@@ -187,6 +187,8 @@ cond_function	cond_function.kama:5
 cond_move_live	cond_move_live.kama:10
 cond_not_bool_operators	cond_not_bool_operators.kama:5 cond_not_bool_operators.kama:6 cond_not_bool_operators.kama:7 cond_not_bool_operators.kama:8
 cond_not_bool_statements	cond_not_bool_statements.kama:6 cond_not_bool_statements.kama:7 cond_not_bool_statements.kama:8 cond_not_bool_statements.kama:9
+cond_null_fnptr	cond_null_fnptr.kama:5 cond_null_fnptr.kama:6 cond_null_fnptr.kama:7
+cond_raw_pointer	cond_raw_pointer.kama:5 cond_raw_pointer.kama:6 cond_raw_pointer.kama:7 cond_raw_pointer.kama:8 cond_raw_pointer.kama:9
 const_addr	const_addr.kama:9
 const_contract_impl	const_contract_impl.kama:9
 const_contract_recv	const_contract_recv.kama:11
@@ -455,6 +457,7 @@ fn_type_param_default	fn_type_param_default.kama:10
 fnptr_bind_arg_shape	fnptr_bind_arg_shape.kama:11
 fnptr_bind_extern_agg_shape	fnptr_bind_extern_agg_shape.kama:16
 fnptr_call_result_narrowed	fnptr_call_result_narrowed.kama:12 fnptr_call_result_narrowed.kama:13 fnptr_call_result_narrowed.kama:14
+fnptr_null_check	fnptr_null_check.kama:4
 for_on_type	for_on_type.kama:1
 foreach_char_over_string	foreach_char_over_string.kama:12
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12
@@ -861,6 +864,7 @@ noheap_try_new	noheap_try_new.kama:4
 noheap_try_new_return	noheap_try_new_return.kama:5
 noheap_unmarked_alloc	noheap_unmarked_alloc.kama:14
 null_check_safe	null_check_safe.kama:4
+null_compare_null	null_compare_null.kama:3 null_compare_null.kama:4
 null_safe_assignment	null_safe_assignment.kama:10 null_safe_assignment.kama:11
 null_safe_compare	null_safe_compare.kama:17
 null_safe_declaration	null_safe_declaration.kama:14 null_safe_declaration.kama:16 null_safe_declaration.kama:21
@@ -929,6 +933,7 @@ public_field_on_resource	public_field_on_resource.kama:3
 public_virtual	public_virtual.kama:2
 raw_elem_private_field	raw_elem_private_field.kama:12
 raw_generic_spelled	raw_generic_spelled.kama:4
+raw_pointer_operand	raw_pointer_operand.kama:4 raw_pointer_operand.kama:5 raw_pointer_operand.kama:6 raw_pointer_operand.kama:7
 raw_ptr_field_access	raw_ptr_field_access.kama:6
 rc_bare_handoff	rc_bare_handoff.kama:6
 reach_as_downcast_private	main.kama:2

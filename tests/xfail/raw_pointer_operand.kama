@@ -1,0 +1,10 @@
+// `-`, `~` and `+` take a number, and a raw pointer or `null` is not one. Each reached C and was refused there with
+// "controlling expression type 'void *' not compatible" or "invalid argument type".
+unsafe fn int32 f(UnsafePtr<int32> p) {
+    usize a = -p;
+    usize b = ~p;
+    int32 c = -null;
+    int32 d = 1 + null;
+    return 0;
+}
+fn int32 main() { return 0; }

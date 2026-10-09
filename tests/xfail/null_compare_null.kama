@@ -1,0 +1,6 @@
+// `null == null` is always true and `null != null` always false: neither asks anything of a pointer.
+fn int32 main() {
+    bool a = null == null;
+    bool b = null != null;
+    return 0;
+}

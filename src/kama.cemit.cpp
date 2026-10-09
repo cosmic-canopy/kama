@@ -987,7 +987,7 @@ std::string CEmitter::neverNullType(SharedExpression e)
             if (it != _localTypeNodes.end() && it->second && it->second->value) {
                 const SharedIdentifier& t = it->second;
                 const std::string ct = cType(t);
-                if (t->builtInVal != 0 || isClass(ct) || isInterface(ct) || isEnum(ct)) return *t->value;
+                if (t->builtInVal != 0 || isClass(ct) || isInterface(ct) || isEnum(ct) || isSigType(ct)) return *t->value;
                 return std::string();          // an UnsafePtr / FFI slot — `null` belongs here
             }
         }
@@ -4842,8 +4842,10 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // cuts the base for every chain; the exponential itself is a separate row.
         const std::string lt = typeOfExpr(lhs), rt = typeOfExpr(rhs);
         if (!isComparisonToken(token)) {
+            // `null` is a raw pointer too, though typeless here (see typeOfExprImpl): `1 + null` reached C.
             auto isPtr = [](const std::string& t) { return t.size() > 1 && t.back() == '*'; };
-            if (isPtr(lt) || isPtr(rt)) {
+            auto isNull = [](const SharedExpression& x) { return dynamic_cast<NullNode*>(x.get()) != nullptr; };
+            if (isPtr(lt) || isPtr(rt) || isNull(lhs) || isNull(rhs)) {
                 unsupported(("`" + binaryOperator(token) + "` is not defined on a raw pointer — an "
                              "`UnsafePtr<T>` carries an address, it is not a number. For the element `i` "
                              "steps along write `addr(of: p[i])`, which scales by the element type "
@@ -5649,6 +5651,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (v->token == EQEQ || v->token == NOTEQ) {
             bool lNull = dynamic_cast<NullNode*>(v->LHS.get()) != nullptr;
             bool rNull = dynamic_cast<NullNode*>(v->RHS.get()) != nullptr;
+            if (lNull && rNull)
+                unsupported("`null` compared with `null` asks nothing — it is always equal; compare a raw "
+                            "pointer with `null` (`p != null`)", v->line);
             if (lNull != rNull) {
                 std::string oc = neverNullType(lNull ? v->RHS : v->LHS);
                 if (!oc.empty())
@@ -5907,6 +5912,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // binary half above.
         if (v->token != EXCLAMATION) {
             const std::string t = typeOfExpr(v->expression);
+            // The binary half's raw-pointer rule: `-p`, `~p` and `-null` reached C, which refused them.
+            if ((t.size() > 1 && t.back() == '*') || dynamic_cast<NullNode*>(v->expression.get())) {
+                unsupported(("`" + op + "` is not defined on a raw pointer — an `UnsafePtr<T>` carries an address, "
+                             "it is not a number; `cast<usize>(p)` makes the address one").c_str(), v->line);
+                return "0";
+            }
             if (cNumBits(t) && cNumBits(t) < 32 && !cNumFloat(t)) {
                 // `-x` on a signed sub-`int` is the one unary overflow (`-(-128i8)` is 128): range-checked
                 // like the binary half, trapping in debug and truncating in release.
@@ -7307,7 +7318,19 @@ static std::string stripRedundantOuterParens(const std::string& s)
 void CEmitter::requireBoolCondition(SharedExpression e, const char* what, int line)
 {
     if (!e || rejectFunctionAsValue(e, what, line)) return;
-    const TKind k = exprKind(e);
+    // A raw pointer, `null` and a `fnptr` all lower to C pointers, which C quietly tests against null and
+    // `kindOfCType` leaves Unknown. kama says which test it means: a raw pointer compares (`p != null`), and a
+    // `fnptr` is never null, so testing one asks nothing.
+    const std::string t = typeOfExpr(e);
+    const bool rawPtr = t.size() > 1 && t.back() == '*';
+    const char* is = dynamic_cast<NullNode*>(e.get()) ? "`null`" : rawPtr ? "a raw pointer"
+                   : isSigType(t) ? "a `fnptr`, which is never null" : nullptr;
+    if (is) {
+        unsupported((std::string(what) + " takes a `bool`, and this is " + is + " — there is no implicit "
+                     "truthiness; say what is meant" + (rawPtr ? " (`p != null`)" : "")).c_str(), line);
+        return;
+    }
+    const TKind k = kindOfCType(t);
     if (k == TKind::Unknown || k == TKind::Bool) return;
     unsupported((std::string(what) + " takes a `bool`, and this is " + kindName(k) + " — there is no implicit "
                  "truthiness; say what is meant" + (k == TKind::Num ? " (`n != 0`)" : "")).c_str(), line);

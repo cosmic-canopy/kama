@@ -1,0 +1,10 @@
+// `null` and a `fnptr` are not conditions either. `if (null)` was C's constant false, and a `fnptr` is never null,
+// so `if (cb)` was always true.
+fnptr int32 Cb(int32 a);
+fn int32 f(Cb cb) {
+    if (null) { return 1; }
+    bool a = !null;
+    if (cb) { return 2; }
+    return 0;
+}
+fn int32 main() { return 0; }

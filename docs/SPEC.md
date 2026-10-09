@@ -1290,7 +1290,7 @@ is always valid: there is nothing to null-check. `null` is only for `UnsafePtr<T
 that holds in **both directions** and for **every** other type — a safe type can neither be *compared* to
 `null` (`== null` / `!= null` is a compile error; the C habit checks the wrong thing here) nor *set* to it. <!-- xfail: null_safe_compare -->
 `int32 x = null;`, `Thing t = null;`, a `string` field defaulted to `null`, `x = null` and `x == null` on
-any of them are all rejected; model absence with `Optional<T>`, or use a zero value. The rule reads the
+any of them are all rejected, and so is `null == null`, which asks nothing; <!-- xfail: null_compare_null --> model absence with `Optional<T>`, or use a zero value. The rule reads the
 **declared type**, so it covers primitives — and it does not care whether you are inside an `unsafe fn`,
 which changes what may be *dereferenced*, not what may be null. An unresolved or FFI type name is left
 alone, since a C typedef for a pointer is a legitimate `null` target. A `Weak<T>`'s liveness is obtained through `tryUpgrade() -> Optional<Shared<T>>`,
@@ -1444,11 +1444,12 @@ files.
 `kama_` are reserved (runtime-provided).
 
 **Pointer arithmetic is not in the language** — `p + n` on a raw pointer is an error, in both the bare and <!-- xfail: ptr_arithmetic -->
-the typed form. An offset is **`addr(of: p[i])`**, which scales by the element type (a bare `UnsafePtr`
+the typed form, and so are `-p`, `~p` and `null` as any arithmetic operand. <!-- xfail: raw_pointer_operand --> An offset is **`addr(of: p[i])`**, which scales by the element type (a bare `UnsafePtr`
 takes a `cast<UnsafePtr<uint8>>(…)` first), and an address that is genuinely being *computed* becomes a
 number with `cast<usize>(p)`. Carrying `+` as well would be a second spelling of the same step, and on a
 bare `UnsafePtr` a byte-stepping one that disagrees with the typed form. Comparisons stay: a carrier is
-`null`-checked and compared.
+`null`-checked and compared, and the check is written out — a raw pointer is not a condition, so C's `if (p)` <!-- xfail: cond_raw_pointer -->
+is `if (p != null)`.
 
 **A `cast` converts between scalars and pointers, on both sides** — an aggregate is neither, so `cast<UnsafePtr>(someInlineArray)` is refused exactly as a cast TO an aggregate always was. <!-- xfail: cast_aggregate_source -->
 An aggregate's storage address is `addr(of: arr[0])`, and an element's address is an ordinary `usize` <!-- test: addr_element_to_usize -->
@@ -3518,7 +3519,8 @@ The codegen — that this really becomes a machine vector rather than four scala
 
 kama has no naked function pointers. **`fnptr`** declares an explicit, named function-pointer **type**
 (independent of any user type) — **zero-cost** (a bare C function pointer, no wrapper). It is **non-null**
-(must be bound; no `null`, no null-check at the call), and binding a free function is **signature-checked**.
+(must be bound; no `null`, no null-check at the call, and `cb == null` is refused), and binding a free function is <!-- xfail: fnptr_null_check -->
+**signature-checked**.
 (A bodiless `fn` is *not* a function pointer — a forgotten body is a clear error, never a silent type.)
 
 ```kama
@@ -5200,6 +5202,7 @@ Both contracts **borrow** their operand (`const ref This`) — a comparison neve
 structural equality — but `@generate(Equatable, Hashable)` will synthesize the memberwise walk on request
 (see *Derives*). The `true`/`false` conversion operators are out of scope: there is no implicit truthiness — `if` takes a `bool`,
 and so does every condition: `while`, `do … while`, `for`'s, `?:`'s, and the operands of `!`, `&&` and `||`. <!-- xfail: cond_not_bool_statements, cond_not_bool_operators, cond_function -->
+A raw pointer, `null` and a `fnptr` are not conditions either. <!-- xfail: cond_raw_pointer, cond_null_fnptr -->
 
 **Primitives are untouched.** An all-primitive comparison keeps the built-in C operator, so `float` `<`
 keeps exact IEEE semantics at zero cost and never routes through `Comparable`. (A float is deliberately

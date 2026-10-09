@@ -1,0 +1,7 @@
+// A `fnptr` is non-null — binding one to `null` is refused — so checking one against `null` asks nothing.
+fnptr int32 Cb(int32 a);
+fn int32 f(Cb cb) {
+    if (cb == null) { return 1; }
+    return 0;
+}
+fn int32 main() { return 0; }

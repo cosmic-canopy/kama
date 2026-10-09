@@ -1,0 +1,11 @@
+// A raw pointer is not a condition: kama has no implicit truthiness, and the null test is written `p != null`.
+// Every one of these was C's "is not NULL" until 0.9.553.
+unsafe fn int32 f(UnsafePtr<int32> p) {
+    int32 n = 0;
+    if (p) { n = 1; }
+    while (p) { n = 2; }
+    bool a = !p;
+    bool b = p && true;
+    return p ? 1 : n;
+}
+fn int32 main() { return 0; }
