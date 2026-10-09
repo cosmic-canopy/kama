@@ -1974,20 +1974,16 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-<a id="s5-in-place-construction"></a>
+<a id="s5-match-binding-copy"></a>
 
-### A fallible constructor builds into its `Ok` payload (KR-120)
+### A `match` binding copies a value payload (KR-131)
 
-`0.9.559` emits every infallible named ctor as `T__name__into(T* self, …)` and has every site with storage hand it
-over: a declared local, a `new` block, a field under construction, a field initializer, a returned value and a
-`match` arm. A 16 KB `type value` now costs one copy in a local's frame and none for a `new` block or a field
-(`tools/check-construct-frame.sh`, clang and GCC). A ctor that leaves without handing back `this` drops what it
-built (`tests/ctor_abandon_drops.kama`), which closed a leak on a fallible ctor's late `Err`. What remains is
-**a fallible ctor** (`ctor Result<T, E> make(…)`): it still builds `kama_self` and returns a `Result` holding a
-copy, so its object costs its size twice (32,880 bytes at -O0 for a 16 KB value). **Design:**
-`T__name__into(Result<T, E>* kama_out, …)` builds in `kama_out->Ok.value` and sets the tag on success. An `Err`
-evaluates its payload apart, drops what was built, and writes the tag and the error field by field, since a
-`Result` compound literal would put the whole object back on the frame.
+Measured on `0.9.560`, after construction stopped copying: `Result<Big, E> r = Big.tryMake(…)` builds in `r`, and
+then `match (r) { case Ok(value: b): b.last(); … }` declares `Big b = subject->Ok.value;`, a 16 KB copy (`local`'s
+frame is 32,928 bytes at -O0, 16,448 at -O2). The subject is already borrowed by pointer. A binding the arm never
+writes, never takes by `ref` and never gives away could be that payload in place: `const Big* b = &subject->Ok.value`
+read through, as a `const ref` parameter is. The rules for when an arm's binding owns its value (a `give` subject, a
+moved-out payload) decide where that holds.
 
 <a id="s5-function-pruning"></a>
 

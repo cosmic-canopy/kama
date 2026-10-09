@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-131**
+**Next id: KR-132**
 
 ## The shape
 
@@ -73,7 +73,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | id | item | size | detail |
 |---|---|---|---|
 | KR-115 | **Bounded quantification is enforced only for a generic nobody instantiates** — `fn int32 feed<T>(T w) { return w.get(); }` is refused unused and accepted once `main` calls it, though SPEC makes it an error at the declaration. Enforcing it needs three probe fixes and an arithmetic contract (no bound can promise `+` today), then a corpus migration | L | [§2](ROADMAP_DETAIL.md#s2-bounds-on-instances) |
-| KR-120 | **A fallible constructor builds into its `Ok` payload** — `0.9.559` builds every infallible ctor in place; a fallible one still builds its object in a local and returns a `Result` holding a copy, so the object costs its size twice | S | [§5](ROADMAP_DETAIL.md#s5-in-place-construction) |
+| KR-131 | **A `match` binding copies a value payload** — `case Ok(value: b):` over a `Result<Big, E>` copies the 16 KB `Big` into `b`, though the subject is already borrowed by pointer; a binding that is not written could alias the payload | S | [§5](ROADMAP_DETAIL.md#s5-match-binding-copy) |
 | KR-130 | **An uncalled function is emitted** — closure pruning keeps or drops whole files, so a dependency file that is reached keeps every function in it: `heavy::unused`, called by nothing, is compiled with its 64 KB frame and trips a consumer's `-Wframe-larger-than`. Prune per function from the program's roots | M | [§5](ROADMAP_DETAIL.md#s5-function-pruning) |
 | KR-122 | **Moving a value out of a field — `replace` and `swap`** — `give this.f` is refused, and nothing else empties a field, so a resource held in a field can never be handed out. Safe library functions over an unsafe core, as Rust's `mem::replace`/`swap` | S | [§2](ROADMAP_DETAIL.md#s2-replace-swap) |
 | KR-123 | **`borrow` names any place for a block** — there is no `ref` local, and `borrow` opens only an argument-less view mint, so an accessor with arguments is repeated at every use. `borrow <place> as L { … }` with the host frozen, as a view window freezes it | M | [§2](ROADMAP_DETAIL.md#s2-borrow-any-place) |

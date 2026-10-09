@@ -1,0 +1,58 @@
+// A fallible constructor builds its object in the `Ok` payload of the `Result` it is handed (KR-120), at every site
+// that has storage — a declared local, a returned value, a `match` arm — and writes an `Err` into the same place
+// field by field. Every path computes what it did before: an early `return Result::Ok(value: give this)`, an `Err`
+// whose payload reads a field, a delegation, and a fallible `new`. Returns 42.
+import { std::memory::Owned };
+
+static int32 drops = 0;
+
+type value Code implements Error {
+    int64 c;
+    public ctor of(int64 c) { this.c = c; }
+    public const fn string message() { return "code"; }
+    public const fn int64 value() { return this.c; }
+}
+
+type resource Tracked {
+    int64 v;
+    public ctor make(int64 v) { this.v = v; }
+    public const fn int64 value() { return this.v; }
+    ~Tracked() { drops = drops + 1; }
+}
+
+type resource Big {
+    InlineArray<int64>#(256) a;
+    Tracked t;
+    int64 n;
+    public ctor Result<Big, Code> make(int64 v) {
+        this.t = Tracked.make(v: v);
+        this.n = v;
+        if (v < 0i64) { return Result::Err(error: Code.of(c: this.n * 10i64)); }   // reads a field, then drops `t`
+        this.a = [v; (256)];
+        if (v > 100i64) { return Result::Ok(value: give this); }                  // early, handing back `this`
+    }
+    public ctor Result<Big, Code> again(int64 v) { return Big.make(v: v + 1i64); }
+    public const fn int64 sum() { return this.a[0] + this.a[255] + this.n + this.t.value(); }
+}
+
+fn int64 of(Result<Big, Code> r) { return match (r) { case Ok(value: b): b.sum(); case Err(error: e): e.value(); }; }
+fn Result<Big, Code> made(int64 v) { return Big.make(v: v); }
+type enum Side { Left, Right }
+fn Result<Big, Code> pick(Side s) { return match (s) { case Left: Big.make(v: 1i64); case Right: Big.make(v: 2i64); }; }
+
+fn int32 main() {
+    int64 s = 0i64;
+    {
+        Result<Big, Code> a = Big.make(v: 3i64);        // 3 + 3 + 3 + 3 = 12
+        Result<Big, Code> b = Big.make(v: -2i64);       // Err(-20), `t` dropped
+        Result<Big, Code> c = Big.make(v: 200i64);      // early Ok: 800
+        Result<Big, Code> d = Big.again(v: 4i64);       // 5 * 4 = 20
+        s = s + of(r: give a) + of(r: give b) + of(r: give c) + of(r: give d);
+    }
+    s = s + of(r: made(v: 1i64)) + of(r: pick(s: Side::Right));                    // 4 + 8
+    Result<Owned<Big>, Code> h = new Big.make(v: 5i64);
+    int64 boxed = match (h) { case Ok(value: p): p.sum(); case Err(error: e): 0i64; };   // 20
+    s = s + boxed;
+    // 12 - 20 + 800 + 20 + 4 + 8 + 20 = 844; every `Tracked` built has been dropped but the boxed one.
+    return s == 844i64 && drops == 6 ? 42 : 1;
+}

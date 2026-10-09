@@ -7477,15 +7477,17 @@ void CEmitter::emitLogFacade(InvocationNode* iv, int level, int depth)
 // destination is a `T` BY VALUE — the return temp, a variant payload such as `Result::Ok(value: this)` — it
 // has to be dereferenced. True for exactly that case. (As an ARGUMENT to an ordinary call, `this` already
 // has its own by-value handling at each argument site.)
-// KR-120 — which constructors BUILD INTO storage they are handed. A named ctor returning its own type, on a type with
-// struct storage of its own: it is emitted as `T__name__into(T* self, …)` plus the `T__name(…)` wrapper. A fallible
-// one (it returns `Result`), a `type adapter` ctor on a primitive and an enum's — plain or tagged, which builds a
-// variant through its own path — keep the value form. The definition
-// (emitClassDefinitions) and every site that calls the into form ask this, so the two cannot disagree.
-bool CEmitter::ctorBuildsInto(const ClassInfo& owner, const MethodInfo& mi)
+// KR-120 — which constructors BUILD INTO storage they are handed: a named ctor on a type with struct storage of its
+// own. An infallible one is emitted as `T__name__into(T* self, …)`, a fallible one as `T__name__into(Result<T, E>*
+// kama_out, …)` building in the `Ok` payload, each plus the `T__name(…)` wrapper. A `type adapter` ctor on a
+// primitive and an enum's — plain or tagged, which builds a variant through its own path — keep the value form, and
+// so does `deserialize`, whose body a graph participant emits under its twin's name (emitClassDefinitions). The
+// definition and every site that calls the into form ask this, so the two cannot disagree.
+bool CEmitter::ctorBuildsInto(const ClassInfo& owner, const MethodInfo& mi, const std::string& name)
 {
-    return mi.isCtor && mi.node && !mi.fromAdapter && mi.returnType && cType(mi.returnType) == owner.name
-        && !owner.isScalarRecv && !owner.isIntrinsicColl && !owner.isVariant && !isEnum(owner.name);
+    if (!mi.isCtor || !mi.node || mi.fromAdapter || !mi.returnType || name == "deserialize") return false;
+    if (owner.isScalarRecv || owner.isIntrinsicColl || owner.isVariant || isEnum(owner.name)) return false;
+    return cType(mi.returnType) == owner.name || (mi.returnType->value && *mi.returnType->value == "Result");
 }
 
 // A construction site offers its storage — `dstPtr`, a `dstCType*` — to the ctor call its value IS, and to nothing
@@ -8555,23 +8557,47 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // about to be destroyed), handling an owned hand-off (give/copy, an inline ctor/`new`, or a
             // bare generic ctor) uniformly with a value-producing `match` arm, then unwind, then return.
             const bool abandons = _inNamedCtorBody && !returnHandsBackThis(ret->expression);
-            if (_ctorInto && _inNamedCtorBody && !abandons) {
-                // The into form (KR-120), handing back what it built: the value is in `*self`, the caller's
-                // storage, already. It unwinds and returns, as a `void` function does.
-                emitOwnedValueInto("(*self)", _currentReturnCType, ret->expression, n->line, depth, "a return value");
+            const bool into = _ctorInto && _inNamedCtorBody;
+            const bool fallibleInto = into && _currentClass && _currentReturnCType != _currentClass->name;
+            if (into && !abandons) {
+                // The into form (KR-120), handing back what it built: the value is in the caller's storage already
+                // (`*self`, or the `Ok` payload of `*kama_out`). It unwinds and returns, as a `void` function does.
+                if (fallibleInto) noteHandoffValue(ret->expression);
+                else emitOwnedValueInto("(*self)", _currentReturnCType, ret->expression, n->line, depth, "a return value");
                 emitUnwindAll(depth);
+                if (fallibleInto) { indent(depth); *_out << "kama_out->kama_tag = " << _currentReturnCType << "_Ok;\n"; }
                 indent(depth); *_out << "return;\n";
                 return;
             }
-            // Any other value is built APART — in the into form too, where `*self` may hold fields the value is
+            // A fallible into ctor's `Result::Err(error: e)`: `e` is evaluated apart — it may read the fields — then
+            // what was built is dropped, and the `Err` is written into `*kama_out` field by field. A `Result`
+            // temporary would hold a whole object it never uses.
+            SharedExpression errValue;
+            if (fallibleInto && !_ctorIntoErrCType.empty())
+                if (auto* iv = dynamic_cast<InvocationNode*>(ret->expression.get()))
+                    if (iv->identifier && iv->identifier->value && *iv->identifier->value == "Err" && iv->identifier->qualifier
+                        && !iv->identifier->qualifier->empty() && *iv->identifier->qualifier->back() == "Result" && iv->args)
+                        for (auto& a : *iv->args) if (a) { errValue = a->expression; break; }   // `Err` carries one payload
+            if (errValue) {
+                std::string et = "kama_err_" + std::to_string(_tempCounter++);
+                indent(depth); *_out << _ctorIntoErrCType << " " << et << ";\n";
+                emitOwnedValueInto(et, _ctorIntoErrCType, errValue, n->line, depth, "a return value");
+                emitUnwindAll(depth);
+                emitDropBuiltFields(depth);
+                indent(depth); *_out << "kama_out->kama_tag = " << _currentReturnCType << "_Err;\n";
+                indent(depth); *_out << "kama_out->kama_u.k_Err.k_error = " << et << ";\n";
+                indent(depth); *_out << "return;\n";
+                return;
+            }
+            // Any other value is built APART — in the into form too, where the storage may hold fields the value is
             // built from (`return Big.copyOf(src: this);`) — and the fields are dropped before it lands.
             std::string tmp = "kama_ret_" + std::to_string(_tempCounter++);
             indent(depth); *_out << _currentReturnCType << " " << tmp << ";\n";
             emitOwnedValueInto(tmp, _currentReturnCType, ret->expression, n->line, depth, "a return value");
             emitUnwindAll(depth);
             if (abandons) emitDropBuiltFields(depth);
-            if (_ctorInto && _inNamedCtorBody) {
-                indent(depth); *_out << "*self = " << tmp << ";\n";
+            if (into) {
+                indent(depth); *_out << (fallibleInto ? "*kama_out = " : "*self = ") << tmp << ";\n";
                 indent(depth); *_out << "return;\n";
             } else {
                 indent(depth); *_out << "return " << tmp << ";\n";
@@ -31112,9 +31138,12 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         *_out << stat << retC << " " << mi.cName << "("
              << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str(),
                            ci.isScalarRecv) << ");\n";   // static/free: no self
-        if (ctorBuildsInto(ci, mi))   // ...and the form that builds into storage (KR-120)
-            *_out << stat << "void " << mi.cName << "__into(" << paramListC(plist, ci.name.c_str(), ci.name.c_str(), false)
-                  << ");\n";
+        if (ctorBuildsInto(ci, mi, kv.first)) {   // ...and the form that builds into storage (KR-120)
+            const std::string rt = cType(mi.returnType);
+            const std::string ps = paramListC(plist, nullptr, ci.name.c_str(), false);
+            *_out << stat << "void " << mi.cName << "__into(" << rt << (rt == ci.name ? "* self" : "* kama_out")
+                  << (ps == "void" ? std::string() : ", " + ps) << ");\n";
+        }
     }
     if (ci.isGraphNode)
         emitGraphNodeHelperProtos(ci);   // the node's internal walk helpers (Phase D)
@@ -31386,6 +31415,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _moveState.clear();   // per-method move analysis
     if (isConstMethod) _constLocals.insert("this");   // `this` is immutable (deep)
     _currentReturnCType = retType;
+    _ctorIntoErrCType.clear();
+    if (ctorBody && _ctorInto && std::string(retType) != owner.name) {   // a fallible into ctor: its `E`
+        for (auto& kv : owner.methods)
+            if (kv.second.cName == cName && kv.second.returnType && kv.second.returnType->genericArgs
+                && kv.second.returnType->genericArgs->size() == 2)
+                _ctorIntoErrCType = cType((*kv.second.returnType->genericArgs)[1]);
+    }
     _tempCounter = 0;
     _scopes.clear();
     _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
@@ -31425,9 +31461,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // KR-120: a ctor that builds into storage is `void T__name__into(T* self, …)` — `self` is the caller's storage,
     // and the value form follows it as a wrapper (below).
     const bool into = ctorBody && _ctorInto;
-    if (into)
+    const bool fallibleInto = into && std::string(retType) != owner.name;   // builds in `kama_out`'s `Ok` payload
+    if (into) {
+        const std::string ps = paramListC(params, nullptr, owner.name.c_str(), false);
         *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << "void " << cName << "__into("
-              << paramListC(params, owner.name.c_str(), owner.name.c_str(), false) << gp << ")\n{\n";
+              << retType << (fallibleInto ? "* kama_out" : "* self") << (ps == "void" ? std::string() : ", " + ps)
+              << gp << ")\n{\n";
+    }
     else
         *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName
               << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str(),
@@ -31463,6 +31503,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         int ln = body ? body->line : 0;
         if (into) {
             // The caller's storage holds whatever was there; zero it as `= {0}` zeroes the local form's.
+            if (fallibleInto) { indent(1); *_out << owner.name << "* self = &kama_out->kama_u.k_Ok.k_value;\n"; }
             indent(1); *_out << "__builtin_memset(self, 0, sizeof(*self));\n";
             emitAggregateFill("(*self)", owner.name, ln, 1, "this", baseInit);
         } else {
@@ -31498,7 +31539,9 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         // Falling off the end of a ctor RETURNS the value it built. A ctor's whole job is to produce that
         // value before it returns, so it need spell no return — exactly as a `void` function need spell
         // none. `return give this;` stays legal as the EARLY-return form, not a second way to say this.
-        if (ctorBody && !into) {   // the into form's value is already in `*self`
+        if (fallibleInto) {        // the value is already in the `Ok` payload: say it is there
+            indent(1); *_out << "kama_out->kama_tag = " << retType << "_Ok;\n";
+        } else if (ctorBody && !into) {   // the infallible into form's value is already in `*self`
             indent(1);
             if (_currentReturnCType == owner.name)
                 *_out << "return kama_self;\n";
@@ -31533,7 +31576,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         // return it. Every construction site that HAS storage calls `__into` directly instead.
         *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName << "("
               << paramListC(params, nullptr, owner.name.c_str(), false) << ")\n{\n";
-        indent(1); *_out << owner.name << " kama_self;\n";
+        indent(1); *_out << retType << " kama_self;\n";   // the object, or the `Result` a fallible ctor fills
         indent(1); *_out << cName << "__into(&kama_self";
         if (params) for (auto& p : *params)
             if (p->identifier && p->identifier->value) *_out << ", " << kName(*p->identifier->value);
@@ -31608,7 +31651,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
             ScopedStr _gq(_deGraphArg,  rtwin ? "g" : "");
             ScopedStr _gs(_serGraphSink, wtwin ? serdeSinkParamName(mi, true)  : "");
             ScopedStr _gt(_deGraphSink,  rtwin ? serdeSinkParamName(mi, false) : "");
-            ScopedNoHeap _ci(_ctorInto, ctorBuildsInto(ci, mi) && !wtwin && !rtwin);   // ScopedFlag's conditional twin
+            ScopedNoHeap _ci(_ctorInto, ctorBuildsInto(ci, mi, kv.first) && !wtwin && !rtwin);   // ScopedFlag's conditional twin
             emitMethodOrCtorBody(wtwin ? ci.name + "__serializeInto"
                                        : rtwin ? ci.name + "__deserializeFrom" : mi.cName,
                                  ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
@@ -35897,7 +35940,7 @@ std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode*
         return "";
     }
     canAccess(owner, mi->visibility, cn, lineNo);
-    if (!intoPtr.empty() && owner && owner->name == cls && ctorBuildsInto(*owner, *mi)) {
+    if (!intoPtr.empty() && owner && owner->name == cls && ctorBuildsInto(*owner, *mi, cn)) {
         if (builtInto) *builtInto = true;
         return emitReorderedCall(disp + "." + cn, mi->cName + "__into", intoPtr, mi->params, oc->args, lineNo);
     }
@@ -36885,7 +36928,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // The site's own value, and a ctor that builds into storage: build it where the site keeps it (KR-120). The
     // offer is the innermost one and names this very call, so a call nested in the arguments cannot take it.
     if (!_ctorIntoOffers.empty() && _ctorIntoOffers.back().node == call && !_ctorIntoOffers.back().used
-        && owner && tn == _ctorIntoOffers.back().type && ctorBuildsInto(*owner, *mi)) {
+        && owner && cType(mi->returnType) == _ctorIntoOffers.back().type && ctorBuildsInto(*owner, *mi, method)) {
         _ctorIntoOffers.back().used = true;
         const std::string dst = _ctorIntoOffers.back().dst;
         return emitReorderedCall(disp + "." + method, mi->cName + "__into", dst, mi->params, call->args, call->line);

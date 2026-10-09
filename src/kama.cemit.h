@@ -2014,7 +2014,8 @@ private:
     // offer pushes and pops its own entry and never clobbers the one around it.
     struct CtorIntoOffer { const ASTNode* node; std::string dst, type; bool used; };
     std::vector<CtorIntoOffer> _ctorIntoOffers;
-    bool ctorBuildsInto(const ClassInfo& owner, const MethodInfo& mi);
+    bool ctorBuildsInto(const ClassInfo& owner, const MethodInfo& mi, const std::string& name);
+    std::string _ctorIntoErrCType;   // a fallible into ctor's `E`: its `Err` is written into `*kama_out` field by field
     void offerCtorInto(SharedExpression value, const std::string& dstPtr, const std::string& dstCType);
     bool takeCtorInto();
     void emitDropBuiltFields(int depth);   // a ctor leaving without the value it built drops what it built
