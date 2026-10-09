@@ -288,6 +288,172 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+<a id="s2-adapter-vtable-once"></a>
+
+### A `type adapter` used from two files fails every release build (KR-114)
+
+Measured on `0.9.542`. A contract has an adapter for `int32` in its own module, and two files each call a function
+that takes the contract with an `int32`. The debug build runs. The release build stops in clang with
+`redefinition of 'int32__as_adapters__Shown__twice__thunk'` and `… 'int32__as_adapters__Shown'`. Each using file emits
+its own `static` thunk and vtable for the adapter conformance, and a release build is one C unit. **A defect.** A
+program that hands a primitive to a contract parameter from two files cannot be built for release. The vtable and
+thunks are a fact about the conformance, so they are emitted once per program.
+
+<a id="s2-dtor-return"></a>
+
+### A `return` in a destructor skips the fields' destructors (KR-113)
+
+Measured on `0.9.542`: in `~Outer() { if (this.done) { return; } … }`, `Outer`'s `Inner` field is never dropped
+on the early path. Falling off the end drops it. **A defect, and a silent one.** Whatever the field owns leaks:
+a socket, a file, a transaction. A destructor's `return` leaves its own body, not the drop of the fields, so it
+must lower to the same epilogue.
+
+<a id="s2-bounds-on-instances"></a>
+
+### Bounded quantification is enforced only for a generic nobody instantiates (KR-115)
+
+SPEC (*Generics*) says that reaching a member the bounds do not declare "is an error at the DECLARATION". Measured on
+`0.9.542`: `fn int32 feed<T>(T w) { return w.get(); }` is refused while unused (`tests/xfail/generic_unbounded_call`).
+It checks clean once `main` calls `feed(w: W.make())`, because the instance resolves `get` on `W`. The probe that
+enforces the rule walks only uninstantiated generics. So a library generic passes `kama check` exactly when its
+own tests instantiate it, which is the case the rule exists for. **A defect against SPEC.** The fix is the
+principle `0.9.542` applied to the unsafe rule: a generic is judged as written, and a declaration's error must not
+depend on which instantiation exists.
+
+<a id="s2-check-passes-c-fails"></a>
+
+### Four constructs pass `kama check` and fail in the C compiler (KR-116)
+
+Measured on `0.9.542`. Each program is either valid and must build, or invalid and must be refused by kama.
+Today each does neither.
+- **An early `return;` in a constructor:** `if (early) { return; }` lowers to a bare `return` in the C
+  constructor, which returns the object. clang reports "non-void function should return a value". It is valid
+  kama: the fields assigned so far are the object.
+- **An `Owned<T>` passed to a `const ref T` parameter:** the auto-deref goes through `deref()`, a `T const*`, and
+  the parameter is a `T*`. Valid kama; it needs the cast the read-only place gets everywhere else.
+- **`copy` of an `InlineArray<string>` element** (`copy sides[i]`): "cannot take the address of an rvalue". The
+  copy reads the element through the by-value getter instead of the place.
+- **A function's name used as an operand** (`a * pi`, with `pi` a `fn`): "invalid operands" in C, in any file.
+  Invalid kama, and kama must say so; a function is not a value except where an `fnptr` is wanted.
+
+<a id="s2-gcc-exhaustive-match"></a>
+
+### Under gcc, a function ending in an exhaustive `match` does not build (KR-117)
+
+`fn int32 pick(Optional<int32> o) { match (o) { case Some(value: v): { return v; } case None: { return 0; } }; }`.
+kama proves every path returns; gcc cannot, and kama's `-Werror=return-type` makes "control reaches end of
+non-void function" fatal. clang builds it. gcc is a documented `cc`, so this is **a defect**. It was measured
+under gcc in the Linux container, and independently under MSYS2 UCRT64 gcc on `0.9.542`. The fact is already
+computed (`bodyDiverges`), so after a statement kama has proven to diverge, the emitter says so to C:
+`__builtin_unreachable()` in release, and a trap in debug so a broken proof still fails loudly.
+
+<a id="s2-scope-child-borrows"></a>
+
+### A `scope`'s spawned child and its parent may both use a place it borrows (KR-112)
+
+Measured on `0.9.542`:
+
+```kama
+scope {
+    spawn worker(c: ref c);      // the child bumps `c` 20 M times
+    … c.bump(); …                // and so does the scope body, at the same moment
+}
+```
+
+`kama check` accepts this. The total comes out near 22 M where 40 M is right. **A data race in safe kama**, which
+the concurrency model exists to rule out. **Design:** a `spawn` inside a `scope` that passes `ref x` or `out x` freezes
+`x` in the parent until the scope joins its children: no read, no write, no borrow. A `const ref x` freezes
+writes only, so both sides may read. The freeze is the one a `borrow` window applies to its host, the same
+prefix test over places, so a disjoint sibling field stays usable. This is Rust's scoped-thread rule, expressed
+with what kama already has; no lifetimes. Check `parallel_for` and `parallel_spawn` bodies against the same rule
+in the same change.
+
+<a id="s2-literal-destinations"></a>
+
+### A literal is not typed by its destination in three positions (KR-118)
+
+SPEC: a literal is typed by its destination, or, as an operand, by the other operand. Measured on `0.9.542`:
+- **Generic inference reads a literal operand first.** With `float32 a`, `sqrt(x: 1.0 + a)` infers `T = float64` and
+  then refuses both the argument and the return. `sqrt(x: a + 1.0)` works. So does `exp(x: 0.0 - d)`, once it
+  is rewritten as `exp(x: 0.0f32 - d)`. Inference must ask the expression its type, and `1.0 + a` is a `float32`.
+- **A literal `match` arm in a typed position:** `fn isize f(K k) { return match (k) { case A: 0; case B: 1; }; }`
+  reports "expects `isize` … `int32`". The arms take the match's destination.
+- **`bitcast<uint64>(1.0)`** reports "the operand's type isn't a resolvable numeric scalar". A literal operand takes
+  the float width that matches the target's width.
+
+One rule, three places it was not applied; **a defect each**.
+
+<a id="s2-diagnostics-batch"></a>
+
+### Diagnostics and docs that say nothing or misstate the rule (KR-119)
+
+Measured on `0.9.542`; each is small and each is real:
+- A `match` statement missing its trailing `;` gives a bare "unexpected }" at the enclosing function's closing
+  brace. `0.9.539`/`0.9.540` gave parse errors notes for the same reason.
+- `import { core::println, core::println };` is accepted, though SPEC makes two imports binding one bare name an
+  error.
+- `localAddr()` and `peerAddr()` are not `const fn` on any socket type, so a `const fn` cannot ask a socket its
+  address. `UdpSocket.localAddr` is an `unsafe fn` in its public signature.
+- The guide `kama agents` writes says every C keyword is reserved, and names `out` as one. kama's own reserved
+  words (`base`, `in`, `as`, `out`, `drop`, `friend`, `cast`, …) are the ones a newcomer reaches for and is not told.
+- docs/TYPE_MODEL.md gives `type view EcsQuery { ref World w; … }`, which does not parse. A view holds raw pointers.
+- A registry dependency whose `.kama/deps` link dangles, for example after resolving on a host and building in a
+  container, is reported as an undeclared dependency, which blames the manifest. The message should name the
+  dangling link and its target.
+
+<a id="s2-replace-swap"></a>
+
+### Moving a value out of a field: `replace` and `swap` (KR-122)
+
+`give this.batch` is refused ("cannot `give` out of a field … use Optional<T>"), and rightly: it would leave the
+owner holding a moved-from value. But `Optional` cannot empty itself in place either, so a resource held in a
+field can never be handed out. A `finish()` that returns its batch cannot be written. **A gap in the ownership
+surface.** **Design:** Rust's `mem::replace` and `mem::swap`, as safe `std::memory` functions over an unsafe core:
+`T replace<T>(ref T place, T with)` hands back the old value and leaves `with` in its place, and
+`void swap<T>(ref T a, ref T b)`. A field is never moved-from, so the move state gains nothing to track. `take`
+is `replace(place:, with: T.default())`, so it is not a third function.
+
+<a id="s2-borrow-any-place"></a>
+
+### `borrow` names any place for a block (KR-123)
+
+A place is second-class, so there is no `ref` local (`0.9.539` says so in its message). A method that works on one
+element of a container therefore repeats the accessor at every use (`this.rig.look(k: look)`), or moves the work
+into a free function so the element can be a `const ref` parameter. `borrow` is kama's construct for naming a
+borrowed thing for a block. Today it opens only an argument-less mint of a `@viewable` contract. **Design:**
+`borrow <place> as L { … }` for any place: a place-returning call with arguments, an element, or a field. `L` is
+that place, `const ref` when the place is read-only. Its host is frozen for the block by the same prefix test a
+view window uses, so `L` cannot dangle and nothing escapes. No lifetimes, no stored borrows, one construct. The
+`0.9.539` message for a `ref` local then points here.
+
+<a id="s2-view-destructor"></a>
+
+### A borrow window that runs code when it closes (KR-124)
+
+A database transaction wants a scope that ends it on every path, rolling back unless the code committed. Other
+clients use a guard that borrows the connection (Rust, C#) or a block or closure (Python, Go). kama has no stored
+borrows, so a guard cannot hold the connection. Capturing closures are sized but not scheduled (below), and
+their captures are by move or by `Shared` only, so one could not borrow the connection either. The window is the
+nearest thing, and a view cannot run anything when it closes. **Design:** a `type view` may declare a destructor. The window that
+minted the view runs it when the window closes, on every path out of the block, including `return`, `break` and
+`continue`. Such a view is not `Copyable`, and its alias passes `ref`/`const ref`, so the destructor runs exactly
+once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `commit` ran.
+
+### Verdicts on reported gaps (2026-10-08)
+
+- **A scoped `unsafe { }` block is a NON-GOAL.** It existed and was removed: one block disabled definite
+  assignment for its whole function, and `unsafe` became a property of the function so that the inventory is
+  greppable at declarations (GOALS §3a). The need is a safe type whose methods all reach one raw field. The answer:
+  put the C-touching code in private `unsafe fn` helpers and make the public methods safe callers of them. Calling
+  an `unsafe fn` from safe code is unrestricted.
+- **Per-function optimization (`@optimize`) is a NON-GOAL.** C has no portable spelling: `optimize` is GCC-only and
+  clang offers only `optnone`. KR-128 gives the package granularity instead.
+- **A workspace member's path dependency on a directory the workspace does not list is refused, BY DESIGN.** A
+  member is extractable only when what it path-depends on is declared beside it (docs/packages.md), and the remedy
+  is one line in `kama_workspace.json`. A consumer does not restate a dependency's own path dependencies. Measured
+  on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
+  naming `voice`. A consumer that imports `voice` itself must declare it.
+
 <a id="s2-fnptr-type-arg"></a>
 
 ### An `fnptr` type is not a type argument (KR-107)
@@ -1477,6 +1643,28 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
+<a id="s4-deserialize-into"></a>
+
+### Deserialize into an existing value (KR-125)
+
+`@field(default)` keeps a field's declared value when the data omits it. A nested object that IS present is
+rebuilt from its own type's defaults rather than the holder's value. With `@field(default) S s = S.of(a: 2.0,
+b: 2.0);`, reading `{"s":{"a":5}}` gives `s.b == 1.0`, `S`'s default. That agrees with SPEC and with serde, but a
+live-tuning reload wants a patch. **Scheduled.** Layering configuration over defaults is common, and the derive
+has no other way to express it. **Design:** Go's `json.Unmarshal` into an existing value. `deserializeJsonInto(text:,
+into: ref T)`, with the named and numbered binary twins, writes only the fields present and recurses into nested
+objects. Positional has every field, so there a patch is a full read. The derived member is `deserializeInto`.
+
+<a id="s4-strict-decoding"></a>
+
+### Strict decoding: unknown fields refused at the read site (KR-126)
+
+Every self-describing back end skips an unknown field, which is what keeps an old reader working against a newer
+writer. A config file wants the opposite: a misspelt key should fail, not do nothing silently. **Scheduled.**
+**Design:** Go's `Decoder.DisallowUnknownFields`, not serde's per-type attribute. The READ decides, because one type
+is read leniently from a peer and strictly from a file. The error is `DeError::UnknownField` and names the key,
+which wants KR-109's payload, so it lands after KR-109.
+
 <a id="s4-deerror-names"></a>
 
 ### `DeError` names the field it reports (KR-109)
@@ -1854,6 +2042,55 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
 Capabilities built on the finished language — the substrate the engine needs (asset I/O, scene serialization,
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
+
+<a id="s5-in-place-construction"></a>
+
+### In-place construction (KR-120)
+
+Measured on `0.9.542`:
+- `T x = T.make(…)` builds the value in a temporary and copies it into `x`.
+- `new T.make(…)` lowers to `*(block) = T__make(…)`, a T-sized temporary in the caller's frame. clang does this at
+  `-O0`, and at `-O3` when it cannot prove the block writable. `std::memory`'s comment calls it "heap placement,
+  0 copies", which is not what is emitted.
+- A constructor's field initializers and field assignments each take a temporary of their own.
+A 16–40 KB `type value` (an FFT state, a game round) therefore costs its size two or three times per frame. A
+consumer measured a 38 KB constructor, and 205 KB in a loader that built several. `0.9.534` fixed exactly this
+for `[v; N]`. **Design:** every infallible constructor is emitted as a construct-into function,
+`T__make__into(T* self, …)`, whose body already writes `self->…`. Each construction site passes the storage it
+fills: a declaration's local, the `new` block, a field under construction (definite assignment knows it is
+unset), and a function's result when it returns a constructor call. A fallible constructor constructs into its
+`Ok` payload. A guard measures frames, as `check-fill-frame.sh` does for fills. The same consumer reports that an
+uncalled public function of a dependency is still emitted, and trips a frame guard. Measure that, and prune it in
+the same pass if so.
+
+<a id="s5-bytewise"></a>
+
+### A byte view of a plain value (KR-127)
+
+Mirroring a large plain `type value` as bytes (for replication, hashing or an upload) takes `addr(of:)`, a
+`cast<UnsafePtr<uint8>>` and a redeclared `memcpy`. A `ConstView` cannot be minted over arbitrary memory, by
+design: a view is minted by what it views. **Scheduled. Design:** a compiler-verified contract,
+`type value Round implements Bytewise`, holds only when two conditions are met:
+- every field is a number, an `InlineArray` of one, or another `Bytewise` value. No `bool`, `char` or enum,
+  whose invalid bit patterns make a writable view unsound, and no handle;
+- the type has no padding, checked by a `_Static_assert` the C compiler evaluates, as extern layouts already are.
+Then `bytesOf(const ref T) -> ConstView<uint8>` and `bytesOfMut(ref T) -> View<uint8>` are safe std functions.
+Rust's `bytemuck::Pod` derive makes exactly these checks.
+
+<a id="s5-debug-optimize"></a>
+
+### An optimized package in a debug build (KR-128)
+
+A consumer measured its DSP at 1.36 ms a frame in debug against 14.8 µs in release, about 95×, so a debug build
+of a game cannot keep its audio real-time. A dependency's `cflags` reach the whole program (docs/targets.md), so
+nothing can optimize one package alone. `kama.json` "per-value build settings" were deferred to keep the manifest
+from becoming a build language, and this is the narrow case that deferral did not price. **Design:** the ROOT
+manifest names the packages, or modules, that a debug build compiles at the release optimization level, as
+Cargo's `[profile.dev.package.<name>] opt-level` does: `"debug": { "optimize": ["voice"] }`. kama's own checks
+stay, because overflow traps, bounds checks and asserts are kama-emitted, not `-O`-dependent. Debug info stays
+too. A dependency cannot set it for its consumers, since how a program is debugged is the program's choice. It
+needs the debug build's unit boundary to follow packages; measure that first. Per-function control is a non-goal
+(§2, verdicts).
 
 ### The allocation campaign — opened 2026-09-12, COMPLETE 2026-09-20
 
@@ -2586,6 +2823,20 @@ rather than here, so there is one number to keep current. Forward work:
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
+
+<a id="s10-package-relative-locations"></a>
+
+### Source locations in a program are package-relative (KR-121)
+
+Measured by a consumer at `0.9.457` and unchanged on `0.9.542`: every panic site is emitted as
+`kama_panic_at(msg, "<absolute path of the .kama file>", line)`. A release binary therefore embeds the build
+machine's home directory and folder layout, and prints them to a player when a panic fires. Inside a container it
+embeds the mount path and the store path. A second defect sits in the same output: the prelude's own panics are
+attributed to the USER's file at the prelude's line numbers (`leak.kama:599` in an eight-line file). **Design:** every
+source location kama writes into a program (a panic, an assert, a trap) is package-relative:
+`game/src/main.kama:4`, `@kama/sodium/src/sodium.kama:12`, `<prelude>/…`. That is one spelling in every build, so
+no remap flag is needed. Debug info (`#line`) keeps absolute paths in a debug build, where a debugger needs them;
+a release build emits no `#line`.
 
 <a id="s10-std-core-names"></a>
 
