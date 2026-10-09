@@ -1,0 +1,62 @@
+// Construction in place (KR-120): a named constructor builds its value in the storage a site hands it, not in a
+// temporary copied in after. Every site that has storage — a declared local, a `new` block, a field under
+// construction, a field initializer, a returned value, a `match` arm — and the cases that must NOT build in place
+// (an argument that reads the object being built, a constructor that returns another value) all compute the same
+// values, and a resource built in a field is dropped exactly once. Returns 42.
+import { std::memory::Owned };
+
+static int32 drops = 0;
+
+type value Big {
+    InlineArray<int64>#(256) a;
+    int64 n;
+    public ctor make(int64 v) { this.a = [v; (256)]; this.n = v; }
+    public ctor copyOf(const ref Big src) { this.a = src.a; this.n = src.n + 1i64; }
+    // Returns a value it did not build in `this`: the into form stores it.
+    public ctor other(int64 v) { Big b = Big.make(v: v * 2i64); return give b; }
+    // Leaves early with `return give this;`.
+    public ctor early(int64 v) { this.a = [v; (256)]; this.n = v; if (v > 0i64) { return give this; } this.n = 0i64; }
+    public const fn int64 sum() { return this.a[0] + this.a[255] + this.n; }
+}
+
+type resource Tracked {
+    InlineArray<int64>#(64) a;
+    public ctor make(int64 v) { this.a = [v; (64)]; }
+    public const fn int64 first() { return this.a[0]; }
+    ~Tracked() { drops = drops + 1; }
+}
+
+type resource Outer {
+    Big b;
+    Big c;
+    Tracked t;
+    Big d = Big.make(v: 9i64);                     // a field initializer
+    public ctor make(int64 v) {
+        this.b = Big.make(v: v);                   // a field under construction
+        this.c = Big.copyOf(src: this.b);          // reads `this`: built in a temporary, then stored
+        this.t = Tracked.make(v: v);               // a move-only field, empty until here
+    }
+    public const fn int64 sum() { return this.b.sum() + this.c.sum() + this.d.sum() + this.t.first(); }
+}
+
+fn Big made(int64 v) { return Big.make(v: v); }  // a returned value
+type enum Side { Left, Right }
+fn Big pick(Side s) { return match (s) { case Left: Big.make(v: 1i64); case Right: Big.make(v: 2i64); }; }
+
+fn int64 run() {
+    Big l = Big.make(v: 1i64);                     // 3
+    Owned<Big> h = new Big.make(v: 2i64);          // 6
+    Big o = Big.other(v: 3i64);                    // 18
+    Big e = Big.early(v: 4i64);                    // 12
+    Big z = Big.early(v: 0i64);                    // 0
+    Big r = made(v: 5i64);                         // 15
+    Big p = pick(s: Side::Right);                      // 6
+    Outer w = Outer.make(v: 1i64);                 // 3 + 4 + 27 + 1 = 35
+    return l.sum() + h.sum() + o.sum() + e.sum() + z.sum() + r.sum() + p.sum() + w.sum();   // 95
+}
+
+fn int32 main() {
+    int64 s = run();
+    // One `Tracked`, built in `w.t`, dropped once when `w` is.
+    return s == 95i64 && drops == 1 ? 42 : 1;
+}

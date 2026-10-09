@@ -1976,23 +1976,30 @@ networking). The MCU/embedded language surface and the const-eval ladder are don
 
 <a id="s5-in-place-construction"></a>
 
-### In-place construction (KR-120)
+### A fallible constructor builds into its `Ok` payload (KR-120)
 
-Measured on `0.9.542`:
-- `T x = T.make(…)` builds the value in a temporary and copies it into `x`.
-- `new T.make(…)` lowers to `*(block) = T__make(…)`, a T-sized temporary in the caller's frame. clang does this at
-  `-O0`, and at `-O3` when it cannot prove the block writable. `std::memory`'s comment calls it "heap placement,
-  0 copies", which is not what is emitted.
-- A constructor's field initializers and field assignments each take a temporary of their own.
-A 16–40 KB `type value` (an FFT state, a game round) therefore costs its size two or three times per frame. A
-consumer measured a 38 KB constructor, and 205 KB in a loader that built several. `0.9.534` fixed exactly this
-for `[v; N]`. **Design:** every infallible constructor is emitted as a construct-into function,
-`T__make__into(T* self, …)`, whose body already writes `self->…`. Each construction site passes the storage it
-fills: a declaration's local, the `new` block, a field under construction (definite assignment knows it is
-unset), and a function's result when it returns a constructor call. A fallible constructor constructs into its
-`Ok` payload. A guard measures frames, as `check-fill-frame.sh` does for fills. The same consumer reports that an
-uncalled public function of a dependency is still emitted, and trips a frame guard. Measure that, and prune it in
-the same pass if so.
+`0.9.559` emits every infallible named ctor as `T__name__into(T* self, …)` and has every site with storage hand it
+over: a declared local, a `new` block, a field under construction, a field initializer, a returned value and a
+`match` arm. A 16 KB `type value` now costs one copy in a local's frame and none for a `new` block or a field
+(`tools/check-construct-frame.sh`, clang and GCC). A ctor that leaves without handing back `this` drops what it
+built (`tests/ctor_abandon_drops.kama`), which closed a leak on a fallible ctor's late `Err`. What remains is
+**a fallible ctor** (`ctor Result<T, E> make(…)`): it still builds `kama_self` and returns a `Result` holding a
+copy, so its object costs its size twice (32,880 bytes at -O0 for a 16 KB value). **Design:**
+`T__name__into(Result<T, E>* kama_out, …)` builds in `kama_out->Ok.value` and sets the tag on success. An `Err`
+evaluates its payload apart, drops what was built, and writes the tag and the error field by field, since a
+`Result` compound literal would put the whole object back on the frame.
+
+<a id="s5-function-pruning"></a>
+
+### An uncalled function is emitted (KR-130)
+
+Measured on `0.9.558`: a library `heavy` exports `used` and `unused`, and an application imports and calls only
+`used`. `heavy__unused` is still compiled, frame and all. Closure pruning (`tools/check-closure-pruning.sh`)
+decides per FILE, and the file is reached. A consumer that sets `-Wframe-larger-than` is then failed by a
+function it never calls. **Design:** after emission the program's call graph (`buildCallGraph`, already built for
+`--no-heap`) is walked from its roots. The roots are `main`, every `expose fn`, `@foreignEntry`, an isolate entry,
+each vtable and contract-adapter slot, and every function whose address is taken (a `fnptr` bind, a callback).
+What is unreached is not emitted. A library build keeps its exported surface.
 
 <a id="s5-bytewise"></a>
 

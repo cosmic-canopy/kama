@@ -7477,6 +7477,71 @@ void CEmitter::emitLogFacade(InvocationNode* iv, int level, int depth)
 // destination is a `T` BY VALUE — the return temp, a variant payload such as `Result::Ok(value: this)` — it
 // has to be dereferenced. True for exactly that case. (As an ARGUMENT to an ordinary call, `this` already
 // has its own by-value handling at each argument site.)
+// KR-120 — which constructors BUILD INTO storage they are handed. A named ctor returning its own type, on a type with
+// struct storage of its own: it is emitted as `T__name__into(T* self, …)` plus the `T__name(…)` wrapper. A fallible
+// one (it returns `Result`), a `type adapter` ctor on a primitive and an enum's — plain or tagged, which builds a
+// variant through its own path — keep the value form. The definition
+// (emitClassDefinitions) and every site that calls the into form ask this, so the two cannot disagree.
+bool CEmitter::ctorBuildsInto(const ClassInfo& owner, const MethodInfo& mi)
+{
+    return mi.isCtor && mi.node && !mi.fromAdapter && mi.returnType && cType(mi.returnType) == owner.name
+        && !owner.isScalarRecv && !owner.isIntrinsicColl && !owner.isVariant && !isEnum(owner.name);
+}
+
+// A construction site offers its storage — `dstPtr`, a `dstCType*` — to the ctor call its value IS, and to nothing
+// else: the offer names the NODE, so a ctor nested in an argument (`T x = T.make(inner: U.make())`) never sees it.
+// The site emits the value as usual, then asks takeCtorInto() whether the call built into the storage — in which
+// case what came back is the into CALL, a statement, rather than a value to assign.
+void CEmitter::offerCtorInto(SharedExpression value, const std::string& dstPtr, const std::string& dstCType)
+{
+    _ctorIntoOffers.push_back(CtorIntoOffer{ value.get(), dstPtr, dstCType, false });
+}
+
+bool CEmitter::takeCtorInto()
+{
+    const bool built = _ctorIntoOffers.back().used;
+    _ctorIntoOffers.pop_back();
+    return built;
+}
+
+// Does a ctor's `return` hand back the value it built — `this`, or `Result::Ok(value: this)` — or abandon it, as a
+// `Result::Err(…)` or a return of some other value does?
+static bool returnHandsBackThis(SharedExpression e)
+{
+    if (auto* h = dynamic_cast<HandoffNode*>(e.get())) return returnHandsBackThis(h->value);
+    if (dynamic_cast<ThisAccessNode*>(e.get())) return true;
+    if (auto* iv = dynamic_cast<InvocationNode*>(e.get()))
+        if (iv->identifier && iv->identifier->value && *iv->identifier->value == "Ok" && iv->identifier->qualifier
+            && !iv->identifier->qualifier->empty() && *iv->identifier->qualifier->back() == "Result" && iv->args)
+            for (auto& a : *iv->args) if (a) return returnHandsBackThis(a->expression);   // `Ok` carries one payload
+    return false;
+}
+
+// The two bytes that bracket a ctor's drops of what it built (emitDropBuiltFields): they are kept when the ctor's
+// storage exists — its prologue was emitted — and cut out with what they bracket when it was not, which is known
+// only once the whole body has been emitted (emitMethodOrCtorBody).
+static const char kDropBuiltOpen = '\x01', kDropBuiltClose = '\x02';
+
+// A ctor that leaves WITHOUT handing back the value it built (`return Result::Err(…)`, or a return of some other
+// value) drops what it built, as its destructor would, in reverse declaration order with the base last. Until
+// 0.9.560 it dropped nothing: a fallible ctor that stored a resource in a field and then failed leaked it. Which
+// fields hold something is the move state the prologue seeded: a move-only field is empty until its first store.
+void CEmitter::emitDropBuiltFields(int depth)
+{
+    if (!_currentClass) return;
+    ClassInfo& ci = *_currentClass;
+    *_out << kDropBuiltOpen;
+    for (auto it = ci.fields.rbegin(); it != ci.fields.rend(); ++it) {
+        auto cit = _classes.find(fieldCType(ci.name, *it));
+        if (cit == _classes.end() || !cit->second.destructible || !assignTargetLive("this." + it->name)) continue;
+        indent(depth); *_out << cit->second.name << "__dtor(&self->" << kMember(ci, it->name) << ");\n";
+    }
+#if KAMA_INHERITANCE
+    if (ci.base && ci.base->destructible) { indent(depth); *_out << ci.baseName << "__dtor(&self->kama_base);\n"; }
+#endif
+    *_out << kDropBuiltClose;
+}
+
 bool CEmitter::ctorThisAsValue(SharedExpression e, const std::string& dstCType) const
 {
     return _inNamedCtorBody && _currentClass && dstCType == _currentClass->name
@@ -8301,14 +8366,17 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // assumption is false.)
                     const bool lateInit = needsTargetType(init.get());
                     if (lateInit) _moveState[nm] = MoveState::Moved;
+                    offerCtorInto(init, "&" + kName(nm), ty);   // `T x = T.make(…)` builds in `x` (KR-120)
                     std::string iv = narrowViewValue(ty, init, receiverObject(emitExpression(init)), n->line);   // `ConstView<T> cv = v;`
+                    const bool builtInPlace = takeCtorInto();
                     if (lateInit) _moveState[nm] = MoveState::NotMoved;   // the assignment below makes it live
                     _matchTargetCType = pmt;
                     _variantTargetType = pvt;
                     _hoistOK = ph;
                     flushHoisted(depth);
                     indent(depth);
-                    *_out << kName(nm) << " = " << iv << ";\n";
+                    if (builtInPlace) *_out << iv << ";\n";
+                    else              *_out << kName(nm) << " = " << iv << ";\n";
                     if (isSmartPtrClass(ty) && isSmartPtrLValue(init)) {
                         CollKind k = smartKind(ty);
                         // Default: Owned -> give(move), Shared/Weak -> copy(retain). A marker overrides.
@@ -8486,11 +8554,28 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // Capture the return value into a temp BEFORE any destructors run (it may reference locals
             // about to be destroyed), handling an owned hand-off (give/copy, an inline ctor/`new`, or a
             // bare generic ctor) uniformly with a value-producing `match` arm, then unwind, then return.
+            const bool abandons = _inNamedCtorBody && !returnHandsBackThis(ret->expression);
+            if (_ctorInto && _inNamedCtorBody && !abandons) {
+                // The into form (KR-120), handing back what it built: the value is in `*self`, the caller's
+                // storage, already. It unwinds and returns, as a `void` function does.
+                emitOwnedValueInto("(*self)", _currentReturnCType, ret->expression, n->line, depth, "a return value");
+                emitUnwindAll(depth);
+                indent(depth); *_out << "return;\n";
+                return;
+            }
+            // Any other value is built APART — in the into form too, where `*self` may hold fields the value is
+            // built from (`return Big.copyOf(src: this);`) — and the fields are dropped before it lands.
             std::string tmp = "kama_ret_" + std::to_string(_tempCounter++);
             indent(depth); *_out << _currentReturnCType << " " << tmp << ";\n";
             emitOwnedValueInto(tmp, _currentReturnCType, ret->expression, n->line, depth, "a return value");
             emitUnwindAll(depth);
-            indent(depth); *_out << "return " << tmp << ";\n";
+            if (abandons) emitDropBuiltFields(depth);
+            if (_ctorInto && _inNamedCtorBody) {
+                indent(depth); *_out << "*self = " << tmp << ";\n";
+                indent(depth); *_out << "return;\n";
+            } else {
+                indent(depth); *_out << "return " << tmp << ";\n";
+            }
         } else {
             if (retExpr) { indent(depth); *_out << emitExpression(retExpr) << ";\n"; }
             emitUnwindAll(depth);
@@ -8886,6 +8971,33 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             return;
                     }
                 }
+        }
+        // KR-120 — a constructor building one of its own fields from a constructor (`this.b = Big.make(…)`) builds
+        // `b` IN PLACE, not in a temporary copied in after. Only where nothing is lost or read while it is built:
+        // the field holds nothing to drop (its type owns nothing, or its move state says it is empty, as a
+        // move-only field is until its first store), and no argument names `this` — a `const ref` argument
+        // reaching the field would be read while the constructor overwrites it. A call that does not build into
+        // storage is stored, which is all this assignment does for such a field.
+        if (as->token == EQ && _inNamedCtorBody) {
+            auto* fma = dynamic_cast<MemberAccessNode*>(as->unaryExpression.get());
+            const bool shape = fma && dynamic_cast<ThisAccessNode*>(fma->expression.get())
+                            && dynamic_cast<InvocationNode*>(as->expression.get());
+            const std::string fty = shape ? exprClass(as->unaryExpression) : std::string();
+            const std::string fkey = fty.empty() ? std::string() : lvalueMoveKey(as->unaryExpression);
+            bool aliased = false;
+            if (!fty.empty())
+                forEachPlaceUse(std::dynamic_pointer_cast<StatementNode>(as->expression),
+                                [&](const std::vector<std::string>& p, int) { if (!p.empty() && p[0] == "this") aliased = true; });
+            if (!fty.empty() && isClass(fty) && !isSmartPtrClass(fty) && !_classes[fty].isIntrinsicColl && !aliased
+                && (!ownsByValue(fty) || !assignTargetLive(fkey))) {
+                checkConstWrite(as->unaryExpression, n->line);
+                // The hand-off every fresh destination gets: the field's type is the target a bare generic ctor
+                // infers from (`this.scratch = FixedArray.make(size: 1)`), and the ctor builds into the field.
+                emitOwnedValueInto(emitPlace(as->unaryExpression), fty, as->expression, n->line, depth, "an assignment",
+                                   /*kindChecked=*/true);
+                if (ownsByValue(fty) && !fkey.empty()) _moveState[fkey] = MoveState::NotMoved;   // live from here on
+                return;
+            }
         }
         // Owned value into an `operator[]` PLACE: `a[i] = [give/copy] <owned>` where the element OWNS
         // something (string/collection/resource/smart-ptr). Release the old element, then move/copy the new
@@ -26785,7 +26897,12 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     std::string pvt = _variantTargetType; _variantTargetType = dstCType; // `:= Optional::Some(…)`
     std::string rv = tryHoistInlineCtor(v, dstCType, line);    // `:= Point(…)` / `:= List()`
     if (rv.empty()) rv = tryHoistInlineValue(v, dstCType, line); // `:= new T(…)`
-    if (rv.empty()) rv = narrowViewValue(dstCType, v, emitExpression(v), line);   // `return v;` into a `ConstView<T>`
+    bool built = false;                                        // a ctor built the value in `dst` itself (KR-120)
+    if (rv.empty()) {
+        offerCtorInto(v, "&(" + dst + ")", dstCType);
+        rv = narrowViewValue(dstCType, v, emitExpression(v), line);   // `return v;` into a `ConstView<T>`
+        built = takeCtorInto();
+    }
     if (ctorThisAsValue(v, dstCType)) rv = "(*" + rv + ")";   // `return give this;` — the early-return form
     else if (dynamic_cast<ThisAccessNode*>(v.get())) rv = receiverObject(rv);   // `return copy this;` from a method
     _matchTargetCType = pmt; _variantTargetType = pvt; _hoistOK = ph;
@@ -26795,7 +26912,9 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     // here that declaration consumes the enclosing `#line` and every C-compiler error in the expression is
     // reported one line low. `this->` because the parameter shadows the stamper.
     this->line(line);
-    indent(depth); *_out << dst << " = " << rv << ";\n";
+    // A value already in `dst` — built there, or the into form's `return give this;` — is not assigned to itself.
+    if (built)          { indent(depth); *_out << rv << ";\n"; }
+    else if (rv != dst) { indent(depth); *_out << dst << " = " << rv << ";\n"; }
     std::string rc = handoffSourceClass(v, handoff);
     rejectUnresolvedHandoff(rc, dstCType, v, handoff, what, line);
     // Smart pointer: give (or a bare dying local) MOVES out (invalidate the source); copy RETAINS.
@@ -27671,8 +27790,8 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
                          + C + "* " + hp + " = (" + C + "*)kama__unwrapPtr(" + pa.second + "__allocate(&" + ap + ", " + layoutOf(C) + "));";
         else        box  = C + "* " + hp + " = (" + C + "*)kama_alloc(" + layoutOf(C) + ");";
         if (newBuildsValue(C, oc)) {
-            std::string cc = newFactoryCall(C, oc, srcLine);   // move the factory result into the heap slot
-            if (!cc.empty()) box += " *(" + hp + ") = " + cc + ";";
+            std::string st = newFactoryStore(C, oc, srcLine, hp);   // build the object in the heap slot
+            if (!st.empty()) box += " " + st + ";";
         }
         std::string adoptArg = hp;                             // adopt the base subobject when widening (offset-0)
         if (upcastNew) {
@@ -27716,8 +27835,8 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
             box += " " + t + ".kama_obj = kama_alloc(" + layoutOf(octy) + ");";
         }
         if (newBuildsValue(octy, oc)) {
-            std::string cc = newFactoryCall(octy, oc, srcLine);
-            if (!cc.empty()) box += " *((" + octy + "*)" + t + ".kama_obj) = " + cc + ";";
+            std::string st = newFactoryStore(octy, oc, srcLine, "(" + octy + "*)" + t + ".kama_obj");
+            if (!st.empty()) box += " " + st + ";";
         }
         box += " " + t + ".kama_vtbl = &" + octy + "__as_" + T + ";";
         if (useAlloc)
@@ -30993,6 +31112,9 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         *_out << stat << retC << " " << mi.cName << "("
              << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str(),
                            ci.isScalarRecv) << ");\n";   // static/free: no self
+        if (ctorBuildsInto(ci, mi))   // ...and the form that builds into storage (KR-120)
+            *_out << stat << "void " << mi.cName << "__into(" << paramListC(plist, ci.name.c_str(), ci.name.c_str(), false)
+                  << ");\n";
     }
     if (ci.isGraphNode)
         emitGraphNodeHelperProtos(ci);   // the node's internal walk helpers (Phase D)
@@ -31300,9 +31422,16 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     std::string gp;
     if (!_serGraphArg.empty()) gp = ", struct kama_ser_graph* " + _serGraphArg;
     else if (!_deGraphArg.empty()) gp = ", struct kama_de_graph* " + _deGraphArg;
-    *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName
-          << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str(),
-                               owner.isScalarRecv) << gp << ")\n{\n";   // static: no self
+    // KR-120: a ctor that builds into storage is `void T__name__into(T* self, …)` — `self` is the caller's storage,
+    // and the value form follows it as a wrapper (below).
+    const bool into = ctorBody && _ctorInto;
+    if (into)
+        *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << "void " << cName << "__into("
+              << paramListC(params, owner.name.c_str(), owner.name.c_str(), false) << gp << ")\n{\n";
+    else
+        *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName
+              << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str(),
+                                   owner.isScalarRecv) << gp << ")\n{\n";   // static: no self
     emitOnPanicPrologue(1);   // a `@onPanic` method arms itself first thing (no-op otherwise)
 
     checkDefiniteAssignment(body, params);   // owning LOCAL read-before-assign + `out` params (any method/ctor)
@@ -31332,9 +31461,15 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     if (ctorBody) {
         std::ostream* sv = _out; _out = &ctorPrologue;
         int ln = body ? body->line : 0;
-        indent(1); *_out << owner.name << " kama_self = {0};\n";
-        emitAggregateFill("kama_self", owner.name, ln, 1, "this", baseInit);
-        indent(1); *_out << owner.name << "* self = &kama_self;\n";
+        if (into) {
+            // The caller's storage holds whatever was there; zero it as `= {0}` zeroes the local form's.
+            indent(1); *_out << "__builtin_memset(self, 0, sizeof(*self));\n";
+            emitAggregateFill("(*self)", owner.name, ln, 1, "this", baseInit);
+        } else {
+            indent(1); *_out << owner.name << " kama_self = {0};\n";
+            emitAggregateFill("kama_self", owner.name, ln, 1, "this", baseInit);
+            indent(1); *_out << owner.name << "* self = &kama_self;\n";
+        }
         _out = sv;
         _ctorSelfUsed = false;   // a field initializer naming another field must not count as a use
         // The storage EXISTS the moment a base is installed into it, even if the body never says `this`
@@ -31363,7 +31498,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         // Falling off the end of a ctor RETURNS the value it built. A ctor's whole job is to produce that
         // value before it returns, so it need spell no return — exactly as a `void` function need spell
         // none. `return give this;` stays legal as the EARLY-return form, not a second way to say this.
-        if (ctorBody) {
+        if (ctorBody && !into) {   // the into form's value is already in `*self`
             indent(1);
             if (_currentReturnCType == owner.name)
                 *_out << "return kama_self;\n";
@@ -31380,10 +31515,31 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
         // The storage is needed when the body NAMES `this`, and also when the ctor falls off the end —
         // there the value is returned without ever being mentioned (`default ctor empty() { }`, whose
         // every field is default-fillable, is exactly that shape).
-        if (_ctorSelfUsed || fellOffEnd) *_out << ctorPrologue.str();
-        *_out << ctorStmts.str();
+        const bool built = _ctorSelfUsed || fellOffEnd;
+        if (built) *_out << ctorPrologue.str();
+        // The drops of what the ctor built (emitDropBuiltFields) stand only where there is something built.
+        std::string stmts = ctorStmts.str(), kept;
+        bool inDrops = false;
+        for (char c : stmts) {
+            if (c == kDropBuiltOpen)  { inDrops = true;  continue; }
+            if (c == kDropBuiltClose) { inDrops = false; continue; }
+            if (!inDrops || built) kept += c;
+        }
+        *_out << kept;
     }
     *_out << "}\n\n";
+    if (into) {
+        // The value form, for an expression with no storage to offer (`f(x: T.make())`): build into a local and
+        // return it. Every construction site that HAS storage calls `__into` directly instead.
+        *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName << "("
+              << paramListC(params, nullptr, owner.name.c_str(), false) << ")\n{\n";
+        indent(1); *_out << owner.name << " kama_self;\n";
+        indent(1); *_out << cName << "__into(&kama_self";
+        if (params) for (auto& p : *params)
+            if (p->identifier && p->identifier->value) *_out << ", " << kName(*p->identifier->value);
+        *_out << ");\n";
+        indent(1); *_out << "return kama_self;\n}\n\n";
+    }
 
     _scopes.clear();
     _currentClass = nullptr;
@@ -31452,6 +31608,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
             ScopedStr _gq(_deGraphArg,  rtwin ? "g" : "");
             ScopedStr _gs(_serGraphSink, wtwin ? serdeSinkParamName(mi, true)  : "");
             ScopedStr _gt(_deGraphSink,  rtwin ? serdeSinkParamName(mi, false) : "");
+            ScopedNoHeap _ci(_ctorInto, ctorBuildsInto(ci, mi) && !wtwin && !rtwin);   // ScopedFlag's conditional twin
             emitMethodOrCtorBody(wtwin ? ci.name + "__serializeInto"
                                        : rtwin ? ci.name + "__deserializeFrom" : mi.cName,
                                  ret.c_str(), mi.node->params, mi.node->body, ci, mi.isConst, mi.isStatic,
@@ -35706,7 +35863,18 @@ std::string CEmitter::newVariantValue(const std::string& enumC, ObjectCreationNo
     return emitExpression(iv);
 }
 
-std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo)
+// `new T.name(…)` into the fresh heap slot `slotPtr` — the whole store, without its `;`. A ctor that builds into
+// storage builds the object IN the slot (KR-120); the rest store the value they return. "" after a diagnostic.
+std::string CEmitter::newFactoryStore(const std::string& cls, ObjectCreationNode* oc, int lineNo, const std::string& slotPtr)
+{
+    bool into = false;
+    const std::string cc = newFactoryCall(cls, oc, lineNo, slotPtr, &into);
+    if (cc.empty()) return "";
+    return into ? cc : "*(" + slotPtr + ") = " + cc;
+}
+
+std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo,
+                                     const std::string& intoPtr, bool* builtInto)
 {
     if (!oc->ctorName && ((_classes.count(cls) && _classes[cls].isVariant) || isEnum(cls))) return newVariantValue(cls, oc);
     const std::string cn = (oc->ctorName && oc->ctorName->value) ? *oc->ctorName->value : "";
@@ -35729,6 +35897,10 @@ std::string CEmitter::newFactoryCall(const std::string& cls, ObjectCreationNode*
         return "";
     }
     canAccess(owner, mi->visibility, cn, lineNo);
+    if (!intoPtr.empty() && owner && owner->name == cls && ctorBuildsInto(*owner, *mi)) {
+        if (builtInto) *builtInto = true;
+        return emitReorderedCall(disp + "." + cn, mi->cName + "__into", intoPtr, mi->params, oc->args, lineNo);
+    }
     return emitReorderedCall(disp + "." + cn, mi->cName, "", mi->params, oc->args, lineNo);
 }
 
@@ -35748,10 +35920,10 @@ void CEmitter::emitNewFactoryMove(const std::string& cls, const std::string& slo
 {
     line(lineNo);
     bool ph = _hoistOK; _hoistOK = true;               // hoist arg hand-offs, like the in-place ctor path
-    std::string cc = newFactoryCall(cls, oc, lineNo);
+    std::string st = newFactoryStore(cls, oc, lineNo, slotPtr);
     _hoistOK = ph; flushHoisted(depth);
-    if (cc.empty()) return;                            // rejected (unknown/fallible ctor) — diagnostic emitted
-    indent(depth); *_out << "*(" << slotPtr << ") = " << cc << ";\n";
+    if (st.empty()) return;                            // rejected (unknown/fallible ctor) — diagnostic emitted
+    indent(depth); *_out << st << ";\n";
 }
 
 // Does `new Type.name(...)` name a FALLIBLE ctor (one returning `Result<T,E>`)? Drives M4b's fallible-`new`
@@ -36010,9 +36182,9 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
         std::string ctl = "kama_tctrl" + std::to_string(_tempCounter++);
         std::string ap  = "kama_talloc" + std::to_string(_tempCounter++);
         if (newBuildsValue(cls, oc)) {
-            std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
-            if (fc.empty()) return "";                            // diagnostic already emitted
-            ctorStmt = "*(" + cls + "*)" + obj + " = " + fc + "; ";
+            std::string st = newFactoryStore(cls, oc, srcLine, "(" + cls + "*)" + obj);   // rejects a fallible/unknown ctor
+            if (st.empty()) return "";                            // diagnostic already emitted
+            ctorStmt = st + "; ";
         }
         const bool shared = smartKind(S) == CollKind::Shared;
         const std::string none = lval + " = (" + target + "){ .kama_tag = " + target + "_None }; ";
@@ -36092,9 +36264,9 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
     // into the slot; a bare positional ctor constructs in place; a ctor-less struct leaves malloc's default.
     std::string ctorStmt;
     if (newBuildsValue(cls, oc)) {
-        std::string fc = newFactoryCall(cls, oc, srcLine);   // `T__make(...)`; rejects a fallible/unknown ctor
-        if (fc.empty()) return "";                            // diagnostic already emitted
-        ctorStmt = "*(" + hp + ") = " + fc + "; ";
+        std::string st = newFactoryStore(cls, oc, srcLine, hp);   // rejects a fallible/unknown ctor
+        if (st.empty()) return "";                            // diagnostic already emitted
+        ctorStmt = st + "; ";
     }
     std::string s;
     if (placed) {   // `ptrOrNull`, not `unwrapPtr` — see the interface branch above
@@ -36710,6 +36882,14 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     if (!stci->isBorrow || _mintGrant != tn)
         canAccess(owner, mi->visibility, method, call->line);
     recordNodeRef(recv->identifier.get(), mi->node);   // M6 B3a: `Type.name(...)` references the ctor
+    // The site's own value, and a ctor that builds into storage: build it where the site keeps it (KR-120). The
+    // offer is the innermost one and names this very call, so a call nested in the arguments cannot take it.
+    if (!_ctorIntoOffers.empty() && _ctorIntoOffers.back().node == call && !_ctorIntoOffers.back().used
+        && owner && tn == _ctorIntoOffers.back().type && ctorBuildsInto(*owner, *mi)) {
+        _ctorIntoOffers.back().used = true;
+        const std::string dst = _ctorIntoOffers.back().dst;
+        return emitReorderedCall(disp + "." + method, mi->cName + "__into", dst, mi->params, call->args, call->line);
+    }
     return emitReorderedCall(disp + "." + method, mi->cName, "", mi->params, call->args, call->line);
 }
 

@@ -1,0 +1,62 @@
+// A constructor that leaves without handing back the value it built drops what it built, as its destructor would
+// (KR-120). Until 0.9.560 it dropped nothing: a fallible ctor that stored a resource in a field and then returned
+// `Err` leaked it. Each case counts its drops.
+import { std::collections::DynamicArray };
+
+static int32 drops = 0;
+
+type enum Why implements Error {
+    Negative;
+
+    public const fn string message() { return "negative"; }
+}
+
+type resource Tracked {
+    int64 v;
+    public ctor make(int64 v) { this.v = v; }
+    public const fn int64 value() { return this.v; }
+    ~Tracked() { drops = drops + 1; }
+}
+
+type resource Holder {
+    Tracked first;
+    Tracked second;
+    DynamicArray<int64> items = DynamicArray.empty();
+    string label = "holder";
+    public ctor Result<Holder, Why> make(int64 n) {
+        if (n == 0i64) { return Result::Err(error: Why::Negative); }          // nothing stored yet: no drop
+        this.first = Tracked.make(v: n);
+        if (n < 0i64) { return Result::Err(error: Why::Negative); }           // `first` stored: one drop
+        this.second = Tracked.make(v: n + 1i64);
+    }
+    // Delegation names no `this`, so it builds nothing of its own and drops nothing.
+    public ctor Result<Holder, Why> again(int64 n) { return Holder.make(n: n); }
+    public const fn int64 sum() { return this.first.value() + this.second.value(); }
+}
+
+type value Pair {
+    int64 a;
+    int64 b;
+    public ctor make(int64 a) { this.a = a; this.b = a; }
+    public ctor copyOf(const ref Pair src) { this.a = src.a + 1i64; this.b = src.b + 1i64; }
+    // Builds `this`, then returns a value built FROM it: the value is built apart, then stored.
+    public ctor bumped(int64 a) { this.a = a; this.b = a * 2i64; return Pair.copyOf(src: this); }
+    public const fn int64 sum() { return this.a + this.b; }
+}
+
+fn int64 total(Result<Holder, Why> r) { return match (r) { case Ok(value: h): h.sum(); case Err(error: e): 0i64; }; }
+
+fn int32 main() {
+    int64 s = 0i64;
+    s = s + total(r: Holder.make(n: 0i64));      // Err before any store: 0 drops
+    if (drops != 0) { return 1; }
+    s = s + total(r: Holder.make(n: -3i64));     // Err after `first`: 1 drop
+    if (drops != 1) { return 2; }
+    s = s + total(r: Holder.make(n: 4i64));      // Ok: 4 + 5, both dropped with the holder
+    if (drops != 3) { return 3; }
+    s = s + total(r: Holder.again(n: -1i64));    // delegated Err after `first`: 1 drop
+    if (drops != 4) { return 4; }
+    Pair p = Pair.bumped(a: 3i64);               // 4 + 7
+    s = s + p.sum();
+    return s == 20i64 ? 42 : 5;                  // 9 + 11
+}

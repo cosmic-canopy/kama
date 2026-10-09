@@ -2004,6 +2004,20 @@ private:
     // only when a `return` used it.
     bool _inDtorBody = false;
     bool _dtorReturned = false;
+    // KR-120 — construction in place. A named ctor that returns its own type is emitted as `T__name__into(T* self,
+    // …)`, which builds the value in storage its caller hands it, plus `T__name(…)`, a wrapper for an expression
+    // with no storage to offer. `_ctorInto` is set while the into body is emitted (its `return`s write `*self`).
+    // A construction site OFFERS its storage to the ctor call its own expression is (offerCtorInto/takeCtorInto).
+    bool _ctorInto = false;
+    // A STACK, because sites nest: the arguments of a ctor that is building into a local can hold a `match` whose
+    // arms are sites of their own. Each offer names its node and records whether its call took it; a nested
+    // offer pushes and pops its own entry and never clobbers the one around it.
+    struct CtorIntoOffer { const ASTNode* node; std::string dst, type; bool used; };
+    std::vector<CtorIntoOffer> _ctorIntoOffers;
+    bool ctorBuildsInto(const ClassInfo& owner, const MethodInfo& mi);
+    void offerCtorInto(SharedExpression value, const std::string& dstPtr, const std::string& dstCType);
+    bool takeCtorInto();
+    void emitDropBuiltFields(int depth);   // a ctor leaving without the value it built drops what it built
     void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots
     std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
     std::string linkNameOf(const SharedAttributeList& attrs, int line);   // ...for any declaration that carries one
@@ -3430,7 +3444,9 @@ private:
     // `v.zz` on a value whose class is known and has no such field: a method named without its call, an
     // unproven bound on an opaque parameter, or simply no field of that name.
     void rejectMissingField(ClassInfo* ci, const std::string& cls, MemberAccessNode* ma, const std::string& field);
-    std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo);  // new Type.name(...) factory
+    std::string newFactoryCall(const std::string& cls, ObjectCreationNode* oc, int lineNo,   // new Type.name(...) factory
+                               const std::string& intoPtr = "", bool* builtInto = nullptr);
+    std::string newFactoryStore(const std::string& cls, ObjectCreationNode* oc, int lineNo, const std::string& slotPtr);
     // Does `new` write a value into the slot it allocates? A named ctor does, and so does an enum variant
     // (`new Geo::Point()`), which has no ctor name. Every heap destination asks HERE: the contract-handle
     // branches once asked `oc->ctorName` alone and left a variant's box uninitialized.

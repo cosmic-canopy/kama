@@ -4088,6 +4088,11 @@ fn int32 main() {
 - **Nothing is constructible by default.** A type with no `ctor` and no `of`/`zero` opt-in cannot be built, <!-- xfail: no_ctor_value, no_ctor_new, no_ctor_resource -->
   and the diagnostic is context-aware: it offers `of`/`zero` only for a transparent `value` (all fields
   public), never for a `resource`.
+- **A constructor builds its value where it will live.** A declared local (`Buffer b = Buffer.make(…)`), a <!-- test: construct_in_place -->
+  `new` block, a field under construction (`this.b = Big.make(…)`), a field initializer, a returned value and a
+  `match` arm each hand the ctor their storage, so a large `type value` costs one copy in its own place rather
+  than two or three (`tools/check-construct-frame.sh`). An argument that reads the object being built
+  (`this.c = Big.copyOf(src: this.b)`) is the exception: that value is built apart, then stored.
 - **Reuse is a visible call.** A ctor delegates by calling another (`return Buffer.make(…)`). There is no
   `init` hook, no designated/final ctor, and no mandatory funnel — shared logic lives in the ctor others
   chain to, and it is greppable.
@@ -4455,7 +4460,8 @@ kama has no exceptions, so a **fallible constructor returns `Result<T, E>`** (wh
 infallible ctor returns the bare `T`. The fallible work lives in the ctor, and on failure it returns `Err`
 *before* the object exists, so no half-constructed object can escape and `match` forces the caller to handle
 the error. A fallible `new Type.ctor(...)` composes to `Result<Owned<T>, E>` — the box is allocated only on
-`Ok`.
+`Ok`. An `Err` returned after some fields were stored drops what was stored, as the type's destructor would, so <!-- test: ctor_abandon_drops -->
+failing late leaks nothing; so does any ctor `return` that hands back a value other than `this`.
 
 ```kama
 type enum SizeError implements Error { TooSmall; public const fn string message() { return "size must be positive"; } }
