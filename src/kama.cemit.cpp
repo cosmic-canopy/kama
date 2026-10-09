@@ -20517,7 +20517,14 @@ CEmitter::ConfSig CEmitter::implSigOf(ClassInfo& tci, ClassInfo* owner, MethodIn
     ConfSig s;
     ClassInfo& src = owner ? *owner : tci;
     NsCtx saved = _nsCtx;
-    if (!src.scope.empty()) { _nsCtx.scope = src.scope; _nsCtx.usings = src.usings; _nsCtx.symbolAliases = src.symbolAliases; }
+    // A `type adapter`'s method was written in the ADAPTER's module, not the target's: `put(ref Sink into)` over
+    // `DynamicArray<uint8>` names the program's `Sink`, which `std::collections` cannot see. Reseated to the
+    // target's scope it read as a different type, and the conformance was refused as "takes `Sink` … the contract
+    // declares `Sink`" — every adapter over a std type that named its own module's types (0.9.565 and before).
+    auto ac = mi->fromAdapter ? _adapterMethodCtx.find(mi->cName) : _adapterMethodCtx.end();
+    const std::string savedUnit = _collectingUnitPath;
+    if (ac != _adapterMethodCtx.end()) { _nsCtx = ac->second.first; _collectingUnitPath = ac->second.second; }   // and its file's private names
+    else if (!src.scope.empty()) { _nsCtx.scope = src.scope; _nsCtx.usings = src.usings; _nsCtx.symbolAliases = src.symbolAliases; }
     {
         ScopedStr  _ts(_thisType, tci.name);
         ScopedThis _tt(_typeSubst, synthId(tci.name));
@@ -20535,9 +20542,23 @@ CEmitter::ConfSig CEmitter::implSigOf(ClassInfo& tci, ClassInfo* owner, MethodIn
                                : mi->isOperator && mi->opDecl && mi->opDecl->operatorDeclarator
                                    ? operatorParamList(mi->opDecl->operatorDeclarator.get())
                                    : SharedParameterList();
+        // An adapter's types are rendered where it was written, with the target instance's arguments bound to
+        // its template's parameters (`<DynamicArray> when [T: Arg]` writes `T`), as applyTemplateAdapter binds them.
+        auto renderParam = [&](SharedIdentifier t) -> std::string {
+            if (ac == _adapterMethodCtx.end()) return cTypeInInstance(tci.name, t);
+            const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+            auto gi = _genericTypeInsts.find(tci.name);
+            if (gi != _genericTypeInsts.end()) {
+                const std::vector<std::string>& params = _genericTypeParams[gi->second.templateKey];
+                for (size_t i = 0; i < params.size() && i < gi->second.typeArgs.size(); ++i) _typeSubst[params[i]] = gi->second.typeArgs[i];
+            }
+            const std::string r = cType(t);
+            _typeSubst = savedSubst;
+            return r;
+        };
         if (ps) {
             for (auto& p : *ps) {
-                s.cParam.push_back(p && p->type ? cTypeInInstance(tci.name, p->type) : "");
+                s.cParam.push_back(p && p->type ? renderParam(p->type) : "");
                 s.kamaParam.push_back(p && p->type ? kamaTypeText(p->type) : "");
                 s.label.push_back(p && p->identifier && p->identifier->value ? *p->identifier->value : "");
                 s.byRef.push_back(p ? paramByRef(p.get()) : false);
@@ -20556,6 +20577,7 @@ CEmitter::ConfSig CEmitter::implSigOf(ClassInfo& tci, ClassInfo* owner, MethodIn
         }
     }
     _nsCtx = saved;
+    _collectingUnitPath = savedUnit;
     return s;
 }
 
@@ -21029,6 +21051,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             }
             MethodInfo mi = enumMethodInfo(md, tkey, contract);
             mi.fromAdapter = adapted;
+            if (adapted) _adapterMethodCtx[mi.cName] = { _nsCtx, _collectingUnitPath };   // where its signature was written (implSigOf)
             // An adapter's signature names types as ITS module sees them (`SqlValue`, imported in std::fmt), but
             // the target's vtable is emitted in the target's module, which may not see them at all. Resolve the
             // return type here, under the adapter's context and the instance's substitution, so every later

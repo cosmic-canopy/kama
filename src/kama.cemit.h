@@ -2017,6 +2017,7 @@ private:
     // …)`, which builds the value in storage its caller hands it, plus `T__name(…)`, a wrapper for an expression
     // with no storage to offer. `_ctorInto` is set while the into body is emitted (its `return`s write `*self`).
     // A construction site OFFERS its storage to the ctor call its own expression is (offerCtorInto/takeCtorInto).
+    std::map<std::string, std::pair<NsCtx, std::string>> _adapterMethodCtx;   // adapter method cName -> (context, file) it was written in
     bool _ctorInto = false;
     // A STACK, because sites nest: the arguments of a ctor that is building into a local can hold a `match` whose
     // arms are sites of their own. Each offer names its node and records whether its call took it; a nested

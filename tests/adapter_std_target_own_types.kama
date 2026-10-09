@@ -1,0 +1,49 @@
+// A `type adapter` over a std type may name its own module's types in a method's signature. The conformance check
+// rendered an adapter method's parameters in the TARGET's module, where `Sink` does not resolve, and refused it as
+// "takes `Sink` … the contract declares `Sink`" — for an adapter over `DynamicArray<uint8>`, over every
+// `DynamicArray<T>` with `when [T: Arg]`, and over `std::uuid::Uuid`. An adapter over a primitive was unaffected.
+// Fixed in 0.9.566. Returns 42.
+import { std::collections::DynamicArray, std::uuid::Uuid };
+
+type resource Sink {
+    int64 n = 0;
+    public ctor make() { }
+    public fn void bump(int64 by) { this.n = this.n + by; }
+    public const fn int64 total() { return this.n; }
+}
+type contract Arg for value, resource, enum, intrinsic {
+    const fn void put(ref Sink into);
+    const fn bool fits(const ref Sink limit);
+}
+type adapter <int32> implements Arg {
+    public const fn void put(ref Sink into) { into.bump(by: cast<int64>(this)); }
+    public const fn bool fits(const ref Sink limit) { return cast<int64>(this) <= limit.total(); }
+}
+type adapter <DynamicArray<uint8>> implements Arg {
+    public const fn void put(ref Sink into) { into.bump(by: cast<int64>(this.length())); }
+    public const fn bool fits(const ref Sink limit) { return true; }
+}
+type adapter <DynamicArray> implements Arg when [T: Arg] {
+    public const fn void put(ref Sink into) { isize i = 0; while (i < this.length()) { this[i].put(into: ref into); i = i + 1; } }
+    public const fn bool fits(const ref Sink limit) { return true; }
+}
+type adapter <Uuid> implements Arg {
+    public const fn void put(ref Sink into) { into.bump(by: 20i64); }
+    public const fn bool fits(const ref Sink limit) { return true; }
+}
+
+fn void feed(ref Sink s, Arg a) { a.put(into: ref s); }
+
+fn int32 main() {
+    Sink s = Sink.make();
+    DynamicArray<uint8> bytes = DynamicArray.empty();
+    bytes.add(item: 1ui8);
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 7);
+    xs.add(item: 9);
+    feed(s: ref s, a: 5);           // 5
+    feed(s: ref s, a: bytes);       // 1
+    feed(s: ref s, a: xs);          // 16
+    feed(s: ref s, a: Uuid.nil());  // 20
+    return cast<int32>(s.total());  // 42
+}
