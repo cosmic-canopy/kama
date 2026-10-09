@@ -7559,11 +7559,22 @@ static const char kDropBuiltOpen = '\x01', kDropBuiltClose = '\x02';
 // value) drops what it built, as its destructor would, in reverse declaration order with the base last. Until
 // 0.9.560 it dropped nothing: a fallible ctor that stored a resource in a field and then failed leaked it. Which
 // fields hold something is the move state the prologue seeded: a move-only field is empty until its first store.
-void CEmitter::emitDropBuiltFields(int depth)
+//
+// Where `this` is COMPLETE — every field holds a value — it is a value like any other, and it is dropped whole,
+// through its destructor. Field by field, a type whose destructor BODY frees what its raw-pointer fields hold —
+// every std collection — was dropped without that body: `DynamicArray.deserialize` failing on its second element
+// leaked the buffer its first had grown. A `this` still missing a field is never handed to the destructor body,
+// which would read the field's zero as a value.
+void CEmitter::emitDropBuiltFields(int depth, const ASTNode* ret)
 {
     if (!_currentClass) return;
     ClassInfo& ci = *_currentClass;
     *_out << kDropBuiltOpen;
+    if (ci.destructible && (_ctorCompleteFromStart || _ctorCompleteReturns.count(ret))) {
+        indent(depth); *_out << ci.name << "__dtor(self);\n";
+        *_out << kDropBuiltClose;
+        return;
+    }
     for (auto it = ci.fields.rbegin(); it != ci.fields.rend(); ++it) {
         auto cit = _classes.find(fieldCType(ci.name, *it));
         if (cit == _classes.end() || !cit->second.destructible || !assignTargetLive("this." + it->name)) continue;
@@ -8582,7 +8593,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 indent(depth); *_out << _ctorIntoErrCType << " " << et << ";\n";
                 emitOwnedValueInto(et, _ctorIntoErrCType, errValue, n->line, depth, "a return value");
                 emitUnwindAll(depth);
-                emitDropBuiltFields(depth);
+                emitDropBuiltFields(depth, n);
                 indent(depth); *_out << "kama_out->kama_tag = " << _currentReturnCType << "_Err;\n";
                 indent(depth); *_out << "kama_out->kama_u.k_Err.k_error = " << et << ";\n";
                 indent(depth); *_out << "return;\n";
@@ -8594,7 +8605,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             indent(depth); *_out << _currentReturnCType << " " << tmp << ";\n";
             emitOwnedValueInto(tmp, _currentReturnCType, ret->expression, n->line, depth, "a return value");
             emitUnwindAll(depth);
-            if (abandons) emitDropBuiltFields(depth);
+            if (abandons) emitDropBuiltFields(depth, n);
             if (into) {
                 indent(depth); *_out << (fallibleInto ? "*kama_out = " : "*self = ") << tmp << ";\n";
                 indent(depth); *_out << "return;\n";
@@ -24962,6 +24973,9 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         if (f.initializer || owner.genZero || owner.isExternStruct) continue;
         if (isOwning || bare || !isDefaultFillable(fc)) mustAssign.insert(f.name);
     }
+    // Which returns leave `this` COMPLETE (emitDropBuiltFields): every return, when the prologue fills every field.
+    _ctorCompleteReturns.clear();
+    _ctorCompleteFromStart = mustAssign.empty();
     if (mustAssign.empty() || !body || !body->statements) return;             // nothing to seal
 
     std::set<std::string> ownerLocals;                       // locals whose declared type is this owner
@@ -25095,6 +25109,7 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
             Assigned* outer = assigned;
             assigned = &state;                               // judged by what THIS path assigned
             classify(ret->expression, bad, line);
+            if (missingField("this").empty()) _ctorCompleteReturns.insert(ret);   // `this` is whole here
             assigned = outer;
             if (!bad.empty()) reportMissing(bad, line ? line : st->line);
             return true;
@@ -32489,10 +32504,12 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
         indent(depth); *_out << "else " << dst << " = " << t << ".kama_u.k_Ok.k_value;\n";
         return;
     }
-    // propagate the boxed `Err` (drop the partial via `cleanup`).
+    // propagate the boxed `Err` (drop the partial via `cleanup`), one level out: a `DeError`'s path gains the field it
+    // was read for (`DeError::inField`), so `port` failing inside `server` reports `server.port`.
+    const std::string nestedErr = t + ".kama_u.k_Err.k_error";
     indent(depth); *_out << "if (" << t << ".kama_tag == " << innerRes << "_Err) { " << cleanup
                          << "return (" << resultCType << "){ .kama_tag = " << resultCType << "_Err, .kama_u.k_Err = { .k_error = "
-                         << t << ".kama_u.k_Err.k_error } }; }\n";
+                         << (_serdeStep.empty() ? nestedErr : deErrorInField(nestedErr, _serdeStep)) << " } }; }\n";
     indent(depth); *_out << dst << " = " << t << ".kama_u.k_Ok.k_value;\n";
 }
 
@@ -32587,16 +32604,50 @@ void CEmitter::emitSerFieldReadPrologue(ClassInfo& ci, const FieldInfo& f, size_
     indent(depth); *_out << "kama_seen[" << slot << "] = 1;\n";
 }
 
-// The fields that must be present: neither `Optional`, `@deprecated` nor `@field(default)`. "" when none must.
-std::string CEmitter::serMissingFieldTest(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf)
+// The fields that must be present — neither `Optional`, `@deprecated` nor `@field(default)` — by slot.
+std::vector<size_t> CEmitter::serRequiredFields(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf)
 {
-    std::string t;
+    std::vector<size_t> out;
     for (size_t i = 0; i < rf.size(); ++i) {
         const FieldInfo& f = *rf[i];
         const bool optional = f.type && f.type->value && *f.type->value == "Optional";
-        if (optional || f.serDeprecated || f.serDefault) continue;
-        t += (t.empty() ? "" : " || ") + std::string("!kama_seen[") + std::to_string(i) + "]";
+        if (!(optional || f.serDeprecated || f.serDefault)) out.push_back(i);
     }
+    return out;
+}
+
+// A read that fails constructs nothing, so the type's destructor never sees it: its body would run on fields the
+// data never filled — a zero `fd` closed, a counter of live values decremented for one that never lived. What the
+// reader does hold is dropped, field by field, in reverse declaration order: every declared value, and every key it
+// read in full. A composite read that failed returned before filling its field, and a scalar owns nothing, so a key
+// seen is a key held — except the one whose read is failing now (`except`), which the prologue left zeroed.
+std::string CEmitter::serDropHeld(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf,
+                                  const std::set<std::string>& filled, int except)
+{
+    std::string out;
+    for (auto it = ci.fields.rbegin(); it != ci.fields.rend(); ++it) {
+        const FieldInfo& f = *it;
+        const std::string fct = fieldCType(ci.name, f);
+        auto fc = _classes.find(fct);
+        if (fc == _classes.end() || !fc->second.destructible) continue;
+        int slot = -1;
+        for (size_t i = 0; i < rf.size(); ++i) if (rf[i] == &f) slot = (int)i;
+        if (slot >= 0 && slot == except) continue;
+        const std::string drop = fct + "__dtor(&result." + kMember(ci, f.name) + "); ";
+        if (filled.count(f.name)) out += drop;
+        else if (slot >= 0) out += "if (kama_seen[" + std::to_string(slot) + "]) " + drop;
+    }
+#if KAMA_INHERITANCE
+    if (ci.base && ci.base->destructible) out += ci.baseName + "__dtor(&result.kama_base); ";
+#endif
+    return out;
+}
+
+// Whether one of them did not arrive. "" when none must.
+std::string CEmitter::serMissingFieldTest(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf)
+{
+    std::string t;
+    for (size_t i : serRequiredFields(ci, rf)) t += (t.empty() ? "" : " || ") + std::string("!kama_seen[") + std::to_string(i) + "]";
     return t;
 }
 
@@ -32620,9 +32671,8 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
             indent(1); *_out << "result." << kMember(ci, f.name) << " = (" << oc << "){ .kama_tag = " << oc << "_None };\n";
         }
     }
-    // On an early Err inside the loop: free the current key, then drop the partial result.
-    std::string cleanup = std::string("kama__FieldKey__dtor(&kama_key); ")
-                        + (ci.destructible ? (ci.name + "__dtor(&result); ") : "");
+    // On an early Err inside the loop: free the current key, then drop what the reader holds (serDropHeld) — the
+    // field being read, which failed, holds nothing.
     // READ-visible fields: `@deprecated` is still read, so it stays in this list (it is only dropped from
     // the write side). An unknown key falls to `skipValue`, which is what keeps a named stream
     // forward-compatible.
@@ -32631,14 +32681,23 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     // `@deprecated` field — read when present, never written — must not be counted, or a positional
     // reader expects one field too many and runs off the end of the record.
     if (!rf.empty()) { indent(1); *_out << "bool kama_seen[" << rf.size() << "] = {0};\n"; }   // which keys arrived
+    // WHERE a failure happened, at no cost until one does: the slot whose value is being read, -1 between fields. A
+    // reader that fails answers `moreFields` with false, so the loop stops with this naming the field it stopped in —
+    // and a broken key, read after the reset, names none. It is one store per field; asking `failed()` per field
+    // would be a call.
+    if (!rf.empty()) { indent(1); *_out << "int32_t kama_at = -1;\n"; }
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
     indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
+    if (!rf.empty()) { indent(2); *_out << "kama_at = -1;\n"; }
     emitFieldKeySlot(ci, rf, 2);
     indent(2); *_out << "switch (__slot) {\n";
+    auto wire = [](const FieldInfo& f) { return f.serName.empty() ? f.name : f.serName; };
     for (size_t i = 0; i < rf.size(); ++i) {
         indent(3); *_out << "case " << i << ": {\n";
+        indent(4); *_out << "kama_at = " << i << ";\n";
         emitSerFieldReadPrologue(ci, *rf[i], i, "result." + kMember(ci, rf[i]->name), filled, 4);
-        { ScopedStr _sf(_serdeField, rf[i]->name); emitDeFieldRead(rf[i]->type, "result." + kMember(ci, rf[i]->name), 4, resC, cleanup); }
+        { ScopedStr _sf(_serdeField, rf[i]->name), _st(_serdeStep, wire(*rf[i]));
+          emitDeFieldRead(rf[i]->type, "result." + kMember(ci, rf[i]->name), 4, resC, "kama__FieldKey__dtor(&kama_key); " + serDropHeld(ci, rf, filled, (int)i)); }
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
@@ -32647,19 +32706,26 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     indent(2); *_out << "kama__FieldKey__dtor(&kama_key);\n";   // the key owns its name string — free each iteration
     indent(1); *_out << "}\n";
     indent(1); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
-    // Boundary: a sticky failure (a scalar read / an explicit `fail`) → drop the partial + Err(boxed).
+    // Boundary: a sticky failure (a scalar read / an explicit `fail`) → drop the partial + Err(boxed), naming the
+    // field the reader stopped in.
+    std::vector<std::pair<std::string, std::string>> atNames;
+    for (size_t i = 0; i < rf.size(); ++i) atNames.push_back({ "kama_at == " + std::to_string(i), wire(*rf[i]) });
+    const std::string dropHeld = serDropHeld(ci, rf, filled, -1);
     indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
-    if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&result);\n"; }
-    std::string box = emitStickyErrBox();
+    if (!dropHeld.empty()) { indent(2); *_out << dropHeld << "\n"; }
+    std::string box = deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", serPathChoice(atNames));
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << box << " } };\n";
     indent(1); *_out << "}\n";
-    // A field the data left out that it had to carry. Asked AFTER the sticky failure, which is the
-    // first thing wrong with a stream that broke off. `Optional`, `@deprecated` and `@field(default)` may be absent.
+    // A field the data left out that it had to carry, named — the first one missing. Asked AFTER the sticky failure,
+    // which is the first thing wrong with a stream that broke off. `Optional`, `@deprecated` and `@field(default)`
+    // may be absent.
     const std::string missing = serMissingFieldTest(ci, rf);
     if (!missing.empty()) {
+        std::vector<std::pair<std::string, std::string>> missNames;
+        for (size_t i : serRequiredFields(ci, rf)) missNames.push_back({ "!kama_seen[" + std::to_string(i) + "]", wire(*rf[i]) });
         indent(1); *_out << "if (" << missing << ") {\n";
-        if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&result);\n"; }
-        std::string mbox = emitStickyErrBox(preludeName("DeError"), "kama__DeError_MissingField");
+        if (!dropHeld.empty()) { indent(2); *_out << dropHeld << "\n"; }
+        std::string mbox = deErrorBox(preludeName("DeErrorKind") + "_MissingField", serPathChoice(missNames));
         indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << mbox << " } };\n";
         indent(1); *_out << "}\n";
     }
@@ -32791,7 +32857,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         indent(1); *_out << "}\n";
         indent(1); *_out << "kama__FieldKey__dtor(&kama_tag);\n";
         indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
-        std::string nbox = emitStickyErrBox();
+        std::string nbox = deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit(""));
         indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << nbox << " } };\n";
         indent(1); *_out << "}\n";
         indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama_result } };\n";
@@ -32809,6 +32875,13 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
                             "kama__FieldKey__dtor(&__sk); r.kama_vtbl->k_skipValue(r.kama_obj); }\n";
         indent(d); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
     };
+    // WHERE a failure happened: the payload field being read, as `Variant.field`. The payload is read positionally
+    // with no loop to reset at, so each field asks whether the reader already failed — the first failure is the
+    // one to name, and every read after it answers a default.
+    std::vector<std::pair<std::string, std::string>> atNames;
+    for (auto& v : ci.variants)
+        for (auto& f : v.payload) atNames.push_back({ "kama_at == " + std::to_string(atNames.size()), v.name + "." + f.name });
+    if (!atNames.empty()) { indent(1); *_out << "int32_t kama_at = -1;\n"; }
     // 0 = "not statically known": which variant follows — and so whether the frame is `{tag}` or
     // `{tag, value}` — is only known once the tag is read, and the tag is INSIDE this object.
     indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, 0);\n";
@@ -32818,6 +32891,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     indent(1); *_out << "kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); kama__FieldKey__dtor(&__k);\n";   // the "tag" key
     emitVariantKeySlot(ci, 1);
     bool first = true;
+    size_t at = 0;   // the payload field's place in `atNames`
     for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
         auto& v = ci.variants[vi];
         indent(1); *_out << (first ? "if" : "else if") << " (__vslot == " << vi << ") {\n";
@@ -32830,13 +32904,16 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
             for (size_t i = 0; i < v.payload.size(); ++i) {
                 const FieldInfo& f = v.payload[i];
                 std::string idx = std::to_string(i);
+                indent(2); *_out << "if (!r.kama_vtbl->k_failed(r.kama_obj)) kama_at = " << at++ << ";\n";
                 indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj);\n";
                 indent(2); *_out << "kama__FieldKey __pk" << idx << " = r.kama_vtbl->k_field(r.kama_obj); kama__FieldKey__dtor(&__pk" << idx << ");\n";
                 indent(2); *_out << cType(f.type) << " kama_p_" << f.name << ";\n";
-                { ScopedStr _sf(_serdeField, f.name); emitDeFieldRead(f.type, "kama_p_" + f.name, 2, resC, cleanup); }
+                { ScopedStr _sf(_serdeField, f.name), _st(_serdeStep, v.name + "." + f.name);
+                  emitDeFieldRead(f.type, "kama_p_" + f.name, 2, resC, cleanup); }
                 if (_classes.count(cType(f.type)) && _classes[cType(f.type)].destructible)
                     cleanup += cType(f.type) + "__dtor(&kama_p_" + f.name + "); ";
             }
+            indent(2); *_out << "if (!r.kama_vtbl->k_failed(r.kama_obj)) kama_at = -1;\n";   // the framing is the enum's own
             closeObj(2);   // the value object
             closeObj(2);   // the outer object
             indent(2); *_out << "kama_result = (" << ci.name << "){ .kama_tag = " << ci.name << "_" << v.name << ", .kama_u." << kName(v.name) << " = { ";
@@ -32860,7 +32937,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         indent(1); *_out << "else {\n";
         indent(2); *_out << "r.kama_vtbl->k_fail(r.kama_obj);\n";
         indent(2); *_out << "kama__FieldKey__dtor(&kama_tag);\n";
-        std::string ubox = emitStickyErrBox();
+        std::string ubox = deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit(""));
         indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << ubox << " } };\n";
         indent(1); *_out << "}\n";
     }
@@ -32868,7 +32945,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     // Boundary: an unknown tag (`fail`) or a scalar payload failure → drop the partial + Err(boxed); else Ok.
     indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
     if (ci.destructible) { indent(2); *_out << ci.name << "__dtor(&kama_result);\n"; }
-    std::string ebox = emitStickyErrBox();
+    std::string ebox = deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", serPathChoice(atNames));
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << ebox << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama_result } };\n";
@@ -33182,13 +33259,37 @@ SharedIdentifier CEmitter::resultUnitOwnedErrorTypeNode()
     return resultOwnedErrorTypeNode(unit);
 }
 
-// The boxing of a sticky enum error (`DeError` for read, `SerError` for write) drawn from `errExpr` into an
-// `Owned<Error>` — an expression (boxValueExpr), so the synthesized serde bodies, which are hand-emitted C rather
-// than the expression/hoist path, take it in place.
+// The boxing of a writer's sticky `SerError` drawn from `errExpr` into an `Owned<Error>` — an expression
+// (boxValueExpr), so the synthesized serde bodies, which are hand-emitted C rather than the expression/hoist path,
+// take it in place. A reader's failure is a `DeError` with a path: deErrorBox.
 std::string CEmitter::emitStickyErrBox(const std::string& enumType, const std::string& errExpr)
 {
     const std::string ownedErr = cType(ownedErrorTypeNode());
     return boxValueExpr(ownedErr, enumType, enumType + "__as_" + _classes[ownedErr].collElemClass, errExpr, 0);
+}
+
+// A reader's failure, boxed: `DeError.at(kind:, field:)` — the kind the reader latched, and where. The path is
+// chosen in C because which field the reader was in is known only at run time (serPathChoice).
+std::string CEmitter::deErrorBox(const std::string& kindExpr, const std::string& pathExpr)
+{
+    const std::string de = preludeName("DeError");
+    const std::string ownedErr = cType(ownedErrorTypeNode());
+    return boxValueExpr(ownedErr, de, de + "__as_" + _classes[ownedErr].collElemClass,
+                        _classes[de].methods["at"].cName + "(" + kindExpr + ", " + pathExpr + ")", 0);
+}
+
+// A nested read's error one level out: `DeError::inField(error:, name:)`, the same call a hand-written reader makes.
+std::string CEmitter::deErrorInField(const std::string& boxExpr, const std::string& name)
+{
+    return _classes[preludeName("DeError")].methods["inField"].cName + "(" + boxExpr + ", " + kamaStrLit(name) + ")";
+}
+
+std::string CEmitter::serPathChoice(const std::vector<std::pair<std::string, std::string>>& condAndName)
+{
+    std::string e = kamaStrLit("");
+    for (auto it = condAndName.rbegin(); it != condAndName.rend(); ++it)
+        e = "(" + it->first + " ? " + kamaStrLit(it->second) + " : " + e + ")";
+    return e;
 }
 
 // Synthesize an `Optional<elem>` type node (the `.as<T>()` result). Resolves like a user-written
@@ -33818,7 +33919,7 @@ void CEmitter::emitGraphFieldRead(SharedIdentifier ty, const std::string& dst, i
             indent(depth); *_out << "if (" << t << ".kama_tag == " << innerRes << "_Ok) " << dst << " = " << t
                                  << ".kama_u.k_Ok.k_value;\n";
             indent(depth); *_out << "else { " << cType(ownedErrorTypeNode()) << "__dtor(&" << t
-                                 << ".kama_u.k_Err.k_error); kama_de_graph_fail(g, kama__DeError_Malformed); }\n";
+                                 << ".kama_u.k_Err.k_error); kama_de_graph_fail(g, kama__DeErrorKind_Malformed); }\n";
             return;
         }
     }
@@ -33874,20 +33975,20 @@ void CEmitter::emitGraphFieldWire(SharedIdentifier ty, const std::string& dst, i
         indent(depth); *_out << "{ uint64_t __rid = (uint64_t)(uintptr_t)" << slot << "; " << slot << " = NULL;\n";
         indent(depth + 1); *_out << "if (__rid != 0) {\n";
         indent(depth + 2); *_out << "kama_de_box* __t = kama_de_graph_lookup(g, __rid);\n";
-        indent(depth + 2); *_out << "if (!__t) kama_de_graph_fail(g, kama__DeError_UnresolvedReference);\n";
+        indent(depth + 2); *_out << "if (!__t) kama_de_graph_fail(g, kama__DeErrorKind_UnresolvedReference);\n";
         indent(depth + 2); *_out << "else {\n";
         if (e.elemIsContract) {
             indent(depth + 3); *_out << "const struct " << X << "_vtbl* __vt = " << X << "__graphImplVtbl(__t->type_id);\n";
-            indent(depth + 3); *_out << "if (!__vt) kama_de_graph_fail(g, kama__DeError_TypeMismatch);\n";
+            indent(depth + 3); *_out << "if (!__vt) kama_de_graph_fail(g, kama__DeErrorKind_TypeMismatch);\n";
             indent(depth + 3); *_out << "else { (" << dst << ").kama_obj = __t->ptr; (" << dst << ").kama_vtbl = __vt; (" << dst << ").kama_ctrl = __t->kama_ctrl; __t->kama_ctrl->" << cnt << "++; }\n";
         } else {
-            indent(depth + 3); *_out << "if (__t->type_id != " << _classes[X].graphTypeId << "u) kama_de_graph_fail(g, kama__DeError_TypeMismatch);\n";
+            indent(depth + 3); *_out << "if (__t->type_id != " << _classes[X].graphTypeId << "u) kama_de_graph_fail(g, kama__DeErrorKind_TypeMismatch);\n";
             indent(depth + 3); *_out << "else { (" << dst << ").k_p = (" << X << "*)__t->ptr; (" << dst << ").k_c = (void*)__t->kama_ctrl; __t->kama_ctrl->" << cnt << "++; }\n";
         }
         indent(depth + 2); *_out << "}\n";
         indent(depth + 1); *_out << "}\n";
         // A `Shared` is never null: an id of 0 under one is a forged wire. A `Weak` at 0 is simply expired.
-        if (e.kind == "Shared") { indent(depth + 1); *_out << "else kama_de_graph_fail(g, kama__DeError_UnresolvedReference);\n"; }
+        if (e.kind == "Shared") { indent(depth + 1); *_out << "else kama_de_graph_fail(g, kama__DeErrorKind_UnresolvedReference);\n"; }
         indent(depth); *_out << "}\n";
         return;
     }
@@ -33922,7 +34023,7 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
         indent(1); *_out << resC << " __t = " << ci.name << "__deserializeFrom(r, g);\n";
         indent(1); *_out << "if (__t.kama_tag == " << resC << "_Ok) *self = __t.kama_u.k_Ok.k_value;\n";
         indent(1); *_out << "else { " << cType(ownedErrorTypeNode()) << "__dtor(&__t.kama_u.k_Err.k_error); "
-                            "kama_de_graph_fail(g, kama__DeError_Malformed); }\n";
+                            "kama_de_graph_fail(g, kama__DeErrorKind_Malformed); }\n";
         *_out << "}\n\n";
         return;
     }
@@ -33960,7 +34061,13 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
     indent(1); *_out << "}\n";
     indent(1); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
     const std::string missing = serMissingFieldTest(ci, rf);   // a field the data had to carry
-    if (!missing.empty()) { indent(1); *_out << "if (" << missing << ") kama_de_graph_fail(g, kama__DeError_MissingField);\n"; }
+    if (!missing.empty()) {   // named, as the by-value reader names it
+        std::vector<std::pair<std::string, std::string>> missNames;
+        for (size_t i : serRequiredFields(ci, rf))
+            missNames.push_back({ "!kama_seen[" + std::to_string(i) + "]", rf[i]->serName.empty() ? rf[i]->name : rf[i]->serName });
+        indent(1); *_out << "if (" << missing << ") kama_de_graph_fail_at(g, kama__DeErrorKind_MissingField, "
+                         << serPathChoice(missNames) << ");\n";
+    }
     *_out << "}\n\n";
 }
 
@@ -34006,7 +34113,7 @@ void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
         if (!unit) closeObj(2);   // the outer object
         indent(1); *_out << "}\n";
     }
-    indent(1); *_out << "else { r.kama_vtbl->k_fail(r.kama_obj); kama_de_graph_fail(g, kama__DeError_Malformed); }\n";
+    indent(1); *_out << "else { r.kama_vtbl->k_fail(r.kama_obj); kama_de_graph_fail(g, kama__DeErrorKind_Malformed); }\n";
     indent(1); *_out << "kama__FieldKey__dtor(&kama_tag);\n";
     *_out << "}\n\n";
 }
@@ -34616,9 +34723,9 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     indent(2); *_out << "kama__FieldKey __ty = r.kama_vtbl->k_variant(r.kama_obj);\n";
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); { kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); kama__FieldKey__dtor(&__k); }\n";
     indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(__ty, r, &__g);\n";
-    indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, kama__DeError_TypeMismatch);\n";
+    indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, kama__DeErrorKind_TypeMismatch);\n";
     // A table id may appear once, and 0 is never a live id. On refusal the shell just read is dropped.
-    indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, kama__DeError_DuplicateId)) {\n";
+    indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, kama__DeErrorKind_DuplicateId)) {\n";
     indent(3); *_out << "__kama_graph_dropBox(__b);\n";
     indent(2); *_out << "}\n";
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj);\n";
@@ -34643,8 +34750,8 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     // wrong-typed root is a forged wire.
     indent(1); *_out << sharedT << " __ret = {0};\n";
     indent(1); *_out << "kama_de_box* __rb = kama_de_graph_lookup(&__g, kama_root);\n";
-    indent(1); *_out << "if (!__rb) kama_de_graph_fail(&__g, kama__DeError_UnresolvedReference);\n";
-    indent(1); *_out << "else if (__rb->type_id != " << ci.graphTypeId << "u) kama_de_graph_fail(&__g, kama__DeError_TypeMismatch);\n";
+    indent(1); *_out << "if (!__rb) kama_de_graph_fail(&__g, kama__DeErrorKind_UnresolvedReference);\n";
+    indent(1); *_out << "else if (__rb->type_id != " << ci.graphTypeId << "u) kama_de_graph_fail(&__g, kama__DeErrorKind_TypeMismatch);\n";
     indent(1); *_out << "else { __ret.k_p = (" << T << "*)__rb->ptr; __ret.k_c = (void*)__rb->kama_ctrl; __rb->kama_ctrl->kama_strong++; }\n";
     // CLEANUP — drop each shell's construction strong. A node no live edge reaches dies here, so a forged
     // wire cannot leak; one the root reaches survives on the reference just taken.
@@ -34655,13 +34762,13 @@ void CEmitter::emitGraphNodeReadBody(ClassInfo& ci, const std::string& fname,
     // Malformed, so it is reported first.
     indent(1); *_out << "if (__g.failed) {\n";
     indent(2); *_out << sharedT << "__dtor(&__ret);\n";
-    indent(2); *_out << "r.kama_vtbl->k_failWith(r.kama_obj, (kama__DeError)__g.code);\n";
-    std::string gbox = emitStickyErrBox();
+    indent(2); *_out << "r.kama_vtbl->k_failWith(r.kama_obj, (kama__DeErrorKind)__g.code);\n";
+    std::string gbox = deErrorBox("(kama__DeErrorKind)__g.code", "__g.at");   // the walker's own, not the reader's first
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << gbox << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
     indent(2); *_out << sharedT << "__dtor(&__ret);\n";
-    std::string rbox = emitStickyErrBox();
+    std::string rbox = deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit(""));
     indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << rbox << " } };\n";
     indent(1); *_out << "}\n";
     indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = __ret } };\n";
@@ -34701,8 +34808,8 @@ void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
     indent(2); *_out << "kama__FieldKey __ty = r.kama_vtbl->k_variant(r.kama_obj);\n";
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj); { kama__FieldKey __k = r.kama_vtbl->k_field(r.kama_obj); kama__FieldKey__dtor(&__k); }\n";
     indent(2); *_out << "kama_de_box* __b = __kama_graph_readShell(__ty, r, &__g);\n";
-    indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, kama__DeError_TypeMismatch);\n";
-    indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, kama__DeError_DuplicateId)) {\n";
+    indent(2); *_out << "if (!__b) kama_de_graph_fail(&__g, kama__DeErrorKind_TypeMismatch);\n";
+    indent(2); *_out << "else if (!kama_de_graph_enroll(&__g, __eid, __b, kama__DeErrorKind_DuplicateId)) {\n";
     indent(3); *_out << "__kama_graph_dropBox(__b);\n";
     indent(2); *_out << "}\n";
     indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj);\n";
@@ -34730,8 +34837,8 @@ void CEmitter::emitGraphReadRootDriver(ClassInfo& ci)
     indent(1); *_out << "for (size_t __i = 0; __i < kama_de_graph_count(&__g); __i++) __kama_graph_dropBox(kama_de_graph_at(&__g, __i));\n";
     indent(1); *_out << "kama_de_graph_free(&__g);\n";
     indent(1); *_out << "if (__g.failed) {\n";
-    indent(2); *_out << "r.kama_vtbl->k_failWith(r.kama_obj, (kama__DeError)__g.code);\n";
-    std::string gbox = emitStickyErrBox();
+    indent(2); *_out << "r.kama_vtbl->k_failWith(r.kama_obj, (kama__DeErrorKind)__g.code);\n";
+    std::string gbox = deErrorBox("(kama__DeErrorKind)__g.code", "__g.at");   // the walker's own, not the reader's first
     indent(2); *_out << "if (__rv.kama_tag == " << resC << "_Ok) " << cType(retNode->genericArgs->at(0))
                      << "__dtor(&__rv.kama_u.k_Ok.k_value);\n";
     indent(2); *_out << "else " << cType(ownedErrorTypeNode()) << "__dtor(&__rv.kama_u.k_Err.k_error);\n";
@@ -36626,14 +36733,14 @@ std::string CEmitter::emitTryCast(const std::string& target, const std::string& 
 // Model C (P3): `expr.as<T>()` — runtime downcast of a boxed poly-dispatch error to its concrete type `T`,
 // yielding `Optional<T>`. A vtbl-POINTER compare (`(op).vtbl == &T__as_C`), no type-id table — and then, when
 // the pointers differ, the vtbl's `__type` name. The pointer alone is not an identity: a PRELUDE
-// enum (`DeError`, `SerError`) has no home module, so its vtbl is `static` in the shared header and every
+// type (`DeError`, `SerError`) has no home module, so its vtbl is `static` in the shared header and every
 // unit holds its own copy. A `DeError` boxed in `std::uuid` (or any library's `deserialize`) carried that
 // unit's address, and `.as<DeError>()` in the caller's unit answered `None` for exactly the error serde
 // returns (tests/as_downcast_cross_unit.d). A C name is unique program-wide, so the name compare is exact;
 // the pointer compare stays first because it is the common hit and costs nothing. On a hit it
 // COPIES the value out, so `op` stays valid on the `None` branch and still owns what it boxed: bitwise for a type
 // that owns nothing, through the type's own `copy` for one that does. Any concrete type implementing the contract
-// is a target — an enum (`DeError`'s kinds), a value (`IoError`), a copyable resource — because the error model
+// is a target — an enum (`SerError`), a value (`IoError`), a copyable resource (`DeError`) — because the error model
 // is a value with a `kind()` (KPG-22's ruling), and until 0.9.567 `.as<IoError>()` was refused as "not an enum".
 // Only a type that owns something and cannot be copied is refused: a bitwise copy of it would alias the box's.
 std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
@@ -38806,7 +38913,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             auto it = _interfaces.find(ifn);
             if (it == _interfaces.end()) continue;
             if (it->second.isViewable) continue;   // a mint protocol has no vtbl TYPE, so this decl would not compile
-            *_out << "extern const " << it->second.name << "_vtbl " << ci->name << "__as_" << it->second.name << ";\n";
+            // A prelude CLASS has no home module either (`DeError implements Error`): its vtbl is header-static,
+            // defined ahead of the generic instantiations below, so it is declared the same tentative way.
+            *_out << (ci->preludeStatic ? "static const " : "extern const ") << it->second.name << "_vtbl " << ci->name
+                  << "__as_" << it->second.name << ";\n";
         }
     }
     // A generic instance's vtables are `static`, defined in this header further down — but a generic FUNCTION's
@@ -38854,8 +38964,8 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // prototype must precede the `_FUNCS` macro that calls it (re-declared identically by
     // emitClassPrototypes). The C signature is `Elem Elem__copy(Elem* self)` (nullary; paramListC).
     for (ClassInfo* ci : classes)
-        if (!ci->isIntrinsicColl && !ci->isExternStruct && ci->copyable)
-            *_out << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
+        if (!ci->isIntrinsicColl && !ci->isExternStruct && ci->copyable)   // a prelude type's: static, as its dtor's
+            *_out << (ci->preludeStatic ? "static inline " : "") << ci->name << " " << ci->name << "__copy(" << ci->name << "* self);\n";
     emitCollectionDefs(/*typesOnly=*/false);   // the `_FUNCS` half (ctor/dtor/methods)
     for (ClassInfo* ci : classes) {
         if (ci->preludeStatic) {
@@ -39079,6 +39189,15 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             ScopedStr _cu(_collectingUnitPath, eci.declFile);
             emitClassInterfaceVtables(eci);
         }
+        // ...and a prelude CLASS's, for the same reason: a generic instance boxes one (`DeError::inElement`, called
+        // from `DynamicArray<T>.deserialize`).
+        for (auto& kv : _classes) {
+            ClassInfo& pci = kv.second;
+            if (!pci.preludeStatic || pci.isVariant || pci.isScalarEnum() || pci.isGenericInst) continue;
+            scopeOf(pci.declFile, pci.scope, pci.usings, pci.symbolAliases);
+            ScopedStr _cu(_collectingUnitPath, pci.declFile);
+            emitClassInterfaceVtables(pci);
+        }
         _emitStaticClass = false;
     }
 
@@ -39111,7 +39230,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         _emitStaticClass = false;
     }
 
-    // A PRELUDE ENUM with members (e.g. `DeError implements Error`) has no home module, so — like the prelude
+    // A PRELUDE ENUM with members (e.g. `SerError implements Error`) has no home module, so — like the prelude
     // types/impl blocks — emit its `<Enum>__as_C` vtbl (+ dtor / synth serde) `static inline` in the header
     // (the module-content enum pass only covers user units; its `extern` decl is skipped above). Placed
     // BEFORE the impl bodies below, which reference the vtbl when boxing an error into `Owned<Error>`.

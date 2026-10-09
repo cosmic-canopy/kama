@@ -1,6 +1,6 @@
 // Graph deserialize surfaces a TYPE MISMATCH: a polymorphic `Shared<Shape>` edge references a node whose wire
 // `__type` (`Tag`) does not implement `Shape`. The two-pass rebuild recovers the pointee's concrete type from
-// its `__type`, finds no `Shape` conformance for it, and `deserializeJsonBuffer` returns `DeError::TypeMismatch` (not the
+// its `__type`, finds no `Shape` conformance for it, and `deserializeJsonBuffer` returns `DeErrorKind::TypeMismatch` (not the
 // generic `Malformed`). `Tag` is a real graph node (a concrete `Shared<Tag>` pointee) with no pointer fields,
 // so only the mismatching edge fails — mirroring `ser_graph_dangling.kama`'s specific-error assertion.
 import { std::serialization::text::json::deserializeJsonBuffer, std::memory::Shared };
@@ -32,7 +32,7 @@ fn int32 main() {
         case Ok(value: sh): { return 1; }                          // must NOT succeed
         case Err(error: e): {
             match (e.as<DeError>()) {                        // recover the concrete deserialize error
-                case Some(value: ec): { match (ec) {
+                case Some(value: ec): { match (ec.kind()) {
                     case TypeMismatch: { return 0; }         // expected
                     case Malformed: { return 2; }
                     case UnexpectedEnd: { return 3; }

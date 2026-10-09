@@ -1,6 +1,6 @@
 // A derived `deserialize` reports a field the data left out. It used to zero-initialize the
 // result and fill whatever arrived, so `{"x": 1}` read as `Ok(x: 1, y: 0)`. Now a missing field is
-// `Err(DeError::MissingField)`, unless the data may leave it out:
+// `Err(DeErrorKind::MissingField)` naming the field — "missing field `host`" — unless the data may leave it out:
 //   * `Optional`           — absent is `None`;
 //   * `@deprecated`        — written by older versions only, so absent keeps its declared value;
 //   * `@field(default)`    — schema evolution's ADD: absent keeps its declared value.
@@ -40,14 +40,17 @@ type resource Pair {
 
 fn int32 main() {
     if (load(src: "{\"host\": \"db\"}") != "db|5432|fast|9|7") { return 1; }
-    if (load(src: "{\"port\": 1}") != "missing field") { return 2; }
+    if (load(src: "{\"port\": 1}") != "missing field `host`") { return 2; }
     if (load(src: "{\"host\": \"a\", \"host\": \"b\", \"mode\": \"slow\", \"port\": 2, \"legacy\": 4}") != "b|2|slow|4|7") { return 3; }
     // Graph mode: the Leaf node carries no `v`.
     string j = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2}},{\"id\":2,\"type\":\"Leaf\",\"value\":{}}]}";
     Result<Shared<Pair>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Pair>>(src: give j);
     bool graphMissing = match (g) {
         case Ok(value: p): false;
-        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d == DeError::MissingField; case None: false; };
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: d): d.kind() == DeErrorKind::MissingField && d.message() == "missing field `v`";
+            case None: false;
+        };
     };
     return graphMissing ? 0 : 4;
 }

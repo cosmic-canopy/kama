@@ -2052,14 +2052,17 @@ typedef struct kama_de_graph {
     uint64_t*     order;   // parallel: each shell's wire id
     size_t        kama_len, kama_cap;
     int           failed;  // sticky, walker-side: the reader has its own flag
-    int           code;    // a DeError tag, translated at the boundary by emitted C
+    int           code;    // a DeErrorKind tag, translated at the boundary by emitted C
+    kama_string   at;      // the field a node was missing — a string LITERAL (owns nothing), "" for none
 } kama_de_graph;
 
 static inline void kama_de_graph_init(kama_de_graph* g) {
     kama_gmap_init(&g->byid); g->boxes = NULL; g->order = NULL; g->kama_len = 0; g->kama_cap = 0;
-    g->failed = 0; g->code = 0;
+    g->failed = 0; g->code = 0; g->at = kama_string_lit("", 0);
 }
 static inline void kama_de_graph_fail(kama_de_graph* g, int code) { g->failed = 1; g->code = code; }
+// ...naming the field it is about. `at` is a literal the emitted reader passes, so the graph never frees it.
+static inline void kama_de_graph_fail_at(kama_de_graph* g, int code, kama_string at) { g->failed = 1; g->code = code; g->at = at; }
 
 // A table id may appear once; id 0 and a repeat are both a forged wire. Returns 0 when the shell was NOT
 // taken (the caller drops it), 1 when enrolled.

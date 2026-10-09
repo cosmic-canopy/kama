@@ -2458,7 +2458,7 @@ Arrow, Parquet, Avro and BigQuery store; Postgres's binary DATE is that minus 10
 microseconds from 2000-01-01 — `Timestamp.fromUnixMicros` plus a constant.
 
 Both types serialize as that text on every backend, as a `Uuid` does, and text that does not parse is <!-- test: time_serde -->
-`DeError::Malformed`.
+`DeErrorKind::Malformed`.
 
 `sleep(d: Duration)` blocks the calling thread for **at least** `d`: POSIX resumes `nanosleep` across a
 signal (without which any program that also uses `std::process` wakes early when a child exits), and a
@@ -2677,7 +2677,7 @@ Go, Rust and Zig leave UUIDs to a package, and the ubiquity of that package is t
    id is still a name, not a credential: a v7 dates itself, and anything that grants access by knowing an
    id wants a secret beside it.
 6. **On the wire a `Uuid` is its canonical string, on every backend.** It is serialized to meet a
-   database or an HTTP API, and text that is not a UUID fails the read as `DeError::Malformed` rather than
+   database or an HTTP API, and text that is not a UUID fails the read as `DeErrorKind::Malformed` rather than
    decoding to some id. <!-- test: uuid_serde -->
 
 ### Encoding (`std::encoding`) ✅
@@ -4492,7 +4492,10 @@ infallible ctor returns the bare `T`. The fallible work lives in the ctor, and o
 *before* the object exists, so no half-constructed object can escape and `match` forces the caller to handle
 the error. A fallible `new Type.ctor(...)` composes to `Result<Owned<T>, E>` — the box is allocated only on
 `Ok`. An `Err` returned after some fields were stored drops what was stored, as the type's destructor would, so <!-- test: ctor_abandon_drops -->
-failing late leaks nothing; so does any ctor `return` that hands back a value other than `this`.
+failing late leaks nothing; so does any ctor `return` that hands back a value other than `this`. Where `this` is
+complete — every field holds a value — it is a value like any other and is dropped through its destructor, body <!-- test: ctor_abandon_complete -->
+and all, which is what releases what a collection keeps behind a raw pointer. Where a field is still missing, only
+the stored fields are dropped: the destructor body would read the missing one's zero as a value.
 
 ```kama
 type enum SizeError implements Error { TooSmall; public const fn string message() { return "size must be positive"; } }
@@ -5742,8 +5745,8 @@ error is boxed: reading data returns `Result<T, Owned<Error>>`, because the form
 error and a type's hand-written `deserialize` may fail with another. `e.message()` reports any of them. To branch <!-- test: as_downcast_value -->
 on one, `e.as<T>()` asks whether the box holds a `T` and answers `Optional<T>`: `Some` with a copy when it does,
 `None` when it holds something else. It is a checked test, never a reinterpretation, and the box keeps what it
-holds. `T` is any concrete type implementing `Error` — an enum, a value such as `IoError` (whose `kind()` is what
-code branches on), a copyable resource. A type that owns something and cannot be copied is refused, since a <!-- xfail: as_downcast_uncopyable -->
+holds. `T` is any concrete type implementing `Error` — an enum, a value such as `IoError`, a copyable resource such as
+`DeError` (the last two have a `kind()`, which is what code branches on). A type that owns something and cannot be copied is refused, since a <!-- xfail: as_downcast_uncopyable -->
 bitwise copy would alias the box's.
 
 ## Modules ✅
@@ -6407,7 +6410,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   fields skip cleanly. KNUM keys each value with `(id << 3) | wireType` and zigzag-varints its integers, so a
   small negative costs one byte; the wire type is what lets an unknown id be measured and stepped over. POS
   writes no names, no tags and no object framing at all — a six-field `int32` record is 24 bytes — and therefore
-  cannot skip: a stream that does not match the type is `DeError::Malformed`. It carries an object graph all the
+  cannot skip: a stream that does not match the type is `DeErrorKind::Malformed`. It carries an object graph all the
   same (`tests/ser_pos_graph`): the envelope is ordinary tokens, whose shapes it can count. <!-- test: ser_pos_graph -->
   <!-- test: ser_pos_size -->
   **JSON is UTF-8 in and out.** `string`/`char` are written as raw UTF-8 bytes — JSON is a UTF-8 format
@@ -6521,13 +6524,25 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   so a field marked only `@deprecated` is still unmarked <!-- xfail: ser_deprecated_alone --> and combining
   it with `@skip` is refused, since `@skip` is absent from every backend while `@deprecated` is still read. <!-- xfail: ser_deprecated_and_skip -->
   (Fixture: `tests/ser_field_id`.) <!-- test: ser_field_id -->
-- **A field the data leaves out is `Err(MissingField)`** unless the data may leave it out. An `Optional` <!-- test: ser_missing_field -->
+- **A field the data leaves out is a `MissingField` error naming it** unless the data may leave it out. An `Optional` <!-- test: ser_missing_field -->
   absent is `None`; a `@deprecated` field and a `@field(default)` field absent keep their DECLARED value.
   `@field(default)` is schema evolution's ADD, the counterpart of `@deprecated`: a field added to a type
   whose data is already stored is marked so that older records still read (`tests/ser_num_evolve`). It needs <!-- test: ser_num_evolve -->
   a declared value to keep: an initializer, or a type whose default is its value. A `@skip` field, never on <!-- xfail: ser_field_default_no_value -->
   the wire, keeps its declared value too. A key that arrives twice keeps its last value. A record that
   needs different handling for old data implements `Deserializable` by hand.
+- **A read's error says where.** A failed read returns a `DeError`: its `kind()`, a `DeErrorKind`, is what a <!-- test: de_error_paths -->
+  caller branches on, and its `field()` is the path from the value read to the part that failed, in the names
+  the data uses: `server.port`, `backups[1].port`, `limits[1].value` for a map entry, `Circle.radius` for an
+  enum payload, a renamed field by its wire name. `message()` says both — "missing field `server.port`",
+  "type mismatch at `backups[1].port`" — and `field()` is `None` for a failure of the value as a whole. The path
+  is the schema's, not the wire's, so a positional backend, which carries no names, reports the path a named one
+  does. A derived reader builds it at no cost until a read fails; a hand-written reader over a collection adds
+  its element with `DeError::inElement(error:, index:)` (a field with `DeError::inField(error:, name:)`) and
+  raises its own with `DeError.of(kind:)` or `DeError.at(kind:, field:)`. A value of another type where the
+  schema wants one — `"port": "x"` — is a `TypeMismatch`, input that ends early is `UnexpectedEnd`, and the
+  first failure is the one reported. A failed read constructs nothing, so the type's destructor never runs for
+  it: what the reader read in full is dropped field by field, and a collection drops the elements it holds.
 - **Enums** serialize externally-tagged: `{"tag":"V"}` (no payload) / `{"tag":"V","value":{fields…}}` (payload);
   deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError`. The **variant selector** has
   its own contract member (`variant(name, index)` / `variant() -> FieldKey`) rather than riding `writeString`:
@@ -6538,10 +6553,10 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
 **Graph specifics.** `Shared`/`Weak` fields serialize as `u64` ids into the table (an absent `Optional` edge
 is `null`; an expired `Weak` is `0`), 1-based in discovery order, the root first. `Shared`/`Weak` dedup by
 pointee identity; a `Weak` is interned only while a strong handle exists. Cycles ride `Weak` back-edges; a
-dangling id → `DeError::UnresolvedReference`; a table id seen twice → `DeError::DuplicateId`. A polymorphic
+dangling id → `DeErrorKind::UnresolvedReference`; a table id seen twice → `DeErrorKind::DuplicateId`. A polymorphic
 edge — `Shared`/`Weak<Contract>` — reconstructs the concrete type from each entry's `type` tag and re-forms
 the fat handle with that concrete's vtable; a tag naming a type that doesn't implement the contract →
-`DeError::TypeMismatch`. A node's nested parts are walked inline: a by-value field whose type itself reaches
+`DeErrorKind::TypeMismatch`. A node's nested parts are walked inline: a by-value field whose type itself reaches
 a `Shared`, or an `Owned` pointee that does, contributes its edges to the OWNER's entry — one table, one id
 per pointee. <!-- test: ser_graph_nested_reach --> An **enum** takes part on the same terms as a type: a
 `Shared`/`Weak` in a variant's payload is an edge (written as an id inside the ordinary `{"tag":…,"value":{…}}`
@@ -6550,7 +6565,8 @@ frame), and a `@generate` enum may be a node — an edge's pointee, or the root 
 edge, and every pointee of a concrete one, **must** be `@generate(Serializable, Deserializable)` — this is
 **compile-enforced**: a non-`@generate` implementor (which would have no adapters and be silently dropped
 from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
-`DeError` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`.
+`DeErrorKind` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`, the
+kind a `DeError` carries beside its path.
 The write is two passes (discover every pointee, so the table's length is exact before the first entry — a
 positional array carries its length up front; then write), the read two passes with no rewind (allocate each
 shell and stash its edge ids; then wire). The `type` index an index backend writes is the node type's position
@@ -6583,7 +6599,7 @@ fn int32 main() {
     Result<string, Owned<Error>> w = serializeJsonBuffer(v: a);   // Ok: {"root":1,"objects":[{"id":1,"type":"Node","value":{…}},…]}
     string wire = match (give w) { case Ok(value: x): give x; case Err(error: e): ""; };
     Result<Shared<Node>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Node>>(src: give wire);   // read back as a handle
-    // the whole graph is read before anything is usable; a dangling id is DeError::UnresolvedReference
+    // the whole graph is read before anything is usable; a dangling id is DeErrorKind::UnresolvedReference
     return 0;
 }
 ```

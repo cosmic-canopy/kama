@@ -144,14 +144,14 @@ type resource KbinNamedDeserializer implements Deserializer {
     isize pos;
     isize len;
     bool err;
-    DeError code;
+    DeErrorKind code;
 
     public ctor make(DynamicArray<uint8> src) {
         this.len = src.length();
         this.buf = give src;
         this.pos = 0;
         this.err = false;
-        this.code = DeError::Malformed;
+        this.code = DeErrorKind::Malformed;
     }
 
     // --- low-level cursor ---
@@ -160,7 +160,7 @@ type resource KbinNamedDeserializer implements Deserializer {
         return this.buf[this.pos];
     }
     fn uint8 next() {                                // consume one byte
-        if (this.pos >= this.len) { this.err = true; return 0ui8; }
+        if (this.pos >= this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return 0ui8; }
         uint8 b = this.buf[this.pos];
         this.pos = this.pos + 1;
         return b;
@@ -171,13 +171,21 @@ type resource KbinNamedDeserializer implements Deserializer {
         while (i < n) { v = v | (cast<uint64>(this.next()) << cast<uint64>(i * 8)); i = i + 1; }
         return v;
     }
-    fn void expectTag(uint8 t) { if (this.next() != t) { this.err = true; } }
+    fn void expectTag(uint8 t) { uint8 b = this.next(); if (b != t) { this.wrongTag(b: b); } }
+    // A tag that is not the one asked for. Another VALUE's tag there — a string where an `int32` belongs — is a
+    // `TypeMismatch`: the stream is well formed and the schema disagrees with it. Any other byte is `Malformed`.
+    // (Past the end, `next` has already said `UnexpectedEnd`, and the first failure is the one reported.)
+    fn void wrongTag(uint8 b) {
+        bool value = (b >= 1ui8 && b <= 16ui8) || b == 18ui8 || b == 20ui8;
+        this.failWith(kind: value ? DeErrorKind::TypeMismatch : DeErrorKind::Malformed);
+    }
     unsafe fn string readStr() {
         this.expectTag(t: 15ui8);
         if (this.err) { return ""; }
         isize n = cast<isize>(this.getU(n: 4));
         if (n == 0) { return ""; }
-        if (n < 0 || this.pos + n > this.len) { this.err = true; return ""; }
+        if (n < 0) { this.failWith(kind: DeErrorKind::Malformed); return ""; }
+        if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
         isize start = this.pos;
         this.pos = this.pos + n;
         return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
@@ -220,7 +228,7 @@ type resource KbinNamedDeserializer implements Deserializer {
         uint8 b = this.next();
         if (b == 12ui8) { return true; }
         if (b == 11ui8) { return false; }
-        this.err = true; return false;
+        this.wrongTag(b: b); return false;
     }
     public fn char readChar() { this.expectTag(t: 14ui8); return cast<char>(cast<uint32>(this.getU(n: 4))); }
     public fn string readString() { return this.readStr(); }
@@ -244,8 +252,8 @@ type resource KbinNamedDeserializer implements Deserializer {
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
 
-    public fn void failWith(DeError e) { this.err = true; this.code = e; }
-    public const fn DeError errorCode() { return this.code; }
+    public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the FIRST failure is the one reported
+    public const fn DeErrorKind errorKind() { return this.code; }
 }
 
 // Serializable any `Serializable` value to a KBIN byte buffer. Byte-oriented (binary is not valid UTF-8): returns a

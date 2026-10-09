@@ -226,14 +226,14 @@ type resource JsonDeserializer implements Deserializer {
     isize pos;
     isize len;
     bool err;
-    DeError code;       // the specific error `failWith` recorded; `Malformed` by default
+    DeErrorKind code;       // the specific error `failWith` recorded; `Malformed` by default
 
     public ctor make(string src) {
         this.len = src.length();
         this.src = give src;
         this.pos = 0;
         this.err = false;
-        this.code = DeError::Malformed;
+        this.code = DeErrorKind::Malformed;
     }
 
     // --- low-level cursor ---
@@ -253,7 +253,32 @@ type resource JsonDeserializer implements Deserializer {
     }
     fn void expect(uint8 b) {
         this.skipWs();
-        if (this.peek() == b) { this.pos = this.pos + 1; } else { this.err = true; }
+        if (this.peek() == b) { this.pos = this.pos + 1; } else { this.brokenAt(); }
+    }
+    // The start of a value the schema asked for (`{`, `[`): another value there is the schema disagreeing with a
+    // well-formed document, not a malformed one.
+    fn void expectValue(uint8 b) {
+        this.skipWs();
+        if (this.peek() == b) { this.pos = this.pos + 1; } else { this.wrongValue(); }
+    }
+    // A read that did not find the value it asked for. Another JSON value there — a string where a number belongs,
+    // `"port": "x"` — is a `TypeMismatch`: the document is well formed and the schema disagrees with it. Anything
+    // else is the document's own fault (brokenAt).
+    fn void wrongValue() {
+        if (this.pos < this.len) {
+            uint8 c = this.src[this.pos];
+            if (c == 34ui8 || c == 123ui8 || c == 91ui8 || c == 116ui8 || c == 102ui8 || c == 110ui8 || c == 45ui8
+                || (c >= 48ui8 && c <= 57ui8)) {
+                this.failWith(kind: DeErrorKind::TypeMismatch);
+                return;
+            }
+        }
+        this.brokenAt();
+    }
+    // The document itself is broken here: it ends (`UnexpectedEnd`), or it holds a byte JSON has no place for.
+    fn void brokenAt() {
+        if (this.pos >= this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); }
+        else { this.failWith(kind: DeErrorKind::Malformed); }
     }
     fn uint8 hexVal(uint8 c) {
         if (c >= 48ui8 && c <= 57ui8) { return c - 48ui8; }        // 0-9
@@ -267,8 +292,8 @@ type resource JsonDeserializer implements Deserializer {
     }
 
     // --- structural (Deserializer) ---
-    public fn void beginObject(usize count) { this.expect(b: 123ui8); }   // { — count unused (self-delimiting)
-    public fn void beginArray()  { this.expect(b: 91ui8); }    // [
+    public fn void beginObject(usize count) { this.expectValue(b: 123ui8); }   // { — count unused (self-delimiting)
+    public fn void beginArray()  { this.expectValue(b: 91ui8); }    // [
     public fn void endObject() { }   // `moreFields` already consumed the `}` — self-describing, nothing to pop
     public fn bool moreFields() {
         if (this.err) { return false; }   // sticky failure: stop iterating (else a malformed byte loops forever)
@@ -305,7 +330,7 @@ type resource JsonDeserializer implements Deserializer {
                 c == 46ui8 || c == 101ui8 || c == 69ui8) { this.pos = this.pos + 1; }
             else { break; }
         }
-        if (this.pos == start) { this.err = true; return ""; }
+        if (this.pos == start) { this.wrongValue(); return ""; }
         return this.src.substring(start: start, end: this.pos);
     }
     fn int64 readInt() {
@@ -342,38 +367,38 @@ type resource JsonDeserializer implements Deserializer {
     // program — so it fails the reader, exactly like a malformed token does, and never traps. That is
     // what `try cast` is for: a plain `cast` would abort the process on `{"n": 300}` into an `int8`, and
     // a deserializer that aborts on untrusted input is not a deserializer. `TypeMismatch` is the closest
-    // existing `DeError`; the range is a property of the destination type, which is what the value failed
+    // existing `DeErrorKind`; the range is a property of the destination type, which is what the value failed
     // to match.
     public fn int8 readI8() {
         Optional<int8> v = try cast<int8>(this.readInt());
         match (v) { case Some(value: x): { return x; } case None: {} };
-        this.failWith(e: DeError::TypeMismatch); return 0i8;
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0i8;
     }
     public fn int16 readI16() {
         Optional<int16> v = try cast<int16>(this.readInt());
         match (v) { case Some(value: x): { return x; } case None: {} };
-        this.failWith(e: DeError::TypeMismatch); return 0i16;
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0i16;
     }
     public fn int32 readI32() {
         Optional<int32> v = try cast<int32>(this.readInt());
         match (v) { case Some(value: x): { return x; } case None: {} };
-        this.failWith(e: DeError::TypeMismatch); return 0;
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0;
     }
     public fn int64 readI64() { return this.readInt(); }
     public fn uint8 readU8() {
         Optional<uint8> v = try cast<uint8>(this.readUint());
         match (v) { case Some(value: x): { return x; } case None: {} };
-        this.failWith(e: DeError::TypeMismatch); return 0ui8;
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui8;
     }
     public fn uint16 readU16() {
         Optional<uint16> v = try cast<uint16>(this.readUint());
         match (v) { case Some(value: x): { return x; } case None: {} };
-        this.failWith(e: DeError::TypeMismatch); return 0ui16;
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui16;
     }
     public fn uint32 readU32() {
         Optional<uint32> v = try cast<uint32>(this.readUint());
         match (v) { case Some(value: x): { return x; } case None: {} };
-        this.failWith(e: DeError::TypeMismatch); return 0ui32;
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui32;
     }
     public fn uint64 readU64() { return this.readUint(); }
     // A float is held to the integers' rule above: past the destination's range the DOCUMENT is bad, and a
@@ -384,7 +409,7 @@ type resource JsonDeserializer implements Deserializer {
         string t = this.numToken();
         slot float64 v;
         int32 st = kama_parse_f64_ck(s: t, v: out v);
-        if (st == 3) { this.failWith(e: DeError::TypeMismatch); return 0.0; }
+        if (st == 3) { this.failWith(kind: DeErrorKind::TypeMismatch); return 0.0; }
         if (st != 0) { this.err = true; return 0.0; }
         return v;
     }
@@ -392,7 +417,7 @@ type resource JsonDeserializer implements Deserializer {
         string t = this.numToken();
         slot float32 v;
         int32 st = kama_parse_f32_ck(s: t, v: out v);
-        if (st == 3) { this.failWith(e: DeError::TypeMismatch); return 0.0f32; }
+        if (st == 3) { this.failWith(kind: DeErrorKind::TypeMismatch); return 0.0f32; }
         if (st != 0) { this.err = true; return 0.0f32; }
         return v;
     }
@@ -401,7 +426,7 @@ type resource JsonDeserializer implements Deserializer {
         uint8 c = this.peek();
         if (c == 116ui8) { this.pos = this.pos + 4; return true; }    // true
         if (c == 102ui8) { this.pos = this.pos + 5; return false; }   // false
-        this.err = true; return false;
+        this.wrongValue(); return false;
     }
     public fn bool readNull() {
         this.skipWs();
@@ -418,7 +443,7 @@ type resource JsonDeserializer implements Deserializer {
     }
     public fn string readString() {
         this.skipWs();
-        if (this.peek() != 34ui8) { this.err = true; return ""; }   // opening "
+        if (this.peek() != 34ui8) { this.wrongValue(); return ""; }   // opening "
         this.pos = this.pos + 1;
         DynamicArray<uint8> acc = DynamicArray.empty();
         while (this.pos < this.len) {
@@ -444,7 +469,7 @@ type resource JsonDeserializer implements Deserializer {
                 this.pos = this.pos + 1;
             }
         }
-        this.err = true;
+        this.brokenAt();   // no closing `"` before the end
         return this.bytesToString(b: acc);
     }
     // Read the four hex digits of a `\uXXXX` escape. Called with pos at the 'u'; leaves pos at the last
@@ -523,8 +548,8 @@ type resource JsonDeserializer implements Deserializer {
 
     // Record a SPECIFIC error (e.g. a dangling ref -> UnresolvedReference), so `deserializeJsonBuffer` surfaces it instead of
     // the generic `Malformed`.
-    public fn void failWith(DeError e) { this.err = true; this.code = e; }
-    public const fn DeError errorCode() { return this.code; }
+    public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the FIRST failure is the one reported
+    public const fn DeErrorKind errorKind() { return this.code; }
 }
 
 // Deserializable a JSON string into a `Deserializable` type — the one-liner entry. Name the target with turbofish:
@@ -533,7 +558,7 @@ type resource JsonDeserializer implements Deserializer {
 // into a `Result` after checking `failed()`.
 fn Result<T, Owned<Error>> deserializeJsonBuffer<T: Deserializable<T>>(string src) {
     JsonDeserializer r = JsonDeserializer.make(src: give src);
-    return T.deserialize(r: r);   // fallibility now lives inside the ctor (sticky check + boxed DeError)
+    return T.deserialize(r: r);   // fallibility lives inside the ctor (sticky check + boxed DeError)
 }
 
 // Deserializable from any `Reader` — the streaming twin of `deserializeJsonBuffer`. Drains the reader fully into a string

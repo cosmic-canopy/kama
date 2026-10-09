@@ -37,7 +37,7 @@ optional backend is an import:
 | Feature | Always-on half (prelude / `kama_runtime.h`) | Opt-in half |
 | --- | --- | --- |
 | Formatting | the `Formattable` contract + `Formatter` (string interpolation lowers into these) + the number→string runtime | `std::fmt` — helpers and the `html`/`sql`/`stripIndent` tags |
-| Serialization | the `Serializable`/`Deserializable`/`Serializer`/`Deserializer` contracts, `SerError`/`DeError`, + `@generate` synthesis | `std::serialization::text::json` and `std::serialization::binary::kbin` — the wire backends |
+| Serialization | the `Serializable`/`Deserializable`/`Serializer`/`Deserializer` contracts, `SerError`/`DeError`/`DeErrorKind`, + `@generate` synthesis | `std::serialization::text::json` and `std::serialization::binary::kbin` — the wire backends |
 | Memory | `Owned`/`Shared`/`Weak` + `HeapOwner`/`Deref`/`Copyable`, which drive `new`/`give`/`copy` | *(none — entirely floor)* |
 | Concurrency | the `spawn`/`scope`/`parallel_for` syntax, the sendability gate, the `Atomic` borrow exemption | `std::concurrent` — `Isolate`/`Channel`/`Atomic` over the C seams |
 
@@ -139,7 +139,7 @@ Available everywhere without import (the tier of `Optional`/`Result`); see [SPEC
   `Iterator<T>`/`IteratorMut<T>`, `Iterable<T>`/`IterableMut<T>`, `Viewable<V>`/`ViewableMut<V>`,
   `Sendable` (may cross an isolate), `Immutable`, `Allocator`, `GlobalHeap` (the contract a
   `@globalAllocator` implements; `GlobalAllocator` is the default `value` behind it),
-  `Serializable`/`Deserializable`/`Serializer`/`Deserializer` (+ `SerError`, `DeError`, `FieldKey`).
+  `Serializable`/`Deserializable`/`Serializer`/`Deserializer` (+ `SerError`, `DeError`, `DeErrorKind`, `FieldKey`).
 - **String iteration:** `Chars` (from `.chars()`) and `Split` (from `.split(separator:)`), both views.
 - **Raw memory and the compile-time-sized types:** `UnsafePtr<T>`, `UnsafeConstPtr<T>` (and `ptrOrNull`),
   `InlineArray<T>#(N)`, `Simd<T>#(N)`, and `BindableFunctionPtr<Sig>` behind `fnptr`.

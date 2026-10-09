@@ -39,7 +39,7 @@ type value Handle implements Sendable, Serializable, Deserializable<This> {
         // back as `Ok` — malformed input decoded as a plausible live slot, in the one type whose whole job is
         // to reject a reference that is no longer valid. Being hand-written is what let it drift: a generated
         // body gets this boundary from the emitter (KR-51).
-        if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); }
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
         return Result::Ok(value: Handle.of(index: cast<isize>(ix), generation: gn));
     }
 }
@@ -310,7 +310,8 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
                 bool __more = r.moreElems();
                 Result<V, Owned<Error>> __ev = V.deserialize(r: r);
                 match (give __ev) {
-                    case Err(error: e): { return Result::Err(error: give e); }
+                    // Reported at its place in the `values` array, which holds the live slots only — `result.len` of them so far.
+                    case Err(error: e): { return Result::Err(error: DeError::inField(error: DeError::inElement(error: give e, index: result.len), name: "values")); }
                     case Ok(value: v):  { result.slotValues[i] = give v; result.len = result.len + 1; }
                 };
             }

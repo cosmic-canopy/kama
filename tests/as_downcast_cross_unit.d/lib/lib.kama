@@ -1,6 +1,6 @@
 export { failPrelude, failOwn, LibError };
 
-// Both errors are BOXED here, in this unit, and recovered in another. `DeError` is a prelude enum, whose
+// Both errors are BOXED here, in this unit, and recovered in another. `DeError` is a prelude type, whose
 // vtbl has no home module and is `static` in the shared header — one copy per unit. `LibError` is an
 // ordinary enum with one externally-linked vtbl; it is the control.
 type enum LibError implements Error {
@@ -8,5 +8,5 @@ type enum LibError implements Error {
     public const fn string message() { return "broken"; }
 }
 
-fn Result<int32, Owned<Error>> failPrelude() { return Result::Err(error: DeError::Malformed); }
+fn Result<int32, Owned<Error>> failPrelude() { return Result::Err(error: DeError.of(kind: DeErrorKind::Malformed)); }
 fn Result<int32, Owned<Error>> failOwn()     { return Result::Err(error: LibError::Broken); }

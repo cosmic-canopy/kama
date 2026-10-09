@@ -21,7 +21,7 @@ type value Gauge {
     public int32 v;
     public ctor of(int32 v) { this.v = v; }
     public ctor Result<Gauge, DeError> checked(int32 v) {
-        if (v < 0) { return Result::Err(error: DeError::Malformed); }
+        if (v < 0) { return Result::Err(error: DeError.of(kind: DeErrorKind::Malformed)); }
         return Result::Ok(value: Gauge.of(v: v));
     }
 }

@@ -375,10 +375,10 @@ type contract Serializable for value, resource, enum, intrinsic { const fn Resul
 // a STICKY error flag — a read on malformed input sets `failed()` and returns a default, so the generated
 // `deserialize` needs no per-read branching; `tryParse` checks `failed()` once at the end). `Deserializable`
 // is the per-type capability the codegen synthesizes: a static factory `deserialize(ref Deserializer)`.
-// DeError is a first-class `Error`: it BOXES into `Owned<Error>` at a fallible-`deserialize` boundary
-// and is recovered with `err.as<DeError>()`. (Declaring a method-carrying contract gives this
-// payload-less enum a tagged repr — transparent to its by-value uses.)
-type enum DeError implements Error, Sendable {
+//
+// What went wrong reading a value: the part a caller branches on, `match (e.kind())`. A reader latches one when it
+// fails (`failWith`), and the error a read returns, `DeError`, carries it beside where it happened.
+type enum DeErrorKind implements Sendable {
     Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId;
 
     public const fn string message() {
@@ -390,6 +390,65 @@ type enum DeError implements Error, Sendable {
             case UnresolvedReference:  "unresolved reference";
             case DuplicateId:          "duplicate id";
         };
+    }
+}
+// A deserialization error in the two parts it has — the shape `std::io::IoError` has: its KIND, which a caller
+// branches on, and WHERE: the path from the value being read to the part that failed, in the names the data uses —
+// `server.port`, `servers[2].port`. A config file missing `port` is then reported as "missing field `server.port`"
+// rather than debugged by elimination. A reader knows only the kind; the path is put together on the way OUT of a
+// read, one step per level — a derived record names its field, a collection its element (`inField`, `inElement`) —
+// so it costs nothing until a read fails. It BOXES into `Owned<Error>` at a fallible-`deserialize` boundary and is
+// recovered with `err.as<DeError>()`, a copy.
+type resource DeError implements Error, Copyable<This>(bare: give), Sendable {
+    DeErrorKind k = DeErrorKind::Malformed;
+    string at = "";   // the path; "": the value being read as a whole
+
+    // An error about the value as a whole — what a reader knows, and what a hand-written `deserialize` raises.
+    public ctor of(DeErrorKind kind) { this.k = kind; }
+    // ...and one about a part of it: `DeError.at(kind: DeErrorKind::MissingField, field: "port")`.
+    public ctor at(DeErrorKind kind, string field) { this.k = kind; this.at = give field; }
+    public ctor copy(ref DeError source) { this.k = source.k; this.at = copy source.at; }
+
+    public const fn DeErrorKind kind() { return this.k; }
+    // Where it failed — `server.port`, `servers[2].port`, `[0].name` — or `None` for the value as a whole.
+    public const fn Optional<string> field() {
+        if (this.at.length() == 0) { return Optional::None; }
+        return Optional::Some(value: copy this.at);
+    }
+    // The kind, and where: "missing field `server.port`", "type mismatch at `servers[2].port`", "malformed input".
+    public const fn string message() {
+        string kindText = this.k.message();
+        if (this.at.length() == 0) { return kindText; }
+        string where = copy this.at;
+        return match (this.k) {
+            case MissingField: "${kindText} `${where}`";
+            case _:            "${kindText} at `${where}`";
+        };
+    }
+
+    // `error`, one level further out: the record field (`name`) or the element (`index`) that held the part that
+    // failed goes in front of its path, so `port` read inside element 2 of `servers` reports `servers[2].port`. A
+    // derived `deserialize` does this for its fields; a hand-written one over a collection does it for its elements.
+    // Any other error passes through untouched — a type's own error names what it likes.
+    public static fn std::memory::Owned<Error> inField(std::memory::Owned<Error> error, string name) {
+        Optional<DeError> d = error.as<DeError>();
+        return match (give d) {
+            case Some(value: e): DeError.at(kind: e.k, field: DeError::joined(step: name, rest: e.at));
+            case None: give error;
+        };
+    }
+    public static fn std::memory::Owned<Error> inElement(std::memory::Owned<Error> error, isize index) {
+        Optional<DeError> d = error.as<DeError>();
+        return match (give d) {
+            case Some(value: e): DeError.at(kind: e.k, field: DeError::joined(step: "[${index}]", rest: e.at));
+            case None: give error;
+        };
+    }
+    // `step` in front of `rest`: a field is joined with a `.`, an element's `[i]` needs none.
+    static fn string joined(const ref string step, const ref string rest) {
+        if (rest.length() == 0) { return copy step; }
+        if (rest[0] == 91ui8) { return "${step}${rest}"; }   // `[`
+        return "${step}.${rest}";
     }
 }
 // What a reader ANSWERS when asked for the next field key (or variant selector). The writer/reader
@@ -424,9 +483,11 @@ type contract Deserializer for resource {
     fn float32 readF32(); fn float64 readF64();
     fn bool readBool(); fn char readChar(); fn string readString();
     fn bool readNull(); fn void skipValue(); const fn bool failed(); fn void fail();
-    // `failWith` records a SPECIFIC DeError (so a dangling graph reference surfaces `UnresolvedReference`,
-    // not the generic `Malformed`); `errorCode` reads it back at the boundary.
-    fn void failWith(DeError e); const fn DeError errorCode();
+    // `failWith` records the KIND of a failure (so a dangling graph reference surfaces `UnresolvedReference`,
+    // not the generic `Malformed`); `errorKind` reads it back at the boundary, where the reader of the record
+    // adds WHERE (`DeError.at`). A reader that has failed answers every later read with a default, and
+    // `moreFields`/`moreElems` with false: a record's reader names the field it was reading when it stops.
+    fn void failWith(DeErrorKind kind); const fn DeErrorKind errorKind();
 }
 // The read side of serde. It DECLARES its factory rather than standing as a marker, because a bound that
 // promises nothing constrains nothing: `deserializeJsonBuffer<T: Deserializable>` calls `T.deserialize(r)`, and until the
@@ -482,19 +543,19 @@ type adapter <char>    implements Serializable    { public const fn Result<Unit,
 type adapter <string>  implements Serializable    { public const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w) { w.writeString(v: this); if (w.failed()) { SerError e = w.errorCode(); return Result::Err(error: e); } return Result::Ok(value: Unit::Unit); } }
 // Each primitive `deserialize` is fallible: read (sticky), then wrap — a bad read surfaces as
 // `Err(DeError)` boxed into `Owned<Error>` (via `errorCode()`). Composition propagates the box.
-type adapter <int8>    implements Deserializable<This>  { public ctor Result<int8, std::memory::Owned<Error>>    deserialize(Deserializer r) { int8    v = r.readI8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <int16>   implements Deserializable<This>  { public ctor Result<int16, std::memory::Owned<Error>>   deserialize(Deserializer r) { int16   v = r.readI16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <int32>   implements Deserializable<This>  { public ctor Result<int32, std::memory::Owned<Error>>   deserialize(Deserializer r) { int32   v = r.readI32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <int64>   implements Deserializable<This>  { public ctor Result<int64, std::memory::Owned<Error>>   deserialize(Deserializer r) { int64   v = r.readI64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <uint8>   implements Deserializable<This>  { public ctor Result<uint8, std::memory::Owned<Error>>   deserialize(Deserializer r) { uint8   v = r.readU8();     if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <uint16>  implements Deserializable<This>  { public ctor Result<uint16, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint16  v = r.readU16();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <uint32>  implements Deserializable<This>  { public ctor Result<uint32, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint32  v = r.readU32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <uint64>  implements Deserializable<This>  { public ctor Result<uint64, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint64  v = r.readU64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <float32> implements Deserializable<This>  { public ctor Result<float32, std::memory::Owned<Error>> deserialize(Deserializer r) { float32 v = r.readF32();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <float64> implements Deserializable<This>  { public ctor Result<float64, std::memory::Owned<Error>> deserialize(Deserializer r) { float64 v = r.readF64();    if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <bool>    implements Deserializable<This>  { public ctor Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <char>    implements Deserializable<This>  { public ctor Result<char, std::memory::Owned<Error>>    deserialize(Deserializer r) { char    v = r.readChar();   if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: v); } }
-type adapter <string>  implements Deserializable<This>  { public ctor Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); } return Result::Ok(value: give v); } }
+type adapter <int8>    implements Deserializable<This>  { public ctor Result<int8, std::memory::Owned<Error>>    deserialize(Deserializer r) { int8    v = r.readI8();     if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <int16>   implements Deserializable<This>  { public ctor Result<int16, std::memory::Owned<Error>>   deserialize(Deserializer r) { int16   v = r.readI16();    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <int32>   implements Deserializable<This>  { public ctor Result<int32, std::memory::Owned<Error>>   deserialize(Deserializer r) { int32   v = r.readI32();    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <int64>   implements Deserializable<This>  { public ctor Result<int64, std::memory::Owned<Error>>   deserialize(Deserializer r) { int64   v = r.readI64();    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <uint8>   implements Deserializable<This>  { public ctor Result<uint8, std::memory::Owned<Error>>   deserialize(Deserializer r) { uint8   v = r.readU8();     if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <uint16>  implements Deserializable<This>  { public ctor Result<uint16, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint16  v = r.readU16();    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <uint32>  implements Deserializable<This>  { public ctor Result<uint32, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint32  v = r.readU32();    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <uint64>  implements Deserializable<This>  { public ctor Result<uint64, std::memory::Owned<Error>>  deserialize(Deserializer r) { uint64  v = r.readU64();    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <float32> implements Deserializable<This>  { public ctor Result<float32, std::memory::Owned<Error>> deserialize(Deserializer r) { float32 v = r.readF32();    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <float64> implements Deserializable<This>  { public ctor Result<float64, std::memory::Owned<Error>> deserialize(Deserializer r) { float64 v = r.readF64();    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <bool>    implements Deserializable<This>  { public ctor Result<bool, std::memory::Owned<Error>>    deserialize(Deserializer r) { bool    v = r.readBool();   if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <char>    implements Deserializable<This>  { public ctor Result<char, std::memory::Owned<Error>>    deserialize(Deserializer r) { char    v = r.readChar();   if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: v); } }
+type adapter <string>  implements Deserializable<This>  { public ctor Result<string, std::memory::Owned<Error>>  deserialize(Deserializer r) { string  v = r.readString(); if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); } return Result::Ok(value: give v); } }
 // The `.chars()` codepoint iterator over a string's UTF-8 bytes. Decodes one Unicode scalar value
 // per `next()`; the compiler constructs it from a string's bytes (a borrow — valid while the string
 // is). Assumes well-formed UTF-8 (string literals/concat are); a truncated trailing sequence is

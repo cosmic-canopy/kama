@@ -220,12 +220,14 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     }
     public ctor Result<Deque<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>, A: default] {
         r.beginArray();
+        isize index = 0;   // the element's place on the wire — a failure inside it is reported there
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume: destructure-move the owning element out
-                case Err(error: e): { return Result::Err(error: give e); }
+                case Err(error: e): { return Result::Err(error: DeError::inElement(error: give e, index: index)); }
                 case Ok(value: v):  { this.pushBack(item: give v); }
             };
+            index = index + 1;
         }
         return Result::Ok(value: give this);
     }

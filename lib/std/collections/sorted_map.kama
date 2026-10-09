@@ -710,17 +710,19 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     public ctor Result<SortedMap<K,V,A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>, A: default] {
         SortedMap<K,V> result = SortedMap.empty();
         r.beginArray();
+        isize index = 0;   // the entry's place on the wire — a failure inside it is reported there
         while (r.moreElems()) {
             r.beginObject(count: 2);
             bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
             Result<K, Owned<Error>> __ek = K.deserialize(r: r);   // read both at top level (a nested generic
-            K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: give e); } };
+            K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "key"), index: index)); } };
             bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
             Result<V, Owned<Error>> __ev = V.deserialize(r: r);   // static call must not sit inside a match arm)
-            V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: give e); } };
+            V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "value"), index: index)); } };
             bool __f3 = r.moreFields();
             r.endObject();
             result.put(key: give k, value: give v);
+            index = index + 1;
         }
         return Result::Ok(value: give result);
     }

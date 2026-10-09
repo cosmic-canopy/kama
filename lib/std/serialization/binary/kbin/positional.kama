@@ -7,7 +7,7 @@
 // What that buys and what it costs are two sides of one decision:
 //   - no field names, no per-value type tags, no framing bytes for an object;
 //   - a reader must therefore know the shape in advance. It cannot skip an unknown field (there is nothing
-//     to measure), so a shape mismatch is `DeError::Malformed` rather than a silent misread. Both ends
+//     to measure), so a shape mismatch is `DeErrorKind::Malformed` rather than a silent misread. Both ends
 //     must be built from the same declarations. That is the agreed-shape contract, stated honestly.
 //
 // How the derive drives it — the same `Serializable`/`Deserializable` bodies every backend gets:
@@ -157,7 +157,7 @@ type resource KbinPositionalDeserializer implements Deserializer {
     isize pos;
     isize len;
     bool err;
-    DeError code;
+    DeErrorKind code;
     // One frame per open object OR array: how many entries are left, and the index of the next one. Objects
     // and arrays share the stack because they nest properly. An object is popped by `endObject`; an array by
     // `moreElems` running out, since its count is exact and nothing asks again after that. A fixed depth is
@@ -172,7 +172,7 @@ type resource KbinPositionalDeserializer implements Deserializer {
         this.buf = give src;
         this.pos = 0;
         this.err = false;
-        this.code = DeError::Malformed;
+        this.code = DeErrorKind::Malformed;
         this.remain = FixedArray.make(size: 64);
         this.idx = FixedArray.make(size: 64);
         this.depth = 0;
@@ -180,7 +180,7 @@ type resource KbinPositionalDeserializer implements Deserializer {
 
     // --- low-level cursor ---
     fn uint8 next() {
-        if (this.pos >= this.len) { this.err = true; return 0ui8; }
+        if (this.pos >= this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return 0ui8; }
         uint8 b = this.buf[this.pos];
         this.pos = this.pos + 1;
         return b;
@@ -207,12 +207,13 @@ type resource KbinPositionalDeserializer implements Deserializer {
         if (this.err) { return ""; }
         isize n = cast<isize>(this.getU(n: 4));
         if (n == 0) { return ""; }
-        if (n < 0 || this.pos + n > this.len) { this.err = true; return ""; }
+        if (n < 0) { this.failWith(kind: DeErrorKind::Malformed); return ""; }
+        if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
         isize start = this.pos;
         this.pos = this.pos + n;
         return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
     }
-    fn void refuse() { this.failWith(e: DeError::Malformed); }
+    fn void refuse() { this.failWith(kind: DeErrorKind::Malformed); }
 
     // --- structure: the count is the only thing that ends a loop ---
     // A count of 0 means the writer could not state the shape (a tagged enum's outer frame), and
@@ -291,8 +292,8 @@ type resource KbinPositionalDeserializer implements Deserializer {
 
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
-    public fn void failWith(DeError e) { this.err = true; this.code = e; }
-    public const fn DeError errorCode() { return this.code; }
+    public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the FIRST failure is the one reported
+    public const fn DeErrorKind errorKind() { return this.code; }
 }
 
 // Encode any `Serializable` value to a POS byte buffer. Byte-oriented (not valid UTF-8): returns a

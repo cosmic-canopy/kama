@@ -198,7 +198,7 @@ type resource KbinNumberedDeserializer implements Deserializer {
     isize pos;
     isize len;
     bool err;
-    DeError code;
+    DeErrorKind code;
     uint8 lastWt;                  // the wire type of the key `field()` last read — what `skipValue` needs
     FixedArray<bool> isArray;
     FixedArray<bool> grouped;
@@ -210,7 +210,7 @@ type resource KbinNumberedDeserializer implements Deserializer {
         this.buf = give src;
         this.pos = 0;
         this.err = false;
-        this.code = DeError::Malformed;
+        this.code = DeErrorKind::Malformed;
         this.lastWt = 0ui8;
         this.isArray = FixedArray.make(size: 64);
         this.grouped = FixedArray.make(size: 64);
@@ -221,7 +221,7 @@ type resource KbinNumberedDeserializer implements Deserializer {
     // --- low-level ---
     fn bool atEnd() { return this.pos >= this.len; }
     fn uint8 next() {
-        if (this.pos >= this.len) { this.err = true; return 0ui8; }
+        if (this.pos >= this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return 0ui8; }
         uint8 b = this.buf[this.pos];
         this.pos = this.pos + 1;
         return b;
@@ -236,7 +236,7 @@ type resource KbinNumberedDeserializer implements Deserializer {
             shift = shift + 7ui64;
             if (shift > 63ui64) { this.err = true; return 0ui64; }
         }
-        this.err = true;
+        this.failWith(kind: DeErrorKind::UnexpectedEnd);   // the input ends inside the varint
         return 0ui64;
     }
     fn uint64 getFixed(isize n) {
@@ -252,13 +252,20 @@ type resource KbinNumberedDeserializer implements Deserializer {
         return (zz >> 1ui64) ^ mask;
     }
     // Read a key without consuming it — `moreFields` has to look for GROUP_END before deciding.
+    // A LOOKAHEAD: it reads the next varint and puts the cursor back, and a varint the stream cuts short is not a
+    // failure here. The read that consumes it reports that, from inside the field it belongs to, so a record's
+    // reader can say which one.
     fn uint64 peekVarint() {
         isize save = this.pos;
+        bool failedBefore = this.err;
+        DeErrorKind kindBefore = this.code;
         uint64 v = this.getVarint();
         this.pos = save;
+        this.err = failedBefore;
+        this.code = kindBefore;
         return v;
     }
-    fn void refuse() { this.failWith(e: DeError::Malformed); }
+    fn void refuse() { this.failWith(kind: DeErrorKind::Malformed); }
     fn bool inArray() { return this.depth > 0 ? this.isArray[this.depth - 1] : false; }
     fn void push(bool asArray, bool asGroup, isize n) {
         if (this.depth >= 64) { this.refuse(); return; }
@@ -292,6 +299,9 @@ type resource KbinNumberedDeserializer implements Deserializer {
     // The id comes off the wire, so an unknown one still skips: the wire type says how long its value is.
     public fn FieldKey field() {
         uint64 k = this.getVarint();
+        // A key the stream cut short names no field. The id the zero would decode to is a real field's, and the
+        // record's reader would report its own broken framing as that field's.
+        if (this.err) { return FieldKey::Name(name: ""); }
         this.lastWt = cast<uint8>(k & 7ui64);
         return FieldKey::Id(id: cast<uint32>(k >> 3ui64));
     }
@@ -332,7 +342,8 @@ type resource KbinNumberedDeserializer implements Deserializer {
     public unsafe fn string readString() {
         isize n = cast<isize>(this.getVarint());
         if (this.err || n == 0) { return ""; }
-        if (n < 0 || this.pos + n > this.len) { this.err = true; return ""; }
+        if (n < 0) { this.failWith(kind: DeErrorKind::Malformed); return ""; }
+        if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }   // the input ends inside it
         isize start = this.pos;
         this.pos = this.pos + n;
         return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
@@ -353,7 +364,8 @@ type resource KbinNumberedDeserializer implements Deserializer {
         else if (wt == 5ui8) { uint64 __ = this.getFixed(n: 4); }
         else if (wt == 2ui8) {
             isize n = cast<isize>(this.getVarint());
-            if (n < 0 || this.pos + n > this.len) { this.err = true; return; }
+            if (n < 0) { this.failWith(kind: DeErrorKind::Malformed); return; }
+            if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return; }
             this.pos = this.pos + n;
         }
         else if (wt == 3ui8) { this.skipGroup(); }
@@ -370,13 +382,13 @@ type resource KbinNumberedDeserializer implements Deserializer {
             else if (wt == 3ui8) { open = open + 1; }
             else { this.lastWt = wt; this.skipValue(); }
         }
-        if (open > 0) { this.err = true; }
+        if (open > 0) { this.failWith(kind: DeErrorKind::UnexpectedEnd); }   // the input ended inside the group
     }
 
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
-    public fn void failWith(DeError e) { this.err = true; this.code = e; }
-    public const fn DeError errorCode() { return this.code; }
+    public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the FIRST failure is the one reported
+    public const fn DeErrorKind errorKind() { return this.code; }
 }
 
 fn Result<DynamicArray<uint8>, Owned<Error>> serializeKbinNumberedBuffer(Serializable v) {

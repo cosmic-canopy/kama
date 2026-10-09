@@ -179,10 +179,10 @@ type value Date implements Equatable<This>, Comparable<This>, Hashable, Formatta
 
     public ctor Result<Date, Owned<Error>> deserialize(Deserializer r) {
         string text = r.readString();
-        if (r.failed()) { DeError e = r.errorCode(); return Result::Err(error: e); }
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
         return match (Date.parse(text: text)) {
             case Ok(value: v): Result::Ok(value: v);
-            case Err(error: pe): { r.failWith(e: DeError::Malformed); return Result::Err(error: DeError::Malformed); }
+            case Err(error: pe): { r.failWith(kind: DeErrorKind::Malformed); return Result::Err(error: DeError.of(kind: DeErrorKind::Malformed)); }
         };
     }
 

@@ -1,6 +1,6 @@
 // The agreed-shape contract, stated honestly. A positional stream carries values and nothing else, so a
 // reader cannot skip what it does not recognise — there is no tag and no length to measure a value by. A
-// stream that does not match the type is therefore `DeError::Malformed`, not a silent misread.
+// stream that does not match the type is therefore `DeErrorKind::Malformed`, not a silent misread.
 //
 // Two ways to get there, both checked here: bytes that run out early, and bytes left over. The second is the
 // one a self-describing format would forgive, and the reason POS documents that both ends must be built from

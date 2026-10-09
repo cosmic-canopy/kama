@@ -1,0 +1,145 @@
+import { std::memory::Owned, std::collections::DynamicArray, std::collections::Map,
+         std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::serializeKbinNamedBuffer, std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+         std::serialization::binary::kbin::serializeKbinPositionalBuffer, std::serialization::binary::kbin::deserializeKbinPositionalBuffer };
+// A `DeError` says WHERE a read failed as well as what went wrong: its `kind()` is what a caller branches on, its
+// `field()` is the path from the value read to the part that failed — in the names the data uses — and its
+// `message()` says both: "missing field `server.port`", "type mismatch at `backups[1].port`". A derived reader names
+// its fields (a renamed one by its wire name, an enum payload as `Variant.field`), a collection its elements and a
+// map its entries' `key`/`value`, and a hand-written reader does the same with `DeError::inField`/`inElement`. The
+// path comes from the schema, not the wire, so a backend with no names on the wire reports the same one.
+// Exit code 42 iff every report is the expected one.
+
+@generate(Serializable, Deserializable)
+type resource Server {
+    @field int32 port;
+    @field string host;
+}
+@generate(Deserializable)
+type resource Config {
+    @field Server server;
+    @field DynamicArray<Server> backups;
+    @field Map<string, int32> limits;
+    @field(name: "max-conn") int32 maxConn;
+}
+@generate(Deserializable)
+type enum Shape { Circle(float64 radius), Dot }
+
+// A wire twin of `Server` whose `port` is text — what an old writer, or a typo in a file, would send.
+@generate(Serializable)
+type resource TextPort {
+    @field string port;
+    @field string host;
+    public ctor make() { this.port = "eighty"; this.host = "a"; }
+}
+@generate(Serializable)
+type resource Short {
+    @field int32 port;
+    public ctor make() { this.port = 1; }
+}
+
+// A hand-written collection reader: its elements report their place exactly as a derived one's do.
+type resource Ring implements Deserializable<This> {
+    DynamicArray<Server> items;
+    public ctor Result<Ring, Owned<Error>> deserialize(Deserializer r) {
+        r.beginArray();
+        isize index = 0;
+        while (r.moreElems()) {
+            Result<Server, Owned<Error>> one = Server.deserialize(r: r);
+            match (give one) {
+                case Err(error: e): { return Result::Err(error: DeError::inElement(error: give e, index: index)); }
+                case Ok(value: s):  { this.items.add(item: give s); }
+            };
+            index = index + 1;
+        }
+        return Result::Ok(value: give this);
+    }
+}
+
+// "<message>|<field or ->|<kind>" for a failed read, "ok" for one that succeeded.
+fn string report(Result<Config, Owned<Error>> r) {
+    return match (give r) {
+        case Ok(value: c): "ok";
+        case Err(error: e): describe(e: give e);
+    };
+}
+fn string describe(Owned<Error> e) {
+    Optional<DeError> d = e.as<DeError>();
+    return match (give d) {
+        case None: "not a DeError";
+        case Some(value: de): {
+            string m = de.message();
+            string f = match (de.field()) { case Some(value: p): copy p; case None: "-"; };
+            string k = match (de.kind()) {
+                case MissingField: "MissingField"; case TypeMismatch: "TypeMismatch"; case UnexpectedEnd: "UnexpectedEnd";
+                case Malformed: "Malformed"; case _: "other";
+            };
+            := "${m}|${f}|${k}";
+        }
+    };
+}
+fn int32 check(string src, string want) {
+    string got = report(r: deserializeJsonBuffer::<Config>(src: give src));
+    return got == want ? 1 : 0;
+}
+
+fn int32 main() {
+    int32 ok = 0;
+    // a nested record's field, missing and of the wrong type
+    ok = ok + check(src: "{\"server\": {\"host\": \"a\"}, \"backups\": [], \"limits\": [], \"max-conn\": 3}",
+                    want: "missing field `server.port`|server.port|MissingField");
+    ok = ok + check(src: "{\"server\": {\"port\": \"x\", \"host\": \"a\"}, \"backups\": [], \"limits\": [], \"max-conn\": 3}",
+                    want: "type mismatch at `server.port`|server.port|TypeMismatch");
+    // a collection's element, and a field inside it
+    ok = ok + check(src: "{\"server\": {\"port\": 1, \"host\": \"a\"}, \"backups\": [{\"port\": 2, \"host\": \"b\"}, {\"port\": true, \"host\": \"c\"}], \"limits\": [], \"max-conn\": 3}",
+                    want: "type mismatch at `backups[1].port`|backups[1].port|TypeMismatch");
+    ok = ok + check(src: "{\"server\": {\"port\": 1, \"host\": \"a\"}, \"backups\": [{\"host\": \"b\"}], \"limits\": [], \"max-conn\": 3}",
+                    want: "missing field `backups[0].port`|backups[0].port|MissingField");
+    // a map's entry, by its place and its half
+    ok = ok + check(src: "{\"server\": {\"port\": 1, \"host\": \"a\"}, \"backups\": [], \"limits\": [{\"key\": \"x\", \"value\": 1}, {\"key\": \"y\", \"value\": \"many\"}], \"max-conn\": 3}",
+                    want: "type mismatch at `limits[1].value`|limits[1].value|TypeMismatch");
+    // a renamed field by its wire name; one never sent
+    ok = ok + check(src: "{\"server\": {\"port\": 1, \"host\": \"a\"}, \"backups\": [], \"limits\": [], \"max-conn\": \"z\"}",
+                    want: "type mismatch at `max-conn`|max-conn|TypeMismatch");
+    ok = ok + check(src: "{\"server\": {\"port\": 1, \"host\": \"a\"}, \"backups\": [], \"limits\": []}",
+                    want: "missing field `max-conn`|max-conn|MissingField");
+    // a document cut short inside a field, and one broken between fields: the second is the record's, no field's
+    ok = ok + check(src: "{\"server\": {\"port\": 1, \"host\": \"a",
+                    want: "unexpected end of input at `server.host`|server.host|UnexpectedEnd");
+    ok = ok + check(src: "{\"server\": {\"port\": 1, \"host\": \"a\"}, \"backups\": [], \"limits\": [], \"max-conn\": 3, @}",
+                    want: "malformed input|-|Malformed");
+    if (ok != 9) { return ok; }
+
+    // an enum payload names its variant
+    Result<Shape, Owned<Error>> s = deserializeJsonBuffer::<Shape>(src: "{\"tag\": \"Circle\", \"value\": {\"radius\": \"big\"}}");
+    string sm = match (give s) { case Ok(value: v): "ok"; case Err(error: e): describe(e: give e); };
+    if (sm != "type mismatch at `Circle.radius`|Circle.radius|TypeMismatch") { return 50; }
+
+    // a hand-written collection reader names its element like a derived one
+    Result<Ring, Owned<Error>> g = deserializeJsonBuffer::<Ring>(src: "[{\"port\": 1, \"host\": \"a\"}, {\"host\": \"b\"}]");
+    string gm = match (give g) { case Ok(value: v): "ok"; case Err(error: e): describe(e: give e); };
+    if (gm != "missing field `[1].port`|[1].port|MissingField") { return 51; }
+
+    // the path is the schema's, whatever the backend: a named binary stream with text where `port` belongs...
+    TextPort tp = TextPort.make();
+    Result<DynamicArray<uint8>, Owned<Error>> nw = serializeKbinNamedBuffer(v: tp);
+    DynamicArray<uint8> named = match (give nw) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+    Result<Server, Owned<Error>> n = deserializeKbinNamedBuffer::<Server>(src: give named);
+    string nm = match (give n) { case Ok(value: v): "ok"; case Err(error: e): describe(e: give e); };
+    if (nm != "type mismatch at `port`|port|TypeMismatch") { return 52; }
+    // ...and a positional one, which carries no names at all, cut short before `host`
+    Short sh = Short.make();
+    Result<DynamicArray<uint8>, Owned<Error>> pw = serializeKbinPositionalBuffer(v: sh);
+    DynamicArray<uint8> pos = match (give pw) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+    Result<Server, Owned<Error>> p = deserializeKbinPositionalBuffer::<Server>(src: give pos);
+    string pm = match (give p) { case Ok(value: v): "ok"; case Err(error: e): describe(e: give e); };
+    if (pm != "unexpected end of input at `host`|host|UnexpectedEnd") { return 53; }
+
+    // an error raised by hand, about the whole value or one part of it; a copy keeps both
+    DeError whole = DeError.of(kind: DeErrorKind::Malformed);
+    DeError part = DeError.at(kind: DeErrorKind::MissingField, field: "port");
+    DeError again = copy part;
+    bool noField = match (whole.field()) { case Some(value: f): false; case None: true; };
+    if (!noField || whole.message() != "malformed input" || again.message() != "missing field `port`") { return 54; }
+    return 42;
+}

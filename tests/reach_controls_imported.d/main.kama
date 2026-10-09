@@ -77,7 +77,7 @@ fn int32 main_cast_arg() { return 0; }
 fn int32 main_sizeof() { usize n = sizeof(ShownVal); return 0; }
 
 // an `.as<X>()` downcast target
-fn int32 main_as_downcast() { Result<int32, Owned<Error>> r = Result::Err(error: DeError::Malformed); return match (r) { case Ok(value: v): 0; case Err(error: e): match (e.as<ShownErr>()) { case Some(value: x): 1; case None: 0; }; }; }
+fn int32 main_as_downcast() { Result<int32, Owned<Error>> r = Result::Err(error: DeError.of(kind: DeErrorKind::Malformed)); return match (r) { case Ok(value: v): 0; case Err(error: e): match (e.as<ShownErr>()) { case Some(value: x): 1; case None: 0; }; }; }
 
 // a variant expression
 fn int32 main_variant_expr() { Result<int32, Owned<Error>> r = Result::Err(error: ShownErr::Bad); return 0; }

@@ -1604,22 +1604,8 @@ objects. Positional has every field, so there a patch is a full read. The derive
 Every self-describing back end skips an unknown field, which is what keeps an old reader working against a newer
 writer. A config file wants the opposite: a misspelt key should fail, not do nothing silently. **Scheduled.**
 **Design:** Go's `Decoder.DisallowUnknownFields`, not serde's per-type attribute. The READ decides, because one type
-is read leniently from a peer and strictly from a file. The error is `DeError::UnknownField` and names the key,
-which wants KR-109's payload, so it lands after KR-109.
-
-<a id="s4-deerror-names"></a>
-
-### `DeError` names the field it reports (KR-109)
-
-Filed 2026-10-01 with the change that made a derived `deserialize` report a missing field (`0.9.516`). The
-error is `DeError::MissingField`, a payload-less variant, so the message reads "missing field" with nothing to
-say which: a config file missing `port` is debugged by elimination. Serde's `missing_field(field)` names it,
-and that is the answer an author expects. The obstacle is the type, not the derive: `DeError` is a prelude
-enum, every backend latches one as its sticky error code (`errorCode()`, `failWith(DeError)`), and a `string`
-payload makes it destructible — so either `MissingField(string field)` (a source break for every
-`case MissingField:` and a change to the sticky-code plumbing), or a separate field-path the derive attaches
-beside the code. Scheduled, not optional: a missing-field error that cannot say which field is a bug report
-waiting to be filed. Wants a maintainer verdict on the shape before any code.
+is read leniently from a peer and strictly from a file. The error is a `DeError` of a new kind, `UnknownField`,
+whose path names the key — the `DeError.at(kind:, field:)` every derived reader builds since `0.9.569`.
 
 <a id="s4-json-value"></a>
 

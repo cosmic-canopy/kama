@@ -1,0 +1,74 @@
+import { std::memory::Owned, std::collections::DynamicArray, std::serialization::text::json::deserializeJsonBuffer };
+// A constructor that abandons a COMPLETE `this` — every field holding a value — drops it whole, through its
+// destructor. Field by field, a type whose destructor BODY releases what it holds (every std collection, which keeps
+// its buffer behind a raw pointer) was dropped without that body: `DynamicArray.deserialize` failing on its second
+// element leaked the buffer its first had grown, and `Pool` below never ran `~Pool`. A `this` still missing a field
+// is NOT handed to the destructor body, which would read the missing field's zero as a value: only what was built
+// is dropped (tests/ctor_abandon_drops). A derived READER that fails constructs nothing, so it never runs the
+// type's destructor either: it drops the fields it read in full, and the one it failed on holds nothing. Until
+// 0.9.569 it dropped the whole half-read value, so `~Item` ran for an element the data never supplied.
+// Exit code 42 iff every count is right.
+
+static int32 released = 0;   // `~Pool` bodies run
+static int32 dropped = 0;    // `~Item`s run
+
+type enum Why implements Error { Stop; public const fn string message() { return "stop"; } }
+
+@generate(Deserializable)
+type resource Item {
+    @field int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    ~Item() { dropped = dropped + 1; }
+}
+@generate(Deserializable) type resource ItemList { @field DynamicArray<Item> items; }   // wraps the reader under test
+@generate(Deserializable) type resource Twin { @field Item a; @field Item b; }
+
+// Every field has a default: complete from the first line, so an abandon runs the body.
+type resource Pool {
+    int32 grown = 0;
+    public ctor Result<Pool, Why> fill(int32 n) {
+        this.grow();
+        if (n < 0) { return Result::Err(error: Why::Stop); }
+    }
+    fn void grow() { this.grown = this.grown + 1; }
+    ~Pool() { released = released + this.grown; }
+}
+
+// `id` has no default: until it is assigned `this` is incomplete, and the body must not run on it.
+type resource Ticket {
+    int32 id;
+    Item held;
+    public ctor Result<Ticket, Why> issue(int32 n) {
+        this.held = Item.make(v: n);
+        if (n < 0) { return Result::Err(error: Why::Stop); }      // `id` missing: drop `held` only
+        this.id = n;
+        if (n == 0) { return Result::Err(error: Why::Stop); }     // complete: the body runs, then `held` drops
+    }
+    ~Ticket() { released = released + 100; }
+}
+
+fn int32 main() {
+    Result<Pool, Why> a = Pool.fill(n: -1);
+    if (released != 1) { return 1; }                        // `~Pool` ran on the abandoned, complete pool
+    Result<Pool, Why> b = Pool.fill(n: 1);                  // kept: nothing released yet
+    if (released != 1) { return 2; }
+
+    Result<Ticket, Why> c = Ticket.issue(n: -1);
+    if (released != 1 || dropped != 1) { return 3; }        // incomplete: `held` dropped, `~Ticket` not run
+    Result<Ticket, Why> d = Ticket.issue(n: 0);
+    if (released != 101 || dropped != 2) { return 4; }      // complete: `~Ticket` ran, and `held` dropped with it
+
+    // a collection reader failing on its second element drops the first, and its buffer, once
+    Result<ItemList, Owned<Error>> e = deserializeJsonBuffer::<ItemList>(src: "{\"items\": [{\"v\": 1}, {\"v\": \"x\"}]}");
+    bool failed = match (e) { case Ok(value: l): false; case Err(error: x): true; };
+    if (!failed || dropped != 3) { return 5; }             // `~Item` never ran for the half-read second element
+
+    // a derived reader drops what it read in full, and nothing it did not
+    Result<Twin, Owned<Error>> f = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": 1}, \"b\": {\"v\": \"x\"}}");
+    if (dropped != 4) { return 6; }                         // `a` read, `b` failed: one drop
+    Result<Twin, Owned<Error>> g = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": \"x\"}}");
+    if (dropped != 4) { return 7; }                         // `a` failed: nothing held
+    Result<Twin, Owned<Error>> h = deserializeJsonBuffer::<Twin>(src: "{\"a\": {\"v\": 1}}");
+    if (dropped != 5) { return 8; }                         // `b` missing: `a` dropped
+    return 42;
+}

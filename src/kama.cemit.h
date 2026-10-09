@@ -2030,7 +2030,11 @@ private:
     std::string _ctorIntoErrCType;   // a fallible into ctor's `E`: its `Err` is written into `*kama_out` field by field
     void offerCtorInto(SharedExpression value, const std::string& dstPtr, const std::string& dstCType);
     bool takeCtorInto();
-    void emitDropBuiltFields(int depth);   // a ctor leaving without the value it built drops what it built
+    void emitDropBuiltFields(int depth, const ASTNode* ret);   // a ctor leaving without the value it built drops what it built
+    // Where the ctor being emitted has a COMPLETE `this` — every field holding a value — so an abandoning return there
+    // drops it whole, through its destructor (checkNamedCtorComplete's definite-assignment walk decides it).
+    bool _ctorCompleteFromStart = false;            // every field is filled by the prologue
+    std::set<const ASTNode*> _ctorCompleteReturns;  // ...or the `return`s where the walk found every one assigned
     void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots
     std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
     std::string linkNameOf(const SharedAttributeList& attrs, int line);   // ...for any declaration that carries one
@@ -2343,6 +2347,18 @@ private:
     void emitSerFieldReadPrologue(ClassInfo& ci, const FieldInfo& f, size_t slot, const std::string& dst,
                                   const std::set<std::string>& filled, int depth);
     std::string serMissingFieldTest(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf);
+    std::vector<size_t> serRequiredFields(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf);
+    // What a derived reader that FAILED drops: the fields that hold something — a declared value, or a key read in full —
+    // field by field, never through the type's destructor body. `except` is the slot whose own read failed.
+    std::string serDropHeld(const ClassInfo& ci, const std::vector<const FieldInfo*>& rf,
+                            const std::set<std::string>& filled, int except);
+    // The path a reader's failure names, picked at run time: the wire name of the first slot whose `cond` holds
+    // (`kama_at == 2`, `!kama_seen[2]`), else "" — a C `string` expression over literals.
+    std::string serPathChoice(const std::vector<std::pair<std::string, std::string>>& condAndName);
+    // A reader's failure as an `Owned<Error>` holding `DeError.at(kind:, field:)` — an expression.
+    std::string deErrorBox(const std::string& kindExpr, const std::string& pathExpr);
+    // `boxExpr` one level out (`DeError::inField`): a nested read's path gains this field's wire name.
+    std::string deErrorInField(const std::string& boxExpr, const std::string& name);
     std::string contractBorrowOf(const std::string& iface, SharedExpression e, std::string val, bool hoisted,
                                  const std::string& what, int line);
     MethodInfo enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey, const std::string& contract);
@@ -2980,6 +2996,9 @@ private:
     bool serdeRejectsField(SharedIdentifier ty, const std::string& access, bool writing);
     // The kama name of the field a serde walk is emitting, for its diagnostics — set by each per-field loop.
     std::string _serdeField;
+    // The step a nested read's failure gains on its way out (`DeError::inField`): the wire name of the record field
+    // being read — `Variant.field` for an enum payload — or "" where nothing names one.
+    std::string _serdeStep;
     std::string serdeFieldName(const std::string& access);
     // The pointee type node of a library `Owned<T, A>` field, else null. An `Owned` is a unique subtree,
     // so on the wire it IS a `T` — the serde field walk recognises it HERE, by identity, rather than
@@ -3073,9 +3092,8 @@ private:
     SharedIdentifier ownedErrorTypeNode();                    // synth `Owned<Error>` (the boxed-error payload)
     SharedIdentifier resultOwnedErrorTypeNode(SharedIdentifier inner); // synth `Result<inner, Owned<Error>>` (the fallible-deserialize return type)
     SharedIdentifier resultUnitOwnedErrorTypeNode();          // synth `Result<Unit, Owned<Error>>` (the fallible-serialize return type)
-    // box a sticky enum error (`DeError`/`SerError`) drawn from `errExpr` into an Owned<Error> (raw C); an expression.
-    std::string emitStickyErrBox(const std::string& enumType = "kama__DeError",
-                                 const std::string& errExpr = "r.kama_vtbl->k_errorCode(r.kama_obj)");
+    // box a writer's sticky `SerError` drawn from `errExpr` into an Owned<Error> (raw C); an expression.
+    std::string emitStickyErrBox(const std::string& enumType, const std::string& errExpr);
     std::string emitAsDowncast(AsDowncastNode* ad);           // Model C `expr.as<T>()` -> Optional<T> (vtbl compare)
     std::string emitBitcast(BitcastNode* v);                  // `bitcast<T>(expr)` -> no-UB same-width union type-pun
     std::vector<std::string> _graphNodeOrder;       // graph node types in a stable order (typeIndex; the shell reader chain)

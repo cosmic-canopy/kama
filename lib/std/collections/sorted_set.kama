@@ -56,12 +56,14 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     }
     public ctor Result<SortedSet<K, A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, A: default] {
         r.beginArray();
+        isize index = 0;   // the element's place on the wire — a failure inside it is reported there
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject
             match (give __er) {                                     // consume: destructure-move the owning element out
-                case Err(error: e): { return Result::Err(error: give e); }
+                case Err(error: e): { return Result::Err(error: DeError::inElement(error: give e, index: index)); }
                 case Ok(value: v):  { this.add(key: give v); }
             };
+            index = index + 1;
         }
         return Result::Ok(value: give this);
     }
