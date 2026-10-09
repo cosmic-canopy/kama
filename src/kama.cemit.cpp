@@ -427,6 +427,20 @@ void CEmitter::noteBuiltinFile(const CompilationUnit* u, const std::string& srcP
     if (u->name) _builtinFileByName[*u->name] = srcPath;
 }
 
+// The file a `panic`/`assert` site names in the program it is compiled into (KR-121). Two things were wrong with
+// writing `_sourcePath`: it is the UNIT being emitted, so a prelude or stdlib body instantiated into the user's
+// file reported the user's file at the prelude's line (`main.kama:713` in a six-line file); and it is an absolute
+// path, so every binary carried the build machine's home directory and printed it. diagFile() is the file the
+// declaration was written in, and the driver spells it relative to its package.
+std::string CEmitter::programLocation()
+{
+    const std::string& f = diagFile();
+    if (!_locationResolver) return f;
+    auto it = _programLocations.find(f);
+    if (it == _programLocations.end()) it = _programLocations.emplace(f, _locationResolver(f)).first;
+    return it->second;
+}
+
 const std::string& CEmitter::diagFile() const
 {
     if (!_collectingUnitPath.empty()) return _collectingUnitPath;
@@ -12239,7 +12253,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
                          : condText.empty() ? message
                                             : (message + " — " + condText);
         std::string s = "_Static_assert(" + c + ", \"kama: " + cEscapeStringBody(note) + " ("
-                      + cEscapeStringBody(_sourcePath) + ":" + std::to_string(a->line) + ")\");\n";
+                      + cEscapeStringBody(reportPath(diagFile())) + ":" + std::to_string(a->line) + ")\");\n";
         // One instantiation's worth is enough: a generic type's members are re-walked per instance, and a
         // monomorph reached twice would otherwise repeat its assert verbatim. Keyed on the emitted text, so
         // two DIFFERENT instances (`Fixed<16>` / `Fixed<24>`) still each get theirs.
@@ -28351,7 +28365,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 if (a && a->name && a->name->value && *a->name->value == want) return a->expression;
             return nullptr;
         };
-        std::string fileLit = "\"" + cEscapeStringBody(_sourcePath) + "\"";
+        std::string fileLit = "\"" + cEscapeStringBody(programLocation()) + "\"";
         std::string lineLit = std::to_string(call->line);
 
         if (name == "panic") {

@@ -919,6 +919,10 @@ public:
     // a driver — a test harness, a future front end — is not silently locked down.
     void setModuleVisible(std::function<bool(const std::string&, const std::string&)> f) { _moduleVisible = std::move(f); }
     void setModuleResolver(std::function<std::string(const std::string&)> r) { _moduleResolver = r; }
+    // How a source file is spelled where a location is written INTO the program — a `panic`/`assert` site's
+    // `file:line` — package-relative, so no build machine's path reaches a binary (KR-121). Supplied by the
+    // driver, which owns the manifests; absent, the location is the unit's path unchanged.
+    void setLocationResolver(std::function<std::string(const std::string&)> r) { _locationResolver = std::move(r); }
 
     // A namespaced built-in module (the smart-pointer triad, std::memory) — collected before user
     // code under its own `namespace`/`export`, plus an implicit `using` so its names are always in
@@ -1527,6 +1531,9 @@ private:
     // and the method returns a view — see emitMethodOrCtorBody and emitDotOnTypeCtorCall.
     std::string _mintGrant;
     std::function<std::string(const std::string&)> _moduleResolver;
+    std::function<std::string(const std::string&)> _locationResolver;
+    std::map<std::string, std::string> _programLocations;   // diagFile() -> its package-relative spelling
+    std::string programLocation();                           // the file a location in the program names
     std::function<bool(const std::string&, const std::string&)> _moduleVisible;   // (importer, imported) -> §2c
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during

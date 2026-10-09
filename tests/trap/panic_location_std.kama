@@ -1,0 +1,4 @@
+// A stdlib generic's panic names the stdlib file it is written in, package-relative. Instantiated into this file,
+// it used to name this file at the stdlib's line, and in a release build no file at all (`(:33)`).
+import { std::num::clamp };
+fn int32 main() { return clamp(x: 5, lo: 9, hi: 1); }

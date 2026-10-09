@@ -3305,7 +3305,11 @@ be written **in the language** rather than baked into the compiler. Three builti
 - **`assert(cond:, msg:)` / `debugAssert(cond:, msg:)` / `panic(msg:)`** — a clean **trap** (writes the
   message + `file:line` to stderr, then `abort()` — not UB, the user-facing form of the built-in bounds
   trap). `msg:` is **mandatory** (empty string allowed); a failed `assert` also **auto-appends the
-  condition's source text** (`assert(cond: x > 0, msg: "")` → `assertion failed: x > 0 (f.kama:12)`).
+  condition's source text** (`assert(cond: x > 0, msg: "")` → `assertion failed: x > 0 (game/f.kama:12)`).
+  The `file` is **package-relative**: the owning package's name, then the path under its `source` root
+  (`game/f.kama`, `std/num/ops.kama`, `@kama/sodium/sodium.kama`, `<prelude>/global.kama`; a loose file is <!-- test: panic_location, panic_location_prelude, panic_location_std -->
+  named under the folder its build spans). It is the file the code was WRITTEN in, wherever it was instantiated,
+  and no build machine's path reaches the binary (`tools/check-panic-locations.sh`).
   `debugAssert` is identical but **stripped under `--release`** (dev-only checks); `assert` is always-on.
   For a premise that can be settled before the program runs, use
   **[`comptime assert`](#compile-time-assertions--comptime-assert-)** — same arguments, checked at build. For

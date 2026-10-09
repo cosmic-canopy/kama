@@ -1,0 +1,6 @@
+// A panic names its file as the package that owns it does (KR-121). A loose file belongs to no package, so it is
+// named under the build's loose root: the fixture's own name, never the build machine's absolute path.
+fn int32 main() {
+    panic(msg: "here");
+    return 0;
+}

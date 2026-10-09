@@ -74,12 +74,13 @@ plain libraries.
 
 For *bugs and broken invariants* — "this can't continue." Recoverable errors stay on `Result<T, E>`; never
 `panic` them. All write a message + `file:line` to stderr and `abort()` (the clean-trap discipline — no
-`<stdio.h>`, no UB); on `--target embedded` they route through the weak `kama_panic_handler`.
+`<stdio.h>`, no UB); on `--target embedded` they route through the weak `kama_panic_handler`. The `file` is
+package-relative — `game/f.kama`, `std/num/ops.kama` — never the build machine's path (SPEC *Writing a collection in kama*).
 
 | Signature | Notes |
 |---|---|
 | `panic(msg: string)` | Unconditional abort with a message. |
-| `assert(cond: bool, msg: string)` | Abort iff `cond` is false. **`msg:` is mandatory** (empty allowed); the condition's source text is **auto-appended** — `assert(cond: x > 0, msg: "")` → `assertion failed: x > 0 (f.kama:12)`, and a non-empty `msg` appends after an em dash. **Always-on** (production invariants). |
+| `assert(cond: bool, msg: string)` | Abort iff `cond` is false. **`msg:` is mandatory** (empty allowed); the condition's source text is **auto-appended** — `assert(cond: x > 0, msg: "")` → `assertion failed: x > 0 (game/f.kama:12)`, and a non-empty `msg` appends after an em dash. **Always-on** (production invariants). |
 | `debugAssert(cond: bool, msg: string)` | Identical to `assert`, but **stripped under `--release`** (`NDEBUG` / `debug_assert!` — for expensive dev-only checks). |
 | `setPanicHandler(handler: PanicHandler)` | *Module `core`.* Install a custom fatal handler (`fnptr void PanicHandler()`) for cleanup/exhibition — a shipped game/GUI shows a dialog / flushes a save instead of a bare stderr abort. **Contract:** set **once** at startup before spawning isolates; **re-entrancy-guarded** (a panic while handling one hard-aborts); the runtime **always terminates** after it (not a resume point). Covers every hosted fatal path (panic/assert/bounds). On embedded, provide a strong `kama_panic_handler` symbol instead (this is a no-op there). |
 

@@ -1344,6 +1344,7 @@ struct ModuleId {
     }
 };
 static ModuleId moduleIdForFile(const std::string& absPath);
+static std::string packageLocationOf(const std::string& unitPath);
 bool kamaModuleVisibleTo(const std::string& importer, const std::string& imported);   // §2c, defined below
 
 // module full name ("std::collections", or a bare project name for a root module) -> the `kama.json` that
@@ -2783,6 +2784,7 @@ static void configureEmitter(CEmitter& e)
     e.setModuleVisible([](const std::string& importer, const std::string& imported) -> bool {
         return kamaModuleVisibleTo(importer, imported);
     });
+    e.setLocationResolver(packageLocationOf);   // a `panic`/`assert` site's file, package-relative (KR-121)
     // The always-in-scope triad, each with the `lib/std/memory/*.kama` it was embedded from — a file
     // that ships in every install, unlike the global prelude.
     for (auto& m : preludeModuleUnits())
@@ -4443,6 +4445,7 @@ static bool validateModules(std::vector<ModuleNode>& mods, const std::string& pr
 // cached anywhere else would serve stale modules across exactly that edit.
 struct ManifestModules {
     std::string             projectName;   // already run through importNameOf
+    std::string             packageName;   // as written (`@kama/sodium`) — what a location shows
     std::vector<ModuleNode> mods;
     bool                    ok = false;    // false: unreadable or rejected — attribute nothing
 };
@@ -4472,6 +4475,7 @@ static const ManifestModules& manifestModulesCached(const std::string& manifest)
         // where a build says so out loud.
         if (r.parse()) {
             m.projectName = importNameOf(rawName);
+            m.packageName = rawName;
             m.ok = validateModules(m.mods, m.projectName, err);
         }
         if (!m.ok) m.mods.clear();
@@ -4539,6 +4543,36 @@ static ModuleId moduleIdForFile(const std::string& absPath)
     // on the way past is both complete and free. Read by `kamaModuleVisibleTo`.
     moduleManifestIndex()[id.full()] = manifest;
     return id;
+}
+
+// How a source file is spelled where a location is written INTO a program — a `panic`/`assert` site (KR-121):
+// `<package>/<path under its source root>`, the way the package that owns the file names it. `game/main.kama`,
+// `std/collections/fixed_array.kama`, `@kama/sodium/sodium.kama`. A loose build's operands are named under the
+// loose root, as moduleIdForFile names their modules, and the prelude by its unit (`<prelude>/global.kama`).
+//
+// The absolute path it replaces put the build machine's home directory, its folder layout and — in a container —
+// the mount and store paths into every binary, and printed them to whoever saw the panic. This spelling is the
+// same on every machine that builds the package, so nothing needs a remap flag (measured on macOS: one project
+// built at two paths gives byte-identical release binaries, where before it did not). Debug info is untouched: a
+// debug build's `#line` keeps real paths, where a debugger needs them, and a release build writes none.
+static std::string packageLocationOf(const std::string& unitPath)
+{
+    if (unitPath.empty()) return unitPath;
+    if (unitPath[0] == '<') return unitPath == "<prelude>" ? "<prelude>/global.kama" : unitPath;
+    const std::string abs = absolutePath(unitPath);
+    if (g_looseBuild && g_looseOperands.count(abs))
+        return underPath(g_looseRoot, abs) && abs != g_looseRoot ? abs.substr(g_looseRoot.size() + 1) : baseName(abs);
+    const std::string dir = owningPackageDir(dirName(abs));
+    if (!dir.empty()) {
+        const std::string manifest = dir + "/kama.json";
+        const std::string& srcRel = manifestSourceCached(manifest);
+        const ManifestModules& mm = manifestModulesCached(manifest);
+        if (!srcRel.empty() && !mm.packageName.empty()) {
+            const std::string srcRoot = absolutePath(joinPathLexical(dir, srcRel));
+            if (underPath(srcRoot, abs) && abs != srcRoot) return mm.packageName + "/" + abs.substr(srcRoot.size() + 1);
+        }
+    }
+    return baseName(abs);   // in no package, and not an operand: its name is all that is stable
 }
 
 // The stem of the `.c` a unit emits to, derived from the unit's IDENTITY rather than its position in the

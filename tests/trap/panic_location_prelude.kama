@@ -1,0 +1,7 @@
+// A prelude body's panic names the prelude. It used to name the USER's file at the prelude's line:
+// `panic_location_prelude.kama:713` in a seven-line file.
+fn int32 tag(Template t) { return t.part(at: 9).length() > 0 ? 1 : 0; }
+fn int32 main() {
+    int32 n = 1;
+    return tag"a${n}b";
+}

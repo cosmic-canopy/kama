@@ -2755,20 +2755,6 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-package-relative-locations"></a>
-
-### Source locations in a program are package-relative (KR-121)
-
-Measured by a consumer at `0.9.457` and unchanged on `0.9.542`: every panic site is emitted as
-`kama_panic_at(msg, "<absolute path of the .kama file>", line)`. A release binary therefore embeds the build
-machine's home directory and folder layout, and prints them to a player when a panic fires. Inside a container it
-embeds the mount path and the store path. A second defect sits in the same output: the prelude's own panics are
-attributed to the USER's file at the prelude's line numbers (`leak.kama:599` in an eight-line file). **Design:** every
-source location kama writes into a program (a panic, an assert, a trap) is package-relative:
-`game/src/main.kama:4`, `@kama/sodium/src/sodium.kama:12`, `<prelude>/…`. That is one spelling in every build, so
-no remap flag is needed. Debug info (`#line`) keeps absolute paths in a debug build, where a debugger needs them;
-a release build emits no `#line`.
-
 <a id="s10-std-core-names"></a>
 
 ### A project or dependency named `std` or `core` (KR-111)
