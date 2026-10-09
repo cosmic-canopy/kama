@@ -2215,6 +2215,9 @@ static bool g_probeTemplates = false;
 // `--release`: strip `debugAssert(...)` at emit time (dev-only checks; `assert` stays always-on). File-scope
 // like g_noHeap so the emitter-setup helpers can read it; set in main from the `--release`/`--debug` flags.
 static bool g_release = false;
+// KR-130: a BUILD compiles only what its program reaches (CEmitter::computeUnreached); `transpile` writes the whole
+// translation, which is what asking for the C means. Set on the build path, read by the two writers below.
+static bool g_pruneUnreached = false;
 static bool g_outputShared = false;   // OUTPUT=SHARED — the emitter defines the runtime slots without a `main`
 
 // `--verify` (M3.2a): enforce registry-package signatures on install — a present-but-invalid signature
@@ -2726,6 +2729,7 @@ static void configureEmitter(CEmitter& e)
     e.setStrictNumeric(g_strictNumeric);   // `--strict-numeric` (M5a): measure numeric hand-offs
     e.setProbeReport(g_probeTemplates);    // `--probe-templates`: measure the uninstantiated-template walk
     e.setRelease(g_release);           // `--release`: strip `debugAssert`
+    e.setPruneUnreached(g_pruneUnreached);   // a build leaves what its program never reaches uncompiled (KR-130)
     e.setSharedModule(g_outputShared); // `OUTPUT=SHARED`: define the runtime slots in a module with no `main`
     // `@compileFor` conditional compilation — what is active, what the project declared, and what any
     // known target could produce (the last is what makes a misspelled triple component an error, KR-69).
@@ -6419,9 +6423,11 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
         fprintf(stderr, "kama: error: cannot write '%s'\n", outPath.c_str());
         return 1;
     }
-    CEmitter emitter(out, srcPath, emitLines);
+    std::ostringstream text;   // held until the program is whole, so what it never reaches can be left out
+    CEmitter emitter(text, srcPath, emitLines);
     configureEmitter(emitter);
     int unsupported = emitter.emit(unit);
+    out << emitter.pruneUnreached(text.str());
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
@@ -6456,12 +6462,15 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     std::ofstream header(osp(headerPath), std::ios::binary);   // LF on every host
     if (!header) { fprintf(stderr, "kama: error: cannot write '%s'\n", headerPath.c_str()); return 1; }
 
+    // Each module's text is held until the program is whole, so what it never reaches can be left out (KR-130).
     std::vector<std::unique_ptr<std::ofstream>> moduleFiles;
+    std::vector<std::unique_ptr<std::ostringstream>> moduleTexts;
     std::vector<std::ostream*> moduleStreams;
     for (auto& cp : cPaths) {
         auto f = std::unique_ptr<std::ofstream>(new std::ofstream(osp(cp), std::ios::binary));
         if (!*f) { fprintf(stderr, "kama: error: cannot write '%s'\n", cp.c_str()); return 1; }
-        moduleStreams.push_back(f.get());
+        moduleTexts.push_back(std::unique_ptr<std::ostringstream>(new std::ostringstream));
+        moduleStreams.push_back(moduleTexts.back().get());
         moduleFiles.push_back(std::move(f));
     }
 
@@ -6469,6 +6478,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     configureEmitter(emitter);
     emitter.setOneTranslationUnit(oneTranslationUnit);
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
+    for (size_t i = 0; i < moduleFiles.size(); ++i) *moduleFiles[i] << emitter.pruneUnreached(moduleTexts[i]->str());
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
@@ -12512,6 +12522,7 @@ int main(int argc, char** argv)
         bool needsApp = false;    // set if the program `extern "kama_app.h";`'s (std::app) -> wasm -sEXIT_RUNTIME=1
         bool needsGpu = false;    // set if the program `extern "kama_gpu.h";`'s (WebGPU seam) -> native surface libs
         bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
+        g_pruneUnreached = true;  // a build compiles what its program reaches (KR-130); `transpile` never gets here
         if (units.size() == 1) {
             // genDir, not the input's directory. The multi-file paths below already did this; this one
             // did not, which is why a bare `kama build x.kama` used to drop an `x.c` beside the source

@@ -878,6 +878,10 @@ public:
     // already defined for every module after it. They are deduped per module so that each separate TU has its
     // own `static` copy; folded, a second copy is a redefinition. See emitModuleContent.
     void setOneTranslationUnit(bool on) { _oneTranslationUnit = on; }
+    // KR-130: a build compiles only the functions its program reaches. `transpile` keeps the whole translation.
+    void setPruneUnreached(bool on) { _pruneUnreached = on; }
+    std::string pruneUnreached(const std::string& text);   // the C `text` without the unreached functions'
+                                                           // definitions; unchanged when nothing was computed
 
     // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
     // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), every triple
@@ -1782,7 +1786,9 @@ private:
     // One C-body parser, used twice: by `buildCallGraph` over the whole emitted program, and by
     // `resolvePendingFacts` over a single module buffer before it is flushed. `entryBodies` is filled only
     // for the whole-program call (a buffer is a fragment, and `main` is found once).
-    struct CBody { std::string name; size_t open = 0, close = 0; std::string params; };
+    // `start`: where the definition's text begins (just past the `;`/`}` before it). `entry`: its header says the
+    // host reaches it by symbol or the toolchain does (`KAMA_EXPORT`, `__attribute__`) — a root no call shows.
+    struct CBody { std::string name; size_t open = 0, close = 0, start = 0; std::string params; bool entry = false; };
     std::vector<CBody> parseCBodies(const std::string& s, bool entryBodies);
     // KR-74: one runtime header, ready to scan — its text, and the name a body in it is attributed to.
     struct CHeader { std::string file, text; };
@@ -1999,6 +2005,9 @@ private:
     }
     bool _sharedModule = false;                                      // OUTPUT=SHARED — see setSharedModule
     bool _oneTranslationUnit = false;                                // every module folds into one C unit — see setOneTranslationUnit
+    bool _pruneUnreached = false;                                    // KR-130 — see setPruneUnreached
+    std::set<std::string> _unreached;                                // emitted functions no root reaches
+    void computeUnreached();
     // Emitting a destructor's own body: a `return` there leaves the BODY, not the drop of the fields that
     // follows it, so it unwinds and jumps to `kama_dtor_fields` (emitDtorDefinition), which places the label
     // only when a `return` used it.

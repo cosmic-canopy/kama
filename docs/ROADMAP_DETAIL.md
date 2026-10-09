@@ -1985,18 +1985,6 @@ writes, never takes by `ref` and never gives away could be that payload in place
 read through, as a `const ref` parameter is. The rules for when an arm's binding owns its value (a `give` subject, a
 moved-out payload) decide where that holds.
 
-<a id="s5-function-pruning"></a>
-
-### An uncalled function is emitted (KR-130)
-
-Measured on `0.9.558`: a library `heavy` exports `used` and `unused`, and an application imports and calls only
-`used`. `heavy__unused` is still compiled, frame and all. Closure pruning (`tools/check-closure-pruning.sh`)
-decides per FILE, and the file is reached. A consumer that sets `-Wframe-larger-than` is then failed by a
-function it never calls. **Design:** after emission the program's call graph (`buildCallGraph`, already built for
-`--no-heap`) is walked from its roots. The roots are `main`, every `expose fn`, `@foreignEntry`, an isolate entry,
-each vtable and contract-adapter slot, and every function whose address is taken (a `fnptr` bind, a callback).
-What is unreached is not emitted. A library build keeps its exported surface.
-
 <a id="s5-bytewise"></a>
 
 ### A byte view of a plain value (KR-127)

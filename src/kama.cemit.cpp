@@ -29413,14 +29413,18 @@ std::vector<CEmitter::CBody> CEmitter::parseCBodies(const std::string& s, bool e
     int depth = 0;
     bool lineStart = true;
     std::string seg;
+    size_t segStart = 0;   // where the text `seg` collects began: one past the `;`/`}` that ended the last
     CBody cur;
     for (size_t i = 0; i < n; ) {
         const char c = s[i];
         if (c == '\n') { lineStart = true; if (depth == 0) seg += ' '; ++i; continue; }
         if (c == ' ' || c == '\t' || c == '\r') { if (depth == 0) seg += ' '; ++i; continue; }
-        if (lineStart && c == '#') { i = skipDirective(i); continue; }
+        // A directive or comment at depth 0 before any of a declaration's text is not part of it — the file's
+        // `#include`s are not the first function's, and pruning that function must leave them.
+        const bool before = depth == 0 && seg.find_first_not_of(' ') == std::string::npos;
+        if (lineStart && c == '#') { i = skipDirective(i); if (before) segStart = i; continue; }
         lineStart = false;
-        if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); continue; }
+        if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); if (before) segStart = i; continue; }
         if (c == '"' || c == '\'') { size_t e = skipLiteral(i); if (depth == 0) seg.append(s, i, e - i); i = e; continue; }
         if (c == '{') {
             if (depth == 0) {
@@ -29437,8 +29441,11 @@ std::vector<CEmitter::CBody> CEmitter::parseCBodies(const std::string& s, bool e
                         // host can call by symbol (`expose fn`, which `@interrupt`/`@callerThread` require).
                         if (entryBodies && (cur.name == "main" || seg.find("KAMA_EXPORT") != std::string::npos))
                             _entryBodies.insert(cur.name);
+                        cur.entry = cur.name == "main" || seg.find("KAMA_EXPORT") != std::string::npos
+                                 || seg.find("__attribute__") != std::string::npos;
                         cur.params = seg.substr(p, e - p + 1);
                         cur.open = i;
+                        cur.start = segStart;
                     }
                 }
             }
@@ -29447,15 +29454,91 @@ std::vector<CEmitter::CBody> CEmitter::parseCBodies(const std::string& s, bool e
         if (c == '}') {
             if (--depth == 0) {
                 if (!cur.name.empty()) { cur.close = i; bodies.push_back(cur); }
-                cur = CBody(); seg.clear();
+                cur = CBody(); seg.clear(); segStart = i + 1;
             }
             if (depth < 0) depth = 0;
             ++i; continue;
         }
-        if (depth == 0) { if (c == ';') seg.clear(); else seg += c; }
+        if (depth == 0) { if (c == ';') { seg.clear(); segStart = i + 1; } else seg += c; }
         ++i;
     }
     return bodies;
+}
+
+// KR-130 — the functions this program never reaches, so a build need not compile them. Closure pruning keeps or
+// drops whole FILES; a file that is reached kept every function in it, and a dependency's uncalled `unused` was
+// compiled frame and all — a consumer's `-Wframe-larger-than` was failed by code it never calls.
+//
+// The graph is the one `--no-heap` reads (buildCallGraph): an edge is any use of a function's name in a body, a
+// call or a value (a callback, a trampoline, a slot store). The ROOTS are every way in that no call shows:
+//   - `main`, and every body the host or the toolchain reaches by symbol — `KAMA_EXPORT` (`expose fn`, which
+//     `@interrupt` and `@linkName` require) or `__attribute__` (a section, a constructor) — and every
+//     `@foreignEntry` body: the entry points `--no-heap` judges a program by;
+//   - a name used OUTSIDE every body — a vtable's initializer, a macro that defines functions over it — other
+//     than a prototype, which is a name followed by `(`;
+//   - a name a runtime header mentions, since the runtime calls into the program by name (`kama_main`).
+// A program with no root at all is a translation, not a program, and nothing is pruned.
+void CEmitter::computeUnreached()
+{
+    _unreached.clear();
+    if (!_pruneUnreached || _unsupported > 0) return;
+    const std::vector<CBody> bodies = parseCBodies(_emittedC, /*entryBodies=*/false);
+    std::set<std::string> defined;
+    for (const CBody& b : bodies) defined.insert(b.name);
+    std::set<std::string> roots;
+    for (const CBody& b : bodies) if (b.entry) roots.insert(b.name);
+    for (auto& kv : _foreignEntryFns) roots.insert(kv.first);   // `@foreignEntry`: entered from foreign code, as `--no-heap` roots it
+    auto identChar = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
+    // Every identifier of `t` in [from, to) that names a defined function, skipping literals and comments;
+    // `callsToo` false: one followed by `(` is a prototype or a definition, not a use.
+    auto harvest = [&](const std::string& t, size_t from, size_t to, bool callsToo) {
+        for (size_t i = from; i < to; ) {
+            const char c = t[i];
+            if (c == '"' || c == '\'') { const char q = c; ++i; while (i < to && t[i] != q) { if (t[i] == '\\') ++i; ++i; } ++i; continue; }
+            if (c == '/' && i + 1 < to && t[i + 1] == '*') { size_t e = t.find("*/", i + 2); i = e == std::string::npos ? to : e + 2; continue; }
+            if (c == '/' && i + 1 < to && t[i + 1] == '/') { while (i < to && t[i] != '\n') ++i; continue; }
+            if (!(isalpha((unsigned char)c) || c == '_')) { ++i; continue; }
+            size_t e = i; while (e < to && identChar(t[e])) ++e;
+            if (i == 0 || !identChar(t[i - 1])) {
+                const std::string id = t.substr(i, e - i);
+                if (defined.count(id)) {
+                    size_t f = e; while (f < to && isspace((unsigned char)t[f])) ++f;
+                    if (callsToo || f >= to || t[f] != '(') roots.insert(id);
+                }
+            }
+            i = e;
+        }
+    };
+    size_t at = 0;
+    for (const CBody& b : bodies) { harvest(_emittedC, at, b.open, false); at = b.close + 1; }
+    harvest(_emittedC, at, _emittedC.size(), false);
+    for (const CHeader& h : _headerTexts) harvest(h.text, 0, h.text.size(), true);
+    if (roots.empty()) return;
+    std::set<std::string> reached;
+    std::vector<std::string> work(roots.begin(), roots.end());
+    while (!work.empty()) {
+        const std::string f = work.back(); work.pop_back();
+        if (!reached.insert(f).second) continue;
+        auto it = _callEdges.find(f);
+        if (it != _callEdges.end()) for (auto& e : it->second) if (!reached.count(e.first)) work.push_back(e.first);
+    }
+    for (const std::string& d : defined) if (!reached.count(d)) _unreached.insert(d);
+}
+
+std::string CEmitter::pruneUnreached(const std::string& text)
+{
+    if (_unreached.empty()) return text;
+    std::string out;
+    size_t at = 0;
+    for (const CBody& b : parseCBodies(text, /*entryBodies=*/false)) {
+        if (!_unreached.count(b.name) || b.close < at) continue;
+        const size_t from = std::max(b.start, at);   // two unreached in a row: this one starts where the last cut ended
+        out.append(text, at, from - at);
+        at = b.close + 1;
+        if (at < text.size() && text[at] == '\n') ++at;
+    }
+    out.append(text, at, std::string::npos);
+    return out;
 }
 
 // The body of `text` that contains each fact recorded against `sink`, and the fact filed under its name. Called
@@ -39520,6 +39603,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
+    computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
                                       // exist only once every body has been emitted.
     walkComptimeCode({unit});         // LAST of all: no walk above reads what it records (KR-97, KR-102)
@@ -39606,6 +39690,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
+    computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled
                                       // runs at collect time — a `spawn` lives in a BODY, so its facts
                                       // exist only once every body has been emitted.
     walkComptimeCode(units);          // LAST of all: no walk above reads what it records (KR-97, KR-102)

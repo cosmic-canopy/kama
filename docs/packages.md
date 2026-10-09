@@ -621,9 +621,13 @@ package and the store is keyed by it, so what a consumer fetches is exactly what
 The "one large package, fetched in parts" shape other ecosystems offer is answered two ways here, neither
 of which weakens that guarantee: **scoped siblings** (`@acme/geo`, `@acme/geo-extras`, `@acme/geo-cli` —
 one scope, several packages, each fetched only by the projects that name it), or **several modules in one
-package** — a consumer imports only the modules it names, and link-time pruning (`--gc-sections`,
-emit-on-instantiation) drops the rest, so the download is the only cost the unused modules have. A package
-big enough for that cost to matter is a package that wants splitting by scope.
+package** — a consumer imports only the modules it names, and a build compiles only the functions its
+program reaches: a file nothing imports is never read, and within a file it does read, a function no entry
+point reaches is never compiled (`tools/check-function-prune.sh`). The entry points are `main`, every
+`expose fn` and `@foreignEntry` body, and whatever is handed out as a value or through a vtable. So the
+download is the only cost the unused modules have, and a consumer's `-Wframe-larger-than` judges only code it
+runs. `kama transpile` writes the whole translation. A package big enough for the download to matter is a
+package that wants splitting by scope.
 
 ### Publishing
 

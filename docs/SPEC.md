@@ -722,8 +722,9 @@ one gate. Target-independent (composes with `--target embedded`).
 written. `--no-heap` proves the PROGRAM, and a program is what its **entry points reach**: `main`, every <!-- xfail: noheap_flag_reached_helper -->
 `expose fn`, and every `@foreignEntry` body. A body nothing reaches is not part of it. An allocating helper
 nobody calls builds, and so does a stdlib module whose error paths allocate, merely imported. <!-- test: noheap_flag_unreached_helper, noheap_flag_import_uuid, noheap_flag_import_json, noheap_flag_import_hex -->
-What a no-heap object promises follows: the reached program never allocates. It does not promise that the
-object never names `malloc`, since an unreached stdlib body may. Every no-heap and bare-metal compile gets one
+What a no-heap object promises follows: the reached program never allocates. A build compiles only that
+reached program, so an unreached body is not in the object at all (*docs/packages.md*); a `kama transpile`
+output, which keeps everything, may still name `malloc` in one. Every no-heap and bare-metal compile gets one
 section per function, so the board's link drops unreached code with `--gc-sections` (*docs/targets.md*).
 
 **`@noheap` is transitive**, which is what makes it a proof rather than a lint: a `@noheap` body may not <!-- xfail: noheap_transitive_new, noheap_transitive_deep, noheap_transitive_method -->
