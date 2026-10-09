@@ -62,7 +62,25 @@ fi
 crc=0; "$TMP/cb" || crc=$?
 [ "$crc" = "$EXPECT" ] || fail "the gcc-built callback fixture exited $crc, expected $EXPECT"
 
-# 3. `--cc cc`, the spelling a name test gets wrong. Skipped where `cc` is absent.
+# 3. A function that ENDS in an exhaustive `match`. kama proves every path returns; clang agrees, because it
+#    treats a switch naming every enumerator of a C enum as total, and gcc does not, so `default: break;` was
+#    "control reaches end of non-void function" — fatal under kama's `-Werror=return-type`. Every exhaustive
+#    match's default arm now diverges. A tagged enum, a plain enum, and a value-producing match.
+cat > "$TMP/match.kama" <<'KAMA'
+type enum Tri { A, B, C }
+fn int32 pick(Optional<int32> o) { match (o) { case Some(value: v): { return v; } case None: { return 0; } }; }
+fn int32 rank(Tri t) { match (t) { case A: { return 1; } case B: { return 2; } case C: { return 3; } }; }
+fn int32 val(Tri t) { int32 r = match (t) { case A: 10; case B: 20; case C: 30; }; return r; }
+fn int32 main() { return pick(o: Optional::Some(value: 3)) + rank(t: Tri::C) + val(t: Tri::A); }   // 16
+KAMA
+if ! "$KAMA" build "$TMP/match.kama" --cc gcc -o "$TMP/match" > "$TMP/match.log" 2>&1; then
+    sed 's/^/    /' "$TMP/match.log" >&2
+    fail "\`--cc gcc\` did not build functions that end in an exhaustive \`match\`"
+fi
+mrc=0; "$TMP/match" || mrc=$?
+[ "$mrc" = 16 ] || fail "the gcc-built exhaustive-match program exited $mrc, expected 16"
+
+# 4. `--cc cc`, the spelling a name test gets wrong. Skipped where `cc` is absent.
 if command -v cc >/dev/null 2>&1; then
     if ! "$KAMA" build "$TMP/hello.kama" --cc cc -o "$TMP/hello_cc" > "$TMP/cc.log" 2>&1; then
         sed 's/^/    /' "$TMP/cc.log" >&2
@@ -74,4 +92,4 @@ fi
 
 ALSO=""
 command -v cc >/dev/null 2>&1 && ALSO=", and so does cc"
-echo "check-cc-gcc: PASS (gcc builds a program and the FFI callback seam$ALSO)"
+echo "check-cc-gcc: PASS (gcc builds a program, the FFI callback seam and functions ending in an exhaustive match$ALSO)"

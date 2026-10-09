@@ -332,17 +332,6 @@ using silently, and SPEC's sentence holds. It is a source break for generics tha
 which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
 contract before code.**
 
-<a id="s2-gcc-exhaustive-match"></a>
-
-### Under gcc, a function ending in an exhaustive `match` does not build (KR-117)
-
-`fn int32 pick(Optional<int32> o) { match (o) { case Some(value: v): { return v; } case None: { return 0; } }; }`.
-kama proves every path returns; gcc cannot, and kama's `-Werror=return-type` makes "control reaches end of
-non-void function" fatal. clang builds it. gcc is a documented `cc`, so this is **a defect**. It was measured
-under gcc in the Linux container, and independently under MSYS2 UCRT64 gcc on `0.9.542`. The fact is already
-computed (`bodyDiverges`), so after a statement kama has proven to diverge, the emitter says so to C:
-`__builtin_unreachable()` in release, and a trap in debug so a broken proof still fails loudly.
-
 <a id="s2-bool-conditions"></a>
 
 ### A condition is not checked to be a `bool` (KR-129)

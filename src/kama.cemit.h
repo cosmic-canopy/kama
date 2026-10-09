@@ -3581,7 +3581,7 @@ private:
     // The `default:` arm closing an exhaustive match's switch. `break` unless the tag is a pinned integer,
     // where the arm diverges instead — see the definition for why the dead edge is a compile error (an
     // unassigned temp in the value form, a missing return in the statement form) and not merely lost.
-    void        emitMatchDefaultArm(bool hasWildcard, bool pinnedTag, const std::string& what, int depth);
+    void        emitMatchDefaultArm(bool hasWildcard, const std::string& what, int depth);
 
     // Merge per-arm move-states at a match join. A `match` is exhaustive, so a local moved on some but
     // not all reaching arms becomes MaybeMoved (rejected as an undecidable drop at scope exit) — the

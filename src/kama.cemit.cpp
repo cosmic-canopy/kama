@@ -27017,8 +27017,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
-    emitMatchDefaultArm(hasWildcard, _classes.count(subjCls) && !_classes[subjCls].tagCType.empty(),
-                        subjCls, depth);
+    emitMatchDefaultArm(hasWildcard, subjCls, depth);
     indent(depth); *_out << "}\n";
     --_switchDepth;
     // A materialized owning subject (a call/construction result) is dropped once after the switch —
@@ -27036,39 +27035,32 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
 
 // The `default:` arm that closes an exhaustive match's switch, keeping the C switch total.
 //
-// `break` is right almost everywhere, and wrong in exactly one shape: a match whose tag is a PINNED
-// INTEGER (`type enum Color : uint8`). ISO C cannot set an enum's underlying type, so that
-// form lowers to `typedef uint8_t Color;` plus an anonymous constant enum (see emitEnum) — and clang
-// then sees a switch over 256 possible values with three cases, takes the default in its CFG, and reports
-// the result temp as used-uninitialized. `-Werror=uninitialized` (kama.driver.cpp) makes that FATAL, so
-// `int32 n = match (c) { … };` over a width-pinned enum simply did not compile.
+// kama has already PROVEN the match exhaustive (the callers reject a missing variant), so nothing is wrong with
+// the program — the C compiler just cannot be told what kama knows. The arm DIVERGES, which is what lets the C
+// compiler drop that CFG edge. Two compilers needed it, for two shapes:
 //
-// kama has already PROVEN the match exhaustive (the callers reject a missing variant), so nothing is
-// wrong with the program — the C compiler just cannot be told what kama knows. The fix is for the arm to
-// DIVERGE, which is what lets clang drop that CFG edge. Zero-initializing the temp instead was rejected:
-// it costs every match in every program to serve this one shape.
+//   - clang, for a PINNED integer tag (`type enum Color : uint8`). ISO C cannot set an enum's underlying type, so
+//     that form lowers to `typedef uint8_t Color;` plus an anonymous constant enum (see emitEnum), and clang saw a
+//     switch over 256 values with three cases, took the default, and reported the result temp as
+//     used-uninitialized (`-Werror=uninitialized`). A statement-form match whose every arm returns hit the same
+//     edge as `-Werror=return-type`.
+//   - gcc, for every OTHER tag. clang treats a switch that names every enumerator of a real C enum as total, and
+//     the arm was `default: break;` byte-for-byte for that reason. gcc does not, so
+//     `fn int32 pick(Optional<int32> o) { match (o) { case Some(value: v): { return v; } case None: { return 0; } }; }`
+//     was "control reaches end of non-void function" under `--cc gcc`, and gcc is a documented `cc`.
 //
-// `kama_panic` rather than `__builtin_unreachable()`, deliberately. Safe kama can no longer mint a tag
-// that names no variant (`cast<Color>(n)` is refused; `try cast` is the checked door; `bitcast` was
-// always refused), so on a pure-safe path this arm is dead and -O2 folds it away. But an `extern fn` and
-// a deserializer both hand back a raw integer that no static rule inspects, and there `unreachable` is UB
-// while a panic is a diagnosed abort. It is a cold, noreturn call either way.
+// So the arm diverges for every tag. Zero-initializing the temp instead was rejected: it costs every match in
+// every program to serve one compiler's flow analysis.
 //
-// The arm is the same in BOTH forms. This used to panic only in the value-producing form, on the claim
-// that a statement-form match "has no value to produce, so falling through is correct" — true until every
-// arm diverges: `fn int32 pick(Tri t) { match (t) { case A: return 1; … } }` is proven exhaustive by
-// kama's own return-path walk (alwaysExits), and the same dead `default: break;` edge is then a
-// `-Werror=return-type` error from clang instead of `-Werror=uninitialized`. Same CFG edge, same
-// argument, one arm. A program hit exactly this, and its author rewrote every such function
-// to assign in the arms.
-//
-// A real C enum tag keeps `default: break;` BYTE-FOR-BYTE: clang already treats a switch that names
-// every enumerator as total.
-void CEmitter::emitMatchDefaultArm(bool hasWildcard, bool pinnedTag, const std::string& what, int depth)
+// `kama_panic` rather than `__builtin_unreachable()`, deliberately. Safe kama can no longer mint a tag that
+// names no variant (`cast<Color>(n)` is refused; `try cast` is the checked door; `bitcast` was always
+// refused), so on a pure-safe path this arm is dead. But an `extern fn` and a deserializer both hand back a raw
+// integer that no static rule inspects, and a C enum holds any `int`; there `unreachable` is UB while a panic
+// is a diagnosed abort. It is a cold, noreturn call either way.
+void CEmitter::emitMatchDefaultArm(bool hasWildcard, const std::string& what, int depth)
 {
     if (hasWildcard) return;
     indent(depth + 1);
-    if (!pinnedTag) { *_out << "default: break;\n"; return; }
     // The message a USER reads at runtime, so it goes through the same demangler every diagnostic does —
     // `_Fvm__Color` is an emitter-internal spelling nobody wrote.
     const std::string msg = "match on '" + demangleForDisplay(what) + "': value names no variant";
@@ -27290,8 +27282,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
-    emitMatchDefaultArm(hasWildcard, _enums.count(enumTy) && !_enums[enumTy].underlyingCType.empty(),
-                        enumTy, depth);
+    emitMatchDefaultArm(hasWildcard, enumTy, depth);
     indent(depth); *_out << "}\n";
     --_switchDepth;
 }
