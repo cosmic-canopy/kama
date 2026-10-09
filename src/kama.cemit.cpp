@@ -692,6 +692,12 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
                     auto it = ctx.symbolAliases.find(local);
                     if (it != ctx.symbolAliases.end() && it->second != target)
                         unsupported(("import of `" + local + "` collides with another import — disambiguate with `as`").c_str(), imp->line);
+                    // The same symbol twice under the same name. Harmless to resolution, which is why it passed in
+                    // silence, but the block is "one entry per symbol" and a repeat is the leftover an edit makes —
+                    // a scripted import added beside one that was already there.
+                    else if (it != ctx.symbolAliases.end())
+                        unsupported(("`" + local + "` is imported twice — an `import` block names each symbol once; "
+                                     "delete the repeated entry").c_str(), imp->line);
                     ctx.symbolAliases[local] = target;
                 }
         }

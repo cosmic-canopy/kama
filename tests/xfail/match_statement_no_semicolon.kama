@@ -1,0 +1,6 @@
+// A `match` used as a statement ends with `;` after its `}`. Without it the parser stopped at the enclosing
+// function's closing brace with a bare "unexpected }", a line away from the mistake and naming nothing.
+fn int32 f(Result<int32, int32> r) {
+    match (r) { case Ok(value: v): { return v; } case Err(error: e): { return 0; } }
+}
+fn int32 main() { return f(r: Result::Ok(value: 3)); }

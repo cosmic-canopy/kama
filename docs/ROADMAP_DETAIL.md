@@ -2860,10 +2860,15 @@ diagnostic, not a feature: no program can use such a package today.
   (`return cast<int32>(base);`), not the declaration. Delete that second line and the entry fails.
   Measured; it is the reason this was found at all.
 
-  **Unprobed, and that is the first task, not the fix:** tree-sitter's keyword extraction has no "reserved everywhere" switch, so the
-  fix is either an external scanner (`src/scanner.c` — the grammar has none today, and the `>>` note
-  in its header records not needing one as a virtue) or a negative lookahead over 78 spellings baked
-  into the `identifier` token. Which of those is tolerable is the question to answer first.
+  **The switch exists now** (checked 2026-10-08): the pinned CLI (0.26.11) has grammar-level `reserved` word
+  sets, and the first set is reserved EVERYWHERE, while `reserved(name, rule)` overrides it per rule (the
+  contextual words). That replaces both earlier candidates: an external scanner (the grammar has one now, for
+  `give`/`copy`/`truncate`, a different job) and a negative lookahead over 78 spellings in `identifier`. The
+  fix is that set, generated from `kama.l`'s keyword table so the two cannot drift.
+
+  `null` belongs to the class too. The compiler's reserved-word note names it (`0.9.554`), but no xfail can
+  pin that note until this lands: `int32 null` is a parse error to the compiler and clean to tree-sitter, so
+  the fixture would break the parse-error parity `check-treesitter.sh` holds. Add `xfail/null_as_name` here.
 
 
 - **AI/agent tooling — SHIPPED.** `kama query --search NAME` / `--diagnostics` / `--json`, the

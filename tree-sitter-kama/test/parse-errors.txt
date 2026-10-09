@@ -51,6 +51,7 @@ tests/xfail/lex_string_badchar.kama
 tests/xfail/lex_string_unterminated.kama
 tests/xfail/lex_tab_column.kama
 tests/xfail/lex_verbatim_unterminated.kama
+tests/xfail/match_statement_no_semicolon.kama
 tests/xfail/module_static_volatile.kama
 tests/xfail/out_local.kama
 tests/xfail/pin_keyword_typo.kama

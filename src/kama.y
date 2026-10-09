@@ -2870,13 +2870,13 @@ SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, con
  * may carry a string alias (`%token <token> WHEN "when"`), so its bison name is not always its
  * spelling uppercased.
  *
- * ⚠️ `null` still gets no note: its token is NULL_LITERAL, whose name is not its spelling at all.
- * Adding an alias would be the wrong trade — a silent miss on one word costs a sentence, a wrong
- * match costs trust in every message. */
+ * `null` is the one keyword whose token name is not its spelling (NULL_LITERAL), so it is named by its
+ * token, exactly — an alias would rename it in every bison message, and a looser match would cost trust
+ * in all of them. */
 static std::string reservedWordNote(yysymbol_kind_t tok, bool wantedIdentifier)
 {
     if (!wantedIdentifier) return "";
-    const char* name = yysymbol_name(tok);
+    const char* name = tok == YYSYMBOL_NULL_LITERAL ? "null" : yysymbol_name(tok);
     if (!name) return "";
     std::string upper;
     for (const char* p = name; *p; ++p) upper += (char)std::toupper((unsigned char)*p);
@@ -2973,12 +2973,25 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
            such declaration, and the reserved-word note that `const ref` used to get ("cannot be used as a name
            here") sent the reader off to rename something. `int32` stands for every type start: the set holds
            it exactly where a declaration may begin, and never in an argument or after a name. */
-        bool typeWanted = false, closeWanted = false;
+        bool typeWanted = false, closeWanted = false, semiWanted = false;
         for (int i = 0; i < n; ++i) {
-            if (expected[i] == YYSYMBOL_INT32)  typeWanted = true;
-            if (expected[i] == YYSYMBOL_RPAREN) closeWanted = true;
+            if (expected[i] == YYSYMBOL_INT32)     typeWanted = true;
+            if (expected[i] == YYSYMBOL_RPAREN)    closeWanted = true;
+            if (expected[i] == YYSYMBOL_SEMICOLON) semiWanted = true;
         }
-        if ((tok == YYSYMBOL_REF || tok == YYSYMBOL_OUT) && typeWanted)
+        /* A `;` was wanted and the next token can only close a block or begin a statement, so the `;` is
+           what is missing. The case it was written for: a `match` used as a statement needs one after its
+           `}` (`match (x) { … };`), and leaving it off said only "unexpected }" at the enclosing function's
+           end — a line away from the mistake, naming nothing. */
+        const bool startsStatement = tok == YYSYMBOL_RIGHT_BRACE || tok == YYSYMBOL_RETURN || tok == YYSYMBOL_IF
+            || tok == YYSYMBOL_WHILE || tok == YYSYMBOL_DO || tok == YYSYMBOL_FOR || tok == YYSYMBOL_FOREACH
+            || tok == YYSYMBOL_MATCH || tok == YYSYMBOL_BREAK || tok == YYSYMBOL_CONTINUE || tok == YYSYMBOL_SCOPE
+            || tok == YYSYMBOL_BORROW || tok == YYSYMBOL_SPAWN || tok == YYSYMBOL_PARALLEL_FOR
+            || tok == YYSYMBOL_PARALLEL_SPAWN;
+        if (semiWanted && startsStatement)
+            msg += " — a `;` is missing before it: every statement ends with one, and so does a `match` used "
+                   "as a statement (`match (x) { … };`)";
+        else if ((tok == YYSYMBOL_REF || tok == YYSYMBOL_OUT) && typeWanted)
             msg += tok == YYSYMBOL_REF
                 ? " — a local cannot be a `ref`: a place is passed (`ref`/`const ref` parameters) and returned "
                   "(`fn ref T`), never stored. Read it where it is (`xs[0]`), copy it out (`int32 first = xs[0];`), "

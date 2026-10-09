@@ -5742,7 +5742,8 @@ a symbol already imported, the spelling to write. Importing one symbol used to o
 module to a qualified spelling, which was a qualified glob and a second way to name each thing. `::` stays
 for a TYPE's scope (`Color::Blue`, `Ordering::Less`), which names no module; the one other place a module
 path is written is a `friend` grant, a module relation like an import entry rather than a use (§ *Access
-control*). Two imports binding the same bare name is a compile error — disambiguate with `as`. An `as` alias may **not** claim a name that already roots a project <!-- xfail: import_alias_claims_global -->
+control*). Two imports binding the same bare name is a compile error — disambiguate with `as` — and so is one <!-- xfail: import_repeated -->
+entry written twice. An `as` alias may **not** claim a name that already roots a project <!-- xfail: import_alias_claims_global -->
 this file can reach, which would leave the original unspellable
 (`tests/xfail/import_alias_shadows_project.kama`).
 

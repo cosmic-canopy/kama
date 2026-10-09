@@ -598,6 +598,7 @@ import_loose_root	app.kama:1 app.kama:2
 import_module_private	b.kama:1 b.kama:2
 import_name_unloaded	b.kama:2
 import_named_iter_unimported	import_named_iter_unimported.kama:6
+import_repeated	import_repeated.kama:4
 index_const_write	index_const_write.kama:6
 index_give_element	index_give_element.kama:3 index_give_element.kama:5 index_give_element.kama:6 index_give_element.kama:7 index_give_element.kama:8
 index_rvalue_no_slot	index_rvalue_no_slot.kama:9
@@ -720,6 +721,7 @@ match_label_missing	match_label_missing.kama:5
 match_label_unknown	match_label_unknown.kama:6
 match_nonexhaustive	match_nonexhaustive.kama:5
 match_partial_move	match_partial_move.kama:15
+match_statement_no_semicolon	match_statement_no_semicolon.kama:5
 match_subject_not_enum	match_subject_not_enum.kama:11
 match_ternary_arg_kind	match_ternary_arg_kind.kama:6 match_ternary_arg_kind.kama:7
 match_ternary_arg_narrow	match_ternary_arg_narrow.kama:10 match_ternary_arg_narrow.kama:9
