@@ -27268,8 +27268,16 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 std::string bcty = fieldCType(subjCls, pf);
                 std::string slot = std::string(sp) + "->kama_u." + kName(*a->variantName)
                                  + "." + kMember(_classes[subjCls], pf.name);
+                // An OWNING payload (a collection, a `string`, a resource, a handle) of a BORROWING `match` is bound
+                // as an ALIAS of the slot, the way `foreach (ref …)` binds an element: it cannot be copied
+                // implicitly, and a shallow copy was what this was until 0.9.562 — a change through it changed the
+                // copy, and a collection that grew freed the buffer the subject still pointed to (an abort on the
+                // subject's drop; measured). Through the alias a change lands in the subject's own payload. A plain
+                // value is still a copy, as a by-value `foreach` binding is.
+                const bool alias = !subjConsumed && (ownsByValue(bcty) || isSmartPtrClass(bcty));
                 indent(depth + 2);
-                *_out << bcty << " " << kName(bn) << " = " << slot << ";\n";
+                if (alias) *_out << bcty << "* " << kName(bn) << " = &" << slot << ";\n";
+                else       *_out << bcty << " " << kName(bn) << " = " << slot << ";\n";
                 // Destructure-MOVE: when the subject is CONSUMED (`match (give x)`) and the payload is owning,
                 // the binding takes ownership — defuse the subject slot (so the subject's drop no-ops it) and
                 // register the binding as a movable owning local (RAII-dropped if not `give`n out, and giveable).
@@ -27293,6 +27301,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     // subject still owns. `give`ing it out double-frees. Mark it non-giveable for this arm.
                     _borrowedMatchBindings.insert(bn);
                     borrowedHere.push_back(bn);
+                    _refParams.insert(bn);                                   // reads/writes go through the alias
+                    if (isConstReceiver(m->subject)) _constLocals.insert(bn);   // a const subject: a const alias
                 }
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
                 // …and the TYPE NODE, which `_localTypes` deliberately drops (it keeps classes only, so a
@@ -27401,7 +27411,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         }
         indent(depth + 2); *_out << "break;\n";
 
-        for (auto& bn : borrowedHere) _borrowedMatchBindings.erase(bn);
+        for (auto& bn : borrowedHere) { _borrowedMatchBindings.erase(bn); _refParams.erase(bn); _constLocals.erase(bn); }
         popScope();   // retires the payload bindings — the state of anything they shadowed comes back with them
         // Captured AFTER the pop, on purpose. A payload binding may shadow an enclosing move-tracked local
         // of the same name; captured before the pop, the merge read the BINDING's state under the outer

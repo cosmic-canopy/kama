@@ -5614,9 +5614,13 @@ integer — `try cast<E>(x)`, above — hands back an `Optional<E>`: a value tha
 a `None` **arm** of the same construct, never as a trap.
 
 **A subject that names storage is borrowed where it lives**: a local, a field, an element, or a call that
-returns a place (`fn ref T`, `const fn const ref T`), so its payload bindings alias storage the owner keeps. <!-- test: match_place_subject -->
+returns a place (`fn ref T`, `const fn const ref T`), so its payload bindings read storage the owner keeps. <!-- test: match_place_subject -->
 Only a fresh value, such as a constructor or a by-value call result, is held in a temporary, and the `match` drops
-that temporary when it ends.
+that temporary when it ends. A binding of an OWNING payload (a collection, a `string`, a resource, a handle) <!-- test: match_payload_alias -->
+is an alias of the subject's slot, as a `foreach (ref …)` binding is of an element: a change through it changes
+the subject's payload, and it cannot be `give`n away (`match (give x)` hands the arm the payload to own). A
+`const` subject's alias is `const`. A binding of a plain value is a copy the arm may change, as a by-value <!-- xfail: match_const_payload_mutate -->
+`foreach` binding is.
 
 **A pattern NAMES the fields it binds** — `field: local` — exactly as a call names its arguments; there is
 no positional form, and kama no more exempts a one-field variant here than it exempts a one-argument call

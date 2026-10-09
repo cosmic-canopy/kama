@@ -1,0 +1,26 @@
+// An owning payload of a borrowing `match` is bound as an ALIAS of the subject's slot, as `foreach (ref …)` binds
+// an element. Until 0.9.562 it was a shallow copy: a change through it was lost, and a collection that grew freed
+// the buffer the subject still pointed to, so the program aborted on the subject's drop. A plain value payload is
+// still a copy the arm may change, as a by-value `foreach` binding is. Returns 42.
+import { std::collections::DynamicArray, std::memory::Owned };
+type value Box { public int64 n; public ctor make(int64 n) { this.n = n; } public fn void set(int64 v) { this.n = v; } }
+type value P { public int64 n; public ctor make(int64 n) { this.n = n; } }
+fn int64 opened(int64 v) { return match (Optional::Some(value: Box.make(n: v))) { case Some(value: b): b.n; case None: 0i64; }; }
+fn DynamicArray<int64> fresh() { DynamicArray<int64> xs = DynamicArray.empty(); xs.add(item: 3i64); return give xs; }
+fn int32 main() {
+    DynamicArray<int64> xs = DynamicArray.empty();
+    xs.add(item: 1i64);
+    Optional<DynamicArray<int64>> o = Optional::Some(value: give xs);
+    match (o) { case Some(value: a): { int32 i = 0; while (i < 100) { a.add(item: 2i64); i = i + 1; } } case None: { } };
+    int64 grown = match (o) { case Some(value: a): cast<int64>(a.length()); case None: 0i64; };              // 101
+    Optional<Owned<Box>> h = Optional::Some(value: new Box.make(n: 1i64));
+    match (h) { case Some(value: p): { p.set(v: 4i64); } case None: { } };                                   // the pointee
+    match (h) { case Some(value: p): { Owned<Box> q = new Box.make(n: 9i64); p = give q; } case None: { } };   // the handle
+    int64 boxed = match (h) { case Some(value: p): p.n; case None: 0i64; };                                  // 9
+    Optional<P> v = Optional::Some(value: P.make(n: 1i64));
+    match (v) { case Some(value: p): { p.n = 5i64; } case None: { } };                                       // a copy
+    int64 kept = match (v) { case Some(value: p): p.n; case None: 0i64; };                                   // 1
+    // A temporary subject is aliased too, and dropped once when the `match` ends.
+    int64 temp = match (Optional::Some(value: fresh())) { case Some(value: a): { a.add(item: 4i64); := a[0] + a[1]; } case None: 0i64; };   // 7
+    return grown == 101i64 && boxed == 9i64 && kept == 1i64 && temp == 7i64 && opened(v: 2i64) == 2i64 ? 42 : 1;
+}

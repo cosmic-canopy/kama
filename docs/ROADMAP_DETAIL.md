@@ -1983,7 +1983,10 @@ then `match (r) { case Ok(value: b): b.last(); … }` declares `Big b = subject-
 frame is 32,928 bytes at -O0, 16,448 at -O2). The subject is already borrowed by pointer. A binding the arm never
 writes, never takes by `ref` and never gives away could be that payload in place: `const Big* b = &subject->Ok.value`
 read through, as a `const ref` parameter is. The rules for when an arm's binding owns its value (a `give` subject, a
-moved-out payload) decide where that holds.
+moved-out payload) decide where that holds. A by-value `foreach` binding is the same copy of each element and takes
+the same answer. The semantics stay: a value binding is a copy the body may change (probed: writing one changes
+neither the subject nor the element), so this is a lowering, not a language change. The read-in-place applies
+only where the body provably never writes the binding.
 
 <a id="s5-bytewise"></a>
 

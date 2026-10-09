@@ -713,6 +713,7 @@ match_bad_variant	match_bad_variant.kama:7
 match_block_no_value	match_block_no_value.kama:6
 match_borrow_give_iface_payload	match_borrow_give_iface_payload.kama:8
 match_borrow_give_payload	match_borrow_give_payload.kama:7
+match_const_payload_mutate	match_const_payload_mutate.kama:4
 match_empty_arm	match_empty_arm.kama:8
 match_handle_give	match_handle_give.kama:7
 match_handle_weak	match_handle_weak.kama:7
