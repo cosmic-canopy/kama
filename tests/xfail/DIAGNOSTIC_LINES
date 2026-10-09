@@ -182,7 +182,10 @@ comptime_value_private_ctor	comptime_value_private_ctor.kama:5
 comptime_value_resource	comptime_value_resource.kama:5
 comptime_value_type_mismatch	comptime_value_type_mismatch.kama:6
 comptime_value_write	comptime_value_write.kama:7 comptime_value_write.kama:8
+cond_function	cond_function.kama:5
 cond_move_live	cond_move_live.kama:10
+cond_not_bool_operators	cond_not_bool_operators.kama:5 cond_not_bool_operators.kama:6 cond_not_bool_operators.kama:7 cond_not_bool_operators.kama:8
+cond_not_bool_statements	cond_not_bool_statements.kama:6 cond_not_bool_statements.kama:7 cond_not_bool_statements.kama:8 cond_not_bool_statements.kama:9
 const_addr	const_addr.kama:9
 const_contract_impl	const_contract_impl.kama:9
 const_contract_recv	const_contract_recv.kama:11

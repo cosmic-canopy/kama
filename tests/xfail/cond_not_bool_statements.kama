@@ -1,0 +1,11 @@
+// A condition takes a `bool`: there is no implicit truthiness (SPEC). Every statement condition was C's
+// "non-zero" until 0.9.550 — `if (n)` on an `int32` built and ran the branch for any n other than 0. The message
+// names the comparison that was meant.
+fn int32 main() {
+    int32 n = 3;
+    if (n) { n = n - 1; }
+    while (n) { n = n - 1; }
+    do { n = n + 1; } while (n);
+    for (int32 i = 0; i; i = i + 1) { }
+    return n;
+}

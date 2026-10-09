@@ -5195,7 +5195,8 @@ Both contracts **borrow** their operand (`const ref This`) — a comparison neve
 `!equals`; `<=`/`>=` are "not Greater"/"not Less", so there is nothing separate to define. Equality stays
 **explicit**: a `value` that implements neither contract cannot be compared, and there is no auto-generated <!-- xfail: operator_missing -->
 structural equality — but `@generate(Equatable, Hashable)` will synthesize the memberwise walk on request
-(see *Derives*). The `true`/`false` conversion operators are out of scope: there is no implicit truthiness — `if` takes a `bool`.
+(see *Derives*). The `true`/`false` conversion operators are out of scope: there is no implicit truthiness — `if` takes a `bool`,
+and so does every condition: `while`, `do … while`, `for`'s, `?:`'s, and the operands of `!`, `&&` and `||`. <!-- xfail: cond_not_bool_statements, cond_not_bool_operators, cond_function -->
 
 **Primitives are untouched.** An all-primitive comparison keeps the built-in C operator, so `float` `<`
 keeps exact IEEE semantics at zero cost and never routes through `Comparable`. (A float is deliberately

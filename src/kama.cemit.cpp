@@ -5627,6 +5627,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 
     if (auto* v = dynamic_cast<LogicalAndOrNode*>(n)) {
         const bool isAnd = v->token == ANDAND;
+        requireBoolCondition(v->LHS, isAnd ? "`&&`'s operand" : "`||`'s operand", v->line);
+        requireBoolCondition(v->RHS, isAnd ? "`&&`'s operand" : "`||`'s operand", v->line);
         std::string l = emitExpression(v->LHS);
         const size_t h0 = _hoisted.size(), l0 = scopeLocalCount();
         // The right side runs on one path only, so a move in it (`f && take(s: give a)`) moves `a` on that
@@ -5650,6 +5652,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<TernaryExpressionNode*>(n)) {
+        requireBoolCondition(v->condition, "a `?:` condition", v->line);
         // A literal arm is typed by the other arm, as `typeOfExpr` types the ternary: `c ? 0.1 : x` on a
         // `float32 x` is a float32 expression, and C would otherwise make it a `double` one.
         const bool lLit = isLiteralExpr(v->LHS.get()), rLit = isLiteralExpr(v->RHS.get());
@@ -5853,6 +5856,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (rejectFunctionAsValue(v->expression, "an operator's operand", v->line)) return "0";
         std::string uop = emitUnaryUserOp(v->token, v->expression, v->line);   // op_neg/op_not/op_bnot/op_pos
         if (!uop.empty()) return uop;
+        if (v->token == EXCLAMATION) requireBoolCondition(v->expression, "`!`'s operand", v->line);   // a type's own `!` above
         std::string op;
         switch (v->token) {
             case EXCLAMATION: op = "!"; break;
@@ -7140,9 +7144,24 @@ static std::string stripRedundantOuterParens(const std::string& s)
     return s.substr(1, s.size() - 2);
 }
 
-std::string CEmitter::emitCondition(SharedExpression cond)
+// SPEC: "there is no implicit truthiness — `if` takes a `bool`". Nothing held it: `if (n)`, `while (n)`, `!n`,
+// `n ? a : b` and `n && ok` on an `int32` all built, C reading each as "non-zero", and so did `if (pi)` with `pi`
+// a function, which is always true. Every condition position asks here: the four statement conditions, `?:`,
+// and the operands of `!`, `&&` and `||`. An UNKNOWN kind is left alone (a `match` typed `bool` by its position,
+// an expression the classifiers cannot see), so the rule refuses only what it is sure of.
+void CEmitter::requireBoolCondition(SharedExpression e, const char* what, int line)
+{
+    if (!e || rejectFunctionAsValue(e, what, line)) return;
+    const TKind k = exprKind(e);
+    if (k == TKind::Unknown || k == TKind::Bool) return;
+    unsupported((std::string(what) + " takes a `bool`, and this is " + kindName(k) + " — there is no implicit "
+                 "truthiness; say what is meant" + (k == TKind::Num ? " (`n != 0`)" : "")).c_str(), line);
+}
+
+std::string CEmitter::emitCondition(SharedExpression cond, const char* what)
 {
     if (!cond) return "";
+    requireBoolCondition(cond, what, cond->line);
     bool ph = _hoistOK; _hoistOK = true;
     std::string pmt = _matchTargetCType;
     if (dynamic_cast<MatchNode*>(cond.get())) _matchTargetCType = "bool";
@@ -8293,7 +8312,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // current scope but *declared* in this wrapper block, so we dtor+unregister it before the wrapper
         // closes (below) rather than at the outer scope — else its drop would name an out-of-scope temp.
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
-        std::string cond = emitCondition(f->booleanExpression);
+        std::string cond = emitCondition(f->booleanExpression, "an `if` condition");
         bool hoist = !_hoisted.empty();
         int bd = depth;
         if (hoist) { indent(depth); *_out << "{\n"; flushHoisted(depth + 1); bd = depth + 1; }
@@ -8338,7 +8357,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     if (auto* w = dynamic_cast<WhileNode*>(n)) {
         line(n->line);
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
-        std::string cond = emitCondition(w->booleanExpression);
+        std::string cond = emitCondition(w->booleanExpression, "a `while` condition");
         _nextLoopExitsNormally = !alwaysTrue(w->booleanExpression);   // for settleLoopExit
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
@@ -8373,6 +8392,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         *_out << "do ";
         _nextLoopExitsNormally = !alwaysTrue(d->booleanExpression);   // for settleLoopExit
         emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
+        requireBoolCondition(d->booleanExpression, "a `do … while` condition", d->line);
         *_out << " while (" << emitExpression(d->booleanExpression) << ");\n";
         placeLoopExit(depth);
         return;
@@ -8390,7 +8410,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         _scopes.push_back(Scope());
         std::string init = emitForClause(f->initializerStatements);
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
-        std::string cond = emitCondition(f->booleanExpression);
+        std::string cond = emitCondition(f->booleanExpression, "a `for` condition");
         std::string iter = emitForClause(f->iteratorStatements);
         _nextLoopExitsNormally = f->booleanExpression && !alwaysTrue(f->booleanExpression);   // for settleLoopExit
         if (_hoisted.empty()) {                                   // fast path — unchanged

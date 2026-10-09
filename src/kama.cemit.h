@@ -2170,7 +2170,7 @@ private:
     size_t scopeLocalCount() const;
     // Emit an if/while/for condition with value-producing constructs allowed (they hoist a temp);
     // any hoisted temps are left in `_hoisted` for the caller to flush (empty => the fast path).
-    std::string emitCondition(SharedExpression cond);
+    std::string emitCondition(SharedExpression cond, const char* what);
     int                _curLine = 0;                   // last source line seen (conditional-drop diagnostics)
     bool               _inUnsafe = false;             // the ENCLOSING FUNCTION is an `unsafe fn`
     // The body being emitted is a generic INSTANCE whose type arguments include a raw pointer
@@ -3404,6 +3404,8 @@ private:
     // A function's NAME where a value is wanted (`a * pi`, `float32 x = pi`): refused, naming the call. A
     // function is a value only where a `fnptr` is — see the definition.
     bool rejectFunctionAsValue(SharedExpression e, const char* what, int line);
+    // A condition takes a `bool` — there is no implicit truthiness (SPEC). Refuses a value of another kind.
+    void requireBoolCondition(SharedExpression e, const char* what, int line);
     // `X.name` with no call, where `X` is a TYPE: an enum variant, a field, a `comptime` constant, a static
     // or a method reached with the constructor spelling. Reports and returns true; false when `X` is not
     // a type at all (the identifier arm then says what `X` is not).

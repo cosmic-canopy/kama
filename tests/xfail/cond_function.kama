@@ -1,0 +1,7 @@
+// A function's name as a condition was its C address, which is never zero, so `if (pi)` was always true. It is
+// refused as a function used where a value is wanted, naming the call.
+import { std::math::pi };
+fn int32 main() {
+    if (pi) { return 1; }
+    return 0;
+}

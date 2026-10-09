@@ -1,0 +1,10 @@
+// The expression positions of the same rule: `!`'s operand, `&&` and `||`'s operands, and a `?:` condition each
+// take a `bool`. `!n` on an `int32` was C's "is zero".
+fn int32 main() {
+    int32 n = 3;
+    bool a = !n;
+    bool b = n && true;
+    bool c = false || n;
+    int32 d = n ? 1 : 2;
+    return d;
+}
