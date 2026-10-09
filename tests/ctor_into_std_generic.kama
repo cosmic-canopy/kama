@@ -1,0 +1,24 @@
+// A constructor's into form is decided at its call site, and the decision read the ctor's declared return type.
+// Read in the CALLER's file, a std generic's return type named std's own names: `Map`'s private `Entry` and
+// `DynamicArray`. From 0.9.559 to 0.9.564 every program that read a collection of its own type through std's JSON
+// reader was refused, "`Entry` is declared in …/map.kama and this file does not import it". The type here is called
+// `Entry` on purpose. Returns 42.
+import { std::collections::DynamicArray, std::collections::Map, std::memory::Owned,
+         std::serialization::text::json::deserializeJsonBuffer };
+
+@generate(Deserializable)
+type resource Entry {
+    @field string id;
+    public const fn isize size() { return this.id.length(); }
+}
+
+fn int32 main() {
+    Result<Map<string, DynamicArray<Entry>>, Owned<Error>> r =
+        deserializeJsonBuffer::<Map<string, DynamicArray<Entry>>>(src: "[{\"key\": \"s\", \"value\": [{\"id\": \"1-1\"}]}]");
+    isize n = match (r) { case Ok(value: m): m.length(); case Err(error: e): -1; };                      // 1
+    Result<DynamicArray<Entry>, Owned<Error>> l = deserializeJsonBuffer::<DynamicArray<Entry>>(src: "[{\"id\": \"a\"}, {\"id\": \"bb\"}]");
+    isize k = match (l) { case Ok(value: xs): xs.length() + xs[1].size(); case Err(error: e): -1; };   // 2 + 2
+    Map<string, Entry> m = Map.empty();                                                                // a plain ctor site
+    DynamicArray<Entry> d = DynamicArray.empty();
+    return n == 1 && k == 4 && m.length() == 0 && d.length() == 0 ? 42 : 1;
+}

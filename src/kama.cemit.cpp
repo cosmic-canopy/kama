@@ -7487,7 +7487,21 @@ bool CEmitter::ctorBuildsInto(const ClassInfo& owner, const MethodInfo& mi, cons
 {
     if (!mi.isCtor || !mi.node || mi.fromAdapter || !mi.returnType || name == "deserialize") return false;
     if (owner.isScalarRecv || owner.isIntrinsicColl || owner.isVariant || isEnum(owner.name)) return false;
-    return cType(mi.returnType) == owner.name || (mi.returnType->value && *mi.returnType->value == "Result");
+    return ctorReturnCType(owner, mi) == owner.name || (mi.returnType->value && *mi.returnType->value == "Result");
+}
+
+// A ctor's return C type, resolved the way its OWN body resolves names — the owner's module, and for a generic
+// instance its parameter binding. Asked at a CALL site (the into decision), where `_nsCtx` is the caller's: there,
+// `cType` read `Result<Map<K, V>, …>` as written in `map.kama` in the program's file, and reported std's own
+// `Entry` and `DynamicArray` as names the program does not import. Until 0.9.565 that refused every program that
+// read a `Map<string, DynamicArray<Entry>>` through std's JSON reader. Cached: the answer is per ctor.
+const std::string& CEmitter::ctorReturnCType(const ClassInfo& owner, const MethodInfo& mi)
+{
+    auto it = _ctorReturnCTypes.find(mi.cName);
+    if (it != _ctorReturnCTypes.end()) return it->second;
+    ScopedStr _tt(_thisType, owner.name);
+    const std::string r = cTypeInInstance(owner.name, mi.returnType);   // the owner's home: names, file, parameters
+    return _ctorReturnCTypes.emplace(mi.cName, r).first->second;
 }
 
 // A construction site offers its storage — `dstPtr`, a `dstCType*` — to the ctor call its value IS, and to nothing
@@ -31239,7 +31253,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
              << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str(),
                            ci.isScalarRecv) << ");\n";   // static/free: no self
         if (ctorBuildsInto(ci, mi, kv.first)) {   // ...and the form that builds into storage (KR-120)
-            const std::string rt = cType(mi.returnType);
+            const std::string rt = ctorReturnCType(ci, mi);
             const std::string ps = paramListC(plist, nullptr, ci.name.c_str(), false);
             *_out << stat << "void " << mi.cName << "__into(" << rt << (rt == ci.name ? "* self" : "* kama_out")
                   << (ps == "void" ? std::string() : ", " + ps) << ");\n";
@@ -37028,7 +37042,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // The site's own value, and a ctor that builds into storage: build it where the site keeps it (KR-120). The
     // offer is the innermost one and names this very call, so a call nested in the arguments cannot take it.
     if (!_ctorIntoOffers.empty() && _ctorIntoOffers.back().node == call && !_ctorIntoOffers.back().used
-        && owner && cType(mi->returnType) == _ctorIntoOffers.back().type && ctorBuildsInto(*owner, *mi, method)) {
+        && owner && ctorBuildsInto(*owner, *mi, method) && ctorReturnCType(*owner, *mi) == _ctorIntoOffers.back().type) {
         _ctorIntoOffers.back().used = true;
         const std::string dst = _ctorIntoOffers.back().dst;
         return emitReorderedCall(disp + "." + method, mi->cName + "__into", dst, mi->params, call->args, call->line);

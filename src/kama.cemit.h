@@ -2024,6 +2024,8 @@ private:
     struct CtorIntoOffer { const ASTNode* node; std::string dst, type; bool used; };
     std::vector<CtorIntoOffer> _ctorIntoOffers;
     bool ctorBuildsInto(const ClassInfo& owner, const MethodInfo& mi, const std::string& name);
+    const std::string& ctorReturnCType(const ClassInfo& owner, const MethodInfo& mi);
+    std::map<std::string, std::string> _ctorReturnCTypes;   // ctor cName -> its return C type, in its own context
     std::string _ctorIntoErrCType;   // a fallible into ctor's `E`: its `Err` is written into `*kama_out` field by field
     void offerCtorInto(SharedExpression value, const std::string& dstPtr, const std::string& dstCType);
     bool takeCtorInto();
