@@ -4730,7 +4730,12 @@ A contract is represented as a fat pointer `{obj, vtbl}` (an implementation deta
 something you spell). Both a `value` and a `resource` may `implements` any number of contracts; a method that
 satisfies a contract method **must be declared `public`** (the contract is public — a hidden implementer
 would be reachable through the contract but not by name). A contract may **refine** another (`type contract
-Animated for value, resource implements Drawable { … }`) for capability layering, without inheritance.
+Animated for value, resource implements Drawable { … }`) for capability layering, without inheritance, and an
+implementer of the refining contract implements its parents too, as Swift's protocol inheritance and Rust's <!-- test: contract_refinement_implies -->
+supertraits do. A `Sprite implements Animated` satisfies a `Drawable` bound and binds to a `Drawable` value with
+no `implements Drawable` of its own. An `Animated` value, `Owned<Animated>` or `Shared<Animated>` passes where the
+`Drawable` one is wanted: the same object, with its vtable for `Drawable` read out of its `Animated` one. A
+contract value whose contract does not refine the wanted one is refused, whatever object is behind it. <!-- xfail: contract_value_not_refined -->
 
 **Passing a contract — by value vs. `ref`/`out`** (mirrors C#'s `ref` rule exactly):
 
@@ -5347,7 +5352,7 @@ fn int32 main() {
   signature puts where only a value may stand: an `InlineArray`'s or a `Simd`'s element, or the parameter a
   `type value` generic holds (`fn T unwrap<T>(Box<T> b) { return b.v; }` copies). Copying any other `T` — out
   of a field, out of a collection — needs `T: Copyable<T>` and says `copy`, since a bare hand-off of a `T`
-  whose copying is its own choice would move. Arithmetic is `T: Arithmetic<T>`, comparison
+  whose copying is its own choice would move. Arithmetic is `T: Additive<T>` or `T: Arithmetic<T>`, comparison
   `T: Comparable<T>`.
 - **What is checked at a generic's DECLARATION, versus at its instantiation.** **Every generic is analyzed
   as written** — every rule in the language applies inside its body, with each type parameter standing for a
@@ -5429,17 +5434,19 @@ fn int32 main() {
   `<T is Widget>` (a subtype bound) is not a thing kama has: inheritance is not a bound axis — substitutability is a contract's job (SPEC § *Inheritance*). Chosen over `Self` to pair with the `this`
   value and the PascalCase-types convention.
 - **Generic math (operators as bounds)** — a `contract` may declare **operators**, giving generic code
-  arithmetic over any conforming type at zero cost. The prelude's is `Arithmetic<T>`, the four operators every
-  number has; a generic that adds, subtracts, multiplies or divides its `T` says so, and is checked where it is
-  declared: <!-- test: arith_bound -->
+  arithmetic over any conforming type at zero cost. The prelude's are `Additive<T>`, `+` and `-`, and
+  `Arithmetic<T>`, which refines it with `*` and `/`; a generic that adds, subtracts, multiplies or divides its
+  `T` says so, and is checked where it is declared: <!-- test: arith_bound -->
   ```kama
-  // in the prelude: type contract Arithmetic<T is This> for value, resource, intrinsic {
-  //     T operator+(T rhs); T operator-(T rhs); T operator*(T rhs); T operator/(T rhs); }
-  fn T sum<T: Arithmetic<T>>(T a, T b) { return a + b; }   // `a + b` -> the primitive `+`, or Concrete__op_add(&a, b)
+  // in the prelude: type contract Additive<T is This> for value, resource, intrinsic { T operator+(T rhs); T operator-(T rhs); }
+  //                 type contract Arithmetic<T is This> for value, resource, intrinsic implements Additive<T> {
+  //                     T operator*(T rhs); T operator/(T rhs); }
+  fn T sum<T: Additive<T>>(T a, T b) { return a + b; }   // `a + b` -> the primitive `+`, or Concrete__op_add(&a, b)
   ```
-  Every number implements it with its own operator, so `sum<int32>` is the bare `+`, overflow check and all;
-  `std::num::Fixed` implements it with the operators it declares, and so does any type that declares the four and
-  `implements Arithmetic<This>` (bounds are nominal). Neither unary `-` (an unsigned number has none) nor `%` (a
+  Every number implements `Arithmetic` with its own operators, so `sum<int32>` is the bare `+`, overflow check
+  and all. `std::num::Fixed` implements `Arithmetic`, and `Vec2`/`Vec3`/`Vec4` and `Duration`, which add and
+  subtract but do not multiply by their own type, implement `Additive`. Any type that declares the operators and
+  `implements` the contract does the same (bounds are nominal). Neither unary `-` (an unsigned number has none) nor `%` (a
   float's is not an integer's) is in it; a contract of one's own may declare those, or `+` alone
   (`tests/generic_arith`). `x + x` on an unbounded `T` is refused with the bound to write. <!-- xfail: arith_unbounded -->
 - **Generic contracts** — a `contract` may itself be parameterized (`type contract Iterator<T>`), and is

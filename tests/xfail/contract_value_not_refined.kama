@@ -1,0 +1,15 @@
+// A contract value passes where another contract is wanted only if its contract REFINES that one (KR-133): a
+// `Sized` is not a `Drawable`, even though the object behind this one happens to be both. The value holds a vtable
+// for `Sized` alone, so there is nothing to read a `Drawable` out of — and this reached clang as a struct of the
+// wrong type until 0.9.572.
+type contract Drawable for value { fn int32 draw(); }
+type contract Sized for value { fn int32 size(); }
+type value Box implements Drawable, Sized {
+    int32 n = 3;
+    public ctor make() { }
+    public fn int32 draw() { return this.n; }
+    public fn int32 size() { return this.n; }
+}
+fn int32 drawValue(Drawable d) { return d.draw(); }
+fn int32 viaSized(Sized s) { return drawValue(d: s); }   // ERROR: `Sized` does not refine `Drawable`
+fn int32 main() { Box b = Box.make(); return viaSized(s: b); }

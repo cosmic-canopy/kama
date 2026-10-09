@@ -2,8 +2,6 @@
 import {
     std::io::IoError, std::io::IoErrorKind,
     std::io::lastError,
-    std::io::Reader,
-    std::io::Writer,
     std::collections::View, std::collections::ConstView,
     ReliableStream,
     Shutdown,
@@ -74,7 +72,7 @@ unsafe fn Result<SocketAddr, IoError> socketAddrOf(isize fd, bool peer) {
 // A connected TCP stream. Closes its socket on drop (RAII). Move-only. Implements the `ReliableStream`
 // contract (a `Reader` + `Writer` + `setNonBlocking`; shared with the WebSocket backend). Blocking by
 // default; `setNonBlocking(true)` makes read/write return `Err(WouldBlock)` instead of stalling.
-type resource TcpStream implements ReliableStream, Reader, Writer, Sendable {
+type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` and a `Writer`, by refinement
     // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
     // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0
     // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable

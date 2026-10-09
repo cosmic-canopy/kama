@@ -22,7 +22,7 @@ extern fn void kama_sleep_ns(uint64 ns);
 // A span of time at nanosecond resolution. A `value` (stack, copied, no alloc). Signed — the delta of two
 // Instants, or a countdown, may be negative.
 @generate(of)
-type value Duration implements Equatable<This>, Comparable<This>, Hashable, Sendable {
+type value Duration implements Equatable<This>, Comparable<This>, Additive<This>, Hashable, Sendable {
     public int64 nanos;
 
     public ctor zero()               { return Duration.of(nanos: 0i64); }
@@ -38,8 +38,8 @@ type value Duration implements Equatable<This>, Comparable<This>, Hashable, Send
     public const fn float64 asSecsF()    { return cast<float64>(this.nanos) / 1000000000.0f64; }
     public const fn bool isNegative()    { return this.nanos < 0i64; }
 
-    public Duration operator+(Duration r) { return Duration.of(nanos: this.nanos + r.nanos); }
-    public Duration operator-(Duration r) { return Duration.of(nanos: this.nanos - r.nanos); }
+    public Duration operator+(Duration rhs) { return Duration.of(nanos: this.nanos + rhs.nanos); }
+    public Duration operator-(Duration rhs) { return Duration.of(nanos: this.nanos - rhs.nanos); }
     public Duration operator-()           { return Duration.of(nanos: -this.nanos); }
     // `==`/`<`/`>`/`<=`/`>=` come from these two contracts; conforming also makes a Duration usable as a
     // `SortedMap`/`SortedSet` key and a `PriorityQueue` element — a timeout wheel is now expressible.

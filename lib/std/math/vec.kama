@@ -7,7 +7,7 @@
 export { Vec2, Vec3, Vec4 };
 
 @generate(of)
-type value Vec2 implements Equatable<This> {
+type value Vec2 implements Equatable<This>, Additive<This> {
     public float32 x;
     public float32 y;
     public default ctor zero()    { return Vec2.of(x: 0.0f32, y: 0.0f32); }
@@ -16,8 +16,8 @@ type value Vec2 implements Equatable<This> {
     public ctor unitX()           { return Vec2.of(x: 1.0f32, y: 0.0f32); }
     public ctor unitY()           { return Vec2.of(x: 0.0f32, y: 1.0f32); }
 
-    public Vec2 operator+(Vec2 r)   { return Vec2.of(x: this.x + r.x, y: this.y + r.y); }
-    public Vec2 operator-(Vec2 r)   { return Vec2.of(x: this.x - r.x, y: this.y - r.y); }
+    public Vec2 operator+(Vec2 rhs)   { return Vec2.of(x: this.x + rhs.x, y: this.y + rhs.y); }
+    public Vec2 operator-(Vec2 rhs)   { return Vec2.of(x: this.x - rhs.x, y: this.y - rhs.y); }
     public Vec2 operator*(float32 s){ return Vec2.of(x: this.x * s, y: this.y * s); }
     public Vec2 operator/(float32 s){ return Vec2.of(x: this.x / s, y: this.y / s); }
     public Vec2 operator-()         { return Vec2.of(x: -this.x, y: -this.y); }
@@ -37,7 +37,7 @@ type value Vec2 implements Equatable<This> {
 }
 
 @generate(of)
-type value Vec3 implements Equatable<This> {
+type value Vec3 implements Equatable<This>, Additive<This> {
     public float32 x;
     public float32 y;
     public float32 z;
@@ -48,8 +48,8 @@ type value Vec3 implements Equatable<This> {
     public ctor unitY()           { return Vec3.of(x: 0.0f32, y: 1.0f32, z: 0.0f32); }
     public ctor unitZ()           { return Vec3.of(x: 0.0f32, y: 0.0f32, z: 1.0f32); }
 
-    public Vec3 operator+(Vec3 r)   { return Vec3.of(x: this.x + r.x, y: this.y + r.y, z: this.z + r.z); }
-    public Vec3 operator-(Vec3 r)   { return Vec3.of(x: this.x - r.x, y: this.y - r.y, z: this.z - r.z); }
+    public Vec3 operator+(Vec3 rhs)   { return Vec3.of(x: this.x + rhs.x, y: this.y + rhs.y, z: this.z + rhs.z); }
+    public Vec3 operator-(Vec3 rhs)   { return Vec3.of(x: this.x - rhs.x, y: this.y - rhs.y, z: this.z - rhs.z); }
     public Vec3 operator*(float32 s){ return Vec3.of(x: this.x * s, y: this.y * s, z: this.z * s); }
     public Vec3 operator/(float32 s){ return Vec3.of(x: this.x / s, y: this.y / s, z: this.z / s); }
     public Vec3 operator-()         { return Vec3.of(x: -this.x, y: -this.y, z: -this.z); }
@@ -69,7 +69,7 @@ type value Vec3 implements Equatable<This> {
 }
 
 @generate(of)
-type value Vec4 implements Equatable<This> {
+type value Vec4 implements Equatable<This>, Additive<This> {
     public float32 x;
     public float32 y;
     public float32 z;
@@ -78,8 +78,8 @@ type value Vec4 implements Equatable<This> {
     public ctor splat(float32 s)  { return Vec4.of(x: s, y: s, z: s, w: s); }
     public ctor fromVec3(Vec3 v, float32 w) { return Vec4.of(x: v.x, y: v.y, z: v.z, w: w); }
 
-    public Vec4 operator+(Vec4 r)   { return Vec4.of(x: this.x+r.x, y: this.y+r.y, z: this.z+r.z, w: this.w+r.w); }
-    public Vec4 operator-(Vec4 r)   { return Vec4.of(x: this.x-r.x, y: this.y-r.y, z: this.z-r.z, w: this.w-r.w); }
+    public Vec4 operator+(Vec4 rhs)   { return Vec4.of(x: this.x+rhs.x, y: this.y+rhs.y, z: this.z+rhs.z, w: this.w+rhs.w); }
+    public Vec4 operator-(Vec4 rhs)   { return Vec4.of(x: this.x-rhs.x, y: this.y-rhs.y, z: this.z-rhs.z, w: this.w-rhs.w); }
     public Vec4 operator*(float32 s){ return Vec4.of(x: this.x*s, y: this.y*s, z: this.z*s, w: this.w*s); }
     public Vec4 operator/(float32 s){ return Vec4.of(x: this.x/s, y: this.y/s, z: this.z/s, w: this.w/s); }
     public Vec4 operator-()         { return Vec4.of(x: -this.x, y: -this.y, z: -this.z, w: -this.w); }

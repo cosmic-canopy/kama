@@ -288,34 +288,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-<a id="s2-refinement-implies"></a>
-
-### A contract's refinement does not make its implementers implement the parent (KR-133)
-
-`type contract Animated for value implements Drawable { fn int32 step(); }` merges `Drawable`'s members into
-`Animated` (linkContracts), so a `Sprite implements Animated` must implement both, and dispatch through an `Animated`
-value reaches `draw`. But the conformance stops there. Measured on `0.9.569`:
-
-```kama fragment
-fn int32 drawIt<T: Drawable>(T x) { return x.draw(); }
-fn int32 viaContract(Drawable d) { return d.draw(); }
-drawIt(x: sprite);        // error: `Sprite` does not satisfy bound `Drawable`
-viaContract(d: sprite);   // error: `Sprite` does not implement `Drawable`
-```
-
-The workaround is to spell both (`implements Animated, Drawable`), as `lib/std/net/stream.kama`'s socket types do
-for `ReliableStream`'s `Reader` and `Writer`. **Scheduled.** SPEC calls refinement "capability layering", and every
-comparable language makes the child imply the parent: Swift's protocol inheritance, C#'s interface inheritance,
-Rust's supertraits (`T: Animated` implies `T: Drawable`). **Design:** an implementer's conformances are closed
-under refinement wherever one is recorded (a type's `implements`, an adapter, an enum, a generic instance, a
-probe's opaque parameter), so bounds, `T__as_Parent` vtables and contract values all follow. A generic contract
-refining a generic one (`Arithmetic<T> implements Additive<T>`) records its parent's type node, so each instance
-substitutes it (`Additive<int32>`) and merges the parent instance's members. An `Animated` VALUE passed as a
-`Drawable` needs a vtable conversion, which is the remaining half. **First consumer:** `Additive<T>` (`+ -`) with
-`Arithmetic<T>` refining it, so a generic sum works over `Vec3` and `Duration`, which add and subtract but do not
-multiply by their own type. `Arithmetic` shipped alone in `0.9.570`, because `Additive` under it needs this row; since `0.9.571` every generic
-is checked as written, so a generic sum over vectors has no other spelling until it lands.
-
 <a id="s2-borrow-any-place"></a>
 
 ### `borrow` names any place for a block (KR-123)
@@ -780,9 +752,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   guard and force the claim out of all three. Real expression type checking in the front end is a
   campaign, not a fix.
 
-- **Contract refinement** — its own row now, KR-133 ([below](#s2-refinement-implies)). *(The generic-instance
-  param edge is fixed — an inherited slot's signature is rebound to its parent-resolved absolute spelling in
-  `linkContracts`; fixture `tests/contract_refine_generic.d`.)*
 - **Unicode module (post-1.0).** The shipped `string` core is UTF-8 bytes + `.chars()` codepoints with
   **ASCII** casing/whitespace. `std::unicode` exists since `0.9.506` with NORMALIZATION (SCRAM's
   SASLprep needs NFKC), generated from one pinned UCD and held to its NormalizationTest.txt; what remains for it is

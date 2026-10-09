@@ -693,6 +693,10 @@ struct InterfaceInfo {
     // Refined parent contracts (`type contract Animated implements Drawable`) — resolved names. Their methods
     // are merged into `methods` by linkContracts() so vtable/conformance/dispatch see the full slot set.
     std::vector<std::string>     refines;
+    // ...and each parent as WRITTEN, the type node `refines` is resolved from. A parent spelled with arguments
+    // (`implements Additive<T>`, `implements Iterator<int32>`) names an INSTANCE, which a bare name cannot: a generic
+    // contract's instance substitutes its own arguments into it (`Arithmetic<int32>` refines `Additive<int32>`).
+    std::vector<SharedIdentifier> refineNodes;
     // `type contract Job implements Sendable` — every implementor must declare `Sendable` (and is verified),
     // which is what lets the type-erased box `Owned<Job>` cross an isolate boundary. Not a parent in
     // `refines`: the marker has no members to merge, only a requirement to pass on.
@@ -2757,7 +2761,9 @@ private:
     // `Ternary`: a `?:` whose arm needs one of them; each arm converts on its own path.
     // Each position used to carry its own subset, so a `return`, an argument and an assignment reached clang for
     // most of them ("assigning to 'Owned_Error' from incompatible type"), and only a variant payload boxed an enum.
-    enum class IntoHandle { None, Box, ContractUpcast, BaseUpcast, Ternary };
+    //   RefineUpcast    a contract handle into the handle of a contract it refines (`Owned<Animated>` into
+    //                   `Owned<Drawable>`, KR-133): the same object, the parent vtable read out of its own.
+    enum class IntoHandle { None, Box, ContractUpcast, BaseUpcast, RefineUpcast, Ternary };
     IntoHandle intoHandleKind(const std::string& dstC, SharedExpression src);
     // The converted value — an expression of type `dstC` (an upcast hoists the statements that build it). Hand-offs
     // follow the by-value matrix: `give` moves, `copy` duplicates, bare follows the source type's own default.
@@ -2813,6 +2819,16 @@ private:
     // Merge each contract's refined-parent methods (`type contract A implements B`) into its own `methods`
     // (transitive, cycle-safe), so a refining contract's vtable/conformance/dispatch include the parent slots.
     void linkContracts();
+    // A contract's refinement is part of what its implementers implement: `Sprite implements Animated`, where
+    // `Animated implements Drawable`, implements `Drawable` too — a bound, a vtable, a contract value (KR-133).
+    // Closes a conformance list in place, appending each refined parent, transitively, once.
+    void closeUnderRefinement(std::vector<std::string>& ifaces);
+    void resolveRefinements();
+    std::vector<std::string> refinedTemplates(const std::string& contract);   // the parents' templates, transitively
+    std::vector<std::string> refinedAncestors(const std::string& contract);   // every contract it refines, transitively
+    // `kama_up_<P>`: the slot in a refining contract's vtable that holds the implementer's vtable for `P`, so an
+    // `Animated` value becomes a `Drawable` as `{ obj, vtbl->kama_up_Drawable }` — the same object, no dispatch.
+    static std::string upSlot(const std::string& parent) { return "kama_up_" + parent; }   // every non-generic contract's `refineNodes` into `refines`, generic parents minted
     void buildVtables();
     // Resolve every field's declared type in ITS OWN class's scope, once, before any body is walked.
     // Runs immediately before computeDestructible, whose context install it reuses. See the definition

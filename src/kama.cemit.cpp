@@ -8021,8 +8021,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                   << "), &" << contractVtblOf(c, ty) << " }";
                         else if (!c.empty() && isClass(c))
                             *_out << " = " << fatPointer(ty, c, emitExpression(d->initializer));
-                        else if (!c.empty() && isInterface(c))
-                            *_out << " = " << emitExpression(d->initializer);  // already an interface value
+                        else if (!c.empty() && isInterface(c))   // a contract value: this one, or a refining one's upcast
+                            *_out << " = " << contractBorrowOf(ty, d->initializer, emitExpression(d->initializer), true,
+                                                               "a local", n->line);
                         else if (!primWidenKey(d->initializer, ty).empty()) {
                             // A PRIMITIVE widened to a contract value. `&(int32_t){ n }` takes the address
                             // of a C99 COMPOUND LITERAL, which has the enclosing block's storage duration —
@@ -10346,7 +10347,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     // parent with members to merge: every `implements Job` must also declare `Sendable`
                     // (and is verified), which is what lets a boxed `Owned<Job>` cross an isolate.
                     if (!_sendableContract.empty() && pn == _sendableContract) ii.requiresSendable = true;
-                    else ii.refines.push_back(pn);
+                    else ii.refineNodes.push_back(p);   // resolved by resolveRefinements / per generic instance
                 }
         // `<T is This>` — the identity pin. Validated here, at the declaration, because every rejection
         // below is a property of the contract alone; a use site would report it too late and too often.
@@ -14123,8 +14124,10 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         }
     }
     // Resolve the `implements` list under THIS instance's subst (linkBases skips generic instances).
-    if (ci.baseTypesDecl() && ci.baseTypesDecl()->interfaces && (!ci.enumNode || _filledEnumTemplates.count(tmpl)))
+    if (ci.baseTypesDecl() && ci.baseTypesDecl()->interfaces && (!ci.enumNode || _filledEnumTemplates.count(tmpl))) {
         ci.interfaces = instanceInterfaces(ci, mangled, params, concrete);
+        closeUnderRefinement(ci.interfaces);   // and what each refines (KR-133)
+    }
     _classes[mangled] = ci;
     if (ci.enumNode && _filledEnumTemplates.count(tmpl)) checkEnumInstanceConformances(_classes[mangled], tmpl);
     applyTemplateAdapters(mangled);     // a `type adapter` over this generic — under its own module's context
@@ -14395,6 +14398,7 @@ void CEmitter::instantiateEnumMembers(const GenericTypeInst& gi)
         for (auto& c : instanceInterfaces(inst, gi.mangledName, params, gi.typeArgs))
             if (std::find(inst.interfaces.begin(), inst.interfaces.end(), c) == inst.interfaces.end())
                 inst.interfaces.push_back(c);
+    closeUnderRefinement(inst.interfaces);
     for (auto& kv : inst.methods) {
         scanTypeForCollections(kv.second.returnType);
         if (kv.second.node) for (auto& p : *kv.second.node->params) if (p) scanTypeForCollections(p->type);
@@ -14505,6 +14509,57 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl_, SharedIdent
     ii.typeArgs = concrete;
     _interfaces[mangled] = ii;                                    // the emit loops pick it up from here
 
+    // Its parents, as THIS instance: `Arithmetic<T> implements Additive<T>` at `T = int32` refines `Additive<int32>`
+    // (KR-133). Each is minted, and its members merged in ahead of the instance's own — CONCRETE, rendered under the
+    // parent's own binding, since the instance's methods are rendered under the instance's and a parent's `T` need
+    // not be called `T`. linkContracts does the same for a contract that is not generic.
+    if (!ii.refineNodes.empty()) {
+        std::vector<std::string> rs;
+        for (auto& pnode : ii.refineNodes) {
+            if (!pnode || !pnode->value) continue;
+            std::string pn = resolveUserName(*pnode->value, pnode->qualifier);
+            if (pnode->genericArgs && _genericContracts.count(pn)) {
+                SharedIdentifier sp = absolutizeType(deepSubstType(pnode));
+                registerGenericContractInst(pn, sp->genericArgs);
+                pn = genericTypeMangle(pn, sp->genericArgs);
+            }
+            if (_interfaces.count(pn)) rs.push_back(pn);
+        }
+        std::set<std::string> seen;
+        for (auto& own : ii.methods) seen.insert(own.name);
+        std::vector<InterfaceMethod> merged;
+        for (const std::string& parent : rs) {
+            const InterfaceInfo pi = _interfaces[parent];
+            ContractSubst _cs(*this, pi);
+            if (!pi.isGenericInst) { _nsCtx = NsCtx{}; _nsCtx.scope = pi.scope; _nsCtx.usings = pi.usings;
+                                     _nsCtx.symbolAliases = pi.symbolAliases; _nsCtx.privScope = pi.privScope;
+                                     _nsCtx.exportedHere = pi.exportedHere; }
+            for (auto& pm : pi.methods) {
+                if (!seen.insert(pm.name).second) continue;
+                InterfaceMethod im = pm;
+                im.returnType = absolutizeType(deepSubstType(im.returnType));
+                if (im.params) {
+                    auto ps = std::make_shared<ParameterList>();
+                    for (auto& p : *im.params) {
+                        if (!p) { ps->push_back(p); continue; }
+                        auto np = std::make_shared<FunctionParameterNode>(*p);
+                        np->synthesized = true;
+                        np->type = absolutizeType(deepSubstType(p->type));
+                        ps->push_back(np);
+                    }
+                    im.params = ps;
+                }
+                merged.push_back(im);
+            }
+            if (!pi.isGenericInst) _nsCtx = _genericContractCtx[tmpl];
+        }
+        for (auto& own : ii.methods) merged.push_back(own);
+        ii.methods = merged;
+        ii.refines = rs;
+        _interfaces[mangled].methods = merged;
+        _interfaces[mangled].refines = rs;
+    }
+
     // transitive close: register any collection / generic type the substituted method sigs use, so
     // `Optional<T>` -> `Optional_int32` exists (as a complete typedef) before this vtable slot names it.
     for (auto& m : ii.methods) {
@@ -14612,6 +14667,9 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
     ClassInfo* pci = implTargetInfo(key);
     auto ii = _interfaces.find(cn);
     if (!pci || ii == _interfaces.end()) return "";   // the emit site already judged the conformance
+    // Each contract it refines, first: this vtable points at theirs (`kama_up_<P>`), so they are defined ahead.
+    const std::vector<std::string> ancestors = refinedAncestors(cn);
+    for (const std::string& a : ancestors) intrinsicContractVtbl(key, a);
     std::ostringstream os;
     std::ostream* saved = _out; _out = &os;
     // Render the slot signatures under the CONTRACT's own scope, with a generic-contract instance's
@@ -14639,6 +14697,7 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
         else                   *_out << ".kama_dtor = (void(*)(void*))&" << pci->name << "__dtor,\n";
         indent(1); *_out << ".kama_size = sizeof(" << pci->name << "), .kama_align = _Alignof(" << pci->name << "),\n";
         if (isPolyDispatchContract(cn)) { indent(1); *_out << ".kama_type = \"" << pci->name << "\",\n"; }
+        for (const std::string& a : ancestors) { indent(1); *_out << "." << upSlot(a) << " = &" << key << "__as_" << a << ",\n"; }
         *_out << "};\n\n";
     }
     _out = saved;
@@ -16420,6 +16479,7 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
             if (!ms) continue;      // unknown contract — checkBounds owns that diagnostic, not this
             if (unsigned k = implKindsOf(contract, *b->value)) { allowedKinds &= k; sawKinds = true; }
             _classes[names[i]].interfaces.push_back(contract);
+            closeUnderRefinement(_classes[names[i]].interfaces);   // `T: Animated` promises `Drawable` too (KR-133)
             // A refinement (`type contract Animated implements Drawable`) has already had its parent's
             // slots merged into `methods` by linkContracts, so one pass over `ms` is the full promise.
             for (auto& m : *ms) {
@@ -18076,7 +18136,12 @@ CEmitter::IntoHandle CEmitter::intoHandleKind(const std::string& dstC, SharedExp
         const bool kindAgrees = isCopyable(sc) ? smartKind(dstC) == CollKind::Shared : smartKind(dstC) == CollKind::Owned;
         return implementsIt && kindAgrees ? IntoHandle::ContractUpcast : IntoHandle::None;
     }
-    if (isSmartPtrClass(sc)) return IntoHandle::None;   // another contract handle: not a conversion this makes
+    if (isSmartPtrClass(sc)) {   // another contract handle: only one of a contract that refines this one, same kind
+        const std::string& se = _classes[sc].collElemClass;
+        if (smartKind(sc) != smartKind(dstC) || !isInterface(se) || se == contract) return IntoHandle::None;
+        const std::vector<std::string> up = refinedAncestors(se);
+        return std::find(up.begin(), up.end(), contract) != up.end() ? IntoHandle::RefineUpcast : IntoHandle::None;
+    }
     const std::string bc = boxSourceClass(src);
     if (!bc.empty()) return implementsContractTemplate(&_classes[bc], contract) ? IntoHandle::Box : IntoHandle::None;
     if (sc == "kama_string") return classDeclaresContract("kama_string", contract) ? IntoHandle::Box : IntoHandle::None;
@@ -18183,6 +18248,41 @@ std::string CEmitter::emitIntoHandle(const std::string& dstC, SharedExpression s
         }
         const std::string pk = primWidenKey(src, contract);   // a primitive owns nothing: its value goes in, marker or not
         return boxValueExpr(dstC, implTargetInfo(pk)->name, intrinsicContractVtbl(pk, contract), emitExpression(src), line);
+    }
+    case IntoHandle::RefineUpcast: {
+        // The same object and control block; its vtable for the parent read out of its own (upSlot). `give` moves
+        // the handle (the source is nulled, so its drop no-ops), `copy` retains; bare follows its nature — a `Shared`
+        // retains, an `Owned` moves. A fresh handle is moved in.
+        const std::string sc = exprClass(src);
+        const CollKind k = smartKind(sc);
+        if (handoff == 2 && k == CollKind::Owned) unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
+        const bool retain = named && (handoff == 1 ? false : handoff == 2 ? true : k != CollKind::Owned);
+        if (!_hoistOK) {
+            unsupported("widening a handle here needs a statement slot — bind it to a local first", line);
+            return "(" + dstC + "){0}";
+        }
+        std::string se = emitExpression(src);
+        if (!named) {
+            const std::string f = "kama_up" + std::to_string(_tempCounter++);
+            _hoisted.push_back(sc + " " + f + " = " + se + ";");
+            se = f;
+        }
+        const std::string& contract = _classes[dstC].collElemClass;
+        const std::string t = "kama_into" + std::to_string(_tempCounter++);
+        std::string st = dstC + " " + t + " = {0}; " + t + ".kama_obj = (" + se + ").kama_obj; " + t + ".kama_vtbl = ("
+                       + se + ").kama_vtbl ? (" + se + ").kama_vtbl->" + upSlot(contract) + " : 0;";
+        if (k == CollKind::Shared) {
+            st += " " + t + ".kama_ctrl = (" + se + ").kama_ctrl;";
+            if (retain) st += " if (" + t + ".kama_ctrl) " + t + ".kama_ctrl->kama_strong++;";
+        }
+        const std::string a = _collections.count(dstC) ? _collections[dstC].allocType : std::string();
+        if (!a.empty() && a != preludeName("GlobalAllocator")) st += " " + t + ".kama_alloc = (" + se + ").kama_alloc;";
+        if (named && !retain) {   // a contract handle moves by being nulled, as any `give` of one does
+            giveOfBorrowedBinding(src, line);
+            st += " " + smartPtrInvalidate("(" + se + ")", k, true);
+        }
+        _hoisted.push_back(st);
+        return t;
     }
     case IntoHandle::ContractUpcast:
     case IntoHandle::BaseUpcast: {
@@ -19172,6 +19272,84 @@ std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string
     return "0";
 }
 
+void CEmitter::closeUnderRefinement(std::vector<std::string>& ifaces)
+{
+    for (size_t i = 0; i < ifaces.size(); ++i) {   // grows as parents are appended, so a parent's parents follow
+        auto it = _interfaces.find(ifaces[i]);
+        if (it == _interfaces.end()) continue;
+        for (auto& p : it->second.refines)
+            if (std::find(ifaces.begin(), ifaces.end(), p) == ifaces.end()) ifaces.push_back(p);
+    }
+}
+
+std::vector<std::string> CEmitter::refinedAncestors(const std::string& contract)
+{
+    std::vector<std::string> all{ contract };
+    closeUnderRefinement(all);
+    all.erase(all.begin());
+    return all;
+}
+
+// The TEMPLATES a contract refines, transitively — `Arithmetic` gives `Additive` — read off the parents as written,
+// each resolved in its own contract's scope. What a conformance recorded before any instance exists can say.
+std::vector<std::string> CEmitter::refinedTemplates(const std::string& contract)
+{
+    std::vector<std::string> out;
+    std::vector<std::string> work{ contract };
+    NsCtx saved = _nsCtx;
+    while (!work.empty()) {
+        const std::string c = work.back(); work.pop_back();
+        const InterfaceInfo* ii = nullptr;
+        auto gc = _genericContracts.find(c);
+        if (gc != _genericContracts.end()) { ii = &gc->second; _nsCtx = _genericContractCtx[c]; }
+        else {
+            auto it = _interfaces.find(c);
+            if (it == _interfaces.end()) continue;
+            ii = &it->second;
+            _nsCtx = NsCtx{}; _nsCtx.scope = ii->scope; _nsCtx.usings = ii->usings; _nsCtx.symbolAliases = ii->symbolAliases;
+            _nsCtx.privScope = ii->privScope; _nsCtx.exportedHere = ii->exportedHere;
+        }
+        for (auto& p : ii->refineNodes) {
+            if (!p || !p->value) continue;
+            const std::string pn = resolveUserName(*p->value, p->qualifier);
+            if (pn == contract || std::find(out.begin(), out.end(), pn) != out.end()) continue;
+            out.push_back(pn);
+            work.push_back(pn);
+        }
+    }
+    _nsCtx = saved;
+    return out;
+}
+
+// Each non-generic contract's parents, from the nodes collectInterfaces kept, in the contract's own scope. A parent
+// with arguments names an instance (`implements Iterator<int32>`), which is minted here — a bare name could only
+// ever have named the template, which is no contract until an instance exists. A generic contract's parents are
+// its instances' business (registerGenericContractInst).
+void CEmitter::resolveRefinements()
+{
+    NsCtx saved = _nsCtx;
+    std::vector<std::string> names;
+    for (auto& kv : _interfaces) if (!kv.second.isGenericInst && !kv.second.refineNodes.empty()) names.push_back(kv.first);
+    for (const std::string& n : names) {
+        InterfaceInfo& ii = _interfaces[n];
+        if (!ii.refines.empty()) continue;   // already resolved
+        _nsCtx = NsCtx{}; _nsCtx.scope = ii.scope; _nsCtx.usings = ii.usings; _nsCtx.symbolAliases = ii.symbolAliases;
+        _nsCtx.privScope = ii.privScope; _nsCtx.exportedHere = ii.exportedHere;
+        std::vector<std::string> rs;
+        for (auto& p : ii.refineNodes) {
+            if (!p || !p->value) continue;
+            std::string pn = resolveUserName(*p->value, p->qualifier);
+            if (p->genericArgs && _genericContracts.count(pn)) {
+                registerGenericContractInst(pn, p->genericArgs);
+                pn = genericTypeMangle(pn, p->genericArgs);
+            }
+            rs.push_back(pn);
+        }
+        _interfaces[n].refines = rs;
+    }
+    _nsCtx = saved;
+}
+
 // Resolve `extends` names to ClassInfo pointers; error on unknown/cycle.
 // Merge each contract's refined-parent methods into its own `methods`, transitively (a refined parent may
 // itself refine), so a refining contract's vtable struct, conformance table, and dispatch all see the full
@@ -19281,6 +19459,7 @@ void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIden
 void CEmitter::linkBases()
 {
     _basesLinked = true;   // from here on, an empty `baseName` means "no base", not "not resolved yet"
+    resolveRefinements();  // before any class's list is closed under them
 
     // Now every file's declarations are registered: resolve each class's base +
     // interface references (bare/qualified) to their mangled names, in the
@@ -19327,6 +19506,7 @@ void CEmitter::linkBases()
         // collectCollections walks units in order, so a type declared in a later-scanned unit would not
         // satisfy a bound checked in an earlier one. Registration dedups, so the later scan is free.
         if (ifaceNodes) for (auto& itf : *ifaceNodes) scanTypeForGenericContracts(itf);
+        closeUnderRefinement(ci.interfaces);   // after the duplicate check: a parent implied is not a parent repeated
     }
 #if KAMA_INHERITANCE
     for (auto& kv : _classes) {
@@ -21282,11 +21462,18 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
     // `type enum E implements C { A, B; …methods… }` path, where the members belong to E's API and the
     // conformance is recorded separately, once per declared contract. Nothing to record here.
     if (contract.empty()) return;
-    tci.interfaces.push_back(contract);
-    // A built-in dispatches statically, and widens into a contract value through an on-demand vtable
-    // (intrinsicContractVtbl). A declared type adapted to a contract gets the ordinary `T__as_C` vtable with
-    // its other contracts, so it binds to a contract value like any implementer.
-    if (!adapted) tci.staticOnlyInterfaces.push_back(contract);
+    // The contract and what it refines (KR-133): the block's members are the parent's too, since the contract's
+    // members include its parents' (linkContracts).
+    std::vector<std::string> claimed{ contract };
+    closeUnderRefinement(claimed);
+    for (const std::string& c : claimed) {
+        if (std::find(tci.interfaces.begin(), tci.interfaces.end(), c) != tci.interfaces.end()) continue;
+        tci.interfaces.push_back(c);
+        // A built-in dispatches statically, and widens into a contract value through an on-demand vtable
+        // (intrinsicContractVtbl). A declared type adapted to a contract gets the ordinary `T__as_C` vtable with
+        // its other contracts, so it binds to a contract value like any implementer.
+        if (!adapted) tci.staticOnlyInterfaces.push_back(c);
+    }
 }
 
 // `type enum E : U implements C, D { A, B; …members… }` — an enum declares conformance inline, like every
@@ -21482,6 +21669,11 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 // Dynamic dispatch through a fat pointer + (P2) boxing into `Owned<C>`.
                 _polyDispatchContracts.insert(c);
                 checkImplCompleteness(eci, c, bare, ed->line);
+            }
+            {   // ...and what each refines, on the same terms (KR-133)
+                const size_t declared = eci.interfaces.size();
+                closeUnderRefinement(eci.interfaces);
+                for (size_t k = declared; k < eci.interfaces.size(); ++k) _polyDispatchContracts.insert(eci.interfaces[k]);
             }
 
             // ...and LAST, the derives. After injectImplMethods and the `implements` loop, both because a
@@ -22015,6 +22207,16 @@ std::string CEmitter::contractBorrowOf(const std::string& iface, SharedExpressio
         std::string pk = primWidenKey(e, iface);
         return "(" + iface + "){ (void*)&(" + primConformance(pk)->name + "){ " + val
            + " }, &" + intrinsicContractVtbl(pk, iface) + " }";
+    } else if (isInterface(c) && c != iface) {
+        // A value of a REFINING contract where a parent is wanted (`Animated` as a `Drawable`): the same object, its
+        // implementer's vtable for the parent read out of its own (upSlot) — KR-133. Any other contract value is not
+        // this one, and was handed to clang as a struct of the wrong type.
+        const std::vector<std::string> up = refinedAncestors(c);
+        if (std::find(up.begin(), up.end(), iface) != up.end())
+            return "(" + iface + "){ (" + val + ").kama_obj, (" + val + ").kama_vtbl->" + upSlot(iface) + " }";
+        unsupported(("a `" + demangleForDisplay(c) + "` value is not a `" + demangleForDisplay(iface) + "` — `"
+                     + demangleForDisplay(c) + "` does not refine it, so " + what + " cannot take it").c_str(), line);
+        return val;
     } else return val;
 }
 
@@ -31130,6 +31332,8 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     indent(1); *_out << "size_t (*kama_valign)(void*);\n";
     // The implementer's C name, for `.as<T>()` — see emitAsDowncast for why a pointer compare alone is wrong.
     if (isPolyDispatchContract(ii.name)) { indent(1); *_out << "const char* kama_type;\n"; }
+    // A refining contract's vtable points at the implementer's vtable for each contract it refines (upSlot).
+    for (const std::string& a : refinedAncestors(ii.name)) { indent(1); *_out << "const " << a << "_vtbl* " << upSlot(a) << ";\n"; }
     *_out << "};\n";
     *_out << "struct " << ii.name << " { void* kama_obj; const " << ii.name << "_vtbl* kama_vtbl; };\n\n";
 }
@@ -31138,7 +31342,21 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
 // methods to the class's matching methods (cast to the type-erased slot signature).
 void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
 {
-    for (auto& ifn : contractsToEmitFor(ci)) {
+    // A refining contract's vtable points at its parents' (`kama_up_<P>`), so each parent's is emitted first.
+    std::vector<std::string> ordered;
+    {
+        const std::vector<std::string> declared = contractsToEmitFor(ci);
+        std::set<std::string> placed;
+        std::function<void(const std::string&)> place = [&](const std::string& c) {
+            if (placed.count(c)) return;
+            placed.insert(c);
+            for (const std::string& a : refinedAncestors(c))
+                if (std::find(declared.begin(), declared.end(), a) != declared.end()) place(a);
+            ordered.push_back(c);
+        };
+        for (const std::string& c : declared) place(c);
+    }
+    for (auto& ifn : ordered) {
         // An impl-block conformance dispatches statically (monomorphized) — no fat-pointer vtable.
         // EXCEPTION (Model C): a poly-DISPATCH contract (base `Error`, an enum-implemented contract) DOES
         // get a `<Impl>__as_<C>` vtbl even then, so an enum can be dispatched dynamically + boxed.
@@ -31245,6 +31463,7 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
         indent(1); *_out << ".kama_size = sizeof(" << ci.name << "), .kama_align = _Alignof(" << ci.name << "),\n";
         if (virt) { indent(1); *_out << ".kama_vsize = &" << ci.name << "__vsize, .kama_valign = &" << ci.name << "__valign,\n"; }
         if (isPolyDispatchContract(ii.name)) { indent(1); *_out << ".kama_type = \"" << ci.name << "\",\n"; }
+        for (const std::string& a : refinedAncestors(ii.name)) { indent(1); *_out << "." << upSlot(a) << " = &" << ci.name << "__as_" << a << ",\n"; }
         *_out << "};\n\n";
     }
 }
@@ -38624,6 +38843,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         if (key.empty()) continue;
                         _intrinsicConformances[key].insert(contract);
                         _intrinsicConformances[key].insert(exact);
+                        // ...and what the contract refines (KR-133), by template: a pinned `implements Arithmetic<This>`
+                        // over a set of targets has no instance per target yet, and a bound is matched on the
+                        // template's leaf (satisfiesBound) — `Additive` for every target `Arithmetic` names.
+                        for (const std::string& pt : refinedTemplates(contract)) _intrinsicConformances[key].insert(pt);
                     }
                 }
             }

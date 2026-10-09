@@ -1,0 +1,87 @@
+import { std::memory::Owned, std::memory::Shared, std::math::Vec3, std::time::Duration, std::num::Fixed };
+// A contract's refinement is part of what its implementers implement (KR-133): `Animated implements Drawable`, so a
+// type that implements `Animated` IS a `Drawable` — it satisfies a `Drawable` bound and binds to a `Drawable` value
+// with no `implements Drawable` of its own, as Swift's protocol inheritance, C#'s interface inheritance and Rust's
+// supertraits have it. An `Animated` VALUE (or handle) passes where a `Drawable` is wanted: the same object, its
+// vtable for `Drawable` read out of its `Animated` one. A generic contract refines per instance — the prelude's
+// `Arithmetic<T>` refines `Additive<T>`, so every number and `Fixed` add and subtract under an `Additive` bound,
+// beside `Vec3` and `Duration`, which add and subtract but do not multiply by their own type.
+// `Sprite`'s destructor counts its drops: each handle widening moves or shares the one object, dropped once.
+// Exit code 42 iff every result is right.
+
+static int32 drops = 0;
+
+type contract Drawable for value, resource, intrinsic { fn int32 draw(); }
+type contract Animated for value, resource, intrinsic implements Drawable { fn int32 step(); }
+type contract Looping for resource implements Animated { fn int32 frames(); }   // two levels up to `Drawable`
+
+type resource Sprite implements Looping {
+    int32 n;
+    public ctor of(int32 n) { this.n = n; }
+    public fn int32 draw() { return this.n; }
+    public fn int32 step() { return this.n + 1; }
+    public fn int32 frames() { return 3; }
+    ~Sprite() { drops = drops + 1; }
+}
+type adapter <int32> implements Animated {   // a primitive, through a refining contract
+    public fn int32 draw() { return this; }
+    public fn int32 step() { return this + 1; }
+}
+
+fn int32 drawBound<T: Drawable>(ref T x) { return x.draw(); }      // a bound the parent's
+fn int32 drawValue(Drawable d) { return d.draw(); }                  // a contract value the parent's
+fn int32 animate(Animated a) { return drawValue(d: a) * 10 + a.step(); }   // a refining value, passed up
+fn int32 loopy(Looping l) { return animate(a: l) + drawValue(d: l); }      // two levels up at once
+fn int32 drawOwned(Owned<Drawable> d) { return d.draw(); }
+
+fn T sum3<T: Additive<T>>(T a, T b, T c) { return a + b - c; }
+fn T viaArith<T: Arithmetic<T>>(T a, T b, T c) { return sum3(a: give a, b: give b, c: give c); }   // an `Arithmetic` IS `Additive`
+
+fn int32 checks() {
+    int32 ok = 0;
+    Sprite s = Sprite.of(n: 2);
+    if (drawBound(x: ref s) == 2) { ok = ok + 1; }
+    if (drawValue(d: s) == 2) { ok = ok + 1; }
+    if (loopy(l: s) == (2 * 10 + 3) + 2) { ok = ok + 1; }
+    Animated av = s;
+    Drawable dv = av;                                    // a local from a refining value
+    if (dv.draw() == 2) { ok = ok + 1; }
+    if (drawBound(x: ref ok) == ok && animate(a: 6) == 67) { ok = ok + 1; }   // the primitive, both ways
+    return ok;
+}
+
+fn int32 handles() {
+    int32 ok = 0;
+    int32 before = drops;
+    {
+        Owned<Animated> a = Sprite.of(n: 4);
+        Owned<Drawable> d = give a;                      // moved into the parent's handle
+        if (d.draw() == 4) { ok = ok + 1; }
+        if (drawOwned(d: give d) == 4) { ok = ok + 1; }  // ...and on, into a parameter: dropped there, once
+        Shared<Looping> sl = Sprite.of(n: 5);
+        Shared<Drawable> sd = sl;                        // shared: both hold the one object
+        if (sd.draw() + sl.frames() == 8) { ok = ok + 1; }
+    }
+    return drops - before == 2 && ok == 3 ? 3 : 0;   // each object dropped once
+}
+
+fn int32 additive() {
+    int32 ok = 0;
+    Vec3 v = sum3(a: Vec3.of(x: 1.0f32, y: 2.0f32, z: 3.0f32), b: Vec3.of(x: 1.0f32, y: 1.0f32, z: 1.0f32),
+                  c: Vec3.of(x: 0.5f32, y: 0.5f32, z: 0.5f32));
+    if (v.x == 1.5f32 && v.z == 3.5f32) { ok = ok + 1; }
+    Duration t = sum3(a: Duration.fromMillis(ms: 300i64), b: Duration.fromMillis(ms: 200i64), c: Duration.fromMillis(ms: 100i64));
+    if (t.asMillis() == 400i64) { ok = ok + 1; }
+    if (sum3(a: 5, b: 6, c: 1) == 10 && viaArith(a: 7i64, b: 7i64, c: 7i64) == 7i64) { ok = ok + 1; }
+    Fixed<int32>#(16) f3 = Fixed::<int32>#(16).fromInt(n: 3);
+    Fixed<int32>#(16) f4 = Fixed::<int32>#(16).fromInt(n: 4);
+    Fixed<int32>#(16) f2 = Fixed::<int32>#(16).fromInt(n: 2);
+    Fixed<int32>#(16) f = sum3(a: f3, b: f4, c: f2);
+    if (f.toInt() == 5) { ok = ok + 1; }
+    return ok;
+}
+
+fn int32 main() {
+    int32 r = checks() + handles() + additive();
+    return r == 12 ? 42 : r;
+}

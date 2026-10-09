@@ -19,7 +19,7 @@
 // - A path is at most `sun_path` bytes less its terminator (103 on macOS, 107 on Linux and Windows); an
 //   empty path, a longer one, or one holding a NUL is `InvalidInput` before the OS is asked.
 import {
-    std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::io::Reader, std::io::Writer,
+    std::io::IoError, std::io::IoErrorKind, std::io::lastError,
     std::collections::View, std::collections::ConstView,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
     std::io::Descriptor, std::collections::DynamicArray, std::collections::FixedArray,
@@ -228,7 +228,7 @@ fn string createdPath(const ref UnixAddr a) {
 
 // A connected Unix-domain stream. Closes its socket on drop (RAII). Move-only, and `Sendable` like `TcpStream`,
 // so a connection accepted on one isolate is served on another.
-type resource UnixStream implements ReliableStream, Reader, Writer, Sendable {
+type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` and a `Writer`, by refinement
     isize fd = -1;   // the -1 empty niche, as `TcpStream`'s — descriptor 0 stays ownable
     // Wrap a connected socket kama itself just made (`connectTo`, `UnixListener.accept`). Private: a descriptor
     // from anywhere else arrives as a `std::io::Descriptor` and enters through `adopt`.

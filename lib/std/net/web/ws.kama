@@ -1,8 +1,6 @@
 
 import {
     std::io::IoError, std::io::IoErrorKind,
-    std::io::Reader,
-    std::io::Writer,
     std::collections::View, std::collections::ConstView,
     std::net::ReliableStream,
 };
@@ -26,7 +24,7 @@ type enum WsState { Connecting, Open, Closing, Closed }
 // returns the next message's bytes (a long message arrives in into.length() chunks). Non-blocking only (the
 // browser is event-driven): read is Err(WouldBlock) when nothing has arrived, Ok(0) when the peer closed
 // (EOF, matching TcpStream). Closes on drop (RAII).
-type resource WsConnection implements ReliableStream, Reader, Writer {
+type resource WsConnection implements ReliableStream {   // a `Reader` and a `Writer`, by refinement
     int32 handle;
     private ctor make(int32 handle) { this.handle = handle; }
 
