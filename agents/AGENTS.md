@@ -160,8 +160,8 @@ feature.
   A name you neither declare nor import is not in scope, even if the file next door is in the same folder.
 - **`export { A, B };` is its own declaration**, near the top of the file — not a modifier you put in
   front of `type`. Without it the type is invisible outside this file even though it compiles.
-- **Every C keyword is reserved** — `out`, `short`, `long`, `signed`, `register`, … cannot name a
-  binding, because kama lowers to C. The message names the word; pick another.
+- **kama's keywords are reserved, and so is every C keyword** — `base`, `in`, `out`, `as`, `new`, `default`,
+  `match`, `scope`, `static`, `drop`, `cast`, `try`, `long`, `short`, … cannot name a binding; pick another.
 - **A `ref`-returning method call cannot feed a `ref` parameter** — a call result is a temporary and
   its mutation would be lost. A **`const ref` parameter takes one fine**, so a reader's signature is the
   usual fix (`hash(of: const ref …)` fed by `pair.secretKey()`); only a MUTATING callee needs the owner

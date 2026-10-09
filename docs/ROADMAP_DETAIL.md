@@ -332,24 +332,6 @@ using silently, and SPEC's sentence holds. It is a source break for generics tha
 which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
 contract before code.**
 
-<a id="s2-diagnostics-batch"></a>
-
-### Diagnostics and docs that say nothing or misstate the rule (KR-119)
-
-Measured on `0.9.542`; each is small and each is real:
-- A `match` statement missing its trailing `;` gives a bare "unexpected }" at the enclosing function's closing
-  brace. `0.9.539`/`0.9.540` gave parse errors notes for the same reason.
-- `import { core::println, core::println };` is accepted, though SPEC makes two imports binding one bare name an
-  error.
-- `localAddr()` and `peerAddr()` are not `const fn` on any socket type, so a `const fn` cannot ask a socket its
-  address. `UdpSocket.localAddr` is an `unsafe fn` in its public signature.
-- The guide `kama agents` writes says every C keyword is reserved, and names `out` as one. kama's own reserved
-  words (`base`, `in`, `as`, `out`, `drop`, `friend`, `cast`, …) are the ones a newcomer reaches for and is not told.
-- docs/TYPE_MODEL.md gives `type view EcsQuery { ref World w; … }`, which does not parse. A view holds raw pointers.
-- A registry dependency whose `.kama/deps` link dangles, for example after resolving on a host and building in a
-  container, is reported as an undeclared dependency, which blames the manifest. The message should name the
-  dangling link and its target.
-
 <a id="s2-replace-swap"></a>
 
 ### Moving a value out of a field: `replace` and `swap` (KR-122)

@@ -121,7 +121,8 @@ type resource Token { }   // owns nothing, but move-only by *identity* — a cap
 A `view` is a **non-owning, second-class borrow** of a contiguous run of memory — a slice / span. The
 flagship is the stdlib pair `View<T>` (`{ UnsafePtr<T> data; isize len }`) and its read-only half
 `ConstView<T>` (`{ UnsafeConstPtr<T> data; isize len }`), but the kind is general: an engine can
-declare its own `type view StridedView<T>`, `type view Grid2D<T>`, `type view EcsQuery { ref World w; … }`.
+declare its own `type view StridedView<T>`, `type view Grid2D<T>`, `type view EcsQuery { UnsafePtr<World> world; … }`
+— a view borrows through raw pointers, since a field is never a `ref`.
 It is kama's answer to a **safe span without a borrow checker** — the same shape as C# `ref struct`
 (`Span<T>`, `ReadOnlySpan<T>`, `Utf8JsonDeserializer`).
 
