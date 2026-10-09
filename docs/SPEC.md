@@ -4042,7 +4042,8 @@ is allowed only on a `resource` (`~dtor` ⟺ `resource` — a `value` owns nothi
 
 A `~Type()` destructor runs deterministically at scope exit, in reverse construction order, on every path
 (block end, early `return`, `break`/`continue`). Destructible fields are destroyed in reverse declaration
-order. No GC; allocation/deallocation is predictable.
+order, after the destructor's own body — and a `return` in that body ends the body, not the destruction: the <!-- test: dtor_return_drops_fields -->
+fields, and a base's destructor after them, still run. No GC; allocation/deallocation is predictable.
 
 ## Construction ✅
 

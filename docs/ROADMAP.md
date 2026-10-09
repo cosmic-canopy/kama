@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-113 | **A `return` in a destructor skips the fields' destructors** — `~Outer() { if (this.done) { return; } … }` never drops `Outer`'s fields on the early path: whatever they own leaks, silently | S | [§2](ROADMAP_DETAIL.md#s2-dtor-return) |
 | KR-115 | **Bounded quantification is enforced only for a generic nobody instantiates** — `fn int32 feed<T>(T w) { return w.get(); }` is refused unused and accepted once `main` calls it, though SPEC makes it an error at the declaration | M | [§2](ROADMAP_DETAIL.md#s2-bounds-on-instances) |
 | KR-116 | **Four constructs pass `kama check` and fail in the C compiler** — an early `return;` in a constructor; an `Owned<T>` passed to a `const ref T`; `copy` of an `InlineArray<string>` element; a function's name used as an operand (`a * pi`) | S | [§2](ROADMAP_DETAIL.md#s2-check-passes-c-fails) |
 | KR-117 | **Under gcc, a function that ends in an exhaustive `match` does not build** — gcc cannot see that every arm returns, and `-Werror=return-type` refuses it; clang builds it. gcc is a documented `cc` | S | [§2](ROADMAP_DETAIL.md#s2-gcc-exhaustive-match) |

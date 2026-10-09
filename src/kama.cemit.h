@@ -1992,6 +1992,11 @@ private:
     }
     bool _sharedModule = false;                                      // OUTPUT=SHARED — see setSharedModule
     bool _oneTranslationUnit = false;                                // every module folds into one C unit — see setOneTranslationUnit
+    // Emitting a destructor's own body: a `return` there leaves the BODY, not the drop of the fields that
+    // follows it, so it unwinds and jumps to `kama_dtor_fields` (emitDtorDefinition), which places the label
+    // only when a `return` used it.
+    bool _inDtorBody = false;
+    bool _dtorReturned = false;
     void emitRuntimeSlotDefinitions();                               // the one-definition-per-program runtime slots
     std::string linkNameOf(FunctionDeclarationNode* fn);             // `@linkName("sym")`, validated; "" when absent
     std::string linkNameOf(const SharedAttributeList& attrs, int line);   // ...for any declaration that carries one

@@ -8249,7 +8249,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         } else {
             if (retExpr) { indent(depth); *_out << emitExpression(retExpr) << ";\n"; }
             emitUnwindAll(depth);
-            indent(depth); *_out << "return;\n";
+            // A destructor's `return` ends its BODY. The fields are still dropped after it, as when the body
+            // falls off its end: a C `return` here skipped them, and whatever they owned leaked in silence.
+            if (_inDtorBody) { _dtorReturned = true; indent(depth); *_out << "goto kama_dtor_fields;\n"; }
+            else             { indent(depth); *_out << "return;\n"; }
         }
         return;
     }
@@ -30823,11 +30826,15 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     }
 
     SharedStatement last;
+    _dtorReturned = false;
     if (ci.dtorNode && ci.dtorNode->body && ci.dtorNode->body->statements) {
+        ScopedFlag _db(_inDtorBody);
         for (auto& st : *ci.dtorNode->body->statements) { emitStatement(st, 1); last = st; }
     }
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), 1);
+    // Every `return` in the body unwound its locals and lands here, where falling off the end arrives too.
+    if (_dtorReturned) { *_out << "kama_dtor_fields: ;\n"; _dtorReturned = false; }
 
     // Field destructors, reverse declaration order.
     for (auto it = ci.fields.rbegin(); it != ci.fields.rend(); ++it) {

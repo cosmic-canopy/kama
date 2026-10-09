@@ -1,0 +1,66 @@
+// A `return` in a destructor ends its BODY; the fields are dropped after it, exactly as when the body falls off
+// its end. Until `0.9.544` it lowered to a C `return`, which skipped the field drops that follow the body, so
+// whatever the fields owned (a socket, a file, a transaction) leaked, silently. Each shape a `return` can take
+// is counted: plain, in a `match` arm, from inside a loop, with a local the body owns, and in a derived type
+// whose base must still be dropped after its fields.
+static int32 innerDrops = 0;
+static int32 localDrops = 0;
+static int32 baseDrops = 0;
+
+type resource Inner {
+    public ctor make() { }
+    ~Inner() { innerDrops = innerDrops + 1; }
+}
+type resource Local {
+    public ctor make() { }
+    ~Local() { localDrops = localDrops + 1; }
+}
+type enum Mode { Quick, Slow }
+
+type resource Plain {
+    Inner inner;
+    bool done;
+    public ctor make(bool done) { this.inner = Inner.make(); this.done = done; }
+    ~Plain() { if (this.done) { return; } }
+}
+type resource InMatch {
+    Inner inner;
+    Mode mode;
+    public ctor make(Mode mode) { this.inner = Inner.make(); this.mode = mode; }
+    ~InMatch() { match (this.mode) { case Quick: { return; } case Slow: { } }; }
+}
+type resource InLoop {
+    Inner inner;
+    public ctor make() { this.inner = Inner.make(); }
+    ~InLoop() { int32 i = 0; while (true) { i = i + 1; if (i == 3) { return; } } }
+}
+type resource WithLocal {
+    Inner inner;
+    public ctor make() { this.inner = Inner.make(); }
+    ~WithLocal() { Local l = Local.make(); if (true) { return; } }
+}
+type virtual(maxDepth: 1) resource Base {
+    Inner inner;
+    public ctor make() { this.inner = Inner.make(); }
+    protected virtual fn int32 tag() { return 1; }
+    ~Base() { baseDrops = baseDrops + 1; }
+}
+type final resource Derived extends Base {
+    Inner own;
+    public ctor make() { this.base = Base.make(); this.own = Inner.make(); }
+    ~Derived() { return; }
+}
+
+fn int32 main() {
+    { Plain a = Plain.make(done: true); }          // 1 Inner
+    { Plain b = Plain.make(done: false); }         // 1 Inner (falls off the end: the old path)
+    { InMatch c = InMatch.make(mode: Mode::Quick); }   // 1 Inner
+    { InLoop d = InLoop.make(); }                  // 1 Inner
+    { WithLocal e = WithLocal.make(); }            // 1 Inner, 1 Local — each exactly once
+    { Derived f = Derived.make(); }                // 2 Inners (own + base's), 1 Base
+    int32 r = 0;
+    if (innerDrops == 7) { r = r + 1; }
+    if (localDrops == 1) { r = r + 2; }
+    if (baseDrops == 1)  { r = r + 4; }
+    return r;                                      // 7
+}

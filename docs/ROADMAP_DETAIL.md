@@ -288,15 +288,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-<a id="s2-dtor-return"></a>
-
-### A `return` in a destructor skips the fields' destructors (KR-113)
-
-Measured on `0.9.542`: in `~Outer() { if (this.done) { return; } … }`, `Outer`'s `Inner` field is never dropped
-on the early path. Falling off the end drops it. **A defect, and a silent one.** Whatever the field owns leaks:
-a socket, a file, a transaction. A destructor's `return` leaves its own body, not the drop of the fields, so it
-must lower to the same epilogue.
-
 <a id="s2-bounds-on-instances"></a>
 
 ### Bounded quantification is enforced only for a generic nobody instantiates (KR-115)
