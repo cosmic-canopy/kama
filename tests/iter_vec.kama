@@ -3,16 +3,16 @@
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
-type value VecIter<T> implements Iterator<T> {
+type value VecIter<T: Copyable<T>> implements Iterator<T> {   // `next` yields copies, so `T` copies
     UnsafePtr<T> data; int32 pos; int32 len;
     public unsafe ctor make(UnsafePtr<T> data, int32 len) { this.data = data; this.pos = 0; this.len = len; }
     public unsafe fn Optional<T> next() {
         if (this.pos >= this.len) { return Optional::None; }
         int32 p = this.pos; this.pos = this.pos + 1;
-        return Optional::Some(value: this.data[p]);
+        return Optional::Some(value: copy this.data[p]);
     }
 }
-type resource Vec<T> implements Iterable<T> {
+type resource Vec<T: Copyable<T>> implements Iterable<T> {
     UnsafePtr<T> data; int32 len;
     public unsafe ctor make(int32 n) { this.data = cast<UnsafePtr<T>>(malloc(n: cast<usize>(n) * sizeof(T))); this.len = n; }
     public unsafe ref T operator[](int32 i) { return this.data[i]; }

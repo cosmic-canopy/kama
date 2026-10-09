@@ -1,7 +1,7 @@
 // M7-E3: an explicit ctor turbofish must supply the right number of type arguments — `Pair<T>` has one
 // type parameter, so `Pair::<int32, int32>.make(...)` is rejected (the same arity check the type gets
 // anywhere it is instantiated).
-type value Pair<T> {
+type value Pair<T: Arithmetic<T>> {
     public T a;
     public T b;
     public ctor make(T a, T b) { this.a = a; this.b = b; return this; }

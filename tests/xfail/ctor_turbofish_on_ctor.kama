@@ -2,7 +2,7 @@
 // not the constructor name. The retired `Pair.make::<int32>(...)` form (type args on the ctor) is now a
 // hard error redirecting to the canonical spelling. (`::<…>` after a ctor is reserved for a ctor's OWN
 // generic params, of which there are none today.)
-type value Pair<T> {
+type value Pair<T: Arithmetic<T>> {
     public T a;
     public T b;
     public ctor make(T a, T b) { this.a = a; this.b = b; return this; }

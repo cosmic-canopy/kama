@@ -20,8 +20,8 @@ type value Dog implements Speaker {
     public fn int32 speak() { return 1; }
 }
 
-// A generic FREE function — its body is a template too, instantiated per call.
-fn T firstOr<T>(DynamicArray<T> xs, T fallback) {
+// A generic FREE function — its body is a template too, instantiated per call (a loop over it yields copies).
+fn T firstOr<T: Copyable<T>>(DynamicArray<T> xs, T fallback) {
     foreach (T x in xs) { return x; }
     return fallback;
 }

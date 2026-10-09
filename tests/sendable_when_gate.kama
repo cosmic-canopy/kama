@@ -3,11 +3,12 @@
 // declaration: a stdlib container over a declared element, a generic enum (`Optional<T>`, which declares
 // `Sendable when [T: Sendable]` in the prelude), a raw pointer (the C seam), a primitive.
 import { std::concurrent::Isolate, std::concurrent::Atomic, std::collections::DynamicArray };
-type value Leaf implements Sendable { public int32 v; public ctor make(int32 v) { this.v = v; } }
-type resource Box<T> implements Sendable when [T: Sendable] {
+type contract Peeked for value { const fn int32 peek(); }   // what `Box<T>.peek` asks of its `T`
+type value Leaf implements Sendable, Peeked { public int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 peek() { return this.v; } }
+type resource Box<T: Peeked> implements Sendable when [T: Sendable] {
     T item;
     public ctor make(T item) { this.item = item; }
-    public fn int32 peek() { return this.item.v; }
+    public fn int32 peek() { return this.item.peek(); }
 }
 type resource Bundle implements Sendable {
     Box<Leaf> boxed;

@@ -12,7 +12,8 @@ type enum Maybe<T> implements Tag when [T: Tag] {
     Has(T v), Nope;
     public const fn bool has() { return match (this) { case Has(v: v): true; case Nope: false; }; }
     public static fn Maybe<T> none() { return Maybe::Nope; }
-    public fn T getOr(T d) { return match (this) { case Has(v: v): v; case Nope: d; }; }
+    // A copy of the payload — `this` is borrowed, so the payload stays — or the default handed back.
+    public fn T getOr(T d) when [T: Copyable<T>] { match (this) { case Has(v: v): { return copy v; } case Nope: { return give d; } }; }
     public fn int32 tag() when [T: Tag] { return match (this) { case Has(v: v): v.tag() + 100; case Nope: 0; }; }
 }
 type enum Unused<T> { A(T x), B; public fn int32 k() { return 7; } }

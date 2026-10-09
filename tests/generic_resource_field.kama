@@ -5,10 +5,10 @@ import { std::collections::DynamicArray };
 // destructibility must be seen through the subst), plus move-into-a-param + param-drop. ASan proves
 // the buffer is freed exactly once (the moved-from `a` is suppressed; only the callee's `w` drops).
 // (A `type value Wrap<T>` here is correctly rejected — a value can't own a resource; see the xfail.)
-type resource Wrap<T> {
+type resource Wrap<T: Copyable<T>> {   // `first` hands out a copy, so `T` copies
     DynamicArray<T> items;
     public ctor make(T a, T b) { this.items.add(item: a); this.items.add(item: b); }
-    public fn T first() { return this.items[0]; }
+    public fn T first() { return copy this.items[0]; }
     public fn isize size() { return this.items.length(); }
 }
 fn int32 total(Wrap<int32> w) { return w.first() + cast<int32>(w.size()); }   // moved-in w drops at fn-end

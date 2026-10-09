@@ -5,7 +5,7 @@
 //   E3: dot-on-type call with an EXPLICIT turbofish (`Pair::<int32>.make(...)`) — the type's args ride the
 //       TYPE (`::<…>` on the receiver), the canonical one-way generic-constructor spelling.
 // The `::` static-factory bridge (M2 coexistence, removed at M8) stays green too.
-type value Pair<T> {
+type value Pair<T: Arithmetic<T>> {   // `sum` adds, so `T` must
     public T a;
     public T b;
     public ctor make(T a, T b) {

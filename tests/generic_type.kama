@@ -1,7 +1,7 @@
 // M27b-alpha: a single-parameter generic VALUE type, monomorphized per concrete type argument —
 // one `Box_int32` / `Box_float64` struct + ctor + methods, chosen at the use site. Fields and method
 // bodies are re-emitted under the M27a substitution engine (`T` -> the concrete type).
-type value Box<T>
+type value Box<T: Arithmetic<T>>   // `twice` adds, so `T` must
 {
     public T value;
     public ctor make(T v) { this.value = v; }

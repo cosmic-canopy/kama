@@ -288,56 +288,6 @@ guard would duplicate that and need a per-fixture allowlist for the cascades abo
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-<a id="s2-bounds-on-instances"></a>
-
-### Bounded quantification is enforced only for a generic nobody instantiates (KR-115)
-
-SPEC (*Generics*) says that reaching a member the bounds do not declare "is an error at the DECLARATION". Measured on
-`0.9.542`: `fn int32 feed<T>(T w) { return w.get(); }` is refused while unused (`tests/xfail/generic_unbounded_call`).
-It checks clean once `main` calls `feed(w: W.make())`, because the instance resolves `get` on `W`. The probe that
-enforces the rule walks only uninstantiated generics. So a library generic passes `kama check` exactly when its
-own tests instantiate it, which is the case the rule exists for. **A defect against SPEC.** The fix is the
-principle `0.9.542` applied to the unsafe rule: a generic is judged as written, and a declaration's error must not
-depend on which instantiation exists.
-
-**Measured on `0.9.544` by making the as-written walk cover every template** (an instance that already reported
-against a template suppresses it, so each mistake is reported once). The patch is kept, not landed. Two of its
-changes are sound and needed regardless:
-- a call's recorded instance is matched exactly under the probe, so the probe does not take a real
-  instantiation's `inner<int32>` for its own opaque `T`;
-- a `type value`'s parameter that a field holds, not behind a raw pointer, is a value at every legal
-  instantiation, since a value owns nothing, so `Box<T>.get()` copies.
-
-With those, 29 of 2,316 fixtures fail, in three groups:
-- **Probe weaknesses that an uninstantiated generic hits today:**
-  - a `comptime` parameter is left unbound in function templates: a `comptime assert` over `N`, `[0; (N + 1)]`,
-    `a[0]` on an `InlineArray<T>#(N)`, and `"${F:x}"` all fail;
-  - a `friend` grant is not matched to the probe's instance;
-  - `foreach (T x in xs)` over a `ConstView<T>` of a move-only `T` names a missing `iterator()` rather than the
-    copy it would need.
-- **Generics that rely on their instances,** which SPEC refuses and a bound fixes: `<`/`>` on an unbounded `T`
-  (`Comparable`), a member or field of an unbounded `T`, copying or moving a field of a resource's `T`, and a
-  contract value of an unbounded `T`.
-- **Generic ARITHMETIC (`this.v + this.v`), which no bound can express.** `Real` declares the math functions,
-  not the operators, and §2 already records that "no bound spells an integer primitive". So strict enforcement
-  would remove a capability. It is already missing for an uninstantiated generic, which the probe refuses with no
-  fix available.
-
-**Shipped, `0.9.570`: the arithmetic bound.** `Arithmetic<T>` is a prelude contract whose members are the four
-OPERATORS — the spelling a user type already declares, so arithmetic keeps one spelling (rather than `add`/`sub`
-methods beside `operator+`). Every number conforms through an adapter whose body is the primitive operator, and
-`std::num::Fixed` conforms with its own. A type parameter's `+` or `<` without the bound is refused naming it.
-`Additive` under it waits on KR-133. **What remains** is below, from "the walk over every template".
-
-**Design (as filed):** arithmetic becomes a contract, as comparison already is (`<` calls `Comparable.compareTo`). A prelude
-`type contract Arithmetic<T is This> for value, intrinsic` declares `add`/`sub`/`mul`/`div` (and `rem`/`neg` as
-SPEC rules). The numeric primitives conform through a `type adapter` in its home module, and `+ - * /` on a `T`
-bounded by it call those members. Monomorphized, the adapter's `return this + other;` is the primitive operator,
-so the cost is zero. Then the as-written walk covers every template, the corpus migrates to the bounds it was
-using silently, and SPEC's sentence holds. It is a source break for generics that relied on their instances,
-which pre-1.0 permits; the relay names the bound to add. **Wants the maintainer's agreement on the new prelude
-contract before code.**
-
 <a id="s2-refinement-implies"></a>
 
 ### A contract's refinement does not make its implementers implement the parent (KR-133)
@@ -363,7 +313,8 @@ refining a generic one (`Arithmetic<T> implements Additive<T>`) records its pare
 substitutes it (`Additive<int32>`) and merges the parent instance's members. An `Animated` VALUE passed as a
 `Drawable` needs a vtable conversion, which is the remaining half. **First consumer:** `Additive<T>` (`+ -`) with
 `Arithmetic<T>` refining it, so a generic sum works over `Vec3` and `Duration`, which add and subtract but do not
-multiply by their own type. `Arithmetic` shipped alone in `0.9.570`, because `Additive` under it needs this row.
+multiply by their own type. `Arithmetic` shipped alone in `0.9.570`, because `Additive` under it needs this row; since `0.9.571` every generic
+is checked as written, so a generic sum over vectors has no other spelling until it lands.
 
 <a id="s2-borrow-any-place"></a>
 
@@ -2778,6 +2729,29 @@ rather than here, so there is one number to keep current. Forward work:
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
+
+<a id="s10-query-generic-names"></a>
+
+### The query index does not see a type parameter, its bound, or a member called through it (KR-134)
+
+Found 2026-10-09 regenerating `tests/query/coverage/dispatch.coverage` after a bound was added to its generic
+(`0.9.571`). `kama query --coverage` over
+
+```kama fragment
+type contract Shape for value { fn int32 area(); }
+fn int32 f<T: Shape>(T x) { return x.area(); }
+type value Box<T: Shape> { public T v; }
+```
+
+reports the declaring `T`s and `Shape` in both bound lists as `-` (no entry), each later `T` as `unresolved`, and
+`area` in `x.area()` as `-`. So an editor's go-to-definition, references and rename stop at a generic's
+signature: a bound cannot be followed to its contract, a contract member called through a bound is not one of
+that member's references, and a type parameter has no declaration. **Scheduled.** The index already sees every name in
+compile-time code (shipped `0.9.462`). A generic body is now checked as written, with an opaque parameter that has exactly
+its bounds' members, so the index has what it needs. **Design:** a type parameter is a declaration (kind
+`type-param`), each later `T` a reference to it, a bound a reference to its contract, and a call through a bound
+a reference to the CONTRACT's member, which is the declaration a reader means. The coverage fixtures gain the
+entries, and `-` there stays reserved for keywords.
 
 <a id="s10-std-core-names"></a>
 

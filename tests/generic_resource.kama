@@ -8,10 +8,10 @@ extern fn void kama_trace(int32 code);
 extern fn int32 kama_trace_get();
 unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
 
-type resource Box<T> {
+type resource Box<T: Copyable<T>> {   // `get` hands out a copy, so `T` copies
     T value;
     public ctor make(T v) { this.value = v; }
-    public fn T get() { return this.value; }
+    public fn T get() { return copy this.value; }
     unsafe ~Box() { kama_trace(code: 7); }
 }
 

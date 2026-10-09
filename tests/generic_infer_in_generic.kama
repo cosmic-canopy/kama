@@ -7,8 +7,8 @@
 import { std::collections::DynamicArray };
 fn T idA<T>(T x) { return x; }
 fn T idB<T>(T x) { return idA(x: x); }
-fn T first<T>(ref DynamicArray<T> a) { return a[0]; }
-fn T head<T>(ref DynamicArray<T> a) { return first(a: a); }
+fn T first<T: Copyable<T>>(ref DynamicArray<T> a) { return copy a[0]; }   // a copy of the element
+fn T head<T: Copyable<T>>(ref DynamicArray<T> a) { return first(a: a); }
 fn T deep<T>(T x) { T y = idB(x: x); return idA(x: y); }
 fn int32 main() {
     DynamicArray<int32> d = DynamicArray.empty();

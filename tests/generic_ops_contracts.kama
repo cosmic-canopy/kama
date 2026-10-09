@@ -13,16 +13,16 @@
 // This is also the shape `Fixed<B>#(const F)` needs: widen through the parameter's contract, do the
 // arithmetic at width, narrow back.
 type contract Widen<T is This> for value, intrinsic {
-    fn int64 wide();
+    const fn int64 wide();   // `const`: `equals`/`compareTo` call it on a read-only receiver
     ctor T fromWide(int64 v);
 }
 
 type adapter <int16> implements Widen<This> {
-    public fn int64 wide() { return cast<int64>(this); }
+    public const fn int64 wide() { return cast<int64>(this); }
     public ctor int16 fromWide(int64 v) { return cast<int16>(v); }
 }
 type adapter <int32> implements Widen<This> {
-    public fn int64 wide() { return cast<int64>(this); }
+    public const fn int64 wide() { return cast<int64>(this); }
     public ctor int32 fromWide(int64 v) { return cast<int32>(v); }
 }
 

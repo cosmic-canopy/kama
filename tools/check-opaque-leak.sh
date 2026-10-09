@@ -1,7 +1,7 @@
 #!/bin/sh
 # check-opaque-leak.sh — a synthetic OPAQUE TYPE PARAMETER must never outlive the walk that minted it.
 #
-# What this is about. `checkUninstantiatedTemplates` checks a generic nobody instantiates by binding each
+# What this is about. `checkTemplatesAsWritten` checks a generic nobody instantiates by binding each
 # type parameter to a synthetic type — `__opq_<template>_<param>` — whose methods are exactly what that
 # parameter's bounds promise. That makes `T` a real type, so `View<T>` is an ordinary instance and the
 # whole rule set reaches inside the body. The cost is that the walk REGISTERS real things: classes,

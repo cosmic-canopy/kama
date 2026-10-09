@@ -2214,7 +2214,7 @@ static bool g_noHeap = false;
 static bool g_strictNumeric = false;
 
 // `--probe-templates`: TSV on stdout, one row per generic template NOBODY instantiates — what
-// `checkUninstantiatedTemplates` walked, how many errors it raised, how many diagnostics it had to
+// `checkTemplatesAsWritten` walked, how many errors it raised, how many diagnostics it had to
 // DEFER because a type was unknown rather than wrong, and — one column per `CEmitter::DeferKind` — WHY
 // each deferral happened, which is what says whether a compiler change or a source change closes it.
 // Hidden, for the same reason `--strict-numeric` is. It sized the opaque-type-parameter campaign and is

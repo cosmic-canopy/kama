@@ -41,7 +41,7 @@ type value k_Box {
     public ctor make(int32 k_x) { this.k_x = k_x; return this; }
 }
 
-type value Pair<T> {
+type value Pair<T: Arithmetic<T>> {
     public T a;
     public T b;
     public ctor make(T a, T b) { this.a = a; this.b = b; return this; }

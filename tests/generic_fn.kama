@@ -1,9 +1,10 @@
 // M27a — generic functions are monomorphized: one specialized C function per concrete type
 // argument, inferred from the call site (no explicit <...> needed). `max` is instantiated at
 // int32 (twice — deduped to one C function) and at float64; `identity` at int32 and string.
-fn T max<T>(T a, T b)
+fn T max<T: Comparable<T>>(T a, T b)   // `>` compares, so `T` must
 {
-    return a > b ? a : b;
+    if (a > b) { return give a; }   // the one handed back moves; the other drops — any `T`, copyable or not
+    return give b;
 }
 fn T identity<T>(T x)
 {

@@ -17,12 +17,12 @@ type resource Bag {
     public ctor make() { }
     public fn int32 fill() { this.xs.add(item: 4); this.xs.add(item: 5); return cast<int32>(this.xs.length()); }
 }
-type resource Box<T> {
+type resource Box<T: Copyable<T>> {   // `t` keeps a copy of `item`, so `T` copies
     T item;
     int64 tag = pick(x: cast<int64>(3));
     DynamicArray<T> items = DynamicArray.empty();
     public ctor of(T item) { this.item = item; }
-    public fn int64 t() { this.items.add(item: this.item); return this.tag + cast<int64>(this.items.length()); }
+    public fn int64 t() { this.items.add(item: copy this.item); return this.tag + cast<int64>(this.items.length()); }
 }
 fn int32 main() {
     Cfg c = Cfg.make();

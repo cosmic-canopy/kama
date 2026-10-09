@@ -16,7 +16,7 @@ fn int32 len(Serializable v) {
     string j = match (give r) { case Ok(value: s): give s; case Err(error: e): { return -1; } };
     return cast<int32>(j.length());
 }
-fn int32 show<T>(T v) { Show s = v; return s.width(); }   // a generic body: its vtbl is demanded in the header
+fn int32 show<T: Show>(T v) { Show s = v; return s.width(); }   // a generic body: its vtbl is demanded in the header
 
 type value Pt { public int32 x; public ctor of(int32 x) { this.x = x; } }
 type value Host {

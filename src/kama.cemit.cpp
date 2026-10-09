@@ -997,7 +997,7 @@ bool CEmitter::reportDeclaredElsewhere(const std::string& noun, const std::strin
 bool CEmitter::isTypeParamName(const std::string& n) const
 {
     if (_typeSubst.count(n)) return true;
-    if (_probeTypeParams.count(n)) return true;   // the template being probed — see checkUninstantiatedTemplates
+    if (_probeTypeParams.count(n)) return true;   // the template being probed — see checkTemplatesAsWritten
     for (auto& kv : _genericTypeParams)
         for (auto& p : kv.second) if (p == n) return true;
     return false;
@@ -2923,6 +2923,30 @@ bool CEmitter::constArgReaches(const SharedIdentifier& k, const char* what, cons
     if (key.empty()) return false;
     checkReach(key, *k->value, what, k->line, refFile, k->qualifier && !k->qualifier->empty());
     return true;
+}
+
+// Does `e` read a comptime parameter the as-written walk holds only a placeholder for? Such an expression is checked
+// there (its types, its names) but not JUDGED: its value is every instance's own.
+bool CEmitter::readsProbeConst(const SharedExpression& e) const
+{
+    if (!e) return false;
+    ASTNode* n = e.get();
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (!id->value || (id->qualifier && !id->qualifier->empty())) return false;
+        auto it = _comptimeSubst.find(*id->value);
+        return it != _comptimeSubst.end() && it->second.probe;
+    }
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(n))      return readsProbeConst(b->LHS) || readsProbeConst(b->RHS);
+    if (auto* l = dynamic_cast<LogicalAndOrNode*>(n))          return readsProbeConst(l->LHS) || readsProbeConst(l->RHS);
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return readsProbeConst(u->expression);
+    if (auto* c = dynamic_cast<CastNode*>(n))                  return readsProbeConst(c->unaryExpression);
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n))
+        return readsProbeConst(t->condition) || readsProbeConst(t->LHS) || readsProbeConst(t->RHS);
+    if (auto* iv = dynamic_cast<InvocationNode*>(n)) {
+        if (iv->args) for (auto& a : *iv->args) if (a && readsProbeConst(a->expression)) return true;
+        return false;
+    }
+    return false;
 }
 
 bool CEmitter::isComptimeParamHere(const std::string& nm) const
@@ -12394,6 +12418,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
     const std::string message  = *lit->value;
     ctCheckOnly([&] { emitExpression(cond); });   // evaluated, never emitted: checked and indexed (KR-97, KR-102)
     if (_ctFnBody) return;   // inside a `comptime fn` body only the fn's run can evaluate it
+    if (readsProbeConst(cond)) return;   // the as-written walk holds no value for it: each instance judges it
 
     // --- lowering 2: a layout fact only the target knows -> let the C compiler answer it ---
     if (ctaNeedsCLowering(cond)) {
@@ -15992,8 +16017,10 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     const bool savedRaw = _rawInstanceBody;
     _rawInstanceBody = instArgsNameRaw(gi.typeArgs);
 
+    const int diagsBefore = _unsupported;
     if (prototypeOnly) emitFunctionPrototype(tmpl, &gi.mangledName);   // emits `static` via nameOverride
     else               emitFunction(tmpl, &gi.mangledName);
+    if (_unsupported > diagsBefore) _templatesFaultedInInstance.insert(gi.templateKey);
 
     _rawInstanceBody = savedRaw;
     _typeSubst.clear();
@@ -16440,9 +16467,17 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
     return names;
 }
 
-// Walk every generic template NOBODY instantiates, for its diagnostics alone. See the header for why this
-// exists at all (short version: `analyze()` IS `emit()`, and the emit walk skips a template body, so every
-// rule in this file was invisible inside an uninstantiated generic by construction).
+// Walk every generic template AS WRITTEN, for its diagnostics alone. See the header for why this exists at
+// all (short version: `analyze()` IS `emit()`, and the emit walk skips a template body, so every rule in this
+// file was invisible inside an uninstantiated generic by construction).
+//
+// Every template, not only the uninstantiated ones. An instance binds real types, so it cannot see what the
+// declaration promises: `fn int32 feed<T>(T w) { return w.get(); }` resolves `get` on `feed<W>`'s `W` and checked
+// clean, though an unbounded `T` promises nothing (SPEC *Generics*: an error at the DECLARATION), and an
+// instance over a copyable type cannot see that the body copies a `T` it may not. Until `0.9.545` the walk
+// skipped every instantiated template, so a library generic passed `kama check` exactly when its own tests
+// instantiated it. It now skips only a template an instance already reported against
+// (`_templatesFaultedInInstance`), so a mistake is reported once — by the instance, or by this walk.
 //
 // This is `emitGenericInst` aimed at a throwaway sink: same ref-unit scope, same declaring-file scope, same
 // home namespace, so a diagnostic lands on the template's own file and line and a reference recorded from
@@ -16450,16 +16485,12 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
 // real type argument — so the probe invents one, an OPAQUE PARAMETER standing for `T` and promising exactly
 // what `T`'s bounds promise. That is the whole difference from `emitGenericInst`, and it is what makes the
 // walk answer `x.compareTo(…)` and `d.length()` instead of stepping around them.
-void CEmitter::checkUninstantiatedTemplates()
+void CEmitter::checkTemplatesAsWritten()
 {
     // BOTH tables, or a file with generic types and no generic functions is walked by neither — which is
     // precisely a library shipping a generic container, the case this whole pass exists for.
     if (_generics.empty() && _genericTypes.empty()) return;
 
-    // Which templates a real instantiation already covered. Built once — `_genericInsts` is keyed by
-    // MANGLED name, so the template key is in the value, and asking per template would be quadratic.
-    std::set<std::string> instantiated;   // an instance over a raw pointer judges nothing raw (rejectRawOutsideUnsafe)
-    for (auto& kv : _genericInsts) if (!instArgsNameRaw(kv.second.typeArgs)) instantiated.insert(kv.second.templateKey);
 
     std::ostringstream sink;
     std::ostream* savedOut = _out;
@@ -16475,7 +16506,7 @@ void CEmitter::checkUninstantiatedTemplates()
         const std::string& key = kv.first;
         FunctionDeclarationNode* tmpl = kv.second;
         if (!tmpl || !tmpl->block || !tmpl->typeParams || tmpl->typeParams->empty()) continue;
-        if (instantiated.count(key)) continue;      // already walked, with real types — do not diagnose twice
+        if (_templatesFaultedInInstance.count(key)) continue;   // an instance already reported this body
 
         RefUnitScope refScope(this, unitOfDecl(tmpl));
         auto dfIt = _genericDeclFile.find(key);
@@ -16508,6 +16539,53 @@ void CEmitter::checkUninstantiatedTemplates()
         // the next one.
         _typeSubst.clear();
         buildOpaqueParams(key, tmpl->typeParams, tmpl->typeBounds, tmpl->constTypes);
+        // A comptime parameter is a VALUE no one has passed yet. It is bound to a placeholder, as a generic TYPE's
+        // probe instance binds `probeConstArg` into its `N` slot, so `InlineArray<T>#(N + 1)` folds to a type and
+        // `"${F:x}"` reads an integer; marked `probe`, so nothing judges by the value (readsProbeConst).
+        // A parameter the SIGNATURE puts where only a value may stand is a value at every legal instantiation, so it
+        // is one here: an `InlineArray`'s or a `Simd`'s element (one over a resource is refused), and a parameter a
+        // `type value` generic HOLDS (a value owns nothing, so `Box<R>` for a resource `R` is refused) — the rule
+        // checkTypeTemplatesAsWritten applies to a value type's own fields. `fn T headOf<T>(InlineArray<T>#(N) a)
+        // { return a[0]; }` and `fn T unwrap<T>(Box<T> b) { return b.v; }` copy, as each instance does.
+        auto opaqueOf = [&](const SharedIdentifier& el) -> ClassInfo* {
+            if (!el || !el->value || el->genericArg || el->genericArgs) return nullptr;
+            auto sub = _typeSubst.find(*el->value);
+            if (sub == _typeSubst.end() || !sub->second || !sub->second->value) return nullptr;
+            auto c = _classes.find(*sub->second->value);
+            return c != _classes.end() && c->second.isOpaqueParam ? &c->second : nullptr;
+        };
+        std::function<void(const SharedIdentifier&)> markValueParams = [&](const SharedIdentifier& t) {
+            if (!t || !t->value) return;
+            if (t->genericArgs) {
+                if (*t->value == "InlineArray" || *t->value == "Simd") {
+                    if (ClassInfo* oc = opaqueOf((*t->genericArgs)[0])) { oc->kind = TypeKind::Value; oc->copyable = true; }
+                } else {
+                    std::string g;
+                    { BoundCtxScope bc(this, key); g = resolveUserName(*t->value, t->qualifier); }
+                    auto gt = _genericTypes.find(g);
+                    auto gp = _genericTypeParams.find(g);
+                    if (gt != _genericTypes.end() && gt->second.kind == TypeKind::Value && gp != _genericTypeParams.end())
+                        for (size_t i = 0; i < t->genericArgs->size() && i < gp->second.size(); ++i) {
+                            ClassInfo* oc = opaqueOf((*t->genericArgs)[i]);
+                            if (!oc) continue;
+                            for (const FieldInfo& f : gt->second.fields)
+                                if (typeHoldsParam(f.type, gp->second[i])) { oc->kind = TypeKind::Value; oc->copyable = true; break; }
+                        }
+                }
+                for (auto& a : *t->genericArgs) markValueParams(a);
+            }
+            if (t->genericArg) markValueParams(t->genericArg);
+        };
+        if (tmpl->parameters) for (auto& p : *tmpl->parameters) if (p) markValueParams(p->type);
+        markValueParams(tmpl->returnType);
+        auto savedComptime = _comptimeSubst;
+        _comptimeSubst.clear();
+        if (tmpl->constTypes)
+            for (size_t i = 0; i < tmpl->typeParams->size() && i < tmpl->constTypes->size(); ++i)
+                if ((*tmpl->constTypes)[i] && (*tmpl->typeParams)[i]) {
+                    ConstBinding b; b.value = 1; b.kind = (*tmpl->constTypes)[i]->builtInVal; b.probe = true;
+                    _comptimeSubst[*(*tmpl->typeParams)[i]] = b;
+                }
 
         // Then register every generic instance the body names, over those opaque arguments: `View<T>`
         // becomes `View<__opq_f_T>`, an ORDINARY instance with an ordinary `operator[]` and `length()`.
@@ -16551,10 +16629,11 @@ void CEmitter::checkUninstantiatedTemplates()
 
         _probeTypeParams = savedProbe;
         _probeParamBounds = savedBounds;
+        _comptimeSubst = savedComptime;
         sink.str(std::string());          // one body's worth of C at a time, not the whole corpus
     }
 
-    checkUninstantiatedTypeTemplates();   // the other table, same walk — see the header
+    checkTypeTemplatesAsWritten();   // the other table, same walk — see the header
 
     _probingTemplate = false;
     probeSandboxEnd();         // every opaque type and every instance built over one goes here
@@ -16565,14 +16644,23 @@ void CEmitter::checkUninstantiatedTemplates()
     _probeParamBounds.clear();
 }
 
-// Runs inside checkUninstantiatedTemplates' sink, probe flag and sandbox — so a diagnostic defers the
+// Runs inside checkTemplatesAsWritten' sink, probe flag and sandbox — so a diagnostic defers the
 // same way, and every instance registered here is erased the same way.
-void CEmitter::checkUninstantiatedTypeTemplates()
+// Does `t` hold a value of parameter `p` — `T`, `Pair<T, int32>`, `InlineArray<T>#(4)` — rather than merely name it
+// behind a raw pointer (`UnsafePtr<T>`), which holds an address and so says nothing about what `T` is?
+bool CEmitter::typeHoldsParam(const SharedIdentifier& t, const std::string& p)
+{
+    if (!t || !t->value) return false;
+    if (!t->genericArg && !t->genericArgs && *t->value == p) return true;
+    if (isRawPtrName(*t->value)) return false;
+    if (t->genericArgs) for (auto& a : *t->genericArgs) if (typeHoldsParam(a, p)) return true;
+    return t->genericArg && typeHoldsParam(t->genericArg, p);
+}
+
+void CEmitter::checkTypeTemplatesAsWritten()
 {
     if (_genericTypes.empty()) return;
 
-    std::set<std::string> instantiated;   // as above: only an instance over no raw pointer walked the body for it
-    for (auto& kv : _genericTypeInsts) if (!instArgsNameRaw(kv.second.typeArgs)) instantiated.insert(kv.second.templateKey);
 
     // Snapshot the keys: registering a probe instance walks the template's members transitively, and a
     // sibling template reached that way must not be visited mid-iteration.
@@ -16581,7 +16669,7 @@ void CEmitter::checkUninstantiatedTypeTemplates()
 
     NsCtx savedCtx = _nsCtx;
     for (const std::string& tmpl : tmpls) {
-        if (instantiated.count(tmpl)) continue;         // a real instantiation already walked it
+        if (_templatesFaultedInInstance.count(tmpl)) continue;   // an instance already reported this body
         auto pit = _genericTypeParams.find(tmpl);
         if (pit == _genericTypeParams.end() || pit->second.empty()) continue;
         const std::vector<std::string> params = pit->second;
@@ -16612,6 +16700,18 @@ void CEmitter::checkUninstantiatedTypeTemplates()
         std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
         _typeSubst.clear();
         std::vector<std::string> opq = buildOpaqueParams(tmpl, sp, bounds, SharedIdentifierList());
+        // A `type value` owns nothing, so an instance whose field holds a resource is refused (`Box<R>` for a
+        // `type value Box<T> { T v; }`). A parameter a value's field holds — directly or inside another value,
+        // not behind a raw pointer, which holds anything — is therefore a value at every legal instantiation, and
+        // the probe treats it as one: `public fn T get() { return this.v; }` copies, as each instance does.
+        if (_genericTypes[tmpl].kind == TypeKind::Value)
+            for (size_t i = 0; i < opq.size() && i < params.size(); ++i) {
+                if (opq[i].empty() || !_classes.count(opq[i])) continue;
+                bool held = false;
+                for (const FieldInfo& f : _genericTypes[tmpl].fields)
+                    if (typeHoldsParam(f.type, params[i])) { held = true; break; }
+                if (held) { _classes[opq[i]].kind = TypeKind::Value; _classes[opq[i]].copyable = true; }
+            }
 
         auto args = std::make_shared<IdentifierList>();
         bool ok = true;
@@ -16714,7 +16814,10 @@ std::string CEmitter::callInstOf(const InvocationNode* call)
     if (ci == _callInst.end() || ci->second.empty()) return "";
     auto si = ci->second.find(substSig());
     if (si == ci->second.end()) si = ci->second.find("");
-    if (si == ci->second.end() && ci->second.size() == 1) si = ci->second.begin();
+    // The lone-entry fallback assumes the one recording is THIS walk's. A template walked as written binds
+    // opaque parameters no instance recorded, so a lone entry there is a real instantiation's (`inner<int32>`
+    // for `inner(x: t)`), and taking it reports the opaque `T` against `int32`. The probe infers its own.
+    if (si == ci->second.end() && ci->second.size() == 1 && !_probingTemplate) si = ci->second.begin();
     return si == ci->second.end() ? "" : si->second;
 }
 
@@ -17187,7 +17290,7 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     // compile-time error, not just a runtime trap (the safe-array payoff).
     SharedExpression idxExpr = (ea->expressionlist && !ea->expressionlist->empty())
                                    ? (*ea->expressionlist)[0] : SharedExpression();
-    if (isFixedColl(cls) && idxExpr) {
+    if (isFixedColl(cls) && idxExpr && !_probingTemplate) {   // a probe's sizes are placeholders: each instance checks
         int64_t iv;
         if (constValue(idxExpr, iv) && (iv < 0 || iv >= _collections[cls].constValue))
             unsupported(("index " + std::to_string(iv) + " is out of bounds for `" + cls + "` (length "
@@ -20327,7 +20430,7 @@ bool CEmitter::declaresViewable(const ClassInfo& ci) const { return grantedMint(
 // pointer is the INSTANTIATOR's, and the containment rule holds it there: the program's local, field read and
 // `match` binding of a `DynamicArray<UnsafePtr>` each need an `unsafe fn`. What the template SPELLS stays checked:
 // by any instance over other arguments, or, when every instance is over a raw pointer, by the opaque-parameter
-// probe (checkUninstantiatedTemplates counts only those other instances as having walked the body).
+// probe (checkTemplatesAsWritten counts only those other instances as having walked the body).
 bool CEmitter::instArgsNameRaw(const std::vector<SharedIdentifier>& args)
 {
     for (const auto& a : args) if (namesUnsafePtr(a)) return true;
@@ -26011,7 +26114,7 @@ Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mod
 // is a friend — which is what a plain owner with a generic CLASS accessor already does.
 bool CEmitter::fnTemplateCorresponds(const std::string& tmplKey, const std::string& ownerArgs)
 {
-    // The TEMPLATE's own body, checked before any instance exists (checkUninstantiatedTemplates): it stands for
+    // The TEMPLATE's own body, checked before any instance exists (checkTemplatesAsWritten): it stands for
     // every instance, so a grant that names the template reaches it — SPEC's rule, which held only for an
     // instance, so a library's generic accessor (instantiated by its users, never by the library) was refused
     // in the library's own `kama check`. Each instance is still judged against its owner's
@@ -26076,8 +26179,22 @@ bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string
             if (of != _genericTypeInstOf.end() && owner->name.size() > of->second.size())
                 ownerArgs = owner->name.substr(of->second.size());
         }
+        // The as-written walk's own instance of a generic accessor (`Lens<T>` over an opaque `T`) stands for EVERY
+        // instance, so a grant naming that template — bare, or with arguments (`friend Lens<int32>[c]`) — reaches it:
+        // which instance it admits is judged when each real instance is emitted, against its own arguments, and the
+        // probe's are nobody's. The function half is fnTemplateCorresponds'.
+        auto probeInstanceOf = [&](const std::string& tmpl) {
+            if (!_probingTemplate || !_currentClass || !_currentClass->isGenericInst) return false;
+            auto of = _genericTypeInstOf.find(_currentClass->name);
+            auto gi = _genericTypeInsts.find(_currentClass->name);
+            if (of == _genericTypeInstOf.end() || of->second != tmpl || gi == _genericTypeInsts.end()) return false;
+            for (auto& a : gi->second.typeArgs)
+                if (a && a->value && _classes.count(cType(a)) && _classes[cType(a)].isOpaqueParam) return true;
+            return false;
+        };
         for (auto& g : owner->friendGrants) {
             if (!g.members.empty() && !g.members.count(member)) continue;   // empty => all privates
+            if ((g.accessorIsClass || g.accessorIsTemplate) && probeInstanceOf(g.accessor)) return true;
             // The corresponding instance of a generic accessor. With a non-generic owner there is nothing
             // to correspond to, so every instance of the accessor is a friend — ownerArgs is empty, and
             // the current context's own template key is what answers.
@@ -34899,6 +35016,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     bindInstConstParams(gi.templateKey, gi.typeArgs);   // so a member body can READ `const F: int32`
     struct RawScope { bool& b; bool prev; ~RawScope() { b = prev; } } _raw{ _rawInstanceBody, _rawInstanceBody };
     _rawInstanceBody = instArgsNameRaw(gi.typeArgs);
+    const int diagsBefore = _unsupported;
     _emitStaticClass = true;
     // M7: the type's own `comptime assert`s, once per instantiation and with THIS instance's const args
     // bound — so `Fixed<24>` can fail while `Fixed<16>` passes, and the diagnostic names which.
@@ -34921,6 +35039,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
         if (tmpl.node) checkComptimeMembersIn(tmpl.node->members, &ci);
         else if (tmpl.enumNode) checkComptimeMembersIn(tmpl.enumNode->members, &ci);
     }
+    if (_unsupported > diagsBefore) _templatesFaultedInInstance.insert(gi.templateKey);
     _emitStaticClass = false;
     _typeSubst.clear();
     _comptimeSubst.clear();
@@ -39808,7 +39927,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     { ScopedFlag _hp(_inHeaderPass); emitHeaderContent({unit}); }
     emitModuleContent(unit);
     if (_sharedModule && !_funcs.count("kama_main")) emitRuntimeSlotDefinitions();   // no entry TU — see the definition
-    checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
+    checkTemplatesAsWritten();   // LAST — see the header; both entry points call it, so check == build
     buildCallGraph();                 // every body is written: read the graph the three walks below share
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.
@@ -39895,7 +40014,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
         emitModuleContent(units[i]);
         if (i == 0 && _sharedModule && !_funcs.count("kama_main")) emitRuntimeSlotDefinitions();   // no entry TU
     }
-    checkUninstantiatedTemplates();   // LAST — see the header; both entry points call it, so check == build
+    checkTemplatesAsWritten();   // LAST — see the header; both entry points call it, so check == build
     buildCallGraph();                 // every body is written: read the graph the three walks below share
     checkNoHeapTransitive();          // ...and this after it: the probe pass records nothing, but it must
                                       // not run against a half-built call graph either.

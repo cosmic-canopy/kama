@@ -2,7 +2,8 @@
 // dot-on-type; `::` is ALWAYS scope resolution. Each spelling below is the only one that compiles for
 // its case — the rejections are xfail/scope_op_on_ctor (a ctor via `::`) and xfail/dot_on_type_not_ctor
 // (a static fn via `.`). Returns 42.
-type contract Spawnable for value { }
+// What `viaTypeParam` may do with its `T`: construct one, and read it back. A generic has what its bound declares.
+type contract Spawnable<T is This> for value { ctor T make(int32 v); const fn int32 value(); }
 
 type enum Tag { Red, Blue }
 
@@ -12,7 +13,7 @@ type enum MakeErr implements Error {
     public const fn string message() { return "too big"; }
 }
 
-type value Cell implements Spawnable {
+type value Cell implements Spawnable<This> {
     public int32 v;
 
     public ctor make(int32 v) { this.v = v; return this; }                       // construction -> `.`
@@ -21,12 +22,13 @@ type value Cell implements Spawnable {
         return Result::Ok(value: Cell.make(v: v));
     }
     public static fn int32 twice(int32 n) { return n * 2; }                        // utility -> `::`
+    public const fn int32 value() { return this.v; }
 }
 
 // A ctor reached through a generic TYPE PARAMETER is still construction, so it is still a dot.
-fn int32 viaTypeParam<T: Spawnable>(int32 n) {
+fn int32 viaTypeParam<T: Spawnable<T>>(int32 n) {
     T t = T.make(v: n);
-    return t.v;
+    return t.value();
 }
 
 fn int32 main()

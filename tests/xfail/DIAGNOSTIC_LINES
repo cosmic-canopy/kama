@@ -43,7 +43,7 @@ arg_kind_intrinsic_string	arg_kind_intrinsic_string.kama:7
 arg_label_one_diagnostic	arg_label_one_diagnostic.kama:5
 arg_str_bare	arg_str_bare.kama:3
 arg_unknown	arg_unknown.kama:3
-arith_unbounded	arith_unbounded.kama:3
+arith_unbounded	arith_unbounded.kama:4
 as_downcast_uncopyable	as_downcast_uncopyable.kama:11
 asm_outside_unsafe	asm_outside_unsafe.kama:4
 assign_kind_int_from_string	assign_kind_int_from_string.kama:7
@@ -522,6 +522,7 @@ generic_resource_uam	generic_resource_uam.kama:10
 generic_return_only	generic_return_only.kama:3 generic_return_only.kama:6
 generic_turbofish_arg	generic_turbofish_arg.kama:11
 generic_unbounded_call	generic_unbounded_call.kama:9
+generic_unbounded_instantiated	generic_unbounded_instantiated.kama:11
 generic_uninst_param_method	generic_uninst_param_method.kama:11
 generic_uninst_type_body	generic_uninst_type_body.kama:14 generic_uninst_type_body.kama:15
 generic_uninst_type_error	generic_uninst_type_error.kama:7

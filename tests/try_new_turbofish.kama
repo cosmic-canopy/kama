@@ -3,10 +3,10 @@
 // (This form was a SYNTAX ERROR while its infallible twin `new Box::<int32>.make(...)` shipped.)
 import { std::memory::Owned };
 
-type resource Box<T> {
+type resource Box<T: Copyable<T>> {   // `get` hands out a copy, so `T` copies
     T v;
     public ctor make(T v) { this.v = v; }
-    public fn T get() { return this.v; }
+    public fn T get() { return copy this.v; }
 }
 
 fn int32 main() {

@@ -9,7 +9,7 @@
 import { std::collections::DynamicArray };
 
 fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
-fn T echoOf<T>(ref T x) { return copy x; }          // an unbounded generic — no contract involved
+fn T echoOf<T: Copyable<T>>(ref T x) { return copy x; }   // a generic over its own bound — no contract dispatch involved
 
 fn int32 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();

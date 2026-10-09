@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-134**
+**Next id: KR-135**
 
 ## The shape
 
@@ -72,8 +72,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-115 | **Bounded quantification is enforced only for a generic nobody instantiates** — `fn int32 feed<T>(T w) { return w.get(); }` is refused unused and accepted once `main` calls it, though SPEC makes it an error at the declaration. The arithmetic bound it needed shipped (`Arithmetic<T>`, `0.9.570`); what remains is three probe fixes, the walk over every template, then a corpus migration | L | [§2](ROADMAP_DETAIL.md#s2-bounds-on-instances) |
 | KR-133 | **A contract's refinement does not make its implementers implement the parent** — `type contract Animated implements Drawable` merges `Drawable`'s members, but a `Sprite implements Animated` satisfies no `Drawable` bound and binds to no `Drawable` value unless it also spells `implements Drawable`, and an `Animated` value cannot be passed where a `Drawable` is wanted. Swift, C# and Rust's supertraits all make the child imply the parent. Its first consumer: `Additive<T>` (`+ -`) under `Arithmetic<T>`, so a generic sum works over vectors and `Duration` | M | [§2](ROADMAP_DETAIL.md#s2-refinement-implies) |
+| KR-134 | **The query index does not see a type parameter, its bound, or a member called through it** — in `fn int32 f<T: Shape>(T x) { return x.area(); }` the `T`s, `Shape` and `area` are unindexed (`kama query --coverage` reports them `-`/`unresolved`), so an editor cannot go from a bound to its contract or from `x.area()` to the member it reaches. Generics are checked as written since `0.9.571`; the index should see them the same way | M | [§10](ROADMAP_DETAIL.md#s10-query-generic-names) |
 | KR-131 | **A by-value `match` or `foreach` binding copies its value even when nothing writes it** — `case Ok(value: b):` over a `Result<Big, E>` copies the 16 KB `Big` into `b` (and `foreach (Big b in xs)` each element), though the subject is already borrowed. A binding its body never writes can be read in place | S | [§5](ROADMAP_DETAIL.md#s5-match-binding-copy) |
 | KR-123 | **`borrow` names any place for a block** — there is no `ref` local, and `borrow` opens only an argument-less view mint, so an accessor with arguments is repeated at every use. `borrow <place> as L { … }` with the host frozen, as a view window freezes it | M | [§2](ROADMAP_DETAIL.md#s2-borrow-any-place) |
 | KR-124 | **A borrow window that runs code when it closes** — a transaction wants a scope that rolls back unless committed; no stored borrows and no closures leave no way to say it. A `type view` may declare a destructor its window runs on every path out | M | [§2](ROADMAP_DETAIL.md#s2-view-destructor) |

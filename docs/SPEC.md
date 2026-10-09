@@ -5290,7 +5290,7 @@ import { std::collections::DynamicArray };
 type contract Shape for value, resource { fn int64 area(); }
 
 type value Pair<A, B> { public A a; public B b; public ctor make(A a, B b){ this.a = a; this.b = b; } }
-fn T max<T: Comparable<T>>(T a, T b) { return a > b ? a : b; }   // generic fn — args INFERRED from the call
+fn T max<T: Comparable<T>>(T a, T b) { if (a > b) { return give a; } return give b; }   // generic fn — args INFERRED from the call
 
 fn int32 main() {
     Pair<int32, bool> p = Pair.make(a: 1, b: true);         // generic type (args inferred from the LHS)
@@ -5343,18 +5343,29 @@ fn int32 main() {
   An unbounded parameter therefore promises nothing at all — it is not "anything", it is a type with no
   API — and it is treated as move-only, because an instantiation may bind it to one. A parameter whose
   bounds are all declared `for value` is a value at every instantiation, so it is copyable
-  (`tests/xfail/generic_unbounded_call`, `tests/xfail/generic_wrong_bound_call`).
-- **What is checked at a generic's DECLARATION, versus at its instantiation.** A generic **nobody
-  instantiates is still fully analyzed** — every rule in the language applies inside its body, with each
-  type parameter standing for a type that promises exactly what its bounds promise. That is what makes
-  `kama check` on a library a real answer: a package's public generic, which its own tests may never
-  instantiate, cannot ship green and hand its consumers the errors. It holds for a generic **function**, a
-  generic **type** and a generic **`enum`** alike, and for `build`, `check` and the language server
-  identically (`tests/generic_uninst_ok.kama`, `tests/xfail/generic_uninst_*`).
+  (`tests/xfail/generic_unbounded_call`, `tests/xfail/generic_wrong_bound_call`), and so is one the
+  signature puts where only a value may stand: an `InlineArray`'s or a `Simd`'s element, or the parameter a
+  `type value` generic holds (`fn T unwrap<T>(Box<T> b) { return b.v; }` copies). Copying any other `T` — out
+  of a field, out of a collection — needs `T: Copyable<T>` and says `copy`, since a bare hand-off of a `T`
+  whose copying is its own choice would move. Arithmetic is `T: Arithmetic<T>`, comparison
+  `T: Comparable<T>`.
+- **What is checked at a generic's DECLARATION, versus at its instantiation.** **Every generic is analyzed
+  as written** — every rule in the language applies inside its body, with each type parameter standing for a
+  type that promises exactly what its bounds promise. Instantiated or not: an instance cannot vouch for its
+  template, so `fn int32 feed<T>(T w) { return w.get(); }` is refused even when the program only ever passes <!-- xfail: generic_unbounded_instantiated -->
+  a type that has `get`. That is what makes `kama check` on a library a real answer: a package's public
+  generic cannot ship green because its own tests instantiated it with a type that happened to fit, and hand
+  the next consumer the errors. It holds for a generic **function**, a generic **type** and a generic
+  **`enum`** alike, and for `build`, `check` and the language server identically
+  (`tests/generic_uninst_ok.kama`, `tests/xfail/generic_uninst_*`). A mistake an instance already reported
+  is not reported again by the walk.
 
-  What waits for the instantiation is only what a concrete type argument decides: whether that argument
-  satisfies the bounds, which `when [T: …]` members exist for it, and a `comptime assert` over a const
-  parameter — each reported at the use site that chose the argument, naming it.
+  What waits for the instantiation is only what a concrete argument decides: whether a type argument
+  satisfies the bounds, which `when [T: …]` members exist for it, which instance a `friend` grant naming one
+  (`friend Lens<int32>[c]`) admits, and what a comptime parameter's VALUE decides — a `comptime assert` over
+  it, a constant index against a size it sets. The as-written walk holds a placeholder for a comptime
+  parameter, so its types resolve, and judges nothing by the value; each instance does, at the use site that
+  chose the argument, naming it.
 
   The one thing neither can check is a constraint the language cannot spell. `cast<T>(…)` inside a generic
   needs `T` to be a scalar, and no contract means "an integer primitive" — so a template that converts

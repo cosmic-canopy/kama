@@ -544,7 +544,7 @@ struct ClassInfo {
     std::string                       collElemClass;         // element class name ("" if primitive)
     bool                              isGenericInst = false; // a specialized generic-type instance (Box_int32)
     // An OPAQUE TYPE PARAMETER: the synthetic type that stands in for a template's `T` while
-    // `checkUninstantiatedTemplates` walks a body nobody instantiated. Its methods are exactly what the
+    // `checkTemplatesAsWritten` walks a body nobody instantiated. Its methods are exactly what the
     // parameter's declared bounds promise, which is what makes `x.compareTo(…)` resolvable — and what
     // makes a call the bounds do NOT promise a diagnosable error at the declaration instead of a surprise
     // at every consumer's use site. Never emitted: the probe erases it before anything can read it as a
@@ -847,7 +847,7 @@ public:
     // lands — its whole job is to answer "how big is the corpus change" with a count instead of a
     // guess. See `noteNumericHandoff`.
     void setStrictNumeric(bool on) { _strictNumericScan = on; }
-    // Measure what `checkUninstantiatedTemplates` reaches. Hidden, off by default, same shape and same
+    // Measure what `checkTemplatesAsWritten` reaches. Hidden, off by default, same shape and same
     // reason as `--strict-numeric`: one TSV row per probed template on stdout, reporting the diagnostics
     // DEFERRED because a type was unknown rather than wrong. That is the point — it is the half of an
     // uninstantiated body this pass cannot see, and a measurement that hid its own blind spot would be
@@ -1566,7 +1566,7 @@ private:
     std::map<std::string, std::string> _genericDeclFile;            // template cName -> declaring file (diagFile)
     std::map<std::string, NsCtx>                    _genericCtx;    // template cName -> home namespace ctx
     std::map<std::string, GenericInst>              _genericInsts;  // mangled name -> instantiation (dedup)
-    // The type params of the template `checkUninstantiatedTemplates` is currently probing. A generic
+    // The type params of the template `checkTemplatesAsWritten` is currently probing. A generic
     // FUNCTION's params live nowhere else: `_genericTypeParams` holds generic classes'/enums' only, and
     // `_typeSubst` is deliberately empty during a probe (that is what keeps `T` symbolic). Without this
     // every probed `T` would reach `checkTypeResolves` as an unknown type. Read by `isTypeParamName`.
@@ -1689,7 +1689,9 @@ private:
     // travel together in one map on purpose — the value alone was enough while a const param could only
     // be a size, but reading it as a value needs the width, and a second parallel map would be one
     // missed `clear()` away from a stale binding silently retyping an unrelated name.
-    struct ConstBinding { int64_t value = 0; int kind = 0; };   // kind = the declared type's builtInVal
+    // kind = the declared type's builtInVal. `probe`: a placeholder the as-written walk binds so a size folds and a type
+    // resolves; its VALUE is nobody's, so nothing may judge by it (a `comptime assert`, a constant index's bounds).
+    struct ConstBinding { int64_t value = 0; int kind = 0; bool probe = false; };
     std::map<std::string, ConstBinding>             _comptimeSubst;    // const-param name (`const N: int`) -> binding (parallel to _typeSubst)
     std::map<int, SharedIdentifier>                 _primTypeCache; // synthesized primitive type nodes (for inference)
     std::shared_ptr<CodeGenContext>                 _synthCtx;      // context for synthesizing those nodes
@@ -2224,6 +2226,10 @@ private:
     // The body being emitted is a generic INSTANCE whose type arguments include a raw pointer
     // (`DynamicArray<UnsafePtr>`). Its raw-ness is the instantiator's — see rejectRawOutsideUnsafe.
     bool               _rawInstanceBody = false;
+    // Templates an INSTANCE already reported a diagnostic for. The as-written probe skips them: their author
+    // has errors in hand at those lines, and walking the template again would say each one twice. Once the
+    // instances are clean, the probe reports what only it can see (checkTemplatesAsWritten).
+    std::set<std::string> _templatesFaultedInInstance;
     static bool instArgsNameRaw(const std::vector<SharedIdentifier>& args);
     bool               _inNamedCtorBody = false;       // emitting a named `ctor` factory body (const fields of the built local are writable)
     bool               _inStaticMethod = false;        // emitting a `static` method body (no `self`/`this`)
@@ -2879,6 +2885,7 @@ private:
     static bool isRawPtrName(const std::string& v);
     static bool isConstRawPtrName(const std::string& v);
     static bool isRawPtrName(const SharedIdentifier& t);
+    static bool typeHoldsParam(const SharedIdentifier& t, const std::string& p);   // holds a `p`, not behind a raw pointer
     static bool isConstRawPtrName(const SharedIdentifier& t);
     // The same two questions of a RESOLVED C type, for the sites where the source spelling is gone.
     static bool isConstRawCType(const std::string& ct);   // `T const*` — a read-only raw pointer
@@ -3238,6 +3245,7 @@ private:
     // instantiation whose argument did not fold was already reported at its call site. Neither is a defect
     // of the body, so the identifier arm defers (probe) or stays silent (cascade) instead of rejecting.
     bool isComptimeParamHere(const std::string& nm) const;
+    bool readsProbeConst(const SharedExpression& e) const;   // names a comptime param the probe holds only a placeholder for
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
                            const char* what, int line, const char* noun = "type");  // unresolved type name -> missing-import / unknown-type diagnostic
     bool isTypeKey(const std::string& k) const;   // a class/enum/contract/generic table holds `k`
@@ -3269,7 +3277,7 @@ private:
     //
     // Runs LAST, after every real emission: instantiation discovery is finished by then, so the walk
     // cannot register work the program does not use, and nothing downstream reads what it touches.
-    void checkUninstantiatedTemplates();
+    void checkTemplatesAsWritten();
     // The same walk for a generic TYPE or `enum` nobody instantiates. It could not exist before opaque
     // parameters: a `_genericTypes` entry is a SHAPE AWAITING SPECIALIZATION, not a class — its `when`
     // gates are unevaluated and its `ctors` map is not the one an instance gets — so handing it straight
@@ -3277,7 +3285,7 @@ private:
     // into a class is `registerGenericTypeInst`, and that needs real arguments; distinct synthetic ones
     // are exactly what an opaque parameter is. So this registers a probe instance and hands it to
     // `emitGenericTypeInst`, the very function a real instantiation goes through.
-    void checkUninstantiatedTypeTemplates();
+    void checkTypeTemplatesAsWritten();
     SharedIdentifier probeConstArg();   // the placeholder a probe puts in a `const N: int32` slot
     long _probeTypesWalked = 0;    // generic types given a probe instance
     // THE FILE RUNG, one predicate for every position: a reference to a symbol declared in ANOTHER file

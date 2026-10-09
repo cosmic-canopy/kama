@@ -1,4 +1,5 @@
 // A generic adds its `T` only if its bound says `T` adds: an unbounded parameter promises nothing, so `x + x` is
-// refused where the generic is declared, with the bound to write. (tests/arith_bound has it written.)
+// refused where the generic is declared, with the bound to write — even though `main` calls it with an `int32`,
+// which adds. (tests/arith_bound has it written.)
 fn T twice<T>(T x) { return x + x; }
-fn int32 main() { return 0; }
+fn int32 main() { return twice(x: 21); }

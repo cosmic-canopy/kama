@@ -1,0 +1,12 @@
+// The same rule as tests/xfail/generic_unbounded_call, and the case it exists for: the generic is CALLED, with a
+// type that has `get`. An instance cannot vouch for its template — `T` promises nothing, so `w.get()` is an error at
+// the declaration whichever types the program happens to pass. Until 0.9.571 the walk skipped every instantiated
+// template, so this built: a library generic passed `kama check` exactly when its own tests instantiated it, and
+// failed in its own body for the first consumer type without `get`.
+type value W {
+    int32 n = 7;
+    public ctor make() { }
+    public fn int32 get() { return this.n; }
+}
+fn int32 feed<T>(T w) { return w.get(); }   // ERROR: `T` is unbounded, so it promises nothing
+fn int32 main() { return feed(w: W.make()); }

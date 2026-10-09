@@ -16,9 +16,10 @@ fn Ordering cmp<T: Comparable<T>>(const ref T a, const ref T b) { return a.compa
 
 // Generic max via the bound: proves `<T: Comparable<T>>` lowers `a.compareTo(other: b)` to a static direct call.
 // (`compareTo` borrows its operand, so `a`/`b` stay live; instantiated here for the value type `int32`.)
+// The one handed back moves and the other drops, so it works for any `T`, copyable or not.
 fn T maxOf<T: Comparable<T>>(T a, T b) {
     Ordering o = a.compareTo(other: b);
-    return match (o) { case Less: b; case Equal: a; case Greater: a; };
+    match (o) { case Less: { return give b; } case _: { return give a; } };
 }
 
 // Collapse an Ordering to -1/0/1 so results can be summed into a sentinel exit code.
