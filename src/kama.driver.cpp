@@ -12678,6 +12678,14 @@ int main(int argc, char** argv)
         // Results are bit-identical either way. Same placement rule as the flag above: fixed base, so a
         // raw `cflags` can put `-fmath-errno` back.
         cmd << "-fno-math-errno ";
+        // A Windows object carries no build time. clang 23 began writing the compile time into every COFF
+        // object's `TimeDateStamp` for the mingw triple too, where clang 22 and gcc write 0 — so two builds of
+        // one unchanged source differed by those four bytes, and check-build-jobs.sh could no longer tell
+        // `-j 10` from `-j 1` (measured: msys2 clang 23.1.3, `SOURCE_DATE_EPOCH` ignored). This is the switch
+        // that writes 0; only an `/INCREMENTAL` link reads the stamp, and no kama link is one. clang family
+        // only: gcc refuses the flag by name. It also reaches the per-TU link line, where clang 23 accepts it
+        // without an unused-argument warning.
+        if (g_target.isWindows() && ccFamily(compiler) == CcFamily::Clang) cmd << "-mno-incremental-linker-compatible ";
         // The target's own toolchain settings from kama.json (a sysroot and any extra compile flags).
         if (!g_target.sysroot.empty()) cmd << "--sysroot=\"" << g_target.sysroot << "\" ";
         // ⚠️ The span the user's `cflags` occupy is RECORDED, because the per-TU path reuses this whole
