@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-135**
+**Next id: KR-136**
 
 ## The shape
 
@@ -111,6 +111,7 @@ Most of this gates on the repo going public.
 | id | item | detail |
 |---|---|---|
 | KR-27 | **Registry — hosted deployment (M3.3)** + mandatory verification and the trust model — IN PROGRESS: `registry.kama-lang.org` is live and the built-in default since `0.9.457`, and `@kama/sodium@0.5.0` is its first package (2026-09-27). The index lives in git and deploys to Pages; the tarballs live in a locked R2 bucket (`dl.kama-lang.org`) behind a `_redirects` rule. What remains is the trust model — an allowed-signers set, then CI/OIDC provenance — and a resolution-time compiler check | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-135 | **Signed releases** — `release.yml` signs nothing: the Windows `kama.exe` has no Authenticode signature (SmartScreen warns on download, Smart App Control refuses to start it) and the macOS binary has no Developer ID signature and is not notarized (Gatekeeper refuses a quarantined copy). Signing kama cannot help what a build PRODUCES — SAC blocks every new unsigned executable, whatever compiled it | [§10](ROADMAP_DETAIL.md#s10-release-signing) |
 | KR-28 | **Editor/registry registrations** — Zed extension registry, nvim-treesitter, linguist, Helix upstreaming, Marketplace publish | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-29 | **tree-sitter accepts 78 of the 84 reserved words as a binding name** — `Thing else = …` renders as a valid declaration in every editor on this grammar, and the compiler then rejects it. The two reserve differently by construction: `kama.l` consults one table at every identifier, tree-sitter extracts keywords CONTEXTUALLY and a binding site expects `$.identifier`. ⚠️ `check-treesitter.sh` cannot see this class, and the one fixture that looks like it covers it passes on its USE site, not its declaration | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-30 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke; ⚠️ **a receiver typed by a generic instance over an UNBOUND parameter resolves to nothing in completion** — `const ref Node<K>` inside another generic offers no members at all, PUBLIC ones included, while the same receiver spelled `Node<int32>` offers every one (measured `0.9.300`, writing the `friend`-across-generics fixtures; it is receiver resolution, not visibility); a type argument's span runs into a NAMED size (`InlineArray<int32>#(LIMIT)`: hover on `LI` answers `int32`) | [§10](ROADMAP_DETAIL.md#s10) |

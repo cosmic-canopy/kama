@@ -181,6 +181,17 @@ run *kama: Restart Server*. (The `include/` copy is what lets the snapshot resol
 
 Worth knowing before debugging, because each of these produced a confident wrong answer once:
 
+- **Smart App Control blocks every executable a build produces, and it can switch itself on.** It
+  refuses any unsigned program it has no reputation for, and that covers msys2's `clang++.exe`, the
+  `kama.exe` you just built, and every program that `kama` compiles. Through msys2 it looks like a
+  permissions problem: `make: clang++: Permission denied`, or `…/kama: Permission denied` with
+  `rwxr-xr-x` right there in `ls -l`. Started from PowerShell, it names itself: *An Application Control
+  policy has blocked this file*. Windows 11 Home starts SAC in evaluation mode, and on 2026-10-04 one box
+  switched itself to enforcing overnight with nobody touching it. Check
+  `(Get-MpComputerStatus).SmartAppControlState`, and look for event 3077 in
+  `Microsoft-Windows-CodeIntegrity/Operational`. SAC has no per-app exception, so a machine that builds
+  software runs with it Off (Windows Security → App & browser control). Signing a release `kama.exe`
+  helps a user start kama, never the programs it builds (KR-135).
 - **`long` is 32-bit** (LLP64). `strtol` silently saturates above `INT32_MAX`; use `strtoll`.
 - **Every path handed to the OS is converted, and the conversion lives on the STACK** (`kama__wpathbuf`
   in `include/kama_os.h` — a `wchar_t[32776]`, 64 KB, one per fs wrapper and two in `kama_rename`). POSIX

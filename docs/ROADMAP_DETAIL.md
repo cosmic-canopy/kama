@@ -2722,6 +2722,39 @@ its bounds' members, so the index has what it needs. **Design:** a type paramete
 a reference to the CONTRACT's member, which is the declaration a reader means. The coverage fixtures gain the
 entries, and `-` there stays reserved for keywords.
 
+<a id="s10-release-signing"></a>
+
+### Signed releases (KR-135)
+
+`release.yml` signs nothing on any platform. **Scheduled** for when releases go to people outside this repo.
+
+**Windows — measured 2026-10-04 on a Windows 11 Home box.** Smart App Control left evaluation mode on its own
+(`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy`: `VerifiedAndReputablePolicyState` 1, `SAC_PreviousState` 2)
+and from then on refused to start msys2's `clang++.exe`, a source-built `kama.exe`, and every executable a kama
+build produced: *An Application Control policy has blocked this file*, event 3077 in
+`Microsoft-Windows-CodeIntegrity/Operational`. Two consequences, and the second is the one that bounds this row:
+
+- A signed release `kama.exe` is what lets a SAC machine start kama at all. Microsoft describes SAC as allowing
+  an app with a valid signature from a trusted CA when its cloud service has no verdict. **Unprobed here**: the
+  first signed build is the probe.
+- Signing kama does nothing for what kama BUILDS. Each output is a new unsigned executable, and SAC blocks it as
+  it blocks the output of every compiler. Signing users' programs is not kama's job, so a development machine
+  runs with SAC off. That is a `docs/platforms/windows.md` line, not part of this row.
+
+Two ways to sign: Azure Trusted Signing (a Microsoft-held key used from CI, a monthly fee, identity validation
+first), or an OV certificate, whose key has had to live on a hardware token or a cloud HSM since 2023, which is
+awkward from a hosted runner. Check the price and eligibility when this is picked up. ⚠️ The bundled variant
+also ships `zig.exe`. Whether zig's Windows release is signed is unprobed. If it is not, a bundled install on a
+SAC machine starts kama and then cannot start its compiler.
+
+**macOS.** The maintainer already holds a Developer ID Application certificate and a notary API key (since
+2026-09-30), in a login keychain. CI needs the same identity exported as a `.p12` repository secret and imported
+into a temporary keychain on the runner, plus the notary key as a second secret. Notarization wants every Mach-O
+in the submission signed with that identity, under the hardened runtime (`--options runtime`) and with
+`--timestamp`, so the bundled `zig` is re-signed with ours. A ticket cannot be stapled to a bare Mach-O (only
+to an `.app`, a `.dmg` or a `.pkg`), so a tarball's binary is checked online at first launch. Shipping a `.pkg`
+instead, so the ticket travels with it, is the open choice.
+
 <a id="s10-std-core-names"></a>
 
 ### A project or dependency named `std` or `core` (KR-111)
