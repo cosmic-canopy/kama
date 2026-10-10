@@ -2713,13 +2713,17 @@ type value Box<T: Shape> { public T v; }
 ```
 
 reports the declaring `T`s and `Shape` in both bound lists as `-` (no entry), each later `T` as `unresolved`, and
-`area` in `x.area()` as `-`. So an editor's go-to-definition, references and rename stop at a generic's
+`area` in `x.area()` as `-`. A comptime value parameter is invisible the same way: in `type value Bag<T: Shape>
+comptime(int32 N) { … this.v.area() * N … }` both `N`s are `-` (measured `0.9.572`). So an editor's go-to-definition, references and rename stop at a generic's
 signature: a bound cannot be followed to its contract, a contract member called through a bound is not one of
 that member's references, and a type parameter has no declaration. **Scheduled.** The index already sees every name in
 compile-time code (shipped `0.9.462`). A generic body is now checked as written, with an opaque parameter that has exactly
 its bounds' members, so the index has what it needs. **Design:** a type parameter is a declaration (kind
 `type-param`), each later `T` a reference to it, a bound a reference to its contract, and a call through a bound
-a reference to the CONTRACT's member, which is the declaration a reader means. The coverage fixtures gain the
+a reference to the CONTRACT's member, which is the declaration a reader means. A comptime parameter is a
+declaration too. rust-analyzer, gopls, Roslyn, tsserver and SourceKit-LSP all land a call through a bound on the
+trait/interface member and offer "go to implementation" beside it; `kama lsp` has no `textDocument/implementation`
+yet, which is the open scope question for the maintainer. The coverage fixtures gain the
 entries, and `-` there stays reserved for keywords.
 
 <a id="s10-release-signing"></a>
