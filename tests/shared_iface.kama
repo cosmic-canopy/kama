@@ -10,13 +10,13 @@ type resource Sq implements Shape {
 }
 fn Weak<Shape> orphan() {                                  // returns an already-expired weak
     Shared<Shape> s = new Sq.make(s: 5);
-    Weak<Shape> w = s;
+    Weak<Shape> w = s.downgrade();
     return give w;                                          // s dies at fn-end
 }
 fn int32 main() {
     Shared<Shape> a = new Sq.make(s: 6);                        // area 36
     Shared<Shape> b = a;                                   // retain: a and b share one Sq
-    Weak<Shape> live = a;                                  // weak to the live Sq
+    Weak<Shape> live = a.downgrade();                      // weak to the live Sq
     Optional<Shared<Shape>> lu = live.tryUpgrade();        // Some while a/b alive
     int32 luv = match (lu) { case Some(value: u): u.area(); case None: 0; };   // 36
     int32 sum = a.area() + b.area() + luv;                  // 36 + 36 + 36 = 108

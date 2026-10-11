@@ -1,0 +1,1 @@
+a strong handle does not become a weak one implicitly

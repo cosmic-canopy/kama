@@ -1,0 +1,27 @@
+// A strong handle never becomes a weak one by itself: `.downgrade()` is the one spelling, for a handle over a contract
+// and over a concrete type, in every position (KR-132). Each line below is refused with that fix; before 0.9.574 the
+// contract local and assignment converted silently and the argument reached the C compiler. An `Owned` has no weak
+// handle at all, and a `Shared<Other>` is not a weak of anything a `Weak<Shape>` names (both passed `kama check`).
+import { std::memory::Shared, std::memory::Weak, std::memory::Owned };
+type contract Shape for resource { fn int32 area(); }
+type resource Sq implements Shape { int32 s; public ctor make(int32 s) { this.s = s; } public fn int32 area() { return this.s * this.s; } }
+type resource Other implements Shape { public ctor make() { } public fn int32 area() { return 1; } }
+type resource Holder { Weak<Shape> w; public ctor make(Shared<Shape> s) { this.w = s; } }
+type enum E { None, P(Weak<Shape> w) }
+fn int32 g(Weak<Shape> w) { return 0; }
+fn Weak<Shape> r(Shared<Shape> s) { return s; }
+fn int32 main() {
+    Shared<Shape> s = new Sq.make(s: 2);
+    Weak<Shape>   a = s;
+    Weak<Shape>   b = s.downgrade();
+    b = s;
+    int32 x = g(w: s);
+    E e = E::P(w: s);
+    Shared<Sq>    q = new Sq.make(s: 2);
+    Weak<Sq>      c = q;
+    Owned<Shape>  o = new Sq.make(s: 3);
+    Weak<Shape>   d = o;
+    Shared<Other> t = new Other.make();
+    Weak<Shape>   f = t;                     // another element: not a weak of `t` at all
+    return x;
+}

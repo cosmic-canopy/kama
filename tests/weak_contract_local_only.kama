@@ -10,9 +10,11 @@ type resource Sq implements Shape {
     public ctor make(int32 s) { this.s = s; }
     public fn int32 area() { return this.s * this.s; }
 }
-fn int32 viaAssign() {
+fn int32 viaReseat() {
     Shared<Shape> a = new Sq.make(s: 6);
-    Weak<Shape> live = a;
+    Shared<Shape> z = new Sq.make(s: 1);
+    Weak<Shape> live = z.downgrade();
+    live = a.downgrade();                                                  // a local `Weak` reseated
     Optional<Shared<Shape>> lu = live.tryUpgrade();
     return match (lu) { case Some(value: u): u.area(); case None: 0; };   // 36
 }
@@ -23,5 +25,5 @@ fn int32 viaDowngrade() {
     return match (bu) { case Some(value: u): u.area(); case None: 0; };   // 4
 }
 fn int32 main() {
-    return viaAssign() + viaDowngrade();                                   // 40
+    return viaReseat() + viaDowngrade();                                   // 40
 }

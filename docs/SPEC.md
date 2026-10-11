@@ -1286,6 +1286,11 @@ int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
 };
 ```
 
+`.downgrade()` is the only way to get a `Weak`, for a handle over a contract and over a concrete type alike.
+A `Shared` given where a `Weak` is wanted (`Weak<Tex> w = s;`, an argument, a return, a field) is refused, naming `s.downgrade()`. <!-- xfail: weak_needs_downgrade -->
+Boxing and upcasts change what a handle owns; this would change whether it owns, which is written down. An `Owned`
+has no weak handle.
+
 **No null (safe surface) — see GOALS §3b.** A value, `Owned`/`Shared`, `ref`/`out` borrow, or contract value
 is always valid: there is nothing to null-check. `null` is only for `UnsafePtr<T>` at the FFI boundary, and
 that holds in **both directions** and for **every** other type — a safe type can neither be *compared* to

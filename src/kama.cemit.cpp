@@ -2677,9 +2677,59 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
                  "explicitly, or take a contract both implement").c_str(), line);
 }
 
+// The element a `Shared`/`Weak` points at, for both shapes: an intrinsic handle over a contract carries it as
+// `collElemClass`, a library `Shared<Sq>`/`Weak<Sq>` as its first type argument.
+std::string CEmitter::handleElemOf(const std::string& cls)
+{
+    auto it = _classes.find(cls);
+    if (it != _classes.end() && it->second.isIntrinsicColl
+        && (it->second.collKind == CollKind::Shared || it->second.collKind == CollKind::Weak))
+        return it->second.collElemClass;
+    auto g = _genericTypeInsts.find(cls);
+    if (g == _genericTypeInsts.end() || g->second.typeArgs.empty() || !g->second.typeArgs[0]) return "";
+    if (g->second.templateKey != _sharedTmpl && g->second.templateKey != _weakTmpl) return "";
+    return cType(g->second.typeArgs[0]);
+}
+
+// KR-132. A strong handle never becomes a weak one by itself: `.downgrade()` is the one spelling, for a handle over
+// a contract and over a concrete type alike, in every position. Boxing and upcasts change WHAT a handle owns; this
+// changes WHETHER it owns, the kind of change GOALS' "explicit over implicit" wants written down. The implicit form
+// used to exist for a contract handle at a local and an assignment only, while an argument reached clang.
+bool CEmitter::rejectStrongToWeak(const std::string& dstCType, SharedExpression value, const char* what, int line)
+{
+    if (!value || dstCType.empty()) return false;
+    const std::string src = exprClass(value);
+    if (src.empty() || src == dstCType || !isSharedOrWeakClass(dstCType)) return false;
+    auto kindIs = [&](const std::string& c, CollKind k, const std::string& tmpl) {
+        auto it = _classes.find(c);
+        if (it != _classes.end() && it->second.isIntrinsicColl) return it->second.collKind == k;
+        auto g = _genericTypeInstOf.find(c);
+        return g != _genericTypeInstOf.end() && g->second == tmpl;
+    };
+    if (!kindIs(dstCType, CollKind::Weak, _weakTmpl)) return false;
+    // An `Owned` has no weak handle at all: nothing counts the strong owners a `Weak` would outlive.
+    if (kindIs(src, CollKind::Owned, _ownedTmpl)) {
+        unsupported((std::string(what) + " expects a `" + demangleForDisplay(dstCType) + "`, and an `Owned` has "
+                     "none — a `Weak` is taken from a `Shared` with `.downgrade()`").c_str(), line);
+        return true;
+    }
+    if (!isSharedOrWeakClass(src) || kindIs(src, CollKind::Weak, _weakTmpl)) return false;
+    const std::string elem = handleElemOf(src);
+    if (elem.empty() || elem != handleElemOf(dstCType)) return false;   // another element: not this mistake
+    std::string down = "downgrade";
+    auto co = _collections.find(src);
+    if (co != _collections.end() && !co->second.downgradeName.empty()) down = co->second.downgradeName;
+    const std::string recv = placeText(placePath(value));
+    unsupported((std::string(what) + " expects a `" + demangleForDisplay(dstCType) + "`, which is taken with `"
+                 + recv + "." + down + "()` — a strong handle does not become a weak one "
+                 "implicitly").c_str(), line);
+    return true;
+}
+
 void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
                                        const char* what, int line)
 {
+    if (rejectStrongToWeak(dstCType, value, what, line)) return;
     noteNumericHandoff(dstCType, value, what, line);   // M5a: measure first, then judge
     noteTypeIdentity(dstCType, value, what, line);     // the identity measurement, same discipline
     // Independent of the kind rule below, and ahead of it so its early returns cannot shadow this one.
@@ -2757,6 +2807,10 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     // owns no identity can never make it fire, so there is no destination worth lowering for it. That
     // covers most initializers in the program.
     if (init) {
+        // A strong handle where its `Weak` is declared (KR-132). The declared type is lowered only when the
+        // initializer IS a Shared/Weak handle, for the reason the rules below are gated.
+        if (!handleElemOf(exprClass(init)).empty() || !ownerElem(exprClass(init)).empty())
+            if (rejectStrongToWeak(classifierCType(declType), init, what, line)) return;
         // An `Optional`/`Result` given a value of one of its argument types: the variant is named. Ahead
         // of every rule below, which would each say it less usefully or — for a payload-free variant such as
         // `IoError::NotFound`, which `exprClass` does not type — not at all. Gated on the declared NAME, so no
@@ -8352,26 +8406,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                          ? *stackCtor->identifier->value : ty;
                         rejectNamelessConstruction(_classes[ty], disp, /*viaNew=*/false, n->line);
                     }
-                } else if (isSmartPtrClass(ty) && smartKind(ty) == CollKind::Weak
-                           && isSmartPtrLValue(init) && exprClass(init) != ty) {
-                    // Shared->Weak conversion (different C structs, same layout):
-                    // field-copy + weak retain. The source Shared stays valid. A fat
-                    // contract Weak copies {obj, vtbl}; a thin Weak copies {ptr}.
-                    line(n->line); indent(depth);
-                    std::string src = emitExpression(init);
-                    if (isInterface(_classes[ty].collElemClass)) {
-                        *_out << kName(nm) << ".kama_obj = (" << src << ").kama_obj; " << kName(nm) << ".kama_vtbl = (" << src << ").kama_vtbl; "
-                             << kName(nm) << ".kama_ctrl = (" << src << ").kama_ctrl;\n";
-                        // stateful-A iface Weak (M11d): carry the allocator so it frees the ctrl through the
-                        // right A even after its Shared is gone.
-                        std::string wa = _collections.count(ty) ? _collections[ty].allocType : "";
-                        if (!wa.empty() && wa != preludeName("GlobalAllocator")) {
-                            indent(depth); *_out << kName(nm) << ".kama_alloc = (" << src << ").kama_alloc;\n";
-                        }
-                    }
-                    else
-                        *_out << kName(nm) << ".ptr = (" << src << ").ptr; " << kName(nm) << ".kama_ctrl = (" << src << ").kama_ctrl;\n";
-                    indent(depth); *_out << "if (" << kName(nm) << ".kama_ctrl) " << kName(nm) << ".kama_ctrl->kama_weak++;\n";
                 } else if (intoHandleKind(ty, init) != IntoHandle::None) {
                     // A value into a handle it is not — boxed into a contract handle, or widened from a concrete or
                     // derived owner (`Owned<Error> e = DeError.of(…)`, `Shared<Shape> s = sq;`). The same
@@ -9218,32 +9252,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             int d2 = depth;
             if (rhsLval) { indent(depth); *_out << "if (&" << b << " != &(" << src << ")) {\n"; d2 = depth + 1; }
             if (assignTargetLive(lvalueMoveKey(as->unaryExpression))) { indent(d2); *_out << ty << "__dtor(&" << b << ");\n"; }   // release b's old (if live)
-            if (knd == CollKind::Weak && rhsLval && exprClass(rhs) != ty) {
-                // Shared->Weak reseat: field-copy + weak retain. A fat contract Weak
-                // copies {obj, vtbl}; a thin Weak copies {ptr}.
+            indent(d2); *_out << b << " = " << src << ";\n";
+            if (rhsLval) {                                       // reseat from a named smart ptr
+                // Default the natural op (Owned -> give, Shared/Weak -> copy); a marker overrides.
+                bool doGive = (handoff == 1) || (handoff == 0 && knd == CollKind::Owned);
+                if (handoff == 2 && knd == CollKind::Owned)
+                    unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
                 indent(d2);
-                if (isInterface(_classes[ty].collElemClass)) {
-                    *_out << b << ".kama_obj = (" << src << ").kama_obj; " << b << ".kama_vtbl = (" << src << ").kama_vtbl; "
-                         << b << ".kama_ctrl = (" << src << ").kama_ctrl;\n";
-                    std::string wa = _collections.count(ty) ? _collections[ty].allocType : "";
-                    if (!wa.empty() && wa != preludeName("GlobalAllocator")) {   // stateful-A iface Weak reseat (M11d)
-                        indent(d2); *_out << b << ".kama_alloc = (" << src << ").kama_alloc;\n";
-                    }
-                }
-                else
-                    *_out << b << ".ptr = (" << src << ").ptr; " << b << ".kama_ctrl = (" << src << ").kama_ctrl;\n";
-                indent(d2); *_out << "if (" << b << ".kama_ctrl) " << b << ".kama_ctrl->kama_weak++;\n";
-            } else {
-                indent(d2); *_out << b << " = " << src << ";\n";
-                if (rhsLval) {                                       // reseat from a named smart ptr
-                    // Default the natural op (Owned -> give, Shared/Weak -> copy); a marker overrides.
-                    bool doGive = (handoff == 1) || (handoff == 0 && knd == CollKind::Owned);
-                    if (handoff == 2 && knd == CollKind::Owned)
-                        unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
-                    indent(d2);
-                    if (doGive) *_out << smartPtrInvalidate(src, knd, isInterface(_classes[ty].collElemClass)) << "\n";
-                    else *_out << b << ".kama_ctrl->" << (knd == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n";
-                }
+                if (doGive) *_out << smartPtrInvalidate(src, knd, isInterface(_classes[ty].collElemClass)) << "\n";
+                else *_out << b << ".kama_ctrl->" << (knd == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n";
             }
             if (rhsLval) { indent(depth); *_out << "}\n"; }
             return;

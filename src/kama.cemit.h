@@ -3651,6 +3651,9 @@ private:
                                      const char* what, int line);
     void rejectValueKindMismatch(const std::string& dstCType, SharedExpression value,
                                  const char* what, int line);
+    // KR-132: a strong handle given where its own `Weak` is wanted. True when it reported.
+    bool rejectStrongToWeak(const std::string& dstCType, SharedExpression value, const char* what, int line);
+    std::string handleElemOf(const std::string& cls);   // a Shared/Weak handle's element, either shape; "" otherwise
     // The variant type named by a `::` qualifier — a non-generic union directly, or a generic
     // template resolved to its target instance (`Optional` + `_variantTargetType` Optional_int32). null if none.
     std::string scalarEnumInstanceOf(const std::string& qualResolved);
