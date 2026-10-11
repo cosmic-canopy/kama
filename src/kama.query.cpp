@@ -63,6 +63,8 @@ const char* symKindName(SymKind k)
         case SymKind::Constant:    return "constant";
         case SymKind::Static:      return "static";
         case SymKind::ComptimeFn:  return "comptime-fn";
+        case SymKind::TypeParam:   return "type-param";
+        case SymKind::ComptimeParam: return "comptime-param";
     }
     return "symbol";
 }
@@ -594,7 +596,10 @@ void CEmitter::buildDefSites()
     for (auto* table : { &_interfaces, &_genericContracts }) {
         for (auto& kv : *table) {
             InterfaceInfo& ii = kv.second;
-            if (!ii.node) continue;
+            // A generic contract's INSTANCE (`Comparable<Coin>`) shares its template's nodes; keying its members
+            // again would leave a member's node naming whichever instance came last (KR-134). The template's
+            // def-sites are the one symbol, and buildRenameGroups maps an instance onto them.
+            if (!ii.node || ii.isGenericInst) continue;
             const CompilationUnit* unit = unitOfDecl(ii.node);
             const std::string bfile = builtinFileOfDecl(ii.node);
             std::string bare = bareOf(ii.node->name, kv.first);
@@ -644,6 +649,48 @@ void CEmitter::buildDefSites()
         }
     }
 
+    // An enum's METHODS (KR-134). Its ClassInfo has no class node, so the type loops above skip it, and a payload-less
+    // enum's `size()` was a declaration nothing indexed — go-to-implementation would have had nowhere to land.
+    for (auto& kv : _enumDeclNodes) {
+        EnumDeclarationNode* en = kv.second;
+        if (!en) continue;
+        const CompilationUnit* unit = unitOfDecl(en);
+        const std::string bfile = builtinFileOfDecl(en), bare = bareOf(en->identifier, kv.first);
+        for (auto* table : { &_classes, &_genericTypes }) {
+            auto ec = table->find(kv.first);
+            if (ec == table->end()) continue;
+            for (auto& mkv : ec->second.methods) {
+                MethodInfo& mi = mkv.second;
+                if (!mi.node || mi.fromAdapter) continue;
+                addDefSite(mi.cName, mi.isCtor ? SymKind::Ctor : SymKind::Method, unit, mi.node, mi.node->name,
+                           bare + "." + mkv.first, bare, bfile);
+            }
+            break;
+        }
+    }
+    // A `type adapter` block and its members (KR-134): the block is a conformance — what go-to-implementation on a
+    // contract lists for the primitives it covers — and each member a declaration a call through a bound reaches.
+    for (auto& u : _units) {
+        if (!u || !u->codeDeclarationList) continue;
+        for (auto& decl : *u->codeDeclarationList) {
+            auto* ad = dynamic_cast<AdapterNode*>(decl.get());
+            if (!ad) continue;
+            std::string targets;
+            if (ad->targets) for (auto& t : *ad->targets) if (t) targets += (targets.empty() ? "" : ", ") + kamaTypeText(t);
+            const std::string disp = "adapter <" + targets + ">";
+            addDefSite(adapterKey(u.get(), ad, ""), SymKind::Class, u.get(), ad, SharedIdentifier(), disp, "");
+            auto members = [&](const SharedClassMemberDeclarationList& ms) {
+                if (ms) for (auto& m : *ms)
+                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                        if (md->name && md->name->value)
+                            addDefSite(adapterKey(u.get(), md, *md->name->value), SymKind::Method, u.get(), md,
+                                       md->name, disp + "." + *md->name->value, disp, "");
+            };
+            members(ad->members);
+            if (ad->sections) for (auto& sec : *ad->sections) if (sec) members(sec->members);
+        }
+    }
+
     // Free functions (+ generic free-fn templates). node was captured in collectSignatures.
     for (auto& kv : _funcs) {
         FuncSig& sig = kv.second;
@@ -652,6 +699,46 @@ void CEmitter::buildDefSites()
         SymKind k = _generics.count(kv.first) ? SymKind::GenericFn : SymKind::Function;
         addDefSite(kv.first, k, unit, sig.node, sig.node->name, bareOf(sig.node->name, kv.first), "");
     }
+
+    // KR-134 — every generic's type and comptime parameters: a declaration each, keyed under its generic and noded on
+    // its own name, so go-to-definition on a `T` lands on `<T: Shape>`, references stay inside the generic, and
+    // hover reads its bound (`T: Shape`) or its type (`int32 N`).
+    auto addTypeParams = [&](const std::string& gkey, const SharedStringList& names, const SharedIdentifierList& ids,
+                             const SharedIdentifierList& constTypes, const SharedBoundsList& bounds,
+                             const CompilationUnit* unit, const std::string& container) {
+        if (!names || !ids) return;
+        for (size_t i = 0; i < ids->size(); ++i) {
+            const SharedIdentifier& id = (*ids)[i];
+            if (!id || !id->value) continue;
+            const bool comptime = constTypes && i < constTypes->size() && (*constTypes)[i];
+            std::string disp = *id->value;
+            if (comptime) disp = kamaTypeText((*constTypes)[i]) + " " + disp;
+            else if (bounds && i < bounds->size() && (*bounds)[i] && !(*bounds)[i]->empty()) {
+                std::string b;
+                for (auto& bn : *(*bounds)[i]) if (bn) b += (b.empty() ? "" : " + ") + kamaTypeText(bn);
+                if (!b.empty()) disp += ": " + b;
+            }
+            addDefSite(typeParamKey(gkey, *id->value), comptime ? SymKind::ComptimeParam : SymKind::TypeParam,
+                       unit, id.get(), id, disp, container, "");
+        }
+    };
+    for (auto& kv : _funcs)
+        if (FunctionDeclarationNode* fn = kv.second.node)
+            if (fn->typeParams && _generics.count(kv.first))
+                addTypeParams(kv.first, fn->typeParams, fn->typeParamIds, fn->constTypes, fn->typeBounds,
+                              unitOfDecl(fn), bareOf(fn->name, kv.first));
+    for (auto& kv : _genericTypes)
+        if (ClassDeclarationNode* cd = kv.second.node)
+            addTypeParams(kv.first, cd->typeParams, cd->typeParamIds, cd->constTypes, cd->typeBounds,
+                          unitOfDecl(cd), bareOf(cd->name, kv.first));
+    for (auto& kv : _genericContracts)
+        if (ClassDeclarationNode* cd = kv.second.node)
+            addTypeParams(kv.first, cd->typeParams, cd->typeParamIds, cd->constTypes, cd->typeBounds,
+                          unitOfDecl(cd), bareOf(cd->name, kv.first));
+    for (auto& kv : _enumDeclNodes)
+        if (EnumDeclarationNode* en = kv.second)
+            addTypeParams(kv.first, en->typeParams, en->typeParamIds, en->constTypes, en->typeBounds,
+                          unitOfDecl(en), bareOf(en->identifier, kv.first));
 
     // `extern const T NAME;` (KR-56) — keyed by its literal name, which is what a reference records.
     for (auto& kv : _externConsts)
@@ -772,6 +859,8 @@ void CEmitter::buildRenameGroups()
             for (const auto& ifn : ci.interfaces) {
                 auto it = _interfaces.find(ifn);
                 if (it == _interfaces.end()) continue;
+                // An instance (`Sizable<Coin>`) answers through its template's members, which carry the def-sites.
+                const std::string ckey = it->second.isGenericInst ? it->second.templateKey : ifn;
                 for (const auto& im : it->second.methods) {
                     if (!im.nameId) continue;                 // the operator arm has no name node
                     ClassInfo* owner = nullptr;
@@ -779,10 +868,66 @@ void CEmitter::buildRenameGroups()
                     // is the same rule emitClassInterfaceVtables uses to fill the vtbl slot.
                     MethodInfo* mi = findMethod(&ci, im.name, &owner);
                     if (!mi) continue;
-                    unite(contractMethodKey(ifn, im.name), mi->cName);
+                    unite(contractMethodKey(ckey, im.name), mi->cName);
                 }
             }
         }
+    }
+
+    // KR-134 — what implements what, for go-to-implementation: per contract, the types; per contract member, the
+    // members. Over each type's resolved conformances (its refinement parents included, closeUnderRefinement), a
+    // payload-less enum's and a generic template's too. A generic contract's instance answers as its template.
+    _implementers.clear();
+    auto addImpl = [&](const std::string& of, const std::string& impl) {
+        if (of.empty() || impl.empty() || !_defSites.count(impl)) return;
+        auto& v = _implementers[of];
+        if (std::find(v.begin(), v.end(), impl) == v.end()) v.push_back(impl);
+    };
+    for (auto* table : { &_classes, &_genericTypes }) {
+        for (auto& kv : *table) {
+            ClassInfo& ci = kv.second;
+            if (ci.isGenericInst || ci.isIntrinsicColl || ci.isExternStruct || ci.isOpaqueParam) continue;
+            for (const auto& ifn : ci.interfaces) {
+                auto it = _interfaces.find(ifn);
+                if (it == _interfaces.end()) continue;
+                const std::string ckey = it->second.isGenericInst ? it->second.templateKey : ifn;
+                addImpl(ckey, kv.first);
+                for (const auto& im : it->second.methods) {
+                    ClassInfo* owner = nullptr;
+                    MethodInfo* mi = findMethod(&ci, im.name, &owner);
+                    if (mi && mi->node && !mi->fromAdapter) addImpl(contractMethodKey(ckey, im.name), mi->cName);
+                }
+            }
+        }
+    }
+    // A `type adapter` block's conformance, from its declaration: the contract it names, under its own unit's scope.
+    {
+        NsCtx saved = _nsCtx;
+        for (auto& u : _units) {
+            if (!u || !u->codeDeclarationList) continue;
+            auto uc = _unitCtx.find(u.get());
+            if (uc == _unitCtx.end()) continue;
+            _nsCtx = uc->second;
+            for (auto& decl : *u->codeDeclarationList) {
+                auto* ad = dynamic_cast<AdapterNode*>(decl.get());
+                SharedIdentifier c = ad ? intrinsicContract(ad) : SharedIdentifier();
+                if (!c || !c->value) continue;
+                std::string ckey = resolveUserName(*c->value, c->qualifier);
+                addImpl(ckey, adapterKey(u.get(), ad, ""));
+                auto members = [&](const SharedClassMemberDeclarationList& ms) {
+                    if (ms) for (auto& m : *ms)
+                        if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
+                            if (md->name && md->name->value) {
+                                const std::string mk = adapterKey(u.get(), md, *md->name->value);
+                                addImpl(contractMethodKey(ckey, *md->name->value), mk);
+                                unite(contractMethodKey(ckey, *md->name->value), mk);   // and they rename together
+                            }
+                };
+                members(ad->members);
+                if (ad->sections) for (auto& sec : *ad->sections) if (sec) members(sec->members);
+            }
+        }
+        _nsCtx = saved;
     }
 
     // Flatten once, here, so every query stays a pure lookup — the same discipline as buildPositions'
@@ -899,6 +1044,27 @@ std::string CEmitter::contractMethodKey(const std::string& contractKey, const st
 {
     if (contractKey.empty() || name.empty()) return "";
     return "contract:" + contractKey + "::" + name;
+}
+
+std::string CEmitter::adapterKey(const CompilationUnit* unit, const ASTNode* n, const std::string& name) const
+{
+    if (!n) return "";
+    const std::string file = unit && unit->name ? *unit->name : "";
+    return "adapter:" + file + ":" + std::to_string(n->line) + ":" + std::to_string(n->column)
+         + (name.empty() ? "" : "::" + name);
+}
+
+std::string CEmitter::typeParamKey(const std::string& genericKey, const std::string& name)
+{
+    if (genericKey.empty() || name.empty()) return "";
+    return "tparam:" + genericKey + "::" + name;
+}
+
+std::string CEmitter::typeParamRef(const std::string& genericKey, const IdentifierNode* id) const
+{
+    if (genericKey.empty() || !id || !id->value || (id->qualifier && !id->qualifier->empty())) return "";
+    const std::string k = typeParamKey(genericKey, *id->value);
+    return _defSites.count(k) ? k : "";
 }
 
 std::string CEmitter::typeConstKey(const std::string& ownerKey, const std::string& name)
@@ -1020,14 +1186,63 @@ void CEmitter::buildPositions()
         _positions[d.unit].push_back(PosEntry{ d.selectionRange, nullptr, true, d.key });
     }
 
-    // (2) Signature type references — structural walk of each user unit's top-level decls.
+    // (2) Signature type references — structural walk of each user unit's top-level decls. A GENERIC's walk also
+    // covers its bounds, and every `T`/`N` it finds is its own parameter (KR-134): kama has no shadowing, so inside a
+    // generic an unqualified `T` can mean nothing else. Fixed up per declaration, ahead of the resolve-fill below,
+    // which would otherwise read `T` as an unresolved type name.
+    std::map<const ASTNode*, std::string> genericKeyOf;
+    for (const auto& kv : _defSites) {
+        const SymKind k = kv.second.kind;
+        if (kv.second.node && (k == SymKind::GenericFn || k == SymKind::GenericType || k == SymKind::Contract
+                               || k == SymKind::Enum))
+            genericKeyOf[kv.second.node] = kv.first;
+    }
+    auto ownParams = [&](std::vector<PosEntry>& out, size_t from, const ASTNode* decl) {
+        auto g = genericKeyOf.find(decl);
+        if (g == genericKeyOf.end()) return;
+        for (size_t i = from; i < out.size(); ++i)
+            if (out[i].declKey.empty()) {
+                const std::string k = typeParamRef(g->second, out[i].id);
+                if (!k.empty()) out[i].declKey = k;
+            }
+    };
+    auto addBounds = [](const SharedBoundsList& bl, std::vector<PosEntry>& out) {
+        if (bl) for (auto& l : *bl) if (l) for (auto& b : *l) addTypeRef(b, out);
+    };
     for (auto& u : _units) {
         if (!u || !u->codeDeclarationList) continue;
         auto& out = _positions[u.get()];
         for (auto& decl : *u->codeDeclarationList) {
+            const size_t from = out.size();
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 addTypeRef(fn->returnType, out);
                 addParamTypes(fn->parameters, out);
+                addBounds(fn->typeBounds, out);
+                ownParams(out, from, fn);
+            } else if (auto* ad = dynamic_cast<AdapterNode*>(decl.get())) {   // KR-134: its contract and members
+                if (ad->baseTypes && ad->baseTypes->interfaces)
+                    for (auto& i : *ad->baseTypes->interfaces) addTypeRef(i, out);
+                if (ad->targets) for (auto& t : *ad->targets) addTypeRef(t, out);
+                auto members = [&](const SharedClassMemberDeclarationList& ms) {
+                    if (ms) for (auto& m : *ms)
+                        if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                            addTypeRef(md->returnType, out);
+                            addParamTypes(md->params, out);
+                        }
+                };
+                members(ad->members);
+                if (ad->sections) for (auto& sec : *ad->sections) if (sec) members(sec->members);
+            } else if (auto* en = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+                if (en->baseTypes && en->baseTypes->interfaces)
+                    for (auto& i : *en->baseTypes->interfaces) addTypeRef(i, out);
+                if (en->body) for (auto& m : *en->body) if (m && m->payload) addParamTypes(m->payload, out);
+                if (en->members) for (auto& m : *en->members)
+                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
+                        addTypeRef(md->returnType, out);
+                        addParamTypes(md->params, out);
+                    }
+                addBounds(en->typeBounds, out);
+                ownParams(out, from, en);
             } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
                 if (cd->baseTypes) {
                     addTypeRef(cd->baseTypes->base, out);
@@ -1049,6 +1264,8 @@ void CEmitter::buildPositions()
                         }
                     }
                 }
+                addBounds(cd->typeBounds, out);
+                ownParams(out, from, cd);
             }
         }
     }
@@ -1060,6 +1277,24 @@ void CEmitter::buildPositions()
         std::map<const CompilationUnit*, std::set<const IdentifierNode*>> seen;
         for (auto& kv : _positions)
             for (const auto& e : kv.second) if (e.id) seen[kv.first].insert(e.id);
+        // A generic's own `T`/`N` in its body, and calls through its bound, first (KR-134): see ::priority.
+        for (const auto& r : _bodyRefs) {
+            if (!r.priority || !r.unit || !r.id || !seen[r.unit].insert(r.id).second) continue;
+            _positions[r.unit].push_back(
+                PosEntry{ SrcRange{ r.id->line, r.id->column, r.id->endLine, r.id->endColumn },
+                          const_cast<IdentifierNode*>(r.id), false, r.key });
+        }
+        std::map<const ASTNode*, const std::string*> boundKeyOf;
+        for (const auto& kv : _defSites)
+            if (kv.second.node && kv.second.kind == SymKind::Method) boundKeyOf[kv.second.node] = &kv.first;
+        for (const auto& nr : _nodeRefs) {
+            if (!nr.priority || !nr.unit || !nr.site || !nr.declNode) continue;
+            auto k = boundKeyOf.find(nr.declNode);
+            if (k == boundKeyOf.end() || !seen[nr.unit].insert(nr.site).second) continue;
+            _positions[nr.unit].push_back(
+                PosEntry{ SrcRange{ nr.site->line, nr.site->column, nr.site->endLine, nr.site->endColumn },
+                          const_cast<IdentifierNode*>(nr.site), false, *k->second });
+        }
         for (const auto& r : _bodyRefs) {
             if (!r.unit || !r.id) continue;
             if (!seen[r.unit].insert(r.id).second) continue;   // already indexed (sig ref or earlier record)
@@ -1404,7 +1639,7 @@ std::string CEmitter::typeAtPosition(const std::string& uri, int line, int col) 
 // both return the same set (that is the point of keying the index the way go-to-definition keys it).
 // Spans every unit analyze() was given, i.e. the open file plus its transitive imports.
 std::vector<Location> CEmitter::referencesAt(const std::string& uri, int line, int col,
-                                             bool includeDecl) const
+                                             bool includeDecl, bool group) const
 {
     std::vector<Location> out;
     const CompilationUnit* unit = unitForUri(uri);
@@ -1415,9 +1650,10 @@ std::vector<Location> CEmitter::referencesAt(const std::string& uri, int line, i
     auto d = _defSites.find(key);
     if (d == _defSites.end() || !d->second.unit) return out;   // builtin / prelude / unresolved: not renameable
 
-    // A contract method and its implementations are ONE renameable name (M6 B3c) — see buildRenameGroups.
-    // A symbol in no group answers for itself, which is every symbol but these.
-    auto g = _renameGroup.find(key);
+    // A contract method and its implementations are ONE renameable name (M6 B3c) — see buildRenameGroups — so the
+    // RENAME asks for the group. A find-references does not: it lists the symbol's own uses (KR-134), and what
+    // implements a contract member is go-to-implementation's to answer.
+    auto g = group ? _renameGroup.find(key) : _renameGroup.end();
     const std::vector<std::string> self{ key };
     const std::vector<std::string>& keys = g == _renameGroup.end() ? self : g->second;
 
@@ -1457,6 +1693,31 @@ std::vector<Location> CEmitter::declarationsAt(const std::string& uri, int line,
         out.push_back(Location{ s->second.unit && s->second.unit->name ? *s->second.unit->name : std::string(),
                                 s->second.selectionRange });
     }
+    return out;
+}
+
+// KR-134 — go-to-implementation. The cursor's symbol is a contract (its implementing types), a contract member (its
+// implementing members), or a call through a generic's bound, which refers to the contract member — so the same answer
+// follows. Anything else implements nothing and is answered empty, as every server answers a concrete method.
+std::vector<Location> CEmitter::implementationsAt(const std::string& uri, int line, int col) const
+{
+    std::vector<Location> out;
+    const CompilationUnit* unit = unitForUri(uri);
+    if (!unit) return out;
+    const std::string key = declKeyAt(unit, line, col);
+    auto im = _implementers.find(key);
+    if (key.empty() || im == _implementers.end()) return out;
+    for (const auto& k : im->second) {
+        auto s = _defSites.find(k);
+        if (s == _defSites.end()) continue;
+        out.push_back(Location{ s->second.unit && s->second.unit->name ? *s->second.unit->name : s->second.file,
+                                s->second.selectionRange });
+    }
+    std::sort(out.begin(), out.end(), [](const Location& a, const Location& b) {   // in source order, file by file
+        if (a.uri != b.uri) return a.uri < b.uri;
+        if (a.range.line != b.range.line) return a.range.line < b.range.line;
+        return a.range.column < b.range.column;
+    });
     return out;
 }
 
@@ -1509,7 +1770,8 @@ std::vector<SymbolInfo> CEmitter::documentSymbols(const std::string& uri) const
     std::vector<SymbolInfo> out;
     if (!unit) return out;
     for (auto& kv : _defSites) {
-        if (kv.second.kind == SymKind::Local || kv.second.kind == SymKind::Param) continue;
+        if (kv.second.kind == SymKind::Local || kv.second.kind == SymKind::Param
+            || kv.second.kind == SymKind::TypeParam || kv.second.kind == SymKind::ComptimeParam) continue;
         const DefSite& d = kv.second;
         if (d.unit != unit) continue;
         out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, uri });
@@ -1596,7 +1858,8 @@ std::vector<SymbolInfo> CEmitter::workspaceSymbols(const std::string& query) con
 
     for (auto& kv : _defSites) {
         const DefSite& d = kv.second;
-        if (d.kind == SymKind::Local || d.kind == SymKind::Param) continue;   // as in the outline: noise
+        if (d.kind == SymKind::Local || d.kind == SymKind::Param                // as in the outline: noise
+            || d.kind == SymKind::TypeParam || d.kind == SymKind::ComptimeParam) continue;
         if (!d.unit || !d.unit->name) continue;                               // prelude / builtin
         if (!needle.empty()) {
             std::string hay;

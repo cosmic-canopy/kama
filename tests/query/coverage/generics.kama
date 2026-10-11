@@ -1,0 +1,17 @@
+// KR-134 — what the index sees in a generic: each type parameter and comptime parameter is a declaration, every later
+// spelling of it in the signature and the body refers to it, a bound refers to its contract, and a call through the
+// bound refers to the contract's member — whether the generic has instances (`f`) or none (`Bag`, `total`).
+import { std::collections::ConstView };
+type contract Shape for value { const fn int32 area(); }
+type value Sq implements Shape { int32 s; public ctor make() { this.s = 2; } public const fn int32 area() { return this.s * this.s; } }
+
+fn int32 f<T: Shape + Copyable<T>>(T x) { T y = copy x; usize n = sizeof(T); return y.area(); }
+fn int32 h<T: Shape>(ConstView<T> xs) { int32 t = 0; foreach (T x in xs) { t = t + x.area(); } return t; }
+type value Bag<T: Shape> comptime(int32 N) {
+    public T v;
+    public fn int32 total() { int32 k = N; return this.v.area() * k; }
+    public fn usize size() { return sizeof(T); }
+}
+fn int32 tally() comptime(int32 M) { int32 a = M; return a + M; }
+
+fn int32 main() { Sq q = Sq.make(); return f(x: q); }

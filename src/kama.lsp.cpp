@@ -159,6 +159,8 @@ int symKindToLsp(SymKind k) {
         case SymKind::Constant:    return 14;   // Constant
         case SymKind::Static:      return 13;   // Variable — a module `static` is mutable, so not a Constant
         case SymKind::ComptimeFn:  return 12;   // Function — at a type's scope too: it takes no receiver
+        case SymKind::TypeParam:
+        case SymKind::ComptimeParam: return 26; // TypeParameter — both are a generic's parameters
     }
     return 5;
 }
@@ -172,6 +174,7 @@ int symKindToLsp(SymKind k) {
 static const char* kSemTokenTypes[] = {
     "class", "struct", "interface", "enum", "enumMember",
     "function", "method", "property", "variable", "parameter",
+    "typeParameter",   // KR-134 — appended, never inserted (see above)
 };
 static const char* kSemTokenModifiers[] = { "declaration" };
 
@@ -197,6 +200,8 @@ int semTokenType(SymKind k) {
         case SymKind::Constant:    return 8;   // variable — the legend has no constant; `readonly` is not sent
         case SymKind::Static:      return 8;   // variable
         case SymKind::ComptimeFn:  return 5;   // function
+        case SymKind::TypeParam:   return 10;  // typeParameter
+        case SymKind::ComptimeParam: return 9; // parameter — a value the generic is given, at compile time
     }
     return 0;
 }
@@ -618,6 +623,7 @@ struct Server {
         caps.set("definitionProvider", true);
         caps.set("documentSymbolProvider", true);
         caps.set("referencesProvider", true);
+        caps.set("implementationProvider", true);   // KR-134
         caps.set("workspaceSymbolProvider", true);
         Json rename = Json::object();
         rename.set("prepareProvider", true);   // we can tell the editor up front whether F2 is offered
@@ -1056,6 +1062,27 @@ struct Server {
         sendResponse(id, std::move(arr));
     }
 
+    // textDocument/implementation -> Location[] (KR-134): what implements the contract or contract member under the
+    // cursor, or the one a call through a generic's bound reaches. The workspace index, for references' reason.
+    void handleImplementation(const Json& id, const Json& params) {
+        std::string uri = params.getStr2("textDocument", "uri");
+        Json arr = Json::array();
+        auto it = docs.find(uri);
+        if (it != docs.end()) {
+            int l, c; kamaPos(params, l, c);
+            std::string path = uriToPath(uri);
+            workspaceIndexFor(path);
+            const SharedLspIndex& idx = wsIndex ? wsIndex : it->second.lastGoodIndex;
+            for (const auto& r : lspImplementations(idx, path, l, c)) {
+                Json loc = Json::object();
+                loc.set("uri", pathToUri(r.uri));
+                loc.set("range", srcRangeToJson(r.range));
+                arr.push(std::move(loc));
+            }
+        }
+        sendResponse(id, std::move(arr));
+    }
+
     // workspace/symbol -> SymbolInformation[]: project-wide symbol search (the editor's Ctrl+T picker).
     void handleWorkspaceSymbol(const Json& id, const Json& params) {
         std::string query = params.getStr("query");
@@ -1157,7 +1184,7 @@ struct Server {
             }
         }
 
-        std::vector<Location> refs = lspReferences(idx, path, l, c, /*includeDecl*/ true);
+        std::vector<Location> refs = lspReferences(idx, path, l, c, /*includeDecl*/ true, /*group*/ true);
         if (!haveProject) {
             for (const auto& r : refs)
                 if (r.uri != path) {
@@ -1246,6 +1273,7 @@ struct Server {
         if (method == "textDocument/definition")     { if (isRequest) handleDefinition(*idp, params);     return true; }
         if (method == "textDocument/hover")          { if (isRequest) handleHover(*idp, params);          return true; }
         if (method == "textDocument/references")     { if (isRequest) handleReferences(*idp, params);     return true; }
+        if (method == "textDocument/implementation") { if (isRequest) handleImplementation(*idp, params); return true; }
         if (method == "textDocument/prepareRename")  { if (isRequest) handlePrepareRename(*idp, params);  return true; }
         if (method == "textDocument/rename")         { if (isRequest) handleRename(*idp, params);         return true; }
         if (method == "workspace/symbol")            { if (isRequest) handleWorkspaceSymbol(*idp, params); return true; }

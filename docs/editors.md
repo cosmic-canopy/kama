@@ -30,7 +30,8 @@ Advertised by `kama lsp` today, in every editor:
 | live diagnostics as you type (semantic, not just parse errors) | `textDocument/publishDiagnostics` |
 | hover — kind and type | `textDocument/hover` |
 | go to definition, including into `std` and the prelude | `textDocument/definition` |
-| find references | `textDocument/references` |
+| find references — every use of the symbol | `textDocument/references` |
+| go to implementation — what implements a contract or contract member, or a call through a generic's bound | `textDocument/implementation` |
 | rename, project-wide | `textDocument/rename` (+ `prepareRename`) |
 | document outline / breadcrumbs | `textDocument/documentSymbol` |
 | project-wide symbol search | `workspace/symbol` |
@@ -401,8 +402,8 @@ nothing at all.
 2. Choose the `editor/zed/` directory.
 
 That gives you syntax colouring, the outline view, bracket matching and indentation from the grammar, plus
-diagnostics, hover, go-to-definition, find-references, rename, completion, signature help, semantic
-tokens and the auto-import quick fix from `kama lsp`.
+diagnostics, hover, go-to-definition, find-references, go-to-implementation, rename, completion, signature
+help, semantic tokens and the auto-import quick fix from `kama lsp`.
 
 The server is launched by `editor/zed/src/kama.rs`, which resolves the binary through the worktree's `PATH`:
 

@@ -61,6 +61,16 @@ The leading `kama.json` is the difference between "uses in this file" and "uses 
 Without it you will confidently miss the callers that matter. The scope is an OPERAND, not a flag:
 `kama_workspace.json` in the same position widens it again, to every project in the workspace.
 
+### "What implements this?"
+
+```sh
+kama query kama.json src/shapes.kama --impl 7:20
+```
+
+On a contract or one of its members, every type or member implementing it — an enum or a `type adapter` block
+included. On a call through a generic's bound (`x.area()` inside `f<T: Shape>`), the members it can reach. `--refs`
+on a contract member lists its USES only; the implementations are this question.
+
 ### "Is my change correct?"
 
 ```sh

@@ -2651,32 +2651,21 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-query-generic-names"></a>
+<a id="s10-comptime-probe"></a>
 
-### The query index does not see a type parameter, its bound, or a member called through it (KR-134)
+### A generic type's `comptime` parameter in the as-written check (KR-137)
 
-Found 2026-10-09 regenerating `tests/query/coverage/dispatch.coverage` after a bound was added to its generic
-(`0.9.571`). `kama query --coverage` over
-
-```kama fragment
-type contract Shape for value { fn int32 area(); }
-fn int32 f<T: Shape>(T x) { return x.area(); }
-type value Box<T: Shape> { public T v; }
-```
-
-reports the declaring `T`s and `Shape` in both bound lists as `-` (no entry), each later `T` as `unresolved`, and
-`area` in `x.area()` as `-`. A comptime value parameter is invisible the same way: in `type value Bag<T: Shape>
-comptime(int32 N) { … this.v.area() * N … }` both `N`s are `-` (measured `0.9.572`). So an editor's go-to-definition, references and rename stop at a generic's
-signature: a bound cannot be followed to its contract, a contract member called through a bound is not one of
-that member's references, and a type parameter has no declaration. **Scheduled.** The index already sees every name in
-compile-time code (shipped `0.9.462`). A generic body is now checked as written, with an opaque parameter that has exactly
-its bounds' members, so the index has what it needs. **Design:** a type parameter is a declaration (kind
-`type-param`), each later `T` a reference to it, a bound a reference to its contract, and a call through a bound
-a reference to the CONTRACT's member, which is the declaration a reader means. A comptime parameter is a
-declaration too. rust-analyzer, gopls, Roslyn, tsserver and SourceKit-LSP all land a call through a bound on the
-trait/interface member and offer "go to implementation" beside it; `kama lsp` has no `textDocument/implementation`
-yet, which is the open scope question for the maintainer. The coverage fixtures gain the
-entries, and `-` there stays reserved for keywords.
+Found 2026-10-10 while indexing generics (go-to-definition through a bound, `0.9.577`). Since `0.9.571` a generic is
+checked as written whether or not anything instantiates it. A generic FUNCTION's comptime parameter is bound to a
+placeholder flagged `probe`, so `InlineArray<T>#(N)` forms in its body and a judgement that would fold `N` against a
+number nobody wrote is left to each instance (`readsProbeConst`). A generic TYPE's probe leaves the same parameter
+unbound (`bindInstConstParams`, whose comment claims the function half does the same, which it no longer does), so
+in a type nobody instantiates, `public InlineArray<T>#(N) vs;` has no element type: `this.vs[0].area()` through a
+bound is neither checked nor indexed. Binding it as the function half does was tried and is not enough: the field's
+array type is formed when the probe instance is REGISTERED, before any body binding, so the binding has to reach
+`registerGenericTypeInst` for a probe instance. **Scheduled.** A fixture: an uninstantiated `type value Bag<T: Shape>
+comptime(int32 N)` whose method calls `area()` on an element, checked (a misspelt member refused) and indexed
+(`--def` lands on `Shape.area`).
 
 <a id="s10-release-signing"></a>
 

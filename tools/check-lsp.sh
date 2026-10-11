@@ -124,6 +124,13 @@ MREN='type value P {\n    public int32 x;   public ctor zero() { this.x = 0; }\n
 MGURI="file:///genrename.kama"
 MGEN='type value Box<T> {\n    public T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> bi = Box::<int32>.of(v: 1); Box<bool> bs = Box::<bool>.of(v: false); return bs.get() ? bi.get() : 0; }\n'
 
+# KR-134 — a contract member, two implementations, a concrete call and a call through the contract. Go-to-
+# implementation lists the two implementations; find-references lists the member's own USES (the declaration and
+# the fat-pointer call — `c.speak()` is Cat's); rename still moves all five, because the group is rename's relation.
+#   L0 `speak` at 43; L1/L2 the implementations at 75; L3 `c.speak()` at 82, `s.speak()` at 94
+IGURI="file:///implgroup.kama"
+IGSRC='type contract Speaker for value { fn int32 speak(); }\ntype value Cat implements Speaker { public ctor make() { } public fn int32 speak() { return 9; } }\ntype value Dog implements Speaker { public ctor make() { } public fn int32 speak() { return 1; } }\nfn int32 main() { Cat c = Cat.make(); Owned<Speaker> s = new Dog.make(); return c.speak() + s.speak(); }\n'
+
 # M6 B3f — the `::` QUALIFIER of a name. Before the grammar carried per-segment positions a qualifier was a
 # list of plain STRINGS, so `Color` in `Color::Green` was indexed nowhere: renaming the enum rewrote its
 # declaration, its type annotations and its `case` arms, and left every `Color::` spelling behind. Both
@@ -571,6 +578,10 @@ frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument"
 frame '{"jsonrpc":"2.0","id":84,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTBURI"'"},"position":{"line":0,"character":11},"newName":"Hue"}}'
 frame '{"jsonrpc":"2.0","id":85,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTBURI"'"},"position":{"line":3,"character":29},"newName":"y"}}'
 frame '{"jsonrpc":"2.0","id":86,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$CTBURI"'"},"position":{"line":0,"character":93},"newName":"times"}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"'"$IGURI"'","languageId":"kama","version":1,"text":"'"$IGSRC"'"}}}'
+frame '{"jsonrpc":"2.0","id":190,"method":"textDocument/implementation","params":{"textDocument":{"uri":"'"$IGURI"'"},"position":{"line":0,"character":43}}}'
+frame '{"jsonrpc":"2.0","id":191,"method":"textDocument/references","params":{"textDocument":{"uri":"'"$IGURI"'"},"position":{"line":0,"character":43},"context":{"includeDeclaration":true}}}'
+frame '{"jsonrpc":"2.0","id":192,"method":"textDocument/rename","params":{"textDocument":{"uri":"'"$IGURI"'"},"position":{"line":0,"character":43},"newName":"talk"}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 
@@ -598,6 +609,7 @@ expect '"capabilities"'                              "initialize -> capabilities
 expect '"textDocumentSync":1'                        "advertises full-document sync"
 expect '"hoverProvider":true'                        "advertises hoverProvider (M2)"
 expect '"definitionProvider":true'                   "advertises definitionProvider (M2)"
+expect '"implementationProvider":true'               "advertises implementationProvider (KR-134)"
 expect '"documentSymbolProvider":true'               "advertises documentSymbolProvider (M2)"
 expect '"referencesProvider":true'                   "advertises referencesProvider (M3)"
 expect '"renameProvider":{"prepareProvider":true}'   "advertises renameProvider with prepareProvider (M3)"
@@ -721,7 +733,7 @@ esac
 echo "check-lsp: M6 B2 semantic tokens"
 # The legend's ORDER is the wire format — a token's type is sent as an INDEX into it, so this assertion is
 # not cosmetic: reorder the array and every buffer in every client silently recolours.
-expect '"semanticTokensProvider":{"legend":{"tokenTypes":["class","struct","interface","enum","enumMember","function","method","property","variable","parameter"],"tokenModifiers":["declaration"]},"full":true}' \
+expect '"semanticTokensProvider":{"legend":{"tokenTypes":["class","struct","interface","enum","enumMember","function","method","property","variable","parameter","typeParameter"],"tokenModifiers":["declaration"]},"full":true}' \
        "initialize advertises semanticTokensProvider with the legend, full-only"
 # Exact array, because every interesting property of the encoding is positional. Decoded, 5 ints per token
 # (deltaLine, deltaStartChar, length, type, modifiers), against
@@ -754,10 +766,12 @@ expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,
 # index (instances are emitted from emitHeaderContent, before the loop that sets `_refUnit`), and `b.v`
 # resolved to `field:Box_int32::v`, a key with no def-site behind it.
 #
-# `T` still yields NO token, and that is correct rather than a residual gap: inside the instance it is
-# substituted to `int32`, a builtin with no def-site, and semanticTokensFor emits nothing for a key it
-# cannot resolve. One `v` in the template also yields ONE symbol however many instantiations exist.
-expect '"id":56,"result":{"data":[0,11,3,0,1,1,6,1,7,1,0,17,2,6,1,0,5,1,9,1,0,10,1,7,0,0,4,1,9,0,1,16,3,6,1,0,20,1,7,0,2,9,4,5,1,0,9,3,0,0,0,11,1,8,1,0,4,3,0,0,0,13,2,6,0,0,3,1,9,0,0,14,1,8,0,0,2,3,6,0]}}' \
+# Since KR-134 every `T` is a token too (`typeParameter`, legend index 10): the declaring `<T>` with the
+# `declaration` modifier, and each later spelling — the field's type, the ctor parameter's, `get`'s return — as a
+# reference to it. It used to yield nothing, read as correct at the time because inside an instance `T` is
+# `int32`; the template's own parameter is what the source spells, whatever the instances. One `v` in the
+# template still yields ONE symbol however many instantiations exist.
+expect '"id":56,"result":{"data":[0,11,3,0,1,0,4,1,10,1,1,4,1,10,0,0,2,1,7,1,0,17,2,6,1,0,3,1,10,0,0,2,1,9,1,0,10,1,7,0,0,4,1,9,0,1,14,1,10,0,0,2,3,6,1,0,20,1,7,0,2,9,4,5,1,0,9,3,0,0,0,11,1,8,1,0,4,3,0,0,0,13,2,6,0,0,3,1,9,0,0,14,1,8,0,0,2,3,6,0]}}' \
        "a generic type's BODY is indexed — declarations, uses, and one symbol per template (M6 B3b)"
 
 echo "check-lsp: M6 B3a renaming a method"
@@ -768,6 +782,14 @@ expect '"id":57,"result":{"start":{"line":2,"character":20},"end":{"line":2,"cha
 # came back no longer compiled.
 expect '"id":58,"result":{"changes":{"file:///methodrename.kama":[{"range":{"start":{"line":2,"character":20},"end":{"line":2,"character":23}},"newText":"fetch"}' \
        "renaming a method rewrites its declaration"
+
+echo "check-lsp: go-to-implementation, and references beside rename (KR-134)"
+expect '"id":190,"result":[{"uri":"file:///implgroup.kama","range":{"start":{"line":1,"character":75},"end":{"line":1,"character":80}}},{"uri":"file:///implgroup.kama","range":{"start":{"line":2,"character":75},"end":{"line":2,"character":80}}}]}' \
+       "implementation on a contract member lists its two implementations, in source order"
+expect '"id":191,"result":[{"uri":"file:///implgroup.kama","range":{"start":{"line":0,"character":43},"end":{"line":0,"character":48}}},{"uri":"file:///implgroup.kama","range":{"start":{"line":3,"character":94},"end":{"line":3,"character":99}}}]}' \
+       "references on a contract member list its uses only — the declaration and the call through the contract"
+expect '"id":192,"result":{"changes":{"file:///implgroup.kama":[{"range":{"start":{"line":0,"character":43},"end":{"line":0,"character":48}},"newText":"talk"},{"range":{"start":{"line":1,"character":75},"end":{"line":1,"character":80}},"newText":"talk"},{"range":{"start":{"line":2,"character":75},"end":{"line":2,"character":80}},"newText":"talk"},{"range":{"start":{"line":3,"character":82},"end":{"line":3,"character":87}},"newText":"talk"},{"range":{"start":{"line":3,"character":94},"end":{"line":3,"character":99}},"newText":"talk"}]}}}' \
+       "rename on a contract member still moves the whole group: both implementations and both calls"
 expect '{"range":{"start":{"line":4,"character":52},"end":{"line":4,"character":55}},"newText":"fetch"}]}}' \
        "...AND its call site, which was silently left behind before B3a"
 # A generic template: the declaration is inside a body that is re-emitted once per instantiation, and the
@@ -795,12 +817,19 @@ expect '"id":64,"result":{"contents":{"kind":"plaintext","value":"module std::co
 expect '"id":65,"result":null'                           "prepareRename REFUSES a module path segment"
 
 echo "check-lsp: M6 B3c contract methods are one name with their implementations"
-# find-references from the implementation reaches the CONTRACT's declaration in the stdlib, and the other
-# implementation of it — that is the group, and it is why the rename below has to refuse.
-expect '/lib/std/io/streams.kama","range":{"start":{"line":24,"character":30}' \
-       "references from an impl reach the std contract's own declaration"
-expect '/lib/std/io/streams.kama","range":{"start":{"line":100,"character":37}' \
-       "...and StringWriter, the stdlib's other implementation of it"
+# The implementation and the stdlib CONTRACT's declaration are one renameable name — that is the group, and it is
+# why the rename below has to refuse. Find-references no longer walks the group (KR-134): from the implementation it
+# lists that member's own uses, so neither the contract's declaration nor StringWriter's implementation is in it;
+# what implements a contract member is go-to-implementation's answer.
+id66=$(printf '%s' "$out" | tr '\r' '\n' | grep -o '"id":66,"result":\[[^]]*\]' || true)
+case "$id66" in
+    *'"id":66,"result":['*)
+        case "$id66" in
+            *'/lib/std/io/streams.kama'*) echo "  FAIL: references from an impl list only its own uses (got the group: $id66)" >&2; fail=1 ;;
+            *) echo "  ok: references from an impl list only its own uses — not the std contract's declaration" ;;
+        esac ;;
+    *) echo "  FAIL: references from an impl answered nothing parseable" >&2; fail=1 ;;
+esac
 expect '"id":67,"error"'                                "rename REFUSES a method that implements a std contract"
 expect 'this name is also declared outside the project'  "...because the group straddles the project boundary"
 expect '/lib/std/io/streams.kama'                        "...and it names the file it cannot rewrite"

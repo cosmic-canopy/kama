@@ -284,6 +284,9 @@ struct MethodInfo {
     // Compiler-synthesized `mergeFrom` (KR-125), written by `@generate(Deserializable)` on a record: an in-place merge
     // of the data into `this`, atomic through a commit log. `node` is null: emitted via emitMergeDefinition.
     bool                         isSynthMerge = false;
+    // A member a generic's opaque parameter has because its BOUND declares it (buildOpaqueParams): the contract
+    // member's own name node, so a call through the bound indexes as a reference to it (KR-134).
+    const IdentifierNode*        boundNameId = nullptr;
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
@@ -1031,7 +1034,14 @@ public:
     SrcRange importInsertionAt(const std::string& uri, bool& hasBlock) const;
     // find-references (M3): every USE of the symbol at the cursor, across every unit passed to analyze().
     // `includeDecl` adds the declaration's own name range (LSP's context.includeDeclaration).
-    std::vector<Location> referencesAt(const std::string& uri, int line, int col, bool includeDecl) const;
+    // `group`: the rename's view — a contract member together with every implementation of it (M6 B3c). A
+    // find-references asks without it and gets the symbol's own uses (KR-134): what implements a contract member
+    // is go-to-implementation's answer, not a use of it.
+    std::vector<Location> referencesAt(const std::string& uri, int line, int col, bool includeDecl,
+                                       bool group = false) const;
+    // KR-134 — go-to-implementation: on a contract member, every member implementing it; on a contract, every type
+    // implementing it (refinement included); on a call through a bound, the member it calls.
+    std::vector<Location> implementationsAt(const std::string& uri, int line, int col) const;
     // prepareRename (M3): the identifier range at the cursor IF it names a renameable user symbol
     // (a DefSite in a user unit), else an empty range. Never matches prelude/std/builtins.
     SrcRange renameRangeAt(const std::string& uri, int line, int col) const;
@@ -1083,7 +1093,10 @@ private:
     // ---- M3 reference index -----------------------------------------------------------------------------
     // A body use-site as the REAL resolver produced it (recordRef), pending merge into _positions. Held only
     // between the analysis walk and buildPositions(), then cleared.
-    struct RecordedRef { const CompilationUnit* unit; const IdentifierNode* id; std::string key; };
+    // `priority` (KR-134): a generic's own `T`/`N` spelled in its body, recorded by the as-written probe — merged
+    // ahead of what any instance recorded for the same spelling (see RecordedNodeRef::priority).
+    struct RecordedRef { const CompilationUnit* unit; const IdentifierNode* id; std::string key; bool priority = false; };
+    void recordTypeParamRef(const IdentifierNode* site);   // KR-134: `site` names a parameter of `_indexGeneric`
     std::vector<RecordedRef> _bodyRefs;
     // M3.4: a DECLARATION discovered during the walk. Locals, params and match bindings have no symbol-table
     // entry to key on, so — unlike types/functions — their def-sites can only be captured where the walk
@@ -1108,8 +1121,11 @@ private:
     // registerGenericTypeInst). `Box<int32>` and `Box<string>` therefore arrive at one node and collapse
     // onto one key with no mapping table, and the answer cannot drift when a new key shape appears.
     // buildPositions resolves node -> key after buildDefSites, so it is also independent of walk order.
+    // `priority` (KR-134): a call through a generic's BOUND, recorded by the as-written probe, which runs after every
+    // instance has recorded the same spelling as the concrete method it reached. The bound's member is the one answer
+    // the source names, whatever instances exist, so its record is merged first.
     struct RecordedNodeRef { const CompilationUnit* unit; const IdentifierNode* site;
-                             const ASTNode* declNode; };
+                             const ASTNode* declNode; bool priority = false; };
     std::vector<RecordedNodeRef> _nodeRefs;
     std::map<std::string, std::vector<Location>> _refIndex;   // DefSite key -> every USE site of that symbol
     // What a `module:` position points at (M6 B3f). Deliberately NOT a DefSite: a module is a directory on
@@ -1149,6 +1165,16 @@ private:
     static std::string enumMemberKey(const std::string& enumKey, const std::string& name);   // "enum:Enum::name"
     // "contract:Contract::name" — a contract method declares a vtbl slot, so it has no cName to key on.
     static std::string contractMethodKey(const std::string& contractKey, const std::string& name);
+    // KR-134: a generic's type or comptime parameter, keyed UNDER its generic — a `T` in one is never another's.
+    static std::string typeParamKey(const std::string& genericKey, const std::string& name);
+    // The parameter a spelling inside generic `genericKey` names, or "" — kama has no shadowing, so inside a
+    // generic an unqualified `T` can only ever be its own parameter.
+    std::string typeParamRef(const std::string& genericKey, const IdentifierNode* id) const;
+    std::string _indexGeneric;   // the generic whose body the as-written probe is walking (KR-134), else ""
+    // KR-134: contract key -> the def-site keys of the types implementing it; contract-member key -> of the members.
+    std::map<std::string, std::vector<std::string>> _implementers;
+    // A `type adapter` block and its members, keyed by position (they have no symbol-table name of their own).
+    std::string adapterKey(const CompilationUnit* unit, const ASTNode* n, const std::string& name) const;
     // KR-97: a type's `comptime` constant and `comptime fn`. Neither is a name a resolver returns — the
     // constant's `Owner__K` is only its C spelling, and would share a key with a method's cName.
     static std::string typeConstKey(const std::string& ownerKey, const std::string& name);       // "const:Owner::name"

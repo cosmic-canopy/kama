@@ -104,7 +104,7 @@ function	main	fn int32 main()
 function	midpoint	fn Point midpoint(a: Point, b: Point)
 ```
 
-### `--type` / `--def` / `--refs` / `--sighelp`
+### `--type` / `--def` / `--refs` / `--impl` / `--sighelp`
 
 ```console
 $ kama query tests/query/shapes.kama --type 6:11
@@ -118,6 +118,18 @@ tests/query/shapes.kama:13:21
 
 $ kama query tests/query/shapes.kama --sighelp 18:26
 sig=Point.at(x: int32, y: int32) -> Point active=1
+```
+
+`--refs` lists the symbol's own uses. On a contract member that is the declaration and every call that reaches
+it through the contract — through a fat pointer or a generic's bound — and not the members implementing it, which
+`--impl` lists (it answers for a contract too: the types implementing it, an enum or a `type adapter` block
+included). Inside a generic, a type parameter and a `comptime` parameter are declarations like any other: `--def`
+on a `T` lands on `<T: Shape>`, `--refs` stays inside that generic, and `--type` reads `type-param T: Shape`.
+
+```console
+$ kama query tests/query/coverage/dispatch.kama --impl 10:43
+tests/query/coverage/dispatch.kama:15:20
+tests/query/coverage/dispatch.kama:20:20
 ```
 
 ### `--diagnostics` — structured, on stdout

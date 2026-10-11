@@ -146,6 +146,7 @@ static void splitFnParams(const std::shared_ptr<FunctionDeclarationNode>& fn,
     bool any = (types && !types->empty()) || (comptimes && !comptimes->empty());
     if (!any) return;
     fn->typeParams = std::make_shared<StringList>();
+    fn->typeParamIds = std::make_shared<IdentifierList>();
     fn->typeBounds = std::make_shared<BoundsList>();
     fn->typePins  = std::make_shared<IdentifierList>();
     fn->comptimeParams = std::make_shared<StringList>();
@@ -153,6 +154,7 @@ static void splitFnParams(const std::shared_ptr<FunctionDeclarationNode>& fn,
     for (const SharedIdentifierList* list : { &types, &comptimes })
         if (*list) for (auto& p : **list) if (p && p->value) {
             fn->typeParams->push_back(p->value);
+            fn->typeParamIds->push_back(p);   // the declaring name, for the query index (KR-134)
             fn->typeBounds->push_back(p->bounds ? p->bounds : std::make_shared<IdentifierList>());
             fn->typePins->push_back(p->pin);   // `<T is This>` — only a contract has an implementer
             fn->constTypes->push_back(p->isComptimeParam ? p->comptimeType : SharedIdentifier());
@@ -2506,6 +2508,7 @@ SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList
     n->attributes = attributes; // `@generate(...)` etc. (null when the un-attributed alternative was used)
     if (head->genericArgs && !head->genericArgs->empty()) {
         n->typeParams   = std::make_shared<StringList>();
+        n->typeParamIds = std::make_shared<IdentifierList>();
         n->typeBounds   = std::make_shared<BoundsList>();
         n->comptimeParams  = std::make_shared<StringList>();
         n->constTypes   = std::make_shared<IdentifierList>();
@@ -2513,6 +2516,7 @@ SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList
         n->typePins     = std::make_shared<IdentifierList>();
         for (auto& a : *head->genericArgs) if (a && a->value) {
             n->typeParams->push_back(a->value);
+            n->typeParamIds->push_back(a);   // the declaring name, for the query index (KR-134)
             n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
             n->typeDefaults->push_back(a->defaultArg);   // null when this param has no `= Default`
             n->typePins->push_back(a->pin);              // null when this param has no `is <T>`
@@ -2541,6 +2545,7 @@ SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList
     n->members        = body ? body->members : SharedClassMemberDeclarationList();
     if (head->genericArgs && !head->genericArgs->empty()) {
         n->typeParams   = std::make_shared<StringList>();
+        n->typeParamIds = std::make_shared<IdentifierList>();
         n->typeBounds   = std::make_shared<BoundsList>();
         n->comptimeParams  = std::make_shared<StringList>();
         n->constTypes   = std::make_shared<IdentifierList>();
@@ -2548,6 +2553,7 @@ SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList
         n->typePins     = std::make_shared<IdentifierList>();
         for (auto& a : *head->genericArgs) if (a && a->value) {
             n->typeParams->push_back(a->value);
+            n->typeParamIds->push_back(a);   // the declaring name, for the query index (KR-134)
             n->typeBounds->push_back(a->bounds ? a->bounds : std::make_shared<IdentifierList>());
             n->typeDefaults->push_back(a->defaultArg);
             n->typePins->push_back(a->pin);   // `<T is This>` — only a contract has an implementer

@@ -214,7 +214,10 @@ std::string             lspHover(const SharedLspIndex& idx, const std::string& p
 // find-references (M3). Results may name OTHER files: the index spans the open file's transitive imports,
 // so each Location carries its own path — map it through pathToUri rather than assuming the open document.
 std::vector<Location>   lspReferences(const SharedLspIndex& idx, const std::string& path,
-                                      int line, int col, bool includeDecl);
+                                      int line, int col, bool includeDecl, bool group = false);
+// go-to-implementation (KR-134): on a contract, the types implementing it; on a contract member or a call through a
+// generic's bound, the members implementing it. Locations may name other files, as references' do.
+std::vector<Location>   lspImplementations(const SharedLspIndex& idx, const std::string& path, int line, int col);
 // Every DECLARATION a rename at the cursor would rewrite: the symbol itself plus its rename group — a
 // contract method and its implementations are one name (M6 B3c). The rename path must check ownership on
 // ALL of them, since a group can straddle the project boundary (an impl here, the contract in std). A

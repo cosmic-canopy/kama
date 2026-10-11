@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-137**
+**Next id: KR-138**
 
 ## The shape
 
@@ -72,7 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-134 | **The query index does not see a type parameter, its bound, or a member called through it** — in `fn int32 f<T: Shape>(T x) { return x.area(); }` the `T`s, `Shape` and `area` are unindexed (`kama query --coverage` reports them `-`/`unresolved`), so an editor cannot go from a bound to its contract or from `x.area()` to the member it reaches. A comptime parameter (`comptime(int32 N)`) is unindexed the same way. Generics are checked as written since `0.9.571`; the index should see them the same way | M | [§10](ROADMAP_DETAIL.md#s10-query-generic-names) |
+| KR-137 | **A generic type with a `comptime` parameter is checked as written only in part** — its as-written probe leaves `N` unbound, so `InlineArray<T>#(N)` never forms in a body nobody instantiates, and a call on its elements (`this.vs[0].area()`) is neither checked nor indexed. A generic function binds a placeholder (`probe`) for the same parameter | S | [§10](ROADMAP_DETAIL.md#s10-comptime-probe) |
 | KR-131 | **A by-value `match` or `foreach` binding copies its value even when nothing writes it** — `case Ok(value: b):` over a `Result<Big, E>` copies the 16 KB `Big` into `b` (and `foreach (Big b in xs)` each element), though the subject is already borrowed. A binding its body never writes can be read in place | S | [§5](ROADMAP_DETAIL.md#s5-match-binding-copy) |
 | KR-123 | **`borrow` names any place for a block** — there is no `ref` local, and `borrow` opens only an argument-less view mint, so an accessor with arguments is repeated at every use. `borrow <place> as L { … }` with the host frozen, as a view window freezes it | M | [§2](ROADMAP_DETAIL.md#s2-borrow-any-place) |
 | KR-124 | **A borrow window that runs code when it closes** — a transaction wants a scope that rolls back unless committed; no stored borrows and no closures leave no way to say it. A `type view` may declare a destructor its window runs on every path out | M | [§2](ROADMAP_DETAIL.md#s2-view-destructor) |

@@ -18,7 +18,7 @@ kama stats <kama.json>                        # what the whole project IS, in nu
 kama query <file> --complete L:C              # candidates + FULL signatures with parameter names
 kama query <file> --type L:C                  # what is this, exactly
 kama query <file> --def L:C                   # where is it declared
-kama query <kama.json> <file> --refs L:C      # every use, across the package
+kama query <kama.json> <file> --refs L:C      # every use, across the package (--impl L:C: what implements it)
 kama query <file> --diagnostics               # analysis diagnostics, structured
 ```
 

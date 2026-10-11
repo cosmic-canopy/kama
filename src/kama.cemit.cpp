@@ -2941,7 +2941,26 @@ void CEmitter::checkBodyType(const SharedIdentifier& t, const char* what, int li
         checkReach(resolveUserNameImpl(*t->value, t->qualifier), *t->value, what, line, refFilePath(),
                    t->qualifier && !t->qualifier->empty());
     forEachTypeArg(t, [&](const SharedIdentifier& a) { checkBodyType(a, what, line); });
-    forEachConstArgName(t, [&](const SharedIdentifier& k) { constArgReaches(k, what, refFilePath()); });
+    forEachConstArgName(t, [&](const SharedIdentifier& k) { constArgReaches(k, what, refFilePath()); recordTypeParamRef(k.get()); });
+    recordTypeParamRef(t.get());
+}
+
+// A generic's own parameter spelled in its body (KR-134). Only the as-written probe walks a body with the generic
+// known, and it runs once per generic whether or not anything instantiates it — so a `T` in a body nobody calls
+// still indexes, and the answer does not depend on how many instances exist.
+void CEmitter::recordTypeParamRef(const IdentifierNode* site)
+{
+    if (_indexGeneric.empty() || !_analysis || !_refUnit || !site || site->synthesized || !site->value) return;
+    if (site->qualifier && !site->qualifier->empty()) return;
+    // The def-sites do not exist yet (buildDefSites runs after the walk), so ask the generic's own parameter list.
+    bool own = false;
+    auto fn = _generics.find(_indexGeneric);
+    if (fn != _generics.end() && fn->second && fn->second->typeParams)
+        for (auto& p : *fn->second->typeParams) if (p && *p == *site->value) own = true;
+    auto ty = _genericTypeParams.find(_indexGeneric);
+    if (ty != _genericTypeParams.end())
+        for (auto& p : ty->second) if (p == *site->value) own = true;
+    if (own) _bodyRefs.push_back(RecordedRef{ _refUnit, site, typeParamKey(_indexGeneric, *site->value), true });
 }
 
 // The TYPE arguments a spelling writes — its `<…>` entries and a qualifier's `::<…>` — never a `#(…)` value,
@@ -5643,6 +5662,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // reaches an uninstantiated generic too), a local at `emitDeclarator`'s shadowing block, and a
         // write at `checkConstWrite`. Each is pinned by a `tests/xfail/constparam_*` fixture.
         if (!v->qualifier || v->qualifier->empty()) {
+            // Indexed whether or not it is bound: the as-written probe of a generic TYPE leaves its comptime
+            // parameters unbound, and the spelling is the parameter either way (KR-134).
+            recordTypeParamRef(v);
             std::string cpv = constParamCValue(nm);
             if (!cpv.empty()) return cpv;
         }
@@ -8938,6 +8960,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         Scope sc; sc.isLoopBoundary = true; sc.switchDepth = _switchDepth;
         _scopes.push_back(sc);
         registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
+        recordTypeParamRef(fe->type.get());                 // ...and its declared type, when it is a `T` (KR-134)
         // The loop scope owns the binding: the type entries below (and `_refParams` for the `ref` form)
         // must not outlive the loop, and popScope puts back whatever `nm` named outside it.
         noteScopedBinding(nm);
@@ -16232,6 +16255,7 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     // declaration's references across every caller's file at the template's own coordinates. A prelude/std
     // template yields nullptr, which correctly disables recording for a body the user cannot edit.
     RefUnitScope refScope(this, unitOfDecl(tmpl));
+    ScopedStr _ig(_indexGeneric, gi.templateKey);   // its own `T`/`N` index as the template's parameters (KR-134)
     // …but a DIAGNOSTIC still belongs to that file even when recording is off, so it reads the file
     // directly rather than through `unitOfDecl`, which answers nothing for a prelude/std template.
     auto dfIt = _genericDeclFile.find(gi.templateKey);
@@ -16689,6 +16713,7 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
                 mi.isConstPlace  = m.isConstPlace;
                 mi.visibility   = Visibility::Public;         // a contract's methods are public
                 mi.fromContract = contract;
+                mi.boundNameId  = m.nameId.get();             // what a call through the bound refers to (KR-134)
                 mi.isAbstract   = true;                       // a promise, not a body — never emit one
                 // An operator reaches the contract's method list under the SAME synthetic name a concrete
                 // class uses (`op_add`), and `nameId` is null only for that arm. Operator dispatch gates
@@ -16864,6 +16889,7 @@ void CEmitter::checkTemplatesAsWritten()
         for (int i = 0; i < DK_Count; ++i) byBefore[i] = _probeDeferBy[i];
         const std::string probeName = key + "__probe";
         ScopedStr _pft(_probeFnTemplate, key);   // a `friend` grant naming this template reaches its body
+        ScopedStr _ig(_indexGeneric, key);       // its own `T`/`N` spelled in the body index as its parameters (KR-134)
         emitFunction(tmpl, &probeName);   // nameOverride => `static` linkage, and no entry-point mangling
 
         // `--probe-templates`: key, file, line, #type-params, errors raised, diagnostics deferred,
@@ -16990,6 +17016,7 @@ void CEmitter::checkTypeTemplatesAsWritten()
                 auto git = _genericTypeInsts.find(_genericTypeInstOrder[i]);
                 if (git == _genericTypeInsts.end()) continue;
                 ++_probeTypesWalked;
+                ScopedStr _ig(_indexGeneric, tmpl);   // its own `T`/`N` in the bodies index as its parameters (KR-134)
                 emitGenericTypeInst(git->second, 2);   // phase 2 = vtables + member BODIES, the rules
                 break;
             }
@@ -17927,6 +17954,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     }
     _scopes.push_back(sc);
     registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
+    recordTypeParamRef(fe->type.get());                 // ...and its declared type, when it is a `T` (KR-134)
     noteScopedBinding(nm);   // the loop scope owns the binding — see the indexed path
     hideShadowedLocal(nm, fe->isRef);
     _localTypes[nm] = elemClass;
@@ -35898,6 +35926,7 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
     // template ClassInfo lives in _genericTypes (never in _classes), and its `.node` is the template decl.
     auto tmplIt = _genericTypes.find(gi.templateKey);
     RefUnitScope refScope(this, tmplIt == _genericTypes.end() ? nullptr : unitOfDecl(tmplIt->second.node));
+    ScopedStr _ig(_indexGeneric, gi.templateKey);   // its own `T`/`N` index as the template's parameters (KR-134)
     // A diagnostic raised in this body belongs to the TEMPLATE's file, not to whichever module happens to
     // instantiate it. `declFile` is recorded at collection for exactly this, and unlike `unitOfDecl` it
     // answers for a prelude/std template too — `Shared<T>` and `Weak<T>` are the ones every program hits.
@@ -36994,6 +37023,12 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
     // the level that actually resolves. Recorded by NODE (mi->node is null for an intrinsic, which drops
     // it) so a generic instance's call collapses onto the template's one declaration.
     recordNodeRef(site, mi->node);
+    // KR-134: through a generic's BOUND, the reference is the contract member — what every language server answers
+    // except clangd, and what a generic checked as written means. Priority, because every instance has already
+    // recorded this spelling as the concrete method it reached.
+    if (!mi->node && mi->boundNameId && owner && owner->isOpaqueParam && _analysis && _refUnit && site
+        && !site->synthesized)
+        _nodeRefs.push_back(RecordedNodeRef{ _refUnit, site, mi->boundNameId, true });
     // ...and the intrinsic half of that same sentence. `string`'s methods are synthesized in
     // registerCollection and have no declaration node, so the record above drops them and `s.length()`
     // indexed as nothing whatever: no hover, no jump, on the most-called methods in the language. They

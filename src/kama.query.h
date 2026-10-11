@@ -28,7 +28,9 @@ enum class SymKind { Class, Value, Resource, Contract, Enum, EnumMember,
                      Local, Param,     // M3.4: function-scoped bindings — indexed, but kept OUT of outlines
                      Constant,         // KR-56: `extern const T NAME;`; KR-97: every `comptime` constant
                      Static,           // KR-97: a module `static` (mutable, so never a `constant`)
-                     ComptimeFn };     // KR-97: a `comptime fn`, module or type scope — it runs only at compile time
+                     ComptimeFn,       // KR-97: a `comptime fn`, module or type scope — it runs only at compile time
+                     TypeParam,        // KR-134: a generic's `T`, scoped to its generic — kept OUT of outlines
+                     ComptimeParam };  // KR-134: a `comptime(int32 N)` parameter, the same way
 const char* symKindName(SymKind k);      // stable lowercase tag ("class", "method", …) for text/JSON output
 
 // A declaration's location + identity. Keyed in `_defSites` by its RESOLVED mangled name (exactly what

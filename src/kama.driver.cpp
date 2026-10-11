@@ -9471,7 +9471,7 @@ void usage(FILE* out = stderr)
         "                   emitted, the unsafe and FFI surfaces, what `@compileFor` leaves out of THIS\n"
         "                   build, per-module lines + exports, dependencies, and the largest declarations\n"
         "  kama query     [<kama.json>] <file> <mode>... [--json]  ask the compiler what it resolved — the agent/editor interface\n"
-        "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --complete L:C\n"
+        "                  (--symbols | --search NAME | --def L:C | --type L:C | --refs L:C | --impl L:C | --complete L:C\n"
         "                   | --sighelp L:C | --diagnostics | --coverage; a leading <kama.json> widens from\n"
         "                   <file>'s imports to the whole package. Coordinates are 1-based LINE, 0-based COLUMN.\n"
         "                   Modes are repeatable and combinable — asked together they are answered in order\n"
@@ -10320,10 +10320,16 @@ std::string lspHover(const SharedLspIndex& idx, const std::string& path, int lin
 }
 
 std::vector<Location> lspReferences(const SharedLspIndex& idx, const std::string& path,
-                                    int line, int col, bool includeDecl)
+                                    int line, int col, bool includeDecl, bool group)
 {
     if (!idx || !idx->idx) return {};
-    return idx->idx->referencesAt(path, line, col, includeDecl);
+    return idx->idx->referencesAt(path, line, col, includeDecl, group);
+}
+
+std::vector<Location> lspImplementations(const SharedLspIndex& idx, const std::string& path, int line, int col)
+{
+    if (!idx || !idx->idx) return {};
+    return idx->idx->implementationsAt(path, line, col);
 }
 
 SrcRange lspPrepareRename(const SharedLspIndex& idx, const std::string& path, int line, int col)
@@ -10572,7 +10578,7 @@ std::vector<std::string> lspImportCandidates(const std::string& fromPath, const 
 // the order they were asked in. `--def 1:1 --type 2:2` silently answered whichever came first in the
 // dispatch chain and dropped the rest. An ordered list makes N questions per analysis representable,
 // and ARGV ORDER is the answer order — the only rule that makes such a command line well-defined.
-enum class QMode { Symbols, Search, Diags, Def, Type, Refs, Coverage, Complete, SigHelp };
+enum class QMode { Symbols, Search, Diags, Def, Type, Refs, Impl, Coverage, Complete, SigHelp };
 struct Question { QMode mode; std::string arg; };
 
 // The flag that spells a mode, and whether it carries a value. `--search ""` is legal (an empty needle
@@ -10586,6 +10592,7 @@ static const char* qFlag(QMode m)
         case QMode::Def:      return "--def";
         case QMode::Type:     return "--type";
         case QMode::Refs:     return "--refs";
+        case QMode::Impl:     return "--impl";
         case QMode::Coverage: return "--coverage";
         case QMode::Complete: return "--complete";
         case QMode::SigHelp:  return "--sighelp";
@@ -10596,7 +10603,7 @@ static const char* qFlag(QMode m)
 // position — so it is the one arg-taking mode with nothing to parse or validate as coordinates.
 static bool qTakesPos(QMode m)
 {
-    return m == QMode::Def || m == QMode::Type || m == QMode::Refs ||
+    return m == QMode::Def || m == QMode::Type || m == QMode::Refs || m == QMode::Impl ||
            m == QMode::Complete || m == QMode::SigHelp;
 }
 static bool qTakesArg(QMode m) { return m == QMode::Search || qTakesPos(m); }
@@ -11073,6 +11080,7 @@ int main(int argc, char** argv)
         else if (a == "--def" && i + 1 < argc)      questions.push_back({QMode::Def,      argv[++i]});
         else if (a == "--type" && i + 1 < argc)     questions.push_back({QMode::Type,     argv[++i]});
         else if (a == "--refs" && i + 1 < argc)     questions.push_back({QMode::Refs,     argv[++i]});
+        else if (a == "--impl" && i + 1 < argc)     questions.push_back({QMode::Impl,     argv[++i]});
         else if (a == "--complete" && i + 1 < argc) questions.push_back({QMode::Complete, argv[++i]});
         else if (a == "--sighelp" && i + 1 < argc)  questions.push_back({QMode::SigHelp,  argv[++i]});
         else if (a == "--search" && i + 1 < argc)   questions.push_back({QMode::Search,   argv[++i]});
@@ -12075,7 +12083,7 @@ int main(int argc, char** argv)
         };
 
         if (questions.empty()) {
-            fprintf(stderr, "kama query: pass --symbols, --search NAME, --def L:C, --type L:C, --refs L:C, "
+            fprintf(stderr, "kama query: pass --symbols, --search NAME, --def L:C, --type L:C, --refs L:C, --impl L:C, "
                             "--complete L:C, --sighelp L:C, --diagnostics, or --coverage\n"
                             "            (L:C is 1-based line, 0-based column; add --project to widen the "
                             "scope to the whole package; any of them may be combined or repeated, and are "
@@ -12225,6 +12233,23 @@ int main(int argc, char** argv)
                     }
                     if (refs.empty()) { printf("no references\n"); return Json::object(); }
                     for (const auto& r : refs)
+                        printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);
+                    return Json::object();
+                }
+                case QMode::Impl: {   // KR-134: go-to-implementation — what implements the contract (member) here
+                    auto impls = idx.implementationsAt(queryUri, l, c);
+                    if (jsonOut) {
+                        Json j = env("impl"), rs = Json::array();
+                        for (const auto& r : impls) {
+                            Json e = jsonPos(r.range.line, r.range.column);
+                            e.set("uri", r.uri);
+                            rs.push(e);
+                        }
+                        j.set("results", rs);
+                        return j;
+                    }
+                    if (impls.empty()) { printf("no implementations\n"); return Json::object(); }
+                    for (const auto& r : impls)
                         printf("%s:%d:%d\n", r.uri.c_str(), r.range.line, r.range.column);
                     return Json::object();
                 }

@@ -446,6 +446,7 @@ public:
     SharedParameterList parameters;
     SharedBlock block;
     SharedStringList typeParams;   // <T, ...> — generic fn; empty for non-generic
+    SharedIdentifierList typeParamIds;   // each param's DECLARING name node, parallel to typeParams (KR-134: the index)
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedIdentifierList typePins; // `<T is This>` identity pin parallel to typeParams; null entry = unpinned
     SharedStringList comptimeParams;  // names of comptime params (`const N: int`); subset of typeParams order
@@ -1006,6 +1007,7 @@ public:
     // Type parameters from `type value Box<T> { … }` — monomorphized per concrete arg;
     // empty for a non-generic type. Set by the grammar action (like typeKind).
     SharedStringList typeParams;
+    SharedIdentifierList typeParamIds;   // each param's DECLARING name node, parallel to typeParams (KR-134: the index)
     SharedBoundsList typeBounds;   // contract bounds parallel to typeParams (empty entry = unbounded)
     SharedStringList comptimeParams;  // names of comptime params (`const N: int`); subset of typeParams order
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)
@@ -1240,6 +1242,7 @@ public:
     // `enum Optional<T> { … }` — type parameters + contract bounds, monomorphized per
     // concrete arg (mirror of ClassDeclarationNode); empty for a non-generic enum.
     SharedStringList typeParams;
+    SharedIdentifierList typeParamIds;   // each param's DECLARING name node, parallel to typeParams (KR-134: the index)
     SharedBoundsList typeBounds;
     SharedStringList comptimeParams;  // names of comptime params (`const N: int`); subset of typeParams order
     SharedIdentifierList constTypes; // each const param's declared integral type, PARALLEL TO typeParams (null entry = a type param)

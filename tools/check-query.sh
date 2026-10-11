@@ -897,6 +897,12 @@ expect --project --refs 15:13 -- "lib.kama:17:36"        # `this.v` inside the g
 expect --project --refs 15:13 -- "lib.kama:19:42"        # and in a second method of the same template
 expect --project --refs 15:13 -- "use.kama:12:7"         # through Box<int32>
 expect --project --refs 15:13 -- "use.kama:17:7"         # through Box<bool> — the SAME symbol
+# KR-134: the template's `T` is one declaration however many instances another unit makes, and every spelling of it
+# in the template — a field's type, a parameter's, a return — refers to it.
+expect --project --type 13:15 -- "type-param T"
+expect --project --refs 13:15 -- "lib.kama:15:11"          # `public T v`
+expect --project --refs 13:15 -- "lib.kama:19:27"          # `replace(T next)`
+expect --project --def 24:3   -- "lib.kama:24:13"          # `fn T firstOr<T>` — the return type is the param
 # ONE def-site however many instantiations exist: exactly one line names the declaration itself.
 n=$("$KAMA" query "$(scope_for "$FIXTURE")" "$FIXTURE" --refs 15:13 2>&1 | grep -c "lib.kama:15:13")
 if [ "$n" = 1 ]; then echo "  ok: two instantiations yield ONE def-site for the field"
@@ -987,18 +993,19 @@ FIXTURE="$ROOT/tests/query/coverage/dispatch.kama"
 if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
 
 echo 'check-query: M6 B3c contract methods'
-# From the CONTRACT's declaration: the contract, both implementations, both direct calls, the fat-pointer
-# call. Renaming any one of them has to move all six or the program stops compiling.
+# Renaming any of the contract method, both implementations, both direct calls and the fat-pointer call has to move
+# all six — that is the GROUP, and rename asks for it (tools/check-lsp.sh pins the edits). Find-references does not
+# (KR-134): it lists a symbol's own USES, and what implements a contract member is go-to-implementation's answer.
 expect --refs 10:43 -- "dispatch.kama:10:43"    # the contract declaration
-expect --refs 10:43 -- "dispatch.kama:15:20"    # Cat's implementation
-expect --refs 10:43 -- "dispatch.kama:20:20"    # Dog's implementation
-expect --refs 10:43 -- "dispatch.kama:34:21"    # c.speak() — a concrete call
-expect --refs 10:43 -- "dispatch.kama:34:33"    # d.speak() — the other concrete call
-expect --refs 10:43 -- "dispatch.kama:38:26"    # s.speak() — through the fat pointer
-# ...and the same set from ONE implementation, which is the direction the rename actually comes from.
-expect --refs 15:20 -- "dispatch.kama:10:43"
-expect --refs 15:20 -- "dispatch.kama:20:20"
-expect --refs 15:20 -- "dispatch.kama:38:26"
+expect --refs 10:43 -- "dispatch.kama:38:26"    # s.speak() — through the fat pointer: a use of the contract member
+reject --refs 10:43 -- "dispatch.kama:15:20"    # Cat's implementation is not a use of it…
+expect --impl 10:43 -- "dispatch.kama:15:20"    # …it is what implements it
+expect --impl 10:43 -- "dispatch.kama:20:20"    # Dog's
+expect --impl 38:26 -- "dispatch.kama:20:20"    # and from the call through the contract
+# From ONE implementation: its own uses — the concrete call that reaches it — not its siblings.
+expect --refs 15:20 -- "dispatch.kama:34:21"    # c.speak()
+reject --refs 15:20 -- "dispatch.kama:20:20"    # Dog's implementation
+reject --impl 15:20 -- "dispatch.kama"          # a concrete method implements nothing below it
 # Go-to-definition does NOT collapse onto the contract: a concrete-typed call lands on THAT type's
 # implementation, and only a fat-pointer call — whose static type IS the contract — lands on the contract.
 # This is the whole reason the group is a separate relation rather than a shared def-site.
@@ -1045,6 +1052,39 @@ for cov in "$ROOT"/tests/query/coverage/*.kama; do
         fail=1
     fi
 done
+
+# KR-134 — a generic's parameters, its bounds, and calls through them. Each `T`/`N` is a declaration and every
+# later spelling refers to it, scoped to its generic; a bound refers to its contract; a call through a bound lands on
+# the contract's member, with an instance (`f`) or with none (`Bag`).
+echo "check-query: generics — type and comptime parameters, bounds, calls through a bound"
+FIXTURE="$ROOT/tests/query/coverage/generics.kama"
+expect --def 8:31  -- "generics.kama:8:11"     # `T` in the signature
+expect --def 8:42  -- "generics.kama:8:11"     # `T` declaring a local in the body
+expect --def 9:62  -- "generics.kama:9:11"     # `foreach (T x in …)`
+expect --def 12:40 -- "generics.kama:10:40"    # a comptime parameter read as a value
+expect --def 8:86  -- "generics.kama:5:47"     # through the bound — though `f<Sq>` reaches `Sq.area`
+expect --def 12:57 -- "generics.kama:5:47"     # through the bound, in a generic nothing instantiates
+expect --type 8:11 -- "type-param T: Shape + Copyable<T>"
+expect --type 10:40 -- "comptime-param int32 N"
+expect --refs 5:14 -- "generics.kama:8:14"     # a bound is a reference to its contract
+expect --refs 8:11 -- "generics.kama:8:73"     # `sizeof(T)`
+reject --refs 8:11 -- "generics.kama:9:31"     # `h`'s `T` is another declaration
+expect --impl 5:47 -- "generics.kama:6:99"     # go-to-implementation: `Sq.area` implements `Shape.area`
+expect --impl 9:85 -- "generics.kama:6:99"     # …and from a call through the bound
+
+# KR-134 — go-to-implementation reaches every kind that can implement a contract: a value, a view, a payload-less
+# enum's method and a `type adapter` block over primitives. Each was indexed nowhere before (the enum's method and the
+# adapter's members had no def-site at all).
+echo "check-query: go-to-implementation — values, views, enums, adapters"
+FIXTURE="$ROOT/tests/contract_for_clause.kama"
+expect --impl 7:14 -- "contract_for_clause.kama:14:11"   # Card (a value)
+expect --impl 7:14 -- "contract_for_clause.kama:22:10"   # Window (a view)
+expect --impl 7:14 -- "contract_for_clause.kama:27:10"   # Shade (an enum)
+expect --impl 7:14 -- "contract_for_clause.kama:32:0"    # the adapter block over int8, int16
+expect --impl 7:67 -- "contract_for_clause.kama:29:20"   # Shade.size
+expect --impl 7:67 -- "contract_for_clause.kama:32:62"   # the adapter's size
+expect --impl 35:42 -- "contract_for_clause.kama:25:20"  # through the bound in `sizeOf<T: Sized>`: Window.size
+expect --def 29:20 -- "contract_for_clause.kama:29:20"   # the enum's method is a declaration now
 
 # ---------------------------------------------------------------------------------------------------
 # MANY QUESTIONS, ONE ANALYSIS.
