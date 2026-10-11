@@ -1,0 +1,11 @@
+// A writable byte view needs every bit pattern of every field to be a valid value (KR-127): a `bool` byte of 2, a
+// surrogate `char` or an out-of-range enum tag is not. Such a type still reads as bytes, with `BytesViewable`.
+import { std::collections::ConstView, std::collections::View };
+type enum Phase : uint8 { Lobby, Play }
+@generate(Blittable)
+type value Flags { public bool live; public uint8 a; public uint16 b; }
+@generate(Blittable)
+type value Glyph { public char c; }
+@generate(Blittable)
+type value Turn { public Phase p; public uint8 a; public uint16 b; }
+fn int32 main() { return 0; }

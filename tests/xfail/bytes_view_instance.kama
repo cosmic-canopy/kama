@@ -1,0 +1,11 @@
+// On a generic type the byte view is conditional, as every derive on an instance is (KR-127): `Pair<uint8, uint32>`
+// has padding, so it has no `bytes()`, and a bound or a `borrow` that wants one says why.
+import { std::collections::ConstView, std::collections::View };
+@generate(BytesViewable)
+type value Pair<T, U> { public T a; public U b; public ctor make(T a, U b) { this.a = a; this.b = b; } }
+fn isize count<T: BytesViewable<ConstView<uint8>>>(const ref T v) { return v.bytes().length(); }
+fn int32 main() {
+    Pair<uint8, uint32> p = Pair.make(a: 1ui8, b: 2ui32);
+    isize n = count(v: p);
+    return 0;
+}

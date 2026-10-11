@@ -305,7 +305,7 @@ type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(
 // cannot name a `std::collections` type this early (see the Args note below): a user's own `type view
 // DmaSpan` has the identical relationship to its owner, and a contract naming `View` would serve exactly
 // one type and leave every other view type unmintable.
-@viewable type contract Viewable<V> for resource, value, view { fn V view(); }
+@viewable type contract Viewable<V> for resource, value, view { const fn V view(); }
 // The writable twin. `view()` hands out the READ-ONLY window (`ConstView<T>` in the stdlib — a `const fn`,
 // so a `const ref` container can open one); `viewMut()` hands out the mutate-through one (`View<T>`).
 // Two contracts rather than two members of one, because a grant is read BY MEMBER NAME (`grantedMint`):
@@ -321,9 +321,17 @@ type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(
 //
 // A separate contract rather than a special case, for the reason `Viewable<V>` gives about `DmaSpan`: a
 // user's own text buffer — a rope, a `Utf8Buf`, an mmap'd file — has the identical relationship to its
-// bytes, and gets `borrow` by implementing this. There is no writable twin on purpose: `string` is
-// immutable, so a mutate-through window over its bytes would be a hole in that.
-@viewable type contract BytesViewable<V> for resource, value, view { fn V bytes(); }
+// bytes, and gets `borrow` by implementing this. A plain `value` gets it from `@generate(BytesViewable)` (KR-127):
+// its in-memory bytes, read-only, proved to be every byte a field's (no padding). `string` has no writable twin on
+// purpose — it is immutable — but a plain value whose every field is a number does: `Blittable`, below. `bytes()` is
+// a `const fn`, as every implementer's is, so a generic can read the bytes of a `const ref T`.
+@viewable type contract BytesViewable<V> for resource, value, view { const fn V bytes(); }
+// The writable twin, for a plain `value`: `@generate(Blittable)` proves that every field is a number — every bit
+// pattern a valid value, which a `bool`, a `char` or an enum is not — and that there is no padding, then gives it
+// `bytesMut()` beside `bytes()`, so data can be received into it in place. `R`/`W` are parameters for the reason
+// `V` is above: the prelude cannot name `std::collections::ConstView`/`View`. It refines `BytesViewable`, so a
+// `Blittable` type is a `BytesViewable` one, and it is `@viewable` because `bytesMut()` is a mint of its own.
+@viewable type contract Blittable<R, W> for resource, value, view implements BytesViewable<R> { fn W bytesMut(); }
 // Serialization capability contracts (the `@generate` protocol). Like the iteration contracts these are
 // language-level bounds, so they live in the prelude: `Serializer` is the pluggable output sink a backend
 // (std::json, …) implements; `Serializable` is what a `@generate(Serializable)` type gets (compiler-synthesized)

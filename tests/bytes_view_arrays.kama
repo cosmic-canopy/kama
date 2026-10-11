@@ -1,0 +1,37 @@
+// The bytes of a run of plain elements (KR-127): an `InlineArray`, or a window (`ConstView<T>`/`View<T>`) over a
+// list, whose element is plain bytes gives `bytes()` — `len * sizeof(T)` bytes of the same buffer, no copy — and over
+// numbers `bytesMut()` too. A byte view of a view lives where the window does. Exit code 42 iff every byte matches.
+import { std::collections::ConstView, std::collections::View, std::collections::DynamicArray };
+
+@generate(BytesViewable)
+type value Rec { public uint16 a; public bool b; public uint8 c; public ctor make(uint16 a) { this.a = a; this.b = true; this.c = 9; } }
+
+// Checked as written though nothing calls it: `ConstView<int64>` appears only in its bound (0.9.575).
+fn isize count<T: Viewable<ConstView<int64>>>(const ref T c) { isize k = 0; borrow c.view() as v { k = v.length(); }; return k; }
+
+fn uint32 sum(ConstView<uint8> b) { uint32 s = 0; for (isize i = 0; i < b.length(); i++) { s = s + cast<uint32>(b[i]); } return s; }
+
+fn int32 main() {
+    int32 ok = 0;
+    InlineArray<uint16>#(3) a = [258ui16; 3];                       // 0x0102: bytes 2, 1 on a little-endian host
+    if (a.bytes().length() == 6 && sum(b: a.bytes()) == 9) { ok = ok + 8; }
+    borrow a.bytesMut() as w { w[0] = 1; };
+    if (a[0] == 257ui16) { ok = ok + 6; }
+
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1); xs.add(item: -1);
+    borrow xs.view() as v {
+        ConstView<uint8> b = v.bytes();                             // a view of the window: no window of its own
+        if (b.length() == 8 && b[0] == 1ui8 && b[4] == 255ui8) { ok = ok + 8; }
+    };
+    borrow xs.viewMut() as v { borrow v.bytesMut() as w { w[0] = 7; }; };
+    if (xs[0] == 7) { ok = ok + 6; }
+
+    DynamicArray<Rec> rs = DynamicArray.empty();
+    rs.add(item: Rec.make(a: 1)); rs.add(item: Rec.make(a: 2));
+    borrow rs.view() as v { if (sum(b: v.bytes()) == 1 + 1 + 9 + 2 + 1 + 9) { ok = ok + 8; } };
+
+    InlineArray<bool>#(2) bs = [true; 2];                           // read-only: a `bool` cannot be written
+    if (sum(b: bs.bytes()) == 2) { ok = ok + 6; }
+    return ok;                                                      // 42
+}

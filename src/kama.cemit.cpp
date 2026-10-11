@@ -6823,6 +6823,9 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 const std::string why = missingViewCause(hostCls, mint);
                 if (!why.empty())
                     unsupported(why.c_str(), bn->line);
+                else if (!whenGateReason(hostCls, mint).empty())   // a derived byte view the instance did not get
+                    unsupported(("`" + hostCls + "` has no `." + mint + "()`" + whenGateReason(hostCls, mint)).c_str(),
+                                bn->line);
                 else
                     unsupported(("`" + hostCls + "` has no nullary `." + mint + "()`, so it cannot open a "
                                  "window — a `borrow` host must be a container that can hand out a view")
@@ -6833,9 +6836,11 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             // window (`viewMut()`, not `const fn`) cannot be opened over a `const` place. Said here because
             // this gate emits the call directly and never passes through the dispatch site's receiver check.
             if (!vmi->isConst && isConstReceiver(recvExpr)) {
+                const bool bytesMint = mint == "bytesMut";   // a byte view's read-only twin is `bytes()` (KR-127)
                 unsupported(("cannot call non-const method `" + mint + "` on a const receiver — a window over "
-                             "a `const` place is the read-only one; open it with `view()` (a `const fn`, "
-                             "yielding a `ConstView<T>`)").c_str(), bn->line);
+                             "a `const` place is the read-only one; open it with `" + (bytesMint ? "bytes" : "view")
+                             + "()` (a `const fn`, yielding a `ConstView<" + (bytesMint ? "uint8" : "T") + ">`)").c_str(),
+                            bn->line);
                 continue;
             }
             if (!grantedMint(_classes[hostCls], mint)) {
@@ -10584,7 +10589,8 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 for (auto& at : *ed->attributes)
                     if (at && at->name && *at->name == "generate") parseGenerateAttr(at, ci, ed->line);
             const bool anyDerive = ci.genSerialize || ci.genDeserialize || ci.genFormat
-                                || ci.genEquatable || ci.genHashable || ci.genOf || ci.genZero;
+                                || ci.genEquatable || ci.genHashable || ci.genOf || ci.genZero
+                                || ci.genBytesViewable;
             if (ed->typeParams && !ed->typeParams->empty()) {
                 // Generic enum (Optional<T>): a monomorphization TEMPLATE, kept OUT of _classes —
                 // each `Optional<Arg>` becomes a specialized ClassInfo at discovery (registerGenericTypeInst).
@@ -10795,7 +10801,17 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
         }
     }
     auto u = it->second.derivedUnmet.find(bound);
-    if (u == it->second.derivedUnmet.end()) return "";
+    if (u == it->second.derivedUnmet.end()) {
+        // A byte view an instance does not get names the instance's own layout, not a field's conformance.
+        if (preludeLeaf(bound) == "BytesViewable" || preludeLeaf(bound) == "Blittable")
+            u = it->second.derivedUnmet.find(preludeLeaf(bound));
+        if (u == it->second.derivedUnmet.end()) return "";
+    }
+    if (preludeLeaf(bound) == "BytesViewable" || preludeLeaf(bound) == "Blittable") {
+        auto of = _genericTypeInstOf.find(cty);
+        return " — `@generate(" + preludeLeaf(bound) + ")` on `" + demangleForDisplay(of != _genericTypeInstOf.end()
+               ? of->second : cty) + "` does not hold for `" + demangleForDisplay(cty) + "`: " + u->second;
+    }
     // Name the TEMPLATE, not the instance: the attribute is written once, on `Box<T>`, and that is the
     // line the author will go to.
     std::string tmpl = cty;
@@ -10814,7 +10830,7 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
 // instance is what registers a conformance.
 void CEmitter::parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int line)
 {
-    static const char* kNames = "Serializable, Deserializable, Formattable, Equatable, Hashable, of, zero";
+    static const char* kNames = "Serializable, Deserializable, Formattable, Equatable, Hashable, BytesViewable, Blittable, of, zero";
     if (!at || !at->name || *at->name != "generate") return;
     if (!at->args || at->args->empty()) {
         unsupported((std::string("`@generate(...)` needs at least one of ") + kNames).c_str(), line);
@@ -10833,6 +10849,9 @@ void CEmitter::parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int l
         // `#[derive(PartialEq, Hash)]`. Registered + validated once the fields are known.
         else if (preludeLeaf(which) == "Equatable") ci.genEquatable = true;
         else if (preludeLeaf(which) == "Hashable")  ci.genHashable = true;
+        // A byte view of a plain `value` (KR-127): `bytes()`, and with `Blittable` (which refines it) `bytesMut()`.
+        else if (preludeLeaf(which) == "BytesViewable") ci.genBytesViewable = true;
+        else if (preludeLeaf(which) == "Blittable") ci.genBytesViewable = ci.genBlittable = true;
         else unsupported((std::string("`@generate(...)` accepts only ") + kNames).c_str(), line);
     }
 }
@@ -11037,6 +11056,27 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
             if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
             mi.returnType = synthId("uint64", IDENTIFIER_UINT64_VAL);
             ci.methods["hash"] = mi;     // `fn uint64 hash()`
+        }
+    }
+    // `@generate(BytesViewable|Blittable)` (KR-127). Only the refusals that need nothing but the declaration
+    // are made here: the members name `std::collections::ConstView`, which may not be collected yet, so they
+    // are registered late (registerByteViews, from registerIntrinsicViews) — or here, for an instance minted
+    // after that pass ran.
+    if (ci.genBytesViewable) {
+        const char* which = ci.genBlittable ? "Blittable" : "BytesViewable";
+        if (ci.isVariant || ci.isScalarEnum()) {
+            unsupported((std::string("`@generate(") + which + ")` is not offered on an `enum`: an enum without a "
+                         "payload is passed by value, so there is no storage for a view to borrow. Hold it in a "
+                         "`value` whose enum declares its integer type (`type enum E : uint8`)").c_str(), line);
+            ci.genBytesViewable = ci.genBlittable = false;
+        } else if (ci.kind != TypeKind::Value) {
+            unsupported((std::string("`@generate(") + which + ")` applies to a plain `value`: a `resource` owns "
+                         "what its fields point at, and a `view` borrows it, so neither one's bytes are its value").c_str(), line);
+            ci.genBytesViewable = ci.genBlittable = false;
+        } else if (ci.isGenericInst && _byteViewPhase == 2) {
+            registerByteViews(ci.name);
+        } else if (ci.isGenericInst && _byteViewPhase == 1) {
+            noteByteViewConformance(ci.name);   // verified at the sweep
         }
     }
 }
@@ -12771,6 +12811,16 @@ SharedIdentifier CEmitter::viewQualifiedNode(const std::string& tmplKey)
 // never imports it does not have one. `dataPtr()` is unaffected and always present.
 void CEmitter::registerIntrinsicViews()
 {
+    // `@generate(BytesViewable|Blittable)` (KR-127), ahead of the early return below: a type that asked for a byte
+    // view in a program with no `ConstView` is told to import one, where an InlineArray's `view()` simply is not
+    // registered. Collected first because registration can mint instances, which grows `_classes`.
+    {
+        std::vector<std::string> want;
+        for (auto& kv : _classes)
+            if (kv.second.genBytesViewable && !kv.second.byteViewsDone) want.push_back(kv.first);
+        for (auto& n : want) registerByteViews(n);
+        _byteViewPhase = 2;
+    }
     const std::string viewTmpl  = viewTemplateKey();
     const std::string constTmpl = constViewTemplateKey();
     if (viewTmpl.empty() || constTmpl.empty()) return;   // one module declares both; neither, or both
@@ -12873,6 +12923,44 @@ void CEmitter::registerIntrinsicViews()
         };
         mint("view",    "Viewable",    constTmpl, /*isConst=*/true);
         mint("viewMut", "ViewableMut", viewTmpl,  /*isConst=*/false);
+        // ...and over plain-bytes elements, their bytes (KR-127): `struct { T v[N]; }` is `N * sizeof(T)` bytes
+        // with no padding when `T` has none, so the array is its elements' bytes. `bytesMut()` over numbers only.
+        if (byteViewElemOK(elem, false)) {
+            const bool writable = byteViewElemOK(elem, true);
+            SharedIdentifier rd = byteViewNode(constTmpl, true), wr = writable ? byteViewNode(viewTmpl, true) : nullptr;
+            ClassInfo& ci = _classes[name];
+            auto put = [&](const char* member, SharedIdentifier ret, bool isConst) {
+                MethodInfo mi; mi.cName = name + "__" + member;
+                mi.returnType = ret; mi.isIntrinsic = true; mi.isConst = isConst;
+                mi.visibility = Visibility::Public;
+                ci.methods[member] = mi;
+            };
+            auto grant = [&](const char* contract, SharedIdentifierList args) {
+                const std::string k = preludeKey(contract);
+                if (!_genericContractParams.count(k)) return;
+                registerGenericContractInst(k, args);
+                std::string n = k;
+                for (auto& a : *args) n += "_" + mangleElem(a);
+                _classes[name].interfaces.push_back(n);
+            };
+            put("bytes", rd, true);
+            auto one = std::make_shared<IdentifierList>(); one->push_back(rd);
+            grant("BytesViewable", one);
+            if (writable) {
+                put("bytesMut", wr, false);
+                auto two = std::make_shared<IdentifierList>(); two->push_back(rd); two->push_back(wr);
+                grant("Blittable", two);
+            }
+            closeUnderRefinement(_classes[name].interfaces);
+        }
+    }
+    // The windows themselves, over plain-bytes elements (registerViewByteViews). Collected first: registering mints
+    // further instances, and one minted from here on registers itself (`_byteViewPhase == 2`).
+    {
+        std::vector<std::string> views;
+        for (auto& kv : _genericTypeInsts)
+            if (kv.second.templateKey == viewTmpl || kv.second.templateKey == constTmpl) views.push_back(kv.first);
+        for (auto& v : views) registerViewByteViews(v);
     }
 }
 
@@ -14217,8 +14305,10 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     // recursing here.
     if (_classes[mangled].genSerialize || _classes[mangled].genDeserialize || _classes[mangled].genFormat
         || _classes[mangled].genEquatable || _classes[mangled].genHashable
-        || _classes[mangled].genOf || _classes[mangled].genZero)
+        || _classes[mangled].genOf || _classes[mangled].genZero || _classes[mangled].genBytesViewable)
         registerDerives(_classes[mangled], synthId(mangled), line);
+    // A window minted after registerIntrinsicViews ran gives its plain-bytes elements their bytes itself (KR-127).
+    if (_byteViewPhase == 2) registerViewByteViews(mangled);
 
     _typeSubst = savedSubst;
     _nsCtx = savedCtx;
@@ -14253,6 +14343,11 @@ void CEmitter::checkWhenParams(const SharedIdentifierList& whenParams, const Sha
 // if the method were never declared, while a gated CONSTRUCTOR in the same position already said why (KR-43).
 std::string CEmitter::whenGateReason(const std::string& inst, const std::string& method)
 {
+    // ...and a derived byte view the instance did not get (KR-127), which is a gate of the same kind.
+    if (method == "bytes" || method == "bytesMut") {
+        const std::string n = derivedUnmetNote(inst, method == "bytes" ? "BytesViewable" : "Blittable");
+        if (!n.empty()) return n;
+    }
     auto gi = _genericTypeInsts.find(inst);
     if (gi == _genericTypeInsts.end()) return "";
     auto tt = _genericTypes.find(gi->second.templateKey);
@@ -14906,6 +15001,23 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
         } else if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
             scanTypeForCollections(fn->returnType);
             if (fn->parameters) for (auto& p : *fn->parameters) if (p) scanTypeForCollections(p->type);
+            // ...and the concrete types a BOUND names (`T: Viewable<ConstView<int64>>`): a generic is checked as
+            // written whether or not anything calls it (0.9.571), and `borrow c.view() as v` there asks whether
+            // `ConstView<int64>` is a view — which it is only once registered. An argument naming the generic's
+            // own parameter (`Comparable<T>`) is skipped: it has no instance until the generic has one.
+            if (fn->typeBounds && fn->typeParams) {
+                std::function<bool(const SharedIdentifier&)> mentionsParam = [&](const SharedIdentifier& t) {
+                    if (!t) return false;
+                    if (t->value && !t->qualifier)
+                        for (auto& tp : *fn->typeParams) if (tp && *tp == *t->value) return true;
+                    if (t->genericArgs) for (auto& a : *t->genericArgs) if (mentionsParam(a)) return true;
+                    return t->genericArg && !t->genericArgs && mentionsParam(t->genericArg);
+                };
+                for (auto& bl : *fn->typeBounds)
+                    if (bl) for (auto& b : *bl)
+                        if (b && b->genericArgs)
+                            for (auto& a : *b->genericArgs) if (a && !mentionsParam(a)) scanTypeForCollections(a);
+            }
             seedParams(fn->parameters);
             scanStmtForCollections(fn->block);
         } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
@@ -16494,6 +16606,27 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
             }
             const std::vector<InterfaceMethod>* ms = contractMethods(contract);
             if (!ms) continue;      // unknown contract — checkBounds owns that diagnostic, not this
+            // A generic contract's instance keeps its template's members, which still spell the contract's own
+            // parameters (`BytesViewable<V>.bytes()` returns `V`), and renders them under its own binding. Bind
+            // the same here, so a member's return type is the instance's: `borrow c.bytes() as v` under
+            // `T: BytesViewable<ConstView<uint8>>` asks whether `ConstView<uint8>` is a view, not whether `V` is.
+            std::map<std::string, SharedIdentifier> cbind;
+            {
+                auto ci_ = _interfaces.find(contract);
+                if (ci_ != _interfaces.end() && ci_->second.isGenericInst) {
+                    const std::vector<std::string>& cps = _genericContractParams[ci_->second.templateKey];
+                    for (size_t k = 0; k < cps.size() && k < ci_->second.typeArgs.size(); ++k)
+                        cbind[cps[k]] = ci_->second.typeArgs[k];
+                }
+            }
+            auto inInst = [&](SharedIdentifier t) {
+                if (cbind.empty() || !t) return t;
+                const std::map<std::string, SharedIdentifier> saved = _typeSubst;
+                _typeSubst = cbind;
+                SharedIdentifier r = deepSubstType(t);
+                _typeSubst = saved;
+                return r;
+            };
             if (unsigned k = implKindsOf(contract, *b->value)) { allowedKinds &= k; sawKinds = true; }
             _classes[names[i]].interfaces.push_back(contract);
             closeUnderRefinement(_classes[names[i]].interfaces);   // `T: Animated` promises `Drawable` too (KR-133)
@@ -16503,7 +16636,7 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
                 if (m.name.empty() || _classes[names[i]].methods.count(m.name)) continue;
                 MethodInfo mi;
                 mi.cName        = names[i] + "__" + m.name;   // never emitted; a probe body is discarded
-                mi.returnType   = m.returnType;
+                mi.returnType   = inInst(m.returnType);
                 mi.params       = paramSigsOf(m.params);
                 mi.isConst      = m.isConst;
                 mi.isStatic     = m.isStatic;
@@ -17091,14 +17224,19 @@ void CEmitter::emitFixedView(const CollectionInfo& info)
 {
     // Both halves (registerIntrinsicViews): `__view` builds the `ConstView<T>` literal — `self->v` decays to
     // `T*` and C narrows it to the struct's `T const*` field — and `__viewMut` the `View<T>` one.
-    for (const char* member : { "view", "viewMut" }) {
+    for (const char* member : { "view", "viewMut", "bytes", "bytesMut" }) {
         auto mi = _classes[info.cName].methods.find(member);
         if (mi == _classes[info.cName].methods.end()) continue;   // no stdlib View -> unregistered
         const std::string vt = cType(mi->second.returnType);
         if (!isViewCType(vt)) continue;                            // registration failed; nothing to emit
-        *_out << "static inline " << vt << " " << info.cName << "__" << member << "(" << info.cName << "* self) {\n"
-              << "    return (" << vt << "){ .k_data = self->kama_v, .k_len = (ptrdiff_t)(" << info.constValue << ") };\n"
-              << "}\n";
+        const std::string m = member;
+        *_out << "static inline " << vt << " " << info.cName << "__" << member << "(" << info.cName << "* self) {\n";
+        if (m == "bytes" || m == "bytesMut")   // KR-127: the elements' bytes, `N * sizeof(T)` of them
+            *_out << "    return (" << vt << "){ .k_data = (" << (m == "bytes" ? "const uint8_t*" : "uint8_t*")
+                  << ")self->kama_v, .k_len = (ptrdiff_t)sizeof(self->kama_v) };\n";
+        else
+            *_out << "    return (" << vt << "){ .k_data = self->kama_v, .k_len = (ptrdiff_t)(" << info.constValue << ") };\n";
+        *_out << "}\n";
     }
 }
 
@@ -20431,6 +20569,385 @@ std::string CEmitter::unsendableReason(const std::string& cls)
     return "`" + cls + "` does not declare `implements Sendable`";
 }
 
+// ---- KR-127: a byte view of a plain `value` ------------------------------------------------------------------
+// `@generate(BytesViewable)` gives a `value` `bytes()`, a `ConstView<uint8>` over its own storage, and
+// `@generate(Blittable)` adds `bytesMut()`, a `View<uint8>`. Two facts make that sound, and both are proved here:
+//   - every byte belongs to a field. Padding holds whatever the memory held before, so two equal values could hash
+//     differently and a send could leak stale bytes;
+//   - (Blittable) every bit pattern of every field is a valid value. A `bool` byte of 2, a surrogate `char` or an
+//     enum tag outside its variants is not, so a writable view is numbers only.
+// kama does not own layout (see ClassInfo::alignN), and this walk does not take it over: it assumes NATURAL
+// alignment — a number aligned to its own size, which no ABI exceeds — so "no padding" here means no padding on any
+// target, conservatively where an ABI aligns less (`{uint32; uint64}` on i386). The C compiler then proves what it
+// actually did, with a `_Static_assert` per field in the body (emitBytesDefinition). `usize`/`isize` are walked at
+// both pointer widths. The view is in host layout, a mirror and not a portable format; kbin is the portable one.
+std::string CEmitter::byteViewFieldLayout(SharedIdentifier type, int ptrBytes, bool writable, int64_t& size,
+                                          int64_t& align)
+{
+    size = 0; align = 1;
+    auto intSize = [](const std::string& pk) -> int64_t {
+        if (pk == "int8"  || pk == "uint8")  return 1;
+        if (pk == "int16" || pk == "uint16") return 2;
+        if (pk == "int32" || pk == "uint32" || pk == "float32") return 4;
+        if (pk == "int64" || pk == "uint64" || pk == "float64") return 8;
+        return 0;
+    };
+    SharedIdentifier t = deepSubstType(type);
+    if (!t) return "it has no type";
+    if (!t->genericArg) {
+        switch (t->builtInVal) {
+            case IDENTIFIER_INT8_VAL:  case IDENTIFIER_UINT8_VAL:                               size = 1; break;
+            case IDENTIFIER_INT16_VAL: case IDENTIFIER_UINT16_VAL:                              size = 2; break;
+            case IDENTIFIER_INT32_VAL: case IDENTIFIER_UINT32_VAL: case IDENTIFIER_FLOAT32_VAL: size = 4; break;
+            case IDENTIFIER_INT64_VAL: case IDENTIFIER_UINT64_VAL: case IDENTIFIER_FLOAT64_VAL: size = 8; break;
+            case IDENTIFIER_ISIZE_VAL: case IDENTIFIER_USIZE_VAL:                               size = ptrBytes; break;
+            case IDENTIFIER_BOOL_VAL:
+                if (writable) return "a `bool` holds only 0 or 1, so bytes written into it can make a value that is neither";
+                size = 1; break;
+            case IDENTIFIER_CHAR_VAL:
+                if (writable) return "a `char` holds only a Unicode scalar value, so bytes written into it can make one that is not";
+                size = 4; break;
+            case IDENTIFIER_CLONG_VAL: case IDENTIFIER_CULONG_VAL: case IDENTIFIER_CCHAR_VAL:
+                return "a C type's size is the C compiler's choice; use a fixed-width number";
+            default: break;
+        }
+        if (size) { align = size; return ""; }
+    }
+    const std::string ct = cType(t);
+    auto en = _enums.find(ct);
+    if (en != _enums.end()) {
+        if (en->second.underlyingCType.empty())
+            return "an enum's size is the C compiler's choice unless it declares one (`type enum "
+                 + demangleForDisplay(ct) + " : uint8`)";
+        if (writable) return "an enum holds only its variants, so bytes written into it can make a tag that names none";
+        size = align = intSize(primKeyOfCType(en->second.underlyingCType));
+        return size ? "" : "its declared type is not a fixed-width integer";
+    }
+    if (!ct.empty() && ct.back() == '*') return "a pointer is an address, which names nothing in another process";
+    auto ci = _classes.find(ct);
+    if (ci == _classes.end()) return "it is not plain data";
+    if (ci->second.isIntrinsicColl && (ci->second.collKind == CollKind::Fixed || ci->second.collKind == CollKind::Simd)) {
+        auto co = _collections.find(ct);
+        if (co == _collections.end()) return "it is not plain data";
+        int64_t es = 0, ea = 1;
+        if (co->second.elem) {   // `InlineArray<T>#(N)`: `struct { T v[N]; }`, laid out as its element
+            const std::string r = byteViewFieldLayout(co->second.elem, ptrBytes, writable, es, ea);
+            if (!r.empty()) return "its element is not plain bytes: " + r;
+        } else {                 // `Simd<T>#(N)`: a vector of a number, aligned to its whole size
+            es = ea = intSize(primKeyOfCType(co->second.elemCType));
+            if (!es) return "its element is not a number";
+        }
+        size = es * co->second.constValue;
+        align = ci->second.collKind == CollKind::Simd ? size : ea;
+        return "";
+    }
+    const ClassInfo& nc = ci->second;
+    if (nc.isVariant) return "an enum with payloads shares one storage among them, and the bytes a variant does not use are padding";
+    if (nc.kind == TypeKind::Value && !nc.isIntrinsicColl && !nc.isExternStruct) {
+        const std::string need = writable ? "Blittable" : "BytesViewable";
+        if (!(writable ? nc.genBlittable : nc.genBytesViewable)) {
+            auto um = nc.derivedUnmet.find(need);
+            if (um != nc.derivedUnmet.end()) return "its own `@generate(" + need + ")` does not hold: " + um->second;
+            return "`" + demangleForDisplay(ct) + "` does not declare `@generate(" + need + ")`";
+        }
+        std::string gap;
+        const std::string r = byteViewLayout(ct, ptrBytes, writable, size, align, &gap);
+        if (!r.empty()) return r;
+        return gap.empty() ? "" : "`" + demangleForDisplay(ct) + "` has " + gap;
+    }
+    return "its bytes are not its value: it owns, borrows or points at memory elsewhere";
+}
+
+std::string CEmitter::byteViewLayout(const std::string& cls, int ptrBytes, bool writable, int64_t& size,
+                                     int64_t& align, std::string* gap)
+{
+    auto it = _classes.find(cls);
+    if (it == _classes.end()) return "it is not a type";
+    ClassInfo& ci = it->second;
+    if (ci.hasVtable) return "it carries a vtable pointer, an address rather than data";
+    if (ci.fields.empty() && !ci.base) return "it has no fields, and C gives it one byte that belongs to none";
+    auto plural = [](int64_t n) { return std::to_string(n) + (n == 1 ? " byte" : " bytes"); };
+    int64_t off = 0, maxA = 1;
+    std::string prev, why;
+    if (ci.base) {   // embedded first (`Base kama_base;`): its own fields, walked the same way
+        int64_t bs = 0, ba = 1;
+        std::string bgap;
+        why = byteViewLayout(ci.base->name, ptrBytes, writable, bs, ba, &bgap);
+        if (!why.empty()) why = "its base `" + demangleForDisplay(ci.base->name) + "`: " + why;
+        else if (!bgap.empty() && gap) *gap = bgap + " in its base `" + demangleForDisplay(ci.base->name) + "`";
+        off = bs; maxA = ci.packed ? 1 : ba; prev = "its base";
+    }
+    const NsCtx savedCtx = _nsCtx;
+    const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    enterClassCtx(ci);
+    for (auto& f : ci.fields) {
+        if (!why.empty()) break;
+        int64_t s = 0, a = 1;
+        const std::string r = byteViewFieldLayout(f.type, ptrBytes, writable, s, a);
+        if (!r.empty()) { why = "field `" + f.name + "` (`" + kamaTypeText(f.type) + "`): " + r; break; }
+        if (ci.packed) a = 1;
+        if (off % a) {
+            const int64_t pad = a - off % a;
+            if (gap && gap->empty()) *gap = plural(pad) + " of padding after `" + prev + "`";
+            off += pad;
+        }
+        off += s;
+        if (a > maxA) maxA = a;
+        prev = f.name;
+    }
+    _nsCtx = savedCtx; _typeSubst = savedSubst;
+    if (!why.empty()) return why;
+    if (ci.alignN > maxA) maxA = ci.alignN;
+    const int64_t total = (off + maxA - 1) / maxA * maxA;
+    if (total != off && gap && gap->empty()) *gap = plural(total - off) + " of padding at the end, after `" + prev + "`";
+    size = total; align = maxA;
+    return "";
+}
+
+// Both pointer widths, so a type is accepted only if it has no padding on any target. "" when the derive holds.
+std::string CEmitter::byteViewVerdict(const std::string& cls, bool writable)
+{
+    std::string why[2], gap[2];
+    for (int i = 0; i < 2; ++i) {
+        int64_t s = 0, a = 1;
+        why[i] = byteViewLayout(cls, i ? 8 : 4, writable, s, a, &gap[i]);
+    }
+    if (!why[1].empty()) return why[1];
+    if (!why[0].empty()) return why[0];
+    const char* fix = ", which a byte view would expose — add a field there, or reorder the fields";
+    if (!gap[1].empty() && gap[1] == gap[0]) return "it has " + gap[1] + fix;
+    if (!gap[1].empty()) return "it has " + gap[1] + " on a 64-bit target" + fix;
+    if (!gap[0].empty()) return "it has " + gap[0] + " on a 32-bit target" + fix;
+    return "";
+}
+
+// The key a bound names: `BytesViewable<ConstView<uint8>>`, or `Blittable<ConstView<uint8>, View<uint8>>` — the
+// template plus each argument's mangle, as registerGenericContractInst spells an instance. "" without the views.
+std::string CEmitter::byteViewInstName(bool writable)
+{
+    const std::string constTmpl = constViewTemplateKey(), viewTmpl = viewTemplateKey();
+    if (constTmpl.empty() || viewTmpl.empty()) return "";
+    auto u8 = synthId("uint8", IDENTIFIER_UINT8_VAL);
+    auto viewOf = [&](const std::string& tmpl) {
+        auto n = viewQualifiedNode(tmpl);
+        n->genericArg = u8;
+        n->genericArgs = std::make_shared<IdentifierList>();
+        n->genericArgs->push_back(u8);
+        return n;
+    };
+    if (!writable) return preludeKey("BytesViewable") + "_" + mangleElem(viewOf(constTmpl));
+    return preludeKey("Blittable") + "_" + mangleElem(viewOf(constTmpl)) + "_" + mangleElem(viewOf(viewTmpl));
+}
+
+// What a bound on a generic TYPE sees, which is judged while collections are collected — before the members exist
+// (registerIntrinsicViews). A plain type is noted at the adapter pre-scan, and refused at the sweep if it fails.
+void CEmitter::noteByteViewConformance(const std::string& cls)
+{
+    auto it = _classes.find(cls);
+    if (it == _classes.end() || !it->second.genBytesViewable) return;
+    const std::string bv = byteViewInstName(false);
+    if (bv.empty()) return;
+    _intrinsicConformances[cls].insert(bv);
+    if (it->second.genBlittable) _intrinsicConformances[cls].insert(byteViewInstName(true));
+}
+
+void CEmitter::registerByteViews(const std::string& cls)
+{
+    auto it = _classes.find(cls);
+    if (it == _classes.end() || !it->second.genBytesViewable || it->second.byteViewsDone) return;
+    const bool blit = it->second.genBlittable;
+    const std::string which = blit ? "Blittable" : "BytesViewable";
+    const std::string disp = demangleForDisplay(cls);
+    std::string why;
+    for (const char* m : { "bytes", "bytesMut" }) {
+        auto mi = it->second.methods.find(m);
+        if (mi != it->second.methods.end() && !mi->second.isSynthBytes)
+            why = "it already has a `" + std::string(m) + "()`, and the derive would give it a second";
+    }
+    if (why.empty()) why = byteViewVerdict(cls, blit);
+    if (why.empty()) { noteByteViewConformance(cls); registerByteViewMembers(cls); return; }
+    ClassInfo& ci = it->second;
+    const bool readOnlyHolds = blit && byteViewVerdict(cls, false).empty();
+    if (ci.isGenericInst && readOnlyHolds) {
+        // An instance gets the strongest level its fields allow, as each derive on an instance is conditional:
+        // `Pair<bool>` from `@generate(Blittable) Pair<T>` still reads as bytes, it just cannot be written.
+        ci.genBlittable = false;
+        ci.derivedUnmet["Blittable"] = why;
+        auto rc = _intrinsicConformances.find(cls);
+        if (rc != _intrinsicConformances.end()) rc->second.erase(byteViewInstName(true));
+        noteByteViewConformance(cls);
+        registerByteViewMembers(cls);
+        return;
+    }
+    if (readOnlyHolds) why += " — `@generate(BytesViewable)` gives `" + disp + "` a read-only view";
+    ci.genBytesViewable = ci.genBlittable = false;
+    auto rc = _intrinsicConformances.find(cls);
+    if (rc != _intrinsicConformances.end()) { rc->second.erase(byteViewInstName(false)); rc->second.erase(byteViewInstName(true)); }
+    if (ci.isGenericInst) {   // conditional, as every derive on an instance: neither level holds
+        ci.derivedUnmet["BytesViewable"] = blit ? byteViewVerdict(cls, false) : why;
+        if (blit) ci.derivedUnmet["Blittable"] = why;
+        return;
+    }
+    ScopedStr _cu(_collectingUnitPath, ci.declFile);
+    unsupported(("`@generate(" + which + ")` on `" + disp + "`: " + why).c_str(), ci.declLine());
+}
+
+// `bytes()` (and for Blittable `bytesMut()`) plus the grants `grantedMint` reads, the way registerIntrinsicViews
+// gives `string` its `bytes()`. The bodies are C (emitBytesDefinition): the view literal IS the mint.
+void CEmitter::registerByteViewMembers(const std::string& cls)
+{
+    const std::string constTmpl = constViewTemplateKey(), viewTmpl = viewTemplateKey();
+    ClassInfo* ci = &_classes[cls];
+    const bool blit = ci->genBlittable;
+    ci->byteViewsDone = true;
+    if (constTmpl.empty() || viewTmpl.empty()) {
+        ScopedStr _cu(_collectingUnitPath, ci->declFile);
+        unsupported(("`@generate(" + std::string(blit ? "Blittable" : "BytesViewable") + ")` gives `"
+                     + demangleForDisplay(cls) + "` a `bytes()` returning a `ConstView<uint8>`, and this program has "
+                     "no `std::collections::ConstView` — add `import { std::collections::ConstView };`").c_str(),
+                    ci->declLine());
+        return;
+    }
+    auto u8 = synthId("uint8", IDENTIFIER_UINT8_VAL);
+    auto viewOf = [&](const std::string& tmpl) {
+        auto args = std::make_shared<IdentifierList>();
+        args->push_back(u8);
+        registerGenericTypeInst(tmpl, args);
+        auto n = viewQualifiedNode(tmpl);   // QUALIFIED, so inference matches a `ConstView<T>` parameter
+        n->genericArg = u8;
+        n->genericArgs = std::make_shared<IdentifierList>();
+        n->genericArgs->push_back(u8);
+        return n;
+    };
+    SharedIdentifier rd = viewOf(constTmpl), wr = blit ? viewOf(viewTmpl) : nullptr;
+    ClassInfo& c = _classes[cls];   // re-look-up: the instantiations above may have grown `_classes`
+    auto member = [&](const char* name, SharedIdentifier ret, bool isConst) {
+        MethodInfo mi; mi.cName = cls + "__" + name;
+        mi.returnType = ret; mi.isSynthBytes = true; mi.isConst = isConst;
+        mi.visibility = Visibility::Public;
+        c.methods[name] = mi;
+    };
+    member("bytes", rd, /*isConst=*/true);
+    auto grant = [&](const char* contract, SharedIdentifierList args) {
+        const std::string k = preludeKey(contract);
+        if (!_genericContractParams.count(k)) return;
+        registerGenericContractInst(k, args);
+        std::string n = k;
+        for (auto& a : *args) n += "_" + mangleElem(a);
+        bool has = false;
+        for (auto& i : c.interfaces) if (i == n) has = true;
+        if (!has) c.interfaces.push_back(n);
+    };
+    auto one = std::make_shared<IdentifierList>(); one->push_back(rd);
+    grant("BytesViewable", one);
+    if (blit) {
+        member("bytesMut", wr, /*isConst=*/false);
+        auto two = std::make_shared<IdentifierList>(); two->push_back(rd); two->push_back(wr);
+        grant("Blittable", two);
+    }
+    closeUnderRefinement(c.interfaces);
+}
+
+// `ConstView<uint8>` or `View<uint8>` as a QUALIFIED node, so inference matches a `ConstView<T>` parameter by name,
+// optionally registering the instance first.
+SharedIdentifier CEmitter::byteViewNode(const std::string& tmpl, bool registerInst)
+{
+    auto u8 = synthId("uint8", IDENTIFIER_UINT8_VAL);
+    if (registerInst) {
+        auto args = std::make_shared<IdentifierList>();
+        args->push_back(u8);
+        registerGenericTypeInst(tmpl, args);
+    }
+    auto n = viewQualifiedNode(tmpl);
+    n->genericArg = u8;
+    n->genericArgs = std::make_shared<IdentifierList>();
+    n->genericArgs->push_back(u8);
+    return n;
+}
+
+bool CEmitter::byteViewElemOK(SharedIdentifier elem, bool writable)
+{
+    int64_t s = 0, a = 1;
+    if (!elem) return false;
+    return byteViewFieldLayout(elem, 4, writable, s, a).empty() && byteViewFieldLayout(elem, 8, writable, s, a).empty();
+}
+
+// `bytes()` (and over plain NUMBERS `bytesMut()`) on a window whose elements are plain bytes (KR-127): a run of
+// them is `len * sizeof(T)` bytes of the same buffer, so a list of numbers — or of `@generate(BytesViewable)`
+// values — reaches anything that takes bytes without a copy: `borrow list.view() as v { conn.write(bytes:
+// v.bytes())?; }`. A view of a view, so it lives where the window does. `ConstView` has no writable half.
+void CEmitter::registerViewByteViews(const std::string& inst)
+{
+    auto gi = _genericTypeInsts.find(inst);
+    auto ci = _classes.find(inst);
+    if (gi == _genericTypeInsts.end() || ci == _classes.end() || ci->second.byteViewsDone) return;
+    const std::string constTmpl = constViewTemplateKey(), viewTmpl = viewTemplateKey();
+    const bool isView = gi->second.templateKey == viewTmpl;
+    if (!isView && gi->second.templateKey != constTmpl) return;
+    ci->second.byteViewsDone = true;
+    if (gi->second.typeArgs.empty() || !byteViewElemOK(gi->second.typeArgs[0], false)) return;
+    const bool writable = isView && byteViewElemOK(gi->second.typeArgs[0], true);
+    SharedIdentifier rd = byteViewNode(constTmpl, true), wr = writable ? byteViewNode(viewTmpl, true) : nullptr;
+    ClassInfo& c = _classes[inst];   // re-look-up: the instantiations above may have grown `_classes`
+    auto member = [&](const char* name, SharedIdentifier ret, bool isConst) {
+        if (c.methods.count(name)) return;
+        MethodInfo mi; mi.cName = inst + "__" + name;
+        mi.returnType = ret; mi.isSynthBytes = true; mi.isConst = isConst;
+        mi.visibility = Visibility::Public;
+        c.methods[name] = mi;
+    };
+    auto grant = [&](const char* contract, SharedIdentifierList args) {
+        const std::string k = preludeKey(contract);
+        if (!_genericContractParams.count(k)) return;
+        registerGenericContractInst(k, args);
+        std::string n = k;
+        for (auto& a : *args) n += "_" + mangleElem(a);
+        for (auto& i : c.interfaces) if (i == n) return;
+        c.interfaces.push_back(n);
+    };
+    member("bytes", rd, true);
+    auto one = std::make_shared<IdentifierList>(); one->push_back(rd);
+    grant("BytesViewable", one);
+    if (writable) {
+        member("bytesMut", wr, false);
+        auto two = std::make_shared<IdentifierList>(); two->push_back(rd); two->push_back(wr);
+        grant("Blittable", two);
+    }
+    closeUnderRefinement(c.interfaces);
+}
+
+// The view over the value's own storage. The asserts are the C compiler's half of the no-padding proof — each
+// field starts where the one before it ends, and the struct ends where its last field does — for the target
+// actually being built; the walk above already refused anything that could fail them on any target.
+void CEmitter::emitBytesDefinition(ClassInfo& ci, const std::string& name)
+{
+    auto mi = ci.methods.find(name);
+    if (mi == ci.methods.end()) return;
+    const std::string vt = cType(mi->second.returnType);
+    const bool mut = name == "bytesMut";
+    const std::string T = ci.name, disp = demangleForDisplay(ci.name);
+    *_out << (_emitStaticClass ? "static inline " : "") << vt << " " << T << "__" << name << "(" << T << "* self)\n{\n";
+    if (ci.isBorrow) {   // a window's bytes: the same buffer, `len` elements of `sizeof(T)` each
+        indent(1); *_out << "return (" << vt << "){ .k_data = (" << (mut ? "uint8_t*" : "const uint8_t*") << ")self->k_data,"
+                         << " .k_len = self->k_len * (ptrdiff_t)sizeof(*self->k_data) };\n";
+        *_out << "}\n\n";
+        return;
+    }
+    std::string end = "0";
+    if (ci.base) end = "sizeof(((" + T + "*)0)->kama_base)";
+    for (auto& f : ci.fields) {
+        const std::string m = kMember(ci, f.name);
+        indent(1); *_out << "_Static_assert(offsetof(" << T << ", " << m << ") == " << end
+                         << ", \"kama: `" << cEscapeStringBody(disp) << "` has padding before field `" << f.name << "`\");\n";
+        end = "offsetof(" + T + ", " + m + ") + sizeof(((" + T + "*)0)->" + m + ")";
+    }
+    indent(1); *_out << "_Static_assert(sizeof(" << T << ") == " << end
+                     << ", \"kama: `" << cEscapeStringBody(disp) << "` has padding at its end\");\n";
+    indent(1); *_out << "return (" << vt << "){ .k_data = (" << (mut ? "uint8_t*" : "const uint8_t*") << ")self,"
+                     << " .k_len = (ptrdiff_t)sizeof(" << T << ") };\n";
+    *_out << "}\n\n";
+}
+
 // M6.2 predicate: is `cls` a deeply-immutable class? (Primitives/enums aren't in `_classes`, so a non-class
 // name — a scalar, `UnsafePtr`, etc. — is not deeply immutable here; that's handled by fieldTypeDeeplyImmutable.)
 bool CEmitter::deeplyImmutable(const std::string& cls) const
@@ -21699,7 +22216,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             // synthesized yet. A tagged enum has already been through this in collectEnums, so only a
             // payload-less one reaches it here — `hasGen` is what brought it.
             if (hasGen && !eci.genSerialize && !eci.genDeserialize && !eci.genFormat
-                && !eci.genEquatable && !eci.genHashable && !eci.genOf && !eci.genZero) {
+                && !eci.genEquatable && !eci.genHashable && !eci.genOf && !eci.genZero && !eci.genBytesViewable) {
                 for (auto& at : *ed->attributes)
                     if (at && at->name && *at->name == "generate") parseGenerateAttr(at, eci, ed->line);
                 registerDerives(eci, ed->identifier, ed->line);
@@ -31707,6 +32224,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isSynthDe)  { *_out << stat << cType(mi.returnType) << " " << ci.name << "__deserialize(kama__Deserializer r);\n"; continue; }   // graph: Shared<T>; by-value: T
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
         if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << selfC << ", kama__Formatter* f);\n"; continue; }   // `@generate(Formattable)`
+        if (mi.isSynthBytes) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__" << kv.first << "(" << selfC << ");\n"; continue; }   // KR-127
         if (mi.isSynthCmp) {   // `@generate(Equatable|Hashable)` — keyed by the method name
             if (kv.first == "equals") *_out << stat << "bool " << ci.name << "__equals(" << selfC << ", " << ci.name << "* other);\n";
             else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << selfC << ");\n";
@@ -32192,7 +32710,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // Every `@generate` body, through the one fork that knows a variant from a class — which is how a
         // GENERIC ENUM instance gets its per-tag bodies, since its instance comes through here like any
         // other (emitGenericTypeInst phase 2).
-        if (mi.isSynthSer || mi.isSynthDe || mi.isSynthBag || mi.isSynthFormat || mi.isSynthCmp) {
+        if (mi.isSynthSer || mi.isSynthDe || mi.isSynthBag || mi.isSynthFormat || mi.isSynthCmp || mi.isSynthBytes) {
             emitSynthBody(ci, kv.first, mi);
             continue;
         }
@@ -33459,6 +33977,7 @@ void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo&
         else                  isEnumType ? emitEnumHashDefinition(ci)   : emitHashDefinition(ci);
         return;
     }
+    if (mi.isSynthBytes) { emitBytesDefinition(ci, name); return; }   // KR-127 — never a variant (registerDerives refuses it)
     emitBagCtorBody(ci, name);   // M6 `@generate(of|zero)` — never a variant (registerDerives refuses it)
 }
 
@@ -38868,6 +39387,18 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 }
             }
         }
+    }
+    // ...and the byte views (KR-127), for the same reason: `Holder<T: BytesViewable<ConstView<uint8>>>` is judged
+    // during collectCollections, while `bytes()` — a derived type's, and `string`'s own — is registered only by
+    // registerIntrinsicViews, once `ConstView` is known. Unverified here; a type the sweep refuses has them erased.
+    {
+        _byteViewPhase = 1;
+        const std::string bv = byteViewInstName(false);
+        if (!bv.empty()) {
+            _intrinsicConformances["string"].insert(bv);
+            _intrinsicConformances["kama_string"].insert(bv);
+        }
+        for (auto& kv : _classes) if (kv.second.genBytesViewable) noteByteViewConformance(kv.first);
     }
     // Every module constant, then every enum member, BEFORE the first reader of a const-generic size below.
     // Both used to run after collectCollections and generic discovery, so a `comptime fn`-derived constant

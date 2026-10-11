@@ -278,6 +278,9 @@ struct MethodInfo {
     // Compiler-synthesized `@generate(Equatable|Hashable)` — memberwise `equals` / field-walked `hash`.
     // `node` is null: emitted via emitEqualsDefinition / emitHashDefinition, keyed on the method name.
     bool                         isSynthCmp = false;
+    // Compiler-synthesized `@generate(BytesViewable|Blittable)` `bytes()`/`bytesMut()` on a plain `value` (KR-127):
+    // a view over the value's own storage. `node` is null: emitted via emitBytesDefinition, keyed on the name.
+    bool                         isSynthBytes = false;
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
@@ -425,6 +428,12 @@ struct ClassInfo {
     // equality stays a deliberate NON-default: you ask for it. Bodies: emitEqualsDefinition/emitHashDefinition.
     bool                              genEquatable = false;
     bool                              genHashable = false;
+    // `@generate(BytesViewable|Blittable)` (KR-127) — a byte view of a plain `value`: `bytes()`, and with Blittable
+    // `bytesMut()`, verified to have no padding and (Blittable) only numbers. Registered late, once
+    // `std::collections::ConstView` is known (registerByteViewMembers); `byteViewsDone` once it has been.
+    bool                              genBytesViewable = false;
+    bool                              genBlittable = false;
+    bool                              byteViewsDone = false;
     // For a generic INSTANCE: the derives its own fields disqualified it from, bound name -> the field
     // that did it ("field `v` (`Handle`)"). `@generate(Equatable)` on `Box<T>` holds for `Box<int32>`
     // and not for `Box<Handle>`, and the difference is not an error at the template — it is the
@@ -2852,6 +2861,23 @@ private:
     void        checkSendableDeclarations();
     bool        isSendableClass(const std::string& cls);
     std::string unsendableReason(const std::string& cls);
+    // KR-127 — a byte view of a plain `value`. The layout walk is natural alignment at one pointer width; "" when
+    // the type is plain bytes, else why not. `gap` names the first padding found ("3 bytes of padding after `live`").
+    std::string byteViewFieldLayout(SharedIdentifier type, int ptrBytes, bool writable, int64_t& size, int64_t& align);
+    std::string byteViewLayout(const std::string& cls, int ptrBytes, bool writable, int64_t& size, int64_t& align,
+                               std::string* gap);
+    std::string byteViewVerdict(const std::string& cls, bool writable);   // both pointer widths; "" when it holds
+    void noteByteViewConformance(const std::string& cls);  // the bound-visible names, ahead of the members
+    void registerByteViewMembers(const std::string& cls);  // `bytes()`/`bytesMut()` + the grants
+    void registerByteViews(const std::string& cls);        // verify, then register (or refuse / record unmet)
+    void emitBytesDefinition(ClassInfo& ci, const std::string& name);
+    bool byteViewElemOK(SharedIdentifier elem, bool writable);   // a run of `elem` is plain bytes, at both widths
+    void registerViewByteViews(const std::string& inst);         // `bytes()`/`bytesMut()` on a `View`/`ConstView`
+    SharedIdentifier byteViewNode(const std::string& tmpl, bool registerInst);   // `ConstView<uint8>`/`View<uint8>`
+    std::string byteViewInstName(bool writable);           // `BytesViewable<ConstView<uint8>>` / `Blittable<…>`'s key
+    // 0 before the adapter pre-scan; 1 once the bound-visible names are noted there (an instance minted now notes
+    // its own); 2 once registerIntrinsicViews has registered the members (an instance minted now registers itself).
+    int _byteViewPhase = 0;
     bool        contractRequiresSendable(const std::string& name) const;   // `type contract C implements Sendable`
     void        enterClassCtx(const ClassInfo& ci);   // resolve as the class's own body does; caller saves/restores _nsCtx/_typeSubst
     // A `type view` may not implement a contract whose `ctor` slot constructs the implementer out of

@@ -1,0 +1,8 @@
+// A byte view is of a plain `value` (KR-127). An enum without a payload is passed by value, so there is no storage to
+// borrow; a `resource` owns what its fields point at. Each is refused at its declaration.
+import { std::collections::ConstView, std::collections::View };
+@generate(BytesViewable)
+type enum Phase : uint8 { Lobby, Play }
+@generate(BytesViewable)
+type resource Conn { uint32 fd; public ctor make() { this.fd = 0; } }
+fn int32 main() { return 0; }

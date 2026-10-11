@@ -1,0 +1,1 @@
+`@generate(BytesViewable)` on `Pair` does not hold for `Pair<uint8, uint32>`: it has 3 bytes of padding after `a`

@@ -1910,40 +1910,6 @@ the same answer. The semantics stay: a value binding is a copy the body may chan
 neither the subject nor the element), so this is a lowering, not a language change. The read-in-place applies
 only where the body provably never writes the binding.
 
-<a id="s5-bytewise"></a>
-
-### A byte view of a plain value (KR-127)
-
-Mirroring a large plain `type value` as bytes (for replication, hashing or an upload) takes `addr(of:)`, a
-`cast<UnsafePtr<uint8>>` and a redeclared `memcpy`. A `ConstView` cannot be minted over arbitrary memory, by
-design: a view is minted by what it views. **Scheduled. Design:** a compiler-verified contract,
-`type value Round implements Bytewise`, holds only when two conditions are met:
-- every field is a number, an `InlineArray` of one, or another `Bytewise` value. No `bool`, `char` or enum,
-  whose invalid bit patterns make a writable view unsound, and no handle;
-- the type has no padding, checked by a `_Static_assert` the C compiler evaluates, as extern layouts already are.
-Then `bytesOf(const ref T) -> ConstView<uint8>` and `bytesOfMut(ref T) -> View<uint8>` are safe std functions.
-Rust's `bytemuck::Pod` derive makes exactly these checks.
-
-**Probed on `0.9.563`; the minting is the open question.** The contract and its verification follow `Sendable`
-piece for piece: a prelude marker, an adapter for the numbers, `InlineArray` by its element, and a verifier
-over fields plus padding. The name follows the `-able` rule for a passive capability, and .NET's term for this
-exact property is `Blittable`. What does not follow is the view: a generic `bytesOf<T>` that mints a
-`ConstView<uint8>` is refused twice.
-- **The mint rule** lets a view be born only in the view itself (`slice`) or in a member of a `@viewable`
-  contract the viewed type implements. A `friend` grant on `over` does not count.
-- **The `friend` grant's corresponding-instance rule** reaches `bytesOf<uint8>` from `ConstView<uint8>` but
-  not `bytesOf<int32>`.
-- The escape check does not look through `cast<…>(…)`, which `addr(of: value)` needs. That one is a fix.
-
-Two ways through, a choice for the maintainer:
-- **(a)** A function the view grants `over` to may mint, with a grant form that does not tie the function's
-  instances to the view's. This widens the mint rule by one named, greppable door.
-- **(b)** `Blittable` is itself `@viewable`: `const fn ConstView<uint8> bytes()` and `fn View<uint8>
-  bytesMut()` members the compiler synthesizes for every verified implementer, so `round.bytes()` mints in a
-  member of the viewed type, inside today's model. A scalar receiver is passed by value, so numbers would not
-  carry `bytes()`, and `T: Blittable` would not admit them; a byte view of a number array would then be
-  `View<T>.bytes()` for a `Blittable` element.
-
 ### The allocation campaign — opened 2026-09-12, COMPLETE 2026-09-20
 
 What it did, in one paragraph: `kama_alloc`/`kama_free` became the only way heap memory is obtained or

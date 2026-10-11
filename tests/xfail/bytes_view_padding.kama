@@ -1,0 +1,6 @@
+// A byte view exposes every byte of a value, so a value with padding has none (KR-127): the padding holds whatever the
+// memory held before, two equal values could hash differently, and a send would leak it. The gap is named.
+import { std::collections::ConstView, std::collections::View };
+@generate(BytesViewable)
+type value Hdr { public uint8 tag; public uint32 len; }
+fn int32 main() { return 0; }

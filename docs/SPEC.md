@@ -494,6 +494,55 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   containers carry is unrelated and was never a substitute — it points into the container too, so reading it
   after a free *is* the use-after-free.
 
+#### The bytes of a plain value — `@generate(BytesViewable)` / `@generate(Blittable)` ✅
+
+A plain `value` that a program sends, hashes or uploads as-is wants its own in-memory bytes, not a serialization
+pass. The type hands them out itself, as `string` hands out `s.bytes()`: <!-- test: bytes_view_value -->
+
+```kama
+import { std::collections::ConstView, std::collections::View };
+type enum Phase : uint8 { Lobby, Play }
+
+@generate(BytesViewable)            // read: numbers, `bool`, `char`, an enum with a declared integer type
+type value Round { public uint32 tick; public Phase phase; public bool live; public uint8 spare0; public uint8 spare1; }
+
+@generate(Blittable)                // read and write: numbers only
+type value Snapshot { public uint32 tick; public InlineArray<float32>#(64) pos; }
+
+fn uint32 sum(ConstView<uint8> b) { uint32 s = 0; for (isize i = 0; i < b.length(); i++) { s = s + cast<uint32>(b[i]); } return s; }
+fn void receive(View<uint8> into) { }
+fn void step(ref Round r, ref Snapshot snap) {
+    uint32 h = sum(b: r.bytes());                        // an argument needs no window
+    borrow snap.bytesMut() as w { receive(into: w); };   // received in place
+}
+```
+
+`bytes()` is a `ConstView<uint8>` over the value's storage and `bytesMut()` a `View<uint8>`; both are minted by the
+type, so the window rule applies as to any view. Two facts make them sound, and the compiler proves both:
+
+- **Every byte belongs to a field.** Padding holds whatever the memory held before, so two equal values could hash
+  differently and a send would leak it. A type with padding is refused, naming the gap — "`Hdr` has 3 bytes of <!-- xfail: bytes_view_padding -->
+  padding after `tag`" — so the fix is a field there or another order. The check assumes natural alignment, so
+  "no padding" holds on every target, at both pointer widths for `usize`/`isize`; the C compiler then asserts
+  each field's offset for the target being built.
+- **`Blittable`: every bit pattern of every field is a valid value.** A `bool` byte of 2, a surrogate `char` or an <!-- xfail: bytes_view_blittable_numbers -->
+  enum tag outside its variants is not, so a writable view takes numbers only; such a type still reads as bytes.
+
+A field qualifies when it is a number, a `bool`/`char`/declared-width enum (read only), an `InlineArray` or <!-- xfail: bytes_view_not_plain -->
+`Simd` of those, or a value that itself declares the view. An enum with payloads, an undeclared-width enum, a
+pointer and anything that owns or borrows memory are refused, naming the field; so are an enum, a `resource` and <!-- xfail: bytes_view_kind -->
+a type that already has a `bytes()`. On a generic type the view is conditional, as every derive is: each <!-- xfail: bytes_view_clash -->
+instance gets the strongest level its fields allow, and a use that wants more says why. <!-- xfail: bytes_view_instance -->
+
+A run of plain elements is plain bytes too: an `InlineArray`, a `ConstView<T>` and a `View<T>` over such a `T` give
+`bytes()` (and over numbers `bytesMut()`), `len * sizeof(T)` bytes of the same buffer — `borrow list.view() as v <!-- test: bytes_view_arrays -->
+{ send(bytes: v.bytes()); }`. `BytesViewable` and `Blittable<R, W>` are the prelude contracts a bound names;
+`Blittable` refines `BytesViewable`.
+
+The bytes are in **host layout** — a mirror, not a portable format; kbin is the portable one — and byte equality
+is equality of representation (`-0.0` and `0.0` differ). **A lone number has no byte view** (a non-goal): a method
+on a number receives a copy, so there is no storage to view; `std::num::byteswap*` and kbin put a number on the wire.
+
 ### Hash maps & sets (`std::collections`) ✅
 
 `Map<K, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>` (open-addressing, linear-probing,
@@ -4243,6 +4292,7 @@ synthesized body, and the nominal conformance is registered either way.
 | `Formattable` | a field-dump `format(ref Formatter)` — `Type { f: v, … }` |
 | `Equatable` | a memberwise `equals(ref This)`; also what gives the type `==` / `!=` |
 | `Hashable` | a field-walked `hash()`, FNV-combined in declaration order |
+| `BytesViewable` / `Blittable` | `bytes()` / `bytesMut()`, a view of the value's own bytes — plain `value` only; see *The bytes of a plain value* |
 | `of` | a memberwise ctor `T.of(f1:, …)` — **bag only** (a transparent `value`) |
 | `zero` | a zero-init ctor `T.zero()` — bag only |
 

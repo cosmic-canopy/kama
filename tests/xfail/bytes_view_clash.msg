@@ -1,0 +1,1 @@
+it already has a `bytes()`, and the derive would give it a second

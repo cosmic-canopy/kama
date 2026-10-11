@@ -1,1 +1,1 @@
-accepts only Serializable, Deserializable, Formattable, Equatable, Hashable, of, zero
+accepts only Serializable, Deserializable, Formattable, Equatable, Hashable, BytesViewable, Blittable, of, zero

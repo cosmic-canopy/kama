@@ -684,6 +684,8 @@ parameters: `type value InlineArray<T> comptime(int32 N)`, written at the use si
 `InlineArray<float32>#(4)`. The same mechanism gives `Simd<float32>#(4)`, explicit SIMD that lowers to
 the target's vector registers. `@generate(...)` derives the routine members — `Formattable`,
 `Equatable`, `Hashable`, the serialization pair — so the compiler writes the code you would otherwise copy.
+`@generate(BytesViewable)` hands out a plain value's own bytes as a view, once the compiler has proved it has
+no padding, and `@generate(Blittable)` a writable one for a value made only of numbers.
 
 ## Reaching C, and being reached from C
 

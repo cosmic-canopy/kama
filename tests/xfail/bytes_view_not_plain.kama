@@ -1,0 +1,16 @@
+// A field is plain bytes only when its bytes are its value and their size is kama's to know (KR-127): an enum without
+// a declared integer type (the C compiler sizes it), an enum with payloads (a variant leaves bytes unused), a pointer
+// (an address), and a value that does not declare the view itself are each refused, naming the field.
+import { std::collections::ConstView, std::collections::View };
+type enum Bare { X, Y }
+type enum Shape { Circle(int32 r), Dot }
+type value Inner { public uint32 a; }
+@generate(BytesViewable)
+type value A { public Bare b; public uint8 p0; public uint16 p1; }
+@generate(BytesViewable)
+type value B { public Shape s; }
+@generate(BytesViewable)
+type value C { public UnsafePtr<uint8> p; }
+@generate(BytesViewable)
+type value D { public Inner i; }
+fn int32 main() { return 0; }

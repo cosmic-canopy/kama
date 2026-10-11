@@ -1,0 +1,1 @@
+an enum's size is the C compiler's choice unless it declares one (`type enum Bare : uint8`)

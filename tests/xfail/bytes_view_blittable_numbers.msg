@@ -1,0 +1,1 @@
+a `bool` holds only 0 or 1, so bytes written into it can make a value that is neither — `@generate(BytesViewable)` gives `Flags` a read-only view

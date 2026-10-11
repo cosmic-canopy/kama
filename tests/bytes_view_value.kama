@@ -1,0 +1,63 @@
+// A plain `value` seen as its own bytes (KR-127). `@generate(BytesViewable)` gives it `bytes()`, a `ConstView<uint8>`
+// over its storage, once the compiler has proved every byte belongs to a field; `@generate(Blittable)` refines it with
+// `bytesMut()`, for a value whose every field is a number, so data can be received into it in place. A generic
+// instance gets the strongest level its own fields allow. Exit code 42 iff every byte is the expected one.
+import { std::collections::ConstView, std::collections::View };
+
+type enum Phase : uint8 { Lobby, Play }
+
+@generate(BytesViewable)                       // a `bool`, a `char` and a declared-width enum read fine
+type value Round {
+    public uint32 tick; public Phase phase; public bool live; public uint8 spare0; public uint8 spare1;
+    public ctor make(uint32 tick) { this.tick = tick; this.phase = Phase::Play; this.live = true; this.spare0 = 0; this.spare1 = 0; }
+}
+@generate(Blittable)                           // numbers only, so it can be written
+type value Pos { public uint16 x; public uint16 y; public ctor make(uint16 x, uint16 y) { this.x = x; this.y = y; } }
+@generate(Blittable)
+type value Snapshot {
+    public uint32 tick; public Pos at; public InlineArray<float32>#(2) vel;
+    public ctor make() { this.tick = 7; this.at = Pos.make(x: 258, y: 3); this.vel = [1.5; 2]; }
+}
+@generate(Blittable)
+type value Pair<T> { public T a; public T b; public ctor make(T a, T b) { this.a = a; this.b = b; } }
+
+// Through a bound, the way a generic sender or hasher takes "anything that is its bytes".
+fn uint32 sum<T: BytesViewable<ConstView<uint8>>>(const ref T v) {
+    uint32 s = 0;
+    borrow v.bytes() as b { for (isize i = 0; i < b.length(); i++) { s = s + cast<uint32>(b[i]); } };
+    return s;
+}
+fn bool same(ConstView<uint8> b, InlineArray<uint8>#(12) want, isize n) {
+    if (b.length() != n) { return false; }
+    for (isize i = 0; i < n; i++) { if (b[i] != want[i]) { return false; } }
+    return true;
+}
+// A bound on a generic TYPE is judged early, before any `bytes()` is registered; `string` failed it until 0.9.575.
+type resource Holder<T: BytesViewable<ConstView<uint8>>> { T v; public ctor make(T v) { this.v = give v; } public fn uint32 total() { return sum(v: this.v); } }
+
+fn int32 main() {
+    int32 ok = 0;
+    Round r = Round.make(tick: 7);
+    InlineArray<uint8>#(12) w1 = [0ui8; 12];
+    w1[0] = 7; w1[4] = 1; w1[5] = 1;                                    // tick, Play, live, spares
+    borrow r.bytes() as b { if (same(b: b, want: w1, n: 8)) { ok = ok + 10; } };
+
+    Snapshot s = Snapshot.make();
+    InlineArray<uint8>#(12) w2 = [0ui8; 12];
+    w2[0] = 7; w2[4] = 2; w2[5] = 1; w2[6] = 3;                        // tick, x = 258, y = 3
+    w2[10] = 192; w2[11] = 63;                                          // 1.5 as an IEEE float32 (first lane)
+    borrow s.bytes() as b { if (b.length() == 16 && b[0] == 7ui8 && b[4] == 2ui8 && b[5] == 1ui8 && b[6] == 3ui8
+                                && b[10] == 192ui8 && b[11] == 63ui8 && b[14] == 192ui8) { ok = ok + 10; } };
+    borrow s.bytesMut() as m { m[0] = 9; m[6] = 4; };                   // received in place
+    if (s.tick == 9 && s.at.y == 4) { ok = ok + 10; }
+
+    Pair<int32> p = Pair.make(a: 1, b: -1);
+    Pair<bool> q = Pair.make(a: true, b: false);                        // read-only: a `bool` cannot be written
+    if (sum(v: p) == 1 + 4 * 255 && sum(v: q) == 1) { ok = ok + 6; }
+    borrow p.bytesMut() as m { m[0] = 2; };
+    if (p.a == 2) { ok = ok + 3; }
+
+    Holder<string> h = Holder.make(v: "ab");
+    if (h.total() == 97 + 98) { ok = ok + 3; }
+    return ok;                                                          // 42
+}
