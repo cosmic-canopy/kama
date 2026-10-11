@@ -2094,6 +2094,40 @@ static inline void kama_de_graph_free(kama_de_graph* g) {
     g->boxes = NULL; g->order = NULL; g->kama_len = 0; g->kama_cap = 0;
 }
 
+// MERGE (KR-125). A merge into a value the program already holds must leave it untouched when the input turns out to
+// be wrong, and a reader cannot rewind — so each new field value is staged here as it is read, and written into place
+// only once the whole input has been read. `kama_merge_end(l, 1)` drops each replaced field's old value and moves the
+// staged one in, in read order (a key given twice ends with the second); `kama_merge_end(l, 0)` drops every staged
+// value and leaves the target as it was. `drop` is the field type's destructor, or NULL for one that owns nothing.
+typedef struct kama_merge_entry { void* dst; void* val; size_t size, align; void (*drop)(void*); } kama_merge_entry;
+typedef struct kama_merge_log { kama_merge_entry* e; size_t kama_len, kama_cap; } kama_merge_log;
+
+static inline void kama_merge_put(kama_merge_log* l, void* dst, const void* v, size_t size, size_t align, void (*drop)(void*)) {
+    if (l->kama_len == l->kama_cap) {
+        size_t nc = l->kama_cap ? l->kama_cap * 2 : 8;
+        kama_merge_entry* ne = (kama_merge_entry*)kama_alloc(nc * sizeof(kama_merge_entry), _Alignof(kama_merge_entry));
+        if (!ne) kama_panic(kama_string_lit("out of memory", 13));
+        for (size_t i = 0; i < l->kama_len; ++i) ne[i] = l->e[i];
+        kama_free(l->e, l->kama_cap * sizeof(kama_merge_entry), _Alignof(kama_merge_entry));
+        l->e = ne; l->kama_cap = nc;
+    }
+    void* b = kama_alloc(size, align);
+    if (!b) kama_panic(kama_string_lit("out of memory", 13));
+    kama_copy(b, v, size);
+    kama_merge_entry en = { dst, b, size, align, drop };
+    l->e[l->kama_len++] = en;
+}
+static inline void kama_merge_end(kama_merge_log* l, int commit) {
+    for (size_t i = 0; i < l->kama_len; ++i) {
+        kama_merge_entry* en = &l->e[i];
+        if (commit) { if (en->drop) en->drop(en->dst); kama_copy(en->dst, en->val, en->size); }
+        else if (en->drop) en->drop(en->val);
+        kama_free(en->val, en->size, en->align);
+    }
+    kama_free(l->e, l->kama_cap * sizeof(kama_merge_entry), _Alignof(kama_merge_entry));
+    l->e = NULL; l->kama_len = 0; l->kama_cap = 0;
+}
+
 // --- Fatal diagnostics with source location (panic / assert) -----------------
 // Compose a message + " (file:line)" into a stack buffer, write it to stderr, and terminate — the same
 // clean-abort discipline as kama_panic (no <stdio.h>, no UB, never returns). On embedded there is no

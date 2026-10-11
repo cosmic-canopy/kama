@@ -1,0 +1,60 @@
+// MERGE on every KBIN back end (KR-125), Buffer and Stream: the named and numbered forms carry only the fields a patch
+// was written with, so the rest of the value keeps what it held; the positional form carries every field, so its merge
+// writes every field — still in place, still all or nothing. Exit code 42 iff every step holds.
+import { std::memory::Owned, std::collections::DynamicArray, std::collections::View, std::io::Reader, std::io::IoError,
+         std::serialization::binary::kbin::serializeKbinNamedBuffer, std::serialization::binary::kbin::mergeKbinNamedBuffer,
+         std::serialization::binary::kbin::mergeKbinNamedStream,
+         std::serialization::binary::kbin::serializeKbinNumberedBuffer, std::serialization::binary::kbin::mergeKbinNumberedBuffer,
+         std::serialization::binary::kbin::mergeKbinNumberedStream,
+         std::serialization::binary::kbin::serializeKbinPositionalBuffer, std::serialization::binary::kbin::mergeKbinPositionalBuffer,
+         std::serialization::binary::kbin::mergeKbinPositionalStream };
+
+@generate(Serializable, Deserializable)
+type value Mix {
+    @field(id: 1) public int32 gain;
+    @field(id: 2) public int32 pan;
+    public ctor of(int32 gain, int32 pan) { this.gain = gain; this.pan = pan; }
+}
+@generate(Serializable)                       // what a patch file holds: `gain` alone, under the same name and id
+type value GainOnly { @field(id: 1) public int32 gain; public ctor of(int32 gain) { this.gain = gain; } }
+
+// A `Reader` over bytes, for the stream twins.
+type resource BytesReader implements Reader {
+    DynamicArray<uint8> b; isize pos;
+    public ctor make(DynamicArray<uint8> b) { this.b = give b; this.pos = 0; }
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        isize k = 0;
+        while (k < into.length() && this.pos < this.b.length()) { into[k] = this.b[this.pos]; k = k + 1; this.pos = this.pos + 1; }
+        return Result::Ok(value: k);
+    }
+}
+
+fn DynamicArray<uint8> bytes(Result<DynamicArray<uint8>, Owned<Error>> r) {
+    return match (give r) { case Ok(value: b): { := give b; } case Err(error: e): { := DynamicArray.empty(); } };
+}
+fn bool ok(Result<Unit, Owned<Error>> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
+
+fn int32 main() {
+    int32 score = 0;
+    Mix m = Mix.of(gain: 1, pan: -5);
+    if (ok(r: mergeKbinNamedBuffer(src: bytes(r: serializeKbinNamedBuffer(v: GainOnly.of(gain: 7))), into: m))
+        && m.gain == 7 && m.pan == -5) { score = score + 7; }
+    if (ok(r: mergeKbinNumberedBuffer(src: bytes(r: serializeKbinNumberedBuffer(v: GainOnly.of(gain: 8))), into: m))
+        && m.gain == 8 && m.pan == -5) { score = score + 7; }
+    if (ok(r: mergeKbinPositionalBuffer(src: bytes(r: serializeKbinPositionalBuffer(v: Mix.of(gain: 2, pan: 3))), into: m))
+        && m.gain == 2 && m.pan == 3) { score = score + 7; }
+
+    if (ok(r: mergeKbinNamedStream(from: BytesReader.make(b: bytes(r: serializeKbinNamedBuffer(v: GainOnly.of(gain: 11)))), into: m))
+        && m.gain == 11 && m.pan == 3) { score = score + 5; }
+    if (ok(r: mergeKbinNumberedStream(from: BytesReader.make(b: bytes(r: serializeKbinNumberedBuffer(v: GainOnly.of(gain: 12)))), into: m))
+        && m.gain == 12 && m.pan == 3) { score = score + 5; }
+    if (ok(r: mergeKbinPositionalStream(from: BytesReader.make(b: bytes(r: serializeKbinPositionalBuffer(v: Mix.of(gain: 4, pan: 6)))), into: m))
+        && m.gain == 4 && m.pan == 6) { score = score + 5; }
+
+    // A record cut short: the first field arrives, the second does not — and neither is written.
+    DynamicArray<uint8> full = bytes(r: serializeKbinPositionalBuffer(v: Mix.of(gain: 9, pan: 9)));
+    DynamicArray<uint8> cut = DynamicArray.empty();
+    for (isize i = 0; i + 1 < full.length(); i++) { cut.add(item: full[i]); }
+    if (!ok(r: mergeKbinPositionalBuffer(src: give cut, into: m)) && m.gain == 4 && m.pan == 6) { score = score + 6; }
+    return score;                                                        // 42
+}

@@ -2241,7 +2241,7 @@ void CEmitter::addMembers(const std::string& clsKey, bool wantStatic, const Quer
             // Operators are not spellable as members; the synthesized serde/format bodies have no source
             // form a user would call. `of`/`zero` (isSynthBag) and the intrinsic collection ops ARE
             // user-callable and are exactly what a `.` on a collection should offer.
-            if (m.isOperator || m.isSynthSer || m.isSynthDe || m.isSynthFormat) continue;
+            if (m.isOperator || m.isSynthSer || m.isSynthDe || m.isSynthFormat || m.isSynthMerge) continue;
             if (kv.first.rfind("__", 0) == 0) continue;
             bool isStaticish = m.isStatic || m.isCtor;
             if (isStaticish != wantStatic) continue;

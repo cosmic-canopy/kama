@@ -1,0 +1,1 @@
+reads itself with a hand-written `deserialize`, so there is no field walk to merge

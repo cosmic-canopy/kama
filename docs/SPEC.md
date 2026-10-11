@@ -6471,7 +6471,8 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   going to a wire form. The format is in the NAME because kama has no module-qualified call — a module
   path is written only in an `import`, so it never reaches the call site and the name must carry
   everything. `…Buffer` works on a value already in memory; `…Stream` works on a `Reader`/`Writer` (a file, a
-  socket). Every back end offers all four, so the read and write sides are symmetric.
+  socket). Every back end offers all four, so the read and write sides are symmetric, and a merge pair beside them
+  (below).
 
   | back end | addressing | buffer | stream | what it is for |
   |---|---|---|---|---|
@@ -6479,6 +6480,40 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   | `binary` — **KBIN** | named | `serializeKbinNamedBuffer` / `deserializeKbinNamedBuffer` | `serializeKbinNamedStream` / `deserializeKbinNamedStream` | self-describing save/load: order-independent, unknown fields skip |
   | `binary` — **KNUM** | numbered | `serializeKbinNumberedBuffer` / `deserializeKbinNumberedBuffer` | `serializeKbinNumberedStream` / `deserializeKbinNumberedStream` | schema evolution: protobuf-shaped keys, so unknown ids skip and reordering survives |
   | `binary` — **POS** | positional | `serializeKbinPositionalBuffer` / `deserializeKbinPositionalBuffer` | `serializeKbinPositionalStream` / `deserializeKbinPositionalStream` | smallest: only values on the wire, shape agreed in advance |
+
+  **Merge — into a value the program already holds.** Each back end also offers `merge…Buffer(src:, into:)` and
+  `merge…Stream(from:, into:)` (`mergeJsonBuffer`, `mergeKbinNamedBuffer`, …), for data that changes some settings on
+  top of what the program has — a layered config file, a live reload, a remote change of one setting. A full read
+  builds a NEW value, so every field the data leaves out takes its declared default; a merge writes only what the
+  data carries: <!-- test: ser_merge_json -->
+
+  ```kama
+  import { std::memory::Owned, std::serialization::text::json::mergeJsonBuffer };
+  @generate(Deserializable)
+  type value Mix {
+      @field(default) public float32 gain = 1.0; @field(default) public float32 pan = 0.0;
+      public ctor of(float32 gain, float32 pan) { this.gain = gain; this.pan = pan; }
+  }
+  @generate(Deserializable)
+  type value Settings { @field(default) public int32 voices = 8; @field(default) public Mix mix = Mix.of(gain: 0.8, pan: -0.5); }
+  fn void reload(ref Settings s, string file) {          // voices 12, gain 0.8, pan -0.5 before
+      Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give file, into: s);   // {"mix":{"gain":0.25}}
+  }                                                      // voices 12, gain 0.25, pan -0.5 after
+  ```
+
+  - **A field whose type is a derived record merges** into what the field holds, recursively — through an `Owned`
+    too. **Every other field the data names is replaced whole**: a number, a `string`, an enum, an `Optional`
+    (`null` is `None`), a list, a `Map` (a map is an array of key/value pairs on the wire). A key the data leaves
+    out is untouched, and an unknown key is skipped, as in a full read. No field is required.
+  - **Atomic.** If the data is wrong anywhere, the value is left as it was, and the error still names where: <!-- test: ser_merge_json -->
+    `{"voices":99,"mix":{"pan":"left"}}` is ``type mismatch at `mix.pan` `` and `voices` keeps what it held. Each
+    new value is staged as it is read and written into place once the whole input has been.
+  - `@generate(Deserializable)` on a `value` or `resource` writes it, as the member `mergeFrom(r)` of the prelude
+    contract `MergeDeserializable<T>`, which refines `Deserializable<T>` and is what the entry points bound. An enum
+    is replaced whole, and a type with a hand-written `deserialize` has no field walk to merge; each is refused at <!-- xfail: ser_merge_not_record -->
+    the call, saying so. A graph is not merged into either: a node's wire id is assigned per write, so a node on <!-- xfail: ser_merge_graph -->
+    the wire names nothing the program holds. KBIN's positional form carries every field, so its merge writes <!-- test: ser_merge_kbin -->
+    every field — in place, all or nothing.
 
   A `…Stream` encoder CONSUMES its sink (kama refuses a move out of a field, so it cannot hand it back); to
   keep writing to the same sink, construct the serializer yourself and call `encodeValue` on it. A

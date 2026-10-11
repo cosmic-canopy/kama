@@ -1,0 +1,21 @@
+// A merge is a derived record's field walk (KR-125), so what has none is refused at the call, saying why: a type that
+// reads itself with a hand-written `deserialize`, an enum (a choice between tags, replaced whole), and a type that
+// does not `@generate(Deserializable)` at all.
+import { std::memory::Owned, std::serialization::text::json::mergeJsonBuffer };
+type value Celsius implements Deserializable<This> {
+    float64 v;
+    public ctor make() { this.v = 0.0; }
+    public ctor Result<Celsius, Owned<Error>> deserialize(Deserializer r) { Celsius c = Celsius.make(); c.v = r.readF64(); return Result::Ok(value: c); }
+}
+@generate(Deserializable)
+type enum Mode { Quiet, Loud }
+type value Plain { public int32 a; public ctor make() { this.a = 1; } }
+fn int32 main() {
+    Celsius c = Celsius.make();
+    Result<Unit, Owned<Error>> r1 = mergeJsonBuffer(src: "1.5", into: c);
+    Mode m = Mode::Quiet;
+    Result<Unit, Owned<Error>> r2 = mergeJsonBuffer(src: "\"Loud\"", into: m);
+    Plain p = Plain.make();
+    Result<Unit, Owned<Error>> r3 = mergeJsonBuffer(src: "{}", into: p);
+    return 0;
+}

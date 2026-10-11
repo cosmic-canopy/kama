@@ -1,0 +1,90 @@
+// MERGE a document into a value the program already holds (KR-125): `mergeJsonBuffer(src:, into:)` writes only what
+// the document carries. A field whose type is a derived record merges — through an `Owned` too — and any other field
+// the document names is replaced whole: a number, a string, an enum, an `Optional`, a list, a map. Atomic: a document
+// that is wrong anywhere leaves the value as it was, and the error still names where (`mix.pan`). An unknown key is
+// skipped. The san leg proves no string is leaked on either path. Exit code 42 iff every step holds.
+import { std::memory::Owned, std::collections::DynamicArray, std::collections::Map, std::io::SliceReader,
+         std::serialization::text::json::mergeJsonBuffer, std::serialization::text::json::mergeJsonStream };
+
+@generate(Deserializable)
+type value Mix {
+    @field(default) public float32 gain = 1.0;
+    @field(default) public float32 pan  = 0.0;
+    public ctor of(float32 gain, float32 pan) { this.gain = gain; this.pan = pan; }
+}
+@generate(Deserializable)
+type enum Mode { Quiet, Loud }
+@generate(Deserializable)
+type resource Server {
+    @field string host;
+    @field int32 port;
+    public ctor make(string host, int32 port) { this.host = give host; this.port = port; }
+    public const fn string hostName() { return copy this.host; }
+    public const fn int32 portNumber() { return this.port; }
+}
+@generate(Deserializable)
+type resource Settings {
+    @field int32 voices;
+    @field Mix mix;
+    @field Mode mode;
+    @field Optional<int32> limit;
+    @field DynamicArray<int32> tags;
+    @field Map<string, int32> caps;
+    @field Owned<Server> primary;
+    @field string name;
+    public ctor make() {
+        this.voices = 8; this.mix = Mix.of(gain: 0.8, pan: -0.5); this.mode = Mode::Quiet; this.limit = Optional::None;
+        this.tags = DynamicArray.empty(); this.tags.add(item: 1); this.tags.add(item: 2);
+        this.caps = Map.empty(); this.caps.put(key: "a", value: 1);
+        Owned<Server> srv = new Server.make(host: "a", port: 1);
+        this.primary = give srv;
+        this.name = "start";
+    }
+    public fn void setVoices(int32 v) { this.voices = v; }
+    public const fn int32 voiceCount() { return this.voices; }
+    public const fn float32 gain() { return this.mix.gain; }
+    public const fn float32 pan() { return this.mix.pan; }
+    public const fn bool loud() { return match (this.mode) { case Loud: true; case Quiet: false; }; }
+    public const fn int32 limitOr(int32 d) { return match (this.limit) { case Some(value: v): v; case None: d; }; }
+    public const fn isize tagCount() { return this.tags.length(); }
+    public const fn int32 firstTag() { return this.tags[0]; }
+    public const fn bool hasCap(string k) { return this.caps.contains(key: k); }
+    public const fn string host() { return this.primary.hostName(); }
+    public const fn int32 port() { return this.primary.portNumber(); }
+    public const fn string label() { return copy this.name; }
+}
+@generate(Deserializable)
+type value Pair<T> { @field public T a; @field public T b; public ctor make(T a, T b) { this.a = a; this.b = b; } }
+
+fn bool ok(Result<Unit, Owned<Error>> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
+fn string why(Result<Unit, Owned<Error>> r) { return match (r) { case Ok(value: u): ""; case Err(error: e): e.message(); }; }
+
+fn int32 main() {
+    int32 score = 0;
+    Settings s = Settings.make();
+    s.setVoices(v: 12);                                                  // changed at run time
+
+    if (ok(r: mergeJsonBuffer(src: "{\"mix\":{\"gain\":0.25}}", into: s))
+        && s.voiceCount() == 12 && s.gain() == 0.25 && s.pan() == -0.5) { score = score + 5; }   // a record merges
+    if (ok(r: mergeJsonBuffer(src: "{\"limit\":3}", into: s)) && s.limitOr(d: 0) == 3
+        && ok(r: mergeJsonBuffer(src: "{\"limit\":null}", into: s)) && s.limitOr(d: 0) == 0) { score = score + 4; }
+    if (ok(r: mergeJsonBuffer(src: "{\"tags\":[9]}", into: s)) && s.tagCount() == 1 && s.firstTag() == 9) { score = score + 4; }
+    if (ok(r: mergeJsonBuffer(src: "{\"caps\":[{\"key\":\"b\",\"value\":2}]}", into: s))
+        && s.hasCap(k: "b") && !s.hasCap(k: "a")) { score = score + 4; }                    // a map is replaced
+    if (ok(r: mergeJsonBuffer(src: "{\"mode\":\"Loud\"}", into: s)) && s.loud()) { score = score + 3; }
+    if (ok(r: mergeJsonBuffer(src: "{\"primary\":{\"port\":8080}}", into: s))
+        && s.host() == "a" && s.port() == 8080) { score = score + 5; }                       // through an `Owned`
+    if (ok(r: mergeJsonBuffer(src: "{\"nope\":1,\"voices\":4}", into: s)) && s.voiceCount() == 4) { score = score + 3; }
+    if (ok(r: mergeJsonBuffer(src: "{\"name\":\"x\"}", into: s)) && s.label() == "x") { score = score + 2; }
+
+    // All or nothing: `voices` and `name` come first in the document, and are not written.
+    Result<Unit, Owned<Error>> bad = mergeJsonBuffer(src: "{\"voices\":99,\"name\":\"y\",\"mix\":{\"pan\":\"left\"}}", into: s);
+    if (why(r: bad) == "type mismatch at `mix.pan`" && s.voiceCount() == 4 && s.label() == "x" && s.pan() == -0.5) { score = score + 6; }
+    if (!ok(r: mergeJsonBuffer(src: "{\"voices\":", into: s)) && s.voiceCount() == 4) { score = score + 2; }
+
+    if (ok(r: mergeJsonStream(from: SliceReader.make(src: "{\"voices\":7}"), into: s)) && s.voiceCount() == 7) { score = score + 2; }
+
+    Pair<int32> p = Pair.make(a: 1, b: 2);
+    if (ok(r: mergeJsonBuffer(src: "{\"b\":5}", into: p)) && p.a == 1 && p.b == 5) { score = score + 2; }
+    return score;                                                        // 42
+}

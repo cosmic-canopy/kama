@@ -281,6 +281,9 @@ struct MethodInfo {
     // Compiler-synthesized `@generate(BytesViewable|Blittable)` `bytes()`/`bytesMut()` on a plain `value` (KR-127):
     // a view over the value's own storage. `node` is null: emitted via emitBytesDefinition, keyed on the name.
     bool                         isSynthBytes = false;
+    // Compiler-synthesized `mergeFrom` (KR-125), written by `@generate(Deserializable)` on a record: an in-place merge
+    // of the data into `this`, atomic through a commit log. `node` is null: emitted via emitMergeDefinition.
+    bool                         isSynthMerge = false;
     // `fn … when [P1: B1, …]` — the gated type-params + required contracts (index-aligned, AND). Empty = unconditional.
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
@@ -2871,6 +2874,10 @@ private:
     void registerByteViewMembers(const std::string& cls);  // `bytes()`/`bytesMut()` + the grants
     void registerByteViews(const std::string& cls);        // verify, then register (or refuse / record unmet)
     void emitBytesDefinition(ClassInfo& ci, const std::string& name);
+    // KR-125 — merge the data into a value the program holds.
+    void emitMergeDefinition(ClassInfo& ci);
+    void emitMergeFieldRead(SharedIdentifier ty, const std::string& dst, int depth, const std::string& resultCType);
+    bool mergesInPlace(const std::string& cls);   // a derived record: its merge joins the caller's commit log
     bool byteViewElemOK(SharedIdentifier elem, bool writable);   // a run of `elem` is plain bytes, at both widths
     void registerViewByteViews(const std::string& inst);         // `bytes()`/`bytesMut()` on a `View`/`ConstView`
     SharedIdentifier byteViewNode(const std::string& tmpl, bool registerInst);   // `ConstView<uint8>`/`View<uint8>`

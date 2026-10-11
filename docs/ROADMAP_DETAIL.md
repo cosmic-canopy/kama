@@ -1510,17 +1510,26 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
-<a id="s4-deserialize-into"></a>
+<a id="s4-string-map-object"></a>
 
-### Deserialize into an existing value (KR-125)
+### A string-keyed `Map` as a JSON object, merged per key (KR-136)
 
-`@field(default)` keeps a field's declared value when the data omits it. A nested object that IS present is
-rebuilt from its own type's defaults rather than the holder's value. With `@field(default) S s = S.of(a: 2.0,
-b: 2.0);`, reading `{"s":{"a":5}}` gives `s.b == 1.0`, `S`'s default. That agrees with SPEC and with serde, but a
-live-tuning reload wants a patch. **Scheduled.** Layering configuration over defaults is common, and the derive
-has no other way to express it. **Design:** Go's `json.Unmarshal` into an existing value. `deserializeJsonInto(text:,
-into: ref T)`, with the named and numbered binary twins, writes only the fields present and recurses into nested
-objects. Positional has every field, so there a patch is a full read. The derived member is `deserializeInto`.
+Filed 2026-10-10, when merge shipped (`mergeJsonBuffer` and its twins, `0.9.576`). A `Map<K, V>` is written as an array of
+`{"key":…,"value":…}` pairs, because a generic `K` cannot be a JSON object key. A `Map<string, V>` could be one, and
+that is how a config file, an HTTP API and every other JSON producer writes a map: `"limits":{"cpu":2,"mem":512}`.
+kama cannot read that document into a `Map<string, int32>` today, and a merge replaces a map whole, because on the
+wire a map is an array and the merge rule replaces anything that is not a derived record. **Scheduled.** To decide
+before code:
+- **The wire form.** `Map<string, V>` as an object on the JSON back end only, or on KBIN named too; and whether the
+  pair-array form is still READ, so data already written keeps loading. Writing the object form is a data break for
+  any reader older than the change.
+- **Merge per key.** A key the data names merges into the existing entry when `V` is a derived record and replaces
+  it otherwise; a key it leaves out is kept; `null` removes the entry (RFC 7396, Helm). A generic `Map` cannot pick
+  merge-or-replace for its `V` without in-body type branching, which kama does not have, so the per-key step is an
+  arm of the compiler's merge walk, as `Owned` is: it then joins the same commit log, and the merge stays atomic.
+  A hand-written `mergeFrom` today is used only where a type is merged into directly; as a field of a derived
+  record it is replaced, because its writes cannot join the caller's log. This arm is where that would change.
+- `SortedMap<string, V>` the same way.
 
 <a id="s4-strict-decoding"></a>
 

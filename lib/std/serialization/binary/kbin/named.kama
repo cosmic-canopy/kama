@@ -37,7 +37,8 @@ import {
 // `std::io::Writer` sink the type owns (`BinaryWriter<W: Writer>` used "Writer" for two unrelated
 // things in one declaration).
 export { KbinNamedSerializer, KbinNamedDeserializer,
-         serializeKbinNamedBuffer, serializeKbinNamedStream, deserializeKbinNamedBuffer, deserializeKbinNamedStream };
+         serializeKbinNamedBuffer, serializeKbinNamedStream, deserializeKbinNamedBuffer, deserializeKbinNamedStream,
+         mergeKbinNamedBuffer, mergeKbinNamedStream };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
@@ -281,6 +282,23 @@ fn Result<T, Owned<Error>> deserializeKbinNamedStream<T: Deserializable<T>>(Read
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes());
     return T.deserialize(r: r);
+}
+
+// MERGE KBIN bytes into a value the program already holds (KR-125) — the `Named` twin of `mergeJsonBuffer`: a field
+// whose type is a derived record merges, any other field the data carries is replaced whole, and on an `Err` `into` is
+// untouched.
+fn Result<Unit, Owned<Error>> mergeKbinNamedBuffer<T: MergeDeserializable<T>>(DynamicArray<uint8> src, ref T into) {
+    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give src);
+    return into.mergeFrom(r: r);
+}
+
+// The streaming twin of `mergeKbinNamedBuffer`: drains the reader, as `deserializeKbinNamedStream` does, then merges.
+fn Result<Unit, Owned<Error>> mergeKbinNamedStream<T: MergeDeserializable<T>>(Reader from, ref T into) {
+    StringWriter sw = StringWriter.make();
+    Result<isize, IoError> pr = pump(from: from, to: sw);
+    match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes());
+    return into.mergeFrom(r: r);
 }
 
 // Stream a value straight into an owned `W: Writer` sink — a file, socket or buffered writer — without

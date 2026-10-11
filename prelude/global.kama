@@ -526,6 +526,16 @@ type contract Deserializer for resource {
 type contract Deserializable<T is This> for value, resource, enum, intrinsic {
     ctor Result<T, std::memory::Owned<Error>> deserialize(Deserializer r);
 }
+// MERGE the data into a value the program already holds (KR-125) — a layered config file, a live reload, a remote
+// change of one setting. `deserialize` builds a NEW value, so a field the data leaves out takes its declared default;
+// `mergeFrom` writes only what the data carries: a field whose type is a derived record merges, recursively, and any
+// other field the data names is replaced whole. Atomic: if the data is wrong anywhere, `this` is left as it was.
+// `@generate(Deserializable)` on a `value` or `resource` writes it, so no type declares this by hand to get it; it
+// refines `Deserializable` so a generic merging a `T` may also build one. A separate contract rather than a second
+// member of `Deserializable`, because a contract carries no default body and every hand-written reader would owe one.
+type contract MergeDeserializable<T is This> for value, resource implements Deserializable<T> {
+    fn Result<Unit, std::memory::Owned<Error>> mergeFrom(Deserializer r);
+}
 // Primitive Serializable/Deserializable conformances (pure-kama, like the Hashable/Equatable ones above) — so
 // EVERY type is a uniform serialization participant and a collection's generic element write
 // (`this[i].serialize(w)`) / read (`T.deserialize(r)`) composes for a scalar element with no compiler

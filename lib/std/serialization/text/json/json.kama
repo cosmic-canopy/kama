@@ -27,7 +27,8 @@ import {
 };
 
 export { JsonSerializer, JsonDeserializer,
-         serializeJsonBuffer, serializeJsonStream, deserializeJsonBuffer, deserializeJsonStream };
+         serializeJsonBuffer, serializeJsonStream, deserializeJsonBuffer, deserializeJsonStream,
+         mergeJsonBuffer, mergeJsonStream };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
@@ -572,6 +573,27 @@ fn Result<T, Owned<Error>> deserializeJsonStream<T: Deserializable<T>>(Reader fr
     };
     JsonDeserializer r = JsonDeserializer.make(src: give src);
     return T.deserialize(r: r);
+}
+
+// MERGE a JSON document into a value the program already holds (KR-125): a layered config file, a live reload, a
+// remote change of one setting. Only what the document carries is written — `{"mix":{"gain":0.25}}` changes `gain`
+// and nothing else, where `deserializeJsonBuffer` would build a new value and reset every field the document leaves
+// out. A field whose type is a derived record merges; any other field the document names is replaced whole (a list,
+// a map, an `Optional`, an enum). Atomic: on an `Err` — a type mismatch, a broken document — `into` is untouched.
+fn Result<Unit, Owned<Error>> mergeJsonBuffer<T: MergeDeserializable<T>>(string src, ref T into) {
+    JsonDeserializer r = JsonDeserializer.make(src: give src);
+    return into.mergeFrom(r: r);
+}
+
+// The streaming twin of `mergeJsonBuffer`: drains the reader, as `deserializeJsonStream` does, then merges.
+fn Result<Unit, Owned<Error>> mergeJsonStream<T: MergeDeserializable<T>>(Reader from, ref T into) {
+    Result<string, IoError> rr = readAll(r: from);
+    string src = match (give rr) {
+        case Ok(value: s):  { := give s; }
+        case Err(error: e): { return Result::Err(error: e); }
+    };
+    JsonDeserializer r = JsonDeserializer.make(src: give src);
+    return into.mergeFrom(r: r);
 }
 
 // Stream a value straight into an owned `W: Writer` sink — a file, socket or buffered writer — without

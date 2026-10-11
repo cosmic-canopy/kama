@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-136**
+**Next id: KR-137**
 
 ## The shape
 
@@ -76,7 +76,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-131 | **A by-value `match` or `foreach` binding copies its value even when nothing writes it** — `case Ok(value: b):` over a `Result<Big, E>` copies the 16 KB `Big` into `b` (and `foreach (Big b in xs)` each element), though the subject is already borrowed. A binding its body never writes can be read in place | S | [§5](ROADMAP_DETAIL.md#s5-match-binding-copy) |
 | KR-123 | **`borrow` names any place for a block** — there is no `ref` local, and `borrow` opens only an argument-less view mint, so an accessor with arguments is repeated at every use. `borrow <place> as L { … }` with the host frozen, as a view window freezes it | M | [§2](ROADMAP_DETAIL.md#s2-borrow-any-place) |
 | KR-124 | **A borrow window that runs code when it closes** — a transaction wants a scope that rolls back unless committed; no stored borrows and no closures leave no way to say it. A `type view` may declare a destructor its window runs on every path out | M | [§2](ROADMAP_DETAIL.md#s2-view-destructor) |
-| KR-125 | **Deserialize into an existing value** — a nested object present in the data is rebuilt from its own type's defaults, so a partial tuning file resets fields it never named. A patch read: only the fields present are written, recursively | M | [§4](ROADMAP_DETAIL.md#s4-deserialize-into) |
+| KR-136 | **A `Map<string, V>` written as a JSON object, merged per key** — kama writes every `Map` as an array of `{"key","value"}` pairs, so a config file's `"limits":{"cpu":2}` does not read into a `Map<string, int32>`, and a merge (`mergeJsonBuffer`) replaces a map whole. A string-keyed map as an object, merged per key, `null` removing an entry | M | [§4](ROADMAP_DETAIL.md#s4-string-map-object) |
 | KR-126 | **Strict decoding: unknown fields refused at the read site** — a misspelt key in a config file does nothing and says nothing. The read decides, not the type, and the error names the key | S | [§4](ROADMAP_DETAIL.md#s4-strict-decoding) |
 | KR-101 | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |

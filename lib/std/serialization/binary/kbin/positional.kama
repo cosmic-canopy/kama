@@ -47,7 +47,8 @@ import {
 // used "Writer" for two unrelated things in one declaration). The older `JsonSerializer`/`BinaryWriter` and the
 // module folder names are due the same treatment in a later pass — see the ROADMAP row.
 export { KbinPositionalSerializer, KbinPositionalDeserializer, serializeKbinPositionalBuffer,
-         serializeKbinPositionalStream, deserializeKbinPositionalBuffer, deserializeKbinPositionalStream };
+         serializeKbinPositionalStream, deserializeKbinPositionalBuffer, deserializeKbinPositionalStream,
+         mergeKbinPositionalBuffer, mergeKbinPositionalStream };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it.
@@ -320,6 +321,24 @@ fn Result<T, Owned<Error>> deserializeKbinPositionalStream<T: Deserializable<T>>
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give sw.takeBytes());
     return T.deserialize(r: r);
+}
+
+// MERGE KBIN bytes into a value the program already holds (KR-125) — the `Positional` twin of `mergeJsonBuffer`: a field
+// whose type is a derived record merges, any other field the data carries is replaced whole, and on an `Err` `into` is
+// untouched. A positional record carries every
+// field, so here every field the type has is written — still in place, still all or nothing.
+fn Result<Unit, Owned<Error>> mergeKbinPositionalBuffer<T: MergeDeserializable<T>>(DynamicArray<uint8> src, ref T into) {
+    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give src);
+    return into.mergeFrom(r: r);
+}
+
+// The streaming twin of `mergeKbinPositionalBuffer`: drains the reader, as `deserializeKbinPositionalStream` does, then merges.
+fn Result<Unit, Owned<Error>> mergeKbinPositionalStream<T: MergeDeserializable<T>>(Reader from, ref T into) {
+    StringWriter sw = StringWriter.make();
+    Result<isize, IoError> pr = pump(from: from, to: sw);
+    match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give sw.takeBytes());
+    return into.mergeFrom(r: r);
 }
 
 // Stream a value straight into an owned `W: Writer` sink — a file, socket or buffered writer — without

@@ -1,0 +1,10 @@
+// A graph is not merged into (KR-125): a node's wire id is assigned per write, first come first served, so a node on
+// the wire names nothing the program holds. The refusal lands on the call, naming the graph and the whole-graph read.
+import { std::memory::Shared, std::memory::Owned, std::serialization::text::json::mergeJsonBuffer };
+@generate(Serializable, Deserializable)
+type resource Node { @field int32 v; @field Optional<Shared<Node>> next; public ctor make() { this.v = 1; this.next = Optional::None; } }
+fn int32 main() {
+    Node n = Node.make();
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: "{\"v\":2}", into: n);
+    return 0;
+}

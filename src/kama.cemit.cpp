@@ -10800,6 +10800,25 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
                    "field. A pointer-free type is read by value, with no handle";
         }
     }
+    // A merge (KR-125) is written by `@generate(Deserializable)` on a record, so a type without one says which half is
+    // missing — rather than naming a derive, `MergeDeserializable`, that nobody writes.
+    if (preludeLeaf(bound) == "MergeDeserializable") {
+        const ClassInfo& c = it->second;
+        const std::string d = demangleForDisplay(cty);
+        if (c.isVariant || c.isScalarEnum())
+            return " — `" + d + "` is an enum, a choice between tags, so a document replaces it whole rather than merging "
+                   "into it: read a new one with `deserialize…` and assign it";
+        auto de = c.methods.find("deserialize");
+        if (de != c.methods.end() && !de->second.isSynthDe)
+            return " — `" + d + "` reads itself with a hand-written `deserialize`, so there is no field walk to merge: read a "
+                   "new one with `deserialize…` and assign it, or implement `MergeDeserializable` by hand";
+        auto du = c.derivedUnmet.find("MergeDeserializable");
+        if (du != c.derivedUnmet.end())
+            return " — `@generate(Deserializable)` holds for an instance whose every field conforms, and " + du->second
+                   + " does not implement `Deserializable`";
+        if (!c.genDeserialize)
+            return " — a merge is written by `@generate(Deserializable)` on a `value` or `resource`, which `" + d + "` does not declare";
+    }
     auto u = it->second.derivedUnmet.find(bound);
     if (u == it->second.derivedUnmet.end()) {
         // A byte view an instance does not get names the instance's own layout, not a field's conformance.
@@ -10905,6 +10924,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
         drop(ci.genFormat,      "Formattable");
         drop(ci.genSerialize,   "Serializable");
         drop(ci.genDeserialize, "Deserializable");
+        if (ci.derivedUnmet.count("Deserializable")) ci.derivedUnmet["MergeDeserializable"] = ci.derivedUnmet["Deserializable"];
     }
     // Register the nominal conformance whenever `@generate` opts in — INDEPENDENT of whether the
     // body is synthesized. A hand-written `serialize`/`deserialize` (e.g. a user `ctor deserialize`)
@@ -10946,6 +10966,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
     }
     if (ci.genDeserialize) {
         addItf(synthConformanceName("Deserializable", ci.name));
+        const bool handDe = ci.methods.count("deserialize") != 0;   // a custom wire form has no field walk to merge
         if (!ci.methods.count("deserialize")) {
             MethodInfo mi; mi.cName = ci.name + "__deserialize"; mi.visibility = Visibility::Public;
             // P4: the synth deserialize is a FALLIBLE ctor `Result<This, Owned<Error>>` — reading crosses
@@ -10957,6 +10978,20 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
             ParamSig r; r.name = "r"; r.byRef = false; r.className = preludeName("Deserializer"); mi.params.push_back(r);
             ci.methods["deserialize"] = mi;   // `ctor Result<This, Owned<Error>> deserialize(Deserializer r)`
             ci.ctors["deserialize"] = CtorInfo{ nullptr, mi.params, Visibility::Public, true, mi.returnType };
+        }
+        // MERGE (KR-125): a record's field walk, run against a value the program holds. Not on an enum, whose data
+        // is a choice between tags and so is replaced whole, and not over a hand-written `deserialize`, whose wire
+        // form is its own. A graph node loses it again in computeGraphNodeTypes. A hand-written `mergeFrom` wins.
+        if (!handDe && !ci.isVariant && !ci.isScalarEnum()) {
+            addItf(synthConformanceName("MergeDeserializable", ci.name));
+            if (!ci.methods.count("mergeFrom")) {
+                MethodInfo mi; mi.cName = ci.name + "__mergeFrom"; mi.visibility = Visibility::Public;
+                mi.isSynthMerge = true;
+                mi.returnType = resultUnitOwnedErrorTypeNode();
+                scanTypeForCollections(mi.returnType);
+                ParamSig r; r.name = "r"; r.byRef = false; r.className = preludeName("Deserializer"); mi.params.push_back(r);
+                ci.methods["mergeFrom"] = mi;   // `fn Result<Unit, Owned<Error>> mergeFrom(Deserializer r)`
+            }
         }
     }
     // Nothing graph-specific is registered here. A graph node keeps exactly the pair declared above —
@@ -14343,6 +14378,15 @@ void CEmitter::checkWhenParams(const SharedIdentifierList& whenParams, const Sha
 // if the method were never declared, while a gated CONSTRUCTOR in the same position already said why (KR-43).
 std::string CEmitter::whenGateReason(const std::string& inst, const std::string& method)
 {
+    // A graph node is not merged into (KR-125): its derive's `mergeFrom` was taken away once the type proved a node,
+    // after the bound on the merge was judged — so the refusal lands here, at the call inside the entry point.
+    if (method == "mergeFrom") {
+        auto c = _classes.find(inst);
+        if (c != _classes.end() && c->second.isGraphNode)
+            return " — `" + demangleForDisplay(inst) + "` reaches a `Shared`/`Weak` field, so it is a graph, and a graph is "
+                   "not merged into: its wire ids are assigned per write, so a node on the wire names nothing the program "
+                   "holds. Read the whole graph instead, as `Shared<" + demangleForDisplay(inst) + ">`";
+    }
     // ...and a derived byte view the instance did not get (KR-127), which is a gate of the same kind.
     if (method == "bytes" || method == "bytesMut") {
         const std::string n = derivedUnmetNote(inst, method == "bytes" ? "BytesViewable" : "Blittable");
@@ -14365,7 +14409,7 @@ std::string CEmitter::whenGateReason(const std::string& inst, const std::string&
             if (params[i] != tm.whenParams[c]) continue;
             // whenConditionsHold treats a serde gate as unmet in a program that serializes nothing — say that,
             // rather than blame an argument that may well be Serializable.
-            if (!_usesSerde && (preludeLeaf(tm.whenBounds[c]) == "Serializable" || preludeLeaf(tm.whenBounds[c]) == "Deserializable")) {
+            if (!_usesSerde && (preludeLeaf(tm.whenBounds[c]) == "Serializable" || preludeLeaf(tm.whenBounds[c]) == "Deserializable" || preludeLeaf(tm.whenBounds[c]) == "MergeDeserializable")) {
                 why = ", and this program uses no serialization, so a `" + tm.whenBounds[c] + "` gate is off";
                 break;
             }
@@ -22901,7 +22945,7 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
         // the program uses no serde — so none of that machinery is emitted, and it references no primitive
         // serde impl (which is likewise gated off). A program that truly serializes has a Serializer backend
         // or a `@generate` type, which sets `_usesSerde` (see collectProgram) and restores the normal check.
-        if (!_usesSerde && (preludeLeaf(whenBounds[c]) == "Serializable" || preludeLeaf(whenBounds[c]) == "Deserializable")) return false;
+        if (!_usesSerde && (preludeLeaf(whenBounds[c]) == "Serializable" || preludeLeaf(whenBounds[c]) == "Deserializable" || preludeLeaf(whenBounds[c]) == "MergeDeserializable")) return false;
         bool held = false;
         for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
             if (params[i] == whenParams[c]) {
@@ -32225,6 +32269,11 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         if (mi.isSynthBag) { *_out << stat << bagCtorSig(ci, kv.first) << ";\n"; continue; }   // M6: `V V__of(…)` / `V V__zero(void)`
         if (mi.isSynthFormat) { *_out << stat << "void " << ci.name << "__format(" << selfC << ", kama__Formatter* f);\n"; continue; }   // `@generate(Formattable)`
         if (mi.isSynthBytes) { *_out << stat << cType(mi.returnType) << " " << ci.name << "__" << kv.first << "(" << selfC << ");\n"; continue; }   // KR-127
+        if (mi.isSynthMerge) {   // KR-125: the entry, and the step a containing record's merge calls into its own log
+            *_out << stat << cType(mi.returnType) << " " << ci.name << "__mergeFrom(" << selfC << ", kama__Deserializer r);\n";
+            *_out << stat << cType(mi.returnType) << " " << ci.name << "____mergeStep(" << selfC << ", kama__Deserializer r, kama_merge_log* kama_log);\n";
+            continue;
+        }
         if (mi.isSynthCmp) {   // `@generate(Equatable|Hashable)` — keyed by the method name
             if (kv.first == "equals") *_out << stat << "bool " << ci.name << "__equals(" << selfC << ", " << ci.name << "* other);\n";
             else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << selfC << ");\n";
@@ -32710,7 +32759,8 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // Every `@generate` body, through the one fork that knows a variant from a class — which is how a
         // GENERIC ENUM instance gets its per-tag bodies, since its instance comes through here like any
         // other (emitGenericTypeInst phase 2).
-        if (mi.isSynthSer || mi.isSynthDe || mi.isSynthBag || mi.isSynthFormat || mi.isSynthCmp || mi.isSynthBytes) {
+        if (mi.isSynthSer || mi.isSynthDe || mi.isSynthBag || mi.isSynthFormat || mi.isSynthCmp || mi.isSynthBytes
+            || mi.isSynthMerge) {
             emitSynthBody(ci, kv.first, mi);
             continue;
         }
@@ -33621,6 +33671,90 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
+// MERGE (KR-125) — `mergeFrom`, the field walk of emitDeserializeDefinition run against `*self` rather than a fresh
+// value. A field whose type is a derived record merges into the field (emitMergeFieldRead); any other field the data
+// names is read whole and replaces it. Nothing is written until the whole input has been read: every new value goes
+// to a commit log (`kama_merge_log`, kama_runtime.h), which `mergeFrom` applies when the read succeeded and drops when
+// it failed — so a typo in a reload file leaves the program as it was. The log is a parameter of `____mergeStep`, so
+// a record's merge of a nested record lands in the SAME log: one commit, all or nothing. No field is required — the
+// data names what changes — and an unknown key is skipped, as in a full read.
+bool CEmitter::mergesInPlace(const std::string& cls)
+{
+    auto c = _classes.find(cls);
+    if (c == _classes.end()) return false;
+    auto m = c->second.methods.find("mergeFrom");
+    return m != c->second.methods.end() && m->second.isSynthMerge;
+}
+
+void CEmitter::emitMergeFieldRead(SharedIdentifier ty, const std::string& dst, int depth, const std::string& resultCType)
+{
+    ty = deepSubstType(ty);
+    // A derived record merges in place — through an `Owned` too, whose pointee is written inline on the wire.
+    SharedIdentifier rec = ty;
+    std::string place = "&(" + dst + ")";
+    if (SharedIdentifier p = ownedPointeeOf(ty)) { rec = deepSubstType(p); place = derefFnName(cType(ty), /*wantMut=*/true) + "(&(" + dst + "))"; }
+    const std::string rc = cType(rec);
+    if (mergesInPlace(rc)) {
+        const std::string t = "kama_mr" + std::to_string(_tempCounter++);
+        const std::string err = t + ".kama_u.k_Err.k_error";
+        indent(depth); *_out << resultCType << " " << t << " = " << rc << "____mergeStep(" << place << ", r, kama_log);\n";
+        indent(depth); *_out << "if (" << t << ".kama_tag == " << resultCType << "_Err) { kama__FieldKey__dtor(&kama_key); "
+                             << "return (" << resultCType << "){ .kama_tag = " << resultCType << "_Err, .kama_u.k_Err = { .k_error = "
+                             << (_serdeStep.empty() ? err : deErrorInField(err, _serdeStep)) << " } }; }\n";
+        return;
+    }
+    // Anything else is replaced: read a whole new value into a temporary, then stage it.
+    const std::string fc = cType(ty);
+    const std::string v = "kama_mv" + std::to_string(_tempCounter++);
+    indent(depth); *_out << fc << " " << v << ";\n";
+    emitDeFieldRead(ty, v, depth, resultCType, "kama__FieldKey__dtor(&kama_key); ");
+    auto dc = _classes.find(fc);
+    const bool destr = dc != _classes.end() && dc->second.destructible;
+    indent(depth); *_out << "kama_merge_put(kama_log, &(" << dst << "), &" << v << ", sizeof(" << fc << "), _Alignof(" << fc
+                         << "), " << (destr ? "(void (*)(void*))&" + fc + "__dtor" : std::string("NULL")) << ");\n";
+}
+
+void CEmitter::emitMergeDefinition(ClassInfo& ci)
+{
+    const std::string resC = cType(ci.methods["mergeFrom"].returnType);
+    const std::string stat = _emitStaticClass ? "static inline " : "";
+    const std::vector<const FieldInfo*> rf = serWireFields(ci, /*forWrite=*/false);
+    auto wire = [](const FieldInfo& f) { return f.serName.empty() ? f.name : f.serName; };
+    *_out << stat << resC << " " << ci.name << "____mergeStep(" << ci.name << "* self, kama__Deserializer r, kama_merge_log* kama_log)\n{\n";
+    if (!rf.empty()) { indent(1); *_out << "int32_t kama_at = -1;\n"; }   // where a failure was, as in a full read
+    indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << serWireFields(ci, /*forWrite=*/true).size() << ");\n";
+    indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
+    if (!rf.empty()) { indent(2); *_out << "kama_at = -1;\n"; }
+    emitFieldKeySlot(ci, rf, 2);
+    indent(2); *_out << "switch (__slot) {\n";
+    for (size_t i = 0; i < rf.size(); ++i) {
+        indent(3); *_out << "case " << i << ": {\n";
+        indent(4); *_out << "kama_at = " << i << ";\n";
+        { ScopedStr _sf(_serdeField, rf[i]->name), _st(_serdeStep, wire(*rf[i]));
+          emitMergeFieldRead(rf[i]->type, "self->" + kMember(ci, rf[i]->name), 4, resC); }
+        indent(4); *_out << "break;\n";
+        indent(3); *_out << "}\n";
+    }
+    indent(3); *_out << "default: r.kama_vtbl->k_skipValue(r.kama_obj); break;\n";
+    indent(2); *_out << "}\n";
+    indent(2); *_out << "kama__FieldKey__dtor(&kama_key);\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
+    std::vector<std::pair<std::string, std::string>> atNames;
+    for (size_t i = 0; i < rf.size(); ++i) atNames.push_back({ "kama_at == " + std::to_string(i), wire(*rf[i]) });
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj))\n";
+    indent(2); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = "
+                     << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", serPathChoice(atNames)) << " } };\n";
+    indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama__Unit_Unit } };\n";
+    *_out << "}\n\n";
+    *_out << stat << resC << " " << ci.name << "__mergeFrom(" << ci.name << "* self, kama__Deserializer r)\n{\n";
+    indent(1); *_out << "kama_merge_log kama_log = { 0 };\n";
+    indent(1); *_out << resC << " kama_res = " << ci.name << "____mergeStep(self, r, &kama_log);\n";
+    indent(1); *_out << "kama_merge_end(&kama_log, kama_res.kama_tag == " << resC << "_Ok);   // all or nothing\n";
+    indent(1); *_out << "return kama_res;\n";
+    *_out << "}\n\n";
+}
+
 // Externally-tagged enum serialize: `{"tag":"V"}` (unit) / `{"tag":"V","value":{fields…}}` (payload).
 void CEmitter::emitEnumSerializeDefinition(ClassInfo& ci)
 {
@@ -33978,6 +34112,7 @@ void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo&
         return;
     }
     if (mi.isSynthBytes) { emitBytesDefinition(ci, name); return; }   // KR-127 — never a variant (registerDerives refuses it)
+    if (mi.isSynthMerge) { emitMergeDefinition(ci); return; }          // KR-125 — never a variant (registerDerives skips it)
     emitBagCtorBody(ci, name);   // M6 `@generate(of|zero)` — never a variant (registerDerives refuses it)
 }
 
@@ -34316,6 +34451,15 @@ void CEmitter::computeGraphNodeTypes()
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
         if (!ci.isGraphNode) continue;
+        // A graph node does not MERGE (KR-125): its wire ids are assigned per write, first come first served, so a
+        // node on the wire names nothing the program holds and there is nothing to merge it into. Taken away here
+        // because whether a type is a node is settled only now; a merge asked of one is refused at the call.
+        {
+            auto mf = ci.methods.find("mergeFrom");
+            if (mf != ci.methods.end() && mf->second.isSynthMerge) ci.methods.erase(mf);
+            const std::string m = pinnedInstanceName("MergeDeserializable", ci.name);
+            ci.interfaces.erase(std::remove(ci.interfaces.begin(), ci.interfaces.end(), m), ci.interfaces.end());
+        }
         ci.graphTypeId = (int)_graphNodeOrder.size();
         _graphNodeOrder.push_back(kv.first);
         // A node keeps the same two members a by-value type has — so `serializeJsonBuffer(v: root)` and
@@ -39315,7 +39459,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             if (mod == "std::serialization" || mod.compare(0, 20, "std::serialization::") == 0) _usesSerde = true;
             continue;
         }
-        for (const char* c : {"Serializable", "Deserializable", "Serializer", "Deserializer"})
+        for (const char* c : {"Serializable", "Deserializable", "MergeDeserializable", "Serializer", "Deserializer"})
             if (u->identTokens.count(c)) { _usesSerde = true; break; }
     }
 

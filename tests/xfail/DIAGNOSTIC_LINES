@@ -1136,6 +1136,8 @@ ser_field_name_optional	ser_field_name_optional.kama:6
 ser_field_name_owned	ser_field_name_owned.kama:6
 ser_field_no_conformance	ser_field_no_conformance.kama:15
 ser_field_no_generate	ser_field_no_generate.kama:2
+ser_merge_graph	ser_merge_graph.kama:8
+ser_merge_not_record	ser_merge_not_record.kama:15 ser_merge_not_record.kama:17 ser_merge_not_record.kama:19
 ser_unmarked_field	ser_unmarked_field.kama:5
 serialize_isize_field	serialize_isize_field.kama:13
 shadow_enclosing	shadow_enclosing.kama:4

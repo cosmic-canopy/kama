@@ -43,7 +43,8 @@ import {
 // One module for all three binary addressings — see the note in `positional.kama`.
 // NAMING: `{Addressing}{Medium}Serializer`.
 export { KbinNumberedSerializer, KbinNumberedDeserializer, serializeKbinNumberedBuffer,
-         serializeKbinNumberedStream, deserializeKbinNumberedBuffer, deserializeKbinNumberedStream };
+         serializeKbinNumberedStream, deserializeKbinNumberedBuffer, deserializeKbinNumberedStream,
+         mergeKbinNumberedBuffer, mergeKbinNumberedStream };
 
 extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 extern fn uint32 kama_f32_bits(float32 v);
@@ -410,6 +411,23 @@ fn Result<T, Owned<Error>> deserializeKbinNumberedStream<T: Deserializable<T>>(R
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give sw.takeBytes());
     return T.deserialize(r: r);
+}
+
+// MERGE KBIN bytes into a value the program already holds (KR-125) — the `Numbered` twin of `mergeJsonBuffer`: a field
+// whose type is a derived record merges, any other field the data carries is replaced whole, and on an `Err` `into` is
+// untouched.
+fn Result<Unit, Owned<Error>> mergeKbinNumberedBuffer<T: MergeDeserializable<T>>(DynamicArray<uint8> src, ref T into) {
+    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give src);
+    return into.mergeFrom(r: r);
+}
+
+// The streaming twin of `mergeKbinNumberedBuffer`: drains the reader, as `deserializeKbinNumberedStream` does, then merges.
+fn Result<Unit, Owned<Error>> mergeKbinNumberedStream<T: MergeDeserializable<T>>(Reader from, ref T into) {
+    StringWriter sw = StringWriter.make();
+    Result<isize, IoError> pr = pump(from: from, to: sw);
+    match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+    KbinNumberedDeserializer r = KbinNumberedDeserializer.make(src: give sw.takeBytes());
+    return into.mergeFrom(r: r);
 }
 
 // Stream a value straight into an owned `W: Writer` sink — a file, socket or buffered writer — without
