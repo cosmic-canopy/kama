@@ -1,6 +1,6 @@
 # kama benchmark results
 
-_Generated: 2026-09-21 13:07 · arch: aarch64 (Linux) · in the `kama-bench` container_
+_Generated: 2026-10-11 10:18 · arch: aarch64 (Linux) · in the `kama-bench` container_
 
 Toolchains: clang `Ubuntu clang version 18.1.3 (1ubuntu1)` · rustc 1.79.0 (129f3b996 2024-06-10) · go version go1.22.5 linux/arm64 · dotnet 8.0.422 · openjdk version "21.0.11" 2026-04-21 · node v22.16.0 · Lua 5.4.6  Copyright (C) 1994-2023 Lua.org, PUC-Rio · Python 3.12.3
 Timing: `hyperfine --warmup 2 --runs 8 --shell=none` (median); the `(N×)` after each time is relative to kama for that workload (native → kama, wasm → kama→wasm). Peak RSS: `/usr/bin/time -v`.
@@ -64,6 +64,7 @@ diverged:
 - `map`: checksum = 192 (exit code) — ✓ all match
 - `map_kernel`: checksum = 192 (exit code) — ✓ all match
 - `math`: checksum = 0 (exit code) — ✓ all match
+- `bulk`: checksum = 173 (exit code) — ✓ all match
 
 ## Workloads
 - **fib** — naive recursive Fibonacci summed over 0..31 (function-call / stack-frame cost).
@@ -88,7 +89,7 @@ diverged:
   look every key up 10× in a scrambled (bijective LCG) order. Because the algorithm, hash, and capacity
   are pinned, **this is the row that answers "is kama on par with C?"** — the AOT cluster
   (kama/C/C++/Rust) should converge, exactly as it does on the compute kernels. (TS is absent here and in
-  `map`/`math`: its `tsconfig.json` compiles only fib/pi/collatz/dispatch/alloc/fnptr.)
+  `map`/`math`: its `tsconfig.json` compiles only fib/pi/collatz/dispatch/alloc/fnptr/bulk.)
 - **map** — the hash-map **library-design** row: the same workload, but each language uses its *idiomatic*
   map — kama `Map<int32, int64>`, C++ `unordered_map`, Rust `HashMap`, Go `map`, C# `Dictionary`, Java
   `HashMap` (boxed), Lua table, Python `dict`, JS `Map`. **⚠️ This measures map DESIGN, not codegen** —
@@ -98,7 +99,7 @@ diverged:
   ranking it against everyone else's general-purpose library maps would read as a codegen win when the
   actual finding is the trivial "a purpose-built preallocated map beats a general-purpose one".
   Every map that can be pre-sized is (see *Methodology — pre-sizing*), so what remains is hash and
-  layout: kama 5.24 ms, C++ `unordered_map` 4.9 ms, Rust `HashMap` 8.27 ms.
+  layout: kama 4.68 ms, C++ `unordered_map` 4.7 ms, Rust `HashMap` 7.47 ms.
   kama keeps its **stronger default hash** (splitmix64, two dependent 64-bit multiplies) here; the
   pluggable `H: Hasher` slot's `FastHasher` is `map_kernel`'s single Fibonacci multiply, so a program
   that wants that tradeoff writes `Map<int32, int64, FastHasher>`. It is deliberately NOT used here:
@@ -113,33 +114,45 @@ diverged:
   and no explicit vector surface — vectorization is the C backend's, earned by the layout plus release
   inlining; see [SPEC.md](../SPEC.md) *Math*.)
 
+- **bulk** — bulk byte movement, the shape a protocol reader has: 64× (assemble a 4 MiB buffer from chunks of
+  a 64 KiB source, 7 B to 64 KiB each, then copy it whole into a fixed buffer and sample it). Each language uses
+  its idiomatic bulk append and slice copy — kama `DynamicArray.addAll` + `View.copyFrom`, Rust
+  `extend_from_slice` + `copy_from_slice`, C++ `vector::insert` + `std::copy`, Go `append(s, xs...)` + `copy`,
+  C `realloc` + `memcpy`, C# `List<byte>.AddRange(span)` + `CopyTo`, Java `System.arraycopy` into a doubled
+  `byte[]` (its standard library's only growable byte buffer, `ByteArrayOutputStream`, cannot hand its bytes
+  over without a second copy), Python `bytearray +=`, JS/TS `Uint8Array.set` into a doubled buffer, Lua
+  `table.move`. So this row measures what each standard library makes of `memcpy`; the AOT cluster should
+  converge on the machine's copy bandwidth.
+
 ## NATIVE — execution time (median, ms)
 
 | workload | kama | C | C++ | Rust | Go | C# (JIT) | Java (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|---|
-| fib | 6.05 (1.0×) | 5.95 (1.0×) | 6.19 (1.0×) | 6.09 (1.0×) | 10.09 (1.7×) | 33.97 (5.6×) | 27.29 (4.5×) | 90.06 (14.9×) | 213.85 (35.3×) |
-| pi | 11.71 (1.0×) | 11.84 (1.0×) | 11.96 (1.0×) | 11.89 (1.0×) | 13.92 (1.2×) | 32.28 (2.8×) | 37.91 (3.2×) | 123.02 (10.5×) | 1670.39 (142.6×) |
-| collatz | 67.07 (1.0×) | 67.63 (1.0×) | 67.51 (1.0×) | 66.86 (1.0×) | 91.64 (1.4×) | 124.0 (1.8×) | 140.03 (2.1×) | 981.12 (14.6×) | 2957.59 (44.1×) |
-| dispatch | 6.48 (1.0×) | 6.25 (1.0×) | 6.62 (1.0×) | 6.52 (1.0×) | 13.87 (2.1×) | 27.83 (4.3×) | 30.5 (4.7×) | 103.71 (16.0×) | 643.08 (99.2×) |
-| alloc | 1.34 (1.0×) | 1.14 (0.9×) | 1.62 (1.2×) | 2.29 (1.7×) | 6.66 (5.0×) | 27.0 (20.1×) | 53.46 (39.9×) | 24.96 (18.6×) | 109.61 (81.8×) |
-| fnptr | 2.48 (1.0×) | 2.5 (1.0×) | 2.7 (1.1×) | 2.67 (1.1×) | 5.03 (2.0×) | 33.62 (13.6×) | 31.67 (12.8×) | 138.88 (56.0×) | 715.52 (288.5×) |
-| map | 5.24 (1.0×) | — | 4.9 (0.9×) | 8.27 (1.6×) | 23.61 (4.5×) | 59.22 (11.3×) | 43.09 (8.2×) | 7.55 (1.4×) | 128.16 (24.5×) |
-| map_kernel | 2.73 (1.0×) | 2.7 (1.0×) | 3.02 (1.1×) | 3.03 (1.1×) | 4.84 (1.8×) | 31.89 (11.7×) | 29.09 (10.7×) | 52.26 (19.1×) | 217.64 (79.7×) |
-| math | 3.15 (1.0×) | 3.09 (1.0×) | 3.28 (1.0×) | 3.55 (1.1×) | 79.02 (25.1×) | 116.97 (37.1×) | 113.49 (36.0×) | 3916.21 (1243.2×) | 4311.81 (1368.8×) |
+| fib | 6.01 (1.0×) | 6.05 (1.0×) | 6.11 (1.0×) | 6.02 (1.0×) | 10.1 (1.7×) | 28.93 (4.8×) | 25.67 (4.3×) | 89.37 (14.9×) | 213.27 (35.5×) |
+| pi | 11.74 (1.0×) | 11.74 (1.0×) | 12.04 (1.0×) | 11.95 (1.0×) | 14 (1.2×) | 32.24 (2.7×) | 36.89 (3.1×) | 119.91 (10.2×) | 1653.27 (140.8×) |
+| collatz | 65.83 (1.0×) | 65.61 (1.0×) | 65.92 (1.0×) | 65.84 (1.0×) | 91.04 (1.4×) | 123.48 (1.9×) | 133.64 (2.0×) | 962.92 (14.6×) | 2960.04 (45.0×) |
+| dispatch | 6.26 (1.0×) | 6.18 (1.0×) | 6.43 (1.0×) | 6.37 (1.0×) | 13.51 (2.2×) | 26.93 (4.3×) | 29.94 (4.8×) | 102.93 (16.4×) | 612.84 (97.9×) |
+| alloc | 1.19 (1.0×) | 1.16 (1.0×) | 1.6 (1.3×) | 2.29 (1.9×) | 6.61 (5.6×) | 27.66 (23.2×) | 45.55 (38.3×) | 24.24 (20.4×) | 108.29 (91.0×) |
+| fnptr | 2.51 (1.0×) | 2.5 (1.0×) | 2.73 (1.1×) | 2.71 (1.1×) | 4.99 (2.0×) | 31.08 (12.4×) | 29.77 (11.9×) | 137.54 (54.8×) | 713.22 (284.2×) |
+| map | 4.68 (1.0×) | — | 4.7 (1.0×) | 7.47 (1.6×) | 22.92 (4.9×) | 56.84 (12.1×) | 42.55 (9.1×) | 7.41 (1.6×) | 125.36 (26.8×) |
+| map_kernel | 2.68 (1.0×) | 2.62 (1.0×) | 2.86 (1.1×) | 2.68 (1.0×) | 4.89 (1.8×) | 28.64 (10.7×) | 29.05 (10.8×) | 49.78 (18.6×) | 212.99 (79.5×) |
+| math | 3.11 (1.0×) | 3.07 (1.0×) | 3.29 (1.1×) | 3.59 (1.2×) | 77.38 (24.9×) | 113.04 (36.3×) | 111.25 (35.8×) | 3816.79 (1227.3×) | 4269.27 (1372.8×) |
+| bulk | 10.74 (1.0×) | 10.71 (1.0×) | 73.7 (6.9×) | 10.86 (1.0×) | 303.48 (28.3×) | 122.55 (11.4×) | 76.85 (7.2×) | 3504.15 (326.3×) | 23.47 (2.2×) |
 
 ## NATIVE — peak resident memory (MB)
 
 | workload | kama | C | C++ | Rust | Go | C# (JIT) | Java (JIT) | Lua | Python |
 |---|---|---|---|---|---|---|---|---|---|
 | fib | 2 | 2 | 3 | 2 | 2 | 20 | 39 | 2 | 8 |
-| pi | 2 | 2 | 3 | 2 | 2 | 20 | 40 | 2 | 8 |
-| collatz | 2 | 2 | 3 | 2 | 2 | 20 | 40 | 2 | 8 |
+| pi | 2 | 2 | 3 | 2 | 2 | 21 | 40 | 2 | 8 |
+| collatz | 2 | 2 | 3 | 2 | 2 | 21 | 39 | 2 | 8 |
 | dispatch | 2 | 2 | 3 | 2 | 2 | 21 | 40 | 2 | 8 |
-| alloc | 2 | 2 | 3 | 2 | 6 | 25 | 82 | 2 | 8 |
-| fnptr | 2 | 2 | 2 | 2 | 2 | 21 | 41 | 2 | 8 |
-| map | 7 | n/a | 7 | 5 | 5 | 23 | 69 | 3 | 21 |
-| map_kernel | 4 | 4 | 5 | 4 | 4 | 24 | 44 | 13 | 18 |
-| math | 2 | 2 | 3 | 2 | 2 | 20 | 129 | 2 | 8 |
+| alloc | 2 | 2 | 3 | 2 | 6 | 25 | 79 | 2 | 8 |
+| fnptr | 2 | 2 | 3 | 2 | 2 | 21 | 40 | 2 | 8 |
+| map | 7 | n/a | 7 | 5 | 4 | 24 | 68 | 4 | 21 |
+| map_kernel | 4 | 4 | 5 | 4 | 4 | 24 | 43 | 13 | 18 |
+| math | 2 | 2 | 3 | 2 | 2 | 21 | 127 | 2 | 8 |
+| bulk | 9 | 8 | 15 | 9 | 34 | 72 | 173 | 194 | 16 |
 
 ## NATIVE — package size
 
@@ -155,55 +168,57 @@ Java ship one multi-workload assembly, so their size is the same everywhere._
 | C++ | 66.1 KB | 66.1 KB – 66.3 KB | self-contained |
 | Rust | 322.3 KB | 322.3 KB | self-contained |
 | Go | 1604.8 KB | 1603.7 KB – 1605.2 KB | self-contained |
-| C# (JIT) | 9.0 KB | 9.0 KB | + .NET runtime |
-| Java (JIT) | 4.9 KB | 4.9 KB | + JVM |
+| C# (JIT) | 9.5 KB | 9.5 KB | + .NET runtime |
+| Java (JIT) | 5.5 KB | 5.5 KB | + JVM |
 | Lua | 0.1 KB | 0.1 KB – 1.9 KB | source (+ Lua) |
 | Python | 0.1 KB | 0.1 KB – 1.8 KB | source (+ Python) |
 
 ## NATIVE — compile time
 
 _Wall-clock to compile that language's bench artifacts (single build, not averaged). The compiled
-languages build **one binary per workload** (`binaries built` — 9 workloads; C skips `map`); C# and Java build **one**
+languages build **one binary per workload** (`binaries built` — 10 workloads; C skips `map`); C# and Java build **one**
 multi-workload binary that dispatches on `args[0]`. kama's figure is transpile-to-C **plus** clang.
 Interpreted languages (Lua, Python, JS) have no compile step and are omitted._
 
 | lang | compile time | binaries built |
 |---|---|---|
-| kama | 1345 ms | 9 |
-| C | 322 ms | 8 |
-| C++ | 758 ms | 9 |
-| Rust | 2058 ms | 9 |
-| Go | 1403 ms | 9 |
-| C# (JIT) | 1481 ms | 1 |
-| Java (JIT) | 301 ms | 1 |
+| kama | 1713 ms | 10 |
+| C | 412 ms | 9 |
+| C++ | 897 ms | 10 |
+| Rust | 4311 ms | 10 |
+| Go | 2029 ms | 10 |
+| C# (JIT) | 2917 ms | 1 |
+| Java (JIT) | 833 ms | 1 |
 
 ## WASM track — execution time under node (median, ms)
 
 | workload | kama→wasm | JS | TS |
 |---|---|---|---|
-| fib | 20.3 (1.0×) | 27.57 (1.4×) | 27.91 (1.4×) |
-| pi | 21.06 (1.0×) | 26.47 (1.3×) | 26.45 (1.3×) |
-| collatz | 95.66 (1.0×) | 429.51 (4.5×) | 427.28 (4.5×) |
-| dispatch | 29.12 (1.0×) | 22.99 (0.8×) | 22.59 (0.8×) |
-| alloc | 18.08 (1.0×) | 16.27 (0.9×) | 16.58 (0.9×) |
-| fnptr | 11.68 (1.0×) | 42.73 (3.7×) | 41.76 (3.6×) |
-| map | 20.15 (1.0×) | 48.44 (2.4×) | — |
-| map_kernel | 17.26 (1.0×) | 28.76 (1.7×) | — |
-| math | 17.07 (1.0×) | 170.15 (10.0×) | — |
+| fib | 19.88 (1.0×) | 27.03 (1.4×) | 27.37 (1.4×) |
+| pi | 20.66 (1.0×) | 25.89 (1.3×) | 25.88 (1.3×) |
+| collatz | 93 (1.0×) | 418.21 (4.5×) | 408.19 (4.4×) |
+| dispatch | 29.29 (1.0×) | 21.84 (0.7×) | 22.01 (0.8×) |
+| alloc | 17.09 (1.0×) | 15.87 (0.9×) | 16.03 (0.9×) |
+| fnptr | 11.19 (1.0×) | 41.92 (3.7×) | 40.64 (3.6×) |
+| map | 19.56 (1.0×) | 46.26 (2.4×) | — |
+| map_kernel | 16.79 (1.0×) | 27.03 (1.6×) | — |
+| math | 15.91 (1.0×) | 161.77 (10.2×) | — |
+| bulk | 27.74 (1.0×) | 48.74 (1.8×) | 47.86 (1.7×) |
 
 ## WASM track — peak resident memory (MB)
 
 | workload | kama→wasm | JS | TS |
 |---|---|---|---|
 | fib | 43 | 44 | 44 |
-| pi | 43 | 45 | 45 |
+| pi | 42 | 45 | 45 |
 | collatz | 42 | 45 | 45 |
-| dispatch | 45 | 45 | 45 |
-| alloc | 46 | 46 | 46 |
+| dispatch | 45 | 44 | 45 |
+| alloc | 45 | 46 | 46 |
 | fnptr | 42 | 45 | 45 |
 | map | 50 | 54 | n/a |
 | map_kernel | 46 | 50 | n/a |
 | math | 43 | 49 | n/a |
+| bulk | 55 | 82 | 83 |
 
 ## WASM track — module size
 
@@ -211,9 +226,9 @@ _The size column is each language's `fib` artifact; the range spans every worklo
 
 | lang | package size (`fib`) | range across workloads | kind |
 |---|---|---|---|
-| kama→wasm | 0.4 KB | 0.2 KB – 9.5 KB | + wasm/JS host |
+| kama→wasm | 0.4 KB | 0.2 KB – 12.2 KB | + wasm/JS host |
 | JS | 0.1 KB | 0.1 KB – 1.9 KB | source (+ node) |
-| TS | 0.1 KB | 0.1 KB – 0.6 KB | source (+ node) |
+| TS | 0.1 KB | 0.1 KB – 1.1 KB | source (+ node) |
 
 ## WASM track — compile time
 
@@ -221,8 +236,8 @@ _kama→wasm is transpile-to-C **plus** `emcc -O3`; TS is `tsc`. Hand-written JS
 
 | lang | compile time | binaries built |
 |---|---|---|
-| kama→wasm | 5757 ms | 9 |
-| TS | 244 ms | 1 |
+| kama→wasm | 6580 ms | 10 |
+| TS | 266 ms | 1 |
 
 ## Caveats
 - **`dispatch` measures *true* dynamic dispatch.** An earlier variant called two stack locals of
