@@ -2787,8 +2787,8 @@ diagnostic, not a feature: no program can use such a package today.
 - **AI/agent tooling — SHIPPED.** `kama query --search NAME` / `--diagnostics` / `--json`, the
   `kama agents` command, and the `AGENTS.md` it writes into a project. Record: [agents.md](agents.md);
   guarded by `tools/check-agents.sh`. Residuals, none blocking:
-  - **No name-based entry beyond `--search`.** There is no call hierarchy (`callers-of`) and no type
-    hierarchy (`implementors-of`), though the contract rename group already holds the data.
+  - **No call hierarchy (`callers-of`).** The type hierarchy shipped as go-to-implementation (`--impl`,
+    `textDocument/implementation`, `0.9.577`): what implements a contract or one of its members.
   - **No stdin / unsaved-buffer mode.** Every query reads the file from disk, so an agent cannot ask
     about an edit it has not written out. The LSP can; the CLI deliberately cannot.
   - **A `fnptr` signature type is not in the index** (measured `0.9.463`, found beside the fixture that indexed compile-time names).
