@@ -329,6 +329,47 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
   naming `voice`. A consumer that imports `voice` itself must declare it.
 
+<a id="s2-raw-element"></a>
+
+### A raw pointer's element is typed one step short (KR-138)
+
+`0.9.537` typed a raw element's pointee for a member read and a call (`receiverClass`), through a local, a parameter
+or a static: `g_p[0].bump()` and `p[0].inner.bump()` work. Three neighbouring shapes do not (measured on `0.9.577`,
+each in its own file):
+- An `InlineArray` field indexed through the element — `p[0].bytes[1]`, with `p: UnsafePtr<Buf>` — passes `kama check`
+  and fails in clang (*"subscripted value is not an array, pointer, or vector"*): it lowers to a bare C subscript on the
+  struct, where the same read through a `ref` is the bounds-checked `InlineArray_uint8_4__get`. A C compiler's error is
+  kama's bug, and this one also skips the bounds check.
+- A second pointer hop — `c[0].world[0].step()`, where `world` is an `UnsafePtr<World>` field — is refused: *"cannot
+  resolve the receiver of `step`"*.
+- A call on the element as a `match` subject — `match (w[0].ending())` — is refused: *"`match` subject's type could
+  not be resolved"*, though the same call through a `const ref World` builds.
+
+**Scheduled.** No ruling: each is the `0.9.537` rule applied one step further. Fixtures: the three shapes, built and
+run, the first reading through the bounds-checked accessor.
+
+<a id="s2-fnptr-enum-return"></a>
+
+### An `fnptr` returning an enum of its own module reaches clang (KR-139)
+
+`type enum State : uint8 { … }` beside `fnptr State PollFn(UnsafePtr ctx);` passes `kama check` and fails in clang
+(*"type specifier missing, defaults to 'int'"*), because the function-pointer typedef is emitted before the enum's
+own typedef (measured on `0.9.577`). An enum PARAMETER of an `fnptr` builds, and so does an enum field of a `type
+value` beside it; only the return type's ordering is wrong. **Scheduled.** No ruling: an `fnptr` typedef comes
+after every type it names. Fixture: the shape above, built and called.
+
+<a id="s2-ctor-this-assign"></a>
+
+### `this = T.make(…)` in a constructor reaches clang (KR-140)
+
+`public ctor b(string name) { this = Foo.a(name: give name); this.hop = Hop::Trusted; }` passes `kama check` and fails
+in clang: the lowering passes `&self` (a `Foo**`) to the destructor and assigns a struct to a pointer (measured on
+`0.9.577`). SPEC's delegation is `return Other.make(…)`. **Recommendation (140-D1, the maintainer's call):** refuse
+the assignment form, naming `return Foo.a(…)` and a private all-fields ctor for the "delegate, then adjust one
+field" case. GOALS favours one way to do a thing, and the `return` form already builds in place. *Alternative:*
+support it, as a destroy of the half-built value followed by an in-place rebuild. Fixture: an xfail with the
+refusal's text.
+
 <a id="s2-fnptr-type-arg"></a>
 
 ### An `fnptr` type is not a type argument (KR-107)
@@ -1531,6 +1572,36 @@ before code:
   record it is replaced, because its writes cannot join the caller's log. This arm is where that would change.
 - `SortedMap<string, V>` the same way.
 
+**Measured on `0.9.577`.** A `Map<string, int32>` field writes `"caps":[{"key":"cpu","value":2},{"key":"mem","value":512}]`;
+reading `{"caps":{"cpu":2}}` fails with ``type mismatch at `caps` ``; the pair array reads. A `Map` writes in hash-slot
+order: `zeta, mid, alpha` whether the keys went in as `zeta, alpha, mid` or `mid, alpha, zeta`, so stable for one
+history but neither sorted nor as inserted.
+
+**What others do.** A string-keyed map is a JSON object everywhere: Go `encoding/json`, Rust `serde_json`, .NET
+`System.Text.Json`, Python `json`, Swift `JSONEncoder`, Kotlin serialization. Integer keys are an object too, written
+as decimal strings (Go, serde_json, .NET 5+, Python; Swift for `Int`). A structured key is refused (Go, serde_json,
+.NET, Python) or written as an array: Swift alternates key and value, Kotlin uses pairs under `allowStructuredMapKeys`.
+Go sorts keys on write; Python sorts with `sort_keys=True`; the others write the map's own order.
+
+**Decisions for the maintainer, with the recommendation first:**
+- **136-D1 — which maps become objects.** String keys and integer keys (as decimal strings); every other key type
+  keeps the pair array. *Alternative:* string keys only.
+- **136-D2 — what reading accepts.** Both forms, object and pair array, so everything written by `0.9.577` and earlier
+  still loads; writing uses the object form. The only break left: a file the new kama writes does not load in an
+  older one. *Alternative:* object only, so stored JSON maps stop loading.
+- **136-D3 — KBIN.** Unchanged: binary, never hand-written, so the readability reason does not apply, and binary saves
+  keep loading in every version. *Alternative:* KBIN named writes a keyed object too, reading both.
+- **136-D4 — key order on write.** Sorted, as Go does, so a config file a program writes diffs cleanly (`SortedMap`
+  already is); one sort per map written. *Alternative:* slot order, as today.
+- **136-D5 — merging into an object-form map.** Per key: a key the data names merges into its entry when the value is
+  a derived record and replaces it otherwise; a key it leaves out is kept; `null` removes the entry (RFC 7396, Helm).
+  A map still written as pairs is replaced whole, as today. *Alternative:* Go's rule, where `null` has no effect, so an
+  overlay cannot remove an entry.
+
+**The session's first probe:** how a generic `Map` picks its form by key type with no in-body type branching —
+whether `when [K: …]` may gate two members of one name, or the compiler picks the form as it does for an `Owned`
+field. Neither is verified.
+
 <a id="s4-strict-decoding"></a>
 
 ### Strict decoding: unknown fields refused at the read site (KR-126)
@@ -1540,6 +1611,29 @@ writer. A config file wants the opposite: a misspelt key should fail, not do not
 **Design:** Go's `Decoder.DisallowUnknownFields`, not serde's per-type attribute. The READ decides, because one type
 is read leniently from a peer and strictly from a file. The error is a `DeError` of a new kind, `UnknownField`,
 whose path names the key — the `DeError.at(kind:, field:)` every derived reader builds since `0.9.569`.
+
+**Measured on `0.9.577`:** `deserializeJsonBuffer::<Limits>(src: "{\"voicez\":12,\"caps\":[]}")` succeeds with `voices`
+at its default, 8: the typo is skipped and says nothing. kama has no default arguments, and the reader
+(`JsonDeserializer.make(src:)`) is public, so a strict read can be a reader rather than more entry points.
+
+**What others do.** Lenient by default: Go (opt in on the reader, `dec.DisallowUnknownFields()`), serde (on the type,
+`#[serde(deny_unknown_fields)]`), .NET 8 (`UnmappedMemberHandling.Disallow` in the call's options, or on the type).
+Strict by default: Jackson and Kotlin serialization, each with an opt-out. protobuf keeps unknown fields for
+re-encoding.
+
+**Decisions for the maintainer, with the recommendation first:**
+- **126-D1 — how a read asks.** A strict READER: `JsonDeserializer.strict(src:)`, and the same named ctor on
+  `KbinNamedDeserializer` and `KbinNumberedDeserializer` (positional KBIN has no keys), used with `T.deserialize(r:)`
+  or `x.mergeFrom(r:)`. The derived reader reports an unclaimed key to the reader through one new `Deserializer`
+  member instead of skipping it; a lenient reader skips, a strict one fails, and nested records read through the
+  same reader are strict too. That member is a source change for a hand-written back end outside the stdlib, as
+  `failWith(kind:)` was in `0.9.569`. *Alternative:* `…Strict` twins of the entry points, which is 12 more functions.
+- **126-D2 — the default.** Lenient, as today: it lets an old reader load a newer writer's data, which the numbered
+  KBIN form exists for. *Alternative:* strict by default (Jackson, Kotlin), changing every existing read.
+- **126-D3 — what a strict read refuses.** A key no field claims, including a `@skip` field's key, which is not part of
+  the wire form. A `@deprecated` field is still read, so its key is known; map keys are data and never unknown. The
+  first unknown key is reported with its path (``unknown field `server.prot` ``). *Alternative:* accept a `@skip`
+  field's key silently.
 
 <a id="s4-json-value"></a>
 

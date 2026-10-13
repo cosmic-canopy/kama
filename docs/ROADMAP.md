@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-138**
+**Next id: KR-141**
 
 ## The shape
 
@@ -73,11 +73,14 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | id | item | size | detail |
 |---|---|---|---|
 | KR-137 | **A generic type with a `comptime` parameter is checked as written only in part** — its as-written probe leaves `N` unbound, so `InlineArray<T>#(N)` never forms in a body nobody instantiates, and a call on its elements (`this.vs[0].area()`) is neither checked nor indexed. A generic function binds a placeholder (`probe`) for the same parameter | S | [§10](ROADMAP_DETAIL.md#s10-comptime-probe) |
+| KR-138 | **A raw pointer's element is typed one step short** — `p[0].bytes[1]` (an `InlineArray` field) passes `kama check` and fails in clang, skipping the bounds check a `ref` gets; a second hop (`c[0].world[0].step()`) and a call on the element as a `match` subject are refused | S | [§2](ROADMAP_DETAIL.md#s2-raw-element) |
+| KR-139 | **An `fnptr` returning an enum of its own module reaches clang** — the function-pointer typedef is emitted before the enum's, so `fnptr State PollFn(…)` passes `kama check` and fails to compile | S | [§2](ROADMAP_DETAIL.md#s2-fnptr-enum-return) |
+| KR-140 | **`this = T.make(…)` in a constructor reaches clang** — it passes `kama check`, then lowers to a pointer assigned a struct. Refuse it, naming `return T.make(…)`, or support it: the maintainer's call | S | [§2](ROADMAP_DETAIL.md#s2-ctor-this-assign) |
+| KR-136 | **A `Map<string, V>` written as a JSON object, merged per key** — kama writes every `Map` as an array of `{"key","value"}` pairs, so a config file's `"limits":{"cpu":2}` does not read into a `Map<string, int32>`, and a merge (`mergeJsonBuffer`) replaces a map whole. A string-keyed map as an object, merged per key, `null` removing an entry | M | [§4](ROADMAP_DETAIL.md#s4-string-map-object) |
+| KR-126 | **Strict decoding: unknown fields refused at the read site** — a misspelt key in a config file does nothing and says nothing. The read decides, not the type, and the error names the key | S | [§4](ROADMAP_DETAIL.md#s4-strict-decoding) |
 | KR-131 | **A by-value `match` or `foreach` binding copies its value even when nothing writes it** — `case Ok(value: b):` over a `Result<Big, E>` copies the 16 KB `Big` into `b` (and `foreach (Big b in xs)` each element), though the subject is already borrowed. A binding its body never writes can be read in place | S | [§5](ROADMAP_DETAIL.md#s5-match-binding-copy) |
 | KR-123 | **`borrow` names any place for a block** — there is no `ref` local, and `borrow` opens only an argument-less view mint, so an accessor with arguments is repeated at every use. `borrow <place> as L { … }` with the host frozen, as a view window freezes it | M | [§2](ROADMAP_DETAIL.md#s2-borrow-any-place) |
 | KR-124 | **A borrow window that runs code when it closes** — a transaction wants a scope that rolls back unless committed; no stored borrows and no closures leave no way to say it. A `type view` may declare a destructor its window runs on every path out | M | [§2](ROADMAP_DETAIL.md#s2-view-destructor) |
-| KR-136 | **A `Map<string, V>` written as a JSON object, merged per key** — kama writes every `Map` as an array of `{"key","value"}` pairs, so a config file's `"limits":{"cpu":2}` does not read into a `Map<string, int32>`, and a merge (`mergeJsonBuffer`) replaces a map whole. A string-keyed map as an object, merged per key, `null` removing an entry | M | [§4](ROADMAP_DETAIL.md#s4-string-map-object) |
-| KR-126 | **Strict decoding: unknown fields refused at the read site** — a misspelt key in a config file does nothing and says nothing. The read decides, not the type, and the error names the key | S | [§4](ROADMAP_DETAIL.md#s4-strict-decoding) |
 | KR-101 | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net. The compiler already writes deflate/gzip and tar, in C++, for `kama publish` (`src/kama.archive.cpp`, `0.9.452`); the stdlib half — kama code a program can call — **wants a maintainer verdict: stdlib or package** | — | [§1](ROADMAP_DETAIL.md#s1) |

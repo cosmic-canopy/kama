@@ -133,6 +133,13 @@ package that vendors many `csources`) is not a gap reference and is fine.
 
 ## Where things are written down
 
+**Everything a later session needs lives in this repo — never in a hosted service.** A brief, a plan or a set of
+decisions for the maintainer is a `docs/ROADMAP_DETAIL.md` section beside the row it decides (what was measured, what
+other languages do, the recommendation, numbered decisions), presented in chat when the session opens; what comes next
+is the order of `docs/ROADMAP.md`'s rows. Do not publish project work to a web page or document service, and do not
+leave it only in an assistant's per-account memory or in `.scratch/` (gitignored): the next session may run under
+another account or on another machine.
+
 `docs/ROADMAP.md` is a **plan, not a changelog**, and it is **the ordered list only** — one row per
 item, a one-line summary, and a link. **It is the authority on what to do next; read it first and you
 should not need anything else to pick up work.** The reasoning behind each row lives in
