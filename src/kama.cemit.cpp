@@ -14014,6 +14014,20 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         }
     }
 
+    // A comptime argument spelled by NAME — a generic function's own `M`, a module `comptime` — becomes the number it
+    // stands for HERE, where its binding is visible: the instance is registered and emitted long after that binding is
+    // gone, so it must carry the value itself. Left a name, `M` read as an unbound type parameter just below and the
+    // instance was skipped — `Buf<int32>#(M)` named only inside `fn … comptime(int32 M)` had no struct and no methods.
+    {
+        auto cti = _genericTypeConstTypes.find(tmpl);
+        if (cti != _genericTypeConstTypes.end())
+            for (size_t i = 0; i < concrete.size() && i < cti->second.size(); ++i) {
+                if (!cti->second[i] || !concrete[i] || concrete[i]->constArgValue) continue;
+                int64_t v;
+                if (constArgN(concrete[i], v)) concrete[i] = constValueArg(v);
+            }
+    }
+
     // Defer if a substituted arg still carries an unbound type-param — this only happens when scanning a
     // generic FUNCTION's signature before instantiation (its `V` isn't in _typeSubst yet, so deepSubstType
     // left it raw). The real instance registers at monomorphization (with concrete args). Registering now
@@ -15715,6 +15729,19 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
     // reject is a genuine conflict: one parameter unified against two different types.
     std::function<bool(const SharedIdentifier&, const SharedIdentifier&)> unify =
         [&](const SharedIdentifier& pt, const SharedIdentifier& at) -> bool {
+        // A comptime parameter in a generic type's VALUE slot (`Buf<int32>#(M)`): bind it to the argument's number,
+        // as the `InlineArray`/`Simd` branch below binds a size — those two were the only types it reached through.
+        if (pt && pt->value && !pt->genericArg && !pt->genericArgs && cps.count(*pt->value)) {
+            int64_t v;
+            if (!at || !constArgN(at, v)) return true;           // not a known number — bind nothing (best effort)
+            auto b = bind.find(*pt->value);
+            if (b != bind.end()) { int64_t pv; if (constArgN(b->second, pv) && pv != v) {
+                unsupported(("cannot unify comptime parameter '" + *pt->value + "' (" + std::to_string(pv) +
+                             " vs " + std::to_string(v) + ")").c_str(), line);
+                return false; } }
+            bind[*pt->value] = constArgNode(v);
+            return true;
+        }
         if (!pt || !pt->value || !at || !at->value) return true;
         if (!pt->genericArg && tps.count(*pt->value)) {          // a bare type-param position — bind it
             if (!isConcreteTypeArg(at)) { if (argCarriesUnboundParam(at)) _inferSawOpenArg = true; return true; }
@@ -16634,12 +16661,15 @@ bool CEmitter::rejectUnprovenBound(const std::string& cls, const std::string& me
 // The stand-in a probe puts in a `const N: int32` slot. Its VALUE is deliberately never read — see the
 // call site — so it exists only to be a well-formed argument for mangling and arity checking. `1` rather
 // than `0` because a zero is the value most likely to be meaningful if it ever did leak into a fold.
-SharedIdentifier CEmitter::probeConstArg()
+SharedIdentifier CEmitter::probeConstArg() { return constValueArg(1); }
+
+// A comptime ARGUMENT the emitter writes: a nameless node carrying the value, as a literal `#(4)` does.
+SharedIdentifier CEmitter::constValueArg(int64_t v)
 {
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
     auto id = std::make_shared<IdentifierNode>(*_synthCtx, SharedString());
     id->synthesized = true;
-    id->constArgValue = std::make_shared<Int64Node>(*_synthCtx, 1);
+    id->constArgValue = std::make_shared<Int64Node>(*_synthCtx, v);
     return id;
 }
 

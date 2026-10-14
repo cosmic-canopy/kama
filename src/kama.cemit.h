@@ -3365,6 +3365,7 @@ private:
     // `emitGenericTypeInst`, the very function a real instantiation goes through.
     void checkTypeTemplatesAsWritten();
     SharedIdentifier probeConstArg();   // the placeholder a probe puts in a `const N: int32` slot
+    SharedIdentifier constValueArg(int64_t v);   // a nameless comptime argument carrying `v`
     ClassInfo* opaqueParamOf(const SharedIdentifier& el);   // the opaque a probe bound to a bare type param, or null
     void markValueParams(const std::string& key, const SharedIdentifier& t);   // a param the signature makes a value
     long _probeTypesWalked = 0;    // generic types given a probe instance

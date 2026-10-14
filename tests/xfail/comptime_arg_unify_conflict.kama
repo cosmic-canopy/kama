@@ -1,0 +1,15 @@
+// A comptime parameter inferred from two arguments must agree, through a generic type's value slot as through an
+// `InlineArray`'s size: `M` is 3 from `b` and 5 from `xs`.
+type value Buf<T> comptime(int32 N) {
+    public InlineArray<T>#(N) a;
+    public ctor make(InlineArray<T>#(N) a) { this.a = a; }
+}
+
+fn int32 pair(Buf<int32>#(M) b, InlineArray<int32>#(M) xs) comptime(int32 M) { return M; }
+
+fn int32 main() {
+    InlineArray<int32>#(3) v = [1, 2, 3];
+    InlineArray<int32>#(5) w = [1, 2, 3, 4, 5];
+    Buf<int32>#(3) b = Buf::<int32>#(3).make(a: v);
+    return pair(b: b, xs: w);   // ERROR: `M` is 3 and 5
+}

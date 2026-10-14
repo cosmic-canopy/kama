@@ -1,0 +1,39 @@
+// A generic's own `comptime` parameter as a generic TYPE's comptime argument. `Buf<T>#(M)` named only inside
+// `fn … comptime(int32 M)` was never instantiated: its argument stayed the NAME `M`, which registration read as an
+// unbound type parameter, so the instance was skipped — "cannot tell which `Buf` to construct", then "`Buf_int32_3`
+// has no method `size`" — and a program naming the same instance anywhere else hid it. The argument is now the number
+// `M` stands for, fixed where it is written. And `M` is inferred from a `Buf<int32>#(M)` parameter, as it already was
+// from an `InlineArray<int32>#(M)` one.
+type value Buf<T> comptime(int32 N) {
+    public InlineArray<T>#(N) a;
+    public ctor make(InlineArray<T>#(N) a) { this.a = a; }
+    public fn int32 size() { return N; }
+    public fn T first() { return this.a[0]; }
+}
+
+// The instance is named only here, over the function's own `M` (and its own `T`).
+fn int32 sizeOfWrapped<T>(InlineArray<T>#(M) xs) comptime(int32 M) {
+    Buf<T>#(M) b = Buf::<T>#(M).make(a: xs);
+    return b.size();
+}
+fn int32 firstWrapped(InlineArray<int32>#(M) xs) comptime(int32 M) {
+    Buf<int32>#(M) b = Buf::<int32>#(M).make(a: xs);
+    return b.first();
+}
+// `M` inferred from a user generic type's value slot.
+fn int32 sizeOf(Buf<int32>#(M) b) comptime(int32 M) { return b.size() * 10; }
+
+fn int32 main() {
+    InlineArray<int32>#(3) v = [7, 8, 9];
+    InlineArray<int32>#(5) w = [1, 2, 3, 4, 5];
+    InlineArray<int64>#(2) x = [4i64, 5i64];
+    int32 n = 0;
+    if (sizeOfWrapped::<int32>(xs: v) == 3) { n = n + 1; }
+    if (sizeOfWrapped::<int32>(xs: w) == 5) { n = n + 2; }
+    if (sizeOfWrapped::<int64>(xs: x) == 2) { n = n + 4; }
+    if (firstWrapped(xs: v) == 7)           { n = n + 8; }
+    if (firstWrapped(xs: w)#(5) == 1)       { n = n + 16; }
+    Buf<int32>#(3) b = Buf::<int32>#(3).make(a: v);
+    if (sizeOf(b: b) == 30)                 { n = n + 32; }
+    return n;
+}

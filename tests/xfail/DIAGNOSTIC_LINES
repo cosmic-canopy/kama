@@ -150,6 +150,7 @@ compilefor_member_pair	compilefor_member_pair.kama:10 compilefor_member_pair.kam
 compilefor_negated_component_typo	compilefor_negated_component_typo.kama:7
 compilefor_on_method	compilefor_on_method.kama:9
 compilefor_unknown_platform	compilefor_unknown_platform.kama:8
+comptime_arg_unify_conflict	comptime_arg_unify_conflict.kama:14
 comptime_args_arity	comptime_args_arity.kama:3
 comptime_assert_false	comptime_assert_false.kama:4
 comptime_assert_generic_false	comptime_assert_generic_false.kama:6
