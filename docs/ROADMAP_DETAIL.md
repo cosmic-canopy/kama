@@ -2901,17 +2901,6 @@ The fix is to tell the reader when it reads the stdlib's manifest, or to refuse 
 path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
 diagnostic, not a feature: no program can use such a package today.
 
-<a id="s10-emcc-file-flags"></a>
-
-### emcc's file inputs in `ldflags` resolve against the working directory (KR-161)
-
-Measured on `0.9.589`, filed 2026-10-14. A project's `ldflags` go to the link verbatim and the link runs in the caller's directory, so `--shell-file`,
-`--embed-file` and `--preload-file` paths work only from the manifest's own directory; `jsLibraries` resolve against
-the manifest (`src/kama.driver.cpp` ~5717). The dependency path guard (`depFlagPathIsPortable`, ~5279) checks only
-`-I`/`-L`/`-isystem`/`-iquote`/`-idirafter`, so a dependency's relative emcc file flag passes unchecked. Natively the
-same: a relative `-Wl,-sectcreate,…,data.txt` builds from the project only. **Scheduled:** structured keys for emcc's
-file inputs (`shellFile`, `embedFiles`, `preloadFiles`), resolved like `jsLibraries`; the guard widened to them.
-
 <a id="s10-target-js-keys"></a>
 
 ### A target entry refuses `jsLibraries` and `emSettings` (KR-162)

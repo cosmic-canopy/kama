@@ -387,6 +387,24 @@ What answers the need instead:
 them. emcc accumulates them, so there is nothing to resolve between a project and its dependencies —
 a package that binds a browser API ships the glue that binds it.
 
+emcc's other file inputs have a key each, resolved the same way:
+
+```json
+{
+  "shellFile": "web/shell.html",
+  "embedFiles": ["assets"],
+  "preloadFiles": ["data/level.bin@/levels/1.bin"]
+}
+```
+
+**`shellFile`** is the `--shell-file` page around the program. It is the project's alone: one page holds
+a program, so a dependency naming one is refused. **`embedFiles`** and **`preloadFiles`** pack files into
+the program's virtual filesystem (`--embed-file`, `--preload-file`), from the project or from a
+dependency. An entry is `src` or emcc's own `src@dst`. Without `@dst`, the file lands where its relative
+spelling puts it (`assets` → `/assets`), which is where emcc put it when run from the manifest's directory.
+As raw `ldflags` these resolved against wherever the build was started, so they built from the manifest's
+own directory only.
+
 **`emSettings`** is an object, and the **shape of each value decides what it means**:
 
 | value | kind | how it merges |
@@ -432,13 +450,16 @@ What a dependency **cannot** do is redefine your build:
 
 | it contributes | it does not |
 |---|---|
-| `cflags`, `cxxflags`, `objcflags`, `ldflags`, `link`, `csources`, `cincludes`, `jsLibraries`, `emSettings` | `cc`, `cxx`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
+| `cflags`, `cxxflags`, `objcflags`, `ldflags`, `link`, `csources`, `cincludes`, `jsLibraries`, `emSettings`, `embedFiles`, `preloadFiles` | `cc`, `cxx`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
+| | `shellFile` — the page your program runs in |
 | `reproducible-float` — it can only turn contraction off, and its own arithmetic is what you compile | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
 
 Two more rules worth knowing. A dependency's **relative** `-I`/`-L` is **refused**, because it would
 resolve against *your* working directory rather than against the package — a package's own include tree
-is `cincludes`, which kama resolves against the declaring manifest; a machine path stays absolute. And a
+is `cincludes`, which kama resolves against the declaring manifest; a machine path stays absolute. A
+relative emcc file flag (`--js-library`, `--shell-file`, `--embed-file`, `--preload-file`) in a dependency's
+`ldflags` is refused the same way, naming the key that replaces it. And a
 dependency whose manifest does not parse stops the build, naming that file: silently skipping it would
 silently drop whatever it was contributing. (`kama query` and `kama lsp` stay lenient — an editor sits
 above trees you do not own.)

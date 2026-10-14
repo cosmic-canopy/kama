@@ -3182,6 +3182,10 @@ struct BuildSettings {
     std::vector<std::string> cxxflags, objcflags;     // per-language, like cflags (see TargetSpec)
     std::vector<SourceEntry> csources;                // as written, relative to `manifestPath`
     std::vector<std::string> jsLibraries;             // likewise
+    // emcc's other FILE inputs, likewise relative (KR-161): the page around the program (the root's alone),
+    // and files packed into its virtual filesystem, each `src` or `src@dst`.
+    std::string shellFile;
+    std::vector<std::string> embedFiles, preloadFiles;
     std::vector<SourceEntry> cincludes;               // include DIRECTORIES, likewise relative
     std::vector<std::pair<std::string, EmValue>> emSettings;
     // The one boolean that travels. `no-heap` and `webgpu` are whole-artifact decisions a dependency
@@ -3209,6 +3213,10 @@ static std::vector<CSourceRef> g_cincludes;
 // The emscripten pair, resolved and merged across every manifest in the build. Both are inert on a
 // non-wasm target; the SHAPE is still validated everywhere, because the same manifest builds both.
 static std::vector<CSourceRef> g_jsLibraries;
+// The other emcc file inputs, resolved the same way. Each `--embed-file`/`--preload-file` argument is already
+// `<resolved src>@<dst>`, so the file keeps the place in the virtual filesystem its relative spelling gave it.
+static std::vector<CSourceRef> g_embedFiles, g_preloadFiles;
+static std::string g_shellFile;
 // Ordered, so the command line is stable and a conflict names its settings in manifest order. `owner`
 // on each entry is the manifest that last set it — a scalar conflict between two dependencies is
 // refused, and the message needs both names.
@@ -3272,6 +3280,9 @@ struct ManifestReader {
     std::vector<std::string>* objcflagsOut = nullptr;       // ...`objcflags` (Objective-C and Objective-C++)
     std::vector<SourceEntry>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
     std::vector<std::string>* jsLibrariesOut = nullptr;      // set to capture `jsLibraries` (emscripten --js-library)
+    std::string* shellFileOut = nullptr;                     // ...`shellFile` (--shell-file)
+    std::vector<std::string>* embedFilesOut = nullptr;       // ...`embedFiles` (--embed-file)
+    std::vector<std::string>* preloadFilesOut = nullptr;     // ...`preloadFiles` (--preload-file)
     std::vector<SourceEntry>* cincludesOut = nullptr;        // set to capture `cincludes` (include directories)
     // A VECTOR, not a map: the file's own order is the order a conflict names its settings in, and the
     // order they reach the command line.
@@ -3433,6 +3444,14 @@ struct ManifestReader {
     // The path rules every file-naming manifest key shares: inside the package, and relative to the
     // manifest that names it — so the project stays relocatable and a published package cannot name a
     // directory nobody else has.
+    // An `embedFiles`/`preloadFiles` entry: `src` or `src@dst`, emcc's own spelling. The `src` half names a file
+    // of the package, under validRelPath; the `dst` half is a path in the program's virtual filesystem.
+    bool validEmFile(const std::string& p, const char* key) {
+        const size_t at = p.find('@');
+        if (at != std::string::npos && at + 1 == p.size())
+            return fail(std::string("`") + key + "` entry \"" + p + "\" has an empty destination after `@`");
+        return validRelPath(at == std::string::npos ? p : p.substr(0, at), key);
+    }
     bool validRelPath(const std::string& p, const char* key) {
         const std::string k = std::string("`") + key + "`";
         if (p.empty()) return fail(k + " has an empty path");
@@ -4241,6 +4260,21 @@ struct ManifestReader {
                 std::vector<std::string>& into = jsLibrariesOut ? *jsLibrariesOut : scratch;
                 if (!stringArray(into, "jsLibraries")) return false;
                 for (const std::string& p : into) if (!validRelPath(p, "jsLibraries")) return false;
+            }
+            // emcc's other file inputs, under the same rule (KR-161). As raw `ldflags` they reached the link
+            // verbatim, and the link runs where the build was started, so `--shell-file web/shell.html` built
+            // only from the manifest's own directory.
+            else if (key == "shellFile") {
+                std::string scratch;
+                std::string& into = shellFileOut ? *shellFileOut : scratch;
+                if (!str(into) || !validRelPath(into, "shellFile")) return false;
+            }
+            else if (key == "embedFiles" || key == "preloadFiles") {
+                std::vector<std::string> scratch;
+                std::vector<std::string>* sink = key == "embedFiles" ? embedFilesOut : preloadFilesOut;
+                std::vector<std::string>& into = sink ? *sink : scratch;
+                if (!stringArray(into, key.c_str())) return false;
+                for (const std::string& p : into) if (!validEmFile(p, key.c_str())) return false;
             }
             // Include directories, under the path rules every file-naming key shares (inside the
             // package, relative to the manifest that names them). Whether each is actually a directory
@@ -5054,6 +5088,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     r.cxxflagsOut = &out.cxxflags; r.objcflagsOut = &out.objcflags;
     r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries; r.cincludesOut = &out.cincludes;
     r.emSettingsOut = &out.emSettings;
+    r.shellFileOut = &out.shellFile; r.embedFilesOut = &out.embedFiles; r.preloadFilesOut = &out.preloadFiles;
     r.reproFloatOut = &out.reproFloat;
     r.kamaReqOut = &out.kamaReq;
     if (!r.parse()) {
@@ -5286,6 +5321,18 @@ static bool loadBuildSettings(const std::string& manifestPath, const std::string
     return true;
 }
 
+// An `embedFiles`/`preloadFiles` entry resolved against the manifest directory `dir`: `<dir>/src@dst`. With no
+// `@dst` the destination is the entry's own relative spelling, which is where emcc put a relative `src` when it was
+// run from the manifest's directory; resolving the source alone would have moved the file to its absolute path.
+static std::string emFileArg(const std::string& dir, const std::string& entry)
+{
+    const size_t at = entry.find('@');
+    const std::string src = at == std::string::npos ? entry : entry.substr(0, at);
+    std::string dst = at == std::string::npos ? joinPathLexical(".", src) : entry.substr(at + 1);
+    if (at == std::string::npos) dst = "/" + dst;
+    return joinPathLexical(dir, src) + "@" + dst;
+}
+
 // A dependency's relative `-I`/`-L`/`-isystem` resolves against the CONSUMER's working directory, not
 // against the dependency — so it either fails loudly or, worse, silently finds the consumer's own
 // `include/`. Refused rather than propagated: the supported route for a path is a structured key kama
@@ -5307,6 +5354,23 @@ static bool depFlagPathIsPortable(const std::vector<std::string>& flags, const s
             err = "dependency `" + owner + "` declares a relative path in its build flags (`" + f + "`),\n"
                   "      which would resolve against YOUR working directory rather than against\n"
                   "      " + manifestPath + ". Make it absolute.";
+            return false;
+        }
+        // emcc's file inputs have a structured key each, resolved against the declaring manifest (KR-161).
+        static const struct { const char* flag; const char* key; } kEmFileFlags[] = {
+            { "--js-library", "jsLibraries" }, { "--shell-file", "shellFile" },
+            { "--embed-file", "embedFiles" },  { "--preload-file", "preloadFiles" },
+        };
+        for (const auto& ef : kEmFileFlags) {
+            const size_t n = strlen(ef.flag);
+            if (f.compare(0, n, ef.flag) != 0 || (f.size() > n && f[n] != '=')) continue;
+            std::string arg = f.size() > n ? f.substr(n + 1) : (i + 1 < flags.size() ? flags[i + 1] : std::string());
+            const size_t at = arg.find('@');
+            if (arg.empty() || isAbsolutePath(at == std::string::npos ? arg : arg.substr(0, at))) break;
+            err = "dependency `" + owner + "` passes a relative file to emcc in its build flags (`" + f + " " + arg +
+                  "`),\n      which would resolve against YOUR working directory rather than against\n"
+                  "      " + manifestPath + ". Name it with the `" + ef.key + "` key, which resolves against the\n"
+                  "      manifest that declares it.";
             return false;
         }
     }
@@ -5434,6 +5498,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     g_manifestTargets.clear();
     g_rootSettings = BuildSettings();
     g_csources.clear(); g_jsLibraries.clear(); g_cincludes.clear(); g_emSettings.clear();
+    g_embedFiles.clear(); g_preloadFiles.clear(); g_shellFile.clear();
     g_manifestWebgpu = false; g_manifestNoHeap = false; g_manifestReproFloat = false;
     g_debugOptimize.clear();
     g_strictFlags = false;
@@ -5681,6 +5746,14 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     if (req.strictDeps) { err = derr; return false; }
                     continue;
                 }
+                // One page holds a program, and which one is the program's decision: a library naming it
+                // would be a second page, or a choice made for every consumer.
+                if (!bs.shellFile.empty()) {
+                    derr = "dependency `" + n + "` names a `shellFile` (" + depManifest + ") — the page a program runs "
+                           "in is the project's to choose, not a dependency's";
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
                 // The dependency's `kama` range, at BUILD time: install already refused a package this
                 // compiler cannot build, so this catches the view a newer manifest has outgrown (a `path`
                 // dependency edited in place, a downgraded compiler). Same leniency split as above.
@@ -5704,6 +5777,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs.path), cs.gate });
                 for (const std::string& js : bs.jsLibraries)
                     g_jsLibraries.push_back({ n, joinPathLexical(dirName(depManifest), js) });
+                for (const std::string& f : bs.embedFiles)   g_embedFiles.push_back({ n, emFileArg(dirName(depManifest), f) });
+                for (const std::string& f : bs.preloadFiles) g_preloadFiles.push_back({ n, emFileArg(dirName(depManifest), f) });
                 for (const SourceEntry& inc : bs.cincludes)
                     g_cincludes.push_back({ n, joinPathLexical(dirName(depManifest), inc.path), inc.gate });
                 if (!mergeEmSettings(bs.emSettings, n, derr)) {
@@ -5731,6 +5806,9 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             g_csources.push_back({ "", joinPathLexical(dirName(req.manifest), cs.path), cs.gate });
         for (const std::string& js : g_rootSettings.jsLibraries)
             g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
+        if (!g_rootSettings.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_rootSettings.shellFile);
+        for (const std::string& f : g_rootSettings.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
+        for (const std::string& f : g_rootSettings.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
         for (const SourceEntry& inc : g_rootSettings.cincludes)
             g_cincludes.push_back({ "", joinPathLexical(dirName(req.manifest), inc.path), inc.gate });
         // The project merges LAST, which is what makes "the project wins" true of a scalar — including
@@ -8285,6 +8363,7 @@ static bool appendIndexEntry(const std::string& indexPath, const std::string& na
 static const struct { const char* key; const char* since; } kManifestKeySince[] = {
     { "publish", "0.9.453" },
     { "description", "0.9.523" }, { "repository", "0.9.523" }, { "keywords", "0.9.523" },
+    { "shellFile", "0.9.602" }, { "embedFiles", "0.9.602" }, { "preloadFiles", "0.9.602" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
@@ -13366,6 +13445,9 @@ int main(int argc, char** argv)
             std::set<std::string> seenJs;
             for (const CSourceRef& js : g_jsLibraries)
                 if (seenJs.insert(js.path).second) link << "--js-library \"" << js.path << "\" ";
+            if (!g_shellFile.empty()) link << "--shell-file \"" << g_shellFile << "\" ";
+            for (const CSourceRef& f : g_embedFiles)   link << "--embed-file \"" << f.path << "\" ";
+            for (const CSourceRef& f : g_preloadFiles) link << "--preload-file \"" << f.path << "\" ";
         }
         // The target's own link flags from kama.json, last so they can override anything above.
         if (!stopsAtObject) for (const auto& f : g_target.ldflags) link << shellArg(f) << " ";

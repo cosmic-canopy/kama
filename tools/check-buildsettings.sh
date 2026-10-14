@@ -738,6 +738,63 @@ fi
     && ok "...and they are inert on a native build" \
     || { bad "jsLibraries broke a native build"; head -2 "$tmp/e" >&2; }
 
+# emcc's other FILE inputs (KR-161). As raw `ldflags` they reached the link verbatim and the link runs where
+# the build was started, so `--shell-file web/shell.html` built only from the manifest's own directory. The
+# structured keys resolve against the declaring manifest, like `jsLibraries`; built here from `/`. An entry
+# without `@dst` keeps the place its relative spelling gave it in the virtual filesystem.
+app emfiles geo <<'JSON'
+{ "name": "emfiles", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "shellFile": "web/shell.html", "embedFiles": ["assets"], "preloadFiles": ["data/level.bin@/levels/1.bin"],
+  "dependencies": { "geo": { "path": "./vendor/geo" } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+cat > "$tmp/emfiles/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src", "embedFiles": ["fonts"],
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+"$KAMA" pkg install "$tmp/emfiles/kama.json" >/dev/null 2>&1 || true
+line=$(cd / && "$KAMA" build "$tmp/emfiles/kama.json" --target wasm --cc "echo emcc" -o "$tmp/emfiles/app.html" 2>/dev/null || true)
+# (`echo` drops the quotes; a dependency's path runs through its view link, `.kama/deps/geo`, as `csources` do.)
+efd="$tmp/emfiles"
+emok=1
+for want in "--shell-file $efd/web/shell.html" "--embed-file $efd/assets@/assets" \
+            "--preload-file $efd/data/level.bin@/levels/1.bin" "--embed-file $efd/.kama/deps/geo/fonts@/fonts"; do
+    printf '%s' "$line" | grep -qF -- "$want" \
+        || { emok=0; bad "the link line lacks $want, built from /"; printf '%s\n' "$line" | sed 's/^/    /' >&2; }
+done
+[ "$emok" = 1 ] \
+    && ok "\`shellFile\`, \`embedFiles\` and \`preloadFiles\` resolve against their manifest, a dependency's too"
+# A dependency may pack files, never choose the page.
+cat > "$tmp/emfiles/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src", "shellFile": "page.html",
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+"$KAMA" build "$tmp/emfiles/kama.json" --target wasm --cc "echo emcc" -o "$tmp/emfiles/app.html" >"$tmp/o" 2>"$tmp/e" \
+    && bad "a dependency's \`shellFile\` was accepted" \
+    || { grep -qF 'the page a program runs in is the project' "$tmp/e" \
+         && ok "...and a dependency naming a \`shellFile\` is refused" \
+         || { bad "a dependency's shellFile was refused for the wrong reason"; head -3 "$tmp/e" >&2; }; }
+# A dependency's raw relative emcc file flag names the key that replaces it.
+cat > "$tmp/emfiles/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src", "ldflags": ["--embed-file", "fonts"],
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+"$KAMA" build "$tmp/emfiles/kama.json" --target wasm --cc "echo emcc" -o "$tmp/emfiles/app.html" >"$tmp/o" 2>"$tmp/e" \
+    && bad "a dependency's relative \`--embed-file\` was accepted" \
+    || { grep -qF 'Name it with the `embedFiles` key' "$tmp/e" \
+         && ok "...and a dependency's relative \`--embed-file\` in \`ldflags\` is refused, naming \`embedFiles\`" \
+         || { bad "a dependency's relative --embed-file was refused for the wrong reason"; head -3 "$tmp/e" >&2; }; }
+# The path rules every file-naming key shares.
+app emabs <<'JSON'
+{ "name": "emabs", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "shellFile": "/tmp/shell.html", "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/emabs/kama.json" -o "$tmp/emabs/app" >"$tmp/o" 2>"$tmp/e" \
+    && bad "an absolute \`shellFile\` was accepted" \
+    || { grep -qF '`shellFile` path "/tmp/shell.html" is absolute' "$tmp/e" \
+         && ok "...and an absolute \`shellFile\` is refused on every target" \
+         || { bad "an absolute shellFile was refused for the wrong reason"; head -3 "$tmp/e" >&2; }; }
+
 # INERT on a non-wasm target, not refused: the same manifest builds both, and `subsystem` set the
 # precedent for an accepted no-op. The SHAPE is still validated everywhere, which is the half that
 # makes a typo findable by whoever wrote it rather than by whoever ships to the web.
