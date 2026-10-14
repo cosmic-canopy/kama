@@ -297,6 +297,20 @@ std::vector<std::string> splitPathComponents(const std::string& p)
     return out;
 }
 
+// A path spelled ABSOLUTE on either kind of host: `/x`, `\x`, or drive-qualified `C:…`. Such a path is used as
+// written, never joined onto a directory.
+static bool isAbsolutePath(const std::string& p)
+{
+    return !p.empty() && (p[0] == '/' || p[0] == '\\' || (p.size() > 1 && p[1] == ':'));
+}
+
+// `p` against `dir` — unless `p` is absolute, which names its directory itself. A dependency's or an
+// override's `path` was always joined, so `"path": "/abs/dep"` looked for `<project>//abs/dep` (KR-158).
+static std::string joinUnlessAbsolute(const std::string& dir, const std::string& p)
+{
+    return isAbsolutePath(p) ? p : dir + "/" + p;
+}
+
 // Join a relative `rel` onto `dir` LEXICALLY — collapsing "." and ".." as text, never touching the
 // filesystem. Deliberately NOT absolutePath(): that is realpath(), which resolves symlinks, and a path
 // dependency reaches its package *through* the `.kama/deps/<name>` symlink. Canonicalizing there would
@@ -3422,7 +3436,7 @@ struct ManifestReader {
     bool validRelPath(const std::string& p, const char* key) {
         const std::string k = std::string("`") + key + "`";
         if (p.empty()) return fail(k + " has an empty path");
-        if (p[0] == '/' || (p.size() > 1 && p[1] == ':'))
+        if (isAbsolutePath(p))
             return fail(k + " path \"" + p + "\" is absolute; it must be relative to the manifest "
                         "that declares it, or the project stops being relocatable (and a published "
                         "package would name a directory nobody else has)");
@@ -5102,7 +5116,7 @@ static bool loadManifestSource(const std::string& path, std::string& out, std::s
 
     const std::string bad =
         out == "." || out == ".."                          ? "`source` must name a subdirectory, not \"" + out + "\""
-      : out[0] == '/' || (out.size() > 1 && out[1] == ':') ? "`source` must be relative to the manifest, not an absolute path"
+      : isAbsolutePath(out)                                ? "`source` must be relative to the manifest, not an absolute path"
       : out.find("..") != std::string::npos               ? "`source` may not reach outside the project with `..`"
       : std::string();
     if (!bad.empty()) { err = bad + " (the default is \"src\")"; out.clear(); return false; }
@@ -5288,7 +5302,7 @@ static bool depFlagPathIsPortable(const std::vector<std::string>& flags, const s
             // Either `-Ifoo` (joined) or `-I foo` / `-isystem foo` (the next element).
             std::string arg = f.size() > n ? f.substr(n) : (i + 1 < flags.size() ? flags[i + 1] : std::string());
             while (!arg.empty() && arg[0] == ' ') arg.erase(0, 1);
-            if (arg.empty() || arg[0] == '/' || (arg.size() > 1 && arg[1] == ':')) break;   // absolute: their call
+            if (arg.empty() || isAbsolutePath(arg)) break;   // absolute: their call
             err = "dependency `" + owner + "` declares a relative path in its build flags (`" + f + "`),\n"
                   "      which would resolve against YOUR working directory rather than against\n"
                   "      " + manifestPath + ". Make it absolute.";
@@ -7233,7 +7247,7 @@ static bool resolveOne(const std::string& name, const DepSpec& spec, const std::
                        LockEntry& out, std::string& storePath, std::string& err)
 {
     if (!spec.path.empty()) {
-        std::string target = spec.pathAbs.empty() ? absolutePath(requestorDir + "/" + spec.path) : spec.pathAbs;
+        std::string target = spec.pathAbs.empty() ? absolutePath(joinUnlessAbsolute(requestorDir, spec.path)) : spec.pathAbs;
         if (!dirExists(target)) { err = "path dependency '" + name + "' not found at " + target; return false; }
         out = LockEntry(); out.source = "path"; out.path = spec.path; storePath = target;
         return true;
@@ -7629,7 +7643,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 // Canonicalize the path spec against its OWN declaring manifest before anything compares
                 // or materializes it — the single point where a spelling becomes a directory.
                 if (!r.spec.path.empty() && r.spec.pathAbs.empty())
-                    r.spec.pathAbs = absolutePath(r.requestorDir + "/" + r.spec.path);
+                    r.spec.pathAbs = absolutePath(joinUnlessAbsolute(r.requestorDir, r.spec.path));
                 bool incomingRange = isRangeDep(r.spec) || isRegistryDep(r.spec);   // a versioned dep (git range or registry)
 
                 auto ci = chosen.find(r.name);
@@ -7878,7 +7892,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 fprintf(stderr, "kama: override '%s' in kama.local.json is not a dependency of this "
                         "project — declare it in kama.json first\n", name.c_str()); return 1;
             }
-            std::string target = absolutePath(base + "/" + spec.path);
+            std::string target = absolutePath(joinUnlessAbsolute(base, spec.path));
             if (!dirExists(target)) {
                 fprintf(stderr, "kama: override '%s' target not found at %s\n", name.c_str(), target.c_str());
                 return 1;

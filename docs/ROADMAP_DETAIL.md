@@ -2901,16 +2901,6 @@ The fix is to tell the reader when it reads the stdlib's manifest, or to refuse 
 path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
 diagnostic, not a feature: no program can use such a package today.
 
-<a id="s10-abs-path-deps"></a>
-
-### An absolute path dependency or override (KR-158)
-
-Measured on `0.9.589`, filed 2026-10-14. `"dependencies": {"dep": {"path": "/abs/path/dep"}}` fails `kama pkg install` with "path dependency 'dep' not found
-at .//abs/path/dep": the driver always joins `requestorDir + "/" + spec.path` (`src/kama.driver.cpp` ~7632, the
-fallback ~7236, and the `kama.local.json` override join ~7881). A relative path works. **Scheduled:** an absolute
-path is used as written — it is the natural form in a machine-local `kama.local.json`; packages.md says what a
-published manifest may carry.
-
 <a id="s10-install-hint"></a>
 
 ### `kama check`'s install hint names no manifest (KR-159)

@@ -188,6 +188,11 @@ which is the wrong place to look. Re-running `kama pkg install` per environment 
 each run overwrites the other's links. The content-addressed store (`~/.kama/store`) stays absolute — it
 is machine-global and does not travel with the tree.
 
+**A `path` is relative to the manifest that declares it, or absolute.** `{ "path": "/work/geo" }` names the
+directory as written; it was once joined onto the project's own directory and never found. An absolute path
+ties a manifest to one machine, which is why its natural home is a `kama.local.json` override, and a `path`
+dependency of either spelling is refused at publish (see *Publishing*).
+
 ## Telling the tooling what your project contains — `source`
 
 This key exists to replace an inference with a declaration. Editor tooling (the language server) has to

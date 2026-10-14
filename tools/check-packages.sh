@@ -983,6 +983,19 @@ if ! "$KAMA" pkg install "$rp/kama.json" >"$tmp/rp1.out" 2>&1; then
 grep -q '"source": "registry"' "$rp/kama.lock" \
     || { echo "check-packages: FAIL — registries-override install did not lock a registry source:" >&2; sed 's/^/  /' "$rp/kama.lock" >&2; exit 1; }
 
+# KR-158, in `kama.json` itself: an absolute `path` dependency is used as written.
+abp="$tmp/abp"; mkdir -p "$abp/src"
+cat > "$abp/kama.json" <<JSON
+{ "name": "abpapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "ogeo": { "path": "$(kama_native_path "$ogeo")" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'import { ogeo::area };\nfn int32 main() { return area(); }\n' > "$abp/src/main.kama"
+"$KAMA" pkg install "$abp/kama.json" >"$tmp/abp.out" 2>&1 \
+    || { echo "check-packages: FAIL — an absolute path dependency did not install:" >&2; sed 's/^/  /' "$tmp/abp.out" >&2; exit 1; }
+"$KAMA" build "$abp/kama.json" -o "$tmp/abpapp" >"$tmp/abpb.out" 2>&1 \
+    || { echo "check-packages: FAIL — the build through an absolute path dependency failed:" >&2; sed 's/^/  /' "$tmp/abpb.out" >&2; exit 1; }
+if "$tmp/abpapp"; then arc=0; else arc=$?; fi
+[ "$arc" = 30 ] || { echo "check-packages: FAIL — the absolute-path app returned $arc, expected 30" >&2; exit 1; }
 # 27a. a DEPENDENCY written for a newer compiler: its manifest carries a key this one has never heard of,
 #     under a `kama` range this one misses. The install says to update rather than naming the key alone —
 #     the shape 0.9.440 met with a package that used `publish` (it said only "unknown key", at a store path).
