@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-153 | **Returning `this` as a place reaches clang** — `fn ref B me() { return this; }` (and `const ref`) emits `return &(self);` on a pointer | S | [§2](ROADMAP_DETAIL.md#s2-return-this-place) |
 | KR-154 | **A recursive enum through a collection, with an `Owned` variant, is refused for copies nobody makes** — `type enum J { List(DynamicArray<J> items), Box(Owned<J> inner), … }` reports `copy`-related errors inside the stdlib | S | [§2](ROADMAP_DETAIL.md#s2-recursive-enum-owned) |
 | KR-155 | **A false use-after-move when a loop body ends in an `if`/`else` that always leaves** — a binding given and re-assigned before `continue`, with `break` in the `else`, is reported as given away and never re-assigned | S | [§2](ROADMAP_DETAIL.md#s2-loop-diverging-move) |
 | KR-156 | **A value-producing `match` into an existing `string`, and a `match` arm that moves a named owned local silently** — `s = match (e) {…}` is refused for a `string` (works for `int32`, a list); and `case A: t;` moves `t` with no `give`, where a ternary demands one | S | [§2](ROADMAP_DETAIL.md#s2-match-string-assign) |

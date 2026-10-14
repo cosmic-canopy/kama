@@ -417,14 +417,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-return-this-place"></a>
-
-### Returning `this` as a place reaches clang (KR-153)
-
-Measured on `0.9.589`, filed 2026-10-14. `const fn const ref B me() { return this; }` (and `fn ref B`, and on a `type value`) emits `return &(self);` —
-`emitPlace(this)` is already `self`, a pointer, and the place return takes its address again (`src/kama.cemit.cpp`
-~8641). Passing `this` to a `const ref B` parameter works. **Scheduled.** Fixture: both forms, chained.
-
 <a id="s2-recursive-enum-owned"></a>
 
 ### A recursive enum through a collection, with an `Owned` variant (KR-154)

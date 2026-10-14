@@ -8648,8 +8648,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // as "already a pointer, return it directly" and emit `return (*call)`: a chained place return
             // through a DIRECT method call never compiled (the stdlib's one chain, `SortedMap.getRef`, goes
             // through an `Owned` auto-deref and took another path), and the first `const ref` fixture found it.
+            // `this` is the one place that is already a pointer — `self` — so it is addressed as the object it
+            // points at, `(*self)`, as every other receiver use does. `&(self)` was the address of the parameter
+            // slot: `fn ref B me() { return this; }` reached clang as a `B**` (KR-153).
             bool ph = _hoistOK; _hoistOK = true;
-            std::string p = retExpr ? emitPlace(retExpr) : std::string("0");
+            std::string p = retExpr ? receiverObject(emitPlace(retExpr)) : std::string("0");
             _hoistOK = ph;
             flushHoisted(depth);
             emitUnwindAll(depth);

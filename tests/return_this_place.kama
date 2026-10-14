@@ -1,0 +1,33 @@
+// A method returning `this` as a place — `fn ref B me()` / `const fn const ref B me()` — hands back the object
+// itself. It emitted `return &(self);`, the address of the receiver PARAMETER: a `B**` clang refused (and
+// warned would dangle). The place a call returns composes like any other: chained, read, and written through.
+// Returns 0.
+
+type resource B {
+    int32 x;
+    public ctor make(int32 x) { this.x = x; }
+    public fn ref B me() { return this; }
+    public const fn const ref B view() { return this; }
+    public fn void bump() { this.x = this.x + 1; }
+    public const fn int32 get() { return this.x; }
+}
+
+type value P {
+    public int32 x = 0;
+    public ctor make(int32 x) { this.x = x; }
+    public fn ref P me() { return this; }
+    public const fn const ref P view() { return this; }
+}
+
+fn int32 main() {
+    B b = B.make(x: 1);
+    b.me().bump();                            // a write through the returned place lands on `b`
+    b.me().me().bump();                       // …chained
+    if (b.get() != 3) { return 1; }
+    if (b.view().view().get() != 3) { return 2; }
+    P p = P.make(x: 5);
+    p.me().x = 7;
+    if (p.x != 7 || p.view().x != 7) { return 3; }
+    if (p.me().me().view().x != 7) { return 4; }
+    return 0;
+}
