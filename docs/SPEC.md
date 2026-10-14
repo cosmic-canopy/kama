@@ -4236,6 +4236,13 @@ only name it has. (An *initialized* local of the same type is untouched — it i
 other.) Falling off the end returns that value, exactly as a `void` function need spell no return;
 `return give this;` is the **early-return** form, and a bare `return;` is refused for naming nothing to return. <!-- xfail: ctor_bare_return, ctor_fallible_bare_return -->
 
+**`this` is never assigned whole** — not in a constructor and not in a method. <!-- xfail: this_assign --> A constructor's `this`
+is the value being built, so building it with another constructor is `return Foo.a(…);`, and "delegate, then
+change one field" is a private constructor that takes every field. A method borrows its receiver, so it assigns
+the receiver's fields, or returns the new value for the caller to assign (`l = l.next();`). Replacing a receiver
+whole (C++'s `*this = …`, Rust's `*self = …`) is a non-goal: an enum's receiver is a copy, and the assignment
+would change nothing the caller can see.
+
 **`self` is reserved inside a type body.** It is the emitted C name of the receiver pointer, so a local or
 parameter called `self` anywhere in a `type` — method, constructor or `static fn` — is a compile error <!-- xfail: self_param -->
 pointing at `this`. Outside a type body it is an ordinary identifier: a free `fn` or `fnptr` may name a

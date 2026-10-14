@@ -1,0 +1,16 @@
+// `this` is never assigned whole (KR-140). In a constructor it is the value being built: `this = P.make(…)` passed
+// `kama check` and lowered to a pointer assigned a struct, which clang refused. Delegation is `return P.make(…);`.
+// In a method the receiver is borrowed: a struct's assignment reached clang the same way, and an enum's — passed by
+// value — compiled and wrote a COPY, so `l.advance()` left `l` unchanged with no error. Each is one diagnostic: the
+// constructor's required fields are not reported again as never assigned.
+type value P {
+    public int32 a;
+    public int32 b;
+    public ctor make(int32 a) { this.a = a; this.b = 1; }
+    public ctor two(int32 a) { this = P.make(a: a); this.b = 2; }      // ERROR: delegate with `return`
+    public const fn int32 sum() { return this.a + this.b; }
+}
+type enum Light { Red, Green;
+    public fn void advance() { this = Light::Green; }  // ERROR: a method assigns fields, or returns
+}
+fn int32 main() { P p = P.two(a: 1); return p.sum(); }

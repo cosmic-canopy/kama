@@ -3536,6 +3536,7 @@ private:
     void             rejectBaseMember(MemberAccessNode* ma);
     int              readMaxDepth(const SharedModifier& mod, int line);
     bool             isThisBase(SharedExpression e);
+    void             rejectThisAssign(SharedExpression rhs, int line);   // `this = …` anywhere (KR-140)
     bool             exprMentionsThis(SharedExpression e);
     SharedExpression baseInstallOf(SharedStatement st);
     void             checkBaseInstall(ClassInfo& owner, SharedBlock body, int ctorLine);

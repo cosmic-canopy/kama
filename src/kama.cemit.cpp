@@ -5896,6 +5896,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
+        // Before the const rule: in a `const fn` the thing wrong with `this = …` is not the const.
+        if (dynamic_cast<ThisAccessNode*>(v->unaryExpression.get())) { rejectThisAssign(v->expression, v->line); return "0"; }
         checkConstWrite(v->unaryExpression, v->line);   // no write to/through const
         if (v->token == EQ) rejectConstPtrWiden(lvalueCType(v->unaryExpression), v->expression, "this assignment", v->line);
         // A plain `=` STORES to its target: the LHS mention that follows is a write, not a read, and the
@@ -9017,6 +9019,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // pinning the placement rule would report two errors, one of them beside the point.
         if (isThisBase(as->unaryExpression)) return;
 #endif
+        // `this` is never assigned whole (KR-140): once refused, nothing else is said about the statement.
+        if (dynamic_cast<ThisAccessNode*>(as->unaryExpression.get())) { rejectThisAssign(as->expression, n->line); return; }
         // The kind rule in ASSIGNMENT position — the SIXTH hand-off, and the one the spine missed. It
         // wired the five that hand a value into a *declared* destination (initializer, return, `match`
         // arm, argument, variant payload) and left the plainest one open: `int32 x = 0; x = "oops";`
@@ -26119,6 +26123,8 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
             return false;
         }
         if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+            // `this = …` is refused where it is emitted (KR-140); crediting every field keeps that the ONE diagnostic.
+            if (dynamic_cast<ThisAccessNode*>(as->unaryExpression.get())) { state["this"].insert(mustAssign.begin(), mustAssign.end()); return false; }
             std::pair<std::string, std::string> lf = localFieldRef(as->unaryExpression);
             if (!lf.first.empty() && mustAssign.count(lf.second)) state[lf.first].insert(lf.second);
             return false;
@@ -36657,6 +36663,30 @@ int CEmitter::readMaxDepth(const SharedModifier& mod, int line)
 }
 
 // Is `e` the expression `this.base`? (`base` is a keyword, so no field can ever be spelled that way.)
+// `this = …` (or `this += …`), anywhere: `this` is never assigned whole (KR-140). In a constructor it is the storage
+// being built, so `this = Foo.a(…)` lowered to a pointer assigned a struct; delegation is `return Foo.a(…)`. In a
+// method the receiver is borrowed — a struct's by pointer, which reached clang the same way, and an enum's or an
+// adapter's by value, so the write landed in a copy and the caller's value never changed. Replacing a receiver whole
+// is a non-goal: a method assigns its fields, or returns the new value for the caller to assign.
+void CEmitter::rejectThisAssign(SharedExpression rhs, int line)
+{
+    if (_inNamedCtorBody) {
+        const std::string ty = _currentClass ? demangleForDisplay(_currentClass->name) : std::string("T");
+        // Name the constructor the author reached for (`this = Foo.a(…)` → `return Foo.a(…);`) when there is one.
+        std::string ctor = ty + ".<ctor>";
+        if (auto* inv = dynamic_cast<InvocationNode*>(rhs.get()))
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
+                if (ma->expression && ma->identifier && ma->identifier->value)
+                    ctor = unparseExpr(ma->expression) + "." + *ma->identifier->value;
+        unsupported(("a constructor cannot assign `this` — it is the value being built. Build the whole value with "
+                     "another constructor: `return " + ctor + "(…);`; to delegate and change one field, give `"
+                     + ty + "` a private constructor that takes every field").c_str(), line);
+    } else {
+        unsupported("a method cannot assign `this` whole — assign its fields, or return the new value and let the "
+                    "caller assign it (`x = x.next();`)", line);
+    }
+}
+
 bool CEmitter::isThisBase(SharedExpression e)
 {
     auto* ma = dynamic_cast<MemberAccessNode*>(e.get());

@@ -341,25 +341,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-ctor-this-assign"></a>
-
-### `this = T.make(…)` in a constructor reaches clang (KR-140)
-
-`public ctor b(string name) { this = Foo.a(name: give name); this.hop = Hop::Trusted; }` passes `kama check` and fails
-in clang: the lowering passes `&self` (a `Foo**`) to the destructor and assigns a struct to a pointer (measured on
-`0.9.577`). SPEC's delegation is `return Other.make(…)`.
-
-**Decided 2026-10-14 (the maintainer):**
-- **140-D1 — refuse it in a constructor**, naming `return Foo.a(…)` and a private all-fields ctor for the "delegate,
-  then adjust one field" case. GOALS favours one way to do a thing, and the `return` form already builds in place.
-  (The alternative, a destroy of the half-built value followed by an in-place rebuild, was declined.)
-- **140-D2 — refuse it in a method too: `this` is never assigned whole.** Found tracing 140: an assignment to bare
-  `this` has no check anywhere. In a method of a `type value`/`type resource` it lowers to `self = <struct>` (clang
-  fails); on an enum receiver, which is passed by value, it compiles and writes a local copy (read from the code,
-  reproduced before the fix). A method assigns fields, or returns the new value for the caller to assign
-  (`l = l.next()`). Replacing a receiver whole (C++ `*this = …`, Rust `*self = …`) is a **non-goal** for that reason.
-- One fixture holds both refusals, and a constructor that has a required field still reports ONE diagnostic.
-
 <a id="s2-fnptr-type-arg"></a>
 
 ### An `fnptr` type is not a type argument (KR-107)
