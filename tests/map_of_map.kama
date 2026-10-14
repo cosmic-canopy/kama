@@ -1,0 +1,13 @@
+// A `Map` whose value is a `Map` compiles. It did not: the inner map's default hasher, `DefaultHasher`, was checked as
+// a name `map.kama` uses — the outer map's template — and that file named it in its own declaration without
+// importing it, so `Map<string, Map<string, int32>>` was "`DefaultHasher` is declared in hasher.kama and this file
+// does not import it" (measured on 0.9.577). A `Set` or a `SortedMap` as the value always built.
+import { std::collections::Map };
+
+fn int32 main() {
+    Map<string, Map<string, int32>> m = Map.empty();
+    Map<string, int32> inner = Map.empty();
+    inner.put(key: "a", value: 4);
+    m.put(key: "x", value: give inner);
+    return m.contains(key: "x") ? cast<int32>(m.length()) + 4 : 0;   // 5
+}
