@@ -1,0 +1,68 @@
+// Arguments are evaluated in the order they are WRITTEN — left to right, as Rust, C#, Java and Go do — and,
+// with named arguments, that is not always the order the parameters are declared. C leaves a call's argument
+// order unspecified, and the hand-offs made it worse than unspecified: a `give` of a `string` ran ahead of the
+// call, so `both(a: copy s, b: give s)` copied an already-emptied `s` and `a` came out "" under every C
+// compiler; the move check walked the DECLARED order, refusing `both(b: copy s, a: give s)` and accepting
+// `both(b: give s, a: copy s)`; and `pair(a: next(), b: next())` ran its two calls in whichever order the C
+// compiler chose. An enum variant's payload is the same list, written the same way.
+// Returns 0.
+
+static int32 seq = 0;
+fn int32 next() { seq = seq + 1; return seq; }
+
+fn string both(string a, string b) { return "${a}|${b}"; }
+fn int32 pair(int32 a, int32 b) { return a * 10 + b; }
+fn int32 lens(isize n, string b) { return cast<int32>(n) * 10 + cast<int32>(b.length()); }
+
+type resource P {
+    string a; string b;
+    public ctor make(string a, string b) { this.a = give a; this.b = give b; }
+    public const fn string joined() { return "${this.a}|${this.b}"; }
+    public const fn string both(string x, string y) { return "${x}|${y}"; }
+}
+
+type enum E { Pair(int32 a, int32 b), Text(string a, string b) }
+
+fn int32 pairOf(E e) {
+    return match (e) { case Pair(a: a, b: b): a * 10 + b; case Text(a: a, b: b): 0 - 1; };
+}
+
+fn int32 main() {
+    // A copy written before a give reads the value before it moves.
+    string s = "hello";
+    if (both(a: copy s, b: give s) != "hello|hello") { return 1; }
+    // …in whichever order the parameters were declared.
+    string t = "hello";
+    if (both(b: copy t, a: give t) != "hello|hello") { return 2; }
+    // A constructor and a method take their arguments the same way.
+    string u = "ab";
+    P p = P.make(a: copy u, b: give u);
+    if (p.joined() != "ab|ab") { return 3; }
+    string v = "cd";
+    if (p.both(x: copy v, y: give v) != "cd|cd") { return 4; }
+    // A plain read written before the give reads the string it was.
+    string w = "hello";
+    if (lens(n: w.length(), b: give w) != 55) { return 5; }
+
+    // Side effects run in the order written.
+    if (pair(a: next(), b: next()) != 12) { return 6; }
+    if (pair(b: next(), a: next()) != 43) { return 7; }           // b = 3, then a = 4
+    // A read written after a call sees what the call did.
+    if (pair(a: next(), b: seq) != 55) { return 8; }
+    // A variant's payload, written out of declared order.
+    if (pairOf(e: E::Pair(b: next(), a: next())) != 76) { return 9; }   // b = 6, then a = 7
+    string x = "xy";
+    E e = E::Text(b: copy x, a: give x);
+    bool same = match (e) { case Text(a: a, b: b): a == "xy" && b == "xy"; case Pair(a: a, b: b): false; };
+    if (!same) { return 10; }
+
+    // An assignment and a loop condition, where the temporaries have no statement of their own.
+    int32 r = 0;
+    r = pair(b: next(), a: next());                                // b = 8, then a = 9
+    if (r != 98) { return 11; }
+    seq = 0;
+    int32 rounds = 0;
+    while (pair(b: next(), a: next()) != 21 && rounds < 3) { rounds = rounds + 1; }
+    if (rounds != 0) { return 12; }
+    return 0;
+}

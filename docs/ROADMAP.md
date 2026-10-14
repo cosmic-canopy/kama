@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-151 | **Arguments are evaluated in the order written** — `both(a: copy s, b: give s)` passes an EMPTY string to `a`: the `give` is hoisted ahead of the call and empties `s` before the copy reads it. Any earlier argument reading the binding is affected (`s.length()` reads 0). Decided: left to right, and SPEC says so | S | [§2](ROADMAP_DETAIL.md#s2-arg-order) |
 | KR-152 | **`copy` of a `const ref` call with an rvalue argument reaches clang** — `copy b.get(key: "x")` passes `kama check` and fails "cannot take the address of an rvalue"; a key in a local works | S | [§2](ROADMAP_DETAIL.md#s2-copy-constref-rvalue) |
 | KR-153 | **Returning `this` as a place reaches clang** — `fn ref B me() { return this; }` (and `const ref`) emits `return &(self);` on a pointer | S | [§2](ROADMAP_DETAIL.md#s2-return-this-place) |
 | KR-154 | **A recursive enum through a collection, with an `Owned` variant, is refused for copies nobody makes** — `type enum J { List(DynamicArray<J> items), Box(Owned<J> inner), … }` reports `copy`-related errors inside the stdlib | S | [§2](ROADMAP_DETAIL.md#s2-recursive-enum-owned) |

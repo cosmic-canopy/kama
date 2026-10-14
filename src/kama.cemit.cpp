@@ -24171,6 +24171,46 @@ void CEmitter::emitBagCtorBody(ClassInfo& ci, const std::string& which)
     *_out << "}\n\n";
 }
 
+// ARGUMENT ORDER (KR-151). Arguments are evaluated in the order they are WRITTEN — which, with named
+// arguments, need not be the order declared: `add(b: f(), a: g())` runs `f` first. C leaves the order of a
+// call's arguments unspecified, and the hand-off rules made it worse than unspecified: a `give` of a `string`
+// is hoisted ahead of the call to null its source, so `both(a: copy s, b: give s)` copied an already-emptied
+// `s` (`a=[]`) under every C compiler, and the move check, walking parameters in DECLARED order, refused
+// `both(b: copy s, a: give s)` and accepted `both(b: give s, a: copy s)` — the opposite of what was written.
+//
+// So the matcher walks the arguments as written, and an argument that may ACT — call something, move, trap —
+// fixes the order around it: every argument written before the last such one is evaluated into a temporary
+// at its own position, and that last one too when a plain read is written after it. A constant needs no
+// temporary, and neither does a `ref` to a named place, whose address no argument can change. Everything else
+// stays inline, so a call whose arguments are all plain reads emits exactly the C it always did.
+static bool argIsConstant(const SharedExpression& e)
+{
+    ASTNode* n = e.get();
+    if (dynamic_cast<TernaryExpressionNode*>(n)) return false;   // a literal ternary still reads its condition
+    return isLiteralExpr(n) || dynamic_cast<StringNode*>(n) || dynamic_cast<BooleanNode*>(n)
+        || dynamic_cast<NullNode*>(n) || dynamic_cast<CharNode*>(n);
+}
+// A READ of a name or a field chain off one: no call, no move, nothing that can trap.
+static bool argIsPlainRead(const SharedExpression& e)
+{
+    ASTNode* n = e.get();
+    if (argIsConstant(e) || dynamic_cast<IdentifierNode*>(n) || dynamic_cast<ThisAccessNode*>(n)) return true;
+    if (auto* m = dynamic_cast<MemberAccessNode*>(n)) return m->expression && argIsPlainRead(m->expression);
+    return false;
+}
+// The C type a sequenced argument's temporary takes: the parameter's own, as `paramListC` spells it.
+static std::string seqArgCType(const ParamSig& p)
+{
+    std::string t = p.className.empty() ? p.kindCType : p.className;
+    if (t.empty()) return t;                                   // an untyped intrinsic slot: left inline
+    if (p.byRef) return t + "*";
+    if (t.back() == '*') {                                     // a raw pointer keeps its qualifiers
+        if (p.isHardware) t = "volatile " + t;
+        if (p.isConst) t = "const " + t;
+    }
+    return t;
+}
+
 // The SOURCE spelling of an inline `Type(...)` call, for a diagnostic — falls back to the mangled name.
 static std::string ctorDisp(const InvocationNode* iv, const std::string& fallback)
 {
@@ -24250,12 +24290,45 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         viewArgRoots.push_back({ root, pname });
     };
 
-    std::string s = cName + "(";
-    bool first = true;
-    if (!leadArg.empty()) { s += leadArg; first = false; }
-    for (auto& p : params) {
-        if (!first) s += ", ";
-        first = false;
+    // The order the arguments are WRITTEN — see argIsConstant. Unfilled parameters follow; they only diagnose.
+    std::vector<size_t> order;
+    {
+        std::map<std::string, size_t> at;
+        for (size_t i = 0; i < params.size(); ++i) at[params[i].name] = i;
+        std::vector<bool> placed(params.size(), false);
+        if (args)
+            for (auto& a : *args)
+                if (a->name && a->name->value) {
+                    auto it = at.find(*a->name->value);
+                    if (it != at.end() && !placed[it->second]) { placed[it->second] = true; order.push_back(it->second); }
+                }
+        for (size_t i = 0; i < params.size(); ++i) if (!placed[i]) order.push_back(i);
+    }
+    std::vector<bool> sequence(params.size(), false);   // evaluated into a temporary where it is written
+    {
+        auto argOf = [&](size_t w) -> SharedExpression {
+            auto f = byName.find(params[order[w]].name);
+            return f == byName.end() ? SharedExpression() : f->second->expression;
+        };
+        auto needsTemp = [&](size_t w) {
+            SharedExpression e = argOf(w);
+            return e && !argIsConstant(e) && !(params[order[w]].byRef && argIsPlainRead(e))
+                && !seqArgCType(params[order[w]]).empty();
+        };
+        long last = -1;                                    // the last argument that may act
+        for (size_t w = 0; w < order.size(); ++w) if (argOf(w) && !argIsPlainRead(argOf(w))) last = (long)w;
+        if (last >= 0) {
+            bool readAfter = false;
+            for (size_t w = last + 1; w < order.size(); ++w) if (needsTemp(w)) readAfter = true;
+            for (long w = 0; w < last; ++w) if (needsTemp(w)) sequence[order[w]] = true;
+            if (readAfter && needsTemp(last)) sequence[order[last]] = true;
+        }
+    }
+    std::vector<std::string> argC(params.size());      // each argument's C, assembled in DECLARED order below
+    std::vector<std::string> unhoisted;                 // the temporaries, where nothing may be hoisted
+    for (size_t pi : order) {
+        const ParamSig& p = params[pi];
+        std::string& s = argC[pi];
         auto f = byName.find(p.name);
         if (f == byName.end()) {   // beside a mistyped label, this is that label's parameter — already named
             if (unknownLabels.empty()) unsupported(argMissing(shown, p.name).c_str(), srcLine);
@@ -24794,11 +24867,25 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 s += narrowViewValue(p.className, argExpr, val, srcLine);
             }
         }
+        if (sequence[pi]) {   // evaluated HERE, before any argument written after it — see argIsConstant
+            std::string t = "kama_seqarg" + std::to_string(_tempCounter++);
+            std::string decl = seqArgCType(p) + " " + t + " = " + s + ";";
+            if (_hoistOK) _hoisted.push_back(decl); else unhoisted.push_back(decl);
+            s = t;
+        }
     }
-    // The graph parameter rides here, after every declared argument — see the header note. `s` ends in
-    // `(` only when nothing at all was emitted, which is the one case that must not get a comma.
-    if (!trailingArg.empty()) { if (s.back() != '(') s += ", "; s += trailingArg; }
-    return s + ")";
+    std::string call = cName + "(" + leadArg;
+    bool first = leadArg.empty();
+    for (auto& a : argC) { if (!first) call += ", "; first = false; call += a; }
+    // The graph parameter rides here, after every declared argument — see the header note.
+    if (!trailingArg.empty()) { if (!first) call += ", "; call += trailingArg; }
+    call += ")";
+    if (unhoisted.empty()) return call;
+    // No statement may precede this one (a loop condition): the temporaries run in a statement expression,
+    // the form the by-value smart-pointer hand-off already takes in that position.
+    std::string seq = "({ ";
+    for (auto& d : unhoisted) seq += d + " ";
+    return seq + call + "; })";
 }
 
 // does a free function match a FunctionPtr signature? Positional, by C type.
@@ -29138,22 +29225,54 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
         unsupported(("variant '" + ci.name + "::" + variant + "' takes " + std::to_string(vc->payload.size())
                      + " payload field(s), got " + std::to_string(argc)).c_str(), srcLine);
 
+    std::vector<std::string> unhoisted;   // the payload's temporaries, where nothing may be hoisted
     std::string s = "(" + ci.name + "){ .kama_tag = " + ci.name + "_" + variant;
     if (!vc->payload.empty()) {
         s += ", .kama_u." + kName(variant) + " = {";
-        bool first = true;
-        for (auto& f : vc->payload) {
+        // The payload is evaluated in the order it is WRITTEN, as a call's arguments are (KR-151 — see
+        // argIsConstant): a C initializer list leaves its order unspecified, as an argument list does.
+        std::vector<size_t> order;
+        {
+            std::vector<bool> placed(vc->payload.size(), false);
+            if (args)
+                for (auto& a : *args)
+                    if (a->name && a->name->value)
+                        for (size_t i = 0; i < vc->payload.size(); ++i)
+                            if (vc->payload[i].name == *a->name->value && !placed[i]) { placed[i] = true; order.push_back(i); }
+            for (size_t i = 0; i < vc->payload.size(); ++i) if (!placed[i]) order.push_back(i);
+        }
+        std::vector<bool> sequence(vc->payload.size(), false);
+        {
+            auto argOf = [&](size_t w) -> SharedExpression {
+                auto ai = byName.find(vc->payload[order[w]].name);
+                return ai == byName.end() ? SharedExpression() : ai->second->expression;
+            };
+            auto needsTemp = [&](size_t w) { SharedExpression e = argOf(w); return e && !argIsConstant(e); };
+            long last = -1;
+            for (size_t w = 0; w < order.size(); ++w) if (argOf(w) && !argIsPlainRead(argOf(w))) last = (long)w;
+            if (last >= 0) {
+                bool readAfter = false;
+                for (size_t w = last + 1; w < order.size(); ++w) if (needsTemp(w)) readAfter = true;
+                for (long w = 0; w < last; ++w) if (needsTemp(w)) sequence[order[w]] = true;
+                if (readAfter && needsTemp(last)) sequence[order[last]] = true;
+            }
+        }
+        std::vector<std::string> fieldC(vc->payload.size());
+        std::vector<bool> filled(vc->payload.size(), false);
+        for (size_t fi : order) {
+            const auto& f = vc->payload[fi];
             auto ai = byName.find(f.name);
             if (ai == byName.end()) {
                 unsupported(("missing payload field '" + f.name + "' for '" + ci.name + "::" + variant + "'").c_str(), srcLine);
                 continue;
             }
+            std::string fcls = fieldCType(ci.name, f);   // the payload field's C type (Shared_Probe / int32_t / …)
+            std::string fc = [&]() -> std::string {
             // M6 B3e: the payload LABEL is a reference to the payload field, exactly as an argument label
             // is to a parameter. This construction does its own named-arg matching rather than going
             // through emitReorderedCall, so A2's one line does not cover it. By node, so a generic union's
             // instances collapse onto the template's declaration.
             recordNodeRef(ai->second->name.get(), f.nameId.get());
-            std::string fcls = fieldCType(ci.name, f);   // the payload field's C type (Shared_Probe / int32_t / …)
             SharedExpression argExpr = ai->second->expression;
             int handoff = 0;                             // 0 none, 1 give, 2 copy
             if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
@@ -29167,12 +29286,8 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                                     ("payload field `" + f.name + "`").c_str(), srcLine);
             // A value into a handle field (`Result::Err(error: e)` at an `Owned<Error>`): boxed or widened, the
             // conversion every by-value position makes (emitIntoHandle).
-            if (intoHandleKind(fcls, argExpr) != IntoHandle::None) {
-                s += (first ? " ." : ", .");
-                s += kMember(ci, f.name) + " = " + emitIntoHandle(fcls, argExpr, handoff, srcLine);
-                first = false;
-                continue;
-            }
+            if (intoHandleKind(fcls, argExpr) != IntoHandle::None)
+                return emitIntoHandle(fcls, argExpr, handoff, srcLine);
             // an inline construction as the payload (inline `new`, an inline generic-instance ctor,
             // or a nested `Some(Some(…))` / value-producing `match`) materializes against the field type;
             // propagate the target so the nested variant/match resolves.
@@ -29274,13 +29389,30 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                     unsupported("`give`/`copy` apply to a named smart pointer / resource value", srcLine);
                 field = val;
             }
+            return field;
+            }();
+            if (sequence[fi]) {   // evaluated HERE, before any field written after it
+                std::string t = "kama_seqarg" + std::to_string(_tempCounter++);
+                std::string decl = fcls + " " + t + " = " + fc + ";";
+                if (_hoistOK) _hoisted.push_back(decl); else unhoisted.push_back(decl);
+                fc = t;
+            }
+            fieldC[fi] = fc; filled[fi] = true;
+        }
+        bool first = true;
+        for (size_t fi = 0; fi < vc->payload.size(); ++fi) {
+            if (!filled[fi]) continue;
             s += (first ? " ." : ", .");
-            s += kMember(ci, f.name) + " = " + field;
+            s += kMember(ci, vc->payload[fi].name) + " = " + fieldC[fi];
             first = false;
         }
         s += " }";
     }
-    return s + " }";
+    s += " }";
+    if (unhoisted.empty()) return s;
+    std::string seq = "({ ";   // no statement slot (a loop condition) — see emitReorderedCall
+    for (auto& d : unhoisted) seq += d + " ";
+    return seq + s + "; })";
 }
 
 // a place-returning free/static call lowers to `T*`; deref it so the call is an lvalue EVERYWHERE

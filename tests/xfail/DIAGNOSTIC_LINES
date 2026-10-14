@@ -41,6 +41,7 @@ arg_duplicate	arg_duplicate.kama:3
 arg_kind_intrinsic_inline_array	arg_kind_intrinsic_inline_array.kama:5
 arg_kind_intrinsic_string	arg_kind_intrinsic_string.kama:7
 arg_label_one_diagnostic	arg_label_one_diagnostic.kama:5
+arg_order_give_first	arg_order_give_first.kama:8
 arg_str_bare	arg_str_bare.kama:3
 arg_unknown	arg_unknown.kama:3
 arith_unbounded	arith_unbounded.kama:4

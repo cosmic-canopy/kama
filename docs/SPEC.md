@@ -1388,6 +1388,12 @@ fn int32 main() { Builder b = Builder.make(); Batch done = b.finish(); return 0;
 fn int32 add(int32 a, int32 b) { return a + b; }
 fn int32 main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
 ```
+**Arguments are evaluated in the order they are written**, left to right, whatever order the parameters are <!-- test: arg_order -->
+declared in: `add(b: f(), a: g())` calls `f` first. An enum variant's payload is evaluated the same way. So
+`both(a: copy s, b: give s)` copies `s` before it moves, and a `give s` written BEFORE a `copy s` leaves
+nothing for the copy to read, which is refused. <!-- xfail: arg_order_give_first -->
+C leaves a call's argument order unspecified; kama does not.
+
 `ref` and `out` parameters both pass by pointer, but they are **different promises**:
 
 - **`ref T x`** — a read-write **borrow** of a value that is already live. The marker at the call site is

@@ -1,0 +1,10 @@
+// Arguments are evaluated in the order WRITTEN (tests/arg_order.kama), so a `give` written before a `copy`
+// of the same binding has already moved it: the copy reads a moved value. Here the parameters are declared
+// `a, b` and the arguments written `b, a` — the move check once walked the declared order, accepted this, and
+// handed `a` an empty string.
+fn string both(string a, string b) { return "${a}|${b}"; }
+fn int32 main() {
+    string s = "hello";
+    string r = both(b: give s, a: copy s);   // ERROR: `s` is read after the give written before it
+    return cast<int32>(r.length());
+}
