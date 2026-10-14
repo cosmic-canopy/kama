@@ -18817,9 +18817,42 @@ bool CEmitter::variantCopyable(const ClassInfo& c)
     // question, mid-answer, where the coinductive "assume it copies" would leak out as a final answer.
     for (const auto& v : c.variants)
         for (const auto& f : v.payload)
-            if (ok && !payloadCopyable(fieldCType(c.name, f))) ok = false;
+            if (ok) {
+                const std::string ft = fieldCType(c.name, f);
+                if (_classes.count(ft) ? !payloadCopyable(ft) : !declaredCopyable(f.type)) ok = false;
+            }
     _variantCopyVisiting.erase(c.name);
     return ok;
+}
+
+// A payload whose type is not registered YET is judged from what its template DECLARES. Payloads register in
+// declaration order, so in `type enum J { List(DynamicArray<J> items), Box(Owned<J> inner) }` the `DynamicArray<J>`
+// instance asks whether `J` copies while `Owned<J>` does not exist: read as "a primitive, bitwise", it made `J`
+// Copyable, the array kept its `copy` and its by-value iterators, and those failed to compile once `Owned<J>` was
+// known — errors inside the stdlib for a copy nobody wrote (KR-154). `Owned` never copies, `Shared`/`Weak`
+// retain, and a conditionally Copyable template copies when each gated type argument does.
+bool CEmitter::declaredCopyable(const SharedIdentifier& ty)
+{
+    if (!ty || !ty->value) return true;
+    const std::string n = resolveUserName(*ty->value, ty->qualifier);
+    if (n == _ownedTmpl) return false;
+    if (n == _sharedTmpl || n == _weakTmpl) return true;
+    auto g = _genericTypes.find(n);
+    if (g == _genericTypes.end()) return _classes.count(n) ? payloadCopyable(n) : true;
+    const ClassInfo& t = g->second;
+    if (t.kind == TypeKind::Value) return true;
+    auto argCopies = [&](size_t i) { return !ty->genericArgs || i >= ty->genericArgs->size() || declaredCopyable((*ty->genericArgs)[i]); };
+    if (t.isVariant) {                                     // a generic enum: as its type arguments
+        for (size_t i = 0; ty->genericArgs && i < ty->genericArgs->size(); ++i) if (!argCopies(i)) return false;
+        return true;
+    }
+    if (!t.copyable) return false;
+    auto ps = _genericTypeParams.find(n);
+    if (ps != _genericTypeParams.end())
+        for (const std::string& wp : t.copyableWhenParams)
+            for (size_t i = 0; i < ps->second.size(); ++i)
+                if (ps->second[i] == wp && !argCopies(i)) return false;
+    return true;
 }
 
 bool CEmitter::payloadCopyable(const std::string& t)

@@ -417,17 +417,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-recursive-enum-owned"></a>
-
-### A recursive enum through a collection, with an `Owned` variant (KR-154)
-
-Measured on `0.9.589`, filed 2026-10-14. `type enum J { Num(int32 n), List(DynamicArray<J> items), Box(Owned<J> inner) }` is refused with "`DynamicArray<J>` has
-no method `copyAllFrom`" at the enum, and "`J` has no `copy` method" inside `view.kama` and `dynamic_array.kama`;
-through a `Map` the same, at `map.kama`. Nothing in the program copies a `J`. Recursion through a collection with
-plain variants, recursion through `Owned` alone, and an `Owned` variant without recursion all build. **Scheduled:** a
-move-only recursive enum is not `Copyable`, and the conditional `Copyable` of its collections must say so instead of
-being judged against it.
-
 <a id="s2-loop-diverging-move"></a>
 
 ### A false use-after-move when a loop body ends in an `if`/`else` that always leaves (KR-155)

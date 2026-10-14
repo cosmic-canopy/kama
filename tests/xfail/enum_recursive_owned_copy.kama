@@ -1,0 +1,13 @@
+// A recursive enum with an `Owned` variant is move-only (tests/enum_recursive_owned.kama), however its variants
+// are ordered — so a copy of one is refused, here, naming the `Owned` that makes it so.
+import { std::collections::DynamicArray };
+type enum J {
+    Num(int32 n),
+    List(DynamicArray<J> items),
+    Box(Owned<J> inner)
+}
+fn int32 main() {
+    J a = J::Num(n: 1);
+    J b = copy a;   // ERROR: `J` holds an `Owned<J>`, which does not copy
+    return 0;
+}

@@ -1,0 +1,43 @@
+// A recursive enum through a collection, with a variant that holds an `Owned` — a JSON-like tree whose
+// nodes box a child — is move-only, and builds. It was refused for copies nobody wrote: "`DynamicArray<J>` has
+// no method `copyAllFrom`" at the enum, and "`J` has no `copy` method" inside the stdlib's views and maps.
+// Payloads register in declaration order, so the collection asked whether `J` copies before `Owned<J>` existed,
+// and an unknown type read as a primitive: `J` was judged Copyable and the collection kept its copies. Declaring
+// the `Owned` variant first built; now the order does not matter.
+// Returns 0.
+import { std::collections::DynamicArray, std::collections::Map };
+
+type enum J {
+    Num(int32 n),
+    List(DynamicArray<J> items),
+    Box(Owned<J> inner)
+}
+
+type enum K {
+    Num(int32 n),
+    Obj(Map<string, K> m),
+    Box(Owned<K> inner)
+}
+
+fn int32 weight(const ref J j) {
+    return match (j) {
+        case Num(n: n): n;
+        case List(items: items): 100 * cast<int32>(items.length()) + weight(j: items[0]);
+        case Box(inner: inner): 1000 + weight(j: inner);
+    };
+}
+
+fn int32 main() {
+    DynamicArray<J> xs = DynamicArray.empty();
+    xs.add(item: J::Box(inner: new J::Num(n: 9)));
+    xs.add(item: J::Num(n: 4));
+    J t = J::List(items: give xs);
+    if (weight(j: t) != 1209) { return 1; }   // a list of two, whose first boxes a 9
+
+    Map<string, K> m = Map.empty();
+    m.put(key: "a", value: K::Box(inner: new K::Num(n: 9)));
+    K k = K::Obj(m: give m);
+    bool isObj = match (k) { case Obj(m: inner): inner.length() == 1; case Num(n: n): false; case Box(inner: b): false; };
+    if (!isObj) { return 2; }
+    return 0;
+}

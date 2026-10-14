@@ -1908,6 +1908,7 @@ private:
     std::string copyCall(const std::string& cls, const std::string& lvalue);
     std::string copiedThrough(const std::string& ty, SharedExpression v, int handoff);
     std::string copyFirst(const std::string& cls, const std::string& src, int depth);
+    bool declaredCopyable(const SharedIdentifier& ty);
     // The fixpoint + the report. Runs after ALL emission on both entry points — see the .cpp.
     void checkNoHeapTransitive();
     // Is this body one the AUTHOR wrote, as opposed to the prelude or the stdlib? Asked only by
