@@ -5730,6 +5730,8 @@ member of `Shape`'s scope, reached with `::` like any other scope member; supply
 `Optional`/`Result` prelude types alike — and an enum behind an `Owned`/`Shared` handle, which it matches <!-- test: match_heap_handle -->
 through the handle, borrowing the payloads in place (not `give`, and not a `Weak`, which must be upgraded first). It is **value-producing**<!-- xfail: match_handle_give, match_handle_weak --> (usable in statement or expression
 position), enforces **compile-time exhaustiveness**, and accepts a `_` wildcard for the catch-all case.
+In a pattern, `_` in place of a binding discards that payload field — as often as the pattern needs it, <!-- test: match_discard_bindings -->
+`case Rect(w: _, h: _)` — and a discarded owning field of a consumed subject is dropped at the arm's end.
 It is also the only construct that *reads* an enum, which is why the only way to *build* one from an
 integer — `try cast<E>(x)`, above — hands back an `Optional<E>`: a value that names no variant arrives as
 a `None` **arm** of the same construct, never as a trap.

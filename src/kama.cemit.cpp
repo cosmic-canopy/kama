@@ -28419,8 +28419,13 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             for (size_t i = 0; vc && i < a->bindings->size(); ++i) {
                 if (slotOf[i] == SIZE_MAX) continue;   // already diagnosed above
                 std::string bn = *(*a->bindings)[i];
+                // `_` discards a payload field, any number of times in one pattern. It still TAKES the field — a
+                // consumed subject's owning payload is dropped at the arm's end, as a named binding's is — under a
+                // name no source can spell: two `_` used to be two C locals named `k__`, which clang refused.
+                const bool discard = bn == "_";
+                if (discard) bn = "__discard" + std::to_string(_tempCounter++);
                 // LSP index: the binding's own node (parallel list, same order) carries the span.
-                if (a->bindingIds && i < a->bindingIds->size())
+                if (!discard && a->bindingIds && i < a->bindingIds->size())
                     registerBinding((*a->bindingIds)[i].get(), SymKind::Local);
                 int bnLine = (a->bindingIds && i < a->bindingIds->size() && (*a->bindingIds)[i])
                                  ? (*a->bindingIds)[i]->line : a->line;

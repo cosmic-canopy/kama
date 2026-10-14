@@ -1,0 +1,15 @@
+// `_` discards a payload field, any number of times in one pattern. Two `_` in one pattern — `case Rect(w: _, h: _)`
+// — passed `kama check` and failed in clang ("redefinition of 'k__'"): each was bound as a C local named for `_`.
+// A discarded field is still TAKEN: under `match (give p)` an owning payload a `_` names is dropped at the arm's end,
+// as a named binding's is (the sanitizer leg holds that down).
+type enum Pair { Two(string a, string b), Num(int32 x, int32 y), Empty }
+
+fn int32 main() {
+    Pair p = Pair::Two(a: "x", b: "yz");
+    int32 n = match (give p) { case Two(a: _, b: _): 1; case Num(x: _, y: _): 2; case Empty: 3; };
+    Pair q = Pair::Num(x: 1, y: 2);
+    int32 m = match (q) { case Two(a: _, b: s): cast<int32>(s.length()); case Num(x: _, y: y): y * 10; case Empty: 0; };
+    Pair r = Pair::Two(a: "abc", b: "de");
+    int32 k = match (r) { case Two(a: a, b: _): cast<int32>(a.length()); case Num(x: _, y: _): 0; case Empty: 0; };
+    return n + m + k;   // 1 + 20 + 3
+}
