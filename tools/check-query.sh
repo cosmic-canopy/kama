@@ -1064,6 +1064,7 @@ expect --def 9:62  -- "generics.kama:9:11"     # `foreach (T x in …)`
 expect --def 12:40 -- "generics.kama:10:40"    # a comptime parameter read as a value
 expect --def 8:86  -- "generics.kama:5:47"     # through the bound — though `f<Sq>` reaches `Sq.area`
 expect --def 12:57 -- "generics.kama:5:47"     # through the bound, in a generic nothing instantiates
+expect --def 23:48 -- "generics.kama:5:47"     # …and on an element of its comptime-sized `InlineArray` (KR-137)
 expect --type 8:11 -- "type-param T: Shape + Copyable<T>"
 expect --type 10:40 -- "comptime-param int32 N"
 expect --refs 5:14 -- "generics.kama:8:14"     # a bound is a reference to its contract

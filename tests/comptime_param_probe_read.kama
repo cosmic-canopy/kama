@@ -1,8 +1,7 @@
 // A `comptime` parameter read as a VALUE inside a template that nothing instantiates. The
-// uninstantiated-template probe walks these bodies with the parameter deliberately unbound (a probe has no
-// argument to bind), so `N` is the one name that may legitimately reach the identifier arm with nothing
-// binding it — the arm must DEFER it (counted, like every other probe residual), never report it as
-// unresolved. Both halves of the probe are pinned: a generic function and a generic type.
+// uninstantiated-template probe binds the parameter to a placeholder marked `probe` (a probe has no
+// argument of its own), so `N` reads as a number and nothing judges by it — it must never be reported as
+// unresolved. Both halves of the probe are pinned: a generic function and a generic type (KR-137).
 fn int32 scaled<T>(T x) comptime(int32 N) { return N + 1; }
 type value Buf<T> comptime(int32 N) {
     T v;

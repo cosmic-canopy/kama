@@ -1654,7 +1654,7 @@ private:
         DK_ScopeQual,        // `Natural<T>::compare(…)` — qualifier names a generic instance that has none
         DK_DotCtor,          // `DynamicArray<T>.empty()` — no instance to construct until `T` is bound
         DK_OpaqueScalar,     // `cast<T>(…)` — kama has NO bound that says "an integer primitive"
-        DK_ConstParam,       // `return N;` — a `comptime` param read as a value; a probe binds no argument to it
+        DK_ConstParam,       // `return N;` — a `comptime` param read while unbound; both probe halves bind one (KR-137)
         DK_Count
     };
     static const char* deferKindName(int k);
@@ -2535,6 +2535,10 @@ private:
     // generic type keeps EVERY param in _typeSubst, which mangleElem hops through and deepSubstType /
     // argCarriesUnboundParam walk — moving const params out of it would break all three.
     void bindInstConstParams(const std::string& tmplKey, const std::vector<SharedIdentifier>& args);
+    // The same values, folded and returned rather than bound: registerGenericTypeInst folds them at the USE site and
+    // binds them for its own scans (KR-137). `report` refuses an argument that will not fold.
+    std::map<std::string, ConstBinding> foldInstConstParams(const std::string& tmplKey,
+                                                            const std::vector<SharedIdentifier>& args, bool report);
     // A bound const param spelled as a C VALUE — the integer cast to its declared type. The cast is
     // load-bearing: a bare `8` is a C `int`, so a `const F: uint32`/`int8` would promote and compare
     // differently from a real local of the type the author wrote. "" if `name` is not bound.
@@ -3315,10 +3319,9 @@ private:
     // type, a variant of some enum, a member reached with the wrong operator — and "cannot resolve" only
     // when it is nothing at all. Never called for a name a table bound.
     void rejectUnresolvedName(IdentifierNode* v, const std::string& nm);
-    // `nm` is a `comptime` parameter of the function or type being emitted, read while nothing binds it —
-    // the uninstantiated-template probe leaves every const param unbound on purpose, and a real
-    // instantiation whose argument did not fold was already reported at its call site. Neither is a defect
-    // of the body, so the identifier arm defers (probe) or stays silent (cascade) instead of rejecting.
+    // `nm` is a `comptime` parameter of the function or type being emitted, read while nothing binds it — a
+    // real instantiation whose argument did not fold, already reported at its call site. Not a defect of the
+    // body, so the identifier arm stays silent (cascade) instead of rejecting. (The probe binds a placeholder.)
     bool isComptimeParamHere(const std::string& nm) const;
     bool readsProbeConst(const SharedExpression& e) const;   // names a comptime param the probe holds only a placeholder for
     void checkTypeResolves(SharedIdentifier type, const std::string& cTypeResult,
@@ -3362,6 +3365,8 @@ private:
     // `emitGenericTypeInst`, the very function a real instantiation goes through.
     void checkTypeTemplatesAsWritten();
     SharedIdentifier probeConstArg();   // the placeholder a probe puts in a `const N: int32` slot
+    ClassInfo* opaqueParamOf(const SharedIdentifier& el);   // the opaque a probe bound to a bare type param, or null
+    void markValueParams(const std::string& key, const SharedIdentifier& t);   // a param the signature makes a value
     long _probeTypesWalked = 0;    // generic types given a probe instance
     // THE FILE RUNG, one predicate for every position: a reference to a symbol declared in ANOTHER file
     // requires that file to have `export`ed it. See the definition for the three deliberate blind spots.

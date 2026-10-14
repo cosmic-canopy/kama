@@ -1,0 +1,1 @@
+its bound (`Shape`) declares no such member

@@ -72,3 +72,15 @@
 17:43 f ref:generic-fn
 17:45 x ref:param
 17:48 q ref:local
+21:5 value -
+21:11 Rack decl:generic-type
+21:16 T decl:type-param
+21:19 Shape ref:contract
+21:41 N decl:comptime-param
+22:11 InlineArray ref:value
+22:23 T ref:type-param
+22:27 N ref:comptime-param
+22:30 vs decl:field
+23:20 first decl:method
+23:42 vs ref:field
+23:48 area ref:method

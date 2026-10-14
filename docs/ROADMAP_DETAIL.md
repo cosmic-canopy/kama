@@ -2875,22 +2875,6 @@ thousands of call sites. **Scheduled.** **Design:** the channel takes a source p
 which the parser already stamps — with the line-only form kept for the sites that have no node, so the change can
 land site by site behind one funnel.
 
-<a id="s10-comptime-probe"></a>
-
-### A generic type's `comptime` parameter in the as-written check (KR-137)
-
-Found 2026-10-10 while indexing generics (go-to-definition through a bound, `0.9.577`). Since `0.9.571` a generic is
-checked as written whether or not anything instantiates it. A generic FUNCTION's comptime parameter is bound to a
-placeholder flagged `probe`, so `InlineArray<T>#(N)` forms in its body and a judgement that would fold `N` against a
-number nobody wrote is left to each instance (`readsProbeConst`). A generic TYPE's probe leaves the same parameter
-unbound (`bindInstConstParams`, whose comment claims the function half does the same, which it no longer does), so
-in a type nobody instantiates, `public InlineArray<T>#(N) vs;` has no element type: `this.vs[0].area()` through a
-bound is neither checked nor indexed. Binding it as the function half does was tried and is not enough: the field's
-array type is formed when the probe instance is REGISTERED, before any body binding, so the binding has to reach
-`registerGenericTypeInst` for a probe instance. **Scheduled.** A fixture: an uninstantiated `type value Bag<T: Shape>
-comptime(int32 N)` whose method calls `area()` on an element, checked (a misspelt member refused) and indexed
-(`--def` lands on `Shape.area`).
-
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)

@@ -1,0 +1,33 @@
+// KR-137 — a generic's `comptime` parameter is bound to a placeholder in the as-written check, for a generic TYPE as
+// for a function, so `InlineArray<T>#(N)` forms and a call on an element is checked (tests/xfail/
+// comptime_type_probe_member). Nothing may JUDGE by that placeholder (`N` is 1), so none of these is refused:
+// `#(N - 1)` is 0 under it, `Simd<float32>#(N)` is not 128 bits under it, and a `type resource`'s `T` is the element
+// of an `InlineArray` field, which makes it a value at every legal instantiation. And a real instance whose only
+// mention of `InlineArray<Sq>#(3)` is its own field gets that array: its size is bound when the instance registers.
+type contract Shape for value { const fn int32 area(); }
+type value Sq implements Shape { int32 s; public ctor make(int32 s) { this.s = s; } public const fn int32 area() { return this.s * this.s; } }
+
+// Nothing instantiates these: each is checked as written, with `N` a placeholder no judgement reads.
+type resource Pool<T: Shape> comptime(int32 N) {
+    InlineArray<T>#(N) slots;
+    InlineArray<int32>#(N - 1) gaps;
+    Simd<float32>#(N) lanes;
+    public fn int32 firstArea() { return this.slots[0].area(); }
+    public fn int32 gapCount() { return cast<int32>(this.gaps.length()); }
+}
+fn int32 sumAreas<T: Shape>(InlineArray<T>#(N) xs) comptime(int32 N) {
+    InlineArray<int32>#(N - 1) tail = InlineArray::<int32>#(N - 1).filled(value: 0);
+    return xs[0].area();
+}
+
+// A real instance whose ONLY mention of `InlineArray<Sq>#(3)` is its own field.
+type value Row<T: Shape> comptime(int32 N) {
+    public InlineArray<T>#(N) cells;
+    public ctor make(InlineArray<T>#(N) cells) { this.cells = cells; }
+    public fn int32 total() { int32 t = 0; foreach (T c in this.cells) { t = t + c.area(); } return t; }
+}
+
+fn int32 main() {
+    Row<Sq>#(3) r = Row::<Sq>#(3).make(cells: [Sq.make(s: 1), Sq.make(s: 2), Sq.make(s: 3)]);
+    return r.total();
+}

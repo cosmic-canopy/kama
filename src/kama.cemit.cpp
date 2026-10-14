@@ -5662,8 +5662,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // reaches an uninstantiated generic too), a local at `emitDeclarator`'s shadowing block, and a
         // write at `checkConstWrite`. Each is pinned by a `tests/xfail/constparam_*` fixture.
         if (!v->qualifier || v->qualifier->empty()) {
-            // Indexed whether or not it is bound: the as-written probe of a generic TYPE leaves its comptime
-            // parameters unbound, and the spelling is the parameter either way (KR-134).
+            // Indexed whether or not it is bound: a real instance whose argument did not fold leaves it unbound,
+            // and the spelling is the parameter either way (KR-134).
             recordTypeParamRef(v);
             std::string cpv = constParamCValue(nm);
             if (!cpv.empty()) return cpv;
@@ -5732,7 +5732,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // resolves to NOTHING. This is the arm that was missing — the spelling used to be written into the
         // C for the C compiler to refuse ("use of undeclared identifier"), on the right line and in the
         // wrong language, while `kama check` said OK. The one name allowed through is a `comptime` param
-        // a probe left unbound (deferred and counted, like every probe residual).
+        // left unbound — an instance whose argument did not fold, reported at that argument already. Both
+        // halves of the probe bind a placeholder (KR-137), so the `const-param` column should read 0.
         const bool bound = !qualified && (_localTypes.count(nm) || _paramNames.count(nm) || _refParams.count(nm));
         if (!v->synthesized && v->builtInVal == 0 && !bound) {
             if (isComptimeParamHere(nm)) { deferUnknownWhileProbing(DK_ConstParam); return nm; }
@@ -12628,22 +12629,34 @@ void CEmitter::bindInstParams(const SharedStringList& params, const SharedIdenti
     }
 }
 
-void CEmitter::bindInstConstParams(const std::string& tmplKey, const std::vector<SharedIdentifier>& args)
+// A generic TYPE/enum instantiation's const arguments, folded under whatever is bound NOW — a use site inside another
+// generic's body reads its own `M` here, so this runs before the caller's bindings are swapped out. While PROBING the
+// argument is probeConstArg's placeholder: it folds like any number, so `InlineArray<T>#(N)` forms and a call on its
+// element is checked, and it is marked `probe`, so nothing judges by the value (readsProbeConst) — the binding the
+// function half gives the same parameter (checkTemplatesAsWritten). A placeholder is never reported as unfoldable.
+std::map<std::string, CEmitter::ConstBinding> CEmitter::foldInstConstParams(const std::string& tmplKey,
+                                                                           const std::vector<SharedIdentifier>& args,
+                                                                           bool report)
 {
+    std::map<std::string, ConstBinding> out;
     auto cti = _genericTypeConstTypes.find(tmplKey);
-    if (cti == _genericTypeConstTypes.end()) return;
+    if (cti == _genericTypeConstTypes.end()) return out;
     const std::vector<SharedIdentifier>& cts = cti->second;
     const std::vector<std::string>& ps = _genericTypeParams[tmplKey];
-    // While PROBING the argument is a placeholder (see probeConstArg), so binding it would fold every
-    // expression that reads `N` against a number nobody wrote. Leave it unbound: the function half has
-    // always walked a `const` parameter that way, and a type error in the body is caught either way.
-    if (_probingTemplate) return;
     for (size_t i = 0; i < ps.size() && i < args.size() && i < cts.size(); ++i) {
-        if (!cts[i]) continue;                       // a type param — already bound in _typeSubst
+        if (!cts[i]) continue;                       // a type param — bound in _typeSubst
         int64_t v;
-        if (constArgN(args[i], v)) { ConstBinding b; b.value = v; b.kind = cts[i]->builtInVal; _comptimeSubst[ps[i]] = b; }
-        else rejectUnfoldableConstArg(ps[i], args[i]);
+        if (constArgN(args[i], v)) {
+            ConstBinding b; b.value = v; b.kind = cts[i]->builtInVal; b.probe = _probingTemplate;
+            out[ps[i]] = b;
+        } else if (report && !_probingTemplate) rejectUnfoldableConstArg(ps[i], args[i]);
     }
+    return out;
+}
+
+void CEmitter::bindInstConstParams(const std::string& tmplKey, const std::vector<SharedIdentifier>& args)
+{
+    for (auto& kv : foldInstConstParams(tmplKey, args, true)) _comptimeSubst[kv.first] = kv.second;
 }
 
 // A bound const param as a C value: the integer, cast to the type it was declared with. Without the cast
@@ -13356,6 +13369,10 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // isn't a concrete type — skip it silently; the concrete `Fixed<T, 4>` instance registers at the
     // use site (a caller's typed local / a bound instantiation). A concrete non-const size resolves here.
     if (!constArgN(nArg, n)) return;
+    // A probe's size is its placeholder (`N` is 1, so `#(N - 1)` is 0): the type still forms, so its elements are
+    // typed, and the size is judged per instance, as a `comptime assert` over `N` is (KR-137).
+    const bool probeSize = _probingTemplate && readsProbeConst(nArg->constArgValue ? nArg->constArgValue : nArg);
+    if (probeSize && n <= 0) n = 1;
     if (n <= 0) {
         unsupported("the size of an `InlineArray<T>#(N)` must be a positive integer", fixedType->line);
         return;
@@ -13483,6 +13500,10 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     // An unbound `N` inside a generic template is not a concrete instance — skip it silently, exactly as
     // registerFixed does; the concrete instantiation registers at the use site that chose the arguments.
     if (!constArgN(nArg, n)) return;
+    // A probe's lane count is its placeholder and its element may be an opaque parameter: neither is judged until an
+    // instance supplies the real one, as registerFixed leaves a probe's size (KR-137).
+    const bool probeLanes = _probingTemplate && readsProbeConst(nArg->constArgValue ? nArg->constArgValue : nArg);
+    if (probeLanes && n <= 0) n = 1;
     if (n <= 0) {
         unsupported("the lane count of a `Simd<T>#(N)` must be a positive integer", simdType->line);
         return;
@@ -13490,6 +13511,10 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
 
     std::string elemCType  = cType(elem);
     std::string elemMangle = mangleElem(elem);
+    if (_probingTemplate) {
+        auto oi = _classes.find(elemCType);
+        if (oi != _classes.end() && oi->second.isOpaqueParam) return;
+    }
 
     // A numeric primitive, and nothing else. `isClass` catches a user type/contract; the width table
     // catches everything else that reached here without one (`bool`, `char`, `string`, a view).
@@ -13500,7 +13525,7 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
                      "is a machine vector, so its element is a machine number").c_str(), simdType->line);
         return;
     }
-    if ((int64_t)(bits / 8) * n != 16) {
+    if (!probeLanes && (int64_t)(bits / 8) * n != 16) {
         unsupported(("a `Simd<T>#(N)` must be exactly 128 bits — `" + elemMangle + "` x " + std::to_string(n)
                      + " is " + std::to_string((bits / 8) * n) + " bytes. 128 is the only width every kama "
                      "target has; wider needs a CPU-tuning flag that does not exist yet").c_str(),
@@ -14237,11 +14262,18 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     // need to fall back to the use-site ctx. For a same-scope user generic the two ctxs coincide.
     _genericTypeInstCtx[mangled] = _genericTypeCtx[tmpl];
 
+    // This instance's own comptime values, folded HERE, under the use site's names and bindings, and bound for the
+    // scans below — a field's `InlineArray<T>#(N)` is formed by them. Unbound, `registerFixed` skipped the field in
+    // silence while `cType` still spelled it, so an element had no type: in a probe instance a call on it went
+    // unchecked (KR-137). The caller's own bindings are not this instance's, so they are swapped out, not added to.
+    std::map<std::string, ConstBinding> ownConsts = foldInstConstParams(tmpl, concrete, false);
     NsCtx savedCtx = _nsCtx;
     std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    std::map<std::string, ConstBinding> savedComptime = _comptimeSubst;
     _nsCtx = _genericTypeCtx[tmpl];
     _typeSubst.clear();
     for (size_t i = 0; i < params.size(); ++i) _typeSubst[params[i]] = concrete[i];   // zip params -> args
+    _comptimeSubst = std::move(ownConsts);
 
     ClassInfo ci = _genericTypes[tmpl];                         // copy the template shape
     ci.name = mangled;
@@ -14369,6 +14401,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     if (_byteViewPhase == 2) registerViewByteViews(mangled);
 
     _typeSubst = savedSubst;
+    _comptimeSubst = savedComptime;
     _nsCtx = savedCtx;
 }
 
@@ -16764,6 +16797,46 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
 // real type argument — so the probe invents one, an OPAQUE PARAMETER standing for `T` and promising exactly
 // what `T`'s bounds promise. That is the whole difference from `emitGenericInst`, and it is what makes the
 // walk answer `x.compareTo(…)` and `d.length()` instead of stepping around them.
+// The opaque type a probe bound to a bare type parameter `el`, or null.
+ClassInfo* CEmitter::opaqueParamOf(const SharedIdentifier& el)
+{
+    if (!el || !el->value || el->genericArg || el->genericArgs) return nullptr;
+    auto sub = _typeSubst.find(*el->value);
+    if (sub == _typeSubst.end() || !sub->second || !sub->second->value) return nullptr;
+    auto c = _classes.find(*sub->second->value);
+    return c != _classes.end() && c->second.isOpaqueParam ? &c->second : nullptr;
+}
+
+// A parameter a template's SIGNATURE puts where only a value may stand is a value at every legal instantiation, so a
+// probe makes its opaque type one: an `InlineArray`'s or a `Simd`'s element (one over a resource is refused), and a
+// parameter a `type value` generic HOLDS (a value owns nothing, so `Box<R>` for a resource `R` is refused).
+// `fn T headOf<T>(InlineArray<T>#(N) a) { return a[0]; }` and `fn T unwrap<T>(Box<T> b) { return b.v; }` copy, as each
+// instance does. Both halves of the probe read it: a function's parameters and return, a type's fields and member
+// signatures. `key` is the template, whose scope a generic's name resolves in.
+void CEmitter::markValueParams(const std::string& key, const SharedIdentifier& t)
+{
+    if (!t || !t->value) return;
+    if (t->genericArgs) {
+        if (*t->value == "InlineArray" || *t->value == "Simd") {
+            if (ClassInfo* oc = opaqueParamOf((*t->genericArgs)[0])) { oc->kind = TypeKind::Value; oc->copyable = true; }
+        } else {
+            std::string g;
+            { BoundCtxScope bc(this, key); g = resolveUserName(*t->value, t->qualifier); }
+            auto gt = _genericTypes.find(g);
+            auto gp = _genericTypeParams.find(g);
+            if (gt != _genericTypes.end() && gt->second.kind == TypeKind::Value && gp != _genericTypeParams.end())
+                for (size_t i = 0; i < t->genericArgs->size() && i < gp->second.size(); ++i) {
+                    ClassInfo* oc = opaqueParamOf((*t->genericArgs)[i]);
+                    if (!oc) continue;
+                    for (const FieldInfo& f : gt->second.fields)
+                        if (typeHoldsParam(f.type, gp->second[i])) { oc->kind = TypeKind::Value; oc->copyable = true; break; }
+                }
+        }
+        for (auto& a : *t->genericArgs) markValueParams(key, a);
+    }
+    if (t->genericArg) markValueParams(key, t->genericArg);
+}
+
 void CEmitter::checkTemplatesAsWritten()
 {
     // BOTH tables, or a file with generic types and no generic functions is walked by neither — which is
@@ -16821,42 +16894,9 @@ void CEmitter::checkTemplatesAsWritten()
         // A comptime parameter is a VALUE no one has passed yet. It is bound to a placeholder, as a generic TYPE's
         // probe instance binds `probeConstArg` into its `N` slot, so `InlineArray<T>#(N + 1)` folds to a type and
         // `"${F:x}"` reads an integer; marked `probe`, so nothing judges by the value (readsProbeConst).
-        // A parameter the SIGNATURE puts where only a value may stand is a value at every legal instantiation, so it
-        // is one here: an `InlineArray`'s or a `Simd`'s element (one over a resource is refused), and a parameter a
-        // `type value` generic HOLDS (a value owns nothing, so `Box<R>` for a resource `R` is refused) — the rule
-        // checkTypeTemplatesAsWritten applies to a value type's own fields. `fn T headOf<T>(InlineArray<T>#(N) a)
-        // { return a[0]; }` and `fn T unwrap<T>(Box<T> b) { return b.v; }` copy, as each instance does.
-        auto opaqueOf = [&](const SharedIdentifier& el) -> ClassInfo* {
-            if (!el || !el->value || el->genericArg || el->genericArgs) return nullptr;
-            auto sub = _typeSubst.find(*el->value);
-            if (sub == _typeSubst.end() || !sub->second || !sub->second->value) return nullptr;
-            auto c = _classes.find(*sub->second->value);
-            return c != _classes.end() && c->second.isOpaqueParam ? &c->second : nullptr;
-        };
-        std::function<void(const SharedIdentifier&)> markValueParams = [&](const SharedIdentifier& t) {
-            if (!t || !t->value) return;
-            if (t->genericArgs) {
-                if (*t->value == "InlineArray" || *t->value == "Simd") {
-                    if (ClassInfo* oc = opaqueOf((*t->genericArgs)[0])) { oc->kind = TypeKind::Value; oc->copyable = true; }
-                } else {
-                    std::string g;
-                    { BoundCtxScope bc(this, key); g = resolveUserName(*t->value, t->qualifier); }
-                    auto gt = _genericTypes.find(g);
-                    auto gp = _genericTypeParams.find(g);
-                    if (gt != _genericTypes.end() && gt->second.kind == TypeKind::Value && gp != _genericTypeParams.end())
-                        for (size_t i = 0; i < t->genericArgs->size() && i < gp->second.size(); ++i) {
-                            ClassInfo* oc = opaqueOf((*t->genericArgs)[i]);
-                            if (!oc) continue;
-                            for (const FieldInfo& f : gt->second.fields)
-                                if (typeHoldsParam(f.type, gp->second[i])) { oc->kind = TypeKind::Value; oc->copyable = true; break; }
-                        }
-                }
-                for (auto& a : *t->genericArgs) markValueParams(a);
-            }
-            if (t->genericArg) markValueParams(t->genericArg);
-        };
-        if (tmpl->parameters) for (auto& p : *tmpl->parameters) if (p) markValueParams(p->type);
-        markValueParams(tmpl->returnType);
+        // A parameter the SIGNATURE puts where only a value may stand is a value here (markValueParams).
+        if (tmpl->parameters) for (auto& p : *tmpl->parameters) if (p) markValueParams(key, p->type);
+        markValueParams(key, tmpl->returnType);
         auto savedComptime = _comptimeSubst;
         _comptimeSubst.clear();
         if (tmpl->constTypes)
@@ -16954,13 +16994,11 @@ void CEmitter::checkTypeTemplatesAsWritten()
         if (pit == _genericTypeParams.end() || pit->second.empty()) continue;
         const std::vector<std::string> params = pit->second;
 
-        // A `const N: int32` parameter stands for a VALUE, not a type, so the instance still needs an
-        // argument in that slot for `registerGenericTypeInst` to mangle and validate. It gets a
-        // placeholder — and the placeholder is NOT then bound as `N`'s value: `bindInstConstParams` skips
-        // it while probing, so the body walks with `N` unbound, exactly as the FUNCTION half already does
-        // (`fn f<const S: int32>` has always been walked that way, and catches every type error in its
-        // body). That is what keeps the walk from deciding anything the number would have decided —
-        // notably the template's own `comptime assert`, which is per-instantiation by definition.
+        // A `comptime(int32 N)` parameter stands for a VALUE, not a type, so the instance needs an argument in
+        // that slot. It gets a placeholder, bound as `N` with the `probe` mark (foldInstConstParams), exactly as
+        // the FUNCTION half binds its own: `InlineArray<T>#(N)` forms, so a call on an element is checked and
+        // indexed (KR-137), and nothing judges by the number — notably the template's own `comptime assert`,
+        // which is per-instantiation by definition (readsProbeConst).
         auto ctit = _genericTypeConstTypes.find(tmpl);
         std::vector<bool> isConstSlot(params.size(), false);
         if (ctit != _genericTypeConstTypes.end())
@@ -16992,6 +17030,21 @@ void CEmitter::checkTypeTemplatesAsWritten()
                     if (typeHoldsParam(f.type, params[i])) { held = true; break; }
                 if (held) { _classes[opq[i]].kind = TypeKind::Value; _classes[opq[i]].copyable = true; }
             }
+        // And, for every kind, a parameter a member's signature makes a value — the element of an `InlineArray`
+        // field of a `type resource Pool<T> comptime(int32 N)` is one, now that its `N` forms the type (KR-137).
+        {
+            const ClassInfo& shape = _genericTypes[tmpl];
+            for (const FieldInfo& f : shape.fields) markValueParams(tmpl, f.type);
+            for (auto& v : shape.variants) for (const FieldInfo& f : v.payload) markValueParams(tmpl, f.type);
+            for (auto& kv : shape.methods) {
+                markValueParams(tmpl, kv.second.returnType);
+                if (kv.second.node && kv.second.node->params)
+                    for (auto& p : *kv.second.node->params) if (p) markValueParams(tmpl, p->type);
+            }
+            for (auto& kv : shape.ctors)
+                if (kv.second.node && kv.second.node->declarator && kv.second.node->declarator->params)
+                    for (auto& p : *kv.second.node->declarator->params) if (p) markValueParams(tmpl, p->type);
+        }
 
         auto args = std::make_shared<IdentifierList>();
         bool ok = true;

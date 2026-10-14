@@ -1,0 +1,11 @@
+// KR-137 — a generic TYPE nobody instantiates is checked as written, and its `comptime` parameter sizes a field's
+// `InlineArray` there too. The probe used to leave `N` unbound, so `InlineArray<T>#(N)` never formed, an element had
+// no type, and a misspelt member on it passed `kama check` — while the same body sized `#(4)` was refused.
+type contract Shape for value { const fn int32 area(); }
+
+type value Bag<T: Shape> comptime(int32 N) {
+    public InlineArray<T>#(N) vs;
+    public fn int32 first() { return this.vs[0].aera(); }   // ERROR: `Shape` declares no `aera`
+}
+
+fn int32 main() { return 0; }

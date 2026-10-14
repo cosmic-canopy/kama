@@ -15,3 +15,10 @@ type value Bag<T: Shape> comptime(int32 N) {
 fn int32 tally() comptime(int32 M) { int32 a = M; return a + M; }
 
 fn int32 main() { Sq q = Sq.make(); return f(x: q); }
+
+// KR-137 — a comptime parameter sizes a field's `InlineArray` in a generic nothing instantiates, so a call on an
+// element is checked and indexed as one on a `T` field is.
+type value Rack<T: Shape> comptime(int32 N) {
+    public InlineArray<T>#(N) vs;
+    public fn int32 first() { return this.vs[0].area(); }
+}
