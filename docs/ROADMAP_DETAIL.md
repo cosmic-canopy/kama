@@ -2901,15 +2901,6 @@ The fix is to tell the reader when it reads the stdlib's manifest, or to refuse 
 path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
 diagnostic, not a feature: no program can use such a package today.
 
-<a id="s10-install-hint"></a>
-
-### `kama check`'s install hint names no manifest (KR-159)
-
-Measured on `0.9.589`, filed 2026-10-14. "kama.json declares dependencies but ./.kama/deps is missing — run `kama pkg install`" — and `kama pkg install` alone
-refuses ("name the project to act on"). Run from a parent directory it still names no path. Four sites
-(`src/kama.driver.cpp` ~4848, ~4855, ~11317, ~11322). **Scheduled:** the hint is the command that works, with the
-manifest's path as the user spelled it.
-
 <a id="s10-override-unpublished"></a>
 
 ### A `kama.local.json` override stands in for an unpublished version (KR-160)

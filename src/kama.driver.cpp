@@ -4857,16 +4857,17 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
         if (!target.empty())
             fprintf(stderr, "kama: note: %s links to %s, which does not exist here — the dependencies were "
                             "installed on another machine or mount, or that folder has moved. Run `kama pkg "
-                            "install` here\n", link.c_str(), target.c_str());
+                            "install %s`\n", link.c_str(), target.c_str(), manifest.c_str());
         else if (prod)
-            fprintf(stderr, "kama: note: %s declares `%s`, but it is not installed — run `kama pkg install`\n",
-                    manifest.c_str(), segs[0].c_str());
+            fprintf(stderr, "kama: note: %s declares `%s`, but it is not installed — run `kama pkg install %s`\n",
+                    manifest.c_str(), segs[0].c_str(), manifest.c_str());
         else if (dev)
             fprintf(stderr, "kama: note: `%s` is a dev-dependency in %s, which only a `--dev` build resolves\n",
                     segs[0].c_str(), manifest.c_str());
         else
             fprintf(stderr, "kama: note: %s declares no dependency named `%s` — add it under "
-                            "\"dependencies\" and run `kama pkg install`\n", manifest.c_str(), segs[0].c_str());
+                            "\"dependencies\" and run `kama pkg install %s`\n", manifest.c_str(), segs[0].c_str(),
+                    manifest.c_str());
         return;
     }
     // A loose build, where the operands ARE the compilation (§2i). Nothing was looked for, so the useful
@@ -11328,13 +11329,13 @@ int main(int argc, char** argv)
         std::map<std::string, DepSpec> deps, devDeps; std::string derr;
         if (loadManifestDeps(bcfg.manifest, deps, derr, &devDeps)) {
             if (!deps.empty() && !dirExists(mdir + "/.kama/deps")) {
-                fprintf(stderr, "kama: %s declares dependencies but %s/.kama/deps is missing — run `kama pkg install`\n",
-                        bcfg.manifest.c_str(), mdir.c_str());
+                fprintf(stderr, "kama: %s declares dependencies but %s/.kama/deps is missing — run `kama pkg install %s`\n",
+                        bcfg.manifest.c_str(), mdir.c_str(), bcfg.manifest.c_str());
                 return 2;
             }
             if (devBuild && !devDeps.empty() && !dirExists(mdir + "/.kama/dev-deps")) {
-                fprintf(stderr, "kama: %s declares dev-dependencies but %s/.kama/dev-deps is missing — run `kama pkg install`\n",
-                        bcfg.manifest.c_str(), mdir.c_str());
+                fprintf(stderr, "kama: %s declares dev-dependencies but %s/.kama/dev-deps is missing — run `kama pkg install %s`\n",
+                        bcfg.manifest.c_str(), mdir.c_str(), bcfg.manifest.c_str());
                 return 2;
             }
         }
