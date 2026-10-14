@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-141**
+**Next id: KR-148**
 
 ## The shape
 
@@ -78,6 +78,13 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-140 | **`this = T.make(…)` in a constructor reaches clang** — it passes `kama check`, then lowers to a pointer assigned a struct. Refuse it, naming `return T.make(…)`, or support it: the maintainer's call | S | [§2](ROADMAP_DETAIL.md#s2-ctor-this-assign) |
 | KR-136 | **A `Map<string, V>` written as a JSON object, merged per key** — kama writes every `Map` as an array of `{"key","value"}` pairs, so a config file's `"limits":{"cpu":2}` does not read into a `Map<string, int32>`, and a merge (`mergeJsonBuffer`) replaces a map whole. A string-keyed map as an object, merged per key, `null` removing an entry | M | [§4](ROADMAP_DETAIL.md#s4-string-map-object) |
 | KR-126 | **Strict decoding: unknown fields refused at the read site** — a misspelt key in a config file does nothing and says nothing. The read decides, not the type, and the error names the key | S | [§4](ROADMAP_DETAIL.md#s4-strict-decoding) |
+| KR-141 | **A failed multi-file check names the wrong file** — an error in `src/b.kama` ends with `src/a.kama FAILED`: the summary names the module's first file, as the passing one does | S | [§10](ROADMAP_DETAIL.md#s10-check-summary-file) |
+| KR-142 | **`kama seed` and a `kama-<name>` repository** — it refuses `kama-widget` and suggests `kama_widget`, which it also refuses (reserved); with no git identity the license names the package as its copyright holder | S | [§10](ROADMAP_DETAIL.md#s10-seed-names) |
+| KR-143 | **The package guide's "marker comments" cannot exist** — `agents/PACKAGE.md` fences a generated `csources` block with comments, and `kama.json` is strict JSON | S | [§10](ROADMAP_DETAIL.md#s10-package-guide-comments) |
+| KR-144 | **A dependency and a `link` entry cannot be gated on a fact, and a dependency entry takes any key** — `"bogus": 1` and `"compileFor"` pass silently (the gate is ignored), and `link` gates only by target NAME, so a consumer's own wasm target links native libraries | S | [§10](ROADMAP_DETAIL.md#s10-manifest-gates) |
+| KR-145 | **A host build variant with its own flags** — a sanitizer build has no place: a `BUILD_TYPE` value takes no `cflags`, a target entry needs a fixed triple, and `kama build` has no `--cflags` | M | [§10](ROADMAP_DETAIL.md#s10-build-variant) |
+| KR-146 | **`kama publish --dry-run` before the first commit** — it refuses with no commit or with uncommitted changes, so "what would ship?" cannot be asked before a first review | S | [§10](ROADMAP_DETAIL.md#s10-dry-run-uncommitted) |
+| KR-147 | **Every semantic diagnostic reports column 0** — parse errors carry the real column; an editor underlines from the line's start | L | [§10](ROADMAP_DETAIL.md#s10-diag-columns) |
 | KR-131 | **A by-value `match` or `foreach` binding copies its value even when nothing writes it** — `case Ok(value: b):` over a `Result<Big, E>` copies the 16 KB `Big` into `b` (and `foreach (Big b in xs)` each element), though the subject is already borrowed. A binding its body never writes can be read in place | S | [§5](ROADMAP_DETAIL.md#s5-match-binding-copy) |
 | KR-123 | **`borrow` names any place for a block** — there is no `ref` local, and `borrow` opens only an argument-less view mint, so an accessor with arguments is repeated at every use. `borrow <place> as L { … }` with the host frozen, as a view window freezes it | M | [§2](ROADMAP_DETAIL.md#s2-borrow-any-place) |
 | KR-124 | **A borrow window that runs code when it closes** — a transaction wants a scope that rolls back unless committed; no stored borrows and no closures leave no way to say it. A `type view` may declare a destructor its window runs on every path out | M | [§2](ROADMAP_DETAIL.md#s2-view-destructor) |

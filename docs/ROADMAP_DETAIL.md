@@ -329,6 +329,18 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   on `0.9.542`: a member depending on `audio`, which path-depends on `voice` (C sources included), builds without
   naming `voice`. A consumer that imports `voice` itself must declare it.
 
+### Verdicts on reported gaps (2026-10-14), each measured on `0.9.577`
+
+- **A gated-out `csources`/`cincludes` path must still exist, BY DESIGN** (docs/targets.md): a path that is wrong only
+  on the platform nobody builds daily is exactly what a gate would otherwise hide.
+- **A build with no `--target` applies `select.TARGET.HOST`, never the `LINUX` or `MACOS` arm, BY DESIGN.** A target
+  name is how a build was spelled; a per-OS setting gates on the fact (`OS_LINUX`). `csources` and `cincludes` take a
+  fact gate today, and KR-144 extends it to `link`, which is where this was felt.
+- **A path dependency of a path dependency across separate repositories is restated at the top, BY DESIGN**
+  (docs/packages.md): a fetched package cannot carry a local path. A `kama_workspace.json` holding both packages
+  permits it, and registry versions end it.
+- **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
+
 <a id="s2-raw-element"></a>
 
 ### A raw pointer's element is typed one step short (KR-138)
@@ -2744,6 +2756,89 @@ rather than here, so there is one number to keep current. Forward work:
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
+
+<a id="s10-check-summary-file"></a>
+
+### A failed multi-file check names the wrong file (KR-141)
+
+`kama check kama.json` over a module of two files, with the error in `src/b.kama`, prints
+`src/b.kama:2:0: error: …` and then `kama: src/a.kama FAILED (1 error)` (measured `0.9.577`). The summary names the
+module's first file, whichever failed; the passing summary does the same (`<first file> OK (N units)`), naming one
+file for a whole module. **Scheduled.** No ruling: the summary names what was checked — the manifest, or each file
+that failed.
+
+<a id="s10-seed-names"></a>
+
+### `kama seed` and a `kama-<name>` repository (KR-142)
+
+`kama seed ~/src/kama-widget --kind library` answers *"'kama-widget' is not a legal kama identifier — try
+'kama_widget'"*, and `--name kama_widget` is then refused too: its C prefix would begin with `kama_`, the compiler's own
+register. The hint names a name kama will not take. And with no git identity (a fresh machine, a container),
+`--license mit` writes `Copyright (c) 2026 widget`: the package as its own copyright holder. Measured `0.9.577`.
+**Scheduled.** **Recommendation:** a `kama-<name>` directory seeds the package `<name>` (the convention every `@kama/*`
+repository follows), and a hint never names a reserved word; the holder comes from `--holder`, else the git identity,
+else a placeholder seed names in its output so it is filled before a publish.
+
+<a id="s10-package-guide-comments"></a>
+
+### The package guide's "marker comments" cannot exist (KR-143)
+
+The shipped `agents/PACKAGE.md` says a vendor script regenerates the `csources` block of `kama.json` "between two
+marker comments". `kama.json` is strict JSON: a `// …` line is *"kama.json: expected a string"* (measured `0.9.577`),
+and packages fence the block by its own `"csources": [` line and the `]` that closes it. **Scheduled.** The guide
+says that; a manifest stays JSON, so every tool that reads JSON can read it.
+
+<a id="s10-manifest-gates"></a>
+
+### A dependency and a `link` entry cannot be gated on a fact, and a dependency entry takes any key (KR-144)
+
+Measured on `0.9.577`:
+- A dependency entry `{"path": "../widget", "bogus": 1}` installs and checks without a word, where the rest of
+  `kama.json` refuses an unknown key (*"unknown key `cflags` in `select.BUILD_TYPE.ASAN`"*). So
+  `{"path": …, "compileFor": ["!ARCH_WASM32"]}` is accepted and ignored: a wasm build still compiles that dependency's
+  C sources, and a cold build pays for them though the link drops the code.
+- `link` takes only strings (`[{"name": "m", "compileFor": ["OS_LINUX"]}]` is *"expected a string in the array"*). So
+  a package drops a native library from a wasm build only by a target NAME (`select.TARGET.WASM.link`), which its
+  consumer may call anything: a consumer's `"WEB": {"triple": "wasm32-emscripten-none"}` links the native library
+  into WebAssembly.
+
+docs/targets.md's own rule is to gate on the fact, never on how the build was spelled. **Scheduled.** **Design:** a
+dependency entry refuses an unknown key, and both a dependency and a `link` entry take `compileFor`, judged as a
+`csources` entry's is. A gated-out dependency is still resolved and installed, so a lockfile does not change by
+platform.
+
+<a id="s10-build-variant"></a>
+
+### A host build variant with flags of its own, such as a sanitizer build (KR-145)
+
+There is no place in the manifest for "this host, plus `-fsanitize=address`": a `select.BUILD_TYPE` value takes only
+`inherits` and `default`; a `select.TARGET` entry with no `triple` passes `check` and is refused by `build` (*"target
+'ASAN' declares no `triple` and is not a built-in"*); `"triple": "HOST"` is not a triple; and `kama build` has no
+`--cflags`. Measured `0.9.577`. The workarounds in use are `cc`/`c++` wrapper scripts passed as `--cc`/`--cxx`, or a
+hand-written local manifest. **Scheduled.** To decide: build settings (`cflags`, `ldflags`) on a `BUILD_TYPE` value,
+or a `select.TARGET` entry that names the host (`"triple": "HOST"`) and adds settings. A `BUILD_TYPE` value is the
+closer fit: a sanitizer build is a build type of any target, and it composes with `--target`.
+
+<a id="s10-dry-run-uncommitted"></a>
+
+### `kama publish --dry-run` before the first commit (KR-146)
+
+`kama publish kama.json --dry-run` in a repository with no commit answers *"the repository has no commit yet"*, and
+refuses uncommitted changes the same way (measured `0.9.577`). Publish archives exactly what git tracks, as
+committed, which is right for a publish; but "what would ship?" cannot be asked of a package waiting for its first
+review. **Scheduled.** **Recommendation:** a dry-run lists what git tracks plus what is staged, says that the tree is
+not publishable as it stands and why, and prints no integrity, since there is no committed archive to hash.
+
+<a id="s10-diag-columns"></a>
+
+### Every semantic diagnostic reports column 0 (KR-147)
+
+`total = "text";` on line 3 reports `col.kama:3:0: error: an assignment expects a number …`; a parse error carries its
+real column (measured `0.9.577`). An editor underlines from the line's start, and a tool reading `--diagnostics`
+cannot point at the expression. The diagnostic channel takes a line (`unsupported(what, line)`), and there are
+thousands of call sites. **Scheduled.** **Design:** the channel takes a source position — the node's own span,
+which the parser already stamps — with the line-only form kept for the sites that have no node, so the change can
+land site by site behind one funnel.
 
 <a id="s10-comptime-probe"></a>
 
