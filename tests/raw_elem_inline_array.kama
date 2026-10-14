@@ -1,0 +1,20 @@
+// A collection reached THROUGH a raw pointer's element is still a collection (KR-138). `p[0].bytes[1]`, with `bytes` an
+// `InlineArray` field of the pointee, passed `kama check` and lowered to a bare C subscript on the struct — clang's
+// "subscripted value is not an array, pointer, or vector" — while the same read through a `ref` went through the
+// bounds-checked `InlineArray_uint8_4__get`. Read and written, it now goes through the accessors; and so does an
+// element of an `InlineArray` that IS the pointee (`a[0][1]`).
+type value Buf { public InlineArray<uint8>#(4) bytes; public ctor make() { this.bytes = [1ui8, 2ui8, 3ui8, 4ui8]; } }
+
+unsafe fn int32 run() {
+    Buf b = Buf.make();
+    UnsafePtr<Buf> p = addr(of: b);
+    int32 total = cast<int32>(p[0].bytes[1]);         // 2
+    p[0].bytes[1] = 30ui8;                            // written in place, in `b`
+    total = total + cast<int32>(b.bytes[1]);          // 32
+    InlineArray<int32>#(3) xs = [5, 6, 7];
+    UnsafePtr<InlineArray<int32>#(3)> a = addr(of: xs);
+    a[0][2] = a[0][2] + 1;                            // the pointee's own element: 8
+    return total + xs[2];                             // 40
+}
+
+fn int32 main() { return run(); }

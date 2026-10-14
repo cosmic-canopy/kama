@@ -1,0 +1,22 @@
+// A second raw hop is typed (KR-138): `c[0].world[0].step()`, where `world` is an `UnsafePtr<World>` FIELD of the
+// first pointee, was "cannot resolve the receiver of `step`" — the element of a raw pointer field was typed only as
+// `this.world[i]`, from inside the class that declares the field. It is now typed from the class of whatever holds
+// the field, for a call, a member read and a member write.
+type value World {
+    public int32 n;
+    public ctor make() { this.n = 1; }
+    public fn void step() { this.n = this.n + 1; }
+    public const fn int32 get() { return this.n; }
+}
+type value Ctx { public UnsafePtr<World> world; public unsafe ctor make(UnsafePtr<World> w) { this.world = w; } }
+
+unsafe fn int32 run() {
+    World w = World.make();
+    Ctx c = Ctx.make(w: addr(of: w));
+    UnsafePtr<Ctx> cp = addr(of: c);
+    cp[0].world[0].step();                            // 2
+    cp[0].world[0].n = cp[0].world[0].n * 10;         // 20
+    return cp[0].world[0].get() + w.n;                // 40
+}
+
+fn int32 main() { return run(); }

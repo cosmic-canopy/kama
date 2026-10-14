@@ -1,0 +1,11 @@
+// A collection reached through a raw element is written through its accessor (KR-138), and through an
+// `UnsafeConstPtr<Buf>` that write is refused: the element is read-only, whatever it holds.
+type value Buf { public InlineArray<uint8>#(4) bytes; public ctor make() { this.bytes = [1ui8, 2ui8, 3ui8, 4ui8]; } }
+
+unsafe fn int32 run() {
+    Buf b = Buf.make();
+    UnsafeConstPtr<Buf> q = addr(of: b);
+    q[0].bytes[1] = 9ui8;                 // ERROR: `q` only reads its `Buf`
+    return cast<int32>(b.bytes[1]);
+}
+fn int32 main() { return run(); }

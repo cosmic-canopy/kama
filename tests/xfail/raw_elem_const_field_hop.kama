@@ -1,0 +1,13 @@
+// KR-138 types a raw element one hop further (`c[0].world[0]`), and the read-only half follows it: through an
+// `UnsafeConstPtr<World>` FIELD, a non-`const fn` call is refused as it is through a const pointer local.
+type value World { public int32 n; public ctor make() { this.n = 1; } public fn void step() { this.n = this.n + 1; } }
+type value Ctx { public UnsafeConstPtr<World> world; public unsafe ctor make(UnsafeConstPtr<World> w) { this.world = w; } }
+
+unsafe fn int32 run() {
+    World w = World.make();
+    Ctx c = Ctx.make(w: addr(of: w));
+    UnsafePtr<Ctx> cp = addr(of: c);
+    cp[0].world[0].step();                // ERROR: `world` only reads its `World`
+    return w.n;
+}
+fn int32 main() { return run(); }

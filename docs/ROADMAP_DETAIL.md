@@ -341,25 +341,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-raw-element"></a>
-
-### A raw pointer's element is typed one step short (KR-138)
-
-`0.9.537` typed a raw element's pointee for a member read and a call (`receiverClass`), through a local, a parameter
-or a static: `g_p[0].bump()` and `p[0].inner.bump()` work. Three neighbouring shapes do not (measured on `0.9.577`,
-each in its own file):
-- An `InlineArray` field indexed through the element — `p[0].bytes[1]`, with `p: UnsafePtr<Buf>` — passes `kama check`
-  and fails in clang (*"subscripted value is not an array, pointer, or vector"*): it lowers to a bare C subscript on the
-  struct, where the same read through a `ref` is the bounds-checked `InlineArray_uint8_4__get`. A C compiler's error is
-  kama's bug, and this one also skips the bounds check.
-- A second pointer hop — `c[0].world[0].step()`, where `world` is an `UnsafePtr<World>` field — is refused: *"cannot
-  resolve the receiver of `step`"*.
-- A call on the element as a `match` subject — `match (w[0].ending())` — is refused: *"`match` subject's type could
-  not be resolved"*, though the same call through a `const ref World` builds.
-
-**Scheduled.** No ruling: each is the `0.9.537` rule applied one step further. Fixtures: the three shapes, built and
-run, the first reading through the bounds-checked accessor.
-
 <a id="s2-fnptr-enum-return"></a>
 
 ### An `fnptr` returning an enum of its own module reaches clang (KR-139)

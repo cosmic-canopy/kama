@@ -948,6 +948,8 @@ protected_on_value_operator	protected_on_value_operator.kama:6 protected_on_valu
 ptr_arithmetic	ptr_arithmetic.kama:5
 public_field_on_resource	public_field_on_resource.kama:3
 public_virtual	public_virtual.kama:2
+raw_elem_const_field_hop	raw_elem_const_field_hop.kama:10
+raw_elem_const_write	raw_elem_const_write.kama:8
 raw_elem_private_field	raw_elem_private_field.kama:12
 raw_generic_spelled	raw_generic_spelled.kama:4
 raw_pointer_operand	raw_pointer_operand.kama:4 raw_pointer_operand.kama:5 raw_pointer_operand.kama:6 raw_pointer_operand.kama:7

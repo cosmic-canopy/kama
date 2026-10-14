@@ -9160,7 +9160,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // receiver, and hold a value receiver in a temporary the assignment then holds a second time.
                 SharedExpression erecv = ea->expression ? ea->expression
                                                         : std::static_pointer_cast<ExpressionNode>(ea->identifier);
-                const std::string rcls = erecv ? exprClass(erecv) : std::string();
+                const std::string rcls = erecv ? receiverClass(erecv) : std::string();
                 std::string et;
                 if (!rcls.empty() && _classes.count(rcls) && _classes[rcls].isIntrinsicColl
                     && _collections.count(_classes[rcls].name))
@@ -17652,7 +17652,9 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     SharedExpression recv = ea->expression ? ea->expression
                                            : std::static_pointer_cast<ExpressionNode>(ea->identifier);
     if (!recv) return false;
-    std::string cls = exprClass(recv);
+    // receiverClass, not exprClass: a collection reached THROUGH a raw element (`p[0].bytes[1]`) is still a
+    // collection, read through its bounds-checked accessor — not a bare C subscript on the struct (KR-138).
+    std::string cls = receiverClass(recv);
     if (cls.empty() || !_classes.count(cls) || !_classes[cls].isIntrinsicColl) return false;
     coll     = _classes[cls].name;
     // A `Fixed<T,N>` knows its size at compile time, so a CONSTANT out-of-range index is a
@@ -17693,13 +17695,13 @@ std::string CEmitter::emitPlace(SharedExpression e)
         // The receiver is emitted as a place too, so a nested `m[i][j]` chains cleanly.
         SharedExpression recv = ea->expression ? ea->expression
                                                : std::static_pointer_cast<ExpressionNode>(ea->identifier);
-        if (recv) if (MethodInfo* op = userIndexOp(exprClass(recv))) {
+        if (recv) if (MethodInfo* op = userIndexOp(receiverClass(recv))) {
             // `this` is already `self` (a pointer) — pass it directly; any other lvalue's address is `&place`.
             // A receiver that is itself a READ-ONLY place (`o.stdout()[i]`) is a `T const*` in C; the
             // operator takes `T*` (the ABI-neutral rule — every write was already refused), so cast, as
             // method dispatch does for its receiver. The receiver goes first: holding a value receiver in
             // a temporary hoists it, and source order is receiver, then index.
-            const std::string ownerCls = exprClass(recv);
+            const std::string ownerCls = receiverClass(recv);
             std::string recvAddr = dynamic_cast<ThisAccessNode*>(recv.get())
                                        ? emitExpression(recv)
                                        : ((chainThroughConstPlace(recv) ? "(" + ownerCls + "*)" : std::string())
@@ -17793,7 +17795,7 @@ bool CEmitter::indexesUserOp(ElementAccessNode* ea)
     if (!ea) return false;
     SharedExpression recv = ea->expression ? ea->expression
                                            : std::static_pointer_cast<ExpressionNode>(ea->identifier);
-    return recv && userIndexOp(exprClass(recv)) != nullptr;
+    return recv && userIndexOp(receiverClass(recv)) != nullptr;
 }
 
 // cType(typeNode) resolved in the type-substitution context of a generic-instance class `inCls` — so a
@@ -23352,8 +23354,14 @@ std::string CEmitter::ptrElemType(SharedExpression e)
     SharedExpression recv = ea->expression ? ea->expression
                                            : std::static_pointer_cast<ExpressionNode>(ea->identifier);
     auto* ma = dynamic_cast<MemberAccessNode*>(recv.get());
-    if (!ma || !ma->identifier || !ma->identifier->value || !_currentClass) return "";
-    ClassInfo* owner = findFieldOwner(_currentClass, *ma->identifier->value);
+    if (!ma || !ma->identifier || !ma->identifier->value || !ma->expression) return "";
+    // The field belongs to the class of what HOLDS it: `this` is the class being emitted, and anything else is its
+    // own type — inside `A`'s method, `b.data[0]` is `B`'s field, which was typed as `A`'s `data` (KR-138).
+    ClassInfo* holder = nullptr;
+    if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) holder = _currentClass;
+    else { const std::string hc = exprClass(ma->expression); if (!hc.empty() && _classes.count(hc)) holder = &_classes[hc]; }
+    if (!holder) return "";
+    ClassInfo* owner = findFieldOwner(holder, *ma->identifier->value);
     if (!owner) return "";
     for (auto& f : owner->fields)
         if (f.name == *ma->identifier->value && f.type && f.type->value
@@ -25450,7 +25458,7 @@ bool CEmitter::chainThroughConstPlace(SharedExpression e)
     if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
         SharedExpression base = ea->expression ? ea->expression
                                                : std::static_pointer_cast<ExpressionNode>(ea->identifier);
-        if (MethodInfo* op = userIndexOp(exprClass(base))) if (op->isConstPlace) return true;
+        if (MethodInfo* op = userIndexOp(receiverClass(base))) if (op->isConstPlace) return true;
         return chainThroughConstPlace(base);
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
@@ -36148,7 +36156,9 @@ std::string CEmitter::lvalueCType(SharedExpression e)
         return "";
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {             // `obj.field` — resolve the receiver's field
-        std::string recv = exprClass(ma->expression);
+        // receiverClass: a field of a raw element (`c[0].world`) has its declared type too, which is what lets the
+        // const-pointer rules see an `UnsafeConstPtr` field one hop down (chainThroughConstRawPtr, KR-138).
+        std::string recv = receiverClass(ma->expression);
         // Auto-deref a smart-pointer / `Deref<T>` receiver to its pointee — but ONLY when the member is
         // not a field of the wrapper itself, the rule `exprClass`'s own member arm already follows and
         // the one this arm was never taught (the identifier arm above got its matching lesson first).
@@ -36185,7 +36195,9 @@ std::string CEmitter::callReturnTypeRaw(InvocationNode* inv)
     // Method call `recv.method(args)` — call->expression is a MemberAccessNode.
     if (auto* ma = inv->expression ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr) {
         std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
-        std::string cls = exprClass(ma->expression);
+        // receiverClass: a call on a raw element (`w[0].ending()`) has a return type too — a `match` subject reads
+        // it here (KR-138). The result is a fresh value, not the element, so no raw store is typed by this.
+        std::string cls = receiverClass(ma->expression);
         if (isSmartPtrClass(cls)) {   // an intrinsic (tryUpgrade/valid/…) — returnType is on the smart-ptr
             auto mit = _classes[cls].methods.find(method);
             if (mit != _classes[cls].methods.end() && mit->second.returnType) {
@@ -36426,7 +36438,7 @@ std::string CEmitter::indexElemTypeRaw(SharedExpression e)
     if (!ea) return "";
     SharedExpression recv = ea->expression ? ea->expression
                                            : std::static_pointer_cast<ExpressionNode>(ea->identifier);
-    std::string cls = exprClass(recv);
+    std::string cls = receiverClass(recv);   // a collection reached through a raw element is still one (KR-138)
     if (!cls.empty() && _classes.count(cls) && _classes[cls].isIntrinsicColl) {
         // An intrinsic collection records its element CLASS, and leaves it empty for a primitive
         // element — the same conflation, one level down. `_collections` carries the C type for both.
@@ -36866,6 +36878,26 @@ std::string CEmitter::receiverClass(SharedExpression e)
             const std::string r = receiverClass(ma->expression);
             if (!r.empty()) return memberFieldClass(r, ma);
         }
+    // `X.f[i]` where `f` is a raw pointer FIELD: its element is the pointee, whatever types `X` — so a second hop,
+    // `c[0].world[0].step()` with `world: UnsafePtr<World>`, reaches `World` through the class of `c[0]` (KR-138).
+    // ptrElemType answers only `this.f[i]`, from the class being emitted.
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {
+        SharedExpression base = ea->expression ? ea->expression
+                                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        auto* ma = dynamic_cast<MemberAccessNode*>(base.get());
+        if (ma && ma->expression && ma->identifier && ma->identifier->value) {
+            const std::string owner = receiverClass(ma->expression);
+            ClassInfo* fo = (!owner.empty() && _classes.count(owner))
+                                ? findFieldOwner(&_classes[owner], *ma->identifier->value) : nullptr;
+            if (fo)
+                for (auto& f : fo->fields)
+                    if (f.name == *ma->identifier->value && f.type && f.type->value
+                        && isRawPtrName(*f.type->value) && f.type->genericArg) {
+                        const std::string pt = cTypeInInstance(fo->name, f.type->genericArg);
+                        return isClass(pt) ? pt : "";
+                    }
+        }
+    }
     return "";
 }
 
@@ -37305,7 +37337,7 @@ bool CEmitter::invocationReturnsPlace(InvocationNode* iv)
         return fit != _funcs.end() && fit->second.isPlaceReturn;   // a ctor isn't in _funcs -> false (a value)
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {   // method call `recv.m()`
-        std::string rcls = exprClass(ma->expression);
+        std::string rcls = receiverClass(ma->expression);   // as callReturnTypeRaw types the same call
         if (isSmartPtrClass(rcls)) rcls = _classes[rcls].collElemClass;       // a method lives on the pointee
         std::string m = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
         if (rcls.empty() || m.empty()) return false;

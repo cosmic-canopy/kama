@@ -1,0 +1,21 @@
+// A call on a raw pointer's element is a `match` subject (KR-138). `match (w[0].ending())` was "`match` subject's
+// type could not be resolved", though the same call through a `const ref World` built: the call's return type was
+// read off the receiver's class, and a raw element had none there. Both enum shapes — payload-less and tagged.
+type enum Ending { Win, Lose }
+type enum Score { Points(int32 n), Nothing }
+type value World {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn Ending ending() { if (this.n > 0) { return Ending::Win; } return Ending::Lose; }
+    public const fn Score score() { if (this.n > 0) { return Score::Points(n: this.n); } return Score::Nothing; }
+}
+
+unsafe fn int32 run() {
+    World w = World.make(n: 4);
+    UnsafePtr<World> wp = addr(of: w);
+    int32 a = match (wp[0].ending()) { case Win: { := 10; } case Lose: { := 20; } };
+    int32 b = match (wp[0].score()) { case Points(n: k): { := k; } case Nothing: { := 0; } };
+    return a + b;                                     // 14
+}
+
+fn int32 main() { return run(); }

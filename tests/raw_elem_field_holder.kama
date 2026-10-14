@@ -1,0 +1,20 @@
+// A raw pointer FIELD's element is typed from the class that HOLDS the field (KR-138). Inside `A`'s method,
+// `b.data[0]` — `B`'s `data`, an `UnsafePtr<Foo>` — was typed from `A`'s own field of the same name, so the call
+// was "`Bar` has no method `get`"; with a method of that name on `Bar`, it would have called the wrong one.
+type value Foo { public int32 v; public ctor make() { this.v = 5; } public const fn int32 get() { return this.v; } }
+type value Bar { public int32 w; public ctor make() { this.w = 9; } public const fn int32 other() { return this.w; } }
+type value B { public UnsafePtr<Foo> data; public unsafe ctor make(UnsafePtr<Foo> d) { this.data = d; } }
+type value A {
+    public UnsafePtr<Bar> data;
+    public unsafe ctor make(UnsafePtr<Bar> d) { this.data = d; }
+    public unsafe fn int32 peek(B b) { return b.data[0].get(); }   // `b.data` is B's field: a `Foo`
+}
+
+unsafe fn int32 run() {
+    Foo f = Foo.make();
+    Bar r = Bar.make();
+    A a = A.make(d: addr(of: r));
+    B b = B.make(d: addr(of: f));
+    return a.peek(b: b);
+}
+fn int32 main() { return run(); }
