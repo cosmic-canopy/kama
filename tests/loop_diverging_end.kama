@@ -1,0 +1,63 @@
+// A loop body whose last statement is an `if`/`else` or a `match` with every arm leaving — `continue` or
+// `break` — never reaches its end, so the end is not a "next pass". The check saw only a LAST statement that
+// was itself a jump, and refused a binding given away and re-assigned before the `continue`: "given away inside
+// this loop … not assigned again before the loop's next pass". Moving `break;` after the `if` passed.
+// (An assignment at the TOP of the body still does not count — tests/xfail/loop_move_rearm_top.)
+// Returns 0.
+import { std::collections::DynamicArray };
+
+type enum Step { More, Done }
+
+fn int32 main() {
+    // `while`, ending in an if/else whose arms both leave.
+    DynamicArray<string> sink = DynamicArray.empty();
+    string s = "a";
+    int32 n = 0;
+    while (true) {
+        sink.add(item: give s);
+        n = n + 1;
+        if (n < 3) { s = "b"; continue; } else { break; }
+    }
+    if (sink.length() != 3) { return 1; }
+
+    // `while`, ending in a match whose arms both leave.
+    Optional<string> o = Optional::Some(value: "a");
+    n = 0;
+    while (true) {
+        match (give o) {
+            case Some(value: v): {
+                sink.add(item: give v);
+                n = n + 1;
+                if (n < 3) { o = Optional::Some(value: "b"); } else { o = Optional::None; }
+                continue;
+            }
+            case None: { break; }
+        };
+    }
+    if (sink.length() != 6) { return 2; }
+
+    // `foreach`, ending in a match on an enum.
+    DynamicArray<int32> steps = DynamicArray.empty();
+    steps.add(item: 1); steps.add(item: 2); steps.add(item: 3);
+    string t = "c";
+    foreach (int32 i in steps) {
+        sink.add(item: give t);
+        Step st = i < 3 ? Step::More : Step::Done;
+        match (st) {
+            case More: { t = "d"; continue; }
+            case Done: { t = "z"; break; }      // the loop can also end by running out: `t` is live on both exits
+        };
+    }
+    if (sink.length() != 9) { return 3; }
+
+    // A nested if/else inside the else, all leaving.
+    string u = "e";
+    n = 0;
+    while (n < 10) {
+        sink.add(item: give u);
+        n = n + 1;
+        if (n < 2) { u = "f"; continue; } else { if (n < 5) { u = "g"; continue; } else { u = "h"; break; } }
+    }
+    if (sink.length() != 14) { return 4; }
+    return 0;
+}

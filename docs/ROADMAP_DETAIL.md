@@ -417,16 +417,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-loop-diverging-move"></a>
-
-### A false use-after-move when a loop body ends in an `if`/`else` that always leaves (KR-155)
-
-Measured on `0.9.589`, filed 2026-10-14. `while (true) { sink.add(item: give s); n = n + 1; if (n < 3) { s = "b"; continue; } else { break; } }` is
-refused: "`s` is given away inside this loop … not assigned again before the loop's next pass". The loop check does
-not see that an `if`/`else` (or a `match`) whose every arm leaves makes the end of the body unreachable; moving
-`break;` after the `if` passes. **Scheduled:** the end of a body reached by no path is not a "next pass". (By design,
-and unchanged: an assignment at the TOP of the body does not count, SPEC *the same for a loop*.)
-
 <a id="s2-match-string-assign"></a>
 
 ### A value-producing `match` into an existing `string`, and a `match` arm that moves silently (KR-156)

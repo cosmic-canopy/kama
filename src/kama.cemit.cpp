@@ -6586,7 +6586,7 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     // ran its own cleanup) — the double-destruction guard.
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), depth + 1);
-    _scopes.back().bodyDiverges = last && stmtIsJump(last);
+    _scopes.back().bodyDiverges = last && bodyDiverges(last);
 
     indent(depth);
     *_out << "}";
@@ -8999,7 +8999,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             emitStatement(fe->body, depth + 2); last = fe->body;
         }
         if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
-        _scopes.back().bodyDiverges = last && stmtIsJump(last);
+        _scopes.back().bodyDiverges = last && bodyDiverges(last);
         popScope();   // retires the binding — see noteScopedBinding above
 
         indent(depth + 1); *_out << "}\n";   // close for
@@ -9636,7 +9636,7 @@ void CEmitter::emitBody(SharedStatement stmt, int depth, bool loopBoundary)
         emitStatement(stmt, depth + 1);
         if (!stmtIsJump(stmt))
             emitScopeCleanup(_scopes.back(), depth + 1);
-        _scopes.back().bodyDiverges = stmtIsJump(stmt);
+        _scopes.back().bodyDiverges = bodyDiverges(stmt);
         indent(depth);
         *_out << "}";
         popScope();
@@ -18093,7 +18093,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         emitStatement(fe->body, depth + 2); last = fe->body;
     }
     if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
-    _scopes.back().bodyDiverges = last && stmtIsJump(last);
+    _scopes.back().bodyDiverges = last && bodyDiverges(last);
     popScope();   // retires the binding
 
     indent(depth + 1); *_out << "}\n";   // close while
