@@ -671,8 +671,9 @@ Publish refuses:
   the history. The official registry refuses the same names in any tarball, whichever compiler wrote it;
 - a `kama.json` that git does not track;
 - a **`path` dependency** in `dependencies`. A fetched package arrives without the directory it names, so no
-  consumer could install the version, and a published version is permanent. Depend on a released version and
-  develop against the local copy with `overrides` in `kama.local.json`, which never ships. A `path`
+  consumer could install the version, and a published version is permanent. Depend on the version and develop
+  against the local copy with `overrides` in `kama.local.json`, which never ships — the override stands in for
+  a version that is not released yet. A `path`
   **dev**-dependency is fine: nobody follows a fetched package's dev-dependencies. (Until `0.9.472` publish let
   one through and recorded it as `{}`, and the version was spent.)
 - a manifest key **newer than the package's `kama` floor**: `publish` needs `"kama"` to start at `0.9.453` or
@@ -902,11 +903,17 @@ a cross target at their own sysroot without editing the committed file.
 **Install-time fields** are read by `kama pkg install`:
 
 - **`overrides`** — redirect a dependency to a **local directory** for local development (Cargo
-  `[patch]` / Go `replace`). The dep stays declared in `kama.json`; the override just relinks the
+  `[patch]` / Go `replace`). The dep stays declared in `kama.json`; the override relinks the
   materialized view (`.kama/deps/<name>`) at your local copy, so your build compiles the local code.
-  It is **never written to `kama.lock`** — the lock stays canonical, so CI (which has no
-  `kama.local.json`) reproduces the published resolution exactly. The overridden package must still be
-  a declared, resolvable dependency and a drop-in for it (its own *new* dependencies aren't re-followed).
+  The directory may be relative to the project or absolute; an absolute path is the natural spelling in
+  a file that never leaves your machine. When a release satisfies the requirement, the dependency
+  resolves to it as usual and the override is a drop-in for it (its own *new* dependencies aren't
+  re-followed). When **no** release does, because the version you are developing is not published yet,
+  the override **stands in** for it, provided its own `version` satisfies the requirement, and its
+  dependencies are installed like any path dependency's. One whose version does not satisfy it is refused.
+  Either way the override is **never written to `kama.lock`**: the lock stays canonical, so CI (which has
+  no `kama.local.json`) reproduces the published resolution exactly, or names the version that is not
+  published yet.
 - **`registries`** — a local registry config that layers over `kama.json`'s (same shape: a `default`
   chain and per-`@scope` chains). Point a scope at a private mirror, or supply a `default` a checkout
   doesn't commit. Lock-safe for free: the lock pins content integrity, not the registry URI.

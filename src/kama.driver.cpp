@@ -7554,6 +7554,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         std::map<std::string, std::string> regBaseOf; // registry deps: name -> resolved registry base URI
         std::map<std::string, std::string> importUsedBy; // import (bare) name -> the scoped name that claimed it
         std::map<std::string, LockEntry> lock;        // output
+        std::set<std::string> overriddenInstall;      // root deps a `kama.local.json` override stood in for (KR-160)
         bool madeDevDir = false;
 
         // Enumerate a git repo's version tags once, memoized across attempts.
@@ -7767,17 +7768,40 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                             else       { pick.tag = lk->second.rev; }
                         }
                     }
+                    // A root dependency's `kama.local.json` override STANDS IN for a release none of the sources
+                    // has — the version being developed is not published yet — when the override's own `version`
+                    // satisfies the requirement (Cargo's `[patch]` does the same). It is resolved like a path
+                    // dependency, its own dependencies followed, and is kept OUT of the lock: the lock records no
+                    // machine-local path, so CI (no `kama.local.json`) still resolves only what is published.
+                    // Install used to resolve every requirement before looking at an override, and failed (KR-160).
+                    std::string standIn, standInWhy;   // the override's directory, or why it cannot stand in
+                    auto overrideStandsIn = [&]() {
+                        auto ov = overrides.find(r.name);
+                        if (r.requestor != "<root manifest>" || ov == overrides.end() || ov->second.path.empty()) return false;
+                        const std::string dir = absolutePath(joinUnlessAbsolute(base, ov->second.path));
+                        std::string on, ovv, oerr; SemVer have;
+                        if (!dirExists(dir) || !loadManifestNameVersion(dir + "/kama.json", on, ovv, oerr))
+                            standInWhy = "the override in kama.local.json names " + dir + ", which holds no readable kama.json";
+                        else if (!parseSemVer(ovv, have))
+                            standInWhy = "the override in kama.local.json (" + dir + ") declares no version";
+                        else if (!satisfies(req, have))
+                            standInWhy = "the override in kama.local.json is version " + ovv + ", which does not satisfy it either";
+                        else { standIn = dir; sv = have; return true; }
+                        return false;
+                    };
                     if (!reused) {
                         bool matched = false; std::string terr;
-                        if (!selectVersion(r.name, r.spec, req, matched, sv, pick, terr)) {
-                            fprintf(stderr, "kama pkg install: %s\n", terr.c_str()); return 1;
-                        }
-                        if (!matched) {
+                        const bool looked = selectVersion(r.name, r.spec, req, matched, sv, pick, terr);
+                        if ((!looked || !matched) && !overrideStandsIn()) {
+                            if (!looked) { fprintf(stderr, "kama pkg install: %s\n", terr.c_str()); return 1; }
                             fprintf(stderr, "kama pkg install: dependency '%s' (required by %s): no %s version "
-                                    "satisfies \"%s\"\n", r.name.c_str(), r.requestor.c_str(),
-                                    isReg ? "registry" : "git tag", r.spec.version.c_str());
+                                    "satisfies \"%s\"%s%s\n", r.name.c_str(), r.requestor.c_str(),
+                                    isReg ? "registry" : "git tag", r.spec.version.c_str(),
+                                    standInWhy.empty() ? "" : " — ", standInWhy.c_str());
                             return 1;
                         }
+                    }
+                    if (!reused && standIn.empty()) {
                         // Dependency-confusion guard: a name@version is a fixed content identity. If the
                         // lock already pinned this exact version, a freshly-resolved DIFFERENT integrity
                         // (e.g. a mirror serving different bytes under the same version) is a hard error.
@@ -7793,7 +7817,10 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                         }
                     }
                     accReq[r.name] = req; reqStr[r.name] = r.spec.version; chosenVer[r.name] = semVerStr(sv);
-                    if (isReg) {                      // pin: resolveOne now treats it as an exact url dep
+                    if (!standIn.empty()) {           // the override, as a path dependency (never locked)
+                        DepSpec local; local.path = overrides[r.name].path; local.pathAbs = standIn;
+                        r.spec = local; overriddenInstall.insert(r.name);
+                    } else if (isReg) {               // pin: resolveOne now treats it as an exact url dep
                         r.spec.url = pick.url; r.spec.integrity = pick.integrity; regBaseOf[r.name] = pick.regBase;
                         r.spec.signature = pick.signature; r.spec.sigKey = pick.sigKey;   // verified at fetch (M3.2a)
                     } else {
@@ -7858,7 +7885,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     fprintf(stderr, "kama pkg install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
                 }
                 e.dependencies = directNames;
-                lock[r.name] = e;
+                if (!overriddenInstall.count(r.name)) lock[r.name] = e;   // a stand-in override is never locked
             }
             return 0;
         };
@@ -7878,9 +7905,10 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         // Dep path-overrides (M5.3, patch-style): the canonical lock is now written and untouched. Redirect
         // ONLY the materialized view for each overridden dep to a local path, so this dev's build compiles
         // against local code. Because nothing here writes the lock, a committed `kama.lock` stays canonical
-        // and CI (no `kama.local.json`) reproduces the published resolution exactly. The overridden dep must
-        // still be a declared, canonically-resolvable dependency (a drop-in replacement); its NEW transitive
-        // deps, if any, are not re-followed (v1 patch semantics — replace-style is a later milestone).
+        // and CI (no `kama.local.json`) reproduces the published resolution exactly. A dep a release satisfies
+        // resolved canonically above, and the override is a drop-in for it whose NEW transitive deps are not
+        // re-followed; a dep no release satisfies was resolved FROM its override in `drain` (KR-160), its deps
+        // followed there, and is relinked here to the same place.
         for (auto& ov : overrides) {
             const std::string& name = ov.first;
             const DepSpec& spec = ov.second;

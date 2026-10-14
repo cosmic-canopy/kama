@@ -983,6 +983,44 @@ if ! "$KAMA" pkg install "$rp/kama.json" >"$tmp/rp1.out" 2>&1; then
 grep -q '"source": "registry"' "$rp/kama.lock" \
     || { echo "check-packages: FAIL — registries-override install did not lock a registry source:" >&2; sed 's/^/  /' "$rp/kama.lock" >&2; exit 1; }
 
+# 27b. KR-160: an override STANDS IN for a version no registry has yet. `hi` is published at 1.0.0 only; the app
+#     needs ^9.9.0, the version being developed in a local checkout. Without an override the install says no
+#     registry version satisfies it; with one whose own version satisfies it, the override is installed like a
+#     path dependency — its registry dependency `rg` followed — and the lock holds `rg` but neither `hi` nor
+#     anything machine-local. An override whose version does not satisfy the requirement is refused, naming
+#     it. The override path is ABSOLUTE (KR-158): it used to be joined onto the project and never found.
+sti="$tmp/sti"; mkdir -p "$sti/src"
+cat > "$sti/kama.json" <<JSON
+{ "name": "stiapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+  "dependencies": { "hi": { "version": "^9.9.0", "registry": "file://$reg" } }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+printf 'import { hi::total };\nfn int32 main() { return total(); }\n' > "$sti/src/main.kama"
+if "$KAMA" pkg install "$sti/kama.json" >"$tmp/sti0.out" 2>&1; then
+    echo "check-packages: FAIL — an unpublished version resolved with no override" >&2; exit 1; fi
+grep -q 'no registry version satisfies "^9.9.0"' "$tmp/sti0.out" \
+    || { echo "check-packages: FAIL — the unpublished-version refusal is unclear:" >&2; sed 's/^/  /' "$tmp/sti0.out" >&2; exit 1; }
+hil="$(kama_native_path "$tmp")/hi-local"; mkdir -p "$hil/src"
+cat > "$hil/kama.json" <<JSON
+{ "name": "hi", "version": "9.9.0", "kind": "library",
+  "dependencies": { "rg": { "version": "^1.0.0", "registry": "file://$reg" } }, "modules": { ".": { "visibility": "public" } } }
+JSON
+printf 'import { rg::area };\nexport { total };\nfn int32 total() { return area() + 100; }\n' > "$hil/src/hi.kama"
+printf '{ "overrides": { "hi": { "path": "%s" } } }\n' "$hil" > "$sti/kama.local.json"
+"$KAMA" pkg install "$sti/kama.json" >"$tmp/sti1.out" 2>&1 \
+    || { echo "check-packages: FAIL — an override did not stand in for an unpublished version:" >&2; sed 's/^/  /' "$tmp/sti1.out" >&2; exit 1; }
+grep -q '"rg"' "$sti/kama.lock" \
+    || { echo "check-packages: FAIL — the stand-in's own dependency was not followed into the lock:" >&2; sed 's/^/  /' "$sti/kama.lock" >&2; exit 1; }
+if grep -q '"hi"\|hi-local' "$sti/kama.lock"; then
+    echo "check-packages: FAIL — the stand-in override reached kama.lock:" >&2; sed 's/^/  /' "$sti/kama.lock" >&2; exit 1; fi
+"$KAMA" build "$sti/kama.json" -o "$tmp/stiapp" >"$tmp/sti2.out" 2>&1 \
+    || { echo "check-packages: FAIL — the build against the stand-in failed:" >&2; sed 's/^/  /' "$tmp/sti2.out" >&2; exit 1; }
+if "$tmp/stiapp"; then src=0; else src=$?; fi
+[ "$src" = 112 ] || { echo "check-packages: FAIL — the stand-in app returned $src, expected 112 (local hi over rg 1.2.0)" >&2; exit 1; }
+sed 's/"9.9.0"/"9.8.0"/' "$hil/kama.json" > "$hil/kama.json.new" && mv "$hil/kama.json.new" "$hil/kama.json"
+if "$KAMA" pkg install "$sti/kama.json" >"$tmp/sti3.out" 2>&1; then
+    echo "check-packages: FAIL — an override whose version misses the requirement stood in" >&2; exit 1; fi
+grep -q 'is version 9.8.0, which does not satisfy it either' "$tmp/sti3.out" \
+    || { echo "check-packages: FAIL — the unsatisfying-override refusal is unclear:" >&2; sed 's/^/  /' "$tmp/sti3.out" >&2; exit 1; }
 # KR-158, in `kama.json` itself: an absolute `path` dependency is used as written.
 abp="$tmp/abp"; mkdir -p "$abp/src"
 cat > "$abp/kama.json" <<JSON
@@ -996,6 +1034,7 @@ printf 'import { ogeo::area };\nfn int32 main() { return area(); }\n' > "$abp/sr
     || { echo "check-packages: FAIL — the build through an absolute path dependency failed:" >&2; sed 's/^/  /' "$tmp/abpb.out" >&2; exit 1; }
 if "$tmp/abpapp"; then arc=0; else arc=$?; fi
 [ "$arc" = 30 ] || { echo "check-packages: FAIL — the absolute-path app returned $arc, expected 30" >&2; exit 1; }
+
 # 27a. a DEPENDENCY written for a newer compiler: its manifest carries a key this one has never heard of,
 #     under a `kama` range this one misses. The install says to update rather than naming the key alone —
 #     the shape 0.9.440 met with a package that used `publish` (it said only "unknown key", at a store path).
@@ -1699,4 +1738,4 @@ if "$KAMA" pkg install "$tmp/xout/kama.json" >"$tmp/xws.out" 2>&1; then
 grep -qF '`net` was fetched, and a fetched package cannot reference a local path' "$tmp/xws.out" \
     || { echo "check-packages: FAIL — the fetched refusal did not say so:" >&2; sed 's/^/  /' "$tmp/xws.out" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false); built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package)"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision; kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package)"

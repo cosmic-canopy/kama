@@ -2901,19 +2901,6 @@ The fix is to tell the reader when it reads the stdlib's manifest, or to refuse 
 path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
 diagnostic, not a feature: no program can use such a package today.
 
-<a id="s10-override-unpublished"></a>
-
-### A `kama.local.json` override stands in for an unpublished version (KR-160)
-
-Measured on `0.9.589`, filed 2026-10-14. With `"@kama/ui": {"version": "^9.9.0"}` and an override pointing at a local checkout whose `kama.json` says 9.9.0,
-`kama pkg install` fails at once: "no registry version satisfies "^9.9.0"". Overrides apply after resolution and the
-lock write (`src/kama.driver.cpp` ~7477, ~7863). packages.md contradicts itself: "develop against the local copy with
-`overrides`" (~670) against "must still be a declared, canonically-resolvable dependency" (~903). **Decided (the
-maintainer, 2026-10-14):** developing against an unpublished local package is the main use of an override, as
-Cargo's `[patch]` allows — the override is used when its own version satisfies the requirement, whether or not a
-registry has it; the lock records the requirement and never the local path, so nothing machine-local reaches a
-commit. Fix packages.md in the same change.
-
 <a id="s10-emcc-file-flags"></a>
 
 ### emcc's file inputs in `ldflags` resolve against the working directory (KR-161)
