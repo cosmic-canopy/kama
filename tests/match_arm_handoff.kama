@@ -1,0 +1,51 @@
+// A value-producing `match` assigns into an existing `string`, local or field, as it always did into an
+// `int32`, a list or an `Optional<string>` — it was refused as "not a typed position". And a `match` arm is a
+// hand-off, as a ternary arm is: a named owning value there says `give` or `copy` (tests/xfail/
+// match_arm_bare_named), where `case A: t;` once moved `t` with no marker. Unlike a ternary arm, an arm may
+// `give`: every arm's moves meet at the end of the `match`, as an `if`'s branches do.
+// Returns 0.
+
+type enum E { A, B }
+
+type resource Holder {
+    string name;
+    public ctor make() { this.name = ""; }
+    public fn void pick(E e) { this.name = match (e) { case A: "abc"; case B: "q"; }; }
+    public const fn isize size() { return this.name.length(); }
+}
+
+type resource Tag implements Copyable<This>(bare: copy) {
+    string t;
+    public ctor make(string t) { this.t = give t; }
+    public ctor copy(ref Tag source) { this.t = copy source.t; }
+    public const fn const ref string text() { return this.t; }
+}
+
+fn int32 main() {
+    E e = E::B;
+    // Into an existing local, and into a field.
+    string s = "init";
+    s = match (e) { case A: "xyz"; case B: "q"; };
+    if (s != "q") { return 1; }
+    Holder h = Holder.make();
+    h.pick(e: E::A);
+    if (h.size() != 3) { return 2; }
+
+    // `copy` in an arm leaves the local alive; `give` in every arm moves it on every path.
+    string t = "kept";
+    string u = match (e) { case A: copy t; case B: copy t; };
+    if (u != "kept" || t != "kept") { return 3; }
+    string v = match (e) { case A: give t; case B: give t; };
+    if (v != "kept") { return 4; }
+
+    // An arm's own binding, handed on — `give` (the arm owns it when the subject is given).
+    Optional<string> o = Optional::Some(value: "inner");
+    string w = match (give o) { case Some(value: x): give x; case None: ""; };
+    if (w != "inner") { return 5; }
+
+    // A `Copyable(bare: copy)` resource needs no marker: its bare default leaves the source alive.
+    Tag tag = Tag.make(t: "tag");
+    Tag other = match (e) { case A: tag; case B: tag; };
+    if (other.text() != "tag" || tag.text() != "tag") { return 6; }
+    return 0;
+}

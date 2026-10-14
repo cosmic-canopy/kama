@@ -9474,7 +9474,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // lift its Formatter build — the only owning-string sink that otherwise forgot to.
                 std::string b = emitExpression(as->unaryExpression);
                 bool ph = _hoistOK; _hoistOK = true;
-                std::string rv = emitExpression(as->expression);
+                // The destination types a value-producing `match` or a variant here, as it does for every other
+                // type: `s = match (e) { … };` into an existing `string` was refused as "not a typed position"
+                // because this branch, which catches an owning `string` first, never said what it was (KR-156).
+                std::string rv;
+                {
+                    ScopedStr mt(_matchTargetCType, lty), vt(_variantTargetType, lty);
+                    rv = emitExpression(as->expression);
+                }
                 _hoistOK = ph;
                 std::string t = "kama_asgn" + std::to_string(_tempCounter++);
                 line(n->line);
@@ -28217,6 +28224,10 @@ std::string CEmitter::emitBindableInvoke(const std::string& shown, const std::st
 // hand-off: unwrap a give/copy marker, resolve an inline ctor/`new`/bare-generic-ctor from `dstCType`, then
 // apply the give/copy matrix (smart-ptr / resource / collection / bindable — move consumes the source, copy
 // duplicates). Mirrors the `return`-value hand-off, shared with value-producing `match` arms.
+// The position `emitOwnedValueInto` is told it fills when it fills a value-producing `match` arm — compared by
+// address, since the arm is the one caller with a marker rule of its own (KR-156).
+static const char* const kMatchArm = "a `match` arm";
+
 void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dstCType,
                                   SharedExpression value, int line, int depth, const char* what, bool kindChecked)
 {
@@ -28224,6 +28235,18 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     SharedExpression v = value;
     if (v) if (auto* h = dynamic_cast<HandoffNode*>(v.get())) { handoff = h->isGive ? 1 : 2; v = h->value; }
     noteHandoffValue(v);
+    // A `match` ARM is a hand-off as a ternary arm is (SPEC): a NAMED owning value there says `give` or `copy`,
+    // unless its type's bare default leaves the source alive — a `Shared` retains, a `Copyable(bare: copy)`
+    // resource copies. A `return` shares this function and keeps its own rule: the local it names is dying, so
+    // a bare one moves. An arm's local is not: `case A: t;` moved `t` and said nothing (KR-156). Unlike a ternary
+    // arm, an arm may `give` — every arm's moves meet at the end of the `match`, as an `if`'s branches do.
+    const bool armBare = what == kMatchArm && handoff == 0 && v && isNamedValue(v.get());
+    auto armNeedsMarker = [&](const std::string& cls, bool canCopy) {
+        const std::string w = unparseExpr(v);
+        unsupported(("a `match` arm that hands off a `" + demangleForDisplay(cls) + "` names `" + w + "` — each arm "
+                     "is a hand-off, so say `give " + w + "`" + (canCopy ? " or `copy " + w + "`" : std::string())
+                     + " there").c_str(), line);
+    };
     // The kind rule, one site for both hand-offs this function serves: a `return` value and a
     // value-producing `match` arm. Checked on the UNWRAPPED value, so `return give x;` is judged on `x`.
     // `dstCType` is empty for a void return and for a statement-position `match`, which reads as Unknown
@@ -28284,6 +28307,10 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
         else if (handoff == 2) { if (k == CollKind::Owned)
                                      unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
                                  doGive = false; }
+        else if (armBare) {                                    // an arm: a `Shared`/`Weak` retains, an `Owned` says so
+            if (k == CollKind::Owned) armNeedsMarker(rc, false);
+            doGive = k == CollKind::Owned;
+        }
         else if (isSmartPtrLValue(v)) doGive = true;           // bare local/param dies here: move it out
         else { unsupported("handing out a smart-pointer field/element needs `give` (move it out) or "
                            "`copy` (retain — the source stays valid)", line); doGive = true; }
@@ -28299,8 +28326,9 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
                             doCopy = cpy; }
         else if (handoff == 1) doCopy = false;
         else doCopy = cpy && _classes[rc].bareDefault == COPY;
+        if (armBare && !doCopy) armNeedsMarker(rc, cpy);
         // (doCopy: the value line above already copied — see `dupCls`)
-        if (!doCopy && handoff != 2) { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
+        else if (!doCopy && handoff != 2) { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move, nor a refused bare arm
     }
     // Named collection/`string` VALUE (exprClass is "" — key on dstCType): give/bare-dying moves, copy deep-copies.
     else if (ownsByValue(dstCType) && _classes.count(dstCType) && _classes[dstCType].isIntrinsicColl
@@ -28310,7 +28338,8 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                 unsupported(("`copy` of a `" + dstCType + "` needs copyable elements — use `give` to move it").c_str(), line);
             // (else: the value line above already copied — see `dupCls`)
-        } else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
+        } else if (armBare) armNeedsMarker(dstCType, true);   // refused, so not a move: no later error blames a `give` nobody wrote
+        else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
     }
     // A named BindableFunctionPtr may own its bound object: null the source so its scope-drop no-ops —
     // and record the move, for the same reason the promote arm now does. (No source spelling reaches
@@ -28717,7 +28746,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     // The value may be an owned hand-off (`:= give x`) or a bare generic ctor (`:= List()`).
                     // A DIVERGING arm (`return`/`break`/`continue`) yields nothing — it's allowed (the value
                     // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
-                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, "a `match` arm");
+                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, kMatchArm);
                     else if (stmtIsJump(st)) emitStatement(st, depth + 2);
                     else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
                 } else {
@@ -28737,7 +28766,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
         } else if (resultTemp) {
-            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, "a `match` arm");   // `case X: give x;`
+            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, kMatchArm);   // `case X: give x;`
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
         } else {
             bool ph = _hoistOK; _hoistOK = true;
@@ -28989,7 +29018,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                     // The value may be an owned hand-off (`:= give x`) or a bare generic ctor (`:= List()`).
                     // A DIVERGING arm (`return`/`break`/`continue`) yields nothing — it's allowed (the value
                     // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
-                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, "a `match` arm");
+                    if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, kMatchArm);
                     else if (stmtIsJump(st)) emitStatement(st, depth + 2);
                     else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
                 } else {
@@ -29009,7 +29038,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
         } else if (resultTemp) {
-            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, "a `match` arm");   // `case X: give x;`
+            emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, kMatchArm);   // `case X: give x;`
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
         } else {
             bool ph = _hoistOK; _hoistOK = true;

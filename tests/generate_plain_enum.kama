@@ -37,7 +37,7 @@ fn int32 main() {
     // On the wire it is a NAME, not a record: `"Green"`, never `{"tag":"Green"}`. There is no payload
     // for an object to carry, and the shape is decided by the TYPE, so a schema still reads cleanly.
     Result<string, Owned<Error>> j = serializeJsonBuffer(v: g);
-    string js = match (give j) { case Ok(value: s): s; case Err(error: e): ""; };
+    string js = match (give j) { case Ok(value: s): give s; case Err(error: e): ""; };
     if (!js.equals(other: "\"Green\"")) { return 96; }
 
     Result<Color, Owned<Error>> back = deserializeJsonBuffer::<Color>(src: give js);

@@ -722,6 +722,8 @@ local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21
 main_called	main_called.kama:6
 main_exported	main_exported.kama:6
 main_void	main_void.kama:4
+match_arm_bare_binding	match_arm_bare_binding.kama:4
+match_arm_bare_named	match_arm_bare_named.kama:8
 match_arm_break_no_loop	match_arm_break_no_loop.kama:8
 match_arm_member_type_mismatch	match_arm_member_type_mismatch.kama:17
 match_arm_stale_target	match_arm_stale_target.kama:10 match_arm_stale_target.kama:9

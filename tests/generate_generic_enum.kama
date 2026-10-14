@@ -44,7 +44,7 @@ fn int32 main() {
     // A generic enum on the wire: the payload is written through the SUBSTITUTED field type, which is
     // where a generic instance's field node still being the template's `T` would have shown up.
     Result<string, Owned<Error>> j = serializeJsonBuffer(v: c);
-    string js = match (give j) { case Ok(value: s): s; case Err(error: e): ""; };
+    string js = match (give j) { case Ok(value: s): give s; case Err(error: e): ""; };
     if (!js.equals(other: "{\"tag\":\"Put\",\"value\":{\"v\":4}}")) { return 96; }
 
     Result<Msg<int32>, Owned<Error>> back = deserializeJsonBuffer::<Msg<int32>>(src: give js);

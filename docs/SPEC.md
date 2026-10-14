@@ -1183,6 +1183,14 @@ a `match` subject, an operand. `(useName ? name : fallback).length()` reads the 
 and copies nothing. A fresh arm there is held in a temporary, which is dropped only if that arm ran, and a
 marker there is refused as on any other sub-expression. <!-- xfail: ternary_arm_copy_borrow -->
 
+**A value-producing `match` hands off one arm the same way.** A named owning value in an arm carries its <!-- test: match_arm_handoff -->
+marker, whether it is a local from outside the `match` or the arm's own binding: `case A: copy t;`,
+`case Some(value: x): give x;`. A bare named arm takes its type's bare default only when that default leaves
+the source alive, as a ternary arm does; otherwise it is refused. <!-- xfail: match_arm_bare_named, match_arm_bare_binding -->
+Unlike a ternary arm, an arm may `give`: every arm's moves meet at the end of the `match`, as an `if`'s
+branches meet, so a value given in one arm and not another is the "moved on some paths" error an `if` gets.
+A value-producing `match` may also be assigned to an existing binding or field of any type, `string` included.
+
 **Move-only `resource` values + the `Copyable` contract.** A **`type resource`** value (it owns something, or
 has identity) is **move-only**: a bare named hand-off *moves* (the source is consumed, its destructor
 suppressed), so its heap is freed exactly once — a silent copy is never emitted (that would double-free).
@@ -5793,7 +5801,7 @@ fn string describe(Optional<int32> reading) {
             string name = "mild";
             if (c < 0)  { name = "freezing"; }
             if (c > 30) { name = "hot"; }
-            := name;                              // the arm's value (must be last)
+            := give name;                         // the arm's value (must be last) — an arm is a hand-off
         }
         case None: "unknown";
     };

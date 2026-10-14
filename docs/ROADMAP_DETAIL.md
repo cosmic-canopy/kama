@@ -417,18 +417,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-match-string-assign"></a>
-
-### A value-producing `match` into an existing `string`, and a `match` arm that moves silently (KR-156)
-
-Measured on `0.9.589`, filed 2026-10-14. Two defects in the same place. **(1)** `s = match (e) { case A: "xyz"; case B: "q"; };` into an existing `string`
-local or field is refused ("a value-producing `match` must appear in a typed position"); the initializer form works,
-and so does the same assignment into an `int32`, a list or an `Optional<string>`. **(2)** `string u = match (e) { case
-A: t; case B: t; };` moves the owned local `t` with no `give`, where `string u = t;` is refused for want of one and a
-ternary arm demands `copy t` (SPEC's hand-off rule) — and a later error then blames a `give` nobody wrote.
-**Scheduled:** an assignment is a typed position for a `string` as for every other type; a `match` arm is a hand-off
-position, under the same marker rule as a ternary arm.
-
 <a id="s2-ternary-optional-arms"></a>
 
 ### A ternary of `Optional::Some`/`None` outside an initializer or `return` (KR-157)
