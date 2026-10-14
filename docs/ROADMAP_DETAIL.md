@@ -440,8 +440,12 @@ affected (`f(n: s.length(), b: give s)` reads 0; a ctor and a method call alike)
 a value and a `Copyable` resource pass by bitwise copy and are unaffected. The reverse order is refused correctly.
 SPEC states no order: nothing was intended. **Decided (the maintainer, 2026-10-14):** arguments are evaluated left to
 right, as written — Rust, C#, Java and Go — so a hoisted argument hoists every argument before it; SPEC gains the
-rule. *(Declined: refusing a `give` of a binding another argument reads.)* Fixture: the snippet, a ctor, a method, a
-read (`s.length()`), and the reverse order still refused.
+rule. *(Declined: refusing a `give` of a binding another argument reads — it rejects valid code and catches no extra
+mistake: the checker already reads arguments in order, which is why `both(a: give s, b: copy s)` is refused; the
+emitter is what broke the order.)* The rule covers side effects too: with C's order, `f(a: next(), b: next())` may run
+its two calls in either order, and differently under clang, gcc and emcc, so the same program could behave
+differently per C compiler. Fixture: the snippet, a ctor, a method, a read (`s.length()`), two side-effecting
+arguments observed in order, and the reverse order still refused.
 
 <a id="s2-copy-constref-rvalue"></a>
 
