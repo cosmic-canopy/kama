@@ -387,6 +387,11 @@ type contract Serializer for resource {
     // value the format can't represent (`NaN`/`Inf` in JSON) — sets `failed()` and records a `SerError`.
     // A fallible `serialize` writes bare (no per-write branching) and checks `failed()` once at the end.
     const fn bool failed(); fn void fail(); fn void failWith(SerError e); const fn SerError errorCode();
+    // Does this back end write a map whose keys are text — a `string` or an integer key — as an OBJECT keyed by that
+    // text (`{"cpu":2}`), rather than the pair array every map can be (`[{"key":"cpu","value":2}]`)? JSON does, for
+    // the files and APIs it is read from; KBIN does not, its maps being for kama to read back (KR-136). A map's form
+    // is the BACK END's, so this is a question a map asks, unlike field addressing above, which every back end shares.
+    const fn bool keyedMaps();
 }
 // SerError is the write-side twin of DeError: a first-class `Error` that BOXES into `Owned<Error>` at a
 // fallible-`serialize` boundary and is recovered with `err.as<SerError>()`.
@@ -528,6 +533,10 @@ type contract Deserializer for resource {
     // `UnknownField`, and the record names the key (``unknown field `server.prot` ``). The READ decides, not the type:
     // one type is read leniently from a peer and strictly from a hand-written file.
     fn void unknownField();
+    // Is the next value a map written as an object keyed by text (`{"cpu":2}`) — see `Serializer.keyedMaps`? A
+    // map's reader asks before it reads, and reads the pair array when the answer is no, so data written before
+    // KR-136 still loads. JSON answers by peeking `{`; KBIN always answers no.
+    fn bool atKeyedMap();
 }
 // The read side of serde. It DECLARES its factory rather than standing as a marker, because a bound that
 // promises nothing constrains nothing: `deserializeJsonBuffer<T: Deserializable>` calls `T.deserialize(r)`, and until the

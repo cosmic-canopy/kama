@@ -148,6 +148,7 @@ type resource KbinPositionalSerializer<W: Writer> implements Serializer {
     public fn void fail() { this.err = true; }
     public fn void failWith(SerError e) { this.err = true; this.code = e; }
     public const fn SerError errorCode() { return this.code; }
+    public const fn bool keyedMaps() { return false; }   // every map is its pair array (KR-136)
 }
 
 // The reader. Unlike every other `Deserializer` in the tree it keeps PER-OBJECT STATE: with no delimiters,
@@ -297,6 +298,7 @@ type resource KbinPositionalDeserializer implements Deserializer {
     // KR-126: a positional stream has no keys, so a field past the end of the agreed shape is refused as any skip is.
     public fn void unknownField() { this.skipValue(); }
     public const fn DeErrorKind errorKind() { return this.code; }
+    public fn bool atKeyedMap() { return false; }
 }
 
 // Encode any `Serializable` value to a POS byte buffer. Byte-oriented (not valid UTF-8): returns a

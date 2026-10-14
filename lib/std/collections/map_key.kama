@@ -1,0 +1,194 @@
+// A map key as JSON object-key TEXT (KR-136): what lets a `Map`/`SortedMap` keyed by a `string` or an integer be
+// written as `{"cpu":2}` and read back, where any other key keeps the `[{"key":…,"value":…}]` pair array.
+//
+// A generic map cannot ask what its `K` is — kama has no branch on a type inside a generic body — so it asks each
+// KEY: the key writes itself into a `MapKeyText`, which records the one string or the one integer it wrote. Anything
+// else a key writes (an object, a variant, a float, a bool, a char) is not text, and the map keeps its pairs. It is
+// the key's own wire form that decides, as the token vocabulary decides everything else in serde, so a key type of
+// yours whose `serialize` writes one string is an object key too (Rust's `serde_json` decides the same way). An empty
+// map has no key to ask: it is written `{}` on a back end that writes keyed maps, and either form reads back.
+//
+// The reading half, `MapKeyReader`, hands a key's text to `K.deserialize`: a `string` key reads it as it is, an
+// integer key parses it (strictly: `"7x"`, `" 7"` and `""` are refused), and every other read is a type mismatch.
+// Not under `std::serialization`: every program with a `Map` loads this file, and serde must stay off for a program
+// that serializes nothing. For the same reason each type is generic over the map's key type, which it does not
+// otherwise use: an instance exists only where a map serializes, so a program that does not pays nothing for this file.
+import { Order };
+export { MapKeyText, MapKeyOrder, MapKeyReader };
+
+type resource MapKeyText<K> implements Serializer {
+    string text;
+    uint8 kind;      // 0 nothing written yet, 1 a string, 2 a signed integer, 3 an unsigned one, 4 not text
+    int64 signedValue;
+    uint64 unsignedValue;
+    isize slot;      // where the map holds this key's entry — the map's own bookkeeping, carried through the sort
+
+    public ctor make(isize slot) {
+        this.text = "";
+        this.kind = 0ui8;
+        this.signedValue = 0i64;
+        this.unsignedValue = 0ui64;
+        this.slot = slot;
+    }
+    // The key wrote exactly one string or one integer.
+    public const fn bool isText() { return this.kind >= 1ui8 && this.kind <= 3ui8; }
+    public const fn const ref string key() { return this.text; }
+    public const fn isize at() { return this.slot; }
+    // Integers in numeric order, strings in byte order: `Map` and `SortedMap` holding the same entries write the same
+    // bytes, and a config file a program writes diffs cleanly.
+    public const fn Ordering orderAgainst(const ref MapKeyText<K> other) {
+        if (this.kind == 2ui8) {
+            if (this.signedValue < other.signedValue) { return Ordering::Less; }
+            if (this.signedValue > other.signedValue) { return Ordering::Greater; }
+            return Ordering::Equal;
+        }
+        if (this.kind == 3ui8) {
+            if (this.unsignedValue < other.unsignedValue) { return Ordering::Less; }
+            if (this.unsignedValue > other.unsignedValue) { return Ordering::Greater; }
+            return Ordering::Equal;
+        }
+        // Byte order, which for UTF-8 is code-point order.
+        isize n = this.text.length();
+        isize m = other.text.length();
+        isize i = 0;
+        while (i < n && i < m) {
+            uint8 a = this.text[i];
+            uint8 b = other.text[i];
+            if (a < b) { return Ordering::Less; }
+            if (a > b) { return Ordering::Greater; }
+            i = i + 1;
+        }
+        if (n < m) { return Ordering::Less; }
+        if (n > m) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
+
+    fn void notText() { this.kind = 4ui8; }
+    fn void wroteSigned(int64 v) {
+        if (this.kind != 0ui8) { this.notText(); return; }
+        this.kind = 2ui8; this.signedValue = v; this.text = "${v}";
+    }
+    fn void wroteUnsigned(uint64 v) {
+        if (this.kind != 0ui8) { this.notText(); return; }
+        this.kind = 3ui8; this.unsignedValue = v; this.text = "${v}";
+    }
+
+    public fn void writeString(const ref string v) {
+        if (this.kind != 0ui8) { this.notText(); return; }
+        this.kind = 1ui8; this.text = copy v;
+    }
+    public fn void writeI8(int8 v)   { this.wroteSigned(v: cast<int64>(v)); }
+    public fn void writeI16(int16 v) { this.wroteSigned(v: cast<int64>(v)); }
+    public fn void writeI32(int32 v) { this.wroteSigned(v: cast<int64>(v)); }
+    public fn void writeI64(int64 v) { this.wroteSigned(v: v); }
+    public fn void writeU8(uint8 v)   { this.wroteUnsigned(v: cast<uint64>(v)); }
+    public fn void writeU16(uint16 v) { this.wroteUnsigned(v: cast<uint64>(v)); }
+    public fn void writeU32(uint32 v) { this.wroteUnsigned(v: cast<uint64>(v)); }
+    public fn void writeU64(uint64 v) { this.wroteUnsigned(v: v); }
+    // Everything else a key can write makes it not text.
+    public fn void beginObject(usize count) { this.notText(); }
+    public fn void endObject() { this.notText(); }
+    public fn void field(string name, uint32 id) { this.notText(); }
+    public fn void variant(string name, uint32 index) { this.notText(); }
+    public fn void beginArray(usize count) { this.notText(); }
+    public fn void endArray() { this.notText(); }
+    public fn void writeF32(float32 v) { this.notText(); }
+    public fn void writeF64(float64 v) { this.notText(); }
+    public fn void writeBool(bool v) { this.notText(); }
+    public fn void writeChar(char v) { this.notText(); }
+    public fn void writeSome() { this.notText(); }
+    public fn void writeNull() { this.notText(); }
+    // A key's own write never fails here: what it wrote decides only whether it is text.
+    public const fn bool failed() { return false; }
+    public fn void fail() { this.notText(); }
+    public fn void failWith(SerError e) { this.notText(); }
+    public const fn SerError errorCode() { return SerError::NotRepresentable; }
+    public const fn bool keyedMaps() { return false; }   // a key holds no map
+}
+
+// Orders the keys a map writes as an object (MapKeyText.orderAgainst).
+type value MapKeyOrder<K> implements Order<MapKeyText<K>> {
+    public ctor make() { }
+    public fn Ordering compare(const ref MapKeyText<K> a, const ref MapKeyText<K> b) { return a.orderAgainst(other: b); }
+}
+
+// A key read back from its text, for `K.deserialize`. A `string` key reads the text; an integer key parses it — an
+// optional `-` for a signed key, then decimal digits and nothing else, so `"7x"`, `" 7"`, `"+7"` and `""` are refused —
+// and a value it does not hold (`"300"` as an `int8`) is a mismatch, as JSON's own integer read refuses one.
+type resource MapKeyReader<K> implements Deserializer {
+    string text;
+    bool err;
+    DeErrorKind code;
+
+    public ctor of(string text) { this.text = give text; this.err = false; this.code = DeErrorKind::Malformed; }
+
+    fn void mismatch() { this.failWith(kind: DeErrorKind::TypeMismatch); }
+    // The digits from `from` to the end as a magnitude, or None: no digit, a non-digit, or more than a `uint64` holds.
+    fn Optional<uint64> magnitude(isize from) {
+        isize n = this.text.length();
+        if (from >= n) { return Optional::None; }
+        uint64 acc = 0ui64;
+        isize i = from;
+        while (i < n) {
+            uint8 c = this.text[i];
+            if (c < 48ui8 || c > 57ui8) { return Optional::None; }
+            uint64 d = cast<uint64>(c - 48ui8);
+            if (acc > (18446744073709551615ui64 - d) / 10ui64) { return Optional::None; }
+            acc = acc * 10ui64 + d;
+            i = i + 1;
+        }
+        return Optional::Some(value: acc);
+    }
+    fn int64 parsedSigned(int64 lo, int64 hi) {
+        bool neg = this.text.length() > 0 && this.text[0] == 45ui8;   // `-`
+        isize from = neg ? 1 : 0;
+        Optional<uint64> m = this.magnitude(from: from);
+        uint64 mag = match (m) { case Some(value: x): x; case None: { this.mismatch(); return 0i64; } };
+        int64 v = 0i64;
+        if (neg) {
+            if (mag > 9223372036854775808ui64) { this.mismatch(); return 0i64; }
+            if (mag == 9223372036854775808ui64) { v = -9223372036854775807i64 - 1i64; } else { v = -cast<int64>(mag); }
+        } else {
+            if (mag > 9223372036854775807ui64) { this.mismatch(); return 0i64; }
+            v = cast<int64>(mag);
+        }
+        if (v < lo || v > hi) { this.mismatch(); return 0i64; }
+        return v;
+    }
+    fn uint64 parsedUnsigned(uint64 hi) {
+        Optional<uint64> m = this.magnitude(from: 0);
+        uint64 v = match (m) { case Some(value: x): x; case None: { this.mismatch(); return 0ui64; } };
+        if (v > hi) { this.mismatch(); return 0ui64; }
+        return v;
+    }
+
+    public fn string readString() { return copy this.text; }
+    public fn int8 readI8()   { return cast<int8>(this.parsedSigned(lo: -128i64, hi: 127i64)); }
+    public fn int16 readI16() { return cast<int16>(this.parsedSigned(lo: -32768i64, hi: 32767i64)); }
+    public fn int32 readI32() { return cast<int32>(this.parsedSigned(lo: -2147483648i64, hi: 2147483647i64)); }
+    public fn int64 readI64() { return this.parsedSigned(lo: -9223372036854775807i64 - 1i64, hi: 9223372036854775807i64); }
+    public fn uint8 readU8()   { return cast<uint8>(this.parsedUnsigned(hi: 255ui64)); }
+    public fn uint16 readU16() { return cast<uint16>(this.parsedUnsigned(hi: 65535ui64)); }
+    public fn uint32 readU32() { return cast<uint32>(this.parsedUnsigned(hi: 4294967295ui64)); }
+    public fn uint64 readU64() { return this.parsedUnsigned(hi: 18446744073709551615ui64); }
+    // A key is one string or one integer; any other read is the schema disagreeing with the key's text.
+    public fn void beginObject(usize count) { this.mismatch(); }
+    public fn void endObject() { }
+    public fn bool moreFields() { this.mismatch(); return false; }
+    public fn FieldKey field() { this.mismatch(); return FieldKey::Position(rank: 0ui32); }
+    public fn FieldKey variant() { this.mismatch(); return FieldKey::Position(rank: 0ui32); }
+    public fn void beginArray() { this.mismatch(); }
+    public fn bool moreElems() { this.mismatch(); return false; }
+    public fn float32 readF32() { this.mismatch(); return 0.0f32; }
+    public fn float64 readF64() { this.mismatch(); return 0.0; }
+    public fn bool readBool() { this.mismatch(); return false; }
+    public fn char readChar() { this.mismatch(); return 'a'; }
+    public fn bool readNull() { return false; }
+    public fn void skipValue() { this.mismatch(); }
+    public fn void unknownField() { this.mismatch(); }
+    public fn bool atKeyedMap() { return false; }
+    public const fn bool failed() { return this.err; }
+    public fn void fail() { this.failWith(kind: DeErrorKind::Malformed); }
+    public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }
+    public const fn DeErrorKind errorKind() { return this.code; }
+}

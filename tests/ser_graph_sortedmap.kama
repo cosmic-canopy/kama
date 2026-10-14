@@ -71,9 +71,10 @@ fn int32 main() {
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     // THE BYTES. Keys 1 and 3 both name id 2, and the shared `Leaf` sits in the objects table ONCE. Without
     // the delegate's mark this read `"value":{"v":7}` twice with an empty table — the failure is visible
-    // right here, before any round trip. Assertable because a SortedMap writes in ascending key order.
-    if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Bag\",\"value\":{\"kids\":["
-             + "{\"key\":1,\"value\":2},{\"key\":2,\"value\":3},{\"key\":3,\"value\":2}]}},"
+    // right here, before any round trip. Assertable because a SortedMap writes in ascending key order — and, its
+    // keys being integers, as an object keyed by their text (KR-136), each value an edge id.
+    if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Bag\",\"value\":{\"kids\":"
+             + "{\"1\":2,\"2\":3,\"3\":2}}},"
              + "{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},"
              + "{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") { return 249; }
     Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: give j);

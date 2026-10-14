@@ -1,4 +1,4 @@
-import { std::memory::Owned, DynamicArray, ValuesIterableMut };
+import { std::memory::Owned, DynamicArray, ValuesIterableMut, MapKeyText, MapKeyReader };
 export { SortedMap, SortedMapValueIterMut };
 
 // An ordered map over `K: Comparable` -> `V`, backed by a B-tree (peer: Rust `BTreeMap`, C++ `std::map`).
@@ -545,8 +545,25 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     // dropping a child `Owned` recursively frees its subtree).
     public fn void clearNode() { this.keys.clear(); this.vals.clear(); this.kids.clear(); this.leaf = true; }
 
-    // In-order emit of each entry as a `{"key":k,"value":v}` object (key/value through a `ref` helper so a
-    // primitive element's adapter `serialize` resolves) — the map serializes to a SORTED pair array.
+    // Does every key write itself as TEXT — one string or one integer (MapKeyText)? Then the map is an object keyed by
+    // that text on a back end that writes keyed maps (KR-136).
+    public const fn bool keysAreText() when [K: Serializable] {
+        isize i = 0; isize n = this.keys.length();
+        while (i < n) {
+            if (!this.leaf && !this.kids[i].keysAreText()) { return false; }
+            MapKeyText<K> kt = MapKeyText::<K>.make(slot: i);
+            Serializer probe = kt;
+            Result<Unit, Owned<Error>> __pk = this.keys[i].serialize(w: ref probe);
+            bool ok = match (give __pk) { case Err(error: _): false; case Ok(value: _): kt.isText(); };
+            if (!ok) { return false; }
+            i = i + 1;
+        }
+        return this.leaf || this.kids[n].keysAreText();
+    }
+
+    // In-order emit of each entry: `keyed`, as `"text":v` in the object the map opened — the in-order walk IS the
+    // order an object's keys are written in (KR-136) — and otherwise as a `{"key":k,"value":v}` object of a SORTED
+    // pair array (key/value through a `ref` helper so a primitive element's adapter `serialize` resolves).
     //
     // ⚠️ MARKED because the element write lives HERE, not in `SortedMap.serialize`. A B-tree's entries are
     // spread over a tree of nodes, so an in-order write is a recursion over nodes — and a graph write has
@@ -557,12 +574,23 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     // visibility is per TYPE, so a sibling type needs naming even inside one file, and the grant is what
     // its `@serializedGraphEdges` mark already implied.
     @serializedGraphEdges
-    private const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w) when [K: Serializable, V: Serializable] {
+    private const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w, bool keyed) when [K: Serializable, V: Serializable] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             if (!this.leaf) {
-                Result<Unit, Owned<Error>> __sc = this.kids[i].serializeInto(w: w);
+                Result<Unit, Owned<Error>> __sc = this.kids[i].serializeInto(w: w, keyed: keyed);
                 match (give __sc) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+            }
+            if (keyed) {
+                MapKeyText<K> kt = MapKeyText::<K>.make(slot: i);
+                Serializer probe = kt;
+                Result<Unit, Owned<Error>> __pk = this.keys[i].serialize(w: ref probe);
+                match (give __pk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                w.field(name: copy kt.key(), id: 0ui32);
+                Result<Unit, Owned<Error>> __kv = this.vals[i].serialize(w: w);
+                match (give __kv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                i = i + 1;
+                continue;
             }
             w.beginObject(count: 2);
             w.field(name: "key", id: 0ui32);
@@ -575,7 +603,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
             i = i + 1;
         }
         if (!this.leaf) {
-            Result<Unit, Owned<Error>> __sl = this.kids[n].serializeInto(w: w);
+            Result<Unit, Owned<Error>> __sl = this.kids[n].serializeInto(w: w, keyed: keyed);
             match (give __sl) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         }
         return Result::Ok(value: Unit::Unit);
@@ -695,13 +723,15 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         return give result;
     }
 
-    // Serializable as a JSON array of `{"key":k,"value":v}` objects in ASCENDING key order (unlike `Map`, whose
-    // order is hash-arbitrary). Deserializable `put`s each pair back (the tree re-sorts).
+    // Serializable in ASCENDING key order: as an object keyed by text when its keys are text on a back end that writes
+    // keyed maps (`{"1":2,"2":3}` — the bytes a `Map` holding the same entries writes, KR-136), and otherwise as an
+    // array of `{"key":k,"value":v}` objects. Deserializable `put`s each entry back (the tree re-sorts).
     public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, V: Serializable] {
-        w.beginArray(count: cast<usize>(this.len));
-        Result<Unit, Owned<Error>> __sr = this.root.serializeInto(w: w);
+        bool keyed = w.keyedMaps() && this.root.keysAreText();
+        if (keyed) { w.beginObject(count: cast<usize>(this.len)); } else { w.beginArray(count: cast<usize>(this.len)); }
+        Result<Unit, Owned<Error>> __sr = this.root.serializeInto(w: w, keyed: keyed);
         match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-        w.endArray();
+        if (keyed) { w.endObject(); } else { w.endArray(); }
         return Result::Ok(value: Unit::Unit);
     }
     // Deserializable is GlobalAllocator-only: the wire format carries no allocator handle, so it builds a
@@ -709,6 +739,26 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     // first `put`). Same convention as the other collections' A-ignoring deserialize.
     public ctor Result<SortedMap<K,V,A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>, A: default] {
         SortedMap<K,V> result = SortedMap.empty();
+        if (r.atKeyedMap()) {   // the keyed object (KR-136), its keys read back from their text
+            r.beginObject(count: 0);
+            while (r.moreFields()) {
+                FieldKey fk = r.field();
+                string text = match (give fk) {
+                    case Name(name: n): { := give n; }
+                    case Id(id: _): { r.fail(); := ""; }
+                    case Position(rank: _): { r.fail(); := ""; }
+                };
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                MapKeyReader<K> kr = MapKeyReader::<K>.of(text: copy text);
+                Result<K, Owned<Error>> __ok = K.deserialize(r: kr);
+                K ok = match (give __ok) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                Result<V, Owned<Error>> __ov = V.deserialize(r: r);
+                V ov = match (give __ov) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                result.put(key: give ok, value: give ov);
+            }
+            r.endObject();
+            return Result::Ok(value: give result);
+        }
         r.beginArray();
         isize index = 0;   // the entry's place on the wire — a failure inside it is reported there
         while (r.moreElems()) {

@@ -648,7 +648,7 @@ fixed-width `int64` and a handle written on one target reads back on another.
 `length`/`isEmpty`/`clear`/deep `copy`/JSON serde), but keys stay **sorted**, so they add the ordered queries a
 hash map can't answer: `first()`/`last()` (min/max key), `floor(key:)`/`ceil(key:)` (nearest ≤ / ≥), `range
 (from:, to:)` (a half-open key window), and `keys()`/`values()` (resp. `SortedSet.elements()`) yielding a fresh
-`DynamicArray` of copies in **ascending order** (serde likewise emits an ascending pair array). Each node backs
+`DynamicArray` of copies in **ascending order** (serde likewise writes its entries in ascending order). Each node backs
 its keys, values, and child boxes with `DynamicArray` (reusing its move-out / shift / RAII) and holds children
 as `Owned<BTreeNode>` heap boxes, so a subtree moves as one owned pointer and the splits (insert) / borrows +
 merges + predecessor-swaps (remove) relocate move-only keys **and** values with ownership intact. `getRef`
@@ -6512,7 +6512,7 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
 
   - **A field whose type is a derived record merges** into what the field holds, recursively — through an `Owned`
     too. **Every other field the data names is replaced whole**: a number, a `string`, an enum, an `Optional`
-    (`null` is `None`), a list, a `Map` (a map is an array of key/value pairs on the wire). A key the data leaves
+    (`null` is `None`), a list, a `Map`. A key the data leaves
     out is untouched, and an unknown key is skipped, as in a full read — or refused, through a strict reader. No
     field is required.
   - **Atomic.** If the data is wrong anywhere, the value is left as it was, and the error still names where: <!-- test: ser_merge_json -->
@@ -6676,7 +6676,8 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   `Deserializer.unknownField()`: skip the value, or fail `UnknownField`.
 - **A read's error says where.** A failed read returns a `DeError`: its `kind()`, a `DeErrorKind`, is what a <!-- test: de_error_paths -->
   caller branches on, and its `field()` is the path from the value read to the part that failed, in the names
-  the data uses: `server.port`, `backups[1].port`, `limits[1].value` for a map entry, `Circle.radius` for an
+  the data uses: `server.port`, `backups[1].port`, `limits.cpu` for a map entry by its key (`limits[1].value` in a
+  map's pair array), `Circle.radius` for an
   enum payload, a renamed field by its wire name. `message()` says both — "missing field `server.port`",
   "type mismatch at `backups[1].port`" — and `field()` is `None` for a failure of the value as a whole. The path
   is the schema's, not the wire's, so a positional backend, which carries no names, reports the path a named one
@@ -6695,7 +6696,16 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   place, since a payload field takes no attributes), or by rank — so `{"h":2,"w":3}` reads into `Rect(w, h)`
   correctly; a repeated key keeps its last value, an unknown one is skipped, and a missing one is a
   `MissingField` naming `Rect.h` (an `Optional` one is `None`).
-- **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs (a generic key can't be a JSON object key).
+- **A map keyed by text is an object.** On a back end that writes keyed maps — JSON — a `Map` or `SortedMap` whose <!-- test: ser_map_object -->
+  keys each write one `string` or one integer is written as an object keyed by that text, as every other JSON
+  producer writes one: `"limits":{"cpu":2,"mem":512}`, `"ports":{"80":"http"}`. Its keys are in order — integers
+  numerically, strings bytewise — so a `Map` and a `SortedMap` holding the same entries write the same bytes, and
+  insertion order changes nothing. Any other key (a struct, an enum) has no object form, so that map is an array of
+  `{"key":…,"value":…}` pairs; KBIN writes every map as pairs. Which keys are text is the keys' own answer — a map
+  cannot ask what `K` is, so it asks each key what it writes, as Rust's `serde_json` does — so an EMPTY map, with no
+  key to ask, is `{}` on JSON whatever its key type. Reading takes either form for any map, so data written before the
+  object form still loads; an integer key is parsed from its text, and one that is not an integer of that width is a
+  `TypeMismatch` at that key (``type mismatch at `ports.80x` ``).
 
 **Graph specifics.** `Shared`/`Weak` fields serialize as `u64` ids into the table (an absent `Optional` edge
 is `null`; an expired `Weak` is `0`), 1-based in discovery order, the root first. `Shared`/`Weak` dedup by

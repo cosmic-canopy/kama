@@ -136,6 +136,7 @@ type resource KbinNamedSerializer<W: Writer> implements Serializer {
     public fn void fail() { this.err = true; }
     public fn void failWith(SerError e) { this.err = true; this.code = e; }
     public const fn SerError errorCode() { return this.code; }
+    public const fn bool keyedMaps() { return false; }   // every map is its pair array (KR-136)
 }
 
 // A KBIN reader over an owned byte buffer, implementing Deserializer with a STICKY error flag (a malformed
@@ -263,6 +264,7 @@ type resource KbinNamedDeserializer implements Deserializer {
     // made `strict`, for a hand-written file where a misspelt key must not do nothing silently.
     public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
     public const fn DeErrorKind errorKind() { return this.code; }
+    public fn bool atKeyedMap() { return false; }
 }
 
 // Serializable any `Serializable` value to a KBIN byte buffer. Byte-oriented (binary is not valid UTF-8): returns a

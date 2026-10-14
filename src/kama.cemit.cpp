@@ -35664,6 +35664,7 @@ void CEmitter::emitNullSerializer()
     indent(1); *_out << ".k_writeSome = __kama_ns_void, .k_writeNull = __kama_ns_void,\n";
     indent(1); *_out << ".k_failed = __kama_ns_failed, .k_fail = __kama_ns_void, "
                         ".k_failWith = NULL, .k_errorCode = __kama_ns_errorCode,\n";
+    indent(1); *_out << ".k_keyedMaps = __kama_ns_failed,\n";   // false: discovery walks a map's values either way
     *_out << "};\n";
     *_out << stat << "kama__Serializer __kama_null_serializer(void) { kama__Serializer s; s.kama_obj = NULL; "
                      "s.kama_vtbl = &__kama_null_ser_vtbl; return s; }\n\n";
@@ -39771,6 +39772,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     };
     for (auto& u : units) {
         if (_usesSerde || !u || !u->codeDeclarationList) break;
+        // The stdlib counts by MODULE (below): `std::collections`' map-key probe implements both contracts for every
+        // program with a `Map`, and only a back end under `std::serialization` means the program serializes.
+        {
+            auto uc = _unitCtx.find(u.get());
+            const std::string mod = uc != _unitCtx.end() ? uc->second.module : std::string();
+            if (mod == "std" || mod.compare(0, 5, "std::") == 0) continue;
+        }
         for (auto& decl : *u->codeDeclarationList) {
             if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
                 if (attrHasSerde(cd->attributes)) { _usesSerde = true; break; }

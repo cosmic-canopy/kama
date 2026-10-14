@@ -1,0 +1,90 @@
+// KR-136 — a map keyed by a `string` or an integer is a JSON OBJECT, as every other JSON producer writes one:
+// `"caps":{"cpu":2,"mem":512}`, where kama wrote `[{"key":"cpu","value":2},…]` and could not read the object at all
+// ("type mismatch at `caps`"). Its keys are written in order — integers numerically, strings bytewise — so the bytes
+// do not depend on insertion order and a `Map` and a `SortedMap` holding the same entries write the same ones. Any
+// other key (a struct, an enum) keeps the pair array, and an empty map, having no key to ask, is `{}`. Reading takes
+// either form, so data written before this change still loads. An integer key is parsed from its text, and a bad one
+// is named where it is (`ports.80x`). KBIN is unchanged: its maps are pairs, byte for byte.
+import {
+    std::collections::DynamicArray, std::collections::Map, std::collections::SortedMap, std::memory::Owned,
+    std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer, std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+};
+
+@generate(Serializable, Deserializable, Hashable, Equatable)
+type value Pt { @field public int32 x; @field public int32 y; public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } }
+@generate(Serializable, Deserializable, Hashable, Equatable)
+type enum Color { Red, Green }
+
+// The KBIN byte count of this one is pinned: 79 before KR-136 and after it.
+@generate(Serializable)
+type resource Caps { @field Map<string, int32> caps; public ctor make() { this.caps = Map.empty(); this.caps.put(key: "cpu", value: 2); this.caps.put(key: "mem", value: 512); } }
+
+@generate(Serializable, Deserializable)
+type resource Limits {
+    @field(default) Map<string, int32> caps = Map.empty();
+    @field(default) Map<int32, string> ports = Map.empty();
+    @field(default) Map<int8, int32> small = Map.empty();
+    @field(default) Map<uint64, int32> big = Map.empty();
+    @field(default) SortedMap<int32, string> sorted = SortedMap.empty();
+    @field(default) Map<Pt, int32> grid = Map.empty();
+    @field(default) Map<Color, int32> colors = Map.empty();
+    public ctor make() { }
+    public fn void caps3(bool reversed) {
+        if (reversed) { this.caps.put(key: "mid", value: 3); this.caps.put(key: "alpha", value: 2); this.caps.put(key: "zeta", value: 1); }
+        else          { this.caps.put(key: "zeta", value: 1); this.caps.put(key: "alpha", value: 2); this.caps.put(key: "mid", value: 3); }
+    }
+    public fn void rest() {
+        this.ports.put(key: 443, value: "https"); this.ports.put(key: 80, value: "http"); this.ports.put(key: -1, value: "neg");
+        this.small.put(key: -128i8, value: 1);
+        this.big.put(key: 18446744073709551615ui64, value: 2);
+        this.sorted.put(key: 443, value: "https"); this.sorted.put(key: 80, value: "http"); this.sorted.put(key: -1, value: "neg");
+        this.grid.put(key: Pt.make(x: 1, y: 2), value: 7);
+        this.colors.put(key: Color::Green, value: 3);
+    }
+    public const fn isize capsLen() { return this.caps.length(); }
+    public const fn bool hasPort(int32 p) { return this.ports.contains(key: p); }
+}
+
+fn string json(const ref Limits l) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: l);
+    return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
+}
+fn string read(string src) {
+    Result<Limits, Owned<Error>> r = deserializeJsonBuffer::<Limits>(src: give src);
+    return match (give r) {
+        case Ok(value: l): json(l: l);
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "other"; };
+    };
+}
+
+fn int32 main() {
+    Limits a = Limits.make(); a.caps3(reversed: false); a.rest();
+    Limits b = Limits.make(); b.caps3(reversed: true); b.rest();
+    string want = "{\"caps\":{\"alpha\":2,\"mid\":3,\"zeta\":1},\"ports\":{\"-1\":\"neg\",\"80\":\"http\",\"443\":\"https\"},"
+        .concat(other: "\"small\":{\"-128\":1},\"big\":{\"18446744073709551615\":2},")
+        .concat(other: "\"sorted\":{\"-1\":\"neg\",\"80\":\"http\",\"443\":\"https\"},")
+        .concat(other: "\"grid\":[{\"key\":{\"x\":1,\"y\":2},\"value\":7}],\"colors\":[{\"key\":\"Green\",\"value\":3}]}");
+    if (json(l: a) != want) { return 1; }
+    if (json(l: b) != want) { return 2; }                        // insertion order does not change the bytes
+    if (read(src: copy want) != want) { return 3; }              // the object form round-trips
+    // The pair array still reads, and so does an empty object into a struct-keyed map.
+    string empty = "{\"caps\":{},\"ports\":{},\"small\":{},\"big\":{},\"sorted\":{},\"grid\":{},\"colors\":{}}";
+    if (read(src: "{\"caps\":[{\"key\":\"cpu\",\"value\":2}],\"grid\":{}}") != "{\"caps\":{\"cpu\":2},\"ports\":{},\"small\":{},\"big\":{},\"sorted\":{},\"grid\":{},\"colors\":{}}") { return 4; }
+    if (json(l: Limits.make()) != empty) { return 5; }          // an empty map has no key to ask: `{}`
+    // Errors, named where they are.
+    if (read(src: "{\"ports\":{\"80x\":\"http\"}}") != "type mismatch at `ports.80x`") { return 6; }
+    if (read(src: "{\"small\":{\"300\":1}}") != "type mismatch at `small.300`") { return 7; }
+    if (read(src: "{\"caps\":{\"cpu\":\"two\"}}") != "type mismatch at `caps.cpu`") { return 8; }
+    if (read(src: "{\"grid\":{\"a\":1}}") != "type mismatch at `grid.a`") { return 9; }
+    // KBIN keeps the pair array: the bytes 0.9.584 wrote, and they read back.
+    Result<DynamicArray<uint8>, Owned<Error>> cb = serializeKbinNamedBuffer(v: Caps.make());
+    isize capsBytes = match (give cb) { case Ok(value: x): x.length(); case Err(error: _): -1; };
+    if (capsBytes != 79) { return 12; }
+    Result<DynamicArray<uint8>, Owned<Error>> kb = serializeKbinNamedBuffer(v: a);
+    DynamicArray<uint8> bytes = match (give kb) { case Ok(value: x): { := give x; } case Err(error: _): { return 10; } };
+    Result<Limits, Owned<Error>> kr = deserializeKbinNamedBuffer::<Limits>(src: give bytes);
+    bool kbOk = match (give kr) { case Ok(value: l): l.capsLen() == 3 && l.hasPort(p: -1); case Err(error: _): false; };
+    if (!kbOk) { return 11; }
+    return 0;
+}

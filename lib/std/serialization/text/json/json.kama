@@ -199,6 +199,8 @@ type resource JsonSerializer<W: Writer> implements Serializer {
     public fn void fail() { this.err = true; }
     public fn void failWith(SerError e) { this.err = true; this.code = e; }
     public const fn SerError errorCode() { return this.code; }
+    // A map keyed by a `string` or an integer is a JSON object (KR-136).
+    public const fn bool keyedMaps() { return true; }
 }
 
 // Serializable any `Serializable` value to a JSON string. Takes the value behind the `Serializable` interface
@@ -561,6 +563,8 @@ type resource JsonDeserializer implements Deserializer {
     // made `strict`, for a hand-written file where a misspelt key must not do nothing silently.
     public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
     public const fn DeErrorKind errorKind() { return this.code; }
+    // A map is read as an object when one is next, and as the pair array kama wrote before KR-136 otherwise.
+    public fn bool atKeyedMap() { this.skipWs(); return this.peek() == 123ui8; }   // `{`
 }
 
 // Deserializable a JSON string into a `Deserializable` type — the one-liner entry. Name the target with turbofish:

@@ -1,4 +1,4 @@
-import { std::ptr::relocate, Hasher, ValuesIterable, ValuesIterableMut, EntriesIterable };
+import { std::ptr::relocate, Hasher, ValuesIterable, ValuesIterableMut, EntriesIterable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
 export { Map, Entry, MapKeyIter, MapValueIter, MapValueIterMut, MapEntryIter };
 
 // Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`
@@ -376,11 +376,39 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     }
 
     // --- Serialization (present only when BOTH key and value are Serializable/Deserializable) ---
-    // A generic `Map<K,V>` can't emit a JSON object (a field key needs a `string`, `K` is generic), so it
-    // serializes as an ARRAY of `{"key":k,"value":v}` objects. (This used to describe a `ref K`/`ref V`
-    // hop "like `cloneKey`/`cloneVal`" — both workarounds are gone: the serde one at `0.9.275`, the copy
-    // one at `0.9.283`, each once its missing resolution was supplied.)
+    // On a back end that writes keyed maps (JSON), a map whose keys are TEXT — each writes one string or one integer —
+    // is an object keyed by that text, its keys in order: `{"cpu":2,"mem":512}`, integers numerically (KR-136). Any
+    // other map, and every map on KBIN, is an array of `{"key":k,"value":v}` objects, since a key that is not text has
+    // no object form. Which keys are text is the keys' own answer (MapKeyText): `Map` cannot ask what `K` is.
     public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, V: Serializable] {
+        if (w.keyedMaps()) {
+            DynamicArray<MapKeyText<K>> texts = DynamicArray::<MapKeyText<K>>.withCapacity(capacity: this.len);
+            bool allText = true;
+            isize k = 0;
+            while (k < this.cap && allText) {
+                if (this.state[k] == 1ui8) {
+                    MapKeyText<K> kt = MapKeyText::<K>.make(slot: k);
+                    Serializer probe = kt;
+                    Result<Unit, Owned<Error>> __pk = this.keys[k].serialize(w: ref probe);
+                    match (give __pk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                    allText = kt.isText();
+                    texts.add(item: give kt);
+                }
+                k = k + 1;
+            }
+            if (allText) {
+                MapKeyOrder<K> byKey = MapKeyOrder::<K>.make();
+                sortUnstableWith(items: texts.viewMut(), by: ref byKey);
+                w.beginObject(count: cast<usize>(this.len));
+                foreach (ref MapKeyText<K> t in texts) {
+                    w.field(name: copy t.key(), id: 0ui32);
+                    Result<Unit, Owned<Error>> __sv = this.vals[t.at()].serialize(w: w);
+                    match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                }
+                w.endObject();
+                return Result::Ok(value: Unit::Unit);
+            }
+        }
         w.beginArray(count: cast<usize>(this.len));
         isize i = 0;
         while (i < this.cap) {
@@ -400,9 +428,31 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         w.endArray();
         return Result::Ok(value: Unit::Unit);
     }
-    // Reconstruct from the pair array: each entry is `{"key":k,"value":v}` (key before value on the wire),
+    // Reconstruct from either form: the keyed object, its keys read back from their text (an integer key parsed, so
+    // `{"80x":1}` into a `Map<int32, V>` is a type mismatch at `80x`), or the pair array — which every map wrote
+    // before KR-136, so stored data keeps loading. Each pair is `{"key":k,"value":v}` (key before value on the wire),
     // read positionally — `moreFields()` consumes the object structure (commas + closing brace).
     public ctor Result<Map<K,V,H,A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>, A: default] {
+        if (r.atKeyedMap()) {
+            r.beginObject(count: 0);
+            while (r.moreFields()) {
+                FieldKey fk = r.field();
+                string text = match (give fk) {
+                    case Name(name: n): { := give n; }
+                    case Id(id: _): { r.fail(); := ""; }
+                    case Position(rank: _): { r.fail(); := ""; }
+                };
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                MapKeyReader<K> kr = MapKeyReader::<K>.of(text: copy text);
+                Result<K, Owned<Error>> __ek = K.deserialize(r: kr);   // read both at top level (a nested generic
+                K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                Result<V, Owned<Error>> __ev = V.deserialize(r: r);    // static call must not sit inside a match arm)
+                V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                this.put(key: give k, value: give v);
+            }
+            r.endObject();
+            return Result::Ok(value: give this);
+        }
         r.beginArray();
         isize index = 0;   // the entry's place on the wire — a failure inside it is reported there
         while (r.moreElems()) {
