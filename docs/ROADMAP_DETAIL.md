@@ -195,7 +195,9 @@ only moves at releases, so it would be stale by this rule for the whole window b
 Everything else here is library or toolchain work that does **not** gate the tag:
 
 1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
-   output today; streaming a running child's stdout as it arrives is the piece left.
+   output today; streaming a running child's stdout as it arrives is the piece left. **And a non-blocking `File`**
+   (filed 2026-10-14): `kama_set_nonblocking` exists for POSIX descriptors, but `File` has no non-blocking mode, and
+   on Windows both it and the `Poller` reach sockets only, so a child's pipe cannot be read without blocking there.
 2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN is COMPLETE** (M2a 2026-08-04; M2b
    `0.9.190`–`0.9.195` and M2c `0.9.196`–`0.9.197`, both 2026-09-05: sleep + wall clock, DNS, fs completion,
    `std::path`, stdio handles + `readLine`/`Lines`, then `std::random` and `std::encoding`). Its brief is
@@ -209,7 +211,10 @@ Everything else here is library or toolchain work that does **not** gate the tag
    constant-time half — ciphers, key exchange, signatures — which is `@kama/sodium`'s job. Recorded emphatically because TLS has been mistaken for scheduled work, listed with
    the status "ROADMAP" and waited on: `wss://` is not coming to `std`, and the answer for a
    secure socket is a package or terminating TLS at a reverse proxy. A non-goal that reads like a
-   backlog item gets re-triaged forever. No new language
+   backlog item gets re-triaged forever. **Re-affirmed 2026-10-14**, with what each asked-for piece is instead: the
+   browser's `fetch`/`EventSource`, an HTTP client and server, and a native WebSocket — the first-party `@kama/http`
+   (KR-173); native WebTransport — a package on `@kama/tls`; a file chooser and native video/audio elements — the UI
+   toolkit's packages, since std has no UI. No new language
    surface; pure library/codegen. The items below are what the campaign left open:
    - **`std::net`** — DNS **shipped `0.9.192`** as explicit `resolve`/`resolveOne` + `TcpStream.connectTo`
      (IPv4 only, because every socket seam is `AF_INET`; a name resolving to IPv6 alone reports
@@ -281,6 +286,88 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
+<a id="s1-writetext-short"></a>
+
+### `writeText` can write part of a file and report success (KR-150)
+
+Measured on `0.9.589`, filed 2026-10-14. `std::fs::writeText` calls `File.write(bytes:)` once — the partial-write primitive, which retries only `EINTR` —
+where `writeFile` goes through `writeAll`. Under a 1024-byte file-size limit, `writeText` of 3000 bytes returns
+`Ok(1024)` and leaves a 1024-byte file; `writeFile` returns `Err`. By reading, also: Linux caps one `write()` near
+2 GiB, and Windows `kama_write` narrows the size to `unsigned int`. **Scheduled, first:** silent data loss. Route it
+through `std::io::writeAll`. Fixture: a short write made observable (a file-size limit in a child, or a writer that
+accepts at most N bytes per call), asserting `Err` or the whole file.
+
+<a id="s1-cwd"></a>
+
+### The current directory (KR-167)
+
+Measured on `0.9.589`, filed 2026-10-14. Nothing in std reads `getcwd`; only the driver does. A relative path given on a command line cannot be made
+absolute without running `/bin/pwd` through `std::process`. `std::path`'s own note says canonicalization "belongs in
+`std::fs`". **Scheduled:** `currentDirectory()` and `setCurrentDirectory(path:)` beside `homeDirectory()`, and a
+canonical path (`realpath`/`GetFinalPathNameByHandleW`), each a `Result`.
+
+<a id="s1-file-seek"></a>
+
+### `File` seek (KR-168)
+
+Measured on `0.9.589`, filed 2026-10-14. `std::fs::File` has no `seek`, no positional read or write and no set-length (`File` has no method `seek`); the one
+`SetFilePointerEx` in `kama_os.h` is internal. **Scheduled:** `seek` (from start/current/end), `readAt`/`writeAt`
+(`pread`/`pwrite`, which a shared file needs), and `setLength`.
+
+<a id="s1-utf8-lossy"></a>
+
+### Lossy UTF-8 decoding (KR-169)
+
+Measured on `0.9.589`, filed 2026-10-14. `std::encoding::utf8` has `decode` and `validate` only; `Utf8Error::Invalid(at)` says where bad bytes start, not
+how many there are. Its own comment leaves the door open: "A lossy U+FFFD variant is a separate, named function if
+one is ever wanted". **Scheduled:** `decodeLossy` — every invalid sequence becomes U+FFFD, as Rust's `from_utf8_lossy`
+and WHATWG's decoder do (one replacement per maximal invalid subpart). Explicit by name; `decode` stays strict.
+
+<a id="s1-process-group"></a>
+
+### A child in its own process group or session (KR-170)
+
+Measured on `0.9.589`, filed 2026-10-14. The POSIX spawn child does `chdir`/`dup2`/`execvp` only — no `setpgid`, no `setsid` — and `kama_kill` is
+`kill(pid)`, so a supervisor cannot stop a child together with everything it started. On Windows the child is
+created with `CREATE_UNICODE_ENVIRONMENT` alone and every signal is `TerminateProcess`. **Scheduled**, by the
+platform-deltas rule: the POSIX type gets a new group or session and a group signal (both calls are
+async-signal-safe, so they belong in the fork child); Windows gets its own type over `CREATE_NEW_PROCESS_GROUP` and
+a Job Object. **And ESRCH:** `kindOf` (`lib/std/io/io.kama`) maps it to `Other` (the code survives in `rawOsError()`).
+It is unreachable through std today — signalling a reaped child is a no-op `Ok` — and becomes reachable with a group
+signal, so its kind is decided here (a "no such process" kind, as Python's `ProcessLookupError`).
+
+<a id="s1-child-stdio"></a>
+
+### A child's stdio redirected (KR-171)
+
+Measured on `0.9.589`, filed 2026-10-14. `type enum Stdio { Inherit, Piped, Null }`: no `2>&1`, and no `File` or `Descriptor` handed to a child as a
+stream (the `UnixStream.pair()` verdict above waits on exactly that hand-off). The workaround is a shell line.
+**Scheduled:** stderr merged into stdout, and an owned `File`/`Descriptor` as any of the three streams.
+
+<a id="s1-datachannel"></a>
+
+### A WebRTC DataChannel type (KR-172)
+
+Measured on `0.9.589`, filed 2026-10-14. `std::net::web` ships the `kama_rtc_*` externs and their JS, with browser end-to-end fixtures on the raw glue
+(`tests/net_rtc_loopback.kama`, `tests/net_rtc_signaling.kama`), but no `.kama` type: the directory has `ws.kama` and
+`wt.kama` only. `udp.kama` promises a DataChannel will satisfy the same contract. **Scheduled:** a type over the glue
+in `wt.kama`'s pull model, with its signalling methods; KR-108 is adjacent (a P2P channel has no `SocketAddr`).
+
+<a id="s1-http-package"></a>
+
+### `@kama/http` — a first-party HTTP package for both targets (KR-173)
+
+Decided 2026-10-14. **HTTP stays out of std on every target**, as the non-goal above says: std carries the
+TRANSPORTS (TCP, UDP, DNS and the `Poller` natively; WebSocket, WebTransport and the DataChannel in the browser) and
+the building blocks (SHA digests, base64, JSON, the `std::io` streams). The browser's own HTTP APIs, `fetch` and
+`EventSource`, are HTTP clients, so they belong with HTTP, not with the browser transports: a std `fetch` would be an
+HTTP client on one target only. Peers split down the middle (Go, Zig, C# and Python ship HTTP; Rust, C and C++ do
+not, and Rust's browser `fetch` is the `web-sys` crate). **The web-first answer is a first-party package**, as
+`@kama/tls` is: `fetch`/`EventSource` in the browser (its JS through `jsLibraries`), HTTP/1.1 client and server
+natively on std's `TcpStream`/`Poller`, server-sent events, a native WebSocket client and server (the RFC 6455
+upgrade on std's `sha1` + base64), and TLS through `@kama/tls`. Native WebTransport (QUIC + TLS 1.3) is a package on
+`@kama/tls` too, not std.
+
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
@@ -340,6 +427,119 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   (docs/packages.md): a fetched package cannot carry a local path. A `kama_workspace.json` holding both packages
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
+
+<a id="s2-arg-order"></a>
+
+### Arguments are evaluated in the order written (KR-151)
+
+Measured on `0.9.589`, filed 2026-10-14. `fn string both(string a, string b)`; `both(a: copy s, b: give s)` prints `a=[] b=[hello]`. The emitter hoists a
+`give` of a `string`/collection argument into a temporary ahead of the call (`kama_string kama_kama_carg0 = (k_s);
+(k_s).kama_data = NULL;`, `src/kama.cemit.cpp` ~24761) and leaves the other arguments inside the C call, whose
+evaluation order C leaves unspecified — so the move always runs first. Any earlier argument that reads the binding is
+affected (`f(n: s.length(), b: give s)` reads 0; a ctor and a method call alike). Only `string`: a `DynamicArray`,
+a value and a `Copyable` resource pass by bitwise copy and are unaffected. The reverse order is refused correctly.
+SPEC states no order: nothing was intended. **Decided (the maintainer, 2026-10-14):** arguments are evaluated left to
+right, as written — Rust, C#, Java and Go — so a hoisted argument hoists every argument before it; SPEC gains the
+rule. *(Declined: refusing a `give` of a binding another argument reads.)* Fixture: the snippet, a ctor, a method, a
+read (`s.length()`), and the reverse order still refused.
+
+<a id="s2-copy-constref-rvalue"></a>
+
+### `copy` of a `const ref` call with an rvalue argument reaches clang (KR-152)
+
+Measured on `0.9.589`, filed 2026-10-14. `public const fn const ref string get(const ref string key)`; `string s = copy b.get(key: "x");` passes `kama
+check` and emits `kama_string__copy(&(*B__get(&b, &(kama_string_lit("x",1)))))` — the address of a literal. A
+free function fails the same way, and so does a chained `copy b.member(key: "error").text()`; a key in a local, no
+`copy`, a `const ref int32`, or a by-value parameter all work. **Scheduled.** An rvalue bound to a `const ref`
+parameter is materialized in a temporary on this path as on the others.
+
+<a id="s2-return-this-place"></a>
+
+### Returning `this` as a place reaches clang (KR-153)
+
+Measured on `0.9.589`, filed 2026-10-14. `const fn const ref B me() { return this; }` (and `fn ref B`, and on a `type value`) emits `return &(self);` —
+`emitPlace(this)` is already `self`, a pointer, and the place return takes its address again (`src/kama.cemit.cpp`
+~8641). Passing `this` to a `const ref B` parameter works. **Scheduled.** Fixture: both forms, chained.
+
+<a id="s2-recursive-enum-owned"></a>
+
+### A recursive enum through a collection, with an `Owned` variant (KR-154)
+
+Measured on `0.9.589`, filed 2026-10-14. `type enum J { Num(int32 n), List(DynamicArray<J> items), Box(Owned<J> inner) }` is refused with "`DynamicArray<J>` has
+no method `copyAllFrom`" at the enum, and "`J` has no `copy` method" inside `view.kama` and `dynamic_array.kama`;
+through a `Map` the same, at `map.kama`. Nothing in the program copies a `J`. Recursion through a collection with
+plain variants, recursion through `Owned` alone, and an `Owned` variant without recursion all build. **Scheduled:** a
+move-only recursive enum is not `Copyable`, and the conditional `Copyable` of its collections must say so instead of
+being judged against it.
+
+<a id="s2-loop-diverging-move"></a>
+
+### A false use-after-move when a loop body ends in an `if`/`else` that always leaves (KR-155)
+
+Measured on `0.9.589`, filed 2026-10-14. `while (true) { sink.add(item: give s); n = n + 1; if (n < 3) { s = "b"; continue; } else { break; } }` is
+refused: "`s` is given away inside this loop … not assigned again before the loop's next pass". The loop check does
+not see that an `if`/`else` (or a `match`) whose every arm leaves makes the end of the body unreachable; moving
+`break;` after the `if` passes. **Scheduled:** the end of a body reached by no path is not a "next pass". (By design,
+and unchanged: an assignment at the TOP of the body does not count, SPEC *the same for a loop*.)
+
+<a id="s2-match-string-assign"></a>
+
+### A value-producing `match` into an existing `string`, and a `match` arm that moves silently (KR-156)
+
+Measured on `0.9.589`, filed 2026-10-14. Two defects in the same place. **(1)** `s = match (e) { case A: "xyz"; case B: "q"; };` into an existing `string`
+local or field is refused ("a value-producing `match` must appear in a typed position"); the initializer form works,
+and so does the same assignment into an `int32`, a list or an `Optional<string>`. **(2)** `string u = match (e) { case
+A: t; case B: t; };` moves the owned local `t` with no `give`, where `string u = t;` is refused for want of one and a
+ternary arm demands `copy t` (SPEC's hand-off rule) — and a later error then blames a `give` nobody wrote.
+**Scheduled:** an assignment is a typed position for a `string` as for every other type; a `match` arm is a hand-off
+position, under the same marker rule as a ternary arm.
+
+<a id="s2-ternary-optional-arms"></a>
+
+### A ternary of `Optional::Some`/`None` outside an initializer or `return` (KR-157)
+
+Measured on `0.9.589`, filed 2026-10-14. `o = c ? Optional::Some(value: 1) : Optional::None;` as an assignment, a field write or an argument reports
+"`Optional::Some` — scope-qualified call resolves to no known function" and "`Optional` has no variant `None`"; the
+same ternary initializing a declaration or returned works. The destination type does not reach the arms. A generic
+argument (`isNone(o: Optional::None)`) adds the false second error beside the true "cannot infer type parameter".
+And `o == Optional::None` advises implementing `Equatable<This>` on `Optional<int32>`, a prelude type nobody can edit
+(the answer is `match`, or KR-163's `isNone()`). **Scheduled:** every typed position threads its type into a ternary.
+
+<a id="s2-optional-queries"></a>
+
+### `Optional`/`Result` answer yes/no questions (KR-163)
+
+**Decided (the maintainer, 2026-10-14): queries only.** `isSome()`/`isNone()` on `Optional`, `isOk()`/`isErr()` on
+`Result`. Taking one apart — the value or a default — stays `match`, GOALS' one way: `unwrapOr` and `map` were
+declined (`map` would need closures, which kama does not have). Today `bool has = match (o) { case Some(value: _):
+true; case None: false; };` is the only spelling. A generic enum takes members (shipped; SPEC *Enums*), so these are prelude members
+with no compiler work. KEYWORDS.md's "match is the one construct for branching on an enum" gains the qualification.
+
+<a id="s2-int-match-diagnostic"></a>
+
+### `match` on an integer says what to write instead (KR-164)
+
+Measured on `0.9.589`, filed 2026-10-14. `match (n) { case 1: … }` is "Parse error: syntax error, unexpected DEC_LITERAL_NO_SUFFIX, expecting
+IDENTIFIER". Integer patterns are a non-goal by design — SPEC: "There is no `switch` statement: `match` on an enum,
+`if`/`else if` on an integer — one construct per concept" — but the negative claim has no xfail, and the refusal
+names the grammar, not the rule. **Scheduled:** a refusal that says `if`/`else if`, an xfail, and the SPEC marker.
+
+<a id="s2-const-map-iter"></a>
+
+### A read-only map cannot be iterated (KR-165)
+
+Measured on `0.9.589`, filed 2026-10-14. `fn int32 total(const ref Map<string, int32> m) { foreach (int32 v in m.values()) … }`: "cannot call non-const
+method `values` on a const receiver". `values()`, `iterator()` and `entries()` are non-`const`, so a function that only
+borrows a map cannot read it in a loop. **Scheduled:** the read iterators are `const`, as `DynamicArray.view()` is;
+check `SortedMap` and `Set` the same way.
+
+<a id="s2-result-init-message"></a>
+
+### A `Result` initializing a `string` is described as "a type value" (KR-166)
+
+Measured on `0.9.589`, filed 2026-10-14. `string t = serializeJsonBuffer(v: x);` says "a local is declared `string`, so it cannot be initialized with a
+type value — a `string` was expected". The value is a `Result<string, Owned<Error>>`; the message names a kind where
+it should name the type, and the fix (`match`) goes unsaid. **Scheduled.**
 
 <a id="s2-fnptr-type-arg"></a>
 
@@ -683,10 +883,10 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     (`error: incompatible pointer to integer conversion … from 'void *'`). They are therefore an instance
     of the tracked *"`kama check` does not type-check expressions"* gap, landing on the LSP and on an AI
     agent verifying its work — not on a shipped program.
-  - **`Optional` has no unwrap, and one cannot be added today.** `match` is the only way to open it —
-    there is no `?` operator and **no method on `Optional`**, because a generic enum is a
-    monomorphization template and rejects members (`src/kama.cemit.cpp:10267`). `unwrapPtr` is monomorphic
-    for exactly that reason, and the compiler emits calls to it directly into C at **nine** sites, so its
+  - **`Optional` has no unwrap.** `match` is the only way to open it — there is no `?` operator. *(This said a
+    generic enum "rejects members"; that stopped being true once enums took members, and the maintainer has ruled that `Optional`
+    and `Result` gain yes/no queries only — KR-163 — while taking one apart stays `match`.)* `unwrapPtr` is monomorphic
+    for the old reason, and the compiler emits calls to it directly into C at **nine** sites, so its
     signature is a hard dependency of the `new`/`try new` lowering. Pervasive absence without an
     ergonomic unwrap means a `match` at every one of ~30 stdlib sites.
   - **The niche optimization is not a layout tweak.** `Optional<T>` is tag-then-union
@@ -2788,6 +2988,59 @@ manifest, `lib/kama.json`, which is named `std`.
 The fix is to tell the reader when it reads the stdlib's manifest, or to refuse at the callers that know the
 path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
 diagnostic, not a feature: no program can use such a package today.
+
+<a id="s10-abs-path-deps"></a>
+
+### An absolute path dependency or override (KR-158)
+
+Measured on `0.9.589`, filed 2026-10-14. `"dependencies": {"dep": {"path": "/abs/path/dep"}}` fails `kama pkg install` with "path dependency 'dep' not found
+at .//abs/path/dep": the driver always joins `requestorDir + "/" + spec.path` (`src/kama.driver.cpp` ~7632, the
+fallback ~7236, and the `kama.local.json` override join ~7881). A relative path works. **Scheduled:** an absolute
+path is used as written — it is the natural form in a machine-local `kama.local.json`; packages.md says what a
+published manifest may carry.
+
+<a id="s10-install-hint"></a>
+
+### `kama check`'s install hint names no manifest (KR-159)
+
+Measured on `0.9.589`, filed 2026-10-14. "kama.json declares dependencies but ./.kama/deps is missing — run `kama pkg install`" — and `kama pkg install` alone
+refuses ("name the project to act on"). Run from a parent directory it still names no path. Four sites
+(`src/kama.driver.cpp` ~4848, ~4855, ~11317, ~11322). **Scheduled:** the hint is the command that works, with the
+manifest's path as the user spelled it.
+
+<a id="s10-override-unpublished"></a>
+
+### A `kama.local.json` override stands in for an unpublished version (KR-160)
+
+Measured on `0.9.589`, filed 2026-10-14. With `"@kama/ui": {"version": "^9.9.0"}` and an override pointing at a local checkout whose `kama.json` says 9.9.0,
+`kama pkg install` fails at once: "no registry version satisfies "^9.9.0"". Overrides apply after resolution and the
+lock write (`src/kama.driver.cpp` ~7477, ~7863). packages.md contradicts itself: "develop against the local copy with
+`overrides`" (~670) against "must still be a declared, canonically-resolvable dependency" (~903). **Decided (the
+maintainer, 2026-10-14):** developing against an unpublished local package is the main use of an override, as
+Cargo's `[patch]` allows — the override is used when its own version satisfies the requirement, whether or not a
+registry has it; the lock records the requirement and never the local path, so nothing machine-local reaches a
+commit. Fix packages.md in the same change.
+
+<a id="s10-emcc-file-flags"></a>
+
+### emcc's file inputs in `ldflags` resolve against the working directory (KR-161)
+
+Measured on `0.9.589`, filed 2026-10-14. A project's `ldflags` go to the link verbatim and the link runs in the caller's directory, so `--shell-file`,
+`--embed-file` and `--preload-file` paths work only from the manifest's own directory; `jsLibraries` resolve against
+the manifest (`src/kama.driver.cpp` ~5717). The dependency path guard (`depFlagPathIsPortable`, ~5279) checks only
+`-I`/`-L`/`-isystem`/`-iquote`/`-idirafter`, so a dependency's relative emcc file flag passes unchecked. Natively the
+same: a relative `-Wl,-sectcreate,…,data.txt` builds from the project only. **Scheduled:** structured keys for emcc's
+file inputs (`shellFile`, `embedFiles`, `preloadFiles`), resolved like `jsLibraries`; the guard widened to them.
+
+<a id="s10-target-js-keys"></a>
+
+### A target entry refuses `jsLibraries` and `emSettings` (KR-162)
+
+Measured on `0.9.589`, filed 2026-10-14. `"select": {"TARGET": {"CHK": {"triple": "wasm32-emscripten-none", "jsLibraries": ["x.js"]}}}` is "unknown key
+`jsLibraries` in the target `CHK`"; `emSettings` the same. A target entry accepts `triple`, `cc`, `ar`, `sysroot`,
+`runtime`, `subsystem`, `cflags`, `ldflags`, `cxxflags`, `objcflags`, `cxx`, `link`, `webgpu`, `no-heap`,
+`reproducible-float`, `default` (`src/kama.driver.cpp` ~3772). **Scheduled:** both accepted, merged like `ldflags`.
+Adjacent to KR-144's gating.
 
 <a id="s10-agent-tooling"></a>
 
