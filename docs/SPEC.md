@@ -6486,8 +6486,8 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   | back end | addressing | buffer | stream | what it is for |
   |---|---|---|---|---|
   | `std::serialization::text::json` | named | `serializeJsonBuffer` / `deserializeJsonBuffer` | `serializeJsonStream` / `deserializeJsonStream` | text, human-readable, UTF-8 in and out |
-  | `binary` — **KBIN** | named | `serializeKbinNamedBuffer` / `deserializeKbinNamedBuffer` | `serializeKbinNamedStream` / `deserializeKbinNamedStream` | self-describing save/load: order-independent, unknown fields skip |
-  | `binary` — **KNUM** | numbered | `serializeKbinNumberedBuffer` / `deserializeKbinNumberedBuffer` | `serializeKbinNumberedStream` / `deserializeKbinNumberedStream` | schema evolution: protobuf-shaped keys, so unknown ids skip and reordering survives |
+  | `binary` — **KBIN** | named | `serializeKbinNamedBuffer` / `deserializeKbinNamedBuffer` | `serializeKbinNamedStream` / `deserializeKbinNamedStream` | self-describing save/load: order-independent, unknown fields skip (a strict reader refuses them) |
+  | `binary` — **KNUM** | numbered | `serializeKbinNumberedBuffer` / `deserializeKbinNumberedBuffer` | `serializeKbinNumberedStream` / `deserializeKbinNumberedStream` | schema evolution: protobuf-shaped keys, so unknown ids skip (a strict reader refuses them) and reordering survives |
   | `binary` — **POS** | positional | `serializeKbinPositionalBuffer` / `deserializeKbinPositionalBuffer` | `serializeKbinPositionalStream` / `deserializeKbinPositionalStream` | smallest: only values on the wire, shape agreed in advance |
 
   **Merge — into a value the program already holds.** Each back end also offers `merge…Buffer(src:, into:)` and
@@ -6513,7 +6513,8 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   - **A field whose type is a derived record merges** into what the field holds, recursively — through an `Owned`
     too. **Every other field the data names is replaced whole**: a number, a `string`, an enum, an `Optional`
     (`null` is `None`), a list, a `Map` (a map is an array of key/value pairs on the wire). A key the data leaves
-    out is untouched, and an unknown key is skipped, as in a full read. No field is required.
+    out is untouched, and an unknown key is skipped, as in a full read — or refused, through a strict reader. No
+    field is required.
   - **Atomic.** If the data is wrong anywhere, the value is left as it was, and the error still names where: <!-- test: ser_merge_json -->
     `{"voices":99,"mix":{"pan":"left"}}` is ``type mismatch at `mix.pan` `` and `voices` keeps what it held. Each
     new value is staged as it is read and written into place once the whole input has been.
@@ -6654,6 +6655,25 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   a declared value to keep: an initializer, or a type whose default is its value. A `@skip` field, never on <!-- xfail: ser_field_default_no_value -->
   the wire, keeps its declared value too. A key that arrives twice keeps its last value. A record that
   needs different handling for old data implements `Deserializable` by hand.
+- **A key no field claims is skipped — unless the READ is strict.** Skipping is what lets an older reader load a <!-- test: de_strict -->
+  newer writer's data. A hand-written file wants the opposite, so a reader built with `strict` refuses the first
+  such key with a `DeError` of kind `UnknownField` naming it: ``unknown field `server.prot` ``. The read decides,
+  not the type — one type is read leniently from a peer and strictly from a config file:
+  ```kama
+  import { std::memory::Owned, std::serialization::text::json::JsonDeserializer };
+  @generate(Deserializable)
+  type value Limits { @field(default) public int32 voices = 8; }
+  fn Result<Limits, Owned<Error>> load(string text) {
+      JsonDeserializer r = JsonDeserializer.strict(src: give text);   // `make` is lenient, as `deserializeJsonBuffer` is
+      return Limits.deserialize(r: r);   // {"voicez":12} -> unknown field `voicez`; `x.mergeFrom(r: r)` merges strictly
+  }
+  ```
+  `KbinNamedDeserializer` and `KbinNumberedDeserializer` have the same `strict` ctor (a numbered key is named by its
+  id); a positional stream has no keys to be unknown. A `@skip` field's key is unknown, since it is not part of the
+  wire form; a `@deprecated` field's key and a renamed field's wire name are known; a map's keys are data, never
+  unknown. A record nested in the one being read, an element and an enum payload are read through the same reader,
+  so they are strict too — `backups[1].hots`, `shape.Rect.hh`. A back end written outside the stdlib implements
+  `Deserializer.unknownField()`: skip the value, or fail `UnknownField`.
 - **A read's error says where.** A failed read returns a `DeError`: its `kind()`, a `DeErrorKind`, is what a <!-- test: de_error_paths -->
   caller branches on, and its `field()` is the path from the value read to the part that failed, in the names
   the data uses: `server.port`, `backups[1].port`, `limits[1].value` for a map entry, `Circle.radius` for an
@@ -6692,7 +6712,7 @@ frame), and a `@generate` enum may be a node — an edge's pointee, or the root 
 edge, and every pointee of a concrete one, **must** be `@generate(Serializable, Deserializable)` — this is
 **compile-enforced**: a non-`@generate` implementor (which would have no adapters and be silently dropped
 from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
-`DeErrorKind` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId}`, the
+`DeErrorKind` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId, UnknownField}`, the
 kind a `DeError` carries beside its path.
 The write is two passes (discover every pointee, so the table's length is exact before the first entry — a
 positional array carries its length up front; then write), the read two passes with no rewind (allocate each

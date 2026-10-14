@@ -1598,42 +1598,6 @@ when the map is empty, and Swift and Kotlin (`allowStructuredMapKeys`) write a f
   `@generate` types and supplied by hand everywhere else, as Kotlin's `SerialDescriptor` is. No new syntax, but a
   source change to every hand-written `serialize`. It would also serve schema export.
 
-<a id="s4-strict-decoding"></a>
-
-### Strict decoding: unknown fields refused at the read site (KR-126)
-
-Every self-describing back end skips an unknown field, which is what keeps an old reader working against a newer
-writer. A config file wants the opposite: a misspelt key should fail, not do nothing silently. **Scheduled.**
-**Design:** Go's `Decoder.DisallowUnknownFields`, not serde's per-type attribute. The READ decides, because one type
-is read leniently from a peer and strictly from a file. The error is a `DeError` of a new kind, `UnknownField`,
-whose path names the key — the `DeError.at(kind:, field:)` every derived reader builds since `0.9.569`.
-
-**Measured on `0.9.577`:** `deserializeJsonBuffer::<Limits>(src: "{\"voicez\":12,\"caps\":[]}")` succeeds with `voices`
-at its default, 8: the typo is skipped and says nothing. kama has no default arguments, and the reader
-(`JsonDeserializer.make(src:)`) is public, so a strict read can be a reader rather than more entry points.
-
-**What others do.** Lenient by default: Go (opt in on the reader, `dec.DisallowUnknownFields()`), serde (on the type,
-`#[serde(deny_unknown_fields)]`), .NET 8 (`UnmappedMemberHandling.Disallow` in the call's options, or on the type).
-Strict by default: Jackson and Kotlin serialization, each with an opt-out. protobuf keeps unknown fields for
-re-encoding.
-
-**Decided 2026-10-14 (the maintainer).**
-- **126-D1 — how a read asks.** A strict READER: `JsonDeserializer.strict(src:)`, and the same named ctor on
-  `KbinNamedDeserializer` and `KbinNumberedDeserializer` (positional KBIN has no keys), used with `T.deserialize(r:)`
-  or `x.mergeFrom(r:)`. The derived reader reports an unclaimed key to the reader through one new `Deserializer`
-  member instead of skipping it; a lenient reader skips, a strict one fails, and nested records read through the
-  same reader are strict too. That member is a source change for a hand-written back end outside the stdlib, as
-  `failWith(kind:)` was in `0.9.569`. (Go does both: `json.Unmarshal` is lenient, a `Decoder` made strict with
-  `DisallowUnknownFields()` is not.)
-- **126-D2 — the default.** Lenient, as today.
-- **126-D3 — what a strict read refuses.** A key no field claims, including a `@skip` field's key, which is not part of
-  the wire form. A `@deprecated` field is still read, so its key is known; map keys are data and never unknown. The
-  first unknown key is reported with its path (``unknown field `server.prot` ``).
-- **Found designing it, fixed first:** an enum variant's payload is read by POSITION, its keys thrown away, so a strict
-  read could not see a misspelt payload key, and a payload whose keys arrive in another order reads into the wrong
-  fields with no error (read from the code; reproduced before the fix). Payload keys are matched by name, as record
-  fields are, in a commit of its own before this row.
-
 <a id="s4-json-value"></a>
 
 ### An untyped JSON value (KR-110)

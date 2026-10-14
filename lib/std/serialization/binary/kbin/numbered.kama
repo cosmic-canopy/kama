@@ -205,8 +205,12 @@ type resource KbinNumberedDeserializer implements Deserializer {
     FixedArray<bool> grouped;
     FixedArray<isize> remain;      // array frames only: elements left
     isize depth;
+    bool refuseUnknown;            // a STRICT reader: a key no field claims fails `UnknownField` (KR-126)
 
-    public ctor make(DynamicArray<uint8> src) {
+    public ctor make(DynamicArray<uint8> src) { return KbinNumberedDeserializer.of(src: give src, refuseUnknown: false); }
+    // The strict reader: the first id no field claims fails the read, named by its id (see `JsonDeserializer.strict`).
+    public ctor strict(DynamicArray<uint8> src) { return KbinNumberedDeserializer.of(src: give src, refuseUnknown: true); }
+    ctor of(DynamicArray<uint8> src, bool refuseUnknown) {
         this.len = src.length();
         this.buf = give src;
         this.pos = 0;
@@ -217,6 +221,7 @@ type resource KbinNumberedDeserializer implements Deserializer {
         this.grouped = FixedArray.make(size: 64);
         this.remain = FixedArray.make(size: 64);
         this.depth = 0;
+        this.refuseUnknown = refuseUnknown;
     }
 
     // --- low-level ---
@@ -389,6 +394,9 @@ type resource KbinNumberedDeserializer implements Deserializer {
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
     public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the FIRST failure is the one reported
+    // KR-126: a key no field claims. Skipped, so an older reader loads a newer writer's data — unless this reader was
+    // made `strict`, for a hand-written file where a misspelt key must not do nothing silently.
+    public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
     public const fn DeErrorKind errorKind() { return this.code; }
 }
 

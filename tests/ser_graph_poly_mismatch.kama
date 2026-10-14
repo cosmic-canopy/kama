@@ -39,6 +39,7 @@ fn int32 main() {
                     case UnresolvedReference: { return 4; }
                     case MissingField: { return 5; }
                     case DuplicateId: { return 6; }
+                    case UnknownField: { return 19; }
                 }; }
                 case None: { return 8; }                     // not a DeError
             };

@@ -228,13 +228,20 @@ type resource JsonDeserializer implements Deserializer {
     isize len;
     bool err;
     DeErrorKind code;       // the specific error `failWith` recorded; `Malformed` by default
+    bool refuseUnknown;     // a STRICT reader: a key no field claims fails `UnknownField` (KR-126)
 
-    public ctor make(string src) {
+    // The lenient reader: a key no field claims is skipped.
+    public ctor make(string src) { return JsonDeserializer.of(src: give src, refuseUnknown: false); }
+    // The strict reader, for a hand-written file: `T.deserialize(r:)` or `x.mergeFrom(r:)` through it fails on the first
+    // key no field claims, naming it — ``unknown field `server.prot` `` — where `make` would skip it.
+    public ctor strict(string src) { return JsonDeserializer.of(src: give src, refuseUnknown: true); }
+    ctor of(string src, bool refuseUnknown) {
         this.len = src.length();
         this.src = give src;
         this.pos = 0;
         this.err = false;
         this.code = DeErrorKind::Malformed;
+        this.refuseUnknown = refuseUnknown;
     }
 
     // --- low-level cursor ---
@@ -550,6 +557,9 @@ type resource JsonDeserializer implements Deserializer {
     // Record a SPECIFIC error (e.g. a dangling ref -> UnresolvedReference), so `deserializeJsonBuffer` surfaces it instead of
     // the generic `Malformed`.
     public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the FIRST failure is the one reported
+    // KR-126: a key no field claims. Skipped, so an older reader loads a newer writer's data — unless this reader was
+    // made `strict`, for a hand-written file where a misspelt key must not do nothing silently.
+    public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
     public const fn DeErrorKind errorKind() { return this.code; }
 }
 

@@ -411,7 +411,8 @@ type contract Serializable for value, resource, enum, intrinsic { const fn Resul
 // What went wrong reading a value: the part a caller branches on, `match (e.kind())`. A reader latches one when it
 // fails (`failWith`), and the error a read returns, `DeError`, carries it beside where it happened.
 type enum DeErrorKind implements Sendable {
-    Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId;
+    Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId,
+    UnknownField;   // a STRICT reader's: a key no field claims (`JsonDeserializer.strict`) — last, the graph casts by value
 
     public const fn string message() {
         return match (this) {
@@ -421,6 +422,7 @@ type enum DeErrorKind implements Sendable {
             case MissingField:         "missing field";
             case UnresolvedReference:  "unresolved reference";
             case DuplicateId:          "duplicate id";
+            case UnknownField:         "unknown field";
         };
     }
 }
@@ -454,6 +456,7 @@ type resource DeError implements Error, Copyable<This>(bare: give), Sendable {
         string where = copy this.at;
         return match (this.k) {
             case MissingField: "${kindText} `${where}`";
+            case UnknownField: "${kindText} `${where}`";
             case _:            "${kindText} at `${where}`";
         };
     }
@@ -520,6 +523,11 @@ type contract Deserializer for resource {
     // adds WHERE (`DeError.at`). A reader that has failed answers every later read with a default, and
     // `moreFields`/`moreElems` with false: a record's reader names the field it was reading when it stops.
     fn void failWith(DeErrorKind kind); const fn DeErrorKind errorKind();
+    // The key just read names no field of the record being read (KR-126). A lenient reader skips its value, which is
+    // what lets an older reader load a newer writer's data; a strict one — `JsonDeserializer.strict(src:)` — fails
+    // `UnknownField`, and the record names the key (``unknown field `server.prot` ``). The READ decides, not the type:
+    // one type is read leniently from a peer and strictly from a hand-written file.
+    fn void unknownField();
 }
 // The read side of serde. It DECLARES its factory rather than standing as a marker, because a bound that
 // promises nothing constrains nothing: `deserializeJsonBuffer<T: Deserializable>` calls `T.deserialize(r)`, and until the

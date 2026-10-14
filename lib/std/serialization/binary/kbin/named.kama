@@ -146,13 +146,18 @@ type resource KbinNamedDeserializer implements Deserializer {
     isize len;
     bool err;
     DeErrorKind code;
+    bool refuseUnknown;     // a STRICT reader: a key no field claims fails `UnknownField` (KR-126)
 
-    public ctor make(DynamicArray<uint8> src) {
+    public ctor make(DynamicArray<uint8> src) { return KbinNamedDeserializer.of(src: give src, refuseUnknown: false); }
+    // The strict reader: the first key no field claims fails the read, named (see `JsonDeserializer.strict`).
+    public ctor strict(DynamicArray<uint8> src) { return KbinNamedDeserializer.of(src: give src, refuseUnknown: true); }
+    ctor of(DynamicArray<uint8> src, bool refuseUnknown) {
         this.len = src.length();
         this.buf = give src;
         this.pos = 0;
         this.err = false;
         this.code = DeErrorKind::Malformed;
+        this.refuseUnknown = refuseUnknown;
     }
 
     // --- low-level cursor ---
@@ -254,6 +259,9 @@ type resource KbinNamedDeserializer implements Deserializer {
     public fn void fail() { this.err = true; }
 
     public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the FIRST failure is the one reported
+    // KR-126: a key no field claims. Skipped, so an older reader loads a newer writer's data — unless this reader was
+    // made `strict`, for a hand-written file where a misspelt key must not do nothing silently.
+    public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
     public const fn DeErrorKind errorKind() { return this.code; }
 }
 

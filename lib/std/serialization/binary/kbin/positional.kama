@@ -294,6 +294,8 @@ type resource KbinPositionalDeserializer implements Deserializer {
     public const fn bool failed() { return this.err; }
     public fn void fail() { this.err = true; }
     public fn void failWith(DeErrorKind kind) { if (!this.err) { this.code = kind; } this.err = true; }   // the FIRST failure is the one reported
+    // KR-126: a positional stream has no keys, so a field past the end of the agreed shape is refused as any skip is.
+    public fn void unknownField() { this.skipValue(); }
     public const fn DeErrorKind errorKind() { return this.code; }
 }
 

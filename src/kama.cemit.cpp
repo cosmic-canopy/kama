@@ -33304,6 +33304,45 @@ void CEmitter::emitPayloadKeySlot(const VariantCase& v, int depth)
     indent(depth); *_out << "}\n";
 }
 
+// A key no field claims (`kama_key` in scope) — a key switch's `default:` arm and a frame's trailing keys alike. The
+// reader decides (KR-126): a lenient one skips the value, a strict one fails `UnknownField`, and then the read stops
+// HERE, naming the key — its name, or on a numbered back end its id — under `variant` when it is a payload's
+// (``unknown field `Rect.hh` ``); `cleanup` frees what the reader holds. The first failure is the one reported, so
+// any other kind falls through to the boundary that already reports it.
+std::string CEmitter::unknownKeyText()
+{
+    return "((kama_key.kama_tag == kama__FieldKey_Name) ? kama_string__copy(&kama_key.kama_u.k_Name.k_name) : "
+           "kama_fmt_u64(kama_key.kama_tag == kama__FieldKey_Id ? kama_key.kama_u.k_Id.k_id : kama_key.kama_u.k_Position.k_rank))";
+}
+
+void CEmitter::emitUnknownKey(int depth, const std::string& resC, const std::string& cleanup, const std::string& variant)
+{
+    const std::string uk = preludeName("DeErrorKind") + "_UnknownField";
+    indent(depth); *_out << "r.kama_vtbl->k_unknownField(r.kama_obj);\n";
+    indent(depth); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj) && r.kama_vtbl->k_errorKind(r.kama_obj) == " << uk << ") {\n";
+    indent(depth + 1); *_out << "kama_string kama_uk = " << unknownKeyText() << ";\n";
+    if (!cleanup.empty()) { indent(depth + 1); *_out << cleanup << "\n"; }
+    std::string box = deErrorBox(uk, "kama_uk");
+    if (!variant.empty()) box = deErrorInField(box, variant);
+    indent(depth + 1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << box << " } };\n";
+    indent(depth); *_out << "}\n";
+}
+
+// The graph reader's twin: a graph read fails through its walker, which reports the first failure it was given.
+void CEmitter::emitUnknownKeyGraph(int depth, const std::string& variant)
+{
+    const std::string uk = preludeName("DeErrorKind") + "_UnknownField";
+    indent(depth); *_out << "r.kama_vtbl->k_unknownField(r.kama_obj);\n";
+    indent(depth); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj) && r.kama_vtbl->k_errorKind(r.kama_obj) == " << uk << " && !g->failed) {\n";
+    indent(depth + 1); *_out << "kama_string kama_uk = " << unknownKeyText() << ";\n";
+    if (!variant.empty()) {
+        indent(depth + 1); *_out << "kama_string kama_ukv = " << kamaStrLit(variant + ".") << ";\n";
+        indent(depth + 1); *_out << "kama_string kama_ukp = kama_string__concat(&kama_ukv, kama_uk); kama_string__dtor(&kama_uk); kama_uk = kama_ukp;\n";
+    }
+    indent(depth + 1); *_out << "kama_de_graph_fail_at(g, " << uk << ", kama_uk);\n";
+    indent(depth); *_out << "}\n";
+}
+
 void CEmitter::emitSerializeDefinition(ClassInfo& ci)
 {
     // P4: fallible `Result<Unit, Owned<Error>> This__serialize(...)`. A composite field's Err propagates its
@@ -33788,7 +33827,10 @@ void CEmitter::emitDeserializeDefinition(ClassInfo& ci)
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
-    indent(3); *_out << "default: r.kama_vtbl->k_skipValue(r.kama_obj); break;\n";
+    indent(3); *_out << "default: {\n";
+    emitUnknownKey(4, resC, "kama__FieldKey__dtor(&kama_key); " + serDropHeld(ci, rf, filled, -1), "");
+    indent(4); *_out << "break;\n";
+    indent(3); *_out << "}\n";
     indent(2); *_out << "}\n";
     indent(2); *_out << "kama__FieldKey__dtor(&kama_key);\n";   // the key owns its name string — free each iteration
     indent(1); *_out << "}\n";
@@ -33884,7 +33926,10 @@ void CEmitter::emitMergeDefinition(ClassInfo& ci)
         indent(4); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
-    indent(3); *_out << "default: r.kama_vtbl->k_skipValue(r.kama_obj); break;\n";
+    indent(3); *_out << "default: {\n";
+    emitUnknownKey(4, resC, "kama__FieldKey__dtor(&kama_key);", "");   // nothing is written before the commit
+    indent(4); *_out << "break;\n";
+    indent(3); *_out << "}\n";
     indent(2); *_out << "}\n";
     indent(2); *_out << "kama__FieldKey__dtor(&kama_key);\n";
     indent(1); *_out << "}\n";
@@ -34041,9 +34086,14 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     // value — the 49- and 50-byte prefixes of a 51-byte `Create(name: "matt")` both came back as it.
     // Draining makes the reader ask `next()` past the end, which IS an error, and skips any unknown
     // trailing field on the way — the same forward-compat rule the struct path above has always had.
-    auto closeObj = [&](int d) {
-        indent(d); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) { kama__FieldKey __sk = r.kama_vtbl->k_field(r.kama_obj); "
-                            "kama__FieldKey__dtor(&__sk); r.kama_vtbl->k_skipValue(r.kama_obj); }\n";
+    // A key past `tag`/`value` is one no field claims: a strict reader refuses it, naming it (KR-126). `cleanup` drops
+    // what the arm holds by then — the tag, and the payload fields already read.
+    auto closeObj = [&](int d, const std::string& cleanup) {
+        indent(d); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
+        indent(d + 1); *_out << "kama__FieldKey kama_key = r.kama_vtbl->k_field(r.kama_obj);\n";
+        emitUnknownKey(d + 1, resC, "kama__FieldKey__dtor(&kama_key); " + cleanup, "");
+        indent(d + 1); *_out << "kama__FieldKey__dtor(&kama_key);\n";
+        indent(d); *_out << "}\n";
         indent(d); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
     };
     // WHERE a failure happened: the payload field being read, as `Variant.field`. The payload is read positionally
@@ -34107,13 +34157,21 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
                 indent(5); *_out << "break;\n";
                 indent(4); *_out << "}\n";
             }
-            indent(4); *_out << "default: r.kama_vtbl->k_skipValue(r.kama_obj); break;\n";
+            // Every payload field already read is dropped on the way out — the one kept for each owning field below.
+            std::string held = "kama__FieldKey__dtor(&kama_tag); ";
+            for (size_t j = 0; j < v.payload.size(); ++j)
+                if (destructible(v.payload[j]))
+                    held += "if (kama_pseen[" + std::to_string(j) + "]) " + cType(v.payload[j].type) + "__dtor(&kama_p_" + v.payload[j].name + "); ";
+            indent(4); *_out << "default: {\n";
+            emitUnknownKey(5, resC, "kama__FieldKey__dtor(&kama_key); " + held, v.name);
+            indent(5); *_out << "break;\n";
+            indent(4); *_out << "}\n";
             indent(3); *_out << "}\n";
             indent(3); *_out << "kama__FieldKey__dtor(&kama_key);\n";
             indent(2); *_out << "}\n";
             at += v.payload.size();
             indent(2); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";   // the value object
-            closeObj(2);   // the outer object
+            closeObj(2, held);   // the outer object
             // A payload field the data left out — every one is required but an `Optional` — named, after a sticky failure.
             {
                 std::vector<std::pair<std::string, std::string>> missNames;
@@ -34140,7 +34198,7 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
             for (size_t i = 0; i < v.payload.size(); ++i) { if (i) *_out << ", "; *_out << "." << kMember(ci, v.payload[i].name) << " = kama_p_" << v.payload[i].name; }
             *_out << " } };\n";
         } else {
-            closeObj(2);   // the outer object
+            closeObj(2, "kama__FieldKey__dtor(&kama_tag);");   // the outer object
             indent(2); *_out << "kama_result = (" << ci.name << "){ .kama_tag = " << ci.name << "_" << v.name << " };\n";
         }
         indent(1); *_out << "}\n";
@@ -35286,7 +35344,10 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
         indent(3); *_out << "break;\n";
         indent(3); *_out << "}\n";
     }
-    indent(3); *_out << "default: r.kama_vtbl->k_skipValue(r.kama_obj); break;\n";
+    indent(3); *_out << "default: {\n";
+    emitUnknownKeyGraph(4, "");
+    indent(4); *_out << "break;\n";
+    indent(3); *_out << "}\n";
     indent(2); *_out << "}\n";
     indent(2); *_out << "kama__FieldKey__dtor(&kama_key);\n";
     indent(1); *_out << "}\n";
@@ -35308,9 +35369,12 @@ void CEmitter::emitGraphReadInto(ClassInfo& ci)
 // a valid variant (tag set before any payload is read, the rest zeroed), which is all its dtor needs.
 void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
 {
-    auto closeObj = [&](int d) {
-        indent(d); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) { kama__FieldKey __sk = r.kama_vtbl->k_field(r.kama_obj); "
-                            "kama__FieldKey__dtor(&__sk); r.kama_vtbl->k_skipValue(r.kama_obj); }\n";
+    auto closeObj = [&](int d) {   // trailing keys: a strict reader refuses them (KR-126)
+        indent(d); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
+        indent(d + 1); *_out << "kama__FieldKey kama_key = r.kama_vtbl->k_field(r.kama_obj);\n";
+        emitUnknownKeyGraph(d + 1, "");
+        indent(d + 1); *_out << "kama__FieldKey__dtor(&kama_key);\n";
+        indent(d); *_out << "}\n";
         indent(d); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
     };
     const bool unit = ci.isScalarEnum();
@@ -35355,7 +35419,10 @@ void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
                 if (!(f.type && f.type->value && *f.type->value == "Optional"))
                     missNames.push_back({ "!kama_pseen[" + std::to_string(i) + "]", v.name + "." + f.name });
             }
-            indent(4); *_out << "default: r.kama_vtbl->k_skipValue(r.kama_obj); break;\n";
+            indent(4); *_out << "default: {\n";
+            emitUnknownKeyGraph(5, v.name);
+            indent(5); *_out << "break;\n";
+            indent(4); *_out << "}\n";
             indent(3); *_out << "}\n";
             indent(3); *_out << "kama__FieldKey__dtor(&kama_key);\n";
             indent(2); *_out << "}\n";

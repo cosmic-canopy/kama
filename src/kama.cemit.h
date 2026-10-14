@@ -3034,7 +3034,10 @@ private:
     // The same two-arm resolution for a tagged enum's SELECTOR: emits `FieldKey __tag = …; int32_t
     // __vslot = …;`, where the slot is the variant's declaration index (also its C tag value).
     void emitVariantKeySlot(const ClassInfo& ci, int depth);
-    void emitPayloadKeySlot(const VariantCase& v, int depth);   // a variant payload's key, matched by name/id/rank
+    void emitPayloadKeySlot(const VariantCase& v, int depth);
+    std::string unknownKeyText();   // C: the text of `kama_key` — its name, or its id/rank in decimal
+    void emitUnknownKey(int depth, const std::string& resC, const std::string& cleanup, const std::string& variant);   // KR-126
+    void emitUnknownKeyGraph(int depth, const std::string& variant);   // a variant payload's key, matched by name/id/rank
     std::string scalarEnumIs(const ClassInfo& ci, size_t vi, const std::string& operand);
     // By-value (tree) serialization intrinsic — direct C emission for a `@generate` struct (Phase C).
     void emitSerializeDefinition(ClassInfo& ci);
