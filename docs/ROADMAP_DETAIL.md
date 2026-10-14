@@ -341,16 +341,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-fnptr-enum-return"></a>
-
-### An `fnptr` returning an enum of its own module reaches clang (KR-139)
-
-`type enum State : uint8 { … }` beside `fnptr State PollFn(UnsafePtr ctx);` passes `kama check` and fails in clang
-(*"type specifier missing, defaults to 'int'"*), because the function-pointer typedef is emitted before the enum's
-own typedef (measured on `0.9.577`). An enum PARAMETER of an `fnptr` builds, and so does an enum field of a `type
-value` beside it; only the return type's ordering is wrong. **Scheduled.** No ruling: an `fnptr` typedef comes
-after every type it names. Fixture: the shape above, built and called.
-
 <a id="s2-ctor-this-assign"></a>
 
 ### `this = T.make(…)` in a constructor reaches clang (KR-140)

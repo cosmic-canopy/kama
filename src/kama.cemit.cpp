@@ -40035,24 +40035,6 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     }
     if (!ordered.empty() || !_interfaces.empty()) *_out << "\n";
 
-    // Function-pointer signature typedefs: `typedef ret (*Name)(params);`.
-    // After the class forward-typedefs so a signature may take/return a class.
-    for (auto& kv : _sigs) {
-        SigInfo& si = kv.second;
-        *_out << "typedef " << si.retCType << " (*" << si.cName << ")(";
-        if (si.params.empty()) *_out << "void";
-        for (size_t i = 0; i < si.params.size(); ++i) {
-            const ParamSig& p = si.params[i];
-            // const pointer params -> `const T*` (FFI). className already ends
-            // in `*` for an UnsafePtr<T>/UnsafePtr; a const-ref class param keeps its self mutable.
-            bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*' && !isConstRawCType(p.className);
-            bool hwPtr    = p.isHardware && !p.className.empty() && p.className.back() == '*';
-            *_out << (i ? ", " : "") << (constPtr ? "const " : "") << (hwPtr ? "volatile " : "") << p.className << (p.byRef ? "*" : "");
-        }
-        *_out << ");\n";
-    }
-    if (!_sigs.empty()) *_out << "\n";
-
     // Set the name-resolution scope from the type/file being emitted. `aliases` carries the
     // declaring file's per-symbol imports (a field/base typed with an imported generic needs them).
     auto scopeOf = [&](const std::string& declFile, const std::string& scope, const std::vector<std::string>& usings,
@@ -40067,6 +40049,36 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // bodies, so a class may hold a collection/smart-pointer BY VALUE as a field. They
     // store only `T*`, so the element being forward-declared (above) is enough.
     emitCollectionDefs(/*typesOnly=*/true);
+
+    // Function-pointer signature typedefs: `typedef ret (*Name)(params);` — after every type a signature can name: the
+    // class forward typedefs (a struct needs no more, even by value, in a declaration), the enum typedefs (an enum has
+    // no forward declaration, so `fnptr State Poll(…)` ahead of `State`'s typedef was an implicit `int` to clang), and
+    // the collection `_TYPE` typedefs (`Owned<T>` by value). And before the struct bodies, which may hold one. A
+    // signature naming another is written after it, whatever the two names sort as (`Apply(Op f)`, KR-139).
+    {
+        std::map<std::string, SigInfo*> byCName;
+        for (auto& kv : _sigs) byCName[kv.second.cName] = &kv.second;
+        std::set<std::string> written;
+        std::function<void(SigInfo&)> emitSig = [&](SigInfo& si) {
+            if (!written.insert(si.cName).second) return;
+            auto after = [&](const std::string& ct) { auto d = byCName.find(ct); if (d != byCName.end()) emitSig(*d->second); };
+            after(si.retCType);
+            for (const ParamSig& p : si.params) after(p.className);
+            *_out << "typedef " << si.retCType << " (*" << si.cName << ")(";
+            if (si.params.empty()) *_out << "void";
+            for (size_t i = 0; i < si.params.size(); ++i) {
+                const ParamSig& p = si.params[i];
+                // const pointer params -> `const T*` (FFI). className already ends
+                // in `*` for an UnsafePtr<T>/UnsafePtr; a const-ref class param keeps its self mutable.
+                bool constPtr = p.isConst && !p.className.empty() && p.className.back() == '*' && !isConstRawCType(p.className);
+                bool hwPtr    = p.isHardware && !p.className.empty() && p.className.back() == '*';
+                *_out << (i ? ", " : "") << (constPtr ? "const " : "") << (hwPtr ? "volatile " : "") << p.className << (p.byRef ? "*" : "");
+            }
+            *_out << ");\n";
+        };
+        for (auto& kv : _sigs) emitSig(kv.second);
+        if (!_sigs.empty()) *_out << "\n";
+    }
 
     // struct bodies (normal classes + generic instances + tagged unions) in ONE by-value-
     // dependency order — so any struct may hold another user struct BY VALUE (`Box<Rock>`, a union

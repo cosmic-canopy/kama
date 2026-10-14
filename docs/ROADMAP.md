@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-139 | **An `fnptr` returning an enum of its own module reaches clang** — the function-pointer typedef is emitted before the enum's, so `fnptr State PollFn(…)` passes `kama check` and fails to compile | S | [§2](ROADMAP_DETAIL.md#s2-fnptr-enum-return) |
 | KR-140 | **`this = T.make(…)` in a constructor reaches clang** — it passes `kama check`, then lowers to a pointer assigned a struct. Refuse it, naming `return T.make(…)`, or support it: the maintainer's call | S | [§2](ROADMAP_DETAIL.md#s2-ctor-this-assign) |
 | KR-136 | **A `Map<string, V>` written as a JSON object, merged per key** — kama writes every `Map` as an array of `{"key","value"}` pairs, so a config file's `"limits":{"cpu":2}` does not read into a `Map<string, int32>`, and a merge (`mergeJsonBuffer`) replaces a map whole. A string-keyed map as an object, merged per key, `null` removing an entry | M | [§4](ROADMAP_DETAIL.md#s4-string-map-object) |
 | KR-126 | **Strict decoding: unknown fields refused at the read site** — a misspelt key in a config file does nothing and says nothing. The read decides, not the type, and the error names the key | S | [§4](ROADMAP_DETAIL.md#s4-strict-decoding) |
