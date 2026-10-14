@@ -33285,6 +33285,25 @@ void CEmitter::emitVariantKeySlot(const ClassInfo& ci, int depth)
     indent(depth); *_out << "}\n";
 }
 
+// A variant payload's key, matched like a record's (emitFieldKeySlot): by name on a named backend, by id on a numbered
+// one, by rank on a positional one. A payload field carries no attributes, so its name is its own and its id is its
+// place, which is what the writer put on the wire (emitVariantWriteFrame). It was read POSITIONALLY with the key thrown
+// away, so `{"h":2,"w":3}` into `Rect(int32 w, int32 h)` read as `w: 2, h: 3`, silently.
+void CEmitter::emitPayloadKeySlot(const VariantCase& v, int depth)
+{
+    indent(depth); *_out << "kama__FieldKey kama_key = r.kama_vtbl->k_field(r.kama_obj);\n";
+    indent(depth); *_out << "int32_t __slot = -1;\n";
+    indent(depth); *_out << "if (kama_key.kama_tag == kama__FieldKey_Name) {\n";
+    for (size_t i = 0; i < v.payload.size(); ++i) {
+        indent(depth + 1); *_out << (i ? "else if" : "if") << " (kama_string__equals(&kama_key.kama_u.k_Name.k_name, "
+                                 << kamaStrLit(v.payload[i].name) << ")) __slot = " << i << ";\n";
+    }
+    indent(depth); *_out << "} else {\n";
+    indent(depth + 1); *_out << "uint32_t __pk = (kama_key.kama_tag == kama__FieldKey_Id) ? kama_key.kama_u.k_Id.k_id : kama_key.kama_u.k_Position.k_rank;\n";
+    indent(depth + 1); *_out << "if (__pk < " << v.payload.size() << "u) __slot = (int32_t)__pk;\n";
+    indent(depth); *_out << "}\n";
+}
+
 void CEmitter::emitSerializeDefinition(ClassInfo& ci)
 {
     // P4: fallible `Result<Unit, Owned<Error>> This__serialize(...)`. A composite field's Err propagates its
@@ -34051,23 +34070,72 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
             indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj);\n";
             indent(2); *_out << "kama__FieldKey __kv = r.kama_vtbl->k_field(r.kama_obj); kama__FieldKey__dtor(&__kv);\n";   // the "value" key
             indent(2); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << v.payload.size() << ");\n";
-            // an early Err while reading payload field i must free __tag + drop the already-read temps.
-            std::string cleanup = "kama__FieldKey__dtor(&kama_tag); ";
+            // The payload's keys are matched, as a record's are (emitPayloadKeySlot): each field is read into its
+            // temporary whichever order the data names them in. `kama_pseen` is which arrived — a repeated key keeps
+            // its last value, a missing one is a `MissingField` naming it, and an early Err drops exactly what was read.
+            const size_t at0 = at;
+            auto destructible = [&](const FieldInfo& f) { auto c = _classes.find(cType(f.type)); return c != _classes.end() && c->second.destructible; };
+            for (auto& f : v.payload) {
+                const std::string fc = cType(f.type);
+                indent(2); *_out << fc << " kama_p_" << f.name << " = (" << fc << "){0};\n";
+                if (f.type && f.type->value && *f.type->value == "Optional") {   // zero is `Some(0)` — absent is None
+                    indent(2); *_out << "kama_p_" << f.name << " = (" << fc << "){ .kama_tag = " << fc << "_None };\n";
+                }
+            }
+            indent(2); *_out << "bool kama_pseen[" << v.payload.size() << "] = {0};\n";
+            indent(2); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
+            indent(3); *_out << "kama_at = -1;\n";
+            emitPayloadKeySlot(v, 3);
+            indent(3); *_out << "switch (__slot) {\n";
             for (size_t i = 0; i < v.payload.size(); ++i) {
                 const FieldInfo& f = v.payload[i];
-                std::string idx = std::to_string(i);
-                indent(2); *_out << "if (!r.kama_vtbl->k_failed(r.kama_obj)) kama_at = " << at++ << ";\n";
-                indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj);\n";
-                indent(2); *_out << "kama__FieldKey __pk" << idx << " = r.kama_vtbl->k_field(r.kama_obj); kama__FieldKey__dtor(&__pk" << idx << ");\n";
-                indent(2); *_out << cType(f.type) << " kama_p_" << f.name << ";\n";
+                const std::string fc = cType(f.type);
+                indent(4); *_out << "case " << i << ": {\n";
+                indent(5); *_out << "kama_at = " << (at0 + i) << ";\n";
+                if (destructible(f)) {
+                    indent(5); *_out << "if (kama_pseen[" << i << "]) { " << fc << "__dtor(&kama_p_" << f.name << "); kama_p_" << f.name
+                                     << " = (" << fc << "){0}; }\n";
+                }
+                indent(5); *_out << "kama_pseen[" << i << "] = 1;\n";
+                // An early Err frees both keys and drops every OTHER field already read (this one failed, holding nothing).
+                std::string cleanup = "kama__FieldKey__dtor(&kama_key); kama__FieldKey__dtor(&kama_tag); ";
+                for (size_t j = 0; j < v.payload.size(); ++j)
+                    if (j != i && destructible(v.payload[j]))
+                        cleanup += "if (kama_pseen[" + std::to_string(j) + "]) " + cType(v.payload[j].type) + "__dtor(&kama_p_" + v.payload[j].name + "); ";
                 { ScopedStr _sf(_serdeField, f.name), _st(_serdeStep, v.name + "." + f.name);
-                  emitDeFieldRead(f.type, "kama_p_" + f.name, 2, resC, cleanup); }
-                if (_classes.count(cType(f.type)) && _classes[cType(f.type)].destructible)
-                    cleanup += cType(f.type) + "__dtor(&kama_p_" + f.name + "); ";
+                  emitDeFieldRead(f.type, "kama_p_" + f.name, 5, resC, cleanup); }
+                indent(5); *_out << "break;\n";
+                indent(4); *_out << "}\n";
             }
-            indent(2); *_out << "if (!r.kama_vtbl->k_failed(r.kama_obj)) kama_at = -1;\n";   // the framing is the enum's own
-            closeObj(2);   // the value object
+            indent(4); *_out << "default: r.kama_vtbl->k_skipValue(r.kama_obj); break;\n";
+            indent(3); *_out << "}\n";
+            indent(3); *_out << "kama__FieldKey__dtor(&kama_key);\n";
+            indent(2); *_out << "}\n";
+            at += v.payload.size();
+            indent(2); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";   // the value object
             closeObj(2);   // the outer object
+            // A payload field the data left out — every one is required but an `Optional` — named, after a sticky failure.
+            {
+                std::vector<std::pair<std::string, std::string>> missNames;
+                for (size_t i = 0; i < v.payload.size(); ++i) {
+                    const FieldInfo& f = v.payload[i];
+                    if (f.type && f.type->value && *f.type->value == "Optional") continue;
+                    missNames.push_back({ "!kama_pseen[" + std::to_string(i) + "]", v.name + "." + f.name });
+                }
+                if (!missNames.empty()) {
+                    std::string test;
+                    for (auto& m : missNames) test += (test.empty() ? "" : " || ") + m.first;
+                    indent(2); *_out << "if (!r.kama_vtbl->k_failed(r.kama_obj) && (" << test << ")) {\n";
+                    for (size_t j = 0; j < v.payload.size(); ++j)
+                        if (destructible(v.payload[j])) {
+                            indent(3); *_out << "if (kama_pseen[" << j << "]) " << cType(v.payload[j].type) << "__dtor(&kama_p_" << v.payload[j].name << ");\n";
+                        }
+                    indent(3); *_out << "kama__FieldKey__dtor(&kama_tag);\n";
+                    std::string mbox = deErrorBox(preludeName("DeErrorKind") + "_MissingField", serPathChoice(missNames));
+                    indent(3); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Err, .kama_u.k_Err = { .k_error = " << mbox << " } };\n";
+                    indent(2); *_out << "}\n";
+                }
+            }
             indent(2); *_out << "kama_result = (" << ci.name << "){ .kama_tag = " << ci.name << "_" << v.name << ", .kama_u." << kName(v.name) << " = { ";
             for (size_t i = 0; i < v.payload.size(); ++i) { if (i) *_out << ", "; *_out << "." << kMember(ci, v.payload[i].name) << " = kama_p_" << v.payload[i].name; }
             *_out << " } };\n";
@@ -35265,13 +35333,39 @@ void CEmitter::emitGraphReadIntoVariant(ClassInfo& ci)
             indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj);\n";
             indent(2); *_out << "{ kama__FieldKey __kv = r.kama_vtbl->k_field(r.kama_obj); kama__FieldKey__dtor(&__kv); }\n";   // the "value" key
             indent(2); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, " << v.payload.size() << ");\n";
-            for (auto& f : v.payload) {
-                indent(2); *_out << "r.kama_vtbl->k_moreFields(r.kama_obj);\n";
-                indent(2); *_out << "{ kama__FieldKey __pk = r.kama_vtbl->k_field(r.kama_obj); kama__FieldKey__dtor(&__pk); }\n";
-                ScopedStr _sf(_serdeField, f.name);
-                emitGraphFieldRead(f.type, "self->kama_u." + kName(v.name) + "." + kMember(ci, f.name), 2);
+            // Matched by key, as the by-value reader matches them (emitPayloadKeySlot).
+            indent(2); *_out << "bool kama_pseen[" << v.payload.size() << "] = {0};\n";
+            indent(2); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
+            emitPayloadKeySlot(v, 3);
+            indent(3); *_out << "switch (__slot) {\n";
+            std::vector<std::pair<std::string, std::string>> missNames;
+            for (size_t i = 0; i < v.payload.size(); ++i) {
+                const FieldInfo& f = v.payload[i];
+                const std::string fc = cType(f.type);
+                const std::string dst = "self->kama_u." + kName(v.name) + "." + kMember(ci, f.name);
+                indent(4); *_out << "case " << i << ": {\n";
+                auto c = _classes.find(fc);
+                if (c != _classes.end() && c->second.destructible) {
+                    indent(5); *_out << "if (kama_pseen[" << i << "]) { " << fc << "__dtor(&" << dst << "); " << dst << " = (" << fc << "){0}; }\n";
+                }
+                indent(5); *_out << "kama_pseen[" << i << "] = 1;\n";
+                { ScopedStr _sf(_serdeField, f.name); emitGraphFieldRead(f.type, dst, 5); }
+                indent(5); *_out << "break;\n";
+                indent(4); *_out << "}\n";
+                if (!(f.type && f.type->value && *f.type->value == "Optional"))
+                    missNames.push_back({ "!kama_pseen[" + std::to_string(i) + "]", v.name + "." + f.name });
             }
-            closeObj(2);   // the value object
+            indent(4); *_out << "default: r.kama_vtbl->k_skipValue(r.kama_obj); break;\n";
+            indent(3); *_out << "}\n";
+            indent(3); *_out << "kama__FieldKey__dtor(&kama_key);\n";
+            indent(2); *_out << "}\n";
+            indent(2); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";   // the value object
+            if (!missNames.empty()) {
+                std::string test;
+                for (auto& m : missNames) test += (test.empty() ? "" : " || ") + m.first;
+                indent(2); *_out << "if (" << test << ") kama_de_graph_fail_at(g, kama__DeErrorKind_MissingField, "
+                                 << serPathChoice(missNames) << ");\n";
+            }
         }
         if (!unit) closeObj(2);   // the outer object
         indent(1); *_out << "}\n";

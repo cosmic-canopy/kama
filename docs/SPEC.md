@@ -6671,6 +6671,10 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   its own contract member (`variant(name, index)` / `variant() -> FieldKey`) rather than riding `writeString`:
   a discriminant is one of `n` known alternatives, not a string, so a positional or numbered backend spends
   one byte on it where a name costs the whole string. A named backend writes the name, unchanged.
+  A payload's fields are matched **by key**, as a record's are — by name, by id (a payload field's id is its <!-- test: ser_enum_payload_by_name -->
+  place, since a payload field takes no attributes), or by rank — so `{"h":2,"w":3}` reads into `Rect(w, h)`
+  correctly; a repeated key keeps its last value, an unknown one is skipped, and a missing one is a
+  `MissingField` naming `Rect.h` (an `Optional` one is `None`).
 - **`Map<K,V>`** serializes as an array of `{"key":…,"value":…}` pairs (a generic key can't be a JSON object key).
 
 **Graph specifics.** `Shared`/`Weak` fields serialize as `u64` ids into the table (an absent `Optional` edge

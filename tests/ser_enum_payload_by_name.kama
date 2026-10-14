@@ -1,0 +1,71 @@
+// An enum variant's payload is matched by KEY, as a record's fields are. It was read by position with its keys thrown
+// away, so a payload whose keys arrived in another order read into the wrong fields with no error:
+// `{"tag":"Rect","value":{"h":2,"w":3}}` came back as `Rect(w: 2, h: 3)`. Now the keys decide — on a named back end
+// by name, on a numbered one by id (a payload field's id is its place, so that form cannot be reordered), on a
+// positional one by rank — with a record's rules for the rest: a repeated key keeps its last value, an unknown one is
+// skipped, a missing one is `MissingField` naming `Variant.field`, and a missing `Optional` is `None`. The graph
+// reader (an enum holding a `Shared`) matches the same way.
+import {
+    std::collections::DynamicArray, std::memory::Owned, std::memory::Shared,
+    std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer, std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+};
+
+@generate(Serializable, Deserializable)
+type enum Shape { Rect(int32 w, int32 h), Named(string name, Optional<int32> n), Dot }
+// The same variant with its payload declared the other way round — what an older or newer writer may hold.
+@generate(Serializable, Deserializable)
+type enum ShapeHW { Rect(int32 h, int32 w), Named(string name, Optional<int32> n), Dot }
+
+@generate(Serializable, Deserializable)
+type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 get() { return this.v; } }
+@generate(Serializable, Deserializable)
+type enum Slot { Pair(int32 n, Shared<Leaf> l), Empty }
+@generate(Serializable, Deserializable)
+type resource Holder {
+    @field Slot a;
+    public ctor make(Shared<Leaf> l) { this.a = Slot::Pair(n: 3, l: give l); }
+    public const fn int32 sum() { return match (this.a) { case Pair(n: n, l: l): n * 10 + l.get(); case Empty: -1; }; }
+}
+
+fn int32 rect(Result<Shape, Owned<Error>> r) {
+    return match (give r) {
+        case Ok(value: s): match (s) { case Rect(w: w, h: h): w * 10 + h; case Named(name: _, n: _): -1; case Dot: -2; };
+        case Err(error: _): -3;
+    };
+}
+fn string why(Result<Shape, Owned<Error>> r) {
+    return match (give r) {
+        case Ok(value: _): "ok";
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "other"; };
+    };
+}
+
+fn int32 main() {
+    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"h\":2,\"w\":3}}")) != 32) { return 1; }
+    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"w\":1,\"h\":2,\"w\":3}}")) != 32) { return 2; }
+    if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"d\":9,\"h\":2,\"w\":3}}")) != 32) { return 3; }
+    if (why(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"w\":3}}")) != "missing field `Rect.h`") { return 4; }
+    // A repeated owning key drops the value it replaces, and a missing `Optional` is `None`.
+    Result<Shape, Owned<Error>> nm = deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Named\",\"value\":{\"name\":\"a\",\"name\":\"bc\"}}");
+    int32 named = match (give nm) {
+        case Ok(value: s): match (s) {
+            case Named(name: nmv, n: o): nmv.length() == 2 ? match (o) { case Some(value: _): 6; case None: 0; } : 7;
+            case Rect(w: _, h: _): 8; case Dot: 9;
+        };
+        case Err(error: _): 10;
+    };
+    if (named != 0) { return 10 + named; }
+    // KBIN named, written by the other declaration order.
+    Result<DynamicArray<uint8>, Owned<Error>> b = serializeKbinNamedBuffer(v: ShapeHW::Rect(h: 2, w: 3));
+    DynamicArray<uint8> bytes = match (give b) { case Ok(value: v): { := give v; } case Err(error: _): { return 30; } };
+    if (rect(r: deserializeKbinNamedBuffer::<Shape>(src: give bytes)) != 32) { return 31; }
+    // The graph reader: `l` before `n`.
+    string j = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Holder\",\"value\":{\"a\":{\"tag\":\"Pair\",\"value\":{\"l\":2,\"n\":3}}}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}}]}";
+    Result<Shared<Holder>, Owned<Error>> g = deserializeJsonBuffer::<Shared<Holder>>(src: give j);
+    int32 graph = match (give g) {
+        case Ok(value: h): h.sum();
+        case Err(error: _): -2;
+    };
+    return graph == 37 ? 0 : 40;
+}
