@@ -30783,6 +30783,10 @@ std::string CEmitter::copiedThrough(const std::string& ty, SharedExpression v, i
 {
     auto c = _classes.find(ty);
     if (c == _classes.end() || !isNamedValue(v.get())) return "";
+    // A smart-pointer LOCAL is retained by its own arm, never copied — and a smart pointer is an intrinsic
+    // collection too, so without this the collection rule below answered `__copy` and the handle was
+    // retained twice: `Rc<Shape> b = copy a;` leaked its object.
+    if (isSmartPtrClass(ty) && isSmartPtrLValue(v)) return "";
     if (c->second.isIntrinsicColl && !isFixedColl(ty) && !isValueVectorKind(c->second.collKind)) {
         if (handoff != 2) return "";
         auto ci = _collections.find(ty);
