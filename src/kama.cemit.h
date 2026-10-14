@@ -1906,6 +1906,8 @@ private:
     void noteThreadSpawn();
     // The ONE spelling of a deep copy (`T__copy(&(x))`), so the intrinsic copy's fact is recorded in one place.
     std::string copyCall(const std::string& cls, const std::string& lvalue);
+    std::string copiedThrough(const std::string& ty, SharedExpression v, int handoff);
+    std::string copyFirst(const std::string& cls, const std::string& src, int depth);
     // The fixpoint + the report. Runs after ALL emission on both entry points — see the .cpp.
     void checkNoHeapTransitive();
     // Is this body one the AUTHOR wrote, as opposed to the prelude or the stdlib? Asked only by

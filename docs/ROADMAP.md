@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-152 | **`copy` of a `const ref` call with an rvalue argument reaches clang** — `copy b.get(key: "x")` passes `kama check` and fails "cannot take the address of an rvalue"; a key in a local works | S | [§2](ROADMAP_DETAIL.md#s2-copy-constref-rvalue) |
 | KR-153 | **Returning `this` as a place reaches clang** — `fn ref B me() { return this; }` (and `const ref`) emits `return &(self);` on a pointer | S | [§2](ROADMAP_DETAIL.md#s2-return-this-place) |
 | KR-154 | **A recursive enum through a collection, with an `Owned` variant, is refused for copies nobody makes** — `type enum J { List(DynamicArray<J> items), Box(Owned<J> inner), … }` reports `copy`-related errors inside the stdlib | S | [§2](ROADMAP_DETAIL.md#s2-recursive-enum-owned) |
 | KR-155 | **A false use-after-move when a loop body ends in an `if`/`else` that always leaves** — a binding given and re-assigned before `continue`, with `break` in the `else`, is reported as given away and never re-assigned | S | [§2](ROADMAP_DETAIL.md#s2-loop-diverging-move) |

@@ -8484,8 +8484,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // assumption is false.)
                     const bool lateInit = needsTargetType(init.get());
                     if (lateInit) _moveState[nm] = MoveState::Moved;
+                    // A `copy` that duplicates through `copy()`/`__copy` reads its source ONCE, here, where the
+                    // source's own temporaries can still be hoisted. It used to blit the source and then emit it
+                    // a second time inside the copy, after the hoist window had closed: a call ran twice, and a
+                    // literal argument to a `const ref` parameter reached C as `&(kama_string_lit(…))` (KR-152).
+                    const std::string dupCls = copiedThrough(ty, init, handoff);
                     offerCtorInto(init, "&" + kName(nm), ty);   // `T x = T.make(…)` builds in `x` (KR-120)
-                    std::string iv = narrowViewValue(ty, init, receiverObject(emitExpression(init)), n->line);   // `ConstView<T> cv = v;`
+                    std::string iv = !dupCls.empty() ? copyCall(dupCls, emitPlace(init))
+                                   : narrowViewValue(ty, init, receiverObject(emitExpression(init)), n->line);   // `ConstView<T> cv = v;`
                     const bool builtInPlace = takeCtorInto();
                     if (lateInit) _moveState[nm] = MoveState::NotMoved;   // the assignment below makes it live
                     _matchTargetCType = pmt;
@@ -8519,13 +8525,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             // `copy` = a real deep copy (fresh buffer), element-wise. Valid iff
                             // each element is copyable — bitwise-copyable (owns nothing), OR a resource that
                             // opted into `Copyable` (`__copy` calls the element's `copy()`). A
-                            // resource element WITHOUT the contract is rejected. Overwrites the blit above.
+                            // resource element WITHOUT the contract is rejected.
                             auto ci = _collections.find(ty);
                             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                                 unsupported(("`copy` of a `" + ty + "` needs copyable elements — its elements own "
                                              "resources but aren't `Copyable` (add a `copy` method to the element, "
                                              "or use `give` to move)").c_str(), n->line);
-                            else { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitPlace(init)) << ";\n"; }
+                            // (else: the initializer above already copied — see `dupCls`)
                         }
                         // give: the plain `=` already transferred the struct; null the source's buffer —
                         // and RECORD the move, which this arm alone forgot to do. Both neighbours (the
@@ -8550,8 +8556,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             doCopy = cpy;
                         } else if (handoff == 1) doCopy = false;         // explicit `give` = move (always allowed)
                         else doCopy = cpy && _classes[ty].bareDefault == COPY;   // bare — the declared default
-                        if (doCopy) { indent(depth); *_out << kName(nm) << " = " << copyCall(ty, emitPlace(init)) << ";\n"; }
-                        else if (handoff != 2) { std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
+                        // (doCopy: the initializer above already copied — see `dupCls`)
+                        if (!doCopy && handoff != 2) { std::string mv = moveOnlySource(init, n->line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
                     }
                     // A value/primitive: the plain `=` above IS the hand-off — `copy` and `give` are both
                     // just that copy (a value's "move" is a copy; the source stays valid, so no marker error).
@@ -9247,8 +9253,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             bool ownedRhs = marked || (tgtField && !rc.empty() && (isMoveOnlyValue(rc) || isSmartPtrClass(rc)));
             if (ownedRhs) {
                 std::string b = emitExpression(as->unaryExpression);
+                bool ph = _hoistOK; _hoistOK = true;                    // the source's own temporaries (KR-152)
                 std::string src = (marked && !give) ? emitPlace(rhs) : emitExpression(rhs);   // a `copy` reads a place
+                _hoistOK = ph;
                 line(n->line);
+                flushHoisted(depth);
                 // `copy` of an owning collection/`string` into the raw slot deep-copies (`__copy`), so the
                 // slot and the source own separate buffers (the source survives). Otherwise blit.
                 if (marked && !give && ownsByValue(rc) && !isMoveOnlyValue(rc)) {
@@ -9329,11 +9338,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
                 if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // write target: clear before emit
                 std::string b   = emitExpression(as->unaryExpression);
+                bool ph = _hoistOK; _hoistOK = true;                    // the source's own temporaries (KR-152)
                 std::string src = doCopy ? emitPlace(rhs) : emitExpression(rhs);   // a `copy` reads a place
+                _hoistOK = ph;
                 line(n->line);
+                flushHoisted(depth);
+                if (doCopy) src = copyFirst(lty, src, depth);
                 if (!bMoved && _classes.count(lty) && _classes[lty].destructible)             // free the old value (if it owns anything)
                     { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
-                indent(depth); *_out << b << " = " << (doCopy ? copyCall(lty, src) : src) << ";\n";
+                indent(depth); *_out << b << " = " << src << ";\n";
                 if (!mv.empty()) markMoved(mv);
                 return;
             }
@@ -9427,10 +9440,15 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             unsupported(("`copy` of a `" + lty + "` needs copyable elements — its elements own "
                                          "resources but aren't `Copyable`; use `give` to move").c_str(), n->line);
                         if (!lname.empty() && rname == lname) return;     // self-copy: no-op
-                        std::string b = emitExpression(as->unaryExpression), src = emitPlace(rhs);   // a `copy` reads a place
+                        std::string b = emitExpression(as->unaryExpression);
+                        bool ph = _hoistOK; _hoistOK = true;            // the source's own temporaries (KR-152)
+                        std::string src = emitPlace(rhs);               // a `copy` reads a place
+                        _hoistOK = ph;
                         line(n->line);
+                        flushHoisted(depth);
+                        src = copyFirst(lty, src, depth);
                         if (assignTargetLive(lname)) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
-                        indent(depth); *_out << b << " = " << copyCall(lty, src) << ";\n";
+                        indent(depth); *_out << b << " = " << src << ";\n";
                         return;
                     }
                     // give = move: relocate the struct, then null the source so its scope-drop is a no-op.
@@ -28197,6 +28215,12 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
     std::string rv = tryHoistInlineCtor(v, dstCType, line);    // `:= Point(…)` / `:= List()`
     if (rv.empty()) rv = tryHoistInlineValue(v, dstCType, line); // `:= new T(…)`
     bool built = false;                                        // a ctor built the value in `dst` itself (KR-120)
+    // A `copy` reads its source once, here, inside the hoist window — see copiedThrough.
+    const std::string srcCls = handoffSourceClass(v, handoff);
+    const std::string dupCls = isSmartPtrClass(srcCls) ? std::string()
+                             : isMoveOnlyValue(srcCls) ? copiedThrough(srcCls, v, handoff)
+                             : ownsByValue(dstCType)   ? copiedThrough(dstCType, v, handoff) : std::string();
+    if (rv.empty() && !dupCls.empty()) rv = copyCall(dupCls, emitPlace(v));
     if (rv.empty()) {
         offerCtorInto(v, "&(" + dst + ")", dstCType);
         rv = narrowViewValue(dstCType, v, emitExpression(v), line);   // `return v;` into a `ConstView<T>`
@@ -28229,7 +28253,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
                            "`copy` (retain — the source stays valid)", line); doGive = true; }
         indent(depth);
         if (doGive) *_out << smartPtrInvalidate(emitExpression(v), k, isInterface(_classes[rc].collElemClass)) << "\n";
-        else        *_out << "(" << emitExpression(v) << ").kama_ctrl->" << (k == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n";
+        else        *_out << "(" << dst << ").kama_ctrl->" << (k == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n";   // `dst` holds the handle now: the source is not read twice
     }
     // Destructible `resource` VALUE: give MOVES (mark source moved), copy duplicates via copy().
     else if (isMoveOnlyValue(rc) && isNamedValue(v.get())) {
@@ -28239,8 +28263,8 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
                             doCopy = cpy; }
         else if (handoff == 1) doCopy = false;
         else doCopy = cpy && _classes[rc].bareDefault == COPY;
-        if (doCopy) { indent(depth); *_out << dst << " = " << copyCall(rc, emitPlace(v)) << ";\n"; }
-        else if (handoff != 2) { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
+        // (doCopy: the value line above already copied — see `dupCls`)
+        if (!doCopy && handoff != 2) { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }   // a refused `copy` is not a move
     }
     // Named collection/`string` VALUE (exprClass is "" — key on dstCType): give/bare-dying moves, copy deep-copies.
     else if (ownsByValue(dstCType) && _classes.count(dstCType) && _classes[dstCType].isIntrinsicColl
@@ -28249,7 +28273,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
             auto ci = _collections.find(dstCType);
             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                 unsupported(("`copy` of a `" + dstCType + "` needs copyable elements — use `give` to move it").c_str(), line);
-            else { indent(depth); *_out << dst << " = " << copyCall(dstCType, emitPlace(v)) << ";\n"; }
+            // (else: the value line above already copied — see `dupCls`)
         } else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
     }
     // A named BindableFunctionPtr may own its bound object: null the source so its scope-drop no-ops —
@@ -30646,6 +30670,34 @@ void CEmitter::rejectNoHeapIndirect(const char* what, int line)
 std::string CEmitter::receiverObject(const std::string& emitted) const
 {
     return emitted == "self" && _currentClass && !_currentClass->isScalarRecv ? "(*self)" : emitted;
+}
+
+// The class a hand-off of the named value `v` into a `ty` DUPLICATES through — a collection's or a `string`'s
+// `__copy` under `copy`, a Copyable resource's `copy()` under `copy` or its `bare: copy` default — or "" when it
+// moves or blits. Asked BEFORE the source is emitted, so the copy is what reads it, once, while its own
+// temporaries can still be hoisted (KR-152). The arms that act on the answer keep their own diagnostics.
+std::string CEmitter::copiedThrough(const std::string& ty, SharedExpression v, int handoff)
+{
+    auto c = _classes.find(ty);
+    if (c == _classes.end() || !isNamedValue(v.get())) return "";
+    if (c->second.isIntrinsicColl && !isFixedColl(ty) && !isValueVectorKind(c->second.collKind)) {
+        if (handoff != 2) return "";
+        auto ci = _collections.find(ty);
+        return (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable) ? "" : ty;
+    }
+    if (!isMoveOnlyValue(ty)) return "";
+    const bool cpy = isCopyable(ty);
+    return (handoff == 2 ? cpy : handoff == 0 && cpy && c->second.bareDefault == COPY) ? ty : "";
+}
+
+// A copy assigned over an owning value is made BEFORE that value is dropped, into a temporary: its source may
+// live inside the value being replaced (`s = copy pick(a: s)`), and dropping first copies freed memory. The
+// element assignment has always done this; the whole-value ones dropped first.
+std::string CEmitter::copyFirst(const std::string& cls, const std::string& src, int depth)
+{
+    std::string t = "kama_cpy" + std::to_string(_tempCounter++);
+    indent(depth); *_out << cls << " " << t << " = " << copyCall(cls, src) << ";\n";
+    return t;
 }
 
 std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue)

@@ -1,0 +1,64 @@
+// `copy` of a place a call returns reads that place ONCE, with the call's temporaries alive. A declaration
+// `string s = copy b.get(key: "x");` blitted the call's result and then emitted the call AGAIN inside the
+// copy, after its temporaries were gone: the literal argument to the `const ref` parameter reached C as
+// `&(kama_string_lit(…))`, "cannot take the address of an rvalue", and a key in a local made the call run
+// twice. A `return`, a `match` arm and an assignment had the same shape, and the assignment dropped the old
+// value before the copy read its source — so `s = copy pick(a: s, …)` copied freed memory.
+// Returns 0.
+
+static int32 calls = 0;
+
+type resource V {
+    string t;
+    public ctor make(string t) { this.t = give t; }
+    public const fn const ref string text() { return this.t; }
+}
+
+type resource Note implements Copyable<This>(bare: give) {
+    string t;
+    public ctor make(string t) { this.t = give t; }
+    public ctor copy(ref Note source) { this.t = copy source.t; }
+    public const fn const ref string text() { return this.t; }
+}
+
+type resource B {
+    string v; V inner; Note n;
+    public ctor make() { this.v = "x-value"; this.inner = V.make(t: "inner"); this.n = Note.make(t: "note"); }
+    public const fn const ref string get(const ref string key) { calls = calls + 1; return this.v; }
+    public const fn const ref V member(const ref string key) { calls = calls + 1; return this.inner; }
+    public const fn const ref Note note(const ref string key) { calls = calls + 1; return this.n; }
+}
+
+type enum Which { First, Second }
+
+fn const ref string pick(const ref string a, const ref string key) { calls = calls + 1; return a; }
+
+fn string viaReturn(const ref B b) { return copy b.get(key: "r"); }
+
+fn int32 main() {
+    B b = B.make();
+    // A declaration, from a method, a free function and a chain — each call made once.
+    string s = copy b.get(key: "x");
+    if (s != "x-value" || calls != 1) { return 1; }
+    string v = "free";
+    string f = copy pick(a: v, key: "k");
+    if (f != "free" || calls != 2) { return 2; }
+    string c = copy b.member(key: "error").text();
+    if (c != "inner" || calls != 3) { return 3; }
+    // A Copyable resource, by its `copy` ctor.
+    Note n = copy b.note(key: "n");
+    if (n.text() != "note" || calls != 4) { return 4; }
+    // A return and a `match` arm.
+    if (viaReturn(b: b) != "x-value" || calls != 5) { return 5; }
+    Which w = Which::First;
+    string m = match (w) { case First: copy b.get(key: "m"); case Second: "none"; };
+    if (m != "x-value" || calls != 6) { return 6; }
+    // An assignment, including one whose source lives in the value it replaces.
+    s = copy b.get(key: "y");
+    if (s != "x-value" || calls != 7) { return 7; }
+    f = copy pick(a: f, key: "self");
+    if (f != "free" || calls != 8) { return 8; }
+    n = copy b.note(key: "again");
+    if (n.text() != "note" || calls != 9) { return 9; }
+    return 0;
+}

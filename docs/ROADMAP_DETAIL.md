@@ -417,16 +417,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-copy-constref-rvalue"></a>
-
-### `copy` of a `const ref` call with an rvalue argument reaches clang (KR-152)
-
-Measured on `0.9.589`, filed 2026-10-14. `public const fn const ref string get(const ref string key)`; `string s = copy b.get(key: "x");` passes `kama
-check` and emits `kama_string__copy(&(*B__get(&b, &(kama_string_lit("x",1)))))` — the address of a literal. A
-free function fails the same way, and so does a chained `copy b.member(key: "error").text()`; a key in a local, no
-`copy`, a `const ref int32`, or a by-value parameter all work. **Scheduled.** An rvalue bound to a `const ref`
-parameter is materialized in a temporary on this path as on the others.
-
 <a id="s2-return-this-place"></a>
 
 ### Returning `this` as a place reaches clang (KR-153)
