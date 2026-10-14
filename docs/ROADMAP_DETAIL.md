@@ -376,11 +376,18 @@ after every type it names. Fixture: the shape above, built and called.
 
 `public ctor b(string name) { this = Foo.a(name: give name); this.hop = Hop::Trusted; }` passes `kama check` and fails
 in clang: the lowering passes `&self` (a `Foo**`) to the destructor and assigns a struct to a pointer (measured on
-`0.9.577`). SPEC's delegation is `return Other.make(…)`. **Recommendation (140-D1, the maintainer's call):** refuse
-the assignment form, naming `return Foo.a(…)` and a private all-fields ctor for the "delegate, then adjust one
-field" case. GOALS favours one way to do a thing, and the `return` form already builds in place. *Alternative:*
-support it, as a destroy of the half-built value followed by an in-place rebuild. Fixture: an xfail with the
-refusal's text.
+`0.9.577`). SPEC's delegation is `return Other.make(…)`.
+
+**Decided 2026-10-14 (the maintainer):**
+- **140-D1 — refuse it in a constructor**, naming `return Foo.a(…)` and a private all-fields ctor for the "delegate,
+  then adjust one field" case. GOALS favours one way to do a thing, and the `return` form already builds in place.
+  (The alternative, a destroy of the half-built value followed by an in-place rebuild, was declined.)
+- **140-D2 — refuse it in a method too: `this` is never assigned whole.** Found tracing 140: an assignment to bare
+  `this` has no check anywhere. In a method of a `type value`/`type resource` it lowers to `self = <struct>` (clang
+  fails); on an enum receiver, which is passed by value, it compiles and writes a local copy (read from the code,
+  reproduced before the fix). A method assigns fields, or returns the new value for the caller to assign
+  (`l = l.next()`). Replacing a receiver whole (C++ `*this = …`, Rust `*self = …`) is a **non-goal** for that reason.
+- One fixture holds both refusals, and a constructor that has a required field still reports ONE diagnostic.
 
 <a id="s2-fnptr-type-arg"></a>
 
@@ -1571,8 +1578,8 @@ Filed 2026-10-10, when merge shipped (`mergeJsonBuffer` and its twins, `0.9.576`
 `{"key":…,"value":…}` pairs, because a generic `K` cannot be a JSON object key. A `Map<string, V>` could be one, and
 that is how a config file, an HTTP API and every other JSON producer writes a map: `"limits":{"cpu":2,"mem":512}`.
 kama cannot read that document into a `Map<string, int32>` today, and a merge replaces a map whole, because on the
-wire a map is an array and the merge rule replaces anything that is not a derived record. **Scheduled.** To decide
-before code:
+wire a map is an array and the merge rule replaces anything that is not a derived record. **Scheduled.** What had
+to be decided (the decisions follow below):
 - **The wire form.** `Map<string, V>` as an object on the JSON back end only, or on KBIN named too; and whether the
   pair-array form is still READ, so data already written keeps loading. Writing the object form is a data break for
   any reader older than the change.
@@ -1595,24 +1602,49 @@ as decimal strings (Go, serde_json, .NET 5+, Python; Swift for `Int`). A structu
 .NET, Python) or written as an array: Swift alternates key and value, Kotlin uses pairs under `allowStructuredMapKeys`.
 Go sorts keys on write; Python sorts with `sort_keys=True`; the others write the map's own order.
 
-**Decisions for the maintainer, with the recommendation first:**
+**Decided 2026-10-14 (the maintainer).**
 - **136-D1 — which maps become objects.** String keys and integer keys (as decimal strings); every other key type
-  keeps the pair array. *Alternative:* string keys only.
-- **136-D2 — what reading accepts.** Both forms, object and pair array, so everything written by `0.9.577` and earlier
-  still loads; writing uses the object form. The only break left: a file the new kama writes does not load in an
-  older one. *Alternative:* object only, so stored JSON maps stop loading.
-- **136-D3 — KBIN.** Unchanged: binary, never hand-written, so the readability reason does not apply, and binary saves
-  keep loading in every version. *Alternative:* KBIN named writes a keyed object too, reading both.
-- **136-D4 — key order on write.** Sorted, as Go does, so a config file a program writes diffs cleanly (`SortedMap`
-  already is); one sort per map written. *Alternative:* slot order, as today.
-- **136-D5 — merging into an object-form map.** Per key: a key the data names merges into its entry when the value is
-  a derived record and replaces it otherwise; a key it leaves out is kept; `null` removes the entry (RFC 7396, Helm).
-  A map still written as pairs is replaced whole, as today. *Alternative:* Go's rule, where `null` has no effect, so an
-  overlay cannot remove an entry.
+  keeps the pair array. `SortedMap` the same.
+- **136-D2 — what reading accepts.** Both forms, object and pair array; writing uses the object form. Asked what the
+  old read path costs: nothing worth removing. The pair reader stays in the stdlib anyway, for structured keys and
+  for KBIN, so accepting it for a string-keyed map is a one-byte peek (`{` or `[`) and a branch. Dropping it would
+  break data at rest (saves, caches, written configs), which no update to a program's source can repair.
+- **136-D3 — KBIN.** Unchanged.
+- **136-D4 — key order on write.** Sorted: integers numerically, strings bytewise, so a `Map` and a `SortedMap` holding
+  the same entries write the same bytes (Python orders integers numerically; Go converts first and sorts the strings).
+- **136-D5 — merging into an object-form map.** Per key: a key the data names merges into its entry when the value
+  merges in place and replaces it otherwise; a key it leaves out is kept; `null` removes the entry (RFC 7396, Helm).
+  A map read as pairs is replaced whole, as today. **Follow-up, decided:** a value that is itself an object-form map
+  merges per key too, as RFC 7396 recurses into every object.
+- **How `Map` picks its form: at run time, from its keys** (Rust `serde_json`'s answer). Two `serialize` members
+  that differ only by `when` are refused as overloading (`kama.cemit.cpp`, "duplicate method"), and kama has no
+  branch on a type inside a generic body. So the writer asks each key to write itself into a probe: a key whose one
+  write is a string or an integer is text, and anything else keeps the pairs. An empty map has no key to ask and
+  writes `{}` for every key type, where an empty struct-keyed map wrote `[]`; kama reads either back as empty.
+  Deciding by type instead is KR-149, a maintainer decision.
 
-**The session's first probe:** how a generic `Map` picks its form by key type with no in-body type branching —
-whether `when [K: …]` may gate two members of one name, or the compiler picks the form as it does for an `Owned`
-field. Neither is verified.
+<a id="s4-map-form-by-type"></a>
+
+### A map's JSON form decided from its key type at compile time (KR-149)
+
+Filed 2026-10-14 while deciding KR-136. **A maintainer decision, not scheduled work.** KR-136 picks a map's form at run
+time by asking its keys, as Rust's `serde_json` does. That is complete for every map with an entry. The one thing it
+cannot answer is an empty map: an empty `Map<Point, V>` writes `{}` where it wrote `[]`. Reading accepts both forms for
+every map, so either answer can be changed later without breaking stored data; what would change is output bytes.
+
+**What others do.** Libraries with run-time type information decide by type: Go and .NET refuse a structured key even
+when the map is empty, and Swift and Kotlin (`allowStructuredMapKeys`) write a flat array. Rust `serde_json` and Python
+`json`, with no such information at hand, ask the keys, and write `{}` for any empty map.
+
+**Two routes, each with a cost:**
+- **A branch on a type inside a generic body**: `when [K: MapKey] { … } else { … }` as a statement, keeping one block
+  per instance, plus a `MapKey` contract that `string` and the integers implement and a user key type opts into. It
+  gives a compile-time choice, `[]` for an empty struct-keyed map, and an explicit opt-in. It is the "second body per
+  type" that SPEC's *Specialization is a non-goal* rules out, and it means type-checking a body differently per
+  instance. **The maintainer leans against it on that ground (2026-10-14).** It is also a grammar change.
+- **A type descriptor on `Serializable`**: a second member that says what shape a type writes, generated for
+  `@generate` types and supplied by hand everywhere else, as Kotlin's `SerialDescriptor` is. No new syntax, but a
+  source change to every hand-written `serialize`. It would also serve schema export.
 
 <a id="s4-strict-decoding"></a>
 
@@ -1633,19 +1665,22 @@ at its default, 8: the typo is skipped and says nothing. kama has no default arg
 Strict by default: Jackson and Kotlin serialization, each with an opt-out. protobuf keeps unknown fields for
 re-encoding.
 
-**Decisions for the maintainer, with the recommendation first:**
+**Decided 2026-10-14 (the maintainer).**
 - **126-D1 — how a read asks.** A strict READER: `JsonDeserializer.strict(src:)`, and the same named ctor on
   `KbinNamedDeserializer` and `KbinNumberedDeserializer` (positional KBIN has no keys), used with `T.deserialize(r:)`
   or `x.mergeFrom(r:)`. The derived reader reports an unclaimed key to the reader through one new `Deserializer`
   member instead of skipping it; a lenient reader skips, a strict one fails, and nested records read through the
   same reader are strict too. That member is a source change for a hand-written back end outside the stdlib, as
-  `failWith(kind:)` was in `0.9.569`. *Alternative:* `…Strict` twins of the entry points, which is 12 more functions.
-- **126-D2 — the default.** Lenient, as today: it lets an old reader load a newer writer's data, which the numbered
-  KBIN form exists for. *Alternative:* strict by default (Jackson, Kotlin), changing every existing read.
+  `failWith(kind:)` was in `0.9.569`. (Go does both: `json.Unmarshal` is lenient, a `Decoder` made strict with
+  `DisallowUnknownFields()` is not.)
+- **126-D2 — the default.** Lenient, as today.
 - **126-D3 — what a strict read refuses.** A key no field claims, including a `@skip` field's key, which is not part of
   the wire form. A `@deprecated` field is still read, so its key is known; map keys are data and never unknown. The
-  first unknown key is reported with its path (``unknown field `server.prot` ``). *Alternative:* accept a `@skip`
-  field's key silently.
+  first unknown key is reported with its path (``unknown field `server.prot` ``).
+- **Found designing it, fixed first:** an enum variant's payload is read by POSITION, its keys thrown away, so a strict
+  read could not see a misspelt payload key, and a payload whose keys arrive in another order reads into the wrong
+  fields with no error (read from the code; reproduced before the fix). Payload keys are matched by name, as record
+  fields are, in a commit of its own before this row.
 
 <a id="s4-json-value"></a>
 
@@ -2905,6 +2940,22 @@ manifest, `lib/kama.json`, which is named `std`.
 The fix is to tell the reader when it reads the stdlib's manifest, or to refuse at the callers that know the
 path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
 diagnostic, not a feature: no program can use such a package today.
+
+<a id="s10-agent-tooling"></a>
+
+### kama's own AI-agent tooling (KR-148)
+
+Asked for 2026-10-14: kama should carry its own tooling so that an LLM or an agent can work in a kama codebase with
+the compiler and the language server behind it, beside the `llms.txt` it already ships. The ask names a skill (one
+that would likely drive the language server), agentic workflow helpers embedded in this repo, the `ponytail` skill
+(github.com/DietrichGebert/ponytail) as a reference for the shape, and using the same tooling to develop kama itself.
+
+**What already ships**, and what a design starts from: `kama query` (verified facts from the compiler's index, one
+process, no editor; [agents.md](agents.md)), `kama agents install|list|print` (an `AGENTS.md` per project, a pointer
+file per tool, `AGENTS.package.md` for a library), the `kama` skill at `agents/skill/SKILL.md` (written by
+`kama seed --skill`), `llms.txt`, and `kama lsp`. **Unscoped:** a design session is owed — what the skill does
+that `kama query` does not, whether it talks to `kama lsp` or the CLI (agents.md § *Why not the LSP?* records why
+the CLI was chosen), which workflows earn a helper, and how this repo's own sessions would use it. Sized `—` until then.
 
 - **`kama describe --json` (KR-84)** — GOALS §7's "other half" of self-description: the language surface
   itself (keywords, kinds, builtins, attributes, grammar) as data, independent of any source file, so an

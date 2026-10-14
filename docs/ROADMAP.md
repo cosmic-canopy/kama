@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-148**
+**Next id: KR-150**
 
 ## The shape
 
@@ -78,6 +78,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-140 | **`this = T.make(…)` in a constructor reaches clang** — it passes `kama check`, then lowers to a pointer assigned a struct. Refuse it, naming `return T.make(…)`, or support it: the maintainer's call | S | [§2](ROADMAP_DETAIL.md#s2-ctor-this-assign) |
 | KR-136 | **A `Map<string, V>` written as a JSON object, merged per key** — kama writes every `Map` as an array of `{"key","value"}` pairs, so a config file's `"limits":{"cpu":2}` does not read into a `Map<string, int32>`, and a merge (`mergeJsonBuffer`) replaces a map whole. A string-keyed map as an object, merged per key, `null` removing an entry | M | [§4](ROADMAP_DETAIL.md#s4-string-map-object) |
 | KR-126 | **Strict decoding: unknown fields refused at the read site** — a misspelt key in a config file does nothing and says nothing. The read decides, not the type, and the error names the key | S | [§4](ROADMAP_DETAIL.md#s4-strict-decoding) |
+| KR-149 | **A map's JSON form decided from its key type at compile time — a maintainer decision** — KR-136 picks the form at run time by asking the map's keys what they write (Rust `serde_json`'s answer), so an empty `Map<Point, V>` writes `{}` where it wrote `[]`. Deciding by type needs a branch on a type inside a generic body or a type descriptor on `Serializable`; the maintainer leans against the first. Both are reversible against data: readers accept `{}` and `[]` | — | [§4](ROADMAP_DETAIL.md#s4-map-form-by-type) |
 | KR-141 | **A failed multi-file check names the wrong file** — an error in `src/b.kama` ends with `src/a.kama FAILED`: the summary names the module's first file, as the passing one does | S | [§10](ROADMAP_DETAIL.md#s10-check-summary-file) |
 | KR-142 | **`kama seed` and a `kama-<name>` repository** — it refuses `kama-widget` and suggests `kama_widget`, which it also refuses (reserved); with no git identity the license names the package as its copyright holder | S | [§10](ROADMAP_DETAIL.md#s10-seed-names) |
 | KR-143 | **The package guide's "marker comments" cannot exist** — `agents/PACKAGE.md` fences a generated `csources` block with comments, and `kama.json` is strict JSON | S | [§10](ROADMAP_DETAIL.md#s10-package-guide-comments) |
@@ -126,6 +127,7 @@ Most of this gates on the repo going public.
 | KR-31 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-33 | **`kama query` residuals** — no `callers-of`, no stdin/unsaved-buffer mode; a `fnptr` signature type has no definition site | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-84 | **`kama describe --json`** — the language surface as data, the other half of `kama query --json` (GOALS §7) | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-148 | **kama's own AI-agent tooling** — a skill that drives the language server and `kama query`, agentic workflow helpers shipped beside `llms.txt` and `kama agents`, usable for developing kama itself too. Asked for 2026-10-14; a design session is owed before any code | [§10](ROADMAP_DETAIL.md#s10-agent-tooling) |
 
 ## FUTURE — the big arcs, in this order
 
