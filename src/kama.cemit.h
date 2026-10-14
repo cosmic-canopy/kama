@@ -515,6 +515,7 @@ struct ClassInfo {
     // This is an `Owned<X>` box carrying a compiler-registered `deserialize` that reads the POINTEE by value
     // and adopts the block — see registerOwnedDeserialize / pruneOwnedDeserialize. Nothing else on the triad.
     bool                              ownedBoxDe = false;
+    bool                              mergeByKey = false;   // a `MergeByKey` map: its merge is per key (KR-136)
     // Opted into the `Copyable` contract — declares a public nullary `copy` returning
     // `implements Copyable(bare: give|copy)`: this resource opts into copy (a public nullary `copy()`),
     // and its `bareDefault` says what a BARE hand-off means (give=move, copy=`copy()`/retain). Movable +
@@ -2906,6 +2907,7 @@ private:
     void emitBytesDefinition(ClassInfo& ci, const std::string& name);
     // KR-125 — merge the data into a value the program holds.
     void emitMergeDefinition(ClassInfo& ci);
+    void emitMergeByKeyDefinition(ClassInfo& ci);   // a `MergeByKey` map's `mergeFrom` + per-key step (KR-136)
     void emitMergeFieldRead(SharedIdentifier ty, const std::string& dst, int depth, const std::string& resultCType);
     bool mergesInPlace(const std::string& cls);   // a derived record: its merge joins the caller's commit log
     bool byteViewElemOK(SharedIdentifier elem, bool writable);   // a run of `elem` is plain bytes, at both widths
@@ -3089,6 +3091,7 @@ private:
     // The step a nested read's failure gains on its way out (`DeError::inField`): the wire name of the record field
     // being read — `Variant.field` for an enum payload — or "" where nothing names one.
     std::string _serdeStep;
+    std::string _serdeStepC;   // a step known only at run time: a C `kama_string` expression the wrap takes (a map key)
     std::string serdeFieldName(const std::string& access);
     // The pointee type node of a library `Owned<T, A>` field, else null. An `Owned` is a unique subtree,
     // so on the wire it IS a `T` — the serde field walk recognises it HERE, by identity, rather than
@@ -3104,6 +3107,7 @@ private:
     // A node's per-type helpers are internal C functions over the kama_runtime.h substrate, never members.
     void computeGraphNodeTypes();                   // closure over edge fields; sets isGraphNode + graphTypeId
     void registerOwnedDeserialize();                // `Owned<X>.deserialize` for a by-value pointee (the box read)
+    void registerMergeByKey(ClassInfo& ci);         // `mergeFrom` for a `MergeByKey` map, merged per key (KR-136)
     void pruneOwnedDeserialize();                   // …and take it back off a box whose pointee is a graph node
     void registerEdgeElementResults();              // `Result<Shared<X>, Owned<Error>>` — what an element read binds
     // A type that must carry the graph through its OWN serde body — it reaches a `Shared`/`Weak` and its

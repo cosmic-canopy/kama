@@ -6511,8 +6511,13 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   ```
 
   - **A field whose type is a derived record merges** into what the field holds, recursively — through an `Owned`
-    too. **Every other field the data names is replaced whole**: a number, a `string`, an enum, an `Optional`
-    (`null` is `None`), a list, a `Map`. A key the data leaves
+    too. **A map keyed by text merges PER KEY** (`Map`, `SortedMap`, through the prelude's `MergeByKey`): each key <!-- test: ser_merge_map -->
+    the document names merges into its entry when the entry's value merges in place (a derived record, or another
+    such map) and replaces it otherwise, a new key is added, a key left out is kept, and `null` removes the entry —
+    RFC 7396: `{"limits":{"cpu":4,"mem":null}}` sets `cpu`, drops `mem`, keeps the rest. A map written as its pair
+    array, and every map on KBIN, is replaced whole; a map can also be merged into directly
+    (`mergeJsonBuffer(src:, into: limits)`). **Every other field the data names is replaced whole**: a number, a
+    `string`, an enum, an `Optional` (`null` is `None`), a list. A key the data leaves
     out is untouched, and an unknown key is skipped, as in a full read — or refused, through a strict reader. No
     field is required.
   - **Atomic.** If the data is wrong anywhere, the value is left as it was, and the error still names where: <!-- test: ser_merge_json -->

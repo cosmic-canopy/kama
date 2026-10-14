@@ -2099,10 +2099,16 @@ static inline void kama_de_graph_free(kama_de_graph* g) {
 // only once the whole input has been read. `kama_merge_end(l, 1)` drops each replaced field's old value and moves the
 // staged one in, in read order (a key given twice ends with the second); `kama_merge_end(l, 0)` drops every staged
 // value and leaves the target as it was. `drop` is the field type's destructor, or NULL for one that owns nothing.
-typedef struct kama_merge_entry { void* dst; void* val; size_t size, align; void (*drop)(void*); } kama_merge_entry;
-typedef struct kama_merge_log { kama_merge_entry* e; size_t kama_len, kama_cap; } kama_merge_log;
+//
+// A map merged PER KEY (KR-136) stages OPERATIONS as well: `apply(dst, val)` puts an entry into the map at `dst` or
+// removes one, consuming `val`. They run after every plain write — a put may rehash, and a removal frees, the storage a
+// plain write points into — and DEEPEST first, in read order within one depth: a map inside a map's entry is
+// written before the outer map moves that entry. `kama_depth` is how many per-key maps the read is inside.
+typedef struct kama_merge_entry { void* dst; void* val; size_t size, align; void (*drop)(void*); void (*apply)(void*, void*); size_t depth; } kama_merge_entry;
+typedef struct kama_merge_log { kama_merge_entry* e; size_t kama_len, kama_cap; size_t kama_depth; } kama_merge_log;
 
-static inline void kama_merge_put(kama_merge_log* l, void* dst, const void* v, size_t size, size_t align, void (*drop)(void*)) {
+static inline void kama_merge_stage(kama_merge_log* l, void* dst, const void* v, size_t size, size_t align, void (*drop)(void*),
+                                    void (*apply)(void*, void*)) {
     if (l->kama_len == l->kama_cap) {
         size_t nc = l->kama_cap ? l->kama_cap * 2 : 8;
         kama_merge_entry* ne = (kama_merge_entry*)kama_alloc(nc * sizeof(kama_merge_entry), _Alignof(kama_merge_entry));
@@ -2114,18 +2120,45 @@ static inline void kama_merge_put(kama_merge_log* l, void* dst, const void* v, s
     void* b = kama_alloc(size, align);
     if (!b) kama_panic(kama_string_lit("out of memory", 13));
     kama_copy(b, v, size);
-    kama_merge_entry en = { dst, b, size, align, drop };
+    kama_merge_entry en = { dst, b, size, align, drop, apply, l->kama_depth };
     l->e[l->kama_len++] = en;
 }
+static inline void kama_merge_put(kama_merge_log* l, void* dst, const void* v, size_t size, size_t align, void (*drop)(void*)) {
+    kama_merge_stage(l, dst, v, size, align, drop, NULL);
+}
+// Was the key at `key` staged for removal from the map at `dst` earlier in this read? A value arriving for it after
+// its `null` is a new entry, not a merge into the one being removed. `remove` is that map's removal thunk; `eq` its
+// key equality.
+static inline int kama_merge_removed(const kama_merge_log* l, void* dst, void (*remove)(void*, void*), const void* key,
+                                     int (*eq)(const void*, const void*)) {
+    int removed = 0;
+    for (size_t i = 0; i < l->kama_len; ++i) {
+        const kama_merge_entry* en = &l->e[i];
+        if (en->dst != dst || !en->apply) continue;
+        if (eq(en->val, key)) removed = en->apply == remove;   // the LAST staged operation on the key decides
+    }
+    return removed;
+}
 static inline void kama_merge_end(kama_merge_log* l, int commit) {
+    size_t deepest = 0;
     for (size_t i = 0; i < l->kama_len; ++i) {
         kama_merge_entry* en = &l->e[i];
+        if (en->apply) { if (en->depth > deepest) deepest = en->depth; continue; }
         if (commit) { if (en->drop) en->drop(en->dst); kama_copy(en->dst, en->val, en->size); }
         else if (en->drop) en->drop(en->val);
         kama_free(en->val, en->size, en->align);
     }
+    for (size_t d = deepest + 1; d-- > 0; ) {
+        for (size_t i = 0; i < l->kama_len; ++i) {
+            kama_merge_entry* en = &l->e[i];
+            if (!en->apply || en->depth != d) continue;
+            if (commit) en->apply(en->dst, en->val);   // consumes what `val` holds
+            else if (en->drop) en->drop(en->val);
+            kama_free(en->val, en->size, en->align);
+        }
+    }
     kama_free(l->e, l->kama_cap * sizeof(kama_merge_entry), _Alignof(kama_merge_entry));
-    l->e = NULL; l->kama_len = 0; l->kama_cap = 0;
+    l->e = NULL; l->kama_len = 0; l->kama_cap = 0; l->kama_depth = 0;
 }
 
 // --- Fatal diagnostics with source location (panic / assert) -----------------

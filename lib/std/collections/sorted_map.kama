@@ -618,6 +618,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
                    ValuesIterableMut<SortedMapValueIterMut<K,V,A>>,
                    Serializable when [K: Serializable, V: Serializable],
                    Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
+                   MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    Sendable when [K: Sendable, V: Sendable, A: Sendable] {
     // Every node box, the root included, is drawn from `A` through a placement `new(allocator:)`, so the whole tree
     // lives in the allocator it names. Each ctor assigns `alloc` before it builds the root from it.
@@ -733,6 +734,11 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
         if (keyed) { w.endObject(); } else { w.endArray(); }
         return Result::Ok(value: Unit::Unit);
+    }
+    // The key a merge names by its text (MergeByKey), read back as the object form's keys are.
+    public fn Result<K, Owned<Error>> keyFromText(string text) when [K: Deserializable<K>] {
+        MapKeyReader<K> kr = MapKeyReader::<K>.of(text: give text);
+        return K.deserialize(r: kr);
     }
     // Deserializable is GlobalAllocator-only: the wire format carries no allocator handle, so it builds a
     // default `SortedMap<K,V>` (a stateful-A instance would bare-ctor a zero-init handle and crash on the

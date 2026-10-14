@@ -558,6 +558,20 @@ type contract Deserializable<T is This> for value, resource, enum, intrinsic {
 type contract MergeDeserializable<T is This> for value, resource implements Deserializable<T> {
     fn Result<Unit, std::memory::Owned<Error>> mergeFrom(Deserializer r);
 }
+// A map a merge writes PER KEY (KR-136): `{"limits":{"cpu":4,"mem":null}}` merged into the `limits` a program holds sets
+// `cpu`, removes `mem` and keeps every other entry (RFC 7396), where a field of any other type is replaced whole. A key
+// the data names merges into its entry when the entry's value merges in place — a derived record, or another such map
+// — and replaces it otherwise. `std::collections`' `Map` and `SortedMap` implement it, and the compiler's merge walk
+// drives it, so a map's writes join the record's commit log and the merge stays all or nothing. The members are what
+// that walk needs: the key a text names, and the four operations a per-key write is made of. A map written as its pair
+// array (any map on KBIN) is still replaced whole.
+type contract MergeByKey<K, V> for resource {
+    fn Result<K, std::memory::Owned<Error>> keyFromText(string text);
+    const fn bool contains(const ref K key);
+    fn ref V getRefMut(const ref K key);
+    fn void put(K key, V value);
+    fn Optional<V> remove(const ref K key);
+}
 // Primitive Serializable/Deserializable conformances (pure-kama, like the Hashable/Equatable ones above) — so
 // EVERY type is a uniform serialization participant and a collection's generic element write
 // (`this[i].serialize(w)`) / read (`T.deserialize(r)`) composes for a scalar element with no compiler

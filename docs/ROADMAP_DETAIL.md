@@ -1522,64 +1522,12 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
-<a id="s4-string-map-object"></a>
-
-### A string-keyed `Map` as a JSON object, merged per key (KR-136)
-
-Filed 2026-10-10, when merge shipped (`mergeJsonBuffer` and its twins, `0.9.576`). A `Map<K, V>` is written as an array of
-`{"key":…,"value":…}` pairs, because a generic `K` cannot be a JSON object key. A `Map<string, V>` could be one, and
-that is how a config file, an HTTP API and every other JSON producer writes a map: `"limits":{"cpu":2,"mem":512}`.
-kama cannot read that document into a `Map<string, int32>` today, and a merge replaces a map whole, because on the
-wire a map is an array and the merge rule replaces anything that is not a derived record. **Scheduled.** What had
-to be decided (the decisions follow below):
-- **The wire form.** `Map<string, V>` as an object on the JSON back end only, or on KBIN named too; and whether the
-  pair-array form is still READ, so data already written keeps loading. Writing the object form is a data break for
-  any reader older than the change.
-- **Merge per key.** A key the data names merges into the existing entry when `V` is a derived record and replaces
-  it otherwise; a key it leaves out is kept; `null` removes the entry (RFC 7396, Helm). A generic `Map` cannot pick
-  merge-or-replace for its `V` without in-body type branching, which kama does not have, so the per-key step is an
-  arm of the compiler's merge walk, as `Owned` is: it then joins the same commit log, and the merge stays atomic.
-  A hand-written `mergeFrom` today is used only where a type is merged into directly; as a field of a derived
-  record it is replaced, because its writes cannot join the caller's log. This arm is where that would change.
-- `SortedMap<string, V>` the same way.
-
-**Measured on `0.9.577`.** A `Map<string, int32>` field writes `"caps":[{"key":"cpu","value":2},{"key":"mem","value":512}]`;
-reading `{"caps":{"cpu":2}}` fails with ``type mismatch at `caps` ``; the pair array reads. A `Map` writes in hash-slot
-order: `zeta, mid, alpha` whether the keys went in as `zeta, alpha, mid` or `mid, alpha, zeta`, so stable for one
-history but neither sorted nor as inserted.
-
-**What others do.** A string-keyed map is a JSON object everywhere: Go `encoding/json`, Rust `serde_json`, .NET
-`System.Text.Json`, Python `json`, Swift `JSONEncoder`, Kotlin serialization. Integer keys are an object too, written
-as decimal strings (Go, serde_json, .NET 5+, Python; Swift for `Int`). A structured key is refused (Go, serde_json,
-.NET, Python) or written as an array: Swift alternates key and value, Kotlin uses pairs under `allowStructuredMapKeys`.
-Go sorts keys on write; Python sorts with `sort_keys=True`; the others write the map's own order.
-
-**Decided 2026-10-14 (the maintainer).**
-- **136-D1 — which maps become objects.** String keys and integer keys (as decimal strings); every other key type
-  keeps the pair array. `SortedMap` the same.
-- **136-D2 — what reading accepts.** Both forms, object and pair array; writing uses the object form. Asked what the
-  old read path costs: nothing worth removing. The pair reader stays in the stdlib anyway, for structured keys and
-  for KBIN, so accepting it for a string-keyed map is a one-byte peek (`{` or `[`) and a branch. Dropping it would
-  break data at rest (saves, caches, written configs), which no update to a program's source can repair.
-- **136-D3 — KBIN.** Unchanged.
-- **136-D4 — key order on write.** Sorted: integers numerically, strings bytewise, so a `Map` and a `SortedMap` holding
-  the same entries write the same bytes (Python orders integers numerically; Go converts first and sorts the strings).
-- **136-D5 — merging into an object-form map.** Per key: a key the data names merges into its entry when the value
-  merges in place and replaces it otherwise; a key it leaves out is kept; `null` removes the entry (RFC 7396, Helm).
-  A map read as pairs is replaced whole, as today. **Follow-up, decided:** a value that is itself an object-form map
-  merges per key too, as RFC 7396 recurses into every object.
-- **How `Map` picks its form: at run time, from its keys** (Rust `serde_json`'s answer). Two `serialize` members
-  that differ only by `when` are refused as overloading (`kama.cemit.cpp`, "duplicate method"), and kama has no
-  branch on a type inside a generic body. So the writer asks each key to write itself into a probe: a key whose one
-  write is a string or an integer is text, and anything else keeps the pairs. An empty map has no key to ask and
-  writes `{}` for every key type, where an empty struct-keyed map wrote `[]`; kama reads either back as empty.
-  Deciding by type instead is KR-149, a maintainer decision.
-
 <a id="s4-map-form-by-type"></a>
 
 ### A map's JSON form decided from its key type at compile time (KR-149)
 
-Filed 2026-10-14 while deciding KR-136. **A maintainer decision, not scheduled work.** KR-136 picks a map's form at run
+Filed 2026-10-14 while deciding a string-keyed map's JSON form (shipped `0.9.587`/`0.9.589`, SPEC *A map keyed by
+text is an object*). **A maintainer decision, not scheduled work.** A map picks its form at run
 time by asking its keys, as Rust's `serde_json` does. That is complete for every map with an entry. The one thing it
 cannot answer is an empty map: an empty `Map<Point, V>` writes `{}` where it wrote `[]`. Reading accepts both forms for
 every map, so either answer can be changed later without breaking stored data; what would change is output bytes.

@@ -1,0 +1,100 @@
+// KR-136 — a map keyed by text MERGES PER KEY: `mergeJsonBuffer` writes each key the document names into its entry
+// and keeps every other entry, and `null` removes one (RFC 7396), where a map used to be replaced whole. An entry whose
+// value merges in place — a derived record, or another map — is merged into; anything else is replaced. A new key is
+// put. It is all or nothing: a failure anywhere leaves every map as it was. A map's pair array (and every map on KBIN)
+// is still replaced whole, and a map can be merged into directly.
+//
+// The ordering this has to get right: a put may grow the map and MOVE its entries, so a merge into an entry's own map
+// and a put of a new key, in one document, must not write through a moved entry. Puts and removals run after every
+// plain write, innermost map first.
+import {
+    std::collections::DynamicArray, std::collections::Map, std::collections::SortedMap, std::memory::Owned,
+    std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::mergeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer, std::serialization::binary::kbin::mergeKbinNamedBuffer,
+};
+
+@generate(Serializable, Deserializable)
+type resource Env {
+    @field(default) int32 cpu = 1;
+    @field(default) Map<string, int32> tags = Map.empty();
+    public ctor make() { }
+    public fn void tag(string k, int32 v) { this.tags.put(key: give k, value: v); }
+}
+
+@generate(Serializable, Deserializable)
+type resource Cfg {
+    @field(default) Map<string, int32> caps = Map.empty();
+    @field(default) Map<string, Env> envs = Map.empty();
+    @field(default) Map<string, Map<string, int32>> nested = Map.empty();
+    @field(default) SortedMap<int32, string> ports = SortedMap.empty();
+    @field(default) SortedMap<string, Env> sorted = SortedMap.empty();
+    public ctor make() { }
+    public fn void fill() {
+        this.caps.put(key: "cpu", value: 2); this.caps.put(key: "mem", value: 512); this.caps.put(key: "io", value: 3);
+        Env prod = Env.make(); prod.tag(k: "tier", v: 1);
+        this.envs.put(key: "prod", value: give prod);
+        Map<string, int32> inner = Map.empty(); inner.put(key: "a", value: 1); inner.put(key: "b", value: 2);
+        this.nested.put(key: "x", value: give inner);
+        this.ports.put(key: 80, value: "http");
+        this.sorted.put(key: "s", value: Env.make());
+    }
+    public fn void cap(string k, int32 v) { this.caps.put(key: give k, value: v); }
+}
+
+fn string json(const ref Cfg c) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: c);
+    return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
+}
+// "ok" or the error's message.
+fn string merged(ref Cfg c, string src) {
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: c);
+    return match (give r) {
+        case Ok(value: _): "ok";
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "other"; };
+    };
+}
+
+fn int32 main() {
+    Cfg c = Cfg.make(); c.fill();
+    // Per key: one set, one removed, one added, one kept.
+    if (merged(c: c, src: "{\"caps\":{\"cpu\":4,\"mem\":null,\"gpu\":1}}") != "ok") { return 1; }
+    // A record entry merged into; a new one put.
+    if (merged(c: c, src: "{\"envs\":{\"prod\":{\"cpu\":8},\"dev\":{\"cpu\":2}}}") != "ok") { return 2; }
+    // A map in a map merges per key too.
+    if (merged(c: c, src: "{\"nested\":{\"x\":{\"b\":20,\"c\":3}}}") != "ok") { return 3; }
+    // SortedMap: put and remove.
+    if (merged(c: c, src: "{\"ports\":{\"443\":\"https\",\"80\":null},\"sorted\":{\"s\":{\"cpu\":5}}}") != "ok") { return 4; }
+    string after = "{\"caps\":{\"cpu\":4,\"gpu\":1,\"io\":3},\"envs\":{\"dev\":{\"cpu\":2,\"tags\":{}},\"prod\":{\"cpu\":8,\"tags\":{\"tier\":1}}},"
+        .concat(other: "\"nested\":{\"x\":{\"a\":1,\"b\":20,\"c\":3}},\"ports\":{\"443\":\"https\"},\"sorted\":{\"s\":{\"cpu\":5,\"tags\":{}}}}");
+    if (json(c: c) != after) { return 5; }
+    // All or nothing: the second key fails, so the first is not written either.
+    if (merged(c: c, src: "{\"caps\":{\"cpu\":100,\"io\":\"three\"}}") != "type mismatch at `caps.io`") { return 6; }
+    if (json(c: c) != after) { return 7; }
+    // A key given twice keeps its last value: `null`, then a value, is that value.
+    if (merged(c: c, src: "{\"caps\":{\"io\":null,\"io\":7}}") != "ok") { return 8; }
+    // A merge into an entry's own map while new keys grow the outer one past its capacity (a rehash moves `prod`).
+    string grow = "{\"envs\":{\"prod\":{\"tags\":{\"zone\":9}}";
+    int32 i = 0;
+    while (i < 40) { grow = grow.concat(other: ",\"e${i}\":{\"cpu\":${i}}"); i = i + 1; }
+    grow = grow.concat(other: "}}");
+    if (merged(c: c, src: give grow) != "ok") { return 9; }
+    string j = json(c: c);
+    if (!j.contains(substring: "\"prod\":{\"cpu\":8,\"tags\":{\"tier\":1,\"zone\":9}}") || !j.contains(substring: "\"e39\":{\"cpu\":39")) { return 10; }
+    // A pair array replaces the map whole, as before.
+    if (merged(c: c, src: "{\"caps\":[{\"key\":\"only\",\"value\":1}]}") != "ok") { return 11; }
+    if (!json(c: c).contains(substring: "\"caps\":{\"only\":1}")) { return 12; }
+    // A map merged into directly.
+    Map<string, int32> root = Map.empty(); root.put(key: "a", value: 1); root.put(key: "c", value: 3);
+    Result<Unit, Owned<Error>> rr = mergeJsonBuffer(src: "{\"b\":2,\"a\":null}", into: root);
+    bool rootOk = match (give rr) { case Ok(value: _): true; case Err(error: _): false; };
+    if (!rootOk || root.contains(key: "a") || !root.contains(key: "b") || !root.contains(key: "c")) { return 13; }
+    // KBIN: a map is its pair array there, so a merge replaces it whole.
+    Cfg k = Cfg.make(); k.fill();
+    Cfg over = Cfg.make(); over.cap(k: "x", v: 1);
+    Result<DynamicArray<uint8>, Owned<Error>> kb = serializeKbinNamedBuffer(v: over);
+    DynamicArray<uint8> bytes = match (give kb) { case Ok(value: b): { := give b; } case Err(error: _): { return 14; } };
+    Result<Unit, Owned<Error>> km = mergeKbinNamedBuffer(src: give bytes, into: k);
+    bool kOk = match (give km) { case Ok(value: _): true; case Err(error: _): false; };
+    if (!kOk || !json(c: k).contains(substring: "\"caps\":{\"x\":1}")) { return 15; }
+    return 0;
+}

@@ -130,6 +130,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
                    ValuesIterable<MapValueIter<V>> when [V: Copyable<V>], ValuesIterableMut<MapValueIterMut<V>>,
                    EntriesIterable<MapEntryIter<K,V>> when [K: Copyable<K>, V: Copyable<V>],
                    Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
+                   MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    Sendable when [K: Sendable, V: Sendable, H: Sendable, A: Sendable] {
     UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> state = null;
     isize len = 0; isize cap = 0; isize tombs = 0; uint32 mods = 0; A alloc;
@@ -427,6 +428,11 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         }
         w.endArray();
         return Result::Ok(value: Unit::Unit);
+    }
+    // The key a merge names by its text (MergeByKey), read back as the object form's keys are.
+    public fn Result<K, Owned<Error>> keyFromText(string text) when [K: Deserializable<K>] {
+        MapKeyReader<K> kr = MapKeyReader::<K>.of(text: give text);
+        return K.deserialize(r: kr);
     }
     // Reconstruct from either form: the keyed object, its keys read back from their text (an integer key parsed, so
     // `{"80x":1}` into a `Map<int32, V>` is a type mismatch at `80x`), or the pair array — which every map wrote

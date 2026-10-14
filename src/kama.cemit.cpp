@@ -14415,6 +14415,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         || _classes[mangled].genEquatable || _classes[mangled].genHashable
         || _classes[mangled].genOf || _classes[mangled].genZero || _classes[mangled].genBytesViewable)
         registerDerives(_classes[mangled], synthId(mangled), line);
+    registerMergeByKey(_classes[mangled]);   // a per-key map's `mergeFrom` (KR-136)
     // A window minted after registerIntrinsicViews ran gives its plain-bytes elements their bytes itself (KR-127).
     if (_byteViewPhase == 2) registerViewByteViews(mangled);
 
@@ -33635,7 +33636,8 @@ void CEmitter::emitDeFieldRead(SharedIdentifier ty, const std::string& dst, int 
     const std::string nestedErr = t + ".kama_u.k_Err.k_error";
     indent(depth); *_out << "if (" << t << ".kama_tag == " << innerRes << "_Err) { " << cleanup
                          << "return (" << resultCType << "){ .kama_tag = " << resultCType << "_Err, .kama_u.k_Err = { .k_error = "
-                         << (_serdeStep.empty() ? nestedErr : deErrorInField(nestedErr, _serdeStep)) << " } }; }\n";
+                         << (!_serdeStepC.empty() ? _classes[preludeName("DeError")].methods["inField"].cName + "(" + nestedErr + ", " + _serdeStepC + ")"
+                             : _serdeStep.empty() ? nestedErr : deErrorInField(nestedErr, _serdeStep)) << " } }; }\n";
     indent(depth); *_out << dst << " = " << t << ".kama_u.k_Ok.k_value;\n";
 }
 
@@ -33885,6 +33887,9 @@ void CEmitter::emitMergeFieldRead(SharedIdentifier ty, const std::string& dst, i
     std::string place = "&(" + dst + ")";
     if (SharedIdentifier p = ownedPointeeOf(ty)) { rec = deepSubstType(p); place = derefFnName(cType(ty), /*wantMut=*/true) + "(&(" + dst + "))"; }
     const std::string rc = cType(rec);
+    // A per-key map (KR-136) merges only a keyed OBJECT; its pair array is replaced whole, as before.
+    const bool byKey = mergesInPlace(rc) && _classes[rc].mergeByKey;
+    if (byKey) { indent(depth); *_out << "if (r.kama_vtbl->k_atKeyedMap(r.kama_obj)) {\n"; depth++; }
     if (mergesInPlace(rc)) {
         const std::string t = "kama_mr" + std::to_string(_tempCounter++);
         const std::string err = t + ".kama_u.k_Err.k_error";
@@ -33892,7 +33897,10 @@ void CEmitter::emitMergeFieldRead(SharedIdentifier ty, const std::string& dst, i
         indent(depth); *_out << "if (" << t << ".kama_tag == " << resultCType << "_Err) { kama__FieldKey__dtor(&kama_key); "
                              << "return (" << resultCType << "){ .kama_tag = " << resultCType << "_Err, .kama_u.k_Err = { .k_error = "
                              << (_serdeStep.empty() ? err : deErrorInField(err, _serdeStep)) << " } }; }\n";
-        return;
+        if (!byKey) return;
+        depth--;
+        indent(depth); *_out << "} else {\n";
+        depth++;
     }
     // Anything else is replaced: read a whole new value into a temporary, then stage it.
     const std::string fc = cType(ty);
@@ -33903,6 +33911,7 @@ void CEmitter::emitMergeFieldRead(SharedIdentifier ty, const std::string& dst, i
     const bool destr = dc != _classes.end() && dc->second.destructible;
     indent(depth); *_out << "kama_merge_put(kama_log, &(" << dst << "), &" << v << ", sizeof(" << fc << "), _Alignof(" << fc
                          << "), " << (destr ? "(void (*)(void*))&" + fc + "__dtor" : std::string("NULL")) << ");\n";
+    if (byKey) { depth--; indent(depth); *_out << "}\n"; }
 }
 
 void CEmitter::emitMergeDefinition(ClassInfo& ci)
@@ -33944,6 +33953,142 @@ void CEmitter::emitMergeDefinition(ClassInfo& ci)
     *_out << stat << resC << " " << ci.name << "__mergeFrom(" << ci.name << "* self, kama__Deserializer r)\n{\n";
     indent(1); *_out << "kama_merge_log kama_log = { 0 };\n";
     indent(1); *_out << resC << " kama_res = " << ci.name << "____mergeStep(self, r, &kama_log);\n";
+    indent(1); *_out << "kama_merge_end(&kama_log, kama_res.kama_tag == " << resC << "_Ok);   // all or nothing\n";
+    indent(1); *_out << "return kama_res;\n";
+    *_out << "}\n\n";
+}
+
+// A map that implements `MergeByKey` (KR-136) is merged PER KEY: the same `mergeFrom` + `____mergeStep` pair a derived
+// record gets — so a record's merge walk reaches it as it reaches a nested record, and `mergeJsonBuffer` into a map
+// is bound-checked and works as into a record — with a step that walks the object's keys. Registered with the
+// instance, once its conditional conformances are decided (its `MergeByKey` needs `K`/`V` readable), as a record's
+// merge is registered with its derives — and only when the program serializes at all.
+void CEmitter::registerMergeByKey(ClassInfo& ci)
+{
+    if (!_usesSerde || !ci.isGenericInst || !implementsContractTemplate(&ci, "MergeByKey")) return;
+    {
+        if (ci.methods.count("mergeFrom")) return;
+        if (!ci.methods.count("contains") || !ci.methods.count("getRefMut") || !ci.methods.count("put")
+            || !ci.methods.count("remove") || !ci.methods.count("keyFromText") || !ci.methods.count("deserialize")) return;
+        ci.mergeByKey = true;
+        auto addItf = [&](const std::string& itf) {
+            if (std::find(ci.interfaces.begin(), ci.interfaces.end(), itf) == ci.interfaces.end()) ci.interfaces.push_back(itf);
+        };
+        addItf(synthConformanceName("MergeDeserializable", ci.name));
+        MethodInfo mi; mi.cName = ci.name + "__mergeFrom"; mi.visibility = Visibility::Public;
+        mi.isSynthMerge = true;
+        mi.returnType = resultUnitOwnedErrorTypeNode();
+        scanTypeForCollections(mi.returnType);
+        ParamSig r; r.name = "r"; r.byRef = false; r.className = preludeName("Deserializer"); mi.params.push_back(r);
+        ci.methods["mergeFrom"] = mi;
+    }
+}
+
+// The per-key step and `mergeFrom` of a `MergeByKey` map. Each key the object names is read back from its text, then:
+//   `null`                                   -> its entry is removed (RFC 7396);
+//   an entry that merges in place, present,  -> merged into, in the SAME log, one level deeper (a derived record, or
+//     and not removed earlier in this object      another per-key map when an object is next);
+//   anything else                            -> a whole value is read and put.
+// Puts and removals are staged as log OPERATIONS (kama_merge_stage), which run after every plain write, deepest map
+// first: a put may rehash and move the entry a plain write points into. Nothing is written until the whole document
+// has been read, so a failure anywhere leaves the map as it was. An error names the key it was under.
+void CEmitter::emitMergeByKeyDefinition(ClassInfo& ci)
+{
+    const std::string M = ci.name;
+    const std::string stat = _emitStaticClass ? "static inline " : "";
+    const std::string resC = cType(ci.methods["mergeFrom"].returnType);
+    MethodInfo& cm = ci.methods["contains"];
+    MethodInfo& gm = ci.methods["getRefMut"];
+    SharedIdentifier kNode = (cm.node && cm.node->params && !cm.node->params->empty()) ? deepSubstType(cm.node->params->front()->type)
+                                                                                       : SharedIdentifier();
+    SharedIdentifier vNode = deepSubstType(gm.returnType);
+    const std::string K = cType(kNode), V = cType(vNode);
+    auto dtorOf = [&](const std::string& ct) -> std::string {
+        auto c = _classes.find(ct);
+        return (c != _classes.end() && c->second.destructible) ? ct + "__dtor" : std::string();
+    };
+    const std::string kDtor = dtorOf(K), vDtor = dtorOf(V);
+    const std::string optV = cType(ci.methods["remove"].returnType), optDtor = dtorOf(optV);
+    const std::string kResC = cType(ci.methods["keyFromText"].returnType);
+    const std::string mapResC = cType(ci.methods["deserialize"].returnType);
+    const std::string inField = _classes[preludeName("DeError")].methods["inField"].cName;
+    const std::string vRec = V;
+    const bool vInPlace = mergesInPlace(vRec);
+    const bool vByKey = vInPlace && _classes[vRec].mergeByKey;
+
+    // The operations' thunks: an entry `{k, v}` put, a key removed (its old value dropped), and their drops.
+    *_out << "typedef struct " << M << "____kv { " << K << " k; " << V << " v; } " << M << "____kv;\n";
+    *_out << stat << "void " << M << "____mergePut(void* m, void* e) { " << M << "____kv* p = (" << M << "____kv*)e; "
+          << ci.methods["put"].cName << "((" << M << "*)m, p->k, p->v); }\n";
+    *_out << stat << "void " << M << "____mergeRemove(void* m, void* k) { " << optV << " o = " << ci.methods["remove"].cName
+          << "((" << M << "*)m, (" << K << "*)k); " << (optDtor.empty() ? "(void)o; " : optDtor + "(&o); ")
+          << (kDtor.empty() ? "" : kDtor + "((" + K + "*)k); ") << "}\n";
+    *_out << stat << "void " << M << "____mergeKvDrop(void* e) { " << M << "____kv* p = (" << M << "____kv*)e; "
+          << (kDtor.empty() ? "" : kDtor + "(&p->k); ") << (vDtor.empty() ? "" : vDtor + "(&p->v); ") << "(void)p; }\n";
+    *_out << stat << "void " << M << "____mergeKDrop(void* k) { " << (kDtor.empty() ? "(void)k; " : kDtor + "((" + K + "*)k); ") << "}\n";
+    *_out << stat << "int " << M << "____mergeKeyEq(const void* a, const void* b) { return "
+          << eqFieldTest(kNode, "(*(" + K + "*)a)", "(*(" + K + "*)b)", ci.declLine()) << "; }\n";
+
+    *_out << stat << resC << " " << M << "____mergeStep(" << M << "* self, kama__Deserializer r, kama_merge_log* kama_log)\n{\n";
+    const std::string err = "return (" + resC + "){ .kama_tag = " + resC + "_Err, .kama_u.k_Err = { .k_error = ";
+    indent(1); *_out << "r.kama_vtbl->k_beginObject(r.kama_obj, 0);\n";
+    indent(1); *_out << "while (r.kama_vtbl->k_moreFields(r.kama_obj)) {\n";
+    indent(2); *_out << "kama__FieldKey kama_key = r.kama_vtbl->k_field(r.kama_obj);\n";
+    indent(2); *_out << "if (kama_key.kama_tag != kama__FieldKey_Name) { kama__FieldKey__dtor(&kama_key); r.kama_vtbl->k_fail(r.kama_obj); break; }\n";
+    indent(2); *_out << "kama_string kama_kt = kama_string__copy(&kama_key.kama_u.k_Name.k_name);\n";
+    indent(2); *_out << "kama__FieldKey__dtor(&kama_key);\n";
+    indent(2); *_out << kResC << " kama_kr = " << ci.methods["keyFromText"].cName << "(self, kama_string__copy(&kama_kt));\n";
+    indent(2); *_out << "if (kama_kr.kama_tag == " << kResC << "_Err) { " << err << inField << "(kama_kr.kama_u.k_Err.k_error, kama_kt) } }; }\n";
+    indent(2); *_out << K << " kama_k = kama_kr.kama_u.k_Ok.k_value;\n";
+    indent(2); *_out << "if (r.kama_vtbl->k_readNull(r.kama_obj)) {\n";
+    indent(3); *_out << "kama_merge_stage(kama_log, self, &kama_k, sizeof(" << K << "), _Alignof(" << K << "), " << M << "____mergeKDrop, "
+                     << M << "____mergeRemove);\n";
+    indent(3); *_out << "kama_string__dtor(&kama_kt);\n";
+    indent(3); *_out << "continue;\n";
+    indent(2); *_out << "}\n";
+    if (vInPlace) {
+        indent(2); *_out << "if (" << cm.cName << "(self, &kama_k) && !kama_merge_removed(kama_log, self, " << M << "____mergeRemove, &kama_k, "
+                         << M << "____mergeKeyEq)" << (vByKey ? " && r.kama_vtbl->k_atKeyedMap(r.kama_obj)" : "") << ") {\n";
+        indent(3); *_out << "kama_log->kama_depth++;\n";
+        indent(3); *_out << resC << " kama_ms = " << vRec << "____mergeStep(" << gm.cName << "(self, &kama_k), r, kama_log);\n";
+        indent(3); *_out << "kama_log->kama_depth--;\n";
+        if (!kDtor.empty()) { indent(3); *_out << kDtor << "(&kama_k);\n"; }
+        indent(3); *_out << "if (kama_ms.kama_tag == " << resC << "_Err) { " << err << inField << "(kama_ms.kama_u.k_Err.k_error, kama_kt) } }; }\n";
+        indent(3); *_out << "kama_string__dtor(&kama_kt);\n";
+        indent(3); *_out << "continue;\n";
+        indent(2); *_out << "}\n";
+    }
+    // A whole value, read and put. Its error names the key it was under; so does a reader that failed reading it.
+    indent(2); *_out << M << "____kv kama_kv; kama_kv.k = kama_k;\n";
+    {
+        ScopedStr _sc(_serdeStepC, "kama_kt"), _st(_serdeStep, std::string());
+        emitDeFieldRead(vNode, "kama_kv.v", 2, resC, (kDtor.empty() ? std::string() : kDtor + "(&kama_kv.k); "));
+    }
+    indent(2); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) { " << (kDtor.empty() ? "" : kDtor + "(&kama_kv.k); ")
+                     << (vDtor.empty() ? "" : vDtor + "(&kama_kv.v); ") << err
+                     << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", "kama_kt") << " } }; }\n";
+    indent(2); *_out << "kama_merge_stage(kama_log, self, &kama_kv, sizeof(" << M << "____kv), _Alignof(" << M << "____kv), "
+                     << M << "____mergeKvDrop, " << M << "____mergePut);\n";
+    indent(2); *_out << "kama_string__dtor(&kama_kt);\n";
+    indent(1); *_out << "}\n";
+    indent(1); *_out << "r.kama_vtbl->k_endObject(r.kama_obj);\n";
+    indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) " << err << deErrorBox("r.kama_vtbl->k_errorKind(r.kama_obj)", kamaStrLit("")) << " } };\n";
+    indent(1); *_out << "return (" << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama__Unit_Unit } };\n";
+    *_out << "}\n\n";
+
+    // The entry: per key when an object is next; a pair array is read whole and replaces the map, as before KR-136.
+    *_out << stat << resC << " " << M << "__mergeFrom(" << M << "* self, kama__Deserializer r)\n{\n";
+    indent(1); *_out << "kama_merge_log kama_log = { 0 };\n";
+    indent(1); *_out << resC << " kama_res;\n";
+    indent(1); *_out << "if (r.kama_vtbl->k_atKeyedMap(r.kama_obj)) kama_res = " << M << "____mergeStep(self, r, &kama_log);\n";
+    indent(1); *_out << "else {\n";
+    indent(2); *_out << mapResC << " kama_w = " << M << "__deserialize(r);\n";
+    indent(2); *_out << "if (kama_w.kama_tag == " << mapResC << "_Err) kama_res = (" << resC << "){ .kama_tag = " << resC
+                     << "_Err, .kama_u.k_Err = { .k_error = kama_w.kama_u.k_Err.k_error } };\n";
+    indent(2); *_out << "else { kama_merge_put(&kama_log, self, &kama_w.kama_u.k_Ok.k_value, sizeof(" << M << "), _Alignof(" << M
+                     << "), " << (dtorOf(M).empty() ? std::string("NULL") : "(void (*)(void*))&" + dtorOf(M)) << "); kama_res = ("
+                     << resC << "){ .kama_tag = " << resC << "_Ok, .kama_u.k_Ok = { .k_value = kama__Unit_Unit } }; }\n";
+    indent(1); *_out << "}\n";
     indent(1); *_out << "kama_merge_end(&kama_log, kama_res.kama_tag == " << resC << "_Ok);   // all or nothing\n";
     indent(1); *_out << "return kama_res;\n";
     *_out << "}\n\n";
@@ -34368,7 +34513,7 @@ void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo&
         return;
     }
     if (mi.isSynthBytes) { emitBytesDefinition(ci, name); return; }   // KR-127 — never a variant (registerDerives refuses it)
-    if (mi.isSynthMerge) { emitMergeDefinition(ci); return; }          // KR-125 — never a variant (registerDerives skips it)
+    if (mi.isSynthMerge) { ci.mergeByKey ? emitMergeByKeyDefinition(ci) : emitMergeDefinition(ci); return; }   // KR-125/KR-136
     emitBagCtorBody(ci, name);   // M6 `@generate(of|zero)` — never a variant (registerDerives refuses it)
 }
 
@@ -34703,6 +34848,17 @@ void CEmitter::computeGraphNodeTypes()
     }
     _nsCtx = saved; _typeSubst.clear();
     regateGenericInstances();
+    // …nor does a per-key map (KR-136) whose entries reach a `Shared`/`Weak`: its values are graph edges, which only a
+    // graph walk reads, so it has no by-value entry to merge into or put.
+    for (auto& kv : _classes) {
+        ClassInfo& ci = kv.second;
+        if (!ci.mergeByKey || !ci.reachesPointer) continue;
+        auto mf = ci.methods.find("mergeFrom");
+        if (mf != ci.methods.end() && mf->second.isSynthMerge) ci.methods.erase(mf);
+        const std::string m = pinnedInstanceName("MergeDeserializable", ci.name);
+        ci.interfaces.erase(std::remove(ci.interfaces.begin(), ci.interfaces.end(), m), ci.interfaces.end());
+        ci.mergeByKey = false;
+    }
     _graphNodeOrder.clear();
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
