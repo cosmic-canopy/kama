@@ -1,0 +1,26 @@
+// A negative integer is a `Map`/`Set` key like any other. The integers' `hash()` was `cast<uint64>(this)`, and a
+// `cast` preserves the VALUE — so once a narrowing cast checked, `-1` did not fit a `uint64` and every insert of a
+// negative key trapped: "value -1 does not fit the target range". A signed width's hash is now its sign-extended
+// bits (`bitcast`), every width keeps hashing equal values equal, and an unsigned width is unchanged.
+import { std::collections::Map, std::collections::Set };
+
+fn int32 main() {
+    Map<int32, int32> m = Map.empty();
+    m.put(key: -1, value: 10);
+    m.put(key: -2147483648, value: 20);
+    m.put(key: 5, value: 30);
+    Set<int64> s = Set.empty();
+    s.add(key: -5i64);
+    s.add(key: -5i64);
+    Map<int8, int32> small = Map.empty();
+    small.put(key: -128i8, value: 1);
+    Map<isize, int32> sz = Map.empty();
+    sz.put(key: -7, value: 2);
+    Map<uint64, int32> big = Map.empty();
+    big.put(key: 18446744073709551615ui64, value: 3);
+    int32 n = 0;
+    if (m.length() == 3 && m.contains(key: -1) && m.contains(key: -2147483648)) { n = n + 1; }
+    if (s.length() == 1 && s.contains(key: -5i64)) { n = n + 2; }
+    if (small.contains(key: -128i8) && sz.contains(key: -7) && big.contains(key: 18446744073709551615ui64)) { n = n + 4; }
+    return n;   // 7
+}

@@ -183,9 +183,11 @@ type adapter <string> implements Hashable {
         return h;
     }
 }
-// Every integer width is its own content hash — `cast<uint64>(this)` (signed widths sign-extend, which is
-// fine: equal values still hash equal; on uint64 the cast is the identity) + scalar `equals` — so every
-// integer type is a universal `Map`/`Set` key and satisfies `<T: Hashable + Equatable>` without an import.
+// Every integer width is its own content hash — its bits as a `uint64` (a signed width sign-extended first: equal
+// values still hash equal) + scalar `equals` — so every integer type is a universal `Map`/`Set` key and satisfies
+// `<T: Hashable + Equatable>` without an import. The signed widths take the bits with `bitcast`, never `cast`: a
+// `cast` preserves the VALUE and traps on one that does not fit, so `cast<uint64>(-1)` made every negative key a
+// trap on insert — `Map<int32, V>.put(key: -1, …)`, `Set<int64>.add(key: -5)` — once a narrowing cast checked.
 //
 // `isize`/`usize` belong here as much as any fixed width, and their absence until 0.9.136 was not a choice:
 // they carried no `builtInVal`, so they could not be NAMED in a target list at all. That made the size type
@@ -195,7 +197,10 @@ type adapter <string> implements Hashable {
 // The `Map`'s `Hasher::finish` supplies the avalanche; a well-behaved key sequence (0,1,2,…) maps to
 // consecutive slots, which open addressing handles fine, and `FastHasher` can be selected to skip
 // splitmix entirely for such keys.
-type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize> implements Hashable {
+type adapter <int8, int16, int32, int64, isize> implements Hashable {
+    public const fn uint64 hash() { int64 wide = cast<int64>(this); return bitcast<uint64>(wide); }
+}
+type adapter <uint8, uint16, uint32, uint64, usize> implements Hashable {
     public const fn uint64 hash() { return cast<uint64>(this); }
 }
 // Every scalar and `string` may cross an isolate boundary: a scalar has no interior to share, and a
