@@ -784,6 +784,40 @@ JSON
     || { grep -qF 'Name it with the `embedFiles` key' "$tmp/e" \
          && ok "...and a dependency's relative \`--embed-file\` in \`ldflags\` is refused, naming \`embedFiles\`" \
          || { bad "a dependency's relative --embed-file was refused for the wrong reason"; head -3 "$tmp/e" >&2; }; }
+# A target entry takes what a project takes (KR-162): a wasm configuration is a target, and refusing
+# `jsLibraries`/`emSettings` there ("unknown key in the target") left no structured way to give one
+# configuration its own glue. Lists append after the project's, like `ldflags`; the target has the last word on
+# an `emSettings` scalar and on `shellFile`; an `emSettings` list unions.
+app emtgt geo <<'JSON'
+{ "name": "emtgt", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "geo": { "path": "./vendor/geo" } },
+  "jsLibraries": ["js/own.js"], "shellFile": "web/default.html",
+  "emSettings": { "STACK_SIZE": "4MB", "EXPORTED_RUNTIME_METHODS": ["ccall"] },
+  "select": { "TARGET": { "WEB": { "triple": "wasm32-emscripten-none", "jsLibraries": ["js/web.js"],
+      "shellFile": "web/page.html", "preloadFiles": ["levels"],
+      "emSettings": { "STACK_SIZE": "8MB", "EXPORTED_RUNTIME_METHODS": ["cwrap"] } } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+# …and a dependency's own `WEB` arm contributes, as its `ldflags` would.
+cat > "$tmp/emtgt/vendor/geo/kama.json" <<'JSON'
+{ "name": "geo", "version": "1.0.0", "kind": "library", "source": "src",
+  "select": { "TARGET": { "WEB": { "triple": "wasm32-emscripten-none", "jsLibraries": ["js/geoweb.js"] } } },
+  "modules": { ".": { "visibility": "public" } } }
+JSON
+"$KAMA" pkg install "$tmp/emtgt/kama.json" >/dev/null 2>&1 || true
+line=$("$KAMA" build "$tmp/emtgt/kama.json" --target WEB --cc "echo emcc" -o "$tmp/emtgt/app.html" 2>"$tmp/e" || true)
+tok=1
+printf '%s' "$line" | grep -qF -- "geo/js/geoweb.js" || { tok=0; bad "a dependency's target \`jsLibraries\` did not reach the link"; }
+printf '%s' "$line" | grep -qE -- "own\.js.*web\.js" || { tok=0; bad "a target's \`jsLibraries\` did not follow the project's"; }
+printf '%s' "$line" | grep -qF -- "-sSTACK_SIZE=8MB" && ! printf '%s' "$line" | grep -qF -- "-sSTACK_SIZE=4MB" \
+    || { tok=0; bad "a target's \`emSettings\` scalar did not have the last word"; }
+printf '%s' "$line" | grep -q -- "EXPORTED_RUNTIME_METHODS=[^ ]*ccall" && printf '%s' "$line" | grep -q -- "EXPORTED_RUNTIME_METHODS=[^ ]*cwrap" \
+    || { tok=0; bad "a target's \`emSettings\` list did not union with the project's"; }
+printf '%s' "$line" | grep -qF -- "--shell-file $tmp/emtgt/web/page.html" && printf '%s' "$line" | grep -qF -- "--preload-file $tmp/emtgt/levels@/levels" \
+    || { tok=0; bad "a target's \`shellFile\`/\`preloadFiles\` did not reach the link"; }
+[ "$tok" = 1 ] && ok "a target entry takes \`jsLibraries\`, \`emSettings\` and the file keys, after the project's" \
+    || { printf '%s\n' "$line" | sed 's/^/    /' >&2; head -3 "$tmp/e" >&2; }
+
 # The path rules every file-naming key shares.
 app emabs <<'JSON'
 { "name": "emabs", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",

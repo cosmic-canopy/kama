@@ -405,6 +405,10 @@ spelling puts it (`assets` → `/assets`), which is where emcc put it when run f
 As raw `ldflags` these resolved against wherever the build was started, so they built from the manifest's
 own directory only.
 
+A **`select.TARGET` entry takes all five keys**, so one wasm configuration can carry its own page, assets and
+glue. Its lists follow the project's, as its `ldflags` do; it has the last word on `shellFile` and on an
+`emSettings` scalar, and an `emSettings` list unions with the project's.
+
 **`emSettings`** is an object, and the **shape of each value decides what it means**:
 
 | value | kind | how it merges |

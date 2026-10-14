@@ -2901,16 +2901,6 @@ The fix is to tell the reader when it reads the stdlib's manifest, or to refuse 
 path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
 diagnostic, not a feature: no program can use such a package today.
 
-<a id="s10-target-js-keys"></a>
-
-### A target entry refuses `jsLibraries` and `emSettings` (KR-162)
-
-Measured on `0.9.589`, filed 2026-10-14. `"select": {"TARGET": {"CHK": {"triple": "wasm32-emscripten-none", "jsLibraries": ["x.js"]}}}` is "unknown key
-`jsLibraries` in the target `CHK`"; `emSettings` the same. A target entry accepts `triple`, `cc`, `ar`, `sysroot`,
-`runtime`, `subsystem`, `cflags`, `ldflags`, `cxxflags`, `objcflags`, `cxx`, `link`, `webgpu`, `no-heap`,
-`reproducible-float`, `default` (`src/kama.driver.cpp` ~3772). **Scheduled:** both accepted, merged like `ldflags`.
-Adjacent to KR-144's gating.
-
 <a id="s10-agent-tooling"></a>
 
 ### kama's own AI-agent tooling (KR-148)

@@ -2377,6 +2377,38 @@ static FileGate fileGateOf(const SharedCompilationUnit& unit, const std::string&
 }
 
 // ---- build configuration: target triples ------------------------------------------------------
+// One `-s<KEY>=<value>` emscripten setting. The JSON SHAPE decides which of the two kinds it is, which
+// is the whole reason `emSettings` is an object rather than an array of raw `-sFOO=1` strings: emcc is
+// last-wins on a repeated `-s`, so kama's own `-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8` silently
+// beat any project that set the same key through `cflags`. A merge needs comparable keys, and a raw
+// string array is just `cflags` with extra steps.
+//
+// A JSON ARRAY is a LIST setting and UNIONS (kama's values, then dependencies', then the project's);
+// anything else is a SCALAR and is last-wins, with the project winning over kama and over every
+// dependency. So the project can say `"EXPORTED_RUNTIME_METHODS": ["ccall"]` and get its own name
+// AND the two the stdlib's JS glue needs.
+struct EmValue {
+    bool isList = false;
+    std::vector<std::string> list;   // isList
+    std::string scalar;              // !isList — already rendered (`true` -> "1", a number verbatim)
+};
+
+// A target entry's `emSettings` laid over its manifest's own, one tier down from the merge across manifests: a
+// list unions, and the target has the last word on a scalar (KR-162).
+static void overlayEmSettings(std::vector<std::pair<std::string, EmValue>>& base,
+                              const std::vector<std::pair<std::string, EmValue>>& over)
+{
+    for (const auto& kv : over) {
+        auto it = std::find_if(base.begin(), base.end(),
+                               [&](const std::pair<std::string, EmValue>& b) { return b.first == kv.first; });
+        if (it == base.end()) { base.push_back(kv); continue; }
+        if (!(it->second.isList && kv.second.isList)) { it->second = kv.second; continue; }
+        for (const std::string& v : kv.second.list)
+            if (std::find(it->second.list.begin(), it->second.list.end(), v) == it->second.list.end())
+                it->second.list.push_back(v);
+    }
+}
+
 // A target is an `<arch>-<os>-<abi>` triple — Zig's 3-part form, because GNU's `vendor` field is
 // vestigial (`unknown`/`pc`); a 4-part spelling is accepted and its vendor dropped, so pasting a Rust
 // or clang triple works. Selecting a target inserts its NAME plus its derived component flags into the
@@ -2421,6 +2453,12 @@ struct TargetSpec {
     // not for the clang flag it happens to emit today (the rule ROADMAP row 20 writes down for
     // `@linkName`: kama's only backend is C now, and a 2.0 bytecode VM has no `-ffp-contract`).
     bool reproFloat = false, reproFloatSet = false;
+    // The emscripten keys a project takes, which a target takes too (KR-162): APPENDED to the project's lists
+    // like `ldflags`, with the last word on an `emSettings` scalar and on `shellFile`. A wasm configuration is
+    // a target, so this is where a page, a packed asset or a JS library for one configuration belongs.
+    std::vector<std::string> jsLibraries, embedFiles, preloadFiles;
+    std::string shellFile;
+    std::vector<std::pair<std::string, EmValue>> emSettings;
     std::string triple() const { return arch + "-" + os + "-" + abi; }
     bool hosted()      const { return os != "none"; }         // has an OS and a libc
     bool isWasm()      const { return arch == "wasm32" || arch == "wasm64"; }
@@ -2655,6 +2693,11 @@ static bool resolveTarget(const std::string& selRaw,
         if (u.webgpuSet) { out.webgpu = u.webgpu; out.webgpuSet = true; }
         if (u.noHeapSet) { out.noHeap = u.noHeap; out.noHeapSet = true; }
         if (u.reproFloatSet) { out.reproFloat = u.reproFloat; out.reproFloatSet = true; }
+        out.jsLibraries.insert(out.jsLibraries.end(),   u.jsLibraries.begin(),  u.jsLibraries.end());
+        out.embedFiles.insert(out.embedFiles.end(),     u.embedFiles.begin(),   u.embedFiles.end());
+        out.preloadFiles.insert(out.preloadFiles.end(), u.preloadFiles.begin(), u.preloadFiles.end());
+        if (!u.shellFile.empty()) out.shellFile = u.shellFile;
+        overlayEmSettings(out.emSettings, u.emSettings);
         if (out.arch.empty() || out.os.empty()) {
             err = "target '" + sel + "' declares no `triple` and is not a built-in";
             return false;
@@ -3136,22 +3179,6 @@ static bool isRegistryDep(const DepSpec& d)
     return d.git.empty() && d.url.empty() && d.path.empty() && !d.version.empty();
 }
 // ---------------------------------------------------------------------------------------------
-
-// One `-s<KEY>=<value>` emscripten setting. The JSON SHAPE decides which of the two kinds it is, which
-// is the whole reason `emSettings` is an object rather than an array of raw `-sFOO=1` strings: emcc is
-// last-wins on a repeated `-s`, so kama's own `-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8` silently
-// beat any project that set the same key through `cflags`. A merge needs comparable keys, and a raw
-// string array is just `cflags` with extra steps.
-//
-// A JSON ARRAY is a LIST setting and UNIONS (kama's values, then dependencies', then the project's);
-// anything else is a SCALAR and is last-wins, with the project winning over kama and over every
-// dependency. So the project can say `"EXPORTED_RUNTIME_METHODS": ["ccall"]` and get its own name
-// AND the two the stdlib's JS glue needs.
-struct EmValue {
-    bool isList = false;
-    std::vector<std::string> list;   // isList
-    std::string scalar;              // !isList — already rendered (`true` -> "1", a number verbatim)
-};
 
 // The language of a `csources` entry, read from its extension. `Kama` is kama's own generated C, which is
 // never a csources entry but shares the compile table (see `ccInputs` in the build).
@@ -3836,6 +3863,23 @@ struct ManifestReader {
                 else if (k == "no-heap") { if (!boolean(t.noHeap)) return false; t.noHeapSet = true; }
                 else if (k == "reproducible-float") {
                     if (!boolean(t.reproFloat)) return false; t.reproFloatSet = true;
+                }
+                // What a project takes for emscripten, a target takes, under the same rules (KR-162).
+                else if (k == "jsLibraries" || k == "embedFiles" || k == "preloadFiles") {
+                    std::vector<std::string>& into = k == "jsLibraries" ? t.jsLibraries
+                                                   : k == "embedFiles"  ? t.embedFiles : t.preloadFiles;
+                    if (!stringArray(into, k.c_str())) return false;
+                    for (const std::string& p : into)
+                        if (k == "jsLibraries" ? !validRelPath(p, k.c_str()) : !validEmFile(p, k.c_str())) return false;
+                    if (topKeysOut) topKeysOut->insert("select.TARGET." + k);
+                }
+                else if (k == "shellFile") {
+                    if (!str(t.shellFile) || !validRelPath(t.shellFile, "shellFile")) return false;
+                    if (topKeysOut) topKeysOut->insert("select.TARGET.shellFile");
+                }
+                else if (k == "emSettings") {
+                    if (!emSettingsObject(t.emSettings)) return false;
+                    if (topKeysOut) topKeysOut->insert("select.TARGET.emSettings");
                 }
                 // Same spelling every other select value uses (see valueGroup) — a project that only ever
                 // builds for one target declares it once instead of retyping `--target`, and the editor
@@ -5318,6 +5362,11 @@ static bool loadBuildSettings(const std::string& manifestPath, const std::string
     out.objcflags.insert(out.objcflags.end(), t->second.objcflags.begin(), t->second.objcflags.end());
     if (t->second.linkSet) out.link = t->second.link;   // replaces THIS manifest's own list, nobody else's
     if (t->second.reproFloatSet) out.reproFloat = t->second.reproFloat;   // same: this manifest's own tier
+    out.jsLibraries.insert(out.jsLibraries.end(),   t->second.jsLibraries.begin(),  t->second.jsLibraries.end());
+    out.embedFiles.insert(out.embedFiles.end(),     t->second.embedFiles.begin(),   t->second.embedFiles.end());
+    out.preloadFiles.insert(out.preloadFiles.end(), t->second.preloadFiles.begin(), t->second.preloadFiles.end());
+    if (!t->second.shellFile.empty()) out.shellFile = t->second.shellFile;
+    overlayEmSettings(out.emSettings, t->second.emSettings);
     return true;
 }
 
@@ -5657,6 +5706,11 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 if (!l.cxxflags.empty())  t.cxxflags  = l.cxxflags;
                 if (!l.objcflags.empty()) t.objcflags = l.objcflags;
                 if (!l.cxx.empty())       t.cxx       = l.cxx;
+                if (!l.jsLibraries.empty())  t.jsLibraries  = l.jsLibraries;
+                if (!l.embedFiles.empty())   t.embedFiles   = l.embedFiles;
+                if (!l.preloadFiles.empty()) t.preloadFiles = l.preloadFiles;
+                if (!l.shellFile.empty())    t.shellFile    = l.shellFile;
+                overlayEmSettings(t.emSettings, l.emSettings);
             }
             for (auto& kv : lgroups) {                                            // local extends/wins
                 SelectGroup& g = g_selectGroups[kv.first];
@@ -5809,6 +5863,13 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         if (!g_rootSettings.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_rootSettings.shellFile);
         for (const std::string& f : g_rootSettings.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
         for (const std::string& f : g_rootSettings.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
+        // …then the target's own, after the project's: the target has the last word (KR-162).
+        for (const std::string& js : g_target.jsLibraries)
+            g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
+        if (!g_target.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_target.shellFile);
+        for (const std::string& f : g_target.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
+        for (const std::string& f : g_target.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
+        overlayEmSettings(g_rootSettings.emSettings, g_target.emSettings);
         for (const SourceEntry& inc : g_rootSettings.cincludes)
             g_cincludes.push_back({ "", joinPathLexical(dirName(req.manifest), inc.path), inc.gate });
         // The project merges LAST, which is what makes "the project wins" true of a scalar — including
@@ -8364,6 +8425,10 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     { "publish", "0.9.453" },
     { "description", "0.9.523" }, { "repository", "0.9.523" }, { "keywords", "0.9.523" },
     { "shellFile", "0.9.602" }, { "embedFiles", "0.9.602" }, { "preloadFiles", "0.9.602" },
+    // …and the target-entry keys, named by where they sit (an older compiler says "unknown key in the target").
+    { "select.TARGET.jsLibraries", "0.9.603" }, { "select.TARGET.emSettings", "0.9.603" },
+    { "select.TARGET.shellFile", "0.9.603" }, { "select.TARGET.embedFiles", "0.9.603" },
+    { "select.TARGET.preloadFiles", "0.9.603" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
