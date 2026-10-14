@@ -2113,6 +2113,9 @@ byte-level `readFile`/`writeFile` that keep working unchanged: `readText(path:) 
 and `writeText(path:, text:) -> Result<isize, IoError>` (the byte count, and it create/truncates like
 `writeFile`). `writeText` copies nothing on the way in — `text.bytes()` is a borrow of the string's own
 storage. <!-- test: fs_text -->
+Both whole-file writes are all or an error: `Ok` means every byte was written, and a write the OS cut short
+(a full disk, a file-size limit) is the `Err` that stopped it, never `Ok` with fewer bytes — `File.write` is the
+partial-write primitive, and `std::io::writeAll` is the loop over it that both use.
 
 ⚠️ **`readText` validates, and so does every other path that builds a `string` out of foreign bytes** —
 `std::io::readAll` and `BufReader.readLine`, which are where the reading actually happens. Invalid UTF-8

@@ -4,7 +4,7 @@ import {
     std::io::Descriptor,
     std::io::lastError,
     std::io::Reader,
-    std::io::Writer,
+    std::io::Writer, std::io::writeAll,
     std::collections::DynamicArray,
     std::collections::FixedArray,
     std::collections::View, std::collections::ConstView,
@@ -418,20 +418,13 @@ type resource File implements Reader, Writer, Sendable {
         return Result::Ok(value: give buf);
     }
 
-    // Write the whole buffer, looping until every byte is sent (partial writes + EINTR handled).
+    // Write the whole buffer: `Ok(length)` only once every byte is written, else the error that stopped it.
+    // The loop is `std::io::writeAll`'s, the one every Writer shares.
     public unsafe fn Result<isize, IoError> writeAll(const ref DynamicArray<uint8> bytes) {
-        isize total = bytes.length();
-        isize off = 0;
-        while (off < total) {
-            isize remaining = total - off;
-            isize n = kama_write(fd: this.fd, buf: addr(of: bytes[off]), n: cast<usize>(remaining));
-            if (n < 0) {
-                if (kama_last_error() == kama_EINTR()) { continue; }
-                return Result::Err(error: lastError());
-            }
-            off = off + n;
-        }
-        return Result::Ok(value: total);
+        return match (writeAll(w: this, bytes: bytes.view())) {
+            case Ok(value: u):  Result::Ok(value: bytes.length());
+            case Err(error: e): Result::Err(error: e);
+        };
     }
 
     // The test is `>= 0`, not `> 0`, and that is the point: explicit field init let the empty niche be
@@ -493,12 +486,18 @@ unsafe fn Result<string, IoError> textOf(const ref DynamicArray<uint8> bytes) {
     }
 }
 
-// Create/truncate a file and write a string's UTF-8 bytes to it. No conversion and no copy: `bytes()` is
-// a borrow of the string's own storage, which is what made this a one-liner rather than a second loop.
+// Create/truncate a file and write a string's UTF-8 bytes to it: `Ok(length)` only once every byte is
+// written, as `writeFile`. No conversion and no copy: `bytes()` is a borrow of the string's own storage.
+// (It once made ONE `write`, the partial-write primitive, so a short write — a full disk, a file-size limit —
+// returned `Ok` with the file cut short.)
 unsafe fn Result<isize, IoError> writeText(const ref string path, const ref string text) {
     Result<File, IoError> r = File.open(path: path, mode: OpenMode::Write);
-    return match (r) {
-        case Ok(value: f):  f.write(bytes: text.bytes());
+    File f = match (give r) {
+        case Ok(value: opened): give opened;
+        case Err(error: e):     { return Result::Err(error: e); }
+    };
+    return match (writeAll(w: f, bytes: text.bytes())) {
+        case Ok(value: u):  Result::Ok(value: text.length());
         case Err(error: e): Result::Err(error: e);
     };
 }

@@ -286,17 +286,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
-<a id="s1-writetext-short"></a>
-
-### `writeText` can write part of a file and report success (KR-150)
-
-Measured on `0.9.589`, filed 2026-10-14. `std::fs::writeText` calls `File.write(bytes:)` once — the partial-write primitive, which retries only `EINTR` —
-where `writeFile` goes through `writeAll`. Under a 1024-byte file-size limit, `writeText` of 3000 bytes returns
-`Ok(1024)` and leaves a 1024-byte file; `writeFile` returns `Err`. By reading, also: Linux caps one `write()` near
-2 GiB, and Windows `kama_write` narrows the size to `unsigned int`. **Scheduled, first:** silent data loss. Route it
-through `std::io::writeAll`. Fixture: a short write made observable (a file-size limit in a child, or a writer that
-accepts at most N bytes per call), asserting `Err` or the whole file.
-
 <a id="s1-cwd"></a>
 
 ### The current directory (KR-167)

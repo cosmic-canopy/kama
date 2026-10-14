@@ -274,8 +274,12 @@ KAMA_NOINLINE static int32_t kama__wopen(const char* path, int flags) {
 static inline int32_t   kama_open_read(const char* path)   { return kama__wopen(path, _O_RDONLY | _O_BINARY); }
 static inline int32_t   kama_open_create(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY); }
 static inline int32_t   kama_open_append(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY); }
-static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)_read((int)fd, buf, (unsigned int)n); }
-static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)_write((int)fd, buf, (unsigned int)n); }
+// `_read`/`_write` take an `unsigned int` count and return an `int`, so a `size_t` cast straight down wrapped:
+// 4 GiB + k asked for k bytes. One call moves at most INT_MAX; the callers loop for the rest, as for any
+// short transfer.
+static inline unsigned int kama__io_count(size_t n) { return n > 0x7fffffffu ? 0x7fffffffu : (unsigned int)n; }
+static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)_read((int)fd, buf, kama__io_count(n)); }
+static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)_write((int)fd, buf, kama__io_count(n)); }
 static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)_close((int)fd); }
 KAMA_NOINLINE static int32_t kama_unlink(const char* path) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
@@ -1403,7 +1407,7 @@ static inline DWORD WINAPI kama__cap_thread(LPVOID arg) {
             if (c->buf) kama_free(c->buf, c->kama_cap, 1);
             c->buf = nb; c->kama_cap = nc;
         }
-        int r = _read(c->fd, c->buf + c->kama_len, (unsigned int)(c->kama_cap - c->kama_len));
+        int r = _read(c->fd, c->buf + c->kama_len, kama__io_count(c->kama_cap - c->kama_len));
         if (r > 0)       c->kama_len += (size_t)r;
         else if (r == 0) break;                            // EOF
         else             { c->err = 1; return 0; }
