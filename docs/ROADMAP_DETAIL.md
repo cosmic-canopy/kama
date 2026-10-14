@@ -417,17 +417,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-ternary-optional-arms"></a>
-
-### A ternary of `Optional::Some`/`None` outside an initializer or `return` (KR-157)
-
-Measured on `0.9.589`, filed 2026-10-14. `o = c ? Optional::Some(value: 1) : Optional::None;` as an assignment, a field write or an argument reports
-"`Optional::Some` — scope-qualified call resolves to no known function" and "`Optional` has no variant `None`"; the
-same ternary initializing a declaration or returned works. The destination type does not reach the arms. A generic
-argument (`isNone(o: Optional::None)`) adds the false second error beside the true "cannot infer type parameter".
-And `o == Optional::None` advises implementing `Equatable<This>` on `Optional<int32>`, a prelude type nobody can edit
-(the answer is `match`, or KR-163's `isNone()`). **Scheduled:** every typed position threads its type into a ternary.
-
 <a id="s2-optional-queries"></a>
 
 ### `Optional`/`Result` answer yes/no questions (KR-163)

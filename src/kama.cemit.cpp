@@ -3063,6 +3063,33 @@ static std::string contextualNameHint(const std::string& nm)
     return "";
 }
 
+// An argument of a generic call whose inference failed, and was reported. A variant constructor there has no
+// type to take — that IS the failure — so it is not reported again as a second mistake (KR-157).
+void CEmitter::noteUntypedByInference(ASTNode* e)
+{
+    if (auto* h = dynamic_cast<HandoffNode*>(e)) e = h->value.get();
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(e)) { noteUntypedByInference(t->LHS.get()); noteUntypedByInference(t->RHS.get()); return; }
+    if (e) _untypedByInference.insert(e);
+}
+
+// `Optional::None` / `Optional::Some(…)` reached with no destination to type it: the generic enum DOES declare
+// the variant, so "has no variant" was false. Say what is missing — unless the call it is an argument of has
+// already been reported for failing to infer exactly that type.
+bool CEmitter::reportUntypedVariant(ASTNode* at, const std::string& tmpl, const std::string& shown,
+                                    const std::string& variant, int line)
+{
+    auto g = _genericTypes.find(tmpl);
+    if (g == _genericTypes.end() || !g->second.isVariant) return false;
+    const VariantCase* vc = nullptr;
+    for (auto& c : g->second.variants) if (c.name == variant) vc = &c;
+    if (!vc) return false;
+    if (!_untypedByInference.count(at))
+        unsupported(("`" + shown + "::" + variant + "` takes its type from where it goes, and nothing here gives it "
+                     "one — write it where the type is known (`" + shown + "<int32> o = " + shown + "::" + variant
+                     + (vc->payload.empty() ? "" : "(…)") + ";`)").c_str(), line);
+    return true;
+}
+
 void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
 {
     const int line = v->line;
@@ -3081,6 +3108,7 @@ void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
         if (_classes.count(t))            ci = &_classes[t];
         else if (_genericTypes.count(t))  ci = &_genericTypes[t];
         if (_enums.count(t) || (ci && ci->isVariant)) {
+            if (reportUntypedVariant(v, t, last, nm, line)) return;
             unsupported(("`" + last + "` has no variant `" + nm + "`").c_str(), line, nm);
             return;
         }
@@ -9511,18 +9539,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // inference — the same channel a local-decl uses. (A concrete-type ctor needs no threading.) #M8d.2
             bool isDotCtor = false;
             if (!isMatch && !isArrayLit) {
-                SharedStringList qual;
-                if (auto* iv = dynamic_cast<InvocationNode*>(r)) {
-                    if (iv->identifier) qual = iv->identifier->qualifier;
-                    isDotCtor = isGenericDotCtorCall(r);
-                }
-                else if (auto* id = dynamic_cast<IdentifierNode*>(r)) qual = id->qualifier;
-                if (qual && !qual->empty()) {
-                    auto q = std::make_shared<StringList>();
-                    for (size_t i = 0; i + 1 < qual->size(); ++i) q->push_back((*qual)[i]);
-                    std::string en = resolveUserName(*qual->back(), q);
-                    isVariantCtor = (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
-                }
+                isDotCtor = dynamic_cast<InvocationNode*>(r) && isGenericDotCtorCall(r);
+                isVariantCtor = isVariantCtorExpr(r);
             }
             if (isMatch || isVariantCtor || isArrayLit || isDotCtor) {
                 std::string lhsCType = exprClass(as->unaryExpression);      // class/union name
@@ -16087,6 +16105,7 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                     _callInst[inv][substSig()] = gi.mangledName;   // per call node, per enclosing substitution
                 } else {
                     _genericInferFailed.insert(inv);   // already diagnosed here — see the emit-side rule
+                    if (inv->args) for (auto& a : *inv->args) if (a) noteUntypedByInference(a->expression.get());
                 }
             }
             // Turbofish on a non-generic function is rejected at emit (emitInvocation), where it is a
@@ -24272,6 +24291,24 @@ static std::string seqArgCType(const ParamSig& p)
     return t;
 }
 
+// A variant constructor — `Optional::Some(value: 1)`, `Optional::None`, `E::A` — or a ternary choosing between
+// them. Neither knows its instance (`Optional_int32`) until a destination types it, so every typed position
+// threads its type in when this answers yes. The ternary was missing: `o = c ? Optional::Some(value: 1) :
+// Optional::None;` reached its arms untyped as an assignment or an argument, and reported two false errors
+// (KR-157).
+bool CEmitter::isVariantCtorExpr(ASTNode* e)
+{
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(e)) return isVariantCtorExpr(t->LHS.get()) || isVariantCtorExpr(t->RHS.get());
+    SharedStringList qual;
+    if (auto* iv = dynamic_cast<InvocationNode*>(e)) { if (iv->identifier) qual = iv->identifier->qualifier; }
+    else if (auto* id = dynamic_cast<IdentifierNode*>(e)) qual = id->qualifier;
+    if (!qual || qual->empty()) return false;
+    auto q = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < qual->size(); ++i) q->push_back((*qual)[i]);
+    std::string en = resolveUserName(*qual->back(), q);
+    return (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
+}
+
 // The SOURCE spelling of an inline `Type(...)` call, for a diagnostic — falls back to the mangled name.
 static std::string ctorDisp(const InvocationNode* iv, const std::string& fallback)
 {
@@ -24516,18 +24553,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         // construction (`f(o: Optional::Some(…))` / `…::None`) or a value-producing `match` (`f(x: match(…))`).
         // Thread the PARAM's C type as the target so the union instance / match result resolves, exactly as
         // the initializer / assignment / return / arm positions do. (An ordinary arg leaves these unset.)
-        bool argIsVariant = false;
-        {
-            SharedStringList vq;
-            if (ctorIv) { if (ctorIv->identifier) vq = ctorIv->identifier->qualifier; }
-            else if (auto* id = dynamic_cast<IdentifierNode*>(argExpr.get())) vq = id->qualifier;
-            if (vq && !vq->empty()) {
-                auto q = std::make_shared<StringList>();
-                for (size_t i = 0; i + 1 < vq->size(); ++i) q->push_back((*vq)[i]);
-                std::string en = resolveUserName(*vq->back(), q);
-                argIsVariant = (_classes.count(en) && _classes[en].isVariant) || _genericTypeParams.count(en);
-            }
-        }
+        const bool argIsVariant = isVariantCtorExpr(argExpr.get());
         bool argIsMatch = needsTargetType(argExpr.get());   // incl. a ternary yielding a match / array literal
         // An inline ctor is a temporary rvalue. To an INTERFACE `ref`/`out` param it can't be a fat pointer
         // inline — reject (bind first). To a concrete-class param (by value OR `ref`) it's materialized into
@@ -24698,6 +24724,17 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 val = emitExpression(argExpr);
                 _matchTargetCType = pmt; _variantTargetType = pvt;
                 valHoisted = true;   // union/match compound literal — keep its existing addressable form
+                // …but a ternary of them is an rvalue, so a borrow holds it in a temporary, dropped at scope end
+                // like any `kama_refarg` (KR-157). A non-const `ref` is refused below as for any temporary.
+                if (p.byRef && dynamic_cast<TernaryExpressionNode*>(argExpr.get())) {
+                    argIsTemp = true;
+                    if (_hoistOK) {
+                        std::string t = "kama_refarg" + std::to_string(_tempCounter++);
+                        _hoisted.push_back(p.className + " " + t + " = " + val + ";");
+                        if (_classes.count(p.className) && _classes[p.className].destructible) recordDestructibleLocal(t, p.className);
+                        val = t;
+                    } else rvalueBorrowCType = p.className;
+                }
             } else {
                 // FAIL CLOSED: an argument that does NOT get a destination threaded must not inherit the
                 // one an enclosing position left behind. Leaving it set is what let a `match` reachable
@@ -30278,6 +30315,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                              "here").c_str(), call->line, head);
             return "0";
         }
+        if (reportUntypedVariant(call, typeName, head, name, call->line)) return "0";
         unsupported(("`" + head + "::" + name + "` — scope-qualified call resolves to no known "
                      "function").c_str(), call->line);
         return "0";

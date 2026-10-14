@@ -1,0 +1,6 @@
+// A generic enum's variant takes its instance from where it goes (tests/ternary_variant_target.kama). With no
+// destination it says so — it used to claim "`Optional` has no variant `None`", which is false.
+fn int32 main() {
+    bool b = Optional::None == Optional::None;   // ERROR: nothing gives `Optional::None` a type
+    return 0;
+}

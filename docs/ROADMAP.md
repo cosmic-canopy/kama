@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-157 | **A ternary of `Optional::Some`/`None` outside an initializer or `return` reports two false errors** — as an assignment or an argument it says the call "resolves to no known function" and "`Optional` has no variant `None`"; the destination type never reaches the arms | S | [§2](ROADMAP_DETAIL.md#s2-ternary-optional-arms) |
 | KR-149 | **A map's JSON form decided from its key type at compile time — a maintainer decision** — a map picks its form at run time by asking its keys what they write (Rust `serde_json`'s answer, `0.9.587`), so an empty `Map<Point, V>` writes `{}` where it wrote `[]`. Deciding by type needs a branch on a type inside a generic body or a type descriptor on `Serializable`; the maintainer leans against the first. Both are reversible against data: readers accept `{}` and `[]` | — | [§4](ROADMAP_DETAIL.md#s4-map-form-by-type) |
 | KR-141 | **A failed multi-file check names the wrong file** — an error in `src/b.kama` ends with `src/a.kama FAILED`: the summary names the module's first file, as the passing one does | S | [§10](ROADMAP_DETAIL.md#s10-check-summary-file) |
 | KR-142 | **`kama seed` and a `kama-<name>` repository** — it refuses `kama-widget` and suggests `kama_widget`, which it also refuses (reserved); with no git identity the license names the package as its copyright holder | S | [§10](ROADMAP_DETAIL.md#s10-seed-names) |

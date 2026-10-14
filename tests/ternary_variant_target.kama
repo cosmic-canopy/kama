@@ -1,0 +1,46 @@
+// A ternary choosing between variant constructors takes its type from where it goes, in every typed position.
+// `o = c ? Optional::Some(value: 1) : Optional::None;` worked as an initializer or a `return`, and as an
+// assignment, a field write or an argument reported "`Optional::Some` — scope-qualified call resolves to no
+// known function" and "`Optional` has no variant `None`": the destination never reached the arms.
+// Returns 0.
+import { std::collections::DynamicArray };
+
+type enum Shape { Dot, Square(int32 side) }
+
+type resource R {
+    Optional<int32> f;
+    public ctor make() { this.f = Optional::None; }
+    public fn void set(bool b) { this.f = b ? Optional::Some(value: 1) : Optional::None; }
+    public const fn int32 get() { return match (this.f) { case Some(value: v): v; case None: 0; }; }
+}
+
+fn int32 val(Optional<int32> o) { return match (o) { case Some(value: v): v; case None: 0 - 1; }; }
+fn int32 borrowed(const ref Optional<int32> o) { return match (o) { case Some(value: v): v; case None: 0 - 1; }; }
+fn int32 side(Shape s) { return match (s) { case Dot: 0; case Square(side: n): n; }; }
+
+fn int32 main() {
+    bool yes = true;
+    bool no = false;
+    // An assignment to a local.
+    Optional<int32> o = Optional::None;
+    o = yes ? Optional::Some(value: 7) : Optional::None;
+    if (val(o: o) != 7) { return 1; }
+    o = no ? Optional::Some(value: 7) : Optional::None;
+    if (val(o: o) != 0 - 1) { return 2; }
+    // A field write.
+    R r = R.make();
+    r.set(b: true);
+    if (r.get() != 1) { return 3; }
+    // An argument, by value and borrowed, and a collection's `add`.
+    if (val(o: yes ? Optional::Some(value: 2) : Optional::None) != 2) { return 4; }
+    if (borrowed(o: no ? Optional::Some(value: 2) : Optional::None) != 0 - 1) { return 5; }
+    DynamicArray<Optional<int32>> xs = DynamicArray.empty();
+    xs.add(item: yes ? Optional::Some(value: 3) : Optional::None);
+    if (val(o: xs[0]) != 3) { return 6; }
+    // A user enum, and a nested ternary.
+    if (side(s: yes ? Shape::Square(side: 4) : Shape::Dot) != 4) { return 7; }
+    Shape s = Shape::Dot;
+    s = no ? Shape::Dot : (yes ? Shape::Square(side: 5) : Shape::Dot);
+    if (side(s: s) != 5) { return 8; }
+    return 0;
+}

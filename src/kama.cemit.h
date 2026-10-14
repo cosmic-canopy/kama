@@ -1725,6 +1725,7 @@ private:
     // to tell "discovery said no" from "discovery never came here", and stays silent about the first, so
     // one mistake keeps producing one diagnostic.
     std::set<const InvocationNode*>                 _genericInferFailed;
+    std::set<const ASTNode*>                        _untypedByInference;   // see noteUntypedByInference
     std::string substSig();      // the active _typeSubst as a stable key ("" outside a generic instance)
     std::string callInstOf(const InvocationNode* call);   // the instantiation for `call` here, or ""
     std::map<std::string, SharedIdentifier>         _typeSubst;     // type-param name -> concrete (only while emitting an instantiation)
@@ -1908,7 +1909,11 @@ private:
     std::string copyCall(const std::string& cls, const std::string& lvalue);
     std::string copiedThrough(const std::string& ty, SharedExpression v, int handoff);
     std::string copyFirst(const std::string& cls, const std::string& src, int depth);
+    bool isVariantCtorExpr(ASTNode* e);
     bool declaredCopyable(const SharedIdentifier& ty);
+    void noteUntypedByInference(ASTNode* e);
+    bool reportUntypedVariant(ASTNode* at, const std::string& tmpl, const std::string& shown,
+                              const std::string& variant, int line);
     // The fixpoint + the report. Runs after ALL emission on both entry points — see the .cpp.
     void checkNoHeapTransitive();
     // Is this body one the AUTHOR wrote, as opposed to the prelude or the stdlib? Asked only by
