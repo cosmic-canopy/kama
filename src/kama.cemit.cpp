@@ -18039,7 +18039,8 @@ bool CEmitter::refuseUnindexable(SharedExpression recv, ElementAccessNode* ea)
     }
     const std::string pk = primKeyOfCType(t);
     if (pk.empty()) return false;
-    unsupported(((std::string(strchr("aeiou", pk[0]) ? "an `" : "a `")) + pk + "` cannot be indexed" + reads).c_str(), ea);
+    const char* article = std::string("aeiou").find(pk[0]) != std::string::npos ? "an `" : "a `";
+    unsupported((article + pk + "` cannot be indexed" + reads).c_str(), ea);
     return true;
 }
 
