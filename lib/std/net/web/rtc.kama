@@ -1,0 +1,195 @@
+import {
+    std::io::IoError, std::io::IoErrorKind,
+    std::collections::View, std::collections::ConstView, std::collections::DynamicArray, std::collections::FixedArray,
+    std::net::DatagramSocket, std::net::SocketAddr, std::net::IpAddr, std::net::RecvFrom,
+    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
+};
+
+export { RtcConnection, RtcState, RtcDelivery, IceServer };
+
+// WebRTC DataChannel bindings (KR-172) — bodies in kama_net_web.js (emcc --js-library), the glue the raw fixtures
+// drove for a year with no type over it. Handles are int32 (< 0 = error). See kama_net_web.h.
+extern "kama_net_web.h";
+extern fn int32 kama_rtc_create(UnsafeConstPtr<uint8> ice, usize iceLen);
+extern fn int32 kama_rtc_datachannel(int32 h, int32 unreliable);
+extern fn int32 kama_rtc_offer(int32 h);
+extern fn int32 kama_rtc_answer(int32 h);
+extern fn int32 kama_rtc_local_sdp(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn int32 kama_rtc_set_remote(int32 h, UnsafeConstPtr<uint8> buf, usize n);
+extern fn int32 kama_rtc_dc_state(int32 h);
+extern fn int32 kama_rtc_send(int32 h, UnsafeConstPtr<uint8> buf, usize n);
+extern fn int32 kama_rtc_recv(int32 h, UnsafePtr<uint8> buf, usize n);
+extern fn void  kama_rtc_close(int32 h);
+
+// `Disconnected` is the transient one: ICE lost the path and may find it again, so it is not `Closed` (the glue used
+// to treat it as closed, for good).
+type enum RtcState { Connecting, Open, Disconnected, Closed }
+
+// What the channel promises, chosen by the OFFERER, which opens it — the answerer receives it as it was opened.
+// `Unreliable` is unordered with no retransmission: the UDP-like channel a game's state wants. `Reliable` is ordered
+// and retransmitted, for messages that must all arrive. Either way a message is ATOMIC — received whole or not at all.
+type enum RtcDelivery { Unreliable, Reliable }
+
+// One ICE server: STUN finds this peer's public address, TURN relays when no direct path exists (both peers behind
+// symmetric NATs). With NONE the peers find each other only on one machine or one LAN — that is an explicit choice,
+// an empty list, and no server is built in: which third party sees a connection's addresses is the program's to say.
+type resource IceServer {
+    string url;
+    string username;
+    string credential;
+    // A STUN server: `stun:stun.example.org:3478`.
+    public ctor stun(string url) { this.url = give url; this.username = ""; this.credential = ""; }
+    // A TURN server and the credential it asks for: `turn:turn.example.org:3478?transport=udp`.
+    public ctor turn(string url, string username, string credential) {
+        this.url = give url; this.username = give username; this.credential = give credential;
+    }
+    // The RTCIceServer object the glue hands the browser.
+    public const fn string json() {
+        string o = "{\"urls\":".concat(other: quoted(s: this.url));
+        if (this.username.length() > 0) { o = o.concat(other: ",\"username\":").concat(other: quoted(s: this.username)); }
+        if (this.credential.length() > 0) { o = o.concat(other: ",\"credential\":").concat(other: quoted(s: this.credential)); }
+        return o.concat(other: "}");
+    }
+}
+
+// A JSON string literal: `"` and `\` escaped, and the control characters as `\u00XX`. Built as bytes and decoded once,
+// so a multi-byte character passes through whole.
+fn string quoted(const ref string s) {
+    DynamicArray<uint8> o = DynamicArray.empty();
+    o.add(item: 34ui8);
+    foreach (uint8 b in s) {
+        if (b == 34ui8 || b == 92ui8) { o.add(item: 92ui8); o.add(item: b); }
+        else if (b < 32ui8) {
+            uint8 hi = b / 16ui8;
+            uint8 lo = b % 16ui8;
+            o.add(item: 92ui8); o.add(item: 117ui8); o.add(item: 48ui8); o.add(item: 48ui8);   // \u00
+            o.add(item: hi < 10ui8 ? 48ui8 + hi : 87ui8 + hi);
+            o.add(item: lo < 10ui8 ? 48ui8 + lo : 87ui8 + lo);
+        }
+        else { o.add(item: b); }
+    }
+    o.add(item: 34ui8);
+    Result<string, Utf8Error> t = decode(bytes: o.view());
+    return match (give t) { case Ok(value: q): { := give q; } case Err(error: e): { := "\"\""; } };
+}
+
+// A WebRTC DataChannel — a peer-to-peer datagram channel between two browsers (KR-172): the unreliable transport
+// `udp.kama` promised beside WebTransport's. One side OFFERS and the other ANSWERS, and each side's description
+// travels to the other through signalling the program provides (a WebSocket, a copy-paste, a QR code) — non-trickle:
+// a description carries every ICE candidate, so it is one string each way. It is a CONNECTED datagram endpoint (one
+// peer), so it satisfies `DatagramSocket` as `WtConnection` does: `sendTo` ignores its address and `recvFrom`
+// reports a nil sender. Non-blocking only; closes the connection on drop.
+type resource RtcConnection implements DatagramSocket {
+    int32 handle;
+    private ctor make(int32 handle) { this.handle = handle; }
+
+    // The OFFERER: opens the channel with the delivery it chooses, and starts gathering its description — poll
+    // `localDescription()`, send it to the peer, and apply the answer with `acceptAnswer`.
+    public unsafe ctor Result<RtcConnection, IoError> offer(const ref DynamicArray<IceServer> iceServers, RtcDelivery delivery) {
+        int32 h = created(iceServers: iceServers);
+        if (h < 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::Other)); }
+        if (kama_rtc_datachannel(h: h, unreliable: delivery == RtcDelivery::Unreliable ? 1 : 0) != 0
+            || kama_rtc_offer(h: h) != 0) {
+            kama_rtc_close(h: h);
+            return Result::Err(error: IoError.of(kind: IoErrorKind::Other));
+        }
+        return Result::Ok(value: RtcConnection.make(handle: h));
+    }
+
+    // The ANSWERER: applies the offerer's description and starts gathering its own — poll `localDescription()` and
+    // send it back. The channel arrives as the offerer opened it.
+    public unsafe ctor Result<RtcConnection, IoError> answer(const ref string offer, const ref DynamicArray<IceServer> iceServers) {
+        int32 h = created(iceServers: iceServers);
+        if (h < 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::Other)); }
+        if (offer.length() == 0
+            || kama_rtc_set_remote(h: h, buf: offer.bytes().dataPtr(), n: cast<usize>(offer.length())) != 0
+            || kama_rtc_answer(h: h) != 0) {
+            kama_rtc_close(h: h);
+            return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+        }
+        return Result::Ok(value: RtcConnection.make(handle: h));
+    }
+
+    // This side's description, once ICE gathering is complete — `None` until then. A UTF-8 JSON string; send it
+    // as it is.
+    public unsafe fn Optional<string> localDescription() {
+        isize cap = 4096;
+        while (true) {
+            FixedArray<uint8> buf = FixedArray.make(size: cap);
+            int32 n = kama_rtc_local_sdp(h: this.handle, buf: buf.dataPtrMut(), n: cast<usize>(cap));
+            if (n <= 0) { return Optional::None; }
+            if (cast<isize>(n) <= cap) {
+                Result<string, Utf8Error> t = decode(bytes: buf.slice(from: 0, count: cast<isize>(n)));
+                return match (give t) { case Ok(value: s): Optional::Some(value: give s); case Err(error: e): Optional::None; };
+            }
+            cap = cast<isize>(n);   // longer than the buffer: ask again with room for it
+        }
+    }
+
+    // The offerer applies the answerer's description. A description the browser rejects fails the connection,
+    // and `state()` says `Closed`.
+    public unsafe fn Result<Unit, IoError> acceptAnswer(const ref string answer) {
+        if (answer.length() == 0
+            || kama_rtc_set_remote(h: this.handle, buf: answer.bytes().dataPtr(), n: cast<usize>(answer.length())) != 0) {
+            return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    public unsafe const fn RtcState state() {
+        int32 s = kama_rtc_dc_state(h: this.handle);
+        if (s == 0) { return RtcState::Connecting; }
+        if (s == 1) { return RtcState::Open; }
+        if (s == 2) { return RtcState::Disconnected; }
+        return RtcState::Closed;
+    }
+
+    // Send one message to the peer. `WouldBlock` while the channel is not open yet (connecting, or transiently
+    // disconnected); `ConnectionReset` once it has closed.
+    public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {
+        if (bytes.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+        int32 r = kama_rtc_send(h: this.handle, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+        if (r == 0) { return Result::Ok(value: cast<usize>(bytes.length())); }
+        if (r == (0 - 3)) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        return Result::Err(error: IoError.of(kind: IoErrorKind::ConnectionReset));
+    }
+
+    // Receive one message, whole. `WouldBlock` if none has arrived; `MessageTooLong` if the next one is bigger than
+    // `into` — it stays queued, so a larger buffer receives it; `ConnectionReset` once the channel has closed.
+    public unsafe fn Result<usize, IoError> recv(View<uint8> into) {
+        if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+        int32 n = kama_rtc_recv(h: this.handle, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+        if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
+        if (n == (0 - 1)) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        if (n == (0 - 4)) { return Result::Err(error: IoError.of(kind: IoErrorKind::MessageTooLong)); }
+        return Result::Err(error: IoError.of(kind: IoErrorKind::ConnectionReset));
+    }
+
+    // DatagramSocket conformance: one peer, so sendTo ignores `to` and recvFrom reports a nil sender (0.0.0.0:0) —
+    // a DataChannel message carries no per-packet address.
+    public fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to) { return this.send(bytes: bytes); }
+    public fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
+        Result<usize, IoError> r = this.recv(into: into);
+        return match (r) {
+            case Ok(value: n):  Result::Ok(value: RecvFrom.of(count: n, from: SocketAddr.of(ip: IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8), port: 0ui16)));
+            case Err(error: e): Result::Err(error: e);
+        };
+    }
+    // No-op: web transports are always non-blocking (kept for DatagramSocket parity with native UdpSocket).
+    public fn Result<Unit, IoError> setNonBlocking(bool on) { return Result::Ok(value: Unit::Unit); }
+
+    unsafe ~RtcConnection() { kama_rtc_close(h: this.handle); }
+}
+
+// A peer connection over these ICE servers, as the glue's JSON array: its handle, or < 0.
+unsafe fn int32 created(const ref DynamicArray<IceServer> iceServers) {
+    string list = "[";
+    isize i = 0;
+    foreach (const ref IceServer s in iceServers) {
+        if (i > 0) { list = list.concat(other: ","); }
+        list = list.concat(other: s.json());
+        i = i + 1;
+    }
+    list = list.concat(other: "]");
+    return kama_rtc_create(ice: list.bytes().dataPtr(), iceLen: cast<usize>(list.length()));
+}

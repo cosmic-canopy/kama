@@ -2599,6 +2599,15 @@ does not return.
 - **`WtConnection`** — WebTransport datagrams, `connect(url:)`, `state()` (`WtState`), and
   `send`/`recv`/`sendTo`/`recvFrom` in the `UdpSocket` shape: message-oriented, so not a `Reader`/`Writer`.
   Where WebTransport is unavailable (Safari/iOS, Node), `WsConnection` is the reliable fallback.
+- **`RtcConnection`** — a WebRTC DataChannel, peer to peer between two browsers: `offer(iceServers:, delivery:)`
+  opens it (`RtcDelivery::Unreliable` — unordered, never retransmitted, the UDP-like channel — or `Reliable`) and
+  `answer(offer:, iceServers:)` receives it; each side's `localDescription()` (`None` until ICE gathering is done)
+  travels to the other through signalling the program provides, and the offerer applies the answer with
+  `acceptAnswer`. The ICE servers are a required list of `IceServer.stun(url:)`/`IceServer.turn(url:, username:,
+  credential:)` — an empty one is the explicit same-machine-or-LAN choice, and no server is built in. A message is
+  atomic: one bigger than the buffer is `MessageTooLong` and stays queued; `send` before the channel opens is
+  `WouldBlock`; `state()` (`RtcState`) has a transient `Disconnected` beside `Closed`. It implements `DatagramSocket`
+  as `WtConnection` does. <!-- test: net_rtc_smoke -->
 
 ### Paths (`std::path`) ✅
 

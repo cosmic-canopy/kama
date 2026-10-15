@@ -1,0 +1,27 @@
+// std::net::web RtcConnection build/link smoke (KR-172) — the type over the WebRTC glue compiles and links, and its
+// constructors are callable. Under Node (no RTCPeerConnection) `offer` returns Err cleanly; in a browser it returns
+// Ok. Either way the API is sound -> exit 55. The real exchange is net_rtc_loopback/net_rtc_signaling (browser).
+import { std::net::web::RtcConnection, std::net::web::RtcDelivery, std::net::web::RtcState, std::net::web::IceServer,
+         std::io::IoError, std::collections::DynamicArray, std::collections::FixedArray };
+
+unsafe fn int32 use(ref RtcConnection c) {   // every member, so the whole surface is compiled
+    Optional<string> d = c.localDescription();
+    Result<Unit, IoError> a = c.acceptAnswer(answer: "{}");
+    FixedArray<uint8> b = FixedArray.make(size: 8);
+    Result<usize, IoError> s = c.send(bytes: b.view());
+    Result<usize, IoError> r = c.recv(into: b.viewMut());
+    return match (c.state()) { case Open: 1; case _: 0; };
+}
+
+unsafe fn int32 run() {
+    DynamicArray<IceServer> ice = DynamicArray.empty();
+    ice.add(item: IceServer.stun(url: "stun:stun.example.org:3478"));
+    ice.add(item: IceServer.turn(url: "turn:turn.example.org:3478", username: "u\"ser", credential: "secret"));
+    Result<RtcConnection, IoError> o = RtcConnection.offer(iceServers: ice, delivery: RtcDelivery::Unreliable);
+    int32 k = match (give o) { case Ok(value: c): { RtcConnection cc = give c; := use(c: cc) + 55 - use(c: cc); } case Err(error: e): 55; };
+    Result<RtcConnection, IoError> a = RtcConnection.answer(offer: "", iceServers: ice);
+    int32 m = match (give a) { case Ok(value: c): 1; case Err(error: e): 0; };   // an empty offer is refused
+    return m == 0 ? k : 2;
+}
+
+fn int32 main() { return run(); }

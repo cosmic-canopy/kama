@@ -299,27 +299,6 @@ SOCK_STREAM | SOCK_CLOEXEC)` (the `FD_CLOEXEC` gate on macOS, as every descripto
 one connect and one accept, the path removed at once. On Windows a socket is no child's stream (`Stdio` documents
 it: the handle is overlapped), so there a pair serves isolates and fd passing, not a child's stdin.
 
-<a id="s1-datachannel"></a>
-
-### A WebRTC DataChannel type (KR-172)
-
-Measured on `0.9.589`, filed 2026-10-14. `std::net::web` ships the `kama_rtc_*` externs and their JS, with browser end-to-end fixtures on the raw glue
-(`tests/net_rtc_loopback.kama`, `tests/net_rtc_signaling.kama`), but no `.kama` type: the directory has `ws.kama` and
-`wt.kama` only. `udp.kama` promises a DataChannel will satisfy the same contract. **Scheduled:** a type over the glue
-in `wt.kama`'s pull model, with its signalling methods; KR-108 is adjacent (a P2P channel has no `SocketAddr`).
-
-**Where (surveyed on `0.9.603`, still reproduces):** a new `lib/std/net/web/rtc.kama` — a resource implementing `DatagramSocket`, and an
-`RtcState` — over the shipped `kama_rtc_*` glue; copy `WtConnection` (wt.kama), and `idName`'s grow-and-retry for the
-SDP. **Decisions owed:** offer and answer as separate constructors (only the offerer opens the channel and chooses its
-reliability; the answerer receives it through `ondatachannel`); ICE servers — the glue hardcodes `iceServers: []`, so
-only host candidates connect (same machine or LAN). Glue defects to fix with it: `kama_rtc_recv` delivers an oversized
-datagram in pieces (a datagram is atomic); `send` while connecting is `-1`, `Other`, not `WouldBlock`; `disconnected`,
-often transient, is treated as closed. Adjacent: KR-108 (a peer channel has no `SocketAddr`).
-
-**Decided (the maintainer, 2026-10-15):** `offer(iceServers:, delivery:)` and `answer(offer:, iceServers:)`. The ICE
-servers are a required list, and an empty one is the explicit same-machine-or-LAN choice — no server is built in. The
-glue defects above are fixed with it.
-
 <a id="s1-http-package"></a>
 
 ### `@kama/http` — a first-party HTTP package for both targets (KR-173)

@@ -7,7 +7,7 @@ import { std::app::run, std::app::TickFn, std::app::quit };
 extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern "kama_net_web.h";
-extern fn int32 kama_rtc_create();
+extern fn int32 kama_rtc_create(UnsafeConstPtr<uint8> ice, usize iceLen);
 extern fn int32 kama_rtc_datachannel(int32 h, int32 unreliable);
 extern fn int32 kama_rtc_offer(int32 h);
 extern fn int32 kama_rtc_answer(int32 h);
@@ -71,8 +71,8 @@ unsafe fn int32 tick(UnsafePtr state) {
 unsafe fn int32 appMain() {
     UnsafePtr<uint8> block = cast<UnsafePtr<uint8>>(malloc(n: cast<usize>(8192)));
     UnsafePtr<int32> hdr = cast<UnsafePtr<int32>>(cast<UnsafePtr>(block));
-    int32 a = kama_rtc_create();
-    int32 b = kama_rtc_create();
+    int32 a = kama_rtc_create(ice: null, iceLen: cast<usize>(0));
+    int32 b = kama_rtc_create(ice: null, iceLen: cast<usize>(0));
     if ((a < 0) || (b < 0)) { quit(code: 60); }        // no RTCPeerConnection
     int32 dc = kama_rtc_datachannel(h: a, unreliable: 1);
     if (dc != 0) { quit(code: 61); }

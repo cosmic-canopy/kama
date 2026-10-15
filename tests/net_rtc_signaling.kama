@@ -12,7 +12,7 @@ extern fn int32 kama_ws_state(int32 h);
 extern fn int32 kama_ws_send(int32 h, UnsafeConstPtr<uint8> buf, usize n);
 extern fn int32 kama_ws_recv(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn void  kama_ws_close(int32 h);
-extern fn int32 kama_rtc_create();
+extern fn int32 kama_rtc_create(UnsafeConstPtr<uint8> ice, usize iceLen);
 extern fn int32 kama_rtc_datachannel(int32 h, int32 unreliable);
 extern fn int32 kama_rtc_offer(int32 h);
 extern fn int32 kama_rtc_answer(int32 h);
@@ -90,8 +90,8 @@ unsafe fn int32 appMain() {
     string url = "ws://127.0.0.1:47690";
     int32 wsA = kama_ws_connect(url: url.cstr());
     int32 wsB = kama_ws_connect(url: url.cstr());
-    int32 rtcA = kama_rtc_create();
-    int32 rtcB = kama_rtc_create();
+    int32 rtcA = kama_rtc_create(ice: null, iceLen: cast<usize>(0));
+    int32 rtcB = kama_rtc_create(ice: null, iceLen: cast<usize>(0));
     if ((wsA < 0) || (wsB < 0) || (rtcA < 0) || (rtcB < 0)) { quit(code: 60); }
     kama_rtc_datachannel(h: rtcA, unreliable: 1);
     kama_rtc_offer(h: rtcA);
