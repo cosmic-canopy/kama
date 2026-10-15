@@ -1,0 +1,26 @@
+// A file that must not exist yet (KR-177): `OpenMode::CreateNew` creates it, and anything already at the path is
+// `AlreadyExists` in the same step — what a lockfile needs, and what a check-then-open cannot promise. The same
+// through `openWith`, which also sets exact permissions. Returns 42.
+import { std::fs::File, std::fs::OpenMode, std::fs::Permissions, std::fs::remove, std::io::IoError };
+
+fn int32 kindCode(Result<File, IoError> r) {   // 0 opened, 1 AlreadyExists, 2 anything else
+    return match (give r) {
+        case Ok(value: f): 0;
+        case Err(error: e): match (e.kind()) { case AlreadyExists: 1; case _: 2; };
+    };
+}
+
+unsafe fn int32 run() {
+    Result<Unit, IoError> pre = remove(path: "kr177.lock");
+    if (kindCode(r: File.open(path: "kr177.lock", mode: OpenMode::CreateNew)) != 0) { return 1; }
+    if (kindCode(r: File.open(path: "kr177.lock", mode: OpenMode::CreateNew)) != 1) { return 2; }
+    Result<Permissions, IoError> pr = Permissions.fromMode(mode: 0o600ui32);
+    Permissions pm = match (pr) { case Ok(value: v): v; case Err(error: e): { return 3; } };
+    if (kindCode(r: File.openWith(path: "kr177.lock", mode: OpenMode::CreateNew, permissions: pm)) != 1) { return 4; }
+    Result<Unit, IoError> rm = remove(path: "kr177.lock");
+    if (kindCode(r: File.openWith(path: "kr177.lock", mode: OpenMode::CreateNew, permissions: pm)) != 0) { return 5; }
+    Result<Unit, IoError> rm2 = remove(path: "kr177.lock");
+    return 42;
+}
+
+fn int32 main() { return run(); }

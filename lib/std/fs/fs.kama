@@ -28,6 +28,7 @@ extern fn int32  kama_open_create(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_open_append(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_open_create_mode(UnsafeConstPtr<cchar> path, uint32 mode, int32 how);
 extern fn int32  kama_open_rw(UnsafeConstPtr<cchar> path);
+extern fn int32  kama_open_new(UnsafeConstPtr<cchar> path);
 extern fn int64  kama_seek(int32 fd, int64 off, int32 whence);
 extern fn isize  kama_pread(int32 fd, UnsafePtr<uint8> buf, usize n, uint64 off);
 extern fn isize  kama_pwrite(int32 fd, UnsafeConstPtr<uint8> buf, usize n, uint64 off);
@@ -71,11 +72,13 @@ extern fn int32  kama_EINTR();
 // write, which is the only way concurrent appenders (a log from two processes) do not overwrite each
 // other — a seek-then-write cannot promise that, because the two steps are not one operation. `ReadWrite`
 // reads AND writes, creating the file and never emptying it — the mode random access needs (KR-168: an update in
-// place with `seek`, `readAt`/`writeAt`, `setLength`).
+// place with `seek`, `readAt`/`writeAt`, `setLength`). `CreateNew` writes a file that must not exist yet: anything
+// already at the path — a dangling link included — is `AlreadyExists`, in the same step as the create, which a
+// check-then-open cannot promise (a lockfile; KR-177).
 //
 // A file either one creates asks for `rw-rw-rw-` and the process umask narrows it (`rw-r--r--` under the
 // usual `022`) — every language's default. On Windows it inherits its directory's access list.
-type enum OpenMode { Read, Write, Append, ReadWrite }
+type enum OpenMode { Read, Write, Append, ReadWrite, CreateNew }
 
 // Where `File.seek` moves the cursor (KR-168): from the start, or from where it is or from the end, by a signed step.
 type enum SeekFrom { Start(uint64 offset), Current(int64 offset), End(int64 offset) }
@@ -348,6 +351,7 @@ type resource File implements Reader, Writer, Sendable {
             case Write:  kama_open_create(path: path.cstr());
             case Append: kama_open_append(path: path.cstr());
             case ReadWrite: kama_open_rw(path: path.cstr());
+            case CreateNew: kama_open_new(path: path.cstr());
         };
         if (fd < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: File.make(fd: fd));
@@ -371,7 +375,7 @@ type resource File implements Reader, Writer, Sendable {
     // for the bits they are given, inheriting nothing wider — see `Permissions` and kama_os.h.
     public unsafe ctor Result<File, IoError> openWith(const ref string path, OpenMode mode, Permissions permissions) {
         if (mode == OpenMode::Read) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
-        int32 how = match (mode) { case Append: 1; case ReadWrite: 2; case _: 0; };
+        int32 how = match (mode) { case Append: 1; case ReadWrite: 2; case CreateNew: 3; case _: 0; };
         int32 fd = kama_open_create_mode(path: path.cstr(), mode: permissions.mode(), how: how);
         if (fd < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: File.make(fd: fd));
@@ -599,9 +603,8 @@ unsafe fn Result<string, IoError> canonicalPath(const ref string path) {
     }
 }
 
-// Create ONE directory. Err(AddrInUse-free) — an existing path reports the platform's error (POSIX EEXIST
-// surfaces as `Other`), and a missing PARENT reports `NotFound`; `createDirAll` is the one that makes
-// parents.
+// Create ONE directory. An existing path is `AlreadyExists` (KR-177), and a missing PARENT is `NotFound`;
+// `createDirAll` is the one that makes parents.
 unsafe fn Result<Unit, IoError> createDir(const ref string path) {
     if (kama_mkdir(path: path.cstr()) != 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: Unit::Unit);

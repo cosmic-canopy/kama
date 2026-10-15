@@ -142,6 +142,7 @@ static inline int32_t kama_EMSGSIZE(void)     { return (int32_t)EMSGSIZE; }
 static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 static inline int32_t kama_ESPIPE(void)       { return (int32_t)ESPIPE; }   // a seek on a pipe (KR-168)
+static inline int32_t kama_EEXIST(void)       { return (int32_t)EEXIST; }   // something is already there (KR-177)
 
 // Winsock's code as the uniform errno set — one table, for the call that failed and for a connect's SO_ERROR.
 static inline int kama__wsa_errno(int e) {
@@ -279,6 +280,8 @@ static inline int32_t   kama_open_read(const char* path)   { return kama__wopen(
 static inline int32_t   kama_open_create(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY); }
 static inline int32_t   kama_open_append(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY); }
 static inline int32_t   kama_open_rw(const char* path)     { return kama__wopen(path, _O_RDWR | _O_CREAT | _O_BINARY); }
+// Create, and fail with EEXIST if anything is there already — a dangling link included (KR-177).
+static inline int32_t   kama_open_new(const char* path)    { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY); }
 // ---- random access (KR-168) -----------------------------------------------------------------------------------
 // Only a disk file seeks: a pipe or a console answers ESPIPE, as POSIX's lseek does, rather than whatever the
 // file pointer of a pipe means to Win32. `whence` 0/1/2 = from the start / the cursor / the end.
@@ -748,7 +751,8 @@ static inline int kama__token_ids(kama__tokid* t, PSID* user, PSID* group)
 // accepted only when it already holds exactly `mode` — POSIX's answer too, where `fchmod` is skipped when
 // nothing would change and refused to a non-owner otherwise. Hands back a CRT descriptor, as every other open
 // here does.
-// `how`: 0 write (an existing file is emptied), 1 append, 2 read and write (KR-168 — never emptied).
+// `how`: 0 write (an existing file is emptied), 1 append, 2 read and write (KR-168 — never emptied), 3 a NEW file
+// (KR-177 — anything already there is EEXIST, never opened).
 KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t how)
 {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
@@ -764,6 +768,9 @@ KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mo
     SECURITY_ATTRIBUTES sa = { sizeof sa, &sd, FALSE };
     int made = 1, relist = 1;
     HANDLE h = CreateFileW(w, access, share, &sa, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS && how == 3) {
+        kama__os_fail(ERROR_FILE_EXISTS, EEXIST); return -1;
+    }
     if (h == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS) {
         made = 0;
         h = CreateFileW(w, access, share, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -775,7 +782,8 @@ KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mo
     if (h == INVALID_HANDLE_VALUE) {
         DWORD e = GetLastError();
         kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
-              : (e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION) ? EACCES : EINVAL);
+              : (e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION) ? EACCES
+              : (e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS) ? EEXIST : EINVAL);
         return -1;
     }
     int bad = 0;
@@ -1716,6 +1724,7 @@ static inline int32_t kama_EMSGSIZE(void)     { return (int32_t)EMSGSIZE; }
 static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 static inline int32_t kama_ESPIPE(void)       { return (int32_t)ESPIPE; }   // a seek on a pipe (KR-168)
+static inline int32_t kama_EEXIST(void)       { return (int32_t)EEXIST; }   // something is already there (KR-177)
 
 // ---- close-on-exec (KR-174) -------------------------------------------------
 // Every descriptor kama makes is close-on-exec, so a child std::process starts holds the three streams it was
@@ -1784,6 +1793,8 @@ static inline int32_t   kama_open_read(const char* path)   { return (int32_t)ope
 static inline int32_t   kama_open_create(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_TRUNC | KAMA__O_CLOEXEC, 0666); }
 static inline int32_t   kama_open_append(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_APPEND | KAMA__O_CLOEXEC, 0666); }
 static inline int32_t   kama_open_rw(const char* path)     { return (int32_t)open(path, O_RDWR | O_CREAT | KAMA__O_CLOEXEC, 0666); }
+// Create, and fail with EEXIST if anything is there already — a dangling link included (KR-177).
+static inline int32_t   kama_open_new(const char* path)    { return (int32_t)open(path, O_WRONLY | O_CREAT | O_EXCL | KAMA__O_CLOEXEC, 0666); }
 // ---- random access (KR-168) -----------------------------------------------------------------------------------
 // <unistd.h>'s, declared here for the reason `read`/`write` are (above). macOS labels pread/pwrite with
 // __DARWIN_ALIAS_C, and kama_isolate.h pulls <unistd.h> later in some TUs, so the SAME label is carried here —
@@ -1904,13 +1915,14 @@ static inline int32_t kama__mode_exact(int fd, uint32_t mode)
     if (((uint32_t)st.st_mode & 0777u) != mode) { errno = EPERM; return -1; }
     return 0;
 }
-// `how`: 0 write (an existing file is emptied), 1 append, 2 read and write (KR-168 — never emptied).
+// `how`: 0 write (an existing file is emptied), 1 append, 2 read and write (KR-168 — never emptied), 3 a NEW file
+// (KR-177 — anything already there is EEXIST, never opened).
 static inline int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t how)
 {
     const int flags = (how == 2 ? O_RDWR : O_WRONLY) | (how == 1 ? O_APPEND : 0) | KAMA__O_CLOEXEC;
     int made = 1;
     int fd = open(path, flags | O_CREAT | O_EXCL, (mode_t)mode);
-    if (fd < 0 && errno == EEXIST) {
+    if (fd < 0 && errno == EEXIST && how != 3) {
         made = 0;
         fd = open(path, flags);
         if (fd < 0 && errno == ENOENT) fd = open(path, flags | O_CREAT, (mode_t)mode);

@@ -4,7 +4,7 @@
 // checks that it is said, not the words; `osMessage()` hands the OS's words over alone. Returns 0.
 import {
     std::io::IoError, std::io::IoErrorKind,
-    std::fs::File, std::fs::OpenMode, std::fs::createDir, std::fs::removeDir,
+    std::fs::File, std::fs::OpenMode, std::fs::createDir, std::fs::removeDir, std::fs::writeText, std::fs::remove,
 };
 
 fn bool startsWith(const ref string s, const ref string p) {
@@ -25,10 +25,17 @@ fn int32 main() {
     if (!startsWith(s: m, p: "not found (os error ")) { return 4; }
     if (!m.contains(substring: ": ")) { return 5; }                     // the OS's own text follows the code
 
-    // An unclassified one is `Other`, and still says what the OS said: a directory that already exists.
+    // A directory that is already there is `AlreadyExists` (KR-177: EEXIST was `Other`), with the OS's code.
     Result<Unit, IoError> made = createDir(path: "io-error-model-dir");
     Result<Unit, IoError> again = createDir(path: "io-error-model-dir");
-    IoError ex = match (again) { case Ok(value: u): { return 6; } case Err(error: e): e; };
+    IoError dup = match (again) { case Ok(value: u): { return 6; } case Err(error: e): e; };
+    if (match (dup.kind()) { case AlreadyExists: false; case _: true; }) { return 14; }
+    if (!hasCode(e: dup) || !startsWith(s: dup.message(), p: "already exists (os error ")) { return 15; }
+    // An unclassified one is `Other`, and still says what the OS said: a directory that is not empty.
+    Result<isize, IoError> w = writeText(path: "io-error-model-dir/f.txt", text: "x");
+    Result<Unit, IoError> notEmpty = removeDir(path: "io-error-model-dir");
+    IoError ex = match (notEmpty) { case Ok(value: u): { return 16; } case Err(error: e): e; };
+    Result<Unit, IoError> rmf = remove(path: "io-error-model-dir/f.txt");
     Result<Unit, IoError> gone = removeDir(path: "io-error-model-dir");
     if (match (ex.kind()) { case Other: false; case _: true; }) { return 7; }
     if (!hasCode(e: ex)) { return 8; }

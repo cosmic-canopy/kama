@@ -2039,7 +2039,8 @@ fn int32 main() {
 A native, single-binary I/O foundation — **library over FFI, no new language surface** beyond the prelude's
 `enum Unit` (the empty `Result<Unit, E>` payload — one error convention for void-fallible ops). `std::io`
 gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor; opened
-`Read`, `Write` — create/truncate — `Append`, or `ReadWrite` — create, never truncate), with random access: `seek`
+`Read`, `Write` — create/truncate — `Append`, `ReadWrite` — create, never truncate — or `CreateNew`, which is
+`AlreadyExists` if anything is at the path, in the same step as the create <!-- test: fs_create_new -->), with random access: `seek`
 (a `SeekFrom` — `Start`, `Current` or `End`), `readAt`/`writeAt` at an offset, which leave the cursor where it was on
 every OS (Windows moves it for a positioned call, so kama puts it back, as Go does), and `setLength`; a pipe has no
 position and answers `InvalidInput` <!-- test: fs_random_access --> <!-- test: proc_pipe_seek -->; plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
@@ -2058,7 +2059,7 @@ another account's private file. Rust and Go expose no owner on Windows, and Pyth
 `UnixListener`/`UnixStream` (Unix-domain) and `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
 
 **An `IoError` is a kind and, when the OS reported it, the OS's code** — the two facts every mainstream library keeps
-apart. `e.kind()` is an `IoErrorKind` (`NotFound`, `PermissionDenied`, `WouldBlock`, `ConnectionRefused`, …,
+apart. `e.kind()` is an `IoErrorKind` (`NotFound`, `AlreadyExists`, `PermissionDenied`, `WouldBlock`, `ConnectionRefused`, …,
 `Interrupted`, `Other`), which a caller branches on with `match (e.kind())`. `e.rawOsError()` is the POSIX errno or,
 on Windows, the Winsock or Win32 code, and `e.message()` quotes the system's own words for it: <!-- test: io_error_model -->
 `"not found (os error 2: No such file or directory)"`; `e.osMessage()` is those words alone, as `strerror` gives

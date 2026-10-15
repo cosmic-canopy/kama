@@ -330,21 +330,6 @@ Windows' twin is `{ Inherit, New }` — a new console group plus a kill-on-close
 `os.ErrProcessDone`, C++ `errc::no_such_process`, Zig `error.ProcessNotFound`), and pre-1.0 a variant is added as four
 were before. What adding one costs after 1.0 is KR-176.
 
-<a id="s1-exclusive-create"></a>
-
-### No exclusive create, and an existing path is `Other` (KR-177)
-
-Filed 2026-10-15 while deciding `File` random access, measured on `0.9.603`. `type enum OpenMode { Read, Write, Append }`: `Write`
-creates or truncates, so nothing opens a file only if it does not exist yet. A lockfile, a "write this, never
-overwrite", or a temp file with a chosen name is then a check-then-open race (`exists` says so in its own comment: it
-is for reporting, not guarding). The seam already makes the call internally — `kama_open_create_mode` opens with
-`O_CREAT|O_EXCL` first, and Windows with `CREATE_NEW` — but no mode reaches it. And `kindOf` has no arm for EEXIST:
-`createDir` on an existing directory documents "POSIX EEXIST surfaces as `Other`". Rust (`create_new`,
-`ErrorKind::AlreadyExists`), Go (`O_EXCL`, `fs.ErrExist`) and Python (`"x"` mode, `FileExistsError`) all have both.
-**Scheduled:** `OpenMode::CreateNew` (write-only, fails with `AlreadyExists` when the path exists, a dangling link
-included), and `IoErrorKind::AlreadyExists` for EEXIST (Windows `ERROR_FILE_EXISTS`/`ERROR_ALREADY_EXISTS`). Adjacent:
-KR-176, since this adds a variant.
-
 <a id="s1-child-stdio"></a>
 
 ### A child's stdio redirected (KR-171)
@@ -472,7 +457,7 @@ Filed 2026-10-15 while ruling on KR-170's ESRCH kind. `match` on an enum is exha
 `case Y:` or `case _:`" — so a new variant in a std enum stops every user `match` without a `_` arm from compiling.
 Measured on `0.9.603`: of the 29 matches over `IoErrorKind` in the tree, 28 have `_`; the one without is
 `IoErrorKind.message()` in io.kama itself. The enum has grown four times (`b4ff3732` InProgress..BrokenPipe, `20a912d5`
-InvalidInput, `176aca2f` Interrupted), and this session adds `ProcessNotFound` (KR-170) and `AlreadyExists` (KR-177),
+InvalidInput, `176aca2f` Interrupted), and this session adds `ProcessNotFound` (KR-170) and `AlreadyExists` (`0.9.621`),
 while `OpenMode` gains `ReadWrite` (`0.9.618`) and `Stdio` gains `Handle`/`Stdout` (KR-171). Before 1.0 that is allowed;
 after the tag each is a source break, and 1.x is where the stdlib grows.
 
