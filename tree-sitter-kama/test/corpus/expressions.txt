@@ -476,6 +476,8 @@ fn void main()
     parallel_for (ref int32 e in coll) { e = 1; }
     foreach (int32 f in coll) { }
     foreach (ref int32 g in coll) { }
+    foreach (const ref int32 h in coll) { }
+    parallel_for (const ref int32 k in coll) { }
 }
 
 --------------------------------------------------------------------------------
@@ -529,6 +531,16 @@ fn void main()
         (identifier)
         (block))
       (foreach_statement
+        (primitive_type)
+        (identifier)
+        (identifier)
+        (block))
+      (foreach_statement
+        (primitive_type)
+        (identifier)
+        (identifier)
+        (block))
+      (parallel_for_statement
         (primitive_type)
         (identifier)
         (identifier)

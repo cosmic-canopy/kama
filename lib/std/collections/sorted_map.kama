@@ -1,5 +1,5 @@
-import { std::memory::Owned, DynamicArray, ValuesIterableMut, MapKeyText, MapKeyReader };
-export { SortedMap, SortedMapValueIterMut };
+import { std::memory::Owned, DynamicArray, ValuesIterableMut, ValuesIterableConst, MapKeyText, MapKeyReader };
+export { SortedMap, SortedMapValueIterMut, SortedMapValueIterConst };
 
 // An ordered map over `K: Comparable` -> `V`, backed by a B-tree (peer: Rust `BTreeMap`, C++ `std::map`).
 // Unlike `Map` (a hash table, unordered), a `SortedMap` keeps its keys in ascending `compareTo` order, so
@@ -30,6 +30,13 @@ type value BTreeFrame<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
     // Elected so an iterator's `path` stack of these is filled frame by frame when it is made (KR-106: an
     // `InlineArray` has a default only element by element). A view ctor may assign only from its
     // parameters, so the fill is the one way the stack starts out as frames rather than as bytes.
+    public default ctor empty() { }
+}
+// The read-only iterator's frame: the same, over a read-only node address.
+type value BTreeConstFrame<K: Comparable<K>, V, A: Allocator = GlobalAllocator> {
+    public UnsafeConstPtr<BTreeNode<K,V,A>> node = null;
+    public isize i = 0;
+    public unsafe ctor at(UnsafeConstPtr<BTreeNode<K,V,A>> node, isize i) { this.node = node; this.i = i; }
     public default ctor empty() { }
 }
 
@@ -112,6 +119,58 @@ type view SortedMapValueIterMut<K: Comparable<K>, V, A: Allocator = GlobalAlloca
     }
 }
 
+// The read-only twin (`foreach (const ref V v in sm.valuesConst())`, KR-175): the same in-order walk as the
+// mutable iterator above, over READ-ONLY node addresses — `valuesConst()` is a `const fn`, so everything it can
+// reach is read-only, and so is every place this hands out (`const ref V`).
+type view SortedMapValueIterConst<K: Comparable<K>, V, A: Allocator = GlobalAllocator> implements IteratorConst<V> {
+    InlineArray<BTreeConstFrame<K,V,A>>#(32) path;
+    isize depth;
+    UnsafeConstPtr<BTreeNode<K,V,A>> cur = null; isize curI = 0;    // a field, as in the mutable twin: the result borrows `this`
+    UnsafeConstPtr<BTreeNode<K,V,A>> root = null; bool primed = false;
+    UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+
+    unsafe ctor make(UnsafeConstPtr<BTreeNode<K,V,A>> root, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.depth = 0; this.root = root; this.cur = root; this.curI = 0; this.primed = false;
+        this.modsp = modsp; this.modsAt = modsAt;
+    }
+
+    unsafe fn void descend(UnsafeConstPtr<BTreeNode<K,V,A>> n) {
+        UnsafeConstPtr<BTreeNode<K,V,A>> walk = n;
+        while (this.depth < 32) {
+            this.path[this.depth] = BTreeConstFrame::<K,V,A>.at(node: walk, i: 0);
+            this.depth = this.depth + 1;
+            if (walk[0].isLeaf()) { return; }
+            walk = walk[0].childConstPtr(at: 0);
+        }
+        panic(msg: "SortedMap depth exceeded 32 — the tree is corrupt");
+    }
+
+    unsafe fn void settle() {
+        while (this.depth > 0) {
+            isize d = this.depth - 1;
+            UnsafeConstPtr<BTreeNode<K,V,A>> n = this.path[d].node;
+            if (this.path[d].i < n[0].keyCount()) { return; }
+            this.depth = d;
+        }
+    }
+
+    public unsafe fn bool hasNext() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "SortedMap modified during iteration"); }
+        if (!this.primed) { this.primed = true; this.descend(n: this.root); this.settle(); }
+        return this.depth > 0;
+    }
+
+    public unsafe fn const ref V next() {
+        isize d = this.depth - 1;
+        UnsafeConstPtr<BTreeNode<K,V,A>> n = this.path[d].node;
+        isize i = this.path[d].i;
+        this.cur = n; this.curI = i;
+        this.path[d] = BTreeConstFrame::<K,V,A>.at(node: n, i: i + 1);
+        if (!n[0].isLeaf()) { this.descend(n: n[0].childConstPtr(at: i + 1)); } else { this.settle(); }
+        return this.cur[0].valConst(at: this.curI);
+    }
+}
+
 // A single B-tree node. Internal to the module — reached only through `SortedMap` and its iterators. All the
 // B-tree algorithms live here as methods so `this` touches its own `keys`/`vals`/`kids` fields directly (the
 // normal in-place field mutation); a child is mutated via `this.kids[c].method()` (auto-deref through the
@@ -149,6 +208,8 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     // node type itself is module-internal and never named outside this file.)
     public fn ref V valAt(isize at) { return this.vals[at]; }
     public unsafe fn UnsafePtr<BTreeNode<K,V,A>> childPtr(isize at) { return addr(of: this.kids[at].derefMut()); }
+    public const fn const ref V valConst(isize at) { return this.vals[at]; }                  // the read-only twins
+    public unsafe const fn UnsafeConstPtr<BTreeNode<K,V,A>> childConstPtr(isize at) { return addr(of: this.kids[at].deref()); }
 
     // Three-way compare through a `ref K` receiver so a primitive key's scalar adapter conformance resolves (a raw
     // `this.keys[i].compareTo(...)` receiver wouldn't) — the `Map.eqKeys` / `PriorityQueue.higher` idiom.
@@ -616,6 +677,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>],
                    ValuesIterableMut<SortedMapValueIterMut<K,V,A>>,
+                   ValuesIterableConst<SortedMapValueIterConst<K,V,A>>,
                    Serializable when [K: Serializable, V: Serializable],
                    Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
@@ -699,6 +761,11 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     public unsafe fn SortedMapValueIterMut<K,V,A> valuesMut() {
         return SortedMapValueIterMut::<K,V,A>.make(root: addr(of: this.root.derefMut()),
                                                    modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    // `foreach (const ref V v in sm.valuesConst())` — the in-order walk, read-only, for ANY value type.
+    public unsafe const fn SortedMapValueIterConst<K,V,A> valuesConst() {
+        return SortedMapValueIterConst::<K,V,A>.make(root: addr(of: this.root.deref()),
+                                                     modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Ascending keys in the half-open window [from, to) — the ordered range query (empty if from >= to).

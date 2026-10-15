@@ -856,6 +856,7 @@ parallel_clauses_opt
   ;
 parallel_for_statement
   : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block
+  | PARALLEL_FOR LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block      /* every worker READS its slice (KR-175) */
   ;
   /* `parallel_spawn (ref T w in workers) ` — one LONG-LIVED isolate per element, joined by the
      enclosing `scope ` rather than at its own brace, so the children run ALONGSIDE the statements
@@ -864,6 +865,7 @@ parallel_for_statement
      it. Deliberately the SAME shape as `parallel_for` — one grammar tail, so the two cannot drift. */
 parallel_spawn_statement
   : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block
+  | PARALLEL_SPAWN LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block
   ;
 empty_statement
   : SEMICOLON
@@ -979,6 +981,7 @@ match_binding
 foreach_statement
   : FOREACH LPAREN type binding_word IN expression RPAREN embedded_statement
   | FOREACH LPAREN REF type binding_word IN expression RPAREN embedded_statement      /* `foreach (ref T e in …)` — mutate elements in place */
+  | FOREACH LPAREN CONST REF type binding_word IN expression RPAREN embedded_statement      /* `foreach (const ref T e in …)` — read each element in place, never write it (KR-175) */
   ;
 jump_statement
   : break_statement

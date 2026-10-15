@@ -829,7 +829,7 @@ module.exports = grammar({
       seq(
         'foreach',
         '(',
-        optional('ref'),
+        optional(choice('ref', seq('const', 'ref'))),   // a copy, a writable place, or a read-only place (KR-175)
         field('type', $._type),
         field('name', $._binding_name),
         'in',
@@ -838,13 +838,13 @@ module.exports = grammar({
         field('body', $.block),
       ),
 
-    // kama.y:490 — `ref` is MANDATORY (disjoint mutable access is the whole point) and the body must be a
-    // block, because those braces ARE the join barrier.
+    // kama.y — the binding is a place, `ref` (each worker writes its slice) or `const ref` (each only reads it),
+    // and the body must be a block, because those braces ARE the join barrier.
     parallel_for_statement: ($) =>
       seq(
         'parallel_for',
         '(',
-        'ref',
+        choice('ref', seq('const', 'ref')),
         field('type', $._type),
         field('name', $.identifier),
         'in',
@@ -861,7 +861,7 @@ module.exports = grammar({
       seq(
         'parallel_spawn',
         '(',
-        'ref',
+        choice('ref', seq('const', 'ref')),
         field('type', $._type),
         field('name', $.identifier),
         'in',

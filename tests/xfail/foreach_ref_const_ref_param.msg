@@ -1,0 +1,1 @@
+and `a` is read-only here — read each element in place with `foreach (const ref int32 x in …)`

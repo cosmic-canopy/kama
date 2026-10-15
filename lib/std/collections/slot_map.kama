@@ -1,5 +1,5 @@
-import { std::ptr::relocate, ValuesIterable, ValuesIterableMut };
-export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut };
+import { std::ptr::relocate, ValuesIterable, ValuesIterableMut, ValuesIterableConst };
+export { SlotMap, Handle, SlotMapValueIter, SlotMapValueIterMut, SlotMapValueIterConst };
 
 // A stable, generation-checked reference into a `SlotMap`. `index` is the slot; `generation` is the slot's
 // occupancy stamp captured at insert time. A get/remove succeeds only if the slot STILL carries that same
@@ -86,6 +86,25 @@ type view SlotMapValueIterMut<V> implements IteratorMut<V> {
     public unsafe fn ref V next() { isize p = this.pos; this.pos = this.pos + 1; return this.values[p]; }
 }
 
+// The read-only twin (`foreach (const ref V v in sm.valuesConst())`, KR-175), from a `const fn`.
+type view SlotMapValueIterConst<V> implements IteratorConst<V> {
+    UnsafeConstPtr<V> values; UnsafeConstPtr<uint32> gens; isize slotCount; isize pos; UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafeConstPtr<V> values, UnsafeConstPtr<uint32> gens, isize slotCount, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
+        this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public unsafe fn bool hasNext() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "SlotMap modified during iteration"); }
+        while (this.pos < this.slotCount) {
+            uint32 g = this.gens[this.pos];
+            if ((g & 1ui32) == 1ui32) { return true; }
+            this.pos = this.pos + 1;
+        }
+        return false;
+    }
+    public unsafe fn const ref V next() { isize p = this.pos; this.pos = this.pos + 1; return this.values[p]; }
+}
+
 // A slot map (= Rust `slotmap`; the classic ECS entity / asset registry): `insert` returns a stable `Handle`
 // you keep, and `get`/`remove`/`getRef` by handle are O(1) and REJECT a stale handle — one whose slot was
 // removed (and maybe reused) — instead of aliasing whatever lives there now. That generation check is what
@@ -100,7 +119,8 @@ type view SlotMapValueIterMut<V> implements IteratorMut<V> {
 // slot count; `freeList` is sized to `cap`, so a push never overflows (occupied + free <= slotCount <= cap).
 type resource SlotMap<V, A: Allocator = GlobalAllocator>
         implements ValuesIterable<SlotMapValueIter<V>> when [V: Copyable<V>],
-                   ValuesIterableMut<SlotMapValueIterMut<V>>, Sendable when [V: Sendable, A: Sendable],
+                   ValuesIterableMut<SlotMapValueIterMut<V>>, ValuesIterableConst<SlotMapValueIterConst<V>>,
+                   Sendable when [V: Sendable, A: Sendable],
                    Serializable when [V: Serializable],
                    Deserializable<This> when [V: Deserializable<V>, A: default] {
     UnsafePtr<V> slotValues = null; UnsafePtr<uint32> gens = null; UnsafePtr<isize> freeList = null;
@@ -213,6 +233,11 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     public unsafe fn SlotMapValueIterMut<V> valuesMut() {
         return SlotMapValueIterMut::<V>.make(values: this.slotValues, gens: this.gens, slotCount: this.slotCount,
                                              modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    // `foreach (const ref V v in sm.valuesConst())` — every live value in place, read-only, for ANY value type.
+    public unsafe const fn SlotMapValueIterConst<V> valuesConst() {
+        return SlotMapValueIterConst::<V>.make(values: this.slotValues, gens: this.gens, slotCount: this.slotCount,
+                                               modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Drop every live value and vacate every slot (keeps the buffers). Generations keep CLIMBING (each occupied

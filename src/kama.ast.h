@@ -657,6 +657,7 @@ public:
     SharedExpression expression;
     SharedStatement body;
     bool isRef = false;   // `foreach (ref T e in …)` — bind each element by place (mutable, in-place)
+    bool isConstRef = false;   // `foreach (const ref T e in …)` — by place, READ-ONLY (isRef is set too: it is a place)
     ForEachNode(CodeGenContext& context,  SharedIdentifier type,
                 SharedIdentifier name,
                 SharedExpression expression,
@@ -686,6 +687,8 @@ public:
     // run alongside the statements after it. `parallel_for` cannot express a pool for that second reason:
     // it joins at its own brace, so nothing can run concurrently with it.
     bool deferJoin = false;
+    // `parallel_for (const ref T e in c, …)` — every worker READS its slice through `view()`, never writes it.
+    bool isConstRef = false;
     // `parallel_for (ref T e in c, workers: N)` — how many isolates to split into. MANDATORY on
     // `parallel_for` and FORBIDDEN on `parallel_spawn`, whose count is the container's length. There is no
     // default: kama has no optional parameters, so a built-in must not have one either, and the old

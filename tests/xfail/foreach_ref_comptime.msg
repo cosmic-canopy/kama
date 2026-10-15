@@ -1,1 +1,1 @@
-a constant has no writable element to borrow
+is a `comptime` constant — read each element in place

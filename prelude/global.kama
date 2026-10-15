@@ -290,9 +290,13 @@ type adapter <string> implements Comparable<This> {
 // `Iterator<T>` yields each element BY VALUE (a copy); `IteratorMut<T>` yields a mutable place
 // (`ref T`) so `foreach (ref T x in c)` can write through it (Optional can't carry a place, so the
 // two are parallel — Rust's iter()/iter_mut() split). A container hands one out via a nullary
-// `iterator()` / `iterMut()` factory method.
+// `iterator()` / `iterMut()` / `iterConst()` factory method.
 type contract Iterator<T> for value, view, resource { fn Optional<T> next(); }
 type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(); }
+// `IteratorConst<T>` yields a READ-ONLY place (`const ref T`), so `foreach (const ref T x in c)` reads each
+// element where it lives — a move-only element, or a big one, with no copy — and writes none. It is the
+// third form, beside the copy and the writable place (KR-175): C++'s `const auto&`, C#'s `ref readonly`.
+type contract IteratorConst<T> for value, view { fn bool hasNext(); fn const ref T next(); }
 // Container-side opt-in: a type that `implements Iterable<T>` hands out a by-value iterator via a
 // nullary `iterator()`; `IterableMut<T>` hands out a mutable iterator via `iterMut()`. `foreach`
 // requires the container to declare the matching one (nominal on both sides). A type that is its OWN
@@ -303,6 +307,9 @@ type contract IteratorMut<T> for value, view { fn bool hasNext(); fn ref T next(
 // wants declared. (`Iterator`/`IteratorMut` are NOT marked: an iterator hands out elements, not views.)
 @viewable type contract Iterable<T> for resource, view { fn Iterator<T> iterator(); }
 @viewable type contract IterableMut<T> for resource, view { fn IteratorMut<T> iterMut(); }
+// `IterableConst<T>` hands out a read-only iterator via `iterConst()`, which a container declares `const fn`
+// so a READ-ONLY collection (a `const ref` parameter, a `const` local) can be looped by place.
+@viewable type contract IterableConst<T> for resource, view { const fn IteratorConst<T> iterConst(); }
 // The container-side mint grant for a plain window: a type that `implements Viewable<View<T>>` declares
 // that its storage is what a `View<T>` views, and `view()` is the one place that view is born.
 //

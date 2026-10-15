@@ -1,0 +1,20 @@
+// A `const ref` loop binding is read-only, as deep as a `const ref` parameter (KR-175): assigning it, or calling a
+// non-`const` method through it, is refused.
+import { std::collections::DynamicArray };
+
+type value Big {
+    public int32 w;
+    public ctor make(int32 w) { this.w = w; }
+    public fn void bump() { this.w = this.w + 1; }
+}
+
+fn void zap(ref DynamicArray<Big> a) {
+    foreach (const ref Big b in a) { b.w = 9; }   // -> REJECT
+}
+
+fn int32 main() {
+    DynamicArray<Big> a = DynamicArray.empty();
+    a.add(item: Big.make(w: 1));
+    zap(a: a);
+    return 0;
+}

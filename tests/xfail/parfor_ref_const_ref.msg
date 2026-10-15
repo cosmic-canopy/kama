@@ -1,0 +1,1 @@
+workers that only read take `parallel_for (const ref int32 e in …)`

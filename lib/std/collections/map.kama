@@ -1,5 +1,5 @@
-import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, EntriesIterable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
-export { Map, Entry, MapKeyIter, MapValueIter, MapValueIterMut, MapEntryIter };
+import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
+export { Map, Entry, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter };
 
 // Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`
 // returns UNINITIALIZED bytes, so the `state` tag buffer is zeroed with `memset` after allocation
@@ -75,6 +75,25 @@ type view MapValueIterMut<V> implements IteratorMut<V> {
     public unsafe fn ref V next() { isize p = this.pos; this.pos = this.pos + 1; return this.vals[p]; }
 }
 
+// The read-only twin (`foreach (const ref V v in map.valuesConst())`, KR-175): each live value in place, for ANY
+// value type, from a `const fn` — so a function that only borrows a map (`const ref Map`) can walk its values.
+type view MapValueIterConst<V> implements IteratorConst<V> {
+    UnsafeConstPtr<V> vals; UnsafeConstPtr<uint8> state; isize cap; isize pos; UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafeConstPtr<V> vals, UnsafeConstPtr<uint8> state, isize cap, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public unsafe fn bool hasNext() {   // scans forward past empty slots, as MapValueIterMut's does
+        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
+        while (this.pos < this.cap) {
+            uint8 s = this.state[this.pos];
+            if (s == 1ui8) { return true; }
+            this.pos = this.pos + 1;
+        }
+        return false;
+    }
+    public unsafe fn const ref V next() { isize p = this.pos; this.pos = this.pos + 1; return this.vals[p]; }
+}
+
 // A key-value pair yielded by entry iteration. The map has no tuple type, so this is the named pair the
 // `foreach (Entry<K,V> e in map.entries())` protocol hands out — `e.key()` / `e.value()`. It OWNS both (an owned
 // copy read out of the map slot), so it outlives the map and drops them at end of life — hence `type resource`
@@ -128,6 +147,7 @@ type view MapEntryIter<K: Copyable<K>, V: Copyable<V>> implements Iterator<Entry
 type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>], Iterable<K> when [K: Copyable<K>],
                    ValuesIterable<MapValueIter<V>> when [V: Copyable<V>], ValuesIterableMut<MapValueIterMut<V>>,
+                   ValuesIterableConst<MapValueIterConst<V>>,
                    EntriesIterable<MapEntryIter<K,V>> when [K: Copyable<K>, V: Copyable<V>],
                    Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
@@ -255,6 +275,11 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     public unsafe fn MapValueIterMut<V> valuesMut() {
         return MapValueIterMut::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
                                          modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    // `foreach (const ref V v in map.valuesConst())` — every value in place, read-only, for ANY value type.
+    public unsafe const fn MapValueIterConst<V> valuesConst() {
+        return MapValueIterConst::<V>.make(vals: this.vals, state: this.state, cap: this.cap,
+                                           modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // `foreach (Entry<K,V> e in map.entries())` — a by-value key-value pair iterator, present only when BOTH

@@ -1,0 +1,109 @@
+// `foreach (const ref T x in c)` — each element read IN PLACE, written never (KR-175). The third binding form,
+// beside the copy (`T x`) and the writable place (`ref T x`): C++'s `const auto&`, C#'s `ref readonly`. It is the
+// loop a READ-ONLY collection has — a `const ref` parameter, a `const fn`'s fields — and the only one for a
+// move-only element there, which can be neither copied out nor bound `ref` through a read-only place. Every
+// container that hands out a writable place iterator hands out its read-only twin from a `const fn`:
+// `iterConst()`, and `valuesConst()` on the keyed ones. `parallel_for (const ref …)` is the same read, per worker.
+// The by-value loop over a read-only collection keeps building beside it. Returns 42.
+import {
+    std::collections::DynamicArray, std::collections::FixedArray, std::collections::Deque, std::collections::Map,
+    std::collections::SlotMap, std::collections::SortedMap, std::collections::View, std::collections::ConstView,
+    std::memory::Owned, std::concurrent::Atomic,
+};
+
+type value Big {
+    public int32 weight;
+    public ctor make(int32 w) { this.weight = w; }
+    public const fn int32 twice() { return this.weight * 2; }
+}
+
+// Move-only elements, through a `const ref`: no copy, no `ref` — only the read-only place reaches them.
+fn int32 totalOwned(const ref DynamicArray<Owned<Big>> a) {
+    int32 n = 0;
+    foreach (const ref Owned<Big> b in a) { n = n + b.weight + b.twice(); }   // a field, a `const fn`
+    return n;
+}
+
+// Every contiguous kind, and the by-value loop still legal over the same read-only list.
+fn int32 contiguous(const ref DynamicArray<int32> d, const ref FixedArray<int32> f, const ref Deque<int32> q) {
+    int32 n = 0;
+    foreach (const ref int32 x in d) { n = n + x; }
+    foreach (int32 x in d) { n = n + x; }
+    foreach (const ref int32 x in f) { n = n + x; }
+    foreach (const ref int32 x in q) { n = n + x; }
+    return n;
+}
+
+// The keyed containers' values, read in place from a borrowed map.
+fn int32 keyed(const ref Map<string, Owned<Big>> m, const ref SlotMap<Big> s, const ref SortedMap<int32, Big> o) {
+    int32 n = 0;
+    foreach (const ref Owned<Big> b in m.valuesConst()) { n = n + b.weight; }
+    foreach (const ref Big b in s.valuesConst()) { n = n + b.weight; }
+    foreach (const ref Big b in o.valuesConst()) { n = n + b.weight; }
+    return n;
+}
+
+type resource Shelf {
+    DynamicArray<Owned<Big>> items;
+    public ctor make() { this.items = DynamicArray.empty(); }
+    public fn void put(int32 w) { this.items.add(item: new Big.make(w: w)); }
+    // A `const fn`'s fields are read-only, and a `const ref` loop reads them.
+    public const fn int32 weigh() {
+        int32 n = 0;
+        foreach (const ref Owned<Big> b in this.items) { n = n + b.weight; }
+        return n;
+    }
+}
+
+// A `comptime` table is a constant: read in place, never written.
+comptime fn InlineArray<int32>#(2) mk() { InlineArray<int32>#(2) t = [0; 2]; t[0] = 100; t[1] = 200; return t; }
+comptime InlineArray<int32>#(2) TABLE = mk();
+
+// Read-only workers: each reads its slice in place and adds into the one shared atomic.
+fn int32 parallelSum(const ref DynamicArray<int32> a) {
+    Atomic<int32> total = Atomic.make(value: 0i32);
+    parallel_for (const ref int32 e in a, workers: 3) { total.fetchAdd(delta: e); }
+    return total.load();
+}
+
+fn int32 main() {
+    DynamicArray<Owned<Big>> owned = DynamicArray.empty();
+    owned.add(item: new Big.make(w: 1));
+    owned.add(item: new Big.make(w: 2));
+    if (totalOwned(a: owned) != 9) { return 1; }                        // (1+2) + (2+4)
+
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 1); d.add(item: 2);
+    FixedArray<int32> f = FixedArray.make(size: 2);
+    f[0] = 3; f[1] = 4;
+    Deque<int32> q = Deque.empty();
+    q.pushBack(item: 5);
+    if (contiguous(d: d, f: f, q: q) != 18) { return 2; }              // 3 + 3 + 7 + 5
+
+    InlineArray<int32>#(3) fixed = [6, 7, 8];
+    int32 sum = 0;
+    foreach (const ref int32 x in fixed) { sum = sum + x; }
+    borrow d.view() as cv { foreach (const ref int32 x in cv) { sum = sum + x; } }
+    borrow d.viewMut() as v { foreach (const ref int32 x in v) { sum = sum + x; } }
+    foreach (const ref int32 x in TABLE) { sum = sum + x; }
+    if (sum != 327) { return 3; }                                        // 21 + 3 + 3 + 300
+
+    Map<string, Owned<Big>> m = Map.empty();
+    m.put(key: "a", value: new Big.make(w: 10));
+    SlotMap<Big> s = SlotMap.empty();
+    s.insert(value: Big.make(w: 20));
+    SortedMap<int32, Big> o = SortedMap.empty();
+    o.put(key: 2, value: Big.make(w: 30));
+    o.put(key: 1, value: Big.make(w: 40));
+    if (keyed(m: m, s: s, o: o) != 100) { return 4; }
+
+    Shelf shelf = Shelf.make();
+    shelf.put(w: 5); shelf.put(w: 6);
+    if (shelf.weigh() != 11) { return 5; }
+
+    DynamicArray<int32> many = DynamicArray.empty();
+    int32 i = 0;
+    while (i < 30) { many.add(item: 2); i = i + 1; }
+    if (parallelSum(a: many) != 60) { return 6; }
+    return 42;
+}

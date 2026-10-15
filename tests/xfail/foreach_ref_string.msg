@@ -1,0 +1,1 @@
+a `string` is immutable, so a `foreach` over it binds each byte by value

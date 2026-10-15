@@ -7070,14 +7070,45 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         unsupported((KW + " needs a `View<T>` or a contiguous container with `.viewMut()` "
                     "(DynamicArray/FixedArray) — the operand is not a collection").c_str(), pf->line);
     std::string viewCType, viewExpr;
-    if (isViewCType(itCls)) {
+    // A `ref` worker writes its slice, so the operand must be writable: a read-only place is refused here, where
+    // `viewMut()` is called straight from the lowering and no dispatch-site check would see it (KR-175).
+    if (!pf->isConstRef && isConstReceiver(pf->expression)) {
+        const std::string tn = pf->type ? kamaTypeText(pf->type) : "T";
+        unsupported((KW + " binds each element `ref`, so every worker writes its slice, and `" + rootBinding(pf->expression)
+                     + "` is read-only here — workers that only read take `" + KW + " (const ref " + tn + " "
+                     + loopVar + " in …)`").c_str(), pf->line);
+        return;
+    }
+    if (pf->isConstRef && isViewCType(itCls)) {
+        // A read-only worker reads a `View` or a `ConstView` alike — both hand out `iterConst()` and `slice()`.
+        viewCType = itCls;
+        viewExpr  = emitExpression(pf->expression);
+    } else if (pf->isConstRef) {
+        MethodInfo* viewMi = findMethod(&_classes[itCls], "view", nullptr);
+        if (!viewMi || !viewMi->params.empty() || !viewMi->isConst
+            || !isViewCType(cTypeInInstance(itCls, viewMi->returnType))) {
+            unsupported((KW + " (const ref …) needs a `View<T>`, a `ConstView<T>` or a contiguous container with "
+                         "a nullary `const fn view()` (DynamicArray/FixedArray); `" + itCls + "` is not contiguous — "
+                         "a non-contiguous collection cannot be split into disjoint slices").c_str(), pf->line);
+            return;
+        }
+        if (!declaresViewable(_classes[itCls])) {
+            unsupported((KW + " splits a container into disjoint slices, so the container must "
+                         "declare that its storage is what those slices view; `" + itCls + "` has a "
+                         "`.view()` but implements no `@viewable` contract (the prelude's `Viewable<V>`)")
+                            .c_str(), pf->line);
+            return;
+        }
+        viewCType = cTypeInInstance(itCls, viewMi->returnType);
+        viewExpr  = viewMi->cName + "(&(" + emitExpression(pf->expression) + "))";
+    } else if (isViewCType(itCls)) {
         // `ref` is mandatory here — every worker WRITES its slice — so the read-only window cannot serve.
         // Said here, or the foreach lowering below would report a missing `iterMut()` and leave the reader
         // to work out that a `ConstView` never has one.
         if (isConstViewCType(itCls)) {
             unsupported((KW + " binds each element `ref` — every worker writes its slice — and a "
                          "`ConstView<T>` is read-only. Pass the writable window: `viewMut()` where the "
-                         "view was made").c_str(), pf->line);
+                         "view was made, or read it: `" + KW + " (const ref …)`").c_str(), pf->line);
             return;
         }
         viewCType = itCls;
@@ -7306,6 +7337,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         auto sliceId = synthId("kama_slice");
         auto fe = std::make_shared<ForEachNode>(*_synthCtx, pf->type, pf->name, sliceId, pf->body);
         fe->isRef = true;
+        fe->isConstRef = pf->isConstRef;   // a read-only worker reads its slice in place (KR-175)
         emitForeachIterator(fe.get(), viewCType, 1);
         emitScopeCleanup(_scopes.back(), 1);   // function-root scope (no owned locals expected)
         body << "}\n";
@@ -8981,9 +9013,24 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // `foreach (ref T e in K)` would hand out a mutable `T*` into a constant. Reject it here rather
         // than emitting code the C compiler has to catch: the `ref` binding exists to write back, and
         // there is nothing writable to bind to.
-        if (constRecv && fe->isRef) {
-            unsupported("`foreach (ref …)` over a `comptime` constant — a constant has no writable element "
-                        "to borrow (drop the `ref` to iterate by value)", n->line);
+        // A `string` is immutable: it has no element to bind by place, writable or not — its bytes are `uint8`
+        // copies, and nothing is saved by reading one in place.
+        if (fe->isRef && _classes[itCls].collKind == CollKind::String) {
+            unsupported(("a `string` is immutable, so a `foreach` over it binds each byte by value — write "
+                         "`foreach (uint8 " + nm + " in …)`").c_str(), n->line);
+            *_out << "\n";
+            return;
+        }
+        // `foreach (ref T e in K)` would hand out a mutable `T*` into a constant, and the same holds for any
+        // read-only place (a `const ref` parameter, a `const` local, a `const fn`'s field — KR-175): the `ref`
+        // binding exists to write back, and there is nothing writable to bind to.
+        if (fe->isRef && !fe->isConstRef && (constRecv || isConstReceiver(fe->expression))) {
+            const std::string tn = fe->type ? kamaTypeText(fe->type) : "T";
+            const std::string root = rootBinding(fe->expression);
+            unsupported(("a `ref` loop binding writes through each element, and `" + (root.empty() ? coll : root)
+                         + (constRecv ? "` is a `comptime` constant" : "` is read-only here")
+                         + " — read each element in place with `foreach (const ref " + tn + " " + nm
+                         + " in …)`, or take copies with `foreach (" + tn + " " + nm + " in …)`").c_str(), n->line);
             *_out << "\n";
             return;
         }
@@ -9014,8 +9061,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // is recorded destructible (the collection owns the element).
         indent(depth + 2);
         if (fe->isRef) {
-            *_out << elemTy << "* " << kName(nm) << " = " << coll << "__at(" << fp << ", " << ix << ");\n";
+            // A `const ref` binding is the same bounds-checked place, const as deep as a `const ref` parameter
+            // and lowered as one is, to a plain `T*`; over a `comptime` constant the receiver pointer is const.
+            *_out << elemTy << "* " << kName(nm) << " = " << (fe->isConstRef ? "(" + elemTy + "*)" : std::string())
+                  << coll << "__at(" << (constRecv ? "(" + coll + "*)" : std::string()) << fp << ", " << ix << ");\n";
             _refParams.insert(nm);
+            if (fe->isConstRef) _constLocals.insert(nm);
         } else {
             *_out << elemTy << " " << kName(nm) << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
         }
@@ -17973,7 +18024,62 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     // What the iterator ACTUALLY yields, as opposed to what the loop binding claims. Both branches fill
     // it; the mismatch check below is the same rule the intrinsic-collection path enforces.
     std::string actualElem;
-    if (fe->isRef) {
+    // A `ref` binding WRITES through each element, so it cannot iterate a read-only place: a `const ref`
+    // parameter, a `const` local, a field reached through either, a `const fn`'s own fields (KR-175). This branch
+    // calls `iterMut()` straight from here, never through the method-dispatch site whose receiver check would
+    // say so — `emitBorrow` says the same thing for its mint for the same reason — so without it the loop wrote
+    // into the caller's collection while `a[0] = 9` beside it was refused. The read is `foreach (const ref …)`.
+    if (fe->isRef && !fe->isConstRef && isConstReceiver(fe->expression)) {
+        const std::string root = rootBinding(fe->expression);
+        const std::string tn = fe->type ? kamaTypeText(fe->type) : "T";
+        unsupported(("a `ref` loop binding writes through each element, and `" + (root.empty() ? container : root)
+                     + "` is read-only here — read each element in place with `foreach (const ref " + tn
+                     + " " + nm + " in …)`, or take copies with `foreach (" + tn + " " + nm + " in …)`").c_str(),
+                    fe->line);
+        *_out << "\n"; return;
+    }
+    if (fe->isConstRef) {
+        // `foreach (const ref T x in c)` — each element in place, READ-ONLY (KR-175). The container hands out an
+        // `IteratorConst<T>` from `iterConst()`, a `const fn` so a read-only collection can, or the operand IS one
+        // (`m.valuesConst()`) and is iterated by value, as in the other two forms.
+        MethodInfo* iterMi = findMethod(cc, "iterConst", nullptr);
+        if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
+        ClassInfo* ic = nullptr;
+        if (iterMi) {
+            if (!implementsContractTemplate(cc, "IterableConst")) {   // nominal: the container must declare it
+                unsupported(("`" + container + "` must `implements IterableConst<T>` to be used in a "
+                             "`foreach (const ref …)`").c_str(), fe->line); *_out << "\n"; return;
+            }
+            if (!iterMi->isConst) {
+                unsupported(("`" + container + "`'s `iterConst()` must be a `const fn` — a read-only loop "
+                             "must never need a writable collection").c_str(), fe->line); *_out << "\n"; return;
+            }
+            if (!requirePlaceOperand()) return;
+            iterCType = cTypeInInstance(container, iterMi->returnType);
+            ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+            iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
+        } else if (implementsContractTemplate(cc, "IteratorConst")) {   // the operand IS the iterator
+            iterCType = container; ic = cc;
+            iterInit = emitIterable();
+        } else {
+            unsupported(("`" + container + "` has no read-only iteration — `foreach (const ref …)` needs "
+                         "`iterConst()` (`implements IterableConst<T>`), or an operand that is itself an "
+                         "`IteratorConst<T>`").c_str(), fe->line); *_out << "\n"; return;
+        }
+        MethodInfo* hasNextMi = ic ? findMethod(ic, "hasNext", nullptr) : nullptr;
+        MethodInfo* nextMi    = ic ? findMethod(ic, "next", nullptr) : nullptr;
+        if (!hasNextMi || !nextMi || !nextMi->isPlaceReturn) {
+            unsupported(("a read-only iterator (`" + iterCType + "`) needs `hasNext()` and a "
+                         "place-returning `const ref T next()`").c_str(), fe->line); *_out << "\n"; return;
+        }
+        if (!implementsContractTemplate(ic, "IteratorConst")) {   // nominal: it must declare the protocol
+            unsupported(("the read-only iterator `" + iterCType + "` must `implements IteratorConst<T>` "
+                         "to be used in a `foreach (const ref …)`").c_str(), fe->line); *_out << "\n"; return;
+        }
+        hasNextCall = hasNextMi->cName + "(&" + it + ")";
+        nextCall    = nextMi->cName + "(&" + it + ")";
+        actualElem  = cTypeInInstance(iterCType, nextMi->returnType);   // `const ref T next()` -> T
+    } else if (fe->isRef) {
         // Mirror the by-value branch: a container hands out a mutable iterator via `iterMut()`, OR the operand
         // IS its own mutable iterator (implements `IteratorMut` directly) and is iterated by value — the latter
         // lets an rvalue operand (`m.valuesMut()`) work, exactly as `s.chars()` does for the by-value form.
@@ -17981,8 +18087,9 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         // would be true and useless — the remedy is the other half of the pair, not a conformance.
         if (isConstViewCType(container)) {
             unsupported("a `ConstView<T>` is read-only, so it has no `foreach (ref …)` — a `ref` binding is a "
-                        "writable place. Iterate it by value, or take the writable window (`viewMut()`) "
-                        "where the view was made", fe->line); *_out << "\n"; return;
+                        "writable place. Read each element in place with `foreach (const ref …)`, iterate it by "
+                        "value, or take the writable window (`viewMut()`) where the view was made", fe->line);
+            *_out << "\n"; return;
         }
         MethodInfo* iterMi = findMethod(cc, "iterMut", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
@@ -18098,7 +18205,11 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
     if (fe->isRef) {
         _refParams.insert(nm);   // reads/writes deref the place, like a `ref` param / built-in `foreach ref`
-        indent(depth + 2); *_out << elemTy << "* " << kName(nm) << " = " << nextCall << ";\n";
+        // A `const ref` binding is the same place, and const as deep as a `const ref` parameter is — so it
+        // lowers as one does, to a plain `T*` (kama says what may be done through it, C does not need to).
+        if (fe->isConstRef) _constLocals.insert(nm);
+        indent(depth + 2); *_out << elemTy << "* " << kName(nm) << " = "
+                                << (fe->isConstRef ? "(" + elemTy + "*)" : std::string()) << nextCall << ";\n";
     } else {
         indent(depth + 2); *_out << optC << " " << ot << " = " << nextCall << ";\n";
         indent(depth + 2); *_out << "if (" << ot << ".kama_tag == " << optC << "_None) break;\n";

@@ -301,6 +301,7 @@ fn int32 main() {
     int32 first = a[0];
     foreach (int32 x in a) { /* ... */ }            // iterate (x is a copy)
     foreach (ref int32 x in a) { x = x * 2; }       // `ref`: mutate each element in place
+    foreach (const ref int32 x in a) { /* ... */ }  // `const ref`: read each in place, write none
 
     DynamicArray<Point> ps = DynamicArray.empty();             // growable
     ps.add(item: Point.of(x: 1, y: 2));   isize n = ps.length();   Point q = ps[0];
@@ -593,7 +594,9 @@ fn int32 main() {
 `Copyable` key; it guards against a mid-iteration `put`/`remove` like the `DynamicArray` iterator).
 `foreach (V v in m.values())` iterates the **values** by copy (present for a `Copyable` value), and
 `foreach (ref V v in m.valuesMut())` **borrows every value in place** to mutate it — the value analogue of
-`iterMut()`, and the way to walk a map whose key isn't `Copyable`. `copy m` deep-copies a whole map
+`iterMut()`, and the way to walk a map whose key isn't `Copyable` — and `foreach (const ref V v in
+m.valuesConst())` reads every value in place, from a `const fn`, so a function that only borrows a map
+(`const ref Map`) walks values that are not `Copyable`. `copy m` deep-copies a whole map
 (independent clone) — present only when **both** key and value are `Copyable`, gated by a **multi-condition
 `when [K: Copyable, V: Copyable]`**. `foreach (Entry<K,V> e in m.entries())` iterates the **key-value pairs**
 by copy (`e.key()` / `e.value()`), present only when **both** key and value are `Copyable` — the pair analogue
@@ -3490,6 +3493,14 @@ right method shape but no `implements` is rejected (explicit over implicit). <!-
 - **mutable** — `foreach (ref T x in v)`: `v` provides `fn <IterMut> iterMut()` whose iterator
   `implements IteratorMut<T>` (`fn bool hasNext()` + a place-returning `fn ref T next()` — Rust's
   `iter()`/`iter_mut()` split; `Optional` can't carry a place, so mutable is a parallel iterator).
+- **read-only** — `foreach (const ref T x in v)`: `v` provides `const fn <IterConst> iterConst()` whose iterator
+  `implements IteratorConst<T>` (`fn bool hasNext()` + a read-only place, `fn const ref T next()`). It reads each
+  element where it lives — a move-only element, or a big one, with no copy — and writes none: the binding is as
+  deeply `const` as a `const ref` parameter. It is the loop a **read-only collection** has (a `const ref`
+  parameter, a `const` local, a `const fn`'s fields), since its factory is a `const fn`; a `ref` loop over one is
+  refused and names this form, because a `ref` binding writes. C++'s `for (const auto& x : v)`, C#'s
+  `foreach (ref readonly var x in span)`. Every container with `iterMut()` has `iterConst()`, and each keyed one's
+  `valuesMut()` has `valuesConst()`. A `string` is immutable and has neither: its bytes bind by value. <!-- test: foreach_const_ref --> <!-- xfail: foreach_ref_const_ref_param, foreach_ref_const_local, foreach_ref_const_fn_field, foreach_const_ref_write, foreach_ref_string, foreach_ref_comptime -->
 - A borrowing iterator holds an `UnsafePtr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
 
 The prelude contracts (`type contract Iterator<T> for value, view, resource { fn Optional<T> next(); }` and
@@ -6314,7 +6325,9 @@ refused. <!-- xfail: scope_borrow_through_shared -->
 `parallel_for (ref T e in coll) { … }` splits `coll` into K non-overlapping sub-`View`s, one per
 worker isolate, runs the body over each in place, and joins them all at its own closing brace. It is
 safe **by disjointness** — two workers never touch the same element — so it needs no lock and no
-borrow checker.
+borrow checker. Workers that only READ say so — `parallel_for (const ref T e in coll)` — and then the operand may
+be read-only (a `const ref` parameter): the slices are `ConstView`s through `view()`, and each binding is a
+read-only place. A `ref` worker over a read-only operand is refused, naming that form. <!-- test: foreach_const_ref --> <!-- xfail: parfor_ref_const_ref -->
 
 ```kama
 import { std::collections::DynamicArray, std::concurrent::cpuCount };

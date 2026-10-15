@@ -473,10 +473,15 @@ fnptr_call_result_narrowed	fnptr_call_result_narrowed.kama:12 fnptr_call_result_
 fnptr_null_check	fnptr_null_check.kama:4
 for_on_type	for_on_type.kama:1
 foreach_char_over_string	foreach_char_over_string.kama:12
+foreach_const_ref_write	foreach_const_ref_write.kama:12
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12
-foreach_ref_comptime	foreach_ref_comptime.kama:12
+foreach_ref_comptime	foreach_ref_comptime.kama:13
+foreach_ref_const_fn_field	foreach_ref_const_fn_field.kama:9
+foreach_ref_const_local	foreach_ref_const_local.kama:5
+foreach_ref_const_ref_param	foreach_ref_const_ref_param.kama:8
 foreach_ref_const_view	foreach_ref_const_view.kama:9
 foreach_ref_give	foreach_ref_give.kama:8
+foreach_ref_string	foreach_ref_string.kama:7
 foreach_rvalue_container	foreach_rvalue_container.kama:14
 foreach_view_rvalue	foreach_view_rvalue.kama:11
 foreign_callback_expose_return	foreign_callback_expose_return.kama:9
@@ -934,6 +939,7 @@ parfor_const_view	parfor_const_view.kama:9
 parfor_elem_undeclared	parfor_elem_undeclared.kama:11
 parfor_no_workers	parfor_no_workers.kama:14
 parfor_noncontiguous	parfor_noncontiguous.kama:9
+parfor_ref_const_ref	parfor_ref_const_ref.kama:7
 parfor_return	parfor_return.kama:7
 parfor_this	parfor_this.kama:11
 parfor_write_capture	parfor_write_capture.kama:11

@@ -1,4 +1,4 @@
-export { ValuesIterable, ValuesIterableMut, EntriesIterable };
+export { ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable };
 
 // The container-side mint grants for the iterations that are NOT `foreach (x in container)`.
 //
@@ -18,4 +18,6 @@ export { ValuesIterable, ValuesIterableMut, EntriesIterable };
 // and `SlotMap` — which is the test of whether a capability is worth a contract at all.
 @viewable type contract ValuesIterable<I> for resource { fn I values(); }
 @viewable type contract ValuesIterableMut<I> for resource { fn I valuesMut(); }
+// The read-only twin (KR-175): `valuesConst()` is a `const fn`, so a `const ref` map is walked in place.
+@viewable type contract ValuesIterableConst<I> for resource { const fn I valuesConst(); }
 @viewable type contract EntriesIterable<I> for resource { fn I entries(); }

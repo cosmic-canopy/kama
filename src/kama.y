@@ -1542,6 +1542,7 @@ parallel_clauses_opt
   ;
 parallel_for_statement
   : PARALLEL_FOR LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/false, parallelClause($8, "workers")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); $$ = n; }
+  | PARALLEL_FOR LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/false, parallelClause($9, "workers")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }   /* every worker READS its slice (KR-175) */
   ;
   /* `parallel_spawn (ref T w in workers) { ... }` — one LONG-LIVED isolate per element, joined by the
      enclosing `scope { }` rather than at its own brace, so the children run ALONGSIDE the statements
@@ -1550,6 +1551,7 @@ parallel_for_statement
      it. Deliberately the SAME shape as `parallel_for` — one grammar tail, so the two cannot drift. */
 parallel_spawn_statement
   : PARALLEL_SPAWN LPAREN REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10, /*deferJoin=*/true, parallelClause($8, "workers")); n->stack = parallelClause($8, "stack"); STAMP_LOC(n->name, @5); $$ = n; }
+  | PARALLEL_SPAWN LPAREN CONST REF type IDENTIFIER IN expression parallel_clauses_opt RPAREN block   { auto n = std::make_shared<ParallelForNode>(SCANNER_CODEGENCONTEXT, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11, /*deferJoin=*/true, parallelClause($9, "workers")); n->stack = parallelClause($9, "stack"); n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }
   ;
 empty_statement
   : SEMICOLON   {  }
@@ -1690,6 +1692,7 @@ match_binding
 foreach_statement
   : FOREACH LPAREN type binding_word IN expression RPAREN embedded_statement   { requireBraced($8, &@8, scanner, "foreach", "foreach (T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $3, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4), $6, $8); STAMP_LOC(n->name, @4); $$ = n; }
   | FOREACH LPAREN REF type binding_word IN expression RPAREN embedded_statement   { requireBraced($9, &@9, scanner, "foreach", "foreach (ref T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); n->isRef = true; STAMP_LOC(n->name, @5); $$ = n; }   /* `foreach (ref T e in …)` — mutate elements in place */
+  | FOREACH LPAREN CONST REF type binding_word IN expression RPAREN embedded_statement   { requireBraced($10, &@10, scanner, "foreach", "foreach (const ref T e in ...) { ... }"); auto n = std::make_shared<ForEachNode>(SCANNER_CODEGENCONTEXT,  $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $10); n->isRef = true; n->isConstRef = true; STAMP_LOC(n->name, @6); $$ = n; }   /* `foreach (const ref T e in …)` — read each element in place, never write it (KR-175) */
   ;
 jump_statement
   : break_statement

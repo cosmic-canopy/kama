@@ -1,5 +1,5 @@
 import { View, ConstView };
-export { FixedArray, FixedArrayIter, FixedArrayIterMut };
+export { FixedArray, FixedArrayIter, FixedArrayIterMut, FixedArrayIterConst };
 
 // A by-value iterator (the `foreach (T x in arr)` protocol): yields each element by value.
 type view FixedArrayIter<T: Copyable<T>> implements Iterator<T> {
@@ -20,13 +20,22 @@ type view FixedArrayIterMut<T> implements IteratorMut<T> {
     public unsafe fn ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
 
+// A read-only iterator (the `foreach (const ref T x in arr)` protocol): hasNext() + a READ-ONLY place. Minted by
+// `iterConst()`, a `const fn`, so a `const ref` array can be looped in place (KR-175).
+type view FixedArrayIterConst<T> implements IteratorConst<T> {
+    UnsafeConstPtr<T> data; isize pos; isize len;
+    unsafe ctor make(UnsafeConstPtr<T> data, isize len) { this.data = data; this.pos = 0; this.len = len; }
+    public const fn bool hasNext() { return this.pos < this.len; }
+    public unsafe fn const ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
+}
+
 // A fixed-size, heap-owning, bounds-checked array (= C++ `new T[n]` / a boxed slice). Every one of its
 // `size` elements is live from construction to drop — unlike `DynamicArray`, which tracks a separate `len`.
 // So each element is BUILT when the array is: `make(size:)` gives each one `T`'s default, which exists only
 // where `when [T: default]` holds (a number, `string`, a type that elected one — KR-106), and
 // `filled(size:, value:)` gives each a copy of one value. A type with neither is built in a `DynamicArray`.
 // Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
-type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>, ViewableMut<View<T>>,
+type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>, ViewableMut<View<T>>,
                                   Serializable when [T: Serializable], Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> data = null; isize size = 0; A alloc;
 
@@ -115,6 +124,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // (ref T x in c)` accessor is the one.
     @serializedGraphEdges
     public unsafe fn FixedArrayIterMut<T> iterMut() { return FixedArrayIterMut::<T>.make(data: this.data, len: this.size); }
+    public unsafe const fn FixedArrayIterConst<T> iterConst() { return FixedArrayIterConst::<T>.make(data: this.data, len: this.size); }
 
     // Membership + first-index, by ELEMENT equality — present only when the element is `Equatable`
     // (routes through its `equals`, so it works for `string` and any user `Equatable` element).

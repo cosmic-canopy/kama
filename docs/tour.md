@@ -465,6 +465,7 @@ fn int32 main()
     xs.add(item: 2);
 
     foreach (ref int32 x in xs) { x = x * 10; }   // `ref` mutates in place; without it you get a copy
+    foreach (const ref int32 x in xs) { }         // `const ref` reads in place and writes nothing
 
     int32 total = 0;
     foreach (int32 x in xs) { total = total + x; }

@@ -1,0 +1,14 @@
+// A `const fn`'s fields are read-only, as deep as a `const ref` parameter, so a `ref` loop over one is refused
+// (KR-175) — through 0.9.603 it wrote into the receiver of a method that promised not to.
+import { std::collections::DynamicArray };
+
+type resource Bag {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); }
+    public const fn int32 zap() {
+        foreach (ref int32 x in this.items) { x = 9; }   // -> REJECT
+        return 0;
+    }
+}
+
+fn int32 main() { Bag b = Bag.make(); return b.zap(); }

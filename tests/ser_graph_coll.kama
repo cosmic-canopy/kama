@@ -35,7 +35,7 @@ type resource Bag {
     public ctor make(DynamicArray<Shared<Leaf>> kids) { this.kids = give kids; }
     public const fn int32 sum() {
         int32 s = 0;
-        foreach (ref Shared<Leaf> k in this.kids) { s = s + k.get(); }
+        foreach (const ref Shared<Leaf> k in this.kids) { s = s + k.get(); }
         return s;
     }
 }

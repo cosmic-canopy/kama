@@ -1,0 +1,15 @@
+// `parallel_for (ref …)` writes every slice, so a read-only collection cannot be its operand (KR-175): through
+// 0.9.603 the lowering called `viewMut()` on it directly, and every worker wrote into the caller's list. Workers
+// that only read say so: `parallel_for (const ref …)`.
+import { std::collections::DynamicArray, std::concurrent::cpuCount };
+
+fn void zap(const ref DynamicArray<int32> a) {
+    parallel_for (ref int32 e in a, workers: 2) { e = 9; }   // -> REJECT
+}
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    zap(a: a);
+    return a[0];
+}

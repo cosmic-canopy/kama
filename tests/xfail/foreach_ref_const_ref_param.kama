@@ -1,0 +1,16 @@
+// A `ref` loop binding writes through each element, so it cannot iterate a read-only place (KR-175). Through
+// 0.9.603 this built, and the CALLER's list held 9 afterwards: the `ref` lowering called `iterMut()` straight
+// from the loop, never through the method-dispatch site whose receiver check refuses `a[0] = 9` here. The
+// refusal names the read: `foreach (const ref int32 x in a)`.
+import { std::collections::DynamicArray };
+
+fn void zap(const ref DynamicArray<int32> a) {
+    foreach (ref int32 x in a) { x = 9; }   // -> REJECT
+}
+
+fn int32 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    zap(a: a);
+    return a[0];
+}

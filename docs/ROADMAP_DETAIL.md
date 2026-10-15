@@ -544,27 +544,6 @@ type could not be resolved — bind it to a typed local first", which is wrong �
 `matchSubjectClassQuiet`, which answers "" for a primitive) needs the same message for a primitive subject. A grammar
 change is four artifacts (kama.y, grammar.bnf, tree-sitter, the editor pins).
 
-<a id="s2-const-foreach-ref"></a>
-
-### `foreach (ref …)` writes through a `const ref` collection (KR-175)
-
-Measured on `0.9.603`, filed 2026-10-15, found surveying KR-165. `fn void zap(const ref DynamicArray<int32> a) {
-foreach (ref int32 x in a) { x = 9; } }` builds, and the caller's array holds 9 afterwards; `a[0] = 9` in the same body
-is refused ("const is deep"). `CEmitter::emitForeachIterator`'s `isRef` branch calls the collection's `iterMut()` with no
-`isConstReceiver` check, where the method-dispatch site applies one. **Scheduled, unsound:** a `ref` loop binding over a
-read-only place is refused as the write it is, naming `const ref`; a by-value or `const ref` binding over it stays legal.
-Check every `foreach` lowering (collection, iterator, view, `parallel_for`) for the same gap. Fixture: the snippet as an
-xfail, plus `foreach (int32 x in a)` over the same `const ref` still building.
-
-**Decided (the maintainer, 2026-10-15)**, after the survey found no syntax behind "a `const ref` binding stays legal":
-a **`const ref` loop binding** — `foreach (const ref T x in a)`, and the same in `parallel_for` — the read-only place
-every peer has (C++ `const auto&`, C# `ref readonly`, Rust `&v`). The protocol had two forms, by value through
-`Iterator<T>` (an `Optional` cannot carry a place) and `ref` through `IteratorMut<T>`, so a read-only collection of
-move-only elements could only be looped with `ref` — which is how the write-through went unseen; SPEC's `ConstView`
-refusal had its xfail, the `const ref` container never had one. `ref` over a read-only place is refused, naming `const
-ref`. Unchecked as well on `0.9.603`: the intrinsic `InlineArray` path (only a `comptime` static is), `foreach (ref
-uint8 b in s)` over an immutable `string`, a named const `IteratorMut` local, and `parallel_for`'s raw `viewMut()`.
-
 <a id="s2-const-map-iter"></a>
 
 ### A read-only map cannot be iterated (KR-165)
@@ -580,8 +559,9 @@ since `addr(of: this.mods)` inside a `const fn` is an `UnsafeConstPtr`. Wider th
 `DynamicArray.iterator()` and `BitSet.iterator()` have the same non-`const` shape; `SortedSet`'s `elements()`/`first`/
 `last`/`floor`/`ceil`/`range` are non-`const` forwarders over `const` SortedMap methods; and `foreach (… in m.keys())`
 on a SortedMap is refused even on a mutable map ("a temporary with no home"), against the comment beside `keys()`. And
-implicit `foreach (int32 k in m)` over a `const ref Map` already builds, because the foreach lowering skips the const
-check — the same gap as KR-175, which is the unsound half.
+implicit `foreach (int32 k in m)` over a `const ref Map` already builds, because the by-value lowering skips the const
+check (harmless for a copy; the `ref` half of that gap was unsound, and is closed — `foreach (const ref …)`, SPEC
+*foreach*, `0.9.605`).
 
 <a id="s2-result-init-message"></a>
 

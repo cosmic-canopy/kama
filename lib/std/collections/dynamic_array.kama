@@ -1,5 +1,5 @@
 import { std::ptr::relocate, View, ConstView };
-export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut };
+export { DynamicArray, DynamicArrayIter, DynamicArrayIterMut, DynamicArrayIterConst };
 
 // Relocation is a bitwise MOVE for every element type — the old bytes are abandoned, never dropped — so growing
 // the buffer and shifting its tail are one memcpy/memmove whatever `T` is. (A COPY is a per-type question, and
@@ -38,11 +38,25 @@ type view DynamicArrayIterMut<T> implements IteratorMut<T> {
     public unsafe fn ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
 }
 
+// A read-only iterator (the `foreach (const ref T x in list)` protocol): hasNext() + a READ-ONLY place. Minted by
+// `iterConst()`, a `const fn`, so a `const ref` list can be looped in place (KR-175).
+type view DynamicArrayIterConst<T> implements IteratorConst<T> {
+    UnsafeConstPtr<T> data; isize pos; isize len; UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafeConstPtr<T> data, isize len, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public unsafe const fn bool hasNext() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "DynamicArray modified during iteration"); }
+        return this.pos < this.len;
+    }
+    public unsafe fn const ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
+}
+
 // A growable, heap-owning, bounds-checked list (= C++ `std::vector` / Rust `Vec`). Move-only by
 // default (it owns a buffer); Copyable EXACTLY when its element is — a deep copy, element by element.
 // A bare hand-off MOVES (relocates the buffer); `copy` deep-copies; `give` moves. `mods` is a
 // modification counter (bumped on structural change) that iterators snapshot to detect invalidation.
-type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>, ViewableMut<View<T>>,
+type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>, ViewableMut<View<T>>,
                                   Equatable<This> when [T: Equatable<T>],
                                   Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>, A: default],
                                   Sendable when [T: Sendable, A: Sendable] {
@@ -229,6 +243,11 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     @serializedGraphEdges
     public unsafe fn DynamicArrayIterMut<T> iterMut() {
         return DynamicArrayIterMut::<T>.make(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    // `foreach (const ref T x in list)` — each element in place, read-only, for ANY element: the loop a `const ref`
+    // list of move-only elements has (KR-175).
+    public unsafe const fn DynamicArrayIterConst<T> iterConst() {
+        return DynamicArrayIterConst::<T>.make(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Present ONLY for a Copyable element — a deep copy (a buffer of exactly `source.length()`, the elements

@@ -1,5 +1,5 @@
 import { std::ptr::relocate, DynamicArray };
-export { Deque, DequeIter, DequeIterMut };
+export { Deque, DequeIter, DequeIterMut, DequeIterConst };
 
 // Relocation is a bitwise MOVE for every element type, so re-homing the ring is one memcpy per run.
 extern "<string.h>";
@@ -40,12 +40,30 @@ type view DequeIterMut<T> implements IteratorMut<T> {
     }
 }
 
+// A read-only iterator (the `foreach (const ref T x in deque)` protocol): hasNext() + a READ-ONLY place. Minted by
+// `iterConst()`, a `const fn`, so a `const ref` deque can be looped in place (KR-175).
+type view DequeIterConst<T> implements IteratorConst<T> {
+    UnsafeConstPtr<T> data; isize head; isize cap; isize pos; isize len; UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafeConstPtr<T> data, isize head, isize cap, isize len, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
+        this.data = data; this.head = head; this.cap = cap; this.pos = 0; this.len = len;
+        this.modsp = modsp; this.modsAt = modsAt;
+    }
+    public unsafe const fn bool hasNext() {
+        if (this.modsp[0] != this.modsAt) { panic(msg: "Deque modified during iteration"); }
+        return this.pos < this.len;
+    }
+    public unsafe fn const ref T next() {
+        isize idx = (this.head + this.pos) % this.cap; this.pos = this.pos + 1;
+        return this.data[idx];
+    }
+}
+
 // A double-ended queue backed by a growable ring buffer (= C++ `std::deque` / Rust `VecDeque`): O(1)
 // amortized push/pop at BOTH ends, contiguous storage, no per-element node. Move-only by default (it owns a
 // buffer); Copyable EXACTLY when its element is (a deep, element-by-element copy). `head` is the physical
 // slot of the front element; the `len` live elements occupy `data[(head + i) % cap]` for i in 0..len, so the
 // window wraps around the end of the buffer. `mods` is a modification counter iterators snapshot.
-type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, Iterable<T> when [T: Copyable<T>],
+type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>],
                             Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>, A: default],
                             Sendable when [T: Sendable, A: Sendable] {
     UnsafePtr<T> data = null; isize head = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
@@ -168,6 +186,10 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     public unsafe fn DequeIterMut<T> iterMut() {
         return DequeIterMut::<T>.make(data: this.data, head: this.head, cap: this.cap, len: this.len,
                                       modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    public unsafe const fn DequeIterConst<T> iterConst() {
+        return DequeIterConst::<T>.make(data: this.data, head: this.head, cap: this.cap, len: this.len,
+                                        modsp: addr(of: this.mods), modsAt: this.mods);
     }
 
     // Present ONLY for a Copyable element — a deep copy (a fresh buffer of exactly `source.len`, the source's
