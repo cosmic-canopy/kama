@@ -1,0 +1,73 @@
+// std::process — a child inherits the three streams it is given and nothing else of its parent's (KR-174).
+// Through 0.9.603 every File and socket kama opened crossed into every child: POSIX opened them with no
+// O_CLOEXEC/SOCK_CLOEXEC, and Windows made them inheritable and passed bInheritHandles whenever a stream was
+// redirected. Two proofs, each observable from the parent:
+//   1. A listening socket. Start a long-lived child with redirected streams (the case that leaked on Windows),
+//      close the parent's listener, then connect: an inherited listener is still open in the child and the
+//      connect lands in its backlog; without it, the connect is refused. The child is `cat`, and one byte echoed
+//      back proves it is past exec — between fork and exec it holds every descriptor whatever the flags say.
+//   2. A File, on POSIX: a shell child looks for the File's descriptor number under /dev/fd.
+import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output, std::process::ExitStatus,
+         std::net::TcpListener, std::net::TcpStream, std::fs::File, std::fs::OpenMode, std::io::IoError,
+         std::collections::FixedArray };
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+// Bind, and start the child while the listener is open; the listener closes when this returns.
+unsafe fn Result<Process, IoError> startWhileListening(ref uint16 port) {
+    Result<TcpListener, IoError> lr = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give lr) {
+        case Ok(value: v): { := give v; }
+        case Err(error: e): { return Result::Err(error: e); }
+    };
+    port = portOf(l: l);
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "cat");
+    c.stdin(s: Stdio::Piped);
+    c.stdout(s: Stdio::Piped);
+    return c.start();
+}
+
+unsafe fn int32 socketProof() {
+    uint16 port = 0ui16;
+    Result<Process, IoError> sr = startWhileListening(port: port);
+    Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 11; } };
+    string x = "x";
+    Result<isize, IoError> wr = p.stdin().write(bytes: x.bytes());
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    Result<isize, IoError> rr = p.stdout().read(into: one.viewMut());   // the child has exec'd
+    int32 echoed = match (rr) { case Ok(value: n): cast<int32>(n); case Err(error: e): 0; };
+    if (echoed != 1) { return 14; }
+    int32 rc = match (TcpStream.connect(host: "127.0.0.1", port: port)) {
+        case Ok(value: s): 12;                                   // the child still holds the listener
+        case Err(error: e): match (e.kind()) { case ConnectionRefused: 0; case _: 13; };
+    };
+    p.closeStdin();
+    Result<ExitStatus, IoError> w = p.wait();
+    return rc;
+}
+
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 fileProof() {
+    Result<File, IoError> fr = File.open(path: "held.txt", mode: OpenMode::Write);
+    File f = match (give fr) {
+        case Ok(value: v): { := give v; }
+        case Err(error: e): { return 20; }
+    };
+    int32 fd = f.rawFd();
+    Command c = Command.shell(line: "if [ -e /dev/fd/${fd} ]; then exit 7; fi; exit 0");
+    return match (c.run()) {
+        case Ok(value: o): (o.status().code == 0 ? 0 : 21);   // 7: the child holds the parent's file
+        case Err(error: e): 22;
+    };
+}
+@compileFor(OS_WINDOWS)
+unsafe fn int32 fileProof() { return 0; }   // proof 1 covers Windows: a handle is a handle, file or socket
+
+fn int32 main() {
+    int32 a = socketProof();
+    if (a != 0) { return a; }
+    int32 b = fileProof();
+    if (b != 0) { return b; }
+    return 42;
+}

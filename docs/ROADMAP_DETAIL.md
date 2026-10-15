@@ -376,23 +376,6 @@ Windows' twin is `{ Inherit, New }` — a new console group plus a kill-on-close
 `os.ErrProcessDone`, C++ `errc::no_such_process`, Zig `error.ProcessNotFound`), and pre-1.0 a variant is added as four
 were before. What adding one costs after 1.0 is KR-176.
 
-<a id="s1-fd-inherit"></a>
-
-### Every open file and socket is inherited by every child process (KR-174)
-
-Measured on `0.9.603`, filed 2026-10-15, found surveying KR-171. A program that opens a `File` and then runs
-`Command.shell(line: "if [ -e /dev/fd/3 ]; then echo CHILD-HAS-FD3; fi")` prints `CHILD-HAS-FD3`: the child holds the
-parent's file. POSIX `kama_open_read`/`_create`/`_append`/`_create_mode` call `open` with no `O_CLOEXEC`, and
-`socket`/`accept` pass no `SOCK_CLOEXEC`; only pipes (`kama_pipe`) are marked. On Windows `_wopen` has no
-`_O_NOINHERIT`, sockets are inheritable, and `CreateProcessW` passes `bInheritHandles = TRUE` whenever a stream is
-redirected, so every inheritable handle crosses. So a child keeps a listening port open after its parent exits, holds a
-deleted file's space, and can read a file its parent meant to keep. Rust, Go and Python (PEP 446) make every descriptor
-close-on-exec by default. **Scheduled:** `O_CLOEXEC` on every POSIX open; `SOCK_CLOEXEC`/`accept4` where the OS has
-them, else `FD_CLOEXEC` right after (macOS — the fd-passing path already does this); on Windows `_O_NOINHERIT` and
-`WSA_FLAG_NO_HANDLE_INHERIT` (already used for passed sockets), and better, `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` naming
-exactly the three stdio handles. A child that should receive a descriptor gets it through KR-171's redirection, never by
-accident. Fixture: the probe above, a child reading the parent's handle on Windows, and a listening socket.
-
 <a id="s1-exclusive-create"></a>
 
 ### No exclusive create, and an existing path is `Other` (KR-177)
@@ -422,7 +405,7 @@ child ends (`inGive`/`outGive`/`errGive`). Windows needs no seam change (`_get_o
 errFd` — a merge needs its own spelling (`dup2(1,2)` last), and an fd in 0–2 the dup2 shuffle. **Decision owed:** a
 `Stdio` variant carrying a `File` (it makes `Stdio` move-only, and `start()` matches the stored copies several times) or
 separate `Command` methods; and how a merge meets `run()`, which forces both streams `Piped`. Found while surveying this
-row: KR-174.
+row: every descriptor was inherited by every child — fixed `0.9.604` (SPEC *Subprocesses*).
 
 **Decided (the maintainer, 2026-10-15):** one `Stdio` value per stream says where it goes — `Handle(descriptor:)` for
 any owned handle (a `File`, a socket, a pipe end all convert to a `Descriptor`), and `Stdout` for `2>&1`, which means

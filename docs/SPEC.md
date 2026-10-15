@@ -2276,7 +2276,11 @@ deadlock the parent). `Process` gives `wait()` (blocking reap → `ExitStatus { 
 `tryWait() -> Optional<ExitStatus>` (non-blocking), `kill`/`terminate`/`signal`, and the piped streams as
 `std::fs::File`s (`stdout()`/`stderr()` read, `stdin()`+`closeStdin()` feed-then-EOF). Dropping a `Process`
 **never blocks**: it reaps a already-exited child (no zombie) or detaches it (the OS reparents to init) —
-explicit `wait()` is how you get the status. **POSIX and Windows both ship**: `process.kama` is byte-identical
+explicit `wait()` is how you get the status. **A child inherits its three streams and nothing else** of
+its parent's: every descriptor kama makes is close-on-exec on POSIX (atomically where the OS can, and on macOS under a
+gate a fork waits on) and non-inheritable on Windows, where the spawn also names exactly the three handles the child
+may take — so no child keeps a parent's listening port, file or pipe end open (Rust, Go and Python default the same). <!-- test: proc_no_inherit -->
+**POSIX and Windows both ship**: `process.kama` is byte-identical
 across platforms, with the whole difference behind `kama_os.h` (fork/execvp/pipe/waitpid vs `CreateProcess`),
 and `run()`'s two-pipe drain sits behind one `kama_capture2` seam (`poll` on POSIX, a reader thread per pipe on
 Windows) so both platforms take the same code path. wasm has no process model.

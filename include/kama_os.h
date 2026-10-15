@@ -267,9 +267,10 @@ static inline wchar_t* kama__wpath(const char* utf8, kama__wpathbuf* b) {
 // ⚠️ Every wrapper that holds a kama__wpathbuf is KAMA_NOINLINE — see the macro's note in kama_runtime.h.
 // It is a stack-overflow guard, not a tuning knob: `removeDirAll` recurses per directory level, and a
 // 64 KB buffer folded into that frame would blow a 2 MB stack at depth ~32, inside `rm -rf`, at runtime.
+// `_O_NOINHERIT` on every open: no child inherits a file kama opened (KR-174, the POSIX `O_CLOEXEC` twin).
 KAMA_NOINLINE static int32_t kama__wopen(const char* path, int flags) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
-    return (int32_t)_wopen(w, flags, _S_IREAD | _S_IWRITE);
+    return (int32_t)_wopen(w, flags | _O_NOINHERIT, _S_IREAD | _S_IWRITE);
 }
 static inline int32_t   kama_open_read(const char* path)   { return kama__wopen(path, _O_RDONLY | _O_BINARY); }
 static inline int32_t   kama_open_create(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY); }
@@ -807,11 +808,16 @@ static inline int32_t kama_net_init(void) {
     if (!done) { WSADATA w; if (WSAStartup(MAKEWORD(2, 2), &w) != 0) { kama__capture_wsa(); return -1; } done = 1; }
     return 0;
 }
-// `family` is kama's 4 or 6, never an AF_* value: those differ per OS (AF_INET6 is 23 here, 30 on macOS).
-static inline ptrdiff_t kama_socket_tcp(int32_t family) {
-    SOCKET s = socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
+// Every socket kama opens: `socket()`'s own overlapped default, and never inheritable (KR-174) — a Winsock socket
+// is inheritable by default, so a child kept a listening port open after its parent exited.
+static inline ptrdiff_t kama__socket(int af, int type, int proto) {
+    SOCKET s = WSASocketW(af, type, proto, NULL, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
     if (s == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
     return (ptrdiff_t)s;
+}
+// `family` is kama's 4 or 6, never an AF_* value: those differ per OS (AF_INET6 is 23 here, 30 on macOS).
+static inline ptrdiff_t kama_socket_tcp(int32_t family) {
+    return kama__socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
 }
 static inline int32_t kama_set_reuseaddr(ptrdiff_t fd) {
     BOOL one = 1; return (int32_t)setsockopt((SOCKET)fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (int)sizeof one);
@@ -823,6 +829,7 @@ static inline int32_t kama_listen(ptrdiff_t fd, int32_t backlog) {
 static inline ptrdiff_t kama_accept(ptrdiff_t fd) {
     SOCKET c = accept((SOCKET)fd, (struct sockaddr*)0, (int*)0);
     if (c == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
+    (void)SetHandleInformation((HANDLE)c, HANDLE_FLAG_INHERIT, 0);   // whatever it took from the listener (KR-174)
     return (ptrdiff_t)c;
 }
 static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n) {
@@ -839,17 +846,13 @@ static inline int32_t kama_close_socket(ptrdiff_t fd) { return (int32_t)closesoc
 
 // ---- UDP datagrams (Winsock2) ----------------------------------------------
 static inline ptrdiff_t kama_socket_udp(int32_t family) {
-    SOCKET s = socket(family == 6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (s == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
-    return (ptrdiff_t)s;
+    return kama__socket(family == 6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 }
 
 // ---- Unix-domain sockets (Winsock2, Windows 10 1803+) and who is on the other end -------------------------
 // AF_UNIX here is stream-only: `datagram` is refused by the OS, and `UnixDatagram` is not declared for Windows.
 static inline ptrdiff_t kama_socket_unix(int32_t datagram) {
-    SOCKET s = socket(AF_UNIX, datagram ? SOCK_DGRAM : SOCK_STREAM, 0);
-    if (s == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
-    return (ptrdiff_t)s;
+    return kama__socket(AF_UNIX, datagram ? SOCK_DGRAM : SOCK_STREAM, 0);
 }
 // A Windows AF_UNIX socket carries no credentials: the peer's process id is the one fact it knows. Who that
 // process runs as is its token's (kama_token_open), read when asked — so unlike Linux's SO_PEERCRED, which
@@ -893,7 +896,9 @@ static inline ptrdiff_t kama_desc_dup(ptrdiff_t h, int32_t kind) {
         if (s == INVALID_SOCKET) { kama__capture_wsa(); return -1; }
         return (ptrdiff_t)s;
     }
-    return (ptrdiff_t)_dup((int)h);   // errno set by the CRT on failure
+    int d = _dup((int)h);   // errno set by the CRT on failure
+    if (d >= 0) (void)SetHandleInformation((HANDLE)_get_osfhandle(d), HANDLE_FLAG_INHERIT, 0);   // KR-174
+    return (ptrdiff_t)d;
 }
 // Windows has no SCM_RIGHTS. The equivalent is to put each handle INTO the peer process — the socket's
 // `WSADuplicateSocketW`, a file's `DuplicateHandle` — using the peer's pid (SIO_AF_UNIX_GETPEERPID), then send
@@ -1321,32 +1326,65 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     kama__wfree(cmdline); kama__wfree(envblock);
     if (!convOk) { kama__wfree(wcmd); kama__wfree(wenv); kama__wfree(wcwd); return -1; }   // errno: EINVAL (bad UTF-8) or ENOMEM
 
-    STARTUPINFOW si; ZeroMemory(&si, sizeof si); si.cb = sizeof si;
+    // What the child inherits is NAMED, not "every inheritable handle" (KR-174): `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`
+    // limits inheritance to exactly its three streams, so neither a handle some C library made inheritable nor the
+    // ends another isolate's spawn marked inheritable for ITS child can cross. A handle in the list must itself be
+    // inheritable, so the redirected ends are marked for the call and unmarked after it, as before.
+    STARTUPINFOEXW si; ZeroMemory(&si, sizeof si); si.StartupInfo.cb = sizeof si;
     int useStd = (inFd >= 0 || outFd >= 0 || errFd >= 0);
     HANDLE hIn = INVALID_HANDLE_VALUE, hOut = INVALID_HANDLE_VALUE, hErr = INVALID_HANDLE_VALUE;
+    HANDLE list[3]; DWORD nList = 0;
+    union { char b[256]; void* align; } attrBuf;            // one attribute: well under this on every Windows
+    LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
     if (useStd) {
         // A redirected stream -> the pipe/NUL fd's HANDLE; an inherited one (fd -1) -> the parent's std handle.
         hIn  = (inFd  >= 0) ? (HANDLE)_get_osfhandle((int)inFd)  : GetStdHandle(STD_INPUT_HANDLE);
         hOut = (outFd >= 0) ? (HANDLE)_get_osfhandle((int)outFd) : GetStdHandle(STD_OUTPUT_HANDLE);
         hErr = (errFd >= 0) ? (HANDLE)_get_osfhandle((int)errFd) : GetStdHandle(STD_ERROR_HANDLE);
-        if (hIn  != INVALID_HANDLE_VALUE) SetHandleInformation(hIn,  HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-        if (hOut != INVALID_HANDLE_VALUE) SetHandleInformation(hOut, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-        if (hErr != INVALID_HANDLE_VALUE) SetHandleInformation(hErr, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-        si.dwFlags = STARTF_USESTDHANDLES;
-        si.hStdInput = hIn; si.hStdOutput = hOut; si.hStdError = hErr;
+        HANDLE three[3] = { hIn, hOut, hErr };
+        for (int i = 0; i < 3; ++i) {
+            HANDLE h = three[i];
+            if (h == INVALID_HANDLE_VALUE || h == NULL) continue;   // no console: the child gets none either
+            int seen = 0;
+            for (DWORD j = 0; j < nList; ++j) if (list[j] == h) seen = 1;
+            if (seen) continue;                                      // the list refuses a handle twice
+            SetHandleInformation(h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+            list[nList++] = h;
+        }
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        si.StartupInfo.hStdInput = hIn; si.StartupInfo.hStdOutput = hOut; si.StartupInfo.hStdError = hErr;
+        if (nList > 0) {
+            SIZE_T sz = 0;
+            InitializeProcThreadAttributeList(NULL, 1, 0, &sz);
+            if (sz <= sizeof attrBuf.b
+                && InitializeProcThreadAttributeList((LPPROC_THREAD_ATTRIBUTE_LIST)attrBuf.b, 1, 0, &sz)) {
+                attrs = (LPPROC_THREAD_ATTRIBUTE_LIST)attrBuf.b;
+                if (!UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, list, nList * sizeof(HANDLE), NULL, NULL)) {
+                    DeleteProcThreadAttributeList(attrs); attrs = NULL;
+                }
+            }
+        }
     }
     PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof pi);
-    BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, useStd ? TRUE : FALSE, CREATE_UNICODE_ENVIRONMENT,
-                             wenv, wcwd, &si, &pi);
-    if (useStd) {   // undo inheritability on the parent's copies of the redirected ends (belt-and-suspenders)
+    BOOL ok = FALSE; DWORD e = 0;
+    if (nList > 0 && !attrs) e = ERROR_NOT_ENOUGH_MEMORY;    // never fall back to inheriting everything
+    else {
+        si.lpAttributeList = attrs;
+        ok = CreateProcessW(NULL, wcmd, NULL, NULL, nList > 0 ? TRUE : FALSE,
+                            CREATE_UNICODE_ENVIRONMENT | (attrs ? EXTENDED_STARTUPINFO_PRESENT : 0),
+                            wenv, wcwd, &si.StartupInfo, &pi);
+        if (!ok) e = GetLastError();
+    }
+    if (attrs) DeleteProcThreadAttributeList(attrs);
+    if (useStd) {   // undo inheritability on the parent's copies of the redirected ends
         if (inFd  >= 0 && hIn  != INVALID_HANDLE_VALUE) SetHandleInformation(hIn,  HANDLE_FLAG_INHERIT, 0);
         if (outFd >= 0 && hOut != INVALID_HANDLE_VALUE) SetHandleInformation(hOut, HANDLE_FLAG_INHERIT, 0);
         if (errFd >= 0 && hErr != INVALID_HANDLE_VALUE) SetHandleInformation(hErr, HANDLE_FLAG_INHERIT, 0);
     }
     kama__wfree(wcmd); kama__wfree(wenv); kama__wfree(wcwd);
     if (!ok) {
-        DWORD e = GetLastError();
-        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES);
+        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
+                         : e == ERROR_NOT_ENOUGH_MEMORY ? ENOMEM : EACCES);
         return -1;
     }
     CloseHandle(pi.hThread);
@@ -1389,8 +1427,8 @@ static inline int32_t kama_WNOHANG(void) { return 1; }     // a private sentinel
 static inline int32_t kama_SIGKILL(void) { return 9; }     // ignored by kama_kill on Windows (any => Terminate)
 static inline int32_t kama_SIGTERM(void) { return 15; }
 static inline void    kama_sleep_ms(int32_t ms) { Sleep((DWORD)ms); }
-static inline int32_t kama_open_null_read(void)  { return (int32_t)_wopen(L"NUL", _O_RDONLY | _O_BINARY); }
-static inline int32_t kama_open_null_write(void) { return (int32_t)_wopen(L"NUL", _O_WRONLY | _O_BINARY); }
+static inline int32_t kama_open_null_read(void)  { return (int32_t)_wopen(L"NUL", _O_RDONLY | _O_BINARY | _O_NOINHERIT); }
+static inline int32_t kama_open_null_write(void) { return (int32_t)_wopen(L"NUL", _O_WRONLY | _O_BINARY | _O_NOINHERIT); }
 
 // Concurrent stdout+stderr drain (kama_capture2). select() is sockets-only on Windows, so drain with two
 // reader threads: a thread drains stderr while this thread drains stdout, then join. Each fills its own
@@ -1482,6 +1520,10 @@ extern int   fork(void);
 extern void  _exit(int);
 extern int   kill(int, int);
 extern int   fcntl(int, int, ...);
+#if defined(__linux__)
+extern int   pipe2(int[2], int);                 // glibc declares both only under _GNU_SOURCE (KR-174)
+extern int   accept4(int, struct sockaddr*, socklen_t*, int);
+#endif
 extern int   ftruncate(int, off_t);              // <unistd.h>'s (KR-92: `File.openWith` empties a file only after its mode is set)
 extern uid_t getuid(void);                       // <unistd.h>'s (std::process::currentUser)
 extern gid_t getgid(void);
@@ -1539,15 +1581,72 @@ static inline int32_t kama_EMSGSIZE(void)     { return (int32_t)EMSGSIZE; }
 static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 
+// ---- close-on-exec (KR-174) -------------------------------------------------
+// Every descriptor kama makes is close-on-exec, so a child std::process starts holds the three streams it was
+// given and nothing else of its parent's — not a listening socket (the port stays held after the parent exits),
+// not a file the parent meant to keep, not the write end of a pipe whose reader then never sees EOF. Rust, Go and
+// Python (PEP 446) make every descriptor so by default. It is atomic where the OS lets it be: `O_CLOEXEC` on every
+// `open` (POSIX 2008), and on Linux `SOCK_CLOEXEC`, `accept4`, `pipe2` and `MSG_CMSG_CLOEXEC`. Elsewhere (macOS has
+// none of the four) a descriptor is made and THEN marked, and a fork in another isolate landing between the two
+// would hand the child an unmarked one. So making-and-marking holds this gate shared and `fork` holds it
+// exclusive — Go's `syscall.ForkLock`, as a spin gate: a holder keeps it for one syscall pair, or for one fork().
+// A pending fork turns new makers away, so a busy accept loop cannot starve it.
+#if defined(__linux__) || defined(__EMSCRIPTEN__)
+#define KAMA__CLOEXEC_ATOMIC 1
+#else
+#define KAMA__CLOEXEC_ATOMIC 0
+#endif
+#if defined(__EMSCRIPTEN__)
+#define KAMA__O_CLOEXEC 0         // no process model, so nothing to inherit — and the flag stays out of its FS layer
+#else
+#define KAMA__O_CLOEXEC O_CLOEXEC
+#endif
+extern int kama__fork_gate;      // makers inside (low bits) | a fork pending or running (KAMA__FORK_GATE_W)
+#define KAMA__FORK_GATE_W 0x40000000
+static inline void kama__cloexec_enter(void) {
+#if !KAMA__CLOEXEC_ATOMIC
+    for (;;) {
+        int v = __atomic_load_n(&kama__fork_gate, __ATOMIC_RELAXED);
+        if (!(v & KAMA__FORK_GATE_W)
+            && __atomic_compare_exchange_n(&kama__fork_gate, &v, v + 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) return;
+    }
+#endif
+}
+static inline void kama__cloexec_leave(void) {
+#if !KAMA__CLOEXEC_ATOMIC
+    __atomic_fetch_sub(&kama__fork_gate, 1, __ATOMIC_RELEASE);
+#endif
+}
+// Mark a descriptor made a moment ago; on failure it is closed and -1 returned, with errno from fcntl.
+static inline int kama__cloexec_mark(int fd) {
+    if (fd >= 0 && fcntl(fd, F_SETFD, FD_CLOEXEC) != 0) { int e = errno; close(fd); errno = e; return -1; }
+    return fd;
+}
+static inline void kama__fork_gate_close(void) {
+#if !KAMA__CLOEXEC_ATOMIC
+    for (;;) {
+        int v = __atomic_load_n(&kama__fork_gate, __ATOMIC_RELAXED);
+        if (!(v & KAMA__FORK_GATE_W)
+            && __atomic_compare_exchange_n(&kama__fork_gate, &v, v | KAMA__FORK_GATE_W, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) break;
+    }
+    while ((__atomic_load_n(&kama__fork_gate, __ATOMIC_ACQUIRE) & ~KAMA__FORK_GATE_W) != 0) { }
+#endif
+}
+static inline void kama__fork_gate_open(void) {
+#if !KAMA__CLOEXEC_ATOMIC
+    __atomic_fetch_and(&kama__fork_gate, ~KAMA__FORK_GATE_W, __ATOMIC_RELEASE);
+#endif
+}
+
 // ---- files -----------------------------------------------------------------
 // A plain create asks for 0666 and the process umask narrows it — the default of C `fopen` (POSIX says so), Go,
 // Rust, Python, Node, Zig, Java and .NET, and what `mkdir` below already did for a directory (KR-92). It was a
 // hardcoded 0644, which agrees under the usual umask 022 and 077 but under 002 (a group-shared directory)
 // stripped the group-write bit the user's own umask granted — overriding the one setting that says what a new
 // file should allow. Only an explicit `permissions:` (kama_open_create_mode) promises a mode.
-static inline int32_t   kama_open_read(const char* path)   { return (int32_t)open(path, O_RDONLY); }
-static inline int32_t   kama_open_create(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666); }
-static inline int32_t   kama_open_append(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_APPEND, 0666); }
+static inline int32_t   kama_open_read(const char* path)   { return (int32_t)open(path, O_RDONLY | KAMA__O_CLOEXEC); }
+static inline int32_t   kama_open_create(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_TRUNC | KAMA__O_CLOEXEC, 0666); }
+static inline int32_t   kama_open_append(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_APPEND | KAMA__O_CLOEXEC, 0666); }
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)read((int)fd, buf, n); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) {
     ptrdiff_t r = (ptrdiff_t)write((int)fd, buf, n);
@@ -1652,7 +1751,7 @@ static inline int32_t kama__mode_exact(int fd, uint32_t mode)
 }
 static inline int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t append)
 {
-    const int flags = O_WRONLY | (append ? O_APPEND : 0);
+    const int flags = O_WRONLY | (append ? O_APPEND : 0) | KAMA__O_CLOEXEC;
     int made = 1;
     int fd = open(path, flags | O_CREAT | O_EXCL, (mode_t)mode);
     if (fd < 0 && errno == EEXIST) {
@@ -1678,7 +1777,7 @@ static inline int32_t kama_open_create_mode(const char* path, uint32_t mode, int
 static inline int32_t kama_mkdir_mode(const char* path, uint32_t mode)
 {
     if (mkdir(path, (mode_t)(mode | 0400u)) != 0) return -1;
-    int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+    int fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | KAMA__O_CLOEXEC);
     if (fd < 0 || kama__mode_exact(fd, mode) != 0) {
         int e = errno;
         if (fd >= 0) close(fd);
@@ -1763,16 +1862,24 @@ static inline void* kama_envp_build(void* overridesV, int32_t clear) {
     out[k] = NULL;
     return out;
 }
-// Create a pipe with BOTH ends marked FD_CLOEXEC. Critical for the fork/exec model: without it the child
+// Create a pipe with BOTH ends close-on-exec. Critical for the fork/exec model: without it the child
 // inherits a copy of EVERY parent pipe fd, and in particular a stdin pipe's WRITE end — so `closeStdin()`
 // in the parent would never deliver EOF (the child keeps its own inherited write end open) and a child
 // like `cat` blocks forever. CLOEXEC makes exec close every inherited end; the dup2'd 0/1/2 survive (dup2
-// clears CLOEXEC on the new fd). macOS has no pipe2(), so set it via fcntl after pipe().
+// clears CLOEXEC on the new fd). Linux makes both ends so in one call; macOS has no pipe2(), so the pair is
+// marked under the fork gate above.
 static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
     int fds[2];
-    if (pipe(fds) != 0) return -1;
-    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+#if defined(__linux__)
+    if (pipe2(fds, O_CLOEXEC) != 0) return -1;
+#else
+    kama__cloexec_enter();
+    if (pipe(fds) != 0) { kama__cloexec_leave(); return -1; }
+    if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(fds[1], F_SETFD, FD_CLOEXEC) != 0) {
+        int e = errno; close(fds[0]); close(fds[1]); kama__cloexec_leave(); errno = e; return -1;
+    }
+    kama__cloexec_leave();
+#endif
     *outRd = (int32_t)fds[0]; *outWr = (int32_t)fds[1];
     return 0;
 }
@@ -1788,7 +1895,9 @@ static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
 static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
                                       int32_t inFd, int32_t outFd, int32_t errFd,
                                       ptrdiff_t* outHandle, int32_t* outPid) {
+    kama__fork_gate_close();                               // no descriptor half-made in another isolate (KR-174)
     int pid = fork();
+    if (pid != 0) kama__fork_gate_open();                  // the parent, or a failed fork; the child execs or exits
     if (pid < 0) return -1;
     if (pid == 0) {                                        // ---- child (async-signal-safe only) ----
         // SIGPIPE at its default, which is what an exec'd program expects: an ignored signal survives exec, so a
@@ -1875,8 +1984,8 @@ static inline void kama_proc_detach(ptrdiff_t handle) {
     __atomic_clear(&kama_reap_lock, __ATOMIC_RELEASE);
 }
 // The platform null device, opened read/write. POSIX = "/dev/null" (Windows branch = "NUL").
-static inline int32_t kama_open_null_read(void)  { return (int32_t)open("/dev/null", O_RDONLY); }
-static inline int32_t kama_open_null_write(void) { return (int32_t)open("/dev/null", O_WRONLY); }
+static inline int32_t kama_open_null_read(void)  { return (int32_t)open("/dev/null", O_RDONLY | KAMA__O_CLOEXEC); }
+static inline int32_t kama_open_null_write(void) { return (int32_t)open("/dev/null", O_WRONLY | KAMA__O_CLOEXEC); }
 static inline int32_t kama_WNOHANG(void) { return (int32_t)WNOHANG; }
 static inline int32_t kama_SIGKILL(void) { return (int32_t)SIGKILL; }
 static inline int32_t kama_SIGTERM(void) { return (int32_t)SIGTERM; }
@@ -1950,8 +2059,21 @@ static inline void kama__nosigpipe(ptrdiff_t fd) {
 #else
 #define KAMA__SEND_FLAGS 0
 #endif
+// Every socket kama opens, close-on-exec (KR-174): atomically by SOCK_CLOEXEC on Linux, else marked under the gate.
+static inline ptrdiff_t kama__socket(int domain, int type) {
+#if defined(__linux__)
+    return (ptrdiff_t)socket(domain, type | SOCK_CLOEXEC, 0);
+#elif defined(__EMSCRIPTEN__)
+    return (ptrdiff_t)socket(domain, type, 0);
+#else
+    kama__cloexec_enter();
+    int fd = kama__cloexec_mark(socket(domain, type, 0));
+    kama__cloexec_leave();
+    return (ptrdiff_t)fd;
+#endif
+}
 static inline ptrdiff_t kama_socket_tcp(int32_t family) {
-    ptrdiff_t fd = (ptrdiff_t)socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
+    ptrdiff_t fd = kama__socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM);
     kama__nosigpipe(fd);
     return fd;
 }
@@ -1960,7 +2082,15 @@ static inline int32_t   kama_set_reuseaddr(ptrdiff_t fd) {
 }
 static inline int32_t   kama_listen(ptrdiff_t fd, int32_t backlog) { return (int32_t)listen((int)fd, (int)backlog); }
 static inline ptrdiff_t kama_accept(ptrdiff_t fd) {
+#if defined(__linux__)
+    ptrdiff_t c = (ptrdiff_t)accept4((int)fd, (struct sockaddr*)0, (socklen_t*)0, SOCK_CLOEXEC);
+#elif defined(__EMSCRIPTEN__)
     ptrdiff_t c = (ptrdiff_t)accept((int)fd, (struct sockaddr*)0, (socklen_t*)0);
+#else
+    kama__cloexec_enter();
+    ptrdiff_t c = (ptrdiff_t)kama__cloexec_mark(accept((int)fd, (struct sockaddr*)0, (socklen_t*)0));
+    kama__cloexec_leave();
+#endif
     kama__nosigpipe(c);
     return c;
 }
@@ -1972,7 +2102,7 @@ static inline int32_t   kama_close_socket(ptrdiff_t fd) { return (int32_t)close(
 // The SIGPIPE rule of the TCP sockets above holds here unchanged: SO_NOSIGPIPE at creation (Apple), MSG_NOSIGNAL
 // on every send, and kama_accept already applies it to an accepted socket of any family.
 static inline ptrdiff_t kama_socket_unix(int32_t datagram) {
-    ptrdiff_t fd = (ptrdiff_t)socket(AF_UNIX, datagram ? SOCK_DGRAM : SOCK_STREAM, 0);
+    ptrdiff_t fd = kama__socket(AF_UNIX, datagram ? SOCK_DGRAM : SOCK_STREAM);
     kama__nosigpipe(fd);
     return fd;
 }
@@ -2049,34 +2179,38 @@ static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t
     for (size_t i = 0; i < count; ++i) { int fd = (int)hs[i]; memcpy(CMSG_DATA(c) + i * sizeof(int), &fd, sizeof fd); }
     return (ptrdiff_t)sendmsg((int)sock, &m, KAMA__SEND_FLAGS);
 }
-// Up to n bytes and up to `cap` descriptors. Every received descriptor is close-on-exec (atomically where
-// MSG_CMSG_CLOEXEC exists — Linux; set at once otherwise — macOS, where a fork in that instant could inherit
-// one). A truncated control message (more descriptors than room, or than the kernel kept) closes every one
-// that did arrive and fails with EMSGSIZE: nothing half-received is handed on, and nothing leaks.
+// Up to n bytes and up to `cap` descriptors. Every received descriptor is close-on-exec — atomically where
+// MSG_CMSG_CLOEXEC exists (Linux); elsewhere (macOS) they arrive unmarked and are marked at once, under the fork
+// gate so no fork in another isolate can land in that instant (KR-174). A truncated control message (more
+// descriptors than room, or than the kernel kept) closes every one that did arrive and fails with EMSGSIZE:
+// nothing half-received is handed on, and nothing leaks.
+#if defined(MSG_CMSG_CLOEXEC)
+#define KAMA__RECV_CLOEXEC MSG_CMSG_CLOEXEC
+#else
+#define KAMA__RECV_CLOEXEC 0
+#endif
 static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, ptrdiff_t* hs, int32_t* kinds, size_t cap, size_t* count) {
     *count = 0;
     struct iovec iov; iov.iov_base = buf; iov.iov_len = n;
     union { struct cmsghdr align; char b[CMSG_SPACE(sizeof(int) * KAMA__FD_MAX)]; } cb;
     struct msghdr m; memset(&m, 0, sizeof m);
     m.msg_iov = &iov; m.msg_iovlen = 1; m.msg_control = cb.b; m.msg_controllen = (socklen_t)sizeof cb.b;
-    int flags = 0;
-#if defined(MSG_CMSG_CLOEXEC)
-    flags |= MSG_CMSG_CLOEXEC;
-#endif
-    ptrdiff_t r = (ptrdiff_t)recvmsg((int)sock, &m, flags);
-    if (r < 0) return -1;
+    if (!KAMA__RECV_CLOEXEC) kama__cloexec_enter();
+    ptrdiff_t r = (ptrdiff_t)recvmsg((int)sock, &m, KAMA__RECV_CLOEXEC);
     size_t got = 0; int over = 0;
-    for (struct cmsghdr* c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)) {
-        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
-        size_t k = ((size_t)c->cmsg_len - (size_t)CMSG_LEN(0)) / sizeof(int);
-        for (size_t i = 0; i < k; ++i) {
-            int fd; memcpy(&fd, CMSG_DATA(c) + i * sizeof(int), sizeof fd);
-#if !defined(MSG_CMSG_CLOEXEC)
-            (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
-#endif
-            if (got < cap) { hs[got] = fd; kinds[got] = 0; ++got; } else { (void)close(fd); over = 1; }
+    if (r >= 0) {
+        for (struct cmsghdr* c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)) {
+            if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
+            size_t k = ((size_t)c->cmsg_len - (size_t)CMSG_LEN(0)) / sizeof(int);
+            for (size_t i = 0; i < k; ++i) {
+                int fd; memcpy(&fd, CMSG_DATA(c) + i * sizeof(int), sizeof fd);
+                if (!KAMA__RECV_CLOEXEC) (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+                if (got < cap) { hs[got] = fd; kinds[got] = 0; ++got; } else { (void)close(fd); over = 1; }
+            }
         }
     }
+    if (!KAMA__RECV_CLOEXEC) { int e = errno; kama__cloexec_leave(); errno = e; }
+    if (r < 0) return -1;
     if ((m.msg_flags & MSG_CTRUNC) || over) {
         for (size_t i = 0; i < got; ++i) (void)close((int)hs[i]);
         errno = EMSGSIZE; return -1;
@@ -2156,7 +2290,7 @@ static inline void kama_poller_free(void* ph) {
 }
 
 // ---- UDP datagrams ---------------------------------------------------------
-static inline ptrdiff_t kama_socket_udp(int32_t family) { return (ptrdiff_t)socket(family == 6 ? AF_INET6 : AF_INET, SOCK_DGRAM, 0); }
+static inline ptrdiff_t kama_socket_udp(int32_t family) { return kama__socket(family == 6 ? AF_INET6 : AF_INET, SOCK_DGRAM); }
 
 // See the Winsock twin: the native handle, and errno on failure (already set here — a connect's included: POSIX
 // itself says EINPROGRESS for one in flight and ENOENT for a Unix path with nothing at it).

@@ -23864,6 +23864,7 @@ void CEmitter::emitRuntimeSlotDefinitions()
               << "size_t kama_reap_len = 0;\n"
               << "size_t kama_reap_cap = 0;\n"
               << "int kama_reap_lock = 0;\n"
+              << "int kama__fork_gate = 0;\n"
               << "#endif\n";
     *_out << "\n";
 }
