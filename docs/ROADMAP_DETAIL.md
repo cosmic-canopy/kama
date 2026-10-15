@@ -2892,19 +2892,6 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-package-guide-comments"></a>
-
-### The package guide's "marker comments" cannot exist (KR-143)
-
-The shipped `agents/PACKAGE.md` says a vendor script regenerates the `csources` block of `kama.json` "between two
-marker comments". `kama.json` is strict JSON: a `// …` line is *"kama.json: expected a string"* (measured `0.9.577`),
-and packages fence the block by its own `"csources": [` line and the `]` that closes it. **Scheduled.** The guide
-says that; a manifest stays JSON, so every tool that reads JSON can read it.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `agents/PACKAGE.md` ("between two marker comments"): say the script fences the
-block by its own `"csources": [` line and the `]` that closes it. Docs-only, but `agents/` is embedded (`kama agents`
-writes it), so VERSION bumps.
-
 <a id="s10-manifest-gates"></a>
 
 ### A dependency and a `link` entry cannot be gated on a fact, and a dependency entry takes any key (KR-144)

@@ -30,8 +30,9 @@ system libraries at all, and a shipped binary links one known version. One scrip
 
 - `tools/vendor-<lib>.sh` holds `VERSION`, `SHA256` and the tarball URL; it verifies the hash or dies,
   extracts, copies the sources pristine into `third_party/<lib>/`, and **regenerates the `csources`
-  block of `kama.json` between two marker comments**. Nothing under `third_party/` and nothing in that
-  block is hand-edited; upgrading is a change to the two constants, a run, a read of the diff, and a
+  array of `kama.json`**, fenced by its own `"csources": [` line and the `]` that closes it — `kama.json`
+  is strict JSON, so it has no comments to fence it with. Nothing under `third_party/` and nothing in that
+  array is hand-edited; upgrading is a change to the two constants, a run, a read of the diff, and a
   version bump of the package.
 - `csources` compiles C (`-std=gnu11`, the C the world writes), C++ (`gnu++17`, with `cxxflags`) and
   Objective-C by extension; assembly files are never selected, so the library's C paths are what run. `cincludes` puts the vendored include tree on every
