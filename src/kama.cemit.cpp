@@ -29210,6 +29210,14 @@ std::string CEmitter::exprEnumType(SharedExpression e)
                     // field whose instance binds `T` to a plain enum is a legal `match` subject.
                     if (f.name == *id->value && f.type) { std::string r = asEnum(fieldCType(_currentClass->name, f)); if (!r.empty()) return r; }
         }
+        // A module `static` of enum type (`static Kind g_kind;` then `match (g_kind)`), looked up as the other
+        // static rungs look it up. Missing, it fell through to "could not be resolved", and from `0.9.614` to
+        // "an integer … branches with `if`" — advice that trades `match`'s exhaustiveness away.
+        if (!_localTypes.count(*id->value) && !_paramNames.count(*id->value)) {
+            const std::string mk = resolveModuleVar(*id->value, id->qualifier);
+            auto ms = mk.empty() ? _moduleStatics.end() : _moduleStatics.find(mk);
+            if (ms != _moduleStatics.end()) return asEnum(cType(ms->second));
+        }
         return "";
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) {   // `obj.field` of enum type

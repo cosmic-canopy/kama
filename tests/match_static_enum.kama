@@ -1,0 +1,19 @@
+// A module `static` of enum type is a `match` subject, as a local of that type is — a plain enum and one with
+// payloads. The plain one was refused: "`match` subject's type could not be resolved — bind it to a typed local
+// first", and from `0.9.614` "an integer … branches with `if`/`else if`", which would trade `match`'s
+// exhaustiveness for an `if` chain. Returns 37.
+type enum Shape { Circle(int32 r), Square(int32 s) }
+type enum Kind : uint8 { Invite, Crashed }
+
+static Shape g_shape;
+static Kind g_kind;
+
+unsafe fn int32 pick() {
+    g_shape = Shape::Square(s: 7);
+    g_kind = Kind::Invite;
+    int32 a = match (g_shape) { case Circle(r: r): { := r; } case Square(s: s): { := s; } };
+    int32 b = match (g_kind) { case Invite: { := 30; } case Crashed: { := 0; } };
+    return a + b;
+}
+
+fn int32 main() { return pick(); }
