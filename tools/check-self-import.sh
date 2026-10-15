@@ -194,6 +194,16 @@ for f in $(find "$ROOT/lib/std" -name '*.kama'); do
 done
 [ "$bad" -eq 0 ] || exit 1
 
+# 4a. The sweep greps one message; the project itself must check CLEAN, every configuration. That is the
+# editor's whole view of the stdlib, and it reported 91 errors in a clean one until `0.9.627`: the
+# smart-pointer triad's files were loaded from `lib/std/memory/` BESIDE the copies the compiler embeds, so
+# every `Owned` resolved to the disk copy and every file naming it "did not import it".
+if ! "$KAMA" check "$ROOT/lib/kama.json" > "$tmp/stdlib-project.out" 2>&1; then
+    echo "check-self-import: FAIL — \`kama check lib/kama.json\` is not clean:" >&2
+    grep "error" "$tmp/stdlib-project.out" | head -5 >&2
+    exit 1
+fi
+
 # 4b. The control, and it has to be chosen carefully — MEASURED, not assumed, because the deletion of the
 # `namespace` declaration moved which stdlib files a loose build can still manage:
 #

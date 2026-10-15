@@ -118,6 +118,23 @@ else
     diff "$tmp/nosuch.f" "$tmp/nosuch.p" | head -6 >&2
 fi
 
+# The same valve on `std::memory`, the module the compiler partly EMBEDS: its triad is in every
+# compilation, so loading the module whole must not load the triad's files a second time. It did, and a
+# misspelled symbol answered with twenty duplicate declarations ahead of its one real error.
+cat >"$tmp/nosuchmem.kama" <<'EOF'
+import { std::memory::NoSuchThingAtAll };
+
+fn int32 main() { return 0; }
+EOF
+rc_p=0; "$KAMA" check "$tmp/nosuchmem.kama" >/dev/null 2>"$tmp/nosuchmem.p" || rc_p=$?
+rc_f=0; KAMA_NO_PRUNE=1 "$KAMA" check "$tmp/nosuchmem.kama" >/dev/null 2>"$tmp/nosuchmem.f" || rc_f=$?
+if [ "$rc_p" = "$rc_f" ] && cmp -s "$tmp/nosuchmem.p" "$tmp/nosuchmem.f" && [ "$(grep -c ': error:' "$tmp/nosuchmem.p")" = 1 ]; then
+    ok "unknown symbol of a partly-embedded module: one error, identical pruned vs hatched"
+else
+    bad "an unknown std::memory symbol diagnoses as more than its one error (rc $rc_p vs $rc_f)"
+    head -3 "$tmp/nosuchmem.p" >&2
+fi
+
 rc_p=0; "$KAMA" check --no-heap "$tmp/gated.kama" >/dev/null 2>"$tmp/gate.p" || rc_p=$?
 rc_f=0; KAMA_NO_PRUNE=1 "$KAMA" check --no-heap "$tmp/gated.kama" >/dev/null 2>"$tmp/gate.f" || rc_f=$?
 if [ "$rc_p" = "$rc_f" ] && cmp -s "$tmp/gate.p" "$tmp/gate.f"; then

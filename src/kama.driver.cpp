@@ -1638,6 +1638,18 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     bool undeclaredImport = false;   // strict mode: report them ALL, then fail, rather than stop at one
     ModuleIndexCache moduleIndex;    // per call, so it can never serve a unit staler than this analysis
     std::set<std::string> seen;      // resolved absolute paths already parsed
+    // The files the compiler EMBEDS are already in this compilation, so their copies in the stdlib are
+    // never loaded beside them — at any of the three admission points below, which all consult `seen`.
+    // A pruned import never reached them (their names are `provided`), but every path that loads a
+    // module WHOLE did, and the second copy collides with the first: a misspelled
+    // `import { std::memory::replac }` reported twenty duplicate declarations before its one real error,
+    // `KAMA_NO_PRUNE=1` failed every program reaching `std::memory::replace`, and `kama check lib/kama.json`
+    // (the language server on any stdlib file in this repo) found 91 errors in a clean stdlib.
+    for (int i = 0; i < KAMA_PRELUDE_MODULE_COUNT; ++i) {
+        const std::string pfx = "<prelude>/", name = KAMA_PRELUDE_MODULES[i].name ? KAMA_PRELUDE_MODULES[i].name : "";
+        if (!stdlibDir.empty() && name.compare(0, pfx.size(), pfx) == 0)
+            seen.insert(absolutePath(stdlibDir + "/" + name.substr(pfx.size())));
+    }
     // Namespaces already in the compilation, satisfying an import without a disk lookup. TWO states,
     // because once a module can be loaded in PART, "is this module here?" stops being the question:
     //   whole   — every file of it is loaded; satisfies any symbol list, and a bare import.
