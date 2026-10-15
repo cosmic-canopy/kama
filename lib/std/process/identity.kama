@@ -15,10 +15,13 @@ import {
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error, core::env,
 };
 
-export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId, homeDirectory };
+export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId, homeDirectory,
+         currentDirectory, setCurrentDirectory };
 
 extern "kama_os.h";
 extern fn int32 kama_getpid();
+extern fn isize kama_getcwd(UnsafePtr<uint8> into, usize cap);
+extern fn int32 kama_chdir(UnsafeConstPtr<cchar> path);
 @compileFor(!OS_WINDOWS) extern fn uint32 kama_getuid();
 @compileFor(!OS_WINDOWS) extern fn uint32 kama_getgid();
 @compileFor(!OS_WINDOWS) extern fn isize  kama_id_name(int32 group, uint32 id, UnsafePtr<uint8> into, usize cap);
@@ -32,6 +35,26 @@ extern fn int32 kama_getpid();
 // This process's id — what `Process.id()` reports for a child, and `PeerCredentials.processId()` for the
 // process on the other end of a Unix socket.
 unsafe fn int32 currentProcessId() { return kama_getpid(); }
+
+// The current directory (KR-167): what a relative path is relative to, so a path given on a command line can be
+// made absolute without running `pwd`. It belongs to the PROCESS: `setCurrentDirectory` changes it for every isolate
+// at once, racing any that resolves a relative path meanwhile — set it at startup, or hand on absolute paths. On
+// Windows it is MAX_PATH-bound (SetCurrentDirectoryW refuses a longer one, with or without `\\?\`), as
+// `Command.cwd` is; the answer drops the verbatim prefix as `std::fs::canonicalPath`'s does.
+unsafe fn Result<string, IoError> currentDirectory() {
+    isize cap = 1024;
+    while (true) {
+        FixedArray<uint8> buf = FixedArray.make(size: cap);
+        isize n = kama_getcwd(into: buf.dataPtrMut(), cap: cast<usize>(cap));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        if (n <= cap) { return textOf(bytes: buf.slice(from: 0, count: n)); }
+        cap = n;   // longer than the buffer: ask again with room for it
+    }
+}
+unsafe fn Result<Unit, IoError> setCurrentDirectory(const ref string path) {
+    if (kama_chdir(path: path.cstr()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
+}
 
 // Account text off the OS is outside input: it is UTF-8 on every system kama targets, and checked as such.
 fn Result<string, IoError> textOf(ConstView<uint8> bytes) {

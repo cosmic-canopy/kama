@@ -235,7 +235,8 @@ typedef struct kama__wpathbuf { wchar_t w[KAMA__WPATH_CAP]; } kama__wpathbuf;   
 KAMA_NOINLINE static wchar_t* kama__wpath_long(kama__wpathbuf* b) {
     kama__wpathbuf t;
     DWORD got = GetFullPathNameW(b->w, KAMA__WPATH_CAP - 8, t.w + 8, NULL);  // excludes the NUL on success
-    if (got == 0 || got >= KAMA__WPATH_CAP - 8) { kama__os_fail(0, ENOENT); return NULL; }
+    if (got == 0) { kama__os_fail(GetLastError(), ENOENT); return NULL; }
+    if (got >= KAMA__WPATH_CAP - 8) { kama__os_fail(0, ENAMETOOLONG); return NULL; }   // as kama__wpath says, below
     wchar_t* start; size_t len;
     if (t.w[8] == L'\\' && t.w[9] == L'\\') {          // \\srv\share\x -> \\?\UNC\srv\share\x
         memcpy(t.w + 2, L"\\\\?\\UNC\\", 8 * sizeof(wchar_t));   // lands just before the path past its `\\`
@@ -249,8 +250,9 @@ KAMA_NOINLINE static wchar_t* kama__wpath_long(kama__wpathbuf* b) {
 }
 
 // UTF-8 -> UTF-16 into `b`, returning `b->w` (never a fresh block) or NULL with errno set. Invalid UTF-8
-// is EINVAL, as it was; a path too long for the NT namespace is ENAMETOOLONG, which Win32 would refuse
-// anyway. Both surface through IoError::Other(code), which is what POSIX already does for ENAMETOOLONG.
+// is EINVAL, as it was; a path too long for the NT namespace is ENAMETOOLONG — here, or once GetFullPathNameW has
+// made it absolute — which Win32 would refuse anyway. Both surface as `IoErrorKind::Other` with the code in
+// `rawOsError()`, which is what POSIX already does for ENAMETOOLONG.
 static inline wchar_t* kama__wpath(const char* utf8, kama__wpathbuf* b) {
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, b->w, KAMA__WPATH_CAP);
     if (n <= 0) { { const DWORD kama_w_ = GetLastError(); kama__os_fail(kama_w_, kama_w_ == ERROR_INSUFFICIENT_BUFFER ? ENAMETOOLONG : EINVAL); } return NULL; }
@@ -285,6 +287,91 @@ static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)_close((int)
 KAMA_NOINLINE static int32_t kama_unlink(const char* path) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
     return (int32_t)_wunlink(w);
+}
+
+// ---- the current directory and a canonical path (KR-167) ----------------------------------------------------
+// GetFinalPathNameByHandleW answers in the VERBATIM form, `\\?\C:\…`, which std::path cannot parse (the parent of
+// `\\?\C:\` would be `\\?`) and much of Windows misreads. kama strips it — `\\?\C:\x` to `C:\x`, `\\?\UNC\srv\s\x`
+// to `\\srv\s\x` — as Python's realpath, libuv, Go and .NET answer, and keeps it only where the plain path would
+// name a DIFFERENT file: a component ending in `.` or a space, or a device name (`CON`, `nul.txt`), which the
+// Win32 layer rewrites. Nothing is lost by it: kama__wpath re-adds the prefix itself past 248 characters, so a
+// long path still opens. (Rust keeps the prefix, and the `dunce` crate exists to undo that.)
+static inline int kama__win_device_stem(const char* c, size_t n) {
+    size_t stem = 0;
+    while (stem < n && c[stem] != '.') ++stem;
+    char u[5] = { 0 };
+    if (stem != 3 && stem != 4) return 0;
+    for (size_t i = 0; i < stem; ++i) u[i] = (char)(c[i] >= 'a' && c[i] <= 'z' ? c[i] - 32 : c[i]);
+    if (stem == 3) return !strcmp(u, "CON") || !strcmp(u, "PRN") || !strcmp(u, "AUX") || !strcmp(u, "NUL");
+    return (!strncmp(u, "COM", 3) || !strncmp(u, "LPT", 3)) && u[3] >= '1' && u[3] <= '9';
+}
+// Strips in place; answers the new length (the old one when the prefix stays).
+static inline size_t kama__strip_verbatim(char* s, size_t n) {
+    size_t skip = 0; int unc = 0;
+    if (n >= 8 && memcmp(s, "\\\\?\\UNC\\", 8) == 0) { skip = 8; unc = 1; }
+    else if (n >= 7 && memcmp(s, "\\\\?\\", 4) == 0 && ((s[4] | 0x20) >= 'a' && (s[4] | 0x20) <= 'z')
+             && s[5] == ':' && s[6] == '\\') skip = 4;
+    else return n;
+    for (size_t i = skip; i < n; ) {
+        size_t j = i;
+        while (j < n && s[j] != '\\') ++j;
+        if (j > i && (s[j - 1] == '.' || s[j - 1] == ' ')) return n;
+        if (j > i && kama__win_device_stem(s + i, j - i)) return n;
+        i = j + 1;
+    }
+    const size_t lead = unc ? 2 : 0;   // `\\?\UNC\srv` -> `\\srv`
+    memmove(s + lead, s + skip, n - skip);
+    if (unc) { s[0] = '\\'; s[1] = '\\'; }
+    s[lead + n - skip] = 0;
+    return lead + n - skip;
+}
+static inline int kama__win_path_errno(DWORD e) {
+    return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND || e == ERROR_INVALID_NAME) ? ENOENT
+         : e == ERROR_ACCESS_DENIED ? EACCES : e == ERROR_DIRECTORY ? ENOTDIR : EINVAL;
+}
+// A UTF-16 answer, stripped and copied out with the grow-and-retry protocol: the full length, min(len, cap) bytes.
+static inline ptrdiff_t kama__wide_out(const wchar_t* w, uint8_t* out, size_t cap) {
+    size_t len = 0;
+    char* u = kama__utf8(w, &len);
+    if (!u) return -1;
+    const size_t alloc = len + 1;
+    len = kama__strip_verbatim(u, len);
+    memcpy(out, u, len < cap ? len : cap);
+    kama_free(u, alloc, 1);
+    return (ptrdiff_t)len;
+}
+static inline ptrdiff_t kama_getcwd(uint8_t* out, size_t cap) {
+    const DWORD n = GetCurrentDirectoryW(0, NULL);   // counts the NUL
+    if (!n) { kama__os_fail(GetLastError(), EINVAL); return -1; }
+    wchar_t* w = (wchar_t*)kama__sized_alloc((size_t)n * sizeof(wchar_t));
+    if (!w) { kama__os_fail(0, ENOMEM); return -1; }
+    const DWORD got = GetCurrentDirectoryW(n, w);
+    if (!got || got >= n) { const DWORD e = GetLastError(); kama__wfree(w); kama__os_fail(e, EINVAL); return -1; }
+    const ptrdiff_t r = kama__wide_out(w, out, cap);
+    kama__wfree(w);
+    return r;
+}
+KAMA_NOINLINE static int32_t kama_chdir(const char* path) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    if (!SetCurrentDirectoryW(w)) { const DWORD e = GetLastError(); kama__os_fail(e, kama__win_path_errno(e)); return -1; }
+    return 0;
+}
+KAMA_NOINLINE static ptrdiff_t kama_realpath(const char* path, uint8_t* out, size_t cap) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
+    // Opened for nothing — no read or write access — so a file anyone may see resolves; BACKUP_SEMANTICS opens a
+    // directory, and a link is followed, which is what "canonical" asks for.
+    HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) { const DWORD e = GetLastError(); kama__os_fail(e, kama__win_path_errno(e)); return -1; }
+    const DWORD n = GetFinalPathNameByHandleW(h, NULL, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);   // counts the NUL
+    wchar_t* fw = n ? (wchar_t*)kama__sized_alloc((size_t)n * sizeof(wchar_t)) : NULL;
+    const DWORD got = fw ? GetFinalPathNameByHandleW(h, fw, n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS) : 0;
+    const DWORD e = GetLastError();
+    CloseHandle(h);
+    if (!got || got >= n) { if (fw) kama__wfree(fw); kama__os_fail(e, fw ? EINVAL : ENOMEM); return -1; }
+    const ptrdiff_t r = kama__wide_out(fw, out, cap);
+    kama__wfree(fw);
+    return r;
 }
 
 // ---- permissions as an access list (KR-92) --------------------------------------------------------------------
@@ -1787,6 +1874,33 @@ static inline int32_t kama_mkdir_mode(const char* path, uint32_t mode)
     }
     close(fd);
     return 0;
+}
+// ---- the current directory and a canonical path (KR-167) ----------------------------------------------------
+// Both answer with the grow-and-retry protocol kama_id_name uses: the full length, and min(len, cap) bytes copied.
+extern char* getcwd(char*, size_t);   // <unistd.h>'s, which this file deliberately does not pull
+static inline ptrdiff_t kama_getcwd(uint8_t* out, size_t cap) {
+    for (size_t sz = 1024; ; sz *= 4) {   // through the allocation funnel, like every heap block
+        char* buf = (char*)kama_alloc(sz, 1);
+        if (!buf) { errno = ENOMEM; return -1; }
+        if (getcwd(buf, sz)) {
+            const size_t n = strlen(buf);
+            memcpy(out, buf, n < cap ? n : cap);
+            kama_free(buf, sz, 1);
+            return (ptrdiff_t)n;
+        }
+        const int e = errno;
+        kama_free(buf, sz, 1);
+        if (e != ERANGE || sz >= ((size_t)1 << 22)) { errno = e; return -1; }
+    }
+}
+static inline int32_t kama_chdir(const char* path) { return (int32_t)chdir(path); }
+static inline ptrdiff_t kama_realpath(const char* path, uint8_t* out, size_t cap) {
+    char* r = realpath(path, NULL);   // libc's own block, so libc's `free` releases it — never kama_free
+    if (!r) return -1;
+    const size_t n = strlen(r);
+    memcpy(out, r, n < cap ? n : cap);
+    free(r);
+    return (ptrdiff_t)n;
 }
 // `chmod` follows a link, as `setPermissions` means: the permissions of what the path names.
 static inline int32_t kama_set_permissions(const char* path, uint32_t mode)

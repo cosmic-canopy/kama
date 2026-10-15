@@ -286,30 +286,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
-<a id="s1-cwd"></a>
-
-### The current directory (KR-167)
-
-Measured on `0.9.589`, filed 2026-10-14. Nothing in std reads `getcwd`; only the driver does. A relative path given on a command line cannot be made
-absolute without running `/bin/pwd` through `std::process`. `std::path`'s own note says canonicalization "belongs in
-`std::fs`". **Scheduled:** `currentDirectory()` and `setCurrentDirectory(path:)` beside `homeDirectory()`, and a
-canonical path (`realpath`/`GetFinalPathNameByHandleW`), each a `Result`.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `currentDirectory()`/`setCurrentDirectory(path:)` in `lib/std/process/identity.kama` beside
-`homeDirectory()`; a canonical path in `std::fs` (path.kama already says canonicalization belongs there). Seam:
-`kama_getcwd` (POSIX `getcwd`, grown on ERANGE; Windows `GetCurrentDirectoryW`), `kama_chdir` (POSIX `chdir`; Windows
-`SetCurrentDirectoryW` through `kama__wpath`), `kama_realpath` (POSIX `realpath`; Windows `GetFinalPathNameByHandleW` on
-a `FILE_FLAG_BACKUP_SEMANTICS` handle). Copy `idName`'s grow-and-retry; emscripten has all three. **Decisions owed:**
-whether a canonical Windows path keeps the `\\?\` prefix `GetFinalPathNameByHandleW` returns; `setCurrentDirectory` is
-process-wide, so it races across isolates — say so (and `SetCurrentDirectoryW` is MAX_PATH-bound, as `Command.cwd`
-already documents).
-
-**Decided (the maintainer, 2026-10-15):** a canonical Windows path drops the `\\?\` prefix (`\\?\UNC\srv\share`
-becomes `\\srv\share`) unless stripping would name another file — a component ending in `.` or a space, or a device
-name such as `CON` — as Python's `realpath`, libuv, Go and .NET answer; Rust keeps the prefix, and the `dunce` crate
-exists to undo it. kama loses nothing by it: `kama__wpath` re-adds the prefix past 248 characters, as Go and Java do
-internally. `setCurrentDirectory` says it is process-wide (it races across isolates) and MAX_PATH-bound on Windows.
-
 <a id="s1-file-seek"></a>
 
 ### `File` seek (KR-168)

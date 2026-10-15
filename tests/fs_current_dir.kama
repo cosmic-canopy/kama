@@ -1,0 +1,39 @@
+// The current directory and a canonical path (KR-167). `currentDirectory()` reads what a relative path is relative
+// to, `setCurrentDirectory(path:)` changes it, and `canonicalPath(path:)` resolves `.`, `..` and links into the one
+// absolute spelling of a file that exists — so `sub/..` and the directory itself compare equal. On Windows no
+// answer carries the verbatim `\\?\` prefix the OS hands back. Returns 42.
+import { std::process::currentDirectory, std::process::setCurrentDirectory, std::fs::canonicalPath,
+         std::fs::createDir, std::fs::removeDir, std::io::IoError, std::io::IoErrorKind };
+
+fn string orEmpty(Result<string, IoError> r) { return match (give r) { case Ok(value: s): { := give s; } case Err(error: e): { := ""; } }; }
+
+@compileFor(OS_WINDOWS)
+fn bool verbatim(const ref string p) { return p.startsWith(prefix: "\\\\?\\"); }
+@compileFor(!OS_WINDOWS)
+fn bool verbatim(const ref string p) { return false; }
+
+unsafe fn int32 run() {
+    string here = orEmpty(r: currentDirectory());
+    if (here.length() == 0) { return 1; }
+    if (verbatim(p: here)) { return 2; }
+    string canon = orEmpty(r: canonicalPath(path: "."));
+    if (canon.length() == 0 || verbatim(p: canon)) { return 3; }
+    Result<Unit, IoError> mk = createDir(path: "kr167sub");
+    if (!mk.isOk()) { return 4; }
+    if (!setCurrentDirectory(path: "kr167sub").isOk()) { return 5; }
+    string inside = orEmpty(r: currentDirectory());
+    if (!inside.endsWith(suffix: "kr167sub")) { return 6; }
+    string back = orEmpty(r: canonicalPath(path: ".."));          // the same directory, another spelling
+    if (back != canon) { return 7; }
+    if (!setCurrentDirectory(path: "..").isOk()) { return 8; }
+    if (orEmpty(r: canonicalPath(path: "kr167sub/..")) != canon) { return 9; }
+    Result<Unit, IoError> rm = removeDir(path: "kr167sub");
+    int32 missing = match (canonicalPath(path: "kr167-not-there")) {
+        case Ok(value: s): 10;
+        case Err(error: e): match (e.kind()) { case NotFound: 0; case _: 11; };
+    };
+    if (missing != 0) { return missing; }
+    return 42;
+}
+
+fn int32 main() { return run(); }

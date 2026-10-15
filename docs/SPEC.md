@@ -2288,6 +2288,14 @@ across platforms, with the whole difference behind `kama_os.h` (fork/execvp/pipe
 and `run()`'s two-pipe drain sits behind one `kama_capture2` seam (`poll` on POSIX, a reader thread per pipe on
 Windows) so both platforms take the same code path. wasm has no process model.
 
+**Where a process works (`std::process`, `std::fs`).** `currentDirectory()` reads what a relative path is relative
+to and `setCurrentDirectory(path:)` changes it — process-wide, so it races every isolate resolving a relative path
+at the time (set it at startup, or pass absolute paths), and MAX_PATH-bound on Windows. `std::fs::canonicalPath(path:)`
+resolves `.`, `..` and every link into the one absolute spelling of a file that exists (`NotFound` otherwise). On
+Windows neither answer carries the verbatim `\\?\` prefix the OS hands back, except where the plain path would
+name another file (a trailing `.` or space, a device name such as `CON`); kama re-adds the prefix itself past 248
+characters, so nothing is lost. <!-- test: fs_current_dir -->
+
 **Who a process runs as (`std::process`).** `currentUser()`, `currentGroup()` and `currentProcessId()` answer
 for this process, and `UnixStream.peerCredentials()` (below) for the one on the other end of a socket. The
 **interface is the same on every OS** and each OS keeps what is its own — the rule for every platform

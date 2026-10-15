@@ -17,7 +17,8 @@ import {
 };
 
 export { File, OpenMode, Metadata, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
-         readDir, remove, createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, exists, setPermissions };
+         readDir, remove, createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, exists, setPermissions,
+         canonicalPath };
 
 // POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
 // only `int32` fds, `UnsafePtr` handles, and scalar out-params.
@@ -520,6 +521,30 @@ unsafe fn Result<Metadata, IoError> symlinkStat(const ref string path) { return 
 // use a file, open it and handle the error; `exists` is for reporting, not for guarding.
 unsafe fn bool exists(const ref string path) {
     return kama_exists(path: path.cstr()) != 0;
+}
+
+extern fn isize kama_realpath(UnsafeConstPtr<cchar> path, UnsafePtr<uint8> into, usize cap);
+
+// The canonical form of `path` (KR-167): absolute, every `.` and `..` resolved and every symbolic link followed, so
+// two spellings of one file compare equal. The file must exist (`NotFound` otherwise) — a canonical path is a fact
+// about the filesystem, which is why it lives here and not in `std::path`. On Windows the verbatim `\\?\` prefix
+// the OS answers with is dropped wherever the plain path names the same file: `std::path` cannot parse it, and
+// kama re-adds it itself past 248 characters, so nothing is lost.
+unsafe fn Result<string, IoError> canonicalPath(const ref string path) {
+    isize cap = 1024;
+    while (true) {
+        FixedArray<uint8> buf = FixedArray.make(size: cap);
+        isize n = kama_realpath(path: path.cstr(), into: buf.dataPtrMut(), cap: cast<usize>(cap));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        if (n <= cap) {
+            Result<string, Utf8Error> t = decode(bytes: buf.slice(from: 0, count: n));
+            return match (give t) {
+                case Ok(value: s):  Result::Ok(value: give s);
+                case Err(error: e): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+            };
+        }
+        cap = n;
+    }
 }
 
 // Create ONE directory. Err(AddrInUse-free) — an existing path reports the platform's error (POSIX EEXIST
