@@ -1533,8 +1533,9 @@ grep -q 'declares `dldep2`, but it is not installed' "$tmp/dl.out" \
          sed 's/^/  /' "$tmp/dl.out" >&2; exit 1; }
 # KR-159: the hint is the command that works — `kama pkg install` alone refuses ("name the project"), so a hint
 # without the manifest sent the reader to a second error. Here it names the manifest, and running exactly that
-# command, from where the build was run, installs what was missing.
-grep -q "run \`kama pkg install $dl/app/kama.json\`" "$tmp/dl.out" \
+# command, from where the build was run, installs what was missing. Native-spelled: an absolute path reaches kama as
+# Windows spells it (`C:/msys64/tmp/…`), and the hint repeats what kama was given.
+grep -qF "run \`kama pkg install $(kama_native_path "$dl")/app/kama.json\`" "$tmp/dl.out" \
     || { echo "check-packages: FAIL — the not-installed hint does not name the manifest:" >&2; sed 's/^/  /' "$tmp/dl.out" >&2; exit 1; }
 # A project never installed at all, built by a RELATIVE path from its parent: the hint keeps that spelling.
 mkdir -p "$tmp/hint/proj/src"
