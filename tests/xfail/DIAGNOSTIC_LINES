@@ -622,6 +622,7 @@ import_named_iter_unimported	import_named_iter_unimported.kama:6
 import_repeated	import_repeated.kama:4
 index_const_write	index_const_write.kama:6
 index_give_element	index_give_element.kama:3 index_give_element.kama:5 index_give_element.kama:6 index_give_element.kama:7 index_give_element.kama:8
+index_no_operator	index_no_operator.kama:10
 index_rvalue_no_slot	index_rvalue_no_slot.kama:9
 inherit_depth_exceeded	inherit_depth_exceeded.kama:20
 init_kind_bool_from_element	init_kind_bool_from_element.kama:9

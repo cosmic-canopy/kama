@@ -6089,6 +6089,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             // Raw pointer store `p[i] = v` — only inside an `unsafe fn`.
             SharedExpression recv = ea->expression ? ea->expression
                                   : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+            if (refuseUnindexable(recv, ea)) return "0";
             std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
                              ? emitExpression((*ea->expressionlist)[0]) : "0";
             if (!_inUnsafe) {
@@ -6144,6 +6145,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // Raw pointer read `p[i]` — only inside an `unsafe fn`.
         SharedExpression recv = ea->expression ? ea->expression
                               : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        if (refuseUnindexable(recv, ea)) return "0";
         std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
                          ? emitExpression((*ea->expressionlist)[0]) : "0";
         if (!_inUnsafe) {
@@ -18007,6 +18009,38 @@ bool CEmitter::indexesUserOp(ElementAccessNode* ea)
     SharedExpression recv = ea->expression ? ea->expression
                                            : std::static_pointer_cast<ExpressionNode>(ea->identifier);
     return recv && userIndexOp(receiverClass(recv)) != nullptr;
+}
+
+// `p[0]` on something `[]` cannot read, said in kama's words. Reached only after the collection and user
+// `operator[]` arms declined, where the subscript used to be taken for a raw pointer: in an `unsafe fn` the
+// C went out as `(p)[0]` and clang refused it ("subscripted value is not an array"), and in a safe one the
+// refusal blamed a pointer that was not there. Judged only on a CERTAIN type — a declared type or a
+// primitive, by value; a raw pointer (`T*`) and an unresolved receiver keep the raw path.
+bool CEmitter::refuseUnindexable(SharedExpression recv, ElementAccessNode* ea)
+{
+    const std::string t = typeOfExpr(recv);
+    if (t.empty() || t.back() == '*') return false;
+    const std::string reads = " — `[]` reads a collection, a view, an array, a type that declares `operator[]`, or "
+                              "a raw `UnsafePtr<T>` in an `unsafe fn`";
+    if (_classes.count(t) || _enums.count(t)) {
+        if (_classes.count(t)) {
+            ClassInfo* owner = nullptr;
+            if (findMethod(&_classes[t], "op_index", &owner)) return false;   // any `operator[]` answers it
+        }
+        std::string msg = "`" + demangleForDisplay(t) + "` has no `operator[]`, so it cannot be indexed" + reads;
+        if (_classes.count(t)) {
+            ClassInfo* owner = nullptr;
+            MethodInfo* get = findMethod(&_classes[t], "get", &owner);
+            if (get && !get->params.empty() && get->params[0].name == "at")
+                msg += ". It answers `get(at:)`";
+        }
+        unsupported(msg.c_str(), ea);
+        return true;
+    }
+    const std::string pk = primKeyOfCType(t);
+    if (pk.empty()) return false;
+    unsupported(((std::string(strchr("aeiou", pk[0]) ? "an `" : "a `")) + pk + "` cannot be indexed" + reads).c_str(), ea);
+    return true;
 }
 
 // cType(typeNode) resolved in the type-substitution context of a generic-instance class `inCls` — so a

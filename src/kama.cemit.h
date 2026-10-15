@@ -2615,6 +2615,9 @@ private:
     SharedIdentifier deepSubstInInstance(const std::string& inCls, SharedIdentifier typeNode);
     // `ea` indexes a value whose class defines a place-returning `operator[]` (not a built-in collection).
     bool indexesUserOp(ElementAccessNode* ea);
+    // `[]` on a declared type with no `operator[]`, or on a primitive: refused by name (true) rather than
+    // taken for a raw pointer.
+    bool refuseUnindexable(SharedExpression recv, ElementAccessNode* ea);
 
     // Deep-substitute a type node under the active _typeSubst: a bare param `T` -> its (already concrete)
     // binding; a nested generic `Rc<T>` -> `Rc<Counter>` (recurse into args). Keeps a generic arg that

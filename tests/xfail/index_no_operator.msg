@@ -1,0 +1,1 @@
+`Pair` has no `operator[]`, so it cannot be indexed

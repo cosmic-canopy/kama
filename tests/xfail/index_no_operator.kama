@@ -1,0 +1,12 @@
+// `[]` on a type that declares no `operator[]` is refused by name. It was taken for raw-pointer access: in an
+// `unsafe fn` `kama check` passed and clang refused the C ("subscripted value is not an array, pointer, or
+// vector"), and in a safe one the refusal blamed a pointer that was not there.
+type value Pair {
+    public int32 a;
+    public int32 b;
+    public ctor of(int32 a, int32 b) { this.a = a; this.b = b; }
+}
+
+unsafe fn int32 first(Pair p) { return p[0]; }   // -> REJECT
+
+fn int32 main() { return first(p: Pair.of(a: 1, b: 2)); }
