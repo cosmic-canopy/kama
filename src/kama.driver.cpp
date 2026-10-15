@@ -3271,6 +3271,20 @@ static std::string reservedByCRegister(const std::string& ident)
     return "";
 }
 
+// The name to suggest for one that is not a legal project name, or "" when there is none worth offering (KR-142).
+// A `kama-<name>` repository — every `@kama/*` package lives in one — means the package `<name>`: `kama_<name>` is
+// what the hyphen fold alone would give, and that is refused as the compiler's C register. A hint is only ever a
+// name kama would then accept; it used to suggest `kama_widget`, which the next run refused.
+static std::string usableNameHint(const std::string& ident)
+{
+    std::string h = ident;
+    if ((h.rfind("kama-", 0) == 0 || h.rfind("kama_", 0) == 0) && h.size() > 5) h = h.substr(5);
+    for (char& c : h) if (c == '-') c = '_';
+    if (!kamaIsIdentifier(h) || kamaIsKeyword(h.c_str()) || h == "std" || h == "core" || h == "global"
+        || !reservedByCRegister(h).empty() || h == ident) return "";
+    return h;
+}
+
 // ...and everything else the ROOT manifest contributes to the C command line, as written. `link` is
 // seeded into g_target after target resolution unless the target overrode it; `cflags`/`ldflags` PREPEND
 // onto whatever the target carries, because the target tier appends (project-then-target, so the more
@@ -4409,12 +4423,11 @@ struct ManifestReader {
                 if (!str(nm)) return false;
                 const std::string ident = importNameOf(nm);
                 if (!kamaIsIdentifier(ident)) {
-                    std::string hint = ident;
-                    for (char& c : hint) if (c == '-') c = '_';
+                    const std::string hint = usableNameHint(ident);
                     return fail("`name` is \"" + nm + "\", but a project's name is its root module and `"
                                 + ident + "` is not a legal kama identifier — nothing could write `import "
                                 + ident + "::{ … }`"
-                                + (kamaIsIdentifier(hint) ? ". Try \"" + hint + "\"" : ""));
+                                + (!hint.empty() ? ". Try \"" + hint + "\"" : ""));
                 }
                 // `global` (§2f.29, retired as a qualifier by KR-87) and the names that would share a C
                 // register (reservedByCRegister). Refused HERE, not only at `kama seed`, because a
@@ -9115,6 +9128,8 @@ struct SeedOpts {
     bool allTools = false, skill = false, yes = false, force = false;
     std::string license;                 // `--license mit`: the one body seed can write today
     bool licenseGiven = false;
+    std::string holder;                  // `--holder "<name>"`: the copyright holder the license names (KR-142)
+    bool holderGiven = false;
 };
 
 void seedUsage()
@@ -9125,6 +9140,7 @@ void seedUsage()
         "            [--members <a,b,c>]        the members of a monorepo (required for that kind)\n"
         "            [--agents|--no-agents] [--claude] [--tool <name>]... [--all-tools] [--skill]\n"
         "            [--license mit|apache-2.0|mit-or-apache]  write the license file(s), record it in kama.json\n"
+        "            [--holder <name>]         the copyright holder the license names (default: git's user.name)\n"
         "            [--yes|-y] [--force]\n"
         "\n"
         "  Interactive when stdin is a terminal; a pipe or a script behaves as --yes.\n");
@@ -9212,6 +9228,9 @@ static std::string seedDefaultName(const std::string& dir)
         else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-') out += c;
         else out += '_';
     }
+    // A `kama-<name>` directory is the repository of the package `<name>` (KR-142) — the `@kama/*` convention — and
+    // `kama_…` could never be a project's name anyway (the compiler's C register).
+    if ((out.rfind("kama-", 0) == 0 || out.rfind("kama_", 0) == 0) && out.size() > 5) out = out.substr(5);
     if (out.empty() || !((out[0] >= 'a' && out[0] <= 'z'))) out = "app";
     return out;
 }
@@ -9255,10 +9274,9 @@ static bool seedValidName(const std::string& name, bool mustBeImportable, std::s
     if (!mustBeImportable) return true;
 
     if (ident.find('-') != std::string::npos) {
-        std::string suggest = ident;
-        for (char& c : suggest) if (c == '-') c = '_';
-        err = "a project's name is its root module, and '" + ident + "' is not a legal kama identifier "
-              "— try '" + suggest + "'";
+        const std::string suggest = usableNameHint(ident);
+        err = "a project's name is its root module, and '" + ident + "' is not a legal kama identifier"
+              + (suggest.empty() ? std::string() : " — try '" + suggest + "'");
         return false;
     }
     if (kamaIsKeyword(ident.c_str())) {
@@ -9505,6 +9523,28 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
             return 2;
         }
     }
+    // The copyright holder an MIT license names (KR-142): `--holder`, else git's `user.name` — the name the commits
+    // will carry — and with neither, seed refuses rather than guess. It used to name the PACKAGE as its own holder
+    // on a machine with no git identity (a fresh box, a container); a license is a legal statement, and a
+    // placeholder seed printed a line about could ship unread. The Apache body names no holder.
+    const bool namesHolder = license == "MIT" || license == "MIT OR Apache-2.0";
+    if (o.holderGiven && !namesHolder) {
+        fprintf(stderr, "kama seed: --holder names the copyright holder of an MIT license — pass --license mit or "
+                        "mit-or-apache with it\n");
+        return 2;
+    }
+    std::string holder = o.holder;
+    if (namesHolder && holder.empty()) {
+        // stderr to the null device: without git, the shell's own "not found" would land in seed's output.
+        int rc = 0;
+        holder = runCmdCapture(std::string("git config --get user.name 2>") + KAMA_DEVNULL, &rc);
+        if (rc != 0) holder.clear();
+    }
+    if (namesHolder && holder.empty()) {
+        fprintf(stderr, "kama seed: --license %s names a copyright holder, and there is none to name — pass "
+                        "--holder \"<name>\", or set `git config user.name`\n", o.license.c_str());
+        return 2;
+    }
 
     // (4) THE WHOLE FILE LIST, built up front and pre-flighted for collisions, so a seed lands entirely
     // or not at all. embeddedWrite checks per file as it writes, which stops halfway — fine for one file,
@@ -9530,12 +9570,6 @@ int cmdSeed(const std::string& dirArg, const SeedOpts& o)
     files.push_back({ ".gitignore", seedSubst(KAMA_SEED_GITIGNORE, name, ident) });
     files.push_back({ "README.md",  seedSubst(KAMA_SEED_README,    name, ident) });
     if (!license.empty()) {
-        // The holder is git's `user.name` when there is one — the name the commits will carry — and the
-        // project's name otherwise, which is at least true. stderr goes to the null device: without git
-        // the shell's own "not found" would land in the middle of seed's output.
-        int rc = 0;
-        std::string holder = runCmdCapture(std::string("git config --get user.name 2>") + KAMA_DEVNULL, &rc);
-        if (rc != 0 || holder.empty()) holder = name;
         const time_t now = time(nullptr);
         char year[8] = "";
         if (const struct tm* t = localtime(&now)) strftime(year, sizeof year, "%Y", t);
@@ -10929,6 +10963,7 @@ int main(int argc, char** argv)
             else if (a == "--all-tools") { o.allTools = true; o.agents = true; o.agentsGiven = true; }
             else if (a == "--skill")     { o.skill = true;    o.agents = true; o.agentsGiven = true; }
             else if (a == "--license" && i + 1 < argc) { o.license = argv[++i]; o.licenseGiven = true; }
+            else if (a == "--holder" && i + 1 < argc)  { o.holder = argv[++i]; o.holderGiven = true; }
             else if (a == "--yes" || a == "-y")        o.yes = true;
             else if (a == "--force")                   o.force = true;
             else if (!a.empty() && a[0] == '-') {

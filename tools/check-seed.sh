@@ -205,6 +205,15 @@ reject() {   # reject <label> <args...>
     [ -e "$d" ] && bad "$shift_label left $d behind" || ok "$shift_label is rejected, writing nothing"
 }
 reject "a hyphenated library name"   --kind library --name my-lib
+grep -q "try 'my_lib'" "$tmp/rej$n.out" && ok "the hyphen refusal suggests the underscore name" \
+                                       || bad "no usable suggestion for my-lib: $(cat "$tmp/rej$n.out")"
+reject "a kama- library name"         --kind library --name kama-widget
+grep -q "try 'widget'" "$tmp/rej$n.out" && ok "a kama-<name> refusal suggests <name>, never the reserved kama_<name>" \
+                                       || bad "the kama- refusal suggests a name kama refuses: $(cat "$tmp/rej$n.out")"
+# A `kama-<name>` DIRECTORY seeds the package <name> — the repository convention every @kama/* package follows.
+kw="$tmp/kama-widget"
+"$KAMA" seed "$kw" --yes --kind library >/dev/null 2>&1 && grep -q '"name": "widget"' "$kw/kama.json" \
+    && ok "a kama-<name> directory seeds the package <name>" || bad "a kama-widget directory did not seed widget"
 reject "an uppercase name"           --name BadName
 reject "a name with a space"         --name 'Bad Name'
 reject "a keyword as a library name" --kind library --name return
@@ -261,13 +270,12 @@ echo "check-seed: --license writes the body AND records the id, or refuses by na
 # not write. Both halves are asserted: the file, and the manifest key that points at it — a `license`
 # in kama.json with no LICENSE beside it would be a claim the tree does not back.
 lic="$tmp/lic"
-"$KAMA" seed "$lic" --yes --kind library --name liclib --license mit >/dev/null 2>&1 || bad "seed --license mit failed"
+"$KAMA" seed "$lic" --yes --kind library --name liclib --license mit --holder "Guard Holder" >/dev/null 2>&1 \
+    || bad "seed --license mit failed"
 [ -f "$lic/LICENSE" ] && ok "--license mit writes LICENSE" || bad "--license mit wrote no LICENSE"
 grep -q '^MIT License$' "$lic/LICENSE" && ok "the body is the MIT text" || bad "LICENSE is not the MIT body"
-# The holder is git's user.name — the name the commits carry — or the project name without one; the
-# guard resolves it the same way seed does, from the same cwd.
-holder=$(git config --get user.name 2>/dev/null || true); [ -n "$holder" ] || holder=liclib
-grep -qF "Copyright (c) $(date +%Y) $holder" "$lic/LICENSE" \
+# The holder is the one --holder names (the git fallback and the refusal are asserted below).
+grep -qF "Copyright (c) $(date +%Y) Guard Holder" "$lic/LICENSE" \
     && ok "the copyright line carries this year and the holder" \
     || bad "unexpected copyright line: $(sed -n 3p "$lic/LICENSE")"
 grep -q '"license": "MIT"' "$lic/kama.json" && ok "the manifest records the SPDX id" \
@@ -276,11 +284,11 @@ grep -q '"license": "MIT"' "$lic/kama.json" && ok "the manifest records the SPDX
                                                   || bad "the manifest with \`license\` does not load"
 # Case-insensitive on the way in; the SPDX spelling on the way out.
 lic2="$tmp/lic2"
-"$KAMA" seed "$lic2" --yes --license MIT >/dev/null 2>&1 && grep -q '"license": "MIT"' "$lic2/kama.json" \
+"$KAMA" seed "$lic2" --yes --license MIT --holder H >/dev/null 2>&1 && grep -q '"license": "MIT"' "$lic2/kama.json" \
     && ok "--license MIT is the same answer" || bad "--license MIT was not accepted as mit"
 # A monorepo: one LICENSE at the root, and every member manifest says which.
 licw="$tmp/licw"
-"$KAMA" seed "$licw" --yes --kind monorepo --members a,b --license mit >/dev/null 2>&1 || bad "monorepo --license failed"
+"$KAMA" seed "$licw" --yes --kind monorepo --members a,b --license mit --holder H >/dev/null 2>&1 || bad "monorepo --license failed"
 [ -f "$licw/LICENSE" ] && grep -q '"license": "MIT"' "$licw/a/kama.json" && grep -q '"license": "MIT"' "$licw/b/kama.json" \
     && ok "a monorepo gets one LICENSE at the root and the id in every member" \
     || bad "monorepo --license: root LICENSE or a member's key is missing"
@@ -289,7 +297,7 @@ licw="$tmp/licw"
 # and its MIT body the same as this repo's LICENSE-MIT but for the copyright line: one text each, and these
 # three comparisons are what keep seed's copy, the embedded seed/LICENSE-APACHE and the repo's from drifting.
 licd="$tmp/licd"
-"$KAMA" seed "$licd" --yes --kind library --name duallib --license mit-or-apache >/dev/null 2>&1 \
+"$KAMA" seed "$licd" --yes --kind library --name duallib --license mit-or-apache --holder H >/dev/null 2>&1 \
     || bad "seed --license mit-or-apache failed"
 [ -f "$licd/LICENSE-MIT" ] && [ -f "$licd/LICENSE-APACHE" ] && [ ! -f "$licd/LICENSE" ] \
     && ok "--license mit-or-apache writes LICENSE-MIT and LICENSE-APACHE" \
@@ -308,11 +316,29 @@ lica="$tmp/lica"
     && ok "--license apache-2.0 writes the Apache text as LICENSE and records Apache-2.0" \
     || bad "--license apache-2.0 did not write the Apache LICENSE and id"
 licwd="$tmp/licwd"
-"$KAMA" seed "$licwd" --yes --kind monorepo --members a,b --license mit-or-apache >/dev/null 2>&1 \
+"$KAMA" seed "$licwd" --yes --kind monorepo --members a,b --license mit-or-apache --holder H >/dev/null 2>&1 \
     && [ -f "$licwd/LICENSE-MIT" ] && [ -f "$licwd/LICENSE-APACHE" ] \
     && grep -q '"license": "MIT OR Apache-2.0"' "$licwd/b/kama.json" \
     && ok "a dual-licensed monorepo gets both files at the root and the expression in every member" \
     || bad "monorepo --license mit-or-apache: root files or a member's key is missing"
+# The holder an MIT license names (KR-142): git's user.name when --holder is absent, and with neither seed
+# REFUSES, writing nothing. It used to write the package as its own copyright holder. Both cases pin git's
+# identity through the environment, so neither depends on how this machine is configured.
+licg="$tmp/licg"
+env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name \
+    GIT_CONFIG_VALUE_0="Git Person" "$KAMA" seed "$licg" --yes --license mit >/dev/null 2>&1 \
+    && grep -qF "Copyright (c) $(date +%Y) Git Person" "$licg/LICENSE" \
+    && ok "with no --holder the holder is git's user.name" \
+    || bad "the git identity did not become the holder: $(sed -n 3p "$licg/LICENSE" 2>/dev/null)"
+n=$((n + 1)); nog="$tmp/rej$n"
+if env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$KAMA" seed "$nog" --yes --license mit >"$tmp/rej$n.out" 2>&1; then
+    bad "--license mit with no holder and no git identity was accepted: $(sed -n 3p "$nog/LICENSE" 2>/dev/null)"
+else
+    [ -e "$nog" ] && bad "the holder refusal left $nog behind" || ok "--license mit with no holder at all is refused, writing nothing"
+    grep -q 'pass --holder' "$tmp/rej$n.out" && ok "the refusal names --holder and git's user.name" \
+                                              || bad "the holder refusal does not say the way through: $(cat "$tmp/rej$n.out")"
+fi
+reject "--holder with no license that names one" --holder X --license apache-2.0
 # Anything else is refused by name, writing nothing, and says the way through.
 reject "a license seed cannot write" --license gpl-3.0
 grep -q 'can write `mit`, `apache-2.0` or `mit-or-apache`' "$tmp/rej$n.out" && ok "the refusal says what it can write" \

@@ -2892,28 +2892,6 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-seed-names"></a>
-
-### `kama seed` and a `kama-<name>` repository (KR-142)
-
-`kama seed ~/src/kama-widget --kind library` answers *"'kama-widget' is not a legal kama identifier — try
-'kama_widget'"*, and `--name kama_widget` is then refused too: its C prefix would begin with `kama_`, the compiler's own
-register. The hint names a name kama will not take. And with no git identity (a fresh machine, a container),
-`--license mit` writes `Copyright (c) 2026 widget`: the package as its own copyright holder. Measured `0.9.577`.
-**Scheduled.** **Recommendation:** a `kama-<name>` directory seeds the package `<name>` (the convention every `@kama/*`
-repository follows), and a hint never names a reserved word; the holder comes from `--holder`, else the git identity,
-else a placeholder seed names in its output so it is filled before a publish.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `kama.driver.cpp` — `seedDefaultName` (strip a leading `kama-`), `seedValidName`
-(offer a hint only when `reservedByCRegister` and the keyword list would accept it), `cmdSeed` (`holder = name` when git
-has no `user.name`), and the seed option parser. **Decision owed:** the license holder with no git identity — a
-`--holder` option, and what seed writes and says when neither it nor a git identity exists (a placeholder it calls out,
-or a refusal).
-
-**Decided (the maintainer, 2026-10-15):** the holder is `--holder`, else the git identity, else seed refuses
-`--license` and names both remedies — a license names a legal holder, and a placeholder can ship unread. A
-`kama-<name>` directory seeds `<name>`.
-
 <a id="s10-package-guide-comments"></a>
 
 ### The package guide's "marker comments" cannot exist (KR-143)

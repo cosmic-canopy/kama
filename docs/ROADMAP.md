@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-142 | **`kama seed` and a `kama-<name>` repository** — it refuses `kama-widget` and suggests `kama_widget`, which it also refuses (reserved); with no git identity the license names the package as its copyright holder | S | [§10](ROADMAP_DETAIL.md#s10-seed-names) |
 | KR-143 | **The package guide's "marker comments" cannot exist** — `agents/PACKAGE.md` fences a generated `csources` block with comments, and `kama.json` is strict JSON | S | [§10](ROADMAP_DETAIL.md#s10-package-guide-comments) |
 | KR-144 | **A dependency and a `link` entry cannot be gated on a fact, and a dependency entry takes any key** — `"bogus": 1` and `"compileFor"` pass silently (the gate is ignored), and `link` gates only by target NAME, so a consumer's own wasm target links native libraries | S | [§10](ROADMAP_DETAIL.md#s10-manifest-gates) |
 | KR-145 | **A host build variant with its own flags** — a sanitizer build has no place: a `BUILD_TYPE` value takes no `cflags`, a target entry needs a fixed triple, and `kama build` has no `--cflags` | M | [§10](ROADMAP_DETAIL.md#s10-build-variant) |

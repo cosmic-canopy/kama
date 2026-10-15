@@ -27,7 +27,10 @@ manifest — the bundle a package publishes with: `mit` writes `LICENSE` and `"l
 writes `LICENSE` and `"license": "Apache-2.0"`, and `mit-or-apache` — kama's own license, and the usual
 choice for a kama package — writes `LICENSE-MIT` + `LICENSE-APACHE` and `"license": "MIT OR Apache-2.0"`. A
 license is a flag and never a prompt, because it is a decision the author brings, and those three are the
-bodies `seed` can write: any other value is refused by name. It refuses to touch a directory that already has a `kama.json`, and if any other file it would
+bodies `seed` can write: any other value is refused by name. An MIT license names its copyright holder: `--holder
+"<name>"`, else git's `user.name` (the name the commits will carry), and with neither `seed` refuses rather than
+guess. A directory named `kama-<name>` — the repository convention every `@kama/*` package follows — seeds the
+package `<name>`. It refuses to touch a directory that already has a `kama.json`, and if any other file it would
 write already exists it writes **nothing** rather than half a project.
 
 What `--kind executable` produces:
@@ -995,7 +998,7 @@ registry metadata keys — so no registry version is unreadable to an older comp
 
 | Command | What it does |
 |---|---|
-| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--license mit|apache-2.0|mit-or-apache` (the license file(s) plus the manifest's `license`), `--force`. |
+| `kama seed [<dir>] [--kind executable\|library\|monorepo]` | Turn a directory into a project — manifest, starter source, `.gitignore`, README, optionally `AGENTS.md` — or, with `monorepo`, into a workspace of them. Interactive on a terminal; a pipe or a script behaves as `--yes`. Also `--name`, `--version` (projects only), `--members a,b` (monorepo only), `--license mit|apache-2.0|mit-or-apache` (the license file(s) plus the manifest's `license`), `--holder <name>` (the holder an MIT license names; default git's `user.name`), `--force`. |
 | `kama run <kama.json> [-- <args>]` | Build the project and run it; native-only. A workspace errors and names its members. |
 | `kama build <file>…\|<kama.json>\|<kama_workspace.json> [--dev]` | Build a native/wasm/embedded artifact. The operand picks the mode; a workspace builds every member. |
 | `kama pkg install <kama.json>\|<kama_workspace.json> [--verify]` | Resolve `kama.json` (dev-)dependencies into `.kama/{deps,dev-deps}` + `kama.lock`; `--verify` requires + checks registry signatures. |
