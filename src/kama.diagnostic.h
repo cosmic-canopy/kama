@@ -39,7 +39,7 @@ inline void renderDiagnostic(std::FILE* to, const Diagnostic& d);
 
 struct Diagnostic {
     int          line      = 0;   // 1-based start line
-    int          column    = 0;   // 1-based start column (0 = whole line / unknown)
+    int          column    = 0;   // 0-based start column, as the lexer counts (0 with no endLine = whole line / unknown)
     int          endLine   = 0;   // T3: end line   (0 = unknown -> == start)
     int          endColumn = 0;   // T3: end column (0 = unknown -> == start)
     DiagSeverity severity  = DiagSeverity::Error;

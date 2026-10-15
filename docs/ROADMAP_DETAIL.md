@@ -2892,23 +2892,6 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-diag-columns"></a>
-
-### Every semantic diagnostic reports column 0 (KR-147)
-
-`total = "text";` on line 3 reports `col.kama:3:0: error: an assignment expects a number …`; a parse error carries its
-real column (measured `0.9.577`). An editor underlines from the line's start, and a tool reading `--diagnostics`
-cannot point at the expression. The diagnostic channel takes a line (`unsupported(what, line)`), and there are
-thousands of call sites. **Scheduled.** **Design:** the channel takes a source position — the node's own span,
-which the parser already stamps — with the line-only form kept for the sites that have no node, so the change can
-land site by site behind one funnel.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `CEmitter::unsupported` sets only `d.line` (its comment defers columns "with spans"),
-and `ctFail` in `kama.comptime.cpp` the same; `Diagnostic` already has `column`/`endLine`/`endColumn`, and every
-`ASTNode` carries its span (`YYLLOC_DEFAULT`/`STAMP_LOC`). Measured: 907 `unsupported` sites and ~95 `ctFail` — 467 pass
-`node->line` (mechanical), 344 a local line, ~96 another source. A node-taking overload that fills the span, the line
-form kept, the column in the `_reportedDiags` dedup key, then site by site. Stays L.
-
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)

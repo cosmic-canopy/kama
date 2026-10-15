@@ -518,11 +518,34 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine)
     unsupported(rawWhat, srcLine, std::string());
 }
 
+// A diagnostic's column (KR-147). Every semantic diagnostic reported column 0 for years, because the channel took a
+// line: an editor underlined from the line's start and `--diagnostics` could not point at the expression. A site
+// that has the node passes it; one that passes only a line takes the span of the construct being emitted on that
+// line, which is the one the emitter is judging. A synthesized node names no source text, so it gives its line only.
+static bool sameOrAfter(int l0, int c0, int l1, int c1) { return l1 > l0 || (l1 == l0 && c1 > c0); }
+CEmitter::PosGuard::PosGuard(CEmitter& em, const ASTNode* n) : e(em), saved(em._posNode)
+{
+    if (n && !n->synthesized) em._posNode = n;
+}
+void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& subject)
+{
+    const ASTNode* p = _posNode;
+    if (p && p->line == srcLine) unsupportedAt(rawWhat, srcLine, p->column, p->endLine, p->endColumn, subject);
+    else                         unsupportedAt(rawWhat, srcLine, 0, 0, 0, subject);
+}
+void CEmitter::unsupported(const char* rawWhat, const ASTNode* at, const std::string& subject)
+{
+    if (!at)              { unsupported(rawWhat, 0, subject); return; }
+    if (at->synthesized)  { unsupported(rawWhat, at, subject); return; }
+    unsupportedAt(rawWhat, at->line, at->column, at->endLine, at->endColumn, subject);
+}
+
 // The same channel, plus the NAME the defect is about — see Diagnostic::subject for why a tool must be
 // handed the name rather than left to find it in the prose. Only the sites a TOOL can act on pass one;
 // everything else keeps the two-argument form, so an empty subject means "nothing to act on" rather
 // than "nobody got round to it".
-void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& subject)
+void CEmitter::unsupportedAt(const char* rawWhat, int srcLine, int column, int endLine, int endColumn,
+                             const std::string& subject)
 {
     // An index-only walk says nothing (KR-97). It runs code the emitter was never meant to see — in a
     // `comptime fn` body every call to another is a runtime-position refusal — and its C is thrown away; the
@@ -532,7 +555,13 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     ++_diagAttempts;
     std::string display = demangleForDisplay(rawWhat);
     std::string dfile = reportPath(diagFile());
-    attributeToInstSite(dfile, srcLine, display);
+    {
+        const std::string f0 = dfile; const int l0 = srcLine;
+        attributeToInstSite(dfile, srcLine, display);
+        // Moved to the author's instantiation site, it is no longer at this node: keep the line, drop the column.
+        if (dfile != f0 || srcLine != l0) column = endLine = endColumn = 0;
+    }
+    if (!sameOrAfter(srcLine, column, endLine, endColumn)) endLine = endColumn = 0;   // a span ends after it starts
     if (_ctCheck) _ctCheckedAt.insert(dfile + ":" + std::to_string(srcLine));   // see dropShadowedComptimeDiags
     const char* what = display.c_str();
     // ONE mistake, ONE diagnostic. A generic type's member body is emitted once per instantiation, so a
@@ -543,7 +572,7 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     //
     // The `/* TODO(kama): unsupported … */` marker below is deliberately NOT deduped: it is a property of
     // the emission site, one per body actually emitted, and it keeps `--keep-c` honest.
-    if (!_reportedDiags.insert(dfile + ":" + std::to_string(srcLine) + ":" + display).second) {
+    if (!_reportedDiags.insert(dfile + ":" + std::to_string(srcLine) + ":" + std::to_string(column) + ":" + display).second) {
         *_out << "/* TODO(kama): unsupported " << what << " */";
         return;
     }
@@ -553,9 +582,9 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
     // a second, differently-worded rendering of what this struct already says — which is exactly what it
     // was. See `renderDiagnostic` (kama.diagnostic.h) for the shape that replaced it; the driver renders
     // this list for `build` and `check` alike, so the two cannot disagree about a defect they both found.
-    // We only know the line here (call sites pass `node->line`); precise column/end come with spans (T3).
     Diagnostic d;
     d.line = srcLine;
+    d.column = column; d.endLine = endLine; d.endColumn = endColumn;
     d.severity = DiagSeverity::Error;
     // "semantic", not "unsupported": this is the emitter's general rejection path and it is named for
     // the C++ helper that reaches it, but almost none of its 800-odd call sites are about a feature
@@ -712,17 +741,17 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
                     if (sym->alias && sym->alias->value && projectRoots.count(local))
                         unsupported(("`as " + local + "` claims `" + local + "`, which already names a "
                                      "project this file can reach — the alias would shadow it with no way "
-                                     "left to spell the original. Pick another name").c_str(), imp->line);
+                                     "left to spell the original. Pick another name").c_str(), imp);
                     std::string target = mod + "__" + *sym->identifier->value;
                     auto it = ctx.symbolAliases.find(local);
                     if (it != ctx.symbolAliases.end() && it->second != target)
-                        unsupported(("import of `" + local + "` collides with another import — disambiguate with `as`").c_str(), imp->line);
+                        unsupported(("import of `" + local + "` collides with another import — disambiguate with `as`").c_str(), imp);
                     // The same symbol twice under the same name. Harmless to resolution, which is why it passed in
                     // silence, but the block is "one entry per symbol" and a repeat is the leftover an edit makes —
                     // a scripted import added beside one that was already there.
                     else if (it != ctx.symbolAliases.end())
                         unsupported(("`" + local + "` is imported twice — an `import` block names each symbol once; "
-                                     "delete the repeated entry").c_str(), imp->line);
+                                     "delete the repeated entry").c_str(), imp);
                     ctx.symbolAliases[local] = target;
                 }
         }
@@ -3320,7 +3349,7 @@ void CEmitter::checkReturns(FunctionDeclarationNode* fn, ClassMethodDeclarationN
                                : (md->name && md->name->value ? *md->name->value : "");
     unsupported((std::string(what) + " `" + nm + "` can reach the end of its body without returning a value "
                  "— every path out of a non-`void` function must `return` (or diverge: `panic`, or a loop "
-                 "with no exit)").c_str(), body->line);
+                 "with no exit)").c_str(), body);
 }
 
 // kama has no overloading: a name is declared once in its module, whatever KIND of function each declaration
@@ -3669,11 +3698,11 @@ void CEmitter::checkModulePaths(const std::vector<SharedCompilationUnit>& units)
                                                          || name == "addr" || name == "drop" || name == "copyElements");
                 if (intrinsic)
                     unsupported(("`global::" + name + "` — `" + name + "` is a keyword, so it needs no qualifier: "
-                                 "write `" + name + "(…)`").c_str(), id->line, name);
+                                 "write `" + name + "(…)`").c_str(), id, name);
                 else
                     unsupported(("`global::` was retired: a file names what it uses in its import list (KR-87) — "
                                  "for a capability add `import { core::" + name + " };` and write `" + name
-                                 + "`; a language type (`Optional`, `Result`, …) needs neither").c_str(), id->line, name);
+                                 + "`; a language type (`Optional`, `Result`, …) needs neither").c_str(), id, name);
                 continue;
             }
             // The longest leading run of segments that names a module; what follows it is the symbol.
@@ -3699,10 +3728,10 @@ void CEmitter::checkModulePaths(const std::vector<SharedCompilationUnit>& units)
             if (!local.empty())
                 unsupported(("`" + mod + "::" + rest + "` — a module path is written only in an `import`, and this "
                              "file already imports `" + symbol + "`" + (local != symbol ? " as `" + local + "`" : std::string())
-                             + ": write `" + spelled + "`").c_str(), id->line, symbol);
+                             + ": write `" + spelled + "`").c_str(), id, symbol);
             else
                 unsupported(("`" + mod + "::" + rest + "` — a module path is written only in an `import`: add `import { "
-                             + mod + "::" + symbol + " };` and write `" + rest + "`").c_str(), id->line, symbol);
+                             + mod + "::" + symbol + " };` and write `" + rest + "`").c_str(), id, symbol);
         }
     }
 }
@@ -3758,13 +3787,13 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         unsupported(("`" + *t->value + "` is not exported by this file, but " + what
                      + " of an exported declaration names it — a consumer could reach the declaration and "
                        "not the type. Export it too, or take it out of the exported surface").c_str(),
-                    t->line);
+                    t);
     };
     auto constParamShadow = [&](const char* kind, const SharedIdentifier& id) {
         if (!id || !id->value || !cp.count(*id->value)) return;
         unsupported((std::string(kind) + " `" + *id->value + "` shadows the comptime parameter of "
                      "the same name, which binds a compile-time value for this whole declaration and "
-                     "outranks every runtime name — rename it").c_str(), id->line);
+                     "outranks every runtime name — rename it").c_str(), id);
     };
     // One type spelling, judged at its head AND at every type argument under it, to any depth. The rules
     // used to stop at the head, and `cType` maps any generic instance to SOME mangled name, so a bad name
@@ -3787,7 +3816,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         // position, a `#(N)` argument, is skipped below and never reaches here.
         if (cp.count(*t->value)) {
             unsupported(("`" + *t->value + "` is a comptime parameter — a value, not a type — so "
-                         + what + " cannot name it").c_str(), t->line);
+                         + what + " cannot name it").c_str(), t);
             return;
         }
         if (tp.count(*t->value)) return;
@@ -3801,7 +3830,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
             const std::string k = resolveUserNameImpl(*t->value, t->qualifier);
             if ((_classes.count(k) || _enums.count(k) || _genericTypes.count(k)) && !_interfaces.count(k))
                 unsupported(("`" + *t->value + "` is a type, not a contract, so " + what
-                             + " cannot name it").c_str(), t->line);
+                             + " cannot name it").c_str(), t);
         }
         forEachTypeArg(t, [&](const SharedIdentifier& a) { checkTypeNode(a, what, "type"); });
         // A `#(K)` argument names a VALUE, so it is judged as one: a module constant must be in reach of this
@@ -3820,7 +3849,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
                     return _moduleStatics.count(mk) > 0; }, what, k->line))
                 return;
             unsupported(("unknown constant `" + *k->value + "` in " + what
-                         + " — no such constant is declared or imported").c_str(), k->line, *k->value);
+                         + " — no such constant is declared or imported").c_str(), k, *k->value);
         });
     };
     auto check = [&](const SharedIdentifier& t, const char* what) {
@@ -3867,7 +3896,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         for (auto& p : *params)
             if (p && p->identifier && p->identifier->value && *p->identifier->value == "self")
                 unsupported("`self` names the receiver inside a type body — the kama spelling is `this`; "
-                            "rename this parameter", p->identifier->line);
+                            "rename this parameter", p->identifier);
     };
     // A type parameter is a BINDER, so `fn f<Point>(Point p)` legally declares a fresh `Point` that
     // shadows the type — Rust and C++ do the same. What was wrong is that nothing said so: inside the
@@ -4067,7 +4096,7 @@ std::string CEmitter::resolveFunc(const std::string& name, SharedStringList qual
     if (site && !site->synthesized && name == "main")
         unsupported("`main` is the program's entry point, not a callable function — the runtime calls it "
                     "once. Move the body you want to share into a function of its own and call that",
-                    site->line);
+                    site);
     if (site && !site->synthesized)                                        // chokepoint: see resolveUserName
         checkReach(key, name, "a call", site->line, refFilePath(), qualifier && !qualifier->empty());
     recordRef(key, site);
@@ -4242,7 +4271,7 @@ std::string CEmitter::cType(SharedIdentifier type)
     if (type->value && *type->value == "This" && !type->genericArg) {
         if (!_thisType.empty()) return _thisType;
         if (_currentClass)      return _currentClass->name;
-        unsupported("`This` (the self-type) is only valid inside a `type` or `contract`", type->line);
+        unsupported("`This` (the self-type) is only valid inside a `type` or `contract`", type);
         return "void";
     }
     // `Base` is `This`'s companion — the enclosing type's BASE. resolveUserNameImpl does the resolving;
@@ -4261,10 +4290,10 @@ std::string CEmitter::cType(SharedIdentifier type)
                                                                               : _currentClass;
             if (!encl)
                 unsupported("`Base` (the base type) is only valid inside a `type` that declares "
-                            "`extends …`", type->line);
+                            "`extends …`", type);
             else
                 unsupported(("'" + encl->name + "' has no base class, so `Base` names nothing "
-                             "(only a type declared `extends …` has one)").c_str(), type->line);
+                             "(only a type declared `extends …` has one)").c_str(), type);
             return "void";
         }
     }
@@ -4777,7 +4806,7 @@ std::string CEmitter::hoistCtorIfInline(SharedExpression e)
 void CEmitter::rejectUnhoistableCtor(SharedExpression e)
 {
     if (!bareCtorClass(e).empty())
-        unsupported("an inline constructor as an operator operand here has no statement slot — bind it to a local first", e->line);
+        unsupported("an inline constructor as an operator operand here has no statement slot — bind it to a local first", e);
 }
 
 // emit an operator operand by value, materializing an inline constructor into a hoisted temp.
@@ -5281,7 +5310,7 @@ std::string CEmitter::emitInterpolation(InterpolatedStringNode* is)
     if (!is) return "\"\"";
     if (!_hoistOK) {
         unsupported("string interpolation must appear where a statement can be hoisted (an initializer, "
-                    "argument, or return) — not a raw `if`/`while` condition; bind a `let` first", is->line);
+                    "argument, or return) — not a raw `if`/`while` condition; bind a `let` first", is);
         return "\"\"";
     }
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<interp>"));
@@ -5343,7 +5372,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
                          + (dnote.empty() ? std::string("; add `implements Formattable` (or "
                                                         "`@generate(Formattable)`), or call a method that "
                                                         "returns a string")
-                                          : dnote)).c_str(), hole->line);
+                                          : dnote)).c_str(), hole);
             return;   // reported; synthesizing the call would add a second error against the synth line
         }
         // The same question for a PRIMITIVE hole, which took a very different road to a much worse
@@ -5362,7 +5391,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
                 unsupported(("`" + hk + "` cannot be interpolated — `${…}` renders a value through the "
                              "`Formattable` contract, and no `Formattable` is implemented for `" + hk
                              + "`. Widen it at the hole (`cast<int64>(…)`) or render it another way").c_str(),
-                            hole->line);
+                            hole);
         }
     }
     // synthesize `<hole>.format(f: ref fv)` so the hole's static type picks the right `format`.
@@ -5406,7 +5435,7 @@ std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
     if (tcls.empty()) {
         unsupported(("unknown string tag '" + *is->tag + "' — a tag is a function of one `Template` parameter in "
                      "scope, `fn R " + *is->tag + "(Template t)` (e.g. `html`, `sql`, `stripIndent` from std::fmt)").c_str(),
-                    is->line);
+                    is);
         return "\"\"";
     }
     SharedIdentifier holeTy = _genericTypeInsts[tcls].typeArgs[0];
@@ -5416,7 +5445,7 @@ std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
         const std::string pk = primKeyOfCType(hct);   // `int32`, not its C spelling `int32_t`
         const std::string shown = pk != hct ? pk : demangleForDisplay(hct);
         unsupported(("`" + *is->tag + "` takes a `Template<" + shown + ">` — a tag's holes are text (`Template`) "
-                     "or the values of a contract (`Template<C>`), and `" + shown + "` is neither").c_str(), is->line);
+                     "or the values of a contract (`Template<C>`), and `" + shown + "` is neither").c_str(), is);
         return "\"\"";
     }
 
@@ -5431,7 +5460,7 @@ std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
             if (i < is->specs.size() && is->specs[i]) {
                 unsupported((where + " has a format spec, but `" + *is->tag + "` takes its holes as `"
                              + demangleForDisplay(hct) + "` values, not text, so there is nothing for the spec to "
-                             "format").c_str(), is->line);
+                             "format").c_str(), is);
                 continue;
             }
             const std::string c = exprClass(h);
@@ -5439,7 +5468,7 @@ std::string CEmitter::emitTaggedInterpolation(InterpolatedStringNode* is)
                 const std::string shown = demangleForDisplay(c.empty() ? typeOfExpr(h) : c);
                 unsupported((where + " is " + aOrAn(shown) + ", which does not implement `" + demangleForDisplay(hct)
                              + "` — `" + *is->tag + "` takes its holes as `" + demangleForDisplay(hct) + "` values")
-                            .c_str(), is->line);
+                            .c_str(), is);
                 continue;
             }
             holeVars.push_back(contractBorrowOf(hct, h, emitExpression(h), false, where, is->line));
@@ -5524,6 +5553,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
 {
     if (!expr) return "";
     ASTNode* n = expr.get();
+    PosGuard posGuard(*this, n);   // a line-only diagnostic below takes this node's span (KR-147)
 
     // Compile-time code, on every path: the subset the interpreter evaluates, and nothing else (KR-102). An array
     // literal is the interpreter's too, as an initializer — the one place the run-time rules let one stand — and
@@ -5548,7 +5578,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         else if (auto* u = dynamic_cast<UInt64Node*>(n)) mag = std::to_string((unsigned long long)u->value);
         unsupported(("integer literal `" + mag + "` does not fit `int32`, the width of an unsuffixed "
                      "literal, and nothing here says which width to use — write it (`" + mag + "i64`, `"
-                     + mag + "ui64`), or give it a destination whose type it can take").c_str(), expr->line);
+                     + mag + "ui64`), or give it a destination whose type it can take").c_str(), expr);
     }
     if (auto* v = dynamic_cast<Int8Node*>(n))   return std::to_string((int)v->value);
     if (auto* v = dynamic_cast<Int16Node*>(n))  return std::to_string((int)v->value);
@@ -5612,7 +5642,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                    || (!ic.empty() && _classes.count(ic) && (_classes[ic].isIntrinsicColl || _classes[ic].destructible));
         if (owned)
             unsupported("`give`/`copy` mark a value being handed off — an initializer, assignment, argument, "
-                        "or return — not a bare sub-expression", h->line);
+                        "or return — not a bare sub-expression", h);
         return emitExpression(h->value);
     }
 
@@ -5679,7 +5709,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 std::string dotted = head;   // the whole path respelled, not just the two ends
                 for (size_t i = 1; i < v->qualifier->size(); ++i) dotted += "." + *(*v->qualifier)[i];
                 unsupported(("`" + head + "` is a value — reach its members with `.` (`" + dotted + "."
-                             + nm + "`); `::` resolves modules and types").c_str(), v->line);
+                             + nm + "`); `::` resolves modules and types").c_str(), v);
             }
         }
         // A comptime parameter (`const F: int32`) read as a VALUE — the bound integer, spelled
@@ -5707,14 +5737,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (!qualified && _currentClass && !_localTypes.count(nm)) {
             ClassInfo* owner = findFieldOwner(_currentClass, nm);
             if (owner) {
-                if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v->line);
+                if (_inStaticMethod) unsupported("a `static` method has no `this` — access the field through an instance", v);
                 // In a `ctor` the value under construction is named `this` and its fields are reached only
                 // through it. A bare name is therefore always a local or a param — which is what lets a
                 // ctor write `int32 fd = openRaw(…); this.fd = fd;` without the two `fd`s colliding. Say so
                 // rather than silently resolving to the field, which would make the two spellings differ.
                 if (_inNamedCtorBody)
                     unsupported(("'" + nm + "' is a field of '" + owner->name + "' — inside a constructor, "
-                                 "reach it through the value being built: `this." + nm + "`").c_str(), v->line);
+                                 "reach it through the value being built: `this." + nm + "`").c_str(), v);
                 _ctorSelfUsed = true;           // in a ctor: the implicit `this` storage is needed
                 checkFieldAccess(owner, nm, v->line);
                 recordFieldRef(owner, nm, v);   // implicit `this.` field read
@@ -5777,7 +5807,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* tn = dynamic_cast<ThisAccessNode*>(n)) {
-        if (_inStaticMethod) unsupported("a `static` method has no `this`", tn->line);
+        if (_inStaticMethod) unsupported("a `static` method has no `this`", tn);
         _ctorSelfUsed = true;               // in a ctor: the implicit `this` storage is needed
         return "self";
     }
@@ -5799,13 +5829,13 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // Say what actually happened. This used to report the bare fragment "base access", naming
         // neither the member nor the type — the two failures below are quite different problems.
         if (!_currentClass)
-            unsupported("`base` is only meaningful inside a method of a derived type", ba->line);
+            unsupported("`base` is only meaningful inside a method of a derived type", ba);
         else if (!_currentClass->base)
             unsupported(("'" + _currentClass->name + "' has no base class, so `base` names nothing "
-                         "(only a type declared `extends …` has one)").c_str(), ba->line);
+                         "(only a type declared `extends …` has one)").c_str(), ba);
         else
             unsupported(("'" + name + "' is not a field of the base class '" + _currentClass->base->name
-                         + "'").c_str(), ba->line);
+                         + "'").c_str(), ba);
         return name;
     }
 #endif
@@ -5814,7 +5844,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // `new T(...)` is supported only as a local-variable initializer
         // (handled in LocalVariableDeclaration). Bare expression position needs
         // a temp/statement context that arrives with RAII.
-        unsupported("`new` outside a local-variable initializer", v->line);
+        unsupported("`new` outside a local-variable initializer", v);
         return "0";
     }
 
@@ -5830,13 +5860,13 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             bool rNull = dynamic_cast<NullNode*>(v->RHS.get()) != nullptr;
             if (lNull && rNull)
                 unsupported("`null` compared with `null` asks nothing — it is always equal; compare a raw "
-                            "pointer with `null` (`p != null`)", v->line);
+                            "pointer with `null` (`p != null`)", v);
             if (lNull != rNull) {
                 std::string oc = neverNullType(lNull ? v->RHS : v->LHS);
                 if (!oc.empty())
                     unsupported(("`" + oc + "` is never null in safe code — don't null-check it "
                                  "(a `Weak` uses `tryUpgrade`; `null` is only for `UnsafePtr<T>` at the FFI boundary)").c_str(),
-                                v->line);
+                                v);
             }
         }
         return emitBinaryOperator(v->token, v->LHS, v->RHS, v->line);   // user operand → dispatch, else raw C
@@ -5949,7 +5979,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                     unsupported(("`" + *lid->value + "` is a `borrow` alias — it names the "
                                  "window over `" + placeText(*r) + "` and cannot be reseated, or the rest of "
                                  "the block would hold a view of storage this window never froze. Open another "
-                                 "`borrow`, or derive with `.slice(…)`").c_str(), v->line);
+                                 "`borrow`, or derive with `.slice(…)`").c_str(), v);
         // The STORE direction of the `== null` rule, for an assignment rather than a declaration (where
         // `rejectNullInit` handles it): a safe type is never null, so writing one there is the same
         // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
@@ -5959,7 +5989,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (!lc.empty())
                 unsupported(("`" + lc + "` is never null in safe code, so it cannot be assigned `null` "
                              "— `null` is only for `UnsafePtr<T>` at the FFI boundary. Use a zero value, "
-                             "or `Optional<T>` to model absence").c_str(), v->line);
+                             "or `Optional<T>` to model absence").c_str(), v);
         }
         // Indexed assignment to a collection lowers to __set, not `lhs = rhs`.
         if (auto* ea = dynamic_cast<ElementAccessNode*>(v->unaryExpression.get())) {
@@ -5993,7 +6023,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             std::string ridx = (ea->expressionlist && !ea->expressionlist->empty())
                              ? emitExpression((*ea->expressionlist)[0]) : "0";
             if (!_inUnsafe) {
-                unsupported("raw pointer access requires an `unsafe fn`", ea->line);
+                unsupported("raw pointer access requires an `unsafe fn`", ea);
                 return "0";
             }
             // (not during a poisoned instance's re-walk — the user's spelling was reported already)
@@ -6052,7 +6082,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             // reach — said "raw pointer access requires an `unsafe fn`". Emitting it names what is wrong.
             const long said = _diagAttempts;
             if (typeOfExpr(recv).empty()) emitExpression(recv);
-            if (_diagAttempts == said) unsupported("raw pointer access requires an `unsafe fn`", ea->line);
+            if (_diagAttempts == said) unsupported("raw pointer access requires an `unsafe fn`", ea);
             return "0";
         }
         if (_typeSubst.empty() && rawElemIsCChar(expr)) { rejectBareCChar(synthId("cchar", IDENTIFIER_CCHAR_VAL), "an element read through the pointer", ea->line); return "0"; }
@@ -6100,7 +6130,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             // The binary half's raw-pointer rule: `-p`, `~p` and `-null` reached C, which refused them.
             if ((t.size() > 1 && t.back() == '*') || dynamic_cast<NullNode*>(v->expression.get())) {
                 unsupported(("`" + op + "` is not defined on a raw pointer — an `UnsafePtr<T>` carries an address, "
-                             "it is not a number; `cast<usize>(p)` makes the address one").c_str(), v->line);
+                             "it is not a number; `cast<usize>(p)` makes the address one").c_str(), v);
                 return "0";
             }
             if (cNumBits(t) && cNumBits(t) < 32 && !cNumFloat(t)) {
@@ -6138,7 +6168,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                          + ">` destination — a local, an argument, or the function's return type — that is "
                            "where its result type comes from. For a value that must "
                            "not fail use `cast<" + nm + ">(…)`, and to keep the low bits use `truncate<"
-                         + nm + ">(…)`").c_str(), v->line);
+                         + nm + ">(…)`").c_str(), v);
             return "0";
         }
         // Containment: `cast<UnsafePtr<T>>(…)` MAKES a raw pointer out of an integer or another pointer —
@@ -6162,7 +6192,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             // A contract value is a fat pointer that BORROWS its object; a cast has no object to borrow.
             unsupported(("`" + verb + "<" + nm + ">(…)` — a contract is not a conversion target: a contract "
                          "value borrows its object, so you get one by binding it (`" + nm + " x = obj;`) or "
-                         "by passing the object where a `" + nm + "` is expected").c_str(), v->line);
+                         "by passing the object where a `" + nm + "` is expected").c_str(), v);
             return "0";
         }
         // An enum with members has a `_classes` entry too, but it is an integer, not an aggregate: it takes
@@ -6171,7 +6201,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (opaqueScalarUnknown(target)) return "0";   // an opaque param — see the header
             unsupported(("`" + verb + "<" + nm + ">(…)` — a conversion works between scalars and pointers, "
                          "and `" + nm + "` is neither. To reinterpret a scalar's bits use `bitcast`; to "
-                         "narrow a contract value to a concrete type use `expr.as<T>()`").c_str(), v->line);
+                         "narrow a contract value to a concrete type use `expr.as<T>()`").c_str(), v);
             return "0";
         }
         // The same rule on the SOURCE side, which had no check at all: `cast<UnsafePtr>(anInlineArray)` emitted
@@ -6208,7 +6238,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                              "and `" + srcName + "` is neither. "
                            + (ptrTarget ? std::string("For the address of its storage write `addr(of: x[0])`; to")
                                         : std::string("To"))
-                           + " reinterpret a scalar's bits use `bitcast`").c_str(), v->line);
+                           + " reinterpret a scalar's bits use `bitcast`").c_str(), v);
                 return "0";
             }
         }
@@ -6228,7 +6258,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             unsupported(("`" + verb + "<" + nm + ">(…)` — an integer is not a `" + nm + "` until it has "
                          "been checked against the variants. Name the variant when you know it "
                          "(`" + nm + "::…`), or use `try cast<" + nm + ">(…)` for a value from outside, "
-                         "which yields `Optional<" + nm + ">`").c_str(), v->line);
+                         "which yields `Optional<" + nm + ">`").c_str(), v);
             return "0";
         }
         // A CONSTANT that provably does not fit the target. `cast<int8>(300)` silently produced 44, and
@@ -6252,12 +6282,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (!cNumRangeText(target, tlo, thi))
                 unsupported(("`truncate<" + nm + ">(…)` keeps the low bits of an integer, and `" + nm
                              + "` is not one. To reinterpret a scalar's bits use `bitcast`, and to convert "
-                               "a value use `cast`").c_str(), v->line);
+                               "a value use `cast`").c_str(), v);
             else if (!src.empty() && (cNumBits(src) || cNumTargetWidth(src)) && !cNumFloat(src)
                      && cNumContains(target, src) && target != src)
                 unsupported(("`truncate<" + nm + ">(…)` drops the high bits, but every `"
                              + primKeyOfCType(src) + "` already fits `" + nm
-                             + "` — write `cast<" + nm + ">(…)`").c_str(), v->line);
+                             + "` — write `cast<" + nm + ">(…)`").c_str(), v);
         }
         // And the RUNTIME half, which the sentence above used to defer. `cast<T>` preserves the VALUE, so
         // a value that does not fit `T` is not a conversion but a different number — the same reasoning,
@@ -6290,7 +6320,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         return "(" + cType(v->type) + "){0}";
     }
 
-    unsupported("expression", n->line);
+    unsupported("expression", n);
     return "0";
 }
 
@@ -6817,7 +6847,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 unsupported(("`borrow` binds a mint call, so `" + alias + "` must name one — write "
                              "`borrow <container>.<mint>() as " + alias + "` (e.g. `borrow d.view() as "
                              + alias + "`, `borrow m.values() as " + alias + "`). A container alone does "
-                             "not say which view to open, and a type may grant several").c_str(), bn->line);
+                             "not say which view to open, and a type may grant several").c_str(), bn);
                 continue;
             }
             const std::string mint = *ma->identifier->value;
@@ -6825,7 +6855,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             if (inv->args && !inv->args->empty()) {
                 unsupported(("a mint takes no arguments, so `" + mint + "(…)` cannot open a window — "
                              "borrow the whole thing and narrow inside it with `.slice(…)` on `" + alias
-                             + "`, which is free").c_str(), bn->line);
+                             + "`, which is free").c_str(), bn);
                 continue;
             }
             std::vector<std::string> hp = placePath(recvExpr);
@@ -6837,14 +6867,14 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                     unsupported(("`" + placeText(hp) + "` is borrowed by the child `spawn`ed at line "
                                  + std::to_string(outer->line) + " until its `scope` joins it — a mutable "
                                  "view of it here would race with the child; open the window after the "
-                                 "`scope`").c_str(), bn->line);
+                                 "`scope`").c_str(), bn);
                     continue;
                 } else if (outer) {
                     unsupported(("`" + placeText(hp) + "` is already borrowed by an enclosing `borrow` "
                                  "(opened at line " + std::to_string(outer->line) + " as `" + outer->alias
                                  + "`) — that would be two mutable views of one buffer; derive from `"
                                  + outer->alias + "` with `.slice(…)` instead, which is free").c_str(),
-                                bn->line);
+                                bn);
                     continue;
                 }
                 bool clash = false;
@@ -6854,7 +6884,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                                      + pr.second + "` and as `" + alias + "`) — that is two mutable views "
                                      "of the same storage, which is what the window exists to prevent; "
                                      "borrow it once and derive with `.slice(…)`, which is free")
-                                        .c_str(), bn->line);
+                                        .c_str(), bn);
                         clash = true;
                         break;
                     }
@@ -6864,7 +6894,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             const std::string hostCls = exprClass(recvExpr);
             if (hostCls.empty() || !_classes.count(hostCls)) {
                 unsupported(("`borrow` needs a container that can mint a view; `" + alias
-                             + "`'s host is not one").c_str(), bn->line);
+                             + "`'s host is not one").c_str(), bn);
                 continue;
             }
             // Resolve the mint structurally — this is a gate, never a dispatch, which is what keeps the
@@ -6875,14 +6905,14 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 // the program has a `std::collections` view type for it to return.
                 const std::string why = missingViewCause(hostCls, mint);
                 if (!why.empty())
-                    unsupported(why.c_str(), bn->line);
+                    unsupported(why.c_str(), bn);
                 else if (!whenGateReason(hostCls, mint).empty())   // a derived byte view the instance did not get
                     unsupported(("`" + hostCls + "` has no `." + mint + "()`" + whenGateReason(hostCls, mint)).c_str(),
-                                bn->line);
+                                bn);
                 else
                     unsupported(("`" + hostCls + "` has no nullary `." + mint + "()`, so it cannot open a "
                                  "window — a `borrow` host must be a container that can hand out a view")
-                                    .c_str(), bn->line);
+                                    .c_str(), bn);
                 continue;
             }
             // A mint is a CALL on its receiver, so it answers to deep const like any other: the writable
@@ -6893,7 +6923,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 unsupported(("cannot call non-const method `" + mint + "` on a const receiver — a window over "
                              "a `const` place is the read-only one; open it with `" + (bytesMint ? "bytes" : "view")
                              + "()` (a `const fn`, yielding a `ConstView<" + (bytesMint ? "uint8" : "T") + ">`)").c_str(),
-                            bn->line);
+                            bn);
                 continue;
             }
             if (!grantedMint(_classes[hostCls], mint)) {
@@ -6901,7 +6931,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                              "`borrow` opens the window a view lives in, so the host must declare that its "
                              "storage is what that view views. Implement a `@viewable` contract carrying `"
                              + mint + "()` (the prelude's `Viewable<V>`, `Iterable<T>` and "
-                             "`ValuesIterable<I>` are such contracts)").c_str(), bn->line);
+                             "`ValuesIterable<I>` are such contracts)").c_str(), bn);
                 continue;
             }
             const std::string viewCType = cTypeInInstance(hostCls, vmi->returnType);
@@ -6909,7 +6939,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 unsupported(("`" + hostCls + "." + mint + "()` does not return a `type view` — a window "
                              "bounds the life of a BORROW, and this hands back a value that owns itself, "
                              "so there is nothing here for a window to bound; call it normally").c_str(),
-                            bn->line);
+                            bn);
                 continue;
             }
             indent(depth + 1);
@@ -6996,7 +7026,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     if (pf->deferJoin && pf->workers) {
         unsupported("`parallel_spawn` takes no `workers:` — its isolate count IS the container's length, "
                     "one per element. Size the container to say how many you want (`cpuCount()` for one "
-                    "per core); a second count here could only contradict it", pf->line);
+                    "per core); a second count here could only contradict it", pf);
         return;
     }
     if (!pf->deferJoin && !pf->workers) {
@@ -7004,7 +7034,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                     "`parallel_for (ref T e in c, workers: cpuCount())` for one slice per core (the old "
                     "implicit behaviour), or any other count. It is stated rather than defaulted because "
                     "how finely to slice is the one thing the data cannot say, and a silent count is what "
-                    "makes a chunked loop surprising", pf->line);
+                    "makes a chunked loop surprising", pf);
         return;
     }
     // A count that is provably nonsense is a compile error rather than a clamp — the point of the clause is
@@ -7016,7 +7046,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         else if (auto* i64 = dynamic_cast<Int64Node*>(pf->workers.get())) { litVal = i64->value; isLit = true; }
         if (isLit && litVal <= 0) {
             unsupported(("`workers: " + std::to_string(litVal) + "` asks for no workers at all — the "
-                         "count must be at least 1").c_str(), pf->line);
+                         "count must be at least 1").c_str(), pf);
             return;
         }
     }
@@ -7030,13 +7060,13 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             unsupported("`parallel_spawn` must appear inside a `scope { }` (which owns the join) — it "
                         "starts long-lived workers that run ALONGSIDE the statements after it, so "
                         "something else has to join them. For work that finishes on its own, that is "
-                        "`parallel_for`, which joins at its own brace", pf->line);
+                        "`parallel_for`, which joins at its own brace", pf);
             return;
         }
         if (innermostTaskScopeIndex() != (int)_scopes.size() - 1) {
             unsupported("`parallel_spawn` must be a direct statement of its `scope { }` — this one is "
                         "inside a nested block, whose handle array the scope's join cannot name. Put "
-                        "the `if` outside the `scope`", pf->line);
+                        "the `if` outside the `scope`", pf);
             return;
         }
         // The workers hold the collection's elements by `ref` and run beside the statements after this one,
@@ -7052,7 +7082,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     // The isolate seam header (and its `-lpthread` link) flows in via
     // `import std::concurrent;`; without it the spawn/join calls would not compile.
     if (!externsHeader("kama_isolate.h"))
-        unsupported(("`" + KW + "` requires `import std::concurrent;` (the isolate seam)").c_str(), pf->line);
+        unsupported(("`" + KW + "` requires `import std::concurrent;` (the isolate seam)").c_str(), pf);
 
     const std::string loopVar = (pf->name && pf->name->value) ? *pf->name->value : "__e";
     std::string elemTy = cType(pf->type);
@@ -7068,7 +7098,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     std::string itCls = exprClass(pf->expression);
     if (itCls.empty() || !_classes.count(itCls))
         unsupported((KW + " needs a `View<T>` or a contiguous container with `.viewMut()` "
-                    "(DynamicArray/FixedArray) — the operand is not a collection").c_str(), pf->line);
+                    "(DynamicArray/FixedArray) — the operand is not a collection").c_str(), pf);
     std::string viewCType, viewExpr;
     // A `ref` worker writes its slice, so the operand must be writable: a read-only place is refused here, where
     // `viewMut()` is called straight from the lowering and no dispatch-site check would see it (KR-175).
@@ -7076,7 +7106,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         const std::string tn = pf->type ? kamaTypeText(pf->type) : "T";
         unsupported((KW + " binds each element `ref`, so every worker writes its slice, and `" + rootBinding(pf->expression)
                      + "` is read-only here — workers that only read take `" + KW + " (const ref " + tn + " "
-                     + loopVar + " in …)`").c_str(), pf->line);
+                     + loopVar + " in …)`").c_str(), pf);
         return;
     }
     if (pf->isConstRef && isViewCType(itCls)) {
@@ -7089,14 +7119,14 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             || !isViewCType(cTypeInInstance(itCls, viewMi->returnType))) {
             unsupported((KW + " (const ref …) needs a `View<T>`, a `ConstView<T>` or a contiguous container with "
                          "a nullary `const fn view()` (DynamicArray/FixedArray); `" + itCls + "` is not contiguous — "
-                         "a non-contiguous collection cannot be split into disjoint slices").c_str(), pf->line);
+                         "a non-contiguous collection cannot be split into disjoint slices").c_str(), pf);
             return;
         }
         if (!declaresViewable(_classes[itCls])) {
             unsupported((KW + " splits a container into disjoint slices, so the container must "
                          "declare that its storage is what those slices view; `" + itCls + "` has a "
                          "`.view()` but implements no `@viewable` contract (the prelude's `Viewable<V>`)")
-                            .c_str(), pf->line);
+                            .c_str(), pf);
             return;
         }
         viewCType = cTypeInInstance(itCls, viewMi->returnType);
@@ -7108,7 +7138,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         if (isConstViewCType(itCls)) {
             unsupported((KW + " binds each element `ref` — every worker writes its slice — and a "
                          "`ConstView<T>` is read-only. Pass the writable window: `viewMut()` where the "
-                         "view was made, or read it: `" + KW + " (const ref …)`").c_str(), pf->line);
+                         "view was made, or read it: `" + KW + " (const ref …)`").c_str(), pf);
             return;
         }
         viewCType = itCls;
@@ -7119,14 +7149,14 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             || !isViewCType(cTypeInInstance(itCls, viewMi->returnType))) {
             unsupported((KW + " needs a `View<T>` or a contiguous container with a nullary `.viewMut()` "
                          "(DynamicArray/FixedArray); `" + itCls + "` is not contiguous — a non-contiguous "
-                         "collection cannot be split into disjoint slices").c_str(), pf->line);
+                         "collection cannot be split into disjoint slices").c_str(), pf);
             return;   // `viewMi` may be the null this guard rejected — never fall through and deref it
         }
         if (!declaresViewable(_classes[itCls])) {
             unsupported((KW + " splits a container into disjoint slices, so the container must "
                          "declare that its storage is what those slices view; `" + itCls + "` has a "
                          "`.viewMut()` but implements no `@viewable` contract (the prelude's `ViewableMut<V>`)")
-                            .c_str(), pf->line);
+                            .c_str(), pf);
             return;
         }
         viewCType = cTypeInInstance(itCls, viewMi->returnType);
@@ -7136,7 +7166,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     MethodInfo* lenMi   = findMethod(viewCI, "length", nullptr);
     MethodInfo* sliceMi = findMethod(viewCI, "slice", nullptr);
     if (!lenMi || !sliceMi)
-        unsupported((KW + ": the view type `" + viewCType + "` needs `.length()` and `.slice()`").c_str(), pf->line);
+        unsupported((KW + ": the view type `" + viewCType + "` needs `.length()` and `.slice()`").c_str(), pf);
 
     // ── (b) Free-variable capture analysis — the one genuinely new pass. ──────────────────────────────
     // Collect enclosing locals/params the body references (skip the loop var + body-local decls). A
@@ -7153,7 +7183,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         if (!isLocal) {
             if (_currentClass && findFieldOwner(_currentClass, nm))
                 unsupported((KW + " body may not access field `" + nm + "` — a worker runs with no "
-                             "receiver (shared-nothing); pass the data in as a local").c_str(), pf->line);
+                             "receiver (shared-nothing); pass the data in as a local").c_str(), pf);
             return;   // a top-level fn / type / enum name — not a capture
         }
         if (!capSeen.count(nm)) { capSeen.insert(nm); capOrder.push_back(nm); capWrites[nm] = false; }
@@ -7173,7 +7203,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             if (id->value) noteUse(*id->value, false);
         } else if (dynamic_cast<ThisAccessNode*>(n)) {
             unsupported((KW + " body may not access `this`/fields — a worker runs with no receiver "
-                        "(shared-nothing); pass the data in as a local").c_str(), pf->line);
+                        "(shared-nothing); pass the data in as a local").c_str(), pf);
         } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
             scanE(ma->expression);                   // the member/method name is not a capture
         } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
@@ -7273,7 +7303,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         if (capWrites[nm] && !isAtomicClass(c.className))
             unsupported((KW + " body writes to captured `" + nm + "` — a non-atomic capture is shared "
                          "across all workers and would race; make it an `Atomic<T>`, or write only through the "
-                         "loop element `" + loopVar + "`").c_str(), pf->line);
+                         "loop element `" + loopVar + "`").c_str(), pf);
         c.addr = _refParams.count(nm) ? kName(nm) : ("&(" + kName(nm) + ")");   // a ref-param capture IS already a pointer
         // A capture reaches every worker by `ref` — the same crossing as a borrowed bundle, so the same
         // sendability gate (see the element record above).
@@ -7577,7 +7607,7 @@ std::string CEmitter::emitCondition(SharedExpression cond, const char* what)
 void CEmitter::emitAsm(AsmNode* a, int depth)
 {
     if (!_inUnsafe) {
-        unsupported("inline `asm(...)` must be inside an `unsafe fn`", a->line);
+        unsupported("inline `asm(...)` must be inside an `unsafe fn`", a);
         return;
     }
     const std::string& s = a->code ? *a->code : std::string();
@@ -7889,6 +7919,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 {
     if (!stmt) return;
     ASTNode* n = stmt.get();
+    PosGuard posGuard(*this, n);   // a line-only diagnostic below takes this node's span (KR-147)
 
     // A `comptime fn` body, on every path: the statements the interpreter runs, and plain `=` (KR-102).
     if (_ctFnBody && !n->synthesized) {
@@ -7902,7 +7933,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // statement, or outside any match).
     if (dynamic_cast<ArmValueNode*>(n)) {
         unsupported("`:=` produces a match arm's value — it is only valid as the final statement of a "
-                    "value-producing `match` arm", n->line);
+                    "value-producing `match` arm", n);
         return;
     }
 
@@ -7984,7 +8015,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 && _genericTypes.count(resolveUserName(*declType->value, declType->qualifier))
                 && !allTypeParamsDefaulted(resolveUserName(*declType->value, declType->qualifier)))
                 unsupported(("generic type `" + *declType->value + "` needs a type argument, e.g. `"
-                             + *declType->value + "<int32>`").c_str(), n->line);
+                             + *declType->value + "<int32>`").c_str(), n);
             // Not in the template probe: there `N` is a comptime PARAMETER with no binding, which is not a fault.
             SharedExpression init0 = lvd && lvd->variables && !lvd->variables->empty() ? (*lvd->variables)[0]->initializer
                                    : cvd && cvd->variables && !cvd->variables->empty() ? (*cvd->variables)[0]->initializer
@@ -8039,7 +8070,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // would quietly disable the drop of a live object. One way to say each thing.
                 if (lvd && lvd->isSlot && d->initializer)
                     unsupported(("`slot " + nm + "` declares a hole, so it cannot have an initializer — "
-                                 "drop the `slot` to declare an ordinary local").c_str(), n->line);
+                                 "drop the `slot` to declare an ordinary local").c_str(), n);
                 // A local with NO initializer and no `slot` is the unstated hole this campaign closes: it
                 // zero-inits, it is live, and its destructor runs — which is the only reason a raw-handle
                 // resource ever needed a runtime drop guard. Warn while the corpus is swept; M3 flips this
@@ -8057,11 +8088,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 if (ctorOwnType)
                     unsupported(("a constructor builds `" + ty + "`, and that value is `this` — assign its "
                                  "fields directly (`this.<field> = …`) instead of declaring `" + nm
-                                 + "`").c_str(), n->line);
+                                 + "`").c_str(), n);
                 else if (lvd && !lvd->isSlot && !d->initializer)
                     unsupported(("local `" + nm + "` has no initializer — prefix it with `slot` (declaring "
                                  "a hole that must be assigned before it is used) or give it a value").c_str(),
-                                n->line);
+                                n);
                 // Ban shadowing (enforces the flat-name-map assumption above; C#-aligned, "one way"). A
                 // local may not shadow a parameter, an enclosing-scope local, or an in-scope field. (A
                 // param sharing a FIELD name — the `this.x = x` idiom — is allowed and handled elsewhere.)
@@ -8074,16 +8105,16 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // parameter `self` deliberately, and keeps doing so).
                     if (nm == "self" && _currentClass)
                         unsupported("`self` names the receiver inside a type body — the kama spelling is "
-                                    "`this`; rename this local", n->line);
+                                    "`this`; rename this local", n);
                     checkConstParamBinder(nm, "local", n->line);
                     checkBindingName(nm, "local", n->line);
                     if (_paramNames.count(nm))
-                        unsupported(("local `" + nm + "` shadows a parameter — rename it").c_str(), n->line);
+                        unsupported(("local `" + nm + "` shadows a parameter — rename it").c_str(), n);
                     else {
                         bool enc = false;
                         for (auto& sc : _scopes) { for (auto& dn : sc.declaredNames) if (dn == nm) { enc = true; break; } if (enc) break; }
                         if (enc)
-                            unsupported(("local `" + nm + "` shadows an enclosing-scope local — rename it").c_str(), n->line);
+                            unsupported(("local `" + nm + "` shadows an enclosing-scope local — rename it").c_str(), n);
                         else if (_currentClass && !_inStaticMethod && !_inNamedCtorBody
                                  && _currentClass->fieldNames.count(nm))
                             // A static method has no `this` → no bare field access → nothing to shadow.
@@ -8091,7 +8122,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             // the value under construction is reached only through `this` (below). So
                             // `int32 fd = openRaw(…); this.fd = fd;` shadows nothing — it is the clearest
                             // spelling there is, and it is what the stdlib's raw-handle ctors already write.
-                            unsupported(("local `" + nm + "` shadows a field — rename it").c_str(), n->line);
+                            unsupported(("local `" + nm + "` shadows a field — rename it").c_str(), n);
                     }
                     if (!_scopes.empty()) _scopes.back().declaredNames.push_back(nm);
                     registerBinding(d->name.get(), SymKind::Local);   // LSP index (analysis mode only)
@@ -8108,7 +8139,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                      "buffer is held still. Open a window: `borrow <container>.<mint>() as "
                                      + nm + " { … }`, and derive inside it with `.slice(…)`. A view already "
                                      "rooted in a window, or in a by-value view parameter, needs no "
-                                     "window of its own").c_str(), n->line);
+                                     "window of its own").c_str(), n);
                 }
                 noteScopedBinding(nm);                        // the block owns it: popScope retires every entry below
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
@@ -8116,7 +8147,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 _localTypeNodes[nm] = declType;               // kama type node (keeps char vs uint32 for interpolation)
                 if (isConstDecl) {
                     if (!d->initializer)
-                        unsupported("a const must be initialized (it is immutable)", n->line);
+                        unsupported("a const must be initialized (it is immutable)", n);
                     _constLocals.insert(nm);
                     // 6b-2: bind the folded value so a later local `InlineArray<T,(CAP)>` / `[v;(CAP)]`
                     // resolves at emit time (cType/emitArrayLiteral call constValue). Declared-before-use.
@@ -8180,7 +8211,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         else
                             unsupported(("cannot bind this to the contract `" + ty + "` — a contract value "
                                          "borrows a concrete object, so it needs a named value, or a "
-                                         "primitive that declares the conformance").c_str(), n->line);
+                                         "primitive that declares the conformance").c_str(), n);
                     }
                     *_out << ";\n";
                     return;
@@ -8194,7 +8225,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     line(n->line); indent(depth);
                     *_out << ty << " " << kName(nm);
                     if (!d->initializer)
-                        unsupported("a FunctionPtr must be initialized (it is non-null)", n->line);
+                        unsupported("a FunctionPtr must be initialized (it is non-null)", n);
                     else
                         *_out << " = " << emitFnPtrBind(ty, d->initializer, n->line);
                     *_out << ";\n";
@@ -8277,7 +8308,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 int handoff = 0;   // 0 none, 1 give, 2 copy
                 if (auto* h = dynamic_cast<HandoffNode*>(d->initializer.get())) { handoff = h->isGive ? 1 : 2; init = h->value; }
                 if (handoff && !isNamedValue(init.get()))
-                    unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n->line);
+                    unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n);
 
                 // `T(...)` with no `new` (an InvocationNode whose callee names the
                 // declared class) is STACK construction; `new` is reserved for the heap.
@@ -8352,12 +8383,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // `new` is the HEAP operator and a bindable is a value (its object is already on the
                         // heap, behind the `Owned`/`Shared` it takes) — so it is built like any other value.
                         unsupported("a `BindableFunctionPtr` is built by its constructor, not `new` — write "
-                                    "`BindableFunctionPtr.bind(obj: …, method: Type::method)`", n->line);
+                                    "`BindableFunctionPtr.bind(obj: …, method: Type::method)`", n);
                     } else if (isSmartPtrClass(ty)) {
                         std::string T = _classes[ty].collElemClass;
                         if (isSmartPtrClass(octy) || isBindableClass(octy))
                             unsupported(("`new` now names the element type — write `new " + T
-                                         + "(...)`, not the wrapper").c_str(), n->line);
+                                         + "(...)`, not the wrapper").c_str(), n);
                         else if (isInterface(T)) {
                             // box a concrete class that implements interface T into an owned
                             // interface handle — malloc the concrete, ctor it, set {obj, vtbl}.
@@ -8367,9 +8398,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                 for (auto& i : cit->second.interfaces) if (i == T) { implementsT = true; break; }
                             if (!implementsT)
                                 unsupported(("`new " + octy + "` does not implement `" + T + "` — `" + ty
-                                             + "` owns a class that satisfies the contract").c_str(), n->line);
+                                             + "` owns a class that satisfies the contract").c_str(), n);
                             else if (_classes[octy].isAbstractClass)
-                                unsupported(("cannot instantiate abstract class '" + octy + "'").c_str(), n->line);
+                                unsupported(("cannot instantiate abstract class '" + octy + "'").c_str(), n);
                             else {
                                 // Placement `new(allocator: a)` (M11d): draw the pointee AND (Shared) the ctrl
                                 // from `a`, and store `a`+`objsize` in the fat handle so its dtor frees through it.
@@ -8417,9 +8448,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         std::string C = upcastNew ? octy : T;              // the concrete actually built
                         if (octy != T && !upcastNew)
                             unsupported(("`" + ty + "` owns `" + T + "`, but got `new " + octy
-                                         + "(...)` — name the element type or a derived of it, not the owner").c_str(), n->line);
+                                         + "(...)` — name the element type or a derived of it, not the owner").c_str(), n);
                         else if (isClass(C) && _classes[C].isAbstractClass)
-                            unsupported(("cannot instantiate abstract class '" + C + "'").c_str(), n->line);
+                            unsupported(("cannot instantiate abstract class '" + C + "'").c_str(), n);
                         else {
                             // Placement `new(allocator: a)`: draw the block from `a` (via its `allocate`) and
                             // adopt through `adoptIn` so the box stores the handle for its dtor's `deallocate`.
@@ -8431,22 +8462,22 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             // so require the placement form (else the block would leak on a no-op deallocate).
                             if (!placed) {
                                 const std::string why = bareNewRefusal(boxAllocatorArg(ty), "new", "T");
-                                if (!why.empty()) unsupported(why.c_str(), n->line);
+                                if (!why.empty()) unsupported(why.c_str(), n);
                             } else {
                                 // The box's declared allocator type must match the `new(allocator: …)` handle —
                                 // there is no inference axis; spell it (e.g. `Shared<T, BumpAllocator>`).
                                 std::string boxA = boxAllocatorArg(ty);
                                 if (!boxA.empty() && boxA != pa.second)
                                     unsupported(("the box's allocator type `" + boxA + "` does not match the `new(allocator: …)` "
-                                                 "handle `" + pa.second + "` — spell the box's allocator explicitly").c_str(), n->line);
+                                                 "handle `" + pa.second + "` — spell the box's allocator explicitly").c_str(), n);
                             }
                             const char* adoptName = placed ? "adoptIn" : "adopt";
                             ClassInfo* ao = nullptr;
                             MethodInfo* adoptM = findMethod(&_classes[ty], adoptName, &ao);
                             if (placed && !adoptM)
                                 unsupported(("allocator-aware `new(allocator: …)` needs an `adoptIn(raw, allocator)` on `"
-                                             + ty + "`").c_str(), n->line);
-                            else if (!adoptM) { unsupported(("`" + ty + "` implements HeapOwner but has no `adopt` method").c_str(), n->line); }
+                                             + ty + "`").c_str(), n);
+                            else if (!adoptM) { unsupported(("`" + ty + "` implements HeapOwner but has no `adopt` method").c_str(), n); }
                             else {
                                 std::string hp = "kama_heap" + std::to_string(_tempCounter++);
                                 std::string ap;
@@ -8481,12 +8512,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     } else {
                         unsupported(("`new` allocates on the heap — wrap it in `Owned<" + octy
                                      + ">`/`Shared<" + octy + ">`, or drop `new` for a stack value "
-                                     "(`" + ty + " v = " + octy + ".<ctor>(...)`)").c_str(), n->line);
+                                     "(`" + ty + " v = " + octy + ".<ctor>(...)`)").c_str(), n);
                     }
                 } else if (stackCtor) {
                     // STACK value, constructed in place (`Box b = Box(id: 5)`).
                     if (_classes[ty].isAbstractClass)
-                        unsupported(("cannot instantiate abstract class '" + ty + "'").c_str(), n->line);
+                        unsupported(("cannot instantiate abstract class '" + ty + "'").c_str(), n);
                     {
                         // A bare `Type(args)` has no ctor to call — it would SILENTLY drop the args and leave
                         // the value uninitialized. Reject and point at the named form. This fires for a type
@@ -8515,7 +8546,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     unsupported(("cannot widen this handle into `" + k + "<" + e + ">` — an owning-handle "
                                  "upcast needs the same ownership kind and an `is a` element (a concrete that "
                                  "implements the contract `" + e + "`, or a derived of the base `" + e + "`)").c_str(),
-                                n->line);
+                                n);
                 } else if (isBindableClass(ty)) {
                     // BindableFunctionPtr <- free function (promote) or another bindable (move). The
                     // marker rule differs between those two, so the handoff travels in and is judged there.
@@ -8566,7 +8597,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // Default: Owned -> give(move), Shared/Weak -> copy(retain). A marker overrides.
                         bool doGive = (handoff == 1) || (handoff == 0 && k == CollKind::Owned);
                         if (handoff == 2 && k == CollKind::Owned)
-                            unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
+                            unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n);
                         indent(depth);
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
                         else        *_out << kName(nm) << ".kama_ctrl->" << (k == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n";
@@ -8580,7 +8611,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // aliased, moved from, or deep-copied.)
                         if (handoff == 0)
                             unsupported(("a collection hand-off must say `give` (move) or `copy` (deep) — write "
-                                         "`" + ty + " v = give …`").c_str(), n->line);
+                                         "`" + ty + " v = give …`").c_str(), n);
                         else if (handoff == 2) {
                             // `copy` = a real deep copy (fresh buffer), element-wise. Valid iff
                             // each element is copyable — bitwise-copyable (owns nothing), OR a resource that
@@ -8590,7 +8621,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                                 unsupported(("`copy` of a `" + ty + "` needs copyable elements — its elements own "
                                              "resources but aren't `Copyable` (add a `copy` method to the element, "
-                                             "or use `give` to move)").c_str(), n->line);
+                                             "or use `give` to move)").c_str(), n);
                             // (else: the initializer above already copied — see `dupCls`)
                         }
                         // give: the plain `=` already transferred the struct; null the source's buffer —
@@ -8612,7 +8643,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         bool cpy = isCopyable(ty);
                         bool doCopy;
                         if (handoff == 2) {                              // explicit `copy`
-                            if (!cpy) unsupported(notCopyableMessage(ty, "use `give` to move it").c_str(), n->line);
+                            if (!cpy) unsupported(notCopyableMessage(ty, "use `give` to move it").c_str(), n);
                             doCopy = cpy;
                         } else if (handoff == 1) doCopy = false;         // explicit `give` = move (always allowed)
                         else doCopy = cpy && _classes[ty].bareDefault == COPY;   // bare — the declared default
@@ -8635,7 +8666,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         line(n->line);
         if (inParallelForBody()) {   // the body runs on a worker: a C `return` would end its chunk, silently
             unsupported("`return` cannot leave a `parallel_for` body: it runs on a worker, not in the enclosing "
-                        "function — let the loop finish, then return", n->line);
+                        "function — let the loop finish, then return", n);
             return;
         }
         // A constructor RETURNS the value it builds, so a bare `return;` has nothing to hand back. It lowered to
@@ -8647,7 +8678,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 ? "a fallible constructor returns its `Result` — `return;` has nothing to hand back; return "
                   "`Result::Ok(value: give this)` early, or the `Err` that says why it stopped"
                 : "a constructor returns the value it builds — `return;` has nothing to hand back; the early "
-                  "return is `return give this;`", n->line);
+                  "return is `return give this;`", n);
             return;
         }
         // Unwrap a give/copy marker for the place-return check below; the value path passes the original
@@ -8692,7 +8723,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // builtin privileged over user code.
             if (!rootHasStaticStorage(retExpr) && root != "this" && !_refParams.count(root))
                 unsupported("a `ref T` result must borrow `this`, a `ref` parameter, or static storage — "
-                            "returning a place into a local would dangle", n->line);
+                            "returning a place into a local would dangle", n);
             // The mirror of checkConstPlaceReturn, one step later: a WRITABLE place may not be minted from
             // a read-only one. `fn ref T f(const ref X x) { return x.n; }` would hand the caller a
             // writable alias into a const parameter, and `return this.m.getRef(k)` one into a `const ref`
@@ -8701,7 +8732,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (!_returnIsConstPlace && retExpr && (rootIsConst(root) || chainThroughConstPlace(retExpr)))
                 unsupported("a `ref T` result is a writable place, and this one is read-only — it roots in a "
                             "`const` binding or passes through a `const ref` place. Return `const ref T` "
-                            "instead, or take the mutable form (`…Mut`) where the place was made", n->line);
+                            "instead, or take the mutable form (`…Mut`) where the place was made", n);
             // Every place is an lvalue we address with `&` — a structural one (`this.f[i]`) directly, and a
             // place-returning CALL (`return this.at(i: 0)`) through the `(*call)` placeWrap gives every
             // place call, which `&` folds back to the callee's pointer. This used to special-case the call
@@ -8732,7 +8763,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (!isSafeViewRoot(root))
                 unsupported("a view borrows its buffer, so it can only be returned when it borrows `this` "
                             "or a `ref` parameter — returning a view over a local would dangle; return an "
-                            "owning `DynamicArray` to hand back data", n->line);
+                            "owning `DynamicArray` to hand back data", n);
             // fall through to the normal by-value return emission below (a view is a value, not a place)
         }
         // Capture the return value BEFORE running any destructors (it may
@@ -8964,7 +8995,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             emitForeachIterator(fe, itCls, depth); return;
         }
         if (itCls.empty() || !_classes.count(itCls) || !_classes[itCls].isIntrinsicColl) {
-            unsupported("foreach over a non-collection (a user type needs `iterator()`/`next()` or `iterMut()`)", n->line); *_out << "\n"; return;
+            unsupported("foreach over a non-collection (a user type needs `iterator()`/`next()` or `iterMut()`)", n); *_out << "\n"; return;
         }
         const std::string& coll = _classes[itCls].name;
         std::string elemTy   = cType(fe->type);
@@ -8991,7 +9022,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 : "";
             std::string msg = "foreach element type does not match the collection's (binding is `"
                             + elemTy + "`, elements are `" + want + "`)" + hint;
-            unsupported(msg.c_str(), n->line);
+            unsupported(msg.c_str(), n);
             *_out << "\n";
             return;
         }
@@ -9017,7 +9048,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // copies, and nothing is saved by reading one in place.
         if (fe->isRef && _classes[itCls].collKind == CollKind::String) {
             unsupported(("a `string` is immutable, so a `foreach` over it binds each byte by value — write "
-                         "`foreach (uint8 " + nm + " in …)`").c_str(), n->line);
+                         "`foreach (uint8 " + nm + " in …)`").c_str(), n);
             *_out << "\n";
             return;
         }
@@ -9030,7 +9061,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             unsupported(("a `ref` loop binding writes through each element, and `" + (root.empty() ? coll : root)
                          + (constRecv ? "` is a `comptime` constant" : "` is read-only here")
                          + " — read each element in place with `foreach (const ref " + tn + " " + nm
-                         + " in …)`, or take copies with `foreach (" + tn + " " + nm + " in …)`").c_str(), n->line);
+                         + " in …)`, or take copies with `foreach (" + tn + " " + nm + " in …)`").c_str(), n);
             *_out << "\n";
             return;
         }
@@ -9138,7 +9169,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (ms != _moveState.end() && ms->second == MoveState::MaybeMoved && !_slotDeclared.count(nm)) {
                         unsupported(("`" + nm + "` was given away on some paths but not others, so this assignment "
                                      "cannot know whether to drop its old value — give it away on every path or "
-                                     "none before assigning it, or assign it inside each branch").c_str(), n->line);
+                                     "none before assigning it, or assign it inside each branch").c_str(), n);
                         writeGuard.key = nm;   // one mistake, one diagnostic: not also "still live at scope exit"
                         return;
                     }
@@ -9270,7 +9301,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     bool doCopy;
                     if (handoff == 2) {
                         if (!copyable) unsupported(("`copy` of a `" + et + "` element needs a `Copyable` element "
-                                                    "— use `give` to move it").c_str(), n->line);
+                                                    "— use `give` to move it").c_str(), n);
                         doCopy = true;
                     } else if (handoff == 1) {
                         doCopy = false;                                                 // give = move
@@ -9278,7 +9309,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         // bare: a NAMED owning source needs a marker; a FRESH owned rvalue (`"…"`, `List()`,
                         // a call result) moves in with no marker.
                         if (named) unsupported("an owned element hand-off must say `give` (move) or `copy` "
-                                               "(deep) — write `a[i] = give …` or `a[i] = copy …`", n->line);
+                                               "(deep) — write `a[i] = give …` or `a[i] = copy …`", n);
                         doCopy = false;
                     }
                     // Evaluate the RHS into a temp FIRST (it may read the old `a[i]`, e.g. `a[i] = a[i].concat`),
@@ -9367,7 +9398,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (auto* h = dynamic_cast<HandoffNode*>(rhs.get())) { handoff = h->isGive ? 1 : 2; rhs = h->value; }
             bool rhsLval = isSmartPtrLValue(rhs);
             if (handoff && !rhsLval)
-                unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n->line);
+                unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", n);
             std::string src = emitExpression(rhs);                  // evaluate the RHS once
             line(n->line);
             // Step 4: self-assignment (`a = a`) would release a's pointee, then "copy" it
@@ -9381,7 +9412,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Default the natural op (Owned -> give, Shared/Weak -> copy); a marker overrides.
                 bool doGive = (handoff == 1) || (handoff == 0 && knd == CollKind::Owned);
                 if (handoff == 2 && knd == CollKind::Owned)
-                    unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n->line);
+                    unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", n);
                 indent(d2);
                 if (doGive) *_out << smartPtrInvalidate(src, knd, isInterface(_classes[ty].collElemClass)) << "\n";
                 else *_out << b << ".kama_ctrl->" << (knd == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n";
@@ -9405,7 +9436,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool cpy = isCopyable(lty);
                 bool doCopy;
                 if (handoff == 2) {
-                    if (!cpy) unsupported(notCopyableMessage(lty, "use `give` to move it").c_str(), n->line);
+                    if (!cpy) unsupported(notCopyableMessage(lty, "use `give` to move it").c_str(), n);
                     doCopy = cpy;
                 } else if (handoff == 1) doCopy = false;
                 else doCopy = cpy && _classes[lty].bareDefault == COPY;
@@ -9416,7 +9447,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (rid->value && (!rid->qualifier || rid->qualifier->empty())) rname = *rid->value;
                 if (!lname.empty() && doCopy && rname == lname) return;   // self-copy (retain onto self): no-op
                 if (!lname.empty() && !mv.empty() && mv == lname)
-                    unsupported("handing a value onto itself would use it after it was dropped", n->line);
+                    unsupported("handing a value onto itself would use it after it was dropped", n);
                 bool bMoved = (!lname.empty() && _moveState.count(lname) && _moveState[lname] == MoveState::Moved);
                 if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // write target: clear before emit
                 std::string b   = emitExpression(as->unaryExpression);
@@ -9505,14 +9536,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (isBindableClass(lty)) {
                         if (handoff == 2)
                             unsupported("a `BindableFunctionPtr` can't be `copy`d — whether its bound receiver "
-                                        "is unique or shared is only known at run time; use `give` to move it", n->line);
+                                        "is unique or shared is only known at run time; use `give` to move it", n);
                         else if (handoff == 0)
                             unsupported("a `BindableFunctionPtr` hand-off must say `give` — it owns its bound "
-                                        "receiver, and a bare `=` would leave two handles releasing it", n->line);
+                                        "receiver, and a bare `=` would leave two handles releasing it", n);
                     }
                     else if (handoff == 0)
                         unsupported("a collection/`string` hand-off must say `give` (move) or `copy` (deep) "
-                                    "— write `… = give …` or `… = copy …`, or pass by `ref` to borrow", n->line);
+                                    "— write `… = give …` or `… = copy …`, or pass by `ref` to borrow", n);
                     std::string rname;
                     if (auto* rid = dynamic_cast<IdentifierNode*>(rhs.get()))
                         if (rid->value && (!rid->qualifier || rid->qualifier->empty())) rname = *rid->value;
@@ -9520,7 +9551,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         auto ci = _collections.find(lty);
                         if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
                             unsupported(("`copy` of a `" + lty + "` needs copyable elements — its elements own "
-                                         "resources but aren't `Copyable`; use `give` to move").c_str(), n->line);
+                                         "resources but aren't `Copyable`; use `give` to move").c_str(), n);
                         if (!lname.empty() && rname == lname) return;     // self-copy: no-op
                         std::string b = emitExpression(as->unaryExpression);
                         bool ph = _hoistOK; _hoistOK = true;            // the source's own temporaries (KR-152)
@@ -9536,7 +9567,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // give = move: relocate the struct, then null the source so its scope-drop is a no-op.
                     std::string mv = moveOnlySource(rhs, n->line);
                     if (!lname.empty() && !mv.empty() && mv == lname)
-                        unsupported("handing a value onto itself would use it after it was dropped", n->line);
+                        unsupported("handing a value onto itself would use it after it was dropped", n);
                     const bool live = assignTargetLive(lname);
                     if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target live again
                     std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
@@ -9619,7 +9650,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     }
                 if (lhsCType.empty()) {
                     unsupported("a value-producing `match` / variant construction here needs a typed "
-                                "assignment target — assign to a plain local", n->line);
+                                "assignment target — assign to a plain local", n);
                     *_out << "\n"; return;
                 }
                 checkConstWrite(as->unaryExpression, n->line);
@@ -9693,7 +9724,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     line(n->line);
     indent(depth);
-    unsupported("statement", n->line);
+    unsupported("statement", n);
     *_out << "\n";
 }
 
@@ -9764,7 +9795,7 @@ std::string CEmitter::inlineStatement(SharedStatement stmt)
     if (dynamic_cast<ExpressionStatementNode*>(n))
         return emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt));
 
-    unsupported("for-clause statement", n->line);
+    unsupported("for-clause statement", n);
     return "";
 }
 
@@ -10016,17 +10047,17 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             // so it lives in emitFunction (this pass runs before collectClasses).
             if (fn->typeParams && !fn->typeParams->empty())
                 unsupported("`expose` cannot mark a generic function — a host needs a concrete "
-                            "C-ABI symbol; expose a concrete wrapper instead", fn->line);
+                            "C-ABI symbol; expose a concrete wrapper instead", fn);
             if (fn->isRef)
                 unsupported("`expose` cannot mark a `fn ref T` place-returning function — its "
-                            "return has no C-ABI form; return a value or an `UnsafePtr<T>`", fn->line);
+                            "return has no C-ABI form; return a value or an `UnsafePtr<T>`", fn);
             const std::string exported = link.empty() ? exposedSymbol(*fn->name->value) : link;
             const std::string who = (_nsCtx.module.empty() ? std::string() : _nsCtx.module + "::") + *fn->name->value;
             auto prev = _exposedNames.emplace(exported, who + " (" + _collectingUnitPath + ":" + std::to_string(fn->line) + ")");
             if (!prev.second)
                 unsupported(("`expose fn " + who + "` exports the C symbol `" + exported + "`, which `"
                              + prev.first->second + "` already exports — a host links against one symbol "
-                             "per name; rename one, or give it `@linkName(\"…\")`").c_str(), fn->line);
+                             "per name; rename one, or give it `@linkName(\"…\")`").c_str(), fn);
         }
 
         // A bodiless top-level `fn ret Name(params);` (no body, not extern) is a
@@ -10043,7 +10074,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             if (si.foreignEntry && si.callerThread)
                 unsupported(("`" + *fn->name->value + "` is both `@foreignEntry` and `@callerThread` — a "
                              "callback runs on the calling isolate or it does not; pick the one the C API "
-                             "documents").c_str(), fn->line);
+                             "documents").c_str(), fn);
             _sigs[si.cName] = si;
             continue;
         }
@@ -10080,7 +10111,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                              "allocates is derived from that C, and from which heap. A mark cannot agree with "
                              "that, only override it: it is an unconditional fact, so it would refuse a "
                              "program whose allocation a declared `@globalAllocator` actually serves. Drop the "
-                             "attribute; `@heap` is for C the compiler cannot read").c_str(), fn->line);
+                             "attribute; `@heap` is for C the compiler cannot read").c_str(), fn);
             else
                 _heapSymbols.insert(sym);
         }
@@ -10130,7 +10161,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                                  + ". `main` is scoped by nothing — it is not in any module's surface and "
                                    "every one of them emits as the same C symbol — so two collide where "
                                    "`a::helper` and `b::helper` would not").c_str(),
-                                fn->name->line);
+                                fn->name);
                 else
                     duplicateFunction(*fn->name->value, prev->second.declFile, first && first->name ? first->name->line : 0,
                                       fn->name->line);
@@ -10191,7 +10222,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                                  "declaration of it in a program must match: kama emits no prototype for an "
                                  "extern, so nothing downstream can catch a mismatch, and call sites in "
                                  "BOTH files lower through whichever was collected last").c_str(),
-                                fn->name->line);
+                                fn->name);
                 }
             }
         }
@@ -10241,7 +10272,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
                 }
                 unsupported(("the C symbol `" + sym + "` is already bound as `" + own->second + "`" + where
                              + " — one C symbol has one kama binding in a program; declare `extern fn "
-                             + own->second + "` here and call that").c_str(), fn->name->line);
+                             + own->second + "` here and call that").c_str(), fn->name);
             } else {
                 _externSymbolOwner[sym] = sig.cName;
             }
@@ -10344,11 +10375,11 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                 if (*at->name == "viewable") {
                     if (at->args && !at->args->empty())
                         unsupported("`@viewable` takes no arguments — it marks the whole contract, and the "
-                                    "return type of each member self-selects which ones may mint", cd->line);
+                                    "return type of each member self-selects which ones may mint", cd);
                     ii.isViewable = true;
                 } else {
                     unsupported(("unknown contract attribute `@" + *at->name
-                                 + "` (expected `@viewable`)").c_str(), cd->line);
+                                 + "` (expected `@viewable`)").c_str(), cd);
                 }
             }
         // Kind gate: `for <kinds>` is MANDATORY on a contract — the designer must state which kinds may
@@ -10363,10 +10394,10 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
             if (*k == "both")
                 unsupported(("`for both` is retired — a contract names its kinds: `type contract "
                              + *cd->name->value + " for value, resource`, plus `view`, `enum` or "
-                             "`intrinsic` if those implement it too").c_str(), cd->line);
+                             "`intrinsic` if those implement it too").c_str(), cd);
             else
                 unsupported(("a contract's `for` clause takes `value`, `resource`, `view`, `enum` or "
-                             "`intrinsic` — not `" + *k + "`").c_str(), cd->line);
+                             "`intrinsic` — not `" + *k + "`").c_str(), cd);
         }
         // Keyed on the CLAUSE being absent, not on the mask being empty. A clause that was written and
         // then rejected word-by-word has already been told what is wrong; a second "you didn't declare
@@ -10374,7 +10405,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
         if (!cd->forKinds || cd->forKinds->empty())
             unsupported(("contract `" + *cd->name->value + "` must declare which kinds may implement it: "
                          "`type contract " + *cd->name->value + " for value, resource { … }` — any of "
-                         "`value`, `resource`, `view`, `enum`, `intrinsic`").c_str(), cd->line);
+                         "`value`, `resource`, `view`, `enum`, `intrinsic`").c_str(), cd);
         // A contract signature may not name `This` — see the method arm below for why. Shared by the
         // method and operator arms, since `This operator+(This rhs)` is the same shape as a method.
         auto namesThis = [](SharedIdentifier t) {
@@ -10394,7 +10425,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                     if (md->body)
                         unsupported(("a `contract` method (`" + (md->name && md->name->value ? *md->name->value : std::string())
-                                     + "`) has no body — it is a guarantee, not an implementation").c_str(), md->line);
+                                     + "`) has no body — it is a guarantee, not an implementation").c_str(), md);
                     // …and having no body, it has nothing to be `unsafe`. A contract member is a CONDUIT:
                     // both ends are already closed by the member's own types — an implementation whose
                     // signature names `UnsafePtr` must be an `unsafe fn`, and a caller cannot invoke one
@@ -10403,12 +10434,12 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     if (md->whenParams && !md->whenParams->empty())
                         unsupported(("a `contract` member (`" + (md->name && md->name->value ? *md->name->value : std::string())
                                      + "`) cannot be conditional — a contract is one guarantee for every "
-                                       "implementer; put the `when` on the implementing type's method").c_str(), md->line);
+                                       "implementer; put the `when` on the implementing type's method").c_str(), md);
                     if (modHas(md->modifiers, "unsafe"))
                         unsupported(("`unsafe` marks a function BODY, and the `contract` member `"
                                      + (md->name && md->name->value ? *md->name->value : std::string())
                                      + "` has none — the implementation carries the marker, not the "
-                                       "declaration").c_str(), md->line);
+                                       "declaration").c_str(), md);
                     // A contract signature may not name `This`. It is the erasure hazard in one line: a
                     // vtbl slot has to give `This` ONE type, so it binds the contract, while the concrete
                     // function behind the slot bound the implementing type — two bindings for one function
@@ -10434,7 +10465,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     // (`op_add`) the concrete class's `operator+` uses, so classSatisfiesBound matches
                     // it structurally and the monomorphized `a + b` lowers to `Concrete__op_add(&a, b)`.
                     if (od->body)
-                        unsupported("a `contract` operator has no body — it is a guarantee, not an implementation", od->line);
+                        unsupported("a `contract` operator has no body — it is a guarantee, not an implementation", od);
                     auto* d = od->operatorDeclarator.get();
                     int arity = (d->param1Type ? 1 : 0) + (d->param2Type ? 1 : 0);
                     // owner="" — a `This` param is same-type → the bare name `op_add`, matching the concrete
@@ -10442,14 +10473,14 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     std::string opName = operatorName(d->opToken, arity, d->param1Type, "");
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
-                                     + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
+                                     + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od);
                     if (namesThis(d->returnType) || namesThis(d->param1Type) || namesThis(d->param2Type))
                         rejectThis(std::string("operator") + binaryOperator(d->opToken), od->line);
                     ii.methods.push_back({opName, d->returnType, operatorParamList(d)});
                 } else if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()) || dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
-                    unsupported(("a `contract` holds no state — remove the field from `" + ii.name + "`").c_str(), m->line);
+                    unsupported(("a `contract` holds no state — remove the field from `" + ii.name + "`").c_str(), m);
                 } else if (dynamic_cast<ClassConstructorDeclarationNode*>(m.get()) || dynamic_cast<ClassDestructorDeclarationNode*>(m.get())) {
-                    unsupported(("a `contract` has no constructor/destructor — `" + ii.name + "` is a guarantee").c_str(), m->line);
+                    unsupported(("a `contract` has no constructor/destructor — `" + ii.name + "` is a guarantee").c_str(), m);
                 } else if (dynamic_cast<FriendGrantNode*>(m.get())) {
                     // A `friend` grant opens a PRIVATE member to a named accessor, and a contract has no
                     // private members: every method satisfying one must be `public` (see the conformance
@@ -10463,7 +10494,7 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                     unsupported(("`friend` on `contract " + ii.name + "` grants nothing — a contract is a "
                                  "PUBLIC interface, so it has no private member to open. For a hidden "
                                  "member with named access, put it on a `type` (a `virtual`/`abstract` one "
-                                 "if it needs `protected`) and grant there").c_str(), m->line);
+                                 "if it needs `protected`) and grant there").c_str(), m);
                 }
             }
         // a generic CONTRACT template (`type contract Iterator<T>`) is kept OUT of _interfaces — its
@@ -10510,21 +10541,21 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                 if (!pin->value || *pin->value != "This")
                     unsupported(("`is` constrains a type parameter to the implementing type, so its "
                                  "operand must be `This` — `" + pname + " is "
-                                 + (pin->value ? *pin->value : std::string("?")) + "`").c_str(), cd->line);
+                                 + (pin->value ? *pin->value : std::string("?")) + "`").c_str(), cd);
                 else if (!pin->bounds || pin->bounds->empty()) {
                     if (ii.pinnedParam >= 0) {
                         // Both would be forced equal to the implementer, so the second says nothing.
                         SharedString first = (*cd->typeParams)[ii.pinnedParam];
                         unsupported(("a contract pins at most one type parameter to `This` — `" + ii.name
                                      + "` already pins `" + (first ? *first : std::string("?")) + "`, so `"
-                                     + pname + "` is redundant").c_str(), cd->line);
+                                     + pname + "` is redundant").c_str(), cd);
                     }
                     else if (i != 0)
                         // The pinned parameter IS the contract's subject, so it reads first — and that
                         // keeps `implements C<This, …>` uniform at every conformance site.
                         unsupported(("the `This`-pinned type parameter must come first — move `" + pname
                                      + " is This` to the front of `" + ii.name + "`'s parameter list").c_str(),
-                                    cd->line);
+                                    cd);
                     else ii.pinnedParam = (int)i;
                 }
             }
@@ -10644,14 +10675,14 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
             bool shapeOk = false;
             if (isExtern && isExpose)
                 unsupported(("`" + bare + "` is both `extern` and `expose` — `extern` binds an enum a C header "
-                             "defines, `expose` publishes one kama defines, and one side owns its values").c_str(), ed->line);
+                             "defines, `expose` publishes one kama defines, and one side owns its values").c_str(), ed);
             else if (enumIsTagged(ed))
                 unsupported(("`type " + std::string(mk) + " enum " + bare + "` cannot be generic or carry payloads — "
-                             "a C enum is a set of integer constants; a tagged union has no C spelling").c_str(), ed->line);
+                             "a C enum is a set of integer constants; a tagged union has no C spelling").c_str(), ed);
             else if (!ed->underlyingType)
                 unsupported(("`type " + std::string(mk) + " enum " + bare + "` must state its width (`: int32`, "
                              "`: uint32`, …) — C leaves an enum's size to the compiler, so the crossing states "
-                             "it and the build checks it").c_str(), ed->line);
+                             "it and the build checks it").c_str(), ed);
             else shapeOk = true;
             if (shapeOk && ed->body)
                 for (auto& m : *ed->body) {
@@ -10659,12 +10690,12 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     if (isExtern && m->constantExpression)
                         unsupported(("`" + bare + "::" + *m->identifier->value + "` writes a value, but `" + bare
                                      + "` is a `type extern enum` — its values are the C header's. Name the "
-                                       "constant and leave the number to C").c_str(), m->line);
+                                       "constant and leave the number to C").c_str(), m);
                     if (isExpose && !m->constantExpression)
                         unsupported(("`" + bare + "::" + *m->identifier->value + "` has no value, but `" + bare
                                      + "` is a `type expose enum` — the host header publishes every value, so each "
                                        "is written out: inserting a variant must not renumber one a host compiled "
-                                       "against").c_str(), m->line);
+                                       "against").c_str(), m);
                 }
         }
         std::string name = enumKey(ed);
@@ -10683,7 +10714,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                     unsupported(("`@" + *at->name + "` controls the layout of a struct, and an `enum` has "
                                  "none to control: a payload-less one lowers to an integer, and a tagged "
                                  "one to a tag plus a per-variant union. To fix an enum's tag width write "
-                                 "`type enum E : IntType`").c_str(), ed->line);
+                                 "`type enum E : IntType`").c_str(), ed);
         // ...and every OTHER name is refused too, for the same reason: the `@generate` loops skip what they do not
         // recognize, so `@linkName` on a plain enum (or a typo'd `@genrate`) compiled clean and did nothing.
         if (ed->attributes)
@@ -10692,11 +10723,11 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 if (*at->name == "linkName") {
                     if (!enumHasModifier(ed, "expose"))
                         unsupported("`@linkName` names what a host sees, and only a `type expose enum` has a host-visible "
-                                    "name to fix — a `type extern enum` is the header's own name already", ed->line);
+                                    "name to fix — a `type extern enum` is the header's own name already", ed);
                     continue;
                 }
                 unsupported(("unknown enum attribute `@" + *at->name + "` (expected `@generate`, or `@linkName` on a "
-                             "`type expose enum`)").c_str(), ed->line);
+                             "`type expose enum`)").c_str(), ed);
             }
 
         if (enumIsTagged(ed)) {
@@ -10769,7 +10800,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
                 if (prev->second.underlyingCType != ei.underlyingCType || names != prevNames)
                     unsupported(("this `type extern enum " + name + "` disagrees with the one in `" + prev->second.declFile
                                  + "` — `" + name + "` is ONE C enum, so every declaration of it in a program must "
-                                   "declare the same width and the same constants, in the same order").c_str(), ed->line);
+                                   "declare the same width and the same constants, in the same order").c_str(), ed);
             }
         }
         _enums[ei.name] = ei;
@@ -11267,12 +11298,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             else if (*cd->typeKind == "view")     kind = TypeKind::Value;
             else if (*cd->typeKind == "contract") continue;   // handled as an interface
             else unsupported(("unknown type kind `" + *cd->typeKind
-                              + "` — expected `value`, `resource`, `view`, or `contract`").c_str(), cd->line);
+                              + "` — expected `value`, `resource`, `view`, or `contract`").c_str(), cd);
         }
         // A `for <kinds>` clause gates a CONTRACT's implementers — meaningless on a value/resource.
         if (cd->forKinds && !cd->forKinds->empty())
             unsupported("a `for` clause applies only to a `type contract` — it names the kinds that may "
-                        "implement it, and a value/resource implements rather than being implemented", cd->line);
+                        "implement it, and a value/resource implements rather than being implemented", cd);
 
         // FFI: an `extern class`/`extern value` is an external C struct — keep its literal
         // C name (not namespace-mangled) and don't emit/own it.
@@ -11306,15 +11337,15 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             if (isExt)
                 unsupported(("`" + *cd->name->value + "` is both `extern` and `expose` — `extern` binds a layout a "
                              "C header states, `expose` publishes one kama states, and one side owns a layout"
-                             ).c_str(), cd->line);
+                             ).c_str(), cd);
             else if (kind != TypeKind::Value || ci.isBorrow)
                 unsupported(("`expose` on a type publishes its C layout to a host, and only a `type value` has "
                              "one to publish — a `" + (cd->typeKind ? *cd->typeKind : std::string("?"))
                              + "` owns, borrows or dispatches, which C cannot honor; pass it by `UnsafePtr`, "
-                               "where the host header names it opaquely").c_str(), cd->line);
+                               "where the host header names it opaquely").c_str(), cd);
             else if (cd->typeParams && !cd->typeParams->empty())
                 unsupported(("`type expose value " + *cd->name->value + "` cannot be generic — a host needs one "
-                             "concrete C struct; expose a concrete value instead").c_str(), cd->line);
+                             "concrete C struct; expose a concrete value instead").c_str(), cd);
             ci.hostName = linkNameOf(cd->attributes, cd->line);
         }
         if (isExt) {
@@ -11339,7 +11370,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     unsupported(("`@viewable` marks a `type contract`, not a `type "
                                  + (cd->typeKind ? *cd->typeKind : std::string("?")) + "` — minting is a "
                                  "capability the VIEWED type declares by implementing a marked contract, "
-                                 "so put the mark on that contract").c_str(), cd->line);
+                                 "so put the mark on that contract").c_str(), cd);
                 } else if (*at->name == "linkName" && isExpose) {
                     // The host header's name for the struct (validated in linkNameOf above) — the same one
                     // override an `expose fn`'s symbol has, for a name someone else chose.
@@ -11356,10 +11387,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // emitted — the no-heap facts recorded during emission depend on it — and judged against
                     // the rest of its rules in checkGlobalAllocator, once fields and conformances exist.
                     if (at->args && !at->args->empty())
-                        unsupported("`@globalAllocator` takes no arguments", cd->line);
+                        unsupported("`@globalAllocator` takes no arguments", cd);
                     else if (cd->typeParams && !cd->typeParams->empty())
                         unsupported(("`@globalAllocator` marks `" + *cd->name->value + "`, which is generic — the "
-                                     "program's heap is ONE instance, so it names one concrete type").c_str(), cd->line);
+                                     "program's heap is ONE instance, so it names one concrete type").c_str(), cd);
                     else {
                         ci.globalAllocator = true;
                         if (_globalAllocator.empty()) _globalAllocator = ci.name;
@@ -11368,7 +11399,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     unsupported(("unknown type attribute `@" + *at->name
                                  + (*at->name == "linkName" ? "` here — `@linkName` names a C symbol, and only a "
                                     "`type expose value` has a host-visible name to fix"
-                                    : "` (expected `@generate`, `@align(N)`, `@packed` or `@globalAllocator`)")).c_str(), cd->line);
+                                    : "` (expected `@generate`, `@align(N)`, `@packed` or `@globalAllocator`)")).c_str(), cd);
                 }
             }
 
@@ -11422,7 +11453,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 else if (mv == "immutable") ci.isImmutableQualified = true;   // M6.2: deep-immutability verified in computeDeeplyImmutable
                 else if (mv == "unsafe")
                     unsupported("`unsafe` marks a function BODY, and a type has none — mark the members that "
-                                "touch raw memory instead", cd->line);
+                                "touch raw memory instead", cd);
             }
 #if !KAMA_INHERITANCE
         // A `virtual class` goes too, not just `extends` — it carries a vtable with or without a subclass,
@@ -11435,12 +11466,12 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         // (The base must itself be extensible — checked in linkBases once names resolve.)
         if (!ci.baseName.empty() && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
             unsupported(("class '" + ci.name + "' extends '" + ci.baseName
-                         + "'; only a `virtual`/`abstract`/`final class` may extend").c_str(), cd->line);
+                         + "'; only a `virtual`/`abstract`/`final class` may extend").c_str(), cd);
         // `virtual`/`abstract`/`final` are qualifiers on a `resource` (extensible owned
         // hierarchy). A `value` is sealed — for polymorphism use a `contract`.
         if (ci.kind == TypeKind::Value && (ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
             unsupported("a `value` is sealed — `virtual`/`abstract`/`final` apply to a `resource`; "
-                        "for polymorphism declare a `contract`", cd->line);
+                        "for polymorphism declare a `contract`", cd);
 
         // A `type extern value` may declare ctors, methods, operators and statics (KR-53): the STRUCT is the
         // header's and is never emitted, but a member is an ordinary kama function, emitted like any other —
@@ -11458,11 +11489,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         for (auto& mod : *fd->modifiers) {
                             if (!mod->value) continue;
                             if (*mod->value == "expose")
-                                unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", fd->line);
+                                unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", fd);
                             if (*mod->value == "unsafe")
                                 unsupported("`unsafe` marks a function BODY, and a field has none — declaring "
                                             "an `UnsafePtr<T>` field is safe; it is reading and writing one "
-                                            "that requires an `unsafe fn`", fd->line);
+                                            "that requires an `unsafe fn`", fd);
                             // `immutable` is a WHOLE-TYPE qualifier and cannot mean anything per field:
                             // the guarantee it asserts is what licenses cross-isolate sharing, and one
                             // mutable field anywhere breaks it — so a per-field spelling would promise
@@ -11475,7 +11506,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                             "asserting DEEP immutability of the whole type — a single field "
                                             "cannot carry it, because one mutable field anywhere would break "
                                             "the guarantee. For a field written once in the constructor and "
-                                            "never again, use `const`", fd->line);
+                                            "never again, use `const`", fd);
                         }
                     // A `value` picks field visibility PER FIELD (default private, `public` allowed;
                     // `protected` belongs to an extensible `resource`). A `resource` field is always
@@ -11504,7 +11535,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (!ci.isExternStruct)
                                     unsupported("`@linkName` on a field names the C member it binds, and only a "
                                                 "`type extern value`'s fields are C's to name — every other type's "
-                                                "fields are spelled by kama", fd->line);
+                                                "fields are spelled by kama", fd);
                                 else fLink = linkNameOf(fd->attributes, fd->line);
                             }
                             else if (an == "skip") { fSkip = true; fMarked = true; }
@@ -11521,32 +11552,32 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                         if (named && *a->name->value == "name") {
                                             if (auto* sn = dynamic_cast<StringNode*>(a->expression.get()))
                                                 fName = sn->value ? *sn->value : "";
-                                            else unsupported("`@field(name: …)` needs a string literal", fd->line);
+                                            else unsupported("`@field(name: …)` needs a string literal", fd);
                                         } else if (named && *a->name->value == "id") {
                                             int64_t n = 0;
                                             if (!constValue(a->expression, n))
                                                 unsupported("`@field(id: N)` needs one literal number — the field's "
-                                                            "wire id, e.g. `@field(id: 3)`", fd->line);
+                                                            "wire id, e.g. `@field(id: 3)`", fd);
                                             else if (n < 0 || n > 4294967295LL)
                                                 unsupported(("`@field(id: " + std::to_string(n) + ")` — a wire id is a "
-                                                             "uint32, so it must be from 0 to 4294967295").c_str(), fd->line);
+                                                             "uint32, so it must be from 0 to 4294967295").c_str(), fd);
                                             else { fId = n; fIdSet = true; }
                                         } else if (a && a->name && a->name->value && !a->expression
                                                    && *a->name->value == "default") {
                                             fDefault = true;
                                         } else {
-                                            unsupported("`@field(...)` accepts only `name: \"…\"`, `id: N` and `default`", fd->line);
+                                            unsupported("`@field(...)` accepts only `name: \"…\"`, `id: N` and `default`", fd);
                                         }
                                     }
                             }
-                            else unsupported(("unknown field attribute `@" + an + "`").c_str(), fd->line);
+                            else unsupported(("unknown field attribute `@" + an + "`").c_str(), fd);
                         }
                     // `@skip` is absent from every backend; `@deprecated` means "still read, no longer
                     // written". A field cannot be both, and silently letting `@skip` win would drop a field
                     // an author explicitly asked to keep reading.
                     if (fDeprecated && fSkip)
                         unsupported("`@deprecated` and `@skip` on one field — `@skip` is absent from every "
-                                    "backend, while `@deprecated` is still READ. Drop one", fd->line);
+                                    "backend, while `@deprecated` is still READ. Drop one", fd);
                     // `@field(default)` keeps the field's DECLARED value when the data leaves it out, so there has
                     // to be one: an initializer, or a type whose default is its value (a number, a `string`, a
                     // collection, a type that elects a `default` ctor).
@@ -11555,7 +11586,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             if (d && !d->initializer && !isDefaultFillable(cType(fd->type))) {
                                 unsupported(("`@field(default)` keeps a field's declared value when the data leaves it "
                                              "out, and `" + (d->name && d->name->value ? *d->name->value : std::string("?"))
-                                             + "` declares none — give it an initializer").c_str(), fd->line);
+                                             + "` declares none — give it an initializer").c_str(), fd);
                                 break;
                             }
                     // An id names ONE field, so it cannot be shared by a declaration's sibling declarators.
@@ -11563,21 +11594,21 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // this same line twice and read as a mystery.
                     if (fIdSet && fd->declarators && fd->declarators->size() > 1) {
                         unsupported("`@field(id: N)` on a declaration that declares several fields — an id "
-                                    "names one field. Give each its own `@field` declaration", fd->line);
+                                    "names one field. Give each its own `@field` declaration", fd);
                         fIdSet = false;   // else every declarator takes the id and the duplicate check piles on
                     }
                     if (!fLink.empty() && fd->declarators && fd->declarators->size() > 1) {
                         unsupported("`@linkName` binds one C member, and this declaration declares several fields "
-                                    "— give the bound field a declaration of its own", fd->line);
+                                    "— give the bound field a declaration of its own", fd);
                         fLink.clear();
                     }
                     if (!serGen && !ci.genFormat && fSerAttr)
                         unsupported("field attributes (`@field`/`@skip`/`@deprecated`) require `@generate(...)` "
-                                    "on the type", fd->line);
+                                    "on the type", fd);
                     // `@generate(Formattable)` honors `@skip` (omit a field from the dump) but does NOT require every
                     // field marked — a field dump needs no wire names, so marking would be pointless ceremony.
                     if (serGen && !fMarked)
-                        unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd->line);
+                        unsupported("every field of a `@generate`d type must be marked `@field` or `@skip`", fd);
                     // Smart-pointer fields = object-graph mode: `Shared`/`Weak`/`Owned` serialize as integer ids
                     // into the `{root,objects}` id table and deserialize via the two-pass graph intrinsic (Phase
                     // D). `Bindable` (a bound callback) is never serializable.
@@ -11585,7 +11616,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         const std::string& tn = *fd->type->value;
                         if (tn == "Bindable")
                             unsupported("a `Bindable<…>` field can't be serialized — `@skip` it and rebind it "
-                                        "after decoding", fd->line);
+                                        "after decoding", fd);
                     }
 
                     // BAKE a named compile-time SIZE into the field's type, HERE, where the declaring
@@ -11690,7 +11721,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                          "memory it does not own, so it may only be minted by the type that "
                                          "owns that memory. Drop the visibility and let the viewed type "
                                          "declare the capability, by implementing a `@viewable` contract "
-                                         "whose member returns this view").c_str(), md->line);
+                                         "whose member returns this view").c_str(), md);
                         // `protected` belongs to a `resource` in an extensibility hierarchy
                         // (`virtual`/`abstract` declares protected members for subclasses; a `final`
                         // override still uses `protected` by NVI). It's meaningless on a `value`, a
@@ -11698,7 +11729,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         if (mi.visibility == Visibility::Protected
                             && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
                             unsupported(("`protected` belongs to a `virtual`/`abstract`/`final resource` — `" + ci.name
-                                         + "` is a plain `value`/`resource`, so its members are `private` or `public`").c_str(), md->line);
+                                         + "` is a plain `value`/`resource`, so its members are `private` or `public`").c_str(), md);
                         mi.isFinal    = modHas(md->modifiers, "final");
                         mi.isUnsafe   = modHas(md->modifiers, "unsafe");
                         // `unsafe` describes a BODY. A contract member and an `abstract` method are
@@ -11710,7 +11741,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         if (mi.isUnsafe && !md->body)
                             unsupported(("`unsafe` marks a function BODY, and `" + *md->name->value
                                          + "` has none — the implementation carries the marker, not the "
-                                           "declaration").c_str(), md->line);
+                                           "declaration").c_str(), md);
                         // The signature half of the containment rule. A member that NAMES a raw pointer —
                         // in its return type or any parameter — must be `unsafe`, so the marker sits at
                         // the declaration a reader greps for rather than inside a body they must open.
@@ -11726,14 +11757,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (*mod->value == "abstract") { mi.isVirtual = true; mi.isAbstract = true; }
                                 if (*mod->value == "static")   mi.isStatic = true;   // no implicit `self`
                                 if (*mod->value == "expose")
-                                    unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", md->line);
+                                    unsupported("`expose` applies only to a free function (the kama->host C-ABI boundary), not a type, field, or method", md);
                                 // See the field arm above: a whole-type qualifier, silently dropped here
                                 // until 0.9.144. `const fn` is the per-method promise it gets mistaken for.
                                 if (*mod->value == "immutable")
                                     unsupported("`immutable` is a TYPE qualifier (`type immutable value T`) "
                                                 "asserting DEEP immutability of the whole type — a method "
                                                 "cannot carry it. For a method that does not mutate its "
-                                                "receiver, use `const fn`", md->line);
+                                                "receiver, use `const fn`", md);
                             }
                         // Construction-model: a named constructor (`ctor name(…)`) is a static factory
                         // returning the enclosing type (infallible — no return type written) or `Result<This,E>`
@@ -11750,7 +11781,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 const std::string rt = (mi.returnType->value) ? *mi.returnType->value : "";
                                 if (rt != "Result")
                                     unsupported(("a `ctor` with a return type must be `Result<…, E>` (fallible) — "
-                                                 "omit it for an infallible ctor; got `" + rt + "`").c_str(), md->line);
+                                                 "omit it for an infallible ctor; got `" + rt + "`").c_str(), md);
                             } else if (cd->typeParams && !cd->typeParams->empty()) {
                                 // infallible ctor on a GENERIC type: the return type must carry the type
                                 // parameters (`Pair<T>`, not the bare template `_F<file>__Pair`) so per-instance
@@ -11774,24 +11805,24 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             bool isDefaultCtor = modHas(md->modifiers, "default");
                             if (isDefaultCtor) {
                                 if (!mi.params.empty())
-                                    unsupported("`default` marks a zero-arg ctor — remove its parameters", md->line);
+                                    unsupported("`default` marks a zero-arg ctor — remove its parameters", md);
                                 for (auto& kv : ci.ctors)
                                     if (kv.second.isDefaultCtor)
                                         unsupported(("a type may mark at most one `default` ctor — `"
-                                                     + kv.first + "` is already the default").c_str(), md->line);
+                                                     + kv.first + "` is already the default").c_str(), md);
                             }
                             mi.isDefaultCtor = isDefaultCtor;
                             ci.ctors[*md->name->value] = CtorInfo{ nullptr, mi.params, mi.visibility, fallible, mi.returnType, isDefaultCtor };
                         }
                         // `default` is a ctor-only modifier — reject it silently no-op'ing on a plain method.
                         if (!md->isCtor && modHas(md->modifiers, "default"))
-                            unsupported("`default` applies only to a zero-arg `ctor`", md->line);
+                            unsupported("`default` applies only to a zero-arg `ctor`", md);
                         // a `static` method has no `this`: no vtable slot, must have a body.
                         if (mi.isStatic) {
                             if (mi.isVirtual)
-                                unsupported("a `static` method has no `this` — it can't be `virtual`/`override`/`abstract`", md->line);
+                                unsupported("a `static` method has no `this` — it can't be `virtual`/`override`/`abstract`", md);
                             if (!md->body)
-                                unsupported("a `static` method needs a body", md->line);
+                                unsupported("a `static` method needs a body", md);
                             // Construction-model M8e: a SELF-RETURNING `static fn` (returns the enclosing type,
                             // or `Result<EnclosingType, E>`) IS a constructor — the whole factory role now lives
                             // in `ctor`. Reject it so there is exactly one way to construct. A static fn returning
@@ -11808,7 +11839,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                 if (selfRet)
                                     unsupported(("a self-returning `static fn " + *md->name->value + "` is a constructor — "
                                                  "declare it `ctor " + *md->name->value + "(...)` and call it dot-on-type (`"
-                                                 + encl + "." + *md->name->value + "(...)`)").c_str(), md->line);
+                                                 + encl + "." + *md->name->value + "(...)`)").c_str(), md);
                             }
                         }
                         if (!md->body) mi.isAbstract = mi.isVirtual = true;   // null body => pure
@@ -11825,20 +11856,20 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             //     a private virtual can't be overridden, a public one is the interface's job.
                             if (mi.visibility != Visibility::Protected)
                                 unsupported(("overridable method '" + mname + "' must be declared `protected` (write `protected "
-                                    + kw + "`); public polymorphism belongs on a contract").c_str(), md->line);
+                                    + kw + "`); public polymorphism belongs on a contract").c_str(), md);
                             // (4a) the class kind must opt in to the method's polymorphism.
                             if (mi.isAbstract && !ci.isAbstractClass)
-                                unsupported(("class '" + ci.name + "' declares an abstract method; declare it `abstract class`").c_str(), md->line);
+                                unsupported(("class '" + ci.name + "' declares an abstract method; declare it `abstract class`").c_str(), md);
                             else if (mi.isOverride && !(ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
-                                unsupported(("class '" + ci.name + "' overrides a method; declare it `virtual`/`abstract`/`final class`").c_str(), md->line);
+                                unsupported(("class '" + ci.name + "' overrides a method; declare it `virtual`/`abstract`/`final class`").c_str(), md);
                             else if (!mi.isAbstract && !mi.isOverride && !ci.isVirtualClass && !ci.isAbstractClass)
-                                unsupported(("class '" + ci.name + "' declares a virtual method; declare it `virtual class`").c_str(), md->line);
+                                unsupported(("class '" + ci.name + "' declares a virtual method; declare it `virtual class`").c_str(), md);
                         }
                         // `final` seals a virtual slot; reject the meaningless/contradictory cases.
                         if (mi.isFinal && mi.isAbstract)
-                            unsupported(("`final abstract` on '" + *md->name->value + "' is a contradiction (an abstract method must be overridden)").c_str(), md->line);
+                            unsupported(("`final abstract` on '" + *md->name->value + "' is a contradiction (an abstract method must be overridden)").c_str(), md);
                         else if (mi.isFinal && !mi.isVirtual)
-                            unsupported(("`final` on '" + *md->name->value + "' applies only to an overridable (virtual/override) method").c_str(), md->line);
+                            unsupported(("`final` on '" + *md->name->value + "' applies only to an overridable (virtual/override) method").c_str(), md);
                         // The duplicate's silent half: two bodies under one name compiled, and the LAST one
                         // answered every call. Same rule as `duplicate function` at file scope — kama has
                         // no overloading — so a member name is declared once. (`redeclares … inherits` is
@@ -11849,7 +11880,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         // below used to answer first — "duplicate method" — about code whose real mistake is the
                         // gate. The text is the emitter's, so the second report dedups onto this one (KR-21 d).
                         const bool gated = hasAttr(md->attributes, "compileFor");
-                        if (gated) unsupported(kCompileForOnMember, md->line);
+                        if (gated) unsupported(kCompileForOnMember, md);
                         auto dupIt = ci.methods.find(*md->name->value);
                         const bool prevGated = dupIt != ci.methods.end() && dupIt->second.node
                                             && hasAttr(dupIt->second.node->attributes, "compileFor");
@@ -11857,7 +11888,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             unsupported(("duplicate method '" + *md->name->value + "' in '" + ci.name
                                          + "' — kama has no overloading, so a member name may be declared "
                                            "only once in its type; the second body would silently replace the first").c_str(),
-                                        md->line);
+                                        md);
                         ci.methods[*md->name->value] = mi;
                     }
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
@@ -11879,11 +11910,11 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                          "base VALUE instead: `this.base = Base.<ctor>(...);` as the first "
                                          "statement of a named constructor `ctor make(...)` on `"
                                          + tnm + "`").c_str(),
-                                        cc->line);
+                                        cc);
                         else
                             unsupported(("class-named constructor `" + tnm + "(...)` is no longer allowed — declare a "
                                          "named constructor `ctor make(...)` and call it dot-on-type (`" + tnm
-                                         + ".make(...)`)").c_str(), cc->line);
+                                         + ".make(...)`)").c_str(), cc);
                     }
                     // Nothing is recorded: the form is rejected above, so no later pass may act on it.
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
@@ -11892,10 +11923,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // owns nothing either — a `~dtor` would try to free memory it doesn't own.
                     if (ci.isBorrow)
                         unsupported("a `view` borrows and owns nothing — it may not declare a `~dtor` "
-                                    "(it would free memory it doesn't own)", dd->line);
+                                    "(it would free memory it doesn't own)", dd);
                     if (ci.kind == TypeKind::Value)
                         unsupported("a `value` owns nothing — a `~dtor` makes it a `resource`; "
-                                    "declare it `type resource`", dd->line);
+                                    "declare it `type resource`", dd);
                     ci.hasDtor  = true;
                     ci.dtorNode = dd;
                 } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(mn)) {
@@ -11964,21 +11995,21 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      "directly — comparison comes from a contract: `implements " + need + " for "
                                      + ci.name + " { public " + meth + " { … } }`, and `"
                                      + binaryOperator(d->opToken) + "` calls it"
-                                     + (eq ? " (a data bag can `@generate(Equatable)` instead)" : "")).c_str(), od->line);
+                                     + (eq ? " (a data bag can `@generate(Equatable)` instead)" : "")).c_str(), od);
                         continue;
                     }
                     std::string opName = operatorName(d->opToken, arity, d->param1Type, ci.name);   // type-suffixed
                     if (opName.empty())
                         unsupported((std::string("operator '") + binaryOperator(d->opToken)
-                                     + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od->line);
+                                     + "' has no " + (arity == 0 ? "unary" : "binary") + " form").c_str(), od);
                     if (!od->body)
-                        unsupported("an operator needs a body", od->line);
+                        unsupported("an operator needs a body", od);
                     // No overloading BY ARITY (a stated non-goal). Operators MAY distinguish operand types
                     // (`mat*vec` vs `mat*mat` — the sanctioned exception, since `a*b` can't take named args),
                     // so a duplicate is only two operators with the same symbol AND operand type (same name).
                     if (ci.methods.count(opName))
                         unsupported((std::string("duplicate operator '") + binaryOperator(d->opToken)
-                                     + "' on '" + ci.name + "' for the same operand type").c_str(), od->line);
+                                     + "' on '" + ci.name + "' for the same operand type").c_str(), od);
                     MethodInfo mi;
                     mi.cName      = ci.name + "__" + opName;
                     mi.returnType = d->returnType;
@@ -12015,7 +12046,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             // extensible class was a root, so this distinction could not arise.)
             if (!hasOverridable && ci.baseName.empty())
                 unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
-                             + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd->line);
+                             + ci.name + "' declares no overridable (virtual/abstract) method").c_str(), cd);
             // ...and it must declare a CONSTRUCTOR, for the same reason: without one it can be neither
             // instantiated nor installed as a base (`this.base = Base.<ctor>(…)` has nothing to call), so
             // it is unconstructible and every type below it is too. Said HERE rather than at each derived
@@ -12026,7 +12057,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 unsupported(("`" + std::string(ci.isAbstractClass ? "abstract" : "virtual") + " class` '"
                              + ci.name + "' declares no `ctor`, so nothing can ever be built from it — "
                              "neither the class itself nor a type that extends it (which must install its "
-                             "base with `this.base = Base.<ctor>(…);`)").c_str(), cd->line);
+                             "base with `this.base = Base.<ctor>(…);`)").c_str(), cd);
         }
         // `implements Copyable(bare: give|copy)` is the nominal opt-in. It obliges a resource to supply
         // BOTH the `copy` CTOR (`ctor copy(ref This source)`) AND the `bare:` contract parameter (the
@@ -12038,10 +12069,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             if (cm == ci.methods.end() || cm->second.visibility != Visibility::Public
                 || !cm->second.isCtor || cm->second.params.size() != 1)
                 unsupported(("`" + ci.name + "` implements `Copyable` but has no public `copy` constructor "
-                             "(the contract is `ctor copy(ref This source)`)").c_str(), cd->line);
+                             "(the contract is `ctor copy(ref This source)`)").c_str(), cd);
             if (ci.bareDefault == 0)
                 unsupported(("`" + ci.name + "` implements `Copyable` but doesn't declare its bare-hand-off default "
-                             "— write `implements Copyable(bare: give)` or `Copyable(bare: copy)`").c_str(), cd->line);
+                             "— write `implements Copyable(bare: give)` or `Copyable(bare: copy)`").c_str(), cd);
         }
         // What `@generate(...)` asks for — see registerDerives. A generic TEMPLATE is skipped here and
         // derived PER INSTANCE instead (registerGenericTypeInst), which is the only place its fields have
@@ -12104,7 +12135,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      "C struct, so every declaration of it in a program must match: kama "
                                      "does not emit it (the real layout comes from the header), and the "
                                      "last declaration collected decides how BOTH files type every read of "
-                                     "its members").c_str(), cd->line);
+                                     "its members").c_str(), cd);
                     // MEMBERS belong to ONE declaration. The fields are the header's and every copy repeats
                     // them; a ctor or method is kama code with one body, so a second declaration carrying
                     // members would define it twice. Share the type by exporting it from the declaring file.
@@ -12113,7 +12144,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         unsupported(("`type extern value " + *cd->name->value + "` declares members here and in `"
                                      + was.declFile + "` — its fields may be repeated, but its ctors and methods "
                                      "have one body each. Declare them once and `export` the type from that "
-                                     "file").c_str(), cd->line);
+                                     "file").c_str(), cd);
                     if (theirs) {   // this copy is fields only (or a refused second set): keep the first declaration's members
                         ci.methods = was.methods; ci.ctors = was.ctors;
                         ci.node = was.node; ci.declFile = was.declFile;
@@ -12515,7 +12546,7 @@ void CEmitter::rejectUnfoldableConstArg(const std::string& param, SharedIdentifi
                              "arithmetic over those";
     // Phrased to read after the "unsupported " prefix `unsupported()` prints.
     unsupported(("comptime argument for `" + param + "` — it does not fold to a compile-time integer; "
-                 + why).c_str(), arg->constArgValue->line);
+                 + why).c_str(), arg->constArgValue);
 }
 
 // --- `comptime assert(cond:, msg:)` — const-generics M7 --------------------------------------------------
@@ -12601,7 +12632,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
     if (!a) return;
     if (a->modifiers && !a->modifiers->empty()) {
         unsupported("visibility on a `comptime assert` — an assertion is not a member anything can reach",
-                    a->line);
+                    a);
         return;
     }
     // The grammar accepts any callee here on purpose: the trailing `(` is what keeps the production
@@ -12611,7 +12642,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
     const bool bare = (!a->callee || !a->callee->qualifier || a->callee->qualifier->empty());
     if (!bare || name != "assert") {
         unsupported(("compile-time statement `comptime " + (name.empty() ? std::string("?") : name)
-                     + "(...)` — the only one is `comptime assert(cond: …, msg: \"…\")`").c_str(), a->line);
+                     + "(...)` — the only one is `comptime assert(cond: …, msg: \"…\")`").c_str(), a);
         return;
     }
     SharedExpression cond, msg;
@@ -12620,8 +12651,8 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
         if      (*ar->name->value == "cond") cond = ar->expression;
         else if (*ar->name->value == "msg")  msg  = ar->expression;
     }
-    if (!cond) { unsupported("`comptime assert` requires `cond:`", a->line); return; }
-    if (!msg)  { unsupported("`comptime assert` requires `msg:` (use `msg: \"\"` for none)", a->line); return; }
+    if (!cond) { unsupported("`comptime assert` requires `cond:`", a); return; }
+    if (!msg)  { unsupported("`comptime assert` requires `msg:` (use `msg: \"\"` for none)", a); return; }
     // A LITERAL, not any string expression — the runtime `assert` accepts the latter, but C11
     // `_Static_assert` needs a literal, and one rule across both lowerings beats a rule that changes
     // depending on which one the predicate happens to take.
@@ -12629,7 +12660,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
     if (!lit || !lit->value) {
         unsupported("`msg:` on a `comptime assert` — it must be a plain string LITERAL (no interpolation): "
                     "the aggregate form lowers to a C11 `_Static_assert`, whose message is a literal",
-                    a->line);
+                    a);
         return;
     }
     const std::string condText = unparseExpr(cond);
@@ -12645,7 +12676,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
             unsupported(("`comptime assert` predicate `" + condText + "` mixes a layout fact "
                          "(`sizeof`/`alignof` of an aggregate) with something that is not a compile-time "
                          "constant — a layout assertion may only combine `sizeof`/`alignof`, literals and "
-                         "`comptime` constants").c_str(), a->line);
+                         "`comptime` constants").c_str(), a);
             return;
         }
         // Both halves are optional: `msg: ""` is allowed, and unparseExpr returns "" for a form it does
@@ -12671,7 +12702,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
     CTValue v;
     if (!ctEvalExpr(cond, env, v)) return;    // ctEvalExpr has already reported precisely why
     if (v.kind != CTValue::Bool) {
-        ctFail(("`comptime assert` condition `" + condText + "` is not a boolean").c_str(), a->line);
+        ctFail(("`comptime assert` condition `" + condText + "` is not a boolean").c_str(), a);
         return;
     }
     if (v.i == 0) {
@@ -12693,7 +12724,7 @@ void CEmitter::emitComptimeAssert(ComptimeAssertNode* a)
             binds += (binds.empty() ? "" : ", ") + kv.first + " = " + std::to_string(kv.second.value);
         ctFail(("assertion failed: " + (condText.empty() ? std::string("<condition>") : condText)
                 + (message.empty() ? std::string() : " — " + message)
-                + (binds.empty()   ? std::string() : " [with " + binds + "]")).c_str(), a->line);
+                + (binds.empty()   ? std::string() : " [with " + binds + "]")).c_str(), a);
     }
 }
 
@@ -12921,7 +12952,7 @@ bool CEmitter::validateGenericArgs(const std::string& tmpl, const char* kind,
             bool found = false;
             for (auto& p : params) if (p == *a->argName) { found = true; break; }
             if (!found) {
-                unsupported(("unknown type parameter `" + *a->argName + "` for generic " + kind + " `" + tmpl + "`").c_str(), a->line);
+                unsupported(("unknown type parameter `" + *a->argName + "` for generic " + kind + " `" + tmpl + "`").c_str(), a);
                 return false;
             }
         } else {
@@ -13323,11 +13354,11 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         if (isInterface(elemCType))
             unsupported(("a contract (`" + nm + "`) borrows its object, so it can't be a collection "
                          "element — it would dangle; store an owning `Shared<" + nm + ">` instead").c_str(),
-                        collType->line);
+                        collType);
         else
             unsupported(("a view (`" + nm + "`) borrows its buffer, so it can't be a collection "
                          "element — it would dangle; copy into an owning collection instead").c_str(),
-                        collType->line);
+                        collType);
         return;
     }
 
@@ -13460,7 +13491,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     SharedIdentifierList args = fixedType->genericArgs;
     if (!args || args->size() != 2) {
         unsupported("`InlineArray<T>#(N)` takes one type argument and one compile-time size, in separate "
-                    "groups -- `InlineArray<float32>#(4)`", fixedType->line);
+                    "groups -- `InlineArray<float32>#(4)`", fixedType);
         return;
     }
     SharedIdentifier elem = (*args)[0];
@@ -13475,7 +13506,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     const bool probeSize = _probingTemplate && readsProbeConst(nArg->constArgValue ? nArg->constArgValue : nArg);
     if (probeSize && n <= 0) n = 1;
     if (n <= 0) {
-        unsupported("the size of an `InlineArray<T>#(N)` must be a positive integer", fixedType->line);
+        unsupported("the size of an `InlineArray<T>#(N)` must be a positive integer", fixedType);
         return;
     }
 
@@ -13489,7 +13520,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
         unsupported(("an `InlineArray<T>#(N)` element must be a `value` (it owns nothing) — `" + nm +
                      "` is a `resource`/contract, which would leak; wrap it in an owning `FixedArray`/"
-                     "`DynamicArray` instead").c_str(), fixedType->line);
+                     "`DynamicArray` instead").c_str(), fixedType);
         return;
     }
 
@@ -13592,7 +13623,7 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     SharedIdentifierList args = simdType->genericArgs;
     if (!args || args->size() != 2) {
         unsupported("`Simd<T>#(N)` takes one numeric element type and one compile-time lane count, in "
-                    "separate groups -- `Simd<float32>#(4)`", simdType->line);
+                    "separate groups -- `Simd<float32>#(4)`", simdType);
         return;
     }
     SharedIdentifier elem = (*args)[0];
@@ -13606,7 +13637,7 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     const bool probeLanes = _probingTemplate && readsProbeConst(nArg->constArgValue ? nArg->constArgValue : nArg);
     if (probeLanes && n <= 0) n = 1;
     if (n <= 0) {
-        unsupported("the lane count of a `Simd<T>#(N)` must be a positive integer", simdType->line);
+        unsupported("the lane count of a `Simd<T>#(N)` must be a positive integer", simdType);
         return;
     }
 
@@ -13623,14 +13654,14 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     if (isClass(elemCType) || !bits || elemCType == "bool") {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
         unsupported(("a `Simd<T>#(N)` lane must be a numeric primitive — `" + nm + "` is not; a lane batch "
-                     "is a machine vector, so its element is a machine number").c_str(), simdType->line);
+                     "is a machine vector, so its element is a machine number").c_str(), simdType);
         return;
     }
     if (!probeLanes && (int64_t)(bits / 8) * n != 16) {
         unsupported(("a `Simd<T>#(N)` must be exactly 128 bits — `" + elemMangle + "` x " + std::to_string(n)
                      + " is " + std::to_string((bits / 8) * n) + " bytes. 128 is the only width every kama "
                      "target has; wider needs a CPU-tuning flag that does not exist yet").c_str(),
-                    simdType->line);
+                    simdType);
         return;
     }
 
@@ -17768,7 +17799,7 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
         int64_t iv;
         if (constValue(idxExpr, iv) && (iv < 0 || iv >= _collections[cls].constValue))
             unsupported(("index " + std::to_string(iv) + " is out of bounds for `" + cls + "` (length "
-                         + std::to_string(_collections[cls].constValue) + ")").c_str(), ea->line);
+                         + std::to_string(_collections[cls].constValue) + ")").c_str(), ea);
     }
     // The receiver is emitted as a PLACE (an lvalue): a plain name stays itself, but a nested index
     // (`m[i]` in `m[i][j]`) becomes `(*Outer__at(&m, i))` so `&recvExpr` is a real `T*`, not the
@@ -18015,7 +18046,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
               "<container>.<mint>() as v { foreach (… in v) { … } }`"
             : ("`foreach` needs somewhere to iterate FROM, and `" + container + "` here is a temporary "
                "with no home — bind it to a local first (`" + container + " xs = …;`), then iterate that")
-                  .c_str()), fe->line);
+                  .c_str()), fe);
         *_out << "\n";
         return false;
     };
@@ -18035,7 +18066,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         unsupported(("a `ref` loop binding writes through each element, and `" + (root.empty() ? container : root)
                      + "` is read-only here — read each element in place with `foreach (const ref " + tn
                      + " " + nm + " in …)`, or take copies with `foreach (" + tn + " " + nm + " in …)`").c_str(),
-                    fe->line);
+                    fe);
         *_out << "\n"; return;
     }
     if (fe->isConstRef) {
@@ -18048,11 +18079,11 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         if (iterMi) {
             if (!implementsContractTemplate(cc, "IterableConst")) {   // nominal: the container must declare it
                 unsupported(("`" + container + "` must `implements IterableConst<T>` to be used in a "
-                             "`foreach (const ref …)`").c_str(), fe->line); *_out << "\n"; return;
+                             "`foreach (const ref …)`").c_str(), fe); *_out << "\n"; return;
             }
             if (!iterMi->isConst) {
                 unsupported(("`" + container + "`'s `iterConst()` must be a `const fn` — a read-only loop "
-                             "must never need a writable collection").c_str(), fe->line); *_out << "\n"; return;
+                             "must never need a writable collection").c_str(), fe); *_out << "\n"; return;
             }
             if (!requirePlaceOperand()) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
@@ -18064,17 +18095,17 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         } else {
             unsupported(("`" + container + "` has no read-only iteration — `foreach (const ref …)` needs "
                          "`iterConst()` (`implements IterableConst<T>`), or an operand that is itself an "
-                         "`IteratorConst<T>`").c_str(), fe->line); *_out << "\n"; return;
+                         "`IteratorConst<T>`").c_str(), fe); *_out << "\n"; return;
         }
         MethodInfo* hasNextMi = ic ? findMethod(ic, "hasNext", nullptr) : nullptr;
         MethodInfo* nextMi    = ic ? findMethod(ic, "next", nullptr) : nullptr;
         if (!hasNextMi || !nextMi || !nextMi->isPlaceReturn) {
             unsupported(("a read-only iterator (`" + iterCType + "`) needs `hasNext()` and a "
-                         "place-returning `const ref T next()`").c_str(), fe->line); *_out << "\n"; return;
+                         "place-returning `const ref T next()`").c_str(), fe); *_out << "\n"; return;
         }
         if (!implementsContractTemplate(ic, "IteratorConst")) {   // nominal: it must declare the protocol
             unsupported(("the read-only iterator `" + iterCType + "` must `implements IteratorConst<T>` "
-                         "to be used in a `foreach (const ref …)`").c_str(), fe->line); *_out << "\n"; return;
+                         "to be used in a `foreach (const ref …)`").c_str(), fe); *_out << "\n"; return;
         }
         hasNextCall = hasNextMi->cName + "(&" + it + ")";
         nextCall    = nextMi->cName + "(&" + it + ")";
@@ -18088,7 +18119,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         if (isConstViewCType(container)) {
             unsupported("a `ConstView<T>` is read-only, so it has no `foreach (ref …)` — a `ref` binding is a "
                         "writable place. Read each element in place with `foreach (const ref …)`, iterate it by "
-                        "value, or take the writable window (`viewMut()`) where the view was made", fe->line);
+                        "value, or take the writable window (`viewMut()`) where the view was made", fe);
             *_out << "\n"; return;
         }
         MethodInfo* iterMi = findMethod(cc, "iterMut", nullptr);
@@ -18097,7 +18128,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         if (iterMi) {
             if (!implementsContractTemplate(cc, "IterableMut")) {   // nominal: the container must declare it
                 unsupported(("`" + container + "` must `implements IterableMut<T>` to be used in a "
-                             "`foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
+                             "`foreach (ref …)`").c_str(), fe); *_out << "\n"; return;
             }
             if (!requirePlaceOperand()) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
@@ -18111,11 +18142,11 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         MethodInfo* nextMi    = ic ? findMethod(ic, "next", nullptr) : nullptr;
         if (!hasNextMi || !nextMi || !nextMi->isPlaceReturn) {
             unsupported(("a mutable iterator (`" + iterCType + "`) needs `hasNext()` and a "
-                         "place-returning `ref T next()`").c_str(), fe->line); *_out << "\n"; return;
+                         "place-returning `ref T next()`").c_str(), fe); *_out << "\n"; return;
         }
         if (!implementsContractTemplate(ic, "IteratorMut")) {   // nominal: it must declare the protocol
             unsupported(("the mutable iterator `" + iterCType + "` must `implements IteratorMut<T>` "
-                         "to be used in a `foreach (ref …)`").c_str(), fe->line); *_out << "\n"; return;
+                         "to be used in a `foreach (ref …)`").c_str(), fe); *_out << "\n"; return;
         }
         hasNextCall = hasNextMi->cName + "(&" + it + ")";
         nextCall    = nextMi->cName + "(&" + it + ")";
@@ -18130,18 +18161,18 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
                       iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
                       if (!implementsContractTemplate(cc, "Iterable")) {   // nominal: the container declares it
                           unsupported(("`" + container + "` must `implements Iterable<T>` to be used in a "
-                                       "`foreach`").c_str(), fe->line); *_out << "\n"; return;
+                                       "`foreach`").c_str(), fe); *_out << "\n"; return;
                       } }
         else        { iterCType = container; ic = cc;                       // the container IS the iterator
                       iterInit = emitIterable(); }                          // (needs only Iterator<T>, below)
         MethodInfo* nextMi = ic ? findMethod(ic, "next", nullptr) : nullptr;
         if (!nextMi || !nextMi->params.empty()) {
             unsupported(("`foreach` over `" + container + "` needs a nullary `iterator()`, or a nullary "
-                         "`next()` returning `Optional<T>`").c_str(), fe->line); *_out << "\n"; return;
+                         "`next()` returning `Optional<T>`").c_str(), fe); *_out << "\n"; return;
         }
         if (!implementsContractTemplate(ic, "Iterator")) {   // nominal: it must declare the protocol
             unsupported(("the iterator `" + iterCType + "` must `implements Iterator<T>` to be used "
-                         "in a `foreach`").c_str(), fe->line); *_out << "\n"; return;
+                         "in a `foreach`").c_str(), fe); *_out << "\n"; return;
         }
         optC     = cTypeInInstance(iterCType, nextMi->returnType);
         nextCall = nextMi->cName + "(&" + it + ")";
@@ -18162,7 +18193,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     if (!actualElem.empty() && actualElem != elemTy) {
         std::string msg = "foreach element type does not match what the iterator yields (binding is `"
                         + elemTy + "`, elements are `" + actualElem + "`)";
-        unsupported(msg.c_str(), fe->line);
+        unsupported(msg.c_str(), fe);
         *_out << "\n";
         return;
     }
@@ -18267,7 +18298,7 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al, const std::string* 
     if (!isAggr(ty)) ty = _matchTargetCType;
     if (!isAggr(ty)) {
         unsupported("an array literal `[…]` initializes an `InlineArray<T>#(N)` or a `Simd<T>#(N)` — its "
-                    "type must be known from context (a typed local, return, or assignment)", al->line);
+                    "type must be known from context (a typed local, return, or assignment)", al);
         return "0";
     }
     const bool isSimd = isSimdColl(ty);
@@ -18280,7 +18311,7 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al, const std::string* 
         size_t count = al->elements->size();
         if ((int64_t)count != n) {
             unsupported(("this array literal has " + std::to_string(count) + " element(s) but `" + ty
-                         + "` holds " + std::to_string(n)).c_str(), al->line);
+                         + "` holds " + std::to_string(n)).c_str(), al);
             return "0";
         }
         // A Fixed is `struct { T v[N]; }`, so its compound literal designates `.v`; a Simd is a bare
@@ -18299,12 +18330,12 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al, const std::string* 
     // fill form `[v; count]` — the count must be a constant equal to N.
     int64_t fc;
     if (!constValue(al->fillCount, fc)) {
-        unsupported("the count in a fill literal `[v; N]` must be an integer constant", al->line);
+        unsupported("the count in a fill literal `[v; N]` must be an integer constant", al);
         return "0";
     }
     if (fc != n) {
         unsupported(("this fill literal repeats " + std::to_string(fc) + " time(s) but `" + ty
-                     + "` holds " + std::to_string(n)).c_str(), al->line);
+                     + "` holds " + std::to_string(n)).c_str(), al);
         return "0";
     }
     // `[v; N]` on a lane batch IS a splat — the same literal, and the operation every SIMD API names
@@ -19458,20 +19489,20 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     // The seam header (and its `-lpthread` link) flows in via `import std::concurrent;`. Without it the
     // generated spawn call would not compile — give a clear error instead.
     if (!externsHeader("kama_isolate.h"))
-        unsupported("`spawn` requires `import std::concurrent;` (the native isolate seam)", iso->line);
+        unsupported("`spawn` requires `import std::concurrent;` (the native isolate seam)", iso);
 
     auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
     // Must be a BARE top-level fn call: `spawn worker(...)`. A receiver call (`spawn obj.m(...)`) or an
     // indirect callee would capture/alias enclosing state — reject to keep the entry shared-nothing.
     if (!inv || !inv->identifier || !inv->identifier->value || inv->expression || callsThroughLocal(inv)) {
-        unsupported("`spawn` entry must be a bare top-level function call, e.g. `spawn worker(p: give x)`", iso->line);
+        unsupported("`spawn` entry must be a bare top-level function call, e.g. `spawn worker(p: give x)`", iso);
         return "";   // `inv`/`identifier` may be the null this guard rejected — never fall through and deref it
     }
 
     const std::string fname = *inv->identifier->value;
     auto it = _funcs.find(resolveFunc(fname, inv->identifier->qualifier));
     if (it == _funcs.end())
-        unsupported(("`spawn` entry `" + fname + "` names no known top-level function").c_str(), iso->line);
+        unsupported(("`spawn` entry `" + fname + "` names no known top-level function").c_str(), iso);
     const FuncSig& sig = it->second;
 
     // A `void` entry taking exactly one argument (the bundle) — `void` because there is no channel to
@@ -19479,11 +19510,11 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     // param's SHAPE selects the mode: a by-value move-only `resource` (M2/M4.1, `give`) or a `ref T`
     // borrow of a caller-owned bundle (M4.2), sound because the scope joins before the local drops.
     if (sig.retCType != "void")
-        unsupported(("`spawn` entry `" + fname + "` must return void — there is no channel to return a result over").c_str(), iso->line);
+        unsupported(("`spawn` entry `" + fname + "` must return void — there is no channel to return a result over").c_str(), iso);
     if (sig.params.size() != 1)
-        unsupported(("`spawn` entry `" + fname + "` must take exactly one argument (the bundle)").c_str(), iso->line);
+        unsupported(("`spawn` entry `" + fname + "` must take exactly one argument (the bundle)").c_str(), iso);
     if (!inv->args || inv->args->size() != 1)
-        unsupported(("`spawn` call to `" + fname + "` needs exactly one argument").c_str(), iso->line);
+        unsupported(("`spawn` call to `" + fname + "` needs exactly one argument").c_str(), iso);
 
     const ParamSig& p = sig.params[0];
     cls = p.className;
@@ -19494,7 +19525,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         // mode restricts the TYPE (`isMoveOnlyValue` below) and is free in lifetime. The old wording named
         // a rule neither mode has.
         unsupported("`spawn` entry's parameter names no known type — the bundle must be a type this "
-                    "unit can see", iso->line);
+                    "unit can see", iso);
     isBorrow = p.byRef;   // a `ref T` param = borrow (M4.2); a by-value param = the moved bundle (M2/M4.1)
     // The bundle crosses into another isolate exactly as a channel element does, so it faces the same
     // sendability gate — see checkSpawnBundleSendability for why the fact is recorded rather than tested
@@ -19509,7 +19540,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         // ── M4.2: a `ref T` borrow of a caller-owned scope local ────────────────────────────────────
         if (!borrowOK || !innermostTaskScope())
             unsupported("only a bare `spawn` inside a `scope { }` may `ref`-borrow (the scope joins the "
-                        "child before the local drops); the handle form must take a moved `give` bundle", iso->line);
+                        "child before the local drops); the handle form must take a moved `give` bundle", iso);
         // The argument must be `ref <place>`. A `give`/`copy` (HandoffNode) or a bare value would not
         // match the `ref T` parameter.
         //
@@ -19533,7 +19564,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
             unsupported(("`spawn` to `" + fname + "` borrows — pass a local or one of its fields by `ref` "
                          "(e.g. `spawn " + fname + "(b: ref myBundle)` or `ref myWorld.bodies`). An element "
                          "(`a[i]`) or a call result names no place a static disjointness rule can pin — "
-                         "split a buffer with `parallel_for` instead").c_str(), iso->line);
+                         "split a buffer with `parallel_for` instead").c_str(), iso);
             return "";   // the place is empty — never fall through and index it
         }
         const std::string root = place[0];
@@ -19557,7 +19588,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
                 unsupported(("`spawn` borrows `" + placeText(place) + "`, a place inside `" + root
                              + "`'s own storage — but `" + root + "` is a shared handle, and another handle "
                              "can name the same object, so two children are not provably disjoint. Own it "
-                             "uniquely (`Owned<T>`), or move the bundle in with `give`").c_str(), iso->line);
+                             "uniquely (`Owned<T>`), or move the bundle in with `give`").c_str(), iso);
                 return "";
             }
             n = ma->expression.get();
@@ -19579,7 +19610,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         if (di >= 0 && di > ti)
             unsupported(("`spawn` may not borrow `" + root + "` — it is declared inside a block nested in "
                          "the `scope`, so it is destroyed before the scope joins this child; declare it in "
-                         "the `scope` itself or an outer scope").c_str(), iso->line);
+                         "the `scope` itself or an outer scope").c_str(), iso);
         // Can't borrow something already moved into (or given away by) an earlier statement. Both keys
         // matter for a place: moving the ROOT away takes the field with it, and the field can also have
         // been given away on its own — `_moveState` keys those as "w.bodies", the same shape
@@ -19589,7 +19620,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
             auto ms = _moveState.find(key);
             if (ms != _moveState.end() && ms->second != MoveState::NotMoved) {
                 unsupported(("cannot borrow `" + placeText(place) + "` — `" + key
-                             + "` was moved (given) away").c_str(), iso->line);
+                             + "` was moved (given) away").c_str(), iso);
                 break;
             }
         }
@@ -19611,7 +19642,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
                     unsupported(("two children in this `scope` borrow overlapping places (`"
                                  + placeText(prev) + "` and `" + placeText(place) + "`) — a shared mutable "
                                  "borrow across tasks would race; borrow disjoint fields or distinct locals, "
-                                 "or use an `Atomic<T>` (M6)").c_str(), iso->line);
+                                 "or use an `Atomic<T>` (M6)").c_str(), iso);
                     break;
                 }
             ts->borrowedPlaces.push_back(place);
@@ -19646,13 +19677,13 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     // A move-only `resource` VALUE owned by the callee: ownership actually transfers across the thread
     // (a plain `value` would only be copied; a collection would need source-nulling — both deferred).
     if (!isMoveOnlyValue(cls))
-        unsupported("`spawn` argument must be a moved `resource` value — the entry's parameter type is not one", iso->line);
+        unsupported("`spawn` argument must be a moved `resource` value — the entry's parameter type is not one", iso);
     // The argument must be `give`n: a shared borrow would alias state across the thread boundary. Unwrap
     // the HandoffNode ourselves (we emit no call — just the move + spawn).
     SharedExpression argExpr = argNode ? argNode->expression : (*inv->args)[0]->expression;
     auto* h = dynamic_cast<HandoffNode*>(argExpr.get());
     if (!h || !h->isGive) {
-        unsupported("`spawn` argument must be `give`n (moved) — a borrow would alias state across the thread", iso->line);
+        unsupported("`spawn` argument must be `give`n (moved) — a borrow would alias state across the thread", iso);
         return "";   // `h` may be the null this guard rejected — never fall through and deref it
     }
     SharedExpression src = h->value;
@@ -19685,7 +19716,7 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
 {
     if (!innermostTaskScope()) {
         unsupported("a bare `spawn` must appear inside a `scope { }` (which owns the join) — outside a "
-                    "scope use the handle form `Isolate h = spawn worker(...)`", iso->line);
+                    "scope use the handle form `Isolate h = spawn worker(...)`", iso);
         return;   // there is no scope to register the handle into; the tail would deref that same null
     }
     // ...and it must be a DIRECT statement of that scope, not buried in a nested block. The handle is
@@ -19699,7 +19730,7 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
     if (innermostTaskScopeIndex() != (int)_scopes.size() - 1) {
         unsupported("a bare `spawn` must be a direct statement of its `scope { }` — this one is inside a "
                     "nested block, whose handle the scope's join cannot name. Put the `if` outside the "
-                    "`scope`, or use `parallel_for` for per-item work", iso->line);
+                    "`scope`, or use `parallel_for` for per-item work", iso);
         return;   // registering it would emit a join naming a handle declared in the sub-block
     }
 
@@ -19750,7 +19781,7 @@ std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
     if (cName.empty()) return "0";   // prep already reported; its `cls`/`val` outputs are unset
     std::string iso_t = resolveUserName("Isolate", SharedStringList());
     if (!_classes.count(iso_t))
-        unsupported("the `isolate` handle form needs `std::concurrent::Isolate` in scope — add `import std::concurrent;`", iso->line);
+        unsupported("the `isolate` handle form needs `std::concurrent::Isolate` in scope — add `import std::concurrent;`", iso);
     std::string arg = "kama_kama_iso_arg" + std::to_string(_tempCounter++);
     const std::string stk = isolateStackArg(iso->stack, iso->line);
     std::ostringstream e;
@@ -19941,7 +19972,7 @@ void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIden
                 unsupported(("`" + base + "` pins its type parameter to the implementing type, so the "
                              "conformance names it `This` — write `implements " + base + "<This"
                              + (itfNode->genericArgs && itfNode->genericArgs->size() > 1 ? ", …" : "")
-                             + ">`").c_str(), itfNode->line);
+                             + ">`").c_str(), itfNode);
         }
         // A source-spelled name that is not a contract was reported where it is written, by
         // `checkDeclaredTypes`. Recording it anyway filed a conformance to nothing, which the vtable emit then
@@ -22260,7 +22291,7 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
         const std::string rt = md->returnType->value ? *md->returnType->value : "";
         if (rt != "Result")
             unsupported(("a `ctor` with a return type must be `Result<…, E>` (fallible) — "
-                         "omit it for an infallible ctor; got `" + rt + "`").c_str(), md->line);
+                         "omit it for an infallible ctor; got `" + rt + "`").c_str(), md);
     }
     // ...and an INFALLIBLE one returns the enum itself, as a type's does. With no return type written it
     // lowered to a `void` function and its `return` value was dropped, which clang then refused at the caller.
@@ -22287,7 +22318,7 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
                                        : Visibility::Public;
     if (mi.visibility == Visibility::Protected)
         unsupported(("`protected` belongs to a `virtual`/`abstract`/`final resource` — `" + tkey
-                     + "` is an `enum`, so its members are `private` or `public`").c_str(), md->line);
+                     + "` is an `enum`, so its members are `private` or `public`").c_str(), md);
     if (md->whenParams)
         for (size_t c = 0; c < md->whenParams->size(); ++c) {
             auto& p = (*md->whenParams)[c];
@@ -22312,7 +22343,7 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             if (tci.methods.count(mname)) {
                 unsupported(("`" + demangleForDisplay(tkey) + "` implements `" + demangleForDisplay(contract)
                              + "`: method `" + mname + "` conflicts with an existing method on the type").c_str(),
-                            md->line);
+                            md);
                 continue;
             }
             MethodInfo mi = enumMethodInfo(md, tkey, contract);
@@ -22327,14 +22358,14 @@ void CEmitter::injectImplMethods(ClassInfo& tci, SharedClassMemberDeclarationLis
             // Only its own members can — a contract's members belong to the contract, not to the type.
             if (contract.empty() && modHas(md->modifiers, "default")) {
                 if (!md->isCtor)
-                    unsupported("`default` applies only to a zero-arg `ctor`", md->line);
+                    unsupported("`default` applies only to a zero-arg `ctor`", md);
                 else if (!mi.params.empty())
-                    unsupported("`default` marks a zero-arg ctor — remove its parameters", md->line);
+                    unsupported("`default` marks a zero-arg ctor — remove its parameters", md);
                 else {
                     for (auto& kv : tci.methods)
                         if (kv.second.isDefaultCtor)
                             unsupported(("a type may mark at most one `default` ctor — `" + kv.first
-                                         + "` is already the default").c_str(), md->line);
+                                         + "` is already the default").c_str(), md);
                     mi.isDefaultCtor = true;
                 }
             }
@@ -22397,7 +22428,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             const std::string& bare = *ed->identifier->value;
             if (ed->baseTypes && ed->baseTypes->base)
                 unsupported(("`type enum " + bare + "` cannot `extends` — an enum has no base type; "
-                             "a contract is declared with `implements`").c_str(), ed->line);
+                             "a contract is declared with `implements`").c_str(), ed);
             std::string name = enumKey(ed);
             // A C enum may be declared again where it is used, but it is ONE type: its members belong to one of
             // those declarations, or two files could each hang methods on it and neither would see the other's.
@@ -22407,7 +22438,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 if (enumHasModifier(ed, "extern") && prior != _classes.end() && prior->second.declFile != here) {
                     unsupported(("`type extern enum " + bare + "` declares members, `implements` or `@generate` in `"
                                  + prior->second.declFile + "` too — a C enum is one type, so declare them on one of "
-                                   "its declarations and import it where it is used").c_str(), ed->line);
+                                   "its declarations and import it where it is used").c_str(), ed);
                     continue;
                 }
             }
@@ -22420,10 +22451,10 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                     if (dynamic_cast<ClassFieldDeclarationNode*>(m.get()))
                         unsupported(("`type enum " + bare + "` cannot declare a field — an enum's layout is "
                                      "its tag and its variant payloads; put the data in a variant payload")
-                                    .c_str(), m->line);
+                                    .c_str(), m);
                     else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get()))
                         unsupported(("`type enum " + bare + "` cannot declare a destructor — an enum owns "
-                                     "nothing beyond its payloads, which drop themselves").c_str(), m->line);
+                                     "nothing beyond its payloads, which drop themselves").c_str(), m);
                     else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) {
                         checkWhenParams(md->whenParams, ed->typeParams, bare, md->line);
                         // A type-associated `comptime fn`, exactly as collectClasses registers one: the
@@ -22444,7 +22475,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                         if (!kc->isComptime)
                             unsupported(("`type enum " + bare + "` cannot declare a field — an enum's layout is "
                                          "its tag and its variant payloads; put the data in a variant payload, "
-                                         "or make a constant `comptime`").c_str(), m->line);
+                                         "or make a constant `comptime`").c_str(), m);
                         else if (kc->declarators)
                             for (auto& d : *kc->declarators) {
                                 if (!d->name || !d->name->value) continue;
@@ -22465,7 +22496,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                             }
                     } else if (dynamic_cast<ClassOperatorDeclarationNode*>(m.get()))
                         unsupported(("`type enum " + bare + "` cannot declare an operator — write a named method "
-                                     "instead (`public fn " + bare + " next()`)").c_str(), m->line);
+                                     "instead (`public fn " + bare + " next()`)").c_str(), m);
                     rejectInertModifiers(m.get(), nullptr, MemberOwner::Enum);   // KR-93
                 }
             // `friend` grants, captured raw as collectClasses captures a class's, for resolveFriends to resolve
@@ -22503,7 +22534,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                         if (!md || !md->name || !md->name->value || md->isComptime) continue;
                         const std::string mname = *md->name->value;
                         if (tmpl.methods.count(mname)) {
-                            unsupported(("duplicate method '" + mname + "' in '" + bare + "'").c_str(), md->line);
+                            unsupported(("duplicate method '" + mname + "' in '" + bare + "'").c_str(), md);
                             continue;
                         }
                         tmpl.methods[mname] = enumMethodInfo(md, name, /*contract=*/"");
@@ -22551,7 +22582,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             for (auto& c : ifaces) {
                 bool dup = false;
                 for (auto& ex : eci.interfaces) if (ex == c) { dup = true; break; }
-                if (dup) { unsupported(("`" + bare + "` already implements `" + c + "`").c_str(), ed->line); continue; }
+                if (dup) { unsupported(("`" + bare + "` already implements `" + c + "`").c_str(), ed); continue; }
                 eci.interfaces.push_back(c);
                 // Dynamic dispatch through a fat pointer + (P2) boxing into `Owned<C>`.
                 _polyDispatchContracts.insert(c);
@@ -22689,7 +22720,7 @@ void CEmitter::applyBuiltinAdapterTarget(AdapterNode* n, SharedIdentifier tgt)
     if (allowed && !(allowed & IK_Intrinsic))
         unsupported(("`" + *tgt->value + "` is an `intrinsic`, but contract `" + contract
                      + "` is declared `for " + kamaImplKindListText(allowed)
-                     + "` — an intrinsic can't implement it").c_str(), n->line);
+                     + "` — an intrinsic can't implement it").c_str(), n);
     ClassInfo* tcip = nullptr;
     auto ti = _classes.find(ctKey);
     if (ti != _classes.end()) tcip = &ti->second;     // `string`, whose kama_string IS a ClassInfo
@@ -22703,7 +22734,7 @@ void CEmitter::applyBuiltinAdapterTarget(AdapterNode* n, SharedIdentifier tgt)
     ClassInfo& tci = *tcip;
     for (auto& ex : tci.interfaces)
         if (ex == contract) {
-            unsupported(("`" + *tgt->value + "` already implements `" + contract + "`").c_str(), n->line);
+            unsupported(("`" + *tgt->value + "` already implements `" + contract + "`").c_str(), n);
             break;
         }
     SharedClassMemberDeclarationList members = intrinsicMembersFor(n, tgt);   // fields/dtors: refused per block
@@ -22774,7 +22805,7 @@ void CEmitter::injectAdapterMethods(ClassInfo& tci, AdapterNode* n, SharedIdenti
 {
     for (auto& ex : tci.interfaces)
         if (ex == contract) {
-            unsupported(("`" + shown + "` already implements `" + demangleForDisplay(contract) + "`").c_str(), n->line);
+            unsupported(("`" + shown + "` already implements `" + demangleForDisplay(contract) + "`").c_str(), n);
             return;
         }
     SharedClassMemberDeclarationList members = intrinsicMembersFor(n, tgt);   // fields/dtors: refused per block
@@ -22846,26 +22877,26 @@ void CEmitter::applyTemplateAdapters(const std::string& inst)
 void CEmitter::applyAdapter(AdapterNode* n)
 {
     if (n->kindWord && *n->kindWord == "intrinsic") {   // the block's name until 0.9.510
-        unsupported("`type intrinsic <…>` is now `type adapter <…>` — the same block, renamed", n->line);
+        unsupported("`type intrinsic <…>` is now `type adapter <…>` — the same block, renamed", n);
         return;
     }
     if (!n->kindWord || *n->kindWord != "adapter") {
         unsupported(("`type " + (n->kindWord ? *n->kindWord : std::string("?")) + " <…>` — a conformance "
-                     "block over a target list is `type adapter <…> implements C`").c_str(), n->line);
+                     "block over a target list is `type adapter <…> implements C`").c_str(), n);
         return;
     }
     if (n->baseTypes && n->baseTypes->base)
         unsupported("a `type adapter` cannot `extends` — it adds one contract's methods to types that already exist",
-                    n->line);
+                    n);
     SharedIdentifierList ifaces = n->baseTypes ? n->baseTypes->interfaces : SharedIdentifierList();
     if (!ifaces || ifaces->empty()) {
         unsupported("a `type adapter <…>` must declare a contract — a block with no `implements` gives its "
-                    "targets nothing", n->line);
+                    "targets nothing", n);
         return;
     }
     if (ifaces->size() > 1) {
         unsupported("a `type adapter <…>` declares ONE contract per block — a method's contract has to be "
-                    "unambiguous; write a second block for the other one", n->line);
+                    "unambiguous; write a second block for the other one", n);
         return;
     }
     if (!n->targets) return;
@@ -22877,11 +22908,11 @@ void CEmitter::applyAdapter(AdapterNode* n)
             if (ms) for (auto& m : *ms) {
                 if (dynamic_cast<ClassFieldDeclarationNode*>(m.get())) {
                     unsupported("a `type adapter` cannot declare a field — it adds a contract's methods to its "
-                                "targets, never storage", m->line);
+                                "targets, never storage", m);
                     bad = true;
                 } else if (dynamic_cast<ClassDestructorDeclarationNode*>(m.get())) {
                     unsupported("a `type adapter` cannot declare a destructor — each target drops as its own "
-                                "declaration says", m->line);
+                                "declaration says", m);
                     bad = true;
                 }
             }
@@ -22908,7 +22939,7 @@ void CEmitter::applyAdapter(AdapterNode* n)
         } else if (_classes.count(base) || _enums.count(base)) {
             t.key = base; anyConcrete = true;
         } else {
-            unsupported(("unknown type `" + *tgt->value + "` in a `type adapter`'s targets").c_str(), n->line);
+            unsupported(("unknown type `" + *tgt->value + "` in a `type adapter`'s targets").c_str(), n);
             continue;
         }
         tgts.push_back(t);
@@ -22923,11 +22954,11 @@ void CEmitter::applyAdapter(AdapterNode* n)
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get()))
                     if (md->whenParams && !md->whenParams->empty())
                         unsupported("a method of a `type adapter` takes no `when` — the block's `implements … when "
-                                    "[…]` is its one gate", md->line);
+                                    "[…]` is its one gate", md);
         if (gated && anyConcrete)
             unsupported("a `type adapter`'s `when` conditions a generic type's every instance (`type adapter "
                         "<Optional> implements C when [T: C]`) — these targets are concrete, so there is no "
-                        "type parameter for it to condition; remove the gate", n->line);
+                        "type parameter for it to condition; remove the gate", n);
         if (gated && !anyConcrete)
             for (auto& t : tgts) {
                 const std::vector<std::string>& params = _genericTypeParams[t.key];
@@ -22937,7 +22968,7 @@ void CEmitter::applyAdapter(AdapterNode* n)
                         for (auto& q : params) list += (list.empty() ? "`" : ", `") + q + "`";
                         unsupported(("`" + *t.node->value + "` has no type parameter `" + *p->value
                                      + "` — a `type adapter`'s `when` names the generic type's own: " + list).c_str(),
-                                    n->line);
+                                    n);
                     }
             }
     }
@@ -22996,7 +23027,7 @@ void CEmitter::applyAdapter(AdapterNode* n)
         if (allowed && kindBit && !(allowed & kindBit)) {
             const std::string kindA = aOrAn(kamaImplKindListText(kindBit));   // "a `resource`"
             unsupported(("`" + shown + "` is " + kindA + ", but contract `" + *(*ifaces)[0]->value + "` is declared `for "
-                         + kamaImplKindListText(allowed) + "` — " + kindA + " can't implement it").c_str(), n->line);
+                         + kamaImplKindListText(allowed) + "` — " + kindA + " can't implement it").c_str(), n);
             continue;
         }
         ScopedStr  _ts(_thisType, t.key);
@@ -25639,7 +25670,7 @@ void CEmitter::checkDeclaredNames(const std::vector<SharedCompilationUnit>& unit
             if (id && id->value && isLanguageName(*id->value))
                 unsupported((std::string(what) + " `" + *id->value + "` takes a language name — `" + *id->value
                              + "` is in every scope, like `string`, so nothing may be named it; rename it").c_str(),
-                            id->line, *id->value);
+                            id, *id->value);
         };
         for (auto& decl : *u->codeDeclarationList) {
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) { if (!isExtern(fn)) topLevel(fn->name, "function"); continue; }
@@ -25659,7 +25690,7 @@ void CEmitter::checkDeclaredNames(const std::vector<SharedCompilationUnit>& unit
                     const std::string& nm = *d->name->value;
                     if (methods.count(nm))
                         unsupported(("field `" + nm + "` has the name of a method of its own type — inside a method "
-                                     "the bare name would mean both; rename one").c_str(), d->name->line, nm);
+                                     "the bare name would mean both; rename one").c_str(), d->name, nm);
                     else
                         checkBindingName(nm, "field", d->name->line);
                 }
@@ -26157,7 +26188,7 @@ std::string CEmitter::emitNaturalDefault(InvocationNode* call, MemberAccessNode*
         if (ci == _classes.end() && _enums.count(ct)) {
             unsupported(("`" + spelled + "` has no `default` constructor — electing one is the type's own "
                          "choice; mark its canonical zero-arg ctor `default ctor name()`, or call a "
-                         "named constructor").c_str(), call->line);
+                         "named constructor").c_str(), call);
             return "0";
         }
         return "";
@@ -26236,14 +26267,14 @@ void CEmitter::checkBaseInstall(ClassInfo& owner, SharedBlock body, int ctorLine
     if (!recv) {
         unsupported(("`this.base` takes a constructor call on '" + owner.baseName
                      + "' (`this.base = Base.<ctor>(…);`) — it is not a general assignment").c_str(),
-                    rhs->line);
+                    rhs);
         return;
     }
     std::string recvType;
     if (!isTypeReceiver(recv, recvType) || recvType != owner.baseName) {
         unsupported(("`this.base` in '" + owner.name + "' installs a '" + owner.baseName + "', but this "
                      "builds a '" + (recvType.empty() ? std::string("value of another kind") : recvType)
-                     + "'").c_str(), rhs->line);
+                     + "'").c_str(), rhs);
         return;
     }
     // `this` does not exist yet where the install is emitted — the arguments run before `self` is bound.
@@ -26252,7 +26283,7 @@ void CEmitter::checkBaseInstall(ClassInfo& owner, SharedBlock body, int ctorLine
             if (a && a->expression && exprMentionsThis(a->expression)) {
                 unsupported(("the base install runs before `this` exists — `" + owner.baseName
                              + "`'s constructor may read this constructor's parameters, not "
-                               "`this.<field>`").c_str(), rhs->line);
+                               "`this.<field>`").c_str(), rhs);
                 return;
             }
     }
@@ -28296,10 +28327,10 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
             if (isBindableClass(exprClass(init))) {
                 if (handoff == 2)
                     unsupported("a `BindableFunctionPtr` can't be `copy`d — whether its bound receiver is "
-                                "unique or shared is only known at run time; use `give` to move it", init->line);
+                                "unique or shared is only known at run time; use `give` to move it", init);
                 else if (handoff == 0)
                     unsupported("a `BindableFunctionPtr` hand-off must say `give` — it owns its bound "
-                                "receiver, and a bare `=` would leave two handles releasing it", init->line);
+                                "receiver, and a bare `=` would leave two handles releasing it", init);
                 std::string src = emitExpression(init);
                 indent(depth); *_out << nm << " = " << src << ";\n";
                 indent(depth); *_out << moveNullStmt(ty, src) << "\n";
@@ -28315,21 +28346,21 @@ void CEmitter::emitBindablePromote(const std::string& nm, const std::string& ty,
             if (fit != _funcs.end()) {
                 if (handoff)
                     unsupported("a free function is PROMOTED into a `BindableFunctionPtr`, not handed over "
-                                "— it owns nothing; drop the `give`/`copy`", init->line);
+                                "— it owns nothing; drop the `give`/`copy`", init);
                 if (!sigMatches(_sigs.at(sigCName), fit->second))
-                    unsupported("function does not match the BindableFunctionPtr signature", init->line);
+                    unsupported("function does not match the BindableFunctionPtr signature", init);
                 else if (_sigs.at(sigCName).noHeap && !fnHasNoHeap(fit->second.node))
                     unsupported(("function '" + *id->value + "' is bound to `" + demangleForDisplay(sigCName)
                                  + "`, which is `@noheap` — declare `" + *id->value + "` `@noheap` too, so a "
                                    "no-heap caller calling through the slot still gets the guarantee").c_str(),
-                                init->line);
+                                init);
                 indent(depth);
                 *_out << nm << ".kama_obj = NULL; " << nm << ".kama_ctrl = NULL; " << nm << ".kama_fn = (void (*)(void))"
                       << fit->second.cName << "; " << nm << ".kama_release = NULL;\n";
                 return;
             }
             unsupported("a BindableFunctionPtr binds via `BindableFunctionPtr.bind(obj:, method:)`, "
-                        "a free function, or another BindableFunctionPtr", init->line);
+                        "a free function, or another BindableFunctionPtr", init);
             return;
         }
     }
@@ -28529,10 +28560,10 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         if (weakEnum)
             unsupported(("`match` subject is a `" + demangleForDisplay(subjCls) + "`, which may no longer point at "
                          "anything — upgrade it first (`tryUpgrade()` gives an `Optional<Shared<…>>`) and match "
-                         "the `Shared`").c_str(), m->line);
+                         "the `Shared`").c_str(), m);
         else if (!subjCls.empty())
             unsupported(("`match` subject has type `" + subjCls + "`, which is neither an enum nor a "
-                         "tagged union").c_str(), m->line);
+                         "tagged union").c_str(), m);
         else {
             // A downcast whose TARGET does not resolve is why its type is unknown — name that name, not the
             // shape of the `match`.
@@ -28541,7 +28572,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 checkBodyType(ad->type, "an `.as<T>()` target", ad->type ? ad->type->line : m->line);
             if (_unsupported == before)
                 unsupported("`match` subject's type could not be resolved — bind it to a typed local first "
-                            "(a nested value-producing `match` or a variant-producing ternary needs one)", m->line);
+                            "(a nested value-producing `match` or a variant-producing ternary needs one)", m);
         }
         return;
     }
@@ -28567,15 +28598,15 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         bool found = false;
         for (auto& v : ci.variants) if (v.name == vn) { found = true; break; }
         if (found) recordRef(enumMemberKey(subjCls, vn), a->variantId.get());   // LSP: the arm uses the case
-        if (!found)          unsupported(("`match` arm names unknown variant '" + vn + "' of '" + subjCls + "'").c_str(), a->line);
-        if (covered.count(vn)) unsupported(("duplicate `match` arm for variant '" + vn + "'").c_str(), a->line);
+        if (!found)          unsupported(("`match` arm names unknown variant '" + vn + "' of '" + subjCls + "'").c_str(), a);
+        if (covered.count(vn)) unsupported(("duplicate `match` arm for variant '" + vn + "'").c_str(), a);
         covered.insert(vn);
     }
     if (!hasWildcard)
         for (auto& v : ci.variants)
             if (!covered.count(v.name))
                 unsupported(("`match` on '" + subjCls + "' is not exhaustive: variant '" + v.name
-                             + "' is unhandled — add `case " + v.name + ":` or `case _:`").c_str(), m->line);
+                             + "' is unhandled — add `case " + v.name + ":` or `case _:`").c_str(), m);
 
     // The subject is borrowed by pointer. A plain lvalue is addressed in place; a non-lvalue
     // (a call / construction result) can't be `&`-taken, so materialize an OWNING temp
@@ -28607,7 +28638,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         if (subjConsumed) {
             unsupported(("`match (give …)` on a `" + demangleForDisplay(handleCls) + "` — a handle's enum is "
                          "borrowed through it, not moved out of it; match the handle itself (`match (h)`)").c_str(),
-                        m->line);
+                        m);
             return;
         }
         const bool lib = !heapOwnerTarget(handleCls).empty();
@@ -28728,9 +28759,9 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     std::string have;
                     for (size_t k = 0; k < vc->payload.size(); ++k) have += (k ? ", " : "") + vc->payload[k].name;
                     unsupported(("`match` arm for '" + arm + "' binds unknown field `" + lbl + "` — `" + arm
-                                 + "` has " + (have.empty() ? std::string("no fields") : have)).c_str(), a->line);
+                                 + "` has " + (have.empty() ? std::string("no fields") : have)).c_str(), a);
                 } else if (!bound.insert(f).second) {
-                    unsupported(("`match` arm for '" + arm + "' binds field `" + lbl + "` twice").c_str(), a->line);
+                    unsupported(("`match` arm for '" + arm + "' binds field `" + lbl + "` twice").c_str(), a);
                 }
                 slotOf[i] = f;
             }
@@ -28740,7 +28771,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     if (!bound.count(k)) missing += (missing.empty() ? "" : ", ") + vc->payload[k].name;
                 if (!missing.empty())
                     unsupported(("`match` arm for '" + arm + "' does not bind " + missing
-                                 + " — a pattern names every field of its variant").c_str(), a->line);
+                                 + " — a pattern names every field of its variant").c_str(), a);
             }
             for (size_t i = 0; vc && i < a->bindings->size(); ++i) {
                 if (slotOf[i] == SIZE_MAX) continue;   // already diagnosed above
@@ -28882,12 +28913,12 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             // legal there and stays legal.
             if (resultTemp && nstmt == 0)
                 unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge "
-                            "(return/break/continue)", a->line);
+                            "(return/break/continue)", a);
             for (size_t i = 0; i < nstmt; ++i) {
                 SharedStatement st = (*stmts)[i];
                 auto armv = std::dynamic_pointer_cast<ArmValueNode>(st);   // `:= expr;` — the arm's value
                 if (armv && i + 1 != nstmt) {
-                    unsupported("`:=` must be the final statement of a match arm", armv->line);
+                    unsupported("`:=` must be the final statement of a match arm", armv);
                     continue;
                 }
                 if (resultTemp && i + 1 == nstmt) {
@@ -28897,7 +28928,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
                     if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, kMatchArm);
                     else if (stmtIsJump(st)) emitStatement(st, depth + 2);
-                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
+                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a);
                 } else {
                     // A NON-FINAL statement of an arm runs in its own typed context, not the match's.
                     // Leaving the target set here let a nested value-producing `match` inside the arm
@@ -28994,12 +29025,12 @@ void CEmitter::emitMatchDefaultArm(bool hasWildcard, const std::string& what, in
 std::string CEmitter::emitMatch(MatchNode* m)
 {
     if (!_hoistOK) {
-        unsupported("a value-producing `match` here needs a statement slot — bind it to a local first", m->line);
+        unsupported("a value-producing `match` here needs a statement slot — bind it to a local first", m);
         return "0";
     }
     if (_matchTargetCType.empty()) {
         unsupported("a value-producing `match` must appear in a typed position "
-                    "(a local-variable initializer or a `return`)", m->line);
+                    "(a local-variable initializer or a `return`)", m);
         return "0";
     }
     std::string t  = "kama_match" + std::to_string(_tempCounter++);
@@ -29113,17 +29144,17 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         // would rewrite every `Enum::Member` and leave the arms behind, i.e. produce code that no
         // longer compiles. `variantId` is the same name as a node with a span (see MatchArmNode).
         if (found) recordRef(enumMemberKey(enumTy, vn), a->variantId.get());
-        if (!found)            unsupported(("`match` arm names unknown case '" + vn + "' of enum '" + enumTy + "'").c_str(), a->line);
+        if (!found)            unsupported(("`match` arm names unknown case '" + vn + "' of enum '" + enumTy + "'").c_str(), a);
         if (a->bindings && !a->bindings->empty())
-                               unsupported(("enum case '" + vn + "' carries no payload to bind").c_str(), a->line);
-        if (covered.count(vn)) unsupported(("duplicate `match` arm for case '" + vn + "'").c_str(), a->line);
+                               unsupported(("enum case '" + vn + "' carries no payload to bind").c_str(), a);
+        if (covered.count(vn)) unsupported(("duplicate `match` arm for case '" + vn + "'").c_str(), a);
         covered.insert(vn);
     }
     if (!hasWildcard)
         for (auto& mem : ei.members)
             if (!covered.count(mem.name))
                 unsupported(("`match` on '" + enumTy + "' is not exhaustive: case '" + mem.name
-                             + "' is unhandled — add `case " + mem.name + ":` or `case _:`").c_str(), m->line);
+                             + "' is unhandled — add `case " + mem.name + ":` or `case _:`").c_str(), m);
 
     // Build the subject FIRST: a call subject can hoist (a string argument temp), and those declarations
     // have to land before the `switch` line rather than inside it. Evaluated exactly once either way, so
@@ -29154,12 +29185,12 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
             size_t nstmt = stmts ? stmts->size() : 0;
             if (resultTemp && nstmt == 0)   // the same empty-block hole as the tagged-union path above
                 unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge "
-                            "(return/break/continue)", a->line);
+                            "(return/break/continue)", a);
             for (size_t i = 0; i < nstmt; ++i) {
                 SharedStatement st = (*stmts)[i];
                 auto armv = std::dynamic_pointer_cast<ArmValueNode>(st);   // `:= expr;` — the arm's value
                 if (armv && i + 1 != nstmt) {
-                    unsupported("`:=` must be the final statement of a match arm", armv->line);
+                    unsupported("`:=` must be the final statement of a match arm", armv);
                     continue;
                 }
                 if (resultTemp && i + 1 == nstmt) {
@@ -29169,7 +29200,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                     // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
                     if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, kMatchArm);
                     else if (stmtIsJump(st)) emitStatement(st, depth + 2);
-                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a->line);
+                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a);
                 } else {
                     // A NON-FINAL statement of an arm runs in its own typed context, not the match's.
                     // Leaving the target set here let a nested value-producing `match` inside the arm
@@ -29781,12 +29812,12 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             if (auto* ba = dynamic_cast<BaseAccessNode*>(call->expression.get())) {
                 // base.m(args) -> direct (non-virtual) call into the base.
                 if (!_currentClass) {
-                    unsupported("`base` is only meaningful inside a method of a derived type", call->line);
+                    unsupported("`base` is only meaningful inside a method of a derived type", call);
                     return "0";
                 }
                 if (!_currentClass->base) {
                     unsupported(("'" + _currentClass->name + "' has no base class, so `base` names nothing "
-                                 "(only a type declared `extends …` has one)").c_str(), call->line);
+                                 "(only a type declared `extends …` has one)").c_str(), call);
                     return "0";
                 }
                 std::string m = (ba->identifier && ba->identifier->value) ? *ba->identifier->value : "";
@@ -29794,7 +29825,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 MethodInfo* mi = findMethod(_currentClass->base, m, &owner);
                 if (!mi) {
                     unsupported(("'" + m + "' is not a method of the base class '"
-                                 + _currentClass->base->name + "'").c_str(), call->line);
+                                 + _currentClass->base->name + "'").c_str(), call);
                     return "0";
                 }
                 // The base path used to skip access control entirely, so a derived type could reach any
@@ -29809,7 +29840,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             }
 #endif
         }
-        unsupported("indirect call", call->line);
+        unsupported("indirect call", call);
         return "0";
     }
 
@@ -29856,24 +29887,24 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (badTypeArg) return "0";   // the argument itself was already refused — one diagnostic, not two
         if (call->args && !call->args->empty())
             unsupported("`globalHeap::<…>()` takes no arguments — it names the one declared global "
-                        "allocator instance", call->line);
+                        "allocator instance", call);
         if (_globalAllocator.empty()) {
             unsupported("this program declares no `@globalAllocator`, so `globalHeap::<…>()` names "
                         "nothing — declare `@globalAllocator type resource <Pool> implements GlobalHeap` "
-                        "(SPEC *Global allocator*)", call->line);
+                        "(SPEC *Global allocator*)", call);
             return "0";
         }
         if (call->identifier->nTypeArgs != 1) {
             unsupported(("`globalHeap::<…>()` takes exactly one type argument, the declared global "
                          "allocator — write `globalHeap::<" + _globalAllocator + ">()`").c_str(),
-                        call->line);
+                        call);
             return "0";
         }
         const std::string want = cType(absolutizeType(deepSubstType((*call->identifier->genericArgs)[0])));
         if (want != _globalAllocator) {
             unsupported(("`" + want + "` is not this program's declared `@globalAllocator` — `"
                          + _globalAllocator + "` is, and a program has ONE heap").c_str(),
-                        call->line);
+                        call);
             return "0";
         }
         // A place is a POINTER that placeWrap derefs, exactly as a `fn ref T` call's result is.
@@ -29917,7 +29948,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         unsupported((call->identifier->nTypeArgs == 0
                          ? "`" + name + "#(…)` — compile-time arguments are only valid on a generic function"
                          : "`" + name + "::<…>` — turbofish type arguments are only valid on a generic function")
-                        .c_str(), call->line);
+                        .c_str(), call);
         return "0";
     }
 
@@ -29938,7 +29969,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (_generics.count(gk)) {
             unsupported(("`" + name + "` is a generic function and no instantiation was resolved for this "
                          "call — pass the type arguments explicitly (`" + name + "::<…>(…)`)").c_str(),
-                        call->line, name);
+                        call, name);
             return "0";
         }
     }
@@ -30027,7 +30058,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // place-returning-method awareness was bypassed with it.)
         if (!isNamedValue(a.get()))
             unsupported("`addr(of: …)` needs a place — a field, local, or element (not a temporary)",
-                        call->line);
+                        call);
         // An element or field IS a place, but not when its ROOT is a temporary: `addr(of: f.view()[0])`
         // indexes a view minted by a call and dropped at the end of the statement, so the pointer would
         // dangle — and until 0.9.231 it escaped the front end and died in clang ("cannot take the address
@@ -30038,7 +30069,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             unsupported(("`addr(of: …)` on an element of a temporary — `" + unparseExpr(a) + "` is rooted in "
                          "a call result that is dropped at the end of the statement, so the pointer would "
                          "dangle; bind the value to a local first, then take the address through that").c_str(),
-                        call->line);
+                        call);
         return "(&(" + emitPlace(a) + "))";
     }
 
@@ -30066,13 +30097,13 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
 
         if (name == "panic") {
             SharedExpression msg = argByName("msg");
-            if (!msg) { unsupported("`panic` requires `msg:`", call->line); return "(void)0"; }
+            if (!msg) { unsupported("`panic` requires `msg:`", call); return "(void)0"; }
             return "kama_panic_at(" + emitExpression(msg) + ", " + fileLit + ", " + lineLit + ")";
         }
         SharedExpression cond = argByName("cond");
         SharedExpression msg  = argByName("msg");
-        if (!cond) { unsupported("`assert`/`debugAssert` requires `cond:`", call->line); return "(void)0"; }
-        if (!msg)  { unsupported("`assert`/`debugAssert` requires `msg:` (use `msg: \"\"` for none)", call->line); return "(void)0"; }
+        if (!cond) { unsupported("`assert`/`debugAssert` requires `cond:`", call); return "(void)0"; }
+        if (!msg)  { unsupported("`assert`/`debugAssert` requires `msg:` (use `msg: \"\"` for none)", call); return "(void)0"; }
         if (name == "debugAssert" && _release) return "(void)0";   // stripped in release builds
         std::string condText = unparseExpr(cond);
         return "((" + emitExpression(cond) + ") ? (void)0 : kama_assert_fail(\""
@@ -30090,14 +30121,14 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (label != "ptr") {
             unsupported(("`" + name + "(" + label + ": …)` — the pointer form is `" + name + "(ptr: p)`, the "
                          + (isSize ? "size" : "alignment") + " of the object `p` points at; the "
-                         + (isSize ? "size" : "alignment") + " of a type is `" + name + "(T)`").c_str(), call->line);
+                         + (isSize ? "size" : "alignment") + " of a type is `" + name + "(T)`").c_str(), call);
             return "0";
         }
         std::string pc = rawPointeeCType(a0->expression);
         if (pc.empty()) {
             unsupported(("`" + name + "(ptr:)` takes an `UnsafePtr<T>` — it measures the POINTEE. The "
                          + std::string(isSize ? "size" : "alignment") + " of a type is `" + name + "(T)`").c_str(),
-                        call->line);
+                        call);
             return "0";
         }
 #if KAMA_INHERITANCE
@@ -30131,7 +30162,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (!shapeOk) {
             unsupported(rangeDrop ? "the range form of `drop` is `drop(ptr: p, count: n)` — `n` pointees from `p` on"
                                   : "`copyElements` is `copyElements(ptr: d, from: s, count: n)` — `n` copies of `s[0..n)` "
-                                    "placed at `d`, labels in that order", call->line);
+                                    "placed at `d`, labels in that order", call);
             return "(void)0";
         }
         SharedExpression dst = (*call->args)[0]->expression;
@@ -30141,7 +30172,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (pc.empty()) {
             unsupported(("`" + name + "(ptr:)` takes an `UnsafePtr<T>` — the storage it "
                          + (rangeDrop ? "destroys" : "fills") + ". An `UnsafeConstPtr<T>` cannot be written "
-                           "through, and a bare `UnsafePtr` names no element type").c_str(), call->line);
+                           "through, and a bare `UnsafePtr` names no element type").c_str(), call);
             return "(void)0";
         }
         // An `isize`, like every length in kama; a constant adapts to it.
@@ -30149,7 +30180,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             int64_t cv;
             if (typeOfExpr(cnt) != "ptrdiff_t" && !constValue(cnt, cv)) {
                 unsupported(("`" + name + "(count:)` takes an `isize` — the number of elements, as `length()` "
-                             "answers it").c_str(), call->line);
+                             "answers it").c_str(), call);
                 return "(void)0";
             }
         }
@@ -30182,7 +30213,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                          + demangleForDisplay(primKeyOfCType(pc)) + ">`, and `from:` "
                          + (sc.empty() ? std::string("is not a typed raw pointer")
                                        : "points at `" + demangleForDisplay(primKeyOfCType(sc)) + "`")).c_str(),
-                        call->line);
+                        call);
             return "(void)0";
         }
         const std::string D = emitExpression(dst), S = emitExpression(src), N = emitExpression(cnt);
@@ -30192,7 +30223,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             const CollKind k = smartKind(pc);
             if (k == CollKind::Owned) {
                 unsupported("`copyElements` of `Owned` elements — an `Owned` is unique, so it cannot be copied; "
-                            "relocate them, or hold `Shared`", call->line);
+                            "relocate them, or hold `Shared`", call);
                 return "(void)0";
             }
             each = "kama__d[kama__i] = kama__s[kama__i]; kama__d[kama__i].kama_ctrl->"
@@ -30201,11 +30232,11 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             auto ci = _collections.find(pc);
             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable) {
                 unsupported(("`copyElements` of `" + demangleForDisplay(pc) + "` elements needs their elements to copy "
-                             "— they own resources but aren't `Copyable`").c_str(), call->line);
+                             "— they own resources but aren't `Copyable`").c_str(), call);
                 return "(void)0";
             }
             if (ci == _collections.end() && isMoveOnlyValue(pc) && !isCopyable(pc)) {
-                unsupported(notCopyableMessage(pc, "relocate the elements instead").c_str(), call->line);
+                unsupported(notCopyableMessage(pc, "relocate the elements instead").c_str(), call);
                 return "(void)0";
             }
             each = "kama__d[kama__i] = " + copyCall(pc, "kama__s[kama__i]") + ";";
@@ -30239,11 +30270,11 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 if (ct.size() > 7 && ct.compare(ct.size() - 7, 7, " const*") == 0)
                     unsupported("cannot `drop` through an `UnsafeConstPtr<T>` — a destructor mutates what it "
                                 "runs on. Drop through the writable pointer (`derefMut()`'s owner, "
-                                "`addr(of: …)` on a mutable root, or `dataPtrMut()`)", call->line);
+                                "`addr(of: …)` on a mutable root, or `dataPtrMut()`)", call);
                 else
                     unsupported("`drop(ptr:)` takes an `UnsafePtr<T>` — it destroys the POINTEE. To end a "
                                 "local's life early, give it a scope (`{ T x = …; }`); a local is already "
-                                "owned and dropping it again would run its destructor twice", call->line);
+                                "owned and dropping it again would run its destructor twice", call);
                 return "(void)0";
             }
             if (_classes.count(pc)) {
@@ -30266,10 +30297,10 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                          "destructor run twice. `drop(ptr:)` takes an `UnsafePtr<T>` and destroys the "
                          "POINTEE: write `drop(ptr: " + shown + ")` if `" + shown + "` is a raw pointer, or "
                          "`drop(ptr: addr(of: " + shown + "))` for an element in a buffer you manage. To end "
-                         "a LOCAL's life early, give it a scope: `{ T x = …; }`").c_str(), call->line);
+                         "a LOCAL's life early, give it a scope: `{ T x = …; }`").c_str(), call);
         else
             unsupported(("`drop` takes `ptr:` — `drop(ptr: " + shown + ")`, an `UnsafePtr<T>` whose pointee "
-                         "is destroyed").c_str(), call->line);
+                         "is destroyed").c_str(), call);
         return "(void)0";
     }
     // M6.2: `__kama_ctrl_atomic()` — a per-instance COMPILE-TIME constant (0/1) that the prelude
@@ -30365,7 +30396,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 const std::string& disp = *qual->back();
                 unsupported(("`" + disp + "::" + name + "` names a constructor — construct with "
                              "dot-on-type: `" + disp + "." + name + "(...)`. `::` is scope resolution "
-                             "(static functions, enum variants, modules)").c_str(), call->line);
+                             "(static functions, enum variants, modules)").c_str(), call);
                 return "0";
             }
             if (mi && mi->isStatic && _ctCheck && stci->kind != TypeKind::Value) {   // KR-102
@@ -30380,7 +30411,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                                  mi->isPlaceReturn);
             }
             if (mi && !mi->isStatic)
-                unsupported(("`" + typeName + "::" + name + "` names a non-static method — call it on an instance (`obj." + name + "(...)`)").c_str(), call->line);
+                unsupported(("`" + typeName + "::" + name + "` names a non-static method — call it on an instance (`obj." + name + "(...)`)").c_str(), call);
         }
         // const-eval 6b-3: a type-associated `comptime fn` (`Type::table()`) runs only at compile time. A generic
         // one is its TEMPLATE's — `Box::<int32>::k()` names the instance, which holds no comptime fn of its own.
@@ -30395,7 +30426,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             }
             indexComptimeCallArgs(call, cm.node->params);
             unsupported(("`" + typeName + "::" + name + "` is a `comptime fn` — it runs only at compile time; "
-                         "assign its result to a `comptime` constant and use that").c_str(), call->line);
+                         "assign its result to a `comptime` constant and use that").c_str(), call);
             return "0";
         }
         auto fit = _funcs.find(resolveFunc(name, qual, call->identifier.get()));
@@ -30412,7 +30443,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             && _genericTypes[typeName].methods.count(name)) {
             const std::string& disp = *qual->back();
             unsupported(("`" + disp + "` is generic — a static needs its type arguments: `"
-                         + disp + "::<...>::" + name + "(...)`").c_str(), call->line);
+                         + disp + "::<...>::" + name + "(...)`").c_str(), call);
             return "0";
         }
         // `Natural<T>::compare(...)` — the qualifier names a generic instance that has none yet.
@@ -30424,12 +30455,12 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             if (!reportDeclaredElsewhere("type", head, [&](const std::string& k) { return isTypeKey(k); },
                                          "this call", call->line))
                 unsupported(("`" + head + "::" + name + "` — `" + head + "` is not a type or module in reach "
-                             "here").c_str(), call->line, head);
+                             "here").c_str(), call, head);
             return "0";
         }
         if (reportUntypedVariant(call, typeName, head, name, call->line)) return "0";
         unsupported(("`" + head + "::" + name + "` — scope-qualified call resolves to no known "
-                     "function").c_str(), call->line);
+                     "function").c_str(), call);
         return "0";
     }
 
@@ -30460,7 +30491,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             if (_ctCheck) return checkComptimeCall(call, cf.node->parameters, cf.ctx, name);   // KR-102
             indexComptimeCallArgs(call, cf.node->parameters);
             unsupported(("`" + name + "` is a `comptime fn` — it runs only at compile time; assign its "
-                         "result to a `comptime` constant and use that").c_str(), call->line);
+                         "result to a `comptime` constant and use that").c_str(), call);
             return "0";
         }
         // The SUBJECT, so an editor can offer the import: a free `fn` is an importable name like any
@@ -30471,9 +30502,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                                              return _funcs.count(k) > 0 || _comptimeFns.count(k) > 0; },
                                          "this call", call->line))
                 unsupported(("call to unknown function `" + name + "` — no function of that name is declared or "
-                             "imported" + contextualNameHint(name)).c_str(), call->line, name);
+                             "imported" + contextualNameHint(name)).c_str(), call, name);
         } else
-            unsupported("call to unknown function (args kept in source order)", call->line, name);
+            unsupported("call to unknown function (args kept in source order)", call, name);
         std::string s = cFunctionName(name) + "(";
         bool first = true;
         if (call->args) for (auto& a : *call->args) {
@@ -30530,7 +30561,7 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
             // status register). Raw pointers only.
             bool hwPtr = p->isHardware && isRawPtrName(p->type);
             if (p->isHardware && !hwPtr)
-                unsupported("`hardware` applies only to an `UnsafePtr<T>` or `UnsafeConstPtr<T>` parameter (a pointer to an MMIO register)", p->line);
+                unsupported("`hardware` applies only to an `UnsafePtr<T>` or `UnsafeConstPtr<T>` parameter (a pointer to an MMIO register)", p);
             // a `ref`/`const ref` parameter may not name a smart pointer — you borrow
             // the OBJECT (`ref T`), or transfer ownership by value (`give`/`copy`). Borrowing
             // the handle never makes sense (and would make `ref p` ambiguous). `out` producing
@@ -30547,7 +30578,7 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
                 unsupported(("a `ref` parameter may not name a smart pointer ('" + pct
                              + "') — borrow the object with `ref "
                              + (libElem.empty() ? _classes[pct].collElemClass : libElem)
-                             + "`, or transfer ownership by value (`give`/`copy`)").c_str(), p->line);
+                             + "`, or transfer ownership by value (`give`/`copy`)").c_str(), p);
             s += std::string(constPtr ? "const " : "") + std::string(hwPtr ? "volatile " : "") + cType(p->type)
                + (paramByRef(p.get()) ? "* " : " ") + kName(nm);   // KR-67 (the host header keeps the kama spelling — D3)
         }
@@ -32011,14 +32042,14 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     if (isEntry && fn->isUnsafe)
         unsupported("`main` may not be `unsafe` — it encloses the whole program, so the marker would put "
                     "every line in the trusted region. Move the raw work into a helper `unsafe fn` and "
-                    "call it from `main` (calling an `unsafe fn` from safe code is allowed)", fn->line);
+                    "call it from `main` (calling an `unsafe fn` from safe code is allowed)", fn);
 
     // `main` has ONE signature, `fn int32 main()`: its result is the exit status, and arguments come from
     // `args()`. A `fn void main()` used to pass `kama check` and then fail in clang on the synthesized
     // `return (int)kama_main();` — a program kama accepted that the C compiler refused.
     if (isEntry && (cType(fn->returnType) != "int32_t" || (fn->parameters && !fn->parameters->empty())))
         unsupported("`main` is declared `fn int32 main()` — it returns the exit status (0 for success) and "
-                    "takes no parameters; command-line arguments come from `args()`", fn->line);
+                    "takes no parameters; command-line arguments come from `args()`", fn);
 
     // `expose fn` crosses to a host over a raw C ABI — an owned-by-value type (kama `string`,
     // a collection, or an `Owned`/`Shared`/`Weak` smart pointer) carries RAII/refcount state that
@@ -32027,7 +32058,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         auto rejectOwned = [&](const std::string& cty, const char* where) {
             if (isSmartPtrClass(cty) || ownsByValue(cty))
                 unsupported(("`expose`: `" + cty + "` cannot cross the C-ABI boundary by value (" + where
-                             + ") — pass an `UnsafePtr<T>` or an `extern` struct").c_str(), fn->line);
+                             + ") — pass an `UnsafePtr<T>` or an `extern` struct").c_str(), fn);
         };
         rejectOwned(cType(fn->returnType), "return");
         if (fn->parameters)
@@ -32047,7 +32078,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
                          "a callback's threading contract cannot be inferred — mark that `fnptr` type "
                          "`@callerThread` if the host calls it on the calling isolate, or `@foreignEntry` "
                          "if it may run on a thread kama did not create (where a module `static` assigned "
-                         "elsewhere is a different object)").c_str(), fn->line);
+                         "elsewhere is a different object)").c_str(), fn);
     }
 
     // Track by-ref params (deref on read) and param classes (for member calls).
@@ -34976,7 +35007,7 @@ CEmitter::GraphEdge CEmitter::graphEdgeOf(SharedIdentifier ty)
         if (!a.empty() && a != preludeName("GlobalAllocator"))
             unsupported("graph-mode serialization is GlobalAllocator-only — a Shared/Weak<…, A> edge with "
                         "a stateful allocator can't be reconstructed (deserialize wires a zeroed allocator); use "
-                        "the default allocator for @generate graph fields", ty->line);
+                        "the default allocator for @generate graph fields", ty);
     };
     // Concrete-element triad instance (`Shared<Leaf>` etc.) — a library generic instance keyed by template.
     auto g = _genericTypeInstOf.find(ic);
@@ -37467,18 +37498,18 @@ void CEmitter::rejectBaseMember(MemberAccessNode* ma)
 #else
     bool isThis = dynamic_cast<ThisAccessNode*>(ma->expression.get()) != nullptr;
     if (!_currentClass)
-        unsupported("`this.base` is only meaningful inside a constructor of a derived type", ma->line);
+        unsupported("`this.base` is only meaningful inside a constructor of a derived type", ma);
     else if (!_currentClass->base)
         unsupported(("'" + _currentClass->name + "' has no base class, so `this.base` names nothing "
-                     "(only a type declared `extends …` has one)").c_str(), ma->line);
+                     "(only a type declared `extends …` has one)").c_str(), ma);
     else if (!isThis)
         unsupported(("the base part of a '" + _currentClass->name + "' is reachable only from inside it — "
                      "write `this.base = " + _currentClass->baseName + ".<ctor>(…);` as the first statement "
-                     "of its constructor").c_str(), ma->line);
+                     "of its constructor").c_str(), ma);
     else
         unsupported(("`this.base` may only be ASSIGNED, as the first statement of a constructor "
                      "(`this.base = " + _currentClass->baseName + ".<ctor>(…);`) — to reach an inherited "
-                     "member write `base.<member>`").c_str(), ma->line);
+                     "member write `base.<member>`").c_str(), ma);
 #endif
 }
 
@@ -37538,9 +37569,9 @@ bool CEmitter::rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, c
         for (auto& m : ei->second.members) if (m.name == field) { has = true; break; }
         if (has)
             unsupported(("`" + disp + "." + field + "` — `.` reads a value's member; a variant is reached through "
-                         "its type with `::` (`" + disp + "::" + field + "`)").c_str(), ma->line);
+                         "its type with `::` (`" + disp + "::" + field + "`)").c_str(), ma);
         else
-            unsupported(("`" + disp + "` has no variant `" + field + "`").c_str(), ma->line, field);
+            unsupported(("`" + disp + "` has no variant `" + field + "`").c_str(), ma, field);
         return true;
     }
     ClassInfo* ci = nullptr;
@@ -37549,7 +37580,7 @@ bool CEmitter::rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, c
     if (!ci) {
         if (_interfaces.count(t)) {
             unsupported(("`" + disp + "` is a contract — it has no members to read; reach `" + field
-                         + "` through a value that implements it").c_str(), ma->line);
+                         + "` through a value that implements it").c_str(), ma);
             return true;
         }
         return false;
@@ -37559,9 +37590,9 @@ bool CEmitter::rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, c
         for (auto& vc : ci->variants) if (vc.name == field) { has = true; break; }
         if (has)
             unsupported(("`" + disp + "." + field + "` — `.` reads a value's member; a variant is reached through "
-                         "its type with `::` (`" + disp + "::" + field + "`)").c_str(), ma->line);
+                         "its type with `::` (`" + disp + "::" + field + "`)").c_str(), ma);
         else
-            unsupported(("`" + disp + "` has no variant `" + field + "`").c_str(), ma->line, field);
+            unsupported(("`" + disp + "` has no variant `" + field + "`").c_str(), ma, field);
         return true;
     }
     DotMemberKind kind;
@@ -37573,11 +37604,11 @@ bool CEmitter::rejectDotOnTypeRead(MemberAccessNode* ma, IdentifierNode* head, c
                                                            : mi->isStatic ? DotMemberKind::Static : DotMemberKind::Method;
     else {
         if (rejectUnprovenBound(t, field, ma->line)) return true;
-        unsupported(("`" + disp + "` has no member `" + field + "`").c_str(), ma->line, field);
+        unsupported(("`" + disp + "` has no member `" + field + "`").c_str(), ma, field);
         return true;
     }
     unsupported(("`" + disp + "." + field + "` — `.` reads a value's member; "
-                 + dotOnTypeAdvice(kind, disp, t, field)).c_str(), ma->line);
+                 + dotOnTypeAdvice(kind, disp, t, field)).c_str(), ma);
     return true;
 }
 
@@ -37661,7 +37692,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
 {
     std::string field = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
     if (!ma->expression) {
-        unsupported("static member access", ma->line);
+        unsupported("static member access", ma);
         return field;
     }
     // `this.base` is not a member — it is the ONE place a derived constructor installs its base part, and
@@ -37681,7 +37712,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     // A Weak can't be dereffed — it must be upgraded with upgrade() first.
     if (isSmartPtrClass(cls)) {
         if (smartKind(cls) == CollKind::Weak) {
-            unsupported("cannot access a field through Weak<T>; call .tryUpgrade()", ma->line);
+            unsupported("cannot access a field through Weak<T>; call .tryUpgrade()", ma);
             return field;
         }
         std::string T = _classes[cls].collElemClass;
@@ -37722,7 +37753,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         }
     }
     if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
-        if (_inStaticMethod) unsupported("a `static` method has no `this`", ma->line);
+        if (_inStaticMethod) unsupported("a `static` method has no `this`", ma);
         _ctorSelfUsed = true;               // in a ctor: the implicit `this` storage is needed
         return "self->" + basePath + (fieldOwner ? kMember(*fieldOwner, field) : kName(field));
     }
@@ -37741,7 +37772,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
         // primKeyOfCType echoes what it does not know, so a changed spelling is the positive test — except
         // `bool`, the one primitive whose C spelling IS its kama spelling.
         if (!rk.empty() && (rk != rct || rct == "bool")) {
-            unsupported(("`" + rk + "` has no field `" + field + "` — a primitive has no members").c_str(), ma->line, field);
+            unsupported(("`" + rk + "` has no field `" + field + "` — a primitive has no members").c_str(), ma, field);
             return "0";
         }
         // A raw pointer has no fields either — its POINTEE does, and kama reaches a pointee by indexing. This
@@ -37751,12 +37782,12 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
             const std::string place = unparseExpr(ma->expression);
             unsupported(("`" + place + "` is a raw pointer, which has no field `" + field + "` — its pointee does; "
                          "read or write it through the pointer as `" + place + "[0]." + field + "`").c_str(),
-                        ma->line, field);
+                        ma, field);
             return "0";
         }
         const std::string et = exprEnumType(ma->expression);
         if (!et.empty()) {
-            unsupported(("`" + et + "` is a plain enum — a variant value has no field `" + field + "`").c_str(), ma->line, field);
+            unsupported(("`" + et + "` is a plain enum — a variant value has no field `" + field + "`").c_str(), ma, field);
             return "0";
         }
     }
@@ -37773,10 +37804,10 @@ void CEmitter::rejectMissingField(ClassInfo* ci, const std::string& cls, MemberA
     if (findMethod(ci, field, &owner)) {
         const std::string place = unparseExpr(ma->expression);
         unsupported(("`" + place + "." + field + "` names a method — call it (`" + place + "." + field + "(...)`)").c_str(),
-                    ma->line, field);
+                    ma, field);
         return;
     }
-    unsupported(("`" + cls + "` has no field `" + field + "`").c_str(), ma->line, field);
+    unsupported(("`" + cls + "` has no field `" + field + "`").c_str(), ma, field);
 }
 
 // Dispatch a method call on a receiver of static class `clsName`.
@@ -38799,18 +38830,18 @@ std::string CEmitter::emitBitcast(BitcastNode* v)
     }
     if (to.first == 0) {
         unsupported(("bitcast<" + tname + ">(x) — the target `" + tname + "` must be a numeric scalar "
-                     "(`int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v->line);
+                     "(`int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v);
         return "0";
     }
     if (fr.first == 0) {
         unsupported(("bitcast<" + tname + ">(x) — the operand's type isn't a resolvable numeric scalar "
-                     "(need a variable/field of `int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v->line);
+                     "(need a variable/field of `int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v);
         return "0";
     }
     if (to.first != fr.first) {
         unsupported(("bitcast<" + tname + ">(x) requires equal width — the operand is " + std::to_string(fr.first)
                      + " bytes but `" + tname + "` is " + std::to_string(to.first)
-                     + " (use `cast<" + tname + ">` for a value conversion)").c_str(), v->line);
+                     + " (use `cast<" + tname + ">` for a value conversion)").c_str(), v);
         return "0";
     }
     // ISO C11 union type-pun via a compound literal: store the source member, read the target member.
@@ -38926,7 +38957,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         if (mit != gt.methods.end() && mit->second.isStatic && !mit->second.isCtor)
             unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; `" + method
                          + "` is a static function — call it with `" + disp + "::<...>::" + method
-                         + "(...)`").c_str(), call->line);
+                         + "(...)`").c_str(), call);
         // The sibling branch above stays live under a probe: calling a static through dot-on-type is the
         // wrong spelling whatever `T` turns out to be. THIS one is pure absence — `DynamicArray<T>.new()`
         // has no instance to name until something instantiates the enclosing template.
@@ -38935,10 +38966,10 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         else if (!deferUnknownWhileProbing(DK_DotCtor))
             unsupported(("cannot tell which `" + disp + "` to construct — give the type arguments (`"
                          + disp + "::<...>." + method + "(...)`) or annotate the target so they can be "
-                         "inferred").c_str(), call->line);
+                         "inferred").c_str(), call);
         return "0";
     }
-    if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call->line); return "0"; }
+    if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call); return "0"; }
     // M6 B3d: the RECEIVER of `Type.name(...)` is a reference to the type, exactly as the same spelling in
     // an annotation is — it was missing only because this path resolves without passing a site. Record
     // `typeName`, not `tn`: for a generic the latter is the mangled INSTANCE, which has no def-site, while
@@ -38951,7 +38982,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // carve-out an abstract base could only ever be derived from if it had a `default` ctor, which would
     // make `abstract` and "carries constructor arguments" mutually exclusive for no reason.
     if (stci->isAbstractClass && !_inBaseInstall) {
-        unsupported(("cannot instantiate abstract class '" + disp + "' (it has an unimplemented method)").c_str(), call->line);
+        unsupported(("cannot instantiate abstract class '" + disp + "' (it has an unimplemented method)").c_str(), call);
         return "0";
     }
     // OBJECT-GRAPH READ RETARGET, the mirror of the write side in emitDispatch. Inside a read twin,
@@ -38984,7 +39015,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         if (!mi) {
             unsupported(("`" + disp + "` has no `default` constructor — electing one is the type's own "
                          "choice; mark its canonical zero-arg ctor `default ctor name()`, or call a "
-                         "named constructor").c_str(), call->line);
+                         "named constructor").c_str(), call);
             return "0";
         }
     }
@@ -39042,7 +39073,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                 if (why.empty()) why = " (e.g. a custom allocator has no `default`); use an allocator-taking "
                                        "constructor instead";
                 unsupported(("constructor `" + disp + "." + method + "` is not available for this "
-                             "instantiation — it requires `when [" + cond + "]`" + why).c_str(), call->line);
+                             "instantiation — it requires `when [" + cond + "]`" + why).c_str(), call);
                 return "0";
             }
         }
@@ -39050,7 +39081,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // as "no constructor `x` — define one", which sends the reader to write a ctor they don't want.
         if (findFieldOwner(stci, method)) {
             unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; "
-                         + dotOnTypeAdvice(DotMemberKind::Field, disp, typeName, method)).c_str(), call->line);
+                         + dotOnTypeAdvice(DotMemberKind::Field, disp, typeName, method)).c_str(), call);
             return "0";
         }
         // The receiver is an opaque parameter and its bounds promise no such ctor — the BOUND is what is
@@ -39073,11 +39104,11 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                 unsupported(("`" + demangleForDisplay(x) + "` reaches no `Shared`/`Weak` field, so it is not "
                              "a graph — read it by value (`::<" + demangleForDisplay(x) + ">`), not as `Shared<"
                              + demangleForDisplay(x) + ">`. Only a graph comes back behind a handle").c_str(),
-                            call->line);
+                            call);
             if (e != _classes.end()) return "0";
         }
         unsupported(("type `" + disp + "` has no constructor `" + method + "` — define one "
-                     "(`ctor " + method + "(...) {…}`)").c_str(), call->line);
+                     "(`ctor " + method + "(...) {…}`)").c_str(), call);
         return "0";
     }
     if (!mi->isCtor) {
@@ -39087,7 +39118,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         // (`Type::name(...)`) sent the reader to a second error telling them the opposite.
         unsupported(("`" + disp + "." + method + "` — dot-on-type calls a constructor; "
                      + dotOnTypeAdvice(mi->isStatic ? DotMemberKind::Static : DotMemberKind::Method, disp, typeName, method)).c_str(),
-                    call->line);
+                    call);
         return "0";
     }
     // A GRAPH NODE cannot be read BY VALUE: its `deserialize` returns `Result<Shared<This>, …>`, because a
@@ -39103,7 +39134,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         const std::string n = demangleForDisplay(stci->name);
         unsupported(("`" + n + "` reaches a `Shared`/`Weak` field, so it is a graph and cannot be read by "
                      "value — a cycle has nowhere to point if the root is a stack value. Read it as "
-                     "`Shared<" + n + ">`").c_str(), call->line);
+                     "`Shared<" + n + ">`").c_str(), call);
         return "0";
     }
     // One-way construction (M8 Phase E): the enclosing type's args ride the TYPE (`Type::<A>.make(...)`),
@@ -39112,7 +39143,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
     // method-turbofish fallback so this can name the exact fix.)
     if (recv->identifier && recv->identifier->genericArgs) {
         unsupported(("type arguments belong on the type — write `" + disp + "::<...>." + method
-                     + "(...)`, not `" + disp + "." + method + "::<...>(...)`").c_str(), call->line);
+                     + "(...)`, not `" + disp + "." + method + "::<...>(...)`").c_str(), call);
         return "0";
     }
     // THE MINT. A `type view`'s constructor is private, so this is where the two places a view may be born
@@ -39128,7 +39159,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         unsupported(("`" + disp + "` is a `view`, so only the type it views may mint one — and `"
                      + (_currentClass ? _currentClass->name : std::string("this function"))
                      + "` has not declared that it does. Implement a `@viewable` contract whose member "
-                       "returns `" + disp + "`, and mint it from that member's body").c_str(), call->line);
+                       "returns `" + disp + "`, and mint it from that member's body").c_str(), call);
         return "0";
     }
     if (!stci->isBorrow || _mintGrant != tn)
@@ -39332,9 +39363,9 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     if (pos < head.size() && head[pos] == '.') {
         ++pos; hasPrec = true; size_t d0 = pos;
         while (pos < head.size() && isdigit((unsigned char)head[pos])) { prec = prec*10 + (head[pos]-'0'); ++pos; }
-        if (pos == d0) { unsupported(("precision specifier `:" + spec + "` needs digits (e.g. `.2`)").c_str(), hole->line); return; }
+        if (pos == d0) { unsupported(("precision specifier `:" + spec + "` needs digits (e.g. `.2`)").c_str(), hole); return; }
     }
-    if (pos != head.size()) { unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole->line); return; }
+    if (pos != head.size()) { unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole); return; }
     bool hasFlag = plus || left || zero;
     int flags = (zero ? 1 : 0) | (left ? 2 : 0) | (plus ? 4 : 0);
 
@@ -39344,9 +39375,9 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
     //      integer and `+` none on a bit pattern, so both stay refused. The combination was refused
     //      wholesale as "not yet" until the consumer-driven audit (0.9.228). ----
     if (hasBase) {
-        if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole->line); return; }
-        if (hasPrec) { unsupported(("a precision (`.N`) does not apply to a base specifier — `:" + spec + "` (an integer has no fraction)").c_str(), hole->line); return; }
-        if (plus)    { unsupported(("`+` does not apply to a base specifier — `:" + spec + "` shows an unsigned bit pattern, which has no sign").c_str(), hole->line); return; }
+        if (!isInt) { unsupported(("base specifier `:" + spec + "` applies only to an integer hole").c_str(), hole); return; }
+        if (hasPrec) { unsupported(("a precision (`.N`) does not apply to a base specifier — `:" + spec + "` (an integer has no fraction)").c_str(), hole); return; }
+        if (plus)    { unsupported(("`+` does not apply to a base specifier — `:" + spec + "` shows an unsigned bit pattern, which has no sign").c_str(), hole); return; }
         _hoisted.push_back("kama__Formatter__writeU64Radix(&" + fv + ", (uint64_t)(" + val + "), "
                            + std::to_string(base) + ", " + std::to_string(bits) + ", "
                            + std::to_string(upper) + ", " + std::to_string(prefix) + ", "
@@ -39354,18 +39385,18 @@ void CEmitter::emitHoleSpec(const std::string& fv, SharedExpression hole, const 
         return;
     }
 
-    if (!hasWidth && !hasPrec && !hasFlag) { unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole->line); return; }
+    if (!hasWidth && !hasPrec && !hasFlag) { unsupported(("unrecognized format specifier `:" + spec + "`").c_str(), hole); return; }
 
     // ---- Precision (with optional width/flags) — float only. ----
     if (hasPrec) {
-        if (!isFloat) { unsupported(("precision specifier `:" + spec + "` applies only to a float hole").c_str(), hole->line); return; }
+        if (!isFloat) { unsupported(("precision specifier `:" + spec + "` applies only to a float hole").c_str(), hole); return; }
         _hoisted.push_back("kama__Formatter__writeF64Prec(&" + fv + ", (double)(" + val + "), "
                            + std::to_string(prec) + ", " + std::to_string(width) + ", " + std::to_string(flags) + ");");
         return;
     }
     // ---- Width/flags only — decimal integer (a float width needs a precision to be well-defined). ----
-    if (isFloat) { unsupported(("a float width needs a precision (e.g. `:" + std::to_string(width) + ".2`)").c_str(), hole->line); return; }
-    if (!isInt) { unsupported(("format specifier `:" + spec + "` applies only to a numeric hole").c_str(), hole->line); return; }
+    if (isFloat) { unsupported(("a float width needs a precision (e.g. `:" + std::to_string(width) + ".2`)").c_str(), hole); return; }
+    if (!isInt) { unsupported(("format specifier `:" + spec + "` applies only to a numeric hole").c_str(), hole); return; }
     if (isSigned)
         _hoisted.push_back("kama__Formatter__writeI64Width(&" + fv + ", (int64_t)(" + val + "), "
                            + std::to_string(width) + ", " + std::to_string(flags) + ");");
@@ -39385,7 +39416,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     if (recv->identifier && recv->identifier->genericArgs) {
         unsupported(("`." + method + "::<…>` — a method takes no type arguments; name them on the callee "
                      "instead (`T." + method + "(…)`, or `T::<Arg>." + method + "(…)` for a generic type)").c_str(),
-                    call->line);
+                    call);
         return "0";
     }
     // `BindableFunctionPtr.bind(…)` takes its signature from the DESTINATION, and the one destination that
@@ -39395,7 +39426,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         if (rid->value && *rid->value == "BindableFunctionPtr" && method == "bind") {
             unsupported("`BindableFunctionPtr.bind(…)` takes its signature from the local it initializes — "
                         "bind one first (`BindableFunctionPtr<Sig> b = BindableFunctionPtr.bind(obj: …, "
-                        "method: …);`) and hand that on with `give`", call->line);
+                        "method: …);`) and hand that on with `give`", call);
             return "0";
         }
     std::string cls = exprClass(receiver);
@@ -39424,7 +39455,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         MethodInfo* mi = _classes.count(mcls) ? findMethod(&_classes[mcls], method, &owner) : nullptr;
         if (mi && !mi->isConst)
             unsupported(("cannot call non-const method `" + method + "` on a const receiver "
-                         "(declare it `const fn` if it does not mutate)").c_str(), call->line);
+                         "(declare it `const fn` if it does not mutate)").c_str(), call);
         // A CONTRACT-typed receiver resolves in `_interfaces`, not `_classes`, so the lookup above comes
         // back null and the call sails through. The contract member is the only thing visible here — the
         // concrete implementation is behind a vtable slot — which is exactly why the member carries
@@ -39435,7 +39466,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                     if (nm.name == method && !nm.isConst)
                         unsupported(("cannot call non-const contract method `" + method + "` on a const "
                                      "receiver (declare it `const fn` on `" + mcls
-                                     + "` if it does not mutate)").c_str(), call->line);
+                                     + "` if it does not mutate)").c_str(), call);
     }
     // Mutable-borrow uniqueness, RECEIVER side. `emitReorderedCall` compares the `ref`/`out` arguments
     // against each other, but it only ever sees the receiver as an already-emitted C string, so
@@ -39469,7 +39500,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                                      "fn` `" + method + "` — the method may grow the very storage that "
                                      "window views, leaving it dangling. Mint the view inside `" + method
                                      + "`, or declare it a `const fn` if it does not mutate").c_str(),
-                                    call->line);
+                                    call);
                     continue;
                 }
                 if (!ps || !ps->byRef || ps->isConst) continue;
@@ -39482,7 +39513,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                                  "fn` borrows its receiver mutably, so this hands the method two mutable "
                                  "borrows of the same object; pass a distinct place, read it into a local "
                                  "first, or declare `" + method + "` a `const fn` if it does not mutate")
-                                    .c_str(), call->line);
+                                    .c_str(), call);
             }
         }
     }
@@ -39522,10 +39553,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             if (!viaTypeParam && !_inSynthDispatch)
                 unsupported(("`" + method + "` is not `" + primTy + "`'s own method — it comes from a "
                              "contract, so reach it through one: a bound (`fn f<T: C<T>>(T x)`) or a "
-                             "contract value (`C c = x;`)").c_str(), call->line);
+                             "contract value (`C c = x;`)").c_str(), call);
             ClassInfo* powner = nullptr;
             MethodInfo* pmi = findMethod(pci, method, &powner);
-            if (!pmi) { unsupported(("unknown method `" + method + "` on `" + primTy + "`").c_str(), call->line); return "0"; }
+            if (!pmi) { unsupported(("unknown method `" + method + "` on `" + primTy + "`").c_str(), call); return "0"; }
             return emitReorderedCall(primTy + "." + method, pmi->cName, emitExpression(receiver), pmi->params, call->args, call->line);
         }
     }
@@ -39574,19 +39605,19 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         if (isGlobalHeapCall(receiver.get()) && _globalAllocator.empty())
             unsupported("this program declares no `@globalAllocator`, so `globalHeap::<…>()` names nothing — "
                         "declare `@globalAllocator type resource <Pool> implements GlobalHeap` "
-                        "(SPEC *Global allocator*)", call->line);
+                        "(SPEC *Global allocator*)", call);
         else if (!viewWhy.empty())
-            unsupported(viewWhy.c_str(), call->line);
+            unsupported(viewWhy.c_str(), call);
         else if (!rk.empty())
             unsupported(("`" + rk + "` has no method `" + method + "` — no contract that declares it is "
                          "implemented for `" + rk + "` (an interpolation hole needs `Formattable`, a `Map` key "
-                         "needs `Hashable`, `sort` needs `Comparable`)").c_str(), call->line, rk);
+                         "needs `Hashable`, `sort` needs `Comparable`)").c_str(), call, rk);
         else
             unsupported((who.empty()
                          ? ("cannot resolve the receiver of `" + method + "` — its type is not known here")
                          : ("cannot resolve `" + who + "`, the receiver of `" + method + "` — no local, "
                             "parameter, module `static`/`comptime` or type of that name is in reach here")).c_str(),
-                        call->line, who);
+                        call, who);
         return "0";
     }
     // The other side of that tally: a receiver the probe DID resolve, so this call site is fully checked.
@@ -39616,7 +39647,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 unsupported((std::string("`.") + method + "()` borrows and re-reads its " + what + " across "
                              "the whole loop, so it must be a stable reference (a variable, literal, field, "
                              "or `this`) — bind an expression like `s.trim()` or `a + b` to a local first").c_str(),
-                            call->line);
+                            call);
                 return "";                            // failure sentinel (a valid ref never emits "")
             }
             return emitExpression(e);                 // stable ref -> direct (zero-copy, unchanged)
@@ -39708,7 +39739,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 unsupported(("`" + method + "` is not `" + cls + "`'s own method — it comes from the "
                              "contract `" + gmi->fromContract + "`, so reach it through one: a bound "
                              "(`fn f<T: " + boundTy + ">(T x)`) or a contract value").c_str(),
-                            call->line);
+                            call);
         }
     }
     std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line, recv->identifier.get(), receiver);
@@ -40024,7 +40055,7 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
         // mistake, and it is one under every verb: the refusal lives here, where every gate passes.
         if (_gateContradiction) {
             std::string why = _gateContradiction(*ap);      // the whole sentence: the driver owns the groups
-            if (!why.empty()) unsupported(why.c_str(), decl->line);
+            if (!why.empty()) unsupported(why.c_str(), decl);
         }
         if (!compileForActive(*ap, decl->line)) {           // gate inactive -> decl never exists
             std::string n = nameOf(decl.get());
@@ -40070,17 +40101,17 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
                     // a bodied declaration is judged by `declAttrPrefix`.
                     if (!what || (!isFnPtr && !dynamic_cast<IncludeNode*>(decl.get()))) continue;
                     unsupported(("`@linkName` names the symbol of an `extern fn`, an `extern const` or an `expose fn`, and "
-                                 + std::string(what) + " has no symbol to rename").c_str(), decl->line);
+                                 + std::string(what) + " has no symbol to rename").c_str(), decl);
                     continue;
                 }
                 if (*at->name == "heap") {
                     // States that the C behind a symbol touches the heap — so it belongs on the one bodyless
                     // form that HAS a symbol and C behind it, and nowhere else (KR-47).
                     if (at->args && !at->args->empty())
-                        unsupported("`@heap` takes no arguments", decl->line);
+                        unsupported("`@heap` takes no arguments", decl);
                     if (what && (isFnPtr || dynamic_cast<IncludeNode*>(decl.get())))
                         unsupported(("`@heap` marks an `extern fn` — it says C the compiler cannot read touches "
-                                     "the heap — and " + std::string(what) + " has no C of its own").c_str(), decl->line);
+                                     "the heap — and " + std::string(what) + " has no C of its own").c_str(), decl);
                     continue;
                 }
                 if (isFnPtr && (*at->name == "noheap" || *at->name == "foreignEntry"
@@ -40092,13 +40123,13 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
                     // since `kama_run_loop` calls back on the caller's thread and a device callback does
                     // not, and neither signature says which.
                     if (at->args && !at->args->empty())
-                        unsupported((std::string("`@") + *at->name + "` takes no arguments").c_str(), decl->line);
+                        unsupported((std::string("`@") + *at->name + "` takes no arguments").c_str(), decl);
                     continue;
                 }
                 if (what)
                     unsupported((std::string("`@") + *at->name + "` needs a body to apply to, and "
                                  + what + " has none — `@compileFor(FLAG)` is the only attribute a "
-                                 "declaration without a body accepts").c_str(), decl->line);
+                                 "declaration without a body accepts").c_str(), decl);
             }
         }
         kept.push_back(decl);
@@ -40669,7 +40700,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                                  + (_nsCtx.module.empty() ? std::string("a file in no module")
                                                           : "`" + _nsCtx.module + "`")
                                  + " — its `visibility` in `kama.json` does not name this module. Widen it, "
-                                   "or import from a module it does name").c_str(), imp->line);
+                                   "or import from a module it does name").c_str(), imp);
             }
             // M6 B3g: an `import`'s symbol list NAMES the things it imports, so renaming one of them has
             // to rewrite the import too — otherwise the rename leaves a module importing a symbol that no
@@ -40698,7 +40729,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                 }
                 if (!live && _prunedNames.count(*sym->identifier->value))
                     unsupported(("`" + *sym->identifier->value + "` is not available in this build configuration"
-                                 " — a `@compileFor` gate on its declaration excludes it").c_str(), imp->line);
+                                 " — a `@compileFor` gate on its declaration excludes it").c_str(), imp);
                 else if (!_exported.count(q)) {
                     const std::string& n = *sym->identifier->value;
                     // ONE TEST, THREE MISTAKES. `!_exported.count(q)` is a single negative set lookup, and
@@ -40725,7 +40756,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                                        "module: a file in the build's own ROOT keeps its symbols file-private, "
                                        "so there is nothing to import FROM. Move both files into a directory, "
                                        "or give the project a `kama.json` — the `export` is already right")
-                                        .c_str(), imp->line);
+                                        .c_str(), imp);
                     }
                     // 2. IT IS HERE AND PRIVATE — the only case the old wording was right about. `live` says
                     //    a declaration of that name exists under this module's scope; it just never left its
@@ -40733,7 +40764,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                     else if (sameModule && live)
                         unsupported(("`" + n + "` is declared in this module but no file `export`s it — "
                                      "visibility is per file, so the sibling that declares it must say "
-                                     "`export { " + n + " };` before this file can import it").c_str(), imp->line);
+                                     "`export { " + n + " };` before this file can import it").c_str(), imp);
                     // 3. IT WAS NEVER LOADED. Nothing of that name is in the compilation at all, so an
                     //    `export` list is the wrong thing to go and edit: either the name is misspelled, or
                     //    the file that declares it was never handed to the build. §2i — a loose build
@@ -40742,9 +40773,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         unsupported(("nothing named `" + n + "` was loaded — no file of this module declares "
                                      "it. Check the spelling; and if a sibling declares it, pass that file "
                                      "too, because a loose build compiles only the files it is given").c_str(),
-                                    imp->line);
+                                    imp);
                     else
-                        unsupported(("module `" + path + "` does not export `" + n + "`").c_str(), imp->line);
+                        unsupported(("module `" + path + "` does not export `" + n + "`").c_str(), imp);
                 }
                 // The module-qualified name the export check just built IS the resolved key the symbol's
                 // def-site is registered under; an alias (`X as Y`) still refers to X, which is what
@@ -41316,7 +41347,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
     if (mv->isHardware && !isPtr && _classes.count(ty) && _classes[ty].isIntrinsicColl) {
         if (!declOnly)
             unsupported("`hardware` applies only to a scalar value or an `UnsafePtr<T>` static (an MMIO register or ISR flag)",
-                        mv->line);
+                        mv);
         return;
     }
     std::string hw = mv->isHardware ? "volatile " : "";
@@ -41340,7 +41371,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
             unsupported(("a module `static` must be a value, UnsafePtr, `InlineArray` or `Simd` — `" + ty
                          + "` owns memory. A `static` is the MCU shape, not a home for a resource: persistence is "
                          "ownership, so keep it in an `Owned<" + ty + ">`, and `release()` it to a foreign API's "
-                         "userdata slot when it must outlive a frame").c_str(), mv->line);
+                         "userdata slot when it must outlive a frame").c_str(), mv);
         return;
     }
     if (declOnly) {
@@ -41369,7 +41400,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
         if (mv->isComptime) {
             if (!d->initializer) {
                 unsupported(("a `comptime` constant must be initialized — `" + *d->name->value
-                             + "`").c_str(), mv->line);
+                             + "`").c_str(), mv);
                 *_out << " = {0}";
             } else {
                 int64_t cv;
@@ -41387,7 +41418,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                 // the target's ABI decides — KR-93 — and a `comptime` is a value kama computed, at every scope.)
                 else {
                     unsupported(("a `comptime` initializer must be a compile-time constant (a literal, an array "
-                                 "literal, `sizeof`, const arithmetic, or a `comptime fn` call) — `" + *d->name->value + "`").c_str(), mv->line);
+                                 "literal, `sizeof`, const arithmetic, or a `comptime fn` call) — `" + *d->name->value + "`").c_str(), mv);
                     *_out << " = {0}";
                 }
             }
@@ -41395,7 +41426,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
             if (!isConstInitExpr(d->initializer.get())) {
                 unsupported(("a module `static` initializer must be a compile-time constant (a literal, "
                              "`sizeof`, or const arithmetic) — `" + *d->name->value
-                             + "` has a runtime initializer; omit it to zero-init").c_str(), mv->line);
+                             + "` has a runtime initializer; omit it to zero-init").c_str(), mv);
                 *_out << " = {0}";
             } else {
                 *_out << " = " << emitExpression(d->initializer);
@@ -41541,7 +41572,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             // M7: checked in the `comptime assert` loop above; it produces a diagnostic or a queued
             // `_Static_assert`, never a top-level definition.
         } else if (decl) {
-            unsupported("top-level declaration", decl->line);
+            unsupported("top-level declaration", decl);
             *_out << "\n";
         }
     }

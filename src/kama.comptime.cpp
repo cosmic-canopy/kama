@@ -241,6 +241,17 @@ void CEmitter::ctCoerce(const CTValue& proto, CTValue& v)
 
 bool CEmitter::ctFail(const char* what, int line)
 {
+    const ASTNode* p = _posNode;   // a line-only site takes the span being emitted on that line, as `unsupported` does
+    return p && p->line == line ? ctFailAt(what, line, p->column, p->endLine, p->endColumn) : ctFailAt(what, line, 0, 0, 0);
+}
+bool CEmitter::ctFail(const char* what, const ASTNode* at)
+{
+    if (!at) return ctFailAt(what, 0, 0, 0, 0);
+    if (at->synthesized) return ctFail(what, at);
+    return ctFailAt(what, at->line, at->column, at->endLine, at->endColumn);
+}
+bool CEmitter::ctFailAt(const char* what, int line, int column, int endLine, int endColumn)
+{
     if (_ctQuiet || _indexWalk) { _ctFailed = true; return false; }   // a pre-pass reports at emission; an
                                                                       // index-only walk never does (KR-97)
     if (!_ctFailed) {
@@ -265,7 +276,12 @@ bool CEmitter::ctFail(const char* what, int line)
                                : "`" + _ctRunning + "` cannot run at compile time — " + what;
         d.message = std::string("comptime evaluation: ") + demangleForDisplay(body);
         d.file = reportPath(diagFile());   // the prelude names its own file when the install has it — see reportPath
+        const std::string f0 = d.file; const int l0 = d.line;
         attributeToInstSite(d.file, d.line, d.message);   // a stdlib type's assert names the author's instantiation (KR-38)
+        if (d.file == f0 && d.line == l0) {   // still at this node: its span (KR-147)
+            d.column = column;
+            if (endLine > line || (endLine == line && endColumn > column)) { d.endLine = endLine; d.endColumn = endColumn; }
+        }
         _diagnostics.push_back(d);
         _ctFailed = true;
     }
@@ -329,7 +345,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         auto st = _ctDeferredState.find(key);
         if (st == _ctDeferredState.end() || st->second == CTConstState::Done) return true;
         if (st->second == CTConstState::Evaluating)
-            return ctFail(("`" + *id->value + "` is defined in terms of itself").c_str(), id->line);
+            return ctFail(("`" + *id->value + "` is defined in terms of itself").c_str(), id);
         if (!evalDeferredConst(key)) { _ctFailed = true; return false; }   // it already said why
         return true;
     };
@@ -363,7 +379,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
                     if (ei->isExtern)   // KR-55: named where it is USED, which is the line the author can change
                         return ctFail(("`" + ei->name + "::" + *id->value + "` is a constant of a `type extern enum`, "
                                        "whose values the C header defines — kama cannot fold one; compare against "
-                                       "the constant at run time").c_str(), id->line);
+                                       "the constant at run time").c_str(), id);
                     int64_t v;
                     if (!enumMemberValue(*ei, i, v)) return false;
                     asInt(v);
@@ -383,7 +399,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
         if (!resolveExternConst(*id->value, id->qualifier).empty())   // KR-56, the qualified spelling
             return ctFail(("`" + *id->value + "` is an `extern const`, whose value the C header defines — kama cannot "
                            "fold one; use it at run time, or state the number in a `comptime` constant of your own").c_str(),
-                          id->line);
+                          id);
         return false;
     }
 
@@ -406,7 +422,7 @@ bool CEmitter::ctResolveConst(SharedIdentifier id, CTValue& out)
     if (!_localTypes.count(*id->value) && !resolveExternConst(*id->value, id->qualifier).empty())   // KR-56
         return ctFail(("`" + *id->value + "` is an `extern const`, whose value the C header defines — kama cannot "
                        "fold one; use it at run time, or state the number in a `comptime` constant of your own").c_str(),
-                      id->line);
+                      id);
     return false;
 }
 
@@ -418,8 +434,8 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
 {
     if (_ctFailed) return false;
     if (!e) return ctFail("empty expression", 0);
-    if (++_ctSteps > CT_STEP_BUDGET) return ctFail("step budget exceeded — a comptime fn must terminate quickly (raise the loop bound or simplify)", e->line);
-    if (!ctExprKindSupported(e.get())) return ctFail(kCtUnsupportedExpr, e->line);
+    if (++_ctSteps > CT_STEP_BUDGET) return ctFail("step budget exceeded — a comptime fn must terminate quickly (raise the loop bound or simplify)", e);
+    if (!ctExprKindSupported(e.get())) return ctFail(kCtUnsupportedExpr, e);
     ASTNode* n = e.get();
 
     // --- literals ---
@@ -451,7 +467,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                             "guarantee (use it in a runtime position)"
                           : "`sizeof` folds only for fixed-width scalars (`int8`..`int64`, `uint8`..`uint64`, "
                             "`char`, `float32`, `float64`) — `usize`, `bool`, `string` and user types have "
-                            "target- or layout-dependent size", e->line);
+                            "target- or layout-dependent size", e);
         out = CTValue{}; out.width = 64; out.isSigned = false; out.i = sz;
         return true;
     }
@@ -474,36 +490,36 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         if (id->value && (!id->qualifier || id->qualifier->empty()) && !_ctCurrentOwner.empty()
             && _typeConsts.count(_ctCurrentOwner + "::" + *id->value))
             return ctFail(("`" + *id->value + "` is a `comptime` constant of `" + _ctCurrentOwner
-                           + "` — read it as `" + _ctCurrentOwner + "::" + *id->value + "`").c_str(), e->line);
+                           + "` — read it as `" + _ctCurrentOwner + "::" + *id->value + "`").c_str(), e);
         // Phrased for BOTH callers: a `comptime fn` body and (M7) a `comptime assert` predicate, which has
         // no params or locals of its own. Naming only the comptime-fn rule read as a non-sequitur there.
-        return ctFail(ctUnknownIdentifier(id->value ? *id->value : std::string("?")).c_str(), e->line);
+        return ctFail(ctUnknownIdentifier(id->value ? *id->value : std::string("?")).c_str(), e);
     }
 
     // --- `this` and a field read `x.f` — a value type's member, running (KR-93) ---
     if (dynamic_cast<ThisAccessNode*>(n)) {
         auto it = env.vars.find("this");
-        if (it == env.vars.end()) return ctFail("`this` is read only inside a value type's member", e->line);
+        if (it == env.vars.end()) return ctFail("`this` is read only inside a value type's member", e);
         out = it->second;
         return true;
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
         if (!ma->identifier || !ma->identifier->value || !ma->expression)
-            return ctFail("unsupported member access at compile time", e->line);
+            return ctFail("unsupported member access at compile time", e);
         CTValue base; if (!ctEvalExpr(ma->expression, env, base)) return false;
         const std::string& fname = *ma->identifier->value;
         if (!base.isStruct)
-            return ctFail(("`." + fname + "` — only a `type value`'s fields are read at compile time").c_str(), e->line);
+            return ctFail(("`." + fname + "` — only a `type value`'s fields are read at compile time").c_str(), e);
         ClassInfo& ci = _classes[base.structClass];
         for (size_t k = 0; k < base.fieldNames.size(); ++k)
             if (base.fieldNames[k] == fname) {
                 Visibility fv = k < ci.fields.size() ? ci.fields[k].visibility : Visibility::Public;
                 if (!ctMemberVisible(ci, fv, fname))
-                    return ctFail(("'" + fname + "' is private in '" + ci.name + "'").c_str(), e->line);
+                    return ctFail(("'" + fname + "' is private in '" + ci.name + "'").c_str(), e);
                 out = base.elems[k];
                 return true;
             }
-        return ctFail(("`" + demangleForDisplay(ci.name) + "` has no field `" + fname + "`").c_str(), e->line);
+        return ctFail(("`" + demangleForDisplay(ci.name) + "` has no field `" + fname + "`").c_str(), e);
     }
 
     // --- cast ---
@@ -511,7 +527,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         CTValue v; if (!ctEvalExpr(c->unaryExpression, env, v)) return false;
         CTValue proto;
         if (!ctTypeInfo(c->type, proto))
-            return ctFail("cast target is not a comptime scalar type", e->line);
+            return ctFail("cast target is not a comptime scalar type", e);
         out = v; ctCoerce(proto, out); return true;
     }
 
@@ -525,12 +541,12 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                 if (v.kind == CTValue::Float) { out = v; out.f = -v.f; out.lit32 = -v.lit32; return true; }
                 out = v; out.i = -v.i; ctTruncate(out); return true;
             case TILDE:
-                if (v.kind == CTValue::Float) return ctFail("`~` needs an integer operand", e->line);
+                if (v.kind == CTValue::Float) return ctFail("`~` needs an integer operand", e);
                 out = v; out.i = ~v.i; ctTruncate(out); return true;
             case EXCLAMATION:
                 out = CTValue{}; out.kind = CTValue::Bool; out.width = 1; out.isSigned = false;
                 out.i = (ctAsI(v) == 0) ? 1 : 0; return true;
-            default: return ctFail("unsupported unary operator in comptime fn", e->line);
+            default: return ctFail("unsupported unary operator in comptime fn", e);
         }
     }
 
@@ -594,7 +610,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                 case GT:    mkBool(a >  c); return true;
                 case LEQ:   mkBool(a <= c); return true;
                 case GEQ:   mkBool(a >= c); return true;
-                default:    return ctFail("unsupported float operator in comptime fn", e->line);
+                default:    return ctFail("unsupported float operator in comptime fn", e);
             }
         }
         int64_t a = ctAsI(lv), c = ctAsI(rv);
@@ -602,10 +618,10 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             case PLUS:    mkInt(a + c); return true;
             case MINUS:   mkInt(a - c); return true;
             case STAR:    mkInt(a * c); return true;
-            case SLASH:   if (c == 0 || (a == INT64_MIN && c == -1)) return ctFail("division by zero (or overflow) in comptime fn", e->line); mkInt(a / c); return true;
-            case PERCENT: if (c == 0 || (a == INT64_MIN && c == -1)) return ctFail("remainder by zero (or overflow) in comptime fn", e->line); mkInt(a % c); return true;
-            case LTLT:    if (c < 0 || c >= 64) return ctFail("shift amount out of range in comptime fn", e->line); mkInt((int64_t)((uint64_t)a << c)); return true;
-            case GTGT:    if (c < 0 || c >= 64) return ctFail("shift amount out of range in comptime fn", e->line); mkInt(a >> c); return true;
+            case SLASH:   if (c == 0 || (a == INT64_MIN && c == -1)) return ctFail("division by zero (or overflow) in comptime fn", e); mkInt(a / c); return true;
+            case PERCENT: if (c == 0 || (a == INT64_MIN && c == -1)) return ctFail("remainder by zero (or overflow) in comptime fn", e); mkInt(a % c); return true;
+            case LTLT:    if (c < 0 || c >= 64) return ctFail("shift amount out of range in comptime fn", e); mkInt((int64_t)((uint64_t)a << c)); return true;
+            case GTGT:    if (c < 0 || c >= 64) return ctFail("shift amount out of range in comptime fn", e); mkInt(a >> c); return true;
             case AMP:     mkInt(a & c); return true;
             case BAR:     mkInt(a | c); return true;
             case CARET:   mkInt(a ^ c); return true;
@@ -615,7 +631,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             case GT:      mkBool(a >  c); return true;
             case LEQ:     mkBool(a <= c); return true;
             case GEQ:     mkBool(a >= c); return true;
-            default:      return ctFail("unsupported binary operator in comptime fn", e->line);
+            default:      return ctFail("unsupported binary operator in comptime fn", e);
         }
     }
 
@@ -630,13 +646,13 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         SharedExpression base = ea->expression ? ea->expression
                               : (ea->identifier ? std::static_pointer_cast<ExpressionNode>(ea->identifier) : SharedExpression());
         if (!base || !ea->expressionlist || ea->expressionlist->size() != 1)
-            return ctFail("only single-index fixed-array access is supported in a comptime fn", e->line);
+            return ctFail("only single-index fixed-array access is supported in a comptime fn", e);
         CTValue arr; if (!ctEvalExpr(base, env, arr)) return false;
-        if (!arr.isArray) return ctFail("indexed value is not a fixed array in comptime fn", e->line);
+        if (!arr.isArray) return ctFail("indexed value is not a fixed array in comptime fn", e);
         CTValue idx; if (!ctEvalExpr((*ea->expressionlist)[0], env, idx)) return false;
         int64_t i = ctAsI(idx);
         if (i < 0 || (size_t)i >= arr.elems.size())
-            return ctFail("comptime fixed-array index out of bounds", e->line);
+            return ctFail("comptime fixed-array index out of bounds", e);
         out = arr.elems[(size_t)i];
         return true;
     }
@@ -645,7 +661,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         if (!inv->identifier) return ctEvalCallExpr(inv, env, out);   // `Type.ctor(…)` / `value.method(…)` (KR-93)
         if (!inv->identifier->value)
-            return ctFail("a comptime fn may call only another `comptime fn` by name", e->line);
+            return ctFail("a comptime fn may call only another `comptime fn` by name", e);
         std::vector<std::string> argNames;
         auto evalArgs = [&](std::vector<CTValue>& args) -> bool {
             if (inv->args) for (auto& a : *inv->args) {
@@ -667,7 +683,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                 bool handled = false;   // a value type's `static fn` runs too (KR-93)
                 bool ok = ctStaticMember(owner, *inv->identifier->value, disp, inv, env, e->line, out, handled);
                 if (handled) return ok;
-                return ctFail(ctNotCompileTimeCallee(disp).c_str(), e->line);
+                return ctFail(ctNotCompileTimeCallee(disp).c_str(), e);
             }
             // ...or a `friend` grant names it. This is the THIRD access-check path — canAccess (emitter)
             // and visibleFrom (query) are the other two — and it was the one that knew nothing about
@@ -687,7 +703,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                                "mark it `public` to call it from another scope, or have `"
                                + *inv->identifier->qualifier->back()
                                + "` grant it to the calling type: `friend <ThatType>["
-                               + *inv->identifier->value + "];`").c_str(), e->line);
+                               + *inv->identifier->value + "];`").c_str(), e);
             std::vector<CTValue> args; if (!evalArgs(args)) return false;
             if (!ctBindByName(mit->second.node->params, argNames, args, disp, e->line)) return false;
             std::string saved = _ctCurrentOwner; _ctCurrentOwner = owner;
@@ -712,9 +728,9 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                                    "file's reach — " + (_exported.count(kv.first)
                                        ? std::string("import it (`import { … };`)")
                                        : std::string("it is private to that file, and leaves it only through that "
-                                                     "file's `export { … };`"))).c_str(), e->line);
+                                                     "file's `export { … };`"))).c_str(), e);
             return ctFail((!_ctRunning.empty() ? "it calls `" + nm + "`, which is not a `comptime fn`"
-                                               : ctNotComptimeCall(nm, _ctDepth > 0)).c_str(), e->line);
+                                               : ctNotComptimeCall(nm, _ctDepth > 0)).c_str(), e);
         }
         std::vector<CTValue> args; if (!evalArgs(args)) return false;
         const ComptimeFn& cf = _comptimeFns[key];
@@ -725,7 +741,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         return ok;
     }
 
-    return ctFail(kCtUnsupportedExpr, e->line);
+    return ctFail(kCtUnsupportedExpr, e);
 }
 
 // Build a fixed array's element values from its initializer: `[v; N]` (fill), `[a, b, c]` (list), or
@@ -735,25 +751,25 @@ bool CEmitter::ctBuildArrayInit(SharedExpression init, CTEnv& env, const CTValue
     auto* al = dynamic_cast<ArrayLiteralNode*>(init.get());
     if (!al) {   // an array-valued expression
         CTValue src; if (!ctEvalExpr(init, env, src)) return false;
-        if (!src.isArray || src.elems.size() != n) return ctFail("comptime array initializer shape mismatch", init->line);
+        if (!src.isArray || src.elems.size() != n) return ctFail("comptime array initializer shape mismatch", init);
         out = src.elems; return true;
     }
     if (al->fillValue && al->fillCount) {
         CTValue fv; if (!ctEvalExpr(al->fillValue, env, fv)) return false;
         int64_t fc;
         if (!constValue(al->fillCount, fc)) { CTValue c; if (!ctEvalExpr(al->fillCount, env, c)) return false; fc = ctAsI(c); }
-        if (fc < 0 || (size_t)fc != n) return ctFail("comptime array fill count does not match the declared size", init->line);
+        if (fc < 0 || (size_t)fc != n) return ctFail("comptime array fill count does not match the declared size", init);
         ctCoerce(elemProto, fv);
         out.assign(n, fv);
         return true;
     }
     if (al->elements) {
-        if (al->elements->size() != n) return ctFail("comptime array literal length does not match the declared size", init->line);
+        if (al->elements->size() != n) return ctFail("comptime array literal length does not match the declared size", init);
         out.clear();
         for (auto& el : *al->elements) { CTValue ev; if (!ctEvalExpr(el, env, ev)) return false; ctCoerce(elemProto, ev); out.push_back(ev); }
         return true;
     }
-    return ctFail("unsupported comptime array initializer", init->line);
+    return ctFail("unsupported comptime array initializer", init);
 }
 
 // ---------------------------------------------------------------------------
@@ -764,8 +780,8 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
 {
     if (_ctFailed) return CTFlow::Fail;
     if (!s) return CTFlow::Normal;
-    if (++_ctSteps > CT_STEP_BUDGET) { ctFail("step budget exceeded — a comptime fn must terminate quickly", s->line); return CTFlow::Fail; }
-    if (!ctStmtKindSupported(s.get())) { ctFail(kCtUnsupportedStmt, s->line); return CTFlow::Fail; }
+    if (++_ctSteps > CT_STEP_BUDGET) { ctFail("step budget exceeded — a comptime fn must terminate quickly", s); return CTFlow::Fail; }
+    if (!ctStmtKindSupported(s.get())) { ctFail(kCtUnsupportedStmt, s); return CTFlow::Fail; }
     ASTNode* n = s.get();
 
     if (auto* blk = dynamic_cast<BlockNode*>(n)) {
@@ -793,7 +809,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         }
         CTValue proto;
         if (!ctValueProto(d->type, proto)) {
-            ctFail(kCtLocalType, s->line);
+            ctFail(kCtLocalType, s);
             return CTFlow::Fail;
         }
         if (d->variables) for (auto& v : *d->variables) {
@@ -810,7 +826,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     if (auto* d = dynamic_cast<ConstLocalVariableDeclaration*>(n)) {
         CTValue proto;
         if (!ctValueProto(d->type, proto)) {
-            ctFail(kCtConstLocalType, s->line);
+            ctFail(kCtConstLocalType, s);
             return CTFlow::Fail;
         }
         if (d->variables) for (auto& v : *d->variables) {
@@ -824,19 +840,19 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     }
 
     if (auto* a = dynamic_cast<AssignmentNode*>(n)) {
-        if (a->token != EQ) { ctFail(kCtPlainAssign, s->line); return CTFlow::Fail; }
+        if (a->token != EQ) { ctFail(kCtPlainAssign, s); return CTFlow::Fail; }
         // Fixed-array element write `t[i] = v` — the table-fill primitive.
         if (auto* ea = dynamic_cast<ElementAccessNode*>(a->unaryExpression.get())) {
             SharedExpression base = ea->expression ? ea->expression
                                   : (ea->identifier ? std::static_pointer_cast<ExpressionNode>(ea->identifier) : SharedExpression());
             auto* bid = base ? dynamic_cast<IdentifierNode*>(base.get()) : nullptr;
-            if (!bid || !bid->value) { ctFail("a comptime array-element write targets a local fixed array", s->line); return CTFlow::Fail; }
+            if (!bid || !bid->value) { ctFail("a comptime array-element write targets a local fixed array", s); return CTFlow::Fail; }
             auto it = env.vars.find(*bid->value);
-            if (it == env.vars.end() || !it->second.isArray) { ctFail(("`" + (bid->value ? *bid->value : std::string("?")) + "` is not a fixed-array local in comptime fn").c_str(), s->line); return CTFlow::Fail; }
-            if (!ea->expressionlist || ea->expressionlist->size() != 1) { ctFail("only single-index array writes are supported in a comptime fn", s->line); return CTFlow::Fail; }
+            if (it == env.vars.end() || !it->second.isArray) { ctFail(("`" + (bid->value ? *bid->value : std::string("?")) + "` is not a fixed-array local in comptime fn").c_str(), s); return CTFlow::Fail; }
+            if (!ea->expressionlist || ea->expressionlist->size() != 1) { ctFail("only single-index array writes are supported in a comptime fn", s); return CTFlow::Fail; }
             CTValue idx; if (!ctEvalExpr((*ea->expressionlist)[0], env, idx)) return CTFlow::Fail;
             int64_t i = ctAsI(idx);
-            if (i < 0 || (size_t)i >= it->second.elems.size()) { ctFail("comptime fixed-array write index out of bounds", s->line); return CTFlow::Fail; }
+            if (i < 0 || (size_t)i >= it->second.elems.size()) { ctFail("comptime fixed-array write index out of bounds", s); return CTFlow::Fail; }
             CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
             CTValue elemProto = it->second; elemProto.isArray = false; elemProto.elems.clear();   // element scalar proto
             ctCoerce(elemProto, val);
@@ -848,7 +864,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             std::vector<std::string> path;
             SharedExpression cur = a->unaryExpression;
             while (auto* m = dynamic_cast<MemberAccessNode*>(cur.get())) {
-                if (!m->identifier || !m->identifier->value) { ctFail("unsupported field write at compile time", s->line); return CTFlow::Fail; }
+                if (!m->identifier || !m->identifier->value) { ctFail("unsupported field write at compile time", s); return CTFlow::Fail; }
                 path.insert(path.begin(), *m->identifier->value);
                 cur = m->expression;
             }
@@ -857,14 +873,14 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             else if (auto* rid = dynamic_cast<IdentifierNode*>(cur.get()))
                 if (rid->value && (!rid->qualifier || rid->qualifier->empty())) root = *rid->value;
             auto it = root.empty() ? env.vars.end() : env.vars.find(root);
-            if (it == env.vars.end()) { ctFail("a compile-time field write targets `this` or a local value", s->line); return CTFlow::Fail; }
+            if (it == env.vars.end()) { ctFail("a compile-time field write targets `this` or a local value", s); return CTFlow::Fail; }
             CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
             CTValue* slot = &it->second;
             for (auto& fname : path) {
-                if (!slot->isStruct) { ctFail(("`." + fname + "` is not a field of a value").c_str(), s->line); return CTFlow::Fail; }
+                if (!slot->isStruct) { ctFail(("`." + fname + "` is not a field of a value").c_str(), s); return CTFlow::Fail; }
                 size_t k = 0;
                 while (k < slot->fieldNames.size() && slot->fieldNames[k] != fname) ++k;
-                if (k == slot->fieldNames.size()) { ctFail(("no field `" + fname + "`").c_str(), s->line); return CTFlow::Fail; }
+                if (k == slot->fieldNames.size()) { ctFail(("no field `" + fname + "`").c_str(), s); return CTFlow::Fail; }
                 slot = &slot->elems[k];
             }
             ctCoerceTo(*slot, val);   // store into the field's declared width/kind
@@ -872,7 +888,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             return CTFlow::Normal;
         }
         auto* tgt = dynamic_cast<IdentifierNode*>(a->unaryExpression.get());
-        if (!tgt || !tgt->value) { ctFail("comptime assignment target must be a local or an element of a local array (`a[i] = …`)", s->line); return CTFlow::Fail; }
+        if (!tgt || !tgt->value) { ctFail("comptime assignment target must be a local or an element of a local array (`a[i] = …`)", s); return CTFlow::Fail; }
         auto it = env.vars.find(*tgt->value);
         // A bare field of `this` inside a value type's member (KR-93).
         if (it == env.vars.end()) {
@@ -886,7 +902,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
                         return CTFlow::Normal;
                     }
         }
-        if (it == env.vars.end()) { ctFail(("assignment to unknown local `" + *tgt->value + "` in comptime fn").c_str(), s->line); return CTFlow::Fail; }
+        if (it == env.vars.end()) { ctFail(("assignment to unknown local `" + *tgt->value + "` in comptime fn").c_str(), s); return CTFlow::Fail; }
         CTValue val;
         if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
         ctCoerceTo(it->second, val);   // store into the target's declared width/kind
@@ -945,9 +961,9 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
     }
 
     if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
-        if (fe->isRef) { ctFail(kCtForeachRef, s->line); return CTFlow::Fail; }
+        if (fe->isRef) { ctFail(kCtForeachRef, s); return CTFlow::Fail; }
         CTValue arr; if (!ctEvalExpr(fe->expression, env, arr)) return CTFlow::Fail;
-        if (!arr.isArray) { ctFail(kCtForeachArray, s->line); return CTFlow::Fail; }
+        if (!arr.isArray) { ctFail(kCtForeachArray, s); return CTFlow::Fail; }
         if (!fe->name || !fe->name->value) return CTFlow::Normal;
         const std::string& bind = *fe->name->value;
         for (auto& elv : arr.elems) {
@@ -976,7 +992,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         }
     }
 
-    ctFail(kCtUnsupportedStmt, s->line);
+    ctFail(kCtUnsupportedStmt, s);
     return CTFlow::Fail;
 }
 
@@ -1071,7 +1087,7 @@ bool CEmitter::ctEvalBody(SharedParameterList params, SharedBlock body, SharedId
             _ctDepth--;
             // At the PARAMETER, which is where the fix goes — and where the check walk, which reads every
             // `comptime fn`, reports the same thing, so the two are one diagnostic (KR-102).
-            return ctFail(kCtParamType, p->identifier->line);
+            return ctFail(kCtParamType, p->identifier);
         }
         CTValue v = args[i]; ctCoerceTo(proto, v);
         env.vars[*p->identifier->value] = v;

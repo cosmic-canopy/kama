@@ -37,6 +37,8 @@
 #  10. A generic-INFERENCE failure names its own file in `build`, `check` and `query --diagnostics` alike.
 #  11. `kama check`'s closing summary names what was checked (KR-141): the manifest, not the module's
 #      alphabetically first file — `src/a.kama FAILED` used to report an error that was in `src/b.kama`.
+#  12. A semantic diagnostic carries the COLUMN of what it is about (KR-147), not 0, in `check`, `--json` and
+#      `query --diagnostics` alike — an editor underlines the construct, not the line from its start.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -506,6 +508,23 @@ if ! printf '%s\n' "$out11l" | grep -q '^kama: src/b.kama FAILED (1 error)$'; th
     exit 1
 fi
 
+# ---- 12. a semantic diagnostic carries its column (KR-147) -------------------------------------------------
+printf 'fn int32 main() {\n    int32 total = 0;\n    total = "text";\n    return total;\n}\n' > "$tmp/col.kama"
+out12=$("$KAMA" check "$tmp/col.kama" 2>&1 || true)
+if ! printf '%s\n' "$out12" | grep -q 'col\.kama:3:4: error: an assignment expects a number'; then
+    echo "check-diag-file: FAIL — a semantic diagnostic did not carry the assignment's column (3:4):"
+    printf '%s\n' "$out12" | sed 's/^/    /' | head -4; exit 1
+fi
+out12j=$("$KAMA" check "$tmp/col.kama" --json 2>&1 || true)
+case "$out12j" in *'"line":3,"column":4,"endLine":3,"endColumn":18'*) ;; *)
+    echo "check-diag-file: FAIL — --json does not give the diagnostic's span (3:4 to 3:18):"
+    printf '%s\n' "$out12j" | head -c 400; echo; exit 1 ;; esac
+out12q=$("$KAMA" query "$tmp/col.kama" --diagnostics 2>&1 || true)
+if ! printf '%s\n' "$out12q" | grep -q 'col\.kama:3:4: error:'; then
+    echo "check-diag-file: FAIL — \`kama query --diagnostics\` does not carry the column:"
+    printf '%s\n' "$out12q" | sed 's/^/    /' | head -4; exit 1
+fi
+
 echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local,"
 echo "                       from the collect pass, a body, or a generic template's body; and one mistake"
 echo "                       in a generic body is reported once, not once per instantiation; an"
@@ -514,4 +533,5 @@ echo "                       same-module import blames the cause that fired, not
 echo "                       failed generic bound is the USE SITE's mistake, reported once, in its file; and a
                        position raised in the HEADER PASS names the prelude, not the user's file; and
                        a generic-inference failure names its file in build, check and query alike; and
-                       check's summary names the manifest, or the files that failed)"
+                       check's summary names the manifest, or the files that failed; and a semantic
+                       diagnostic carries its column, in check, --json and query)"

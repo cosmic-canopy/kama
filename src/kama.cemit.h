@@ -3895,6 +3895,9 @@ private:
     void ctCoerce(const CTValue& proto, CTValue& v);                              // coerce v to proto's kind/width (typed store)
     void ctTruncate(CTValue& v);                                                  // wrap an Int to its declared width
     bool ctFail(const char* what, int line);                                      // emit a comptime diagnostic, mark failed
+    bool ctFail(const char* what, const ASTNode* at);                             // ...at the node's span (KR-147)
+    template <class T> bool ctFail(const char* what, const std::shared_ptr<T>& at) { return ctFail(what, static_cast<const ASTNode*>(at.get())); }
+    bool ctFailAt(const char* what, int line, int column, int endLine, int endColumn);
     std::string ctRender(const CTValue& v) const;                                 // scalar -> C initializer text
     static double ctAsF(const CTValue& v);
     static int64_t ctAsI(const CTValue& v);
@@ -4066,6 +4069,23 @@ private:
     // ...and the form that names the SYMBOL the defect is about, for the sites an editor can offer a fix
     // on (an unimported name, an unknown type). See Diagnostic::subject.
     void unsupported(const char* rawWhat, int srcLine, const std::string& subject);
+    // ...and the forms that take the NODE the defect is about (KR-147): its span gives the diagnostic a column, so
+    // an editor underlines the construct instead of the line from its start, and `--diagnostics` can point at it.
+    void unsupported(const char* rawWhat, const ASTNode* at, const std::string& subject = std::string());
+    template <class T> void unsupported(const char* rawWhat, const std::shared_ptr<T>& at,
+                                        const std::string& subject = std::string()) {
+        unsupported(rawWhat, static_cast<const ASTNode*>(at.get()), subject);
+    }
+    // The one record every form funnels into, at an explicit span (column 0-based, as the lexer counts; 0s = unknown).
+    void unsupportedAt(const char* rawWhat, int srcLine, int column, int endLine, int endColumn, const std::string& subject);
+    // The statement or expression being EMITTED (null outside emission, never a synthesized node). A line-only
+    // diagnostic raised on its line takes its span: it is the construct the emitter is looking at (KR-147).
+    const ASTNode* _posNode = nullptr;
+    struct PosGuard {
+        CEmitter& e; const ASTNode* saved;
+        PosGuard(CEmitter& em, const ASTNode* n);   // kama.cemit.cpp: ASTNode is incomplete here
+        ~PosGuard() { e._posNode = saved; }
+    };
     // Mangled -> source spelling, applied at the single point a message becomes visible (see the .cpp).
     // `cRegister` additionally strips the user register `k_` off a token no table claimed — true only for
     // text that came out of EMITTED C, never for a diagnostic. See demangleEmitted() above, and the
