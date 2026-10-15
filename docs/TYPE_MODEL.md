@@ -177,7 +177,8 @@ type contract Animated for value, resource implements Drawable { fn void step(fl
 ### `enum` — one of a closed set of variants
 
 An `enum` is a sum type: a value is exactly one of its variants, and a variant may carry named fields.
-`match` is the only way to take one apart, and it is exhaustive.
+`match` is the only way to take one apart, and it is exhaustive. (Asking which variant it is — `isSome()`,
+`isOk()` on the prelude's two — takes nothing apart.)
 
 ```kama
 type enum Shape implements Error {

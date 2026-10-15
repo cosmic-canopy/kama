@@ -5856,6 +5856,10 @@ int32 idx = match (find(xs: list, target: 7)) {
 };
 ```
 
+A yes/no question needs no `match`: `isSome()`/`isNone()` on an `Optional`, `isOk()`/`isErr()` on a `Result`,
+each a `const fn` (`if (cache.lookup(key: k).isNone()) { … }`). They take nothing apart — the value, or a default
+in its place, is still `match`'s, the one way; there is no `unwrap`, `unwrapOr` or `map`. <!-- test: optional_result_queries -->
+
 `Weak<T>.tryUpgrade()` returns `Optional<Shared<T>>`; a fallible `static fn` factory returns `Result<T, E>`
 (see Fallible construction above).
 

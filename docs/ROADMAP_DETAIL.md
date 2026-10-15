@@ -510,23 +510,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-optional-queries"></a>
-
-### `Optional`/`Result` answer yes/no questions (KR-163)
-
-**Decided (the maintainer, 2026-10-14): queries only.** `isSome()`/`isNone()` on `Optional`, `isOk()`/`isErr()` on
-`Result`. Taking one apart — the value or a default — stays `match`, GOALS' one way: `unwrapOr` and `map` were
-declined (`map` would need closures, which kama does not have). Today `bool has = match (o) { case Some(value: _):
-true; case None: false; };` is the only spelling. A generic enum takes members (shipped; SPEC *Enums*), so these are prelude members
-with no compiler work. KEYWORDS.md's "match is the one construct for branching on an enum" gains the qualification.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `prelude/global.kama` — `type enum Optional<T>` and `Result<T, E>`: a `;` after the
-variants, then two `public const fn bool` members each. Probed: the members build on `Optional<int32>`,
-`Optional<Owned<Big>>` (through a `const ref` too) and `Result<int32, Owned<Error>>`; no compiler change. The prelude is
-embedded, so VERSION bumps. ⚠️ `tools/check-query.sh` pins `Optional`'s declaration line and column — keep that line and
-add the members below it. Docs that say "`match` is the only way to take one apart" (SPEC *Error model*, TYPE_MODEL,
-tour, KEYWORDS) stay true — a query takes nothing apart — and gain the qualification.
-
 <a id="s2-int-match-diagnostic"></a>
 
 ### `match` on an integer says what to write instead (KR-164)
@@ -576,7 +559,7 @@ it should name the type, and the fix (`match`) goes unsaid. **Scheduled.**
 (`demangleForDisplay(exprClass(e))`), and when the source is an `Optional<D>`/`Result<D, E>` whose payload is the
 destination `D`, say to take it apart with `match` (the inverse of `wrapperHint`). Wider than filed: the same noun
 appears for `int32 k = optionalFn()`, an assignment, a return, an argument, `if (o)` (which could suggest `.isSome()`
-once KR-163 lands), and any user value type — one noun fixed in four places, not a `Result` special case.
+now that it exists, `0.9.613`), and any user value type — one noun fixed in four places, not a `Result` special case.
 
 <a id="s2-growable-enums"></a>
 
@@ -945,7 +928,7 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
     agent verifying its work — not on a shipped program.
   - **`Optional` has no unwrap.** `match` is the only way to open it — there is no `?` operator. *(This said a
     generic enum "rejects members"; that stopped being true once enums took members, and the maintainer has ruled that `Optional`
-    and `Result` gain yes/no queries only — KR-163 — while taking one apart stays `match`.)* `unwrapPtr` is monomorphic
+    and `Result` gained yes/no queries only — `isSome()`, `isOk()`, `0.9.613` — while taking one apart stays `match`.)* `unwrapPtr` is monomorphic
     for the old reason, and the compiler emits calls to it directly into C at **nine** sites, so its
     signature is a hard dependency of the `new`/`try new` lowering. Pervasive absence without an
     ergonomic unwrap means a `match` at every one of ~30 stdlib sites.

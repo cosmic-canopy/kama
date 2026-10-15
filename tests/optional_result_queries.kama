@@ -1,0 +1,18 @@
+// `Optional`/`Result` answer yes/no questions (KR-163): `isSome()`/`isNone()`, `isOk()`/`isErr()` — `const fn`s,
+// so a borrowed one answers too, whatever its payload (a move-only `Owned<Big>` here). They take nothing apart:
+// the value, or a default, is `match`'s, the one way. Returns 15 (each question adds one bit).
+import { std::memory::Owned, std::io::IoError };
+type value Big { public int32 w; public ctor make(int32 w) { this.w = w; } }
+fn bool viaRef(const ref Optional<Owned<Big>> o) { return o.isSome(); }
+fn int32 main() {
+    Optional<int32> a = Optional::Some(value: 3);
+    Optional<int32> b = Optional::None;
+    Optional<Owned<Big>> c = Optional::Some(value: new Big.make(w: 1));
+    Result<int32, IoError> r = Result::Ok(value: 1);
+    int32 n = 0;
+    if (a.isSome()) { n = n + 1; }
+    if (b.isNone()) { n = n + 2; }
+    if (viaRef(o: c)) { n = n + 4; }
+    if (r.isOk() && !r.isErr()) { n = n + 8; }
+    return n;
+}

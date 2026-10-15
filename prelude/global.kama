@@ -12,9 +12,17 @@
 // inline `null`/value case in emitSerFieldWrite), and a derived `{"tag":"Some",…}` would be a second
 // form for one type, disagreeing with the first by position.
 @generate(Equatable, Hashable, Formattable)
-type enum Optional<T> implements Sendable when [T: Sendable] { Some(T value), None }
+type enum Optional<T> implements Sendable when [T: Sendable] { Some(T value), None;
+    // Yes/no questions (KR-163). They take nothing apart: the value, or a default in its place, is `match`'s —
+    // the one way — so there is no `unwrap`, `unwrapOr` or `map` (a `map` would need a closure kama does not have).
+    public const fn bool isSome() { return match (this) { case Some(value: _): true; case None: false; }; }
+    public const fn bool isNone() { return match (this) { case Some(value: _): false; case None: true; }; }
+}
 @generate(Equatable, Hashable, Formattable)
-type enum Result<T, E: Error> implements Sendable when [T: Sendable, E: Sendable] { Ok(T value), Err(E error) }
+type enum Result<T, E: Error> implements Sendable when [T: Sendable, E: Sendable] { Ok(T value), Err(E error);
+    public const fn bool isOk()  { return match (this) { case Ok(value: _): true;  case Err(error: _): false; }; }
+    public const fn bool isErr() { return match (this) { case Ok(value: _): false; case Err(error: _): true; }; }
+}
 // `Sendable` is DECLARED, per instance, as on every other generic type: `Optional<int32>` crosses an
 // isolate and `Optional<Shared<Leaf>>` does not, and the declaration is verified over the payloads rather
 // than trusted. (A generic enum used to be the one type judged by its payloads with no declaration at all.)
