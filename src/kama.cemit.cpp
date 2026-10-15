@@ -18051,6 +18051,23 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         return false;
     };
 
+    // An OWNING value a call returned — `s.elements()`, a SortedMap's `keys()` — has no place either, and the iterator
+    // takes its operand's address. It lives in a temporary for the loop and is dropped after it, as Rust's `for x in
+    // f()` owns what `f` returned (KR-165); it used to be "a temporary with no home" even over a mutable map. A view
+    // still needs its window (requirePlaceOperand says how), and so does a `ref` loop, whose writes would land in
+    // something about to be dropped.
+    std::string ownTemp, ownSrc;
+    auto operandAddr = [&](bool allowTemp) -> std::string {
+        if (!placePath(fe->expression).empty()) return "&(" + emitIterable() + ")";
+        if (allowTemp && !isViewCType(container) && isClass(container)) {
+            ownTemp = "kama_fo" + std::to_string(id);
+            ownSrc = emitIterable();
+            return "&" + ownTemp;
+        }
+        requirePlaceOperand();
+        return "";
+    };
+
     std::string iterCType, iterInit, nextCall, hasNextCall, optC;
     // What the iterator ACTUALLY yields, as opposed to what the loop binding claims. Both branches fill
     // it; the mismatch check below is the same rule the intrinsic-collection path enforces.
@@ -18085,10 +18102,11 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
                 unsupported(("`" + container + "`'s `iterConst()` must be a `const fn` — a read-only loop "
                              "must never need a writable collection").c_str(), fe); *_out << "\n"; return;
             }
-            if (!requirePlaceOperand()) return;
+            const std::string at = operandAddr(/*allowTemp=*/true);
+            if (at.empty()) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
             ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
-            iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
+            iterInit = iterMi->cName + "(" + at + ")";
         } else if (implementsContractTemplate(cc, "IteratorConst")) {   // the operand IS the iterator
             iterCType = container; ic = cc;
             iterInit = emitIterable();
@@ -18155,10 +18173,11 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         MethodInfo* iterMi = findMethod(cc, "iterator", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
         ClassInfo* ic = nullptr;
-        if (iterMi) { if (!requirePlaceOperand()) return;
+        if (iterMi) { const std::string at = operandAddr(/*allowTemp=*/true);
+                      if (at.empty()) return;
                       iterCType = cTypeInInstance(container, iterMi->returnType);
                       ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
-                      iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
+                      iterInit = iterMi->cName + "(" + at + ")";
                       if (!implementsContractTemplate(cc, "Iterable")) {   // nominal: the container declares it
                           unsupported(("`" + container + "` must `implements Iterable<T>` to be used in a "
                                        "`foreach`").c_str(), fe); *_out << "\n"; return;
@@ -18211,6 +18230,10 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     }
     _scopes.push_back(wrap);
     flushHoisted(depth + 1);   // declare the relocated iterable temps before the iterator line
+    if (!ownTemp.empty()) {    // the returned collection, owned by the wrapper and dropped after the loop
+        indent(depth + 1); *_out << container << " " << ownTemp << " = " << ownSrc << ";\n";
+        _scopes.back().locals.push_back({ ownTemp, container, /*userName=*/false });
+    }
     indent(depth + 1); *_out << iterCType << " " << it << " = " << iterInit << ";\n";
     indent(depth + 1); *_out << "while (" << (fe->isRef ? hasNextCall : std::string("1")) << ") {\n";
 

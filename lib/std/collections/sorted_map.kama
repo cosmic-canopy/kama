@@ -372,14 +372,14 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     }
 
     // --- ordered min/max (leftmost / rightmost leaf) ---
-    public fn Optional<K> minKey() when [K: Copyable<K>] {
+    public const fn Optional<K> minKey() when [K: Copyable<K>] {
         if (this.leaf) {
             if (this.keys.length() == 0) { return Optional::None; }
             return Optional::Some(value: copy this.keys[0]);
         }
         return this.kids[0].minKey();
     }
-    public fn Optional<K> maxKey() when [K: Copyable<K>] {
+    public const fn Optional<K> maxKey() when [K: Copyable<K>] {
         if (this.leaf) {
             isize n = this.keys.length();
             if (n == 0) { return Optional::None; }
@@ -390,7 +390,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 
     // Greatest key <= `key` (floor) / least key >= `key` (ceil), None if none. A root-to-leaf descent
     // tracking the best candidate at each level, preferring a closer one found deeper in the subtree.
-    public fn Optional<K> floor(const ref K key) when [K: Copyable<K>] {
+    public const fn Optional<K> floor(const ref K key) when [K: Copyable<K>] {
         isize i = 0; isize n = this.keys.length(); isize cand = 0 - 1;
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
@@ -407,7 +407,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
         if (cand >= 0) { return Optional::Some(value: copy this.keys[cand]); }
         return Optional::None;
     }
-    public fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] {
+    public const fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering o = this.cmpKeys(a: this.keys[i], b: key);
@@ -584,7 +584,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
 
     // In-order collect of the keys in [lo, hi) into `dest` — the ordered range query. Prunes subtrees that
     // can't overlap the window: a child left of a key < lo is skipped, and the walk stops once a key >= hi.
-    public fn void collectRange(const ref K lo, const ref K hi, ref DynamicArray<K> dest) when [K: Copyable<K>] {
+    public const fn void collectRange(const ref K lo, const ref K hi, ref DynamicArray<K> dest) when [K: Copyable<K>] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
             Ordering vsHi = this.cmpKeys(a: this.keys[i], b: hi);
@@ -733,13 +733,13 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     }
 
     // Smallest / largest key (None when empty) — O(log n) leftmost/rightmost spine walk.
-    public fn Optional<K> first() when [K: Copyable<K>] { if (this.len == 0) { return Optional::None; } return this.root.minKey(); }
-    public fn Optional<K> last() when [K: Copyable<K>] { if (this.len == 0) { return Optional::None; } return this.root.maxKey(); }
+    public const fn Optional<K> first() when [K: Copyable<K>] { if (this.len == 0) { return Optional::None; } return this.root.minKey(); }
+    public const fn Optional<K> last() when [K: Copyable<K>] { if (this.len == 0) { return Optional::None; } return this.root.maxKey(); }
 
     // Greatest key <= `key` / least key >= `key` (None if none) — the ordered nearest-neighbour queries a
     // hash map can't answer (timelines, ranges, floor/ceil lookups). Java NavigableMap's floorKey/ceilingKey.
-    public fn Optional<K> floor(const ref K key) when [K: Copyable<K>] { return this.root.floor(key: key); }
-    public fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] { return this.root.ceil(key: key); }
+    public const fn Optional<K> floor(const ref K key) when [K: Copyable<K>] { return this.root.floor(key: key); }
+    public const fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] { return this.root.ceil(key: key); }
 
     // Ascending iteration: a fresh `DynamicArray` of key (resp. value) COPIES in sorted-key order — iterate
     // with `foreach (K k in m.keys())`. Eager (materialized) so it reuses the array's tested iterator + stays
@@ -769,7 +769,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     }
 
     // Ascending keys in the half-open window [from, to) — the ordered range query (empty if from >= to).
-    public fn DynamicArray<K> range(const ref K from, const ref K to) when [K: Copyable<K>] {
+    public const fn DynamicArray<K> range(const ref K from, const ref K to) when [K: Copyable<K>] {
         DynamicArray<K> acc = DynamicArray.empty(); this.root.collectRange(lo: from, hi: to, dest: acc); return give acc;
     }
 

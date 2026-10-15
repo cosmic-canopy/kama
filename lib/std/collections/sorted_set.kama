@@ -31,13 +31,13 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     public fn void clear() { this.m.clear(); }
 
     // Ordered queries + iteration forward to the backing map's key views.
-    public fn Optional<K> first() when [K: Copyable<K>] { return this.m.first(); }
-    public fn Optional<K> last() when [K: Copyable<K>] { return this.m.last(); }
-    public fn Optional<K> floor(const ref K key) when [K: Copyable<K>] { return this.m.floor(key: key); }
-    public fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] { return this.m.ceil(key: key); }
+    public const fn Optional<K> first() when [K: Copyable<K>] { return this.m.first(); }
+    public const fn Optional<K> last() when [K: Copyable<K>] { return this.m.last(); }
+    public const fn Optional<K> floor(const ref K key) when [K: Copyable<K>] { return this.m.floor(key: key); }
+    public const fn Optional<K> ceil(const ref K key) when [K: Copyable<K>] { return this.m.ceil(key: key); }
     // `foreach (K k in set.elements())` — ascending members (key copies).
-    public fn DynamicArray<K> elements() when [K: Copyable<K>] { return this.m.keys(); }
-    public fn DynamicArray<K> range(const ref K from, const ref K to) when [K: Copyable<K>] { return this.m.range(from: from, to: to); }
+    public const fn DynamicArray<K> elements() when [K: Copyable<K>] { return this.m.keys(); }
+    public const fn DynamicArray<K> range(const ref K from, const ref K to) when [K: Copyable<K>] { return this.m.range(from: from, to: to); }
     public ctor copy(ref SortedSet<K, A> source) when [K: Copyable<K>] { this.m = copy source.m; }
 
     // Serializable as a JSON array of the members in ascending order (Serializable needs a Copyable key — the key

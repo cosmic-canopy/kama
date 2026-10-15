@@ -3506,6 +3506,10 @@ right method shape but no `implements` is rejected (explicit over implicit). <!-
   `foreach (ref readonly var x in span)`. Every container with `iterMut()` has `iterConst()`, and each keyed one's
   `valuesMut()` has `valuesConst()`. A `string` is immutable and has neither: its bytes bind by value. <!-- test: foreach_const_ref --> <!-- xfail: foreach_ref_const_ref_param, foreach_ref_const_local, foreach_ref_const_fn_field, foreach_const_ref_write, foreach_ref_string, foreach_ref_comptime -->
 - A borrowing iterator holds an `UnsafePtr` cursor (its own `unsafe` internals); the `foreach` surface is safe.
+- The by-value and read-only factories are `const fn` (`iterator()`, `values()`, `entries()`, `iterConst()`), so a
+  borrowed collection — a `const ref` parameter — is looped like an owned one, and a collection a call RETURNS
+  (`foreach (int32 k in sm.keys())`) is kept in a temporary for the loop and dropped after it. <!-- test: collections_const_read -->
+  A view still needs its `borrow` window, and a `ref` loop over a temporary is refused, its writes landing in a dropped value. <!-- xfail: foreach_ref_temporary -->
 
 The prelude contracts (`type contract Iterator<T> for value, view, resource { fn Optional<T> next(); }` and
 `IteratorMut<T>`) are ordinary monomorphized generic contracts, so they double as a static bound —

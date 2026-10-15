@@ -9,8 +9,8 @@ extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
 // Setting/clearing a bit IN PLACE keeps the buffer stable, so it does not invalidate a walk in flight. The scan
 // skips an all-zero word remainder in one jump (`pos -> (word+1) << 6`) so it visits set bits, not empty gaps.
 type view BitSetIter implements Iterator<isize> {
-    UnsafePtr<uint64> words; isize wordCount; isize pos; UnsafePtr<uint32> modsp; uint32 modsAt;
-    unsafe ctor make(UnsafePtr<uint64> words, isize wordCount, UnsafePtr<uint32> modsp, uint32 modsAt) {
+    UnsafeConstPtr<uint64> words; isize wordCount; isize pos; UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafeConstPtr<uint64> words, isize wordCount, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
         this.words = words; this.wordCount = wordCount; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<isize> next() {
@@ -156,7 +156,7 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
     //
     // Importing `BitSet` alone suffices: the `BitSetIter` return type resolves in THIS module, not the
     // caller's scope. (Only explicitly naming the type needs `import std::collections::{BitSetIter}`.)
-    public unsafe fn BitSetIter iterator() {
+    public unsafe const fn BitSetIter iterator() {
         return BitSetIter.make(words: this.words, wordCount: this.wordCount, modsp: addr(of: this.mods), modsAt: this.mods);
     }
 

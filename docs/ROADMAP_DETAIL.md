@@ -510,25 +510,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-const-map-iter"></a>
-
-### A read-only map cannot be iterated (KR-165)
-
-Measured on `0.9.589`, filed 2026-10-14. `fn int32 total(const ref Map<string, int32> m) { foreach (int32 v in m.values()) … }`: "cannot call non-const
-method `values` on a const receiver". `values()`, `iterator()` and `entries()` are non-`const`, so a function that only
-borrows a map cannot read it in a loop. **Scheduled:** the read iterators are `const`, as `DynamicArray.view()` is;
-check `SortedMap` and `Set` the same way.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `lib/std/collections/map.kama` — `iterator()`, `values()`, `entries()` become `unsafe
-const fn`, and the iterators' `modsp` becomes `UnsafeConstPtr<uint32>` (it is only read); `const` alone does not compile,
-since `addr(of: this.mods)` inside a `const fn` is an `UnsafeConstPtr`. Wider than filed: `Set.iterator()`,
-`DynamicArray.iterator()` and `BitSet.iterator()` have the same non-`const` shape; `SortedSet`'s `elements()`/`first`/
-`last`/`floor`/`ceil`/`range` are non-`const` forwarders over `const` SortedMap methods; and `foreach (… in m.keys())`
-on a SortedMap is refused even on a mutable map ("a temporary with no home"), against the comment beside `keys()`. And
-implicit `foreach (int32 k in m)` over a `const ref Map` already builds, because the by-value lowering skips the const
-check (harmless for a copy; the `ref` half of that gap was unsound, and is closed — `foreach (const ref …)`, SPEC
-*foreach*, `0.9.605`).
-
 <a id="s2-result-init-message"></a>
 
 ### A `Result` initializing a `string` is described as "a type value" (KR-166)

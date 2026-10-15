@@ -47,7 +47,7 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
     }
     public const fn isize length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
-    public fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
+    public const fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
 
     // Serializable as a JSON array of the members. Serializable needs a `Copyable` key (the key iterator yields
     // copies); deserialize just `add`s each key (no copy). A yielded `k` is a nameable local, so `k.serialize`

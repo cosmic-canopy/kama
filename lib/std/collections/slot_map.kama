@@ -49,8 +49,8 @@ type value Handle implements Sendable, Serializable, Deserializable<This> {
 // yields each value BY VALUE (a copy). Rejects a structural change (insert/remove) made mid-iteration via the
 // `mods` snapshot — same contract as `MapValueIter`.
 type view SlotMapValueIter<V: Copyable<V>> implements Iterator<V> {
-    UnsafePtr<V> values; UnsafePtr<uint32> gens; isize slotCount; isize pos; UnsafePtr<uint32> modsp; uint32 modsAt;
-    unsafe ctor make(UnsafePtr<V> values, UnsafePtr<uint32> gens, isize slotCount, UnsafePtr<uint32> modsp, uint32 modsAt) {
+    UnsafeConstPtr<V> values; UnsafeConstPtr<uint32> gens; isize slotCount; isize pos; UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafeConstPtr<V> values, UnsafeConstPtr<uint32> gens, isize slotCount, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
         this.values = values; this.gens = gens; this.slotCount = slotCount; this.pos = 0;
         this.modsp = modsp; this.modsAt = modsAt;
     }
@@ -222,7 +222,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
 
     // `foreach (V v in sm.values())` — a by-value iterator over the live values (Copyable value). `valuesMut()`
     // borrows instead, for any value type. (Slot order, which is insertion order with reused gaps — not sorted.)
-    public unsafe fn SlotMapValueIter<V> values() when [V: Copyable<V>] {
+    public unsafe const fn SlotMapValueIter<V> values() when [V: Copyable<V>] {
         return SlotMapValueIter::<V>.make(values: this.slotValues, gens: this.gens, slotCount: this.slotCount,
                                           modsp: addr(of: this.mods), modsAt: this.mods);
     }

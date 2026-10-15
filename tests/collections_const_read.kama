@@ -1,0 +1,37 @@
+// A read-only collection can be READ in a loop (KR-165): through a `const ref`, every by-value iterator factory is a
+// `const fn` — `Map.iterator`/`values`/`entries`, `Set`, `DynamicArray`, `BitSet`, `Deque`, `SlotMap.values` — and
+// so are `SortedMap`'s ordered queries and `SortedSet`'s forwarders over them. A function that only borrows a map
+// could not loop over it ("cannot call non-const method `values` on a const receiver"). And a collection a call
+// RETURNS (`s.elements()`, `m.keys()`) is kept for the loop rather than refused as "a temporary with no home".
+// Returns 39: the sum of what each reader sees.
+import { std::collections::Map, std::collections::Set, std::collections::DynamicArray, std::collections::BitSet,
+         std::collections::SortedSet, std::collections::SortedMap, std::collections::Deque, std::collections::SlotMap,
+         std::collections::Entry };
+fn int32 m1(const ref Map<string, int32> m) { int32 t = 0; foreach (int32 v in m.values()) { t = t + v; } foreach (string k in m) { t = t + 1; } foreach (Entry<string, int32> e in m.entries()) { t = t + e.value(); } return t; }
+fn int32 s1(const ref Set<int32> s) { int32 t = 0; foreach (int32 k in s) { t = t + k; } return t; }
+fn int32 d1(const ref DynamicArray<int32> d) { int32 t = 0; foreach (int32 x in d) { t = t + x; } return t; }
+fn int32 b1(const ref BitSet b) { int32 t = 0; foreach (isize i in b) { t = t + cast<int32>(i); } return t; }
+fn int32 q1(const ref Deque<int32> q) { int32 t = 0; foreach (int32 x in q) { t = t + x; } return t; }
+fn int32 sm1(const ref SlotMap<int32> s) { int32 t = 0; foreach (int32 x in s.values()) { t = t + x; } return t; }
+fn int32 ss1(const ref SortedSet<int32> s) { int32 t = 0; foreach (int32 k in s.elements()) { t = t + k; } Optional<int32> f = s.first(); return t; }
+fn int32 so1(const ref SortedMap<int32, int32> m) { int32 t = 0; Optional<int32> f = m.first(); Optional<int32> c = m.ceil(key: 1); DynamicArray<int32> r = m.range(from: 0, to: 9); return t + cast<int32>(r.length()); }
+// The case that was refused even on a MUTABLE map: `keys()` returns an owning `DynamicArray`, which the loop now
+// keeps in a temporary and drops after it.
+fn int32 keysOfMutable() {
+    SortedMap<int32, int32> m = SortedMap.empty(); m.put(key: 2, value: 0); m.put(key: 1, value: 0);
+    int32 t = 0;
+    foreach (int32 k in m.keys()) { t = t * 10 + k; }
+    return t;                                                         // ascending: 12
+}
+fn int32 main() {
+    if (keysOfMutable() != 12) { return 1; }
+    Map<string, int32> m = Map.empty(); m.put(key: "a", value: 2);
+    Set<int32> s = Set.empty(); s.add(key: 3);
+    DynamicArray<int32> d = DynamicArray.empty(); d.add(item: 4);
+    BitSet b = BitSet.empty(); b.set(index: 5);
+    Deque<int32> q = Deque.empty(); q.pushBack(item: 6);
+    SlotMap<int32> sm = SlotMap.empty(); sm.insert(value: 7);
+    SortedSet<int32> ss = SortedSet.empty(); ss.add(key: 8);
+    SortedMap<int32, int32> so = SortedMap.empty(); so.put(key: 1, value: 1);
+    return m1(m: m) + s1(s: s) + d1(d: d) + b1(b: b) + q1(q: q) + sm1(s: sm) + ss1(s: ss) + so1(m: so);
+}

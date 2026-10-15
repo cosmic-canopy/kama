@@ -12,8 +12,8 @@ extern fn UnsafePtr memmove(UnsafePtr d, UnsafeConstPtr s, usize n);
 // live pointer to the list's mutation counter + the value it saw at creation, and rejects a structural
 // change (an `add`) made mid-iteration — the buffer may have reallocated, so its cursor would dangle.
 type view DynamicArrayIter<T: Copyable<T>> implements Iterator<T> {
-    UnsafePtr<T> data; isize pos; isize len; UnsafePtr<uint32> modsp; uint32 modsAt;
-    unsafe ctor make(UnsafePtr<T> data, isize len, UnsafePtr<uint32> modsp, uint32 modsAt) {
+    UnsafeConstPtr<T> data; isize pos; isize len; UnsafeConstPtr<uint32> modsp; uint32 modsAt;
+    unsafe ctor make(UnsafeConstPtr<T> data, isize len, UnsafeConstPtr<uint32> modsp, uint32 modsAt) {
         this.data = data; this.pos = 0; this.len = len; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<T> next() {
@@ -234,7 +234,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // The by-value `foreach (T x in list)` yields COPIES, so it exists only for a Copyable element.
     // (Move-only elements — `DynamicArray<Owned>` — borrow instead: `foreach (ref T x in list)`.)
     // Each iterator gets a live pointer to `mods` (its own address) + the current value (a snapshot).
-    public unsafe fn DynamicArrayIter<T> iterator() when [T: Copyable<T>] {
+    public unsafe const fn DynamicArrayIter<T> iterator() when [T: Copyable<T>] {
         return DynamicArrayIter::<T>.make(data: this.data, len: this.len, modsp: addr(of: this.mods), modsAt: this.mods);
     }
     // Serde's graph read half rewires this container's edge ELEMENTS through here (opt-in and
