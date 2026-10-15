@@ -1,1 +1,1 @@
-is declared `int32`, so it cannot be initialized with a type value
+is declared `int32`, so it cannot be initialized with a `P`

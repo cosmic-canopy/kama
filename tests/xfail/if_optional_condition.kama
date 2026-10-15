@@ -1,0 +1,9 @@
+// An `Optional` tested for truth (KR-166): there is no implicit truthiness, and the yes/no question it is asking has
+// its member — the diagnostic names the type and says `.isSome()`.
+fn Optional<int32> f() { return Optional::Some(value: 1); }
+
+fn int32 main() {
+    Optional<int32> o = f();
+    if (o) { return 1; }   // -> REJECT
+    return 0;
+}

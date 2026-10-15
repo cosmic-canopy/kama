@@ -3479,6 +3479,8 @@ private:
                              const std::string& opName, int line);   // M6: the seventh position
     std::string indexElemTypeRaw(SharedExpression e);    // `a[i]`'s element type, class OR primitive
     static const char* kindName(TKind k);                // the word a diagnostic uses for a kind
+    std::string valueNoun(TKind k, SharedExpression e);   // ...and for a VALUE: an aggregate is named by its type (KR-166)
+    std::string unwrapHint(TKind want, SharedExpression e); // an Optional/Result whose payload is `want`: take it out
     // Initializer whose KIND cannot be the declared type's. `what` completes "so ___ cannot be …".
     void rejectInitKindMismatch(SharedIdentifier declType, SharedExpression init, const char* what, int line);
     // The type `e` is declared as, when that type can never BE null; "" when `null` is legitimate there.

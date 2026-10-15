@@ -510,21 +510,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-result-init-message"></a>
-
-### A `Result` initializing a `string` is described as "a type value" (KR-166)
-
-Measured on `0.9.589`, filed 2026-10-14. `string t = serializeJsonBuffer(v: x);` says "a local is declared `string`, so it cannot be initialized with a
-type value — a `string` was expected". The value is a `Result<string, Owned<Error>>`; the message names a kind where
-it should name the type, and the fix (`match`) goes unsaid. **Scheduled.**
-
-**Where (surveyed on `0.9.603`, still reproduces):** `CEmitter::kindName` answers "a type value" for every aggregate, used by
-`rejectInitKindMismatch`, `rejectValueKindMismatch` and `requireBoolCondition`. Name the type instead
-(`demangleForDisplay(exprClass(e))`), and when the source is an `Optional<D>`/`Result<D, E>` whose payload is the
-destination `D`, say to take it apart with `match` (the inverse of `wrapperHint`). Wider than filed: the same noun
-appears for `int32 k = optionalFn()`, an assignment, a return, an argument, `if (o)` (which could suggest `.isSome()`
-now that it exists, `0.9.613`), and any user value type — one noun fixed in four places, not a `Result` special case.
-
 <a id="s2-growable-enums"></a>
 
 ### A std enum that grows after 1.0 (KR-176)

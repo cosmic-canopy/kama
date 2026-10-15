@@ -1,0 +1,1 @@
+takes a `bool`, and this is an `Optional<int32>` — there is no implicit truthiness; say what is meant (`.isSome()`)

@@ -1095,6 +1095,34 @@ void CEmitter::rejectNullInit(SharedIdentifier declType, SharedExpression init, 
 // constructors, a value-producing `match` at check time, `extern fn` results, an unresolved name —
 // becomes `Unknown` and is left alone. (`borrow` aliases, `foreach` bindings and primitive `match`
 // payload bindings were on this list; the classifier answers for all three now.)
+// A VALUE's noun in a kind-mismatch diagnostic (KR-166). `kindName` answers a KIND, and for every aggregate that was
+// "a type value": `string t = serializeJsonBuffer(v: x);` said a `string` "cannot be initialized with a type value",
+// where the value is a `Result<string, Owned<Error>>`. One noun, in four places (an initializer, an assignment, an
+// argument, a condition) — so an aggregate is named by its TYPE wherever a value is described.
+std::string CEmitter::valueNoun(TKind k, SharedExpression e)
+{
+    if (k == TKind::Aggregate && e) {
+        const std::string t = exprClass(e).empty() ? typeOfExpr(e) : exprClass(e);
+        if (!t.empty()) return aOrAn(demangleForDisplay(t));
+    }
+    return kindName(k);
+}
+
+// ...and when that aggregate is an `Optional`/`Result` whose payload is what was wanted, the way to take it out —
+// the inverse of `wrapperHint`, which says how to put a value in. Taking one apart is `match`'s, the one way.
+std::string CEmitter::unwrapHint(TKind want, SharedExpression e)
+{
+    const std::string t = e ? exprClass(e) : std::string();
+    auto gi = _genericTypeInsts.find(t);
+    if (t.empty() || gi == _genericTypeInsts.end()) return "";
+    const std::string leaf = preludeLeaf(gi->second.templateKey);
+    const auto& args = gi->second.typeArgs;
+    if (args.empty() || !args[0] || kindOfCType(cType(args[0])) != want) return "";
+    if (leaf == "Optional") return " — take its value out with `match` (`case Some(value: v): …` / `case None: …`)";
+    if (leaf == "Result")   return " — take its value out with `match` (`case Ok(value: v): …` / `case Err(error: e): …`)";
+    return "";
+}
+
 const char* CEmitter::kindName(TKind k)
 {
     switch (k) {
@@ -2788,8 +2816,9 @@ void CEmitter::rejectValueKindMismatch(const std::string& dstCType, SharedExpres
                      + " is not one — " + hint).c_str(), line);
         return;
     }
-    unsupported((std::string(what) + " expects " + kindName(dk) + ", so it cannot be given "
-                 + kindName(vk)).c_str(), line);
+    const std::string want = dk == TKind::Aggregate ? aOrAn(demangleForDisplay(dstCType)) : std::string(kindName(dk));
+    unsupported((std::string(what) + " expects " + want + ", so it cannot be given "
+                 + valueNoun(vk, value) + unwrapHint(dk, value)).c_str(), line);
 }
 
 // A type's `const` field and its `comptime` constant answer to their declared type as any field does (KR-102):
@@ -2884,8 +2913,12 @@ void CEmitter::rejectInitKindMismatch(SharedIdentifier declType, SharedExpressio
     const TKind dk = declTypeKind(declType);
     if (dk == TKind::Unknown || dk == ik) return;
 
+    const std::string unwrap = unwrapHint(dk, init);
     unsupported((std::string(what) + " is declared `" + *declType->value + "`, so it cannot be initialized "
-                 "with " + kindName(ik) + " — " + kindName(dk) + " was expected").c_str(), line);
+                 "with " + valueNoun(ik, init)
+                 + (!unwrap.empty() ? unwrap
+                    : " — " + (dk == TKind::Aggregate ? aOrAn(kamaTypeText(declType)) : std::string(kindName(dk)))
+                      + " was expected")).c_str(), line);
 }
 
 // A type name in a DECLARATION that resolved to nothing. `cType` hands an unresolved name straight back
@@ -7584,8 +7617,16 @@ void CEmitter::requireBoolCondition(SharedExpression e, const char* what, int li
     }
     const TKind k = kindOfCType(t);
     if (k == TKind::Unknown || k == TKind::Bool) return;
-    unsupported((std::string(what) + " takes a `bool`, and this is " + kindName(k) + " — there is no implicit "
-                 "truthiness; say what is meant" + (k == TKind::Num ? " (`n != 0`)" : "")).c_str(), line);
+    // An `Optional`/`Result` tested for truth is asking a yes/no question it has the member for.
+    std::string ask = k == TKind::Num ? " (`n != 0`)" : "";
+    if (k == TKind::Aggregate) {
+        auto gi = _genericTypeInsts.find(exprClass(e));
+        const std::string leaf = gi == _genericTypeInsts.end() ? std::string() : preludeLeaf(gi->second.templateKey);
+        if (leaf == "Optional") ask = " (`.isSome()`)";
+        else if (leaf == "Result") ask = " (`.isOk()`)";
+    }
+    unsupported((std::string(what) + " takes a `bool`, and this is " + valueNoun(k, e) + " — there is no implicit "
+                 "truthiness; say what is meant" + ask).c_str(), line);
 }
 
 std::string CEmitter::emitCondition(SharedExpression cond, const char* what)

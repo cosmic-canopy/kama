@@ -1,1 +1,1 @@
-a `match` arm expects a type value, so it cannot be given a number
+a `match` arm expects a `Reader<int32>`, so it cannot be given a number

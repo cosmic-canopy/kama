@@ -1,0 +1,10 @@
+// A `Result` initializing a `string` (KR-166): the diagnostic names the `Result` it is — it used to call every
+// aggregate "a type value" — and says how to take the value out, since taking one apart is `match`'s.
+import { std::serialization::text::json::serializeJsonBuffer };
+
+@generate(Serializable) type value P { @field int32 x; public ctor make(int32 x) { this.x = x; } }
+
+fn int32 main() {
+    string t = serializeJsonBuffer(v: P.make(x: 1));   // -> REJECT
+    return 0;
+}

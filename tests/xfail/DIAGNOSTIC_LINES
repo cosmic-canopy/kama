@@ -595,6 +595,7 @@ identity_enum_to_int	identity_enum_to_int.kama:9
 identity_int_to_enum	identity_int_to_enum.kama:13
 identity_sig_arity	identity_sig_arity.kama:20
 identity_sig_cross_sig	identity_sig_cross_sig.kama:13
+if_optional_condition	if_optional_condition.kama:7
 iface_collection	iface_collection.kama:6
 iface_field	iface_field.kama:5
 iface_method_private	iface_method_private.kama:7
@@ -639,6 +640,7 @@ init_kind_string_from_int	init_kind_string_from_int.kama:3
 init_kind_string_from_method	init_kind_string_from_method.kama:11
 init_kind_string_from_sizeof	init_kind_string_from_sizeof.kama:3
 init_kind_string_from_ternary	init_kind_string_from_ternary.kama:5
+init_result_into_string	init_result_into_string.kama:8
 inline_array_size_local	inline_array_size_local.kama:5
 inline_array_size_runtime_static	inline_array_size_runtime_static.kama:7
 inline_array_size_unknown	inline_array_size_unknown.kama:5

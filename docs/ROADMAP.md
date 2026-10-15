@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-166 | **A `Result` initializing a `string` is described as "a type value"** — `string t = serializeJsonBuffer(v: x);` should name the `Result` it is | S | [§2](ROADMAP_DETAIL.md#s2-result-init-message) |
 | KR-167 | **The current directory** — std can neither read nor set it, so a relative path cannot be made absolute without running `pwd`; `currentDirectory()`/`setCurrentDirectory()`, and a canonical path | S | [§1](ROADMAP_DETAIL.md#s1-cwd) |
 | KR-168 | **`File` seek** — no `seek`, positional read/write or set-length; random access to a file is impossible in std | S | [§1](ROADMAP_DETAIL.md#s1-file-seek) |
 | KR-177 | **No exclusive create, and an existing path is `Other`** — `OpenMode` has no create-new (`O_EXCL`/`CREATE_NEW`), so a lockfile or a "create, never overwrite" is a check-then-open race; and every EEXIST — `createDir` on an existing directory included — surfaces as `Other`. `OpenMode::CreateNew` and an `AlreadyExists` kind | S | [§1](ROADMAP_DETAIL.md#s1-exclusive-create) |

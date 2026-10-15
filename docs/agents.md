@@ -211,7 +211,8 @@ This is the sharpest edge in the toolchain for an agent, so it is stated plainly
 tags a diagnostic from another configuration with the flags that reproduce it — `[--target WASM]`. Pass
 any configuration flag to check exactly that one instead. See SPEC *Conditional compilation*.
 
-A **kind** is one of four families: a number, a `bool`, a `string`, or a type value. Crossing between
+A **kind** is one of four families: a number, a `bool`, a `string`, or a value of some declared type (named by
+its type in the message: an `Optional<int32>`, a `Result<string, …>`, with how to take the value out). Crossing between
 two of them is rejected by `kama check`, in kama's own words, against your `.kama` line:
 
 ```
