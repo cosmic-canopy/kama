@@ -1782,50 +1782,6 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
-<a id="s4-map-form-by-type"></a>
-
-### A map's JSON form decided from its key type at compile time (KR-149)
-
-Filed 2026-10-14 while deciding a string-keyed map's JSON form (shipped `0.9.587`/`0.9.589`, SPEC *A map keyed by
-text is an object*). **A maintainer decision, not scheduled work.** A map picks its form at run
-time by asking its keys, as Rust's `serde_json` does. That is complete for every map with an entry. The one thing it
-cannot answer is an empty map: an empty `Map<Point, V>` writes `{}` where it wrote `[]`. Reading accepts both forms for
-every map, so either answer can be changed later without breaking stored data; what would change is output bytes.
-
-**What others do.** Libraries with run-time type information decide by type: Go and .NET refuse a structured key even
-when the map is empty, and Swift and Kotlin (`allowStructuredMapKeys`) write a flat array. Rust `serde_json` and Python
-`json`, with no such information at hand, ask the keys, and write `{}` for any empty map.
-
-**Two routes, each with a cost:**
-- **A branch on a type inside a generic body**: `when [K: MapKey] { … } else { … }` as a statement, keeping one block
-  per instance, plus a `MapKey` contract that `string` and the integers implement and a user key type opts into. It
-  gives a compile-time choice, `[]` for an empty struct-keyed map, and an explicit opt-in. It is the "second body per
-  type" that SPEC's *Specialization is a non-goal* rules out, and it means type-checking a body differently per
-  instance. **The maintainer leans against it on that ground (2026-10-14).** It is also a grammar change.
-- **A type descriptor on `Serializable`**: a second member that says what shape a type writes, generated for
-  `@generate` types and supplied by hand everywhere else, as Kotlin's `SerialDescriptor` is. No new syntax, but a
-  source change to every hand-written `serialize`. It would also serve schema export.
-
-**The question, in bytes** (measured on `0.9.603`; `Point` is a `@generate`d value with `x`, `y`):
-
-```kama fragment
-Map<Point, int32> m = Map.empty();               // serializeJsonBuffer(v: m) writes  {}
-m.put(key: Point.make(x: 1, y: 2), value: 5);    // ... and now  [{"key":{"x":1,"y":2},"value":5}]
-Map<string, int32> t = Map.empty();              // writes  {}  — and {"a":1} once it has an entry
-```
-
-Only the first line is in question: should an EMPTY map whose keys are records write `[]`, the form it writes once it
-has an entry? Every reader takes both, so no stored file breaks whichever is chosen.
-
-**Decisions for the maintainer** (presented when a session takes this row):
-1. **Keep the run-time answer and close this row** — recommended. An empty record-keyed map writes `{}`, as Rust's
-   `serde_json` and Python's `json` do. The cost is one byte pattern that differs from the populated form; both
-   alternatives buy it with a language or contract change. SPEC already says an empty map is `{}` for every key type,
-   so closing the row changes no code.
-2. **A type descriptor on `Serializable`** — the route if schema export becomes a goal of its own; this would fall out
-   of it, and the row would fold into that one.
-3. **A branch on a type in a generic body** — the maintainer leans against it (specialization is a non-goal).
-
 <a id="s4-json-value"></a>
 
 ### An untyped JSON value (KR-110)

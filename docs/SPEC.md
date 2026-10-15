@@ -6742,7 +6742,10 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   insertion order changes nothing. Any other key (a struct, an enum) has no object form, so that map is an array of
   `{"key":…,"value":…}` pairs; KBIN writes every map as pairs. Which keys are text is the keys' own answer — a map
   cannot ask what `K` is, so it asks each key what it writes, as Rust's `serde_json` does — so an EMPTY map, with no
-  key to ask, is `{}` on JSON whatever its key type. Reading takes either form for any map, so data written before the
+  key to ask, is `{}` on JSON whatever its key type. That is the answer, not a gap: deciding by the key TYPE was
+  weighed and declined, since it needs a branch on a type inside a generic body (the second body per type that
+  *Specialization is a non-goal* rules out) or a shape descriptor on `Serializable`; Python's `json` writes `{}` for
+  every empty map too. Reading takes either form for any map, so data written before the
   object form still loads; an integer key is parsed from its text, and one that is not an integer of that width is a
   `TypeMismatch` at that key (``type mismatch at `ports.80x` ``).
 
