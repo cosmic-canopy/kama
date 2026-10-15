@@ -2279,10 +2279,14 @@ descriptors belong to the process) that compose with `pump`, `BufWriter` and ser
 
 **Subprocesses (`std::process`).** A `Command` builder — argv **vector** (never a shell string, so
 injection-safe by construction; `Command.shell(line:)` is the explicit `sh -c` opt-in) with `cwd`/`env`/
-`envClear` and per-stream `Stdio { Inherit | Piped | Null }` — spawns an owned, move-only `type resource
-Process` via `start()`, or captures via the one-shot `run() -> Output { status, stdout, stderr }` (which
-drains stdout+stderr **concurrently** through `std::net::Poller`, so a child that fills both pipes can't
-deadlock the parent). `Process` gives `wait()` (blocking reap → `ExitStatus { code, signal, success() }`),
+`envClear` and one `Stdio` per stream — `Inherit`, `Piped`, `Null`, `Handle(descriptor:)` (any owned handle:
+a file, a socket, a pipe end, another child's stdout, so a pipeline is two `Command`s) or, for stderr alone,
+`Stdout` (`2>&1`) — spawns an owned, move-only `type resource Process` via `start()`, or captures via the
+one-shot `run() -> Output { status, stdout, stderr }`, which drains stdout and stderr **concurrently** (so a child
+that fills both pipes can't deadlock the parent). A `Handle` goes to the child: the parent's copy is closed once
+the child holds it, so a reader of the other end sees end-of-file, and it serves one `start()` (a second is
+`InvalidInput`). `run()` captures only what was left unset — stdout and stderr; an unset stdin is the null
+device — honours every stream that was set, and leaves the `Command` as it found it. <!-- test: proc_stdio_redirect --> `Process` gives `wait()` (blocking reap → `ExitStatus { code, signal, success() }`),
 `tryWait() -> Optional<ExitStatus>` (non-blocking), `kill`/`terminate`/`signal`, and — with `processGroup(group:)`
 — a child in a group of its own, signalled whole by `killGroup`/`terminateGroup`/`signalGroup` so a supervisor
 stops it with everything it started. `ProcessGroup` keeps each OS's own: POSIX has `Inherit`, `New` (setpgid),

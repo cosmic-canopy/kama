@@ -1482,7 +1482,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     // ends another isolate's spawn marked inheritable for ITS child can cross. A handle in the list must itself be
     // inheritable, so the redirected ends are marked for the call and unmarked after it, as before.
     STARTUPINFOEXW si; ZeroMemory(&si, sizeof si); si.StartupInfo.cb = sizeof si;
-    int useStd = (inFd >= 0 || outFd >= 0 || errFd >= 0);
+    int useStd = (inFd >= 0 || outFd >= 0 || errFd >= 0 || errFd == -2);
     HANDLE hIn = INVALID_HANDLE_VALUE, hOut = INVALID_HANDLE_VALUE, hErr = INVALID_HANDLE_VALUE;
     HANDLE list[3]; DWORD nList = 0;
     union { char b[256]; void* align; } attrBuf;            // one attribute: well under this on every Windows
@@ -1492,6 +1492,7 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
         hIn  = (inFd  >= 0) ? (HANDLE)_get_osfhandle((int)inFd)  : GetStdHandle(STD_INPUT_HANDLE);
         hOut = (outFd >= 0) ? (HANDLE)_get_osfhandle((int)outFd) : GetStdHandle(STD_OUTPUT_HANDLE);
         hErr = (errFd >= 0) ? (HANDLE)_get_osfhandle((int)errFd) : GetStdHandle(STD_ERROR_HANDLE);
+        if (errFd == -2) hErr = hOut;                      // `2>&1` (KR-171): stderr goes wherever stdout went
         HANDLE three[3] = { hIn, hOut, hErr };
         for (int i = 0; i < 3; ++i) {
             HANDLE h = three[i];
@@ -1616,6 +1617,7 @@ static inline int32_t kama_open_null_write(void) { return (int32_t)_wopen(L"NUL"
 typedef struct kama__cap { int fd; uint8_t* buf; size_t kama_len; size_t kama_cap; int err; } kama__cap;
 static inline DWORD WINAPI kama__cap_thread(LPVOID arg) {
     kama__cap* c = (kama__cap*)arg;
+    if (c->fd < 0) return 0;                               // a stream not captured (KR-171): nothing to drain
     for (;;) {
         if (c->kama_len == c->kama_cap) {
             size_t nc = c->kama_cap ? c->kama_cap * 2 : 65536;
@@ -2161,9 +2163,22 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
         if (group == 2 && setpgid(0, (pid_t)pgid) != 0) _exit(127);
         if (group == 3 && setsid() < 0) _exit(127);
         if (cwd && cwd[0]) { if (chdir(cwd) != 0) _exit(127); }
-        if (inFd  >= 0) { dup2(inFd,  0); if (inFd  > 2) close(inFd);  }
-        if (outFd >= 0) { dup2(outFd, 1); if (outFd > 2) close(outFd); }
-        if (errFd >= 0) { dup2(errFd, 2); if (errFd > 2) close(errFd); }
+        // The three streams (KR-171). A source already in 0..2 but not in its own place is moved above 2 first,
+        // or an earlier dup2 would overwrite it (a `Handle` that is the parent's stdin, given as stdout); one
+        // already in its place keeps it, with close-on-exec cleared, as dup2 would have. `errFd` -2 is stderr
+        // into stdout (`2>&1`), done last so it follows wherever stdout went. Every dup2 is checked: a child
+        // whose streams are not what it was promised never runs.
+        int src[3] = { (int)inFd, (int)outFd, (int)errFd };
+        for (int t = 0; t < 3; ++t)
+            if (src[t] >= 0 && src[t] <= 2 && src[t] != t) { src[t] = fcntl(src[t], F_DUPFD, 3); if (src[t] < 0) _exit(127); }
+        for (int t = 0; t < 3; ++t) {
+            if (src[t] < 0) continue;
+            if (src[t] == t) { if (fcntl(t, F_SETFD, 0) != 0) _exit(127); continue; }
+            if (dup2(src[t], t) != t) _exit(127);
+        }
+        if (errFd == -2 && dup2(1, 2) != 2) _exit(127);
+        for (int t = 0; t < 3; ++t)
+            if (src[t] > 2 && (t == 0 || src[t] != src[t - 1]) && (t < 2 || src[t] != src[0])) close(src[t]);
         if (envp) environ = (char**)envp;
         execvp(((char**)argv)[0], (char* const*)argv);
         _exit(127);                                        // exec failed (ENOENT/EACCES/...) — 127 convention
@@ -2279,7 +2294,7 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
     int    fds[2]  = { (int)outFd, (int)errFd };
     uint8_t* buf[2] = { NULL, NULL };
     size_t len[2]  = { 0, 0 }, cap[2] = { 0, 0 };
-    int    done[2] = { 0, 0 };
+    int    done[2] = { outFd < 0, errFd < 0 };              // a stream not captured (KR-171) is drained at once
     struct pollfd pfd[2];
     while (!done[0] || !done[1]) {
         for (int i = 0; i < 2; i++) {

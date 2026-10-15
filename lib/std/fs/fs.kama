@@ -316,7 +316,7 @@ type resource File implements Reader, Writer, Sendable {
     // outside this file, granted below). Private: a descriptor from anywhere else arrives as a
     // `std::io::Descriptor` and enters through `adopt`. -1 is an empty File.
     ctor make(int32 fd) { this.fd = fd; }
-    friend std::process::Command::start[make];
+    friend std::process::Command::launch[make];
 
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adopt(raw:)`. On Windows it must be a file's (`InvalidInput` for a socket's, which is closed).

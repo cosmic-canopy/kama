@@ -223,8 +223,9 @@ Everything else here is library or toolchain work that does **not** gate the tag
      concrete reason to want that row: the resolver already sees the AAAA records it has to drop.)*
    - **`std::net` local sockets and TCP options — the verdicts (shipped `0.9.482`–`0.9.485`).** The
      record is SPEC's net section; what stays here is what was decided NOT to ship, each with its reason:
-     `UnixStream.pair()` (socketpair) is genuinely optional until `std::process` can hand a descriptor to a child —
-     between isolates a `Channel` answers, and a pair's use across processes is exactly that hand-off; (a
+     `UnixStream.pair()` (socketpair) was genuinely optional until `std::process` could hand a descriptor to a child —
+     between isolates a `Channel` answers, and a pair's use across processes is exactly that hand-off; it can since
+     `0.9.624` (`Stdio::Handle`), so the pair is scheduled: KR-178; (a
      non-blocking Unix `connect` was filed here as optional, and that was WRONG — a blocking connect to a full
      queue waits on Linux, where the caller never sees the `EAGAIN` it was told to retry; it has shipped);
      getters for the keepalive and
@@ -286,28 +287,17 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
-<a id="s1-child-stdio"></a>
+<a id="s1-unix-pair"></a>
 
-### A child's stdio redirected (KR-171)
+### `UnixStream.pair()` (KR-178)
 
-Measured on `0.9.589`, filed 2026-10-14. `type enum Stdio { Inherit, Piped, Null }`: no `2>&1`, and no `File` or `Descriptor` handed to a child as a
-stream (the `UnixStream.pair()` verdict above waits on exactly that hand-off). The workaround is a shell line.
-**Scheduled:** stderr merged into stdout, and an owned `File`/`Descriptor` as any of the three streams.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `Stdio`/`Command` in process.kama; a user's `File` slots in where `start()` holds the
-child ends (`inGive`/`outGive`/`errGive`). Windows needs no seam change (`_get_osfhandle` on any fd; a merge sets
-`hErr = hOut`). POSIX does: the child runs `dup2(outFd,1); close(outFd); dup2(errFd,2)`, which breaks when `outFd ==
-errFd` — a merge needs its own spelling (`dup2(1,2)` last), and an fd in 0–2 the dup2 shuffle. **Decision owed:** a
-`Stdio` variant carrying a `File` (it makes `Stdio` move-only, and `start()` matches the stored copies several times) or
-separate `Command` methods; and how a merge meets `run()`, which forces both streams `Piped`. Found while surveying this
-row: every descriptor was inherited by every child — fixed `0.9.604` (SPEC *Subprocesses*).
-
-**Decided (the maintainer, 2026-10-15):** one `Stdio` value per stream says where it goes — `Handle(descriptor:)` for
-any owned handle (a `File`, a socket, a pipe end all convert to a `Descriptor`), and `Stdout` for `2>&1`, which means
-"wherever stdout goes" and so belongs to stderr alone (Python's `stderr=STDOUT`). A `Handle` is consumed by the
-`start()` that uses it: closed in the parent once the child holds it, so a reader of the other end sees end-of-file
-(Rust and Python keep the parent's copy open, a known trap). `run()` stops overwriting the `Command`: what a program
-set wins, and what it left unset is captured (stdout, stderr) or `Null` (stdin), as Rust's `output()` does.
+Filed 2026-10-15, when `Stdio::Handle(descriptor:)` shipped (`0.9.624`) and met the condition the net verdicts set
+for it: a connected pair of local sockets, one end kept and one handed to a child as a stream — the shape a parent
+uses to talk to a helper process both ways, without a path on disk. **Scheduled.** POSIX: `socketpair(AF_UNIX,
+SOCK_STREAM | SOCK_CLOEXEC)` (the `FD_CLOEXEC` gate on macOS, as every descriptor kama makes). Windows has no
+`socketpair`, and by the platform-deltas rule its twin is the same `pair()` over a listener bound to a private path,
+one connect and one accept, the path removed at once. On Windows a socket is no child's stream (`Stdio` documents
+it: the handle is overlapped), so there a pair serves isolates and fd passing, not a child's stdin.
 
 <a id="s1-datachannel"></a>
 
@@ -414,7 +404,7 @@ Filed 2026-10-15 while ruling on the process-group ESRCH kind. `match` on an enu
 Measured on `0.9.603`: of the 29 matches over `IoErrorKind` in the tree, 28 have `_`; the one without is
 `IoErrorKind.message()` in io.kama itself. The enum has grown four times (`b4ff3732` InProgress..BrokenPipe, `20a912d5`
 InvalidInput, `176aca2f` Interrupted), and this session adds `ProcessNotFound` (`0.9.623`) and `AlreadyExists` (`0.9.621`),
-while `OpenMode` gains `ReadWrite` (`0.9.618`) and `Stdio` gains `Handle`/`Stdout` (KR-171). Before 1.0 that is allowed;
+while `OpenMode` gains `ReadWrite` (`0.9.618`) and `Stdio` gains `Handle`/`Stdout` (`0.9.624`). Before 1.0 that is allowed;
 after the tag each is a source break, and 1.x is where the stdlib grows.
 
 **What others do.** Rust marks `io::ErrorKind` `#[non_exhaustive]`: outside its crate a `match` must carry `_`, and

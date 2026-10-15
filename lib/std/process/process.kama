@@ -12,7 +12,7 @@
 // (0.9.217), and `tests/proc_*` run there; its one residual is the ≤260 cwd/executable limit noted on
 // `cwd()` below. wasm has no fork/exec.
 
-import { std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::fs::File, std::collections::DynamicArray, std::ptr::nonNull };
+import { std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::io::Descriptor, std::memory::replace, std::fs::File, std::collections::DynamicArray, std::ptr::nonNull };
 
 export { Command, Process, ExitStatus, Output, Stdio, ProcessGroup };
 
@@ -78,9 +78,17 @@ fn int32 groupKind(const ref ProcessGroup g) { return match (g) { case Inherit: 
 @compileFor(OS_WINDOWS)
 fn int32 groupJoin(const ref ProcessGroup g) { return 0; }
 
-// How a child's stdin/stdout/stderr is wired. Inherit = share the parent's fd; Piped = a pipe the parent
-// keeps an end of (Process.stdin()/stdout()/stderr() become a readable/writable File); Null = /dev/null.
-type enum Stdio { Inherit, Piped, Null }
+// Where one of a child's streams goes — one value per stream says it all (KR-171):
+//   `Inherit` — the parent's own; `Piped` — a pipe the parent keeps an end of (`Process.stdin()`/`stdout()`/
+//   `stderr()`); `Null` — the null device; `Handle(descriptor:)` — any owned handle: a `File`, a socket, a pipe end,
+//   another child's (`file.takeDescriptor()`). The child takes it: it is closed in the parent once the child holds
+//   it, so a reader of the other end sees end-of-file when the child exits, and it serves ONE `start()` — a second
+//   without setting the stream again is `InvalidInput`. (Rust and Python keep the parent's copy open, a known trap.)
+//   `Stdout` — stderr into stdout, `2>&1`: it means "wherever stdout goes", so it belongs to stderr alone
+//   (Python's `stderr=STDOUT`), and on stdin or stdout it is `InvalidInput`.
+// Move-only, since a `Handle` owns what it carries. On Windows a socket is no child's stream (its handle is
+// overlapped, which a child's `ReadFile` cannot use): `InvalidInput`.
+type enum Stdio implements Sendable { Inherit, Piped, Null, Handle(Descriptor descriptor), Stdout }
 
 // A finished child's status. On POSIX a process either EXITS with a code OR is killed by a SIGNAL (exactly
 // one): `code` is -1 when signalled, `signal` is 0 when it exited normally.
@@ -163,6 +171,25 @@ unsafe fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
     return give a;
 }
 
+// One stream as a spawn wires it (KR-171): as set, or `dflt` when left alone — and a `Handle` is TAKEN, leaving
+// `Inherit` in its place, so it goes to this child alone (`spent` then refuses it to the next).
+fn Result<Stdio, IoError> streamOf(ref Stdio cfg, ref bool spent, bool set, Stdio dflt) {
+    if (spent) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+    if (!set) { return Result::Ok(value: give dflt); }
+    bool handle = match (cfg) { case Handle(descriptor: _): true; case _: false; };
+    if (handle) {
+        spent = true;
+        Stdio emptied = Stdio::Inherit;
+        return Result::Ok(value: replace::<Stdio>(place: cfg, with: give emptied));
+    }
+    return match (cfg) {
+        case Piped:  Result::Ok(value: Stdio::Piped);
+        case Null:   Result::Ok(value: Stdio::Null);
+        case Stdout: Result::Ok(value: Stdio::Stdout);
+        case _:      Result::Ok(value: Stdio::Inherit);
+    };
+}
+
 // A subprocess builder. Accumulates program + args + env overrides + cwd + per-stream Stdio, then
 // spawn()/run(). Move-only (owns its lists/strings). Not injection-prone: args are a vector, never a shell
 // string (use the explicit `shell` ctor for `sh -c`).
@@ -176,6 +203,10 @@ type resource Command implements Sendable {
     Stdio  inCfg;
     Stdio  outCfg;
     Stdio  errCfg;
+    // Whether a stream was SET (KR-171): `run()` captures what was left alone, and an explicit `Inherit` stays the
+    // parent's — so "unset" and `Inherit` are two answers. `spent`: its `Handle` went to an earlier child.
+    bool inSet; bool outSet; bool errSet;
+    bool inSpent; bool outSpent; bool errSpent;
     ProcessGroup grp;        // KR-170: `Inherit` unless asked
 
     // Build a command for `program` (PATH-resolved by execvp unless it contains '/'). Args take ownership of
@@ -188,6 +219,8 @@ type resource Command implements Sendable {
         this.clearsEnv = false;
         this.workingDir = "";
         this.inCfg = Stdio::Inherit; this.outCfg = Stdio::Inherit; this.errCfg = Stdio::Inherit;
+        this.inSet = false; this.outSet = false; this.errSet = false;
+        this.inSpent = false; this.outSpent = false; this.errSpent = false;
         this.grp = ProcessGroup::Inherit;
     }
 
@@ -211,36 +244,60 @@ type resource Command implements Sendable {
     public fn void cwd(string dir) { this.workingDir = give dir; }
     public fn void env(string key, string val) { this.envKeys.add(item: give key); this.envVals.add(item: give val); }
     public fn void envClear() { this.clearsEnv = true; }
-    public fn void stdin(Stdio s)  { this.inCfg = s; }
-    public fn void stdout(Stdio s) { this.outCfg = s; }
-    public fn void stderr(Stdio s) { this.errCfg = s; }
+    public fn void stdin(Stdio s)  { this.inCfg = give s;  this.inSet = true;  this.inSpent = false; }
+    public fn void stdout(Stdio s) { this.outCfg = give s; this.outSet = true; this.outSpent = false; }
+    public fn void stderr(Stdio s) { this.errCfg = give s; this.errSet = true; this.errSpent = false; }
     // The process group the child runs in (KR-170) — see `ProcessGroup`.
     public fn void processGroup(ProcessGroup group) { this.grp = group; }
 
-    // Spawn the child and return a live Process handle. Creates a pipe (or opens /dev/null) per Piped/Null
-    // stream; the parent keeps its end (in the Process), the child-side ends close on return (RAII).
-    public unsafe fn Result<Process, IoError> start() {
+    // Spawn the child and return a live Process handle. A stream left unset is the parent's (`Inherit`); a pipe or
+    // the null device is opened per Piped/Null stream, and the parent keeps its end (in the Process) while the
+    // child's ends close on return (RAII).
+    public unsafe fn Result<Process, IoError> start() { return this.launch(capture: false); }
+
+    // The child end of a `Handle`: the descriptor, as the File the seam hands the child. On Windows a socket's
+    // descriptor is no file's — `File.adopt` answers `InvalidInput` — which is the refusal `Stdio` documents.
+    unsafe fn Result<File, IoError> childEnd(Descriptor d) { return File.adopt(descriptor: give d); }
+
+    // `capture`: `run()`'s defaults — an unset stdout and stderr are captured, an unset stdin is the null device.
+    unsafe fn Result<Process, IoError> launch(bool capture) {
+        Result<Stdio, IoError> ir = streamOf(cfg: ref this.inCfg, spent: ref this.inSpent, set: this.inSet,
+                                                  dflt: capture ? Stdio::Null : Stdio::Inherit);
+        Stdio inS = match (give ir) { case Ok(value: v): { := give v; } case Err(error: e): { return Result::Err(error: e); } };
+        Result<Stdio, IoError> orr = streamOf(cfg: ref this.outCfg, spent: ref this.outSpent, set: this.outSet,
+                                                   dflt: capture ? Stdio::Piped : Stdio::Inherit);
+        Stdio outS = match (give orr) { case Ok(value: v): { := give v; } case Err(error: e): { return Result::Err(error: e); } };
+        Result<Stdio, IoError> er = streamOf(cfg: ref this.errCfg, spent: ref this.errSpent, set: this.errSet,
+                                                  dflt: capture ? Stdio::Piped : Stdio::Inherit);
+        Stdio errS = match (give er) { case Ok(value: v): { := give v; } case Err(error: e): { return Result::Err(error: e); } };
+
         // stdin: parent WRITES inKeep; child READS inGive.
         File inKeep = File.make(fd: -1);
         File inGive = File.make(fd: -1);
-        match (this.inCfg) {
+        bool inPiped = false;
+        match (give inS) {
             case Inherit: {}
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
                 if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
-                inGive = File.make(fd: rd); inKeep = File.make(fd: wr);
+                inGive = File.make(fd: rd); inKeep = File.make(fd: wr); inPiped = true;
             }
             case Null: {
                 int32 fd = kama_open_null_read();
                 if (fd < 0) { return Result::Err(error: lastError()); }
                 inGive = File.make(fd: fd);
             }
+            case Handle(descriptor: d): {
+                Result<File, IoError> f = this.childEnd(d: give d);
+                inGive = match (give f) { case Ok(value: v): { := give v; } case Err(error: e): { return Result::Err(error: e); } };
+            }
+            case Stdout: { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // stderr's alone
         };
 
         // stdout: parent READS outKeep; child WRITES outGive.
         File outKeep = File.make(fd: -1);
         File outGive = File.make(fd: -1);
-        match (this.outCfg) {
+        match (give outS) {
             case Inherit: {}
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
@@ -252,12 +309,18 @@ type resource Command implements Sendable {
                 if (fd < 0) { return Result::Err(error: lastError()); }
                 outGive = File.make(fd: fd);
             }
+            case Handle(descriptor: d): {
+                Result<File, IoError> f = this.childEnd(d: give d);
+                outGive = match (give f) { case Ok(value: v): { := give v; } case Err(error: e): { return Result::Err(error: e); } };
+            }
+            case Stdout: { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // stderr's alone
         };
 
-        // stderr: parent READS errKeep; child WRITES errGive.
+        // stderr: parent READS errKeep; child WRITES errGive — or, `Stdout`, wherever stdout went (the seam's -2).
         File errKeep = File.make(fd: -1);
         File errGive = File.make(fd: -1);
-        match (this.errCfg) {
+        bool merge = false;
+        match (give errS) {
             case Inherit: {}
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
@@ -269,11 +332,16 @@ type resource Command implements Sendable {
                 if (fd < 0) { return Result::Err(error: lastError()); }
                 errGive = File.make(fd: fd);
             }
+            case Handle(descriptor: d): {
+                Result<File, IoError> f = this.childEnd(d: give d);
+                errGive = match (give f) { case Ok(value: v): { := give v; } case Err(error: e): { return Result::Err(error: e); } };
+            }
+            case Stdout: { merge = true; }
         };
 
-        int32 childIn  = match (this.inCfg)  { case Inherit: -1; case _: inGive.rawFd(); };
-        int32 childOut = match (this.outCfg) { case Inherit: -1; case _: outGive.rawFd(); };
-        int32 childErr = match (this.errCfg) { case Inherit: -1; case _: errGive.rawFd(); };
+        int32 childIn  = inGive.rawFd();
+        int32 childOut = outGive.rawFd();
+        int32 childErr = merge ? -2 : errGive.rawFd();
 
         UnsafePtr argv = match (buildArgv(program: ref this.program, args: ref this.arguments)) {
             case Some(value: v): v;
@@ -312,13 +380,15 @@ type resource Command implements Sendable {
     // capture lives in the `kama_capture2` seam (POSIX poll / Windows threads) — reading one stream to EOF
     // then the other would deadlock once the child fills the second pipe. One platform-neutral path here.
     public unsafe fn Result<Output, IoError> run() {
-        this.outCfg = Stdio::Piped;
-        this.errCfg = Stdio::Piped;
-        Result<Process, IoError> sp = this.start();
+        // What was SET wins (KR-171): an unset stdout and stderr are captured, an unset stdin is the null device, and
+        // the `Command` is left as it was — `run()` used to force both outputs `Piped` and leave them so. A stream sent
+        // elsewhere (`Inherit`, `Null`, a `Handle`, stderr's `Stdout`) captures nothing, and its buffer is empty.
+        Result<Process, IoError> sp = this.launch(capture: true);
         Process p = match (give sp) {
             case Ok(value: pr): { := give pr; }
             case Err(error: e): { return Result::Err(error: e); }
         };
+        p.closeStdin();   // a piped stdin nobody writes would hold a child reading to end-of-file
         UnsafePtr<uint8> outRaw = null; usize outLen = 0; usize outCap = 0;
         UnsafePtr<uint8> errRaw = null; usize errLen = 0; usize errCap = 0;
         int32 rc = kama_capture2(outFd: p.stdout().rawFd(), errFd: p.stderr().rawFd(),
@@ -340,7 +410,7 @@ type resource Command implements Sendable {
 }
 
 // A spawned child. Move-only, RAII. Holds the pid + the parent-side pipe ends (a File per Piped stream, else
-// a moved-from File{0} the drop-guard skips).
+// an empty File, -1, the drop-guard skips).
 type resource Process implements Sendable {
     isize handle;             // OS wait handle (POSIX: pid; Windows: (isize)hProcess). != 0 live/reapable;
                               //   0 = reaped / moved-from sentinel. wait/kill/dtor act on THIS.
@@ -361,7 +431,7 @@ type resource Process implements Sendable {
     // The child's process id (Rust `.id()`).
     public const fn int32 id() { return this.pid; }
 
-    // Borrow the parent-side pipe ends (meaningful only when that stream was Piped — else it's a File{0}
+    // Borrow the parent-side pipe ends (meaningful only when that stream was Piped — else it's an empty File{-1}
     // sentinel over stdin/stdout, so don't read/write a non-Piped stream). Write to stdin(), read stdout()/
     // stderr(). Call closeStdin() to send EOF to a child reading its stdin.
     public fn ref File stdin()  { return this.inPipe; }
