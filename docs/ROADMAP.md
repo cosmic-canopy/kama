@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-146 | **`kama publish --dry-run` before the first commit** — it refuses with no commit or with uncommitted changes, so "what would ship?" cannot be asked before a first review | S | [§10](ROADMAP_DETAIL.md#s10-dry-run-uncommitted) |
 | KR-147 | **Every semantic diagnostic reports column 0** — parse errors carry the real column; an editor underlines from the line's start | L | [§10](ROADMAP_DETAIL.md#s10-diag-columns) |
 | KR-163 | **`Optional`/`Result` answer yes/no questions** — `isSome()`/`isNone()`, `isOk()`/`isErr()`. Decided: queries only; taking one apart stays `match` | S | [§2](ROADMAP_DETAIL.md#s2-optional-queries) |
 | KR-164 | **`match` on an integer says what to write instead** — `case 1:` is a raw parse error; integers branch with `if`/`else if` by design (SPEC), and the refusal should say so, with an xfail behind the claim | S | [§2](ROADMAP_DETAIL.md#s2-int-match-diagnostic) |

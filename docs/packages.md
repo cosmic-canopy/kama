@@ -653,7 +653,9 @@ kama publish kama.json --registry file:///srv/kama-registry
 `kama publish kama.json --dry-run` answers "what would ship?" first: it runs every check below and builds the
 archive, then prints the files one per line and the archive's size and integrity — the integrity the real
 publish will record — and writes nothing. It needs no `--registry`; given one, it also refuses a version that
-is already published.
+is already published. It can be asked before the first commit, too: with no commit yet, or with uncommitted
+changes, it lists the files git's index holds (tracked and staged), says why the tree is not publishable as it
+stands, prints no integrity — there is no committed archive to hash — and exits non-zero, as publish would.
 
 It archives **exactly the files git tracks** under the project's directory, hashes the archive, and adds a
 version entry to `<registry>/<name>/index.json` alongside the tarball. **Published versions are
@@ -1011,7 +1013,7 @@ registry metadata keys — so no registry version is unreadable to an older comp
 | `kama pkg remove <kama.json> <name>` | Drop a dependency and install. |
 | `kama pkg update <kama.json> [<pkg>]` | Re-resolve pins and rewrite the lock. |
 | `kama pkg search <words…> [--registry BASE]…` | List the packages in a registry's catalog whose name, description or keywords match every word (the built-in registry with no `--registry`). Exits 1 when nothing matches. |
-| `kama publish <kama.json> --registry <base> [--key <ssh-key>]` | Archive exactly the files git tracks, as committed, + record (and optionally sign) it in the registry index. Refuses a project outside git or with uncommitted changes. `--dry-run` (no `--registry` needed) lists what would ship and its integrity, and writes nothing. |
+| `kama publish <kama.json> --registry <base> [--key <ssh-key>]` | Archive exactly the files git tracks, as committed, + record (and optionally sign) it in the registry index. Refuses a project outside git or with uncommitted changes. `--dry-run` (no `--registry` needed) lists what would ship and its integrity, and writes nothing — before the first commit too, listing git's index and saying why it is not publishable yet. |
 | `kama toolchain list` | Installed versions, the global default, and what the current dir resolves to. |
 | `kama toolchain install <v>` | Install version `<v>` into `~/.kama/versions/<v>` (alongside; keeps the default). |
 | `kama toolchain uninstall <v>` | Remove an installed version (refuses the current default). |

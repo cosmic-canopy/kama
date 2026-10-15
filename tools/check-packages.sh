@@ -836,8 +836,19 @@ grep -q "\"integrity\": \"$dint\"" "$kreg/dr/index.json" || kfail "the real publ
 if kpub "$dr" --dry-run --registry "file://$kreg" >/dev/null 2>"$tmp/dr3.err"; then kfail "--dry-run passed a version that is already published"; fi
 grep -qi "immutable" "$tmp/dr3.err" || kfail "--dry-run immutability refusal unclear" "$tmp/dr3.err"
 echo '// edit' >> "$dr/src/dr.kama"
-if kpub "$dr" --dry-run >/dev/null 2>"$tmp/dr4.err"; then kfail "--dry-run hid the dirty-tree refusal"; fi
+if kpub "$dr" --dry-run >"$tmp/dr4.out" 2>"$tmp/dr4.err"; then kfail "--dry-run hid the dirty-tree refusal"; fi
 grep -q "uncommitted changes" "$tmp/dr4.err" || kfail "--dry-run dirty refusal unclear" "$tmp/dr4.err"
+# 26c2. ...but a dry run still answers "what would ship?" (KR-146): the files from git's index, the reason the
+# tree is not publishable as it stands, and no integrity — there is no committed archive to hash. Also before
+# the FIRST commit, where it used to answer only "the repository has no commit yet".
+grep -qx "src/dr.kama" "$tmp/dr4.out" || kfail "--dry-run of a dirty tree listed no files" "$tmp/dr4.out"
+if grep -q 'sha256-' "$tmp/dr4.err"; then kfail "--dry-run of a dirty tree printed an integrity" "$tmp/dr4.err"; fi
+nc="$tmp/kr-nocommit"; kpkg "$nc" nc 1.0.0
+git -C "$nc" init -q; git -C "$nc" add -A
+if kpub "$nc" --dry-run >"$tmp/nc.out" 2>"$tmp/nc.err"; then kfail "--dry-run before the first commit reported a publishable tree"; fi
+[ "$(cat "$tmp/nc.out")" = "kama.json
+src/nc.kama" ] || kfail "--dry-run before the first commit did not list the staged files" "$tmp/nc.out"
+grep -q "no commit yet" "$tmp/nc.err" || kfail "--dry-run before the first commit does not say why it stops" "$tmp/nc.err"
 
 # 26m2. a `path` dependency is refused at publish. The resolver refuses one below a fetched package, so a
 # version published with it could never be installed — and versions are permanent. Refused on --dry-run too, and

@@ -2892,20 +2892,6 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-dry-run-uncommitted"></a>
-
-### `kama publish --dry-run` before the first commit (KR-146)
-
-`kama publish kama.json --dry-run` in a repository with no commit answers *"the repository has no commit yet"*, and
-refuses uncommitted changes the same way (measured `0.9.577`). Publish archives exactly what git tracks, as
-committed, which is right for a publish; but "what would ship?" cannot be asked of a package waiting for its first
-review. **Scheduled.** **Recommendation:** a dry-run lists what git tracks plus what is staged, says that the tree is
-not publishable as it stands and why, and prints no integrity, since there is no committed archive to hash.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `vcsSnapshot` (its two refusals) and `cmdPublish`: under `--dry-run`, record the
-reason instead of failing, list the files (`gitFiles` already reads git's index, `ls-files --stage`), say why the tree is
-not publishable yet, and leave out the integrity and the revision. No ruling owed.
-
 <a id="s10-diag-columns"></a>
 
 ### Every semantic diagnostic reports column 0 (KR-147)

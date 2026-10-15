@@ -8703,7 +8703,10 @@ static bool gitFiles(const std::string& dir, const std::string& prefix, std::vec
     return true;
 }
 
-static bool vcsSnapshot(const std::string& base, VcsSnapshot& out, std::string& err)
+// `notPublishable` set: the DRY-RUN form (KR-146). A repository with no commit yet, or with uncommitted changes, is
+// recorded there instead of failing, and the files are what git's INDEX holds — tracked and staged — so "what would
+// ship?" can be asked of a package before its first review. The revision is then empty: there is no commit to name.
+static bool vcsSnapshot(const std::string& base, VcsSnapshot& out, std::string& err, std::string* notPublishable = nullptr)
 {
     const std::string git = "git -C \"" + base + "\" ";
     int rc = 0;
@@ -8715,7 +8718,13 @@ static bool vcsSnapshot(const std::string& base, VcsSnapshot& out, std::string& 
         return false;
     }
     std::string head = runCmdCapture(git + "rev-parse --verify -q HEAD", &rc);
-    if (rc != 0 || head.empty()) { err = "the repository has no commit yet — commit the package, then publish"; return false; }
+    if (rc != 0 || head.empty()) {
+        err = "the repository has no commit yet — commit the package, then publish";
+        if (!notPublishable) return false;
+        *notPublishable = err; err.clear(); head.clear();
+        if (!gitFiles(base, "", out.files, err)) return false;
+        return true;
+    }
     // Staged, unstaged and deleted tracked files all show here, and so does a submodule moved off the commit
     // its gitlink records; untracked files cannot ship, so they are not asked about.
     std::string dirty = runCmdCapture(git + "status --porcelain --untracked-files=no -- .", &rc);
@@ -8728,7 +8737,9 @@ static bool vcsSnapshot(const std::string& base, VcsSnapshot& out, std::string& 
             err += "\n    " + dirty.substr(i, nl - i);
             i = nl + 1;
         }
-        return false;
+        if (!notPublishable) return false;
+        *notPublishable = err; err.clear();
+        return gitFiles(base, "", out.files, err);   // the index: what the next commit would hold, staged included
     }
     if (!gitFiles(base, "", out.files, err)) return false;
     out.revision = "git:" + head;
@@ -8869,7 +8880,8 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     if (!keysWithinKamaFloor(topKeys, kamaReq, err)) { fprintf(stderr, "kama publish: %s: %s\n", manifest.c_str(), err.c_str()); return 1; }
 
     VcsSnapshot snap;
-    if (!vcsSnapshot(base, snap, err)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
+    std::string notYet;   // dry run only: why this tree could not be published as it stands (KR-146)
+    if (!vcsSnapshot(base, snap, err, dryRun ? &notYet : nullptr)) { fprintf(stderr, "kama publish: %s\n", err.c_str()); return 1; }
     if (std::none_of(snap.files.begin(), snap.files.end(), [](const VcsFile& f) { return f.path == "kama.json"; })) {
         fprintf(stderr, "kama publish: %s is not tracked by git — publish ships exactly the tracked files, and "
                 "the manifest is the package\n", manifest.c_str());
@@ -8926,6 +8938,17 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     // One order on every machine. Git's own order is not it: a submodule's files are listed where the
     // submodule sits, so `vendor/sub/x` would precede `vendor/sub-b`.
     std::sort(ship.begin(), ship.end(), [](const VcsFile& a, const VcsFile& b) { return a.path < b.path; });
+
+    // A dry run of a tree not publishable as it stands answers the question it can — which files, from git's index —
+    // and says why it stops there. No archive and no integrity: there is no committed state to build one from, and
+    // an integrity of the index would name bytes no publish would ever ship. The exit status is publish's verdict.
+    if (dryRun && !notYet.empty()) {
+        for (const auto& f : ship) printf("%s\n", f.path.c_str());
+        fflush(stdout);
+        fprintf(stderr, "kama: %s@%s would publish these %zu file%s from git's index — but not as the tree stands: %s\n",
+                name.c_str(), version.c_str(), ship.size(), ship.size() == 1 ? "" : "s", notYet.c_str());
+        return 1;
+    }
 
     // With no registry (a dry run may name none) there is no immutability to check and nowhere to put anything.
     std::string regDir;
