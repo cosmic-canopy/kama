@@ -397,6 +397,42 @@ std enum at 1.0, so a new kind waits for 2.0 or a new enum; (3) leave it, and tr
 **Recommendation: (1)**, before the tag. Open: the marker's spelling (an attribute, by the grammar's rule for
 declaration modifiers), and whether a user enum may carry it.
 
+<a id="s2-panic-info"></a>
+
+### A panic handler learns nothing about the panic (KR-179)
+
+Filed 2026-10-15 from a crash reporter built on `setPanicHandler`. `core::PanicHandler` is `fnptr void PanicHandler()`,
+and every trap path writes its message to fd 2, calls the hook, then `abort()`s
+(`kama_bounds_fail`, `kama_narrow_fail_*`, `kama_arith_fail`, `kama_div_zero_fail` in kama_runtime.h). So a program
+with no terminal — a game started from Steam or Finder — cannot put the one line that says what went wrong into its
+own report; the workaround in use `dup2`s stderr onto a log at start-up and reads the log's tail back in the hook,
+parsing for a line the runtime held a moment earlier. And only `panic`/`assert` carry a location. Measured on
+`0.9.627`: a hook that prints a marker, then `xs[i]` with `i` past a two-element `InlineArray`, prints
+`kama: index 8 out of bounds (length 2)`, the marker, and exits 134. No file, no line, and the hook had nothing to
+read. `panic(msg: "explicit")` on line 2 of a file prints `kama: panic: explicit (hook2.kama:2)`, so the location exists on that path. A
+bounds trap is the commonest crash a shipped program reports.
+
+**What others do.**
+- **Rust** `panic::set_hook` passes a `PanicHookInfo`: the payload (the message) and `location()` (file, line,
+  column). An index panic carries its location through `#[track_caller]`.
+- **Go 1.23** `debug.SetCrashOutput(file, opts)`: the runtime also writes its fatal output to a second descriptor
+  the program names at start-up. It needs no allocation and covers every path that already writes fd 2.
+- **Swift** has no hook. A trap is `SIGTRAP`, and a crash reporter reads the message from the platform's crash log.
+
+**Decision owed (the maintainer), in two halves:**
+1. **What the hook receives.** (a) The handler takes a read-only `PanicInfo` — the message as bytes, plus
+   `file`/`line` where known — held in a fixed runtime buffer, so nothing allocates on the way to `abort()`. This is
+   Rust's shape, and a source break to `PanicHandler`'s signature, which pre-1.0 is allowed. (b) A crash-output
+   descriptor beside the hook, as Go has. (c) Both.
+2. **A location on every trap.** Bounds, `cast`, overflow and divide traps pass the call site's `file:line`, as `panic`
+   already does: one package-relative path constant per file and one integer per site, measured for binary size
+   before it lands. The alternative is the location under debug builds only.
+
+**Recommendation: (1a) with (2) in every build.** The hook is the one place a program handles a fatal error, so it
+should be handed the facts rather than told where to look for them. One way, no descriptor plumbing, and the same
+`file:line` string `panic` already prints. (b) remains if a measured case needs output from a process too broken to
+run the hook.
+
 <a id="s2-fnptr-type-arg"></a>
 
 ### An `fnptr` type is not a type argument (KR-107)

@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-179**
+**Next id: KR-180**
 
 ## The shape
 
@@ -100,6 +100,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-94 | **A struct's `sizeof` and any `alignof` as a compile-time VALUE** — refused in every `comptime` since `0.9.444`, because the target's C compiler decides layout and a kama answer that disagreed would be a silent miscompile. Unlock: a per-target layout model in the compiler, re-checked by the C compiler — every baked size emits a `_Static_assert`, so a wrong model fails the build, never the program. (`comptime assert(cond: sizeof(T) == 20, …)` already works: C checks it) | M? | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-96 | **Operators on an enum: support them, or declare a non-goal** — an operator in an enum body was silently dropped until `0.9.443` and is now refused (`tests/xfail/enum_operator.kama`); `\|` over enum values stays refused on purpose. Wants a maintainer verdict before any code | — | [§2](ROADMAP_DETAIL.md#s2) |
 | KR-176 | **A std enum that grows after 1.0 breaks every `match` with no `_` arm** — `IoErrorKind` has gained variants four times and gains `ProcessNotFound` (`0.9.623`) and `AlreadyExists` (`0.9.621`); `OpenMode` and `Stdio` grow this session too. Pre-1.0 that is allowed; after the tag each one is a source break. Rust marks such an enum `#[non_exhaustive]`, Swift has `@unknown default`; the alternative is to freeze the set at 1.0. Wants a maintainer verdict before the tag | — | [§2](ROADMAP_DETAIL.md#s2-growable-enums) |
+| KR-179 | **A panic handler learns nothing about the panic** — `core::PanicHandler` takes no arguments: the runtime writes the message to fd 2, calls the hook, then aborts, so a program with no terminal cannot put what went wrong into its own crash report. And a bounds, `cast`, overflow or divide trap names no file (`kama: index 8 out of bounds (length 2)`), where `panic`/`assert` carry `file:line`. Wants a maintainer decision: the hook receives the message and location (Rust), or a second crash-output descriptor (Go); plus a location on every trap | M | [§2](ROADMAP_DETAIL.md#s2-panic-info) |
 
 ## LATER — tooling & ecosystem
 
