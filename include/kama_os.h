@@ -1999,6 +1999,8 @@ static inline int32_t kama_mkdir_mode(const char* path, uint32_t mode)
 // ---- the current directory and a canonical path (KR-167) ----------------------------------------------------
 // Both answer with the grow-and-retry protocol kama_id_name uses: the full length, and min(len, cap) bytes copied.
 extern char* getcwd(char*, size_t);   // <unistd.h>'s, which this file deliberately does not pull
+// <stdlib.h>'s, but declared there only past ISO C (glibc's _DEFAULT_SOURCE; emscripten's strict C11 hides it).
+extern char* realpath(const char*, char*);
 static inline ptrdiff_t kama_getcwd(uint8_t* out, size_t cap) {
     for (size_t sz = 1024; ; sz *= 4) {   // through the allocation funnel, like every heap block
         char* buf = (char*)kama_alloc(sz, 1);
@@ -2141,6 +2143,7 @@ static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
 // `outJob` is Windows' (a Job Object); POSIX answers 0.
 extern int setpgid(pid_t, pid_t);
 extern pid_t setsid(void);
+extern int killpg(pid_t, int);         // <signal.h>'s, likewise past ISO C
 static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
                                       int32_t inFd, int32_t outFd, int32_t errFd, int32_t group, int32_t pgid,
                                       ptrdiff_t* outHandle, int32_t* outPid, ptrdiff_t* outJob) {
