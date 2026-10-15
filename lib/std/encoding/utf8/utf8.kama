@@ -1,5 +1,5 @@
-import { std::collections::ConstView };
-export { decode, validate, Utf8Error };
+import { std::collections::ConstView, std::collections::DynamicArray };
+export { decode, decodeLossy, validate, Utf8Error };
 
 // UTF-8 — bytes to text, CHECKED. The one direction that needs code: a `string` IS UTF-8 bytes, so the
 // encode direction is `s.bytes()` (a borrow, free) and this module deliberately does not offer a second
@@ -19,9 +19,9 @@ export { decode, validate, Utf8Error };
 // Skipping any of them is how a "validator" becomes a security bug.
 //
 // Erroring rather than repairing is the same choice Rust (`String::from_utf8` -> `Result`) and Python
-// (`bytes.decode` raises) make, and kama already made it by claiming the invariant. A lossy U+FFFD
-// variant is a separate, named function if one is ever wanted; it is not this one, because silently
-// substituting a replacement character corrupts data and kama has no stderr warning channel to say so.
+// (`bytes.decode` raises) make, and kama already made it by claiming the invariant. The lossy U+FFFD
+// variant is `decodeLossy`, a separate NAMED function (KR-169) — asked for by name, because substituting a
+// replacement character corrupts data and kama has no stderr warning channel to say it happened.
 
 // The runtime string constructor and the validator — an `extern` is a reference to a C symbol,
 // redeclared per module with the one signature every declaration in the program must share
@@ -63,4 +63,51 @@ unsafe fn Result<string, Utf8Error> decode(ConstView<uint8> bytes) {
     isize bad = kama_utf8_bad_offset(src: bytes.dataPtr(), start: 0, len: bytes.length());
     if (bad >= 0) { return Result::Err(error: Utf8Error::Invalid(at: bad)); }
     return Result::Ok(value: kama_string_from_raw(src: bytes.dataPtr(), start: 0, len: bytes.length()));
+}
+
+// The bytes as text, every ill-formed sequence replaced by U+FFFD (KR-169): for text shown to a PERSON — a log line,
+// a file name, a terminal — never for data that is read back, which `decode` refuses to corrupt. One replacement per
+// MAXIMAL SUBPART, the Unicode §3.9 practice WHATWG's decoder and Rust's `from_utf8_lossy` follow: the longest
+// prefix of a well-formed sequence that was cut short is one U+FFFD, and every other bad byte is one. So `ED A0 80`
+// (an encoded surrogate, which no well-formed sequence starts that way) is three, and `F0 9F 98` (a four-byte
+// sequence missing its last byte) is one. `kama_utf8_bad_offset` says only where bad bytes start, not how many
+// belong to one subpart, so the walk is here, over the same bounds it checks.
+unsafe fn string decodeLossy(ConstView<uint8> bytes) {
+    if (bytes.isEmpty()) { return ""; }
+    isize n = bytes.length();
+    if (kama_utf8_bad_offset(src: bytes.dataPtr(), start: 0, len: n) < 0) {
+        return kama_string_from_raw(src: bytes.dataPtr(), start: 0, len: n);   // already text: nothing to replace
+    }
+    DynamicArray<uint8> text = DynamicArray.withCapacity(capacity: n + 8);
+    isize i = 0;
+    while (i < n) {
+        uint8 b = bytes[i];
+        if (b < 128ui8) { text.add(item: b); i = i + 1; continue; }
+        // How many continuation bytes this lead takes, and the range its FIRST one must fall in — the table in
+        // Unicode §3.9 (Table 3-7), which is what rules out overlongs (E0, F0), surrogates (ED) and > U+10FFFF (F4).
+        isize need = 0; uint8 lo = 128ui8; uint8 hi = 191ui8;
+        if (b >= 194ui8 && b <= 223ui8)                                   { need = 1; }
+        else if (b == 224ui8)                                             { need = 2; lo = 160ui8; }
+        else if ((b >= 225ui8 && b <= 236ui8) || b == 238ui8 || b == 239ui8) { need = 2; }
+        else if (b == 237ui8)                                             { need = 2; hi = 159ui8; }
+        else if (b == 240ui8)                                             { need = 3; lo = 144ui8; }
+        else if (b >= 241ui8 && b <= 243ui8)                              { need = 3; }
+        else if (b == 244ui8)                                             { need = 3; hi = 143ui8; }
+        isize j = i + 1; isize got = 0;
+        while (got < need && j < n) {
+            uint8 c = bytes[j];
+            uint8 l = got == 0 ? lo : 128ui8;
+            uint8 h = got == 0 ? hi : 191ui8;
+            if (c < l || c > h) { break; }
+            j = j + 1; got = got + 1;
+        }
+        if (need > 0 && got == need) {                                   // a whole scalar: as it was
+            isize k = i;
+            while (k < j) { text.add(item: bytes[k]); k = k + 1; }
+        } else {                                                         // one maximal subpart: one U+FFFD
+            text.add(item: 239ui8); text.add(item: 191ui8); text.add(item: 189ui8);
+        }
+        i = j;   // past the subpart (a lead no sequence starts with is a subpart of one byte)
+    }
+    return kama_string_from_raw(src: text.view().dataPtr(), start: 0, len: text.length());
 }

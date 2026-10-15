@@ -286,19 +286,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
-<a id="s1-utf8-lossy"></a>
-
-### Lossy UTF-8 decoding (KR-169)
-
-Measured on `0.9.589`, filed 2026-10-14. `std::encoding::utf8` has `decode` and `validate` only; `Utf8Error::Invalid(at)` says where bad bytes start, not
-how many there are. Its own comment leaves the door open: "A lossy U+FFFD variant is a separate, named function if
-one is ever wanted". **Scheduled:** `decodeLossy` — every invalid sequence becomes U+FFFD, as Rust's `from_utf8_lossy`
-and WHATWG's decoder do (one replacement per maximal invalid subpart). Explicit by name; `decode` stays strict.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `decodeLossy` in `lib/std/encoding/utf8/utf8.kama`, no OS seam. `kama_utf8_bad_offset`
-(kama_runtime.h) says only where bad bytes start, not the maximal-subpart length WHATWG replacement needs (`ED A0 80` is
-three U+FFFD), so it needs a helper returning offset and length, or a kama loop. Not gated on `!NOHEAP`, like `decode`.
-
 <a id="s1-process-group"></a>
 
 ### A child in its own process group or session (KR-170)

@@ -2152,7 +2152,10 @@ and `validate(bytes:) -> bool` over a `ConstView<uint8>`, with `Utf8Error::Inval
 offset where the text stopped being well-formed (Rust's `valid_up_to`). Rejection is full RFC 3629 — a
 non-lead byte, a truncated tail, an overlong encoding, a UTF-16 surrogate, and anything above U+10FFFF.
 There is deliberately **no `encode`**: a `string` *is* UTF-8 bytes, so that direction is `s.bytes()`.
-<!-- test: encoding_utf8 -->
+<!-- test: encoding_utf8 --> For text shown to a person — a log line, a file name — `decodeLossy(bytes:) -> string`
+replaces each ill-formed sequence with U+FFFD, one per **maximal subpart** (Unicode §3.9, WHATWG's decoder, Rust's
+`from_utf8_lossy`): `ED A0 80` is three, a four-byte sequence cut short is one. It is named apart on purpose,
+because substituting corrupts data; `decode` stays strict. <!-- test: utf8_decode_lossy -->
 
 **Names (`std::net`).** `resolve(host:, port:) -> Result<DynamicArray<SocketAddr>, IoError>` asks the
 system resolver for **every** address a name has, IPv4 and IPv6, in the resolver's own (RFC 6724) order and

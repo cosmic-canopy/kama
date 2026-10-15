@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-169 | **Lossy UTF-8 decoding** — a named `decodeLossy` (U+FFFD for each invalid sequence), beside the strict `decode` | S | [§1](ROADMAP_DETAIL.md#s1-utf8-lossy) |
 | KR-170 | **A child in its own process group or session, and signalling the group** — no `setsid`/`setpgid`, no `kill(-pgid)` on POSIX; a per-platform type for Windows' process groups/Job Objects; ESRCH gets its own kind | M | [§1](ROADMAP_DETAIL.md#s1-process-group) |
 | KR-171 | **A child's stdio redirected** — stderr into stdout (`2>&1`), or a file as a child's stream; `Stdio` is only `Inherit`/`Piped`/`Null` | M | [§1](ROADMAP_DETAIL.md#s1-child-stdio) |
 | KR-172 | **A WebRTC DataChannel type** — the browser glue ships (`kama_rtc_*`), with no `.kama` type over it; the unreliable wasm transport `udp.kama` promises | S | [§1](ROADMAP_DETAIL.md#s1-datachannel) |

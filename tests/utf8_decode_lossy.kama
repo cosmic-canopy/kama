@@ -1,0 +1,31 @@
+// Lossy UTF-8 decoding (KR-169): `decodeLossy` replaces each ill-formed sequence with U+FFFD — one per MAXIMAL
+// SUBPART, the Unicode §3.9 practice WHATWG and Rust's `from_utf8_lossy` follow — while `decode` stays strict.
+// The vectors are WHATWG's. Returns 42.
+import { std::encoding::utf8::decodeLossy, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
+         std::collections::DynamicArray };
+
+unsafe fn string lossy(DynamicArray<uint8> bytes) { return decodeLossy(bytes: bytes.view()); }
+fn DynamicArray<uint8> of3(uint8 a, uint8 b, uint8 c) { DynamicArray<uint8> d = DynamicArray.empty(); d.add(item: a); d.add(item: b); d.add(item: c); return give d; }
+
+unsafe fn int32 run() {
+    string r = "\u{FFFD}";
+    if (lossy(bytes: of3(a: 97ui8, b: 98ui8, c: 99ui8)) != "abc") { return 1; }                  // valid text, untouched
+    if (lossy(bytes: of3(a: 237ui8, b: 160ui8, c: 128ui8)) != r + r + r) { return 2; }            // ED A0 80: a surrogate, three
+    if (lossy(bytes: of3(a: 240ui8, b: 159ui8, c: 152ui8)) != r) { return 3; }                    // F0 9F 98: cut short, one
+    if (lossy(bytes: of3(a: 192ui8, b: 128ui8, c: 97ui8)) != r + r + "a") { return 4; }           // C0 80: an overlong NUL, two
+    if (lossy(bytes: of3(a: 97ui8, b: 128ui8, c: 98ui8)) != "a" + r + "b") { return 5; }          // a lone continuation byte
+    if (lossy(bytes: of3(a: 226ui8, b: 130ui8, c: 120ui8)) != r + "x") { return 6; }              // E2 82 then x: one
+    if (lossy(bytes: of3(a: 255ui8, b: 254ui8, c: 97ui8)) != r + r + "a") { return 7; }           // FF FE: never a lead
+    DynamicArray<uint8> smile = DynamicArray.empty();
+    smile.add(item: 240ui8); smile.add(item: 159ui8); smile.add(item: 152ui8); smile.add(item: 128ui8);
+    if (lossy(bytes: give smile) != "\u{1F600}") { return 8; }                                  // a whole 4-byte scalar
+    DynamicArray<uint8> empty = DynamicArray.empty();
+    if (lossy(bytes: give empty) != "") { return 9; }
+    // `decode` is unchanged: strict.
+    DynamicArray<uint8> bad = of3(a: 237ui8, b: 160ui8, c: 128ui8);
+    Result<string, Utf8Error> strict = decode(bytes: bad.view());
+    if (strict.isOk()) { return 10; }
+    return 42;
+}
+
+fn int32 main() { return run(); }
