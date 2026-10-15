@@ -3252,7 +3252,7 @@ build it. So **`kama check` owes every gate in your own files one analysis in wh
 ```sh
 $ kama check kama.json
 src/impl_wasm.kama:11:0: error: unknown type `Zork` in a parameter — …  [--target WASM]
-kama: src/app.kama FAILED (2 configurations, 1 error)
+kama: kama.json FAILED (2 configurations, 1 error)
 ```
 
 It analyzes the configuration it was given, then adds configurations until each `@compileFor` and each

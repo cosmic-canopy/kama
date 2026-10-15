@@ -35,6 +35,8 @@
 #   9. A position raised in the header pass — where NO module is current — names the prelude rather than
 #      falling through to the file being compiled, which is the same defect with no declaration to blame.
 #  10. A generic-INFERENCE failure names its own file in `build`, `check` and `query --diagnostics` alike.
+#  11. `kama check`'s closing summary names what was checked (KR-141): the manifest, not the module's
+#      alphabetically first file — `src/a.kama FAILED` used to report an error that was in `src/b.kama`.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -480,6 +482,30 @@ if [ "$n10b" != 1 ]; then
     exit 1
 fi
 
+# ---- 11. the check summary names what was checked (KR-141) ------------------------------------------
+mkdir -p "$tmp/p11/src"
+cat > "$tmp/p11/kama.json" <<'EOF'
+{ "name": "two", "version": "0.1.0", "kind": "library", "source": "src", "modules": { ".": { "visibility": "public" } } }
+EOF
+printf 'export { a1 };\nfn int32 a1() { return 1; }\n' > "$tmp/p11/src/a.kama"
+printf 'fn int32 b1() { int32 x = "no"; return x; }\n' > "$tmp/p11/src/b.kama"
+out11=$(cd "$tmp/p11" && "$KAMA" check kama.json 2>&1 || true)
+if ! printf '%s\n' "$out11" | grep -q '^kama: kama.json FAILED (1 error)$'; then
+    echo "check-diag-file: FAIL — a failed project check must name the manifest in its summary:"
+    printf '%s\n' "$out11" | sed 's/^/    /' | head -6
+    exit 1
+fi
+out11j=$(cd "$tmp/p11" && "$KAMA" check kama.json --json 2>&1 || true)
+case "$out11j" in *'"file":"kama.json"'*) ;; *)
+    echo "check-diag-file: FAIL — \`kama check kama.json --json\` must name the manifest:"
+    printf '%s\n' "$out11j" | head -c 300; echo; exit 1 ;; esac
+out11l=$(cd "$tmp/p11" && "$KAMA" check src/a.kama src/b.kama 2>&1 || true)
+if ! printf '%s\n' "$out11l" | grep -q '^kama: src/b.kama FAILED (1 error)$'; then
+    echo "check-diag-file: FAIL — a failed check of several files must name the file that failed:"
+    printf '%s\n' "$out11l" | sed 's/^/    /' | head -6
+    exit 1
+fi
+
 echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local,"
 echo "                       from the collect pass, a body, or a generic template's body; and one mistake"
 echo "                       in a generic body is reported once, not once per instantiation; an"
@@ -487,4 +513,5 @@ echo "                       unresolved module names the rule that refused it, n
 echo "                       same-module import blames the cause that fired, not the export list; and a"
 echo "                       failed generic bound is the USE SITE's mistake, reported once, in its file; and a
                        position raised in the HEADER PASS names the prelude, not the user's file; and
-                       a generic-inference failure names its file in build, check and query alike)"
+                       a generic-inference failure names its file in build, check and query alike; and
+                       check's summary names the manifest, or the files that failed)"

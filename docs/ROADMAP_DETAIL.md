@@ -2892,21 +2892,6 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-check-summary-file"></a>
-
-### A failed multi-file check names the wrong file (KR-141)
-
-`kama check kama.json` over a module of two files, with the error in `src/b.kama`, prints
-`src/b.kama:2:0: error: …` and then `kama: src/a.kama FAILED (1 error)` (measured `0.9.577`). The summary names the
-module's first file, whichever failed; the passing summary does the same (`<first file> OK (N units)`), naming one
-file for a whole module. **Scheduled.** No ruling: the summary names what was checked — the manifest, or each file
-that failed.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `src/kama.driver.cpp`, the `checkOne` lambda in `main` prints the summary from
-`inputs[0]`. Name the manifest when one was the operand, as `kama stats` already does (`manifestOperand.empty() ? input
-: manifestOperand`), else each failing file from the diagnostics; the `--json` envelope (`jsonEnvelope("check", src)`)
-has the same fault. No ruling owed.
-
 <a id="s10-seed-names"></a>
 
 ### `kama seed` and a `kama-<name>` repository (KR-142)

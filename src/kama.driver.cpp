@@ -11837,7 +11837,7 @@ int main(int argc, char** argv)
         if (biggest.size() > kTop) biggest.resize(kTop);
 
         if (jsonOut) {
-            Json j = jsonEnvelope("stats", input);
+            Json j = jsonEnvelope("stats", manifestOperand.empty() ? input : manifestOperand);   // what was asked about (KR-141)
             Json lines = Json::object();
             lines.set("total", (long)all.total); lines.set("code", (long)all.code);
             lines.set("comment", (long)all.comment); lines.set("blank", (long)all.blank);
@@ -12049,6 +12049,15 @@ int main(int argc, char** argv)
         const bool baseShared = g_outputShared;
         auto checkOne = [&](const std::string& src) -> int {
             const std::vector<std::string> roots = eachMode ? std::vector<std::string>{ src } : inputs;
+            // What was checked, named as the caller named it (KR-141): the manifest when one was the operand, every
+            // file when several were — never `inputs[0]`, which is the alphabetically first source of the project,
+            // so `src/a.kama FAILED` used to report an error that was in `src/b.kama`. Under `--each`, the program.
+            std::string subject = src;
+            if (!eachMode && !manifestOperand.empty()) subject = manifestOperand;
+            else if (!eachMode && roots.size() > 1) {
+                subject.clear();
+                for (const auto& r : roots) subject += (subject.empty() ? "" : ", ") + r;
+            }
             struct Tagged { Diagnostic d; std::string config; };
             std::vector<Tagged> diags;
             std::set<std::string> seenDiag, unitNames;
@@ -12065,7 +12074,7 @@ int main(int argc, char** argv)
                 if (!loadProgramUnits(roots, argv[0], units, unitPaths, devBuild)) {
                     // Whatever stopped it is already on stderr — say which configuration that was.
                     if (!config.empty())
-                        fprintf(stderr, "kama: %s did not load under [%s] (above)\n", src.c_str(), config.c_str());
+                        fprintf(stderr, "kama: %s did not load under [%s] (above)\n", subject.c_str(), config.c_str());
                     return false;
                 }
                 CEmitter idx(src);                   // analysis mode: no output stream
@@ -12119,7 +12128,7 @@ int main(int argc, char** argv)
                 // Everything on STDOUT and nothing on stderr, so a caller can read one stream. `ok` is the
                 // verdict the exit code carries, restated so a consumer that captured only stdout still has
                 // it. The exit code is unchanged — a wrapper script must keep working when --json is added.
-                Json j = jsonEnvelope("check", src);
+                Json j = jsonEnvelope("check", subject);
                 j.set("ok", errs == 0);
                 j.set("units", (int)unitNames.size());
                 j.set("configurations", (int)configs);
@@ -12141,12 +12150,21 @@ int main(int argc, char** argv)
             }
             const std::string cfgs = configs > 1 ? std::to_string(configs) + " configurations, " : "";
             if (errs) {
+                // Several loose files: the summary names the ones that failed, as the diagnostics above do.
+                std::string failed = subject;
+                if (!eachMode && manifestOperand.empty() && roots.size() > 1) {
+                    std::vector<std::string> files;
+                    for (const auto& t : diags)
+                        if (t.d.severity == DiagSeverity::Error && !t.d.file.empty()
+                            && std::find(files.begin(), files.end(), t.d.file) == files.end()) files.push_back(t.d.file);
+                    if (!files.empty()) { failed.clear(); for (const auto& f : files) failed += (failed.empty() ? "" : ", ") + f; }
+                }
                 fprintf(stderr, "kama: %s FAILED (%s%zu error%s)\n",
-                        src.c_str(), cfgs.c_str(), errs, errs == 1 ? "" : "s");
+                        failed.c_str(), cfgs.c_str(), errs, errs == 1 ? "" : "s");
                 return 1;
             }
             fprintf(stderr, "kama: %s OK (%s%zu unit%s analyzed%s)\n",
-                    src.c_str(), cfgs.c_str(), unitNames.size(), unitNames.size() == 1 ? "" : "s",
+                    subject.c_str(), cfgs.c_str(), unitNames.size(), unitNames.size() == 1 ? "" : "s",
                     anyWarning ? ", with warnings" : "");
             return 0;
         };
