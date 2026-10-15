@@ -2039,7 +2039,10 @@ fn int32 main() {
 A native, single-binary I/O foundation — **library over FFI, no new language surface** beyond the prelude's
 `enum Unit` (the empty `Result<Unit, E>` payload — one error convention for void-fallible ops). `std::io`
 gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed by its destructor; opened
-`Read`, `Write` — create/truncate — or `Append`) plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
+`Read`, `Write` — create/truncate — `Append`, or `ReadWrite` — create, never truncate), with random access: `seek`
+(a `SeekFrom` — `Start`, `Current` or `End`), `readAt`/`writeAt` at an offset, which leave the cursor where it was on
+every OS (Windows moves it for a positioned call, so kama puts it back, as Go does), and `setLength`; a pipe has no
+position and answers `InvalidInput` <!-- test: fs_random_access --> <!-- test: proc_pipe_seek -->; plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
 `createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
 `kind`, `modified` (a `std::time::Timestamp` — nanoseconds where the filesystem records them, whole seconds
 on Windows) and `permissions` (the nine bits the file records, not an access check — below). `kind` is a `FileKind`
@@ -4528,7 +4531,7 @@ What it deliberately does **not** mark is as informative:
   is **the naming convention**: for a read/write pair the unmarked name is the read-only form and `Mut`
   marks the writable one (`view`/`viewMut`, `iterator`/`iterMut`, `dataPtr`/`dataPtrMut`,
   `getRef`/`getRefMut`, `deref`/`derefMut`). A lone place-returner with no
-  read-only use keeps its bare name (`IteratorMut.next()`, `Child.stdout()` — every `File` op is non-const).
+  read-only use keeps its bare name (`IteratorMut.next()`, `Child.stdout()` — every `File` op but `readAt` is non-const).
 - **`Map`'s and `SlotMap`'s `hasNext()`** scan forward past empty slots, so asking the question moves the
   cursor. They are not queries — which is why `IteratorMut.hasNext` is not a const member either, even
   though the other implementations would satisfy it.

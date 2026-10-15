@@ -16,7 +16,7 @@ import {
     std::process::UserId, std::process::GroupId,
 };
 
-export { File, OpenMode, Metadata, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
+export { File, OpenMode, SeekFrom, Metadata, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
          readDir, remove, createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, exists, setPermissions,
          canonicalPath };
 
@@ -26,7 +26,12 @@ extern "kama_os.h";
 extern fn int32  kama_open_read(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_open_create(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_open_append(UnsafeConstPtr<cchar> path);
-extern fn int32  kama_open_create_mode(UnsafeConstPtr<cchar> path, uint32 mode, int32 append);
+extern fn int32  kama_open_create_mode(UnsafeConstPtr<cchar> path, uint32 mode, int32 how);
+extern fn int32  kama_open_rw(UnsafeConstPtr<cchar> path);
+extern fn int64  kama_seek(int32 fd, int64 off, int32 whence);
+extern fn isize  kama_pread(int32 fd, UnsafePtr<uint8> buf, usize n, uint64 off);
+extern fn isize  kama_pwrite(int32 fd, UnsafeConstPtr<uint8> buf, usize n, uint64 off);
+extern fn int32  kama_set_length(int32 fd, uint64 len);
 extern fn int32  kama_mkdir_mode(UnsafeConstPtr<cchar> path, uint32 mode);
 extern fn int32  kama_set_permissions(UnsafeConstPtr<cchar> path, uint32 mode);
 extern fn isize  kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
@@ -64,11 +69,16 @@ extern fn int32  kama_EINTR();
 
 // How `File.open` opens. `Write` CREATES and TRUNCATES; `Append` creates and seeks to the end on every
 // write, which is the only way concurrent appenders (a log from two processes) do not overwrite each
-// other — a seek-then-write cannot promise that, because the two steps are not one operation.
+// other — a seek-then-write cannot promise that, because the two steps are not one operation. `ReadWrite`
+// reads AND writes, creating the file and never emptying it — the mode random access needs (KR-168: an update in
+// place with `seek`, `readAt`/`writeAt`, `setLength`).
 //
 // A file either one creates asks for `rw-rw-rw-` and the process umask narrows it (`rw-r--r--` under the
 // usual `022`) — every language's default. On Windows it inherits its directory's access list.
-type enum OpenMode { Read, Write, Append }
+type enum OpenMode { Read, Write, Append, ReadWrite }
+
+// Where `File.seek` moves the cursor (KR-168): from the start, or from where it is or from the end, by a signed step.
+type enum SeekFrom { Start(uint64 offset), Current(int64 offset), End(int64 offset) }
 
 // The nine permission bits a file carries — read, write and execute, for its owner, its group and everyone
 // else — in the Unix model on every platform (KR-92). On Windows they are written and read back as an access
@@ -337,6 +347,7 @@ type resource File implements Reader, Writer, Sendable {
             case Read:   kama_open_read(path: path.cstr());
             case Write:  kama_open_create(path: path.cstr());
             case Append: kama_open_append(path: path.cstr());
+            case ReadWrite: kama_open_rw(path: path.cstr());
         };
         if (fd < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: File.make(fd: fd));
@@ -360,8 +371,8 @@ type resource File implements Reader, Writer, Sendable {
     // for the bits they are given, inheriting nothing wider — see `Permissions` and kama_os.h.
     public unsafe ctor Result<File, IoError> openWith(const ref string path, OpenMode mode, Permissions permissions) {
         if (mode == OpenMode::Read) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
-        int32 fd = kama_open_create_mode(path: path.cstr(), mode: permissions.mode(),
-                                         append: mode == OpenMode::Append ? 1 : 0);
+        int32 how = match (mode) { case Append: 1; case ReadWrite: 2; case _: 0; };
+        int32 fd = kama_open_create_mode(path: path.cstr(), mode: permissions.mode(), how: how);
         if (fd < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: File.make(fd: fd));
     }
@@ -391,6 +402,47 @@ type resource File implements Reader, Writer, Sendable {
 
     // The `Writer` flush: our fs layer is unbuffered (the OS buffers), so there is nothing to drain.
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+
+    // ---- random access (KR-168) ----------------------------------------------------------------------------------
+    // Move the cursor the next `read`/`write` uses, and answer where it now is. A pipe, a socket or a terminal has no
+    // position: `InvalidInput`, on every OS.
+    public unsafe fn Result<uint64, IoError> seek(SeekFrom to) {
+        int64 r = match (to) {
+            case Start(offset: o):   kama_seek(fd: this.fd, off: cast<int64>(o), whence: 0);
+            case Current(offset: o): kama_seek(fd: this.fd, off: o, whence: 1);
+            case End(offset: o):     kama_seek(fd: this.fd, off: o, whence: 2);
+        };
+        if (r < 0i64) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: cast<uint64>(r));
+    }
+    // Read up to `into.length()` bytes at `offset`, leaving the cursor where it was — on every OS: Windows moves its
+    // file pointer for a positioned read, so kama puts it back, as Go's `ReadAt` does. `Ok(0)` at or past the end.
+    // ⚠️ Two `File`s over ONE open file (`duplicateDescriptor`) share that cursor, and used from two isolates at once
+    // one may see the other's move for the instant it lasts, on Windows alone.
+    public unsafe const fn Result<isize, IoError> readAt(View<uint8> into, uint64 offset) {
+        if (into.length() == 0) { return Result::Ok(value: 0); }
+        while (true) {
+            isize n = kama_pread(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), off: offset);
+            if (n >= 0) { return Result::Ok(value: n); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    // Write up to `bytes.length()` bytes at `offset`, leaving the cursor where it was (as `readAt`). A short write is
+    // possible, as for `write`. ⚠️ On a file opened `Append`, Linux puts every write at the end, this one included —
+    // positioned writes want `ReadWrite`.
+    public unsafe fn Result<isize, IoError> writeAt(ConstView<uint8> bytes, uint64 offset) {
+        if (bytes.length() == 0) { return Result::Ok(value: 0); }
+        while (true) {
+            isize n = kama_pwrite(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), off: offset);
+            if (n >= 0) { return Result::Ok(value: n); }
+            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    // Truncate or extend the file to exactly `length` bytes (an extension reads as zeros). The cursor does not move.
+    public unsafe fn Result<Unit, IoError> setLength(uint64 length) {
+        if (kama_set_length(fd: this.fd, len: length) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
 
     // What the filesystem records about this OPEN file (`fstat`) — so a check and the read after it are about one
     // file, where checking the path first leaves a moment for it to be pointed elsewhere. libpq checks `.pgpass`

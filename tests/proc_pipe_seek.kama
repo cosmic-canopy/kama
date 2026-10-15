@@ -1,0 +1,23 @@
+// A pipe has no position (KR-168): seeking a child's stdout, or reading it at an offset, is `InvalidInput` on
+// every OS — POSIX answers ESPIPE, and Windows is held to the same by asking what kind of file it is first.
+import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::ExitStatus,
+         std::fs::SeekFrom, std::io::IoError, std::collections::FixedArray };
+
+fn int32 isInvalid(IoError e) { return match (e.kind()) { case InvalidInput: 0; case _: 1; }; }
+
+unsafe fn int32 run() {
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "echo"); c.arg(a: "x");
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> sr = c.start();
+    Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 10; } };
+    int32 a = match (p.stdout().seek(to: SeekFrom::Start(offset: 0ui64))) { case Ok(value: n): 20; case Err(error: e): isInvalid(e: e); };
+    FixedArray<uint8> b = FixedArray.make(size: 4);
+    int32 r = match (p.stdout().readAt(into: b.viewMut(), offset: 0ui64)) { case Ok(value: n): 30; case Err(error: e): isInvalid(e: e); };
+    Result<ExitStatus, IoError> w = p.wait();
+    if (a != 0) { return a; }
+    if (r != 0) { return r; }
+    return 42;
+}
+
+fn int32 main() { return run(); }

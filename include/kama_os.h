@@ -141,6 +141,7 @@ static inline int32_t kama_ENETUNREACH(void)  { return (int32_t)ENETUNREACH; }
 static inline int32_t kama_EMSGSIZE(void)     { return (int32_t)EMSGSIZE; }
 static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
+static inline int32_t kama_ESPIPE(void)       { return (int32_t)ESPIPE; }   // a seek on a pipe (KR-168)
 
 // Winsock's code as the uniform errno set — one table, for the call that failed and for a connect's SO_ERROR.
 static inline int kama__wsa_errno(int e) {
@@ -277,6 +278,52 @@ KAMA_NOINLINE static int32_t kama__wopen(const char* path, int flags) {
 static inline int32_t   kama_open_read(const char* path)   { return kama__wopen(path, _O_RDONLY | _O_BINARY); }
 static inline int32_t   kama_open_create(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY); }
 static inline int32_t   kama_open_append(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY); }
+static inline int32_t   kama_open_rw(const char* path)     { return kama__wopen(path, _O_RDWR | _O_CREAT | _O_BINARY); }
+// ---- random access (KR-168) -----------------------------------------------------------------------------------
+// Only a disk file seeks: a pipe or a console answers ESPIPE, as POSIX's lseek does, rather than whatever the
+// file pointer of a pipe means to Win32. `whence` 0/1/2 = from the start / the cursor / the end.
+static inline HANDLE kama__seekable(int32_t fd) {
+    HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+    if (h == INVALID_HANDLE_VALUE) return NULL;                    // errno already EBADF
+    if (GetFileType(h) != FILE_TYPE_DISK) { kama__os_fail(0, ESPIPE); return NULL; }
+    return h;
+}
+static inline int64_t kama_seek(int32_t fd, int64_t off, int32_t whence) {
+    if (!kama__seekable(fd)) return -1;
+    return (int64_t)_lseeki64((int)fd, (__int64)off, whence == 0 ? SEEK_SET : whence == 1 ? SEEK_CUR : SEEK_END);
+}
+// A positioned ReadFile/WriteFile on a synchronous handle MOVES the file pointer, which POSIX's pread/pwrite never
+// do. kama promises the POSIX meaning on every OS (the maintainer, 2026-10-15): the cursor is saved and put back,
+// as Go's ReadAt does, so a program that mixes `read` and `readAt` behaves the same here as on Linux. What is left:
+// two `File`s over ONE open file (duplicateDescriptor) used from two isolates at once can see each other's cursor
+// move for the instant between — documented on `readAt`.
+static inline ptrdiff_t kama__positioned(int32_t fd, void* buf, size_t n, uint64_t off, int write) {
+    HANDLE h = kama__seekable(fd);
+    if (!h) return -1;
+    LARGE_INTEGER zero, cur; zero.QuadPart = 0;
+    if (!SetFilePointerEx(h, zero, &cur, FILE_CURRENT)) { kama__os_fail(GetLastError(), EINVAL); return -1; }
+    OVERLAPPED o; ZeroMemory(&o, sizeof o);
+    o.Offset = (DWORD)(off & 0xffffffffu); o.OffsetHigh = (DWORD)(off >> 32);
+    DWORD done = 0;
+    const DWORD cnt = n > 0x7fffffffu ? 0x7fffffffu : (DWORD)n;
+    const BOOL ok = write ? WriteFile(h, buf, cnt, &done, &o) : ReadFile(h, buf, cnt, &done, &o);
+    const DWORD e = ok ? 0 : GetLastError();
+    SetFilePointerEx(h, cur, NULL, FILE_BEGIN);
+    if (!ok) {
+        if (!write && e == ERROR_HANDLE_EOF) return 0;               // at or past the end: end of file, as pread says
+        kama__os_fail(e, e == ERROR_ACCESS_DENIED ? EBADF : e == ERROR_DISK_FULL ? ENOSPC : EIO);
+        return -1;
+    }
+    return (ptrdiff_t)done;
+}
+static inline ptrdiff_t kama_pread(int32_t fd, uint8_t* buf, size_t n, uint64_t off)        { return kama__positioned(fd, buf, n, off, 0); }
+static inline ptrdiff_t kama_pwrite(int32_t fd, const uint8_t* buf, size_t n, uint64_t off) { return kama__positioned(fd, (void*)buf, n, off, 1); }
+static inline int32_t kama_set_length(int32_t fd, uint64_t len) {
+    if (!kama__seekable(fd)) return -1;
+    const errno_t e = _chsize_s((int)fd, (__int64)len);
+    if (e != 0) { errno = e; return -1; }
+    return 0;
+}
 // `_read`/`_write` take an `unsigned int` count and return an `int`, so a `size_t` cast straight down wrapped:
 // 4 GiB + k asked for k bytes. One call moves at most INT_MAX; the callers loop for the rest, as for any
 // short transfer.
@@ -701,10 +748,11 @@ static inline int kama__token_ids(kama__tokid* t, PSID* user, PSID* group)
 // accepted only when it already holds exactly `mode` — POSIX's answer too, where `fchmod` is skipped when
 // nothing would change and refused to a non-owner otherwise. Hands back a CRT descriptor, as every other open
 // here does.
-KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t append)
+// `how`: 0 write (an existing file is emptied), 1 append, 2 read and write (KR-168 — never emptied).
+KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t how)
 {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
-    const DWORD access = GENERIC_WRITE | READ_CONTROL | WRITE_DAC;
+    const DWORD access = GENERIC_WRITE | READ_CONTROL | WRITE_DAC | (how == 2 ? GENERIC_READ : 0);
     const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
     kama__tokid t; PSID user, group; kama__wk k; BYTE aclbuf[KAMA__ACL_CAP]; SECURITY_DESCRIPTOR sd;
     if (kama__token_ids(&t, &user, &group) != 0 || kama__wk_init(&k) != 0
@@ -737,7 +785,7 @@ KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mo
     } else {
         bad = kama__apply_mode(h, mode, 0);
     }
-    if (!bad && !made && !append) {
+    if (!bad && !made && how == 0) {
         LARGE_INTEGER zero; zero.QuadPart = 0;
         if (!SetFilePointerEx(h, zero, NULL, FILE_BEGIN) || !SetEndOfFile(h)) { kama__os_fail(GetLastError(), EACCES); bad = -1; }
     }
@@ -748,7 +796,7 @@ KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mo
         errno = e;
         return -1;
     }
-    int fd = _open_osfhandle((intptr_t)h, _O_BINARY | _O_WRONLY | (append ? _O_APPEND : 0));
+    int fd = _open_osfhandle((intptr_t)h, _O_BINARY | (how == 2 ? _O_RDWR : _O_WRONLY) | (how == 1 ? _O_APPEND : 0));
     if (fd < 0) { int e = errno; CloseHandle(h); if (made) DeleteFileW(w); errno = e; return -1; }
     return (int32_t)fd;
 }
@@ -1667,6 +1715,7 @@ static inline int32_t kama_ENETUNREACH(void)  { return (int32_t)ENETUNREACH; }
 static inline int32_t kama_EMSGSIZE(void)     { return (int32_t)EMSGSIZE; }
 static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
+static inline int32_t kama_ESPIPE(void)       { return (int32_t)ESPIPE; }   // a seek on a pipe (KR-168)
 
 // ---- close-on-exec (KR-174) -------------------------------------------------
 // Every descriptor kama makes is close-on-exec, so a child std::process starts holds the three streams it was
@@ -1734,6 +1783,25 @@ static inline void kama__fork_gate_open(void) {
 static inline int32_t   kama_open_read(const char* path)   { return (int32_t)open(path, O_RDONLY | KAMA__O_CLOEXEC); }
 static inline int32_t   kama_open_create(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_TRUNC | KAMA__O_CLOEXEC, 0666); }
 static inline int32_t   kama_open_append(const char* path) { return (int32_t)open(path, O_WRONLY | O_CREAT | O_APPEND | KAMA__O_CLOEXEC, 0666); }
+static inline int32_t   kama_open_rw(const char* path)     { return (int32_t)open(path, O_RDWR | O_CREAT | KAMA__O_CLOEXEC, 0666); }
+// ---- random access (KR-168) -----------------------------------------------------------------------------------
+// <unistd.h>'s, declared here for the reason `read`/`write` are (above). macOS labels pread/pwrite with
+// __DARWIN_ALIAS_C, and kama_isolate.h pulls <unistd.h> later in some TUs, so the SAME label is carried here —
+// a consistent redeclaration rather than "cannot apply asm label after first use" (see kama_raw_write).
+#if defined(__APPLE__)
+extern ssize_t pread(int, void*, size_t, off_t) __asm("_pread");
+extern ssize_t pwrite(int, const void*, size_t, off_t) __asm("_pwrite");
+#else
+extern ssize_t pread(int, void*, size_t, off_t);
+extern ssize_t pwrite(int, const void*, size_t, off_t);
+#endif
+extern off_t lseek(int, off_t, int);
+static inline int64_t kama_seek(int32_t fd, int64_t off, int32_t whence) {
+    return (int64_t)lseek((int)fd, (off_t)off, whence == 0 ? SEEK_SET : whence == 1 ? SEEK_CUR : SEEK_END);
+}
+static inline ptrdiff_t kama_pread(int32_t fd, uint8_t* buf, size_t n, uint64_t off)        { return (ptrdiff_t)pread((int)fd, buf, n, (off_t)off); }
+static inline ptrdiff_t kama_pwrite(int32_t fd, const uint8_t* buf, size_t n, uint64_t off) { return (ptrdiff_t)pwrite((int)fd, buf, n, (off_t)off); }
+static inline int32_t   kama_set_length(int32_t fd, uint64_t len) { return (int32_t)ftruncate((int)fd, (off_t)len); }
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)read((int)fd, buf, n); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) {
     ptrdiff_t r = (ptrdiff_t)write((int)fd, buf, n);
@@ -1836,9 +1904,10 @@ static inline int32_t kama__mode_exact(int fd, uint32_t mode)
     if (((uint32_t)st.st_mode & 0777u) != mode) { errno = EPERM; return -1; }
     return 0;
 }
-static inline int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t append)
+// `how`: 0 write (an existing file is emptied), 1 append, 2 read and write (KR-168 — never emptied).
+static inline int32_t kama_open_create_mode(const char* path, uint32_t mode, int32_t how)
 {
-    const int flags = O_WRONLY | (append ? O_APPEND : 0) | KAMA__O_CLOEXEC;
+    const int flags = (how == 2 ? O_RDWR : O_WRONLY) | (how == 1 ? O_APPEND : 0) | KAMA__O_CLOEXEC;
     int made = 1;
     int fd = open(path, flags | O_CREAT | O_EXCL, (mode_t)mode);
     if (fd < 0 && errno == EEXIST) {
@@ -1847,7 +1916,7 @@ static inline int32_t kama_open_create_mode(const char* path, uint32_t mode, int
         if (fd < 0 && errno == ENOENT) fd = open(path, flags | O_CREAT, (mode_t)mode);
     }
     if (fd < 0) return -1;
-    if (kama__mode_exact(fd, mode) != 0 || (!append && !made && ftruncate(fd, 0) != 0)) {
+    if (kama__mode_exact(fd, mode) != 0 || (how == 0 && !made && ftruncate(fd, 0) != 0)) {
         int e = errno;
         close(fd);
         if (made) unlink(path);

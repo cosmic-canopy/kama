@@ -286,28 +286,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
-<a id="s1-file-seek"></a>
-
-### `File` seek (KR-168)
-
-Measured on `0.9.589`, filed 2026-10-14. `std::fs::File` has no `seek`, no positional read or write and no set-length (`File` has no method `seek`); the one
-`SetFilePointerEx` in `kama_os.h` is internal. **Scheduled:** `seek` (from start/current/end), `readAt`/`writeAt`
-(`pread`/`pwrite`, which a shared file needs), and `setLength`.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `File` methods in fs.kama and a `SeekFrom { Start, Current, End }` enum. Seam: `kama_seek`
-(`lseek`/`_lseeki64`), `kama_pread`/`kama_pwrite` (`pread`/`pwrite`; Windows `ReadFile`/`WriteFile` with an `OVERLAPPED`
-offset on `_get_osfhandle` — a `File` is a CRT fd there), `kama_set_length` (`ftruncate`/`_chsize_s`). **Decision
-owed:** a positioned `ReadFile` on a synchronous handle MOVES the file pointer, unlike `pread` — document it, or save and
-restore it (racy). Seeking a pipe is `ESPIPE`, `Other` today; Windows wants a `GetFileType` guard.
-
-**Decided (the maintainer, 2026-10-15):** `readAt`/`writeAt` leave the cursor where it was on every OS — POSIX
-`pread`'s promise, which Go's `io.ReaderAt` contract, Java's `FileChannel.read(buf, position)` and .NET's
-`RandomAccess` make too; on Windows the cursor is saved and restored around the transfer, as Go does. The residual is
-documented: two `File`s over one open file (`duplicateDescriptor`) used from two isolates at once. **With it,
-`OpenMode::ReadWrite`** (read and write, creates, never truncates): no mode opens a file for update today — `Write`
-truncates and `Append` is write-only — so `writeAt` and `setLength` would have nothing to update. ESPIPE is
-`InvalidInput`.
-
 <a id="s1-utf8-lossy"></a>
 
 ### Lossy UTF-8 decoding (KR-169)
@@ -356,7 +334,7 @@ were before. What adding one costs after 1.0 is KR-176.
 
 ### No exclusive create, and an existing path is `Other` (KR-177)
 
-Filed 2026-10-15 while deciding KR-168, measured on `0.9.603`. `type enum OpenMode { Read, Write, Append }`: `Write`
+Filed 2026-10-15 while deciding `File` random access, measured on `0.9.603`. `type enum OpenMode { Read, Write, Append }`: `Write`
 creates or truncates, so nothing opens a file only if it does not exist yet. A lockfile, a "write this, never
 overwrite", or a temp file with a chosen name is then a check-then-open race (`exists` says so in its own comment: it
 is for reporting, not guarding). The seam already makes the call internally — `kama_open_create_mode` opens with
@@ -495,7 +473,7 @@ Filed 2026-10-15 while ruling on KR-170's ESRCH kind. `match` on an enum is exha
 Measured on `0.9.603`: of the 29 matches over `IoErrorKind` in the tree, 28 have `_`; the one without is
 `IoErrorKind.message()` in io.kama itself. The enum has grown four times (`b4ff3732` InProgress..BrokenPipe, `20a912d5`
 InvalidInput, `176aca2f` Interrupted), and this session adds `ProcessNotFound` (KR-170) and `AlreadyExists` (KR-177),
-while `OpenMode` gains `ReadWrite` (KR-168) and `Stdio` gains `Handle`/`Stdout` (KR-171). Before 1.0 that is allowed;
+while `OpenMode` gains `ReadWrite` (`0.9.618`) and `Stdio` gains `Handle`/`Stdout` (KR-171). Before 1.0 that is allowed;
 after the tag each is a source break, and 1.x is where the stdlib grows.
 
 **What others do.** Rust marks `io::ErrorKind` `#[non_exhaustive]`: outside its crate a `match` must carry `_`, and

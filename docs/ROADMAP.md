@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-168 | **`File` seek** — no `seek`, positional read/write or set-length; random access to a file is impossible in std | S | [§1](ROADMAP_DETAIL.md#s1-file-seek) |
 | KR-177 | **No exclusive create, and an existing path is `Other`** — `OpenMode` has no create-new (`O_EXCL`/`CREATE_NEW`), so a lockfile or a "create, never overwrite" is a check-then-open race; and every EEXIST — `createDir` on an existing directory included — surfaces as `Other`. `OpenMode::CreateNew` and an `AlreadyExists` kind | S | [§1](ROADMAP_DETAIL.md#s1-exclusive-create) |
 | KR-169 | **Lossy UTF-8 decoding** — a named `decodeLossy` (U+FFFD for each invalid sequence), beside the strict `decode` | S | [§1](ROADMAP_DETAIL.md#s1-utf8-lossy) |
 | KR-170 | **A child in its own process group or session, and signalling the group** — no `setsid`/`setpgid`, no `kill(-pgid)` on POSIX; a per-platform type for Windows' process groups/Job Objects; ESRCH gets its own kind | M | [§1](ROADMAP_DETAIL.md#s1-process-group) |

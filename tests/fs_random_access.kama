@@ -1,0 +1,58 @@
+// Random access to a file (KR-168): `OpenMode::ReadWrite` (reads and writes, creates, never empties), `seek` from the
+// start / the cursor / the end, `readAt`/`writeAt` at an offset — which leave the cursor where it was, on every OS —
+// and `setLength`. Returns 42.
+import { std::fs::File, std::fs::OpenMode, std::fs::SeekFrom, std::fs::remove, std::fs::Permissions, std::io::IoError,
+         std::collections::FixedArray, std::collections::ConstView, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
+
+fn string text(ConstView<uint8> b) { Result<string, Utf8Error> t = decode(bytes: b); return match (give t) { case Ok(value: s): { := give s; } case Err(error: e): { := "?"; } }; }
+
+unsafe fn string take(ref File f, isize n) {          // read n bytes at the cursor, as text
+    FixedArray<uint8> b = FixedArray.make(size: n);
+    Result<isize, IoError> r = f.read(into: b.viewMut());
+    return match (r) { case Ok(value: k): text(b: b.slice(from: 0, count: k)); case Err(error: e): "?"; };
+}
+unsafe fn string at(const ref File f, uint64 off, isize n) {
+    FixedArray<uint8> b = FixedArray.make(size: n);
+    Result<isize, IoError> r = f.readAt(into: b.viewMut(), offset: off);
+    return match (r) { case Ok(value: k): text(b: b.slice(from: 0, count: k)); case Err(error: e): "?"; };
+}
+unsafe fn uint64 pos(ref File f, SeekFrom to) {
+    return match (f.seek(to: to)) { case Ok(value: p): p; case Err(error: e): 999ui64; };
+}
+
+unsafe fn int32 run() {
+    Result<File, IoError> fr = File.open(path: "ra.bin", mode: OpenMode::ReadWrite);
+    File f = match (give fr) { case Ok(value: v): { := give v; } case Err(error: e): { return 1; } };
+    string ten = "0123456789";
+    Result<isize, IoError> w = f.write(bytes: ten.bytes());
+    if (pos(f: f, to: SeekFrom::Start(offset: 2ui64)) != 2ui64) { return 2; }
+    if (take(f: f, n: 2) != "23") { return 3; }                         // the cursor is at 4
+    if (at(f: f, off: 7ui64, n: 2) != "78") { return 4; }
+    if (take(f: f, n: 1) != "4") { return 5; }                          // readAt left the cursor at 4
+    string xy = "XY";
+    Result<isize, IoError> wa = f.writeAt(bytes: xy.bytes(), offset: 0ui64);
+    if (at(f: f, off: 0ui64, n: 2) != "XY") { return 6; }
+    if (take(f: f, n: 1) != "5") { return 7; }                          // ...and so did writeAt
+    if (pos(f: f, to: SeekFrom::End(offset: -1i64)) != 9ui64) { return 8; }
+    if (take(f: f, n: 1) != "9") { return 9; }
+    if (pos(f: f, to: SeekFrom::Current(offset: -3i64)) != 7ui64) { return 10; }
+    if (!f.setLength(length: 4ui64).isOk()) { return 11; }
+    if (at(f: f, off: 10ui64, n: 2) != "") { return 12; }               // past the end: nothing, not an error
+    f.close();
+    // ReadWrite never empties an existing file.
+    Result<File, IoError> gr = File.open(path: "ra.bin", mode: OpenMode::ReadWrite);
+    File g = match (give gr) { case Ok(value: v): { := give v; } case Err(error: e): { return 13; } };
+    if (take(f: g, n: 8) != "XY23") { return 14; }
+    g.close();
+    // ...and neither does `openWith`, which also sets exact permissions.
+    Result<Permissions, IoError> pr = Permissions.fromMode(mode: 0o600ui32);
+    Permissions pm = match (pr) { case Ok(value: v): v; case Err(error: e): { return 15; } };
+    Result<File, IoError> hr = File.openWith(path: "ra.bin", mode: OpenMode::ReadWrite, permissions: pm);
+    File h = match (give hr) { case Ok(value: v): { := give v; } case Err(error: e): { return 16; } };
+    if (take(f: h, n: 8) != "XY23") { return 17; }
+    h.close();
+    Result<Unit, IoError> rm = remove(path: "ra.bin");
+    return 42;
+}
+
+fn int32 main() { return run(); }

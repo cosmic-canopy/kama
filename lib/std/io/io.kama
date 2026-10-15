@@ -23,6 +23,7 @@ extern fn int32 kama_ENETUNREACH();
 extern fn int32 kama_EMSGSIZE();
 extern fn int32 kama_EPIPE();
 extern fn int32 kama_EINVAL();
+extern fn int32 kama_ESPIPE();
 
 // What KIND of failure an I/O error is: the part a caller branches on, `match (e.kind())`. The named kinds cover
 // the cases callers handle; `Other` is everything else, and the error still carries the OS's code for it.
@@ -150,5 +151,7 @@ unsafe fn IoErrorKind kindOf(int32 e) {
     if (e == kama_EMSGSIZE())     { return IoErrorKind::MessageTooLong; }
     if (e == kama_EPIPE())        { return IoErrorKind::BrokenPipe; }
     if (e == kama_EINVAL())       { return IoErrorKind::InvalidInput; }
+    // A seek, or a positioned read or write, on something with no position — a pipe, a socket, a terminal (KR-168).
+    if (e == kama_ESPIPE())       { return IoErrorKind::InvalidInput; }
     return IoErrorKind::Other;
 }
