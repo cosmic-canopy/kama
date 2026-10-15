@@ -304,6 +304,12 @@ whether a canonical Windows path keeps the `\\?\` prefix `GetFinalPathNameByHand
 process-wide, so it races across isolates — say so (and `SetCurrentDirectoryW` is MAX_PATH-bound, as `Command.cwd`
 already documents).
 
+**Decided (the maintainer, 2026-10-15):** a canonical Windows path drops the `\\?\` prefix (`\\?\UNC\srv\share`
+becomes `\\srv\share`) unless stripping would name another file — a component ending in `.` or a space, or a device
+name such as `CON` — as Python's `realpath`, libuv, Go and .NET answer; Rust keeps the prefix, and the `dunce` crate
+exists to undo it. kama loses nothing by it: `kama__wpath` re-adds the prefix past 248 characters, as Go and Java do
+internally. `setCurrentDirectory` says it is process-wide (it races across isolates) and MAX_PATH-bound on Windows.
+
 <a id="s1-file-seek"></a>
 
 ### `File` seek (KR-168)
@@ -317,6 +323,14 @@ Measured on `0.9.589`, filed 2026-10-14. `std::fs::File` has no `seek`, no posit
 offset on `_get_osfhandle` — a `File` is a CRT fd there), `kama_set_length` (`ftruncate`/`_chsize_s`). **Decision
 owed:** a positioned `ReadFile` on a synchronous handle MOVES the file pointer, unlike `pread` — document it, or save and
 restore it (racy). Seeking a pipe is `ESPIPE`, `Other` today; Windows wants a `GetFileType` guard.
+
+**Decided (the maintainer, 2026-10-15):** `readAt`/`writeAt` leave the cursor where it was on every OS — POSIX
+`pread`'s promise, which Go's `io.ReaderAt` contract, Java's `FileChannel.read(buf, position)` and .NET's
+`RandomAccess` make too; on Windows the cursor is saved and restored around the transfer, as Go does. The residual is
+documented: two `File`s over one open file (`duplicateDescriptor`) used from two isolates at once. **With it,
+`OpenMode::ReadWrite`** (read and write, creates, never truncates): no mode opens a file for update today — `Write`
+truncates and `Append` is write-only — so `writeAt` and `setLength` would have nothing to update. ESPIPE is
+`InvalidInput`.
 
 <a id="s1-utf8-lossy"></a>
 
@@ -354,6 +368,14 @@ failure to EINVAL today). Per-OS types by the platform-deltas rule, as identity.
 twins. **Decisions owed:** `setsid`, `setpgid` or both; a new `IoErrorKind` variant breaks a user `match` with no `_`
 arm.
 
+**Decided (the maintainer, 2026-10-15):** all three on POSIX, as ONE value because they exclude each other —
+`ProcessGroup { Inherit, New, Join(group), NewSession }` (`setpgid(0,0)`, `setpgid(0,g)` for a pipeline, `setsid`):
+the set `posix_spawn` itself offers (`POSIX_SPAWN_SETPGROUP`, `POSIX_SPAWN_SETSID`), and Go and Python expose.
+Windows' twin is `{ Inherit, New }` — a new console group plus a kill-on-close Job Object. ESRCH gets its own kind,
+`IoErrorKind::ProcessNotFound`: every peer that names it names it apart (Python `ProcessLookupError`, Go
+`os.ErrProcessDone`, C++ `errc::no_such_process`, Zig `error.ProcessNotFound`), and pre-1.0 a variant is added as four
+were before. What adding one costs after 1.0 is KR-176.
+
 <a id="s1-fd-inherit"></a>
 
 ### Every open file and socket is inherited by every child process (KR-174)
@@ -371,6 +393,21 @@ them, else `FD_CLOEXEC` right after (macOS — the fd-passing path already does 
 exactly the three stdio handles. A child that should receive a descriptor gets it through KR-171's redirection, never by
 accident. Fixture: the probe above, a child reading the parent's handle on Windows, and a listening socket.
 
+<a id="s1-exclusive-create"></a>
+
+### No exclusive create, and an existing path is `Other` (KR-177)
+
+Filed 2026-10-15 while deciding KR-168, measured on `0.9.603`. `type enum OpenMode { Read, Write, Append }`: `Write`
+creates or truncates, so nothing opens a file only if it does not exist yet. A lockfile, a "write this, never
+overwrite", or a temp file with a chosen name is then a check-then-open race (`exists` says so in its own comment: it
+is for reporting, not guarding). The seam already makes the call internally — `kama_open_create_mode` opens with
+`O_CREAT|O_EXCL` first, and Windows with `CREATE_NEW` — but no mode reaches it. And `kindOf` has no arm for EEXIST:
+`createDir` on an existing directory documents "POSIX EEXIST surfaces as `Other`". Rust (`create_new`,
+`ErrorKind::AlreadyExists`), Go (`O_EXCL`, `fs.ErrExist`) and Python (`"x"` mode, `FileExistsError`) all have both.
+**Scheduled:** `OpenMode::CreateNew` (write-only, fails with `AlreadyExists` when the path exists, a dangling link
+included), and `IoErrorKind::AlreadyExists` for EEXIST (Windows `ERROR_FILE_EXISTS`/`ERROR_ALREADY_EXISTS`). Adjacent:
+KR-176, since this adds a variant.
+
 <a id="s1-child-stdio"></a>
 
 ### A child's stdio redirected (KR-171)
@@ -386,6 +423,13 @@ errFd` — a merge needs its own spelling (`dup2(1,2)` last), and an fd in 0–2
 `Stdio` variant carrying a `File` (it makes `Stdio` move-only, and `start()` matches the stored copies several times) or
 separate `Command` methods; and how a merge meets `run()`, which forces both streams `Piped`. Found while surveying this
 row: KR-174.
+
+**Decided (the maintainer, 2026-10-15):** one `Stdio` value per stream says where it goes — `Handle(descriptor:)` for
+any owned handle (a `File`, a socket, a pipe end all convert to a `Descriptor`), and `Stdout` for `2>&1`, which means
+"wherever stdout goes" and so belongs to stderr alone (Python's `stderr=STDOUT`). A `Handle` is consumed by the
+`start()` that uses it: closed in the parent once the child holds it, so a reader of the other end sees end-of-file
+(Rust and Python keep the parent's copy open, a known trap). `run()` stops overwriting the `Command`: what a program
+set wins, and what it left unset is captured (stdout, stderr) or `Null` (stdin), as Rust's `output()` does.
 
 <a id="s1-datachannel"></a>
 
@@ -403,6 +447,10 @@ reliability; the answerer receives it through `ondatachannel`); ICE servers — 
 only host candidates connect (same machine or LAN). Glue defects to fix with it: `kama_rtc_recv` delivers an oversized
 datagram in pieces (a datagram is atomic); `send` while connecting is `-1`, `Other`, not `WouldBlock`; `disconnected`,
 often transient, is treated as closed. Adjacent: KR-108 (a peer channel has no `SocketAddr`).
+
+**Decided (the maintainer, 2026-10-15):** `offer(iceServers:, delivery:)` and `answer(offer:, iceServers:)`. The ICE
+servers are a required list, and an empty one is the explicit same-machine-or-LAN choice — no server is built in. The
+glue defects above are fixed with it.
 
 <a id="s1-http-package"></a>
 
@@ -525,6 +573,15 @@ read-only place is refused as the write it is, naming `const ref`; a by-value or
 Check every `foreach` lowering (collection, iterator, view, `parallel_for`) for the same gap. Fixture: the snippet as an
 xfail, plus `foreach (int32 x in a)` over the same `const ref` still building.
 
+**Decided (the maintainer, 2026-10-15)**, after the survey found no syntax behind "a `const ref` binding stays legal":
+a **`const ref` loop binding** — `foreach (const ref T x in a)`, and the same in `parallel_for` — the read-only place
+every peer has (C++ `const auto&`, C# `ref readonly`, Rust `&v`). The protocol had two forms, by value through
+`Iterator<T>` (an `Optional` cannot carry a place) and `ref` through `IteratorMut<T>`, so a read-only collection of
+move-only elements could only be looped with `ref` — which is how the write-through went unseen; SPEC's `ConstView`
+refusal had its xfail, the `const ref` container never had one. `ref` over a read-only place is refused, naming `const
+ref`. Unchecked as well on `0.9.603`: the intrinsic `InlineArray` path (only a `comptime` static is), `foreach (ref
+uint8 b in s)` over an immutable `string`, a named const `IteratorMut` local, and `parallel_for`'s raw `viewMut()`.
+
 <a id="s2-const-map-iter"></a>
 
 ### A read-only map cannot be iterated (KR-165)
@@ -557,6 +614,29 @@ it should name the type, and the fix (`match`) goes unsaid. **Scheduled.**
 destination `D`, say to take it apart with `match` (the inverse of `wrapperHint`). Wider than filed: the same noun
 appears for `int32 k = optionalFn()`, an assignment, a return, an argument, `if (o)` (which could suggest `.isSome()`
 once KR-163 lands), and any user value type — one noun fixed in four places, not a `Result` special case.
+
+<a id="s2-growable-enums"></a>
+
+### A std enum that grows after 1.0 (KR-176)
+
+Filed 2026-10-15 while ruling on KR-170's ESRCH kind. `match` on an enum is exhaustive — "case 'Y' is unhandled — add
+`case Y:` or `case _:`" — so a new variant in a std enum stops every user `match` without a `_` arm from compiling.
+Measured on `0.9.603`: of the 29 matches over `IoErrorKind` in the tree, 28 have `_`; the one without is
+`IoErrorKind.message()` in io.kama itself. The enum has grown four times (`b4ff3732` InProgress..BrokenPipe, `20a912d5`
+InvalidInput, `176aca2f` Interrupted), and this session adds `ProcessNotFound` (KR-170) and `AlreadyExists` (KR-177),
+while `OpenMode` gains `ReadWrite` (KR-168) and `Stdio` gains `Handle`/`Stdout` (KR-171). Before 1.0 that is allowed;
+after the tag each is a source break, and 1.x is where the stdlib grows.
+
+**What others do.** Rust marks `io::ErrorKind` `#[non_exhaustive]`: outside its crate a `match` must carry `_`, and
+variants have kept arriving across 1.x. Swift's resilient libraries split enums into `@frozen` and not, and a `switch`
+over a non-frozen one warns without `@unknown default`. C#, Java and Go have no exhaustive enum match, so the question
+never arises.
+
+**Decision owed (the maintainer):** (1) a declaration-site marker on an enum std means to grow, under which a `match`
+outside its module must carry `_` — Rust's answer, and the only one that lets std add a kind in 1.x; (2) freeze every
+std enum at 1.0, so a new kind waits for 2.0 or a new enum; (3) leave it, and treat a variant as a 2.0 change.
+**Recommendation: (1)**, before the tag. Open: the marker's spelling (an attribute, by the grammar's rule for
+declaration modifiers), and whether a user enum may carry it.
 
 <a id="s2-fnptr-type-arg"></a>
 
@@ -2926,6 +3006,10 @@ has no `user.name`), and the seed option parser. **Decision owed:** the license 
 `--holder` option, and what seed writes and says when neither it nor a git identity exists (a placeholder it calls out,
 or a refusal).
 
+**Decided (the maintainer, 2026-10-15):** the holder is `--holder`, else the git identity, else seed refuses
+`--license` and names both remedies — a license names a legal holder, and a placeholder can ship unread. A
+`kama-<name>` directory seeds `<name>`.
+
 <a id="s10-package-guide-comments"></a>
 
 ### The package guide's "marker comments" cannot exist (KR-143)
@@ -2982,6 +3066,11 @@ BUILD_TYPE route is the cheaper one: flag vectors on a select value, appended al
 `resolveBuildConfig` (the object cache already keys on the compile command). **Decision owed:** flags on a BUILD_TYPE
 value, or a `"triple": "HOST"` target. Separate and small: `kama check` accepts a TARGET entry with no triple that
 `kama build` then refuses.
+
+**Decided (the maintainer, 2026-10-15):** build flags on a `BUILD_TYPE` value —
+`cflags`/`cxxflags`/`objcflags`/`ldflags`, the names a target entry takes — appended along `inherits` and reaching
+every translation unit, dependencies' included: a build type applies to any target, as CMake's per-configuration flags
+do.
 
 <a id="s10-dry-run-uncommitted"></a>
 
