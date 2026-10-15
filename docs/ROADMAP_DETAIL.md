@@ -510,23 +510,6 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-int-match-diagnostic"></a>
-
-### `match` on an integer says what to write instead (KR-164)
-
-Measured on `0.9.589`, filed 2026-10-14. `match (n) { case 1: … }` is "Parse error: syntax error, unexpected DEC_LITERAL_NO_SUFFIX, expecting
-IDENTIFIER". Integer patterns are a non-goal by design — SPEC: "There is no `switch` statement: `match` on an enum,
-`if`/`else if` on an integer — one construct per concept" — but the negative claim has no xfail, and the refusal
-names the grammar, not the rule. **Scheduled:** a refusal that says `if`/`else if`, an xfail, and the SPEC marker.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `src/kama.y` — a `match_pattern` arm accepting the `literal` nonterminal that
-reports by hand (the `requireBraced` pattern), rather than `yyreport_syntax_error`, which cannot see that the previous
-token was `case`. The message: `match` branches on an enum's variants; integers and strings branch with `if`/`else if`;
-there is no `switch`. Wider than filed: `match (n) { case _: 0; }` on an `int32` parses and then says "`match` subject's
-type could not be resolved — bind it to a typed local first", which is wrong — `CEmitter::emitMatchSwitch` (through
-`matchSubjectClassQuiet`, which answers "" for a primitive) needs the same message for a primitive subject. A grammar
-change is four artifacts (kama.y, grammar.bnf, tree-sitter, the editor pins).
-
 <a id="s2-const-map-iter"></a>
 
 ### A read-only map cannot be iterated (KR-165)

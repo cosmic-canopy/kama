@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-164 | **`match` on an integer says what to write instead** — `case 1:` is a raw parse error; integers branch with `if`/`else if` by design (SPEC), and the refusal should say so, with an xfail behind the claim | S | [§2](ROADMAP_DETAIL.md#s2-int-match-diagnostic) |
 | KR-165 | **A read-only map cannot be iterated** — through `const ref Map`, `values()`, `iterator()` and `entries()` are non-`const`, so `foreach` over a borrowed map is refused | S | [§2](ROADMAP_DETAIL.md#s2-const-map-iter) |
 | KR-166 | **A `Result` initializing a `string` is described as "a type value"** — `string t = serializeJsonBuffer(v: x);` should name the `Result` it is | S | [§2](ROADMAP_DETAIL.md#s2-result-init-message) |
 | KR-167 | **The current directory** — std can neither read nor set it, so a relative path cannot be made absolute without running `pwd`; `currentDirectory()`/`setCurrentDirectory()`, and a canonical path | S | [§1](ROADMAP_DETAIL.md#s1-cwd) |

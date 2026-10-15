@@ -740,6 +740,8 @@ match_const_payload_mutate	match_const_payload_mutate.kama:4
 match_empty_arm	match_empty_arm.kama:8
 match_handle_give	match_handle_give.kama:7
 match_handle_weak	match_handle_weak.kama:7
+match_integer_pattern	match_integer_pattern.kama:6
+match_integer_subject	match_integer_subject.kama:6
 match_label_duplicate	match_label_duplicate.kama:5
 match_label_missing	match_label_missing.kama:5
 match_label_unknown	match_label_unknown.kama:6

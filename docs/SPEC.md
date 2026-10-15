@@ -3919,7 +3919,7 @@ the one case this rule cannot close, and it is a bug to report rather than a haz
 `if/else`, `while`, `do/while`, `for`, `foreach`, `break`, `continue`, `return`; the full operator set
 (`+ - * / %`, bitwise, shifts, comparisons, `&& || !`, ternary `?:`), assignment ops (`= += …`), `++`/`--`,
 casts. Branching on an enum is done with **`match`** (see Enums & `match` below); arbitrary-integer branching
-is done with `if` / `else if`. There is no `switch` statement: `match` on an enum, `if`/`else if` on an integer — one construct per concept (GOALS 4).
+is done with `if` / `else if`. There is no `switch` statement: `match` on an enum, `if`/`else if` on an integer — one construct per concept (GOALS 4). A value pattern (`case 1:`) and a `match` over an integer, a string or a bool are refused, naming that rule. <!-- xfail: match_integer_pattern, match_integer_subject -->
 `&&`, `||` and `?:` evaluate an operand only when the result needs it, so `n > 0 && a[0].isEmpty()` never
 indexes an empty `a`, and the arm `?:` does not choose never runs — its calls, its temporaries, its drops. <!-- test: short_circuit_hoist -->
 

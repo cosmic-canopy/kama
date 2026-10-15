@@ -1,0 +1,1 @@
+branches on an enum's variants — an integer, a string or a bool branches with `if`/`else if`

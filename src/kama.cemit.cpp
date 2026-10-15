@@ -28570,7 +28570,13 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             const auto before = _unsupported;
             if (auto* ad = dynamic_cast<AsDowncastNode*>(m->subject.get()))
                 checkBodyType(ad->type, "an `.as<T>()` target", ad->type ? ad->type->line : m->line);
-            if (_unsupported == before)
+            // A number, a string or a bool is not "unresolved": it is not an enum, and the rule says what branches
+            // on one (KR-164) — the same words the parser uses for `case 1:`.
+            const TKind sk = _unsupported == before ? exprKind(m->subject) : TKind::Unknown;
+            if (sk == TKind::Num || sk == TKind::Bool || sk == TKind::Str)
+                unsupported("`match` branches on an enum's variants — an integer, a string or a bool branches with "
+                            "`if`/`else if`, and kama has no `switch`", m);
+            else if (_unsupported == before)
                 unsupported("`match` subject's type could not be resolved — bind it to a typed local first "
                             "(a nested value-producing `match` or a variant-producing ternary needs one)", m);
         }

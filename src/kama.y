@@ -88,6 +88,15 @@ static void requireBraced(const SharedStatement& body, YYLTYPE* loc, yyscan_t sc
                            + shape + "`").c_str());
 }
 
+/* `case 1:` — a VALUE as a `match` pattern. `match` branches on an enum's variants, and integers, strings and bools
+ * branch with `if`/`else if`: one construct per concept, and there is no `switch` (SPEC *Control flow*). Bison could
+ * only say "unexpected DEC_LITERAL_NO_SUFFIX, expecting IDENTIFIER", naming the grammar rather than the rule, so a
+ * value pattern is parsed here to be refused by name (KR-164). The emitter says the same for `case _:` over an
+ * integer subject, which parses. */
+static const char* kMatchOnValue =
+    "`match` branches on an enum's variants — an integer, a string or a bool branches with `if`/`else if`, "
+    "and kama has no `switch`";
+
 /* A FUNCTION's type parameter takes no `= Default`. The grammar shares `type_param` with types and
  * enums, where a trailing default is a real feature (`Map<string, int32>` filling in a hasher and an
  * allocator), so `fn f<T = int32>()` parsed — and the three `fn` arms then dropped the default on the
@@ -1654,6 +1663,13 @@ match_pattern
   : IDENTIFIER
     { auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = $1;
       a->variantId = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); STAMP_LOC(a->variantId, @1); $$ = a; }
+  /* A value is not a pattern (KR-164): refused by name, and recovered as a wildcard so the refusal is the only error. */
+  | literal
+    { yyerror(&@1, scanner, kMatchOnValue);
+      auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = std::make_shared<std::string>("_"); $$ = a; }
+  | MINUS literal
+    { yyerror(&@1, scanner, kMatchOnValue);
+      auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = std::make_shared<std::string>("_"); $$ = a; }
   | IDENTIFIER LPAREN match_bindings RPAREN
     { auto a = std::make_shared<MatchArmNode>(SCANNER_CODEGENCONTEXT); a->variantName = $1;
       a->variantId = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); STAMP_LOC(a->variantId, @1);

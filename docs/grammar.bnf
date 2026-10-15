@@ -961,6 +961,11 @@ match_arm
 match_pattern
   : IDENTIFIER
 
+  /* A value is not a pattern (KR-164): refused by name, and recovered as a wildcard so the refusal is the only error. */
+  | literal
+
+  | MINUS literal
+
   | IDENTIFIER LPAREN match_bindings RPAREN
 
   ;
