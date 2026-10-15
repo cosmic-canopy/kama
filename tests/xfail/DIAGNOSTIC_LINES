@@ -483,7 +483,6 @@ foreach_ref_const_view	foreach_ref_const_view.kama:9
 foreach_ref_give	foreach_ref_give.kama:8
 foreach_ref_string	foreach_ref_string.kama:7
 foreach_ref_temporary	foreach_ref_temporary.kama:8
-foreach_rvalue_container	foreach_rvalue_container.kama:14
 foreach_view_rvalue	foreach_view_rvalue.kama:11
 foreign_callback_expose_return	foreign_callback_expose_return.kama:9
 foreign_callback_field_assign	foreign_callback_field_assign.kama:18

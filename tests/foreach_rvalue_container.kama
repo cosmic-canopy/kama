@@ -1,0 +1,18 @@
+// A collection a call RETURNS is iterated by value: it lives in a temporary for the loop and is dropped after it
+// (KR-165), as Rust's `for x in f()` owns what `f` returned and as the stdlib documents (`foreach (K k in
+// m.keys())`). Until 0.9.615 this was refused — the iterator takes its operand's address, and the refusal had
+// replaced a clang error, not decided against the loop. A `ref` loop over a temporary is still refused
+// (xfail/foreach_ref_temporary), and a view still needs its window (xfail/foreach_view_rvalue). Returns 1.
+import { std::collections::DynamicArray };
+
+fn DynamicArray<int32> make() {
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
+    d.add(item: 1);
+    return give d;
+}
+
+fn int32 main() {
+    int32 t = 0;
+    foreach (int32 x in make()) { t = t + x; }
+    return t;
+}
