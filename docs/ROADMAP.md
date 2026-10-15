@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-174**
+**Next id: KR-176**
 
 ## The shape
 
@@ -72,6 +72,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-174 | **Every open file and socket is inherited by every child process** — no `O_CLOEXEC`/`SOCK_CLOEXEC` on POSIX, inheritable handles with `bInheritHandles` on Windows: a child keeps the parent's files and listening sockets (a port held after the parent exits, a private file readable). Pipes alone are marked | S | [§1](ROADMAP_DETAIL.md#s1-fd-inherit) |
+| KR-175 | **`foreach (ref …)` writes through a `const ref` collection** — `foreach (ref int32 x in a) { x = 9; }` over a `const ref DynamicArray` changes the caller's array, where `a[0] = 9` is refused: the loop lowering skips the const check. Unsound | S | [§2](ROADMAP_DETAIL.md#s2-const-foreach-ref) |
 | KR-149 | **A map's JSON form decided from its key type at compile time — a maintainer decision** — a map picks its form at run time by asking its keys what they write (Rust `serde_json`'s answer, `0.9.587`), so an empty `Map<Point, V>` writes `{}` where it wrote `[]`. Deciding by type needs a branch on a type inside a generic body or a type descriptor on `Serializable`; the maintainer leans against the first. Both are reversible against data: readers accept `{}` and `[]` | — | [§4](ROADMAP_DETAIL.md#s4-map-form-by-type) |
 | KR-141 | **A failed multi-file check names the wrong file** — an error in `src/b.kama` ends with `src/a.kama FAILED`: the summary names the module's first file, as the passing one does | S | [§10](ROADMAP_DETAIL.md#s10-check-summary-file) |
 | KR-142 | **`kama seed` and a `kama-<name>` repository** — it refuses `kama-widget` and suggests `kama_widget`, which it also refuses (reserved); with no git identity the license names the package as its copyright holder | S | [§10](ROADMAP_DETAIL.md#s10-seed-names) |

@@ -295,6 +295,15 @@ absolute without running `/bin/pwd` through `std::process`. `std::path`'s own no
 `std::fs`". **Scheduled:** `currentDirectory()` and `setCurrentDirectory(path:)` beside `homeDirectory()`, and a
 canonical path (`realpath`/`GetFinalPathNameByHandleW`), each a `Result`.
 
+**Where (surveyed on `0.9.603`, still reproduces):** `currentDirectory()`/`setCurrentDirectory(path:)` in `lib/std/process/identity.kama` beside
+`homeDirectory()`; a canonical path in `std::fs` (path.kama already says canonicalization belongs there). Seam:
+`kama_getcwd` (POSIX `getcwd`, grown on ERANGE; Windows `GetCurrentDirectoryW`), `kama_chdir` (POSIX `chdir`; Windows
+`SetCurrentDirectoryW` through `kama__wpath`), `kama_realpath` (POSIX `realpath`; Windows `GetFinalPathNameByHandleW` on
+a `FILE_FLAG_BACKUP_SEMANTICS` handle). Copy `idName`'s grow-and-retry; emscripten has all three. **Decisions owed:**
+whether a canonical Windows path keeps the `\\?\` prefix `GetFinalPathNameByHandleW` returns; `setCurrentDirectory` is
+process-wide, so it races across isolates — say so (and `SetCurrentDirectoryW` is MAX_PATH-bound, as `Command.cwd`
+already documents).
+
 <a id="s1-file-seek"></a>
 
 ### `File` seek (KR-168)
@@ -302,6 +311,12 @@ canonical path (`realpath`/`GetFinalPathNameByHandleW`), each a `Result`.
 Measured on `0.9.589`, filed 2026-10-14. `std::fs::File` has no `seek`, no positional read or write and no set-length (`File` has no method `seek`); the one
 `SetFilePointerEx` in `kama_os.h` is internal. **Scheduled:** `seek` (from start/current/end), `readAt`/`writeAt`
 (`pread`/`pwrite`, which a shared file needs), and `setLength`.
+
+**Where (surveyed on `0.9.603`, still reproduces):** `File` methods in fs.kama and a `SeekFrom { Start, Current, End }` enum. Seam: `kama_seek`
+(`lseek`/`_lseeki64`), `kama_pread`/`kama_pwrite` (`pread`/`pwrite`; Windows `ReadFile`/`WriteFile` with an `OVERLAPPED`
+offset on `_get_osfhandle` — a `File` is a CRT fd there), `kama_set_length` (`ftruncate`/`_chsize_s`). **Decision
+owed:** a positioned `ReadFile` on a synchronous handle MOVES the file pointer, unlike `pread` — document it, or save and
+restore it (racy). Seeking a pipe is `ESPIPE`, `Other` today; Windows wants a `GetFileType` guard.
 
 <a id="s1-utf8-lossy"></a>
 
@@ -311,6 +326,10 @@ Measured on `0.9.589`, filed 2026-10-14. `std::encoding::utf8` has `decode` and 
 how many there are. Its own comment leaves the door open: "A lossy U+FFFD variant is a separate, named function if
 one is ever wanted". **Scheduled:** `decodeLossy` — every invalid sequence becomes U+FFFD, as Rust's `from_utf8_lossy`
 and WHATWG's decoder do (one replacement per maximal invalid subpart). Explicit by name; `decode` stays strict.
+
+**Where (surveyed on `0.9.603`, still reproduces):** `decodeLossy` in `lib/std/encoding/utf8/utf8.kama`, no OS seam. `kama_utf8_bad_offset`
+(kama_runtime.h) says only where bad bytes start, not the maximal-subpart length WHATWG replacement needs (`ED A0 80` is
+three U+FFFD), so it needs a helper returning offset and length, or a kama loop. Not gated on `!NOHEAP`, like `decode`.
 
 <a id="s1-process-group"></a>
 
@@ -325,6 +344,33 @@ a Job Object. **And ESRCH:** `kindOf` (`lib/std/io/io.kama`) maps it to `Other` 
 It is unreachable through std today — signalling a reaped child is a no-op `Ok` — and becomes reachable with a group
 signal, so its kind is decided here (a "no such process" kind, as Python's `ProcessLookupError`).
 
+**Where (surveyed on `0.9.603`, still reproduces):** a flags argument on `kama_proc_spawn` in both halves (and its one extern in
+process.kama — `check-extern-rung.sh`). POSIX: `setpgid(0,0)`/`setsid()` in the fork child plus `setpgid(pid,pid)` in
+the parent, `killpg`. Windows: `CREATE_NEW_PROCESS_GROUP` (signalled by `GenerateConsoleCtrlEvent`) and a Job Object
+(`CreateJobObjectW`/`AssignProcessToJobObject`/`TerminateJobObject`, `KILL_ON_JOB_CLOSE`) — created suspended or through
+`PROC_THREAD_ATTRIBUTE_JOB_LIST`, since assigning after start races grandchildren (and `pi.hThread` is closed at once
+today). ESRCH: `kama_ESRCH()` in both halves and an `IoErrorKind` (`kindOf` in io.kama; Windows `kama_kill` maps every
+failure to EINVAL today). Per-OS types by the platform-deltas rule, as identity.kama's `UserId`/`GroupId`/`AccessToken`
+twins. **Decisions owed:** `setsid`, `setpgid` or both; a new `IoErrorKind` variant breaks a user `match` with no `_`
+arm.
+
+<a id="s1-fd-inherit"></a>
+
+### Every open file and socket is inherited by every child process (KR-174)
+
+Measured on `0.9.603`, filed 2026-10-15, found surveying KR-171. A program that opens a `File` and then runs
+`Command.shell(line: "if [ -e /dev/fd/3 ]; then echo CHILD-HAS-FD3; fi")` prints `CHILD-HAS-FD3`: the child holds the
+parent's file. POSIX `kama_open_read`/`_create`/`_append`/`_create_mode` call `open` with no `O_CLOEXEC`, and
+`socket`/`accept` pass no `SOCK_CLOEXEC`; only pipes (`kama_pipe`) are marked. On Windows `_wopen` has no
+`_O_NOINHERIT`, sockets are inheritable, and `CreateProcessW` passes `bInheritHandles = TRUE` whenever a stream is
+redirected, so every inheritable handle crosses. So a child keeps a listening port open after its parent exits, holds a
+deleted file's space, and can read a file its parent meant to keep. Rust, Go and Python (PEP 446) make every descriptor
+close-on-exec by default. **Scheduled:** `O_CLOEXEC` on every POSIX open; `SOCK_CLOEXEC`/`accept4` where the OS has
+them, else `FD_CLOEXEC` right after (macOS — the fd-passing path already does this); on Windows `_O_NOINHERIT` and
+`WSA_FLAG_NO_HANDLE_INHERIT` (already used for passed sockets), and better, `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` naming
+exactly the three stdio handles. A child that should receive a descriptor gets it through KR-171's redirection, never by
+accident. Fixture: the probe above, a child reading the parent's handle on Windows, and a listening socket.
+
 <a id="s1-child-stdio"></a>
 
 ### A child's stdio redirected (KR-171)
@@ -332,6 +378,14 @@ signal, so its kind is decided here (a "no such process" kind, as Python's `Proc
 Measured on `0.9.589`, filed 2026-10-14. `type enum Stdio { Inherit, Piped, Null }`: no `2>&1`, and no `File` or `Descriptor` handed to a child as a
 stream (the `UnixStream.pair()` verdict above waits on exactly that hand-off). The workaround is a shell line.
 **Scheduled:** stderr merged into stdout, and an owned `File`/`Descriptor` as any of the three streams.
+
+**Where (surveyed on `0.9.603`, still reproduces):** `Stdio`/`Command` in process.kama; a user's `File` slots in where `start()` holds the
+child ends (`inGive`/`outGive`/`errGive`). Windows needs no seam change (`_get_osfhandle` on any fd; a merge sets
+`hErr = hOut`). POSIX does: the child runs `dup2(outFd,1); close(outFd); dup2(errFd,2)`, which breaks when `outFd ==
+errFd` — a merge needs its own spelling (`dup2(1,2)` last), and an fd in 0–2 the dup2 shuffle. **Decision owed:** a
+`Stdio` variant carrying a `File` (it makes `Stdio` move-only, and `start()` matches the stored copies several times) or
+separate `Command` methods; and how a merge meets `run()`, which forces both streams `Piped`. Found while surveying this
+row: KR-174.
 
 <a id="s1-datachannel"></a>
 
@@ -341,6 +395,14 @@ Measured on `0.9.589`, filed 2026-10-14. `std::net::web` ships the `kama_rtc_*` 
 (`tests/net_rtc_loopback.kama`, `tests/net_rtc_signaling.kama`), but no `.kama` type: the directory has `ws.kama` and
 `wt.kama` only. `udp.kama` promises a DataChannel will satisfy the same contract. **Scheduled:** a type over the glue
 in `wt.kama`'s pull model, with its signalling methods; KR-108 is adjacent (a P2P channel has no `SocketAddr`).
+
+**Where (surveyed on `0.9.603`, still reproduces):** a new `lib/std/net/web/rtc.kama` — a resource implementing `DatagramSocket`, and an
+`RtcState` — over the shipped `kama_rtc_*` glue; copy `WtConnection` (wt.kama), and `idName`'s grow-and-retry for the
+SDP. **Decisions owed:** offer and answer as separate constructors (only the offerer opens the channel and chooses its
+reliability; the answerer receives it through `ondatachannel`); ICE servers — the glue hardcodes `iceServers: []`, so
+only host candidates connect (same machine or LAN). Glue defects to fix with it: `kama_rtc_recv` delivers an oversized
+datagram in pieces (a datagram is atomic); `send` while connecting is `-1`, `Other`, not `WouldBlock`; `disconnected`,
+often transient, is treated as closed. Adjacent: KR-108 (a peer channel has no `SocketAddr`).
 
 <a id="s1-http-package"></a>
 
@@ -427,6 +489,13 @@ declined (`map` would need closures, which kama does not have). Today `bool has 
 true; case None: false; };` is the only spelling. A generic enum takes members (shipped; SPEC *Enums*), so these are prelude members
 with no compiler work. KEYWORDS.md's "match is the one construct for branching on an enum" gains the qualification.
 
+**Where (surveyed on `0.9.603`, still reproduces):** `prelude/global.kama` — `type enum Optional<T>` and `Result<T, E>`: a `;` after the
+variants, then two `public const fn bool` members each. Probed: the members build on `Optional<int32>`,
+`Optional<Owned<Big>>` (through a `const ref` too) and `Result<int32, Owned<Error>>`; no compiler change. The prelude is
+embedded, so VERSION bumps. ⚠️ `tools/check-query.sh` pins `Optional`'s declaration line and column — keep that line and
+add the members below it. Docs that say "`match` is the only way to take one apart" (SPEC *Error model*, TYPE_MODEL,
+tour, KEYWORDS) stay true — a query takes nothing apart — and gain the qualification.
+
 <a id="s2-int-match-diagnostic"></a>
 
 ### `match` on an integer says what to write instead (KR-164)
@@ -435,6 +504,26 @@ Measured on `0.9.589`, filed 2026-10-14. `match (n) { case 1: … }` is "Parse e
 IDENTIFIER". Integer patterns are a non-goal by design — SPEC: "There is no `switch` statement: `match` on an enum,
 `if`/`else if` on an integer — one construct per concept" — but the negative claim has no xfail, and the refusal
 names the grammar, not the rule. **Scheduled:** a refusal that says `if`/`else if`, an xfail, and the SPEC marker.
+
+**Where (surveyed on `0.9.603`, still reproduces):** `src/kama.y` — a `match_pattern` arm accepting the `literal` nonterminal that
+reports by hand (the `requireBraced` pattern), rather than `yyreport_syntax_error`, which cannot see that the previous
+token was `case`. The message: `match` branches on an enum's variants; integers and strings branch with `if`/`else if`;
+there is no `switch`. Wider than filed: `match (n) { case _: 0; }` on an `int32` parses and then says "`match` subject's
+type could not be resolved — bind it to a typed local first", which is wrong — `CEmitter::emitMatchSwitch` (through
+`matchSubjectClassQuiet`, which answers "" for a primitive) needs the same message for a primitive subject. A grammar
+change is four artifacts (kama.y, grammar.bnf, tree-sitter, the editor pins).
+
+<a id="s2-const-foreach-ref"></a>
+
+### `foreach (ref …)` writes through a `const ref` collection (KR-175)
+
+Measured on `0.9.603`, filed 2026-10-15, found surveying KR-165. `fn void zap(const ref DynamicArray<int32> a) {
+foreach (ref int32 x in a) { x = 9; } }` builds, and the caller's array holds 9 afterwards; `a[0] = 9` in the same body
+is refused ("const is deep"). `CEmitter::emitForeachIterator`'s `isRef` branch calls the collection's `iterMut()` with no
+`isConstReceiver` check, where the method-dispatch site applies one. **Scheduled, unsound:** a `ref` loop binding over a
+read-only place is refused as the write it is, naming `const ref`; a by-value or `const ref` binding over it stays legal.
+Check every `foreach` lowering (collection, iterator, view, `parallel_for`) for the same gap. Fixture: the snippet as an
+xfail, plus `foreach (int32 x in a)` over the same `const ref` still building.
 
 <a id="s2-const-map-iter"></a>
 
@@ -445,6 +534,15 @@ method `values` on a const receiver". `values()`, `iterator()` and `entries()` a
 borrows a map cannot read it in a loop. **Scheduled:** the read iterators are `const`, as `DynamicArray.view()` is;
 check `SortedMap` and `Set` the same way.
 
+**Where (surveyed on `0.9.603`, still reproduces):** `lib/std/collections/map.kama` — `iterator()`, `values()`, `entries()` become `unsafe
+const fn`, and the iterators' `modsp` becomes `UnsafeConstPtr<uint32>` (it is only read); `const` alone does not compile,
+since `addr(of: this.mods)` inside a `const fn` is an `UnsafeConstPtr`. Wider than filed: `Set.iterator()`,
+`DynamicArray.iterator()` and `BitSet.iterator()` have the same non-`const` shape; `SortedSet`'s `elements()`/`first`/
+`last`/`floor`/`ceil`/`range` are non-`const` forwarders over `const` SortedMap methods; and `foreach (… in m.keys())`
+on a SortedMap is refused even on a mutable map ("a temporary with no home"), against the comment beside `keys()`. And
+implicit `foreach (int32 k in m)` over a `const ref Map` already builds, because the foreach lowering skips the const
+check — the same gap as KR-175, which is the unsound half.
+
 <a id="s2-result-init-message"></a>
 
 ### A `Result` initializing a `string` is described as "a type value" (KR-166)
@@ -452,6 +550,13 @@ check `SortedMap` and `Set` the same way.
 Measured on `0.9.589`, filed 2026-10-14. `string t = serializeJsonBuffer(v: x);` says "a local is declared `string`, so it cannot be initialized with a
 type value — a `string` was expected". The value is a `Result<string, Owned<Error>>`; the message names a kind where
 it should name the type, and the fix (`match`) goes unsaid. **Scheduled.**
+
+**Where (surveyed on `0.9.603`, still reproduces):** `CEmitter::kindName` answers "a type value" for every aggregate, used by
+`rejectInitKindMismatch`, `rejectValueKindMismatch` and `requireBoolCondition`. Name the type instead
+(`demangleForDisplay(exprClass(e))`), and when the source is an `Optional<D>`/`Result<D, E>` whose payload is the
+destination `D`, say to take it apart with `match` (the inverse of `wrapperHint`). Wider than filed: the same noun
+appears for `int32 k = optionalFn()`, an assignment, a return, an argument, `if (o)` (which could suggest `.isSome()`
+once KR-163 lands), and any user value type — one noun fixed in four places, not a `Result` special case.
 
 <a id="s2-fnptr-type-arg"></a>
 
@@ -1658,6 +1763,26 @@ when the map is empty, and Swift and Kotlin (`allowStructuredMapKeys`) write a f
   `@generate` types and supplied by hand everywhere else, as Kotlin's `SerialDescriptor` is. No new syntax, but a
   source change to every hand-written `serialize`. It would also serve schema export.
 
+**The question, in bytes** (measured on `0.9.603`; `Point` is a `@generate`d value with `x`, `y`):
+
+```kama fragment
+Map<Point, int32> m = Map.empty();               // serializeJsonBuffer(v: m) writes  {}
+m.put(key: Point.make(x: 1, y: 2), value: 5);    // ... and now  [{"key":{"x":1,"y":2},"value":5}]
+Map<string, int32> t = Map.empty();              // writes  {}  — and {"a":1} once it has an entry
+```
+
+Only the first line is in question: should an EMPTY map whose keys are records write `[]`, the form it writes once it
+has an entry? Every reader takes both, so no stored file breaks whichever is chosen.
+
+**Decisions for the maintainer** (presented when a session takes this row):
+1. **Keep the run-time answer and close this row** — recommended. An empty record-keyed map writes `{}`, as Rust's
+   `serde_json` and Python's `json` do. The cost is one byte pattern that differs from the populated form; both
+   alternatives buy it with a language or contract change. SPEC already says an empty map is `{}` for every key type,
+   so closing the row changes no code.
+2. **A type descriptor on `Serializable`** — the route if schema export becomes a goal of its own; this would fall out
+   of it, and the row would fold into that one.
+3. **A branch on a type in a generic body** — the maintainer leans against it (specialization is a non-goal).
+
 <a id="s4-json-value"></a>
 
 ### An untyped JSON value (KR-110)
@@ -2778,6 +2903,11 @@ module's first file, whichever failed; the passing summary does the same (`<firs
 file for a whole module. **Scheduled.** No ruling: the summary names what was checked — the manifest, or each file
 that failed.
 
+**Where (surveyed on `0.9.603`, still reproduces):** `src/kama.driver.cpp`, the `checkOne` lambda in `main` prints the summary from
+`inputs[0]`. Name the manifest when one was the operand, as `kama stats` already does (`manifestOperand.empty() ? input
+: manifestOperand`), else each failing file from the diagnostics; the `--json` envelope (`jsonEnvelope("check", src)`)
+has the same fault. No ruling owed.
+
 <a id="s10-seed-names"></a>
 
 ### `kama seed` and a `kama-<name>` repository (KR-142)
@@ -2790,6 +2920,12 @@ register. The hint names a name kama will not take. And with no git identity (a 
 repository follows), and a hint never names a reserved word; the holder comes from `--holder`, else the git identity,
 else a placeholder seed names in its output so it is filled before a publish.
 
+**Where (surveyed on `0.9.603`, still reproduces):** `kama.driver.cpp` — `seedDefaultName` (strip a leading `kama-`), `seedValidName`
+(offer a hint only when `reservedByCRegister` and the keyword list would accept it), `cmdSeed` (`holder = name` when git
+has no `user.name`), and the seed option parser. **Decision owed:** the license holder with no git identity — a
+`--holder` option, and what seed writes and says when neither it nor a git identity exists (a placeholder it calls out,
+or a refusal).
+
 <a id="s10-package-guide-comments"></a>
 
 ### The package guide's "marker comments" cannot exist (KR-143)
@@ -2798,6 +2934,10 @@ The shipped `agents/PACKAGE.md` says a vendor script regenerates the `csources` 
 marker comments". `kama.json` is strict JSON: a `// …` line is *"kama.json: expected a string"* (measured `0.9.577`),
 and packages fence the block by its own `"csources": [` line and the `]` that closes it. **Scheduled.** The guide
 says that; a manifest stays JSON, so every tool that reads JSON can read it.
+
+**Where (surveyed on `0.9.603`, still reproduces):** `agents/PACKAGE.md` ("between two marker comments"): say the script fences the
+block by its own `"csources": [` line and the `]` that closes it. Docs-only, but `agents/` is embedded (`kama agents`
+writes it), so VERSION bumps.
 
 <a id="s10-manifest-gates"></a>
 
@@ -2818,6 +2958,12 @@ dependency entry refuses an unknown key, and both a dependency and a `link` entr
 `csources` entry's is. A gated-out dependency is still resolved and installed, so a lockfile does not change by
 platform.
 
+**Where (surveyed on `0.9.603`, still reproduces):** `ManifestReader::depsObject` — its "unknown keys ignored (forward-compat)" arm, and
+wider than filed: a non-string value for a KNOWN key is skipped too, so `"path": 1` passes silently; `flagArray` for
+`link` in `targetGroup` and at the top level; `DepSpec`, `TargetSpec::link`; and `resolveBuildConfig`'s dependency loop,
+judging both gates with `kamaGateLitActive` as the gated `csources`/`cincludes` pass does. A gated-out dependency still
+installs, so the lock is the same on every platform.
+
 <a id="s10-build-variant"></a>
 
 ### A host build variant with flags of its own, such as a sanitizer build (KR-145)
@@ -2830,6 +2976,13 @@ hand-written local manifest. **Scheduled.** To decide: build settings (`cflags`,
 or a `select.TARGET` entry that names the host (`"triple": "HOST"`) and adds settings. A `BUILD_TYPE` value is the
 closer fit: a sanitizer build is a build type of any target, and it composes with `--target`.
 
+**Where (surveyed on `0.9.603`, still reproduces):** `SelectGroup` holds only `values`/`dflt`/`inherits` (`ManifestReader::valueGroup`
+refuses `cflags`); a TARGET entry needs a triple and `parseTriple` has no `HOST`; there is no `kama build --cflags`. The
+BUILD_TYPE route is the cheaper one: flag vectors on a select value, appended along its `inherits` chain in
+`resolveBuildConfig` (the object cache already keys on the compile command). **Decision owed:** flags on a BUILD_TYPE
+value, or a `"triple": "HOST"` target. Separate and small: `kama check` accepts a TARGET entry with no triple that
+`kama build` then refuses.
+
 <a id="s10-dry-run-uncommitted"></a>
 
 ### `kama publish --dry-run` before the first commit (KR-146)
@@ -2839,6 +2992,10 @@ refuses uncommitted changes the same way (measured `0.9.577`). Publish archives 
 committed, which is right for a publish; but "what would ship?" cannot be asked of a package waiting for its first
 review. **Scheduled.** **Recommendation:** a dry-run lists what git tracks plus what is staged, says that the tree is
 not publishable as it stands and why, and prints no integrity, since there is no committed archive to hash.
+
+**Where (surveyed on `0.9.603`, still reproduces):** `vcsSnapshot` (its two refusals) and `cmdPublish`: under `--dry-run`, record the
+reason instead of failing, list the files (`gitFiles` already reads git's index, `ls-files --stage`), say why the tree is
+not publishable yet, and leave out the integrity and the revision. No ruling owed.
 
 <a id="s10-diag-columns"></a>
 
@@ -2850,6 +3007,12 @@ cannot point at the expression. The diagnostic channel takes a line (`unsupporte
 thousands of call sites. **Scheduled.** **Design:** the channel takes a source position — the node's own span,
 which the parser already stamps — with the line-only form kept for the sites that have no node, so the change can
 land site by site behind one funnel.
+
+**Where (surveyed on `0.9.603`, still reproduces):** `CEmitter::unsupported` sets only `d.line` (its comment defers columns "with spans"),
+and `ctFail` in `kama.comptime.cpp` the same; `Diagnostic` already has `column`/`endLine`/`endColumn`, and every
+`ASTNode` carries its span (`YYLLOC_DEFAULT`/`STAMP_LOC`). Measured: 907 `unsupported` sites and ~95 `ctFail` — 467 pass
+`node->line` (mechanical), 344 a local line, ~96 another source. A node-taking overload that fills the span, the line
+form kept, the column in the `_reportedDiags` dedup key, then site by site. Stays L.
 
 <a id="s10-release-signing"></a>
 
