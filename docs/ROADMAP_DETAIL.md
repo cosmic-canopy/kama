@@ -2747,12 +2747,165 @@ the compiler and the language server behind it, beside the `llms.txt` it already
 that would likely drive the language server), agentic workflow helpers embedded in this repo, the `ponytail` skill
 (github.com/DietrichGebert/ponytail) as a reference for the shape, and using the same tooling to develop kama itself.
 
-**What already ships**, and what a design starts from: `kama query` (verified facts from the compiler's index, one
-process, no editor; [agents.md](agents.md)), `kama agents install|list|print` (an `AGENTS.md` per project, a pointer
-file per tool, `AGENTS.package.md` for a library), the `kama` skill at `agents/skill/SKILL.md` (written by
-`kama seed --skill`), `llms.txt`, and `kama lsp`. **Unscoped:** a design session is owed — what the skill does
-that `kama query` does not, whether it talks to `kama lsp` or the CLI (agents.md § *Why not the LSP?* records why
-the CLI was chosen), which workflows earn a helper, and how this repo's own sessions would use it. Sized `—` until then.
+**Brief, 2026-10-15 on `0.9.626` — its decisions open the next session.** The hosts and peers below were read from
+their own docs or source that day; the timings were measured on this Mac.
+
+**What kama ships today.**
+- `kama agents install` writes `AGENTS.md` (200 lines, embedded in the binary); a one-line pointer to it for each of
+  six tools that read their own file first; `AGENTS.package.md` for a library; and, with `--skill`, the 129-line
+  `kama query` cookbook at `.claude/skills/kama/SKILL.md`. Claude Code now reads `AGENTS.md` natively when a project
+  has no `CLAUDE.md` (v2.1.277+, code.claude.com/docs/en/memory), so the `--claude` pointer is for older versions and for a
+  project that already has a `CLAUDE.md`.
+- `kama query` costs 0.03 s on one fixture and 0.21 s for `--diagnostics` on `lib/std/process/process.kama` with its
+  closure, but **1.75 s for `--search` at package scope over the stdlib's 14.6k lines**. Package scope analyzes every
+  file the manifest claims, so the cost grows with the project and is paid per process. Every mode except `--search`
+  takes a `LINE:COL` (1-based, 0-based), and the skill already has to say "try one column left".
+- `kama lsp` holds the same analysis resident and answers diagnostics, hover, definition, references,
+  implementation, rename, document and workspace symbols, completion, signature help, semantic tokens and an
+  auto-import fix. It has **no call hierarchy** — KR-33's first residual.
+- `llms.txt`, at the root and on kama-lang.org.
+- This repo's own sessions use none of it. `.claude/skills/` vendors `ponytail` and `karpathy-guidelines` only, no
+  language server is in the agent's loop, and load-bearing procedures live only in an assistant's per-account memory
+  — for one, *a grammar change is four artifacts plus a pins commit*, which no repo doc states whole. AGENTS.md's
+  *Where things are written down* forbids exactly that.
+
+**What the hosts offer** (code.claude.com/docs: plugins-reference, code-intelligence, skills, marketplace-reference).
+- **A code-intelligence plugin.** A plugin's `.lsp.json` names a server (`command`, `args`, `extensionToLanguage`).
+  Claude Code starts it the first time a matching file is edited, **pushes its diagnostics into the conversation
+  after every edit** ("Found N new diagnostic issues"), and gives the model a read-only `LSP` tool: definition,
+  references, hover, document symbols, workspace symbol search, implementations, call hierarchy. Anthropic maintains
+  such plugins for 12 languages (gopls, rust-analyzer, clangd, pyright, sourcekit-lsp, …). The one language *vendor*
+  in the official list is Shopify (Liquid), whose own repo is its marketplace. When a server's binary is on `PATH`
+  and an added marketplace lists a plugin for the extension, Claude Code offers to install it.
+- **Skills** follow the open Agent Skills standard (agentskills.io, 46 clients listed: Codex, Copilot, Cursor,
+  Gemini CLI, Junie, Kiro, …), and `.agents/skills/` is the cross-agent install path. Claude Code adds two things: a
+  line `` !`command` `` in a skill runs when the skill loads and is replaced by its output, and `paths:` loads a skill
+  only for matching files.
+- **A plugin's source can be a `command`**, "when a tool installed on the user's machine produces the plugin
+  directory"; Claude Code re-runs it once per session.
+- **Hooks** (PostToolUse on Edit|Write) and **MCP servers**, whose tool definitions are charged to every session,
+  are the other two channels.
+
+**What peers ship.**
+- **Go: `gopls mcp`**, experimental since gopls v0.20 (July 2025), over stdio or attached to the editor's session.
+  - Its default tools are `go_workspace`, `go_package_api`, `go_diagnostics`, `go_rename_symbol`,
+    `go_symbol_references`, `go_search`, `go_file_context` and `go_vulncheck`.
+  - Its source leaves the position-based `go_references` off by default: it "requires a location, which models tend
+    to get wrong. The symbolic variant seems to be easier to get right".
+  - MCP cannot push, so the instructions (`gopls mcp -instructions`) tell the model: "After every code modification,
+    you MUST call the `go_diagnostics` tool".
+  - The Go blog (2026-02) gives the reason: diagnostics as "guardrails" for models that deny newer APIs exist.
+- **Dart/Flutter** ships the most:
+  - `dart mcp-server`: experimental, about 24 tools (analyze, LSP lookups, run tests, pub search, format);
+  - an official Claude plugin repo, `flutter/agent-plugins`, bundling skills with that server;
+  - rules files in four sizes;
+  - **skills shipped inside packages.** A pub package carries `skills/`, and `dart run skills@ get` installs its
+    dependencies' skills into `.agents/skills/`.
+- **Deno** has an agent entry point (`deno.com/agents.md`) and a skills repo whose CI type-checks every code block and
+  checks every `deno <subcommand>` against the installed Deno.
+- **Kotlin** has `kotlin-agent-skills`: task-shaped skills with Claude and Codex plugin manifests.
+- **Rust** has nothing official. rust-analyzer's maintainers declined: "not the job of rust-analyzer to implement an
+  interface for LLMs".
+- **ponytail**, the shape the ask named:
+  - one canonical `SKILL.md`;
+  - an `AGENTS.md` that is a "compact always-on instruction set for agents without skill support";
+  - thin per-host adapters ("Keep adapters thin.");
+  - the repo as its own Claude marketplace;
+  - a CI script that fails when a rule copy "drifted from AGENTS.md".
+
+  That is the design `kama agents` already has: one text, pointers never copies, and `check-agents.sh` holding the
+  embedded copy byte-identical.
+
+**The gap, in order of what it costs an agent.**
+1. **Feedback depends on the agent remembering to ask.** An agent learns an edit broke the program only if it runs
+   `kama check`. Every peer with a language server now has that pushed after each edit. kama has the server and does
+   not wire it in.
+2. **The skill is a copy that goes stale.** `--skill` writes the text of the compiler of that day, so a later
+   compiler's query modes never reach it, and only Claude Code reads it where it is written.
+3. **Positions are what models get wrong**, by the gopls team's finding and by our own skill's warning, yet every
+   `kama query` mode but `--search` takes one.
+4. **This repo does not use its own tooling**, so nothing exercises it daily.
+
+**Recommendation.** One plugin whose every byte comes from the installed compiler, with the language server kama
+already has as its channel. The CLI stays unchanged as the interface for every other host.
+
+1. **A `kama` plugin, four small files, nothing copied:**
+
+   ```
+   .claude-plugin/plugin.json    {"name": "kama", "description": "…", "license": "MIT OR Apache-2.0"}
+   .lsp.json                     {"kama": {"command": "kama", "args": ["lsp"], "extensionToLanguage": {".kama": "kama"}}}
+   skills/kama/SKILL.md          frontmatter, then one line:  !`kama agents print --skill --body`
+   skills/kama-package/SKILL.md  frontmatter (paths: kama.json), then:  !`kama agents print --package --body`
+   ```
+
+   An agent that edits `src/app.kama` to `int8 a = big;` then sees, without running anything:
+   `Found 1 new diagnostic issue … a local is declared int8, so it cannot be initialized with a int32 — …`.
+   The skill text is printed by the `kama` on `PATH`, so it describes the compiler actually in use, and the plugin
+   needs no release of its own. Where a policy turns off skill shell execution, the line becomes a placeholder; the
+   stub's one line of prose then says to run `kama agents print --skill`.
+2. **Hosted in this repo.** `.claude-plugin/marketplace.json` goes at the root and the plugin under
+   `agents/claude-plugin/`, four static files that are not embedded. Users add it with
+   `/plugin marketplace add cosmic-canopy/kama` (sparse checkout). Listing it in Anthropic's directory is the
+   maintainer's act. That listing is what makes Claude Code offer the plugin, unasked, to anyone with `kama` on `PATH`.
+3. **`kama agents install --skill` also writes `.agents/skills/kama/SKILL.md`**, the cross-agent path, and
+   `kama agents list` says Claude Code reads `AGENTS.md` natively from v2.1.277.
+4. **Symbol-named queries.** Every cursor mode also takes a symbol instead of a position:
+   `kama query kama.json --refs app::util::encodeTo`. It resolves as `--search` resolves, and an ambiguous name is
+   refused, naming the candidates. gopls made this its default, for the reason above.
+5. **Call hierarchy, pulled forward from KR-33.** `kama lsp` gains `callHierarchy/incomingCalls` and
+   `outgoingCalls`, and `kama query` gains `--callers` and `--callees`. The LSP tool exposes the hierarchy, and "who
+   calls this" is the question an agent asks before a change.
+6. **A guard on the guidance**, as Deno has. Every `kama …` command line in the skill and in `AGENTS.md` runs against
+   a fixture project, and the plugin's JSON is checked against the documented schema (strict keys), with
+   `claude plugin validate` where that CLI exists. It joins `check-agents.sh`.
+
+**Not recommended, each with its reason.**
+- **An MCP server (`kama mcp`).** Go and Dart both ship one, and that is the strongest case for it. Against it:
+  - It is a second way to ask what `kama query` and `kama lsp` already answer, and its tool list is charged to every
+    session.
+  - It cannot push diagnostics either: gopls has to tell the model to call `go_diagnostics` after every edit, and
+    AGENTS.md already says the same of `kama check`.
+  - Its one real gain, a warm index for a host with neither shell nor LSP, is the query floor (§9). That fix helps
+    every caller if it is made under `kama query`.
+
+  Proposed verdict: a **non-goal**, answered by the CLI plus the server, and revisited the day a host matters that
+  has no shell.
+- **A PostToolUse hook running `kama check`.** The plugin's pushed diagnostics already do this, from a warm analysis
+  rather than a cold one per edit.
+- **A kama flavour of ponytail.** ponytail is how to write less code in any language, and a user who wants it can
+  install it. kama's own idioms already live in `AGENTS.md` and *coming-from-other-languages*.
+
+**This repo: developing kama with the same tools.**
+- Enable the plugin for this repo's sessions in `.claude/settings.json`: `extraKnownMarketplaces` names the repo
+  itself, and `enabledPlugins` turns it on.
+- The server and the skill's `print` resolve to `out/<os>-<arch>/kama` through a launcher, which `tools/kama-bin.sh`
+  already makes one line. Never the `./kama` symlink, which a container build repoints to a Linux binary. On Windows
+  the launcher runs a snapshot copy, because a running executable is locked (docs/platforms/windows.md).
+- ⚠️ Measure first: `tests/` holds about 2,500 fixtures that no manifest owns, and the server analyzes those as one
+  program up to its 500-file cap.
+- Move the procedures that live only in assistant memory into the repo. The file-triggered ones fit a
+  `paths:`-scoped skill under `.claude/skills/`: an edit to `src/kama.y` means four artifacts and a pins commit. The
+  rest belong in AGENTS.md.
+
+**Decisions owed** (the recommendation first in each):
+1. **Claude Code's channel:** the `kama` plugin with `kama lsp` and the skill (rec.) · a hook · an MCP server.
+2. **The skill's text:** printed by the installed compiler at load (rec.) · a copy generated per release.
+3. **Where the plugin lives:** this repo's root marketplace (rec.) · a separate repo · a marketplace file on
+   kama-lang.org. And whether to submit it to Anthropic's directory after it has run for one release.
+4. **The Agent Skills path:** `--skill` also writes `.agents/skills/kama/` (rec.) · Claude only.
+5. **Symbol-named `kama query` modes:** schedule with this row (rec.) · positions only.
+6. **Call hierarchy:** pull KR-33's residual into this work (rec.) · leave it in KR-33.
+7. **MCP:** a non-goal, as argued above (rec.) · schedule `kama mcp`, with `--instructions` printing the skill as
+   gopls does.
+8. **Skills shipped in packages:** a kama package carries `skills/`, and `kama agents install` gathers its
+   dependencies' skills into `.agents/skills/<package>/`, as Dart does. Rec.: file it as its own row, because a
+   package author's knowledge, such as how to use a vendored library safely, is exactly what an agent lacks · a
+   non-goal.
+9. **This repo:** dogfood the plugin against the in-tree compiler and move memory-only procedures into the repo
+   (rec.) · leave it as it is.
+
+**Size once decided: L.** The plugin and marketplace (S); `print --body`, the `.agents/skills` path and the `list`
+text (S); symbol-named modes (M); call hierarchy (M); the guard (S); the dogfood launcher and its measurement (S).
 
 - **`kama describe --json` (KR-84)** — GOALS §7's "other half" of self-description: the language surface
   itself (keywords, kinds, builtins, attributes, grammar) as data, independent of any source file, so an

@@ -115,7 +115,7 @@ Most of this gates on the repo going public.
 | KR-31 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-33 | **`kama query` residuals** — no `callers-of`, no stdin/unsaved-buffer mode; a `fnptr` signature type has no definition site | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-84 | **`kama describe --json`** — the language surface as data, the other half of `kama query --json` (GOALS §7) | [§10](ROADMAP_DETAIL.md#s10) |
-| KR-148 | **kama's own AI-agent tooling** — a skill that drives the language server and `kama query`, agentic workflow helpers shipped beside `llms.txt` and `kama agents`, usable for developing kama itself too. Asked for 2026-10-14; a design session is owed before any code | [§10](ROADMAP_DETAIL.md#s10-agent-tooling) |
+| KR-148 | **kama's own AI-agent tooling** — brief written 2026-10-15, nine decisions owed: recommended a `kama` Claude Code plugin (`kama lsp` pushes diagnostics after every edit; the skill's text printed by the installed compiler), symbol-named `kama query` modes, call hierarchy, a guard that runs the guidance, the same tools in this repo; MCP proposed a non-goal. L once decided | [§10](ROADMAP_DETAIL.md#s10-agent-tooling) |
 | KR-173 | **`@kama/http` — a first-party HTTP package for both targets** — `fetch` and `EventSource` in the browser, HTTP/1.1 client and server natively on std's TCP, native WebSocket (on std's SHA-1 + base64), TLS through `@kama/tls`. HTTP stays out of std on every target (decided 2026-10-14); this is where a web-first kama gets it | [§1](ROADMAP_DETAIL.md#s1-http-package) |
 
 ## FUTURE — the big arcs, in this order
