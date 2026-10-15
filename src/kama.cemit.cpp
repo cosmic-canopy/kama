@@ -2715,9 +2715,45 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
                 return;
             }
         // Two instances of the SAME template. `Shared<Square>` into a `Shared<Shape>` is the smart-pointer
-        // upcast, and judging argument variance properly is a separate rule from "these are unrelated
-        // types" — so the shared template is where this one stops.
-        if (si != _genericTypeInsts.end() && si->second.templateKey == gi->second.templateKey) return;
+        // upcast, and judging argument variance properly is a separate rule from "these are unrelated types" — so
+        // a pair whose differing arguments are each an upcast (a base, or a contract) stops here. Any other pair is
+        // two types that share a name: `Result<Unit, IoError> r = f()` with `f` answering `Result<isize, IoError>`,
+        // `Optional<int64> p = o` from an `Optional<int32>`. Those returned here too, and reached clang ("assigning
+        // to 'kama__Result_kama__Unit…' from incompatible type"), while `kama check` called the file clean.
+        if (si != _genericTypeInsts.end() && si->second.templateKey == gi->second.templateKey) {
+            // A value whose instance its DESTINATION supplies is not this rule's: `Optional::Some(value: 5)`, or a
+            // generic ctor of the destination's own template (`Box.of(v: 4)` at a `Box<int64>` parameter — the
+            // parameter pins `T`, KR-15). `exprClass` answers what the arguments alone would infer, before the
+            // destination has spoken.
+            std::function<bool(ASTNode*)> destTyped = [&](ASTNode* e) -> bool {
+                if (!e) return false;
+                if (auto* h = dynamic_cast<HandoffNode*>(e)) return destTyped(h->value.get());
+                if (auto* t = dynamic_cast<TernaryExpressionNode*>(e)) return destTyped(t->LHS.get()) || destTyped(t->RHS.get());
+                if (isVariantCtorExpr(e)) return true;
+                if (auto* iv = dynamic_cast<InvocationNode*>(e))
+                    if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) {
+                        std::string dt;
+                        auto of = _genericTypeInstOf.find(dstCType);
+                        if (of != _genericTypeInstOf.end() && isTypeReceiver(ma, dt) && of->second == dt) return true;
+                    }
+                return false;
+            };
+            if (destTyped(value.get())) return;
+            const auto& da = gi->second.typeArgs;
+            const auto& sa = si->second.typeArgs;
+            bool upcast = da.size() == sa.size();
+            for (size_t k = 0; upcast && k < da.size(); ++k) {
+                if (!da[k] || !sa[k]) continue;
+                const std::string dk = cType(da[k]), sk = cType(sa[k]);
+                if (dk == sk) continue;
+                upcast = isInterface(dk) || isBaseOf(dk, sk);
+            }
+            if (upcast) return;
+            unsupported((std::string(what) + " expects " + aOrAn(demangleForDisplay(dstCType)) + ", so it cannot be "
+                         "given " + aOrAn(demangleForDisplay(src)) + " — two instances of one generic type are two "
+                         "types, and nothing converts between them").c_str(), line);
+            return;
+        }
     }
     // The library heap owners are ordinary generic types, not the intrinsic smart pointers, so
     // `isSmartPtrClass` does not see them: an `Owned<Counter>` handed to a `Counter` parameter borrows its

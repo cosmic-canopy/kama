@@ -1,0 +1,13 @@
+// Two instances of one generic type are two types (`Result<Unit, IoError>` is not `Result<isize, IoError>`), and
+// nothing converts between them. Through 0.9.618 the class identity rule stopped at "same template" — meant for the
+// smart-pointer upcast `Shared<Square>` into `Shared<Shape>` — so this reached clang ("assigning to
+// 'kama__Result_kama__Unit…' from incompatible type") while `kama check` called the file clean. The same in an
+// assignment, an argument and a return, and for `Optional<int64>` from an `Optional<int32>`.
+import { std::io::IoError };
+
+fn Result<isize, IoError> count() { return Result::Ok(value: 1); }
+
+fn int32 main() {
+    Result<Unit, IoError> r = count();   // -> REJECT
+    return 0;
+}
