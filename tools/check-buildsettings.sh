@@ -754,8 +754,11 @@ cat > "$tmp/emfiles/vendor/geo/kama.json" <<'JSON'
 JSON
 "$KAMA" pkg install "$tmp/emfiles/kama.json" >/dev/null 2>&1 || true
 line=$(cd / && "$KAMA" build "$tmp/emfiles/kama.json" --target wasm --cc "echo emcc" -o "$tmp/emfiles/app.html" 2>/dev/null || true)
-# (`echo` drops the quotes; a dependency's path runs through its view link, `.kama/deps/geo`, as `csources` do.)
-efd="$tmp/emfiles"
+# A dependency's path runs through its view link, `.kama/deps/geo`, as `csources` do. Matched quote-stripped and
+# native-spelled: cmd.exe's `echo` keeps the quotes (see the link-tail case above), and kama writes the path it
+# was given as Windows spells it, `D:/…/tmp/…`, where this shell spells `$tmp` as `/tmp/…`.
+line=$(printf '%s' "$line" | tr -d '"')
+efd="$(kama_native_path "$tmp")/emfiles"
 emok=1
 for want in "--shell-file $efd/web/shell.html" "--embed-file $efd/assets@/assets" \
             "--preload-file $efd/data/level.bin@/levels/1.bin" "--embed-file $efd/.kama/deps/geo/fonts@/fonts"; do
@@ -806,6 +809,8 @@ cat > "$tmp/emtgt/vendor/geo/kama.json" <<'JSON'
 JSON
 "$KAMA" pkg install "$tmp/emtgt/kama.json" >/dev/null 2>&1 || true
 line=$("$KAMA" build "$tmp/emtgt/kama.json" --target WEB --cc "echo emcc" -o "$tmp/emtgt/app.html" 2>"$tmp/e" || true)
+line=$(printf '%s' "$line" | tr -d '"')   # quote-stripped and native-spelled, as in the case above
+etd="$(kama_native_path "$tmp")/emtgt"
 tok=1
 printf '%s' "$line" | grep -qF -- "geo/js/geoweb.js" || { tok=0; bad "a dependency's target \`jsLibraries\` did not reach the link"; }
 printf '%s' "$line" | grep -qE -- "own\.js.*web\.js" || { tok=0; bad "a target's \`jsLibraries\` did not follow the project's"; }
@@ -813,7 +818,7 @@ printf '%s' "$line" | grep -qF -- "-sSTACK_SIZE=8MB" && ! printf '%s' "$line" | 
     || { tok=0; bad "a target's \`emSettings\` scalar did not have the last word"; }
 printf '%s' "$line" | grep -q -- "EXPORTED_RUNTIME_METHODS=[^ ]*ccall" && printf '%s' "$line" | grep -q -- "EXPORTED_RUNTIME_METHODS=[^ ]*cwrap" \
     || { tok=0; bad "a target's \`emSettings\` list did not union with the project's"; }
-printf '%s' "$line" | grep -qF -- "--shell-file $tmp/emtgt/web/page.html" && printf '%s' "$line" | grep -qF -- "--preload-file $tmp/emtgt/levels@/levels" \
+printf '%s' "$line" | grep -qF -- "--shell-file $etd/web/page.html" && printf '%s' "$line" | grep -qF -- "--preload-file $etd/levels@/levels" \
     || { tok=0; bad "a target's \`shellFile\`/\`preloadFiles\` did not reach the link"; }
 [ "$tok" = 1 ] && ok "a target entry takes \`jsLibraries\`, \`emSettings\` and the file keys, after the project's" \
     || { printf '%s\n' "$line" | sed 's/^/    /' >&2; head -3 "$tmp/e" >&2; }
