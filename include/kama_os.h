@@ -1963,12 +1963,18 @@ static inline ptrdiff_t kama_getcwd(uint8_t* out, size_t cap) {
     }
 }
 static inline int32_t kama_chdir(const char* path) { return (int32_t)chdir(path); }
+// realpath writes into a PATH_MAX buffer the caller gives it, from the allocation funnel — never `realpath(p, NULL)`,
+// whose block libc allocates and libc's `free` must release, outside the funnel every heap block goes through.
+#if !defined(PATH_MAX)
+#define PATH_MAX 4096
+#endif
 static inline ptrdiff_t kama_realpath(const char* path, uint8_t* out, size_t cap) {
-    char* r = realpath(path, NULL);   // libc's own block, so libc's `free` releases it — never kama_free
-    if (!r) return -1;
-    const size_t n = strlen(r);
-    memcpy(out, r, n < cap ? n : cap);
-    free(r);
+    char* buf = (char*)kama_alloc((size_t)PATH_MAX + 1, 1);
+    if (!buf) { errno = ENOMEM; return -1; }
+    if (!realpath(path, buf)) { const int e = errno; kama_free(buf, (size_t)PATH_MAX + 1, 1); errno = e; return -1; }
+    const size_t n = strlen(buf);
+    memcpy(out, buf, n < cap ? n : cap);
+    kama_free(buf, (size_t)PATH_MAX + 1, 1);
     return (ptrdiff_t)n;
 }
 // `chmod` follows a link, as `setPermissions` means: the permissions of what the path names.
