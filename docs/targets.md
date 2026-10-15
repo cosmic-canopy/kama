@@ -207,6 +207,30 @@ default.
 If the paths are personal (your own sysroot location), put the target in **`kama.local.json`**
 instead — same shape, gitignored, overrides the committed manifest.
 
+### A build variant — flags on a `select` value
+
+A sanitizer build is not a target — it is *this* target, built another way — so its flags live on a build
+type:
+
+```json
+"select": { "BUILD_TYPE": {
+    "ASAN": { "inherits": "DEBUG",
+              "cflags":  ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"],
+              "ldflags": ["-fsanitize=address,undefined"] } } }
+```
+
+```sh
+kama build kama.json --select BUILD_TYPE=ASAN
+kama build kama.json --select BUILD_TYPE=ASAN --target LINUX
+```
+
+Any `select` value takes `cflags`, `ldflags`, `cxxflags` and `objcflags`, meaning what they mean on a target
+entry. The chosen value's flags come after the project's and the target's, base first along `inherits` (an
+`ASAN2` inheriting `ASAN` gets `ASAN`'s, then its own), and they reach **every** translation unit, a
+dependency's C included — a sanitizer that missed the C it links would miss the bug. A `TARGET` entry needs
+a `triple` unless it names a built-in it adjusts, and `kama check` refuses one that has neither, as `kama
+build --target` does.
+
 ### `debug.optimize` — a package at the release level in a debug build
 
 A debug build compiles at `-O0`, and some code cannot run there: a measured DSP took 1.36 ms a frame in debug

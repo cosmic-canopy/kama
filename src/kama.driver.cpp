@@ -2591,9 +2591,13 @@ static const std::map<std::string, TargetSpec>& builtinTargets();   // defined j
 // active flag set. `TARGET` and `BUILD_TYPE` are the built-in instances; a project declares its own the
 // same way. There is no user-declared MULTI group on purpose — `flags` already IS the one multi-select
 // bag, and a second grouping mechanism would only buy presentation.
+// The build flags a select VALUE adds (KR-145) — the names a target entry uses, meaning the same: a sanitizer build
+// is `"ASAN": { "inherits": "DEBUG", "cflags": [...], "ldflags": [...] }`, a build type of any target.
+struct SelectFlags { std::vector<std::string> cflags, ldflags, cxxflags, objcflags; };
 struct SelectGroup {
     std::vector<std::string> values;                  // declaration order (error messages, IDE dropdowns)
     std::map<std::string, std::string> inherits;      // value -> base value, e.g. FAST -> RELEASE
+    std::map<std::string, SelectFlags> flags;         // value -> its own build flags (KR-145)
     std::string dflt;                                 // selected when the build does not say
     bool has(const std::string& v) const {
         for (const auto& x : values) if (x == v) return true;
@@ -3820,6 +3824,13 @@ struct ManifestReader {
                 ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a select value body");
                 ++i; ws();
                 if (k == "inherits") { std::string base; if (!str(base)) return false; g.inherits[name] = base; }
+                else if (k == "cflags" || k == "ldflags" || k == "cxxflags" || k == "objcflags") {
+                    SelectFlags& f = g.flags[name];
+                    std::vector<std::string>& into = k == "cflags" ? f.cflags : k == "ldflags" ? f.ldflags
+                                                   : k == "cxxflags" ? f.cxxflags : f.objcflags;
+                    if (!flagArray(into, k.c_str())) return false;
+                    if (topKeysOut) topKeysOut->insert("select.value." + k);
+                }
                 else if (k == "default") {
                     if      (s.compare(i, 4, "true")  == 0) { g.dflt = name; i += 4; }
                     else if (s.compare(i, 5, "false") == 0) { i += 5; }
@@ -3828,7 +3839,8 @@ struct ManifestReader {
                 // Closed, like the top level: a typo'd key here used to be skipped, which reads exactly like
                 // a key that does nothing.
                 else return fail("unknown key `" + k + "` in `select." + group + "." + name
-                                 + "` — a select value takes `inherits` and `default`");
+                                 + "` — a select value takes `inherits`, `default`, `cflags`, `ldflags`, `cxxflags` "
+                                 "and `objcflags`");
                 ws();
                 if (i < s.size() && s[i] == ',') { ++i; continue; }
                 if (i < s.size() && s[i] == '}') { ++i; break; }
@@ -5751,6 +5763,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 SelectGroup& g = g_selectGroups[kv.first];
                 for (const auto& v : kv.second.values) if (!g.has(v)) g.values.push_back(v);
                 for (const auto& iv : kv.second.inherits) g.inherits[iv.first] = iv.second;
+                for (const auto& fv : kv.second.flags) g.flags[fv.first] = fv.second;     // a value's flags, whole
                 if (!kv.second.dflt.empty()) g.dflt = kv.second.dflt;
             }
             if (!ldfltTarget.empty()) dfltTarget = ldfltTarget;
@@ -5822,7 +5835,10 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         for (const auto& kv : g_manifestTargets) {
             TargetSpec t;
             std::string terr;
-            if (resolveTarget(kv.first, g_manifestTargets, t, terr)) known(t);
+            // Refused HERE, in every command, an entry that cannot resolve (KR-145): `kama check` accepted a TARGET
+            // entry with no `triple` that `kama build --target` then refused — the check never selects the target.
+            if (!resolveTarget(kv.first, g_manifestTargets, t, terr)) { err = terr; return false; }
+            known(t);
         }
         known(g_target);
     }
@@ -5885,6 +5901,27 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             std::set<std::string> chain;                             // the value plus what it inherits
             collectInherited(g->second, kv.second, chain);
             for (const auto& f : chain) g_activeFlags.insert(f);
+            // The chosen value's own build flags (KR-145), BASE FIRST along its `inherits` chain — `ASAN: { inherits:
+            // DEBUG, cflags: […] }` is DEBUG's flags and then its own — after the project's and the target's, and on
+            // every translation unit, a dependency's included: a sanitizer that missed the C it links is no use.
+            std::vector<std::string> order;
+            {
+                std::set<std::string> seenV;
+                for (std::string v = kv.second; !v.empty() && seenV.insert(v).second; ) {
+                    order.push_back(v);
+                    auto in = g->second.inherits.find(v);
+                    if (in == g->second.inherits.end()) break;
+                    v = in->second;
+                }
+            }
+            for (auto v = order.rbegin(); v != order.rend(); ++v) {
+                auto f = g->second.flags.find(*v);
+                if (f == g->second.flags.end()) continue;
+                g_target.cflags.insert(g_target.cflags.end(),     f->second.cflags.begin(),    f->second.cflags.end());
+                g_target.ldflags.insert(g_target.ldflags.end(),   f->second.ldflags.begin(),   f->second.ldflags.end());
+                g_target.cxxflags.insert(g_target.cxxflags.end(), f->second.cxxflags.begin(),  f->second.cxxflags.end());
+                g_target.objcflags.insert(g_target.objcflags.end(), f->second.objcflags.begin(), f->second.objcflags.end());
+            }
         }
         // A user BUILD_TYPE inherits its base's driver behavior, so `FAST: {inherits: RELEASE}` gets
         // -O3/-DNDEBUG/strip and `debugAssert` stripping without redeclaring any of it.
@@ -8522,6 +8559,9 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     { "select.TARGET.preloadFiles", "0.9.603" },
     // …and the gates KR-144 added: on a dependency edge, and on a `link` entry (an object where a string was).
     { "dependencies.compileFor", "0.9.609" }, { "link.compileFor", "0.9.609" },
+    // …and a select value's build flags (KR-145), named generically: they are the same four keys on any group's value.
+    { "select.value.cflags", "0.9.610" }, { "select.value.ldflags", "0.9.610" },
+    { "select.value.cxxflags", "0.9.610" }, { "select.value.objcflags", "0.9.610" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The

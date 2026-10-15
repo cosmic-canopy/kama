@@ -615,6 +615,40 @@ depkey dkgate '{ "path": "./vendor/x", "compileFor": ["OS_WINODWS"] }' 'did you 
        "a dependency gate is judged by the @compileFor rule"
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: a select value carries build flags — a sanitizer build is a build type (KR-145)"
+
+# `ASAN2` inherits `ASAN` inherits `DEBUG`: its flags are its bases' first, then its own, after the project's,
+# on the compile line and (ldflags) the link line. One build type of ANY target, chosen with --select.
+app selfl <<'JSON'
+{ "name": "selfl", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "cflags": ["-DKR145_PROJ"],
+  "select": { "BUILD_TYPE": {
+      "ASAN":  { "inherits": "DEBUG", "cflags": ["-DKR145_ASAN"], "ldflags": ["-DKR145_ASAN_LD"] },
+      "ASAN2": { "inherits": "ASAN",  "cflags": ["-DKR145_ASAN2"] } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/selfl/kama.json" --cc "echo CC:" --select BUILD_TYPE=ASAN2 -o "$tmp/selfl/app" >"$tmp/o" 2>"$tmp/e" || true
+order=$(grep -o -- '-DKR145_[A-Z0-9_]*' "$tmp/o" | head -3 | tr '\n' ' ')
+if [ "$order" = "-DKR145_PROJ -DKR145_ASAN -DKR145_ASAN2 " ] && grep -qF -- '-DKR145_ASAN_LD' "$tmp/o"; then
+    ok "a select value's flags follow the project's, base first along \`inherits\`, and its ldflags reach the link"
+else
+    bad "select-value flags missing or out of order: '$order'"; head -3 "$tmp/o" >&2
+fi
+"$KAMA" build "$tmp/selfl/kama.json" --cc "echo CC:" -o "$tmp/selfl/app" >"$tmp/o" 2>"$tmp/e" || true
+grep -qF -- '-DKR145_ASAN' "$tmp/o" && bad "a select value's flags reached a build that did not choose it" \
+                                    || ok "an unchosen select value adds nothing"
+# A TARGET entry that cannot resolve is refused by `kama check` too, which never selects it — not only by the
+# `kama build --target` that does.
+app notrip <<'JSON'
+{ "name": "notrip", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "select": { "TARGET": { "WEIRD": { "cflags": ["-DX"] } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+if "$KAMA" check "$tmp/notrip/kama.json" >"$tmp/o" 2>"$tmp/e"; then bad "kama check accepted a target entry with no triple"
+elif grep -qF "declares no \`triple\`" "$tmp/e"; then ok "kama check refuses a target entry that has no triple and is no built-in"
+else bad "the triple-less target was refused for the wrong reason"; head -2 "$tmp/e" >&2; fi
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: \`cincludes\` puts a package's include tree on the path, under the path rules"
 
 # The runnable proof is tests/cincludes_dep.d/: a dependency whose header lives in include/, not beside

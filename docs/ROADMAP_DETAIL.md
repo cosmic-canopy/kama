@@ -2892,30 +2892,6 @@ rather than here, so there is one number to keep current. Forward work:
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-build-variant"></a>
-
-### A host build variant with flags of its own, such as a sanitizer build (KR-145)
-
-There is no place in the manifest for "this host, plus `-fsanitize=address`": a `select.BUILD_TYPE` value takes only
-`inherits` and `default`; a `select.TARGET` entry with no `triple` passes `check` and is refused by `build` (*"target
-'ASAN' declares no `triple` and is not a built-in"*); `"triple": "HOST"` is not a triple; and `kama build` has no
-`--cflags`. Measured `0.9.577`. The workarounds in use are `cc`/`c++` wrapper scripts passed as `--cc`/`--cxx`, or a
-hand-written local manifest. **Scheduled.** To decide: build settings (`cflags`, `ldflags`) on a `BUILD_TYPE` value,
-or a `select.TARGET` entry that names the host (`"triple": "HOST"`) and adds settings. A `BUILD_TYPE` value is the
-closer fit: a sanitizer build is a build type of any target, and it composes with `--target`.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `SelectGroup` holds only `values`/`dflt`/`inherits` (`ManifestReader::valueGroup`
-refuses `cflags`); a TARGET entry needs a triple and `parseTriple` has no `HOST`; there is no `kama build --cflags`. The
-BUILD_TYPE route is the cheaper one: flag vectors on a select value, appended along its `inherits` chain in
-`resolveBuildConfig` (the object cache already keys on the compile command). **Decision owed:** flags on a BUILD_TYPE
-value, or a `"triple": "HOST"` target. Separate and small: `kama check` accepts a TARGET entry with no triple that
-`kama build` then refuses.
-
-**Decided (the maintainer, 2026-10-15):** build flags on a `BUILD_TYPE` value —
-`cflags`/`cxxflags`/`objcflags`/`ldflags`, the names a target entry takes — appended along `inherits` and reaching
-every translation unit, dependencies' included: a build type applies to any target, as CMake's per-configuration flags
-do.
-
 <a id="s10-dry-run-uncommitted"></a>
 
 ### `kama publish --dry-run` before the first commit (KR-146)

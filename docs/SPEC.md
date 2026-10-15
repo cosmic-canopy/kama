@@ -3333,7 +3333,11 @@ simply inactive) and bare single-file builds need no config. There is no auto-di
 
 A **single-select group** takes exactly one value — `--select CONSOLE=PS5 --select CONSOLE=XBOX` is an
 error — and `inherits` pulls the base in with it, so `FAST` activates `RELEASE` and gets its
-optimization/stripping behavior without redeclaring it. `kama.local.json` overrides defaults per
+optimization/stripping behavior without redeclaring it. A value may also carry **build flags** — `cflags`, `ldflags`,
+`cxxflags`, `objcflags`, the names a target entry takes — added after the project's and the target's, base
+first along `inherits`, to every translation unit (a dependency's included). That is where a sanitizer
+build lives: `"ASAN": { "inherits": "DEBUG", "cflags": ["-fsanitize=address"], "ldflags":
+["-fsanitize=address"] }` is a build type of any target, `--select BUILD_TYPE=ASAN`, beside `--target`. `kama.local.json` overrides defaults per
 machine. Precedence: CLI > `kama.local.json` > `kama.json` > the built-in default. The practical
 toolchain setup is in [targets.md](targets.md).
 
