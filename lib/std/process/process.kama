@@ -14,7 +14,7 @@
 
 import { std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::fs::File, std::collections::DynamicArray, std::ptr::nonNull };
 
-export { Command, Process, ExitStatus, Output, Stdio };
+export { Command, Process, ExitStatus, Output, Stdio, ProcessGroup };
 
 extern "kama_os.h";
 // argv/envp marshalling — kama can't build a `char*[]`, so the vector is assembled in C (strdup'd, so it
@@ -25,7 +25,9 @@ extern fn void  kama_argv_free(UnsafePtr v);
 extern fn UnsafePtr   kama_envp_build(UnsafePtr overrides, int32 clear);
 // pipe + spawn + wait + signal (POSIX fork/exec behind the seam)
 extern fn int32 kama_pipe(UnsafePtr<int32> outRd, UnsafePtr<int32> outWr);
-extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<cchar> cwd, int32 inFd, int32 outFd, int32 errFd, UnsafePtr<isize> outHandle, UnsafePtr<int32> outPid);
+extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<cchar> cwd, int32 inFd, int32 outFd, int32 errFd, int32 group, int32 pgid, UnsafePtr<isize> outHandle, UnsafePtr<int32> outPid, UnsafePtr<isize> outJob);
+extern fn int32 kama_group_signal(isize job, int32 pgid, int32 sig);
+extern fn void  kama_job_close(isize job);
 extern fn int32 kama_proc_wait(isize handle, UnsafePtr<int32> outStatus, int32 flags);
 extern fn int32 kama_proc_exited(int32 st);
 extern fn int32 kama_proc_exit_code(int32 st);
@@ -51,6 +53,30 @@ extern fn int32 kama_open_null_read();
 extern fn int32 kama_open_null_write();
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
+
+// Which process group a child runs in (KR-170) — what a supervisor needs to stop a child TOGETHER with everything it
+// started (`Process.killGroup()`), where `kill()` stops the child alone. One value, because the choices exclude each
+// other. Each OS keeps what is its own (the platform-deltas rule), so the twins differ:
+//   POSIX   — `Inherit` (the parent's group), `New` (the child leads a new one: setpgid), `Join(group:)` (another
+//             child's group — a pipeline's children share one), `NewSession` (setsid: a new group, and no
+//             controlling terminal, so the terminal's Ctrl+C and hang-up no longer reach it).
+//   Windows — `Inherit`, `New`: its own console group (the parent's Ctrl+C no longer reaches it) and a Job Object
+//             holding the child and everything it starts. The job ends when its last handle closes: dropping the
+//             `Process`, or the program exiting, ends the group — a supervisor's children never outlive it.
+@compileFor(!OS_WINDOWS)
+type enum ProcessGroup implements Sendable { Inherit, New, Join(int32 group), NewSession }
+@compileFor(OS_WINDOWS)
+type enum ProcessGroup implements Sendable { Inherit, New }
+
+// The seam's encoding of a group: 0 inherit, 1 new, 2 join `groupJoin`, 3 new session.
+@compileFor(!OS_WINDOWS)
+fn int32 groupKind(const ref ProcessGroup g) { return match (g) { case Inherit: 0; case New: 1; case Join(group: _): 2; case NewSession: 3; }; }
+@compileFor(!OS_WINDOWS)
+fn int32 groupJoin(const ref ProcessGroup g) { return match (g) { case Join(group: p): p; case _: 0; }; }
+@compileFor(OS_WINDOWS)
+fn int32 groupKind(const ref ProcessGroup g) { return match (g) { case Inherit: 0; case New: 1; }; }
+@compileFor(OS_WINDOWS)
+fn int32 groupJoin(const ref ProcessGroup g) { return 0; }
 
 // How a child's stdin/stdout/stderr is wired. Inherit = share the parent's fd; Piped = a pipe the parent
 // keeps an end of (Process.stdin()/stdout()/stderr() become a readable/writable File); Null = /dev/null.
@@ -150,6 +176,7 @@ type resource Command implements Sendable {
     Stdio  inCfg;
     Stdio  outCfg;
     Stdio  errCfg;
+    ProcessGroup grp;        // KR-170: `Inherit` unless asked
 
     // Build a command for `program` (PATH-resolved by execvp unless it contains '/'). Args take ownership of
     // the passed string (pass a literal, or `copy someVar`).
@@ -161,6 +188,7 @@ type resource Command implements Sendable {
         this.clearsEnv = false;
         this.workingDir = "";
         this.inCfg = Stdio::Inherit; this.outCfg = Stdio::Inherit; this.errCfg = Stdio::Inherit;
+        this.grp = ProcessGroup::Inherit;
     }
 
     // Opt-in shell form: run `sh -c <line>`. The default (argv vector) stays injection-safe; this is the
@@ -186,6 +214,8 @@ type resource Command implements Sendable {
     public fn void stdin(Stdio s)  { this.inCfg = s; }
     public fn void stdout(Stdio s) { this.outCfg = s; }
     public fn void stderr(Stdio s) { this.errCfg = s; }
+    // The process group the child runs in (KR-170) — see `ProcessGroup`.
+    public fn void processGroup(ProcessGroup group) { this.grp = group; }
 
     // Spawn the child and return a live Process handle. Creates a pipe (or opens /dev/null) per Piped/Null
     // stream; the parent keeps its end (in the Process), the child-side ends close on return (RAII).
@@ -259,16 +289,23 @@ type resource Command implements Sendable {
 
         isize handle = 0;
         int32 pid = 0;
+        isize job = 0;
+        int32 gk = groupKind(g: this.grp);
+        int32 gj = groupJoin(g: this.grp);
         int32 rc = kama_proc_spawn(argv: argv, envp: envp, cwd: this.workingDir.cstr(),
-                                   inFd: childIn, outFd: childOut, errFd: childErr,
-                                   outHandle: addr(of: handle), outPid: addr(of: pid));
+                                   inFd: childIn, outFd: childOut, errFd: childErr, group: gk, pgid: gj,
+                                   outHandle: addr(of: handle), outPid: addr(of: pid), outJob: addr(of: job));
         kama_argv_free(v: argv);
         if (envp != null) { kama_argv_free(v: envp); }
         if (rc != 0) { return Result::Err(error: lastError()); }
 
         // inGive/outGive/errGive drop at return → close the child-side ends (so the parent's read ends see
         // EOF when the child exits). inKeep/outKeep/errKeep move into the Process.
-        return Result::Ok(value: Process.make(handle: handle, pid: pid, inKeep: give inKeep, outKeep: give outKeep, errKeep: give errKeep));
+        // The child's group: one it leads (a new group or session — its id is the child's pid), one it joined, or
+        // none of its own (0 — the parent's, which a group signal must never reach).
+        int32 group = gk == 1 || gk == 3 ? pid : gk == 2 ? gj : 0;
+        return Result::Ok(value: Process.make(handle: handle, pid: pid, group: group, job: job,
+                                              inKeep: give inKeep, outKeep: give outKeep, errKeep: give errKeep));
     }
 
     // One-shot: force stdout+stderr Piped, spawn, DRAIN BOTH CONCURRENTLY to EOF, then wait. The concurrent
@@ -308,14 +345,16 @@ type resource Process implements Sendable {
     isize handle;             // OS wait handle (POSIX: pid; Windows: (isize)hProcess). != 0 live/reapable;
                               //   0 = reaped / moved-from sentinel. wait/kill/dtor act on THIS.
     int32 pid;                // the real OS pid, reported by id() on both platforms
+    int32 group;              // KR-170: the process group it runs in, when it is its own (0: the parent's)
+    isize job;                // KR-170, Windows: the Job Object a `New` group is (0 otherwise); closed at drop
     bool  reaped;
     File  inPipe;             // parent write end  (child stdin)  when inCfg==Piped
     File  outPipe;            // parent read end   (child stdout) when outCfg==Piped
     File  errPipe;            // parent read end   (child stderr) when errCfg==Piped
 
     // Internal — produced by Command.start() (exposed like TcpStream.make; not meant to be called directly).
-    public ctor make(isize handle, int32 pid, File inKeep, File outKeep, File errKeep) {
-        this.handle = handle; this.pid = pid; this.reaped = false;
+    public ctor make(isize handle, int32 pid, int32 group, isize job, File inKeep, File outKeep, File errKeep) {
+        this.handle = handle; this.pid = pid; this.group = group; this.job = job; this.reaped = false;
         this.inPipe = give inKeep; this.outPipe = give outKeep; this.errPipe = give errKeep;
     }
 
@@ -366,6 +405,26 @@ type resource Process implements Sendable {
     public unsafe fn Result<Unit, IoError> kill()      { return this.signal(sig: kama_SIGKILL()); }
     public unsafe fn Result<Unit, IoError> terminate() { return this.signal(sig: kama_SIGTERM()); }
 
+    // The process group the child runs in, when it is not the parent's (KR-170): the group it leads (`New`,
+    // `NewSession` — its id is the child's pid) or the one it joined. `None` for `Inherit`. What another child's
+    // `ProcessGroup::Join(group:)` takes, on POSIX.
+    public const fn Optional<int32> groupId() {
+        if (this.group == 0) { return Optional::None; }
+        return Optional::Some(value: this.group);
+    }
+    // Signal the child's whole GROUP — every process in it, what the child started included (POSIX killpg; on
+    // Windows the Job Object ends them all, as any signal is termination there). It keeps working after `wait()`:
+    // the group outlives its leader. A child that runs in the parent's group (`Inherit`) has none of its own to
+    // signal — `InvalidInput`, never the parent's own group. A group whose every process has exited is
+    // `ProcessNotFound` on POSIX.
+    public unsafe fn Result<Unit, IoError> signalGroup(int32 sig) {
+        if (this.group == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (kama_group_signal(job: this.job, pgid: this.group, sig: sig) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+    public unsafe fn Result<Unit, IoError> killGroup()      { return this.signalGroup(sig: kama_SIGKILL()); }
+    public unsafe fn Result<Unit, IoError> terminateGroup() { return this.signalGroup(sig: kama_SIGTERM()); }
+
     // Non-blocking reap/detach on drop: reap if already exited, else hand the pid to the runtime's reaper
     // park, which sweeps it on a later drop (POSIX cannot reparent a live child to init while WE are still
     // running, so an un-swept pid would stay a zombie and eventually exhaust the process table — see
@@ -374,5 +433,6 @@ type resource Process implements Sendable {
         if (this.handle != 0 && !this.reaped) {
             kama_proc_detach(handle: this.handle);
         }
+        kama_job_close(job: this.job);   // Windows: a `New` group's job — closing it ends the group (KR-170)
     }
 }

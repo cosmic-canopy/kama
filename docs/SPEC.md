@@ -2283,7 +2283,13 @@ injection-safe by construction; `Command.shell(line:)` is the explicit `sh -c` o
 Process` via `start()`, or captures via the one-shot `run() -> Output { status, stdout, stderr }` (which
 drains stdout+stderr **concurrently** through `std::net::Poller`, so a child that fills both pipes can't
 deadlock the parent). `Process` gives `wait()` (blocking reap → `ExitStatus { code, signal, success() }`),
-`tryWait() -> Optional<ExitStatus>` (non-blocking), `kill`/`terminate`/`signal`, and the piped streams as
+`tryWait() -> Optional<ExitStatus>` (non-blocking), `kill`/`terminate`/`signal`, and — with `processGroup(group:)`
+— a child in a group of its own, signalled whole by `killGroup`/`terminateGroup`/`signalGroup` so a supervisor
+stops it with everything it started. `ProcessGroup` keeps each OS's own: POSIX has `Inherit`, `New` (setpgid),
+`Join(group:)` (a pipeline's children share one) and `NewSession` (setsid — no controlling terminal); Windows has
+`Inherit` and `New`, the child's own console group plus a Job Object that ends with its last handle, so the group
+never outlives the `Process` that owns it. A child in the parent's group has none to signal (`InvalidInput`), and
+a group with nobody left in it is `IoErrorKind::ProcessNotFound` <!-- test: proc_group -->; and the piped streams as
 `std::fs::File`s (`stdout()`/`stderr()` read, `stdin()`+`closeStdin()` feed-then-EOF). Dropping a `Process`
 **never blocks**: it reaps a already-exited child (no zombie) or detaches it (the OS reparents to init) —
 explicit `wait()` is how you get the status. **A child inherits its three streams and nothing else** of

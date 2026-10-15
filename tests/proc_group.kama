@@ -1,0 +1,82 @@
+// A child in its own process group, and signalling the group (KR-170). `kill()` stops the child alone; `killGroup()`
+// stops it together with everything it started. POSIX: a shell child starts a grandchild and the group kill reaches
+// it; a second child JOINs the first one's group and dies with it; a new SESSION leads its own group; once every
+// process of a group is gone, signalling it is `ProcessNotFound`. Everywhere: a child in the parent's group has no
+// group of its own to signal (`InvalidInput`, never the parent's). Windows: a `New` group is a Job Object, and the
+// group kill ends it. Returns 42.
+import { core::envOr, std::process::Command, std::process::Process, std::process::ProcessGroup, std::process::Stdio,
+         std::process::ExitStatus, std::io::IoError, std::collections::FixedArray, std::encoding::utf8::decode,
+         std::encoding::utf8::Utf8Error };
+
+fn string util() { return envOr(name: "KAMA_PROCUTIL", dflt: "procutil"); }
+unsafe fn Result<Process, IoError> sleeper(ProcessGroup g) {
+    Command c = Command.make(program: util()); c.arg(a: "sleep"); c.arg(a: "30000");
+    c.processGroup(group: g);
+    return c.start();
+}
+unsafe fn bool died(ref Process p) {   // waited, and not a clean exit
+    return match (p.wait()) { case Ok(value: s): !s.success(); case Err(error: e): false; };
+}
+unsafe fn int32 groupOf(const ref Process p) { return match (p.groupId()) { case Some(value: g): g; case None: 0; }; }
+
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 posixOnly() {
+    // 1. A shell starts a grandchild and reports its pid; the group kill reaches it.
+    Command c = Command.shell(line: "sleep 30 & echo $!; wait");
+    c.processGroup(group: ProcessGroup::New); c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> sr = c.start();
+    Process p = match (give sr) { case Ok(value: v): { := give v; } case Err(error: e): { return 10; } };
+    if (groupOf(p: p) != p.id()) { return 11; }                      // it leads its own group
+    FixedArray<uint8> buf = FixedArray.make(size: 32);
+    isize n = match (p.stdout().read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): 0; };
+    if (n < 2) { return 12; }
+    Result<string, Utf8Error> pr = decode(bytes: buf.slice(from: 0, count: n - 1));
+    string pid = match (give pr) { case Ok(value: t): { := give t; } case Err(error: e): { := ""; } };
+    if (!p.killGroup().isOk()) { return 13; }
+    if (!died(p: p)) { return 14; }
+    // Gone means gone: a SIGKILLed grandchild is a zombie for a moment, until init reaps it.
+    Command gone = Command.shell(line: "i=0; while kill -0 ${pid} 2>/dev/null; do i=$((i+1)); [ $i -gt 200 ] && exit 1; sleep 0.05; done");
+    int32 g = match (gone.run()) { case Ok(value: o): o.status().code; case Err(error: e): 99; };
+    if (g != 0) { return 15; }
+    // ...and a group with nobody left in it is `ProcessNotFound`.
+    int32 nf = match (p.killGroup()) { case Ok(value: u): 16; case Err(error: e): match (e.kind()) { case ProcessNotFound: 0; case _: 17; }; };
+    if (nf != 0) { return nf; }
+
+    // 2. JOIN: a second child in the first one's group dies with it.
+    Result<Process, IoError> ar = sleeper(g: ProcessGroup::New);
+    Process a = match (give ar) { case Ok(value: v): { := give v; } case Err(error: e): { return 20; } };
+    Result<Process, IoError> br = sleeper(g: ProcessGroup::Join(group: groupOf(p: a)));
+    Process b = match (give br) { case Ok(value: v): { := give v; } case Err(error: e): { return 21; } };
+    if (groupOf(p: b) != groupOf(p: a)) { return 22; }
+    if (!a.killGroup().isOk()) { return 23; }
+    if (!died(p: a) || !died(p: b)) { return 24; }
+
+    // 3. A new SESSION leads its own group too.
+    Result<Process, IoError> sr2 = sleeper(g: ProcessGroup::NewSession);
+    Process s = match (give sr2) { case Ok(value: v): { := give v; } case Err(error: e): { return 30; } };
+    if (groupOf(p: s) != s.id()) { return 31; }
+    if (!s.terminateGroup().isOk() || !died(p: s)) { return 32; }
+    return 0;
+}
+@compileFor(OS_WINDOWS)
+unsafe fn int32 posixOnly() { return 0; }
+
+unsafe fn int32 run() {
+    int32 r = posixOnly();
+    if (r != 0) { return r; }
+    // Everywhere: a New group, ended by its group kill.
+    Result<Process, IoError> nr = sleeper(g: ProcessGroup::New);
+    Process n = match (give nr) { case Ok(value: v): { := give v; } case Err(error: e): { return 40; } };
+    if (!n.killGroup().isOk()) { return 41; }
+    if (!died(p: n)) { return 43; }
+    // A child in the parent's group has no group of its own to signal.
+    Result<Process, IoError> ir = sleeper(g: ProcessGroup::Inherit);
+    Process i = match (give ir) { case Ok(value: v): { := give v; } case Err(error: e): { return 50; } };
+    int32 inv = match (i.killGroup()) { case Ok(value: u): 51; case Err(error: e): match (e.kind()) { case InvalidInput: 0; case _: 52; }; };
+    Result<Unit, IoError> k = i.kill();
+    Result<ExitStatus, IoError> w = i.wait();
+    if (inv != 0) { return inv; }
+    return 42;
+}
+
+fn int32 main() { return run(); }

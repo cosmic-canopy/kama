@@ -286,37 +286,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
-<a id="s1-process-group"></a>
-
-### A child in its own process group or session (KR-170)
-
-Measured on `0.9.589`, filed 2026-10-14. The POSIX spawn child does `chdir`/`dup2`/`execvp` only — no `setpgid`, no `setsid` — and `kama_kill` is
-`kill(pid)`, so a supervisor cannot stop a child together with everything it started. On Windows the child is
-created with `CREATE_UNICODE_ENVIRONMENT` alone and every signal is `TerminateProcess`. **Scheduled**, by the
-platform-deltas rule: the POSIX type gets a new group or session and a group signal (both calls are
-async-signal-safe, so they belong in the fork child); Windows gets its own type over `CREATE_NEW_PROCESS_GROUP` and
-a Job Object. **And ESRCH:** `kindOf` (`lib/std/io/io.kama`) maps it to `Other` (the code survives in `rawOsError()`).
-It is unreachable through std today — signalling a reaped child is a no-op `Ok` — and becomes reachable with a group
-signal, so its kind is decided here (a "no such process" kind, as Python's `ProcessLookupError`).
-
-**Where (surveyed on `0.9.603`, still reproduces):** a flags argument on `kama_proc_spawn` in both halves (and its one extern in
-process.kama — `check-extern-rung.sh`). POSIX: `setpgid(0,0)`/`setsid()` in the fork child plus `setpgid(pid,pid)` in
-the parent, `killpg`. Windows: `CREATE_NEW_PROCESS_GROUP` (signalled by `GenerateConsoleCtrlEvent`) and a Job Object
-(`CreateJobObjectW`/`AssignProcessToJobObject`/`TerminateJobObject`, `KILL_ON_JOB_CLOSE`) — created suspended or through
-`PROC_THREAD_ATTRIBUTE_JOB_LIST`, since assigning after start races grandchildren (and `pi.hThread` is closed at once
-today). ESRCH: `kama_ESRCH()` in both halves and an `IoErrorKind` (`kindOf` in io.kama; Windows `kama_kill` maps every
-failure to EINVAL today). Per-OS types by the platform-deltas rule, as identity.kama's `UserId`/`GroupId`/`AccessToken`
-twins. **Decisions owed:** `setsid`, `setpgid` or both; a new `IoErrorKind` variant breaks a user `match` with no `_`
-arm.
-
-**Decided (the maintainer, 2026-10-15):** all three on POSIX, as ONE value because they exclude each other —
-`ProcessGroup { Inherit, New, Join(group), NewSession }` (`setpgid(0,0)`, `setpgid(0,g)` for a pipeline, `setsid`):
-the set `posix_spawn` itself offers (`POSIX_SPAWN_SETPGROUP`, `POSIX_SPAWN_SETSID`), and Go and Python expose.
-Windows' twin is `{ Inherit, New }` — a new console group plus a kill-on-close Job Object. ESRCH gets its own kind,
-`IoErrorKind::ProcessNotFound`: every peer that names it names it apart (Python `ProcessLookupError`, Go
-`os.ErrProcessDone`, C++ `errc::no_such_process`, Zig `error.ProcessNotFound`), and pre-1.0 a variant is added as four
-were before. What adding one costs after 1.0 is KR-176.
-
 <a id="s1-child-stdio"></a>
 
 ### A child's stdio redirected (KR-171)
@@ -440,11 +409,11 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
 
 ### A std enum that grows after 1.0 (KR-176)
 
-Filed 2026-10-15 while ruling on KR-170's ESRCH kind. `match` on an enum is exhaustive — "case 'Y' is unhandled — add
+Filed 2026-10-15 while ruling on the process-group ESRCH kind. `match` on an enum is exhaustive — "case 'Y' is unhandled — add
 `case Y:` or `case _:`" — so a new variant in a std enum stops every user `match` without a `_` arm from compiling.
 Measured on `0.9.603`: of the 29 matches over `IoErrorKind` in the tree, 28 have `_`; the one without is
 `IoErrorKind.message()` in io.kama itself. The enum has grown four times (`b4ff3732` InProgress..BrokenPipe, `20a912d5`
-InvalidInput, `176aca2f` Interrupted), and this session adds `ProcessNotFound` (KR-170) and `AlreadyExists` (`0.9.621`),
+InvalidInput, `176aca2f` Interrupted), and this session adds `ProcessNotFound` (`0.9.623`) and `AlreadyExists` (`0.9.621`),
 while `OpenMode` gains `ReadWrite` (`0.9.618`) and `Stdio` gains `Handle`/`Stdout` (KR-171). Before 1.0 that is allowed;
 after the tag each is a source break, and 1.x is where the stdlib grows.
 

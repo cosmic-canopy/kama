@@ -143,6 +143,7 @@ static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 static inline int32_t kama_ESPIPE(void)       { return (int32_t)ESPIPE; }   // a seek on a pipe (KR-168)
 static inline int32_t kama_EEXIST(void)       { return (int32_t)EEXIST; }   // something is already there (KR-177)
+static inline int32_t kama_ESRCH(void)        { return (int32_t)ESRCH; }    // no such process — a group long gone (KR-170)
 
 // Winsock's code as the uniform errno set — one table, for the call that failed and for a connect's SO_ERROR.
 static inline int kama__wsa_errno(int e) {
@@ -1450,9 +1451,16 @@ static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
     *outRd = (int32_t)fds[0]; *outWr = (int32_t)fds[1];
     return 0;
 }
+// `group` (KR-170): 0 the parent's group; 1 a NEW group — the child's own console process group
+// (CREATE_NEW_PROCESS_GROUP: the parent's Ctrl+C no longer reaches it) and a Job Object holding it and everything
+// it starts, killed when the job's last handle closes (the `Process` owns it). The child is created SUSPENDED and
+// joins the job before its first instruction, so a grandchild cannot be started outside it. Joining a group and a
+// new session are POSIX's alone (their `ProcessGroup` variants exist only there).
 static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
-                                      int32_t inFd, int32_t outFd, int32_t errFd,
-                                      ptrdiff_t* outHandle, int32_t* outPid) {
+                                      int32_t inFd, int32_t outFd, int32_t errFd, int32_t group, int32_t pgid,
+                                      ptrdiff_t* outHandle, int32_t* outPid, ptrdiff_t* outJob) {
+    (void)pgid;
+    *outJob = 0;
     // Quote in UTF-8 first (the metacharacters are all ASCII, so the bytes >= 0x80 pass through untouched),
     // then convert the finished command line, the env block (by explicit length: it holds NULs) and the cwd.
     // The cwd gets the PLAIN conversion, not kama__wpath: CreateProcessW rejects a >MAX_PATH directory with
@@ -1510,14 +1518,33 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     }
     PROCESS_INFORMATION pi; ZeroMemory(&pi, sizeof pi);
     BOOL ok = FALSE; DWORD e = 0;
+    HANDLE job = NULL;
+    if (group == 1) {
+        job = CreateJobObjectW(NULL, NULL);                   // not inheritable: a NULL security attribute
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION lim; ZeroMemory(&lim, sizeof lim);
+        lim.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if (!job || !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &lim, sizeof lim)) {
+            e = GetLastError(); if (job) CloseHandle(job); job = NULL;
+        }
+    }
     if (nList > 0 && !attrs) e = ERROR_NOT_ENOUGH_MEMORY;    // never fall back to inheriting everything
-    else {
+    else if (group != 1 || job) {
         si.lpAttributeList = attrs;
         ok = CreateProcessW(NULL, wcmd, NULL, NULL, nList > 0 ? TRUE : FALSE,
-                            CREATE_UNICODE_ENVIRONMENT | (attrs ? EXTENDED_STARTUPINFO_PRESENT : 0),
+                            CREATE_UNICODE_ENVIRONMENT | (attrs ? EXTENDED_STARTUPINFO_PRESENT : 0)
+                            | (group == 1 ? CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED : 0),
                             wenv, wcwd, &si.StartupInfo, &pi);
         if (!ok) e = GetLastError();
+        if (ok && job) {                                      // into the job before its first instruction
+            if (!AssignProcessToJobObject(job, pi.hProcess) || ResumeThread(pi.hThread) == (DWORD)-1) {
+                e = GetLastError();
+                TerminateProcess(pi.hProcess, 1);
+                CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+                ok = FALSE;
+            }
+        }
     }
+    if (!ok && job) { CloseHandle(job); job = NULL; }
     if (attrs) DeleteProcThreadAttributeList(attrs);
     if (useStd) {   // undo inheritability on the parent's copies of the redirected ends
         if (inFd  >= 0 && hIn  != INVALID_HANDLE_VALUE) SetHandleInformation(hIn,  HANDLE_FLAG_INHERIT, 0);
@@ -1533,8 +1560,18 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
     CloseHandle(pi.hThread);
     *outHandle = (ptrdiff_t)pi.hProcess;
     *outPid    = (int32_t)pi.dwProcessId;
+    *outJob    = (ptrdiff_t)job;
     return 0;
 }
+// Signal a whole group (KR-170): its Job Object ends every process in it, as `kama_kill` ends one — any signal is
+// termination on Windows. Ending an empty job is not an error.
+static inline int32_t kama_group_signal(ptrdiff_t job, int32_t pgid, int32_t sig) {
+    (void)pgid; (void)sig;
+    if (!job) { kama__os_fail(0, EINVAL); return -1; }
+    if (!TerminateJobObject((HANDLE)job, 1)) { kama__os_fail(GetLastError(), EINVAL); return -1; }
+    return 0;
+}
+static inline void kama_job_close(ptrdiff_t job) { if (job) CloseHandle((HANDLE)job); }
 // Wait on the process HANDLE. flags&1 (kama_WNOHANG) -> poll (timeout 0). Returns >0 (reaped; exit code in
 // *outStatus + the HANDLE closed), 0 (WNOHANG: still running, HANDLE kept), -1 (error).
 static inline int32_t kama_proc_wait(ptrdiff_t handle, int32_t* outStatus, int32_t flags) {
@@ -1725,6 +1762,7 @@ static inline int32_t kama_EPIPE(void)        { return (int32_t)EPIPE; }
 static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 static inline int32_t kama_ESPIPE(void)       { return (int32_t)ESPIPE; }   // a seek on a pipe (KR-168)
 static inline int32_t kama_EEXIST(void)       { return (int32_t)EEXIST; }   // something is already there (KR-177)
+static inline int32_t kama_ESRCH(void)        { return (int32_t)ESRCH; }    // no such process — a group long gone (KR-170)
 
 // ---- close-on-exec (KR-174) -------------------------------------------------
 // Every descriptor kama makes is close-on-exec, so a child std::process starts holds the three streams it was
@@ -2093,17 +2131,35 @@ static inline int32_t kama_pipe(int32_t* outRd, int32_t* outWr) {
 // Two out-params carry the child identity: `outHandle` is the wait handle (`isize`/ptrdiff_t — a raw pid on
 // POSIX, so handle==pid here; a `(ptrdiff_t)HANDLE` on Windows) and `outPid` is the real OS pid for `.id()`.
 // Keeping them separate lets Windows wait/kill on the HANDLE while `.id()` still reports the pid.
+// `group` (KR-170): 0 the parent's group, 1 a NEW group the child leads, 2 JOIN group `pgid` (a pipeline's
+// children share one), 3 a new SESSION (setsid: a new group too, and no controlling terminal). They exclude each
+// other — setsid fails in a process that already leads a group — so they are one value. Set in the child, before
+// exec, and for a group in the parent as well, which closes the race where the parent signals the group before
+// the child has joined it (EACCES once the child has exec'd is that race lost harmlessly: the child did it).
+// `outJob` is Windows' (a Job Object); POSIX answers 0.
+extern int setpgid(pid_t, pid_t);
+extern pid_t setsid(void);
 static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
-                                      int32_t inFd, int32_t outFd, int32_t errFd,
-                                      ptrdiff_t* outHandle, int32_t* outPid) {
+                                      int32_t inFd, int32_t outFd, int32_t errFd, int32_t group, int32_t pgid,
+                                      ptrdiff_t* outHandle, int32_t* outPid, ptrdiff_t* outJob) {
+    *outJob = 0;
+    // A new SESSION can only be made by the child (setsid), so the parent cannot close that race the way it does
+    // for a group. It waits instead, on a close-on-exec pipe the child holds until its exec (or its exit): once
+    // that read sees end-of-file, the session — and the group it leads — exists, and a group signal finds it.
+    int32_t syncRd = -1, syncWr = -1;
+    if (group == 3 && kama_pipe(&syncRd, &syncWr) != 0) return -1;   // before the gate: kama_pipe may take it
     kama__fork_gate_close();                               // no descriptor half-made in another isolate (KR-174)
     int pid = fork();
     if (pid != 0) kama__fork_gate_open();                  // the parent, or a failed fork; the child execs or exits
-    if (pid < 0) return -1;
+    if (pid < 0) { if (syncRd >= 0) { close(syncRd); close(syncWr); } return -1; }
     if (pid == 0) {                                        // ---- child (async-signal-safe only) ----
+        if (syncRd >= 0) close(syncRd);                    // the write end stays, until exec closes it
         // SIGPIPE at its default, which is what an exec'd program expects: an ignored signal survives exec, so a
         // `head` or `yes` spawned from here would otherwise get EPIPE where it expects to be stopped.
         { extern int kama__sigpipe_owned; if (kama__sigpipe_owned) (void)signal(SIGPIPE, SIG_DFL); }
+        if (group == 1 && setpgid(0, 0) != 0) _exit(127);
+        if (group == 2 && setpgid(0, (pid_t)pgid) != 0) _exit(127);
+        if (group == 3 && setsid() < 0) _exit(127);
         if (cwd && cwd[0]) { if (chdir(cwd) != 0) _exit(127); }
         if (inFd  >= 0) { dup2(inFd,  0); if (inFd  > 2) close(inFd);  }
         if (outFd >= 0) { dup2(outFd, 1); if (outFd > 2) close(outFd); }
@@ -2112,9 +2168,24 @@ static inline int32_t kama_proc_spawn(void* argv, void* envp, const char* cwd,
         execvp(((char**)argv)[0], (char* const*)argv);
         _exit(127);                                        // exec failed (ENOENT/EACCES/...) — 127 convention
     }
+    if (group == 1) (void)setpgid((pid_t)pid, (pid_t)pid);     // ---- parent: the same, so no signal can race it
+    if (group == 2) (void)setpgid((pid_t)pid, (pid_t)pgid);
+    if (syncRd >= 0) {                                         // a session: wait for the child's exec (above)
+        close(syncWr);
+        char c;
+        while (read(syncRd, &c, 1) < 0 && errno == EINTR) { }
+        close(syncRd);
+    }
     *outHandle = (ptrdiff_t)pid; *outPid = (int32_t)pid;   // ---- parent (POSIX: handle == pid) ----
     return 0;
 }
+// Signal a whole process group (KR-170) — every process in it, the leader's children included. `job` is Windows'.
+static inline int32_t kama_group_signal(ptrdiff_t job, int32_t pgid, int32_t sig) {
+    (void)job;
+    if (pgid <= 0) { errno = EINVAL; return -1; }        // never "this process's own group" (pgid 0)
+    return (int32_t)killpg((pid_t)pgid, (int)sig);
+}
+static inline void kama_job_close(ptrdiff_t job) { (void)job; }
 // waitpid folded to scalar; `handle` is the pid on POSIX. Returns >0 (reaped; status in *outStatus),
 // 0 (WNOHANG: still running), -1 (err).
 static inline int32_t kama_proc_wait(ptrdiff_t handle, int32_t* outStatus, int32_t flags) {

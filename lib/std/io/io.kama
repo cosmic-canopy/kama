@@ -25,6 +25,7 @@ extern fn int32 kama_EPIPE();
 extern fn int32 kama_EINVAL();
 extern fn int32 kama_ESPIPE();
 extern fn int32 kama_EEXIST();
+extern fn int32 kama_ESRCH();
 
 // What KIND of failure an I/O error is: the part a caller branches on, `match (e.kind())`. The named kinds cover
 // the cases callers handle; `Other` is everything else, and the error still carries the OS's code for it.
@@ -38,6 +39,7 @@ extern fn int32 kama_EEXIST();
 type enum IoErrorKind implements Sendable {
     NotFound,
     AlreadyExists,
+    ProcessNotFound,
     PermissionDenied,
     WouldBlock,
     ConnectionRefused,
@@ -57,6 +59,7 @@ type enum IoErrorKind implements Sendable {
         return match (this) {
             case NotFound:          "not found";
             case AlreadyExists:     "already exists";
+            case ProcessNotFound:   "no such process";
             case PermissionDenied:  "permission denied";
             case WouldBlock:        "would block";
             case ConnectionRefused: "connection refused";
@@ -140,6 +143,7 @@ unsafe fn IoError lastError() {
 unsafe fn IoErrorKind kindOf(int32 e) {
     if (e == kama_ENOENT())       { return IoErrorKind::NotFound; }
     if (e == kama_EEXIST())       { return IoErrorKind::AlreadyExists; }   // a create-new, a directory that is there (KR-177)
+    if (e == kama_ESRCH())        { return IoErrorKind::ProcessNotFound; } // a group signal that finds nobody (KR-170)
     // EPERM too: "not permitted" is what `chmod` of another user's file answers (KR-92), and Rust and Go
     // both classify it as permission-denied. The code keeps the difference (rawOsError, message).
     if (e == kama_EACCES() || e == kama_EPERM()) { return IoErrorKind::PermissionDenied; }
