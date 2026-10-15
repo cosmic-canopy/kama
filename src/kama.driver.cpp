@@ -2252,6 +2252,12 @@ static bool g_verifySignatures = false;
 // One literal of a `@compileFor` gate: a flag name, possibly negated. The gate is their conjunction —
 // there is no `||` — which is what makes the covering check's set cover computable (KR-54).
 struct GateLit { std::string name; bool neg = false; };
+
+// One `csources`, `cincludes` or `link` entry as written: a path (a library NAME, for `link`), and the gate it
+// applies under. A plain string in the manifest is an entry with no gate; `{ "path": …, "compileFor": [
+// "OS_MACOS", "!HOSTED" ] }` (`"name"` for `link`) is one with a gate — the literals of `@compileFor(OS_MACOS,
+// !HOSTED)`, conjoined, judged by the same rule.
+struct SourceEntry { std::string path; std::vector<GateLit> gate; };
 static std::vector<GateLit> gateLiterals(const SharedAttributeList& attrs);   // all three defined with
 static std::string gateContradiction(const std::vector<GateLit>& lits);       // the covering check, below
 static std::string renderGateLits(const std::vector<GateLit>& lits);
@@ -2438,7 +2444,7 @@ struct TargetSpec {
     // Native libraries this artifact links (`-l<name>`), from the project's own `link` key or a target's
     // override of it. Distinct from `ldflags`, which is raw linker text: `link` is the portable half, so
     // a project needing `-lm` everywhere says it once instead of per target.
-    std::vector<std::string> link;
+    std::vector<SourceEntry> link;              // each a library name, gated or not (KR-144)
     bool                     linkSet = false;   // this target OVERRODE `link` (vs. inheriting the project's)
     // Two PROJECT properties a target may override, same shape as `link` and for the same reason: both
     // are permanent facts about the artifact rather than per-invocation choices, and both have a real
@@ -2884,6 +2890,10 @@ struct DepSpec {
     std::string registry;   // optional explicit registry base URI (else the configured/default registry)
     std::string signature;  // registry dep (internal): the SSHSIG blob from the index (verified at fetch)
     std::string sigKey;     // registry dep (internal): the signer public key from the index
+    // `compileFor` on the EDGE (KR-144): the build this dependency belongs to, judged as a gated `csources` entry
+    // is. Not part of what is resolved or locked — a gated-out dependency still installs, so the lock is the same
+    // on every platform; what it would add to the C command line does not reach a build that gates it out.
+    std::vector<GateLit> gate;
     // Resolver-internal, never read from or written to a manifest: `path` canonicalized against the dir
     // of the manifest that DECLARED it. A path spec is meaningless without its declaring manifest —
     // `../config` from a sibling and `../../libs/config` from the app name the same directory — so
@@ -3195,17 +3205,14 @@ static CLang csourceLang(const std::string& path)
     return CLang::None;
 }
 
-// One `csources` or `cincludes` entry as written: a path, and the gate it compiles under. A plain string
-// in the manifest is an entry with no gate; `{ "path": …, "compileFor": [ "OS_MACOS", "!HOSTED" ] }` is one
-// with a gate — the literals of `@compileFor(OS_MACOS, !HOSTED)`, conjoined, judged by the same rule.
-struct SourceEntry { std::string path; std::vector<GateLit> gate; };
 
 // Everything ONE manifest contributes to the C command line, with its own project/target rules already
 // applied. Joined across manifests by the dependency walk in resolveBuildConfig, where the ordering and
 // merge rules are written out.
 struct BuildSettings {
     std::string owner;        // "" for the root project, else the dependency's import name
-    std::vector<std::string> cflags, ldflags, link;
+    std::vector<std::string> cflags, ldflags;
+    std::vector<SourceEntry> link;                    // library names, each with its gate (KR-144)
     std::vector<std::string> cxxflags, objcflags;     // per-language, like cflags (see TargetSpec)
     std::vector<SourceEntry> csources;                // as written, relative to `manifestPath`
     std::vector<std::string> jsLibraries;             // likewise
@@ -3308,7 +3315,7 @@ struct ManifestReader {
     std::string* entryOut = nullptr;                      // set to capture the `entry` field (else skipped)
     std::string* kindOut = nullptr;                       // set to capture `kind` ("library"|"executable")
     std::string* sourceOut = nullptr;                      // set to capture `source`, the one source root
-    std::vector<std::string>* linkOut = nullptr;           // set to capture the project-level `link`
+    std::vector<SourceEntry>* linkOut = nullptr;           // set to capture the project-level `link`
     // The project-level twins of the per-target `cflags`/`ldflags`. They exist for the reason `link`
     // sits on the project too — a setting that is true of the ARTIFACT, not of one target — and,
     // decisively, because a DEPENDENCY cannot know how its consumer spells the target: `select.TARGET`
@@ -3427,12 +3434,30 @@ struct ManifestReader {
         return true;
     }
 
-    // A `csources`/`cincludes` array: each element a path string, or an object with `path` and an
-    // optional `compileFor` — a non-empty array of `"FLAG"` / `"!FLAG"`, exactly the literals `@compileFor`
-    // takes. Closed like every other object in the manifest. Whether the gate holds is decided once the
-    // build's flags are known (resolveBuildConfig); its SHAPE is checked here, in every command.
-    bool sourceEntries(std::vector<SourceEntry>& out, const char* key) {
+    // A gate as `compileFor` spells it: a non-empty array of `"FLAG"` / `"!FLAG"`, exactly the literals
+    // `@compileFor` takes. Whether it holds is decided once the build's flags are known (resolveBuildConfig);
+    // its SHAPE is checked here, in every command.
+    bool gateArray(std::vector<GateLit>& out, const std::string& where) {
+        std::vector<std::string> lits;
+        if (!stringArray(lits, "compileFor")) return false;
+        if (lits.empty()) return fail(where + ": `compileFor` requires at least one flag name");
+        for (const std::string& l : lits) {
+            const bool neg = !l.empty() && l[0] == '!';
+            const std::string name = neg ? l.substr(1) : l;
+            if (!kamaIsIdentifier(name))
+                return fail(where + ": `compileFor` takes flag names or `!FLAG` — the literals `@compileFor(...)` "
+                            "takes — and \"" + l + "\" is not one");
+            out.push_back({ name, neg });
+        }
+        return true;
+    }
+
+    // A `csources`/`cincludes`/`link` array: each element a string, or an object with that string under
+    // `nameKey` (`path`, or `name` for a library) and an optional `compileFor` gate. Closed like every other
+    // object in the manifest.
+    bool gatedEntries(std::vector<SourceEntry>& out, const char* key, const char* nameKey = "path") {
         const std::string k = std::string("`") + key + "`";
+        const std::string nk = std::string("`") + nameKey + "`";
         ws(); if (i >= s.size() || s[i] != '[') return fail(k + " must be a JSON array");
         ++i; ws();
         if (i < s.size() && s[i] == ']') { ++i; return true; }
@@ -3441,39 +3466,28 @@ struct ManifestReader {
             if (i < s.size() && s[i] == '"') { if (!str(e.path)) return false; }
             else if (i < s.size() && s[i] == '{') {
                 ++i; ws();
-                bool havePath = false, haveGate = false;
+                bool havePath = false;
                 if (i < s.size() && s[i] == '}') ++i;
                 else while (true) {
                     std::string ek; if (!str(ek)) return false;
                     ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a " + k + " entry");
                     ++i; ws();
-                    if (ek == "path") { if (!str(e.path)) return false; havePath = true; }
+                    if (ek == nameKey) { if (!str(e.path)) return false; havePath = true; }
                     else if (ek == "compileFor") {
-                        std::vector<std::string> lits;
-                        if (!stringArray(lits, "compileFor")) return false;
-                        if (lits.empty())
-                            return fail(k + " entry: `compileFor` requires at least one flag name");
-                        for (const std::string& l : lits) {
-                            const bool neg = !l.empty() && l[0] == '!';
-                            const std::string name = neg ? l.substr(1) : l;
-                            if (!kamaIsIdentifier(name))
-                                return fail(k + " entry: `compileFor` takes flag names or `!FLAG` — the literals "
-                                            "`@compileFor(...)` takes — and \"" + l + "\" is not one");
-                            e.gate.push_back({ name, neg });
-                        }
-                        haveGate = true;
+                        if (!gateArray(e.gate, k + " entry")) return false;
+                        if (topKeysOut) topKeysOut->insert(std::string(key) + ".compileFor");
                     }
-                    else return fail("unknown key `" + ek + "` in a " + k + " entry — an entry takes `path` "
-                                     "and `compileFor`");
+                    else return fail("unknown key `" + ek + "` in a " + k + " entry — an entry takes " + nk
+                                     + " and `compileFor`");
                     ws();
                     if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
                     if (i < s.size() && s[i] == '}') { ++i; break; }
                     return fail("expected ',' or '}' in a " + k + " entry");
                 }
-                if (!havePath) return fail("a " + k + " entry object needs a `path`");
-                (void)haveGate;
+                if (!havePath) return fail("a " + k + " entry object needs " + nk);
             }
-            else return fail(k + " entries are path strings or `{ \"path\": …, \"compileFor\": […] }` objects");
+            else return fail(k + (std::string(nameKey) == "name" ? " entries are library names" : " entries are path strings")
+                             + " or `{ \"" + nameKey + "\": …, \"compileFor\": […] }` objects");
             out.push_back(std::move(e));
             ws();
             if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
@@ -3481,6 +3495,7 @@ struct ManifestReader {
             return fail("expected ',' or ']' in " + k);
         }
     }
+    bool sourceEntries(std::vector<SourceEntry>& out, const char* key) { return gatedEntries(out, key, "path"); }
 
     // The path rules every file-naming manifest key shares: inside the package, and relative to the
     // manifest that names it — so the project stays relocatable and a published package cannot name a
@@ -3872,7 +3887,7 @@ struct ManifestReader {
                 // "overridable" means, and it is the only way to say "not on this target". Note this is
                 // the opposite of `cflags`/`ldflags` below, which APPEND onto the built-in they merge
                 // over; the two have always differed and the difference is deliberate.
-                else if (k == "link")    { if (!flagArray(t.link, "link")) return false; t.linkSet = true; }
+                else if (k == "link")    { if (!gatedEntries(t.link, "link", "name")) return false; t.linkSet = true; }
                 else if (k == "webgpu")  { if (!boolean(t.webgpu)) return false; t.webgpuSet = true; }
                 else if (k == "no-heap") { if (!boolean(t.noHeap)) return false; t.noHeapSet = true; }
                 else if (k == "reproducible-float") {
@@ -3974,17 +3989,24 @@ struct ManifestReader {
                 std::string k; if (!str(k)) return false;
                 ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' in a dependency body");
                 ++i; ws();
-                std::string v;
-                if (i < s.size() && s[i] == '"') { if (!str(v)) return false; }
-                else if (!skipValue()) return false;         // tolerate a non-string value (ignored)
-                if      (k == "path")      spec.path = v;
-                else if (k == "git")       spec.git = v;
-                else if (k == "url")       spec.url = v;
-                else if (k == "rev")       spec.rev = v;
-                else if (k == "integrity") spec.integrity = v;
-                else if (k == "version")   spec.version = v;
-                else if (k == "registry")  spec.registry = v;
-                // unknown keys ignored (forward-compat)
+                // Closed, like every other object in the manifest (KR-144): a dependency entry used to skip a key it
+                // did not know and a value of the wrong shape, so `"compileFor"` was accepted and ignored (a wasm
+                // build still compiled the native library) and `"path": 1` installed nothing without a word. A key
+                // a newer compiler adds joins kManifestKeySince, so an older one asks for an update instead.
+                if (k == "compileFor") {
+                    if (!gateArray(spec.gate, "dependency '" + name + "'")) return false;
+                    if (topKeysOut) topKeysOut->insert("dependencies.compileFor");
+                } else {
+                    std::string* field = k == "path" ? &spec.path : k == "git" ? &spec.git : k == "url" ? &spec.url
+                                       : k == "rev" ? &spec.rev : k == "integrity" ? &spec.integrity
+                                       : k == "version" ? &spec.version : k == "registry" ? &spec.registry : nullptr;
+                    if (!field)
+                        return fail("unknown key `" + k + "` in dependency '" + name + "' — a dependency takes `path`, "
+                                    "`git`, `url`, `rev`, `integrity`, `version`, `registry` and `compileFor`");
+                    if (i >= s.size() || s[i] != '"')
+                        return fail("`" + k + "` in dependency '" + name + "' must be a string");
+                    if (!str(*field)) return false;
+                }
                 ws();
                 if (i < s.size() && s[i] == ',') { ++i; continue; }
                 if (i < s.size() && s[i] == '}') { ++i; break; }
@@ -4260,7 +4282,7 @@ struct ManifestReader {
             // never reads its workspace file for anything affecting compilation) rules out a pin here.
             if (workspaceFile) {
                 if (key == "projects") { if (!wsProjectsObject()) return false; }
-                else if (key == "dependencies") { if (deps) { if (!depsObject(deps)) return false; } else if (!skipValue()) return false; }
+                else if (key == "dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(deps ? deps : &scratch)) return false; }
                 // `modules` gets its own refusal rather than falling into the generic one below: a
                 // workspace has no `source` and no root module, so there is nothing for a module map
                 // to be relative TO — and putting one here would make a project's identity depend on a
@@ -4278,10 +4300,10 @@ struct ManifestReader {
             }
             if (key == "flags") { if (!flagsObject()) return false; }
             else if (key == "select") { if (!selectObject()) return false; }   // build-config groups
-            else if (key == "dependencies") { if (deps) { if (!depsObject(deps)) return false; } else if (!skipValue()) return false; }
-            else if (key == "dev-dependencies") { if (devDeps) { if (!depsObject(devDeps)) return false; } else if (!skipValue()) return false; }
+            else if (key == "dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(deps ? deps : &scratch)) return false; }
+            else if (key == "dev-dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(devDeps ? devDeps : &scratch)) return false; }
             else if (key == "registries") { if (registriesOut) { if (!registriesObject(registriesOut)) return false; } else if (!skipValue()) return false; }
-            else if (key == "overrides") { if (overridesOut) { if (!depsObject(overridesOut)) return false; } else if (!skipValue()) return false; }  // kama.local.json dep path-overrides (M5.3)
+            else if (key == "overrides") { std::map<std::string, DepSpec> scratch; if (!depsObject(overridesOut ? overridesOut : &scratch)) return false; }  // kama.local.json dep path-overrides (M5.3)
             else if (key == "log") { if (logOut) { if (!logObject()) return false; } else if (!skipValue()) return false; }   // baked log default (M5)
             else if (key == "debug") {   // validated wherever it is read; APPLIED only from the root manifest (KR-128)
                 std::vector<std::string> scratch;
@@ -4290,7 +4312,7 @@ struct ManifestReader {
             // One source root, not a list. A list would let `src/shapes/` and `gen/shapes/` silently be
             // one module, and there is nowhere in the model to say which of them a name came from.
             else if (key == "source") { if (sourceOut) { if (!str(*sourceOut)) return false; } else if (!skipValue()) return false; }
-            else if (key == "link") { if (linkOut) { if (!flagArray(*linkOut, "link")) return false; } else if (!skipValue()) return false; }
+            else if (key == "link") { std::vector<SourceEntry> scratch; if (!gatedEntries(linkOut ? *linkOut : scratch, "link", "name")) return false; }
             // The project tier of `cflags`/`ldflags`. A target's list APPENDS onto these (the same
             // direction a target appends onto the built-in it merges over), so the order on the command
             // line is project-then-target and the more specific one gets the last word.
@@ -5771,126 +5793,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
     if (!g_target.noHeapSet) g_target.noHeap = g_manifestNoHeap;
     if (!g_target.reproFloatSet) g_target.reproFloat = g_manifestReproFloat;
 
-    // ---- what the DEPENDENCIES contribute ----------------------------------------------------------
-    //
-    // Enumerated from the `.kama/deps` VIEW, not from kama.lock, for two reasons. The view is flat and
-    // already transitive, so one readdir gets the whole production closure with no BFS to re-derive.
-    // And the view is what is actually COMPILED: `kama.local.json` `overrides` repoint it without
-    // touching the lock, so a lock-driven walk could read a dependency's settings while building a
-    // different copy of that dependency.
-    //
-    // Order is deps (alphabetical by import name), then the root, then the CLI — one sentence for every
-    // key. `-l` ordering does not matter here the way it does for archives: every dependency's kama code
-    // is already inside this program's own objects, and `link` names SYSTEM libraries.
-    if (!req.manifest.empty()) {
-        const std::string projDir = dirName(req.manifest);
-        std::vector<std::string> views;
-        views.push_back(projDir + "/.kama/deps");
-        if (req.dev) views.push_back(projDir + "/.kama/dev-deps");
-        std::vector<std::string> depCflags, depLdflags, depLink, depCxxflags, depObjcflags;
-        for (const std::string& view : views) {
-            std::vector<std::string> names = listDir(view);
-            std::sort(names.begin(), names.end());   // deterministic: the view is a set, not a sequence
-            for (const std::string& n : names) {
-                // ⚠️ LEXICAL, never absolutePath — that is realpath(), and a dependency reaches its
-                // package THROUGH this symlink. Resolving it away would respell the dep's files as
-                // first-party paths and print a store path the user cannot see.
-                const std::string depManifest = joinPathLexical(view, n) + "/kama.json";
-                if (!fileExists(depManifest)) continue;
-                BuildSettings bs; bs.owner = n;
-                std::string derr;
-                if (!loadBuildSettings(depManifest, g_target.name, bs, derr)) {
-                    // Lenient for the editor, fatal for a build. Reach costs nothing: `kama pkg install`
-                    // already hard-fails on a child manifest it cannot read, so a tree that installs at
-                    // all has readable dependency manifests — this only changes WHEN it is reported.
-                    if (req.strictDeps) { err = depManifest + ": " + derr; return false; }
-                    continue;
-                }
-                if (!depFlagPathIsPortable(bs.cflags, n, depManifest, derr) ||
-                    !depFlagPathIsPortable(bs.cxxflags, n, depManifest, derr) ||
-                    !depFlagPathIsPortable(bs.objcflags, n, depManifest, derr) ||
-                    !depFlagPathIsPortable(bs.ldflags, n, depManifest, derr)) {
-                    if (req.strictDeps) { err = derr; return false; }
-                    continue;
-                }
-                // One page holds a program, and which one is the program's decision: a library naming it
-                // would be a second page, or a choice made for every consumer.
-                if (!bs.shellFile.empty()) {
-                    derr = "dependency `" + n + "` names a `shellFile` (" + depManifest + ") — the page a program runs "
-                           "in is the project's to choose, not a dependency's";
-                    if (req.strictDeps) { err = derr; return false; }
-                    continue;
-                }
-                // The dependency's `kama` range, at BUILD time: install already refused a package this
-                // compiler cannot build, so this catches the view a newer manifest has outgrown (a `path`
-                // dependency edited in place, a downgraded compiler). Same leniency split as above.
-                if (!kamaReqSatisfied(bs.kamaReq, "`" + n + "`", derr)) {
-                    if (req.strictDeps) { err = derr; return false; }
-                    continue;
-                }
-                depCflags.insert(depCflags.end(),   bs.cflags.begin(),  bs.cflags.end());
-                depLdflags.insert(depLdflags.end(), bs.ldflags.begin(), bs.ldflags.end());
-                depCxxflags.insert(depCxxflags.end(),   bs.cxxflags.begin(),  bs.cxxflags.end());
-                depObjcflags.insert(depObjcflags.end(), bs.objcflags.begin(), bs.objcflags.end());
-                depLink.insert(depLink.end(),       bs.link.begin(),    bs.link.end());
-                // An OR, one way: a dependency that needs reproducible arithmetic gets it, and no
-                // dependency's `false` can take it from a consumer (or a sibling) that asked. The
-                // consumer compiles the dependency's code, so the requirement is the consumer's too.
-                if (bs.reproFloat) g_target.reproFloat = true;
-                // A dependency wrapping a C library ships the shim that binds it, and the consumer
-                // compiles it — which is the whole reason `csources` propagates. Resolved against the
-                // DECLARING manifest, lexically (see the symlink note above).
-                for (const SourceEntry& cs : bs.csources)
-                    g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs.path), cs.gate });
-                for (const std::string& js : bs.jsLibraries)
-                    g_jsLibraries.push_back({ n, joinPathLexical(dirName(depManifest), js) });
-                for (const std::string& f : bs.embedFiles)   g_embedFiles.push_back({ n, emFileArg(dirName(depManifest), f) });
-                for (const std::string& f : bs.preloadFiles) g_preloadFiles.push_back({ n, emFileArg(dirName(depManifest), f) });
-                for (const SourceEntry& inc : bs.cincludes)
-                    g_cincludes.push_back({ n, joinPathLexical(dirName(depManifest), inc.path), inc.gate });
-                if (!mergeEmSettings(bs.emSettings, n, derr)) {
-                    if (req.strictDeps) { err = derr; return false; }
-                    continue;
-                }
-            }
-        }
-        g_target.cflags.insert(g_target.cflags.begin(),   depCflags.begin(),  depCflags.end());
-        g_target.ldflags.insert(g_target.ldflags.begin(), depLdflags.begin(), depLdflags.end());
-        g_target.cxxflags.insert(g_target.cxxflags.begin(),   depCxxflags.begin(),  depCxxflags.end());
-        g_target.objcflags.insert(g_target.objcflags.begin(), depObjcflags.begin(), depObjcflags.end());
-        // `link` is a NAME list, so a repeat is pure noise and two dependencies both wanting `m` is the
-        // ordinary case. `cflags`/`ldflags` are raw text, where a repeat can be load-bearing
-        // (`-Xlinker -foo`) and where last-wins is the semantic — those are left exactly as written.
-        depLink.insert(depLink.end(), g_target.link.begin(), g_target.link.end());
-        std::vector<std::string> merged; std::set<std::string> seen;
-        for (const std::string& l : depLink) if (seen.insert(l).second) merged.push_back(l);
-        g_target.link = merged;
-    }
-    // The project's own C comes after its dependencies', matching the flag order: a dependency
-    // contributes first, the project last.
-    if (!req.manifest.empty()) {
-        for (const SourceEntry& cs : g_rootSettings.csources)
-            g_csources.push_back({ "", joinPathLexical(dirName(req.manifest), cs.path), cs.gate });
-        for (const std::string& js : g_rootSettings.jsLibraries)
-            g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
-        if (!g_rootSettings.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_rootSettings.shellFile);
-        for (const std::string& f : g_rootSettings.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
-        for (const std::string& f : g_rootSettings.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
-        // …then the target's own, after the project's: the target has the last word (KR-162).
-        for (const std::string& js : g_target.jsLibraries)
-            g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
-        if (!g_target.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_target.shellFile);
-        for (const std::string& f : g_target.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
-        for (const std::string& f : g_target.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
-        overlayEmSettings(g_rootSettings.emSettings, g_target.emSettings);
-        for (const SourceEntry& inc : g_rootSettings.cincludes)
-            g_cincludes.push_back({ "", joinPathLexical(dirName(req.manifest), inc.path), inc.gate });
-        // The project merges LAST, which is what makes "the project wins" true of a scalar — including
-        // over a conflict two dependencies could not settle between themselves.
-        std::string merr;
-        if (!mergeEmSettings(g_rootSettings.emSettings, "", merr)) { err = merr; return false; }
-        if (!emScalarConflict(merr)) { err = merr; return false; }
-    }
+    // The flag set is FINAL before the dependencies are walked (KR-144): nothing a dependency contributes changes
+    // it, and a dependency edge's own `compileFor` gate is judged against it.
     // The CLI can only turn this ON; the manifest is the way to say it for every build, and a target is
     // the way to say "not this one". `--no-heap` therefore ORs in rather than overriding.
     if (g_target.noHeap) g_noHeap = true;
@@ -6008,12 +5912,186 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         g_activeFlags.erase(u);
     }
 
-    // Gated `csources`/`cincludes` entries, judged now that the flag set is final. The rule is the
-    // `@compileFor` rule, literal for literal (kamaGateLitActive), so a manifest gate and a source gate can
-    // never disagree: a name must be a build-configuration fact or declared (strict mode — a dependency's
-    // gate included, as its kama code is), and a gate no configuration can activate is refused as the typo
-    // it is. A gated-OUT entry must still exist, as a gated-out kama file is still parsed: a path that
-    // rots on the one platform nobody builds daily is exactly what a gate would otherwise hide.
+    // A gate as a manifest writes it — on a `csources`/`cincludes`/`link` entry or on a dependency edge — judged by
+    // the `@compileFor` rule, literal for literal (kamaGateLitActive), so a manifest gate and a source gate can
+    // never disagree: a name must be a build-configuration fact or declared (strict mode — a dependency's gate
+    // included, as its kama code is), and a gate no configuration can activate is refused as the typo it is.
+    auto judgeGate = [&](const std::vector<GateLit>& gate, const std::string& here, bool& active) -> bool {
+        active = true;
+        if (gate.empty()) return true;
+        // The NAMES first, then what the gate means — see the same ordering in fileGateOf.
+        std::string bad;
+        for (const GateLit& l : gate)
+            if (!kamaGateLitActive(l.name, l.neg, g_activeFlags, g_declaredFlags, g_knownTripleFlags, g_strictFlags,
+                                   [&](const std::string& m) { if (bad.empty()) bad = m; }))
+                active = false;
+        if (!bad.empty()) { err = here + ": " + bad; return false; }
+        const std::string never = gateContradiction(gate);
+        if (!never.empty()) {
+            err = here + ": `compileFor` " + renderGateLits(gate) + " can never be active — " + never
+                + ". No configuration compiles it, so it is a mistake";
+            return false;
+        }
+        return true;
+    };
+
+    // ---- what the DEPENDENCIES contribute ----------------------------------------------------------
+    //
+    // Enumerated from the `.kama/deps` VIEW, not from kama.lock, for two reasons. The view is flat and
+    // already transitive, so one readdir gets the whole production closure with no BFS to re-derive.
+    // And the view is what is actually COMPILED: `kama.local.json` `overrides` repoint it without
+    // touching the lock, so a lock-driven walk could read a dependency's settings while building a
+    // different copy of that dependency.
+    //
+    // Order is deps (alphabetical by import name), then the root, then the CLI — one sentence for every
+    // key. `-l` ordering does not matter here the way it does for archives: every dependency's kama code
+    // is already inside this program's own objects, and `link` names SYSTEM libraries.
+    if (!req.manifest.empty()) {
+        const std::string projDir = dirName(req.manifest);
+        std::vector<std::string> views;
+        views.push_back(projDir + "/.kama/deps");
+        if (req.dev) views.push_back(projDir + "/.kama/dev-deps");
+        std::vector<std::string> depCflags, depLdflags, depCxxflags, depObjcflags;
+        std::vector<SourceEntry> depLink;
+        // Which dependencies this build takes (KR-144). A dependency edge may carry `compileFor`, and a dependency
+        // is in the build when an ACTIVE edge reaches it from the project — so one gated out together with the
+        // only package that needed it takes its own dependencies along, unless another active edge wants them.
+        // A gated-out dependency stays installed (the lock is the same on every platform) and its kama modules
+        // can still be imported: the code that uses them is gated, as the code calling a gated `csources` entry
+        // is. What it would add to the C command line — sources, include paths, libraries, flags — stays out.
+        std::set<std::string> reached, reachedActive;
+        {
+            struct Visit { std::string manifest; bool active; };
+            std::vector<Visit> work;
+            work.push_back({ req.manifest, true });
+            std::set<std::pair<std::string, bool>> seen;
+            while (!work.empty()) {
+                const Visit v = work.back(); work.pop_back();
+                if (!seen.insert({ v.manifest, v.active }).second) continue;
+                std::map<std::string, DepSpec> deps, devDeps;
+                std::string derr;
+                const bool root = v.manifest == req.manifest;
+                if (!loadManifestDeps(v.manifest, deps, derr, root && req.dev ? &devDeps : nullptr)) continue;   // said where it is read
+                for (const auto* m : { &deps, &devDeps })
+                    for (const auto& kv : *m) {
+                        const std::string n = importNameOf(kv.first);
+                        bool on = true;
+                        if (!judgeGate(kv.second.gate, "dependency '" + kv.first + "' (" + v.manifest + ")", on)) return false;
+                        on = on && v.active;
+                        reached.insert(n);
+                        if (on) reachedActive.insert(n);
+                        for (const std::string& view : views) {
+                            const std::string dm = joinPathLexical(view, n) + "/kama.json";
+                            if (fileExists(dm)) { work.push_back({ dm, on }); break; }
+                        }
+                    }
+            }
+        }
+        for (const std::string& view : views) {
+            std::vector<std::string> names = listDir(view);
+            std::sort(names.begin(), names.end());   // deterministic: the view is a set, not a sequence
+            for (const std::string& n : names) {
+                // ⚠️ LEXICAL, never absolutePath — that is realpath(), and a dependency reaches its
+                // package THROUGH this symlink. Resolving it away would respell the dep's files as
+                // first-party paths and print a store path the user cannot see.
+                const std::string depManifest = joinPathLexical(view, n) + "/kama.json";
+                if (!fileExists(depManifest)) continue;
+                BuildSettings bs; bs.owner = n;
+                std::string derr;
+                if (!loadBuildSettings(depManifest, g_target.name, bs, derr)) {
+                    // Lenient for the editor, fatal for a build. Reach costs nothing: `kama pkg install`
+                    // already hard-fails on a child manifest it cannot read, so a tree that installs at
+                    // all has readable dependency manifests — this only changes WHEN it is reported.
+                    if (req.strictDeps) { err = depManifest + ": " + derr; return false; }
+                    continue;
+                }
+                if (!depFlagPathIsPortable(bs.cflags, n, depManifest, derr) ||
+                    !depFlagPathIsPortable(bs.cxxflags, n, depManifest, derr) ||
+                    !depFlagPathIsPortable(bs.objcflags, n, depManifest, derr) ||
+                    !depFlagPathIsPortable(bs.ldflags, n, depManifest, derr)) {
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
+                // One page holds a program, and which one is the program's decision: a library naming it
+                // would be a second page, or a choice made for every consumer.
+                if (!bs.shellFile.empty()) {
+                    derr = "dependency `" + n + "` names a `shellFile` (" + depManifest + ") — the page a program runs "
+                           "in is the project's to choose, not a dependency's";
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
+                // The dependency's `kama` range, at BUILD time: install already refused a package this
+                // compiler cannot build, so this catches the view a newer manifest has outgrown (a `path`
+                // dependency edited in place, a downgraded compiler). Same leniency split as above.
+                if (!kamaReqSatisfied(bs.kamaReq, "`" + n + "`", derr)) {
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
+                if (reached.count(n) && !reachedActive.count(n)) continue;   // gated out of this build (above)
+                depCflags.insert(depCflags.end(),   bs.cflags.begin(),  bs.cflags.end());
+                depLdflags.insert(depLdflags.end(), bs.ldflags.begin(), bs.ldflags.end());
+                depCxxflags.insert(depCxxflags.end(),   bs.cxxflags.begin(),  bs.cxxflags.end());
+                depObjcflags.insert(depObjcflags.end(), bs.objcflags.begin(), bs.objcflags.end());
+                depLink.insert(depLink.end(),       bs.link.begin(),    bs.link.end());
+                // An OR, one way: a dependency that needs reproducible arithmetic gets it, and no
+                // dependency's `false` can take it from a consumer (or a sibling) that asked. The
+                // consumer compiles the dependency's code, so the requirement is the consumer's too.
+                if (bs.reproFloat) g_target.reproFloat = true;
+                // A dependency wrapping a C library ships the shim that binds it, and the consumer
+                // compiles it — which is the whole reason `csources` propagates. Resolved against the
+                // DECLARING manifest, lexically (see the symlink note above).
+                for (const SourceEntry& cs : bs.csources)
+                    g_csources.push_back({ n, joinPathLexical(dirName(depManifest), cs.path), cs.gate });
+                for (const std::string& js : bs.jsLibraries)
+                    g_jsLibraries.push_back({ n, joinPathLexical(dirName(depManifest), js) });
+                for (const std::string& f : bs.embedFiles)   g_embedFiles.push_back({ n, emFileArg(dirName(depManifest), f) });
+                for (const std::string& f : bs.preloadFiles) g_preloadFiles.push_back({ n, emFileArg(dirName(depManifest), f) });
+                for (const SourceEntry& inc : bs.cincludes)
+                    g_cincludes.push_back({ n, joinPathLexical(dirName(depManifest), inc.path), inc.gate });
+                if (!mergeEmSettings(bs.emSettings, n, derr)) {
+                    if (req.strictDeps) { err = derr; return false; }
+                    continue;
+                }
+            }
+        }
+        g_target.cflags.insert(g_target.cflags.begin(),   depCflags.begin(),  depCflags.end());
+        g_target.ldflags.insert(g_target.ldflags.begin(), depLdflags.begin(), depLdflags.end());
+        g_target.cxxflags.insert(g_target.cxxflags.begin(),   depCxxflags.begin(),  depCxxflags.end());
+        g_target.objcflags.insert(g_target.objcflags.begin(), depObjcflags.begin(), depObjcflags.end());
+        // `link` is a NAME list, so a repeat is pure noise and two dependencies both wanting `m` is the
+        // ordinary case — the repeats go once the gates are judged, below. `cflags`/`ldflags` are raw text,
+        // where a repeat can be load-bearing (`-Xlinker -foo`) and last-wins is the semantic: left as written.
+        depLink.insert(depLink.end(), g_target.link.begin(), g_target.link.end());
+        g_target.link = std::move(depLink);
+    }
+    // The project's own C comes after its dependencies', matching the flag order: a dependency
+    // contributes first, the project last.
+    if (!req.manifest.empty()) {
+        for (const SourceEntry& cs : g_rootSettings.csources)
+            g_csources.push_back({ "", joinPathLexical(dirName(req.manifest), cs.path), cs.gate });
+        for (const std::string& js : g_rootSettings.jsLibraries)
+            g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
+        if (!g_rootSettings.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_rootSettings.shellFile);
+        for (const std::string& f : g_rootSettings.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
+        for (const std::string& f : g_rootSettings.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
+        // …then the target's own, after the project's: the target has the last word (KR-162).
+        for (const std::string& js : g_target.jsLibraries)
+            g_jsLibraries.push_back({ "", joinPathLexical(dirName(req.manifest), js) });
+        if (!g_target.shellFile.empty()) g_shellFile = joinPathLexical(dirName(req.manifest), g_target.shellFile);
+        for (const std::string& f : g_target.embedFiles)   g_embedFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
+        for (const std::string& f : g_target.preloadFiles) g_preloadFiles.push_back({ "", emFileArg(dirName(req.manifest), f) });
+        overlayEmSettings(g_rootSettings.emSettings, g_target.emSettings);
+        for (const SourceEntry& inc : g_rootSettings.cincludes)
+            g_cincludes.push_back({ "", joinPathLexical(dirName(req.manifest), inc.path), inc.gate });
+        // The project merges LAST, which is what makes "the project wins" true of a scalar — including
+        // over a conflict two dependencies could not settle between themselves.
+        std::string merr;
+        if (!mergeEmSettings(g_rootSettings.emSettings, "", merr)) { err = merr; return false; }
+        if (!emScalarConflict(merr)) { err = merr; return false; }
+    }
+    // Gated `csources`/`cincludes` entries, judged by the one rule (`judgeGate`, above). A gated-OUT entry must
+    // still exist, as a gated-out kama file is still parsed: a path that rots on the one platform nobody builds
+    // daily is exactly what a gate would otherwise hide.
     for (int pass = 0; pass < 2; ++pass) {
         const bool dirs = pass == 1;
         std::vector<CSourceRef>& list = dirs ? g_cincludes : g_csources;
@@ -6023,21 +6101,8 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             if (e.gate.empty()) { kept.push_back(std::move(e)); continue; }
             const std::string who = e.owner.empty() ? std::string() : " (declared by dependency `" + e.owner + "`)";
             const std::string here = "`" + std::string(key) + "` entry '" + e.path + "'" + who;
-            // The NAMES first, then what the gate means — see the same ordering in fileGateOf.
             bool active = true;
-            std::string bad;
-            for (const GateLit& l : e.gate)
-                if (!kamaGateLitActive(l.name, l.neg, g_activeFlags, g_declaredFlags, g_knownTripleFlags,
-                                       g_strictFlags,
-                                       [&](const std::string& m) { if (bad.empty()) bad = m; }))
-                    active = false;
-            if (!bad.empty()) { err = here + ": " + bad; return false; }
-            const std::string never = gateContradiction(e.gate);
-            if (!never.empty()) {
-                err = here + ": `compileFor` " + renderGateLits(e.gate) + " can never be active — " + never
-                    + ". No configuration compiles it, so it is a mistake";
-                return false;
-            }
+            if (!judgeGate(e.gate, here, active)) return false;
             if (active) { kept.push_back(std::move(e)); continue; }
             if (dirs ? !dirExists(e.path) : !fileExists(e.path)) {
                 err = here + " does not exist. It is gated out of this build, and still refused: a path that "
@@ -6046,6 +6111,19 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             }
         }
         list = std::move(kept);
+    }
+    // `link` the same way (KR-144): a library gated by a FACT (`"compileFor": ["!ARCH_WASM32"]`), so a consumer's
+    // wasm target links no native library whatever that target is called — `select.TARGET.<name>.link` gated only
+    // by how the build was spelled. A name is linked once, however many entries want it.
+    {
+        std::vector<SourceEntry> kept;
+        std::set<std::string> seen;
+        for (SourceEntry& e : g_target.link) {
+            bool active = true;
+            if (!judgeGate(e.gate, "`link` entry '" + e.path + "'", active)) return false;
+            if (active && seen.insert(e.path).second) kept.push_back(std::move(e));
+        }
+        g_target.link = std::move(kept);
     }
     return true;
 }
@@ -8442,6 +8520,8 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     { "select.TARGET.jsLibraries", "0.9.603" }, { "select.TARGET.emSettings", "0.9.603" },
     { "select.TARGET.shellFile", "0.9.603" }, { "select.TARGET.embedFiles", "0.9.603" },
     { "select.TARGET.preloadFiles", "0.9.603" },
+    // …and the gates KR-144 added: on a dependency edge, and on a `link` entry (an object where a string was).
+    { "dependencies.compileFor", "0.9.609" }, { "link.compileFor", "0.9.609" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
@@ -11976,7 +12056,7 @@ int main(int argc, char** argv)
             if (!g_csources.empty()) printf("  csources  %zu\n", g_csources.size());
             if (!g_target.link.empty()) {
                 printf("  link     ");
-                for (const auto& l : g_target.link) printf(" %s", l.c_str());
+                for (const auto& l : g_target.link) printf(" %s", l.path.c_str());
                 printf("\n");
             }
         }
@@ -13372,7 +13452,7 @@ int main(int argc, char** argv)
         // The manifest's `link` first, then `--link` from the command line — same form, and a one-off on
         // the CLI should be able to come after what the project always needs.
         if (!stopsAtObject) {
-            for (const auto& lib : g_target.link) link << shellArg("-l" + lib) << " ";   // kama.json `link`
+            for (const auto& lib : g_target.link) link << shellArg("-l" + lib.path) << " ";   // kama.json `link`
             for (const auto& lib : links)         link << shellArg("-l" + lib) << " ";   // --link (FFI)
         }
         // Pay-for-what-you-use: link libm only when the program pulls in <math.h> (std::math or any libm

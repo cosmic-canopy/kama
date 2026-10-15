@@ -563,6 +563,58 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: a dependency EDGE and a \`link\` entry take \`compileFor\` too (KR-144)"
+
+# A dependency gated by a FACT: its C — sources, libraries — reaches only a build its gate admits, judged by
+# the same rule. It stays installed either way (the lock does not change by platform). `HOSTED` holds on this
+# host, so `!HOSTED` is the gated-out half; a link entry the same way, by a fact rather than a target NAME.
+gedge() {   # gedge <name> <edge gate JSON>
+    app "$1" gnat <<JSON
+{ "name": "$1", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "gnat": { "path": "./vendor/gnat", "compileFor": $2 } },
+  "link": ["kr144root", { "name": "kr144on", "compileFor": ["HOSTED"] }, { "name": "kr144off", "compileFor": ["!HOSTED"] }],
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+    mkdir -p "$tmp/$1/vendor/gnat/csrc"; : > "$tmp/$1/vendor/gnat/csrc/nat.c"
+    cat > "$tmp/$1/vendor/gnat/kama.json" <<'JSON'
+{ "name": "gnat", "version": "1.0.0", "kind": "library", "source": "src", "csources": ["csrc/nat.c"],
+  "link": ["kr144dep"], "modules": { ".": { "visibility": "public" } } }
+JSON
+}
+gedge gein '["HOSTED"]'
+line=$(cmdline gein)
+if printf '%s' "$line" | grep -qF 'csrc/nat.c' && printf '%s' "$line" | grep -qF -- '-lkr144dep' \
+   && printf '%s' "$line" | grep -qF -- '-lkr144on' && ! printf '%s' "$line" | grep -qF -- '-lkr144off' \
+   && printf '%s' "$line" | grep -qF -- '-lkr144root'; then
+    ok "an active dependency edge compiles and links its C; a gated \`link\` entry follows its fact"
+else
+    bad "an active edge or a gated link entry was not applied"; printf '%s\n' "$line" | sed 's/^/    /' | head -5 >&2
+fi
+gedge geout '["!HOSTED"]'
+line=$(cmdline geout)
+if ! printf '%s' "$line" | grep -qF 'csrc/nat.c' && ! printf '%s' "$line" | grep -qF -- '-lkr144dep' \
+   && [ -d "$tmp/geout/.kama/deps/gnat" ]; then
+    ok "a gated-out dependency adds no C to the build, and still installs"
+else
+    bad "a gated-out dependency still reached the C command line, or did not install"; printf '%s\n' "$line" | sed 's/^/    /' | head -5 >&2
+fi
+# Closed like every other manifest object: a key a dependency entry does not take, or a known key of the wrong
+# shape, used to be skipped — `"compileFor"` itself was accepted and ignored before this.
+depkey() {   # depkey <name> <entry JSON> <want> <what>
+    app "$1" <<JSON
+{ "name": "$1", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "dependencies": { "x": $2 }, "modules": { ".": { "visibility": "internal" } } }
+JSON
+    if "$KAMA" check "$tmp/$1/kama.json" >"$tmp/o" 2>"$tmp/e"; then bad "$4 — accepted"
+    elif grep -qF -- "$3" "$tmp/e"; then ok "$4"
+    else bad "$4 — refused without \"$3\""; head -2 "$tmp/e" >&2; fi
+}
+depkey dkbogus '{ "path": "./vendor/x", "bogus": 1 }' 'unknown key `bogus` in dependency' "an unknown dependency key is refused"
+depkey dkshape '{ "path": 1 }' '`path` in dependency' "a dependency key of the wrong shape is refused"
+depkey dkgate '{ "path": "./vendor/x", "compileFor": ["OS_WINODWS"] }' 'did you mean `OS_WINDOWS`' \
+       "a dependency gate is judged by the @compileFor rule"
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: \`cincludes\` puts a package's include tree on the path, under the path rules"
 
 # The runnable proof is tests/cincludes_dep.d/: a dependency whose header lives in include/, not beside

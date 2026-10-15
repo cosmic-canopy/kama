@@ -504,7 +504,7 @@ once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `
   on the platform nobody builds daily is exactly what a gate would otherwise hide.
 - **A build with no `--target` applies `select.TARGET.HOST`, never the `LINUX` or `MACOS` arm, BY DESIGN.** A target
   name is how a build was spelled; a per-OS setting gates on the fact (`OS_LINUX`). `csources` and `cincludes` take a
-  fact gate today, and KR-144 extends it to `link`, which is where this was felt.
+  fact gate, and since `0.9.609` so do `link` and a dependency edge (docs/targets.md), which is where this was felt.
 - **A path dependency of a path dependency across separate repositories is restated at the top, BY DESIGN**
   (docs/packages.md): a fetched package cannot carry a local path. A `kama_workspace.json` holding both packages
   permits it, and registry versions end it.
@@ -2891,31 +2891,6 @@ rather than here, so there is one number to keep current. Forward work:
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
-
-<a id="s10-manifest-gates"></a>
-
-### A dependency and a `link` entry cannot be gated on a fact, and a dependency entry takes any key (KR-144)
-
-Measured on `0.9.577`:
-- A dependency entry `{"path": "../widget", "bogus": 1}` installs and checks without a word, where the rest of
-  `kama.json` refuses an unknown key (*"unknown key `cflags` in `select.BUILD_TYPE.ASAN`"*). So
-  `{"path": …, "compileFor": ["!ARCH_WASM32"]}` is accepted and ignored: a wasm build still compiles that dependency's
-  C sources, and a cold build pays for them though the link drops the code.
-- `link` takes only strings (`[{"name": "m", "compileFor": ["OS_LINUX"]}]` is *"expected a string in the array"*). So
-  a package drops a native library from a wasm build only by a target NAME (`select.TARGET.WASM.link`), which its
-  consumer may call anything: a consumer's `"WEB": {"triple": "wasm32-emscripten-none"}` links the native library
-  into WebAssembly.
-
-docs/targets.md's own rule is to gate on the fact, never on how the build was spelled. **Scheduled.** **Design:** a
-dependency entry refuses an unknown key, and both a dependency and a `link` entry take `compileFor`, judged as a
-`csources` entry's is. A gated-out dependency is still resolved and installed, so a lockfile does not change by
-platform.
-
-**Where (surveyed on `0.9.603`, still reproduces):** `ManifestReader::depsObject` — its "unknown keys ignored (forward-compat)" arm, and
-wider than filed: a non-string value for a KNOWN key is skipped too, so `"path": 1` passes silently; `flagArray` for
-`link` in `targetGroup` and at the top level; `DepSpec`, `TargetSpec::link`; and `resolveBuildConfig`'s dependency loop,
-judging both gates with `kamaGateLitActive` as the gated `csources`/`cincludes` pass does. A gated-out dependency still
-installs, so the lock is the same on every platform.
 
 <a id="s10-build-variant"></a>
 

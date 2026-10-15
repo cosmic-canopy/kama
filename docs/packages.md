@@ -492,6 +492,11 @@ kama pkg add kama.json utils --path ../utils        # a sibling checkout
 }
 ```
 
+A dependency entry is closed, like every object in the manifest: it takes `path`, `git`, `url`, `rev`,
+`integrity`, `version`, `registry` — each a string — and `compileFor`, a gate on the build it belongs to
+(`"compileFor": ["!ARCH_WASM32"]` for a native library a wasm build must not compile; docs/targets.md says how
+it is judged). Anything else is refused by name.
+
 Import a dependency by its package name; the build only lets you import what the manifest
 declares (an undeclared import is a hard error — no phantom dependencies):
 

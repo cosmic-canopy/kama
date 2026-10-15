@@ -89,7 +89,8 @@ kama build app.kama --target RPI
 `ar` matters for `OUTPUT=STATIC`: an archive indexed by the host's `ar` may be unreadable to the
 target's linker.
 
-**`link`** names native libraries by their bare name — `["m"]` becomes `-lm`. It is the portable half
+**`link`** names native libraries by their bare name — `["m"]` becomes `-lm` — and an entry may be gated
+on a fact, `{ "name": "dl", "compileFor": ["OS_LINUX"] }` (below). It is the portable half
 of linking, which is why it sits on the *project* as well as on a target: a project that needs `-lm`
 everywhere says so once, at the top level, instead of repeating it per target or making every caller
 remember `--link m`. `ldflags` remains the raw-linker-text escape hatch for anything that is not a
@@ -329,6 +330,16 @@ and a gate no configuration can activate (`["DEBUG", "RELEASE"]`) — plus one o
 entry whose gate leaves it **out** of this build must still exist, the way a gated-out kama file is
 still parsed. A path that is wrong only on the platform nobody builds daily is exactly what a gate would
 otherwise hide.
+
+**A `link` entry and a dependency take the same gate.** `"link": ["m", { "name": "dl", "compileFor":
+["OS_LINUX"] }]` links `-ldl` only where the fact holds — so a package keeps a native library out of a wasm
+build by the fact (`"!ARCH_WASM32"`), which no consumer's spelling of its wasm target can defeat. A
+dependency edge carries one beside its source — `"audio": { "path": "../audio", "compileFor":
+["!ARCH_WASM32"] }` — and a dependency is in the build when an *active* edge reaches it from the project, so
+one gated out takes along the dependencies only it needed. A gated-out dependency is still installed (the
+lock is the same on every platform), and its modules can still be imported: gate the code that uses them, as
+the code calling a gated `csources` entry is gated. What it would add to the C command line — sources,
+include paths, libraries, flags — stays out.
 
 ### `cincludes` — a package's include tree
 
