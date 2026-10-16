@@ -287,6 +287,37 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
 
+**Where (surveyed on `0.9.630`).** It reproduces: a `UnixDatagram` used as a `DatagramSocket` is "does not implement
+it". A mock `Dg<A>`/`Rf<A>` with two socket types over different addresses builds and runs today: bounds
+`fn f<S: Dg<A>, A>`, a `Dg<AddrX>` contract value, and `@generate(of)` on `Rf<A>`.
+
+Sites:
+
+- `lib/std/net/udp.kama`: the contract (~45), `UdpSocket.sendTo` (~112) and `recvFrom` (~124).
+- `addr.kama` (~357): `RecvFrom<A>`. Keep it in addr.kama, because kama.driver.cpp (~1660) relies on udp.kama
+  importing it.
+- `unix.kama`: delete `UnixRecvFrom` (~449), and `implements DatagramSocket<UnixAddr>` (~462/520).
+- `web/wt.kama` and `web/rtc.kama` stay `<SocketAddr>`, so game code is the same on both targets.
+- 9 fixtures (`net_udp_*`, `net_ipv6`, `net_addr_ctor`, `net_unix_datagram.d`); SPEC ~2239/2609;
+  WEB_FRAMEWORK_READINESS.
+
+`sendTo` takes `const ref A to`; today's `ref SocketAddr` refuses a `const` address.
+
+The break is narrower than feared. A bare bound `<S: DatagramSocket>` keeps compiling, because it is checked per
+instantiation. Contract values, `implements` and `RecvFrom` spellings do break.
+
+**Blocked on KR-183** (a bare generic contract used as a value type reaches C): fix that first. Size **S**.
+
+**Decisions owed:**
+
+1. **Recommended:** `DatagramSocket<A>` with `RecvFrom<A>`, deleting `UnixRecvFrom`. The alternatives are two
+   parameters `<A, R>`, or a second contract (two ways to do one thing).
+2. **Recommended:** take the break and spell `<SocketAddr>` everywhere. The alternative, a default
+   `<A = SocketAddr>`, only half works on a contract today: a bare `implements Dg` gives "unknown contract in
+   implements".
+3. A zero-length `recvFrom`: UDP answers `Ok(0, 0.0.0.0:0)` and Unix answers `InvalidInput`. **Recommended:
+   `InvalidInput` for both**, since the UDP answer invents a sender.
+
 <a id="s1-unix-pair"></a>
 
 ### `UnixStream.pair()` (KR-178)
@@ -298,6 +329,57 @@ SOCK_STREAM | SOCK_CLOEXEC)` (the `FD_CLOEXEC` gate on macOS, as every descripto
 `socketpair`, and by the platform-deltas rule its twin is the same `pair()` over a listener bound to a private path,
 one connect and one accept, the path removed at once. On Windows a socket is no child's stream (`Stdio` documents
 it: the handle is overlapped), so there a pair serves isolates and fd passing, not a child's stdin.
+
+**Where (surveyed on `0.9.630`).** Still missing: `UnixStream.pair()` is "no constructor `pair`".
+
+The child half already works. An accepted Unix stream end, handed to a child as stdin with a `duplicateDescriptor()`
+as stdout, round-trips "ping" and then EOF (exit 42). What is missing is a pair with no path on disk.
+
+The seam is `kama_unix_pair(int32 datagram, isize* a, isize* b)` beside `kama_pipe` in kama_os.h:
+
+- Linux: `socketpair(…|SOCK_CLOEXEC)`.
+- macOS: under the fork gate (`kama__cloexec_enter`, `socketpair`, mark both ends, `kama__cloexec_leave`), with
+  `kama__nosigpipe` on each end.
+- emscripten: a plain `socketpair`.
+- Windows has AF_UNIX but no `socketpair`. A twin builds the pair from a private path:
+  1. build the path from `GetTempPathW`, the pid and a counter, retrying on `AddrInUse`;
+  2. `listen(1)`, a blocking connect, `DeleteFileW`, accept, close the listener;
+  3. check that `SIO_AF_UNIX_GETPEERPID` is our own pid.
+
+  This is unmeasured until Windows CI runs it: a connect completing on a 1-deep queue before accept, and the queued
+  connection surviving the delete.
+
+In lib/std/net/unix.kama the pair type needs a `friend` for `UnixStream`'s private `make` (~231) and for
+`UnixDatagram`'s `own` (~461).
+
+Fixtures:
+
+- `net_unix_pair`: round trip both ways, unnamed ends, the peer pid is ours, dropping one end gives EOF on the other
+  and then `BrokenPipe`, and one end handed to an isolate.
+- `proc_unix_pair`: an end as a child's stdin/stdout, plus the close-on-exec proof.
+- A datagram pair case in `net_unix_datagram.d`.
+
+Traps:
+
+- macOS caps a Unix datagram at 2048 bytes and a stream's send buffer at 8192. Keep payloads small, or a parent writing
+  to a `cat` it is not reading deadlocks.
+- On macOS `SO_NOSIGPIPE` travels into the child, which then gets EPIPE where Linux raises SIGPIPE. Document it.
+
+Size **M**: the POSIX half is S, and the Windows twin needs a CI round.
+
+**Decisions owed:**
+
+1. The shape.
+   - **(a), recommended:** a `UnixStreamPair` resource with `ctor Result<UnixStreamPair, IoError> open()` and
+     `ref UnixStream first()`/`second()`, the way `Process` hands out `ref File stdin()`. An end leaves through the
+     existing `takeDescriptor()`. Prototyped and run.
+   - (b) `UnixStream.pair(other: out UnixStream)`. An `out` must be filled on the `Err` path too, so a failed pair would
+     hand back an empty stream.
+   - (c) A `static fn`: a second way to construct.
+2. Windows.
+   - **(a), recommended:** the listener twin.
+   - (b) Refuse at run time, which breaks the platform-deltas rule.
+   - (c) An AF_INET loopback pair: the wrong socket behind `UnixStream`, so `peerCredentials` breaks.
 
 <a id="s1-http-package"></a>
 
@@ -334,6 +416,57 @@ that place, `const ref` when the place is read-only. Its host is frozen for the 
 view window uses, so `L` cannot dangle and nothing escapes. No lifetimes, no stored borrows, one construct. The
 `0.9.539` message for a `ref` local then points here.
 
+**Where (surveyed on `0.9.630`).** It reproduces:
+
+- `borrow m.getRefMut(key: "a") as v { … }` is refused with "a mint takes no arguments … narrow inside it with
+  `.slice(…)`", which is the wrong advice for a `ref` call. Two "cannot resolve `v`" cascades follow.
+- `borrow a[0] as e` and `borrow o.inner as i` are refused with "`borrow` binds a mint call".
+
+**No grammar change is needed:** `borrow_binding` already takes any `primary_expression` (kama.y ~1524), and
+tree-sitter takes any `_expression`.
+
+Sites, in kama.cemit.cpp unless noted:
+
+- `emitBorrow` (~6891–7000) splits its host three ways: a granted nullary mint (as today), a place, or a refusal.
+- A new `placeRoots(expr)` beside `viewRootPlace` (~25386).
+- The temporary relocation that `emitForeach` uses (~18135/18340).
+- `scanStmtForGenerics` (~16444) gives the alias a type node.
+- In kama.y: the `ref`-local note (~3021), and the comment over `borrow_statement` (~1508).
+
+Steps:
+
+1. Fix **KR-180** first. The alias joins `_refParams` and would inherit that hole.
+2. Accept three hosts: a field path, an element `x[i]`, and a call returning `ref`/`const ref`, with any arguments.
+3. Freeze every root:
+   - the receiver place;
+   - every `ref`/`const ref` argument's place (a `const ref` result may legally point at a `const ref` argument —
+     probed);
+   - the container of an element.
+4. Lower the alias as `T* k_L = &(<place>);`, with the call emitted once. Argument temporaries are declared inside the
+   window and dropped when it closes. `L` joins `_constLocals` when the place is read-only.
+5. Give each refusal its own sentence, and no cascade after one:
+   - a value call or a temporary: "not a place, bind it";
+   - a view-returning call with arguments keeps "a mint takes no arguments".
+6. Point the `0.9.539` `ref`-local message at `borrow xs[0] as first { … }`.
+7. Docs: SPEC window rule 1 (~384) and ~3518. Regenerate `docs/grammar.bnf` for the comment.
+8. Fixtures:
+   - a positive `borrow_place`, native and wasm: a map key argument, an element, a field path, a two-`ref` free
+     function, a `const` alias, the alias passed by `ref`, a nested window, a disjoint sibling write, a temporary key;
+   - xfails: a frozen receiver (`m.put`), a frozen `ref` argument, a temporary host, a value call, a write through a
+     const alias, a `give` of the alias, and a `fn ref` returning an alias rooted in a local;
+   - update `borrow_bare_host`'s message.
+
+Size **M**, plus S for KR-180.
+
+**Decisions owed:**
+
+1. A bare local host, `borrow a as v`. **Recommended: refuse it.** `a` is already named, and one way to name a thing is
+   enough. The alternative is to allow it as a rename.
+2. What a call host freezes. **Recommended: the receiver and every `ref`/`const ref` argument,** since the signature
+   lets the result point at any of them. Freezing the receiver only is unsound for a free `fn ref`.
+3. Spelling the alias's ref-ness. **Recommended: no marker.** `L` is `const ref` when the place is read-only, and the
+   writes are visible in the block. `borrow ref <place>` would mirror the call-site marker, but it is a grammar change.
+
 <a id="s2-view-destructor"></a>
 
 ### A borrow window that runs code when it closes (KR-124)
@@ -346,6 +479,54 @@ nearest thing, and a view cannot run anything when it closes. **Design:** a `typ
 minted the view runs it when the window closes, on every path out of the block, including `return`, `break` and
 `continue`. Such a view is not `Copyable`, and its alias passes `ref`/`const ref`, so the destructor runs exactly
 once. Then `borrow conn.begin() as tx { …; tx.commit(); }` rolls back unless `commit` ran.
+
+**Where (surveyed on `0.9.630`).** It reproduces: a `type view Tx` with `~Tx()` gets "a `view` … may not declare a
+`~dtor`" plus three cascades, because a view is registered as `TypeKind::Value` (~11374).
+
+Every exit path already works. A `borrow` lowers to a plain C block, and `emitScopeCleanup` runs at its end and on
+`return`, `break` and `continue`; a resource local inside a window was dropped in order (probed). A trap aborts, so no
+destructor runs there, the same as for a resource.
+
+Sites:
+
+- the `collectClasses` dtor arm (~12000), `computeDestructible` (~20696), and the `__dtor` emission gate (~33563);
+- `emitBorrow`, and `rejectViewByRef` (~21718);
+- the local, return and generic-argument checks;
+- `recordDestructibleOwner` (~6513), which feeds `@onPanic`.
+
+Design A, step by step:
+
+1. Allow `~dtor` on a view under a new `closesWindow` flag. The view stays non-destructible and owns nothing, so the
+   value/owning checks and collection drops are untouched. Emit `__dtor` when `destructible || closesWindow`.
+2. `emitBorrow` registers a closing alias as a scope local, plus `recordDestructibleOwner`, so the destructor runs once
+   on every path, after the body's locals.
+3. Pin the view to its window. Each of these compiles today and must be refused for a closing view:
+   - a mint outside a `borrow` host (`c.begin().commit()`);
+   - a local of the view type;
+   - a by-value parameter;
+   - a return, other than from the mint itself;
+   - a generic argument;
+   - a `give` of the alias.
+4. `rejectViewByRef` narrows to `ref`/`const ref` passing, with no assignment to the parameter.
+5. Refuse a closing view as a `foreach`/`parallel_for` iterator.
+6. Docs: SPEC's view bullet (~4031), the window section, `ref`/`out` (~435), RAII; TYPE_MODEL ~147.
+7. Fixtures:
+   - delete xfail `view_dtor`;
+   - a positive `borrow_view_closes`: commit versus rollback across end, `return`, `break` and `continue`, and the
+     order of several bindings;
+   - one xfail per refusal, and an `@onPanic` region that reaches a closing window.
+
+Size **M**. There is no grammar change: `~Tx()` already parses.
+
+**Decisions owed:**
+
+1. The design.
+   - **(A), recommended:** a view's `~dtor` runs when its window closes, and the view is pinned to the window. `~dtor`
+     stays the one scope-exit mechanism, and the view still owns no memory (C#'s `ref struct` with `Dispose`).
+   - (C) The `@viewable` grant names a closing method on the host: a second mechanism, and a new spelling.
+   - (D) A non-goal: the guard owns a `Shared<Conn>`, so every connection pays a heap allocation and a count.
+2. Passing a closing view to a helper. **Recommended: `ref`/`const ref` only,** so a helper can query without consuming
+   the transaction. The alternative is move-only, with `give`.
 
 ### Verdicts on reported gaps (2026-10-08)
 
@@ -397,6 +578,57 @@ std enum at 1.0, so a new kind waits for 2.0 or a new enum; (3) leave it, and tr
 **Recommendation: (1)**, before the tag. Open: the marker's spelling (an attribute, by the grammar's rule for
 declaration modifiers), and whether a user enum may carry it.
 
+**Where (surveyed on `0.9.630`).** The break reproduces. An `IoErrorKind` `match` that lists the cases as of
+`0.9.620` and has no `_` now fails ("not exhaustive: case 'AlreadyExists' is unhandled", then `ProcessNotFound`).
+
+The problem already exists ACROSS PLATFORMS today. `ProcessGroup` is declared per OS: `{Inherit, New, Join,
+NewSession}` against Windows' `{Inherit, New}`. So an exhaustive match written on Windows fails on macOS ("variant
+'Join' is unhandled"), and the macOS one names a case Windows lacks.
+
+Sites:
+
+- `emitMatchSwitch` (~28746, tagged enums) and `emitMatchPlainEnum` (~29302).
+- The enum attribute accept-list in `collectEnums` (~10799–10812).
+- The flag on `EnumInfo`, and on `ClassInfo` through `buildVariantClassInfo` and the generic template.
+- Which package a file belongs to: a driver-supplied `setPackageResolver` beside `setModuleResolver` (kama.driver.cpp
+  ~2867), built on `ModuleId{inProject, project}` (~1348). Never use the first component of `packageLocationOf`:
+  `@kama/sodium` splits at its slash.
+
+Fix:
+
+1. Accept a bare `@nonExhaustive` on any `type enum`. The attribute list already covers enums (kama.y ~2465/2472), so
+   there is no grammar change. The `@compileFor` twins must agree on it.
+2. In both match functions: a marked enum, matched with no `_` from a file in another package, is one error:
+   "`match` on 'std::io::IoErrorKind' needs `case _:` — the enum is `@nonExhaustive`; a later `std` may add a case".
+   - The file is `diagFile()`, the file the match was WRITTEN in, never the unit a std generic was instantiated into.
+   - An outside match that lists every case still needs `_`.
+   - Inside the package, matching stays exhaustive as today.
+3. Mark these enums:
+   - errors: `IoErrorKind`, `DeErrorKind`, `SerError`, `ParseError`, both `DecodeError`s, `Utf8Error`, `UuidError`,
+     `TimeError`;
+   - options that may grow: `FileKind`, `OpenMode`, `Stdio`, `ProcessGroup`, `SqlValue`, `Interest`.
+
+   These stay closed: `Optional`, `Result`, `Unit`, `Ordering`, `Weekday`, `MemoryOrder`, `NormalizationForm`,
+   `IpAddr`, `Shutdown`, `SeekFrom`, `LogLevel`, `Send`/`RecvResult`, `FieldKey`, and the `Ws`/`Rtc`/`Wt` states.
+4. Add `case _:` wherever the rule now flags a match (tests, examples, doc snippets).
+5. Fixtures:
+   - an xfail for an outside match lacking `_`, and a positive with `_`;
+   - a `.d` path-dependency fixture: a user enum matched exhaustively inside its package, and an xfail outside it;
+   - an xfail for the attribute given arguments.
+6. Docs: SPEC's `match` exhaustiveness and enum attributes, and the accept-list's error text.
+
+Size **S**.
+
+**Decisions owed, refining the three above:**
+
+1. **Recommended: option (1), a marker spelled `@nonExhaustive`.** It is the error's own word and Rust's name. The
+   alternatives are `@growable`, or a keyword (`type open enum`) that would reserve a word.
+2. The boundary: **recommended: the PACKAGE**, not the module the earlier text said. std's modules ship together, so
+   `std::net` matching `IoErrorKind` keeps its exhaustiveness check.
+3. **Recommended: a user enum may carry it.** A registry package grows in 1.x exactly as std does.
+
+It is an error, not a warning: kama has no warning channel.
+
 <a id="s2-panic-info"></a>
 
 ### A panic handler learns nothing about the panic (KR-179)
@@ -433,6 +665,199 @@ should be handed the facts rather than told where to look for them. One way, no 
 `file:line` string `panic` already prints. (b) remains if a measured case needs output from a process too broken to
 run the hook.
 
+**Where (surveyed on `0.9.630`).** The gap reproduces in debug and in `--release`. The overflow, divide and `s[i]`
+traps print no file either. The survey found three more problems:
+
+- A `DynamicArray` index miss prints `(std/collections/dynamic_array.kama:230)`, which is std's line, not the
+  caller's. The prelude's `Template.part` does the same.
+- A `match` default arm whose value "names no variant" emits a bare `kama_panic` with no location.
+- `kama_in_panic_hook` is a plain `int`. Two isolates panicking together race, and the second one's `abort()` can
+  kill the process while the first is still in its hook. It becomes an atomic claim, in the same work.
+
+Sites:
+
+- kama_runtime.h:
+  - the hosted traps (~529–668), `kama_run_panic_hook` (~525), `kama_panic` (~1857), and
+    `kama_fail_emit`/`kama_panic_at`/`kama_assert_fail` (~2169–2215);
+  - every checked helper that calls them: `kama_narrow_chk_s`/`_u` (~687), `kama_arith_chk`, `kama_f2i_chk`, the
+    `KAMA_DIV_CHK`/`MOD`/`SHL`/`SHR` checks, `KAMA_WIDE_ARITH` (~877), `KAMA_ADD`/`SUB`/`MUL`/`NEG` and their `_T`
+    forms, the place ops, `KAMA_ARITH_NARROW`, `KAMA_NARROW`, `KAMA_FIXED_FUNCS` (~1013), `KAMA_SIMD_FUNCS` (~1084),
+    `kama_string__get` (~1309) and `__substring` (~1340);
+  - the embedded traps (~438–509), which change signature only.
+- kama.cemit.cpp:
+  - `emitBinaryOperator` (~4983–5215), the unary branch (~6160–6220), and the place macros (`assignmentOperator`
+    ~4706);
+  - `narrowCheck` (~12314);
+  - the intrinsic-collection index sites (~6069–6141, ~9177, ~17906, ~39831) and the `substring` lowering;
+  - `emitMatchDefaultArm` (~29154) and `emitRuntimeSlotDefinitions` (~24072);
+  - `panic`/`assert` (~30244) already pass `programLocation()` plus the line.
+- core.kama lines 112–114.
+
+The design for (1a) + (2):
+
+- **C runtime.**
+  - `typedef struct kama_panic_info { const char* kama_msg; size_t kama_len; const char* kama_file; int32_t
+    kama_line; }`.
+  - The slot is typed `void (*)(kama_panic_info*)`, not const: kama lowers `const ref` to a plain pointer, and clang
+    16 and later reject a mismatched function-pointer type.
+  - There is ONE failure path. Each trap formats its message into its own STACK buffer (1024 bytes, with bounded
+    appends; the bounds trap's buffer is only 96 bytes today). Then one `kama__fail(buf, len, file, line)` appends
+    ` (file:line)`, writes fd 2, builds the info on the stack, runs the hook, and aborts. Nothing allocates, and two
+    panicking isolates share nothing.
+  - The message is exactly the text stderr shows between `kama: ` and the location.
+  - The accessors return a borrowed `kama_string_lit` (cap 0, a no-op drop).
+- **kama, in module `core`, exported.**
+  - `type extern value PanicInfo` with `public unsafe const fn string message()`, `file()` and `int32 line()`.
+    `file()` is `""` and `line()` is 0 when the location is unknown (OOM, or runtime-internal).
+  - It declares no fields, so no raw pointer reaches the safe surface. A field-less extern value with methods passes
+    the front end (probed).
+  - `@foreignEntry fnptr void PanicHandler(const ref PanicInfo info)`.
+- **Emitter.**
+  - Every checked helper and macro takes a trailing `file, line`: `programLocation()` plus the node's line, from
+    `diagFile()` — the file the code was WRITTEN in (a location must never name the unit a generic was instantiated into).
+  - Identical string literals are pooled.
+  - Under `NDEBUG` the `+ - *` macros drop the pair; `check-release-arith.sh` holds that.
+  - Reword `(length 2) (main.kama:7)` to `index 8 is out of bounds for length 2 (main.kama:7)`.
+- **Fixtures.**
+  - New `tests/trap/panic_info_bounds` and `panic_info_panic`, where the hook prints the message, file and line.
+  - Add `(<file>.kama:N)` to the `.msg` of the `div`/`mod`/overflow/`cast_narrow_*`/`shift`/`float_cast`/string/
+    `substring`/`simd` trap fixtures.
+  - Migrate `trap/panic_handler`, `onpanic_handler_not_run` and `check-panic-multitu.sh` to the new signature.
+  - An xfail for an old `fn void h()` handler, whose message names the expected signature.
+  - Extend `check-panic-locations.sh` with a bounds miss, a narrowing cast and a divide — in the project and in a
+    dependency, in a release build — plus a hook that prints `file()`/`line()`.
+- **Docs.** SPEC ~1040, ~1960–2015, ~3445–3460, and the `type extern value` and `@linkName` sections; FLOOR.md
+  line 85.
+
+The cost, measured:
+
+- `--release` keeps every bounds, narrowing, divide/mod, shift, float-cast, string and SIMD-lane trap. The `+ - * neg`
+  overflow checks and `debugAssert` are debug-only.
+- httpd's release C has 87 narrowing, 15 string-index and 34 `InlineArray` trap sites; its debug build has about 460
+  checked sites.
+- Per site: +32 B at -O3 (two fail calls; merging them into one call halves it), +16 B at -Oz, +12 B at -O0. A pointer
+  to a static `{file, line}` record, Rust's shape, costs +40 B.
+- httpd's `__text` grows from 15,740 to at most 16,504 bytes, and the stripped binary does not change, because it grows
+  in whole pages.
+- wasm takes the same hosted path. Embedded keeps its weak `kama_panic_handler(void)`.
+
+Size **M** for (1a) + (2); **L** if decision (4)'s attribute is included.
+
+**Decisions added by the survey:**
+
+3. How kama names the runtime's struct.
+   - **Recommended: (i) extend `@linkName` to `type extern value`.** Today it is refused ("only a `type expose
+     value`…"). The C header owns the layout, which is what `extern` means. About 42 `isExternStruct` sites use the
+     kama name as the C name and must be split.
+   - (ii) An ordinary `type value`, with the runtime forward-declaring `struct core__PanicInfo`. That would be the
+     first time the runtime names a symbol the compiler emits.
+   - (iii) `fnptr void PanicHandler(string message, string file, int32 line)`. Any later field would then break every
+     handler after 1.0.
+4. A trap inside a std body (`operator[]` on `DynamicArray`/`FixedArray`/`Deque`/`View`, or a prelude body) reports
+   std's line.
+   - **Recommended: a caller-location attribute,** like Rust's `#[track_caller]`: the emitter passes the call site as
+     hidden arguments. A `DynamicArray` index miss is the most common crash.
+   - Alternatively, accept std's line.
+
+Decision (2) is now measured: **a location in every build** (recommended).
+
+<a id="s2-ref-return-escape"></a>
+
+### A `fn ref` returns a place inside a local through a loop or `match` binding (KR-180)
+
+Found 2026-10-15 surveying KR-123 and confirmed on `0.9.630`:
+
+```kama
+public fn ref int32 bad() {
+    DynamicArray<int32> local = DynamicArray.empty();
+    local.add(item: 7);
+    foreach (ref int32 e in local) { return e; }
+    return this.keep;
+}
+```
+
+followed by `h.bad() = 5;` passes `kama check`, and under ASan it is a heap-use-after-free. The same shape through
+`match (local) { case Some(value: v): { return v; } … }` is a stack-use-after-return. **This is unsound in safe kama.**
+
+Cause: the `fn ref` return check (the ReturnNode place path in kama.cemit.cpp, ~8800, `!_refParams.count(root)`)
+treats every name in `_refParams` as a `ref` PARAMETER. But `foreach (ref …)` bindings (~18373) and borrowing-`match`
+payload bindings (~28992) are recorded there too.
+
+Fix: before the this / ref-param / static test, map a binding to its operand's root — the Scope `frozen` entry whose
+alias is that name — and judge the root instead. Add an xfail for each shape; the ASan leg proves that every legal
+`ref` return still builds. Size **S**. Fix it FIRST: KR-123's `borrow` alias joins `_refParams` and would inherit
+the hole.
+
+<a id="s2-alias-subject-write"></a>
+
+### A `match` arm writes its subject while an owning payload's alias is live (KR-181)
+
+Found surveying KR-131 on `0.9.630`. Given `type enum U { A(DynamicArray<int64> xs), B(int64 p, int64 n, int64 c,
+int64 m) }`, this builds and crashes with exit 139:
+
+```kama
+match (u) { case A(xs: a): { u = U::B(p: 4096i64, n: 1i64, c: 1i64, m: 0i64); n = a[0]; } … };
+```
+
+An owning payload binds as an alias into the subject, the assignment drops the old payload, and `a` then reads freed
+memory. **This is unsound in safe kama.**
+
+A blunt freeze of the subject would refuse the common `state = …` arm, so the rule is narrower: refuse a READ of the
+alias after the subject is written in the same arm ("`a` borrows `u`'s payload, which the assignment above
+replaced"). It shares the write scan and the freeze with KR-131, so fix the two together. Size **S**.
+
+<a id="s2-bound-enum-subject"></a>
+
+### A plain enum bound by a `match` arm or a `foreach` is not a `match` subject (KR-182)
+
+Found surveying KR-26 and confirmed on `0.9.630`. Each of these is refused with "`match` branches on an enum's
+variants — an integer, a string or a bool branches with `if`/`else if`":
+
+- `case Some(value: k): { r = match (k) { case A: … } }`
+- `case KeyDown(key: k): match (k)`
+- `foreach (Key k in ks) { … match (k) … }`
+
+That is the message `0.9.614` gave a number subject, here said of an enum. Copying into a local
+(`Key kk = k;`) or passing the value to a function works.
+
+Cause: `exprEnumType` (kama.cemit.cpp ~29220) reads `_localCTypes`. The arm binder in `emitMatchSwitch` (~28995) sets
+only `_localTypes`, and the `foreach` binder sets neither. This is the sibling of the module-static fix in `0.9.628`.
+
+Fix: record the C type at both binders. Add a fixture `match_bound_enum` covering an arm binding, an `Optional`
+payload and a `foreach` element. Size **S**. It blocks KR-26's input idiom.
+
+<a id="s2-bare-generic-contract"></a>
+
+### A generic contract written bare as a value type reaches the C compiler (KR-183)
+
+Found surveying KR-108 on `0.9.630`. With `type contract Src<A> …`, the declaration `fn take(Src s)` (no type
+argument) passes `kama check` ("OK"), and the build then fails in C with `unknown type name 'k_Fq7__Src'`. The
+refusal exists only for a local (kama.cemit.cpp ~8090); a parameter, a field, a return type and a generic argument go
+unchecked.
+
+Fix: one refusal for a bare generic contract — or any bare generic type — in every type position, naming what is
+missing ("`Src` takes a type argument — `Src<…>`"), with an xfail per position. Size **S**. It blocks KR-108: once
+`DatagramSocket<A>` lands, every user's `fn f(DatagramSocket d)` would hit it.
+
+<a id="s2-enum-copy-order"></a>
+
+### An enum's copyability depends on the order of its payloads (KR-184)
+
+Found surveying KR-110 and confirmed on `0.9.630`. With `P` a non-Copyable resource,
+
+```kama
+type enum J { Null, Arr(DynamicArray<J> items), Obj(DynamicArray<P> ps) }
+```
+
+fails inside dynamic_array.kama with "`J` has no `copy` method — use `give` to move it". With the two payloads
+swapped it builds, and it also builds when `P` implements `Copyable`.
+
+Cause: `variantCopyable` (kama.cemit.cpp ~19114) asks for an unbaked payload's `fieldCType`. That registers
+`DynamicArray<J>` partway through the check and bakes in the provisional "J copies" answer, which turns out false.
+
+Fix: judge an unbaked payload with `declaredCopyable(f.type)`, and never register an instance during the check. Add
+the failing order to `tests/enum_copy_settled`. Size **S**. The JSON value tree (KR-110) has exactly this shape.
+
 <a id="s2-fnptr-type-arg"></a>
 
 ### An `fnptr` type is not a type argument (KR-107)
@@ -463,6 +888,48 @@ is open is whether an enum should take operators at all.
 Wanted: a verdict against GOALS (one way to do a thing), and if operators are supported, WHICH (arithmetic
 on a tagged enum but nothing bitwise on a scalar one, say). Then either build it, or record the non-goal in
 SPEC beside the refusal.
+
+**Surveyed on `0.9.630`.** What works and what doesn't:
+
+- Every operator in an enum body is refused, `operator[]` included.
+- `==`/`!=` on a plain enum works. A tagged enum's `==` asks for `Equatable`, and `@generate(Equatable)` works.
+- `|` is refused with a clear message, but it reads "an `Perm`" (an article bug).
+- `cast<uint32>(Perm::Read) | …` works.
+- Bit flags already have a home: `std::fs::Permissions`, a `type value` with `comptime` constants, `operator|` and
+  `has()`.
+
+**A defect:** SPEC (~1905) and the `<` diagnostic both say "an enum with an order implements `Comparable`". But
+`Comparable` is declared `for value, resource, intrinsic` (global.kama ~112), and `implements Comparable<This>` on an
+enum is refused. The documented answer is unreachable, so an enum can never key a `SortedMap`.
+
+Sites:
+
+- global.kama ~112;
+- `rejectMixedOperands` (~2541), which refuses every comparison on an enum before a contract is consulted;
+- `emitBinaryOperator` (~5226), which lowers to `compareTo`.
+
+Steps:
+
+1. Add `enum` to `Comparable`'s `for` list.
+2. Let `<` through `rejectMixedOperands` when the enum satisfies `Comparable`.
+3. Fixture: `<` on a plain and on a tagged enum, plus a `SortedSet<Level>`. Keep `identity_enum_order` and
+   `enum_operator` as xfails.
+4. Write the non-goal into SPEC beside the refusal (~5765), naming the flags idiom.
+5. Fix the article.
+6. Correct this section's claim that C# lets an enum declare operators; it does not.
+
+Size **S**.
+
+**Decisions owed:**
+
+1. **Recommended: declared operators on an enum are a NON-GOAL.** Comparison goes through `Equatable`/`Comparable`,
+   flags are a `type value` (as std already does), and ordinal or algebraic operations are named methods. That is one
+   way each, and the `|` refusal stays. The alternatives are arithmetic on tagged enums only, or all operators.
+2. **Recommended: also add `@generate(Comparable)` for an enum, ordered by declaration.** The alternative is a
+   hand-written `compareTo` only.
+
+Note: under (1), a plain enum's `==` stays a raw integer compare while `<` goes through `compareTo`. That is
+consistent with the `isSynthCmp` shortcut.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
@@ -1638,6 +2105,91 @@ half: Go decodes into `map[string]any`, Python into `dict`, .NET has `JsonDocume
 - Whether a typed schema may hold an opaque subtree: a `JsonValue` field in a `@generate(Deserializable)`
   type, which is how a glTF reader keeps `extensions` without modelling them.
 
+**Where (surveyed on `0.9.630`).** There is no dynamic reader. `JsonDeserializer`'s cursor (`peek`, `numToken`) is
+private, and the `Deserializer` contract has no "what comes next" member.
+
+What exists today:
+
+- `Map` is a hash map (open addressing), with no insertion order. `SortedMap` is ordered by key.
+- Map's lookup convention is the one to mirror: `contains`, `getRef` (which panics on an absent key), and `get`
+  (an `Optional` copy).
+
+Found on the way and filed separately:
+
+- **KR-184:** a recursive enum's copyability depends on payload order, and the tree has exactly that shape.
+- **KR-185:** the integer reader accepts invalid numbers and aborts on overflow, and deep nesting overflows the stack.
+
+Two more constraints:
+
+- A value-producing `match` cannot return a borrow. `return match (this) { case Arr(items: xs): xs[i]; … }` is "ref T
+  result must borrow this"; the statement form works.
+- A module `static` cannot hold an owning enum, so there is no static `Null` sentinel for a missing key. Lookup returns
+  `Optional`.
+
+Sites: json.kama `numToken`/`readInt`/`readUint`/`skipValue` (~334–555); the prelude's `Serializer` (~360) and
+`Deserializer` (~520).
+
+Steps, after KR-184 and KR-185:
+
+1. Add `JsonValue`, a Copyable `JsonMember { key, value }`, and `JsonNumber` in json.kama.
+2. Accessors: `has`/`getRef`/`get`/`at`/`length`/`members()`, and `asInt64`/`asUint64`/`asFloat64` returning
+   `Optional`.
+3. Fixtures:
+   - a byte-exact round trip;
+   - 2^63+1 and 1e400;
+   - key order, and duplicate keys;
+   - a deep-nesting refusal;
+   - a typed schema holding a `JsonValue` field;
+   - a KBIN-named round trip;
+   - an xfail for the positional reader.
+
+Size **M**, plus S each for KR-184 and KR-185.
+
+**Decisions owed:**
+
+1. How a number is held.
+   - **(a), recommended:** `JsonNumber`, a resource over its exact text. Every number stays exact, and invalid text
+     cannot be built.
+   - (b) Three variants: int64, uint64, float64.
+   - (c) float64 only, which loses integers past 2^53.
+2. Object storage.
+   - **(a), recommended:** `DynamicArray<JsonMember>` with linear lookup. Order round-trips, and with duplicate keys the
+     last wins, as the typed reader does.
+   - (b) `Map`, which loses order.
+   - (c) A new insertion-ordered map.
+3. How the tree is reached.
+   - **(a), recommended:** `JsonValue` implements `Serializable`/`Deserializable`. That needs three new contract
+     members: `peekKind()` and `readNumberText()` on the reader, and `writeNumberText()` on the writer.
+     - The parse is `deserializeJsonBuffer::<JsonValue>`, with no second parser.
+     - A typed schema can hold a subtree (glTF `extensions`).
+     - A positional reader answers `TypeMismatch`.
+   - (b) JSON-only `parseJson`/`writeJson`, with no subtree inside a typed schema.
+
+<a id="s4-json-numbers"></a>
+
+### The JSON reader takes invalid numbers, aborts on overflow, and overflows the stack on deep input (KR-185)
+
+Found surveying KR-110 and confirmed on `0.9.630`, reading into a `DynamicArray<int64>`:
+
+- `[1.5]` reads 1, and `[007]` reads 7, with no error.
+- The survey also reports `[1e3]` → 1, `[+7]` → 0, `[-]` → 0, a `uint64` `[-3]` → 0, and
+  `[18446744073709551616]` wrapping to 0.
+- `[9223372036854775808]` **aborts the process** ("arithmetic overflow -- int64 + overflowed", exit 134). A parse of
+  untrusted input must return `Err`, never trap.
+- The lenient reader's `skipValue` recurses: `{"junk":` followed by 10⁶ `[` is a SIGSEGV (exit 139). At depth 1000 it
+  correctly returns `Err`.
+
+Sites: json.kama `numToken`/`readInt`/`readUint`/`skipValue` (~334–555).
+
+Fix:
+
+- One number scanner that validates the JSON number grammar (RFC 8259 §6), shared by every read.
+- A fractional, exponent or out-of-range value read into an integer is `TypeMismatch`, never a wrap or a trap.
+- A nesting-depth limit, and an iterative skip, so deep input is an `Err`.
+
+Fixtures: each case above as an `Err`, the depth limit, and the valid edge values (`-9223372036854775808`,
+`18446744073709551615`). Size **S**.
+
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 
 The 2026-09-09 review judged the shipped serde layering over-engineered and blocked the container work on
@@ -1912,6 +2464,40 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
     taken at module level (package scope). The only gap it closes over `private`-with-no-grant is stopping the
     declaring type from calling its OWN member, and kama polices that nowhere. Revisit only if protocol misuse
     actually bites.
+  - **Surveyed on `0.9.630` (KR-8) — the inert visibility words, and the verdict owed.**
+    - `private` and `protected` on a contract member are accepted and do nothing. `type contract Tok for value
+      { private fn int32 hidden(); }`, with a `public` implementer and `fn int32 outsider(Tok t) { return
+      t.hidden(); }`, builds and prints 42. A generic bound `<T: Tok>` behaves the same, and `protected` on a resource
+      contract prints 9.
+    - **KEYWORDS.md:45 is false.** It says `protected` is "an error on … a `contract`", and it builds.
+    - A `private` implementer is refused ("must be declared `public`"), and so is `friend` on a contract.
+    - No `.kama` file in the repo writes a visibility word on a contract member.
+    - What the feature would buy already works: give the member a key parameter type whose ctor is
+      `friend driver[mint]`. `driver` calls it, and `outsider` is refused ("'mint' is private in 'DriverKey'").
+
+    Sites: `rejectInertModifiers` (~27321; the `0.9.443` inert-modifier work deliberately left these words unchecked here), `collectInterfaces`
+    (~10432; the friend refusal is at ~10573), `emitClassInterfaceVtables` (the public check, ~32705), and
+    `emitInterfaceDispatch` (~32892).
+
+    The fix for (1):
+    - a contract arm in `rejectInertModifiers` refusing `private`/`protected`/`public` ("a contract member is public
+      by definition");
+    - xfails `contract_member_{private,protected,public}`;
+    - a SPEC *Contracts* sentence with its marker, which also makes KEYWORDS true;
+    - record the non-goal, naming the key pattern, as a bullet here, and delete the row.
+
+    Keep `friend_on_contract`. `enum_contract_method_not_public` and intrinsic/adapter implementers stay forced
+    `public`. Size **S**.
+
+    **Decisions owed:**
+    1. **Recommended: refuse all three words and declare restricted-private a NON-GOAL.** The key-type pattern answers
+       it (measured), and so do `protected` hooks on an extensible resource. One way, no cross-type grant rule, and
+       nothing in the corpus breaks.
+    2. Refuse now and leave the row "to consider". That is not an allowed verdict (scheduled / optional / non-goal).
+    3. Build it (M–L). It reverses `0.9.266`, and the generic-bound path calls `Impl::hidden` directly, so a
+       contract-level grant would have to open every implementer's private method.
+
+    Sub-decision: also refuse a redundant `public`. **Recommended: yes.**
   - **Open questions, ANSWERED 2026-09-09 by probe:**
     - **Is `ObjectGraph<T>` load-bearing after `43dd3dd`? NO.** A pure-`Owned` tree round-trips **by value**
       today with no `ObjectGraph` anywhere, re-encoding byte-identically — which is the case that originally
@@ -1991,6 +2577,172 @@ moved-out payload) decide where that holds. A by-value `foreach` binding is the 
 the same answer. The semantics stay: a value binding is a copy the body may change (probed: writing one changes
 neither the subject nor the element), so this is a lowering, not a language change. The read-in-place applies
 only where the body provably never writes the binding.
+
+**Where (surveyed on `0.9.630`).** The `foreach` half is ANSWERED. `foreach (const ref Big b in xs)` (`0.9.605`) copies
+nothing. A by-value loop still copies once at -O2 (twice at -O0), because `Iterator<T>.next()` yields by value. Only
+another method (`iterConst()`) removes that copy, and that method is the `const ref` loop — it is not a lowering.
+
+The `match` half reproduces: `case Ok(value: b): b.last()` over a `const ref Result<Big, E>` (a 16 KB `Big`) emits
+`k_Big k_b = kama_msub2->kama_u.k_Ok.k_value;`. That is one 16 KB copy at -O0, and at -O2 whenever `last` is in
+another C unit; clang removes it only when it can see the callee.
+
+Sites, all in kama.cemit.cpp:
+
+- `emitMatchSwitch`: the subject borrow and `subjOwner` (~28755–28860), the binding (`const bool alias = …`, ~28993),
+  and the `_refParams`/`_constLocals` marking (~29012).
+- The one existing write scan, `emitParallelFor`'s `capWrites` (~7245–7340).
+- The freeze machinery: `Scope::FrozenPlace`, `frozenConflict`/`rejectFrozenWrite`, `checkConstWrite`.
+
+Fix:
+
+1. Lift the scan into one `writtenRoots(stmt)`, adding `give`, `ref` loops, nested `match` subjects and `spawn`.
+2. Bind the payload in place (`T* b = &slot`) only when all of these hold:
+   - the `match` borrows its subject;
+   - the payload is a plain struct;
+   - the arm never writes, `ref`s or `give`s `b`;
+   - the subject is a temporary, a `give` copy, or a local or by-value parameter that the arm never writes.
+3. Mark the binding `_constLocals`, and freeze the subject for the arm. A write the scan missed then becomes a compile
+   error, never a miscompile.
+4. Fixture `match_binding_in_place`. Extend `check-construct-frame.sh`: the -O0 frame, and -O2 with the callee in
+   another unit.
+5. Fix **KR-181** in the same work; it shares the scan and the freeze.
+
+Narrow this row to the `match` half. Size **M**, 2–3 commits.
+
+**Decisions owed:**
+
+1. **Recommended: a lowering.** It keeps one spelling and copy semantics. The alternative, a
+   `case Ok(value: const ref b)` pattern, is a grammar change, and a pattern binding has no type slot.
+2. Which subjects qualify. **Recommended: locals and temporaries only.**
+   - A `const ref` parameter is unsound today. `fn two(const ref Optional<int64> a, ref Optional<int64> b)` called
+     `two(a: o, b: ref o)` is accepted, so the two borrows overlap.
+   - A static that a callee writes behaves the same way. Both were measured: the copy returns 7, while reading in place
+     would read the overwritten payload.
+   - Widening to those subjects first needs a refusal of a `const ref` argument that overlaps a `ref` one.
+
+<a id="s5-noheap-contract-slot"></a>
+
+### `@noheap` across a contract slot (KR-39) — surveyed on `0.9.630`
+
+**The generic-bound case is already solved, but nothing pins it.** `@noheap fn int64 measure<T: Shape>(T sh)` lowers
+to a direct `measure__Sq(…)` call and builds, and it is refused with a chain when `Sq.area` allocates. No fixture holds
+this.
+
+Still refused:
+
+- a local upcast in the body (`Sq q…; Shape sh = q; sh.area()`): "a contract member not declared `@noheap`";
+- a contract parameter under `--no-heap`;
+- `tests/global_allocator_serde.kama --no-heap`, at the drop of `Owned<Error>` (the `kama_dtor` slot).
+
+**What "knowable" means.** In a whole-program build, every contract or virtual slot can hold only a function that some
+emitted vtable instance installed (`const V Impl__as_C = { .k_area = &Impl__area, … }`). Refinement emits its own
+`Sp__as_Drawable` (verified). So the callee set is finite and visible, heterogeneous collections included. Only `fnptr`
+slots, bound function pointers and runtime-header callbacks stay blind.
+
+Sites:
+
+- `emitInterfaceDispatch` (~32892, the immediate `rejectNoHeapIndirect`);
+- `emitIfaceHandleFuncs` (~17674, `kama_dtor`);
+- `__vdrop` (~32960) and the virtual sites (~38051, ~38151);
+- `buildCallGraph` (~31497; the member-call facts at ~31690) and `checkNoHeapTransitive` (~31762);
+- kama_runtime.h ~279, beside `KAMA_NOHEAP_SLOT`.
+
+Fix:
+
+1. `#define KAMA_SLOT(V, f) (f)` wraps every unproven slot call (`KAMA_SLOT(<C>_vtbl, recv.kama_vtbl->k_m)`).
+   Emission stops refusing, so the walk decides for `@noheap` and `--no-heap` alike.
+2. `buildCallGraph` parses the emitted vtable initializers (three emit sites: ~15120, ~32635, ~36392) into a map
+   V → slot → targets. The per-TU `static const` duplicates are unioned by V.
+3. A `KAMA_SLOT(` adds an edge to every target; a null slot adds none. The hop renders as
+   `Shape.area [Sq2] -> Sq2::area`.
+4. Fixtures:
+   - flip `xfail/noheap_contract_member` to positive;
+   - give `noheap_flag_reached_dispatch.d` an allocating implementer;
+   - update `noheap_drop_{contract_box,virtual_box}`'s `.msg`;
+   - a two-implementer positive, and an xfail where one implementer allocates;
+   - a `--no-heap` + pool copy of `global_allocator_serde` that must BUILD;
+   - pin the generic-bound case.
+5. Rewrite SPEC's *No-heap subset* ("blind seam", "a runtime fact"), and KR-79's "inherits KR-39" note.
+
+Traps:
+
+- Intrinsic implementers go through `__thunk` bodies, which is fine.
+- Keep the `!header` exclusion (`kama__loop_step`).
+- Without a pool, the serde drop stays refused, now naming the implementer.
+- `expose fn measure(Shape sh)` builds, so a host-forged vtable is unchecked C. Say so in SPEC.
+- **A display defect seen on the way:** chains print `measure::k_Fk39a2::Sq` and
+  `Owned_kama::Error_kama::GlobalAllocator::dtor`, i.e. generic instances are not demangled. Fix it with this row.
+
+Size **M**.
+
+**Decisions owed:**
+
+1. The callee set. **Recommended: every vtable instance in the emitted, pruned C** — sound, and the least code. The
+   alternative is only the vtables named by reached bodies, which needs a fixed point.
+2. **Recommended: the same rule for virtual and destructor slots** — one rule.
+3. **Recommended: keep `@noheap` on a contract member,** as an optional promise checked at the implementers.
+
+<a id="s5-sizeof-comptime"></a>
+
+### A struct's `sizeof` and `alignof` as a compile-time value (KR-94) — surveyed on `0.9.630`
+
+The current state:
+
+- `comptime usize H = sizeof(Header);` → "`sizeof` folds only for fixed-width scalars…".
+- `alignof(int64)` → "does not fold".
+- `InlineArray<uint8>#(sizeof(Header))` → "does not fold".
+- `comptime assert(cond: sizeof(Header) == 16, …)` works, as `_Static_assert((sizeof(k_Fa__Header)) == (16), …)`.
+
+**A verdict comes first.** Ruling 5 (2026-09-24, "no struct sizeof in comptime") stands until the maintainer says go.
+The §5 bullet already answers "can it be done" with yes.
+
+Half a layout model already exists:
+
+- `byteViewFieldLayout`/`byteViewLayout` (~21103/21180) handle pointer width, `@packed`, base types,
+  `InlineArray`/`Simd`, and enums with a declared integer type.
+- `emitBytesDefinition` (~21440) already emits per-field `_Static_assert(offsetof…)`.
+
+Sites:
+
+- Fold sites: `scalarByteSize` (~12257), `constValue`'s `SizeofNode` arm (~12445), `rejectUnfoldableConstArg`
+  (~12610), `ctaNeedsCLowering`/`ctaRenderC` (~12645), and the interpreter arm (kama.comptime.cpp ~462).
+- Target facts: kama.driver.cpp's `ARCH_` flags (~2576). The named targets MACOS/LINUX/WINDOWS/EMBEDDED carry an empty
+  arch (~2759).
+
+Fix:
+
+1. Generalize the byte-view walk into one `layoutOf(type, model)`.
+2. A per-arch model: {pointer bytes, int64/float64 alignment cap, enum bytes, `clong`}.
+3. Route both fold sites through it.
+4. Emit `_Static_assert(sizeof(T) == N && _Alignof(T) == A)` once per baked type, so a wrong model fails the BUILD,
+   never the program.
+5. Flip these xfails to positive fixtures: `type_comptime_sizeof_aggregate`, `local_comptime_sizeof_aggregate`,
+   `type_comptime_alignof`, `alignof_not_foldable`, `sizeof_usize_not_foldable`, `sizeof_clong_not_foldable`,
+   `sizeof_const_generic_unfoldable`. Add new xfails for a `type extern` and an unknown arch.
+6. Rewrite SPEC ~3388–3400, ~5141–5161 and ~5280, and `ClassInfo::alignN`'s comment (kama.cemit.h ~449, which states
+   the opposite policy).
+7. Prove it on the wasm leg and with `check-target`; Windows CI covers LLP64.
+
+Traps:
+
+- There are two fold paths: `constValue` and the interpreter.
+- `kama check` evaluates each `[--target …]` configuration, so values differ per configuration.
+- `transpile` output becomes target-specific.
+- `--target WINDOWS` on this Mac means aarch64-windows.
+- AVR's `double` already fails the `kama_runtime.h` assertion.
+
+Size **M**, 4–6 commits.
+
+**Decisions owed:**
+
+1. **Recommended: GO.** The assertion makes a wrong model a build error.
+2. Scope. **Recommended: every type except `type extern`,** since every kama lowering is structs and unions over
+   scalars, pointers and `kama_string`. The alternative is plain-data types only.
+3. **Recommended: derive the model from the generalized byte-view walk,** not from a second walker beside `cType`.
+4. **Recommended: assert once per type, beside its C definition.** A generic instance is keyed by its mangled name.
+5. An unknown arch (or EMBEDDED without a triple). **Recommended: refuse, naming the arch.**
+6. A variant's tag is a C `enum`, so its size is the toolchain's choice. **Recommended: model it as 4 bytes behind the
+   assertion.** A fixed-width tag would change the C layout the host header exposes.
 
 ### The allocation campaign — opened 2026-09-12, COMPLETE 2026-09-20
 
@@ -2372,6 +3124,170 @@ remainder is a thin safe `std::gpu` binding wrapper over the shipped `kama_gpu.h
     Android/Quest only via a pushed `.so`). Cross-platform *shipping* scripting is the §7 VM, not this. This buys
     fast native iteration on Linux/Mac/Windows — enough to justify the two tiny primitives.
 
+<a id="s8-gpu-wrapper"></a>
+
+### Safe `std::gpu` (KR-25) — surveyed on `0.9.630`
+
+The current state:
+
+- `lib/std/gpu` holds `kama_gpu.h` (the web half, static inline) and `kama_gpu.c` (native, GLFW), and no kama code.
+  `gpu` is not in `lib/kama.json`, so `import { std::gpu::Device }` gives "cannot resolve module".
+- The seam is four functions: `surface` (it creates the window and the surface together; the native window is a file
+  static `g_window` that is never destroyed), `present`, `pump` and `sleep_ms`.
+- A native `kama build triangle.kama --webgpu` (wgpu-native v29.0.1.1, GLFW 3.4) succeeds. It prints the two
+  documented fnptr warnings, plus a new stray `clang: warning: '-x none' after last input file`. The smoke binary prints
+  "WGPUInstance created", and `kama check` on the triangle passes for native and wasm without the SDK.
+- **Nothing in CI reaches `tests/webgpu/*` or `examples/webgpu`.**
+- The triangle leaks more than its five per-frame releases cover: the shader module, the `GetBindGroupLayout` ref, the
+  adapter, the instance and the calloc'd `App`. It also hardcodes 512×512 BGRA8.
+- webgpu.h ref-counts all 23 handle types (`Release`/`AddRef`). Releasing the last Device ref destroys it, so its
+  children turn INVALID (validation errors) rather than dangling.
+- The web leg is unprobed: there is no emcc on the host.
+
+Sites:
+
+- `kama_gpu.c`: `kama_gpu_surface` (~85) and `kama_gpu_pump` (~92). `kama_gpu.h`: the web bodies (~55–75).
+- A new `lib/std/gpu/gpu.kama`, plus the `lib/kama.json` entry.
+- kama.driver.cpp: the `needsGpu` link (~12985, ~13514), and the seam input order behind `-x none` (~13404).
+
+The design:
+
+- **One `type resource` per handle:** Instance, Adapter, Device, Queue, Surface, ShaderModule, RenderPipeline,
+  BindGroupLayout, BindGroup, Buffer, Texture, TextureView, CommandEncoder, RenderPass, CommandBuffer and
+  SurfaceTexture.
+  - Each holds a private `UnsafePtr` whose `~T` calls `wgpu*Release` (the `Poller` shape).
+  - Each has `public unsafe ctor adopt(UnsafePtr raw)` and `unsafe fn raw()`, so an engine can bind more of the API
+    with its own externs.
+- **The once-in-order steps are moves:** `encoder.finish()` consumes the encoder, `queue.submit(give cmd)` the command
+  buffer, `pass.end()` the pass, and `frame.present()` the frame. Release always follows present, and a frame dropped
+  without presenting is skipped.
+- **A typed acquire:** `surface.acquire() -> Result<SurfaceTexture, SurfaceError>`, with `SurfaceError { Occluded,
+  Outdated, Lost, Timeout, OutOfMemory, Error }`. Suboptimal is a success flag on the frame. The seam maps wgpu.h's
+  `0x00030001` to `Occluded`; the web never produces it, so the triangle's `@compileFor` goes away.
+- **The async device, without closures or ASYNCIFY:**
+  - The C seam chains the adapter and device callbacks into a heap slot, published with a release-store (a callback
+    may fire on a wgpu thread).
+  - kama polls: `instance.requestDevice(surface:) -> DeviceRequest`, and `poll() -> DeviceStatus { Pending,
+    Ready(Device device, Queue queue), Failed(GpuError error) }`.
+  - The user-side fnptr warnings go away.
+
+The commits:
+
+1. Seam rework; `gpu.kama` with Instance, Adapter, Device, Queue, Surface, DeviceRequest and the typed acquire; the
+   manifest entry; the `-x none` fix.
+2. The remaining handles, with safe creation for exactly what the triangle uses.
+3. The triangle on `std::gpu` with zero `wgpu*Release` calls; README, ENGINE_READINESS and SPEC.
+4. `tools/check-gpu.sh`: `kama check` the example and fixtures, native and wasm, always (no SDK needed); build, link
+   and run the smoke when `third_party/wgpu` (or emcc) exists, else SKIP. Plus an xfail for a frame used after
+   `present()`.
+
+Traps:
+
+- On the web `run` never returns, so main's resources are never dropped. That is required, not a leak.
+- emdawnwebgpu aborts on an explicit present, so `present()` stays a seam call.
+- Take enum numbers from the header; never write them by hand.
+- `--webgpu` stays an explicit flag.
+- `Surface.configure` needs the framebuffer size, which KR-26 supplies.
+
+Size **L** (4 commits).
+
+**Decisions owed:**
+
+1. A handle's copy. **Recommended: `Copyable(bare: give)` with copy = `AddRef`.** It is webgpu.h's own model, and it
+   avoids a double count through `Shared<Buffer>`. The alternative is move-only.
+2. Parent lifetime. **Recommended: independent handles.** Dropping the Device destroys it, which is WebGPU's semantics
+   and stays memory-safe. The alternatives: every child AddRefs its device, or `Shared<Device>`.
+3. Descriptor breadth. **Recommended: safe creation for the triangle's set, plus `adopt`/`raw`** (the row's scope
+   line). The alternative is a full descriptor mirror.
+4. `Occluded`. **Recommended: `acquire` sleeps 32 ms natively before returning `Err(Occluded)`,** the way a browser
+   throttles a hidden page. There is one correct response, and that failure once took a machine down. The alternative
+   is to leave it to the caller.
+
+<a id="s8-input"></a>
+
+### A window and its events — `std::input` (KR-26) — surveyed on `0.9.630`
+
+The current state:
+
+- Native `kama_gpu_pump` calls `glfwPollEvents` with no callbacks registered, so only the close flag survives.
+- The web pump is `return 1`, with no html5 listeners.
+- No key, mouse, size or focus information exists anywhere.
+- A pull-API prototype worked: a C ring queue, `type enum InputEvent`, `pollEvent() -> Optional<…>`, and
+  `try cast<Key>(n)` falling back to `Unknown`. It needs **KR-182** fixed first, because a bound key cannot be matched
+  today; that is commit 0.
+- A downstream engine writes its own GLFW/html5 platform layer today, because the seam's window is unreachable and its
+  events are discarded. This module must make that layer unnecessary: several windows, size and scale, and a native
+  handle.
+
+Sites:
+
+- `kama_gpu.c`: `kama_gpu_pump` and `g_window`. `kama_gpu.h`: the web pump (~70).
+- A new `kama_window.h`/`.c`.
+- kama.driver.cpp: a `needsWindow` that links GLFW without wgpu.
+
+The design:
+
+- **A `Window` resource.**
+  - Native: a GLFW window with its own ring queue, reached through the window user pointer, so several windows work.
+  - Web: it binds `#canvas` and registers html5.h callbacks, so no JS library is needed.
+  - NOT `Sendable`, which enforces GLFW's main-thread rule for free.
+  - Methods: `open(title:, width:, height:) -> Result<Window, WindowError>`, `pump()`, `pollEvent() ->
+    Optional<Event>`, `size()` (logical), `framebufferSize()` (pixels), `scale()`, `setCursor(mode:)`, and
+    `unsafe nativeHandle()`.
+- **`Event`:** `KeyDown(key, mods, repeat)`, `KeyUp`, `Text(char c)`, `MouseMove(x, y, dx, dy)`, `MouseButton(button,
+  down, mods)`, `Scroll(dx, dy)`, `Resize(w, h)`, `ScaleChanged`, `Focus(bool)`, `PointerLock(bool)` and
+  `CloseRequested`. One queue keeps a resize and a click in order.
+- **`Key`:** one physical-key enum, with USB HID usage ids as the discriminants. That is what DOM `KeyboardEvent.code`
+  names, and what GLFW's US-named, layout-independent tokens mean. Two C tables translate into it; anything unmapped
+  becomes `Unknown`.
+- **Coordinates** are logical, and `scale()` converts them.
+- **The queue** is a fixed ring (no heap) that coalesces moves, scrolls and resizes.
+- **Gamepad** comes later. GLFW's gamepad API and `getGamepads()` both expose the W3C standard layout.
+- **With KR-25:** one `Window`. `Surface.create(instance:, window: const ref Window)`, with the seam keeping a C ref on
+  the window.
+
+The commits:
+
+0. KR-182.
+1. The native seam: Window, Event, Key, headless, `needsWindow`, and the manifest entry.
+2. The web html5 glue, resize/DPR, and pointer lock.
+3. Gamepad.
+4. The triangle quits on Escape and reconfigures on resize; docs.
+
+CI with no display:
+
+- `Window.headless(width:, height:)` plus `Window.post(event:)` (after SDL_PushEvent), so fixtures can test the queue,
+  ordering and coalescing on the native, san and wasm-under-node legs.
+- The key tables are tested by externing the C translators directly, as `tests/support/procutil.kama` does with
+  kama_os.h.
+- A build-and-link-only guard for the GLFW glue. CI installs no GLFW today, and GLFW 3.4's null platform is likely
+  missing from Ubuntu 24.04's apt GLFW (3.3) — unverified.
+
+Traps:
+
+- On macOS GLFW must run on the main thread.
+- `glfwTerminate` destroys every window, so init and terminate are ref-counted.
+- On the web, pointer lock is granted only inside a user gesture, so it arrives later as a `PointerLock` event.
+- `CloseRequested` never arrives on the web.
+- Under node the headless window must register no html5 callbacks.
+- Writing the translators: `match` on an integer is refused (use if-chains or `try cast`), `out` is a keyword, a
+  statement `match` needs its `;`, and `case None: { break; }` needs its braces.
+
+Size **L** (commit 0 is S, then 4).
+
+**Decisions owed:**
+
+1. The module. **Recommended: `std::window`,** holding `Window`, `Event` and `Key`: the window is where events come
+   from and what a surface targets, and a program without WebGPU still gets input. The alternatives are
+   `std::gpu::Window`, or `std::input` holding `Window`.
+2. **Recommended: a public `Window.headless` plus `post`,** which also serves replay and dedicated servers. The
+   alternative is a test-only extern.
+3. Key identity. **Recommended: the physical key, plus a separate `Text` event.** The alternative is layout-mapped
+   keys.
+4. Pumping. **Recommended: an explicit `pump()`.** An implicit pump inside `pollEvent` can livelock under a high-rate
+   mouse.
+5. Overflow. **Recommended: the coalescing ring plus `Event::Dropped(n)`,** never a silent drop.
+
 <a id="s9"></a>
 
 ## 9. Performance
@@ -2720,6 +3636,60 @@ rather than here, so there is one number to keep current. Forward work:
   loads the whole module by design: nothing pins a file, and seeding from the importing file's tokens would
   be unsound, since a type reached only through inference is never spelled.
 
+<a id="s9-os-seam-bodies"></a>
+
+### The OS seam's bodies (KR-68) — surveyed on `0.9.630`, with a correction
+
+Measured interleaved, min of 30, with clang on macOS:
+
+- A `std::fs` program has 14 TUs. **4 of them include `kama_os.h`, all stdlib modules; `main.c` does not.**
+- The per-unit cache reuses them. After editing `main.kama` only `main.o` rebuilt, so the seam's depth is a
+  CLEAN-build cost only.
+
+| Clang step | empty file | + `kama_runtime.h` | + `kama_os.h` |
+|---|---|---|---|
+| preprocess (`-E`) | 12.9 ms | 17.4 ms | 22.6 ms |
+| parse (`-fsyntax-only`) | 13.3 ms | 23.3 ms | 33.1 ms |
+
+So the seam costs about 10 ms per seam TU, about 40 ms per clean build. **An implementation TU compiling all 158 seam
+bodies at -O2 costs 105.7 ms, against 33.2 ms.** On macOS, moving the bodies into their own TU is a net LOSS.
+
+**A correction to the row.** Of the "~18 of 22.5 ms" attributed to `kama_runtime.h`, about 13 ms is clang starting up.
+In a user TU, `main.gen.h` (9,431 lines) is more text than `kama_runtime.h` (1,291 expanded lines).
+
+Sites: `include/kama_os.h`; the runtime-header glob (kama.driver.cpp ~2840); `ensureRuntimeHeaders` (~31418); the
+per-TU include derivation (~41796–41930); `tools/check-header-scan.sh`.
+
+If the split were ever wanted, this is the protocol. It needs native Windows only; the VM is QEMU and inflates times.
+
+- P1: lines and macros per seam TU.
+- P2: a clean `--no-cache` build, A/B interleaved, min of at least 20, at `-j1` and at the default `-j`. Variant B
+  puts the bodies under `#ifdef KAMA_OS_IMPLEMENTATION` in the same header, so the scan and its guard are unchanged,
+  plus one emitted implementation TU.
+- P3: an incremental build; expect no difference.
+- P4: release micro-benchmarks — a 1-byte pipe read/write ×1M, `exists` ×100k, and a poller with 1k ready
+  descriptors.
+- P5: binary size with dead-strip.
+- Ship B only if it beats noise on P2 and is within noise on P4 and P5.
+
+Blockers:
+
+- There is no native Windows box.
+- The implementation TU's own codegen cost.
+- It must repeat the feature-macro ordering; getting that wrong caused the `global_allocator_isolates` hang.
+- `kama_time.h` and `kama_random.h` also include `<windows.h>`, so splitting the seam alone does not remove it.
+
+Size **S** for the verdict and the trims.
+
+**Decisions owed:**
+
+1. **Recommended: retire the body-split design.** It is a loss on macOS, and the cache already removes the incremental
+   cost.
+   - Keep a Windows-only option: `NOGDI`/`NOUSER`/`NOMINMAX`-style trims before `<windows.h>`, which keep inlining.
+   - Re-point the row at the real per-TU cost: `gen.h` and runtime parsing in user TUs.
+2. Run the protocol first, then decide.
+3. Build the split now.
+
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
@@ -2773,6 +3743,45 @@ manifest, `lib/kama.json`, which is named `std`.
 The fix is to tell the reader when it reads the stdlib's manifest, or to refuse at the callers that know the
 path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
 diagnostic, not a feature: no program can use such a package today.
+
+**Where (surveyed on `0.9.630`).** It reproduces, and the problem is wider than filed:
+
+- A library named `core` fails `kama check` ("`<prelude>/core/src/core.kama` and `src/core.kama` are two files of
+  module `core`"). One named `std` checks OK.
+- An app depending on both (`"std": {"path": "../std"}`, `"core": {…}`) installs ("installed 2 package(s)") and then
+  cannot import either one:
+  - `std` gives "cannot resolve module", with a note blaming the compiler install;
+  - `core` gives "does not export `v`".
+- **Wider:** a dependency KEY that differs from the package's own name installs silently, then reports "declares
+  `foo`, but it is not installed — run `kama pkg install`". A key gets no name check at all.
+
+Sites, in kama.driver.cpp:
+
+- `ManifestReader`'s name branch (~4483), with the comment on why it skips `std`/`core`;
+- `depsObject` (~4005), where the key is read;
+- `seedValidName` (~9441) and `usableNameHint` (~3306);
+- `resolveStdlibDir`/`g_argv0` (~462/474).
+
+Steps:
+
+1. One reserved-name rule, called from three places: the project name; the dependency key, through `importNameOf`
+   (so `@x/core` is caught); and seed.
+2. Exempt only the compiler's own stdlib manifest, by canonical path against `resolveStdlibDir(g_argv0) +
+   "/kama.json"`.
+3. A dependency key must equal the dependency's own name. Refuse it at install, naming both.
+4. Guards: flip `tools/check-manifest.sh` (~655) from accept to reject, and add `corename` and dependency-key cases to
+   check-packages. `check-self-import` and `check-runtime-dir` already hold the stdlib manifest accepted in both
+   layouts.
+5. docs/packages.md names the reserved names.
+
+Trap: an installed compiler checking this repo's `lib/kama.json` would now refuse it. That is acceptable; write it
+down. Size **S**.
+
+**Decision owed:**
+
+- **(a), recommended:** the reader knows its path and exempts the stdlib by identity — one rung, the way `global` is
+  handled. About 25 `ManifestReader` call sites gain a path.
+- (b) Refuse only in build, install and publish. A future caller would miss it.
 
 <a id="s10-agent-tooling"></a>
 
