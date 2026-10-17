@@ -5505,6 +5505,11 @@ fn int32 main() {
   `>>` needs no space. `type value`/`resource` generics both work (a generic resource is move-only with a
   per-instance dtor). Function type args are inferred from the call — inside a generic body too, where an
   argument typed by the enclosing `T` infers per instantiation (`fn T outer<T>(T v) { return ident(x: v); }`). <!-- test: generic_infer_in_generic -->
+- **A parameter named only in another's bound is read off that parameter's conformance.** In <!-- test: generic_infer_through_bound -->
+  `fn A pull<S: Source<A>, A>(ref S s)` the argument binds `S`, and the one `Source<…>` its type implements binds
+  `A` — the conformance is declared, so nothing is guessed (Rust infers the same from a single applicable impl).
+  One binding may open the next: `<S: Source<A>, A: Boxed<B>, B>` reads `A` off `S` and then `B` off `A`. A type
+  that conforms to the contract twice leaves the parameter open, and the call spells it with a turbofish. <!-- xfail: generic_infer_bound_ambiguous -->
 - **Turbofish — explicit type arguments.** When inference can't determine the type args — most commonly a
   **return-only generic** whose type parameter never appears in an argument — spell them explicitly with
   `f::<int32>()` (the `::` before `<` is unambiguous). Turbofish reaches a generic *function*; a generic

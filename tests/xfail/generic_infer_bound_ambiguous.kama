@@ -1,0 +1,18 @@
+// A parameter named only in another's bound is read off that parameter's conformance — when there is exactly
+// one. `Two` implements `Tagged` twice, so `A` could be `int32` or `int64`, and the call must say which
+// (`idOf::<Two, int64>(s: ref t)`). See tests/generic_infer_through_bound.kama.
+type contract Tagged<A> for value { fn int32 id(); }
+
+type value Two implements Tagged<int32>, Tagged<int64> {
+    int32 v;
+    public ctor make() { this.v = 7; }
+    public fn int32 id() { return this.v; }
+}
+
+fn int32 idOf<S: Tagged<A>, A>(ref S s) { return s.id(); }
+
+fn int32 main()
+{
+    Two t = Two.make();
+    return idOf(s: ref t);
+}

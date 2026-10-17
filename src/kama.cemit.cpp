@@ -16235,12 +16235,74 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         if (!bindGenericArg(d.pty, d.pname, d.expr, localTys, bind, line)) return false;
     }
 
+    // A parameter named only in ANOTHER parameter's bound — `A` in `fn drain<S: DatagramSocket<A>, A>(ref S s)` —
+    // is read off that parameter's conformance. `S` bound to `UnixDatagram`, which implements exactly one
+    // `DatagramSocket<…>`, makes `A` its argument: the conformance is nominal and declared, so there is nothing
+    // to guess (Rust infers the same from a single applicable impl). A type with two conformances to the contract
+    // leaves it open, and the turbofish message below asks for it. Repeated while it binds, because one binding
+    // can open the next bound. Only ever WIDENS what compiles, as `unify` does.
+    std::map<std::string, std::string> boundAmbiguity;   // an open parameter -> why its bound did not decide it
+    if (tmpl->typeBounds)
+        for (bool grew = true; grew; ) {
+            grew = false;
+            for (size_t i = 0; i < tmpl->typeParams->size() && i < tmpl->typeBounds->size(); ++i) {
+                const auto& sp = (*tmpl->typeParams)[i];
+                const auto& bl = (*tmpl->typeBounds)[i];
+                if (!sp || !bl || !bind.count(*sp)) continue;
+                const SharedIdentifier concrete = bind[*sp];
+                for (const SharedIdentifier& b : *bl) {
+                    if (!b || !b->value || !b->genericArgs) continue;
+                    bool open = false;
+                    for (auto& a : *b->genericArgs) if (a && a->value && !a->genericArg && tps.count(*a->value) && !bind.count(*a->value)) open = true;
+                    if (!open) continue;
+                    std::string tmplKey;
+                    {   // the contract as the CALLEE's file names it — see sameHead in `unify`
+                        const NsCtx saved = _nsCtx;
+                        auto gc = _genericCtx.find(key);
+                        if (gc != _genericCtx.end()) _nsCtx = gc->second;
+                        tmplKey = resolveUserName(*b->value, b->qualifier);
+                        _nsCtx = saved;
+                    }
+                    std::vector<std::string> conf;
+                    auto ci = _classes.find(cType(concrete));
+                    if (ci != _classes.end()) conf = ci->second.interfaces;
+                    auto ic = _intrinsicConformances.find(primKey(concrete));
+                    if (ic != _intrinsicConformances.end()) conf.insert(conf.end(), ic->second.begin(), ic->second.end());
+                    const InterfaceInfo* only = nullptr; int n = 0;
+                    std::string seen;
+                    for (const std::string& c : conf) {
+                        auto ii = _interfaces.find(c);
+                        if (ii == _interfaces.end() || !ii->second.isGenericInst || ii->second.templateKey != tmplKey) continue;
+                        if (ii->second.typeArgs.size() != b->genericArgs->size()) continue;
+                        only = &ii->second; ++n;
+                        seen += (seen.empty() ? "`" : ", `") + demangleForDisplay(c) + "`";
+                    }
+                    if (n > 1)
+                        for (auto& a : *b->genericArgs)
+                            if (a && a->value && tps.count(*a->value))
+                                boundAmbiguity[*a->value] = "`" + demangleForDisplay(cType(concrete)) + "` (bound to `" + *sp
+                                    + "`) conforms to `" + *b->value + "` more than once — " + seen + " — so the bound does not decide it";
+                    if (n != 1) continue;
+                    const size_t before = bind.size();
+                    for (size_t k = 0; k < b->genericArgs->size(); ++k)
+                        if (!unify((*b->genericArgs)[k], only->typeArgs[k])) return false;
+                    if (bind.size() > before) grew = true;
+                }
+            }
+        }
+
     for (auto& tp : *tmpl->typeParams) {
         if (tp && !bind.count(*tp)) {
             if (_inferSawOpenArg) return false;   // the template's own walk — see bindGenericArg
             // A comptime parameter is a VALUE, and values are written in their own group — pointing the
             // reader at a turbofish would name brackets that can no longer hold one.
             const bool isValue = cps.count(*tp) != 0;
+            auto amb = boundAmbiguity.find(*tp);
+            if (amb != boundAmbiguity.end() && !bind.count(*tp)) {
+                unsupported(("cannot infer type parameter '" + *tp + "': " + amb->second + "; pass it explicitly with "
+                             "turbofish, e.g. `f::<…>(...)`").c_str(), line);
+                return false;
+            }
             unsupported(((isValue ? "cannot infer compile-time parameter '" : "cannot infer type parameter '")
                          + *tp + "' from the call arguments — pass it explicitly"
                          + (isValue ? ", e.g. `f(...)#(4)`" : " with turbofish, e.g. `f::<T>(...)`")).c_str(), line);
