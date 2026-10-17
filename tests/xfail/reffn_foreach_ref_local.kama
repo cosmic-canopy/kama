@@ -1,0 +1,17 @@
+// KR-180. A `foreach (ref …)` binding was in the `ref`-parameter set, so the `fn ref` escape check took
+// `e` for a parameter and handed back a place inside `local`, which dies at the return — `kama check` OK,
+// then a heap-use-after-free under ASan. The binding borrows its operand, and the operand is a local.
+import { std::collections::DynamicArray };
+
+type resource Holder {
+    int32 keep;
+    public ctor make() { this.keep = 1; }
+    public fn ref int32 bad() {
+        DynamicArray<int32> local = DynamicArray.empty();
+        local.add(item: 7);
+        foreach (ref int32 e in local) { return e; }
+        return this.keep;
+    }
+}
+
+fn int32 main() { Holder h = Holder.make(); h.bad() = 5; return 0; }

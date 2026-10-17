@@ -442,7 +442,8 @@ Sites, in kama.cemit.cpp unless noted:
 
 Steps:
 
-1. Fix **KR-180** first. The alias joins `_refParams` and would inherit that hole.
+1. The alias joins `_refParams`, so it is judged by its host's root through `_refBindingOperand`, as a `foreach (ref …)`
+   and a borrowing-`match` binding are since `0.9.631` (SPEC *Writing a collection in kama*, place-returning methods).
 2. Accept three hosts: a field path, an element `x[i]`, and a call returning `ref`/`const ref`, with any arguments.
 3. Freeze every root:
    - the receiver place;
@@ -463,7 +464,7 @@ Steps:
      const alias, a `give` of the alias, and a `fn ref` returning an alias rooted in a local;
    - update `borrow_bare_host`'s message.
 
-Size **M**, plus S for KR-180.
+Size **M**.
 
 **Decided 2026-10-16** (the maintainer):
 
@@ -783,33 +784,6 @@ Size **L**: (1a) + (2) are M, and decision (4)'s attribute is included.
 
 Decision (2) is measured and decided: **a location in every build**. Commits: `PanicInfo` and the hook; a location
 on every trap; the caller-location attribute (its spelling settled when built).
-
-<a id="s2-ref-return-escape"></a>
-
-### A `fn ref` returns a place inside a local through a loop or `match` binding (KR-180)
-
-Found 2026-10-15 surveying KR-123 and confirmed on `0.9.630`:
-
-```kama
-public fn ref int32 bad() {
-    DynamicArray<int32> local = DynamicArray.empty();
-    local.add(item: 7);
-    foreach (ref int32 e in local) { return e; }
-    return this.keep;
-}
-```
-
-followed by `h.bad() = 5;` passes `kama check`, and under ASan it is a heap-use-after-free. The same shape through
-`match (local) { case Some(value: v): { return v; } … }` is a stack-use-after-return. **This is unsound in safe kama.**
-
-Cause: the `fn ref` return check (the ReturnNode place path in kama.cemit.cpp, ~8800, `!_refParams.count(root)`)
-treats every name in `_refParams` as a `ref` PARAMETER. But `foreach (ref …)` bindings (~18373) and borrowing-`match`
-payload bindings (~28992) are recorded there too.
-
-Fix: before the this / ref-param / static test, map a binding to its operand's root — the Scope `frozen` entry whose
-alias is that name — and judge the root instead. Add an xfail for each shape; the ASan leg proves that every legal
-`ref` return still builds. Size **S**. Fix it FIRST: KR-123's `borrow` alias joins `_refParams` and would inherit
-the hole.
 
 <a id="s2-alias-subject-write"></a>
 

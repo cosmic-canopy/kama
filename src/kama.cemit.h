@@ -1449,6 +1449,11 @@ private:
                                              // when the name is not a local/param/field/func.
     bool isSigType(const std::string& name) const { return _sigs.count(name) != 0; }
     std::set<std::string> _refParams;        // by-ref params of the function being emitted
+    // A `foreach (ref …)` or borrowing-`match` binding is in `_refParams` too, so its reads go through the
+    // alias — but it is no PARAMETER: it borrows its OPERAND. This maps each such binding to that operand, so
+    // the `fn ref` return check judges what the alias points into (KR-180: `foreach (ref e in local) { return
+    // e; }` passed as if `e` were a `ref` parameter, and handed back a place inside a dead local).
+    std::map<std::string, SharedExpression> _refBindingOperand;
     std::string           _fieldDefaultOf;      // the class whose field default is being emitted (emitAggregateFill)
     std::set<std::string> _fieldDefaultHidden;  // ...and the body's names it may not read
     std::set<std::string> _paramNames;       // parameter names of the function being emitted — a local
@@ -1512,8 +1517,10 @@ private:
     struct SavedLocalType {
         std::string name;
         bool had = false, hadC = false, hadNode = false, hadConst = false, hadConstVal = false,
-             hadSlot = false, hadSlotDecl = false, hadSlotGiven = false, hadRef = false, hadMove = false;
+             hadSlot = false, hadSlotDecl = false, hadSlotGiven = false, hadRef = false, hadMove = false,
+             hadRefOperand = false;
         std::string prev, prevC; SharedIdentifier prevNode; int64_t prevConstVal = 0;
+        SharedExpression prevRefOperand;
         MoveState prevMove = MoveState::NotMoved;
     };
     SavedLocalType saveLocalBinding(const std::string& name);
@@ -3907,6 +3914,7 @@ private:
     static double ctAsF(const CTValue& v);
     static int64_t ctAsI(const CTValue& v);
     std::string rootBinding(SharedExpression e) const;
+    std::string refReturnRoot(SharedExpression e, bool& isStatic);   // a returned place's root, through ref bindings
     bool rootIsTemporary(SharedExpression e) const;   // member/element chain rooted in a by-value call result        // the root identifier a write targets
     // The PLACE a expression designates: the base binding plus its chain of field names. This is the
     // whole safety core of the view model — see `placesConflict`. Not `const`: resolving a bare field

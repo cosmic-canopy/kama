@@ -3515,6 +3515,9 @@ be written **in the language** rather than baked into the compiler. Three builti
   A static is the least conditional of the three — `this` and a `ref` param outlive the call only because the
   caller holds them — so `static Counters g; fn ref Counters counters() { return g; }` is legal, and a local
   that merely shares a static's name is not. <!-- test: reffn_at, reffn_static -->
+  A `foreach (ref …)` binding and a borrowing `match` binding are not `ref` parameters: each borrows its <!-- xfail: reffn_foreach_ref_local, reffn_match_alias_local -->
+  operand, so a place returned through one is judged by what the loop or the subject roots in, through any
+  depth of nesting — `foreach (ref e in this.rows)` may hand `e` back, `foreach (ref e in local)` may not. <!-- test: reffn_through_bindings -->
   A place is second-class (used in-place, never stored): there is no `ref` local and no `ref` field, and a <!-- xfail: ref_local, ref_field, out_local -->
   value is read where it is or copied out. Its read-only form is
   **`const ref T`** — the place a `const fn` may return (§ `const fn` below).

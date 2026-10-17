@@ -1,0 +1,40 @@
+// A `foreach (ref …)` or borrowing-`match` binding is no `ref` PARAMETER: it borrows its operand, so a
+// `fn ref` returning one is judged by what the operand roots in (KR-180). Every shape here roots in `this`,
+// a `ref` parameter or static storage, nested as deep as it likes, and must keep building — the refused
+// shapes are tests/xfail/reffn_foreach_ref_local and reffn_match_alias_local. `return g[0]` on a static
+// `InlineArray` is static storage too (it was refused as a local until the same release).
+import { std::collections::DynamicArray };
+
+static InlineArray<int32>#(4) g;
+
+type resource Holder {
+    DynamicArray<DynamicArray<int32>> rows;
+    Optional<DynamicArray<int32>> opt;
+    public ctor make() {
+        this.rows = DynamicArray.empty();
+        DynamicArray<int32> r = DynamicArray.empty(); r.add(item: 3); this.rows.add(item: give r);
+        DynamicArray<int32> o = DynamicArray.empty(); o.add(item: 4); this.opt = Optional::Some(value: give o);
+    }
+    public fn ref int32 nested() {   // `e` borrows `r`, which borrows `this`
+        foreach (ref DynamicArray<int32> r in this.rows) { foreach (ref int32 e in r) { return e; } }
+        return this.rows[0][0];
+    }
+    public fn ref int32 viaMatch() {   // `v` aliases the payload of `this.opt`
+        match (this.opt) { case Some(value: v): { return v[0]; } case None: { } };
+        return this.rows[0][0];
+    }
+}
+
+fn ref int32 fromParam(ref DynamicArray<int32> xs) { foreach (ref int32 e in xs) { return e; } return xs[0]; }
+fn ref int32 fromStatic() { foreach (ref int32 e in g) { return e; } return g[0]; }
+
+fn int32 main() {
+    Holder h = Holder.make();
+    h.nested() = 10;
+    h.viaMatch() = 20;
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    fromParam(xs: ref xs) = 30;
+    fromStatic() = 40;
+    return h.nested() + h.viaMatch() + xs[0] + g[0];   // 10 + 20 + 30 + 40
+}

@@ -1,0 +1,21 @@
+// KR-180. An owning payload of a borrowing `match` binds as an ALIAS of the subject's slot, and the alias
+// sat in the `ref`-parameter set too — so `return v[0]` handed back a place inside `local`'s payload,
+// freed at the return (a stack-use-after-return under ASan). The alias borrows the subject, a local.
+import { std::collections::DynamicArray };
+
+type resource Holder {
+    int32 keep;
+    public ctor make() { this.keep = 1; }
+    public fn ref int32 bad() {
+        DynamicArray<int32> xs = DynamicArray.empty();
+        xs.add(item: 7);
+        Optional<DynamicArray<int32>> local = Optional::Some(value: give xs);
+        match (local) {
+            case Some(value: v): { return v[0]; }
+            case None: { }
+        };
+        return this.keep;
+    }
+}
+
+fn int32 main() { Holder h = Holder.make(); h.bad() = 5; return 0; }

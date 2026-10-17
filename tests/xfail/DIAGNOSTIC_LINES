@@ -1109,7 +1109,9 @@ ref_string_literal_mutable	ref_string_literal_mutable.kama:10
 ref_temporary_nonconst	ref_temporary_nonconst.kama:14
 ref_through_weak	ref_through_weak.kama:8
 reffn_byval	reffn_byval.kama:7
+reffn_foreach_ref_local	reffn_foreach_ref_local.kama:12
 reffn_local	reffn_local.kama:3
+reffn_match_alias_local	reffn_match_alias_local.kama:14
 reffn_static_local	reffn_static_local.kama:9
 refreturn_local	refreturn_local.kama:5
 reserved_binding_name	reserved_binding_name.kama:2

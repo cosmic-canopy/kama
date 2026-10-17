@@ -1443,6 +1443,7 @@ CEmitter::SavedLocalType CEmitter::saveLocalBinding(const std::string& name)
     sv.hadSlotDecl = _slotDeclared.count(name);
     sv.hadSlotGiven = _slotGiven.count(name);
     sv.hadRef      = _refParams.count(name);
+    auto ro = _refBindingOperand.find(name); if (ro != _refBindingOperand.end()) { sv.hadRefOperand = true; sv.prevRefOperand = ro->second; }
     return sv;
 }
 
@@ -1462,6 +1463,7 @@ void CEmitter::restoreLocalBindings(const std::vector<SavedLocalType>& saved)
         if (sv.hadSlotDecl) _slotDeclared.insert(sv.name);   else _slotDeclared.erase(sv.name);
         if (sv.hadSlotGiven) _slotGiven.insert(sv.name);     else _slotGiven.erase(sv.name);
         if (sv.hadRef)      _refParams.insert(sv.name);      else _refParams.erase(sv.name);
+        if (sv.hadRefOperand) _refBindingOperand[sv.name] = sv.prevRefOperand; else _refBindingOperand.erase(sv.name);
     }
 }
 
@@ -7411,7 +7413,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         int savedTemp                 = _tempCounter;
 
         _out = &body;
-        _refParams.clear(); _paramNames.clear();
+        _refParams.clear(); _refBindingOperand.clear(); _paramNames.clear();
         _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
         _constLocals.clear(); _moveState.clear(); _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear(); _scopes.clear(); _hoisted.clear();
         _currentClass = nullptr;
@@ -8800,7 +8802,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // treats this as the easy case: Rust's `&'static`, C++'s Meyers singleton, a Go package-level
             // var. Widening it here rather than exempting the intrinsic keeps ONE rule (GOALS #4) and no
             // builtin privileged over user code.
-            if (!rootHasStaticStorage(retExpr) && root != "this" && !_refParams.count(root))
+            bool aliasStatic = false;
+            const std::string owner = retExpr ? refReturnRoot(retExpr, aliasStatic) : root;
+            if (!rootHasStaticStorage(retExpr) && !aliasStatic && owner != "this" && !_refParams.count(owner))
                 unsupported("a `ref T` result must borrow `this`, a `ref` parameter, or static storage — "
                             "returning a place into a local would dangle", n);
             // The mirror of checkConstPlaceReturn, one step later: a WRITABLE place may not be minted from
@@ -9176,6 +9180,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             *_out << elemTy << "* " << kName(nm) << " = " << (fe->isConstRef ? "(" + elemTy + "*)" : std::string())
                   << coll << "__at(" << (constRecv ? "(" + coll + "*)" : std::string()) << fp << ", " << ix << ");\n";
             _refParams.insert(nm);
+            _refBindingOperand[nm] = fe->expression;   // the element lives in the operand
             if (fe->isConstRef) _constLocals.insert(nm);
         } else {
             *_out << elemTy << " " << kName(nm) << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
@@ -18371,6 +18376,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
     if (fe->isRef) {
         _refParams.insert(nm);   // reads/writes deref the place, like a `ref` param / built-in `foreach ref`
+        _refBindingOperand[nm] = fe->expression;   // ...but it is no parameter: it borrows the operand
         // A `const ref` binding is the same place, and const as deep as a `const ref` parameter is — so it
         // lowers as one does, to a plain `T*` (kama says what may be done through it, C does not need to).
         if (fe->isConstRef) _constLocals.insert(nm);
@@ -25290,6 +25296,27 @@ bool CEmitter::rootIsTemporary(SharedExpression e) const
 
 // the root identifier a write ultimately targets, for deep-const checks.
 // `x` -> "x";  `x.f`, `x[i]`, `x.f.g` -> "x";  `this`/`this.f` -> "this";  else "".
+// The binding a returned place borrows. The same root the check reads — a place-returning call borrows its
+// RECEIVER — but traced THROUGH a `foreach (ref …)`/borrowing-`match` binding to the operand that binding
+// aliases, as many times as they nest (`foreach (ref a in this.xs) { foreach (ref b in a.ys) { return b; } }`
+// roots at `this`). An operand that is static storage sets `isStatic`; a temporary operand roots nowhere ("").
+std::string CEmitter::refReturnRoot(SharedExpression e, bool& isStatic)
+{
+    std::set<std::string> seen;
+    for (;;) {
+        std::string root;
+        if (auto* inv = dynamic_cast<InvocationNode*>(e.get()))
+            if (inv->expression)
+                if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
+                    if (ma->expression) root = rootBinding(ma->expression);
+        if (root.empty()) root = rootBinding(e);
+        auto b = _refBindingOperand.find(root);
+        if (b == _refBindingOperand.end() || !b->second || !seen.insert(root).second) return root;
+        e = b->second;
+        if (rootHasStaticStorage(e)) { isStatic = true; return root; }
+    }
+}
+
 std::string CEmitter::rootBinding(SharedExpression e) const
 {
     ASTNode* n = e.get();
@@ -28990,6 +29017,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     _borrowedMatchBindings.insert(bn);
                     borrowedHere.push_back(bn);
                     _refParams.insert(bn);                                   // reads/writes go through the alias
+                    _refBindingOperand[bn] = m->subject;                     // ...into the subject's payload
                     if (isConstReceiver(m->subject)) _constLocals.insert(bn);   // a const subject: a const alias
                 }
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
@@ -32231,7 +32259,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     }
 
     // Track by-ref params (deref on read) and param classes (for member calls).
-    _refParams.clear();
+    _refParams.clear(); _refBindingOperand.clear();
     _paramNames.clear();
     _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
     // `_localCTypes` belongs on this line and was missing from it — here and at the other three
@@ -32340,7 +32368,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _returnIsPlace = false;
     *_out << "\n\n";
 
-    _refParams.clear();
+    _refParams.clear(); _refBindingOperand.clear();
     _viewParams.clear();
 
     if (isEntry) {
@@ -33095,7 +33123,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     // `unsafe ~Name()` — a raw-handle type frees its buffer in the destructor, so a dtor is markable
     // exactly like any other body.
     _inUnsafe = ci.dtorNode && modHas(ci.dtorNode->modifiers, "unsafe");
-    _refParams.clear();
+    _refParams.clear(); _refBindingOperand.clear();
     _paramNames.clear();
     _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
     _constLocals.clear(); _constLocalVals.clear(); _comptimeLocalVals.clear();
@@ -33276,7 +33304,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     bool ctorBody = _inNamedCtorBody;
     if (ctorBody) _inStaticMethod = false;
     _ctorSelfUsed = false;
-    _refParams.clear();
+    _refParams.clear(); _refBindingOperand.clear();
     _paramNames.clear();
     _paramDeclKeys.clear();   // LSP index: params are per-function (they outlive every scope)
     _viewParams.clear();
@@ -33456,7 +33484,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 
     _scopes.clear();
     _currentClass = nullptr;
-    _refParams.clear();
+    _refParams.clear(); _refBindingOperand.clear();
     _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
     _constLocals.clear(); _constLocalVals.clear(); _comptimeLocalVals.clear();
     _inStaticMethod = false;
@@ -34279,7 +34307,7 @@ void CEmitter::emitSerDeclaredValueFill(ClassInfo& ci, const std::string& place,
     auto savedConstLocals = _constLocals;   auto savedMoveState = _moveState;       auto savedSlotLocals = _slotLocals;
     auto savedSlotDeclared = _slotDeclared; auto savedSlotGiven = _slotGiven;       auto savedScopes = _scopes;
     auto savedHoisted = _hoisted;           ClassInfo* savedClass = _currentClass;  std::string savedRetC = _currentReturnCType;
-    _refParams.clear(); _paramNames.clear();
+    _refParams.clear(); _refBindingOperand.clear(); _paramNames.clear();
     _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
     _constLocals.clear(); _moveState.clear(); _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
     _scopes.clear(); _hoisted.clear();
@@ -38248,7 +38276,12 @@ bool CEmitter::rootHasStaticStorage(SharedExpression e) const
     ASTNode* n = e.get();
     for (;;) {
         if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) { n = ma->expression.get(); continue; }
-        if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) { if (ea->expression) { n = ea->expression.get(); continue; } }
+        if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+            if (ea->expression) { n = ea->expression.get(); continue; }
+            // `g[0]` on a bare name parses as the IDENTIFIER form, which this walk used to stop at, so a
+            // `ref` result into a static `InlineArray` was refused as a dangling local.
+            if (ea->identifier) n = ea->identifier.get();
+        }
         break;
     }
     auto* id = dynamic_cast<IdentifierNode*>(n);
