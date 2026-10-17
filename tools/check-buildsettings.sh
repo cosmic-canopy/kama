@@ -615,6 +615,46 @@ depkey dkgate '{ "path": "./vendor/x", "compileFor": ["OS_WINODWS"] }' 'did you 
        "a dependency gate is judged by the @compileFor rule"
 
 # ---------------------------------------------------------------------------------------------------
+echo "check-buildsettings: a build-flag entry takes \`compileFor\` too, judged where it sits"
+
+# The fourth list a fact gates, after `csources`, `link` and a dependency edge: a platform layer that needs
+# `-L/opt/homebrew/lib` or `-Wl,-framework,Cocoa` on macOS alone says so by the FACT, which a `select.TARGET` arm
+# cannot — it matches how the build was spelled, and a plain host build on a Mac spells none. A gated-out
+# argument leaves the line; the rest keep the order they were written in, in every list and in a select value.
+app gflags <<'JSON'
+{ "name": "gflags", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "cflags":  ["-DKRGF_A", { "flag": "-DKRGF_ON", "compileFor": ["HOSTED"] },
+              { "flag": "-DKRGF_OFF", "compileFor": ["!HOSTED"] }, "-DKRGF_Z"],
+  "ldflags": [{ "flag": "-DKRGF_LD_ON", "compileFor": ["HOSTED"] }, { "flag": "-DKRGF_LD_OFF", "compileFor": ["!HOSTED"] }],
+  "select": { "BUILD_TYPE": { "GF": { "inherits": "DEBUG",
+      "cflags": [{ "flag": "-DKRGF_SEL_ON", "compileFor": ["HOSTED"] }, { "flag": "-DKRGF_SEL_OFF", "compileFor": ["!HOSTED"] }] } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+"$KAMA" build "$tmp/gflags/kama.json" --cc "echo CC:" --select BUILD_TYPE=GF -o "$tmp/gflags/app" >"$tmp/o" 2>"$tmp/e" || true
+order=$(grep -o -- '-DKRGF_[A-Z_]*' "$tmp/o" | head -4 | tr '\n' ' ')
+if [ "$order" = "-DKRGF_A -DKRGF_ON -DKRGF_Z -DKRGF_SEL_ON " ] && grep -qF -- '-DKRGF_LD_ON' "$tmp/o" \
+   && ! grep -qF -- '_OFF' "$tmp/o"; then
+    ok "a gated flag reaches the line only where its fact holds, in the order it was written"
+else
+    bad "gated flags misapplied: '$order'"; head -3 "$tmp/o" >&2; head -3 "$tmp/e" >&2
+fi
+flagrej() {   # flagrej <name> <cflags entry JSON> <want> <what>
+    app "$1" <<JSON
+{ "name": "$1", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "source": "src",
+  "cflags": [$2], "modules": { ".": { "visibility": "internal" } } }
+JSON
+    if "$KAMA" build "$tmp/$1/kama.json" --cc "echo CC:" -o "$tmp/$1/app" >"$tmp/o" 2>"$tmp/e"; then bad "$4 — accepted"
+    elif grep -qF -- "$3" "$tmp/e"; then ok "$4"
+    else bad "$4 — refused without \"$3\""; head -2 "$tmp/e" >&2; fi
+}
+flagrej gftypo '{ "flag": "-DX", "compileFor": ["OS_WINODWS"] }' 'did you mean `OS_WINDOWS`' \
+        "a flag's gate is judged by the @compileFor rule"
+flagrej gfkey '{ "flags": "-DX" }' 'unknown key `flags` in a `cflags` entry' "a flag entry is closed like every manifest object"
+flagrej gfbare '{ "compileFor": ["HOSTED"] }' 'needs `flag`' "a flag entry without its argument is refused"
+flagrej gfesc '{ "flag": "-DX=\\\"h.h\\\"", "compileFor": ["HOSTED"] }' 'escapes a character for a shell' \
+        "a gated flag keeps the one-argument rule"
+
+# ---------------------------------------------------------------------------------------------------
 echo "check-buildsettings: a select value carries build flags — a sanitizer build is a build type (KR-145)"
 
 # `ASAN2` inherits `ASAN` inherits `DEBUG`: its flags are its bases' first, then its own, after the project's,

@@ -2270,6 +2270,10 @@ struct GateLit { std::string name; bool neg = false; };
 // "OS_MACOS", "!HOSTED" ] }` (`"name"` for `link`) is one with a gate — the literals of `@compileFor(OS_MACOS,
 // !HOSTED)`, conjoined, judged by the same rule.
 struct SourceEntry { std::string path; std::vector<GateLit> gate; };
+// One `cflags`/`ldflags`/`cxxflags`/`objcflags` argument and its gate — a fact the build must hold for the argument to
+// reach the command line (`{ "flag": "-L/opt/homebrew/lib", "compileFor": ["OS_MACOS"] }`), judged with the
+// `csources` and `link` gates in resolveBuildConfig. A plain string is an argument with no gate.
+struct FlagArg { std::string text; std::vector<GateLit> gate; };
 static std::vector<GateLit> gateLiterals(const SharedAttributeList& attrs);   // all three defined with
 static std::string gateContradiction(const std::vector<GateLit>& lits);       // the covering check, below
 static std::string renderGateLits(const std::vector<GateLit>& lits);
@@ -2447,11 +2451,11 @@ struct TargetSpec {
     // a permanent property of the artifact, chosen per target, not a per-invocation switch. Only Windows
     // has a subsystem field at all; elsewhere this is an accepted no-op so one build script carries it.
     std::string subsystem;
-    std::vector<std::string> cflags, ldflags;
+    std::vector<FlagArg> cflags, ldflags;
     // The per-language twins of `cflags`: `cxxflags` reach a C++ or Objective-C++ `csources` entry,
     // `objcflags` an Objective-C or Objective-C++ one, and neither reaches kama's own C. `cxx` is the C++
     // driver paired with `cc`, for a `cc` whose C++ spelling cannot be derived (see deriveCxxDriver).
-    std::vector<std::string> cxxflags, objcflags;
+    std::vector<FlagArg> cxxflags, objcflags;
     std::string cxx;
     // Native libraries this artifact links (`-l<name>`), from the project's own `link` key or a target's
     // override of it. Distinct from `ldflags`, which is raw linker text: `link` is the portable half, so
@@ -2605,7 +2609,7 @@ static const std::map<std::string, TargetSpec>& builtinTargets();   // defined j
 // bag, and a second grouping mechanism would only buy presentation.
 // The build flags a select VALUE adds (KR-145) — the names a target entry uses, meaning the same: a sanitizer build
 // is `"ASAN": { "inherits": "DEBUG", "cflags": [...], "ldflags": [...] }`, a build type of any target.
-struct SelectFlags { std::vector<std::string> cflags, ldflags, cxxflags, objcflags; };
+struct SelectFlags { std::vector<FlagArg> cflags, ldflags, cxxflags, objcflags; };
 struct SelectGroup {
     std::vector<std::string> values;                  // declaration order (error messages, IDE dropdowns)
     std::map<std::string, std::string> inherits;      // value -> base value, e.g. FAST -> RELEASE
@@ -3236,9 +3240,9 @@ static CLang csourceLang(const std::string& path)
 // merge rules are written out.
 struct BuildSettings {
     std::string owner;        // "" for the root project, else the dependency's import name
-    std::vector<std::string> cflags, ldflags;
+    std::vector<FlagArg> cflags, ldflags;             // each with its gate, like `link`
     std::vector<SourceEntry> link;                    // library names, each with its gate (KR-144)
-    std::vector<std::string> cxxflags, objcflags;     // per-language, like cflags (see TargetSpec)
+    std::vector<FlagArg> cxxflags, objcflags;         // per-language, like cflags (see TargetSpec)
     std::vector<SourceEntry> csources;                // as written, relative to `manifestPath`
     std::vector<std::string> jsLibraries;             // likewise
     // emcc's other FILE inputs, likewise relative (KR-161): the page around the program (the root's alone),
@@ -3375,10 +3379,10 @@ struct ManifestReader {
     // is matched by NAME (resolveTarget), and `--target aarch64-linux-gnu` resolves as an anonymous
     // triple matching no manifest entry at all. A dep with only per-target settings would contribute
     // nothing to such a build, which would leave dependency propagation half-dead on arrival.
-    std::vector<std::string>* cflagsOut = nullptr;          // set to capture the project-level `cflags`
-    std::vector<std::string>* ldflagsOut = nullptr;         // set to capture the project-level `ldflags`
-    std::vector<std::string>* cxxflagsOut = nullptr;        // ...`cxxflags` (C++ and Objective-C++ entries)
-    std::vector<std::string>* objcflagsOut = nullptr;       // ...`objcflags` (Objective-C and Objective-C++)
+    std::vector<FlagArg>* cflagsOut = nullptr;              // set to capture the project-level `cflags`
+    std::vector<FlagArg>* ldflagsOut = nullptr;             // set to capture the project-level `ldflags`
+    std::vector<FlagArg>* cxxflagsOut = nullptr;            // ...`cxxflags` (C++ and Objective-C++ entries)
+    std::vector<FlagArg>* objcflagsOut = nullptr;           // ...`objcflags` (Objective-C and Objective-C++)
     std::vector<SourceEntry>* csourcesOut = nullptr;        // set to capture `csources` (the project's own C)
     std::vector<std::string>* jsLibrariesOut = nullptr;      // set to capture `jsLibraries` (emscripten --js-library)
     std::string* shellFileOut = nullptr;                     // ...`shellFile` (--shell-file)
@@ -3463,16 +3467,17 @@ struct ManifestReader {
         }
     }
 
-    // A flag array — `cflags`, `ldflags`, `cxxflags`, `objcflags`, `link`. Each element is ONE argument to the C
+    // A flag array — `cflags`, `ldflags`, `cxxflags`, `objcflags`. Each element is ONE argument to the C
     // compiler, passed exactly as written (shellArg), so a string means the same on every host. They used
     // to be pasted into a shell command, so a manifest carried shell syntax: `-DX=\"h.h\"` to keep a quote,
     // `-Wl,-rpath,\$ORIGIN` to keep a dollar. Passed as written, those backslashes would reach the compiler and
     // silently mean something else — so an element carrying one is refused, naming the spelling that now works.
-    bool flagArray(std::vector<std::string>& out, const char* key) {
-        const size_t first = out.size();
-        if (!stringArray(out, key)) return false;
-        for (size_t k = first; k < out.size(); ++k) {
-            const std::string& f = out[k];
+    // An element may carry a gate, as a `csources` or `link` entry does: `{ "flag": …, "compileFor": […] }`.
+    bool flagArray(std::vector<FlagArg>& out, const char* key) {
+        std::vector<SourceEntry> read;
+        if (!gatedEntries(read, key, "flag")) return false;
+        for (SourceEntry& e : read) {
+            const std::string& f = e.path;
             for (size_t j = 0; j + 1 < f.size(); ++j)
                 if (f[j] == '\\' && (f[j + 1] == '"' || f[j + 1] == '$' || f[j + 1] == '\'' || f[j + 1] == '`')) {
                     std::string fixed;
@@ -3486,6 +3491,7 @@ struct ManifestReader {
                                 "so the backslash would reach it. Write `" + fixed + "`"
                                 + (fixed.find('"') != std::string::npos ? " (in the JSON string a quote is still `\\\"`)" : ""));
                 }
+            out.push_back({ e.path, std::move(e.gate) });
         }
         return true;
     }
@@ -3542,7 +3548,8 @@ struct ManifestReader {
                 }
                 if (!havePath) return fail("a " + k + " entry object needs " + nk);
             }
-            else return fail(k + (std::string(nameKey) == "name" ? " entries are library names" : " entries are path strings")
+            else return fail(k + (std::string(nameKey) == "name" ? " entries are library names"
+                                  : std::string(nameKey) == "flag" ? " entries are compiler arguments" : " entries are path strings")
                              + " or `{ \"" + nameKey + "\": …, \"compileFor\": […] }` objects");
             out.push_back(std::move(e));
             ws();
@@ -3878,7 +3885,7 @@ struct ManifestReader {
                 if (k == "inherits") { std::string base; if (!str(base)) return false; g.inherits[name] = base; }
                 else if (k == "cflags" || k == "ldflags" || k == "cxxflags" || k == "objcflags") {
                     SelectFlags& f = g.flags[name];
-                    std::vector<std::string>& into = k == "cflags" ? f.cflags : k == "ldflags" ? f.ldflags
+                    std::vector<FlagArg>& into = k == "cflags" ? f.cflags : k == "ldflags" ? f.ldflags
                                                    : k == "cxxflags" ? f.cxxflags : f.objcflags;
                     if (!flagArray(into, k.c_str())) return false;
                     if (topKeysOut) topKeysOut->insert("select.value." + k);
@@ -5483,17 +5490,17 @@ static std::string emFileArg(const std::string& dir, const std::string& entry)
 // `include/`. Refused rather than propagated: the supported route for a path is a structured key kama
 // resolves against the declaring manifest. The ROOT's own relative paths are untouched — those are the
 // consumer's business and have always been CWD-relative.
-static bool depFlagPathIsPortable(const std::vector<std::string>& flags, const std::string& owner,
+static bool depFlagPathIsPortable(const std::vector<FlagArg>& flags, const std::string& owner,
                                   const std::string& manifestPath, std::string& err)
 {
     static const char* kPathFlags[] = { "-I", "-L", "-isystem", "-iquote", "-idirafter" };
     for (size_t i = 0; i < flags.size(); ++i) {
-        const std::string& f = flags[i];
+        const std::string& f = flags[i].text;
         for (const char* pf : kPathFlags) {
             const size_t n = strlen(pf);
             if (f.compare(0, n, pf) != 0) continue;
             // Either `-Ifoo` (joined) or `-I foo` / `-isystem foo` (the next element).
-            std::string arg = f.size() > n ? f.substr(n) : (i + 1 < flags.size() ? flags[i + 1] : std::string());
+            std::string arg = f.size() > n ? f.substr(n) : (i + 1 < flags.size() ? flags[i + 1].text : std::string());
             while (!arg.empty() && arg[0] == ' ') arg.erase(0, 1);
             if (arg.empty() || isAbsolutePath(arg)) break;   // absolute: their call
             err = "dependency `" + owner + "` declares a relative path in its build flags (`" + f + "`),\n"
@@ -5509,7 +5516,7 @@ static bool depFlagPathIsPortable(const std::vector<std::string>& flags, const s
         for (const auto& ef : kEmFileFlags) {
             const size_t n = strlen(ef.flag);
             if (f.compare(0, n, ef.flag) != 0 || (f.size() > n && f[n] != '=')) continue;
-            std::string arg = f.size() > n ? f.substr(n + 1) : (i + 1 < flags.size() ? flags[i + 1] : std::string());
+            std::string arg = f.size() > n ? f.substr(n + 1) : (i + 1 < flags.size() ? flags[i + 1].text : std::string());
             const size_t at = arg.find('@');
             if (arg.empty() || isAbsolutePath(at == std::string::npos ? arg : arg.substr(0, at))) break;
             err = "dependency `" + owner + "` passes a relative file to emcc in its build flags (`" + f + " " + arg +
@@ -6037,7 +6044,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
         std::vector<std::string> views;
         views.push_back(projDir + "/.kama/deps");
         if (req.dev) views.push_back(projDir + "/.kama/dev-deps");
-        std::vector<std::string> depCflags, depLdflags, depCxxflags, depObjcflags;
+        std::vector<FlagArg> depCflags, depLdflags, depCxxflags, depObjcflags;
         std::vector<SourceEntry> depLink;
         // Which dependencies this build takes (KR-144). A dependency edge may carry `compileFor`, and a dependency
         // is in the build when an ACTIVE edge reaches it from the project — so one gated out together with the
@@ -6210,6 +6217,19 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
             if (active && seen.insert(e.path).second) kept.push_back(std::move(e));
         }
         g_target.link = std::move(kept);
+    }
+    // ...and the build flags, in place: an argument whose fact does not hold leaves the command line, and the order
+    // of the rest — project, then target, then select values, with dependencies' ahead — is what it was.
+    for (std::vector<FlagArg>* list : { &g_target.cflags, &g_target.ldflags, &g_target.cxxflags, &g_target.objcflags }) {
+        const char* key = list == &g_target.cflags ? "cflags" : list == &g_target.ldflags ? "ldflags"
+                        : list == &g_target.cxxflags ? "cxxflags" : "objcflags";
+        std::vector<FlagArg> kept;
+        for (FlagArg& f : *list) {
+            bool active = true;
+            if (!judgeGate(f.gate, "`" + std::string(key) + "` entry '" + f.text + "'", active)) return false;
+            if (active) kept.push_back(std::move(f));
+        }
+        *list = std::move(kept);
     }
     return true;
 }
@@ -8622,6 +8642,9 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     // …and a select value's build flags (KR-145), named generically: they are the same four keys on any group's value.
     { "select.value.cflags", "0.9.610" }, { "select.value.ldflags", "0.9.610" },
     { "select.value.cxxflags", "0.9.610" }, { "select.value.objcflags", "0.9.610" },
+    // …and a gate on a build-flag entry, in whichever list it sits.
+    { "cflags.compileFor", "0.9.651" }, { "ldflags.compileFor", "0.9.651" },
+    { "cxxflags.compileFor", "0.9.651" }, { "objcflags.compileFor", "0.9.651" },
 };
 
 // Does the `kama` range `req` exclude every compiler older than each key in `keys` that the table lists? The
@@ -13160,7 +13183,7 @@ int main(int argc, char** argv)
         // override it. Appending at the end would silently reverse both. The compile command is therefore
         // byte-for-byte what it always was; only the link-only command has this span cut out.
         const size_t cflagsPos = (size_t)cmd.tellp();
-        for (const auto& f : g_target.cflags) cmd << shellArg(f) << " ";
+        for (const auto& f : g_target.cflags) cmd << shellArg(f.text) << " ";
         const size_t cflagsEnd = (size_t)cmd.tellp();
         // --shared: emit a position-independent shared library. -fvisibility=hidden hides everything
         // by default; only `expose`d functions (KAMA_EXPORT -> visibility("default"),used) reach the
@@ -13475,7 +13498,7 @@ int main(int argc, char** argv)
                 // `cxxflags` wins over the pinned one. The standard itself is spliced in by `prefixFor`.
                 const CLang lang = csourceLang(cs.path);
                 std::string tok;
-                auto flags = [&](const std::vector<std::string>& fs) { for (const auto& f : fs) tok += shellArg(f) + " "; };
+                auto flags = [&](const std::vector<FlagArg>& fs) { for (const auto& f : fs) tok += shellArg(f.text) + " "; };
                 switch (lang) {
                     case CLang::Cxx:    tok = "-x c++ "; flags(g_target.cxxflags); break;
                     case CLang::ObjC:   tok = "-x objective-c "; flags(g_target.objcflags); break;
@@ -13760,7 +13783,7 @@ int main(int argc, char** argv)
             for (const CSourceRef& f : g_preloadFiles) link << "--preload-file \"" << f.path << "\" ";
         }
         // The target's own link flags from kama.json, last so they can override anything above.
-        if (!stopsAtObject) for (const auto& f : g_target.ldflags) link << shellArg(f) << " ";
+        if (!stopsAtObject) for (const auto& f : g_target.ldflags) link << shellArg(f.text) << " ";
 
         // ---- How many C compiles may run at once.
         //

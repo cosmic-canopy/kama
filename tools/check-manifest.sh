@@ -392,13 +392,13 @@ proj cfscalar <<'JSON'
 { "name": "cfscalar", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "cflags": "-DNOPE", "modules": { ".": { "visibility": "internal" } } }
 JSON
-reject cfscalar 'expected a JSON array of strings for `cflags`' "a scalar \`cflags\` is refused, not read as one flag"
+reject cfscalar '`cflags` must be a JSON array' "a scalar \`cflags\` is refused, not read as one flag"
 
 proj ldscalar <<'JSON'
 { "name": "ldscalar", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "ldflags": ["-Wl,--as-needed", 7], "modules": { ".": { "visibility": "internal" } } }
 JSON
-reject ldscalar 'expected a string in the array for `ldflags`' "a non-string element in \`ldflags\` is refused"
+reject ldscalar '`ldflags` entries are compiler arguments or' "a non-string, non-entry element in \`ldflags\` is refused"
 
 proj flagsok <<'JSON'
 { "name": "flagsok", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",

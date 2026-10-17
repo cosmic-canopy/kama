@@ -365,6 +365,22 @@ lock is the same on every platform), and its modules can still be imported: gate
 the code calling a gated `csources` entry is gated. What it would add to the C command line — sources,
 include paths, libraries, flags — stays out.
 
+**So does a build-flag entry**, in `cflags`, `ldflags`, `cxxflags` and `objcflags` alike, wherever the list sits —
+the project, a dependency, a target entry, a `select` value (`0.9.651`):
+
+```json
+{
+  "link":    [{ "name": "glfw", "compileFor": ["OS_MACOS"] }],
+  "ldflags": [{ "flag": "-L/opt/homebrew/lib", "compileFor": ["OS_MACOS"] },
+              { "flag": "-Wl,-framework,Cocoa", "compileFor": ["OS_MACOS"] }]
+}
+```
+
+That is how a platform layer says what macOS alone needs: a Homebrew library directory, a framework. A
+`select.TARGET` arm cannot say it, because it matches how the build was spelled, and a plain build on a Mac
+spells no target. A gated-out argument leaves the line, the rest keep the order they were written in, and an
+entry stays one argument (`-Wl,-framework,Cocoa`, not `-framework` and `Cocoa`, so one gate covers it).
+
 ### `cincludes` — a package's include tree
 
 A header beside its `.c` is found on its own (above). A library whose headers live in their own tree —
