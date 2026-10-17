@@ -55,6 +55,7 @@ fn int32 main() {
                     case MissingField: { return 5; }
                     case DuplicateId: { return 7; }
                     case UnknownField: { return 19; }
+                    case TooDeep: { return 20; }
                 }; }
                 case None: { return 8; }
             };

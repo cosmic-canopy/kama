@@ -432,7 +432,9 @@ type contract Serializable for value, resource, enum, intrinsic { const fn Resul
 // fails (`failWith`), and the error a read returns, `DeError`, carries it beside where it happened.
 type enum DeErrorKind implements Sendable {
     Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId,
-    UnknownField;   // a STRICT reader's: a key no field claims (`JsonDeserializer.strict`) — last, the graph casts by value
+    UnknownField,   // a STRICT reader's: a key no field claims (`JsonDeserializer.strict`)
+    TooDeep;        // nested deeper than 128 objects/arrays, the depth every reader stops at: untrusted input must not
+                    // decide how deep a read recurses — last, the graph casts by value
 
     public const fn string message() {
         return match (this) {
@@ -443,6 +445,7 @@ type enum DeErrorKind implements Sendable {
             case UnresolvedReference:  "unresolved reference";
             case DuplicateId:          "duplicate id";
             case UnknownField:         "unknown field";
+            case TooDeep:              "nesting too deep";
         };
     }
 }

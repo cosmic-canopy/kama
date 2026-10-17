@@ -68,8 +68,8 @@ type resource KbinNumberedSerializer<W: Writer> implements Serializer {
         this.err = false;
         this.code = SerError::NotRepresentable;
         this.pendingId = 0ui32;
-        this.isArray = FixedArray.make(size: 64);
-        this.grouped = FixedArray.make(size: 64);
+        this.isArray = FixedArray.make(size: 128);
+        this.grouped = FixedArray.make(size: 128);
         this.depth = 0;
     }
 
@@ -114,7 +114,7 @@ type resource KbinNumberedSerializer<W: Writer> implements Serializer {
         this.putVarint(v: (cast<uint64>(this.pendingId) << 3ui64) | cast<uint64>(wt));
     }
     fn void push(bool asArray, bool asGroup) {
-        if (this.depth >= 64) { this.failWith(e: SerError::NotRepresentable); return; }
+        if (this.depth >= 128) { this.failWith(e: SerError::NotRepresentable); return; }   // the readers' limit
         this.isArray[this.depth] = asArray;
         this.grouped[this.depth] = asGroup;
         this.depth = this.depth + 1;
@@ -218,9 +218,9 @@ type resource KbinNumberedDeserializer implements Deserializer {
         this.err = false;
         this.code = DeErrorKind::Malformed;
         this.lastWt = 0ui8;
-        this.isArray = FixedArray.make(size: 64);
-        this.grouped = FixedArray.make(size: 64);
-        this.remain = FixedArray.make(size: 64);
+        this.isArray = FixedArray.make(size: 128);
+        this.grouped = FixedArray.make(size: 128);
+        this.remain = FixedArray.make(size: 128);
         this.depth = 0;
         this.refuseUnknown = refuseUnknown;
     }
@@ -275,7 +275,7 @@ type resource KbinNumberedDeserializer implements Deserializer {
     fn void refuse() { this.failWith(kind: DeErrorKind::Malformed); }
     fn bool inArray() { return this.depth > 0 ? this.isArray[this.depth - 1] : false; }
     fn void push(bool asArray, bool asGroup, isize n) {
-        if (this.depth >= 64) { this.refuse(); return; }
+        if (this.depth >= 128) { this.failWith(kind: DeErrorKind::TooDeep); return; }   // see `DeErrorKind`
         this.isArray[this.depth] = asArray;
         this.grouped[this.depth] = asGroup;
         this.remain[this.depth] = n;

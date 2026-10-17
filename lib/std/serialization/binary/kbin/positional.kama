@@ -175,8 +175,8 @@ type resource KbinPositionalDeserializer implements Deserializer {
         this.pos = 0;
         this.err = false;
         this.code = DeErrorKind::Malformed;
-        this.remain = FixedArray.make(size: 64);
-        this.idx = FixedArray.make(size: 64);
+        this.remain = FixedArray.make(size: 128);
+        this.idx = FixedArray.make(size: 128);
         this.depth = 0;
     }
 
@@ -222,7 +222,7 @@ type resource KbinPositionalDeserializer implements Deserializer {
     // `moreFields` then answers false at once. The derive ignores that result at those framing sites — it
     // reads a fixed `{tag}`/`{tag, value}` shape — so an enum still decodes.
     fn void push(isize n) {
-        if (this.depth >= 64) { this.refuse(); return; }
+        if (this.depth >= 128) { this.failWith(kind: DeErrorKind::TooDeep); return; }   // see `DeErrorKind`
         this.remain[this.depth] = n;
         this.idx[this.depth] = 0;
         this.depth = this.depth + 1;

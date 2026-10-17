@@ -1,0 +1,68 @@
+// KR-185: a JSON number is read by the grammar RFC 8259 §6 gives it, and an integer field takes only an integer
+// that fits. The scan took any run of `0-9+-.eE`, so `[1.5]` read 1, `[007]` 7, `[1e3]` 1 and `[+7]`/`[-]` 0, a
+// `uint64` `[-3]` read 0 and `[18446744073709551616]` wrapped to 0 — all without an error — and `[9223372036854775808]`,
+// like the valid `[-9223372036854775808]`, aborted the process on an int64 overflow. A parse of untrusted input
+// returns `Err`; it never traps. Returns 0, or the number of the failed check.
+import { std::collections::DynamicArray, std::serialization::text::json::deserializeJsonBuffer };
+
+fn bool okI(string src, int64 want) {
+    return match (deserializeJsonBuffer::<DynamicArray<int64>>(src: give src)) {
+        case Ok(value: v): v.length() == 1 && v[0] == want;
+        case Err(error: e): false;
+    };
+}
+fn bool okU(string src, uint64 want) {
+    return match (deserializeJsonBuffer::<DynamicArray<uint64>>(src: give src)) {
+        case Ok(value: v): v.length() == 1 && v[0] == want;
+        case Err(error: e): false;
+    };
+}
+// The kind the read failed with: 0 malformed, 1 type mismatch, 2 anything else, 3 no failure.
+fn int32 kindI(string src) {
+    return match (deserializeJsonBuffer::<DynamicArray<int64>>(src: give src)) {
+        case Ok(value: v): 3;
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: d): match (d.kind()) { case Malformed: 0; case TypeMismatch: 1; case _: 2; };
+            case None: 2;
+        };
+    };
+}
+fn int32 kindU(string src) {
+    return match (deserializeJsonBuffer::<DynamicArray<uint64>>(src: give src)) {
+        case Ok(value: v): 3;
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: d): match (d.kind()) { case Malformed: 0; case TypeMismatch: 1; case _: 2; };
+            case None: 2;
+        };
+    };
+}
+fn int32 kindF(string src) {
+    return match (deserializeJsonBuffer::<DynamicArray<float64>>(src: give src)) {
+        case Ok(value: v): 3;
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: d): match (d.kind()) { case Malformed: 0; case TypeMismatch: 1; case _: 2; };
+            case None: 2;
+        };
+    };
+}
+
+fn int32 main() {
+    // the edges an integer must reach exactly
+    if (!okI(src: "[-9223372036854775808]", want: -9223372036854775807i64 - 1i64)) { return 1; }
+    if (!okI(src: "[9223372036854775807]", want: 9223372036854775807i64)) { return 2; }
+    if (!okU(src: "[18446744073709551615]", want: 18446744073709551615ui64)) { return 3; }
+    if (!okI(src: "[0]", want: 0i64) || !okI(src: "[-0]", want: 0i64) || !okU(src: "[-0]", want: 0ui64)) { return 4; }
+    if (!okI(src: "[ 12 ]", want: 12i64) || !okI(src: "[-7]", want: -7i64)) { return 5; }
+    // a number that is not an integer, or does not fit: TypeMismatch
+    if (kindI(src: "[1.5]") != 1 || kindI(src: "[1e3]") != 1 || kindI(src: "[1E3]") != 1) { return 6; }
+    if (kindI(src: "[9223372036854775808]") != 1 || kindI(src: "[-9223372036854775809]") != 1) { return 7; }
+    if (kindU(src: "[18446744073709551616]") != 1 || kindU(src: "[-3]") != 1) { return 8; }
+    // text that is no JSON number at all: Malformed
+    if (kindI(src: "[007]") != 0 || kindI(src: "[+7]") != 0 || kindI(src: "[-]") != 0) { return 9; }
+    if (kindI(src: "[1.]") != 0 || kindI(src: "[.5]") != 0 || kindI(src: "[1e]") != 0 || kindI(src: "[1e+]") != 0) { return 10; }
+    if (kindF(src: "[1.2.3]") != 0 || kindF(src: "[01.5]") != 0) { return 11; }
+    // a float still reads every valid spelling, and is still refused past its range
+    if (kindF(src: "[-0.5e-3, 1E+2, 0, 2.25]") != 3) { return 12; }
+    if (kindF(src: "[1e400]") != 1) { return 13; }
+    return 0;
+}

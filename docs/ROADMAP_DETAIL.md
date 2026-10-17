@@ -2044,7 +2044,8 @@ What exists today:
 Found on the way and filed separately:
 
 - A recursive enum's copyability depended on payload order, and the tree has exactly that shape — fixed `0.9.636`.
-- **KR-185:** the integer reader accepts invalid numbers and aborts on overflow, and deep nesting overflows the stack.
+- The integer reader accepted invalid numbers and aborted on overflow, and deep nesting overflowed the stack — fixed
+  `0.9.637` (every reader stops at 128 levels with `TooDeep`, which the tree's own parse inherits).
 
 Two more constraints:
 
@@ -2056,7 +2057,7 @@ Two more constraints:
 Sites: json.kama `numToken`/`readInt`/`readUint`/`skipValue` (~334–555); the prelude's `Serializer` (~360) and
 `Deserializer` (~520).
 
-Steps, after KR-185 and KR-186 (`OrderedMap`):
+Steps, after KR-186 (`OrderedMap`):
 
 1. Add `JsonValue`, a Copyable `JsonMember { key, value }`, and `JsonNumber` in json.kama.
 2. Accessors: `has`/`getRef`/`get`/`at`/`length`/`members()`, and `asInt64`/`asUint64`/`asFloat64` returning
@@ -2070,7 +2071,7 @@ Steps, after KR-185 and KR-186 (`OrderedMap`):
    - a KBIN-named round trip;
    - an xfail for the positional reader.
 
-Size **M**, plus S for KR-185.
+Size **M**.
 
 **Decided 2026-10-16** (the maintainer; decision 2 CHANGED from the survey):
 
@@ -2091,31 +2092,6 @@ Size **M**, plus S for KR-185.
      - A typed schema can hold a subtree (glTF `extensions`).
      - A positional reader answers `TypeMismatch`.
    - (b) JSON-only `parseJson`/`writeJson`, with no subtree inside a typed schema.
-
-<a id="s4-json-numbers"></a>
-
-### The JSON reader takes invalid numbers, aborts on overflow, and overflows the stack on deep input (KR-185)
-
-Found surveying KR-110 and confirmed on `0.9.630`, reading into a `DynamicArray<int64>`:
-
-- `[1.5]` reads 1, and `[007]` reads 7, with no error.
-- The survey also reports `[1e3]` → 1, `[+7]` → 0, `[-]` → 0, a `uint64` `[-3]` → 0, and
-  `[18446744073709551616]` wrapping to 0.
-- `[9223372036854775808]` **aborts the process** ("arithmetic overflow -- int64 + overflowed", exit 134). A parse of
-  untrusted input must return `Err`, never trap.
-- The lenient reader's `skipValue` recurses: `{"junk":` followed by 10⁶ `[` is a SIGSEGV (exit 139). At depth 1000 it
-  correctly returns `Err`.
-
-Sites: json.kama `numToken`/`readInt`/`readUint`/`skipValue` (~334–555).
-
-Fix:
-
-- One number scanner that validates the JSON number grammar (RFC 8259 §6), shared by every read.
-- A fractional, exponent or out-of-range value read into an integer is `TypeMismatch`, never a wrap or a trap.
-- A nesting-depth limit, and an iterative skip, so deep input is an `Err`.
-
-Fixtures: each case above as an `Err`, the depth limit, and the valid edge values (`-9223372036854775808`,
-`18446744073709551615`). Size **S**.
 
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 

@@ -1,0 +1,45 @@
+// KR-185: untrusted input must not decide how deep a read recurses. Past 128 nested objects/arrays every reader
+// fails `TooDeep`: `{"junk":` and a million `[` in a skipped field was a SIGSEGV, and so was the same in a KBIN
+// field; a typed schema that holds itself recursed as deep as the data went. 128 levels fit the smallest stack
+// kama runs on (a wasm isolate's 256 KiB). Returns 0, or the number of the failed check.
+import { std::collections::DynamicArray, std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::deserializeKbinNamedBuffer };
+
+@generate(Deserializable) type resource P { @field int32 x; }
+@generate(Deserializable) type resource Tree { @field DynamicArray<Tree> kids; }
+
+fn bool tooDeep(Optional<DeError> d) {
+    return match (d) {
+        case Some(value: x): match (x.kind()) { case TooDeep: true; case _: false; };
+        case None: false;
+    };
+}
+fn string nest(int32 levels) {   // `levels` Trees, each holding the next: two JSON containers a level
+    string s = "";
+    for (int32 i = 0; i < levels; i = i + 1) { s = s + "{\"kids\":["; }
+    for (int32 i = 0; i < levels; i = i + 1) { s = s + "]}"; }
+    return s;
+}
+fn void key(ref DynamicArray<uint8> b, uint8 c) {   // a one-letter KBIN field name
+    b.add(item: 15ui8); b.add(item: 1ui8); b.add(item: 0ui8); b.add(item: 0ui8); b.add(item: 0ui8); b.add(item: c);
+}
+
+fn int32 main() {
+    string junk = "{\"x\":1,\"junk\":";
+    for (int32 i = 0; i < 1000000; i = i + 1) { junk = junk + "["; }
+    bool j1 = match (deserializeJsonBuffer::<P>(src: give junk)) { case Ok(value: p): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
+    if (!j1) { return 1; }
+    bool j2 = match (deserializeJsonBuffer::<Tree>(src: nest(levels: 64))) { case Ok(value: t): true; case Err(error: e): false; };
+    if (!j2) { return 2; }   // 128 levels exactly: read
+    bool j3 = match (deserializeJsonBuffer::<Tree>(src: nest(levels: 65))) { case Ok(value: t): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
+    if (!j3) { return 3; }   // one level past
+    DynamicArray<uint8> b = DynamicArray.empty();
+    b.add(item: 16ui8);
+    key(b: ref b, c: 120ui8);                                                         // "x": 1
+    b.add(item: 3ui8); b.add(item: 1ui8); b.add(item: 0ui8); b.add(item: 0ui8); b.add(item: 0ui8);
+    key(b: ref b, c: 106ui8);                                                         // "j": unknown, nested
+    for (int32 i = 0; i < 1000000; i = i + 1) { b.add(item: 18ui8); }
+    bool k1 = match (deserializeKbinNamedBuffer::<P>(src: give b)) { case Ok(value: p): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
+    if (!k1) { return 4; }
+    return 0;
+}

@@ -6833,8 +6833,12 @@ frame), and a `@generate` enum may be a node — an edge's pointee, or the root 
 edge, and every pointee of a concrete one, **must** be `@generate(Serializable, Deserializable)` — this is
 **compile-enforced**: a non-`@generate` implementor (which would have no adapters and be silently dropped
 from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
-`DeErrorKind` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId, UnknownField}`, the
-kind a `DeError` carries beside its path.
+`DeErrorKind` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId, UnknownField,
+TooDeep}`, the kind a `DeError` carries beside its path. **Every reader stops at 128 nested objects and arrays** with <!-- test: serde_depth_limit -->
+`TooDeep`: untrusted input must not decide how deep a read recurses, through a typed schema that holds itself or
+the skip of an unknown field, and 128 fits the smallest stack kama runs on. A JSON number is read by RFC 8259's <!-- test: json_number_grammar -->
+grammar, and an integer field takes only an integer that fits it — `1.5`, `1e3` and a value past the range are
+`TypeMismatch`, never a truncation, a wrap or a trap.
 The write is two passes (discover every pointee, so the table's length is exact before the first entry — a
 positional array carries its length up front; then write), the read two passes with no rewind (allocate each
 shell and stash its edge ids; then wire). The `type` index an index backend writes is the node type's position

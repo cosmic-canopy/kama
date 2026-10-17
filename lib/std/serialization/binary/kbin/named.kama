@@ -148,6 +148,7 @@ type resource KbinNamedDeserializer implements Deserializer {
     bool err;
     DeErrorKind code;
     bool refuseUnknown;     // a STRICT reader: a key no field claims fails `UnknownField` (KR-126)
+    isize depth;            // objects and arrays open around the cursor
 
     public ctor make(DynamicArray<uint8> src) { return KbinNamedDeserializer.of(src: give src, refuseUnknown: false); }
     // The strict reader: the first key no field claims fails the read, named (see `JsonDeserializer.strict`).
@@ -159,6 +160,7 @@ type resource KbinNamedDeserializer implements Deserializer {
         this.err = false;
         this.code = DeErrorKind::Malformed;
         this.refuseUnknown = refuseUnknown;
+        this.depth = 0;
     }
 
     // --- low-level cursor ---
@@ -199,17 +201,23 @@ type resource KbinNamedDeserializer implements Deserializer {
     }
 
     // --- structural (Deserializer) ---
-    public fn void beginObject(usize count) { this.expectTag(t: 16ui8); }   // self-delimiting; count unused
-    public fn void beginArray()  { this.expectTag(t: 18ui8); }
+    public fn void beginObject(usize count) { this.expectTag(t: 16ui8); this.enter(); }   // self-delimiting
+    public fn void beginArray()  { this.expectTag(t: 18ui8); this.enter(); }
+    // The input decides how deep a read recurses, so it is bounded: past 128 levels it is `TooDeep` — a million
+    // nested arrays in a skipped field was a SIGSEGV. (The limit every kama reader keeps; see `DeErrorKind`.)
+    fn void enter() {
+        this.depth = this.depth + 1;
+        if (this.depth > 128) { this.failWith(kind: DeErrorKind::TooDeep); }
+    }
     public fn void endObject() { }   // `moreFields` already consumed the obj-end tag — self-describing, nothing to pop
     public fn bool moreFields() {
         if (this.err) { return false; }
-        if (this.at() == 17ui8) { this.pos = this.pos + 1; return false; }   // obj-end -> consume, done
+        if (this.at() == 17ui8) { this.pos = this.pos + 1; this.depth = this.depth - 1; return false; }   // obj-end
         return true;
     }
     public fn bool moreElems() {
         if (this.err) { return false; }
-        if (this.at() == 19ui8) { this.pos = this.pos + 1; return false; }   // arr-end -> consume, done
+        if (this.at() == 19ui8) { this.pos = this.pos + 1; this.depth = this.depth - 1; return false; }   // arr-end
         return true;
     }
     // KBIN describes its own shape, so it can only ever report a NAME — never an id.
@@ -252,8 +260,8 @@ type resource KbinNamedDeserializer implements Deserializer {
         else if (t == 4ui8 || t == 8ui8 || t == 10ui8) { this.pos = this.pos + 8; }
         else if (t == 11ui8 || t == 12ui8 || t == 13ui8) { }   // bool/null: no payload
         else if (t == 15ui8) { isize n = cast<isize>(this.getU(n: 4)); this.pos = this.pos + n; }
-        else if (t == 16ui8) { while (this.moreFields()) { FieldKey k = this.field(); this.skipValue(); } }   // the 0x10 was already consumed as `t`
-        else if (t == 18ui8) { while (this.moreElems()) { this.skipValue(); } }
+        else if (t == 16ui8) { this.enter(); while (this.moreFields()) { FieldKey k = this.field(); this.skipValue(); } }   // 0x10 already consumed
+        else if (t == 18ui8) { this.enter(); while (this.moreElems()) { this.skipValue(); } }
         else { this.err = true; }
     }
     public const fn bool failed() { return this.err; }

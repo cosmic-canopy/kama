@@ -231,6 +231,7 @@ type resource JsonDeserializer implements Deserializer {
     bool err;
     DeErrorKind code;       // the specific error `failWith` recorded; `Malformed` by default
     bool refuseUnknown;     // a STRICT reader: a key no field claims fails `UnknownField` (KR-126)
+    isize depth;            // objects and arrays open around the cursor
 
     // The lenient reader: a key no field claims is skipped.
     public ctor make(string src) { return JsonDeserializer.of(src: give src, refuseUnknown: false); }
@@ -244,6 +245,7 @@ type resource JsonDeserializer implements Deserializer {
         this.err = false;
         this.code = DeErrorKind::Malformed;
         this.refuseUnknown = refuseUnknown;
+        this.depth = 0;
     }
 
     // --- low-level cursor ---
@@ -302,14 +304,21 @@ type resource JsonDeserializer implements Deserializer {
     }
 
     // --- structural (Deserializer) ---
-    public fn void beginObject(usize count) { this.expectValue(b: 123ui8); }   // { — count unused (self-delimiting)
-    public fn void beginArray()  { this.expectValue(b: 91ui8); }    // [
+    public fn void beginObject(usize count) { this.expectValue(b: 123ui8); this.enter(); }   // { — count unused
+    public fn void beginArray()  { this.expectValue(b: 91ui8); this.enter(); }    // [
+    // Untrusted input decides how deep a read recurses — a typed schema that holds itself, and the skip of an unknown
+    // value — so a reader that follows it to any depth overflows the stack: `{"junk":` and a million `[` was a SIGSEGV.
+    // 128 levels, serde_json's limit, fits the smallest stack kama runs on (a wasm isolate's 256 KiB).
+    fn void enter() {
+        this.depth = this.depth + 1;
+        if (this.depth > 128) { this.failWith(kind: DeErrorKind::TooDeep); }
+    }
     public fn void endObject() { }   // `moreFields` already consumed the `}` — self-describing, nothing to pop
     public fn bool moreFields() {
         if (this.err) { return false; }   // sticky failure: stop iterating (else a malformed byte loops forever)
         this.skipWs();
         uint8 c = this.peek();
-        if (c == 125ui8) { this.pos = this.pos + 1; return false; }             // }
+        if (c == 125ui8) { this.pos = this.pos + 1; this.depth = this.depth - 1; return false; }   // }
         if (c == 44ui8)  { this.pos = this.pos + 1; this.skipWs(); return true; } // ,
         return true;
     }
@@ -317,7 +326,7 @@ type resource JsonDeserializer implements Deserializer {
         if (this.err) { return false; }   // sticky failure: stop iterating
         this.skipWs();
         uint8 c = this.peek();
-        if (c == 93ui8) { this.pos = this.pos + 1; return false; }              // ]
+        if (c == 93ui8) { this.pos = this.pos + 1; this.depth = this.depth - 1; return false; }    // ]
         if (c == 44ui8) { this.pos = this.pos + 1; this.skipWs(); return true; } // ,
         return true;
     }
@@ -331,47 +340,84 @@ type resource JsonDeserializer implements Deserializer {
     public fn FieldKey variant() { return FieldKey::Name(name: this.readString()); }
 
     // --- scalars ---
+    fn isize digits() {
+        isize n = 0;
+        while (this.pos < this.len && this.src[this.pos] >= 48ui8 && this.src[this.pos] <= 57ui8) {
+            this.pos = this.pos + 1;
+            n = n + 1;
+        }
+        return n;
+    }
+    // One JSON number (RFC 8259 §6) — `-`? (`0` | [1-9] digits) (`.` digits)? ([eE] [+-]? digits)? — and nothing
+    // number-like straight after it. The scan used to take any run of `0-9+-.eE`, so `[007]` read 7, `[+7]` and `[-]`
+    // read 0, and `1.2.3` read as a float; each is malformed input.
     fn string numToken() {
         this.skipWs();
         isize start = this.pos;
-        while (this.pos < this.len) {
-            uint8 c = this.src[this.pos];
-            if ((c >= 48ui8 && c <= 57ui8) || c == 45ui8 || c == 43ui8 ||
-                c == 46ui8 || c == 101ui8 || c == 69ui8) { this.pos = this.pos + 1; }
-            else { break; }
+        uint8 c = this.peek();
+        if (c != 45ui8 && (c < 48ui8 || c > 57ui8)) { this.wrongValue(); return ""; }   // not a number at all
+        if (c == 45ui8) { this.pos = this.pos + 1; }                                  // -
+        if (this.peek() == 48ui8) { this.pos = this.pos + 1; }                       // a lone leading 0
+        else if (this.digits() == 0) { this.brokenAt(); return ""; }
+        if (this.peek() == 46ui8) {                                                  // . fraction
+            this.pos = this.pos + 1;
+            if (this.digits() == 0) { this.brokenAt(); return ""; }
         }
-        if (this.pos == start) { this.wrongValue(); return ""; }
+        uint8 e = this.peek();
+        if (e == 101ui8 || e == 69ui8) {                                             // e/E exponent
+            this.pos = this.pos + 1;
+            uint8 sign = this.peek();
+            if (sign == 43ui8 || sign == 45ui8) { this.pos = this.pos + 1; }
+            if (this.digits() == 0) { this.brokenAt(); return ""; }
+        }
+        uint8 n = this.peek();
+        if ((n >= 48ui8 && n <= 57ui8) || n == 46ui8 || n == 43ui8 || n == 45ui8 || n == 101ui8 || n == 69ui8) {
+            this.brokenAt(); return "";                                               // `007`, `1.2.3`
+        }
         return this.src.substring(start: start, end: this.pos);
+    }
+    // The integer a valid token spells, as a magnitude no greater than `limit`, or `None`: a fraction or an exponent
+    // is no integer (`1.5`, `1e3`), and past `limit` it does not fit. Checked before each step, so nothing overflows —
+    // `9223372036854775808` into an `int64` aborted the process, and so did the valid `-9223372036854775808`.
+    fn Optional<uint64> magnitude(const ref string tok, isize from, uint64 limit) {
+        uint64 v = 0ui64;
+        isize i = from;
+        while (i < tok.length()) {
+            uint8 c = tok[i];
+            if (c < 48ui8 || c > 57ui8) { return Optional::None; }
+            uint64 d = cast<uint64>(c - 48ui8);
+            if (v > (limit - d) / 10ui64) { return Optional::None; }
+            v = v * 10ui64 + d;
+            i = i + 1;
+        }
+        return Optional::Some(value: v);
     }
     fn int64 readInt() {
         string tok = this.numToken();
-        isize n = tok.length();
-        if (n == 0) { return 0i64; }
-        isize i = 0;
-        bool neg = false;
-        if (tok[0] == 45ui8) { neg = true; i = 1; }
-        int64 v = 0i64;
-        while (i < n) {
-            uint8 c = tok[i];
-            if (c < 48ui8 || c > 57ui8) { break; }
-            v = v * 10i64 + cast<int64>(c - 48ui8);
-            i = i + 1;
-        }
-        if (neg) { return 0i64 - v; }
-        return v;
+        if (this.err) { return 0i64; }
+        bool neg = tok[0] == 45ui8;
+        Optional<uint64> m = this.magnitude(tok: tok, from: neg ? 1 : 0,
+                                            limit: neg ? 9223372036854775808ui64 : 9223372036854775807ui64);
+        match (m) {
+            case Some(value: v): {
+                if (!neg) { return cast<int64>(v); }
+                if (v == 9223372036854775808ui64) { return -9223372036854775807i64 - 1i64; }
+                return 0i64 - cast<int64>(v);
+            }
+            case None: { }
+        };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0i64;
     }
     fn uint64 readUint() {
         string tok = this.numToken();
-        isize n = tok.length();
-        uint64 v = 0ui64;
-        isize i = 0;
-        while (i < n) {
-            uint8 c = tok[i];
-            if (c < 48ui8 || c > 57ui8) { break; }
-            v = v * 10ui64 + cast<uint64>(c - 48ui8);
-            i = i + 1;
-        }
-        return v;
+        if (this.err) { return 0ui64; }
+        bool neg = tok[0] == 45ui8;
+        Optional<uint64> m = this.magnitude(tok: tok, from: neg ? 1 : 0, limit: 18446744073709551615ui64);
+        match (m) {
+            case Some(value: v): { if (!neg || v == 0ui64) { return v; } }   // `-0` is zero; `-3` is no uint
+            case None: { }
+        };
+        this.failWith(kind: DeErrorKind::TypeMismatch); return 0ui64;
     }
     // A number that does not FIT the field it is being read into is a bad DOCUMENT, not a bug in this
     // program — so it fails the reader, exactly like a malformed token does, and never traps. That is
