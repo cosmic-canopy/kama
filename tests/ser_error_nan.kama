@@ -20,7 +20,7 @@ fn int32 main() {
     int32 errv = match (badr) {
         case Ok(value: s): 0 - 3;                                   // must NOT succeed
         case Err(error: e): match (e.as<SerError>()) {              // recover the concrete serialize error
-            case Some(value: se): match (se) { case NotRepresentable: 100; case IoError: 0 - 4; };
+            case Some(value: se): match (se) { case NotRepresentable: 100; case IoError: 0 - 4; case _: 0 - 6; };
             case None: 0 - 5;
         };
     };

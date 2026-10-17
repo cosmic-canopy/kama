@@ -30,6 +30,7 @@ fn int32 errCode(DecodeError e) {
         case InvalidLength:           1;
         case InvalidPadding:          2;
         case InvalidTrailingBits:     3;
+        case _:                       4;
     };
 }
 

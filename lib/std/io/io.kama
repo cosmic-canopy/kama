@@ -36,6 +36,7 @@ extern fn int32 kama_ESRCH();
 // group of the wrong family — whether kama or the OS (EINVAL) is the one that refuses it. `Interrupted` is a
 // signal arriving during a blocking call (EINTR): the call did nothing, and trying it again is the answer —
 // `Poller.wait` does that itself, with the time that is left.
+@nonExhaustive
 type enum IoErrorKind implements Sendable {
     NotFound,
     AlreadyExists,

@@ -64,8 +64,10 @@ extern fn int32 kama_EINTR();
 //             holding the child and everything it starts. The job ends when its last handle closes: dropping the
 //             `Process`, or the program exiting, ends the group — a supervisor's children never outlive it.
 @compileFor(!OS_WINDOWS)
+@nonExhaustive
 type enum ProcessGroup implements Sendable { Inherit, New, Join(int32 group), NewSession }
 @compileFor(OS_WINDOWS)
+@nonExhaustive
 type enum ProcessGroup implements Sendable { Inherit, New }
 
 // The seam's encoding of a group: 0 inherit, 1 new, 2 join `groupJoin`, 3 new session.
@@ -88,6 +90,7 @@ fn int32 groupJoin(const ref ProcessGroup g) { return 0; }
 //   (Python's `stderr=STDOUT`), and on stdin or stdout it is `InvalidInput`.
 // Move-only, since a `Handle` owns what it carries. On Windows a socket is no child's stream (its handle is
 // overlapped, which a child's `ReadFile` cannot use): `InvalidInput`.
+@nonExhaustive
 type enum Stdio implements Sendable { Inherit, Piped, Null, Handle(Descriptor descriptor), Stdout }
 
 // A finished child's status. On POSIX a process either EXITS with a code OR is killed by a SIGNAL (exactly

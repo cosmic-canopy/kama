@@ -11,6 +11,7 @@ fn bool failsAt(const ref string text, isize want) {
         case Err(error: e): match (e) {
             case InvalidCharacter(at: a): a == want;
             case InvalidLength: false;
+            case _: false;
         };
     };
 }
@@ -21,6 +22,7 @@ fn bool failsLength(const ref string text) {
         case Err(error: e): match (e) {
             case InvalidCharacter(at: a): false;
             case InvalidLength: true;
+            case _: false;
         };
     };
 }

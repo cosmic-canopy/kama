@@ -1,0 +1,1 @@
+`@nonExhaustive` takes no arguments

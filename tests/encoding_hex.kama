@@ -10,6 +10,7 @@ fn int32 errCode(DecodeError e) {
     return match (e) {
         case InvalidCharacter(at: a): 100 + cast<int32>(a);
         case InvalidLength:           1;
+        case _:                       2;
     };
 }
 

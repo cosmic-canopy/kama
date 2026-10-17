@@ -1,0 +1,13 @@
+// KR-176: `IoErrorKind` is `@nonExhaustive` — std adds error kinds in 1.x, and each addition would otherwise stop
+// every `match` without `case _:` from compiling. Outside std, a `match` on it needs `case _:` even when it lists
+// every case there is today, as this one does. (Inside std the match stays exhaustive: `IoErrorKind.message()`.)
+import { std::io::IoErrorKind };
+fn int32 code(IoErrorKind k) {
+    return match (k) {
+        case NotFound: 1; case AlreadyExists: 2; case ProcessNotFound: 3; case PermissionDenied: 4;
+        case WouldBlock: 5; case ConnectionRefused: 6; case ConnectionReset: 7; case AddrInUse: 8;
+        case UnexpectedEof: 9; case InProgress: 10; case TimedOut: 11; case HostUnreachable: 12;
+        case MessageTooLong: 13; case BrokenPipe: 14; case InvalidInput: 15; case Interrupted: 16; case Other: 17;
+    };
+}
+fn int32 main() { return code(k: IoErrorKind::Other); }

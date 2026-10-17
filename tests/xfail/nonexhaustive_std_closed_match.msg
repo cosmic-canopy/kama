@@ -1,0 +1,1 @@
+the enum is `@nonExhaustive`, so a later `std` may add a case

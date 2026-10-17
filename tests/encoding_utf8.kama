@@ -33,7 +33,7 @@ unsafe fn int32 check(const ref DynamicArray<uint8> b, bool wantOk, isize wantAt
         Result<string, Utf8Error> d = decode(bytes: bv);
         return match (give d) {
             case Ok(value: s):  wantOk ? 0 : 2;
-            case Err(error: e): match (e) { case Invalid(at: a): (!wantOk && a == wantAt) ? 0 : 3; };
+            case Err(error: e): match (e) { case Invalid(at: a): (!wantOk && a == wantAt) ? 0 : 3; case _: 3; };
         };
     }
 }

@@ -9,12 +9,12 @@ import { std::fmt::parse, std::fmt::ParseError };
 fn int32 f64(const ref string s) {   // 1 ok, 2 malformed, 3 out of range, 4 empty
     Result<float64, ParseError> r = parse::<float64>(s: s);
     return match (r) { case Ok(value: v): 1;
-                       case Err(error: e): match (e) { case InvalidDigit: 2; case OutOfRange: 3; case Empty: 4; }; };
+                       case Err(error: e): match (e) { case InvalidDigit: 2; case OutOfRange: 3; case Empty: 4; case _: 5; }; };
 }
 fn int32 f32(const ref string s) {
     Result<float32, ParseError> r = parse::<float32>(s: s);
     return match (r) { case Ok(value: v): 1;
-                       case Err(error: e): match (e) { case InvalidDigit: 2; case OutOfRange: 3; case Empty: 4; }; };
+                       case Err(error: e): match (e) { case InvalidDigit: 2; case OutOfRange: 3; case Empty: 4; case _: 5; }; };
 }
 
 fn int32 main() {

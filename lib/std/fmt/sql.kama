@@ -14,6 +14,7 @@ export { SqlValue, SqlParam, SqlQuery, sql };
 // One SQL value: what a driver binds to a `?`. The portable core every database has; a driver with richer
 // types (arrays, JSON, UUID, timestamps) defines its own contract for them.
 @generate(Equatable)
+@nonExhaustive
 type enum SqlValue implements SqlParam {
     Null,
     Bool(bool value),

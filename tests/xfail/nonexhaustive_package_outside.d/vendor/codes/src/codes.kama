@@ -1,0 +1,7 @@
+export { Code, weight };
+// A registry package's enum may be `@nonExhaustive` too, as std's are (KR-176): the package means to add cases in
+// later releases. INSIDE the package a `match` stays exhaustive — this one names every case and has no `_`, so a
+// case added later must be handled here first.
+@nonExhaustive
+type enum Code { Low, High }
+fn int32 weight(Code c) { return match (c) { case Low: 1; case High: 10; }; }

@@ -410,6 +410,7 @@ type contract Serializer for resource {
 }
 // SerError is the write-side twin of DeError: a first-class `Error` that BOXES into `Owned<Error>` at a
 // fallible-`serialize` boundary and is recovered with `err.as<SerError>()`.
+@nonExhaustive
 type enum SerError implements Error, Sendable {
     NotRepresentable, IoError;
 
@@ -430,6 +431,7 @@ type contract Serializable for value, resource, enum, intrinsic { const fn Resul
 //
 // What went wrong reading a value: the part a caller branches on, `match (e.kind())`. A reader latches one when it
 // fails (`failWith`), and the error a read returns, `DeError`, carries it beside where it happened.
+@nonExhaustive
 type enum DeErrorKind implements Sendable {
     Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId,
     UnknownField,   // a STRICT reader's: a key no field claims (`JsonDeserializer.strict`)

@@ -22,6 +22,7 @@ export { ParseError, Parseable, parse, ParseableRadix, parseRadix };
 // Strict by design, like Rust's: no surrounding whitespace is trimmed and no trailing byte is ignored, so
 // `" 7"` and `"7x"` are both `InvalidDigit`. Trim first if you want otherwise.
 
+@nonExhaustive
 type enum ParseError implements Error {
     Empty, InvalidDigit, OutOfRange;
 

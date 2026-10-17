@@ -947,6 +947,8 @@ public:
     // a driver — a test harness, a future front end — is not silently locked down.
     void setModuleVisible(std::function<bool(const std::string&, const std::string&)> f) { _moduleVisible = std::move(f); }
     void setModuleResolver(std::function<std::string(const std::string&)> r) { _moduleResolver = r; }
+    // The PACKAGE a file belongs to (KR-176): the boundary `@nonExhaustive` draws. Manifest work, so the driver answers.
+    void setPackageResolver(std::function<std::string(const std::string&)> r) { _packageResolver = r; }
     // How a source file is spelled where a location is written INTO the program — a `panic`/`assert` site's
     // `file:line` — package-relative, so no build machine's path reaches a binary (KR-121). Supplied by the
     // driver, which owns the manifests; absent, the location is the unit's path unchanged.
@@ -1592,6 +1594,11 @@ private:
     // and the method returns a view — see emitMethodOrCtorBody and emitDotOnTypeCtorCall.
     std::string _mintGrant;
     std::function<std::string(const std::string&)> _moduleResolver;
+    std::function<std::string(const std::string&)> _packageResolver;
+    // `@nonExhaustive` enums (KR-176), by registry key (a generic one by its template's), to the package that declared
+    // them: outside that package a `match` on one must carry `case _:`, because the package may add a case later.
+    std::map<std::string, std::string> _nonExhaustiveEnums;
+    bool rejectClosedMatchOutside(const std::string& enumKey, ASTNode* at);
     std::function<std::string(const std::string&)> _locationResolver;
     std::map<std::string, std::string> _programLocations;   // diagFile() -> its package-relative spelling
     std::string programLocation();                           // the file a location in the program names

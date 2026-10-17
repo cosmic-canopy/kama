@@ -1,0 +1,1 @@
+the enum is `@nonExhaustive`, so a later `codes` may add a case

@@ -15,21 +15,21 @@ fn string show(const ref string text) {
 fn bool stampOutOfRange(const ref string text) {
     return match (Timestamp.parse(text: text)) {
         case Ok(value: t): false;
-        case Err(error: e): match (e) { case InvalidCharacter(at: a): false; case OutOfRange: true; };
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): false; case OutOfRange: true; case _: false; };
     };
 }
 
 fn bool dateOutOfRange(const ref string text) {
     return match (Date.parse(text: text)) {
         case Ok(value: d): false;
-        case Err(error: e): match (e) { case InvalidCharacter(at: a): false; case OutOfRange: true; };
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): false; case OutOfRange: true; case _: false; };
     };
 }
 
 fn bool stampFailsAt(const ref string text, isize want) {
     return match (Timestamp.parse(text: text)) {
         case Ok(value: t): false;
-        case Err(error: e): match (e) { case InvalidCharacter(at: a): a == want; case OutOfRange: false; };
+        case Err(error: e): match (e) { case InvalidCharacter(at: a): a == want; case OutOfRange: false; case _: false; };
     };
 }
 

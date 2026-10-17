@@ -7,7 +7,7 @@ fn int32 kindOf(ref string s) {
     Result<int32, ParseError> r = parse::<int32>(s: s);
     return match (r) {
         case Ok(value: v):  0;
-        case Err(error: e): match (e) { case Empty: 1; case InvalidDigit: 2; case OutOfRange: 3; };
+        case Err(error: e): match (e) { case Empty: 1; case InvalidDigit: 2; case OutOfRange: 3; case _: 4; };
     };
 }
 

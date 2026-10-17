@@ -19,6 +19,7 @@ export { encode, decode, DecodeError };
 // the one signature every declaration in the program must share (tools/check-extern-rung.sh).
 extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 
+@nonExhaustive
 type enum DecodeError implements Error {
     InvalidCharacter(isize at), InvalidLength;
 

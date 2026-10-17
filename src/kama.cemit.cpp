@@ -10880,15 +10880,22 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
         if (ed->attributes)
             for (auto& at : *ed->attributes) {
                 if (!at || !at->name || *at->name == "align" || *at->name == "packed" || *at->name == "generate") continue;
+                if (*at->name == "nonExhaustive") {   // KR-176
+                    if (at->args && !at->args->empty())
+                        unsupported("`@nonExhaustive` takes no arguments — it says the enum may gain cases later", ed);
+                    continue;
+                }
                 if (*at->name == "linkName") {
                     if (!enumHasModifier(ed, "expose"))
                         unsupported("`@linkName` names what a host sees, and only a `type expose enum` has a host-visible "
                                     "name to fix — a `type extern enum` is the header's own name already", ed);
                     continue;
                 }
-                unsupported(("unknown enum attribute `@" + *at->name + "` (expected `@generate`, or `@linkName` on a "
-                             "`type expose enum`)").c_str(), ed);
+                unsupported(("unknown enum attribute `@" + *at->name + "` (expected `@generate`, `@nonExhaustive`, "
+                             "or `@linkName` on a `type expose enum`)").c_str(), ed);
             }
+        if (hasAttr(ed->attributes, "nonExhaustive") && unit && unit->name)
+            _nonExhaustiveEnums[name] = _packageResolver ? _packageResolver(*unit->name) : std::string();
 
         if (enumIsTagged(ed)) {
             // a payload/generic enum is a discriminated union backed by a ClassInfo.
@@ -29026,7 +29033,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         if (covered.count(vn)) unsupported(("duplicate `match` arm for variant '" + vn + "'").c_str(), a);
         covered.insert(vn);
     }
-    if (!hasWildcard)
+    if (!hasWildcard && !rejectClosedMatchOutside(subjCls, m))
         for (auto& v : ci.variants)
             if (!covered.count(v.name))
                 unsupported(("`match` on '" + subjCls + "' is not exhaustive: variant '" + v.name
@@ -29509,6 +29516,24 @@ void CEmitter::mergeMatchMoveStates(const std::map<std::string, MoveState>& befo
 
 // Resolve the plain (payload-less) enum type of a `match` subject; "" if it is not a plain enum.
 // A tagged union resolves through exprClass instead — this only sees bare-integer enums.
+// `@nonExhaustive` (KR-176): outside the package that declared the enum, a `match` with no `case _:` is refused even
+// when it lists every case today — the package may add one in a later release, and then the match would stop
+// compiling. Judged by the file the match was WRITTEN in (diagFile), never the unit a generic was instantiated into.
+// Inside the package the match stays exhaustive, so the package itself must handle each case it adds.
+bool CEmitter::rejectClosedMatchOutside(const std::string& enumKey, ASTNode* at)
+{
+    std::string k = enumKey;
+    auto gi = _genericTypeInsts.find(k);
+    if (gi != _genericTypeInsts.end()) k = gi->second.templateKey;
+    auto ne = _nonExhaustiveEnums.find(k);
+    if (ne == _nonExhaustiveEnums.end()) return false;
+    const std::string here = _packageResolver ? _packageResolver(diagFile()) : std::string();
+    if (here == ne->second) return false;
+    unsupported(("`match` on '" + demangleForDisplay(enumKey) + "' needs `case _:` — the enum is `@nonExhaustive`, so a "
+                 "later `" + (ne->second.empty() ? std::string("version") : ne->second) + "` may add a case").c_str(), at);
+    return true;
+}
+
 std::string CEmitter::exprEnumType(SharedExpression e)
 {
     if (!e) return "";
@@ -29596,7 +29621,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         if (covered.count(vn)) unsupported(("duplicate `match` arm for case '" + vn + "'").c_str(), a);
         covered.insert(vn);
     }
-    if (!hasWildcard)
+    if (!hasWildcard && !rejectClosedMatchOutside(enumTy, m))
         for (auto& mem : ei.members)
             if (!covered.count(mem.name))
                 unsupported(("`match` on '" + enumTy + "' is not exhaustive: case '" + mem.name

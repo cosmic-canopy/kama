@@ -124,7 +124,7 @@ feature.
   call is not limited that way: it infers `T` from a local, a field — `this.yaw` too — an element, or a
   nested call such as `showIt(x: Leaf.make(n: 7))`. Where nothing says the type, write it:
   `showIt::<Leaf>(…)`.)
-- **`match`, never `switch`.** `switch` does not exist. `match` is exhaustive and produces a value.
+- **`match`, never `switch`.** `match` is exhaustive and yields a value; an `@nonExhaustive` enum (std's error kinds) also needs `case _:` outside its package.
 - **No `null`, no exceptions.** Absence is `Optional<T>`, failure is `Result<T, E>`; `== null` on a
   safe type is a compile error. <!-- xfail: null_safe_compare --> A **constructor may fail** — the return type goes between `ctor` and
   the name: `public ctor Result<Buffer, SizeError> create(int32 size)`, and an infallible ctor returns

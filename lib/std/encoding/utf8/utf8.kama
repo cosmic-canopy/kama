@@ -29,6 +29,7 @@ export { decode, decodeLossy, validate, Utf8Error };
 extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
 extern fn isize  kama_utf8_bad_offset(UnsafeConstPtr<uint8> src, isize start, isize len);
 
+@nonExhaustive
 type enum Utf8Error implements Error {
     // The byte offset where the first ill-formed sequence BEGINS — Rust's `Utf8Error::valid_up_to`.
     // A caller reporting a bad file wants to say where, not just that.

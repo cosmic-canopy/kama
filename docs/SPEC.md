@@ -5839,6 +5839,14 @@ member of `Shape`'s scope, reached with `::` like any other scope member; supply
 `Optional`/`Result` prelude types alike — and an enum behind an `Owned`/`Shared` handle, which it matches <!-- test: match_heap_handle -->
 through the handle, borrowing the payloads in place (not `give`, and not a `Weak`, which must be upgraded first). It is **value-producing**<!-- xfail: match_handle_give, match_handle_weak --> (usable in statement or expression
 position), enforces **compile-time exhaustiveness**, and accepts a `_` wildcard for the catch-all case.
+**An enum that means to grow says so: `@nonExhaustive`.** Outside the PACKAGE that declares it, a `match` on one <!-- xfail: nonexhaustive_std_closed_match, nonexhaustive_package_outside -->
+needs `case _:` even when it lists every case today — the package may add a case in a later release, and a match
+with no `_` would then stop compiling. Inside the package the match stays exhaustive, so the package handles each <!-- test: nonexhaustive_package -->
+case it adds. std's error kinds and growable options carry it — `IoErrorKind`, `DeErrorKind`, `SerError`,
+`ParseError`, the `DecodeError`s, `Utf8Error`, `UuidError`, `TimeError`, `FileKind`, `OpenMode`, `Stdio`,
+`ProcessGroup` (whose cases already differ by OS), `SqlValue`, `Interest` — while closed sets (`Optional`,
+`Result`, `Ordering`, `Weekday`, `SeekFrom`, …) stay exhaustive everywhere. Any enum may carry it, a registry
+package's included. It takes no arguments, and it is an error rather than a warning: kama has none. <!-- xfail: nonexhaustive_args -->
 In a pattern, `_` in place of a binding discards that payload field — as often as the pattern needs it, <!-- test: match_discard_bindings -->
 `case Rect(w: _, h: _)` — and a discarded owning field of a consumed subject is dropped at the arm's end.
 It is also the only construct that *reads* an enum, which is why the only way to *build* one from an

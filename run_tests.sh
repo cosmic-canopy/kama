@@ -831,7 +831,18 @@ xfail_one() {
             # build, which by design applies no manifest at all, so a rejection that needs one could never
             # fire: `visibility` would be read by nothing and the fixture would compile clean. This arm was
             # simply never added when 1c gave it to the positive leg.
-            "$KAMA" build "$src/kama.json" -o "$xwd/$name" >/dev/null 2>"$err"; rc=$?
+            local proj="$src"
+            if grep -q '"dependencies"' "$src/kama.json"; then
+                # A path dependency needs its view built first, exactly as the positive leg builds it — in a
+                # copy, so the worktree stays clean — or the rejection under test never gets the chance to fire
+                # ("… declares dependencies but … .kama/deps is missing"). The positions are then the copy's.
+                proj="$xwd/src"; cp -R "$src" "$proj"
+                fsrcs=$(find "$proj" -name '*.kama' -not -path '*/.kama/*' | sort)
+                if ! "$KAMA" pkg install "$proj/kama.json" >/dev/null 2>"$err"; then
+                    { echo "FAIL xfail/$name (pkg install failed)"; cat "$err"; } >"$out"; echo FAIL >"$res"; return
+                fi
+            fi
+            "$KAMA" build "$proj/kama.json" -o "$xwd/$name" >/dev/null 2>"$err"; rc=$?
         else
             # shellcheck disable=SC2086
             "$KAMA" build $fsrcs -o "$xwd/$name" >/dev/null 2>"$err"; rc=$?

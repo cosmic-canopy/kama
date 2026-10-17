@@ -1,0 +1,12 @@
+{
+  "name": "nonexhaustiveout",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "dependencies": {
+    "codes": { "path": "./vendor/codes" }
+  },
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
+}

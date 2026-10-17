@@ -2882,6 +2882,15 @@ static void configureEmitter(CEmitter& e)
         return kamaModuleVisibleTo(importer, imported);
     });
     e.setLocationResolver(packageLocationOf);   // a `panic`/`assert` site's file, package-relative (KR-121)
+    // The package a file belongs to (KR-176): its project's import name — never the first segment of
+    // `packageLocationOf`, which splits `@kama/sodium` at its slash. A compiler-owned unit (`<prelude>`, `core`,
+    // the triad) ships with std; every loose file of a build is one package.
+    e.setPackageResolver([](const std::string& unitPath) -> std::string {
+        if (unitPath.empty()) return std::string("<loose>");
+        if (unitPath[0] == '<') return std::string("std");
+        ModuleId m = moduleIdForFile(unitPath);
+        return m.inProject ? m.project : std::string("<loose>");
+    });
     // The always-in-scope triad, each with the `lib/std/memory/*.kama` it was embedded from — a file
     // that ships in every install, unlike the global prelude.
     for (auto& m : preludeModuleUnits())

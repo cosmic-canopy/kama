@@ -78,6 +78,7 @@ extern fn int32  kama_EINTR();
 //
 // A file either one creates asks for `rw-rw-rw-` and the process umask narrows it (`rw-r--r--` under the
 // usual `022`) — every language's default. On Windows it inherits its directory's access list.
+@nonExhaustive
 type enum OpenMode { Read, Write, Append, ReadWrite, CreateNew }
 
 // Where `File.seek` moves the cursor (KR-168): from the start, or from where it is or from the end, by a signed step.
@@ -193,6 +194,7 @@ type value Metadata implements Sendable {
 // the connect — and `Metadata` used to say only whether it was a directory). `Symlink` is seen only by
 // `symlinkStat`, which does not follow the link. Windows reports a file, a directory, a character device (`NUL`, a
 // console), a pipe as `Fifo`, and a symbolic link or junction; a block device and a socket are what POSIX adds.
+@nonExhaustive
 type enum FileKind implements Sendable { File, Dir, Symlink, Fifo, CharDevice, BlockDevice, Socket, Other }
 
 // The seam's kind code (kama_os.h, kama__file_kind) as a FileKind.

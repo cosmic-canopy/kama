@@ -42,6 +42,7 @@ export { Uuid, UuidError };
 // The length of the text form: 32 hex digits and 4 hyphens.
 comptime isize TEXTLEN = 36;
 
+@nonExhaustive
 type enum UuidError implements Error {
     InvalidLength, InvalidCharacter(isize at);
 
