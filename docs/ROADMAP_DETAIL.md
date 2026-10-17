@@ -230,26 +230,12 @@ Everything else here is library or toolchain work that does **not** gate the tag
      queue waits on Linux, where the caller never sees the `EAGAIN` it was told to retry; it has shipped);
      getters for the keepalive and
      user-timeout knobs are genuinely optional — no std option has one, and a program sets what it wants;
-     `UnixDatagram` does not implement `DatagramSocket` YET — that contract's addresses are `SocketAddr`s — and that
-     is SCHEDULED, not optional: a syslog client sends to `/dev/log` or to UDP 514 through one code path, which is
-     `DatagramSocket` generic over its address type (KR-108). And one ruling that outlives
+     (`UnixDatagram` implementing `DatagramSocket` shipped in `0.9.650`, by making the contract generic over its
+     address type.) And one ruling that outlives
      the rows (the maintainer, 2026-09-30): **a platform is never cut down to the common subset** — the primary
      interface is the same everywhere and each OS's deltas live in the per-platform TYPES it returns
      (`PeerCredentials`, `UserId`, Linux's `UnixAddr` with abstract names, POSIX's `UnixDatagram`), because
      `@compileFor` gates types, not members, by design.
-<a id="s1-datagram-address"></a>
-
-### `DatagramSocket` generic over its address, so `UnixDatagram` implements it (KR-108)
-
-`DatagramSocket` (`udp.kama`) is written over `SocketAddr` — `sendTo(bytes:, to: SocketAddr)`,
-`recvFrom → RecvFrom { count, from: SocketAddr }` — so `UdpSocket` and the web's `WtConnection` implement it and
-`UnixDatagram` (`0.9.484`) cannot, though its methods are the same shape over a `UnixAddr`. A consumer that needs
-the one code path: a syslog client, which sends to `/dev/log` (a Unix datagram socket) or to UDP 514 depending on
-configuration; likewise a metrics emitter (statsd over UDP, or a local agent's socket). The shape to decide: a
-contract with the address as a type parameter (`DatagramSocket<A>`, with `RecvFrom<A>`), which is a source break
-for every `fn f<S: DatagramSocket>` today, against a second contract beside the first. One-way-to-do-a-thing
-argues for the parameter; the maintainer rules on the break.
-
 
 **Post-1.0 — the decided big-arc sequence (with the user, 2026-07-26):**
 1. **Editor tooling (§10).** The front end is a reusable query API with real source spans, which every
@@ -286,40 +272,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 …), read and left alone. **No error-count guard** was added: `DIAGNOSTIC_LINES` already pins every position
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
-
-**Where (surveyed on `0.9.630`).** It reproduces: a `UnixDatagram` used as a `DatagramSocket` is "does not implement
-it". A mock `Dg<A>`/`Rf<A>` with two socket types over different addresses builds and runs today: bounds
-`fn f<S: Dg<A>, A>`, a `Dg<AddrX>` contract value, and `@generate(of)` on `Rf<A>`.
-
-Sites:
-
-- `lib/std/net/udp.kama`: the contract (~45), `UdpSocket.sendTo` (~112) and `recvFrom` (~124).
-- `addr.kama` (~357): `RecvFrom<A>`. Keep it in addr.kama, because kama.driver.cpp (~1660) relies on udp.kama
-  importing it.
-- `unix.kama`: delete `UnixRecvFrom` (~449), and `implements DatagramSocket<UnixAddr>` (~462/520).
-- `web/wt.kama` and `web/rtc.kama` stay `<SocketAddr>`, so game code is the same on both targets.
-- 9 fixtures (`net_udp_*`, `net_ipv6`, `net_addr_ctor`, `net_unix_datagram.d`); SPEC ~2239/2609;
-  WEB_FRAMEWORK_READINESS.
-
-`sendTo` takes `const ref A to`; today's `ref SocketAddr` refuses a `const` address.
-
-The break is narrower than feared. A bare bound `<S: DatagramSocket>` keeps compiling, because it is checked per
-instantiation. Contract values, `implements` and `RecvFrom` spellings do break.
-
-Unblocked by `0.9.635`: a bare generic contract in a type position is refused by name, and a defaulted one is
-filled, rather than reaching C. Size **S**.
-
-**Decided 2026-10-16** (the maintainer):
-
-1. `DatagramSocket<A>` with `RecvFrom<A>`, deleting `UnixRecvFrom`. A second contract would be two ways to do one
-   thing. Go's `net.PacketConn` is the same shape over a dynamic `net.Addr`; Rust's std shares nothing between
-   `UdpSocket` and `UnixDatagram`.
-2. Take the break and spell `<SocketAddr>` everywhere. A default `<A = SocketAddr>` is the wrong tool: default type
-   parameters are for POLICY knobs nobody thinks about (a hasher, an allocator), and the address is what kind of
-   socket this is. A default would make a bare `DatagramSocket` silently mean "the IP one", and give one contract
-   two spellings. (A defaulted contract parameter is filled in `implements` and every type position since `0.9.635`.)
-3. A zero-length `recvFrom` is `InvalidInput` on both. UDP answers `Ok(0, 0.0.0.0:0)` today, which invents a
-   sender.
 
 <a id="s1-unix-pair"></a>
 

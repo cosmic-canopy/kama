@@ -1,13 +1,14 @@
 // std::net UDP loopback — two ephemeral sockets exchange a patterned datagram on 127.0.0.1; verify byte
 // count, checksum, AND that recvFrom reports the correct sender port (proving the address round-trip).
-// Single process, blocking, deadlock-free (the datagram is kernel-buffered before the matching recv).
+// Single process, blocking, deadlock-free (the datagram is kernel-buffered before the matching recv). An empty
+// buffer is `InvalidInput` from `recvFrom` — it cannot hold a datagram, and answering would invent a sender (KR-108).
 // Returns 55.
 import {
     std::net::UdpSocket,
     std::net::SocketAddr,
     std::net::IpAddr,
     std::net::RecvFrom,
-    std::io::IoError,
+    std::io::IoError, std::io::IoErrorKind,
     std::collections::DynamicArray,
     std::collections::FixedArray,
 };
@@ -53,7 +54,7 @@ fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
     FixedArray<uint8> buf = FixedArray.make(size: 2048);
     int32 got = -1;
     int32 fromPort = -1;
-    Result<RecvFrom, IoError> rr = b.recvFrom(into: buf.viewMut());
+    Result<RecvFrom<SocketAddr>, IoError> rr = b.recvFrom(into: buf.viewMut());
     match (rr) {
         case Ok(value: rf): { got = cast<int32>(rf.count); fromPort = cast<int32>(rf.from.port); }
         case Err(error: e): { got = -2; }
@@ -62,6 +63,12 @@ fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
     if (got != n) { return 85; }
     if (fromPort != ap) { return 86; }
     if (checksum(buf: buf, n: got) != expectSum(n: n)) { return 87; }
+    FixedArray<uint8> none = FixedArray.make(size: 0);
+    bool invalid = match (b.recvFrom(into: none.viewMut())) {
+        case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; };
+        case Ok(value: rf): false;
+    };
+    if (!invalid) { return 88; }
     return 55;
 }
 

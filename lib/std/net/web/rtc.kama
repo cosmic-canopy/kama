@@ -77,9 +77,9 @@ fn string quoted(const ref string s) {
 // `udp.kama` promised beside WebTransport's. One side OFFERS and the other ANSWERS, and each side's description
 // travels to the other through signalling the program provides (a WebSocket, a copy-paste, a QR code) — non-trickle:
 // a description carries every ICE candidate, so it is one string each way. It is a CONNECTED datagram endpoint (one
-// peer), so it satisfies `DatagramSocket` as `WtConnection` does: `sendTo` ignores its address and `recvFrom`
+// peer), so it satisfies `DatagramSocket<SocketAddr>` as `WtConnection` does: `sendTo` ignores its address and `recvFrom`
 // reports a nil sender. Non-blocking only; closes the connection on drop.
-type resource RtcConnection implements DatagramSocket {
+type resource RtcConnection implements DatagramSocket<SocketAddr> {
     int32 handle;
     private ctor make(int32 handle) { this.handle = handle; }
 
@@ -167,8 +167,9 @@ type resource RtcConnection implements DatagramSocket {
 
     // DatagramSocket conformance: one peer, so sendTo ignores `to` and recvFrom reports a nil sender (0.0.0.0:0) —
     // a DataChannel message carries no per-packet address.
-    public fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to) { return this.send(bytes: bytes); }
-    public fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
+    public fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref SocketAddr to) { return this.send(bytes: bytes); }
+    public fn Result<RecvFrom<SocketAddr>, IoError> recvFrom(View<uint8> into) {
+        if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // as every implementer
         Result<usize, IoError> r = this.recv(into: into);
         return match (r) {
             case Ok(value: n):  Result::Ok(value: RecvFrom.of(count: n, from: SocketAddr.of(ip: IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8), port: 0ui16)));

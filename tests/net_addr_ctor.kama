@@ -6,7 +6,7 @@ fn int32 main() {
     SocketAddr a = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: 8080ui16);
     SocketAddr b = SocketAddr.of(ip: IpAddr::V4(a: cast<uint8>(10), b: cast<uint8>(0),
                                                 c: cast<uint8>(0), d: cast<uint8>(1)), port: 53ui16);
-    RecvFrom rf = RecvFrom.of(count: cast<usize>(12), from: b);
+    RecvFrom<SocketAddr> rf = RecvFrom.of(count: cast<usize>(12), from: b);
     int32 pa = cast<int32>(a.port);          // 8080
     int32 pb = cast<int32>(b.port);          // 53
     int32 cnt = cast<int32>(rf.count);       // 12

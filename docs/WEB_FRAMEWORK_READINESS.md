@@ -19,7 +19,7 @@ and [ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundati
 - **Native sockets (`std::net`)** — `TcpListener` (bind/listen/accept) + `TcpStream` (connect/read/writeAll),
   `UdpSocket`, blocking **and** non-blocking modes (`setNonBlocking`), RAII auto-close. Web transports
   (WebSocket/WebTransport) exist for the *browser* side, unified with native via the `ReliableStream` /
-  `DatagramSocket` contracts.
+  `DatagramSocket<SocketAddr>` contracts.
 - **Readiness multiplexing** — `std::net::Poller` wraps `poll(2)` / `WSAPoll`: register many sockets, `wait(timeoutMs)`,
   query per-fd `{readable, writable}`. This is the substrate an event loop is built *on* (the loop itself is missing).
 - **Contracts + virtual dispatch** — first-class interfaces (fat pointers) and inheritance vtables, so a
@@ -74,7 +74,7 @@ missing to make it *Node-like* (ergonomic async, timeouts, scale) is below.
 
 A Node.js replacement is a **native binary** (kama → C → clang). `TcpListener` + `Poller` are native; a browser
 cannot bind a listening socket, so the WASM path is for **clients** (WebSocket/WebTransport to your server), not
-for hosting the server. The `ReliableStream`/`DatagramSocket` contracts already let one codebase target both
+for hosting the server. The `ReliableStream`/`DatagramSocket<SocketAddr>` contracts already let one codebase target both
 sides.
 
 ---

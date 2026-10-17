@@ -23,10 +23,10 @@ type enum WtState { Connecting, Connected, Closed }
 
 // A WebTransport session's DATAGRAM channel — unreliable, unordered: the UDP-equivalent on the web, and the
 // primary web transport (WebSocket is the reliable fallback). It is a CONNECTED datagram endpoint (one peer,
-// the server), so it satisfies `DatagramSocket`: send/recv are the natural path; sendTo ignores its address
+// the server), so it satisfies `DatagramSocket<SocketAddr>`: send/recv are the natural path; sendTo ignores its address
 // (there is one peer) and recvFrom reports a nil sender (WebTransport datagrams carry no per-packet address).
 // Non-blocking only. Closes the session on drop (RAII).
-type resource WtConnection implements DatagramSocket {
+type resource WtConnection implements DatagramSocket<SocketAddr> {
     int32 handle;
     private ctor make(int32 handle) { this.handle = handle; }
 
@@ -64,10 +64,11 @@ type resource WtConnection implements DatagramSocket {
 
     // DatagramSocket conformance: WebTransport has a single peer, so sendTo ignores `to` (delegates to send)
     // and recvFrom reports a nil sender (0.0.0.0:0) — datagrams carry no per-packet address here.
-    public fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to) {
+    public fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref SocketAddr to) {
         return this.send(bytes: bytes);
     }
-    public fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
+    public fn Result<RecvFrom<SocketAddr>, IoError> recvFrom(View<uint8> into) {
+        if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // as every implementer
         Result<usize, IoError> r = this.recv(into: into);
         return match (r) {
             case Ok(value: n):  Result::Ok(value: RecvFrom.of(count: n, from: SocketAddr.of(ip: IpAddr::V4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8), port: 0ui16)));

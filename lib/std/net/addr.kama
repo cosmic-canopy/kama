@@ -352,9 +352,11 @@ unsafe fn Result<SocketAddr, IoError> resolveOne(const ref string host, uint16 p
     };
 }
 
-// The (count, sender) result of a datagram `recvFrom`: how many bytes landed + who sent them.
+// The (count, sender) result of a datagram `recvFrom`: how many bytes landed + who sent them, named by the
+// socket's own address type — a `SocketAddr` for UDP, a `UnixAddr` (unnamed when the sender never bound one)
+// for a Unix datagram socket.
 @generate(of)
-type value RecvFrom implements Sendable {
+type value RecvFrom<A> implements Sendable when [A: Sendable] {
     public usize count;
-    public SocketAddr from;
+    public A from;
 }

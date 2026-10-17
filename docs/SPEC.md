@@ -2247,9 +2247,15 @@ A Windows file descriptor and socket close differently, so adopting one as the o
 
 Each OS keeps what is its own. **`UnixDatagram`** (Linux, macOS) sends whole messages between local processes —
 systemd's notify socket, syslog's `/dev/log`: `unbound()`, `bind(path:)`/`bindTo(address:)`, `sendTo(bytes:, to:)`, <!-- test: net_unix_datagram -->
-`recvFrom(into:)` → `UnixRecvFrom { count, from }`, `connect`/`send`/`recv`, and it removes a file it bound when it
-drops. It is `UdpSocket`'s shape over a `UnixAddr`, which is why it does not implement `DatagramSocket`, whose
-addresses are `SocketAddr`s. Windows' AF_UNIX is stream-only, so the type is not declared there. On **Linux**
+`recvFrom(into:)` → `RecvFrom<UnixAddr> { count, from }`, `connect`/`send`/`recv`, and it removes a file it bound
+when it drops. It is `UdpSocket`'s shape over a `UnixAddr`, and both implement **`DatagramSocket<A>`**, the contract
+over the address type `A` a datagram's peer is named by: `UdpSocket`, `WtConnection` and `RtcConnection` are
+`DatagramSocket<SocketAddr>`, `UnixDatagram` is `DatagramSocket<UnixAddr>`, and `recvFrom` answers `RecvFrom<A>`. So a
+syslog client that sends to `/dev/log` or to UDP 514 by configuration is one generic path — `fn emit<S:
+DatagramSocket<A>, A>(ref S s, ConstView<uint8> line, const ref A to)` — and `A` is inferred from the socket where no
+argument names it. The address is always spelled, never defaulted: it is what kind of socket this is, not a policy
+knob. An empty `into` is `InvalidInput` from every `recvFrom`: it cannot hold a datagram, and answering would invent
+a sender. Windows' AF_UNIX is stream-only, so the type is not declared there. On **Linux**
 `UnixAddr.fromAbstract(name:)` names the abstract namespace — no file behind it, nothing a crash leaves, gone
 when the last socket holding it closes, and, with no file, no file permissions either: any process in the
 network namespace may connect — read back by `abstractName()` and rendered `@name`. An API one OS lacks is a
@@ -2617,8 +2623,8 @@ does not return.
   `acceptAnswer`. The ICE servers are a required list of `IceServer.stun(url:)`/`IceServer.turn(url:, username:,
   credential:)` — an empty one is the explicit same-machine-or-LAN choice, and no server is built in. A message is
   atomic: one bigger than the buffer is `MessageTooLong` and stays queued; `send` before the channel opens is
-  `WouldBlock`; `state()` (`RtcState`) has a transient `Disconnected` beside `Closed`. It implements `DatagramSocket`
-  as `WtConnection` does. <!-- test: net_rtc_smoke -->
+  `WouldBlock`; `state()` (`RtcState`) has a transient `Disconnected` beside `Closed`. It implements
+  `DatagramSocket<SocketAddr>` as `WtConnection` does. <!-- test: net_rtc_smoke -->
 
 ### Paths (`std::path`) ✅
 
@@ -6409,8 +6415,8 @@ reaches a bundle. <!-- xfail: view_field, iface_field -->
 **The stdlib's I/O vocabulary is Sendable**, because a descriptor, a socket and a process handle are process-wide <!-- test: net_stream_to_isolate -->
 rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
 `UnixStream`, `UnixListener`, `UnixDatagram`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`,
-`StringWriter`, `SliceReader`, `PeerCredentials`, `Descriptor`, and the values `SocketAddr`, `UnixAddr`, `UnixRecvFrom`,
-`IpAddr`, `RecvFrom`, `Ready`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
+`StringWriter`, `SliceReader`, `PeerCredentials`, `Descriptor`, and the values `SocketAddr`, `UnixAddr`,
+`IpAddr`, `RecvFrom<A>` (for a `Sendable` address), `Ready`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
 of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread. A channel element is
 dropped exactly once — received, or buffered when the queue's last holder goes — and never as a zeroed copy: a type's <!-- test: channel_resource_drop_once -->

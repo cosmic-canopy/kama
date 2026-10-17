@@ -35,16 +35,21 @@ extern fn int32 kama_close_socket(isize fd);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
 
-// An unreliable, unordered datagram endpoint. Native UDP satisfies it today; WebTransport datagrams (and a
-// later WebRTC DataChannel) satisfy the SAME contract on other targets — so game netcode written
-// `fn tick<S: DatagramSocket>(ref S s)` runs unchanged on every platform. `setNonBlocking(false)` is a
-// no-op on web (the browser is always non-blocking); `WouldBlock` is the uniform "nothing ready" signal.
+// An unreliable, unordered datagram endpoint, over the address type `A` its peers are named by. Native UDP, and
+// the web's WebTransport datagrams and WebRTC DataChannel, are `DatagramSocket<SocketAddr>` — so game netcode
+// written `fn tick<S: DatagramSocket<SocketAddr>>(ref S s)` runs unchanged on every platform — and a Unix
+// datagram socket is a `DatagramSocket<UnixAddr>`, so a syslog client or a metrics emitter that sends to a local
+// socket or to a UDP port by configuration is one path, `fn emit<S: DatagramSocket<A>, A>(ref S s, const ref A to)`
+// (KR-108). The address is a parameter and not a default: it is what kind of socket this is, so it is always
+// spelled. `setNonBlocking(false)` is a no-op on web (the browser is always non-blocking); `WouldBlock` is the
+// uniform "nothing ready" signal. An empty `into` is `InvalidInput` from `recvFrom` on every implementer: it
+// cannot hold a datagram, and answering one would invent a sender.
 // Buffers are `ConstView<uint8>` out / `View<uint8>` in — the uniform byte-buffer type across std::net/fs/serde — so a datagram can be
 // sent from (or received into) a sub-slice of a larger buffer with no copy. Datagrams are message-oriented,
 // so a `DatagramSocket` is NOT a `Reader`/`Writer` (those model byte streams; a datagram is atomic).
-type contract DatagramSocket for resource {
-    fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to);
-    fn Result<RecvFrom, IoError> recvFrom(View<uint8> into);
+type contract DatagramSocket<A> for resource {
+    fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref A to);
+    fn Result<RecvFrom<A>, IoError> recvFrom(View<uint8> into);
     fn Result<usize, IoError> send(ConstView<uint8> bytes);
     fn Result<usize, IoError> recv(View<uint8> into);
     fn Result<Unit, IoError> setNonBlocking(bool on);
@@ -52,7 +57,7 @@ type contract DatagramSocket for resource {
 
 // A UDP socket. Closes its handle on drop (RAII). Move-only. Blocking by default; `setNonBlocking(true)`
 // makes recv/recvFrom return `Err(WouldBlock)` instead of stalling (the game-loop drain model).
-type resource UdpSocket implements DatagramSocket, Sendable {
+type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     // The empty niche is -1, not 0 (force-explicit-field-init makes the field default the place to
     // SAY so). A bare/moved-from slot therefore reads -1 and the destructor skips it, while fd 0
     // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable
@@ -108,7 +113,7 @@ type resource UdpSocket implements DatagramSocket, Sendable {
 
     // Send the whole buffer as one datagram to `to`. Returns the byte count (a datagram is atomic — a
     // short write is unusual). EINTR-retried. `Err(MessageTooLong)` if the payload exceeds the path MTU.
-    public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, ref SocketAddr to) {
+    public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref SocketAddr to) {
         InlineArray<uint8>#(16) ip = to.ip.bytes();
         int32 family = to.ip.family();
         while (true) {
@@ -120,13 +125,13 @@ type resource UdpSocket implements DatagramSocket, Sendable {
     }
 
     // Receive one datagram into `into` (truncated to into.length() if larger); returns count + sender.
-    // Non-blocking + nothing queued => Err(WouldBlock). EINTR-retried.
-    public unsafe fn Result<RecvFrom, IoError> recvFrom(View<uint8> into) {
+    // Non-blocking + nothing queued => Err(WouldBlock). An empty `into` => Err(InvalidInput). EINTR-retried.
+    public unsafe fn Result<RecvFrom<SocketAddr>, IoError> recvFrom(View<uint8> into) {
+        if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         int32 family = 4;
         InlineArray<uint8>#(16) ip = [0; 16];
         uint16 port = 0ui16;
         uint32 zone = 0ui32;
-        if (into.length() == 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(0), from: SocketAddr.raw(family: family, bytes: ip, port: port, scopeId: zone))); }
         while (true) {
             isize n = kama_recvfrom_addr(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()),
                                          outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port),

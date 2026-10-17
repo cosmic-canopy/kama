@@ -23,10 +23,10 @@ import {
     std::collections::View, std::collections::ConstView,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
     std::io::Descriptor, std::collections::DynamicArray, std::collections::FixedArray,
-    ReliableStream, Shutdown, PeerCredentials,
+    ReliableStream, Shutdown, PeerCredentials, DatagramSocket, RecvFrom,
 };
 
-export { UnixStream, UnixListener, UnixAddr, UnixDatagram, UnixRecvFrom };
+export { UnixStream, UnixListener, UnixAddr, UnixDatagram };
 
 extern "kama_os.h";
 extern fn int32 kama_net_init();
@@ -445,21 +445,12 @@ type resource UnixListener implements Sendable {
 
 // ---- datagrams (Linux, macOS) ---------------------------------------------------------------------------------
 
-// One datagram received: how many bytes landed, and who sent it (unnamed when the sender never bound a name).
-@compileFor(!OS_WINDOWS)
-type value UnixRecvFrom implements Sendable {
-    public usize count;
-    public UnixAddr from;
-    public ctor of(usize count, UnixAddr from) { this.count = count; this.from = from; }
-}
-
 // A Unix-domain datagram socket — each send one whole message, as `UdpSocket`'s, between processes on one
 // machine: systemd's notify socket, syslog's `/dev/log`. Linux and macOS: Windows' AF_UNIX is stream-only,
-// and nothing there is a local datagram socket. Its methods are `UdpSocket`'s over a `UnixAddr`, which is why
-// it does not implement `DatagramSocket`, whose addresses are `SocketAddr`s. Closes on drop, removing a socket
-// file it bound. Move-only, `Sendable`.
+// and nothing there is a local datagram socket. It is `UdpSocket`'s shape over a `UnixAddr`, so it is a
+// `DatagramSocket<UnixAddr>`. Closes on drop, removing a socket file it bound. Move-only, `Sendable`.
 @compileFor(!OS_WINDOWS)
-type resource UnixDatagram implements Sendable {
+type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     isize fd = -1;
     string created;   // the path this socket bound and so removes at drop; "" for none
     ctor own(isize fd, string created) { this.fd = fd; this.created = give created; }
@@ -516,13 +507,13 @@ type resource UnixDatagram implements Sendable {
         }
     }
     // Receive one datagram (truncated to into.length()) and who sent it. Non-blocking + nothing queued is
-    // `WouldBlock`. EINTR-retried.
-    public fn Result<UnixRecvFrom, IoError> recvFrom(View<uint8> into) {
+    // `WouldBlock`; an empty `into` is `InvalidInput`. EINTR-retried.
+    public fn Result<RecvFrom<UnixAddr>, IoError> recvFrom(View<uint8> into) {
         if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         isize count = 0;
         return match (recvFromInto(fd: this.fd, into: into, count: ref count)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: from): Result::Ok(value: UnixRecvFrom.of(count: cast<usize>(count), from: from));
+            case Ok(value: from): Result::Ok(value: RecvFrom.of(count: cast<usize>(count), from: from));
         };
     }
     public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {

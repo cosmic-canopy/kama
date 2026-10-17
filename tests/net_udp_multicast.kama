@@ -60,7 +60,7 @@ fn string relay(ref UdpSocket tx, ref UdpSocket rx, ref SocketAddr to) {
         }
     };
     FixedArray<uint8> buf = FixedArray.make(size: 16);
-    Result<RecvFrom, IoError> got = rx.recvFrom(into: buf.viewMut());
+    Result<RecvFrom<SocketAddr>, IoError> got = rx.recvFrom(into: buf.viewMut());
     return match (got) {
         case Err(error: e): "";
         case Ok(value: rf): rf.count == 4 && buf[2] == 109ui8 ? "${rf.from}" : "";

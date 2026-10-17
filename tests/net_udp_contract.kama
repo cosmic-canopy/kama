@@ -14,12 +14,12 @@ import {
 };
 
 // These take the CONTRACT by value (a fat-pointer borrow of the concrete) — dispatch is dynamic.
-fn int32 sendVia(DatagramSocket d, ConstView<uint8> msg, ref SocketAddr to) {
+fn int32 sendVia(DatagramSocket<SocketAddr> d, ConstView<uint8> msg, const ref SocketAddr to) {
     Result<usize, IoError> r = d.sendTo(bytes: msg, to: to);
     return match (r) { case Ok(value: w): cast<int32>(w); case Err(error: e): -1; };
 }
-fn int32 recvVia(DatagramSocket d, View<uint8> into) {
-    Result<RecvFrom, IoError> r = d.recvFrom(into: into);
+fn int32 recvVia(DatagramSocket<SocketAddr> d, View<uint8> into) {
+    Result<RecvFrom<SocketAddr>, IoError> r = d.recvFrom(into: into);
     return match (r) { case Ok(value: rf): cast<int32>(rf.count); case Err(error: e): -1; };
 }
 

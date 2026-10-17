@@ -2,7 +2,7 @@ file @compileFor(OS_LINUX);
 // Linux's abstract namespace: a listener and a datagram socket bound to `@names`, reached through `connectTo` /
 // `sendTo`, read back as abstract names (rendered with the notation's `@`), and nothing left on disk.
 import {
-    std::net::UnixListener, std::net::UnixStream, std::net::UnixDatagram, std::net::UnixAddr, std::net::UnixRecvFrom,
+    std::net::UnixListener, std::net::UnixStream, std::net::UnixDatagram, std::net::UnixAddr,
     std::io::IoError, std::collections::FixedArray, std::fs::exists,
 };
 export { abstractNames };
