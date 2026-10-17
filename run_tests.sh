@@ -408,6 +408,17 @@ timed_out() { [ -f "$1/timed_out" ]; }
 # On Windows that is the only discriminator: `abort()` exits 127, which a program can also return (docs/platforms/
 # windows.md), and a CI-only failure that printed just "got 127" had to be reproduced before it could be read.
 stderr_tail() { [ -s "$1" ] && tail -n 5 "$1" | sed 's/^/  stderr: /'; return 0; }
+# ...and on Windows, what the process itself ended with. bash sees 127 for `abort()` and for a crash alike; the
+# NTSTATUS tells them apart — 0xC0000005 access violation, 0xC0000374 heap corruption, 0xC00000FD stack overflow,
+# 0xC0000409 a fail-fast — so the program is run once more under PowerShell, which reports the whole status.
+windows_status() {   # $1 = the native executable
+    [ "$TRAP_STYLE" = windows ] || return 0
+    command -v powershell.exe >/dev/null 2>&1 || return 0
+    local w st; w=$(cygpath -w "$1" 2>/dev/null) || return 0
+    st=$(cd "$(dirname -- "$1")" && powershell.exe -NoProfile -NonInteractive -Command "& '$w' *> \$null; \$LASTEXITCODE" 2>/dev/null | tr -d '\r')
+    case "$st" in ''|*[!0-9-]*) return 0;; esac
+    printf '  windows exit status: %s (0x%08X)\n' "$st" $(( st & 0xFFFFFFFF ))
+}
 hang_evidence() {   # $1 = the fixture's build dir
     [ -f "$1/hang_native.txt" ] && cat "$1/hang_native.txt"
     local r="$1/hang.json"
@@ -562,7 +573,8 @@ test_one() {
     if [ "$actual" = "$expected" ]; then
         echo "PASS $name (exit $actual)" >"$out"; echo PASS >"$res"
     else
-        { echo "FAIL $name (got $actual, expected $expected)"; stderr_tail "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"
+        { echo "FAIL $name (got $actual, expected $expected)"; stderr_tail "$TMP/$name.san"
+          [ "$actual" = 127 ] && [ "$WASM" != 1 ] && windows_status "$exe"; } >"$out"; echo FAIL >"$res"
     fi
 }
 

@@ -1,60 +1,71 @@
-// TEMPORARY (removed with the fix): CI's Windows leg ends ordered_map_basic with exit 127 AFTER every check passed —
-// so in a destructor or at teardown, with nothing on stderr. Each group of its locals lives in its own function here,
-// and a marker follows each function's return: the first marker missing names the group whose drop crashes.
-import { core::eprintln, std::collections::OrderedMap, std::collections::DefaultHasher, std::collections::Arena,
-         std::collections::BumpAllocator };
+// TEMPORARY (removed with the fix), round 3: round 2 showed ordered_map_basic's crash is in what it does beside the
+// puts, removes, copies and arena — the loops that build strings and the matches over `first()`/`last()`/`remove`.
+// Each now runs in its own function over its own map, with a marker after it returns: the first one missing names it.
+import { core::eprintln, std::collections::OrderedMap, std::collections::Entry };
 
-type value Counter { public int32 n; public ctor of(int32 n) { this.n = n; } public fn void bump() { this.n = this.n + 1; } }
-
-fn int32 strings() {
+fn OrderedMap<string, int32> three() {
     OrderedMap<string, int32> m = OrderedMap.withCapacity(capacity: 4);
     m.put(key: "zeta", value: 1); m.put(key: "alpha", value: 2); m.put(key: "mid", value: 3);
-    m.put(key: "zeta", value: 10);
-    bool moved = m.moveToEnd(key: "zeta");
-    Optional<int32> gone = m.remove(key: "alpha");
-    m.compact(); m.put(key: "new", value: 7);
+    return give m;
+}
+fn int32 keysLoop() {
+    OrderedMap<string, int32> m = three();
+    string seen = "";
+    foreach (string k in m) { seen = seen + k + ","; }
+    return seen == "zeta,alpha,mid," ? 1 : 0;
+}
+fn int32 entriesLoop() {
+    OrderedMap<string, int32> m = three();
+    string again = "";
+    foreach (Entry<string, int32> e in m.entries()) { int32 v = e.value(); again = again + e.key() + "=${v},"; }
+    return again == "zeta=1,alpha=2,mid=3," ? 1 : 0;
+}
+fn int32 lookups() {
+    OrderedMap<string, int32> m = three();
+    int32 g = match (m.get(key: "alpha")) { case Some(value: v): v; case None: 0; };
+    return g == 2 && m.getRef(key: "mid") == 3 && m.contains(key: "mid") ? 1 : 0;
+}
+fn int32 ends() {
+    OrderedMap<string, int32> m = three();
+    bool e = match (m.first()) { case Some(value: k): k == "zeta"; case None: false; }
+          && match (m.last()) { case Some(value: k): k == "mid"; case None: false; };
+    return e ? 1 : 0;
+}
+fn int32 removes() {
+    OrderedMap<string, int32> m = three();
+    int32 taken = match (m.remove(key: "alpha")) { case Some(value: v): v; case None: 0; };
+    bool miss = match (m.remove(key: "alpha")) { case Some(value: _): false; case None: true; };
+    string rest = "";
+    foreach (string k in m) { rest = rest + k + ","; }
+    return taken == 2 && miss && rest == "zeta,mid," ? 1 : 0;
+}
+fn int32 valuesLoop() {
+    OrderedMap<string, int32> m = three();
+    string after = "";
+    foreach (int32 v in m.values()) { after = after + "${v},"; }
+    return after == "1,2,3," ? 1 : 0;
+}
+fn int32 copyLoop() {
+    OrderedMap<string, int32> m = three();
     OrderedMap<string, int32> c2 = copy m;
-    c2.put(key: "mid", value: 99);
-    m.clear(); m.put(key: "x", value: 1);
-    eprintln(s: "kama: strings body done");
-    return cast<int32>(m.length() + c2.length());
+    string copied = "";
+    foreach (string k in c2) { copied = copied + k + ","; }
+    return copied == "zeta,alpha,mid," ? 1 : 0;
 }
-fn int32 counters() {
-    OrderedMap<string, Counter> cs = OrderedMap.empty();
-    cs.put(key: "a", value: Counter.of(n: 1)); cs.put(key: "b", value: Counter.of(n: 5));
-    foreach (ref Counter c in cs.valuesMut()) { c.bump(); }
-    cs.getRefMut(key: "a").bump();
-    eprintln(s: "kama: counters body done");
-    return cs.getRef(key: "a").n;
-}
-fn int32 arenaMap() {
-    Arena arena = Arena.make(capacity: 65536);
-    OrderedMap<int32, int32, DefaultHasher, BumpAllocator> am = OrderedMap.withAllocator(allocator: arena.handle());
-    int32 i = 0;
-    while (i < 100) { am.put(key: (i * 37) % 100, value: i); i = i + 1; }
-    i = 0;
-    while (i < 100) { if (i % 3 == 0) { Optional<int32> x = am.remove(key: i); } i = i + 1; }
-    eprintln(s: "kama: arena body done");
-    return cast<int32>(am.length());
-}
-fn int32 lru() {
-    OrderedMap<int32, int32> c = OrderedMap.empty();
-    InlineArray<int32>#(7) uses = [1, 2, 3, 1, 4, 2, 5];
-    foreach (int32 k in uses) {
-        if (c.contains(key: k)) { bool moved = c.moveToEnd(key: k); continue; }
-        if (c.length() == 3) {
-            int32 old = match (c.first()) { case Some(value: o): o; case None: 0; };
-            Optional<int32> gone = c.remove(key: old);
-        }
-        c.put(key: k, value: k * 100);
-    }
-    eprintln(s: "kama: lru body done");
-    return cast<int32>(c.length());
+fn int32 clearMatch() {
+    OrderedMap<string, int32> m = three();
+    m.clear();
+    bool empty = m.length() == 0 && match (m.first()) { case Some(value: _): false; case None: true; };
+    return empty ? 1 : 0;
 }
 fn int32 main() {
-    int32 a = strings();  eprintln(s: "kama: after strings");
-    int32 b = counters(); eprintln(s: "kama: after counters");
-    int32 c = arenaMap(); eprintln(s: "kama: after arena");
-    int32 d = lru();      eprintln(s: "kama: after lru");
-    return a + b + c + d - 47;   // 4 + 3 + 66 + 3 - 47 = 29
+    int32 n = keysLoop();    eprintln(s: "kama: after keysLoop");
+    n = n + entriesLoop();   eprintln(s: "kama: after entriesLoop");
+    n = n + lookups();       eprintln(s: "kama: after lookups");
+    n = n + ends();          eprintln(s: "kama: after ends");
+    n = n + removes();       eprintln(s: "kama: after removes");
+    n = n + valuesLoop();    eprintln(s: "kama: after valuesLoop");
+    n = n + copyLoop();      eprintln(s: "kama: after copyLoop");
+    n = n + clearMatch();    eprintln(s: "kama: after clearMatch");
+    return n;   // 8
 }
