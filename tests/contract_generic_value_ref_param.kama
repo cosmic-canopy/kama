@@ -1,0 +1,33 @@
+// A call through a generic contract VALUE whose parameter is typed by the contract's own parameter and passed by
+// reference. The vtbl slot was emitted under the instance's arguments, but the call site read the signature
+// bare, so `s.put(a: ref w)` through a `Sink<int32>` reached C as `(A*)&w` — "use of undeclared identifier 'A'".
+// Found by `DatagramSocket<SocketAddr>.sendTo(to:)` (KR-108). A primitive and a user type as the argument.
+type contract Sink<A> for value, resource {
+    fn int32 take(const ref A a);
+    fn int32 put(ref A a);
+}
+
+type value Pt { public int32 x; public ctor make(int32 x) { this.x = x; } }
+
+type value Counter implements Sink<int32> {
+    int32 seen;
+    public ctor make() { this.seen = 0; }
+    public fn int32 take(const ref int32 a) { return a; }
+    public fn int32 put(ref int32 a) { a += 1; return a; }
+}
+
+type value Mover implements Sink<Pt> {
+    int32 seen;
+    public ctor make() { this.seen = 0; }
+    public fn int32 take(const ref Pt a) { return a.x; }
+    public fn int32 put(ref Pt a) { a.x *= 2; return a.x; }
+}
+
+fn int32 viaInt(Sink<int32> s, int32 v) { int32 w = v; return s.take(a: v) + s.put(a: ref w) + w; }   // 3 + 4 + 4
+fn int32 viaPt(Sink<Pt> s, Pt p) { Pt q = p; return s.take(a: p) + s.put(a: ref q) + q.x; }          // 5 + 10 + 10
+
+fn int32 main() {
+    Counter c = Counter.make();
+    Mover m = Mover.make();
+    return viaInt(s: c, v: 3) + viaPt(s: m, p: Pt.make(x: 5));   // 11 + 25
+}

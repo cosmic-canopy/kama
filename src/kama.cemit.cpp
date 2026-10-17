@@ -33284,7 +33284,11 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
         // out of the C — without it the slot call would be a fact like any other (see buildCallGraph).
         const std::string slot = m.noHeap ? ("KAMA_NOHEAP_SLOT((" + recv + ").kama_vtbl->" + kName(method) + ")")
                                           : ("(" + recv + ").kama_vtbl->" + kName(method));
-        std::vector<ParamSig> params = paramSigsOf(m.params);
+        // Read under the instance's arguments, as its vtbl slot was: a generic contract's `A` is `SocketAddr`
+        // in `DatagramSocket<SocketAddr>`, and read bare it reached C as `(A*)`. Only the SIGNATURE — the
+        // arguments are the caller's expressions and are emitted in the caller's scope below.
+        std::vector<ParamSig> params;
+        { ContractSubst _cs(*this, it->second); params = paramSigsOf(m.params); }
         // A place-returning slot (`fn ref T m()` / `fn const ref T m()`) yields a `T*` / `T const*`; deref it
         // so the call is an lvalue everywhere, exactly as the class and free-function paths do — a contract
         // place call used to come back as a bare pointer, so `x.at(i: 0).value()` fed a `T const*` to a
