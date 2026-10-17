@@ -6859,7 +6859,7 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
 // any field of `c`), an element uses its container, and an argument, an index or an operand is a use of its own.
 // A nested `spawn` is skipped: what a second child borrows is judged by the children's disjointness rule.
 void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn,
-                              bool writesOnly)
+                              bool writesOnly, SharedExpression alsoExpr)
 {
     std::function<void(SharedExpression, int)> E;
     std::function<void(SharedStatement)> S;
@@ -6926,7 +6926,9 @@ void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const
         if (!st) return;
         ASTNode* n = st.get();
         const int ln = n->line;
-        if (dynamic_cast<IsolateNode*>(n)) return;   // a second child: the children's disjointness rule
+        // A second child: what it USES is judged by the children's disjointness rule. What it WRITES is a write
+        // like any call's — `spawn f(x: ref a)` writes `a` — and a write scan that skipped it would miss it.
+        if (auto* iso = dynamic_cast<IsolateNode*>(n)) { if (writesOnly) E(iso->call, ln); return; }
         if (auto* blk = dynamic_cast<BlockNode*>(n)) {
             if (blk->statements) for (auto& x : *blk->statements) S(x);
         } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
@@ -6954,6 +6956,7 @@ void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const
         }
     };
     S(s);
+    if (alsoExpr) E(alsoExpr, alsoExpr->line);
 }
 
 // `borrow xf as v, ys as w { ... }` — the lexical window a view is minted into (the view model).
@@ -25867,6 +25870,14 @@ bool CEmitter::rejectFrozenWrite(SharedExpression target, int line)
                        "DISJOINT sibling field, stay legal").c_str(), line);
         return true;
     }
+    if (f->fromMatch) {
+        unsupported(("`" + placeText(p) + "` is written in this arm, but `" + f->alias + "`, the `match` binding at line "
+                     + std::to_string(f->line) + ", reads its payload in place — the arm was judged not to write the "
+                       "subject, and the copy that would have made this write safe was left out. That judgement is "
+                       "the compiler's, and it missed this write: a defect to report. Meanwhile write `"
+                     + placeText(p) + "` after the `match`").c_str(), line);
+        return true;
+    }
     unsupported((f->fromBorrow
         ? ("`" + placeText(p) + "` is frozen by the enclosing `borrow` (opened at line "
            + std::to_string(f->line) + " as `" + f->alias + "`) — a view is live over that storage, so "
@@ -29240,6 +29251,20 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         recordDestructibleLocal(subjOwner, subjCls);   // see the drop below
     }
     }
+    // KR-131 — may a plain value payload be read IN PLACE (`T* b = &slot`) rather than copied into `b`? Only out of
+    // storage nothing but the arm can reach: the match's own temporary (a call's result, a `give`n subject), or a
+    // frame local — a local or a by-value parameter — that the arm never writes. Not a `ref`/`const ref` parameter,
+    // a field, an element, a static or a handle's pointee: code the arm calls could change those under the binding
+    // (a static a callee writes was measured to change the answer). A lowering only: the binding still means a copy.
+    std::vector<std::string> inPlaceSubject;   // a frame local's place, frozen for an arm that reads in place
+    bool inPlaceOk = handleCls.empty() && (subjConsumed || !subjLvalue);
+    if (!inPlaceOk && handleCls.empty())
+        if (auto* sid = dynamic_cast<IdentifierNode*>(m->subject.get()))
+            if (sid->value && (!sid->qualifier || sid->qualifier->empty()) && !_refParams.count(*sid->value)) {
+                bool frameLocal = _paramNames.count(*sid->value) != 0;
+                for (auto& sc : _scopes) for (auto& d : sc.declaredNames) if (d == *sid->value) frameLocal = true;
+                if (frameLocal) { inPlaceOk = true; inPlaceSubject = placePath(m->subject); }
+            }
     indent(depth); *_out << "switch (" << sp << "->kama_tag) {\n";
     ++_switchDepth;                                          // an arm's `break` must jump past it (emitLoopJump)
     auto beforeMove = _moveState;                            // each arm branches from the same pre-match state
@@ -29344,9 +29369,38 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // subject's drop; measured). Through the alias a change lands in the subject's own payload. A plain
                 // value is still a copy, as a by-value `foreach` binding is.
                 const bool alias = !subjConsumed && (ownsByValue(bcty) || isSmartPtrClass(bcty));
+                // ...and a PLAIN value payload of a qualifying subject (above) is read in place when the arm never
+                // writes, `ref`s or `give`s the binding and never writes the subject — proven by the write scan,
+                // and then held: the binding is `const` and the subject frozen for the arm, so a write the scan
+                // missed is a compile error, never a binding changed under the reader. Typed first, so the scan
+                // sees `b.mutate()` (a non-`const fn` receiver) as the write it is.
+                bool inPlace = false;
+                // A PLAIN value only: one with a destructor (a `value` that owns its text, `DeError`) is dropped at the
+                // arm's end, and the subject's own payload must not be.
+                if (inPlaceOk && !discard && !alias && _classes.count(bcty) && !_classes[bcty].isScalarRecv
+                    && !_classes[bcty].destructible && !variantNeedsCopyFn(_classes[bcty])) {
+                    _localTypes[bn] = bcty;
+                    bool written = false;
+                    forEachPlaceUse(a->block, [&](const std::vector<std::string>& wp, int) {
+                        if ((!wp.empty() && wp[0] == bn) || (!inPlaceSubject.empty() && placesConflict(inPlaceSubject, wp)))
+                            written = true;
+                    }, /*writesOnly=*/true, a->body);
+                    inPlace = !written;
+                }
                 indent(depth + 2);
-                if (alias) *_out << bcty << "* " << kName(bn) << " = &" << slot << ";\n";
-                else       *_out << bcty << " " << kName(bn) << " = " << slot << ";\n";
+                if (alias || inPlace) *_out << bcty << "* " << kName(bn) << " = &" << slot << ";\n";
+                else                  *_out << bcty << " " << kName(bn) << " = " << slot << ";\n";
+                if (inPlace) {
+                    _refParams.insert(bn);                 // reads go through the pointer
+                    _constLocals.insert(bn);               // ...and nothing may write through it
+                    _refBindingOperand[bn] = m->subject;   // a `fn ref` return of it is judged by its subject (KR-180)
+                    borrowedHere.push_back(bn);            // all three retired with the arm
+                    if (!inPlaceSubject.empty()) {
+                        Scope::FrozenPlace fz; fz.place = inPlaceSubject; fz.alias = bn; fz.line = bnLine;
+                        fz.fromBorrow = false; fz.fromMatch = true;
+                        _scopes.back().frozen.push_back(fz);
+                    }
+                }
                 // Destructure-MOVE: when the subject is CONSUMED (`match (give x)`) and the payload is owning,
                 // the binding takes ownership — defuse the subject slot (so the subject's drop no-ops it) and
                 // register the binding as a movable owning local (RAII-dropped if not `give`n out, and giveable).

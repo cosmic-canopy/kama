@@ -1,0 +1,60 @@
+// A `match` binding of a plain value payload is read IN PLACE when nothing could change it (KR-131): the subject is
+// the match's own temporary (a call's result, or a `give`n subject), or a frame local (a local, or a by-value parameter) that the arm never
+// writes, and the arm never writes, `ref`s or `give`s the binding. Then `case Ok(value: b): b.last()` reads the 16 KB
+// `Big` where it lies instead of copying it into `b`. It is a lowering: every case below answers what a copy would,
+// including the four that keep the copy — an arm that writes the binding, one that writes the subject, a `const ref`
+// parameter's payload, and an arm that hands `ref b` to a spawned child. Returns 27 (8,866,843 mod 256).
+import { std::concurrent::Channel };
+
+type value Big implements Sendable {
+    InlineArray<int32>#(16) xs;
+    public ctor make(int32 v) { this.xs = [v; 16]; }
+    public const fn int32 last() { return this.xs[15]; }
+    public fn void bump() { this.xs[15] += 1; }
+}
+type enum Res { Ok(Big value), Err(int32 code) }
+
+fn Res make(int32 v) { return Res::Ok(value: Big.make(v: v)); }
+fn int32 readLocal() { Res r = make(v: 3); return match (r) { case Ok(value: b): b.last(); case Err(code: c): c; }; }
+fn int32 readTemp() { return match (make(v: 4)) { case Ok(value: b): b.last(); case Err(code: c): c; }; }
+fn int32 readParam(Res r) { return match (r) { case Ok(value: b): b.last(); case Err(code: c): c; }; }
+fn int32 writesBinding() {
+    Res r = make(v: 5);
+    return match (r) { case Ok(value: b): { b.bump(); := b.last(); } case Err(code: c): c; };   // 6, and r keeps 5
+}
+fn int32 writesSubject() {
+    Res r = make(v: 6);
+    return match (r) { case Ok(value: b): { r = Res::Err(code: 1); := b.last(); } case Err(code: c): c; };   // b keeps 6
+}
+fn int32 readConstRef(const ref Res r) { return match (r) { case Ok(value: b): b.last(); case Err(code: c): c; }; }
+fn void poke(ref Big x) { x.bump(); }
+fn int32 spawnsRef() {
+    Res r = make(v: 7);
+    return match (r) { case Ok(value: b): { scope { spawn poke(x: ref b); } := b.last(); } case Err(code: c): c; };
+}
+// A statement `match` in a loop, the binding read across `continue`/`break`.
+fn int32 inLoop() {
+    int32 sum = 0;
+    int32 i = 0;
+    while (i < 5) {
+        Res r = make(v: i);
+        i += 1;
+        match (r) {
+            case Ok(value: b): {
+                if (b.last() == 1) { continue; }
+                if (b.last() == 4) { break; }
+                sum += b.last();
+            }
+            case Err(code: c): { }
+        };
+    }
+    return sum;   // 0 + 2 + 3
+}
+
+fn int32 main() {
+    Res p = make(v: 8);
+    int32 sum = readLocal() + readTemp() * 10 + readParam(r: p) * 100 + writesBinding() * 1000 + writesSubject() * 10000
+              + readConstRef(r: p) * 100000 + spawnsRef() * 1000000;
+    if (inLoop() != 5) { return 1; }
+    return sum;
+}

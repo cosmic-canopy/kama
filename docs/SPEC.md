@@ -5927,7 +5927,11 @@ that temporary when it ends. A binding of an OWNING payload (a collection, a `st
 is an alias of the subject's slot, as a `foreach (ref …)` binding is of an element: a change through it changes
 the subject's payload, and it cannot be `give`n away (`match (give x)` hands the arm the payload to own). A
 `const` subject's alias is `const`. A binding of a plain value is a copy the arm may change, as a by-value <!-- xfail: match_const_payload_mutate -->
-`foreach` binding is.
+`foreach` binding is — and costs no copy when nothing could tell: a payload with no destructor, out of the <!-- test: match_binding_in_place -->
+`match`'s own temporary or a local (a by-value parameter is one) that the arm never writes, in an arm that never
+writes, `ref`s or `give`s the binding, is read where it lies. A 16 KB `case Ok(value: b): b.last()` then holds one
+`Big` in its frame, not two (`tools/check-construct-frame.sh`). The binding still means a copy: an arm that writes it
+gets one, and so does a `const ref` parameter's payload, which code the arm calls could change.
 
 **Writing the subject ends its aliases.** The arm may write the subject — `state = State::Ready(…)` is the
 commonest arm there is — but the write replaces the payload an alias points into, so from that write on the <!-- test: match_alias_subject_write_ok -->

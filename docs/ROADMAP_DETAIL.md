@@ -2028,65 +2028,6 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-<a id="s5-match-binding-copy"></a>
-
-### A `match` binding copies a value payload (KR-131)
-
-Measured on `0.9.560`, after construction stopped copying: `Result<Big, E> r = Big.tryMake(…)` builds in `r`, and
-then `match (r) { case Ok(value: b): b.last(); … }` declares `Big b = subject->Ok.value;`, a 16 KB copy (`local`'s
-frame is 32,928 bytes at -O0, 16,448 at -O2). The subject is already borrowed by pointer. A binding the arm never
-writes, never takes by `ref` and never gives away could be that payload in place: `const Big* b = &subject->Ok.value`
-read through, as a `const ref` parameter is. The rules for when an arm's binding owns its value (a `give` subject, a
-moved-out payload) decide where that holds. A by-value `foreach` binding is the same copy of each element and takes
-the same answer. The semantics stay: a value binding is a copy the body may change (probed: writing one changes
-neither the subject nor the element), so this is a lowering, not a language change. The read-in-place applies
-only where the body provably never writes the binding.
-
-**Where (surveyed on `0.9.630`).** The `foreach` half is ANSWERED. `foreach (const ref Big b in xs)` (`0.9.605`) copies
-nothing. A by-value loop still copies once at -O2 (twice at -O0), because `Iterator<T>.next()` yields by value. Only
-another method (`iterConst()`) removes that copy, and that method is the `const ref` loop — it is not a lowering.
-
-The `match` half reproduces: `case Ok(value: b): b.last()` over a `const ref Result<Big, E>` (a 16 KB `Big`) emits
-`k_Big k_b = kama_msub2->kama_u.k_Ok.k_value;`. That is one 16 KB copy at -O0, and at -O2 whenever `last` is in
-another C unit; clang removes it only when it can see the callee.
-
-Sites, all in kama.cemit.cpp:
-
-- `emitMatchSwitch`: the subject borrow and `subjOwner` (~28755–28860), the binding (`const bool alias = …`, ~28993),
-  and the `_refParams`/`_constLocals` marking (~29012).
-- The one existing write scan, `emitParallelFor`'s `capWrites` (~7245–7340).
-- The freeze machinery: `Scope::FrozenPlace`, `frozenConflict`/`rejectFrozenWrite`, `checkConstWrite`.
-
-Fix:
-
-1. The write scan exists since `0.9.632`: `forEachPlaceUse(stmt, fn, /*writesOnly=*/true)` reports every place a
-   statement writes (an assignment or `++`/`--` target, a non-`const fn` receiver, a `ref`/`out` argument, a `give`).
-2. Bind the payload in place (`T* b = &slot`) only when all of these hold:
-   - the `match` borrows its subject;
-   - the payload is a plain struct;
-   - the arm never writes, `ref`s or `give`s `b`;
-   - the subject is a temporary, a `give` copy, or a local or by-value parameter that the arm never writes.
-3. Mark the binding `_constLocals`, and freeze the subject for the arm. A write the scan missed then becomes a compile
-   error, never a miscompile.
-4. Fixture `match_binding_in_place`. Extend `check-construct-frame.sh`: the -O0 frame, and -O2 with the callee in
-   another unit.
-5. A use of an owning payload's alias after a write to the subject is refused since `0.9.632` (SPEC *match*,
-   "Writing the subject ends its aliases"); the in-place binding must keep that rule.
-
-Narrow this row to the `match` half. Size **M**, 2–3 commits.
-
-**Decided 2026-10-16** (the maintainer took both; a program that compiles today behaves the same — only the C
-changes):
-
-1. **A lowering.** It keeps one spelling and copy semantics. The alternative, a
-   `case Ok(value: const ref b)` pattern, is a grammar change, and a pattern binding has no type slot.
-2. Which subjects qualify: **locals and temporaries only.** The overlap below was a use-after-free on its own (an
-   `Optional<DynamicArray<…>>` replaced through `b` while `a`'s payload is read); since `0.9.633` the call
-   `two(a: o, b: ref o)` is refused, so a `const ref` parameter no longer overlaps a `ref` one.
-   - A static that a callee writes is the remaining case: measured, the copy returns 7, while reading in place
-     would read the overwritten payload.
-   - That refusal is what widening to `const ref` parameters needed; a static a callee writes still bars statics.
-
 <a id="s5-noheap-contract-slot"></a>
 
 ### `@noheap` across a contract slot (KR-39) — surveyed on `0.9.630`

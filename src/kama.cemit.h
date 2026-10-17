@@ -2254,7 +2254,11 @@ private:
                                         bool fromBorrow = true;
                                         // A `spawn`ed child's `const ref` borrow, frozen against WRITES only —
                                         // the child reads it while the scope body may too (emitScope).
-                                        bool fromChild = false; };
+                                        bool fromChild = false;
+                                        // A `match` arm reading a value payload IN PLACE (KR-131): its subject,
+                                        // which the arm was proven not to write, frozen so a write that proof
+                                        // missed is a compile error rather than a changed binding.
+                                        bool fromMatch = false; };
                    std::vector<FrozenPlace> frozen;
                    // An owning payload of a BORROWING `match` arm, bound as an alias of the subject's slot, with
                    // the subject's place. A write to an overlapping place replaces the payload the alias points
@@ -3980,9 +3984,10 @@ private:
     // Every PLACE a statement uses — `c`, `c.f`, a method's receiver, an element's container — at its widest
     // nameable extent, so a disjoint sibling field is told apart (see emitScope's child-borrow check).
     // `writesOnly`: just the places the statement WRITES — an assignment or `++`/`--` target, a non-`const fn`
-    // receiver, a `ref`/`out` argument, a `give`n place.
+    // receiver, a `ref`/`out` argument (a `spawn`ed child's included), a `give`n place. `alsoExpr` is walked
+    // after `s`, for a single-expression `match` arm, which need not be a statement node.
     void forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn,
-                         bool writesOnly = false);   // one sentence for every write shape
+                         bool writesOnly = false, SharedExpression alsoExpr = nullptr);
     void rejectSubjectWriteInLoop(SharedStatement armBody, const std::vector<std::string>& subject,
                                   const std::string& alias);
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
