@@ -4,8 +4,8 @@
 // added to Vec4, or a type widened to float64, would silently change every GPU upload stride and every
 // serialized frame, and every existing fixture would still pass.
 //
-// This is a *runtime* check (sizeof on an aggregate stays a C sizeof — kama does not model struct layout,
-// the C compiler does). It runs on native, ASan and wasm, so it pins the claim on three ABIs.
+// This is a *runtime* check — a `sizeof` in a body is the C compiler's own answer, independent of the layout
+// model kama folds compile-time sizes from (KR-94). It runs on native, ASan and wasm: three ABIs.
 import { std::math::Vec2, std::math::Vec3, std::math::Vec4, std::math::Mat4 };
 
 fn int32 main() {

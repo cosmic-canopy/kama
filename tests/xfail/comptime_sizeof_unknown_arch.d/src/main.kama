@@ -1,0 +1,7 @@
+// A compile-time `sizeof` is folded from kama's model of the target (KR-94), and i386 is outside it: its ABI puts an
+// `int64` or `float64` struct member at 4 where every modelled arch puts it at 8, so `Header` is 12 bytes there and
+// 16 elsewhere. A guess would only move the error into the C compiler's assertion, so the fold is refused, naming
+// the arch. The run-time `sizeof` is unaffected, and a `comptime assert` falls back to the C compiler.
+type value Header { public uint32 tag; public float64 stamp; }
+comptime usize H = sizeof(Header);
+fn int32 main() { return cast<int32>(H); }

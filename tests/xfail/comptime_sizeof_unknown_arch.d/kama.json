@@ -1,0 +1,8 @@
+{
+  "name": "unknownarch",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "select": { "TARGET": { "OLDPC": { "triple": "i386-linux-gnu", "default": true } } }
+}

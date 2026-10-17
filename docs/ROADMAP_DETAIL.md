@@ -1889,75 +1889,6 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-<a id="s5-sizeof-comptime"></a>
-
-### A struct's `sizeof` and `alignof` as a compile-time value (KR-94) — surveyed on `0.9.630`
-
-The current state:
-
-- `comptime usize H = sizeof(Header);` → "`sizeof` folds only for fixed-width scalars…".
-- `alignof(int64)` → "does not fold".
-- `InlineArray<uint8>#(sizeof(Header))` → "does not fold".
-- `comptime assert(cond: sizeof(Header) == 16, …)` works, as `_Static_assert((sizeof(k_Fa__Header)) == (16), …)`.
-
-**GO — decided 2026-10-16.** It finishes ruling 5 (2026-09-24) rather than reversing it. That ruling closed an
-INCONSISTENT path: before `0.9.444` the same `comptime usize H = sizeof(Header);` was refused at module scope and built
-at type scope by letting C evaluate it, so one declaration meant different things by position. The ruling made it one
-rule — kama never guesses a value the target's ABI decides — and the proper unlock, a model the C compiler re-checks,
-was filed as this row. Run time costs nothing (the baked number is C's own, and `_Static_assert` emits no code); a
-program gains fixed buffers (`InlineArray<uint8>#(sizeof(Header))`), record strides and size classes with no heap, and
-`kama check`/the LSP can answer a layout `comptime assert` that today fails only at build. Peers all have it (C/C++
-`sizeof`, Rust's `const fn size_of`, Zig `@sizeOf`, Go `unsafe.Sizeof`, D `T.sizeof`) — and all own their layout,
-which is why kama's every baked value carries the C cross-check.
-
-Half a layout model already exists:
-
-- `byteViewFieldLayout`/`byteViewLayout` (~21103/21180) handle pointer width, `@packed`, base types,
-  `InlineArray`/`Simd`, and enums with a declared integer type.
-- `emitBytesDefinition` (~21440) already emits per-field `_Static_assert(offsetof…)`.
-
-Sites:
-
-- Fold sites: `scalarByteSize` (~12257), `constValue`'s `SizeofNode` arm (~12445), `rejectUnfoldableConstArg`
-  (~12610), `ctaNeedsCLowering`/`ctaRenderC` (~12645), and the interpreter arm (kama.comptime.cpp ~462).
-- Target facts: kama.driver.cpp's `ARCH_` flags (~2576). The named targets MACOS/LINUX/WINDOWS/EMBEDDED carry an empty
-  arch (~2759).
-
-Fix:
-
-1. Generalize the byte-view walk into one `layoutOf(type, model)`.
-2. A per-arch model: {pointer bytes, int64/float64 alignment cap, enum bytes, `clong`}.
-3. Route both fold sites through it.
-4. Emit `_Static_assert(sizeof(T) == N && _Alignof(T) == A)` once per baked type, so a wrong model fails the BUILD,
-   never the program.
-5. Flip these xfails to positive fixtures: `type_comptime_sizeof_aggregate`, `local_comptime_sizeof_aggregate`,
-   `type_comptime_alignof`, `alignof_not_foldable`, `sizeof_usize_not_foldable`, `sizeof_clong_not_foldable`,
-   `sizeof_const_generic_unfoldable`. Add new xfails for a `type extern` and an unknown arch.
-6. Rewrite SPEC ~3388–3400, ~5141–5161 and ~5280, and `ClassInfo::alignN`'s comment (kama.cemit.h ~449, which states
-   the opposite policy).
-7. Prove it on the wasm leg and with `check-target`; Windows CI covers LLP64.
-
-Traps:
-
-- There are two fold paths: `constValue` and the interpreter.
-- `kama check` evaluates each `[--target …]` configuration, so values differ per configuration.
-- `transpile` output becomes target-specific.
-- `--target WINDOWS` on this Mac means aarch64-windows.
-- AVR's `double` already fails the `kama_runtime.h` assertion.
-
-Size **M**, 4–6 commits.
-
-**Decided 2026-10-16** (the maintainer took all six):
-
-1. **GO.** The assertion makes a wrong model a build error.
-2. **Every type except `type extern`,** since every kama lowering is structs and unions over scalars, pointers and
-   `kama_string`.
-3. **Derive the model from the generalized byte-view walk,** not from a second walker beside `cType`.
-4. **Assert once per type, beside its C definition.** A generic instance is keyed by its mangled name.
-5. An unknown arch (or EMBEDDED without a triple) is **refused, naming the arch.**
-6. A variant's tag (a C `enum`) is **modelled as 4 bytes behind the assertion.** A fixed-width tag would change the C
-   layout the host header exposes.
-
 ### The allocation campaign — opened 2026-09-12, COMPLETE 2026-09-20
 
 What it did, in one paragraph: `kama_alloc`/`kama_free` became the only way heap memory is obtained or
@@ -2203,32 +2134,8 @@ The const-eval ladder and decl-level conditional compilation are done ([SPEC.md]
   little-endian, so this is deferred until a big-endian target appears.
 - **`comptime fn` nice-to-haves (deferred).** A per-fn `@steps(…)` budget override; dual-use fallback
   emission (a `comptime fn` called at run time is an error today). Named-arg reorder inside a comptime fn body
-  and a local `comptime T X = f();` both work since `0.9.444`. `sizeof` of a fixed-width scalar folds in a
-  comptime fn body; a struct's `sizeof` and any `alignof` are refused at every scope — that is KR-94, below.
-- **A struct's `sizeof` and any `alignof` as a compile-time value (KR-94).** Since `0.9.444` — the
-  maintainer's ruling, 2026-09-24 — no `comptime` at any scope takes a value the target's ABI decides:
-  `sizeof` folds for the fixed-width scalars and is refused for a struct, `usize`, `bool` and the rest, and
-  `alignof` is refused outright ("`sizeof` folds only for fixed-width scalars … user types have target- or
-  layout-dependent size"). Two things already answer part of the need: the value is there at RUN time
-  (`sizeof(Box<uint16>)` in a body is C's own answer), and `comptime assert(cond: sizeof(Vertex) == 20, msg:
-  …)` is checked at build time by C, for the real target. What neither gives is the size as a VALUE a program
-  is built from: `InlineArray<uint8>#(sizeof(Header))`, a record format's fixed stride, an allocator's size
-  classes.
-
-  **The unlock** (asked by the maintainer: can it be done? — yes): the compiler computes layouts itself, from
-  a per-target model — pointer width and data model (LP64; LLP64 on Windows, where `long` is 32-bit; ILP32
-  wasm32; the MCU targets), each primitive's size and alignment, C's struct algorithm (each field at its
-  alignment, the size rounded up to the largest), kama's own lowerings (tag-then-union enums, `Optional`,
-  `string`, a contract's fat pointer, the smart pointers) and `@packed`/`@align`. Every value it bakes is then
-  re-checked by the C compiler that builds the program: the emitted C carries `_Static_assert(sizeof(T) == N,
-  …)` (and `_Alignof`) for each type a baked constant read, so a model that disagrees with the target fails
-  the BUILD, naming the type, and never the program. `tools/check-target.sh`'s cross-builds then prove the
-  model on every triple they build. Still refused after it: a `type extern` (its layout lives in a C header
-  kama does not parse) and anything that contains one.
-
-  **Before code:** where the assertions go (per use, or once per type; header or unit); how a generic
-  instance's layout is keyed; whether the model sits beside `cType` or is derived from it; targets like AVR,
-  where every alignment is 1.
+  and a local `comptime T X = f();` both work since `0.9.444`, and a struct's `sizeof` and `alignof` fold in a
+  comptime fn body as at every scope since `0.9.660` (SPEC *Writing a collection in kama*).
 - **Platform tag-type compilation.** The `@compileFor`-gated contract-impl seam is the sanctioned platform-variance
   mechanism (per-platform `type` impls behind a platform-agnostic `contract`, exactly one survives) — NOT
   in-function branching / `#ifdef`. Extending it as new targets land is forward library/driver work.

@@ -460,10 +460,9 @@ struct ClassInfo {
     // the refusal names the field rather than leaving the reader to work out why the derive did nothing.
     std::map<std::string, std::string> derivedUnmet;
     // `@align(N)` / `@packed` — LAYOUT CONTROL, passed through to the C compiler as
-    // `__attribute__((aligned(N)))` / `((packed))` on the emitted struct. kama does not own layout (it
-    // emits C; the C compiler lays the struct out) and deliberately does not acquire a second source of
-    // truth that could disagree per target — these state the constraint and `sizeof`/`alignof`/
-    // `comptime assert` verify what the toolchain actually did. 0 / false = say nothing.
+    // `__attribute__((aligned(N)))` / `((packed))` on the emitted struct. The C compiler owns layout; kama's
+    // compile-time `sizeof`/`alignof` predict it (classLayout applies both as GCC and clang do) and assert each
+    // prediction in the emitted C, so the model can never silently disagree. 0 / false = say nothing.
     int                               alignN = 0;
     bool                              packed = false;
     bool                              globalAllocator = false;   // `@globalAllocator` — see checkGlobalAllocator
@@ -2723,6 +2722,12 @@ private:
     // args in order, NAMED overrides (`A: T`) placed by param name, trailing gaps filled from `defaults`.
     // `full[i]`/`isDefault[i]` are index-aligned with `params` (a null `full[i]` = a required param left
     // unbound). Silent + best-effort — the registration path re-validates and reports precise errors.
+    // The concrete binding of a generic TYPE's parameters at one use, after positionalizeGenericArgs: use-site
+    // arguments resolved here, defaults under the template's home context, a comptime argument named by its number.
+    // registerGenericTypeInst registers an instance under it and the layout walk measures one (genericInstBinding).
+    std::vector<SharedIdentifier> concretizeGenericArgs(const std::string& tmpl, const std::vector<SharedIdentifier>& bound,
+                                                        const std::vector<bool>& isDefault);
+    bool genericInstBinding(const std::string& tmpl, SharedIdentifierList args, std::map<std::string, SharedIdentifier>& bind);
     void positionalizeGenericArgs(const std::vector<std::string>& params,
                                   const std::vector<SharedIdentifier>& defaults,
                                   SharedIdentifierList args,
@@ -2970,11 +2975,22 @@ private:
     void        checkSendableDeclarations();
     bool        isSendableClass(const std::string& cls);
     std::string unsendableReason(const std::string& cls);
-    // KR-127 — a byte view of a plain `value`. The layout walk is natural alignment at one pointer width; "" when
-    // the type is plain bytes, else why not. `gap` names the first padding found ("3 bytes of padding after `live`").
-    std::string byteViewFieldLayout(SharedIdentifier type, int ptrBytes, bool writable, int64_t& size, int64_t& align);
-    std::string byteViewLayout(const std::string& cls, int ptrBytes, bool writable, int64_t& size, int64_t& align,
-                               std::string* gap);
+    // The layout walk (KR-94, KR-127): one walk for a compile-time `sizeof`/`alignof` (Size, under the target's
+    // model) and a byte view's proof (BytesView/Blittable, natural alignment at one pointer width). "" when it has a
+    // layout, else why not. `gap` names the first padding found ("3 bytes of padding after `live`"). See typeLayout.
+    struct LayoutModel { int ptr = 8; int clong = 8; int vecCap = 0; };   // vecCap: a vector's alignment cap, 0 = none
+    enum class LayoutUse { Size, BytesView, Blittable };
+    bool        targetLayoutModel(LayoutModel& m, std::string& arch) const;
+    std::string typeLayout(SharedIdentifier type, const LayoutModel& m, LayoutUse use, int64_t& size, int64_t& align);
+    std::string classLayout(const ClassInfo& ci, const LayoutModel& m, LayoutUse use, int64_t& size, int64_t& align,
+                              std::string* gap, const std::map<std::string, SharedIdentifier>* bind = nullptr);
+    // `sizeof`/`alignof` as a compile-time value on this build's target, asserted in the C (noteBakedLayout); false
+    // with `why` (when asked) if it does not fold.
+    bool        foldLayout(SizeofNode* s, int64_t& out, std::string* why);
+    void        noteBakedLayout(SharedIdentifier t, int64_t size, int64_t align, const std::string& arch, int srcLine);
+    std::set<std::string> _bakedLayouts;   // C types whose layout is asserted already — once per type
+    bool _layoutsReady = false;            // set after buildVtables: before it a class may have no fields yet
+    std::set<std::string> _layoutInProgress;   // typeLayout's re-entry guard: a layout that reads itself
     std::string byteViewVerdict(const std::string& cls, bool writable);   // both pointer widths; "" when it holds
     void noteByteViewConformance(const std::string& cls);  // the bound-visible names, ahead of the members
     void registerByteViewMembers(const std::string& cls);  // `bytes()`/`bytesMut()` + the grants

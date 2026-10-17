@@ -1,0 +1,9 @@
+// The second lowering of `comptime assert`: a predicate over a layout kama has no model of — a `type extern
+// value`'s, whose struct is the C header's (and here names only two of its three fields) — is handed to the C
+// compiler as a C11 `_Static_assert`, which reads the header and rejects it with kama's message carried through.
+// The cost, stated in SPEC: this fails at BUILD, not at `kama check`, which runs no C compiler — hence its entry
+// in run_tests.sh's `analysis_skip`. Every other layout claim kama answers itself (tests/xfail/comptime_assert_layout_false).
+extern "rec.h";
+type extern value Sample { public int16 level; public float32 gain; }
+comptime assert(cond: sizeof(Sample) == 8, msg: "a Sample is a level and a gain");
+fn int32 main() { return 0; }

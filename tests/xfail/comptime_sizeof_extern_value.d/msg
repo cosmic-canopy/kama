@@ -1,0 +1,1 @@
+field `s` (`Sample`): its layout is the C header's, which kama does not read

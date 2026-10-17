@@ -1,7 +1,7 @@
 // M6: `sizeof` folds in a const-generic ARGUMENT, so a type's width can drive monomorphization. This is
 // also the fixture for the defect that motivated the milestone: `idN()#(sizeof(int32))` parsed, failed
 // to fold, and bound `N` as a TYPE — emitting an undeclared `N` into the generated C, reported by clang,
-// with no kama diagnostic at all. The negative half lives in tests/xfail/sizeof_const_generic_unfoldable.
+// with no kama diagnostic at all. The negative half lives in tests/xfail/comptime_arg_sizeof_extern.d.
 // (Parens are the one spelling for a computed const argument, as in `InlineArray<T>#(N+1)`; the bare
 // `::<sizeof(int32)>` form stays a parse error deliberately.)
 fn int32 idN() comptime(int32 N) { return N; }

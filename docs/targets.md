@@ -595,6 +595,11 @@ CI):
 kama transpile app.kama --target thumbv7em-none-eabihf -o app.c
 ```
 
+The C is for the target it was transpiled for, not portable C: a compile-time `sizeof`/`alignof` is baked as
+that target's number (SPEC *Writing a collection in kama*), and each one carries a `_Static_assert`, so the
+same file handed to a compiler for another target stops at the first layout that differs instead of
+building a different program.
+
 ## What "cross" actually means here
 
 kama only treats a build as cross-compiling when the host compiler genuinely **cannot** do the job:

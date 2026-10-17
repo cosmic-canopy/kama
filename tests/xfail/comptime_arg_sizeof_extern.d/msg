@@ -1,0 +1,1 @@
+`sizeof(Sample)` does not fold: its layout is the C header's

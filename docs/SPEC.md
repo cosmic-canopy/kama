@@ -1900,8 +1900,9 @@ crossing into C: `sizeof`, an allocation size, an `extern fn` mirroring a `size_
 which is why they keep `size` in their names: the name is what says a crossing to a fixed width needs a
 cast, and `isize → int32` is a genuine narrowing on a 64-bit host. The other two platform-varying types
 are **`clong`/`culong`**, C's `long`/`unsigned long` — 4 bytes on Windows, 8 elsewhere, so an `extern`
-mirroring a C `long` must say `clong`, never `isize`. All four take the same refusals: `sizeof` does not <!-- test: clong_extern -->
-fold, `bitcast` is refused (no width until the target is known), and there is no wire format. <!-- xfail: sizeof_clong_not_foldable, bitcast_clong, clong_serialize -->
+mirroring a C `long` must say `clong`, never `isize`. All four take the same refusals: `bitcast` is refused <!-- test: clong_extern -->
+(a reinterpret that holds on one target breaks on the next), and there is no wire format. A compile-time <!-- xfail: bitcast_clong, clong_serialize -->
+`sizeof` of one is this build's number, as a run-time one is: 8 on x86_64 Linux, 4 on Windows or wasm32. <!-- test: comptime_layout -->
 
 **`cchar` is C's `char`, and never a value.** kama's `char` is a 32-bit codepoint; C's is a byte that is a
 third type beside `int8` and `uint8`, and a libc prototype spelled `const char*` warns on either. So `cchar`
@@ -1936,9 +1937,10 @@ width is `ptrdiff_t` would be 8 bytes written natively and 4 read on wasm32. A p
 no wire format. Give a serialized field a fixed width (`int64`/`uint64`) and `cast` at the boundary;
 `@generate(Serializable)` over an `isize` field is an error naming the field. <!-- xfail: serialize_isize_field -->
 
-The same line divides everything else about them: they refuse `sizeof` folding at compile time and refuse
-`bitcast` (an equal-width reinterpret needs a width), while `Formattable`'s widening `cast<int64>` needs none.
-**What decides is whether the operation needs to know the width.**
+The same line divides everything else about them: `bitcast` is refused (an equal-width reinterpret that <!-- xfail: bitcast_clong -->
+compiles on one target is a different program on the next), while `Formattable`'s widening `cast<int64>` and a
+compile-time `sizeof` — this build's number, like the run-time one — are not. **What decides is whether the
+operation needs ONE width on every target.**
 
 **Bare `int` is not a kama type.** It was an alias for `int32` carrying no information of its own, and a
 reader coming from C or Go would expect a *platform* width from the name — the opposite of what it meant.
@@ -2542,7 +2544,8 @@ as a field of a `type extern value` or `type expose value`, or as an `InlineArra
   size to its compiler) and the build holds it to the C type's size; a constant the header does not define is <!-- xfail: extern_enum_width -->
   refused by the C compiler, by name. Both are build failures, since only the C compiler reads the header. <!-- xfail: extern_enum_missing_constant -->
   `try cast<E>(n)` tests membership against the C constants, and `match` covers them like any enum. Its values
-  cannot be folded at compile time — they live in the header, which kama never reads. Like a `type extern value` <!-- xfail: extern_enum_comptime -->
+  cannot be folded at compile time — they live in the header, which kama never reads — but its size can: <!-- xfail: extern_enum_comptime -->
+  `sizeof(VkFormat)` is the stated width, which the build already holds to C's. Like a `type extern value` <!-- test: extern_enum -->
   it is a module symbol (`export`/`import`) under its literal C name, and may be declared again where it is used
   only if the declarations are identical. <!-- xfail: extern_enum_disagree --> Fixture: `tests/extern_enum.d/`. <!-- test: extern_enum -->
 - **`type expose enum`** — values kama owns, which the generated host header publishes (*Exposing to a host*).
@@ -3480,17 +3483,24 @@ be written **in the language** rather than baked into the compiler. Three builti
 
 - **`sizeof(T)` / `alignof(T)`** — the byte size / alignment of a type (a `usize`); both monomorphize, so
   `malloc(n: n * sizeof(T))` works in a generic `Vec<T>`, and `alignof(T)` (→ C `_Alignof`) serves aligned
-  DMA buffers / register-block layout asserts. **`sizeof` folds to a compile-time constant for a
-  fixed-width scalar** — `int8`…`int64`, `uint8`…`uint64`, `char`, `float32`, `float64`, including through
-  a bound type parameter (`sizeof(T) * 8` inside a generic) — so it can drive a `comptime` initializer or a
-  comptime argument. It does **not** fold for anything whose size the target decides rather than the
-  language: `usize`/`isize` (C `size_t` — 4 bytes on wasm32/thumbv6m, 8 on x86_64), `bool`, `string`, and
-  user aggregates, whose layout belongs to the C compiler. **`alignof` never folds** — alignment is an ABI
-  choice, not a language guarantee (1 on AVR; `_Alignof(double)` is 4 on i386). Both keep working
-  everywhere a runtime value works. The premises the fold rests on (`CHAR_BIT == 8`, and `float`/`double`
-  at 4/8) are `_Static_assert`ed in `kama_runtime.h`, so the C compiler verifies them for the real target
-  on every build. What kama will not fold, **[`comptime assert`](#compile-time-assertions--comptime-assert-)**
-  lets you assert anyway — it hands an aggregate/`alignof` predicate to the C compiler as a `_Static_assert`.
+  DMA buffers / register-block layout asserts. **Both are compile-time values** for every type but a <!-- test: comptime_layout, sizeof_fold_const_generic -->
+  `type extern value` — they drive a `comptime` initializer, a comptime argument and an `InlineArray` length
+  (`InlineArray<uint8>#(sizeof(Header))`), including through a bound type parameter (`sizeof(T) * 8` inside a
+  generic). A fixed-width scalar's size is the language's (`int8`…`int64`, `uint8`…`uint64`, `char`,
+  `float32`, `float64`, on any target); everything else — `usize`, `bool`, `string`, an enum, a struct, a
+  generic instance, a contract handle — is laid out by the C compiler, so kama folds it from a **model of
+  this build's target**: the pointer width, C's `long`, every scalar aligned to its size (an `int64` or
+  `float64` member at 8), a C `enum` at 4, a vector's alignment capped per arch, and the struct kama emits
+  for the type (the vptr or embedded base first, then the fields in order, `@packed`/`@align` applied). **The
+  C compiler checks every answer**: each baked type gets a `_Static_assert(sizeof(T) == N && _Alignof(T) ==
+  A, …)` in the emitted C, once per type, so a model that disagrees with the toolchain fails the BUILD,
+  never the program. The model covers x86_64, aarch64, riscv64, wasm32, wasm64, 32-bit ARM, riscv32 and
+  xtensa; on any other arch (i386 puts an `int64` member at 4) the fold is refused, naming the arch, and a <!-- xfail: comptime_sizeof_unknown_arch -->
+  `type extern value` — whose layout is the C header's, which kama never reads — is refused naming the <!-- xfail: comptime_sizeof_extern_value -->
+  field that holds it. Both keep working everywhere a run-time value works, and a `comptime assert` over
+  them goes to the C compiler, which knows. The values are per build: `sizeof(usize)` is 8 on a 64-bit
+  target and 4 on wasm32, so `kama check --target WASM` judges a layout claim for wasm, and C written by
+  `kama transpile` is for the target it was transpiled for.
 - **The three conversion verbs, told apart by what each PRESERVES.** One conversion needs one spelling, so
   the verb is chosen by intent and the compiler holds you to it:
 
@@ -5282,12 +5292,11 @@ fn void demo() {
   too: another constant's initializer or an array size may not read it from outside either. (Before `0.9.444` <!-- xfail: type_comptime_private_fold, type_comptime_private_size -->
   those two read the fold directly and a private constant leaked into both.) A **local** `comptime` is scoped
   to its function or block.
-- **Initializer must fold** — a literal, `sizeof` of a fixed-width scalar (**not** `alignof`, and not
-  `sizeof` of a `usize`/aggregate — see *Writing a collection in kama*), const arithmetic, another
-  `comptime`, a `comptime fn` call, or — for an `InlineArray`-typed constant — an **array literal** of
-  foldable elements (`[1, 2, 3]` or the `[v; N]` fill form), which bakes as a `static const` table. A
-  `comptime` whose initializer can't fold is an error **at the declaration** (a `comptime` local's message <!-- xfail: sizeof_usize_not_foldable, alignof_not_foldable -->
-  points you back to `const` for a runtime-initialized immutable).
+- **Initializer must fold** — a literal, a `sizeof`/`alignof` (on this build's target — see *Writing a
+  collection in kama*), const arithmetic, another `comptime`, a `comptime fn` call, or — for an
+  `InlineArray`-typed constant — an **array literal** of foldable elements (`[1, 2, 3]` or the `[v; N]` fill
+  form), which bakes as a `static const` table. A `comptime` whose initializer can't fold is an error **at the <!-- xfail: comptime_sizeof_extern_value -->
+  declaration** (a `comptime` local's message points you back to `const` for a runtime-initialized immutable).
 - **A value type.** A `comptime` may hold a `type value` whose fields are numbers, `bool`s, `char`s, fixed
   arrays or value types of those, built by one of its ctors — the compiler RUNS the ctor, and a method or <!-- test: comptime_value_type -->
   operator the initializer calls, and bakes the result as a `static const` object:
@@ -5300,12 +5309,11 @@ fn void demo() {
   At run time the constant reads as a value: an operator or a `const fn` gets a copy, and a method that is
   not `const fn`, a `ref` argument or a field store is refused — it is read-only storage. <!-- xfail: comptime_value_mutate, comptime_value_write -->
 - **One rule at every scope.** A module, a type and a local `comptime` are folded by the same interpreter, so
-  they take the same initializers and refuse the same ones — a float, a table, a `comptime fn` call and a <!-- test: comptime_type_parity, comptime_named_args -->
-  later-declared constant work at all three, and a struct's `sizeof` or any `alignof`, whose value the
-  target's ABI decides, is an error at all three. Until `0.9.444` a type's constant had only an integer fold <!-- xfail: type_comptime_sizeof_aggregate, local_comptime_sizeof_aggregate, type_comptime_alignof -->
-  (plus C evaluating what it could not) and a local one only "C can compute it", so one declaration meant
-  three things by position. A struct's size is still available at run time (`sizeof(Box<uint16>)` in a
-  body), and checkable at build time in a `comptime assert`, where C verifies it for the real target. A plain `const` *local* whose initializer
+  they take the same initializers and refuse the same ones — a float, a table, a `comptime fn` call, a <!-- test: comptime_type_parity, comptime_named_args -->
+  later-declared constant and a struct's `sizeof` or `alignof` work at all three. Until `0.9.444` a type's <!-- test: comptime_layout -->
+  constant had only an integer fold (plus C evaluating what it could not) and a local one only "C can compute
+  it", so one declaration meant three things by position; that ruling refused a layout at all three until
+  kama had a model of the target to fold it from, which `0.9.660` added (the C compiler re-checks each answer). A plain `const` *local* whose initializer
   happens to fold is *opportunistically* usable in a compile-time position too (mirroring C++ `const` vs
   `constexpr`: `const` works when it can, `comptime` guarantees it); at module and type scope there is no
   runtime init point, so `comptime` is the only named-constant form.
@@ -5421,16 +5429,15 @@ fn void render() {
   both beats a rule that changes with the predicate.
 - **One surface, two lowerings.** Which one applies is decided by the predicate, not by the author:
   - **kama answers it** when the predicate folds — literals, `comptime` constants, comptime
-    parameters, `sizeof` of a fixed-width scalar, and arithmetic/comparison/logic over those. The failure
-    is an ordinary kama diagnostic, so **`kama check` and the LSP report it**.
-  - **The C compiler answers it** when the predicate turns on a layout fact kama deliberately does not
-    model — an aggregate's `sizeof`, any `alignof`, `sizeof(usize)`. kama emits a C11 `_Static_assert`
-    carrying the message, and the target's real ABI decides. This needs no layout model in kama, which is
-    exactly why `sizeof` folds only for fixed-width scalars.
+    parameters, `sizeof`/`alignof` (from the target's layout model, see *Writing a collection in kama*), and
+    arithmetic/comparison/logic over those. The failure is an ordinary kama diagnostic, so **`kama check` and <!-- xfail: comptime_assert_layout_false -->
+    the LSP report it** — for the target being checked: a claim that holds on a 64-bit host and not on wasm32
+    is reported by `kama check --target WASM`.
+  - **The C compiler answers it** when the predicate turns on a layout kama has no model of — a `type extern
+    value`'s, which is the C header's, or any layout on an arch the model does not cover. kama emits a C11
+    `_Static_assert` carrying the message, and the target's real ABI decides; this form fails at BUILD, not
+    at `kama check`, since `kama check` runs no C compiler. <!-- xfail: comptime_assert_extern_layout -->
   - Anything else — a predicate naming a runtime value, or mixing a layout fact with one — is an error. <!-- xfail: comptime_assert_runtime_cond -->
-- **⚠️ The caveat, and it is the price of the split: the layout form fails at BUILD, not at `kama check`.**
-  The C compiler is what rejects it, and `kama check` runs no C compiler — so **the LSP cannot show it**.
-  A scalar predicate has no such gap. Prefer the scalar form when a claim can be stated either way.
 - **Not a `debugAssert`.** There is no release-stripped variant, because there is nothing to strip: a
   compile-time assertion never reaches the running program.
 
@@ -5455,8 +5462,8 @@ existing `@name(args)` mechanism, extended from serialization to functions + sta
 **Layout control — `@align(N)` / `@packed`.** The same passthrough mechanism, applied to a TYPE rather than
 a declaration: `@align(N)` emits `__attribute__((aligned(N)))` and `@packed` emits `((packed))` on the
 struct kama generates. They are the companion to layout *verification* — `sizeof`/`alignof` fold and
-`comptime assert` hands the rest to the C compiler — and verification shipped first deliberately, because
-asserting a layout is what makes stating one safe.
+`comptime assert` checks them — and verification shipped first deliberately, because asserting a layout is
+what makes stating one safe.
 
 ```kama
 @packed  type value Reg  { public uint8 ctrl; public uint32 data; }   // sizeof 5, not 8 — an MMIO block
@@ -5464,10 +5471,11 @@ asserting a layout is what makes stating one safe.
 comptime assert(cond: sizeof(Reg) == 5, msg: "the wire format is 5 bytes");
 ```
 
-- **kama does not own layout, and deliberately does not start.** It emits C and the C compiler lays the
-  struct out; a layout model in kama would be a second source of truth that could disagree with the real
-  one per target. So these state a constraint and `sizeof`/`alignof`/`comptime assert` verify what the
-  toolchain actually did.
+- **The C compiler owns layout; kama predicts it and is checked.** kama emits C and the C compiler lays the
+  struct out. kama's compile-time `sizeof`/`alignof` come from a model of the target that applies these
+  attributes as GCC and clang do (`@packed` puts every member at alignment 1, `@align(N)` raises the
+  struct's), and every baked answer is a `_Static_assert` in the emitted C — so the model is never a second
+  source of truth that could silently disagree: where it would, the build fails.
 - **`N` must be a power of two, 1 to 4096.** Not passthrough, because gcc and clang do not *refuse* a
   non-power-of-two — they round it **up**, so `@align(3)` would compile and quietly mean 4.
 - **Types with a struct only** — `type value` and `type resource`. An `enum` is refused: a payload-less one <!-- xfail: layout_attr_on_enum -->

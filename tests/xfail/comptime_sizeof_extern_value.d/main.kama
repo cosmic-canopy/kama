@@ -1,0 +1,9 @@
+// A `type extern value` binds a C header's struct, and its field list is a claim about that header that may name
+// only some of its fields (`reserved` is not bound here). So its layout is the header's, which kama never reads,
+// and a struct holding one has no compile-time `sizeof` (KR-94) — the refusal names the field. It stays a run-time
+// value, and a `comptime assert` on it is handed to the C compiler, which does read the header.
+extern "rec.h";
+type extern value Sample { public int16 level; public float32 gain; }
+type value Rec { public Sample s; public uint8 tag; }
+comptime usize R = sizeof(Rec);
+fn int32 main() { return cast<int32>(R); }

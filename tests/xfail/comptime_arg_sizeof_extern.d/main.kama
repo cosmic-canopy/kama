@@ -1,0 +1,7 @@
+// A comptime ARGUMENT that does not fold says why, not a generic rule: a `type extern value`'s layout is its C
+// header's, which kama never reads (KR-94 folds every other type's `sizeof` from the target's model). Before M6
+// such an argument bound `N` as a TYPE and leaked an undeclared name into the C (tests/sizeof_fold_const_generic).
+extern "rec.h";
+type extern value Sample { public int16 level; public float32 gain; }
+fn int32 idN() comptime(int32 N) { return N; }
+fn int32 main() { return idN()#(cast<int32>(sizeof(Sample))); }

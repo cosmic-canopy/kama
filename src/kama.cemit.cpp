@@ -12505,10 +12505,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
 // ---- Collections -----------------------------------------------------
 
 // ---- Const generics --------------------------------------------------
-// M6: `sizeof(T)` in BYTES for a fixed-width scalar T — the compiler's only type-size knowledge, and
-// deliberately the smallest set it can justify. kama does not own struct layout (it emits C; the C
-// compiler lays out the aggregates), so it may fold only what the LANGUAGE fixes, never what the ABI
-// decides:
+// M6: `sizeof(T)` in BYTES for a fixed-width scalar T — what the LANGUAGE fixes, so it folds on any target, known
+// or not, and before any type is collected:
 //   int8..int64 / uint8..uint64 / char  ISO C11 §7.20.1.1 pins the exact-width types at N bits with no
 //                                       padding; sizeof counts chars, so this also needs CHAR_BIT == 8
 //   float32 / float64                   `float`/`double` at 4/8 — an ABI convention (ISO C's Annex F is
@@ -12516,11 +12514,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
 // All three premises are `_Static_assert`ed in kama_runtime.h and checked by the C compiler for the real
 // target on every build, so the fold is verified rather than assumed.
 //
-// Everything else stays a C `sizeof` passthrough: `bool` (implementation-defined size), `string`/`void`/
-// user aggregates (layout is the C compiler's), and — the one that looks like it belongs — `usize`/
-// `isize`, which map to `size_t` and are genuinely target-dependent (4 on wasm32/thumbv6m, 8 on x86_64).
-// `alignof` never folds at all: alignment is an ABI CHOICE with no premise to assert (1 on AVR, and
-// _Alignof(double) is 4 on i386), which is why the caller checks isAlign before reaching here.
+// Everything else — `usize`/`isize`, `bool`, `string`, an aggregate, and any `alignof` — is the TARGET's, and
+// foldLayout answers it from the layout model (KR-94), asserting each answer in the emitted C.
 bool CEmitter::scalarByteSize(SharedIdentifier type, int64_t& out)
 {
     if (!type) return false;
@@ -12540,13 +12535,66 @@ bool CEmitter::scalarByteSize(SharedIdentifier type, int64_t& out)
         // so there is no one number to fold and `sizeof(usize)` stays a runtime `sizeof`. They reached
         // this switch for the first time in 0.9.136, when they became reserved words; before that they
         // fell out here anyway, invisibly. A silent `default:` is how `char` slipped past strict numeric
-        // checking, so the refusal is spelled out. Guarded by tests/xfail/sizeof_usize_not_foldable.
+        // checking, so the refusal is spelled out. Their width is the TARGET's, answered by foldLayout.
         case IDENTIFIER_ISIZE_VAL: case IDENTIFIER_USIZE_VAL:                             return false;
-        // ...and C's `long`/`unsigned long` (4 bytes on Windows, 8 elsewhere) — the same refusal, guarded by
-        // tests/xfail/sizeof_clong_not_foldable. `cchar` is refused as a VALUE position at the sizeof site.
+        // ...and C's `long`/`unsigned long` (4 bytes on Windows, 8 elsewhere) — the same, answered by the target's
+        // model. `cchar` is refused as a VALUE position at the sizeof site.
         case IDENTIFIER_CLONG_VAL: case IDENTIFIER_CULONG_VAL: case IDENTIFIER_CCHAR_VAL: return false;
         default: return false;
     }
+}
+
+// KR-94: `sizeof(T)`/`alignof(T)` as a compile-time value — the number C computes for THIS build's target. A
+// fixed-width scalar's size is the language's and needs no target (scalarByteSize); everything else is the layout
+// walk under the target's model (layoutOf), checked by the C compiler once per type (noteBakedLayout).
+bool CEmitter::foldLayout(SizeofNode* s, int64_t& out, std::string* why)
+{
+    if (!s) return false;
+    if (!s->isAlign && scalarByteSize(s->type, out)) return true;
+    // A type's layout is settled only once every class has its fields, its base and its vptr (buildVtables). A
+    // fold asked before that — a module constant's first try, in collectModuleVars — is deferred, not answered:
+    // answered, it measured a class registered by name with no fields yet as one empty byte.
+    if (!_layoutsReady) { if (why) *why = "a type's layout is not settled yet"; return false; }
+    SharedIdentifier t = deepSubstType(s->type);
+    LayoutModel m;
+    std::string arch;
+    if (!targetLayoutModel(m, arch)) {
+        if (why) *why = arch.empty() ? std::string("this build names no target architecture")
+                      : "kama's layout model does not cover the `" + arch + "` architecture (it covers x86_64, "
+                        "aarch64, riscv64, wasm32, wasm64, 32-bit ARM, riscv32 and xtensa), and a guess would only "
+                        "move the error into the C compiler";
+        return false;
+    }
+    int64_t size = 0, align = 1;
+    const std::string r = typeLayout(t, m, LayoutUse::Size, size, align);
+    if (!r.empty()) { if (why) *why = r; return false; }
+    out = s->isAlign ? align : size;
+    noteBakedLayout(t, size, align, arch, s->line);
+    return true;
+}
+
+// Every baked layout is asserted in the emitted C, once per type — keyed by its C name, so a generic instance is one
+// key however it was spelled. The model PREDICTS what the C compiler does; this is where a wrong prediction fails the
+// build instead of the program. Queued with the file-scope helpers, which every translation unit flushes after the
+// shared header, so the type is complete wherever the assertion lands. A `#line` names the `sizeof` that baked it
+// (the next body writes its own), so a failure points at the author's line rather than at whatever preceded it.
+void CEmitter::noteBakedLayout(SharedIdentifier t, int64_t size, int64_t align, const std::string& arch, int srcLine)
+{
+    const std::string ct = cType(t);
+    if (ct.empty() || !_bakedLayouts.insert(ct).second) return;
+    const std::string n = std::to_string(size), a = std::to_string(align);
+    std::string at;
+    // A collection pass has no diagnostic file, but the namespace context still names the file being folded.
+    std::string f = _inHeaderPass ? _emitDeclFile : diagFile();
+    if (f.empty()) f = _nsCtx.unitPath;
+    if (srcLine > 0 && !f.empty() && f[0] != '<') {
+        at = "#line " + std::to_string(srcLine) + " \"";
+        for (char c : f) { if (c == '\\' || c == '"') at += '\\'; at += c; }
+        at += "\"\n";
+    }
+    _fileScopeHelpers.push_back(at + "_Static_assert(sizeof(" + ct + ") == " + n + " && _Alignof(" + ct + ") == " + a
+        + ", \"kama: `" + cEscapeStringBody(kamaTypeText(t)) + "` was folded as " + n + " bytes aligned to " + a + " on "
+        + arch + ", and this C compiler lays it out differently: kama's layout model of the target is wrong\");\n");
 }
 
 // The compile-time integer value of a comptime argument expression: an integer literal (any
@@ -12708,13 +12756,10 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
         }
         return true;
     }
-    // M6: `sizeof(T)` for a fixed-width scalar. One arm serves every consumer, because they all route
-    // here — module/type/local `comptime`, a const-generic argument (via constArgN), an InlineArray size,
-    // a `[v; N]` fill count — and the binary recursion below gives `sizeof(int32) * 8` for free.
-    if (auto* s = dynamic_cast<SizeofNode*>(n)) {
-        if (s->isAlign) return false;   // alignment is an ABI choice kama has no premise to fold — see scalarByteSize
-        return scalarByteSize(s->type, out);
-    }
+    // `sizeof(T)`/`alignof(T)` on this build's target (KR-94). One arm serves every consumer, because they all
+    // route here — module/type/local `comptime`, a const-generic argument (via constArgN), an InlineArray size,
+    // a `[v; N]` fill count — and the binary recursion below gives `sizeof(Header) * 8` for free.
+    if (auto* s = dynamic_cast<SizeofNode*>(n)) return foldLayout(s, out, nullptr);
     if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         int64_t v;
         if (!constValue(u->expression, v)) return false;
@@ -12884,14 +12929,11 @@ void CEmitter::rejectUnfoldableConstArg(const std::string& param, SharedIdentifi
     // (bindInstParams has three call sites), so without this the same line prints three times.
     if (!_badConstArgs.insert(arg->constArgValue.get()).second) return;
     SizeofNode* sz = findSizeof(arg->constArgValue.get());
-    std::string why =
-        (sz && sz->isAlign) ? "`alignof` does not fold — alignment is a target ABI property, not a language "
-                              "guarantee (1 on AVR, and `_Alignof(double)` is 4 on i386)"
-      : (sz)               ? "`sizeof` folds only for fixed-width scalars (`int8`..`int64`, `uint8`..`uint64`, "
-                             "`char`, `float32`, `float64`) — `usize`/`isize`, `bool`, `string` and user types "
-                             "have target- or layout-dependent size"
-                           : "it must be an integer literal, a comptime parameter, or "
-                             "arithmetic over those";
+    int64_t v = 0;
+    std::string layout;
+    std::string why = sz && !foldLayout(sz, v, &layout)
+                    ? std::string(sz->isAlign ? "`alignof(" : "`sizeof(") + kamaTypeText(sz->type) + ")` does not fold: " + layout
+                    : "it must be an integer literal, a comptime parameter, `sizeof`/`alignof`, or arithmetic over those";
     // Phrased to read after the "unsupported " prefix `unsupported()` prints.
     unsupported(("comptime argument for `" + param + "` — it does not fold to a compile-time integer; "
                  + why).c_str(), arg->constArgValue);
@@ -12899,23 +12941,23 @@ void CEmitter::rejectUnfoldableConstArg(const std::string& param, SharedIdentifi
 
 // --- `comptime assert(cond:, msg:)` — const-generics M7 --------------------------------------------------
 //
-// One surface, TWO lowerings, and the rule below is what picks between them. The split exists because M6
-// drew `sizeof`'s fold boundary at fixed-width scalars: kama owns what the LANGUAGE fixes and never what
-// the ABI decides, since clang — not kama — lays out aggregates. So a predicate kama can answer, kama
-// answers (a real diagnostic, visible to `kama check` and the LSP); a predicate that turns on a layout fact
-// kama deliberately does not model is handed to the C compiler as a C11 `_Static_assert`. That is what
-// makes M6's narrow fold cost nothing: the cases it refuses are exactly the cases clang is the authority on.
+// One surface, TWO lowerings, and the rule below is what picks between them. A predicate kama can answer,
+// kama answers (a real diagnostic, visible to `kama check` and the LSP) — since KR-94 that includes every
+// `sizeof`/`alignof` the target's layout model covers, each checked by C through its baked-layout assertion. A
+// predicate over a layout kama has no model of (a `type extern value`'s, or any type on an arch outside the
+// model) is handed to the C compiler as a C11 `_Static_assert`, since the C compiler is the one that knows.
 
 // Does this predicate turn on a `sizeof`/`alignof` that kama cannot fold? If so it must go to C — asking
-// the interpreter first would only produce M6's "does not fold" diagnostic for a question that HAS a right
-// answer on the target. Every `alignof`, `sizeof` of an aggregate, and `sizeof(usize)` lands here.
+// the interpreter first would only produce a "does not fold" diagnostic for a question that HAS a right
+// answer on the target. Since KR-94 only a layout outside the model lands here: a `type extern value`'s, or any
+// layout on an arch the model does not cover.
 bool CEmitter::ctaNeedsCLowering(SharedExpression e)
 {
     if (!e) return false;
     ASTNode* n = e.get();
     if (auto* s = dynamic_cast<SizeofNode*>(n)) {
         int64_t sz;
-        return s->isAlign || !scalarByteSize(s->type, sz);
+        return !foldLayout(s, sz, nullptr);
     }
     if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return ctaNeedsCLowering(u->expression);
     if (auto* c = dynamic_cast<CastNode*>(n))                  return ctaNeedsCLowering(c->unaryExpression);
@@ -14461,33 +14503,11 @@ bool CEmitter::argCarriesUnboundParam(const SharedIdentifier& a)
 // template shape, rewrite identity (struct name + method cNames), re-derive param signatures under
 // _typeSubst, register in _classes, and transitively scan its substituted member types so a
 // `Box<T>` holding `List<T>` registers `List_int32`. Deduped by the mangled name.
-void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifierList args)
+// See the declaration. Split out of registerGenericTypeInst so the layout walk binds an instance exactly as
+// registration will (KR-94): a fold may measure `Box<uint16>` before discovery has registered it.
+std::vector<SharedIdentifier> CEmitter::concretizeGenericArgs(const std::string& tmpl, const std::vector<SharedIdentifier>& bound,
+                                                              const std::vector<bool>& isDefault)
 {
-    const std::string tmpl = preludeKey(tmpl_);   // a compiler-written leaf names a prelude generic
-    // Empty args is valid ONLY for a bare all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`);
-    // otherwise there is nothing to instantiate. Below, `args` may be null/empty (defaults fill every slot).
-    if ((!args || args->empty()) && !allTypeParamsDefaulted(tmpl)) return;
-    // Every rejection here is about the USE SITE — the line below is the first type argument's — and
-    // `_nsCtx` at registration IS the use-site context (that is exactly what `_genericTypeInstCtx` records
-    // further down). Instantiation is discovered from passes that leave `_collectingUnitPath` empty, so
-    // without this a bad type argument named no file at all. Keeps the current value when there is nothing
-    // better to say. See diagFile().
-    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
-    const std::vector<std::string>& params = _genericTypeParams[tmpl];
-
-    // Resolve each arg to its concrete binding — DEEPLY (a nested `Rc<T>` -> `Rc<Counter>`), so a
-    // generic arg carrying a type-param is never stored raw in _typeSubst (which would self-reference
-    // and loop mangleElem for a mutually-recursive generic type).
-    // Bind the use-site args to the template's params: leading POSITIONAL, then NAMED overrides
-    // (`A: Arena` skips an earlier default), then fill trailing unbound params from their `= Default`.
-    int line = (args && !args->empty() && args->front()) ? args->front()->line : 0;
-    auto dit = _genericTypeDefaults.find(tmpl);
-    const std::vector<SharedIdentifier> emptyDefs;
-    const std::vector<SharedIdentifier>& defs = dit != _genericTypeDefaults.end() ? dit->second : emptyDefs;
-    std::vector<SharedIdentifier> bound; std::vector<bool> isDefault;
-    positionalizeGenericArgs(params, defs, args, bound, isDefault);
-    if (!validateGenericArgs(tmpl, "type", params, args, bound, line)) return;
-
     // Resolve each binding to its concrete type — use-site args under the current ctx, DEFAULTS under the
     // template's home ctx (a default names a type visible where the template was declared, not at the use site).
     std::vector<SharedIdentifier> concrete;
@@ -14516,6 +14536,54 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
                 if (constArgN(concrete[i], v)) concrete[i] = constValueArg(v);
             }
     }
+    return concrete;
+}
+
+bool CEmitter::genericInstBinding(const std::string& tmpl, SharedIdentifierList args,
+                                  std::map<std::string, SharedIdentifier>& bind)
+{
+    auto pit = _genericTypeParams.find(tmpl);
+    if (pit == _genericTypeParams.end()) return false;
+    auto dit = _genericTypeDefaults.find(tmpl);
+    static const std::vector<SharedIdentifier> noDefs;
+    std::vector<SharedIdentifier> bound; std::vector<bool> isDefault;
+    positionalizeGenericArgs(pit->second, dit != _genericTypeDefaults.end() ? dit->second : noDefs, args, bound, isDefault);
+    const std::vector<SharedIdentifier> concrete = concretizeGenericArgs(tmpl, bound, isDefault);
+    for (size_t i = 0; i < pit->second.size(); ++i) {
+        if (i >= concrete.size() || !concrete[i] || argCarriesUnboundParam(concrete[i])) return false;
+        bind[pit->second[i]] = concrete[i];
+    }
+    return true;
+}
+
+void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifierList args)
+{
+    const std::string tmpl = preludeKey(tmpl_);   // a compiler-written leaf names a prelude generic
+    // Empty args is valid ONLY for a bare all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`);
+    // otherwise there is nothing to instantiate. Below, `args` may be null/empty (defaults fill every slot).
+    if ((!args || args->empty()) && !allTypeParamsDefaulted(tmpl)) return;
+    // Every rejection here is about the USE SITE — the line below is the first type argument's — and
+    // `_nsCtx` at registration IS the use-site context (that is exactly what `_genericTypeInstCtx` records
+    // further down). Instantiation is discovered from passes that leave `_collectingUnitPath` empty, so
+    // without this a bad type argument named no file at all. Keeps the current value when there is nothing
+    // better to say. See diagFile().
+    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
+    const std::vector<std::string>& params = _genericTypeParams[tmpl];
+
+    // Resolve each arg to its concrete binding — DEEPLY (a nested `Rc<T>` -> `Rc<Counter>`), so a
+    // generic arg carrying a type-param is never stored raw in _typeSubst (which would self-reference
+    // and loop mangleElem for a mutually-recursive generic type).
+    // Bind the use-site args to the template's params: leading POSITIONAL, then NAMED overrides
+    // (`A: Arena` skips an earlier default), then fill trailing unbound params from their `= Default`.
+    int line = (args && !args->empty() && args->front()) ? args->front()->line : 0;
+    auto dit = _genericTypeDefaults.find(tmpl);
+    const std::vector<SharedIdentifier> emptyDefs;
+    const std::vector<SharedIdentifier>& defs = dit != _genericTypeDefaults.end() ? dit->second : emptyDefs;
+    std::vector<SharedIdentifier> bound; std::vector<bool> isDefault;
+    positionalizeGenericArgs(params, defs, args, bound, isDefault);
+    if (!validateGenericArgs(tmpl, "type", params, args, bound, line)) return;
+
+    std::vector<SharedIdentifier> concrete = concretizeGenericArgs(tmpl, bound, isDefault);
 
     // Defer if a substituted arg still carries an unbound type-param — this only happens when scanning a
     // generic FUNCTION's signature before instantiation (its `V` isn't in _typeSubst yet, so deepSubstType
@@ -21542,22 +21610,59 @@ std::string CEmitter::unsendableReason(const std::string& cls)
     return "`" + cls + "` does not declare `implements Sendable`";
 }
 
-// ---- KR-127: a byte view of a plain `value` ------------------------------------------------------------------
-// `@generate(BytesViewable)` gives a `value` `bytes()`, a `ConstView<uint8>` over its own storage, and
-// `@generate(Blittable)` adds `bytesMut()`, a `View<uint8>`. Two facts make that sound, and both are proved here:
-//   - every byte belongs to a field. Padding holds whatever the memory held before, so two equal values could hash
-//     differently and a send could leak stale bytes;
-//   - (Blittable) every bit pattern of every field is a valid value. A `bool` byte of 2, a surrogate `char` or an
-//     enum tag outside its variants is not, so a writable view is numbers only.
-// kama does not own layout (see ClassInfo::alignN), and this walk does not take it over: it assumes NATURAL
-// alignment — a number aligned to its own size, which no ABI exceeds — so "no padding" here means no padding on any
-// target, conservatively where an ABI aligns less (`{uint32; uint64}` on i386). The C compiler then proves what it
-// actually did, with a `_Static_assert` per field in the body (emitBytesDefinition). `usize`/`isize` are walked at
-// both pointer widths. The view is in host layout, a mirror and not a portable format; kbin is the portable one.
-std::string CEmitter::byteViewFieldLayout(SharedIdentifier type, int ptrBytes, bool writable, int64_t& size,
-                                          int64_t& align)
+// ---- The layout walk: `sizeof`/`alignof` as compile-time values (KR-94), and a byte view's proof (KR-127) -------
+// ONE walk answers every question kama asks about a type's bytes, under a model of the target:
+//   - LayoutUse::Size folds `sizeof(T)`/`alignof(T)` for THIS build (targetLayoutModel). kama emits C and the C
+//     compiler lays the struct out, so the number is a prediction of what C will do — and every type it is baked
+//     for gets a `_Static_assert` in the emitted C (noteBakedLayout), so a model that disagrees with the C compiler
+//     fails the BUILD, never the program. Every kama lowering is a struct or union over scalars, pointers and the
+//     runtime's handles, so every type has a model except one whose layout is a C header's (`type extern`).
+//   - LayoutUse::BytesView/Blittable prove a byte view of a plain `value`: every byte belongs to a field (padding
+//     holds whatever the memory held, so two equal values could hash differently and a send could leak stale
+//     bytes), and (Blittable) every bit pattern of every field is a valid value — a `bool` byte of 2, a surrogate
+//     `char` or an enum tag outside its variants is not, so a writable view is numbers only. Walked at BOTH pointer
+//     widths (byteViewVerdict), so "no padding" holds on any target; the C compiler then proves what it actually did
+//     with a `_Static_assert` per field (emitBytesDefinition). The view is in host layout, a mirror and not a
+//     portable format; kbin is the portable one.
+// "" with `size`/`align` set, else why not.
+
+// The target's half of the model, from the build's `ARCH_`/`OS_` flags. Every other number is the same on each arch
+// modelled here, MEASURED (clang, 2026-10-17): a fixed-width scalar at its size, aligned to it (an `int64` or
+// `float64` member at 8 — which is why i386, whose struct members of both sit at 4, is not modelled), `bool` 1, a C
+// `enum` 4, and a vector at its size up to the arch's cap. Clang caps a vector's alignment at 16 on AArch64 and on
+// Darwin x86_64, at 8 on 32-bit ARM, and not at all elsewhere. An arch outside the table is refused, naming it: a
+// guess would only move the error from kama to the C compiler's assertion.
+bool CEmitter::targetLayoutModel(LayoutModel& m, std::string& arch) const
+{
+    bool windows = false, macos = false;
+    for (const auto& f : _activeFlags) {
+        if (f.compare(0, 5, "ARCH_") == 0) {
+            arch = f.substr(5);
+            for (char& c : arch) c = (char)tolower((unsigned char)c);
+        }
+        windows = windows || f == "OS_WINDOWS";
+        macos   = macos   || f == "OS_MACOS";
+    }
+    auto starts = [&](const char* p) { return arch.compare(0, strlen(p), p) == 0; };
+    if (arch == "x86_64")                                              m = { 8, 8, macos ? 16 : 0 };
+    else if (arch == "aarch64" || arch == "arm64" || arch == "aarch64_be") m = { 8, 8, 16 };
+    else if (starts("riscv64") || arch == "wasm64")                    m = { 8, 8, 0 };
+    else if (arch == "arm" || starts("armv") || starts("thumbv"))      m = { 4, 4, 8 };
+    else if (arch == "wasm32" || starts("riscv32") || starts("xtensa")) m = { 4, 4, 0 };
+    else return false;
+    if (windows) m.clong = 4;   // LLP64: `long` stays 32 bits on 64-bit Windows
+    return true;
+}
+
+std::string CEmitter::typeLayout(SharedIdentifier type, const LayoutModel& m, LayoutUse use, int64_t& size,
+                               int64_t& align)
 {
     size = 0; align = 1;
+    // A layout is a question about types already judged where they were WRITTEN, so the walk judges and records
+    // nothing: it resolves a payload's or a field's type from inside whatever body asked — a `sizeof(T)` in
+    // `DynamicArray<Tree>` lays out the caller's `Tree` — and the per-file reach rule would blame the wrong file.
+    RefUnitScope quiet(this, nullptr);
+    const bool view = use != LayoutUse::Size, writable = use == LayoutUse::Blittable;
     auto intSize = [](const std::string& pk) -> int64_t {
         if (pk == "int8"  || pk == "uint8")  return 1;
         if (pk == "int16" || pk == "uint16") return 2;
@@ -21565,6 +21670,8 @@ std::string CEmitter::byteViewFieldLayout(SharedIdentifier type, int ptrBytes, b
         if (pk == "int64" || pk == "uint64" || pk == "float64") return 8;
         return 0;
     };
+    const char* owns = "its bytes are not its value: it owns, borrows or points at memory elsewhere";
+    auto ptrs = [&](int n) { if (view) return std::string(owns); size = n * m.ptr; align = m.ptr; return std::string(); };
     SharedIdentifier t = deepSubstType(type);
     if (!t) return "it has no type";
     if (!t->genericArg) {
@@ -21573,50 +21680,148 @@ std::string CEmitter::byteViewFieldLayout(SharedIdentifier type, int ptrBytes, b
             case IDENTIFIER_INT16_VAL: case IDENTIFIER_UINT16_VAL:                              size = 2; break;
             case IDENTIFIER_INT32_VAL: case IDENTIFIER_UINT32_VAL: case IDENTIFIER_FLOAT32_VAL: size = 4; break;
             case IDENTIFIER_INT64_VAL: case IDENTIFIER_UINT64_VAL: case IDENTIFIER_FLOAT64_VAL: size = 8; break;
-            case IDENTIFIER_ISIZE_VAL: case IDENTIFIER_USIZE_VAL:                               size = ptrBytes; break;
+            case IDENTIFIER_ISIZE_VAL: case IDENTIFIER_USIZE_VAL:                               size = m.ptr; break;
             case IDENTIFIER_BOOL_VAL:
                 if (writable) return "a `bool` holds only 0 or 1, so bytes written into it can make a value that is neither";
                 size = 1; break;
             case IDENTIFIER_CHAR_VAL:
                 if (writable) return "a `char` holds only a Unicode scalar value, so bytes written into it can make one that is not";
                 size = 4; break;
-            case IDENTIFIER_CLONG_VAL: case IDENTIFIER_CULONG_VAL: case IDENTIFIER_CCHAR_VAL:
-                return "a C type's size is the C compiler's choice; use a fixed-width number";
+            case IDENTIFIER_CLONG_VAL: case IDENTIFIER_CULONG_VAL:
+                if (view) return "a C type's size is the C compiler's choice; use a fixed-width number";
+                size = m.clong; break;
+            case IDENTIFIER_CCHAR_VAL: return "a C type's size is the C compiler's choice; use a fixed-width number";
+            case IDENTIFIER_STRING_VAL: return ptrs(3);   // kama_string: { data, len, cap }
+            case IDENTIFIER_VOID_VAL:   return "`void` has no size";
             default: break;
         }
         if (size) { align = size; return ""; }
     }
+    if (isRawPtrName(t)) {
+        if (view) return "a pointer is an address, which names nothing in another process";
+        size = align = m.ptr;
+        return "";
+    }
+    // The compiler's own value vectors and arrays, read off the type itself: `InlineArray<T>#(N)` is
+    // `struct { T v[N]; }`, laid out as its element; `Simd<T>#(N)` and its `Mask` are `vector_size` typedefs.
+    const std::string head = t->value ? *t->value : std::string();
+    if (t->genericArgs && t->genericArgs->size() == 2 && (head == "InlineArray" || head == "Simd" || head == "Mask")) {
+        int64_t n = 0, es = 0, ea = 1;
+        if (!constArgN((*t->genericArgs)[1], n) || n <= 0) return "its length is not a compile-time number";
+        if (head == "InlineArray") {
+            const std::string r = typeLayout((*t->genericArgs)[0], m, use, es, ea);
+            if (!r.empty()) return view ? "its element is not plain bytes: " + r : r;
+            size = es * n; align = ea;
+            return "";
+        }
+        if (head == "Mask" && view) return owns;
+        SharedIdentifier el = deepSubstType((*t->genericArgs)[0]);
+        es = el ? intSize(primKeyOfCType(cType(el))) : 0;
+        if (!es) return "its element is not a number";
+        size = es * n;
+        align = (m.vecCap && size > m.vecCap) ? m.vecCap : size;
+        return "";
+    }
+    if (head == "BindableFunctionPtr" && t->genericArg) return ptrs(4);   // { obj, ctrl, fn, release }
     const std::string ct = cType(t);
     auto en = _enums.find(ct);
-    if (en != _enums.end()) {
-        if (en->second.underlyingCType.empty())
-            return "an enum's size is the C compiler's choice unless it declares one (`type enum "
-                 + demangleForDisplay(ct) + " : uint8`)";
+    if (en != _enums.end()) {   // (a `type extern enum` must state its width, and the build holds it to C's)
+        if (en->second.underlyingCType.empty()) {
+            if (view)
+                return "an enum's size is the C compiler's choice unless it declares one (`type enum "
+                     + demangleForDisplay(ct) + " : uint8`)";
+            size = align = 4;   // a C `enum`: 4 on every arch modelled, and asserted (see the head)
+            return "";
+        }
         if (writable) return "an enum holds only its variants, so bytes written into it can make a tag that names none";
         size = align = intSize(primKeyOfCType(en->second.underlyingCType));
         return size ? "" : "its declared type is not a fixed-width integer";
     }
-    if (!ct.empty() && ct.back() == '*') return "a pointer is an address, which names nothing in another process";
-    auto ci = _classes.find(ct);
-    if (ci == _classes.end()) return "it is not plain data";
-    if (ci->second.isIntrinsicColl && (ci->second.collKind == CollKind::Fixed || ci->second.collKind == CollKind::Simd)) {
-        auto co = _collections.find(ct);
-        if (co == _collections.end()) return "it is not plain data";
-        int64_t es = 0, ea = 1;
-        if (co->second.elem) {   // `InlineArray<T>#(N)`: `struct { T v[N]; }`, laid out as its element
-            const std::string r = byteViewFieldLayout(co->second.elem, ptrBytes, writable, es, ea);
-            if (!r.empty()) return "its element is not plain bytes: " + r;
-        } else {                 // `Simd<T>#(N)`: a vector of a number, aligned to its whole size
-            es = ea = intSize(primKeyOfCType(co->second.elemCType));
-            if (!es) return "its element is not a number";
-        }
-        size = es * co->second.constValue;
-        align = ci->second.collKind == CollKind::Simd ? size : ea;
+    if (!ct.empty() && ct.back() == '*') {
+        if (view) return "a pointer is an address, which names nothing in another process";
+        size = align = m.ptr;
         return "";
     }
+    if (isSigType(ct)) {   // a `fnptr` is a C function pointer
+        if (view) return "a function pointer is an address, which names nothing in another process";
+        size = align = m.ptr;
+        return "";
+    }
+    const std::string tmpl = (t->value && (t->genericArg || !_classes.count(ct)))
+                           ? resolveUserName(*t->value, t->qualifier) : std::string();
+    if (isInterface(ct) || (!tmpl.empty() && _genericContracts.count(tmpl))) return ptrs(2);   // { obj, vtbl }
+    if (_externNames.count(ct)) return "its layout is the C header's, which kama does not read";
+    // A heap owner over a CONTRACT is the runtime's type-erased handle: `{obj, vtbl}` (`Owned`), `+ ctrl` (`Shared`,
+    // `Weak`), and with a stateful allocator `+ alloc, objsize`. Read from the registered collection once there is
+    // one, else from the templates exactly as registerGenericTypeInst routes it — a fold may run before collections.
+    {
+        int handle = 0;
+        const ClassInfo* alloc = nullptr;
+        auto co = _collections.find(ct);
+        if (co != _collections.end() && co->second.elemIsInterface
+            && (co->second.kind == CollKind::Owned || co->second.kind == CollKind::Shared || co->second.kind == CollKind::Weak)) {
+            handle = co->second.kind == CollKind::Owned ? 2 : 3;
+            auto ac = isIfaceAllocColl(co->second) ? _classes.find(co->second.allocType) : _classes.end();
+            if (ac != _classes.end()) alloc = &ac->second;
+        } else if (!tmpl.empty() && t->genericArg && _genericTypes.count(tmpl)
+                   && (isInterface(cType(t->genericArg)) || _genericContracts.count(resolveUserName(
+                           t->genericArg->value ? *t->genericArg->value : std::string(), t->genericArg->qualifier)))) {
+            auto ownsHeap = [&](const ClassInfo& c) {
+                for (auto& ifn : c.interfaces) if (resolveUserName(ifn, nullptr) == _heapOwnerContract) return true;
+                return false;
+            };
+            const ClassInfo& tc = _genericTypes[tmpl];
+            if (!_heapOwnerContract.empty() && ownsHeap(tc)) handle = tc.copyable ? 3 : 2;
+            else if (tmpl == _weakTmpl) handle = 3;
+            else for (auto& kv : _genericTypes) {
+                if (handle || !kv.second.copyable || !ownsHeap(kv.second)) continue;
+                for (auto& mk : kv.second.methods) {
+                    const SharedIdentifier& rt = mk.second.returnType;
+                    if (rt && rt->value && rt->genericArg && resolveUserName(*rt->value, rt->qualifier) == tmpl) { handle = 3; break; }
+                }
+            }
+            if (handle && t->genericArgs)
+                for (auto& a : *t->genericArgs) {
+                    auto ac = a ? _classes.find(cType(a)) : _classes.end();
+                    if (ac != _classes.end() && ac->first != preludeName("GlobalAllocator")
+                        && implementsContractTemplate(&ac->second, "Allocator")) { alloc = &ac->second; break; }
+                }
+        }
+        if (handle) {
+            if (view) return owns;
+            size = handle * m.ptr; align = m.ptr;
+            if (alloc) {
+                int64_t as = 0, aa = 1;
+                const std::string r = classLayout(*alloc, m, use, as, aa, nullptr);
+                if (!r.empty()) return "its allocator: " + r;
+                if (aa > align) align = aa;
+                size = (size + aa - 1) / aa * aa + as;
+                size = (size + m.ptr - 1) / m.ptr * m.ptr + m.ptr;   // objsize, a size_t
+                size = (size + align - 1) / align * align;
+            }
+            return "";
+        }
+    }
+    // A layout that reads itself — a field `InlineArray<uint8>#(sizeof(This))` — has no answer, in C either; the
+    // fold of the field's length would lay this type out again, without end. Keyed by the C name, so each instance
+    // of one template is its own entry.
+    if (!_layoutInProgress.insert(ct).second) return "its layout depends on its own size";
+    struct Leave { std::set<std::string>& s; std::string c; ~Leave() { s.erase(c); } } leave{ _layoutInProgress, ct };
+    auto ci = _classes.find(ct);
+    if (ci == _classes.end()) {
+        // A generic instance a fold reached before discovery registered it: walk its TEMPLATE under the binding
+        // registration would make, so the answer cannot depend on which pass asked first.
+        if (tmpl.empty() || !_genericTypes.count(tmpl)) return view ? "it is not plain data" : "it has no layout kama knows";
+        std::map<std::string, SharedIdentifier> bind;
+        if (!genericInstBinding(tmpl, t->genericArgs, bind)) return "its type arguments are not all bound";
+        return classLayout(_genericTypes[tmpl], m, use, size, align, nullptr, &bind);
+    }
     const ClassInfo& nc = ci->second;
-    if (nc.isVariant) return "an enum with payloads shares one storage among them, and the bytes a variant does not use are padding";
-    if (nc.kind == TypeKind::Value && !nc.isIntrinsicColl && !nc.isExternStruct) {
+    if (nc.isOpaqueParam) return "a type parameter has no size until it is bound";
+    if (nc.isExternStruct) return "its layout is the C header's, which kama does not read";
+    if (view) {
+        if (nc.isIntrinsicColl || nc.kind != TypeKind::Value) return owns;
+        if (nc.isVariant) return "an enum with payloads shares one storage among them, and the bytes a variant does not use are padding";
         const std::string need = writable ? "Blittable" : "BytesViewable";
         if (!(writable ? nc.genBlittable : nc.genBytesViewable)) {
             auto um = nc.derivedUnmet.find(need);
@@ -21624,54 +21829,96 @@ std::string CEmitter::byteViewFieldLayout(SharedIdentifier type, int ptrBytes, b
             return "`" + demangleForDisplay(ct) + "` does not declare `@generate(" + need + ")`";
         }
         std::string gap;
-        const std::string r = byteViewLayout(ct, ptrBytes, writable, size, align, &gap);
+        const std::string r = classLayout(nc, m, use, size, align, &gap);
         if (!r.empty()) return r;
         return gap.empty() ? "" : "`" + demangleForDisplay(ct) + "` has " + gap;
     }
-    return "its bytes are not its value: it owns, borrows or points at memory elsewhere";
+    if (nc.isIntrinsicColl) return "it has no layout kama knows";   // every intrinsic kind is answered above
+    return classLayout(nc, m, use, size, align, nullptr);
 }
 
-std::string CEmitter::byteViewLayout(const std::string& cls, int ptrBytes, bool writable, int64_t& size,
-                                     int64_t& align, std::string* gap)
+// The struct a class lowers to (emitStruct, emitVariantStruct): the vptr (a hierarchy's root) or the embedded base
+// first, then the fields in order — or `char kama_empty` when there is nothing, since C forbids an empty struct; an
+// enum with payloads is its tag then a union of one struct per payload-carrying variant. `@packed` puts every member
+// at alignment 1 and `@align(N)` raises the struct's, as GCC and clang apply them. `bind` walks a generic TEMPLATE as
+// one instance (see typeLayout); without it a registered class walks under its own context.
+std::string CEmitter::classLayout(const ClassInfo& ci, const LayoutModel& m, LayoutUse use, int64_t& size,
+                                    int64_t& align, std::string* gap, const std::map<std::string, SharedIdentifier>* bind)
 {
-    auto it = _classes.find(cls);
-    if (it == _classes.end()) return "it is not a type";
-    ClassInfo& ci = it->second;
-    if (ci.hasVtable) return "it carries a vtable pointer, an address rather than data";
-    if (ci.fields.empty() && !ci.base) return "it has no fields, and C gives it one byte that belongs to none";
+    const bool view = use != LayoutUse::Size;
+    if (ci.isExternStruct) return "its layout is the C header's, which kama does not read";
+    if (view && ci.hasVtable) return "it carries a vtable pointer, an address rather than data";
+    if (view && ci.fields.empty() && !ci.base) return "it has no fields, and C gives it one byte that belongs to none";
     auto plural = [](int64_t n) { return std::to_string(n) + (n == 1 ? " byte" : " bytes"); };
-    int64_t off = 0, maxA = 1;
-    std::string prev, why;
-    if (ci.base) {   // embedded first (`Base kama_base;`): its own fields, walked the same way
-        int64_t bs = 0, ba = 1;
-        std::string bgap;
-        why = byteViewLayout(ci.base->name, ptrBytes, writable, bs, ba, &bgap);
-        if (!why.empty()) why = "its base `" + demangleForDisplay(ci.base->name) + "`: " + why;
-        else if (!bgap.empty() && gap) *gap = bgap + " in its base `" + demangleForDisplay(ci.base->name) + "`";
-        off = bs; maxA = ci.packed ? 1 : ba; prev = "its base";
-    }
+    auto up = [](int64_t v, int64_t a) { return (v + a - 1) / a * a; };
+    RefUnitScope quiet(this, nullptr);   // judges and records nothing — see typeLayout
     const NsCtx savedCtx = _nsCtx;
     const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
-    enterClassCtx(ci);
-    for (auto& f : ci.fields) {
-        if (!why.empty()) break;
+    if (bind) {
+        auto hc = _genericTypeCtx.find(ci.name);
+        if (hc != _genericTypeCtx.end()) _nsCtx = hc->second;
+        _typeSubst = *bind;
+    } else {
+        enterClassCtx(ci);
+    }
+    std::string why;
+    int64_t off = 0, maxA = 1;
+    // One struct's members, laid out in order. `packed` is the struct's own `@packed`; a variant's payload is not.
+    auto member = [&](SharedIdentifier ft, const std::string& name, bool packed, std::string& prev) {
         int64_t s = 0, a = 1;
-        const std::string r = byteViewFieldLayout(f.type, ptrBytes, writable, s, a);
-        if (!r.empty()) { why = "field `" + f.name + "` (`" + kamaTypeText(f.type) + "`): " + r; break; }
-        if (ci.packed) a = 1;
+        const std::string r = typeLayout(ft, m, use, s, a);
+        if (!r.empty()) { why = "field `" + name + "` (`" + kamaTypeText(ft) + "`): " + r; return false; }
+        if (packed) a = 1;
         if (off % a) {
-            const int64_t pad = a - off % a;
-            if (gap && gap->empty()) *gap = plural(pad) + " of padding after `" + prev + "`";
-            off += pad;
+            if (gap && gap->empty()) *gap = plural(a - off % a) + " of padding after `" + prev + "`";
+            off = up(off, a);
         }
         off += s;
         if (a > maxA) maxA = a;
-        prev = f.name;
+        prev = name;
+        return true;
+    };
+    std::string prev;
+    if (ci.isVariant) {
+        int64_t tag = 4;   // a C `enum` (see typeLayout), unless `: IntType` pinned it
+        if (!ci.tagCType.empty()) {
+            const std::string pk = primKeyOfCType(ci.tagCType);
+            tag = pk == "int8" || pk == "uint8" ? 1 : pk == "int16" || pk == "uint16" ? 2
+                : pk == "int64" || pk == "uint64" ? 8 : 4;
+        }
+        int64_t uSize = 0, uAlign = 1;
+        for (auto& v : ci.variants) {
+            if (v.payload.empty() || !why.empty()) continue;
+            off = 0; maxA = 1;
+            for (auto& f : v.payload) if (!member(f.type, f.name, false, prev)) break;
+            const int64_t s = up(off, maxA);
+            if (s > uSize) uSize = s;
+            if (maxA > uAlign) uAlign = maxA;
+        }
+        maxA = tag > uAlign ? tag : uAlign;
+        off = uSize ? up(tag, uAlign) + uSize : tag;
+    } else {
+        if (ci.hasVtable && ci.vtableRoot == ci.name) {   // `const V* kama_vptr`
+            off = m.ptr; maxA = ci.packed ? 1 : m.ptr; prev = "its vtable pointer";
+        }
+        if (ci.base) {   // embedded first (`Base kama_base;`): its own members, walked the same way
+            int64_t bs = 0, ba = 1;
+            std::string bgap;
+            why = classLayout(*ci.base, m, use, bs, ba, gap ? &bgap : nullptr);
+            if (!why.empty()) why = "its base `" + demangleForDisplay(ci.base->name) + "`: " + why;
+            else if (!bgap.empty() && gap) *gap = bgap + " in its base `" + demangleForDisplay(ci.base->name) + "`";
+            if (ci.packed) ba = 1;
+            off = up(off, ba) + bs;
+            if (ba > maxA) maxA = ba;
+            prev = "its base";
+        }
+        for (auto& f : ci.fields) if (!why.empty() || !member(f.type, f.name, ci.packed, prev)) break;
+        if (why.empty() && off == 0) off = 1;   // `char kama_empty`
     }
     _nsCtx = savedCtx; _typeSubst = savedSubst;
     if (!why.empty()) return why;
     if (ci.alignN > maxA) maxA = ci.alignN;
-    const int64_t total = (off + maxA - 1) / maxA * maxA;
+    const int64_t total = up(off, maxA);
     if (total != off && gap && gap->empty()) *gap = plural(total - off) + " of padding at the end, after `" + prev + "`";
     size = total; align = maxA;
     return "";
@@ -21680,10 +21927,13 @@ std::string CEmitter::byteViewLayout(const std::string& cls, int ptrBytes, bool 
 // Both pointer widths, so a type is accepted only if it has no padding on any target. "" when the derive holds.
 std::string CEmitter::byteViewVerdict(const std::string& cls, bool writable)
 {
+    auto it = _classes.find(cls);
+    if (it == _classes.end()) return "it is not a type";
     std::string why[2], gap[2];
     for (int i = 0; i < 2; ++i) {
         int64_t s = 0, a = 1;
-        why[i] = byteViewLayout(cls, i ? 8 : 4, writable, s, a, &gap[i]);
+        const LayoutModel natural{ i ? 8 : 4, i ? 8 : 4, 0 };
+        why[i] = classLayout(it->second, natural, writable ? LayoutUse::Blittable : LayoutUse::BytesView, s, a, &gap[i]);
     }
     if (!why[1].empty()) return why[1];
     if (!why[0].empty()) return why[0];
@@ -21842,7 +22092,8 @@ bool CEmitter::byteViewElemOK(SharedIdentifier elem, bool writable)
 {
     int64_t s = 0, a = 1;
     if (!elem) return false;
-    return byteViewFieldLayout(elem, 4, writable, s, a).empty() && byteViewFieldLayout(elem, 8, writable, s, a).empty();
+    const LayoutUse use = writable ? LayoutUse::Blittable : LayoutUse::BytesView;
+    return typeLayout(elem, LayoutModel{ 4, 4, 0 }, use, s, a).empty() && typeLayout(elem, LayoutModel{ 8, 8, 0 }, use, s, a).empty();
 }
 
 // `bytes()` (and over plain NUMBERS `bytesMut()`) on a window whose elements are plain bytes (KR-127): a run of
@@ -22363,12 +22614,14 @@ std::string CEmitter::kamaTypeText(SharedIdentifier t)
         return kamaTypeText(s->second);
     std::string out = *t->value;
     if (t->genericArgs && !t->genericArgs->empty()) {
-        out += "<";
-        for (size_t i = 0; i < t->genericArgs->size(); ++i) {
-            if (i) out += ", ";
-            out += kamaTypeText((*t->genericArgs)[i]);
+        // A comptime argument has no name of its own: it is spelled after the type arguments, `#(…)`, as written
+        // (`Simd<float32>#(4)`, `InlineArray<uint8>#(sizeof(Header))`). Rendered as a type it was an empty slot.
+        std::string types, values;
+        for (auto& a : *t->genericArgs) {
+            if (a && a->constArgValue) values += (values.empty() ? "" : ", ") + unparseExpr(a->constArgValue);
+            else                       types  += (types.empty()  ? "" : ", ") + kamaTypeText(a);
         }
-        out += ">";
+        out += (types.empty() ? "" : "<" + types + ">") + (values.empty() ? "" : "#(" + values + ")");
     } else if (t->genericArg) {
         out += "<" + kamaTypeText(t->genericArg) + ">";
     }
@@ -28751,9 +29004,9 @@ void CEmitter::checkExposeValues()
 }
 
 // A `type extern value` emits no struct — the header's is used — so its field list is a claim nothing read:
-// `int32 a` over a header's `short a` compiled clean and `a: 70000` truncated silently (measured, KR-52). kama
-// does not model C layout (clang does, see `comptime assert`), so the check is handed to the C compiler, and
-// it therefore fails at BUILD rather than `kama check`. Order and a subset of the header's fields are fine —
+// `int32 a` over a header's `short a` compiled clean and `a: 70000` truncated silently (measured, KR-52). The
+// header's layout is the C compiler's to read — kama models every type but this one (KR-94) — so the check is
+// handed to the C compiler, and it therefore fails at BUILD rather than `kama check`. Order and a subset of the header's fields are fine —
 // every read is by name — so what is asserted is exactly what decides how a value is read: its size and class.
 void CEmitter::emitExternLayoutChecks()
 {
@@ -41582,6 +41835,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     collectEnumConformances(units);
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
+    _layoutsReady = true;   // every class has its fields, base and vptr: a layout fold may answer (foldLayout)
     resolveFriends();   // after all classes/functions are registered
     // Pre-scan `type adapter` blocks into _intrinsicConformances (target primKey -> contracts) BEFORE
     // collectCollections. A `Map<string, V>` local drives a generic-type-arg bound check DURING collection,
@@ -42298,10 +42552,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // once in the header before any body reads them. The value is ALWAYS one kama computed — the integer fold
     // or the interpreter's (a float, a table) — baked as a literal, so there is no C init-order dependency.
     // There used to be a third source, the initializer handed to C when kama could not fold it: that is how
-    // `public comptime usize U = sizeof(Box<uint16>);` built here while the same line is refused at module
-    // scope — a value the target's ABI decides, which a `comptime` never holds (tests/xfail/alignof_not_foldable).
-    // The maintainer's ruling (KR-93): one rule at every scope. `sizeof` of an aggregate stays usable in a body
-    // and in a `comptime assert`, where C checks it for the real target.
+    // `public comptime usize U = sizeof(Box<uint16>);` built here while the same line was refused at module
+    // scope. The maintainer's ruling (KR-93): one rule at every scope — and since KR-94 that rule folds a layout
+    // at all three, from the target's model (foldLayout).
     if (!_typeConsts.empty()) {
         for (auto& kv : _typeConsts) {
             TypeConstInfo& tc = kv.second;

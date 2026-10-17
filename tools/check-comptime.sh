@@ -49,37 +49,44 @@ if [ -f "$FE" ]; then
     fi
 fi
 
-# 4. M7 LAYOUT ASSERTS — the aggregate lowering of `comptime assert` is INVISIBLE to the exit-code suite.
-#    tests/comptime_assert_layout.kama passes as a fixture whether or not a single `_Static_assert` was
-#    emitted: nothing it returns depends on them. So the property is asserted on the transpiled C, the same
-#    way the baked CRC table above is. Both halves matter — that the asserts are THERE, and that a
-#    scalar predicate kama can answer itself does NOT become one (it would move a diagnostic the LSP can
-#    see to one it cannot, which is the whole reason the two lowerings are split).
+# 4. LAYOUT ASSERTS — invisible to the exit-code suite, so asserted on the transpiled C, the way the baked CRC
+#    table above is. Three facts, since KR-94 folds every layout kama has a model of:
+#      a. a baked layout is CHECKED by the C compiler: tests/comptime_assert_layout.kama's types each get one
+#         `_Static_assert(sizeof(T) == N && _Alignof(T) == A, …)`, which is what makes the model safe;
+#      b. a predicate over fixed-width scalars bakes nothing and emits nothing — kama answers it;
+#      c. a predicate over a layout kama has NO model of — a `type extern value`'s — still reaches C as the
+#         predicate itself, with kama's message carried through as the assert text.
 LA="$ROOT/tests/comptime_assert_layout.kama"
 if [ -f "$LA" ]; then
     lac="$tmp/layout.c"
     "$KAMA" transpile "$LA" -o "$lac" >/dev/null
-
-    # the aggregate cases reached C, with kama's message carried through as the assert text
-    for want in 'sizeof(std__math__Vec4)) == (16)' '_Alignof(std__math__Vec4)' 'sizeof(size_t)'; do
-        if ! grep -qF "_Static_assert((" "$lac" || ! grep -qF "$want" "$lac"; then
-            echo "check-comptime: FAIL — no emitted _Static_assert matching '$want' (M7 aggregate lowering did not fire?)" >&2
-            grep -c '_Static_assert' "$lac" >&2 || true
+    for want in 'sizeof(std__math__Vec4) == 16 && _Alignof(std__math__Vec4) == 4' 'sizeof(size_t) == '; do
+        if ! grep -qF "_Static_assert($want" "$lac"; then
+            echo "check-comptime: FAIL — no baked-layout _Static_assert matching '$want' (a folded layout went unchecked?)" >&2
+            grep '_Static_assert' "$lac" | head -5 >&2
             exit 1
         fi
     done
 
-    # a scalar predicate is answered BY KAMA and must not reach C. `sizeof(int32)` folds (M6), so if the
-    # scalar fixture emitted an assert at all, the lowering rule picked the wrong side.
     SA="$ROOT/tests/comptime_assert_scalar.kama"
     if [ -f "$SA" ]; then
         sac="$tmp/scalar.c"
         "$KAMA" transpile "$SA" -o "$sac" >/dev/null
         if grep -q '_Static_assert' "$sac"; then
-            echo "check-comptime: FAIL — a foldable scalar `comptime assert` emitted a _Static_assert; it must be answered by kama (so `kama check` and the LSP see it)" >&2
+            echo "check-comptime: FAIL — a fixed-width scalar `comptime assert` emitted a _Static_assert; kama answers it, and a scalar's size needs no check" >&2
             grep '_Static_assert' "$sac" | head -3 >&2; exit 1
+        fi
+    fi
+
+    XA="$ROOT/tests/xfail/comptime_assert_extern_layout.d/main.kama"
+    if [ -f "$XA" ]; then
+        xac="$tmp/extern.c"
+        "$KAMA" transpile "$XA" -o "$xac" >/dev/null
+        if ! grep -qF '_Static_assert((sizeof(Sample)) == (8), "kama: a Sample is a level and a gain' "$xac"; then
+            echo "check-comptime: FAIL — a layout claim over a \`type extern value\` did not reach C as its predicate" >&2
+            grep '_Static_assert' "$xac" | head -3 >&2; exit 1
         fi
     fi
 fi
 
-echo "check-comptime: PASS (CRC table baked at compile time; comptime fn not emitted; foreach over a constant is warning-free; M7 layout asserts lowered to C, scalar ones not)"
+echo "check-comptime: PASS (CRC table baked at compile time; comptime fn not emitted; foreach over a constant is warning-free; baked layouts asserted in C, scalar predicates not, an extern layout claim lowered to C)"

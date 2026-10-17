@@ -1,0 +1,107 @@
+// KR-94: a type's `sizeof` and `alignof` are compile-time values — at module, type and local scope, in a comptime
+// argument and in a `comptime assert` — for every kind of type, folded from a model of this build's target. The
+// C compiler lays a struct out, not kama, so each baked type also gets a `_Static_assert` in the emitted C: a model
+// that disagreed would fail the BUILD, never this program. Every value below is then checked against the C
+// compiler's own run-time `sizeof`/`alignof`, which makes the fixture target-independent — it returns how many
+// agreed, on a 64-bit host, wasm32 and Windows' 4-byte `clong` alike.
+//
+// Each of these was refused before, one fixture apiece: a generic aggregate in a type's or a local's constant, any
+// `alignof`, `sizeof(usize)` and `sizeof(clong)` (platform-varying), and an aggregate as a comptime argument.
+import { std::collections::DynamicArray, std::collections::Map, std::memory::Owned, std::memory::Shared,
+         std::memory::Weak };
+
+type contract Shape for value, resource { fn int64 area(); }
+type value Sq implements Shape { int64 s; public ctor of(int64 s) { this.s = s; } public fn int64 area() { return this.s; } }
+type enum Color { Red, Green }                      // a C `enum`
+type enum Small : uint8 { A, B }                    // its declared width
+type enum Tok { Num(int64 v), Word(string w), End } // a tag, then a union of the payloads
+type enum Tiny : uint8 { P(uint8 a), Q }            // a pinned tag
+fnptr int32 Op(int32 x);
+type resource Res { DynamicArray<int32> a; public ctor make() { this.a = DynamicArray.empty(); } }
+type virtual(maxDepth: 1) resource Base {           // the vptr first
+    int32 b;
+    public ctor make() { this.b = 1; }
+    protected virtual fn int32 f() { return 1; }
+}
+type final resource Der extends Base {              // the base embedded first
+    uint8 d;
+    public ctor make() { this.base = Base.make(); this.d = 2; }
+    protected override fn int32 f() { return 2; }
+}
+type value Empty { public ctor make() { } }         // C forbids an empty struct: one byte
+@packed type value Pk { public uint8 a; public uint32 b; }
+@align(16) type value Al { public uint8 a; }
+type value Box<T> { public T v; public ctor make(T v) { this.v = v; } }
+type value Mixed {
+    public bool b; public char c; public usize u; public float64 d; public clong l; public UnsafePtr<int32> p;
+    public Op f; public Color col; public Small sm;
+}
+type value Header { public uint32 tag; public uint64 stamp; }
+type value Frame {                                  // a size from a layout drives a field's type
+    public InlineArray<uint8>#(sizeof(Header)) raw;
+    public uint8 kind;
+    public ctor make() { this.raw = [0; (sizeof(Header))]; this.kind = 1; }
+}
+type value Cfg {                                    // a TYPE's constants
+    public int32 x;
+    public comptime usize UNIT  = sizeof(Box<uint16>);
+    public comptime usize ALIGN = alignof(int32);
+    public ctor make() { this.x = 0; }
+}
+
+comptime assert(cond: sizeof(Frame) == sizeof(Header) + 1, msg: "a byte array is laid out unpadded");
+comptime assert(cond: alignof(Al) == 16, msg: "@align(16) raises the alignment");
+
+fn int32 idN() comptime(int32 N) { return N; }
+fn int32 same(usize a, usize b) { if (a == b) { return 1; } return 0; }
+
+fn int32 main() {
+    comptime usize LOCAL = sizeof(Box<uint32>);     // a LOCAL constant
+    int32 n = same(a: LOCAL, b: sizeof(Box<uint32>)) + same(a: Cfg::UNIT, b: sizeof(Box<uint16>))
+            + same(a: Cfg::ALIGN, b: alignof(int32));
+    // A comptime ARGUMENT: the platform-varying sizes and an aggregate.
+    n = n + same(a: cast<usize>(idN()#(cast<int32>(sizeof(usize)))), b: sizeof(usize))
+          + same(a: cast<usize>(idN()#(cast<int32>(sizeof(clong)))), b: sizeof(clong))
+          + same(a: cast<usize>(idN()#(cast<int32>(sizeof(Header)))), b: sizeof(Header));
+    comptime usize S01 = sizeof(string);              comptime usize A01 = alignof(string);
+    comptime usize S02 = sizeof(Optional<int32>);     comptime usize A02 = alignof(Optional<int32>);
+    comptime usize S03 = sizeof(Result<int32, Owned<Error>>);
+    comptime usize S04 = sizeof(Owned<Sq>);           comptime usize S05 = sizeof(Shared<Sq>);
+    comptime usize S06 = sizeof(Weak<Sq>);            comptime usize S07 = sizeof(Owned<Shape>);
+    comptime usize S08 = sizeof(Shared<Shape>);       comptime usize S09 = sizeof(InlineArray<uint16>#(3));
+    comptime usize A09 = alignof(InlineArray<uint16>#(3));
+    comptime usize S10 = sizeof(Simd<float32>#(4));   comptime usize A10 = alignof(Simd<float32>#(4));
+    comptime usize S11 = sizeof(Color);               comptime usize S12 = sizeof(Small);
+    comptime usize S13 = sizeof(Tok);                 comptime usize A13 = alignof(Tok);
+    comptime usize S14 = sizeof(Tiny);                comptime usize S15 = sizeof(Op);
+    comptime usize S16 = sizeof(BindableFunctionPtr<Op>);
+    comptime usize S17 = sizeof(Res);                 comptime usize S18 = sizeof(Base);
+    comptime usize S19 = sizeof(Der);                 comptime usize S20 = sizeof(Empty);
+    comptime usize S21 = sizeof(Pk);                  comptime usize A21 = alignof(Pk);
+    comptime usize S22 = sizeof(Al);                  comptime usize S23 = sizeof(Box<uint16>);
+    comptime usize S24 = sizeof(DynamicArray<int64>); comptime usize S25 = sizeof(Map<int32, int32>);
+    comptime usize S26 = sizeof(Mixed);               comptime usize A26 = alignof(Mixed);
+    comptime usize S27 = sizeof(Shape);               comptime usize S28 = sizeof(Box<Box<int8>>);
+    comptime usize S29 = sizeof(Optional<string>);    comptime usize S30 = sizeof(Mask<float32>#(4));
+    comptime usize S31 = sizeof(Frame);               comptime usize S32 = sizeof(clong);
+    n = n + same(a: S01, b: sizeof(string)) + same(a: A01, b: alignof(string))
+          + same(a: S02, b: sizeof(Optional<int32>)) + same(a: A02, b: alignof(Optional<int32>))
+          + same(a: S03, b: sizeof(Result<int32, Owned<Error>>))
+          + same(a: S04, b: sizeof(Owned<Sq>)) + same(a: S05, b: sizeof(Shared<Sq>)) + same(a: S06, b: sizeof(Weak<Sq>))
+          + same(a: S07, b: sizeof(Owned<Shape>)) + same(a: S08, b: sizeof(Shared<Shape>))
+          + same(a: S09, b: sizeof(InlineArray<uint16>#(3))) + same(a: A09, b: alignof(InlineArray<uint16>#(3)))
+          + same(a: S10, b: sizeof(Simd<float32>#(4))) + same(a: A10, b: alignof(Simd<float32>#(4)))
+          + same(a: S11, b: sizeof(Color)) + same(a: S12, b: sizeof(Small))
+          + same(a: S13, b: sizeof(Tok)) + same(a: A13, b: alignof(Tok))
+          + same(a: S14, b: sizeof(Tiny)) + same(a: S15, b: sizeof(Op)) + same(a: S16, b: sizeof(BindableFunctionPtr<Op>))
+          + same(a: S17, b: sizeof(Res)) + same(a: S18, b: sizeof(Base)) + same(a: S19, b: sizeof(Der))
+          + same(a: S20, b: sizeof(Empty)) + same(a: S21, b: sizeof(Pk)) + same(a: A21, b: alignof(Pk))
+          + same(a: S22, b: sizeof(Al)) + same(a: S23, b: sizeof(Box<uint16>))
+          + same(a: S24, b: sizeof(DynamicArray<int64>)) + same(a: S25, b: sizeof(Map<int32, int32>))
+          + same(a: S26, b: sizeof(Mixed)) + same(a: A26, b: alignof(Mixed))
+          + same(a: S27, b: sizeof(Shape)) + same(a: S28, b: sizeof(Box<Box<int8>>))
+          + same(a: S29, b: sizeof(Optional<string>)) + same(a: S30, b: sizeof(Mask<float32>#(4)))
+          + same(a: S31, b: sizeof(Frame)) + same(a: S32, b: sizeof(clong));
+    Frame f = Frame.make();
+    return n + same(a: cast<usize>(f.raw.length()), b: sizeof(Header));   // 46 when every fold is C's own answer
+}

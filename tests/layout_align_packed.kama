@@ -1,13 +1,13 @@
 // `@align(N)` / `@packed` — LAYOUT CONTROL, the companion to the layout VERIFICATION that shipped first.
-// kama could already KNOW a layout (`sizeof`/`alignof` fold; `comptime assert` hands the rest to the C
-// compiler as a `_Static_assert`) but could not STATE one — which an engine needs for a vertex buffer or
-// an std140 block, and an MCU needs for a packed register block or a wire struct.
+// kama could already KNOW a layout (`sizeof`/`alignof`, checked by `comptime assert`) but could not STATE
+// one — which an engine needs for a vertex buffer or an std140 block, and an MCU needs for a packed register
+// block or a wire struct.
 //
-// It stays PASSTHROUGH on purpose: kama emits C and the C compiler lays the struct out, so kama does not
-// acquire a second source of truth that could disagree with it per target. `@align(N)` lowers to
-// `__attribute__((aligned(N)))` and `@packed` to `((packed))`, both as a suffix on the emitted struct —
-// and the assertions below are on `sizeof`/`alignof`, i.e. on what the toolchain ACTUALLY did, not on
-// what kama asked for. That is the whole design: state the constraint, then verify it.
+// It stays PASSTHROUGH: kama emits C and the C compiler lays the struct out. `@align(N)` lowers to
+// `__attribute__((aligned(N)))` and `@packed` to `((packed))`, both as a suffix on the emitted struct. kama's
+// compile-time `sizeof`/`alignof` predict the result (KR-94) and every prediction is a `_Static_assert` in the
+// C, so the assertions below hold what the toolchain ACTUALLY did, not what kama asked for. That is the whole
+// design: state the constraint, then verify it.
 //
 // Types only. Aligning an object is `@align(64) type value Line` + a `Line` binding, so there is one way
 // to do it rather than two (Rust makes the same call: `#[repr(align(N))]` is types-only and a static is

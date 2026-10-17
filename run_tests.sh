@@ -1041,13 +1041,13 @@ done
 # So: every positive fixture must pass `check`, and every negative fixture must fail it. `check` does no C
 # compilation, so this is cheap and target-independent — it runs on every leg.
 analysis_skip() {   # fixtures where `check` legitimately cannot match `build`
-    # M7: a `comptime assert` over an AGGREGATE's layout lowers to a C11 `_Static_assert`, because kama
-    # does not model struct layout — clang does. So the rejection comes from the C compiler, which `check`
-    # never runs. This is not the hazard the leg guards against (a diagnostic kama COULD give and drops on
-    # the check path); it is the documented cost of letting the target answer a target question, and the
-    # docs say so at the surface. Adding an entry here is a deliberate act — read the note above first.
+    # M7: a `comptime assert` over a layout kama has no model of — a `type extern value`'s, which is its C
+    # header's (KR-94 models every other type) — lowers to a C11 `_Static_assert`. So the rejection comes from
+    # the C compiler, which `check` never runs. This is not the hazard the leg guards against (a diagnostic kama
+    # COULD give and drops on the check path); it is the documented cost of letting the target answer a target
+    # question, and the docs say so at the surface. Adding an entry here is a deliberate act — read the note above.
     case "$1" in
-        comptime_assert_layout_false) return 0 ;;
+        comptime_assert_extern_layout) return 0 ;;
         # The same cost for a `type extern value` field checked against its C header: the header's layout is
         # the C compiler's to read, so the mismatch is a `_Static_assert` only `kama build` reaches.
         extern_value_layout) return 0 ;;

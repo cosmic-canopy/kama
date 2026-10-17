@@ -9,8 +9,8 @@
 //   2. it did not enter a `comptime` initializer or a `comptime assert` predicate, at any scope;
 //   3. a generic type's instance had its member SIGNATURES scanned and never its member BODIES.
 //
-// Layout is the target's (kama emits C and clang lays out the structs), so the assertions are relative
-// wherever the answer differs between x86_64/arm64 and wasm32.
+// Layout is the target's (kama emits C and the C compiler lays out the structs; kama's fold is a checked
+// prediction, KR-94), so the assertions are relative wherever the answer differs between 64-bit and wasm32.
 import { std::collections::DynamicArray };
 
 type value Box<T> {
@@ -18,12 +18,12 @@ type value Box<T> {
     public ctor make(T v) { this.v = v; }
 }
 
-// (2) module scope: an aggregate `sizeof` predicate lowers to C11 `_Static_assert`.
+// (2) module scope: an aggregate `sizeof` predicate, folded — and the instance's layout asserted in the C.
 comptime assert(cond: sizeof(Box<int8>) == 1, msg: "a one-byte Box");
 
-// (2) a type's member `comptime assert`s. (A `comptime` CONSTANT may no longer hold a struct's size at any
-// scope — the target's ABI decides it, KR-93 — so the type-associated constant this case used to carry became
-// a second assertion, which names its instance the same way.)
+// (2) a type's member `comptime assert`s, which name their instances the same way. (This case once carried a
+// type-associated constant, refused from KR-93 until KR-94 gave a struct's size a model; tests/comptime_layout
+// holds a type's constant now.)
 type value Cfg {
     public int32 x;
     public ctor make() { this.x = 0; }

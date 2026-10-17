@@ -8,11 +8,13 @@
 //   - an extern enum as a `type extern value` field, held to the header's layout;
 //   - an `expose fn` taking and returning one, called from C through the generated header, which includes the
 //     C header rather than redefining the enum;
-//   - the enum declared identically in two modules, and imported from one of them.
+//   - the enum declared identically in two modules, and imported from one of them;
+//   - its size as a compile-time value (KR-94): the width it states, which the build holds to the C type's.
 import { externenum::gfx::bitsOf };
 extern "fmt.h";
 
 type extern enum Format : int32 { FORMAT_UNDEFINED, FORMAT_RGBA8, FORMAT_BGRA8 }
+comptime usize FORMAT_BYTES = sizeof(Format);
 
 @generate(of)
 type extern value Surface { public int32 width; public Format format; }
@@ -33,7 +35,8 @@ unsafe fn int32 run() {
          + (surface_score(s: Surface.of(width: 1, format: f)) - 27)            //  1: 1 + 27, the header's value
          + arm                                                                 //  2
          + casts                                                               // 10
-         + host_calls();                                                       //  5
+         + host_calls()                                                        //  5
+         + (cast<int32>(FORMAT_BYTES) - 4);                                    //  0: `: int32`
 }
 
 fn int32 main() { return run(); }   // 50
