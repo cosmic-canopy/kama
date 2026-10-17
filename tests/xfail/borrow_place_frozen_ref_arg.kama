@@ -1,0 +1,10 @@
+// A call host freezes every `ref`/`const ref` argument too (KR-123): `bigger` may return either of them, so writing `p`
+// may write the place `big` names behind its back. Freezing the receiver alone would be unsound for a free `fn ref`.
+fn ref int32 bigger(ref int32 a, ref int32 b) { if (a > b) { return a; } return b; }
+fn int32 main()
+{
+    int32 p = 1;
+    int32 q = 2;
+    borrow bigger(a: ref p, b: ref q) as big { p = 5; }
+    return q;
+}

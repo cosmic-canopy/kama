@@ -56,6 +56,21 @@ path** — which is what lets the caller's definite-assignment analysis count th
 The `out` at the call site is mandatory because both lower to `T*`, and without it no reader could tell a
 borrow from a fill.
 
+## There is no `ref` local: `borrow` names a place for a block
+
+`auto& j = rig.joints[k];` (C++) and `let j = &mut rig.joints[k];` (Rust) have no kama spelling, and `ref Joint j =
+…;` is a parse error that says why. A reference local is safe only while nothing moves what it points at, and that
+region — from the declaration to the last use — is one nobody wrote down; C++ does not check it and Rust infers it.
+kama makes the region a block you write:
+
+```kama fragment
+borrow rig.joints[k] as j { j.angle = j.angle + 10; bend(joint: ref j); }   // `j` IS rig.joints[k]
+borrow scores.getRefMut(key: name) as s { s = s + 1; }                     // any call that returns `ref`
+```
+
+Inside the block `rig.joints` cannot grow (it is frozen), so `j` cannot dangle; a disjoint field of `rig` stays
+writable, and anything may be read. A read-only place gives a `const` alias.
+
 ## A free function's bounds go in its type-parameter list
 
 ```kama fragment

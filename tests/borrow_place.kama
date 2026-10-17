@@ -1,0 +1,49 @@
+// `borrow <place> as L { … }` (KR-123): any place gets a name for a block — an element, a nested element, a field path,
+// or a call that returns `ref`/`const ref`, with any arguments. `L` IS that place: a write through it changes the
+// place, it passes on as `ref`, and it is `const` when the place is read-only. The place's roots are held for the block
+// — a field path itself, an element's container, a call's receiver and every `ref`/`const ref` argument — so nothing
+// moves or frees what `L` names; a DISJOINT sibling stays writable, and anything may still be read. An argument's
+// temporary (the `"a"` below) lives for the window, since a `const ref` result may point into it. The place is named
+// once, when the window opens: an index changed inside the block does not move it.
+// There is no `ref` local (`ref T x = …;`): its host would have to stay frozen until `x`'s last use, a region nobody
+// wrote; `borrow`'s region is its block. Returns 42.
+import { std::collections::Map, std::collections::DynamicArray };
+
+type value In { public int32 x; public int32 y; public ctor make() { this.x = 1; this.y = 2; } }
+type value Out { public In inner; public int32 b; public ctor make() { this.inner = In.make(); this.b = 0; } }
+
+fn ref int32 bigger(ref int32 a, ref int32 b) { if (a > b) { return a; } return b; }
+fn void inc(ref int32 x) { x += 1; }
+fn T ident<T>(T x) { return x; }                  // a generic call infers its `T` from an alias, as from a local
+
+fn int32 main() {
+    Map<string, int32> m = Map.empty();
+    m.put(key: "a", value: 10);
+    borrow m.getRefMut(key: "a") as v { v += 5; inc(x: ref v); }                 // a `ref` call with an argument: 16
+    int32 got = 0;
+    borrow m.getRef(key: "a") as cv { got = cv; }                                  // a `const ref` call: a `const` alias
+
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1); xs.add(item: 2); xs.add(item: 3);
+    borrow xs[1] as e { e = e * 10; }                                              // an element: 20
+    int32 i = 0;
+    borrow xs[i] as first { i = 2; first = 7; }                                    // named once: xs[0], not xs[2]
+
+    DynamicArray<DynamicArray<int32>> g = DynamicArray.empty();
+    g.add(item: copy xs);
+    borrow g[0][2] as c { c = 9; }                                                 // a nested element
+
+    Out o = Out.make();
+    borrow o.inner.x as ix { ix = 30; o.b = 4; }                                   // a field path, and a disjoint sibling
+    borrow o.inner as io { borrow io.y as iy { iy = 40; } }                        // a window inside a window
+
+    int32 p = 3; int32 q = 9;
+    borrow bigger(a: ref p, b: ref q) as big { big = 100; }                        // a free `fn ref` over two `ref`s
+
+    int32 inferred = 0;
+    borrow xs[1] as e2 { inferred = ident(x: e2); }                               // T = int32, read through the alias
+
+    if (inferred != 20 || got != 16 || xs[0] != 7 || xs[1] != 20 || xs[2] != 3 || g[0][2] != 9) { return 1; }
+    if (o.inner.x != 30 || o.inner.y != 40 || o.b != 4 || p != 3 || q != 100) { return 2; }
+    return 42;
+}

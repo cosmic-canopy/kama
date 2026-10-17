@@ -1,0 +1,11 @@
+// A `comptime fn` borrows its own locals' elements and field paths (KR-123); a call that returns a place runs at run time
+// only, so it has no compile-time form.
+type value Q { public int32 x; public ctor make() { this.x = 1; } public fn ref int32 first() { return this.x; } }
+comptime fn int32 viaCall()
+{
+    Q q = Q.make();
+    borrow q.first() as f { f = 5; }
+    return q.x;
+}
+comptime int32 K = viaCall();
+fn int32 main() { return K; }

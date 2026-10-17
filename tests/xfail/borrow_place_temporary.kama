@@ -1,0 +1,9 @@
+// `borrow` names a place (KR-123), and a field of a call's result has none that outlives the statement: bind the result
+// to a local first. One sentence, and no "cannot resolve `v`" after it.
+type value In { public int32 x; public ctor make() { this.x = 1; } }
+fn In mk() { return In.make(); }
+fn int32 main()
+{
+    borrow mk().x as v { v = 2; }
+    return 0;
+}

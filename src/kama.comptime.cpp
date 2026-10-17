@@ -50,7 +50,7 @@ bool CEmitter::ctStmtKindSupported(const ASTNode* n)
         || dynamic_cast<const IfNode*>(n) || dynamic_cast<const WhileNode*>(n) || dynamic_cast<const DoWhileNode*>(n)
         || dynamic_cast<const ForNode*>(n) || dynamic_cast<const ForEachNode*>(n) || dynamic_cast<const BreakNode*>(n)
         || dynamic_cast<const ContinueNode*>(n) || dynamic_cast<const ReturnNode*>(n)
-        || dynamic_cast<const ExpressionStatementNode*>(n);
+        || dynamic_cast<const ExpressionStatementNode*>(n) || dynamic_cast<const BorrowNode*>(n);
 }
 const char* const CEmitter::kCtUnsupportedExpr = "unsupported expression in comptime fn (no I/O, allocation, pointers, or strings)";
 const char* const CEmitter::kCtUnsupportedStmt = "unsupported statement in comptime fn (no I/O, allocation, unsafe, or spawn)";
@@ -475,6 +475,13 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
     // --- identifier: a local frame var, else a module/type comptime constant ---
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value) {
+            auto al = (!id->qualifier || id->qualifier->empty()) ? env.aliases.find(*id->value) : env.aliases.end();
+            if (al != env.aliases.end()) {   // a `borrow` alias reads the place its window named
+                CTValue* slot = ctSlot(env, al->second, n);
+                if (!slot) return false;
+                out = *slot;
+                return true;
+            }
             auto it = env.vars.find(*id->value);
             if (it != env.vars.end()) { out = it->second; return true; }
             if (ctResolveConst(std::static_pointer_cast<IdentifierNode>(e), out)) return true;
@@ -792,6 +799,29 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         return CTFlow::Normal;
     }
 
+    // `borrow <place> as L { … }` (KR-123): `L` names the place for the block — resolved now, indices and all, so a later
+    // change to an index variable does not move it, as the run-time alias's pointer does not move. The run-time
+    // checks (the host's roots frozen, a read-only place's alias `const`) already held when the body was emitted.
+    if (auto* bw = dynamic_cast<BorrowNode*>(n)) {
+        std::vector<std::string> added;
+        if (bw->bindings)
+            for (auto& b : *bw->bindings) {
+                if (!b || !b->host || !b->alias || !b->alias->value) continue;
+                if (!dynamic_cast<ElementAccessNode*>(b->host.get()) && !dynamic_cast<MemberAccessNode*>(b->host.get())) {
+                    ctFail("a `comptime fn` borrows an element or a field path of its own locals — a call that returns a "
+                           "place, or a view, has no compile-time form", s);
+                    return CTFlow::Fail;
+                }
+                CTPlace p;
+                if (!ctPlaceOf(b->host, env, p) || !ctSlot(env, p, n)) return CTFlow::Fail;
+                env.aliases[*b->alias->value] = p;
+                added.push_back(*b->alias->value);
+            }
+        CTFlow f = ctEvalStmt(bw->body, env, ret);
+        for (auto& al : added) env.aliases.erase(al);
+        return f;
+    }
+
     if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
         // Fixed-array local (`InlineArray<T,N> t = [0; N];` / `= [a, b, c];`) — the table carrier.
         CTValue elemProto; int64_t n64; std::string elemCType;
@@ -841,6 +871,29 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
 
     if (auto* a = dynamic_cast<AssignmentNode*>(n)) {
         if (a->token != EQ) { ctFail(kCtPlainAssign, s); return CTFlow::Fail; }
+        // A write through a `borrow` alias, or into a place inside one: the root is the alias, and the place is the one
+        // its window named, extended by this target's own fields and indices.
+        {
+            SharedExpression r = a->unaryExpression;
+            for (;;) {
+                if (auto* m = dynamic_cast<MemberAccessNode*>(r.get())) { r = m->expression; continue; }
+                if (auto* ea = dynamic_cast<ElementAccessNode*>(r.get())) {
+                    r = ea->expression ? ea->expression : std::static_pointer_cast<ExpressionNode>(ea->identifier); continue;
+                }
+                break;
+            }
+            auto* rid = dynamic_cast<IdentifierNode*>(r.get());
+            if (rid && rid->value && (!rid->qualifier || rid->qualifier->empty()) && env.aliases.count(*rid->value)) {
+                CTPlace p;
+                if (!ctPlaceOf(a->unaryExpression, env, p)) return CTFlow::Fail;
+                CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
+                CTValue* slot = ctSlot(env, p, n);
+                if (!slot) return CTFlow::Fail;
+                ctCoerceTo(*slot, val);
+                *slot = val;
+                return CTFlow::Normal;
+            }
+        }
         // Fixed-array element write `t[i] = v` — the table-fill primitive.
         if (auto* ea = dynamic_cast<ElementAccessNode*>(a->unaryExpression.get())) {
             SharedExpression base = ea->expression ? ea->expression
@@ -1796,4 +1849,58 @@ void CEmitter::foldEnumMembers()
             int64_t v;
             enumMemberValue(kv.second, i, v);
         }
+}
+
+// A place expression — a local, `this`, a `borrow` alias, and fields and indices inside them — resolved to its root and
+// the steps that reach it, each index evaluated once (KR-123).
+bool CEmitter::ctPlaceOf(SharedExpression e, CTEnv& env, CTPlace& out)
+{
+    ASTNode* n = e.get();
+    if (dynamic_cast<ThisAccessNode*>(n)) { out.root = "this"; out.steps.clear(); return true; }
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (!id->value || (id->qualifier && !id->qualifier->empty())) return ctFail("a compile-time place is a local, `this` or a field or element inside one", e);
+        auto al = env.aliases.find(*id->value);
+        if (al != env.aliases.end()) { out = al->second; return true; }
+        if (env.vars.count(*id->value)) { out.root = *id->value; out.steps.clear(); return true; }
+        auto self = env.vars.find("this");   // a bare field of `this`, inside a value type's member
+        if (self != env.vars.end() && self->second.isStruct)
+            for (auto& fname : self->second.fieldNames)
+                if (fname == *id->value) { out.root = "this"; out.steps.clear(); CTStep st; st.field = fname; out.steps.push_back(st); return true; }
+        return ctFail(ctUnknownIdentifier(*id->value).c_str(), e);
+    }
+    if (auto* m = dynamic_cast<MemberAccessNode*>(n)) {
+        if (!m->identifier || !m->identifier->value || !ctPlaceOf(m->expression, env, out)) return m->identifier ? false : ctFail("unsupported field place at compile time", e);
+        CTStep st; st.field = *m->identifier->value; out.steps.push_back(st);
+        return true;
+    }
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        SharedExpression base = ea->expression ? ea->expression : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        if (!base || !ea->expressionlist || ea->expressionlist->size() != 1) return ctFail("a compile-time element place takes one index", e);
+        if (!ctPlaceOf(base, env, out)) return false;
+        CTValue idx; if (!ctEvalExpr((*ea->expressionlist)[0], env, idx)) return false;
+        CTStep st; st.isIndex = true; st.index = ctAsI(idx); out.steps.push_back(st);
+        return true;
+    }
+    return ctFail("a compile-time place is a local, `this` or a field or element inside one", e);
+}
+
+CEmitter::CTValue* CEmitter::ctSlot(CTEnv& env, const CTPlace& p, ASTNode* at)
+{
+    auto it = env.vars.find(p.root);
+    if (it == env.vars.end()) { ctFail(ctUnknownIdentifier(p.root).c_str(), at); return nullptr; }
+    CTValue* slot = &it->second;
+    for (const CTStep& st : p.steps) {
+        if (st.isIndex) {
+            if (!slot->isArray) { ctFail("an index applies to a fixed array", at); return nullptr; }
+            if (st.index < 0 || (size_t)st.index >= slot->elems.size()) { ctFail("comptime fixed-array index out of bounds", at); return nullptr; }
+            slot = &slot->elems[(size_t)st.index];
+        } else {
+            if (!slot->isStruct) { ctFail(("`." + st.field + "` is not a field of a value").c_str(), at); return nullptr; }
+            size_t k = 0;
+            while (k < slot->fieldNames.size() && slot->fieldNames[k] != st.field) ++k;
+            if (k == slot->fieldNames.size()) { ctFail(("no field `" + st.field + "`").c_str(), at); return nullptr; }
+            slot = &slot->elems[k];
+        }
+    }
+    return slot;
 }

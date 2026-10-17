@@ -1,0 +1,11 @@
+// A place a `spawn`ed child holds by `ref` cannot be named for a window before the scope joins it (KR-123) — the scope's
+// own rule answers first: the body may not use what a child holds, read or write, until the join.
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+fn void work(ref DynamicArray<int32> xs) { }
+fn int32 main()
+{
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    scope { spawn work(xs: ref xs); borrow xs[0] as e { } }
+    return 0;
+}

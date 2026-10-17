@@ -19,8 +19,8 @@ type resource Buf implements Counted {
     DynamicArray<int32> a;
     public ctor empty() { this.a = DynamicArray.empty(); }
     public fn void add(int32 v) { this.a.add(item: v); }
-    public fn int32 size() { return this.a.length(); }
-    public unsafe fn Span counter() { return Span.over(p: addr(of: this.a[0]), n: this.a.length()); }
+    public fn int32 size() { return cast<int32>(this.a.length()); }
+    public unsafe fn Span counter() { return Span.over(p: addr(of: this.a[0]), n: cast<int32>(this.a.length())); }
 }
 
 fn int32 main() {

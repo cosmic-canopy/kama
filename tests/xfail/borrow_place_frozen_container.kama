@@ -1,0 +1,9 @@
+// An element host freezes its CONTAINER (KR-123): `xs.add` may grow the buffer and leave `a` pointing at freed memory.
+import { std::collections::Map, std::collections::DynamicArray };
+fn int32 main()
+{
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    borrow xs[0] as a { xs.add(item: 3); }
+    return 0;
+}

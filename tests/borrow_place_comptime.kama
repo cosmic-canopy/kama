@@ -1,0 +1,23 @@
+// `borrow <place>` in a `comptime fn` (KR-123), under the one rule (KR-102): checked as run-time code is, and run by
+// the compile-time evaluator, which names the place once when the window opens — as the run-time alias's pointer does —
+// so an index changed inside the block does not move it. A compile-time body borrows its own locals' elements and field
+// paths; a call that returns a place has no compile-time form (xfail/borrow_place_comptime_call). Returns 95.
+type value P { public int32 x; public int32 y; public ctor make() { this.x = 1; this.y = 2; } }
+
+comptime fn int32 firstPlusOne() {
+    InlineArray<int32>#(3) a = [4; 3];
+    borrow a[0] as e { e = e + 1; }
+    P p = P.make();
+    borrow p.y as py { py = py * 10; }
+    return a[0] + p.y;                     // 5 + 20
+}
+
+comptime fn int32 indexStays() {
+    InlineArray<int32>#(3) a = [0; 3];
+    int32 i = 0;
+    borrow a[i] as e { i = 2; e = 7; }     // a[0], named when the window opened
+    return a[0] * 10 + a[2];               // 70
+}
+
+comptime int32 K = firstPlusOne() + indexStays();
+fn int32 main() { return K; }

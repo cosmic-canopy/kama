@@ -368,36 +368,70 @@ fn int32 main() {
 }
 ```
 
-#### The window — `borrow h.mint() as v { … }` ✅
+#### The window — `borrow <place> as v { … }` ✅
 
-A view borrows storage it does not own, so kama answers *how long is this view valid?* with **lexical
-scope** — not a lifetime annotation, and not a programmer's promise. A **`borrow` block is that extent**,
-and it is purely lexical: one C block plus one initializer per binding, no runtime cost.
+`borrow` names something for a block. A place is second-class in kama — passed (`ref`/`const ref` parameters) and
+returned (`fn ref T`), never stored — so there is no `ref` local; `borrow` is how a place gets a name, and how a view
+gets the extent it is valid for. The extent is **lexical**: a `borrow` block is it, one C block plus one initializer
+per binding, no runtime cost — no lifetime annotation, and no programmer's promise.
 
 ```kama fragment
-borrow d.view() as v { … }        // `Viewable<ConstView<T>>` grants `view()`; `ViewableMut<View<T>>` grants `viewMut()`
-borrow m.values() as vals { … }   // `ValuesIterable<I>` grants `values()` — `Map` has no `view()`
-borrow buf.span() as s { … }      // a user contract's own grant
+borrow xs[i] as e { … }                    // an element — `e` IS `xs[i]`
+borrow this.rig.joints[k] as j { … }       // a field path, and elements inside it
+borrow m.getRefMut(key: name) as v { … }   // a call returning `ref`/`const ref`, with any arguments
+borrow d.view() as v { … }                 // a view mint: `Viewable<ConstView<T>>` grants `view()`
+borrow m.values() as vals { … }            // `ValuesIterable<I>` grants `values()` — `Map` has no `view()`
 ```
+
+A host is a **place** or a **mint**, and nothing else:
+
+- **A place** — an element (`xs[i]`, `grid[r][c]`), a field path (`o.inner.x`), or a call that returns `ref` or <!-- test: borrow_place -->
+  `const ref` (`m.getRefMut(key: k)`, a free `fn ref`), with any arguments. The alias **is** that place: a write
+  through it writes the place, it passes on as `ref`/`const ref`, and it is `const` when the place is read-only
+  (a `const ref` result, a field of a `const` value). The place is named **once**, when the window opens, so an <!-- xfail: borrow_place_const_write -->
+  index changed inside the block does not move it. An argument's temporary (a `"key"` literal for a `const ref
+  string` parameter) lives for the window, since a `const ref` result may point into it.
+- **A mint** — a nullary member of a `@viewable` contract the receiver's type implements; the alias is the view it
+  makes. The grant names its own member, so nothing is hardcoded: a container alone would not say which view to
+  open (`DynamicArray` grants three), and a mint takes no arguments — narrow by deriving off the alias with <!-- xfail: borrow_mint_takes_args -->
+  `.slice(…)` inside the window, which is free.
+
+Refused, each with its own sentence and no cascade after it: **a bare local** (`borrow a as v` — `a` already names <!-- xfail: borrow_bare_host -->
+its place), and **a value**: a call that returns one, or a field of one (`mk().x`), which nothing holds beyond the <!-- xfail: borrow_place_value_call, borrow_place_value_fn, borrow_place_temporary -->
+statement — bind it to a local first.
 
 Three rules, and together they are what lets the paragraph above say "cannot dangle":
 
-1. **The host is a MINT CALL**, and the window is over the call's *receiver*. The mint is any **nullary
-   member of a `@viewable` contract** the receiver's type implements — the grant names its own member, so
-   nothing is hardcoded. A container alone would not say which view to open (`DynamicArray` grants three),
-   and a mint takes no arguments: narrow by deriving off the alias with `.slice(…)` inside the window,
-   which is free.
-2. **The host place is FROZEN for the extent of the block** — no assignment, no non-`const` `ref`/`out`
-   argument, no `give` out of it, no non-`const fn` receiver overlapping it, and the alias itself may not
-   be reseated. Conflict is a **prefix test over places**, so a *disjoint sibling field stays fully
+1. **The host's roots are FROZEN for the extent of the block** — no assignment, no non-`const` `ref`/`out` <!-- xfail: borrow_place_frozen_container, borrow_place_frozen_receiver, borrow_place_frozen_ref_arg -->
+   argument, no `give` out of them, no non-`const fn` receiver overlapping them. The roots: a field path itself, an
+   element's container, a mint's or a place-returning call's receiver, and every `ref`/`const ref` argument of
+   that call — the signature lets the result point at any of them, so freezing the receiver alone would be unsound
+   for a free `fn ref`. Conflict is a **prefix test over places**, so a *disjoint sibling field stays fully
    mutable*: `borrow this.buf.view() as b { this.hits = this.hits + 1; … }` is legal, because two distinct
-   fields cannot overlap in storage. Reads are untouched — a `const fn` call, an index, a `foreach` over
-   the frozen host, and an element write (`a[0] = 7` cannot realloc, and a `View<T>` is a mutate-through
-   window in the first place).
+   fields cannot overlap in storage. Reads are untouched — a `const fn` call, an index, a `foreach` over the
+   frozen host, and (under a view) an element write, which cannot realloc. One storage takes one name: two <!-- xfail: borrow_place_overlap, borrow_place_nested_same, borrow_two_bindings_overlap, borrow_nested_same_place -->
+   bindings over one container, or a window inside a window over the same storage, are refused — `xs[0]` and
+   `xs[1]` are disjoint only when the indices are, which nothing proves in general.
+2. **Nothing leaves the block.** A view alias may not be reseated; a place alias is no value to store, `give` <!-- xfail: borrow_alias_reseat, borrow_place_give -->
+   cannot move out of the host it points into (`replace(place:, with:)` swaps a value in), and a `fn ref` result
+   is judged by what the alias points into — a place inside a local is refused, as returning the local's own <!-- xfail: borrow_place_fn_ref_local -->
+   place would be. Reading through the alias copies the value out, which is always fine.
 3. **A view LOCAL's root must already be lifetime-bounded** — a `borrow` alias, a by-value view parameter,
    a derive off either, or a free function's result when every view handed to it was bounded. A view
    minted from a container you can still name is *not* bounded, because the next line may grow it, and is
    an error with the window as its remedy.
+
+`borrow` works the same in every statement position — a function or method body, a loop body left by <!-- test: borrow_place_positions -->
+`break`/`continue`/`return`, a `match` arm, a generic body, a `spawn`ed child's body, a `parallel_for` body — and in
+a `comptime fn`, which borrows its own locals' elements and field paths and is checked by the same rules (a call <!-- test: borrow_place_comptime --> <!-- xfail: borrow_place_comptime_call -->
+that returns a place has no compile-time form). A place a `spawn`ed child holds by `ref` cannot be named until its <!-- xfail: borrow_place_held_by_child -->
+`scope` joins it.
+
+**Why a window and not a `ref` local.** `ref Joint j = this.rig.joint(name: n);` is safe only if its host stays
+frozen from the declaration to `j`'s last use — a region nobody wrote. Rust infers that region (lifetimes and a
+borrow checker); C++ does not check it (`auto& j = …` dangles when the vector grows); C#'s ref locals lean on a GC
+and cannot point into a `List<T>`; Swift has none. kama has no lifetimes, so the frozen region is the visible block,
+the rule a view window already used — one construct for both. A `ref` local is a parse error that points here. <!-- xfail: ref_local -->
 
 The rule covers **every `type view`**, not just `View<T>`: an iterator that borrows is a view. That is only
 expressible because the mint is read from the grant — `Map` has no `view()`, so before that,
@@ -4967,9 +5001,9 @@ contract value is fine as a **parameter or local** (the zero-copy polymorphic vi
 stored beyond the call that made it** — a bare `Shape` **field**, **return type**, or **collection element**
 is a compile error, because the borrowed object could die and leave it dangling. To keep polymorphism around, <!-- xfail: iface_field, iface_return, iface_collection -->
 **own the object** with a smart pointer over the contract (below). Ownership is always written explicitly —
-never an implicit box. This is the language-wide rule **"borrow is parameter-only; storage requires
-ownership"** — the same reason a `ref` parameter can't be returned and a returnable "reference" is always an
-owned smart-pointer handle.
+never an implicit box. This is the language-wide rule **"a borrow lives in a parameter or a `borrow` window,
+never in storage; storage requires ownership"** — the same reason a `ref` parameter can't be returned and a
+returnable "reference" is always an owned smart-pointer handle.
 
 **Owned contracts — `Owned`/`Shared`/`Weak<Shape>`.** A smart pointer *over a contract* owns the concrete
 object behind a fat handle `{obj, vtbl}` (`Shared`/`Weak` add a `ctrl` block). `new Circle.make(...)` boxes a

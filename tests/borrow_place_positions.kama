@@ -1,0 +1,52 @@
+// `borrow <place>` (KR-123) in every statement position: a method body (an element of a field, and a `ref` method on
+// `this`), a loop body left by `continue`, `break` and `return`, a `match` arm, several bindings in one `borrow` in a
+// generic body, a `spawn`ed child's body, and a `parallel_for` body over its own element. A `comptime fn` body is
+// tests/borrow_place_comptime.kama. Returns 42.
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+type value Joint implements Sendable { public int32 n; public ctor make(int32 n) { this.n = n; } }
+type value Row implements Sendable { public InlineArray<int32>#(2) cells; public ctor make(int32 v) { this.cells = [v; 2]; } }
+type resource Rig {
+    DynamicArray<Joint> joints;
+    public ctor make() { this.joints = DynamicArray.empty(); this.joints.add(item: Joint.make(n: 1)); this.joints.add(item: Joint.make(n: 2)); }
+    public fn ref Joint joint(int32 k) { return this.joints[k]; }
+    public fn void bumpAt(int32 k) { borrow this.joints[k] as j { j.n += 10; } }                  // a method body, a field's element
+    public fn void viaRef(int32 k) { borrow this.joint(k: k) as j { j.n += 100; } }             // a `ref` method on `this`
+    public const fn int32 at(int32 k) { return this.joints[k].n; }
+}
+fn int32 loopy(ref DynamicArray<int32> xs) {
+    int32 i = 0;
+    while (i < 4) {
+        borrow xs[i] as e {
+            i += 1;
+            if (e == 2) { continue; }
+            if (e == 4) { break; }
+            e *= 10;
+        }
+    }
+    borrow xs[0] as first { if (first == 10) { return 7; } }
+    return 0;
+}
+fn int32 armed(Optional<int32> o, ref DynamicArray<int32> xs) {
+    match (o) { case Some(value: v): { borrow xs[1] as e { e = v; } } case None: { } };
+    return xs[1];
+}
+fn void swapFirst<T: Copyable<T>>(ref DynamicArray<T> a, ref DynamicArray<T> b) {
+    borrow a[0] as x, b[0] as y { T t = copy x; x = copy y; y = t; }    // several bindings, a generic body
+}
+fn void work(ref DynamicArray<int32> part) { borrow part[0] as e { e += 1; } }
+fn int32 main() {
+    Rig r = Rig.make();
+    r.bumpAt(k: 0); r.viaRef(k: 1);
+    if (r.at(k: 0) != 11 || r.at(k: 1) != 102) { return 1; }
+    DynamicArray<int32> xs = DynamicArray.empty(); xs.add(item: 1); xs.add(item: 2); xs.add(item: 3); xs.add(item: 4);
+    if (loopy(xs: ref xs) != 7 || xs[0] != 10 || xs[1] != 2 || xs[2] != 30 || xs[3] != 4) { return 2; }
+    if (armed(o: Optional::Some(value: 9), xs: ref xs) != 9) { return 3; }
+    DynamicArray<int32> ys = DynamicArray.empty(); ys.add(item: 5);
+    swapFirst(a: ref xs, b: ref ys);
+    if (xs[0] != 5 || ys[0] != 10) { return 4; }
+    scope { spawn work(part: ref ys); }                                  // inside a spawned child's body
+    DynamicArray<Row> rows = DynamicArray.empty(); rows.add(item: Row.make(v: 1)); rows.add(item: Row.make(v: 2));
+    parallel_for (ref Row row in rows, workers: 2) { borrow row.cells[1] as c { c += 5; } }   // a parallel_for body
+    if (rows[0].cells[1] != 6 || rows[1].cells[1] != 7) { return 6; }
+    return ys[0] == 11 ? 42 : 5;
+}

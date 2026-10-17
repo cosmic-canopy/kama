@@ -1,0 +1,10 @@
+// An alias names a place inside its host, so `give` cannot move out of it — the host would hold a moved-from value
+// (KR-123). `replace(place:, with:)` swaps a value in.
+import { std::collections::Map, std::collections::DynamicArray };
+fn int32 main()
+{
+    DynamicArray<DynamicArray<int32>> g = DynamicArray.empty();
+    g.add(item: DynamicArray.empty());
+    borrow g[0] as e { DynamicArray<int32> t = give e; }
+    return 0;
+}

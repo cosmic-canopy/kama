@@ -816,11 +816,12 @@ spawn_stack
 scope_statement
   : SCOPE block
   ;
-  /* `borrow xf as v, ys as w ` — the lexical window a view is minted into (view model). The host
-     is `primary_expression`, not a narrower place nonterminal, so that `borrow this.items[i] as v` and
-     `borrow makeVec() as v` reach the emitter and are rejected with a sentence; a tighter nonterminal
-     would make them bison syntax errors instead. The body is a `block` because those braces ARE the
-     window (like `scope ` / `parallel_for`). */
+  /* `borrow xs[i] as e, m.getRefMut(key: k) as v ` — names a PLACE for a block (KR-123: an element, a field
+     path, or a call returning `ref`/`const ref`), or opens the lexical window a view is minted into (`borrow
+     d.view() as v`). The host is `primary_expression`, not a narrower place nonterminal, so that `borrow
+     makeVec() as v` reaches the emitter and is refused with a sentence; a tighter nonterminal would make it a
+     bison syntax error instead. The body is a `block` because those braces ARE the window (like `scope ` /
+     `parallel_for`). */
 borrow_statement
   : BORROW borrow_bindings block
   ;
@@ -830,8 +831,9 @@ borrow_bindings
   ;
   /* Two alternatives, for the same reason `as_downcast_expression` below needs two: a BARE name is a
      `qualified_identifier_no_generic`, which `primary_expression` does not cover — that covers
-     `member_access` (`this.buf`), `element_access`, calls and the rest. Both spellings are real hosts:
-     the corpus mints from a local (`borrow scratch as s`) and from a field (`borrow this.buf as b`). */
+     `member_access` (`this.buf`), `element_access`, calls and the rest. The bare name is parsed so that the
+     emitter can refuse it with a sentence: a local already names its place, so `borrow a as v` would only
+     rename it. */
 borrow_binding
   : primary_expression AS IDENTIFIER
   | qualified_identifier_no_generic AS IDENTIFIER

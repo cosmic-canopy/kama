@@ -1469,6 +1469,9 @@ private:
     // the `fn ref` return check judges what the alias points into (KR-180: `foreach (ref e in local) { return
     // e; }` passed as if `e` were a `ref` parameter, and handed back a place inside a dead local).
     std::map<std::string, SharedExpression> _refBindingOperand;
+    // A binding whose declaration was refused with its own sentence (a `borrow` alias over a host that is no place):
+    // a use of it in the body is not a second mistake, so "cannot resolve" says nothing about it. Window-scoped.
+    std::set<std::string> _refusedBindings;
     std::string           _fieldDefaultOf;      // the class whose field default is being emitted (emitAggregateFill)
     std::set<std::string> _fieldDefaultHidden;  // ...and the body's names it may not read
     std::set<std::string> _paramNames;       // parameter names of the function being emitted — a local
@@ -2258,7 +2261,10 @@ private:
                                         // A `match` arm reading a value payload IN PLACE (KR-131): its subject,
                                         // which the arm was proven not to write, frozen so a write that proof
                                         // missed is a compile error rather than a changed binding.
-                                        bool fromMatch = false; };
+                                        bool fromMatch = false;
+                                        // A `borrow` of a PLACE (KR-123): the alias points at that place, it is no
+                                        // view, so assigning to it writes through it rather than reseating it.
+                                        bool placeAlias = false; };
                    std::vector<FrozenPlace> frozen;
                    // An owning payload of a BORROWING `match` arm, bound as an alias of the subject's slot, with
                    // the subject's place. A write to an overlapping place replaces the payload the alias points
@@ -3893,7 +3899,13 @@ private:
         std::vector<std::string> fieldNames;
         bool isVoid = false;          // KR-93: what a bare `return;` returns — fine from a `void` member, not a fn
     };
-    struct CTEnv { std::map<std::string, CTValue> vars; };   // one comptime-fn call frame (its locals)
+    // A place in a call frame: a local (or `this`) and the fields and indices that reach inside it — a `borrow` alias
+    // in a `comptime fn` (KR-123), resolved once when its window opens, as the run-time alias's pointer is.
+    struct CTStep { bool isIndex = false; int64_t index = 0; std::string field; };
+    struct CTPlace { std::string root; std::vector<CTStep> steps; };
+    struct CTEnv { std::map<std::string, CTValue> vars; std::map<std::string, CTPlace> aliases; };   // one call frame
+    bool ctPlaceOf(SharedExpression e, CTEnv& env, CTPlace& out);   // a place expression -> its resolved place
+    CTValue* ctSlot(CTEnv& env, const CTPlace& p, ASTNode* at);       // the storage that place names, or null (failed)
     enum class CTFlow { Normal, Return, Break, Continue, Fail };
     long _ctSteps = 0;      // step budget consumed by the current top-level comptime evaluation
     int  _ctDepth = 0;      // comptime-fn call-recursion depth
@@ -3966,7 +3978,13 @@ private:
     std::map<std::string, std::string> _externLinkShown;   // C name -> kama name
     std::string externKey(ClassDeclarationNode* cd);
     bool rejectBareGeneric(const SharedIdentifier& t, const char* what, int line);   // `Src` for `Src<A>` (KR-183)
-    bool rootIsTemporary(SharedExpression e) const;   // member/element chain rooted in a by-value call result        // the root identifier a write targets
+    bool rootIsTemporary(SharedExpression e) const;   // member/element chain rooted in a by-value call result
+    // A `borrow` place host (KR-123): the places a write to which would move or free it — a field path's own, an
+    // element's container, a place-returning call's receiver and every `ref`/`const ref` argument — and whether it
+    // is rooted in no named storage at all.
+    void borrowHostRoots(SharedExpression host, std::vector<std::vector<std::string>>& out);
+    bool borrowHostIsTemporary(SharedExpression host);
+    const std::vector<ParamSig>* placeCallParams(InvocationNode* inv, bool* constPlace = nullptr);        // the root identifier a write targets
     // The PLACE a expression designates: the base binding plus its chain of field names. This is the
     // whole safety core of the view model — see `placesConflict`. Not `const`: resolving a bare field
     // name to `this.<name>` needs `findFieldOwner`.

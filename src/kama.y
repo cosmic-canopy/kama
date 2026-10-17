@@ -1505,11 +1505,12 @@ spawn_stack
 scope_statement
   : SCOPE block   { $$ = std::make_shared<ScopeNode>(SCANNER_CODEGENCONTEXT, $2); }
   ;
-  /* `borrow xf as v, ys as w { ... }` — the lexical window a view is minted into (view model). The host
-     is `primary_expression`, not a narrower place nonterminal, so that `borrow this.items[i] as v` and
-     `borrow makeVec() as v` reach the emitter and are rejected with a sentence; a tighter nonterminal
-     would make them bison syntax errors instead. The body is a `block` because those braces ARE the
-     window (like `scope { }` / `parallel_for`). */
+  /* `borrow xs[i] as e, m.getRefMut(key: k) as v { ... }` — names a PLACE for a block (KR-123: an element, a field
+     path, or a call returning `ref`/`const ref`), or opens the lexical window a view is minted into (`borrow
+     d.view() as v`). The host is `primary_expression`, not a narrower place nonterminal, so that `borrow
+     makeVec() as v` reaches the emitter and is refused with a sentence; a tighter nonterminal would make it a
+     bison syntax error instead. The body is a `block` because those braces ARE the window (like `scope { }` /
+     `parallel_for`). */
 borrow_statement
   : BORROW borrow_bindings block   { $$ = std::make_shared<BorrowNode>(SCANNER_CODEGENCONTEXT, $2, $3); }
   ;
@@ -1519,8 +1520,9 @@ borrow_bindings
   ;
   /* Two alternatives, for the same reason `as_downcast_expression` below needs two: a BARE name is a
      `qualified_identifier_no_generic`, which `primary_expression` does not cover — that covers
-     `member_access` (`this.buf`), `element_access`, calls and the rest. Both spellings are real hosts:
-     the corpus mints from a local (`borrow scratch as s`) and from a field (`borrow this.buf as b`). */
+     `member_access` (`this.buf`), `element_access`, calls and the rest. The bare name is parsed so that the
+     emitter can refuse it with a sentence: a local already names its place, so `borrow a as v` would only
+     rename it. */
 borrow_binding
   : primary_expression AS IDENTIFIER   { auto a = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(a, @3); $$ = std::make_shared<BorrowBindingNode>(SCANNER_CODEGENCONTEXT, $1, a); }
   | qualified_identifier_no_generic AS IDENTIFIER   { auto a = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3); STAMP_LOC(a, @3); $$ = std::make_shared<BorrowBindingNode>(SCANNER_CODEGENCONTEXT, std::static_pointer_cast<ExpressionNode>($1), a); }
@@ -2995,9 +2997,11 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
         }
         /* A `ref`/`out` where a declaration's TYPE was wanted: a reference LOCAL (`const ref int32 first = xs[0];`,
            `ref T x = …;`). A place is second-class in kama — passed and returned, never stored — so there is no
-           such declaration, and the reserved-word note that `const ref` used to get ("cannot be used as a name
-           here") sent the reader off to rename something. `int32` stands for every type start: the set holds
-           it exactly where a declaration may begin, and never in an argument or after a name. */
+           such declaration (its host would have to stay frozen until the local's last use, a region nobody
+           wrote); `borrow xs[0] as first { … }` names a place for the block it writes (KR-123). The reserved-word
+           note that `const ref` used to get ("cannot be used as a name here") sent the reader off to rename
+           something. `int32` stands for every type start: the set holds it exactly where a declaration may begin,
+           and never in an argument or after a name. */
         bool typeWanted = false, closeWanted = false, semiWanted = false;
         for (int i = 0; i < n; ++i) {
             if (expected[i] == YYSYMBOL_INT32)     typeWanted = true;
@@ -3019,8 +3023,8 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
         else if ((tok == YYSYMBOL_REF || tok == YYSYMBOL_OUT) && typeWanted)
             msg += tok == YYSYMBOL_REF
                 ? " — a local cannot be a `ref`: a place is passed (`ref`/`const ref` parameters) and returned "
-                  "(`fn ref T`), never stored. Read it where it is (`xs[0]`), copy it out (`int32 first = xs[0];`), "
-                  "or hand it to a function that takes `const ref`"
+                  "(`fn ref T`), never stored. To name one for a block, `borrow` it (`borrow xs[0] as first { … }`); "
+                  "or read it where it is (`xs[0]`), or copy it out (`int32 first = xs[0];`)"
                 : " — `out` marks a parameter a callee fills; a local filled later is a `slot` "
                   "(`slot int32 q;` then `f(q: out q)`)";
         /* An argument list wants a LABEL first (`take(v: ref x)`), so a marker where the label goes is the label

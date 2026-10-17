@@ -1,0 +1,9 @@
+// A `fn ref` result cannot be an alias rooted in a local (KR-123): the alias is judged by what it points into.
+import { std::collections::Map, std::collections::DynamicArray };
+fn ref int32 leak()
+{
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    borrow xs[0] as e { return e; }
+}
+fn int32 main() { return leak(); }

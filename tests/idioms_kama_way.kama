@@ -1,7 +1,7 @@
 // Every "do it this way" example from docs/coming-from-other-languages.md, compiled.
 // That page is written for readers (and LLMs) arriving from C#/Rust/Python, whose instincts kama
 // deliberately rejects. If an example there stops being true, this fixture fails and says so.
-import { std::serialization::text::json::serializeJsonBuffer };
+import { std::serialization::text::json::serializeJsonBuffer, std::collections::DynamicArray, std::collections::Map };
 
 type contract Shown for value { fn int32 show(); }
 
@@ -32,6 +32,18 @@ type value Leaf implements Shown {
 
 // (4) `out` fills an uninitialized `slot`; `ref` borrows something already live.
 fn void split(int32 a, int32 b, out int32 q, out int32 r) { q = a / b; r = a % b; }
+
+// (10) There is no `ref` local: `borrow` names a place for a block, and its host is frozen there.
+type value Joint { public int32 angle; public ctor make(int32 a) { this.angle = a; } }
+type resource Rig {
+    DynamicArray<Joint> joints;
+    public ctor make() { this.joints = DynamicArray.empty(); this.joints.add(item: Joint.make(a: 5)); }
+    public fn int32 turn(int32 k) {
+        borrow this.joints[k] as j { j.angle = j.angle + 10; bend(joint: ref j); }   // `j` IS this.joints[k]
+        return this.joints[k].angle;                                                  // 5 + 10 + 1 = 16
+    }
+}
+fn void bend(ref Joint joint) { joint.angle += 1; }
 
 type enum Code { Ok, Bad }
 fn Code classify(int32 x) { if (x > 0) { return Code::Ok; } return Code::Bad; }
@@ -88,6 +100,13 @@ fn int32 main()
     isize keep = acc.truncate(maxBytes: 2).length();          // 1 — "A", never a split é
     isize bnd  = acc.floorCharBoundary(at: 2);               // 1 — snapped down
 
-    return a + q + r + v + s + ok - cast<int32>(msg.length()) + eight - cast<int32>(keep) - cast<int32>(bnd);
-    // 33 + 8 - 1 - 1 = 39
+    // (10) A place named for a block — an element, and an entry by key.
+    Rig rig = Rig.make();
+    Map<string, int32> scores = Map.empty();
+    scores.put(key: "ana", value: 1);
+    borrow scores.getRefMut(key: "ana") as sc { sc = sc + 1; }
+    int32 placed = rig.turn(k: 0) - 16 + scores.getRef(key: "ana") - 2;   // 0
+
+    return a + q + r + v + s + ok - cast<int32>(msg.length()) + eight - cast<int32>(keep) - cast<int32>(bnd) + placed;
+    // 33 + 8 - 1 - 1 + 0 = 39
 }

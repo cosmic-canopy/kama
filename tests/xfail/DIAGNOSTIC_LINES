@@ -103,10 +103,23 @@ borrow_frozen_give	borrow_frozen_give.kama:13
 borrow_frozen_mutate	borrow_frozen_mutate.kama:13
 borrow_frozen_ref_arg	borrow_frozen_ref_arg.kama:14
 borrow_frozen_spawn	borrow_frozen_spawn.kama:17
-borrow_mint_not_a_view	borrow_mint_not_a_view.kama:22 borrow_mint_not_a_view.kama:23 borrow_mint_not_a_view.kama:30
+borrow_mint_not_a_view	borrow_mint_not_a_view.kama:30
 borrow_mint_takes_args	borrow_mint_takes_args.kama:12
 borrow_nested_same_place	borrow_nested_same_place.kama:13
-borrow_not_viewable	borrow_not_viewable.kama:18 borrow_not_viewable.kama:19
+borrow_not_viewable	borrow_not_viewable.kama:18
+borrow_place_comptime_call	borrow_place_comptime_call.kama:7
+borrow_place_const_write	borrow_place_const_write.kama:7
+borrow_place_fn_ref_local	borrow_place_fn_ref_local.kama:7
+borrow_place_frozen_container	borrow_place_frozen_container.kama:7
+borrow_place_frozen_receiver	borrow_place_frozen_receiver.kama:8
+borrow_place_frozen_ref_arg	borrow_place_frozen_ref_arg.kama:8
+borrow_place_give	borrow_place_give.kama:8
+borrow_place_held_by_child	borrow_place_held_by_child.kama:9
+borrow_place_nested_same	borrow_place_nested_same.kama:7
+borrow_place_overlap	borrow_place_overlap.kama:9
+borrow_place_temporary	borrow_place_temporary.kama:7
+borrow_place_value_call	borrow_place_value_call.kama:6
+borrow_place_value_fn	borrow_place_value_fn.kama:6
 borrow_two_bindings_overlap	borrow_two_bindings_overlap.kama:13
 bound_generic_contract_arg_mismatch	bound_generic_contract_arg_mismatch.kama:10
 bound_names_a_type	bound_names_a_type.kama:5
@@ -1364,7 +1377,7 @@ view_ctor_public	view_ctor_public.kama:10
 view_dtor	view_dtor.kama:2
 view_escape_inline_array	view_escape_inline_array.kama:9
 view_field	view_field.kama:3
-view_from_const_receiver	view_from_const_receiver.kama:7 view_from_const_receiver.kama:8
+view_from_const_receiver	view_from_const_receiver.kama:7
 view_local_from_method	view_local_from_method.kama:16
 view_local_inline_array	view_local_inline_array.kama:7
 view_local_ternary_root	view_local_ternary_root.kama:10

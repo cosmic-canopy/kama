@@ -3237,6 +3237,7 @@ bool CEmitter::reportUntypedVariant(ASTNode* at, const std::string& tmpl, const 
 void CEmitter::rejectUnresolvedName(IdentifierNode* v, const std::string& nm)
 {
     const int line = v->line;
+    if ((!v->qualifier || v->qualifier->empty()) && _refusedBindings.count(nm)) return;   // already said why
     if (v->qualifier && !v->qualifier->empty()) {
         const std::string& head = *(*v->qualifier)[0];
         const std::string& last = *v->qualifier->back();
@@ -6982,10 +6983,94 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     // cannot overlap. A non-place host has an empty path and is skipped here — it is rejected on its own.
     std::vector<std::pair<std::vector<std::string>, std::string>> bound;   // place -> the alias holding it
     std::vector<Scope::FrozenPlace> frozenNow;   // staged; registered after the loop (see below)
+    std::vector<std::string> placeAliases;       // KR-123: aliases of a place, retired from the ref tables at the close
+    // A PLACE host (KR-123): an element, a field path, or a call returning `ref`/`const ref` with any arguments. The
+    // alias IS that place (`T* L = &(<place>)`, the call made once), `const ref` when the place is read-only, and the
+    // place's roots are frozen for the block: a field path itself, an element's container, a call's receiver and every
+    // `ref`/`const ref` argument (the signature lets the result point at any of them). So nothing can move or free
+    // what the alias points at while the block runs, and the alias cannot leave it — the rule a view window keeps.
+    auto borrowPlace = [&](SharedExpression host, const std::string& alias) -> bool {
+        if (borrowHostIsTemporary(host)) {
+            unsupported(("`borrow` names a place, and `" + unparseExpr(host) + "` is a value, or rooted in one — "
+                         "nothing holds it beyond this statement. Bind it to a local first, and borrow from that "
+                         "if you need a place inside it").c_str(), bn);
+            return false;
+        }
+        std::vector<std::vector<std::string>> roots;
+        borrowHostRoots(host, roots);
+        for (auto& r : roots) {
+            const Scope::FrozenPlace* outer = frozenConflict(r);
+            if (outer && outer->fromChild) {
+                unsupported(("`" + placeText(r) + "` is borrowed by the child `spawn`ed at line " + std::to_string(outer->line)
+                             + " until its `scope` joins it — naming a place in it here would race with the child; open "
+                               "the window after the `scope`").c_str(), bn);
+                return false;
+            }
+            if (outer) {
+                unsupported(("`" + placeText(r) + "` is already held by an enclosing window (opened at line "
+                             + std::to_string(outer->line) + " as `" + outer->alias + "`) — borrowing it again would give "
+                             "one place two names, either of which could move it under the other. Reach it through `"
+                             + outer->alias + "`").c_str(), bn);
+                return false;
+            }
+            for (auto& pr : bound)
+                if (placesConflict(pr.first, r)) {
+                    unsupported(("`" + placeText(r) + "` is held twice by one `borrow` (for `" + pr.second + "` and for `"
+                                 + alias + "`) — two names for one storage, either of which could move it under the "
+                                 "other; borrow it once").c_str(), bn);
+                    return false;
+                }
+        }
+        for (auto& r : roots) bound.push_back({ r, alias });
+        bool constPlace = false;
+        if (auto* inv = dynamic_cast<InvocationNode*>(host.get())) placeCallParams(inv, &constPlace);
+        const bool readOnly = constPlace || isConstReceiver(host);
+        const std::string ct = typeOfExpr(host);
+        if (ct.empty()) {   // the host's own diagnostic says why (a name out of reach, say) — emit it for that
+            const int before = _unsupported;
+            (void)emitExpression(host);
+            if (_unsupported == before)
+                unsupported(("`borrow` cannot tell what `" + unparseExpr(host) + "` is, so it cannot name it").c_str(), bn);
+            return false;
+        }
+        bool ph = _hoistOK; _hoistOK = true;   // an argument's temporary lives for the window (its scope owns it)
+        const std::string placeC = emitPlace(host);
+        _hoistOK = ph;
+        flushHoisted(depth + 1);
+        indent(depth + 1);
+        *_out << ct << "* " << kName(alias) << " = (" << ct << "*)&(" << placeC << ");\n";
+        noteScopedBinding(alias);
+        _refParams.insert(alias);                // reads and writes go through the pointer, as a `ref` parameter's
+        _refBindingOperand[alias] = host;        // a `fn ref` return of it is judged by what it points into
+        if (readOnly) _constLocals.insert(alias);
+        placeAliases.push_back(alias);
+        _localTypes[alias] = (isClass(ct) || isInterface(ct) || isSigType(ct)) ? ct : "";
+        _localCTypes[alias] = ct;
+        _localTypeNodes[alias] = exprTypeNode(host, _localTypeNodes);
+        _scopes.back().declaredNames.push_back(alias);
+        for (auto& r : roots) { Scope::FrozenPlace fz; fz.place = r; fz.alias = alias; fz.line = bn->line; fz.placeAlias = true;
+                                frozenNow.push_back(fz); }
+        return true;
+    };
     if (bn->bindings) {
         for (auto& b : *bn->bindings) {
             if (!b || !b->host || !b->alias || !b->alias->value) continue;
             const std::string alias = *b->alias->value;
+            _refusedBindings.insert(alias);   // until the binding below declares it; no cascade after its refusal
+            if (auto* hid = dynamic_cast<IdentifierNode*>(b->host.get())) {
+                const std::string nm = hid->value ? *hid->value : "?";
+                unsupported(("`" + nm + "` already names its place, so `borrow " + nm + " as " + alias + "` would only "
+                             "give it a second name — use `" + nm + "`. `borrow` names a place that has no name of its "
+                             "own: an element (`" + nm + "[i]`), a field path, or a call that returns a place").c_str(), bn);
+                continue;
+            }
+            {
+                auto* pinv = dynamic_cast<InvocationNode*>(b->host.get());
+                const bool placeHost = (pinv && invocationReturnsPlace(pinv))
+                                    || dynamic_cast<ElementAccessNode*>(b->host.get())
+                                    || (!pinv && dynamic_cast<MemberAccessNode*>(b->host.get()));
+                if (placeHost) { if (borrowPlace(b->host, alias)) _refusedBindings.erase(alias); continue; }
+            }
             // The host is a MINT CALL — `<place>.<mint>()` — and the window is over the mint's RECEIVER.
             // Naming the container alone would not say WHICH view to open: a type may carry several grants
             // (`DynamicArray` has `view`, `iterator` and `iterMut`), and a `Map` has no `view()` at all, so
@@ -6995,14 +7080,24 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             MemberAccessNode* ma = (inv && inv->expression)
                                  ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr;
             if (!ma || !ma->expression || !ma->identifier || !ma->identifier->value) {
-                unsupported(("`borrow` binds a mint call, so `" + alias + "` must name one — write "
-                             "`borrow <container>.<mint>() as " + alias + "` (e.g. `borrow d.view() as "
-                             + alias + "`, `borrow m.values() as " + alias + "`). A container alone does "
-                             "not say which view to open, and a type may grant several").c_str(), bn);
+                unsupported(("`borrow` names a place or opens a view, and `" + unparseExpr(b->host) + "` is neither "
+                             "— it is a value, which nothing holds beyond this statement. Bind it to a local "
+                             "first").c_str(), bn);
                 continue;
             }
             const std::string mint = *ma->identifier->value;
             SharedExpression recvExpr = ma->expression;
+            // A method that returns a VALUE — neither a place nor a view — has nothing for a window to hold.
+            {
+                const std::string rc = exprClass(recvExpr);
+                MethodInfo* mm = (!rc.empty() && _classes.count(rc)) ? findMethod(&_classes[rc], mint, nullptr) : nullptr;
+                if (mm && !mm->isPlaceReturn && !isViewCType(cTypeInInstance(rc, mm->returnType))
+                    && !grantedMint(_classes[rc], mint)) {   // a granted member that is no view has its own sentence below
+                    unsupported(("`borrow` names a place or opens a view, and `" + mint + "(…)` returns a value — "
+                                 "nothing holds it beyond this statement. Bind it to a local first").c_str(), bn);
+                    continue;
+                }
+            }
             if (inv->args && !inv->args->empty()) {
                 unsupported(("a mint takes no arguments, so `" + mint + "(…)` cannot open a window — "
                              "borrow the whole thing and narrow inside it with `.slice(…)` on `" + alias
@@ -7106,6 +7201,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             _localTypeNodes[alias] = vmi->returnType;
             _scopes.back().declaredNames.push_back(alias);
             frozenNow.push_back({ hp, alias, bn->line });
+            _refusedBindings.erase(alias);
         }
         // Registered only AFTER every binding is resolved. Eagerly, the second binding of
         // `borrow a.view() as x, a.view() as y` would trip the freeze rule instead of the sibling rule
@@ -7123,6 +7219,9 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
         emitScopeCleanup(_scopes.back(), depth + 1);
     indent(depth); *_out << "}\n";
     popScope();   // retires the aliases
+    for (const std::string& a : placeAliases) { _refParams.erase(a); _constLocals.erase(a); _refBindingOperand.erase(a); }
+    if (bn->bindings)
+        for (auto& b : *bn->bindings) if (b && b->alias && b->alias->value) _refusedBindings.erase(*b->alias->value);
 }
 
 // Synthesize the `View<elem>` type node the loop iterates, so the scan passes register that instance
@@ -16658,9 +16757,12 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
             scanExprForGenerics(b->host, localTys);
             // A `borrow` ALIAS is a locally-typed value like the declaration and `foreach` arms above —
             // and the only one whose type is never written, so it has to be resolved from the mint.
-            if (b->alias && b->alias->value)
+            if (b->alias && b->alias->value) {
                 if (SharedIdentifier at = mintReturnTypeNode(b->host, localTys))
                     bodyTys[*b->alias->value] = at;
+                else if (SharedIdentifier pt = exprTypeNode(b->host, localTys))   // a PLACE host: the alias IS it (KR-123)
+                    bodyTys[*b->alias->value] = pt;
+            }
         }
         scanStmtForGenerics(bn->body, bodyTys);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
@@ -25636,6 +25738,68 @@ bool CEmitter::rootIsTemporary(SharedExpression e) const
     return false;
 }
 
+// The parameters of a place-returning call, and whether its place is read-only — for a `borrow` host, which freezes
+// every `ref`/`const ref` argument because the signature lets the result point at any of them. Null when `inv` names
+// no place-returner kama can see.
+const std::vector<ParamSig>* CEmitter::placeCallParams(InvocationNode* inv, bool* constPlace)
+{
+    if (!inv || !invocationReturnsPlace(inv)) return nullptr;
+    if (inv->identifier && inv->identifier->value) {
+        auto fit = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
+        if (fit == _funcs.end()) return nullptr;
+        if (constPlace) *constPlace = fit->second.isConstPlace;
+        return &fit->second.params;
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
+        std::string rcls = receiverClass(ma->expression);
+        if (isSmartPtrClass(rcls)) rcls = _classes[rcls].collElemClass;
+        if (rcls.empty() || !_classes.count(rcls) || !ma->identifier || !ma->identifier->value) return nullptr;
+        MethodInfo* mi = placeMethodOf(rcls, *ma->identifier->value);
+        if (!mi) return nullptr;
+        if (constPlace) *constPlace = mi->isConstPlace;
+        return &mi->params;
+    }
+    return nullptr;
+}
+
+void CEmitter::borrowHostRoots(SharedExpression e, std::vector<std::vector<std::string>>& out)
+{
+    if (!e) return;
+    if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) borrowHostRoots(ma->expression, out);
+        if (const std::vector<ParamSig>* ps = placeCallParams(inv))
+            if (inv->args)
+                for (auto& a : *inv->args) {   // a kama call names every argument
+                    if (!a || !a->name || !a->name->value) continue;
+                    for (const ParamSig& p : *ps)
+                        if (p.byRef && p.name == *a->name->value) borrowHostRoots(a->expression, out);
+                }
+        return;
+    }
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {   // an element lives in its container
+        if (ea->expression) borrowHostRoots(ea->expression, out);
+        else if (ea->identifier) borrowHostRoots(std::static_pointer_cast<ExpressionNode>(ea->identifier), out);
+        return;
+    }
+    std::vector<std::string> p = placePath(e);
+    if (!p.empty()) { out.push_back(p); return; }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) borrowHostRoots(ma->expression, out);
+}
+
+bool CEmitter::borrowHostIsTemporary(SharedExpression e)
+{
+    ASTNode* n = e.get();
+    if (dynamic_cast<IdentifierNode*>(n) || dynamic_cast<ThisAccessNode*>(n)) return false;
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) return !ma->expression || borrowHostIsTemporary(ma->expression);
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) return ea->expression ? borrowHostIsTemporary(ea->expression) : false;
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        if (!invocationReturnsPlace(inv)) return true;   // a value: nothing names it
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) return borrowHostIsTemporary(ma->expression);
+        return false;                                     // a free `fn ref`: its place is in its arguments or static
+    }
+    return true;
+}
+
 // the root identifier a write ultimately targets, for deep-const checks.
 // `x` -> "x";  `x.f`, `x[i]`, `x.f.g` -> "x";  `this`/`this.f` -> "this";  else "".
 // The binding a returned place borrows. The same root the check reads — a place-returning call borrows its
@@ -25857,7 +26021,7 @@ const std::vector<std::string>* CEmitter::frozenAliasRoot(const std::string& nam
     if (name.empty()) return nullptr;
     for (int i = (int)_scopes.size() - 1; i >= 0; --i)
         for (auto& f : _scopes[i].frozen)
-            if (f.fromBorrow && f.alias == name) return &f.place;
+            if (f.fromBorrow && !f.placeAlias && f.alias == name) return &f.place;
     return nullptr;
 }
 
@@ -25879,6 +26043,13 @@ bool CEmitter::rejectFrozenWrite(SharedExpression target, int line)
                        "subject, and the copy that would have made this write safe was left out. That judgement is "
                        "the compiler's, and it missed this write: a defect to report. Meanwhile write `"
                      + placeText(p) + "` after the `match`").c_str(), line);
+        return true;
+    }
+    if (f->placeAlias) {
+        unsupported(("`" + placeText(p) + "` is held by the enclosing `borrow` (opened at line " + std::to_string(f->line)
+                     + "), which names a place in it as `" + f->alias + "` — writing it could move or free that place "
+                       "under `" + f->alias + "`. Write through `" + f->alias + "`, or after the window closes; reading it, "
+                       "and writing a DISJOINT sibling field, stay legal").c_str(), line);
         return true;
     }
     unsupported((f->fromBorrow
@@ -40342,6 +40513,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // a one-lookup bug. A diagnostic about a name that cannot be resolved must at minimum say which.
         std::string who;
         if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get())) if (rid->value) who = *rid->value;
+        if (!who.empty() && _refusedBindings.count(who)) return "0";   // its declaration was refused, and said why
         // A generic enum's bare member (`Slot::Empty.isEmpty()`) names no instance — say THAT, as a read of it does.
         if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get()))
             if (rid->value && rid->qualifier && !rid->qualifier->empty()) {
