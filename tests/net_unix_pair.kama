@@ -1,0 +1,70 @@
+// `UnixStreamPair` (KR-178): a connected pair of Unix streams with no name on disk — `socketpair` on POSIX, and on
+// Windows a private listener connected to once, its path removed as soon as the connection is queued. Bytes cross
+// both ways; each end's peer is this process (on Windows the check that refuses a stranger who connected first); an
+// end that leaves the pair through `takeDescriptor()` is adopted and served on another isolate; and an end that
+// leaves and drops ends the stream for the other — `read` answers 0, and a write fails rather than raising SIGPIPE.
+// Returns 55.
+import {
+    std::net::UnixStreamPair, std::net::UnixStream, std::net::PeerCredentials, std::process::currentProcessId,
+    std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+    std::io::IoError, std::io::Descriptor, std::collections::FixedArray,
+};
+
+// The isolate: one byte in, the same byte doubled out.
+fn void doubler(Receiver<UnixStream> rx) {
+    Optional<UnixStream> next = rx.recv();
+    match (give next) {
+        case Some(value: s): {
+            FixedArray<uint8> b = FixedArray.make(size: 1);
+            Result<isize, IoError> r = s.read(into: b.viewMut());
+            b[0] = b[0] * 2ui8;
+            Result<isize, IoError> w = s.write(bytes: b.view());
+        }
+        case None: { }
+    };
+}
+
+fn isize send(ref UnixStream s, uint8 v) {
+    FixedArray<uint8> b = FixedArray.filled(size: 1, value: v);
+    return match (s.write(bytes: b.view())) { case Ok(value: n): n; case Err(error: e): -1; };
+}
+fn int32 recv(ref UnixStream s) {   // the byte read, 0 at EOF, -1 on an error
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    return match (s.read(into: b.viewMut())) { case Ok(value: n): n == 1 ? cast<int32>(b[0]) : 0; case Err(error: e): -1; };
+}
+fn bool peerIsMe(ref UnixStream s) {
+    return match (s.peerCredentials()) { case Ok(value: p): p.processId() == currentProcessId(); case Err(error: e): false; };
+}
+
+fn int32 main() {
+    Result<UnixStreamPair, IoError> rp = UnixStreamPair.open();
+    UnixStreamPair p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    if (send(s: ref p.first(), v: 5ui8) != 1 || recv(s: ref p.second()) != 5) { return 2; }    // first -> second
+    if (send(s: ref p.second(), v: 9ui8) != 1 || recv(s: ref p.first()) != 9) { return 3; }    // second -> first
+    if (!peerIsMe(s: ref p.first()) || !peerIsMe(s: ref p.second())) { return 4; }
+
+    // An end leaves the pair and is served on another isolate.
+    Result<UnixStream, IoError> ra = UnixStream.adopt(descriptor: p.second().takeDescriptor());
+    UnixStream away = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 5; } };
+    Channel<UnixStream> ch = Channel.bounded(capacity: 1);
+    Receiver<UnixStream> rx = ch.receiver();
+    int32 doubled = 0;
+    scope {
+        spawn doubler(rx: give rx);
+        {
+            Sender<UnixStream> tx = ch.sender();
+            tx.send(item: give away);
+            if (send(s: ref p.first(), v: 21ui8) != 1) { return 6; }
+            doubled = recv(s: ref p.first());
+        }
+    }
+    if (doubled != 42) { return 7; }   // the isolate's end dropped when it returned
+
+    // ...so the stream has ended: EOF, then a write that fails.
+    if (recv(s: ref p.first()) != 0) { return 8; }
+    isize w = 0;
+    int32 tries = 0;
+    while (w >= 0 && tries < 64) { w = send(s: ref p.first(), v: 1ui8); tries += 1; }   // Windows may take one first
+    if (w >= 0) { return 9; }
+    return 55;
+}

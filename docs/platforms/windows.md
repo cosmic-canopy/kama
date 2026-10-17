@@ -283,6 +283,11 @@ Worth knowing before debugging, because each of these produced a confident wrong
   `WSASocketW(FROM_PROTOCOL_INFO…)` / `_open_osfhandle`. Both ends must be kama. Since each handle already
   exists in the peer when the send returns, the sender closes its copies at once.
   ⚠️ All of it unverified on a Windows machine when written (2026-09-30) — the cross build compiles; CI runs it.
+  There is no `socketpair` either, so `UnixStreamPair.open()` (`0.9.653`) binds a listener to a private path in
+  `GetTempPathW`'s directory (`kama-pair-<pid>-<n>.sock`, the next name on `AddrInUse`), listens with a queue of one,
+  connects, removes the path at once, accepts, and refuses the pair unless `SIO_AF_UNIX_GETPEERPID` names this
+  process on both ends. Two facts it relies on were unmeasured when written: a blocking connect completing on a
+  one-deep queue before the accept, and the queued connection surviving the delete. CI's `net_unix_pair` is the probe.
 - **`<iphlpapi.h>` defines `interface`, `hyper` and 19 more lowercase macros**, despite `WIN32_LEAN_AND_MEAN`:
   its chain reaches `<rpc.h>`/`<rpcndr.h>` (`#define interface struct`). A kama name spelled that way then breaks
   the C, and at `0.9.376` `UdpSocket.joinMulticastV4(interface:)` failed to compile EVERY program importing

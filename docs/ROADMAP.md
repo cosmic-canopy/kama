@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-178 | **`UnixStream.pair()`** — a connected pair of local sockets (`socketpair`), one end handed to a child as a stream (`Stdio::Handle`, `0.9.624`): the verdict that held it optional until `std::process` could hand a descriptor to a child has had its condition met. Windows has no `socketpair`; its twin is a listener on a private path and one connect | M | [§1](ROADMAP_DETAIL.md#s1-unix-pair) |
 | KR-131 | **A by-value `match` or `foreach` binding copies its value even when nothing writes it** — `case Ok(value: b):` over a `Result<Big, E>` copies the 16 KB `Big` into `b` (and `foreach (Big b in xs)` each element), though the subject is already borrowed. A binding its body never writes can be read in place | M | [§5](ROADMAP_DETAIL.md#s5-match-binding-copy) |
 | KR-123 | **`borrow` names any place for a block** — there is no `ref` local, and `borrow` opens only an argument-less view mint, so an accessor with arguments is repeated at every use. `borrow <place> as L { … }` with the host frozen, as a view window freezes it | M | [§2](ROADMAP_DETAIL.md#s2-borrow-any-place) |
 | KR-124 | **A borrow window that runs code when it closes** — a transaction wants a scope that rolls back unless committed; no stored borrows and no closures leave no way to say it. A `type view` may declare a destructor its window runs on every path out | M | [§2](ROADMAP_DETAIL.md#s2-view-destructor) |

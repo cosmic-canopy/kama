@@ -225,7 +225,7 @@ Everything else here is library or toolchain work that does **not** gate the tag
      record is SPEC's net section; what stays here is what was decided NOT to ship, each with its reason:
      `UnixStream.pair()` (socketpair) was genuinely optional until `std::process` could hand a descriptor to a child —
      between isolates a `Channel` answers, and a pair's use across processes is exactly that hand-off; it can since
-     `0.9.624` (`Stdio::Handle`), so the pair is scheduled: KR-178; (a
+     `0.9.624` (`Stdio::Handle`), so the pair shipped in `0.9.653` (`UnixStreamPair`, SPEC's net section); (a
      non-blocking Unix `connect` was filed here as optional, and that was WRONG — a blocking connect to a full
      queue waits on Linux, where the caller never sees the `EAGAIN` it was told to retry; it has shipped);
      getters for the keepalive and
@@ -272,73 +272,6 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 …), read and left alone. **No error-count guard** was added: `DIAGNOSTIC_LINES` already pins every position
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
-
-<a id="s1-unix-pair"></a>
-
-### `UnixStream.pair()` (KR-178)
-
-Filed 2026-10-15, when `Stdio::Handle(descriptor:)` shipped (`0.9.624`) and met the condition the net verdicts set
-for it: a connected pair of local sockets, one end kept and one handed to a child as a stream — the shape a parent
-uses to talk to a helper process both ways, without a path on disk. **Scheduled.** POSIX: `socketpair(AF_UNIX,
-SOCK_STREAM | SOCK_CLOEXEC)` (the `FD_CLOEXEC` gate on macOS, as every descriptor kama makes). Windows has no
-`socketpair`, and by the platform-deltas rule its twin is the same `pair()` over a listener bound to a private path,
-one connect and one accept, the path removed at once. On Windows a socket is no child's stream (`Stdio` documents
-it: the handle is overlapped), so there a pair serves isolates, not a child's stdin. Windows AF_UNIX is stream-only
-and passes no descriptors (Microsoft's "AF_UNIX comes to Windows", 2017), so the Windows pair is a stream pair only.
-
-**Where (surveyed on `0.9.630`).** Still missing: `UnixStream.pair()` is "no constructor `pair`".
-
-The child half already works. An accepted Unix stream end, handed to a child as stdin with a `duplicateDescriptor()`
-as stdout, round-trips "ping" and then EOF (exit 42). What is missing is a pair with no path on disk.
-
-The seam is `kama_unix_pair(int32 datagram, isize* a, isize* b)` beside `kama_pipe` in kama_os.h:
-
-- Linux: `socketpair(…|SOCK_CLOEXEC)`.
-- macOS: under the fork gate (`kama__cloexec_enter`, `socketpair`, mark both ends, `kama__cloexec_leave`), with
-  `kama__nosigpipe` on each end.
-- emscripten: a plain `socketpair`.
-- Windows has AF_UNIX but no `socketpair`. A twin builds the pair from a private path:
-  1. build the path from `GetTempPathW`, the pid and a counter, retrying on `AddrInUse`;
-  2. `listen(1)`, a blocking connect, `DeleteFileW`, accept, close the listener;
-  3. check that `SIO_AF_UNIX_GETPEERPID` is our own pid.
-
-  This is unmeasured until Windows CI runs it: a connect completing on a 1-deep queue before accept, and the queued
-  connection surviving the delete.
-
-In lib/std/net/unix.kama the pair type needs a `friend` for `UnixStream`'s private `make` (~231) and for
-`UnixDatagram`'s `own` (~461).
-
-Fixtures:
-
-- `net_unix_pair`: round trip both ways, unnamed ends, the peer pid is ours, dropping one end gives EOF on the other
-  and then `BrokenPipe`, and one end handed to an isolate.
-- `proc_unix_pair`: an end as a child's stdin/stdout, plus the close-on-exec proof.
-- A datagram pair case in `net_unix_datagram.d`.
-
-Traps:
-
-- macOS caps a Unix datagram at 2048 bytes and a stream's send buffer at 8192. Keep payloads small, or a parent writing
-  to a `cat` it is not reading deadlocks.
-- On macOS `SO_NOSIGPIPE` travels into the child, which then gets EPIPE where Linux raises SIGPIPE. Document it.
-
-Size **M**: the POSIX half is S, and the Windows twin needs a CI round.
-
-**Decided 2026-10-16** (the maintainer took (a) for both):
-
-1. The shape.
-   - **(a), decided:** a `UnixStreamPair` resource with `ctor Result<UnixStreamPair, IoError> open()` and
-     `ref UnixStream first()`/`second()`, the way `Process` hands out `ref File stdin()`. An end leaves through the
-     existing `takeDescriptor()`. Prototyped and run.
-   - (b) `UnixStream.pair(other: out UnixStream)`. An `out` must be filled on the `Err` path too, so a failed pair would
-     hand back an empty stream.
-   - (c) A `static fn`: a second way to construct.
-2. Windows.
-   - **(a), decided:** the listener twin. It is the established emulation (openconnect's `dumb_socketpair` does the
-     same over AF_UNIX on Windows 10+; Python's `socketpair()` does it over TCP), kept on the right family, with the
-     peer-pid check refusing an intruder who connects first. Abstract (pathless) sockets do not work on Windows, so
-     the brief on-disk path is unavoidable.
-   - (b) Refuse at run time, which breaks the platform-deltas rule.
-   - (c) An AF_INET loopback pair: the wrong socket behind `UnixStream`, so `peerCredentials` breaks.
 
 <a id="s1-http-package"></a>
 

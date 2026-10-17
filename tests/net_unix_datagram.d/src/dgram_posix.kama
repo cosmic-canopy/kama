@@ -6,8 +6,9 @@ file @compileFor(!OS_WINDOWS);
 // And it is a `DatagramSocket<UnixAddr>` (KR-108): `emit` below is ONE generic path that sends through a Unix
 // datagram socket and through a UDP socket alike — a syslog client's `/dev/log` or UDP 514 by configuration —
 // and `count` reaches one through a contract value. An empty buffer is `InvalidInput` from `recvFrom`, as UDP's.
+// A `UnixDatagramPair` (KR-178) is two connected, unnamed ends: each send arrives whole, boundaries kept.
 import {
-    std::net::UnixDatagram, std::net::UnixAddr, std::net::RecvFrom, std::net::DatagramSocket,
+    std::net::UnixDatagram, std::net::UnixDatagramPair, std::net::UnixAddr, std::net::RecvFrom, std::net::DatagramSocket,
     std::net::UdpSocket, std::net::SocketAddr,
     std::io::IoError, std::io::IoErrorKind, std::collections::FixedArray, std::collections::ConstView,
     std::collections::View, std::fs::exists,
@@ -71,6 +72,16 @@ fn int32 datagrams() {
         SocketAddr ubAddr = match (ub.localAddr()) { case Ok(value: a): a; case Err(error: e): { return 28; } };
         if (emit(s: ref ua, line: msg.view(), to: ubAddr) != 4) { return 29; }
         if (!emptyIsInvalid(s: ref server) || !emptyIsInvalid(s: ref ub)) { return 30; }
+        // A pair: two sends, two whole messages, no addresses.
+        Result<UnixDatagramPair, IoError> rpair = UnixDatagramPair.open();
+        UnixDatagramPair pr = match (give rpair) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
+        FixedArray<uint8> three = FixedArray.filled(size: 3, value: 3ui8);
+        if (match (pr.first().send(bytes: three.view())) { case Ok(value: n): n != 3; case Err(error: e): true; }) { return 32; }
+        if (match (pr.first().send(bytes: msg.view())) { case Ok(value: n): n != 4; case Err(error: e): true; }) { return 33; }
+        if (match (pr.second().recv(into: buf.viewMut())) { case Ok(value: n): n != 3; case Err(error: e): true; }) { return 34; }
+        if (match (pr.second().recv(into: buf.viewMut())) { case Ok(value: n): n != 4; case Err(error: e): true; }) { return 35; }
+        bool unnamed = match (pr.second().localAddr()) { case Ok(value: a): a.isUnnamed(); case Err(error: e): false; };
+        if (!unnamed) { return 36; }
     }   // both bound sockets drop here, and their files with them
     if (exists(path: "server.sock") || exists(path: "client.sock")) { return 23; }
     return 0;

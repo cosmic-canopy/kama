@@ -2227,6 +2227,19 @@ connect in flight, and its queue does not fill (all 400 connects to a listener n
 path with nothing at it is `NotFound` on every OS: Windows answers it as it answers a path with no listener,
 `ConnectionRefused`, so kama looks.
 
+**A connected pair with no path.** `UnixStreamPair.open()` makes two connected `UnixStream`s and no file — the shape <!-- test: net_unix_pair -->
+a parent uses to talk to a helper both ways: keep one end, hand the other to a child as its stdin and stdout <!-- test: proc_unix_pair -->
+(`Stdio::Handle(descriptor: pair.second().takeDescriptor())`) or to an isolate. Each end is lent in place, `first()`
+and `second()`, as `Process.stdin()` lends its pipe, and leaves the pair through its own `takeDescriptor()`; an end still
+in the pair closes when the pair drops. Both ends are close-on-exec, so a child holds only the end it is handed, and
+each end's peer is this process. POSIX makes it with `socketpair`; Windows has none, so there the pair is a private
+listener in the temp directory, connected to once and accepted, its path removed as soon as the connection is queued,
+and refused unless both ends name this process as their peer — a stranger who connected first is not paired. A
+socket is no child's stream on Windows (`Stdio` says why), so there a pair serves isolates. On macOS the
+`SO_NOSIGPIPE` every kama socket carries travels into a child with its end, so a child writing to a parent that has
+gone gets `EPIPE` there where Linux raises `SIGPIPE`. `UnixDatagramPair` is the same over datagrams (Linux and
+macOS): each send arrives whole at the other end, and neither needs an address.
+
 **Passing open descriptors.** `UnixStream.sendDescriptors(bytes:, descriptors:)` sends open files, sockets
 and streams to the process on the other end, with at least one byte to carry them, and
 `recvDescriptors(into:, descriptors:)` receives them (`UnixDatagram` has the pair too). What travels is a <!-- test: net_unix_fds -->
@@ -6414,7 +6427,7 @@ A `view` and a bare `contract` value need no rule here: neither can be a field a
 reaches a bundle. <!-- xfail: view_field, iface_field -->
 **The stdlib's I/O vocabulary is Sendable**, because a descriptor, a socket and a process handle are process-wide <!-- test: net_stream_to_isolate -->
 rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
-`UnixStream`, `UnixListener`, `UnixDatagram`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`,
+`UnixStream`, `UnixStreamPair`, `UnixListener`, `UnixDatagram`, `UnixDatagramPair`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`,
 `StringWriter`, `SliceReader`, `PeerCredentials`, `Descriptor`, and the values `SocketAddr`, `UnixAddr`,
 `IpAddr`, `RecvFrom<A>` (for a `Sendable` address), `Ready`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it

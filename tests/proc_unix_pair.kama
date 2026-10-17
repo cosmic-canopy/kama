@@ -1,0 +1,88 @@
+// `UnixStreamPair` and a child (KR-178): the shape a parent uses to talk to a helper both ways with no path on disk.
+// One end stays; the other becomes the child's stdin AND stdout (`Stdio::Handle`, the second through
+// `duplicateDescriptor()`), so `cat` echoes what the parent writes, and when the parent shuts its writing side the
+// child sees EOF, exits, and the parent reads EOF in turn. Then the close-on-exec proof: a child handed neither end is
+// still running, past exec, when the parent drops one end of a second pair, and a non-blocking read on the other
+// answers EOF at once — an end leaked into that child would hold the stream open, and the read would answer
+// `WouldBlock`.
+// On Windows a socket is no child's stream (`Stdio` says why), so there this is the pair alone. Returns 42.
+import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::ExitStatus,
+         std::net::UnixStreamPair, std::net::UnixStream, std::net::Shutdown, std::io::IoError, std::io::Descriptor,
+         std::collections::FixedArray, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
+
+fn string util() { return envOr(name: "KAMA_PROCUTIL", dflt: "procutil"); }
+
+unsafe fn Result<UnixStreamPair, IoError> pair() { return UnixStreamPair.open(); }
+
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 echoChild() {
+    Result<UnixStreamPair, IoError> rp = pair();
+    UnixStreamPair p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    Result<Descriptor, IoError> rd = p.second().duplicateDescriptor();
+    Descriptor dup = match (give rd) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Command c = Command.make(program: util());
+    c.arg(a: "cat");
+    c.stdin(s: Stdio::Handle(descriptor: p.second().takeDescriptor()));
+    c.stdout(s: Stdio::Handle(descriptor: give dup));
+    Result<Process, IoError> sr = c.start();
+    Process child = match (give sr) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    string ping = "ping";
+    if (match (p.first().write(bytes: ping.bytes())) { case Ok(value: n): n != 4; case Err(error: e): true; }) { return 4; }
+    if (match (p.first().shutdown(how: Shutdown::Write)) { case Ok(value: u): false; case Err(error: e): true; }) { return 5; }
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    isize got = 0;
+    bool more = true;
+    while (more) {   // a stream may hand the echo back in pieces
+        isize n = match (p.first().read(into: buf.viewMut().slice(from: got, count: 16 - got))) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return 6; }
+        if (n == 0) { more = false; } else { got += n; }
+    }
+    Result<string, Utf8Error> text = decode(bytes: buf.view().slice(from: 0, count: got));
+    bool echoed = match (give text) { case Ok(value: s): s == "ping"; case Err(error: e): false; };
+    if (!echoed) { return 7; }
+    Result<ExitStatus, IoError> w = child.wait();
+    return match (w) { case Ok(value: st): st.code == 0 ? 0 : 8; case Err(error: e): 9; };
+}
+
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 nothingLeaks() {
+    Result<UnixStreamPair, IoError> rp = pair();
+    UnixStreamPair p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 21; } };
+    Command c = Command.make(program: util());
+    c.arg(a: "cat");
+    c.stdin(s: Stdio::Piped);
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> sr = c.start();
+    Process child = match (give sr) { case Ok(value: x): give x; case Err(error: e): { return 22; } };
+    // One byte echoed proves the child is past exec: between fork and exec it holds every descriptor, flags or not.
+    string x = "x";
+    Result<isize, IoError> wx = child.stdin().write(bytes: x.bytes());
+    FixedArray<uint8> back = FixedArray.make(size: 1);
+    if (match (child.stdout().read(into: back.viewMut())) { case Ok(value: n): n != 1; case Err(error: e): true; }) { return 27; }
+    { Descriptor gone = p.second().takeDescriptor(); }   // the parent's only copy closes here
+    if (match (p.first().setNonBlocking(on: true)) { case Ok(value: u): false; case Err(error: e): true; }) { return 23; }
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    int32 rc = match (p.first().read(into: one.viewMut())) {
+        case Ok(value: n): n == 0 ? 0 : 24;
+        case Err(error: e): match (e.kind()) { case WouldBlock: 25; case _: 26; };   // 25: the child holds the end
+    };
+    child.closeStdin();
+    Result<ExitStatus, IoError> w = child.wait();
+    return rc;
+}
+
+@compileFor(OS_WINDOWS)
+unsafe fn int32 echoChild() {
+    Result<UnixStreamPair, IoError> rp = pair();
+    return match (give rp) { case Ok(value: x): 0; case Err(error: e): 1; };
+}
+@compileFor(OS_WINDOWS)
+unsafe fn int32 nothingLeaks() { return 0; }
+
+fn int32 main() {
+    int32 a = echoChild();
+    if (a != 0) { return a; }
+    int32 b = nothingLeaks();
+    if (b != 0) { return b; }
+    return 42;
+}

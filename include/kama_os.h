@@ -2741,6 +2741,78 @@ static inline int32_t kama_connect_unix(ptrdiff_t fd, const uint8_t* p, size_t n
     if (connect((kama__sock)fd, (struct sockaddr*)&a, len) != 0) return kama__connect_fail(kind == 1 ? p : NULL, n);
     return 0;
 }
+// A connected pair of Unix sockets with no name (KR-178: `UnixStreamPair`, and `UnixDatagramPair` where datagrams
+// exist), each end close-on-exec as every descriptor kama makes is. POSIX has `socketpair`: Linux marks both ends in
+// the call, macOS under the fork gate as kama_pipe does, and Apple's ends get SO_NOSIGPIPE as every socket here does.
+// Windows has AF_UNIX but no `socketpair`, so its twin is the established emulation on the right family: a listener
+// on a private path in the temp directory, one connect, one accept, the path removed as soon as the connection is
+// queued — and both ends must report this process as their peer, so a stranger who connected first is refused, not
+// paired. Stream only there: Windows' AF_UNIX has no datagrams.
+#if defined(_WIN32)
+static inline int32_t kama_unix_pair(int32_t datagram, ptrdiff_t* a, ptrdiff_t* b) {
+    static volatile LONG seq = 0;
+    if (datagram) { kama__os_fail(ERROR_NOT_SUPPORTED, EAFNOSUPPORT); return -1; }
+    wchar_t dir[MAX_PATH + 1];
+    const DWORD dn = GetTempPathW(MAX_PATH + 1, dir);
+    if (dn == 0 || dn > MAX_PATH) { kama__os_fail(GetLastError(), ENOENT); return -1; }
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        wchar_t pathW[MAX_PATH + 64];
+        _snwprintf(pathW, sizeof pathW / sizeof pathW[0], L"%lskama-pair-%lu-%ld.sock", dir,
+                   (unsigned long)GetCurrentProcessId(), (long)InterlockedIncrement(&seq));
+        pathW[sizeof pathW / sizeof pathW[0] - 1] = 0;
+        char path[sizeof(((struct sockaddr_un*)0)->sun_path)];
+        const int pn = WideCharToMultiByte(CP_UTF8, 0, pathW, -1, path, (int)sizeof path, NULL, NULL);
+        if (pn <= 1) { kama__os_fail(ERROR_FILENAME_EXCED_RANGE, ENAMETOOLONG); return -1; }
+        const size_t n = (size_t)pn - 1;
+        const ptrdiff_t l = kama_socket_unix(0);
+        if (l < 0) return -1;
+        if (kama_bind_unix(l, (const uint8_t*)path, n, 1) != 0) {
+            const int busy = errno == EADDRINUSE;
+            (void)kama_close_socket(l);
+            if (busy) continue;   // a stale file of a crashed process with this pid and counter: take the next name
+            return -1;
+        }
+        ptrdiff_t c = -1, s = -1;
+        int ok = kama_listen(l, 1) == 0 && (c = kama_socket_unix(0)) >= 0
+              && kama_connect_unix(c, (const uint8_t*)path, n, 1) == 0;
+        (void)DeleteFileW(pathW);   // the connection is queued (or failed); the name is not needed either way
+        if (ok) ok = (s = kama_accept(l)) >= 0;
+        (void)kama_close_socket(l);
+        int32_t ps = 0, pc = 0;
+        if (ok && (kama_unix_peer_pid(s, &ps) != 0 || kama_unix_peer_pid(c, &pc) != 0)) ok = 0;
+        else if (ok && (ps != kama_getpid() || pc != kama_getpid())) { ok = 0; kama__os_fail(ERROR_ACCESS_DENIED, EACCES); }
+        if (!ok) {
+            if (c >= 0) (void)kama_close_socket(c);
+            if (s >= 0) (void)kama_close_socket(s);
+            return -1;
+        }
+        *a = c; *b = s;
+        return 0;
+    }
+    kama__os_fail(WSAEADDRINUSE, EADDRINUSE);
+    return -1;
+}
+#else
+static inline int32_t kama_unix_pair(int32_t datagram, ptrdiff_t* a, ptrdiff_t* b) {
+    int fds[2];
+    const int type = datagram ? SOCK_DGRAM : SOCK_STREAM;
+#if defined(__linux__)
+    if (socketpair(AF_UNIX, type | SOCK_CLOEXEC, 0, fds) != 0) return -1;
+#elif defined(__EMSCRIPTEN__)
+    if (socketpair(AF_UNIX, type, 0, fds) != 0) return -1;
+#else
+    kama__cloexec_enter();
+    if (socketpair(AF_UNIX, type, 0, fds) != 0) { kama__cloexec_leave(); return -1; }
+    if (fcntl(fds[0], F_SETFD, FD_CLOEXEC) != 0 || fcntl(fds[1], F_SETFD, FD_CLOEXEC) != 0) {
+        const int e = errno; close(fds[0]); close(fds[1]); kama__cloexec_leave(); errno = e; return -1;
+    }
+    kama__cloexec_leave();
+#endif
+    kama__nosigpipe(fds[0]); kama__nosigpipe(fds[1]);
+    *a = (ptrdiff_t)fds[0]; *b = (ptrdiff_t)fds[1];
+    return 0;
+}
+#endif
 // The inverse, for what getsockname/getpeername/recvfrom hand back: *kind is 0 for an unnamed socket, 1 for a
 // path, 2 for an abstract name; the name's bytes (no terminator) go into out[cap]; returns their length.
 static inline ptrdiff_t kama__sun_read(const struct sockaddr_un* a, socklen_t len, int32_t* kind, uint8_t* out, size_t cap) {
