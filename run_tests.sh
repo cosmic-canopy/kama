@@ -404,6 +404,10 @@ run_one() {
 }
 
 timed_out() { [ -f "$1/timed_out" ]; }
+# What the program said before it ended with the wrong code — a panic's `kama: …` line names its message and location.
+# On Windows that is the only discriminator: `abort()` exits 127, which a program can also return (docs/platforms/
+# windows.md), and a CI-only failure that printed just "got 127" had to be reproduced before it could be read.
+stderr_tail() { [ -s "$1" ] && tail -n 5 "$1" | sed 's/^/  stderr: /'; return 0; }
 hang_evidence() {   # $1 = the fixture's build dir
     [ -f "$1/hang_native.txt" ] && cat "$1/hang_native.txt"
     local r="$1/hang.json"
@@ -558,7 +562,7 @@ test_one() {
     if [ "$actual" = "$expected" ]; then
         echo "PASS $name (exit $actual)" >"$out"; echo PASS >"$res"
     else
-        echo "FAIL $name (got $actual, expected $expected)" >"$out"; echo FAIL >"$res"
+        { echo "FAIL $name (got $actual, expected $expected)"; stderr_tail "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"
     fi
 }
 
@@ -695,7 +699,7 @@ multi_one() {
     if [ "$actual" = "$expected" ]; then
         echo "PASS $name (multi-file, exit $actual)" >"$out"; echo PASS >"$res"
     else
-        echo "FAIL $name (got $actual, expected $expected)" >"$out"; echo FAIL >"$res"
+        { echo "FAIL $name (got $actual, expected $expected)"; stderr_tail "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"
     fi
 }
 
