@@ -6837,6 +6837,44 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
   cannot skip: a stream that does not match the type is `DeErrorKind::Malformed`. It carries an object graph all the
   same (`tests/ser_pos_graph`): the envelope is ordinary tokens, whose shapes it can count. <!-- test: ser_pos_graph -->
   <!-- test: ser_pos_size -->
+  **The untyped value — `JsonValue`.** A document whose KEYS are data (glTF's `extensions`, a response keyed by <!-- test: json_value -->
+  ids), or whose shape a program only partly knows, is read without a schema into
+  `std::serialization::text::json::JsonValue`: `Null`, `Bool(bool value)`, `Number(JsonNumber value)`,
+  `String(string value)`, `Array(DynamicArray<JsonValue> items)`, `Object(OrderedMap<string, JsonValue> members)`.
+  It is an ordinary `Serializable`/`Deserializable` type, so there is no second parser —
+  `deserializeJsonBuffer::<JsonValue>(src:)` is the read, with the typed reader's RFC 8259 numbers, 128-level limit,
+  errors and paths — and a typed schema may hold a `JsonValue` field to keep a subtree it does not model.
+
+  ```kama
+  import { std::memory::Owned, std::serialization::text::json::deserializeJsonBuffer,
+           std::serialization::text::json::JsonValue };
+  fn int64 lightCount(string gltf) {
+      Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give gltf);
+      JsonValue doc = match (give r) { case Ok(value: v): give v; case Err(error: _): JsonValue::Null; };
+      if (!doc.has(key: "extensions")) { return 0i64; }
+      return cast<int64>(doc.getRef(key: "extensions").getRef(key: "KHR_lights").getRef(key: "lights").length());
+  }
+  ```
+
+  - **An object keeps document order** (it is an `OrderedMap`), so a document reads and writes back byte for byte;
+    a key the document repeats keeps its first position and takes its last value, as a typed read's last wins.
+  - **A number keeps its text** (`JsonNumber`): `18446744073709551617`, `1e400` and `1.50` all survive, and the
+    program picks the width it reads one at — `asInt64()`, `asUint64()`, `asFloat64()` answer `None` when the
+    number does not fit (a fraction is no integer, `1e400` is no `float64`). A `JsonNumber` is made from an
+    integer, a finite float (`ofFloat64` refuses NaN and the infinities) or valid text (`parse`), so an invalid
+    number cannot exist.
+  - **Navigating** mirrors `OrderedMap`: `has(key:)`, `getRef(key:)` (in place; panics on a missing member or a
+    value that is not an object), `get(key:)` (an `Optional` copy), `at(index:)` (an element in place), `length()`,
+    and `match` for the kinds themselves.
+  - **It needs a self-describing back end**: JSON, or KBIN named. The read asks the reader what comes next
+    (`Deserializer.peekKind()`, answering a prelude `ValueKind`) and reads a number as its text (`readNumberText()`);
+    the write hands the text back (`Serializer.writeNumberText(text:)`). KBIN carries that text under its own tag, <!-- test: json_value -->
+    `0x18`, and reads it into a typed field as JSON does. KNUM and POS cannot say what comes next — POS has no tags,
+    KNUM's wire types do not separate an integer from a `bool` — so a read fails `TypeMismatch` and a write of a
+    number fails `NotRepresentable`, rather than producing a stream nothing could read.
+  - JSON's literals are read whole: `{"a": nada}` and a `bool` spelled `tzzz` are `Malformed`, in a typed read as in
+    an untyped one. (Only their first byte used to be looked at.)
+
   **JSON is UTF-8 in and out.** `string`/`char` are written as raw UTF-8 bytes — JSON is a UTF-8 format
   (RFC 8259 §8.1), so escaping buys nothing — and only `"`, `\` and the control bytes are escaped. On
   READ, `\uXXXX` is decoded to UTF-8, **including surrogate pairs**: JSON inherited UTF-16 escapes from

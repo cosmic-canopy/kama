@@ -2481,6 +2481,7 @@ private:
     std::string deErrorInField(const std::string& boxExpr, const std::string& name);
     std::string contractBorrowOf(const std::string& iface, SharedExpression e, std::string val, bool hoisted,
                                  const std::string& what, int line);
+    bool methodTrackCaller(ClassMethodDeclarationNode* md, const std::string& cName);   // KR-179, every member kind
     MethodInfo enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey, const std::string& contract);
     // Generic enums (KR-44): a template's members + `implements` are filled in collectEnumConformances; an
     // instance cut before that is refreshed, one cut after takes them at registration.

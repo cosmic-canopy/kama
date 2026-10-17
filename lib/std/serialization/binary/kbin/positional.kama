@@ -141,6 +141,9 @@ type resource KbinPositionalSerializer<W: Writer> implements Serializer {
     public fn void writeChar(char v) { this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
     public fn void writeString(const ref string v) { this.putStr(s: ref v); }
     // Presence: one byte, both ways. See the contract comment on `writeSome`.
+    // A number as text has no form here: its varints and fixed widths hold no number past 64 bits and no exact decimal, so the untyped value that writes one (KR-110) is
+    // refused rather than rounded. JSON and KBIN named carry it.
+    public fn void writeNumberText(const ref string text) { this.failWith(e: SerError::NotRepresentable); }
     public fn void writeSome() { this.byte(b: 1ui8); }
     public fn void writeNull() { this.byte(b: 0ui8); }
 
@@ -287,6 +290,10 @@ type resource KbinPositionalDeserializer implements Deserializer {
     public fn bool readBool() { return this.next() != 0ui8; }
     public fn char readChar() { return cast<char>(cast<uint32>(this.getU(n: 4))); }
     public unsafe fn string readString() { return this.readStr(); }
+    // An untyped read (KR-110) cannot be answered: its values carry no tags at all, so nothing on the wire says what comes next. Read it with a schema,
+    // or through a self-describing back end (JSON, KBIN named).
+    public fn ValueKind peekKind() { this.failWith(kind: DeErrorKind::TypeMismatch); return ValueKind::Null; }
+    public fn string readNumberText() { this.failWith(kind: DeErrorKind::TypeMismatch); return ""; }
     public fn bool readNull() { return this.next() == 0ui8; }
     // A positional reader cannot skip: there is no tag and no length to measure a value by. A stream whose
     // shape does not match the type is `Malformed` — the agreed-shape contract, stated rather than guessed.

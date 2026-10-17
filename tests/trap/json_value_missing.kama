@@ -1,0 +1,9 @@
+// KR-110: `JsonValue.getRef` on a member the document does not have panics, and — being `@trackCaller` — names the
+// line that asked, not a line inside std. It is an ENUM's method: `@trackCaller` on one put the hidden location
+// parameters in its definition but not in its prototype or at its calls, which C refused, until this row.
+import { std::memory::Owned, std::serialization::text::json::deserializeJsonBuffer, std::serialization::text::json::JsonValue };
+fn int32 main() {
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: "{\"a\":1}");
+    JsonValue doc = match (give r) { case Ok(value: v): give v; case Err(error: _): JsonValue::Null; };
+    return cast<int32>(doc.getRef(key: "b").length());   // panics, naming this line
+}

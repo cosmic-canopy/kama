@@ -96,6 +96,7 @@ type resource MapKeyText<K> implements Serializer {
     public fn void writeF64(float64 v) { this.notText(); }
     public fn void writeBool(bool v) { this.notText(); }
     public fn void writeChar(char v) { this.notText(); }
+    public fn void writeNumberText(const ref string text) { this.notText(); }
     public fn void writeSome() { this.notText(); }
     public fn void writeNull() { this.notText(); }
     // A key's own write never fails here: what it wrote decides only whether it is text.
@@ -184,6 +185,8 @@ type resource MapKeyReader<K> implements Deserializer {
     public fn bool readBool() { this.mismatch(); return false; }
     public fn char readChar() { this.mismatch(); return 'a'; }
     public fn bool readNull() { return false; }
+    public fn ValueKind peekKind() { return ValueKind::String; }        // a key's text, which `readString` reads
+    public fn string readNumberText() { this.mismatch(); return ""; }
     public fn void skipValue() { this.mismatch(); }
     public fn void unknownField() { this.mismatch(); }
     public fn bool atKeyedMap() { return false; }

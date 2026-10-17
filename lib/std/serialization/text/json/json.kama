@@ -8,6 +8,9 @@
 import {
     std::collections::DynamicArray,
     std::collections::FixedArray,
+    std::collections::OrderedMap,
+    std::fmt::parse,
+    std::fmt::ParseError,
     std::fmt::i8Str,
     std::fmt::i16Str,
     std::fmt::i32Str,
@@ -26,7 +29,7 @@ import {
     std::io::IoError,
 };
 
-export { JsonSerializer, JsonDeserializer,
+export { JsonSerializer, JsonDeserializer, JsonValue, JsonNumber,
          serializeJsonBuffer, serializeJsonStream, deserializeJsonBuffer, deserializeJsonStream,
          mergeJsonBuffer, mergeJsonStream };
 
@@ -170,6 +173,8 @@ type resource JsonSerializer<W: Writer> implements Serializer {
     }
     public fn void writeBool(bool v) { this.sep(); this.ascii(s: boolStr(b: v)); this.needComma = true; }
     public fn void writeString(const ref string v) { this.sep(); this.quoted(s: ref v); this.needComma = true; }
+    // A number's exact text, as it came (`JsonNumber` holds only text that is RFC 8259's grammar).
+    public fn void writeNumberText(const ref string text) { this.sep(); this.ascii(s: copy text); this.needComma = true; }
     public fn void writeSome()   { }   // JSON marks presence by the value itself not being `null`
     public fn void writeNull() { this.sep(); this.ascii(s: "null"); this.needComma = true; }
     public fn void writeChar(char v) {
@@ -477,16 +482,27 @@ type resource JsonDeserializer implements Deserializer {
         if (st != 0) { this.err = true; return 0.0f32; }
         return v;
     }
+    // `true`, `false` and `null` are read whole. Their first byte alone used to decide, and the rest was skipped
+    // unread, so `{"a": nada}` read as null and `tzzz` as true.
+    fn bool literal(const ref string word) {
+        isize n = word.length();
+        if (this.pos + n > this.len) { return false; }
+        isize i = 0;
+        while (i < n) { if (this.src[this.pos + i] != word[i]) { return false; } i = i + 1; }
+        this.pos = this.pos + n;
+        return true;
+    }
     public fn bool readBool() {
         this.skipWs();
         uint8 c = this.peek();
-        if (c == 116ui8) { this.pos = this.pos + 4; return true; }    // true
-        if (c == 102ui8) { this.pos = this.pos + 5; return false; }   // false
+        if (c == 116ui8) { if (this.literal(word: "true")) { return true; } this.brokenAt(); return false; }
+        if (c == 102ui8) { if (this.literal(word: "false")) { return false; } this.brokenAt(); return false; }
         this.wrongValue(); return false;
     }
+    // Consumes `null` when it is next, and answers whether it was. Any other value is left for the caller to read.
     public fn bool readNull() {
         this.skipWs();
-        if (this.peek() == 110ui8) { this.pos = this.pos + 4; return true; }  // null
+        if (this.peek() == 110ui8) { if (this.literal(word: "null")) { return true; } this.brokenAt(); }
         return false;
     }
     // The first CODEPOINT of the string, not its first byte. `s[0]` used to be returned directly, which is
@@ -611,6 +627,21 @@ type resource JsonDeserializer implements Deserializer {
     public const fn DeErrorKind errorKind() { return this.code; }
     // A map is read as an object when one is next, and as the pair array kama wrote before KR-136 otherwise.
     public fn bool atKeyedMap() { this.skipWs(); return this.peek() == 123ui8; }   // `{`
+    // The next value's kind, from its first byte; a byte no JSON value starts with is the document's fault.
+    public fn ValueKind peekKind() {
+        this.skipWs();
+        uint8 c = this.peek();
+        if (c == 123ui8) { return ValueKind::Object; }                          // {
+        if (c == 91ui8)  { return ValueKind::Array; }                           // [
+        if (c == 34ui8)  { return ValueKind::String; }                          // "
+        if (c == 116ui8 || c == 102ui8) { return ValueKind::Bool; }             // t f
+        if (c == 110ui8) { return ValueKind::Null; }                            // n
+        if (c == 45ui8 || (c >= 48ui8 && c <= 57ui8)) { return ValueKind::Number; }
+        this.brokenAt();
+        return ValueKind::Null;
+    }
+    // The next number's text exactly as the document spells it, held to RFC 8259 by the one scanner every read uses.
+    public fn string readNumberText() { return this.numToken(); }
 }
 
 // Deserializable a JSON string into a `Deserializable` type — the one-liner entry. Name the target with turbofish:
@@ -666,4 +697,240 @@ fn Result<Unit, Owned<Error>> mergeJsonStream<T: MergeDeserializable<T>>(Reader 
 fn Result<Unit, Owned<Error>> serializeJsonStream<W: Writer>(Serializable v, W to) {
     JsonSerializer<W> w = JsonSerializer::<W>.make(sink: give to);
     return w.encodeValue(v: v);
+}
+
+// --- The untyped half (KR-110) ---------------------------------------------------------------------------------------
+// A JSON document read without a schema: what a program needs when a document's KEYS are data (glTF's `extensions`, a
+// response keyed by ids) or its shape is only partly known. Go has `map[string]any`, Python `dict`, .NET `JsonNode`,
+// Rust serde_json's `Value`; this is kama's, one enum over JSON's six kinds:
+//
+//     Result<JsonValue, Owned<Error>> doc = deserializeJsonBuffer::<JsonValue>(src: text);
+//
+// It is an ordinary `Serializable`/`Deserializable` type, so there is no second parser: the read is the typed reader's
+// (its RFC 8259 numbers, its 128-level depth limit, its errors and paths), and a typed schema may hold a `JsonValue`
+// field to keep a subtree it does not model. It reads from any SELF-DESCRIBING back end — JSON, and KBIN named — and is
+// refused by the numbered and positional ones, whose streams do not say what comes next.
+//
+//   - An object keeps its members in document order (an `OrderedMap`), so a document reads and writes back unchanged;
+//     a key the document repeats keeps its first position and takes its last value, as the typed reader's last wins.
+//   - A number keeps the text it was written with (`JsonNumber`): `2^63+1`, `1e400` and `1.50` all survive, and the
+//     program chooses the width it reads one at — `asInt64()`, `asUint64()`, `asFloat64()`.
+
+// A JSON number, held as its exact text — RFC 8259's grammar, which every way of making one enforces, so an invalid
+// number cannot exist. Converting it is the reader's choice of width, answered `None` when the number does not fit:
+// a fraction or an exponent is no integer, and `1e400` is no `float64`.
+type resource JsonNumber implements Copyable<This>(bare: give), Sendable {
+    string t;
+
+    // Text a reader's own scanner has already held to the grammar — the one place a `JsonValue` read makes one.
+    ctor read(string text) { this.t = give text; }
+    friend JsonValue[read];
+    public ctor ofInt64(int64 v) { this.t = "${v}"; }
+    public ctor ofUint64(uint64 v) { this.t = "${v}"; }
+    public ctor copy(ref JsonNumber source) { this.t = copy source.t; }
+    // A float's shortest round-trip text; NaN and the infinities have no JSON spelling.
+    public static unsafe fn Optional<JsonNumber> ofFloat64(float64 v) {
+        if (v != v || v - v != 0.0) { return Optional::None; }
+        return Optional::Some(value: JsonNumber.read(text: f64Str(v: v)));
+    }
+    // `text` as a number, when it is one: `-`? (`0` | [1-9] digits) (`.` digits)? ([eE] [+-]? digits)?, nothing else.
+    public static fn Optional<JsonNumber> parse(string text) {
+        if (!JsonNumber::spelled(t: text)) { return Optional::None; }
+        return Optional::Some(value: JsonNumber.read(text: give text));
+    }
+    static fn bool spelled(const ref string t) {
+        isize n = t.length();
+        isize i = 0;
+        if (i < n && t[i] == 45ui8) { i = i + 1; }
+        if (i < n && t[i] == 48ui8) { i = i + 1; }
+        else {
+            isize from = i;
+            while (i < n && t[i] >= 48ui8 && t[i] <= 57ui8) { i = i + 1; }
+            if (i == from) { return false; }
+        }
+        if (i < n && t[i] == 46ui8) {
+            i = i + 1;
+            isize from = i;
+            while (i < n && t[i] >= 48ui8 && t[i] <= 57ui8) { i = i + 1; }
+            if (i == from) { return false; }
+        }
+        if (i < n && (t[i] == 101ui8 || t[i] == 69ui8)) {
+            i = i + 1;
+            if (i < n && (t[i] == 43ui8 || t[i] == 45ui8)) { i = i + 1; }
+            isize from = i;
+            while (i < n && t[i] >= 48ui8 && t[i] <= 57ui8) { i = i + 1; }
+            if (i == from) { return false; }
+        }
+        return i == n;
+    }
+
+    public const fn const ref string text() { return this.t; }
+    public const fn Optional<int64> asInt64() {
+        Result<int64, ParseError> p = parse::<int64>(s: this.t);
+        return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
+    }
+    public const fn Optional<uint64> asUint64() {
+        Result<uint64, ParseError> p = parse::<uint64>(s: this.t);
+        return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
+    }
+    // The nearest `float64` — a number with more digits than a `float64` holds rounds, as any reader's would — or
+    // `None` past its range.
+    public const fn Optional<float64> asFloat64() {
+        Result<float64, ParseError> p = parse::<float64>(s: this.t);
+        return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
+    }
+}
+
+type enum JsonValue implements Serializable, Deserializable<This> {
+    Null, Bool(bool value), Number(JsonNumber value), String(string value),
+    Array(DynamicArray<JsonValue> items), Object(OrderedMap<string, JsonValue> members);
+
+    // An array's elements or an object's members; 0 for anything else.
+    public const fn isize length() {
+        match (this) {
+            case Array(items: xs): { return xs.length(); }
+            case Object(members: m): { return m.length(); }
+            case _: { }
+        };
+        return 0;
+    }
+    // Does an object have this member? False for anything that is not an object.
+    public const fn bool has(const ref string key) {
+        match (this) { case Object(members: m): { return m.contains(key: key); } case _: { } };
+        return false;
+    }
+    // A member, in place — panics when this is not an object or has no such member (guard with `has`), as
+    // `OrderedMap.getRef` panics on an absent key.
+    @trackCaller
+    public unsafe const fn const ref JsonValue getRef(const ref string key) {
+        match (this) {
+            case Object(members: m): { if (m.contains(key: key)) { return m.getRef(key: key); } }
+            case _: { }
+        };
+        panic(msg: "JsonValue.getRef: no such member");
+    }
+    // A member, copied — `None` when this is not an object or has no such member.
+    public const fn Optional<JsonValue> get(const ref string key) {
+        match (this) {
+            case Object(members: m): { if (m.contains(key: key)) { return Optional::Some(value: copy m.getRef(key: key)); } }
+            case _: { }
+        };
+        return Optional::None;
+    }
+    // An element, in place — panics when this is not an array or `index` is out of its range.
+    @trackCaller
+    public unsafe const fn const ref JsonValue at(isize index) {
+        match (this) {
+            case Array(items: xs): { if (index >= 0 && index < xs.length()) { return xs[index]; } }
+            case _: { }
+        };
+        panic(msg: "JsonValue.at: no such element");
+    }
+    // A number at the width asked for, or `None`: not a number, or not one that fits (see `JsonNumber`).
+    public const fn Optional<int64> asInt64() {
+        match (this) { case Number(value: n): { return n.asInt64(); } case _: { } };
+        return Optional::None;
+    }
+    public const fn Optional<uint64> asUint64() {
+        match (this) { case Number(value: n): { return n.asUint64(); } case _: { } };
+        return Optional::None;
+    }
+    public const fn Optional<float64> asFloat64() {
+        match (this) { case Number(value: n): { return n.asFloat64(); } case _: { } };
+        return Optional::None;
+    }
+
+    public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) {
+        match (this) {
+            case Null: { w.writeNull(); }
+            case Bool(value: b): { w.writeBool(v: b); }
+            case Number(value: n): { w.writeNumberText(text: n.text()); }
+            case String(value: s): { w.writeString(v: s); }
+            case Array(items: xs): {
+                w.beginArray(count: cast<usize>(xs.length()));
+                foreach (const ref JsonValue x in xs.iterConst()) {
+                    Result<Unit, Owned<Error>> r = x.serialize(w: w);
+                    match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                }
+                w.endArray();
+            }
+            case Object(members: m): {
+                w.beginObject(count: cast<usize>(m.length()));
+                foreach (string k in m) {   // each member borrowed in place, in order: writing copies no subtree
+                    w.field(name: copy k, id: 0ui32);
+                    Result<Unit, Owned<Error>> r = m.getRef(key: k).serialize(w: w);
+                    match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                }
+                w.endObject();
+            }
+        };
+        // A write that could not proceed — a number on a back end with no form for one — is sticky; report it once.
+        if (w.failed()) { return Result::Err(error: w.errorCode()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Whatever the reader finds next, one value deep, recursing for arrays and objects. A failure is reported where
+    // it happened (`servers[2].port`), as a typed read reports one.
+    public ctor Result<JsonValue, Owned<Error>> deserialize(Deserializer r) {
+        ValueKind k = r.peekKind();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        match (k) {
+            case Null: {
+                if (!r.readNull()) { r.failWith(kind: DeErrorKind::Malformed); }
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                return Result::Ok(value: JsonValue::Null);
+            }
+            case Bool: {
+                bool b = r.readBool();
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                return Result::Ok(value: JsonValue::Bool(value: b));
+            }
+            case Number: {
+                string t = r.readNumberText();
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                return Result::Ok(value: JsonValue::Number(value: JsonNumber.read(text: give t)));
+            }
+            case String: {
+                string s = r.readString();
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                return Result::Ok(value: JsonValue::String(value: give s));
+            }
+            case Array: {
+                r.beginArray();
+                DynamicArray<JsonValue> items = DynamicArray.empty();
+                isize index = 0;
+                while (r.moreElems()) {
+                    Result<JsonValue, Owned<Error>> e = JsonValue.deserialize(r: r);
+                    match (give e) {
+                        case Ok(value: v): { items.add(item: give v); }
+                        case Err(error: x): { return Result::Err(error: DeError::inElement(error: give x, index: index)); }
+                    };
+                    index = index + 1;
+                }
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                return Result::Ok(value: JsonValue::Array(items: give items));
+            }
+            case Object: {
+                r.beginObject(count: 0);
+                OrderedMap<string, JsonValue> members = OrderedMap.empty();
+                while (r.moreFields()) {
+                    FieldKey fk = r.field();
+                    string name = match (give fk) {
+                        case Name(name: n): { := give n; }
+                        case Id(id: _): { r.fail(); := ""; }
+                        case Position(rank: _): { r.fail(); := ""; }
+                    };
+                    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                    Result<JsonValue, Owned<Error>> e = JsonValue.deserialize(r: r);
+                    match (give e) {
+                        case Ok(value: v): { members.put(key: give name, value: give v); }
+                        case Err(error: x): { return Result::Err(error: DeError::inField(error: give x, name: give name)); }
+                    };
+                }
+                r.endObject();
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                return Result::Ok(value: JsonValue::Object(members: give members));
+            }
+        };
+    }
 }

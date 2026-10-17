@@ -12027,14 +12027,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.isConstPlace  = md->isConstRef;   // `fn const ref T …` — a read-only place (T const*)
-                        mi.trackCaller = hasAttr(md->attributes, "trackCaller");
-                        if (mi.trackCaller && md->isCtor) {   // KR-179
-                            unsupported("`@trackCaller` marks a function or method; a constructor is also built into "
-                                        "storage through its `__into` form, which carries no caller location — a "
-                                        "constructor whose input can be wrong returns `Result`", md);
-                            mi.trackCaller = false;
-                        }
-                        if (mi.trackCaller) _trackCallerCNames.insert(mi.cName);
+                        mi.trackCaller = methodTrackCaller(md, mi.cName);
                         mi.noHeap = hasNoHeapAttr(md->attributes);   // the declared half of the no-heap proof
                         mi.serdeGraphEdges = hasAttr(md->attributes, "serializedGraphEdges");
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
@@ -23137,6 +23130,21 @@ MethodInfo* CEmitter::findMethod(ClassInfo* ci, const std::string& name, ClassIn
 // A recorded conformance is STATIC-dispatch-only (it lands in `staticOnlyInterfaces`, so no fat-pointer
 // vtable is emitted for it). `isPrimitive` gates the serde-return scan: a primitive's
 // `Result<scalar, Owned<Error>>` monomorph only matters when the program actually uses serde.
+// `@trackCaller` on a member (KR-179), and the C name every call then hands the caller's location to — one rule for a
+// type's methods and an enum's or adapter's. A constructor is refused: its `__into` form carries no caller location.
+bool CEmitter::methodTrackCaller(ClassMethodDeclarationNode* md, const std::string& cName)
+{
+    if (!hasAttr(md->attributes, "trackCaller")) return false;
+    if (md->isCtor) {
+        unsupported("`@trackCaller` marks a function or method; a constructor is also built into "
+                    "storage through its `__into` form, which carries no caller location — a "
+                    "constructor whose input can be wrong returns `Result`", md);
+        return false;
+    }
+    _trackCallerCNames.insert(cName);
+    return true;
+}
+
 // The MethodInfo for a method declared in a `type enum`'s own body or a `type adapter` block — both
 // always public, and neither has a `ClassDeclarationNode` to come through collectClasses. A `when [...]`
 // gate is recorded for a GENERIC enum's template, where each instance judges it.
@@ -23186,6 +23194,9 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
             mi.returnType = rt;
         }
     }
+    // Read here too: an enum method marked `@trackCaller` had the hidden location parameters in its definition and
+    // not in its prototype or at its calls, which C refused as conflicting declarations.
+    mi.trackCaller = methodTrackCaller(md, mi.cName);
     mi.fromContract = contract;             // an injected method, not part of the type's own API
     // A `type adapter` block's methods belong to its contract, so they are public. An enum's OWN members
     // follow the member rule every other kind follows — private unless written `public` — which they did
@@ -37614,7 +37625,7 @@ void CEmitter::emitNullSerializer()
                         ".k_writeU32 = __kama_ns_writeU32, .k_writeU64 = __kama_ns_writeU64,\n";
     indent(1); *_out << ".k_writeF32 = __kama_ns_writeF32, .k_writeF64 = __kama_ns_writeF64,\n";
     indent(1); *_out << ".k_writeBool = __kama_ns_writeBool, .k_writeChar = __kama_ns_writeChar, "
-                        ".k_writeString = __kama_ns_str,\n";
+                        ".k_writeString = __kama_ns_str, .k_writeNumberText = __kama_ns_str,\n";
     indent(1); *_out << ".k_writeSome = __kama_ns_void, .k_writeNull = __kama_ns_void,\n";
     indent(1); *_out << ".k_failed = __kama_ns_failed, .k_fail = __kama_ns_void, "
                         ".k_failWith = NULL, .k_errorCode = __kama_ns_errorCode,\n";

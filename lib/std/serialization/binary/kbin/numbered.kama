@@ -182,6 +182,9 @@ type resource KbinNumberedSerializer<W: Writer> implements Serializer {
     // value, so `Some(12)` came back as 4 (the zigzag of the key byte). So: absence is its own wire type
     // (6, no payload) and presence writes nothing at all, leaving the inner value's own key to carry the id.
     // Inside an ARRAY there is no key to ride, so the marker is a bare varint in both directions.
+    // A number as text has no form here: its varints and fixed widths hold no number past 64 bits and no exact decimal, so the untyped value that writes one (KR-110) is
+    // refused rather than rounded. JSON and KBIN named carry it.
+    public fn void writeNumberText(const ref string text) { this.failWith(e: SerError::NotRepresentable); }
     public fn void writeSome() { if (this.inArray()) { this.putVarint(v: 1ui64); } }
     public fn void writeNull() {
         if (this.inArray()) { this.putVarint(v: 0ui64); return; }
@@ -357,6 +360,10 @@ type resource KbinNumberedDeserializer implements Deserializer {
     }
     // The twin of `writeSome`/`writeNull`: absence is wire type 6 with no payload, so a present value
     // consumes nothing here and its own read then finds the payload the key introduced.
+    // An untyped read (KR-110) cannot be answered: its wire types do not separate an integer from a `bool` or a `char`, nor an object from an array. Read it with a schema,
+    // or through a self-describing back end (JSON, KBIN named).
+    public fn ValueKind peekKind() { this.failWith(kind: DeErrorKind::TypeMismatch); return ValueKind::Null; }
+    public fn string readNumberText() { this.failWith(kind: DeErrorKind::TypeMismatch); return ""; }
     public fn bool readNull() {
         if (this.inArray()) { return this.getVarint() == 0ui64; }
         return this.lastWt == 6ui8;

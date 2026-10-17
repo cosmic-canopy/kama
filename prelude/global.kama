@@ -388,6 +388,12 @@ type contract Serializer for resource {
     fn void writeU8(uint8 v); fn void writeU16(uint16 v); fn void writeU32(uint32 v); fn void writeU64(uint64 v);
     fn void writeF32(float32 v); fn void writeF64(float64 v);
     fn void writeBool(bool v); fn void writeChar(char v); fn void writeString(const ref string v);
+    // A number as its exact decimal TEXT — RFC 8259's grammar, which the caller has already held it to — for a value
+    // that keeps the number the document spelled rather than one fixed-width reading of it: an untyped JSON value
+    // (`std::serialization::text::json::JsonValue`, KR-110), where `2^63+1` and `1e400` must survive a round trip.
+    // JSON writes the text; KBIN writes it under its own tag; a back end with no exact form for an arbitrary number
+    // (the numbered and positional ones) fails `NotRepresentable` rather than round it.
+    fn void writeNumberText(const ref string text);
     // An `Optional<T>` field's PRESENCE, written before the two arms diverge: `writeSome()` then the inner
     // value, or `writeNull()` alone. A self-describing backend no-ops `writeSome` — JSON reads a present
     // value back by seeing something that is not `null`, KBIN by seeing a tag that is not 0x0D — but a
@@ -522,6 +528,10 @@ type resource DeError implements Error, Copyable<This>(bare: give), Sendable {
 // the two cannot share a case: with ids `(5, 1)` the number 1 means slot 0 read as an id and slot 1 read as a
 // rank, so a single switch over both would need two meanings for one label.
 type enum FieldKey { Name(string name), Id(uint32 id), Position(uint32 rank) }
+// What a SELF-DESCRIBING reader finds next, before it is read (`Deserializer.peekKind`): the shape of an untyped value
+// (KR-110), which a typed read never asks because its type already says. JSON's six kinds, which every self-describing
+// format kama reads can name.
+type enum ValueKind { Null, Bool, Number, String, Array, Object }
 type contract Deserializer for resource {
     // `count` is what the WRITER put on the wire (so a `@deprecated` field, read but never written, is not
     // in it) — see `Serializer.beginObject` for why the reader is told rather than reading it back, and why
@@ -542,6 +552,12 @@ type contract Deserializer for resource {
     fn uint8 readU8(); fn uint16 readU16(); fn uint32 readU32(); fn uint64 readU64();
     fn float32 readF32(); fn float64 readF64();
     fn bool readBool(); fn char readChar(); fn string readString();
+    // The kind of the next value, without consuming it — what lets a reader take a document whose shape the program
+    // does not declare (KR-110). A self-describing reader answers from what it sees (JSON a byte, KBIN a tag); one that
+    // cannot tell — a positional reader, whose values carry no tags, or a numbered one, whose wire types do not
+    // separate an integer from a `bool` — fails `TypeMismatch`. `readNumberText` is the twin of `writeNumberText`: the
+    // next number's exact decimal text, whatever width it was written at (`1e400` stays `1e400`).
+    fn ValueKind peekKind(); fn string readNumberText();
     fn bool readNull(); fn void skipValue(); const fn bool failed(); fn void fail();
     // `failWith` records the KIND of a failure (so a dangling graph reference surfaces `UnresolvedReference`,
     // not the generic `Malformed`); `errorKind` reads it back at the boundary, where the reader of the record

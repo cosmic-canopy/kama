@@ -11,17 +11,28 @@
 //   0x09 F32  0x0A F64                            (LE IEEE-754 bits — NaN/Inf round-trip exactly)
 //   0x0B bool:false  0x0C bool:true              (value in the tag, no payload)
 //   0x0D null
-//   0x0E char  (u32 LE codepoint)
+//   0x0E char  (u32 LE codepoint) — also read by `readString`, as one character of text, as JSON writes a char
 //   0x0F string  (u32 LE byte-length + raw UTF-8)   ← also how a field NAME is written
 //   0x10 obj-begin  0x11 obj-end                  (moreFields consumes obj-end)
 //   0x12 arr-begin  0x13 arr-end                  (moreElems consumes arr-end)
 //   0x14 graph-begin (+u64 root, then the table obj-begin)   0x15 entry-key (+u64 id)
 //   0x16 ref (+u64 id)                            0x17 graph-end
+//   0x18 number text  (u32 LE byte-length + ASCII) — a number as its exact decimal text, RFC 8259's grammar
+//        (`writeNumberText`, KR-110): what an untyped JSON value writes, so `2^63+1` and `1e400` survive. A typed
+//        read parses it into its width as JSON does — a fraction into an integer, or a value past the width, is a
+//        `TypeMismatch` — and the other numeric tags read back as text through `readNumberText`.
 
 import {
     std::collections::DynamicArray,
     std::collections::FixedArray,
     std::collections::View,
+    std::fmt::i64Str,
+    std::fmt::u64Str,
+    std::fmt::f32Str,
+    std::fmt::f64Str,
+    std::fmt::parse,
+    std::fmt::Parseable,
+    std::fmt::ParseError,
     std::io::Writer,
     std::io::Reader,
     std::io::StringWriter,
@@ -129,6 +140,13 @@ type resource KbinNamedSerializer<W: Writer> implements Serializer {
     public fn void writeBool(bool v) { this.byte(b: v ? 12ui8 : 11ui8); }
     public fn void writeChar(char v) { this.byte(b: 14ui8); this.putU(v: cast<uint64>(cast<uint32>(v)), n: 4); }
     public fn void writeString(const ref string v) { this.putStr(s: ref v); }
+    public fn void writeNumberText(const ref string text) {   // 0x18 + u32 LE length + the text (see the tag table)
+        this.byte(b: 24ui8);
+        isize n = text.length();
+        this.putU(v: cast<uint64>(cast<uint32>(n)), n: 4);
+        isize i = 0;
+        while (i < n) { this.byte(b: text[i]); i = i + 1; }
+    }
     public fn void writeSome() { }   // KBIN marks presence by the next tag not being 0x0D (null)
     public fn void writeNull() { this.byte(b: 13ui8); }
     // --- sticky error queries ---
@@ -185,7 +203,7 @@ type resource KbinNamedDeserializer implements Deserializer {
     // `TypeMismatch`: the stream is well formed and the schema disagrees with it. Any other byte is `Malformed`.
     // (Past the end, `next` has already said `UnexpectedEnd`, and the first failure is the one reported.)
     fn void wrongTag(uint8 b) {
-        bool value = (b >= 1ui8 && b <= 16ui8) || b == 18ui8 || b == 20ui8;
+        bool value = (b >= 1ui8 && b <= 16ui8) || b == 18ui8 || b == 20ui8 || b == 24ui8;
         this.failWith(kind: value ? DeErrorKind::TypeMismatch : DeErrorKind::Malformed);
     }
     unsafe fn string readStr() {
@@ -224,21 +242,74 @@ type resource KbinNamedDeserializer implements Deserializer {
     public fn FieldKey field()   { return FieldKey::Name(name: this.readStr()); }
     public fn FieldKey variant() { return FieldKey::Name(name: this.readStr()); }
 
+    // --- a number as its text (0x18, KR-110) ---
+    unsafe fn string numText() {                     // consumes 0x18 + its payload
+        this.expectTag(t: 24ui8);
+        if (this.err) { return ""; }
+        isize n = cast<isize>(this.getU(n: 4));
+        if (n <= 0) { this.failWith(kind: DeErrorKind::Malformed); return ""; }
+        if (this.pos + n > this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); return ""; }
+        isize start = this.pos;
+        this.pos = this.pos + n;
+        return kama_string_from_raw(src: addr(of: this.buf[start]), start: 0, len: n);
+    }
+    fn void mismatch() { this.failWith(kind: DeErrorKind::TypeMismatch); }
+    // The next value's kind, from its tag. A `char` is text, as JSON writes one; the graph tags and any other byte are
+    // no value an untyped read can take.
+    public fn ValueKind peekKind() {
+        uint8 t = this.at();
+        if ((t >= 1ui8 && t <= 10ui8) || t == 24ui8) { return ValueKind::Number; }
+        if (t == 11ui8 || t == 12ui8) { return ValueKind::Bool; }
+        if (t == 13ui8) { return ValueKind::Null; }
+        if (t == 14ui8 || t == 15ui8) { return ValueKind::String; }
+        if (t == 16ui8) { return ValueKind::Object; }
+        if (t == 18ui8) { return ValueKind::Array; }
+        if (this.pos >= this.len) { this.failWith(kind: DeErrorKind::UnexpectedEnd); }
+        else { this.failWith(kind: DeErrorKind::Malformed); }
+        return ValueKind::Null;
+    }
+    // The next number as text: 0x18's own, and every fixed width spelled as JSON spells it. A float's text is its
+    // shortest round trip; NaN and the infinities have no number text, so they are the stream disagreeing.
+    public unsafe fn string readNumberText() {
+        uint8 t = this.at();
+        if (t == 24ui8) { return this.numText(); }
+        if (t == 1ui8) { int8 v = this.readI8(); return i64Str(v: cast<int64>(v)); }
+        if (t == 2ui8) { int16 v = this.readI16(); return i64Str(v: cast<int64>(v)); }
+        if (t == 3ui8) { int32 v = this.readI32(); return i64Str(v: cast<int64>(v)); }
+        if (t == 4ui8) { return i64Str(v: this.readI64()); }
+        if (t == 5ui8) { uint8 v = this.readU8(); return u64Str(v: cast<uint64>(v)); }
+        if (t == 6ui8) { uint16 v = this.readU16(); return u64Str(v: cast<uint64>(v)); }
+        if (t == 7ui8) { uint32 v = this.readU32(); return u64Str(v: cast<uint64>(v)); }
+        if (t == 8ui8) { return u64Str(v: this.readU64()); }
+        if (t == 9ui8) {
+            float32 v = this.readF32();
+            if (v != v || v - v != 0.0f32) { this.failWith(kind: DeErrorKind::TypeMismatch); return ""; }
+            return f32Str(v: v);
+        }
+        if (t == 10ui8) {
+            float64 v = this.readF64();
+            if (v != v || v - v != 0.0) { this.failWith(kind: DeErrorKind::TypeMismatch); return ""; }
+            return f64Str(v: v);
+        }
+        this.wrongTag(b: this.next());
+        return "";
+    }
+
     // --- scalars ---
     // A signed scalar goes onto the wire as its unsigned peer's BIT PATTERN and comes back the same way,
     // so each crossing is a `bitcast` (same width, all the bits) and not a `cast` (which preserves the
     // VALUE, and so traps: -56 is not a `uint8`, and 200 is not an `int8`). The reads bind a local first
     // because `bitcast` resolves its operand's type statically — SPEC § bitcast.
-    public fn int8  readI8()  { this.expectTag(t: 1ui8); uint8  u = cast<uint8>(this.getU(n: 1));  return bitcast<int8>(u); }
-    public fn int16 readI16() { this.expectTag(t: 2ui8); uint16 u = cast<uint16>(this.getU(n: 2)); return bitcast<int16>(u); }
-    public fn int32 readI32() { this.expectTag(t: 3ui8); uint32 u = cast<uint32>(this.getU(n: 4)); return bitcast<int32>(u); }
-    public fn int64 readI64() { this.expectTag(t: 4ui8); uint64 u = this.getU(n: 8);               return bitcast<int64>(u); }
-    public fn uint8  readU8()  { this.expectTag(t: 5ui8); return cast<uint8>(this.getU(n: 1)); }
-    public fn uint16 readU16() { this.expectTag(t: 6ui8); return cast<uint16>(this.getU(n: 2)); }
-    public fn uint32 readU32() { this.expectTag(t: 7ui8); return cast<uint32>(this.getU(n: 4)); }
-    public fn uint64 readU64() { this.expectTag(t: 8ui8); return this.getU(n: 8); }
-    public unsafe fn float32 readF32() { this.expectTag(t: 9ui8);  return kama_f32_from_bits(b: cast<uint32>(this.getU(n: 4))); }
-    public unsafe fn float64 readF64() { this.expectTag(t: 10ui8); return kama_f64_from_bits(b: this.getU(n: 8)); }
+    public fn int8  readI8()  { if (this.at() == 24ui8) { Optional<int8> n = parsedNumber::<int8>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0i8; } this.expectTag(t: 1ui8); uint8  u = cast<uint8>(this.getU(n: 1));  return bitcast<int8>(u); }
+    public fn int16 readI16() { if (this.at() == 24ui8) { Optional<int16> n = parsedNumber::<int16>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0i16; } this.expectTag(t: 2ui8); uint16 u = cast<uint16>(this.getU(n: 2)); return bitcast<int16>(u); }
+    public fn int32 readI32() { if (this.at() == 24ui8) { Optional<int32> n = parsedNumber::<int32>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0; } this.expectTag(t: 3ui8); uint32 u = cast<uint32>(this.getU(n: 4)); return bitcast<int32>(u); }
+    public fn int64 readI64() { if (this.at() == 24ui8) { Optional<int64> n = parsedNumber::<int64>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0i64; } this.expectTag(t: 4ui8); uint64 u = this.getU(n: 8);               return bitcast<int64>(u); }
+    public fn uint8  readU8()  { if (this.at() == 24ui8) { Optional<uint8> n = parsedNumber::<uint8>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0ui8; } this.expectTag(t: 5ui8); return cast<uint8>(this.getU(n: 1)); }
+    public fn uint16 readU16() { if (this.at() == 24ui8) { Optional<uint16> n = parsedNumber::<uint16>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0ui16; } this.expectTag(t: 6ui8); return cast<uint16>(this.getU(n: 2)); }
+    public fn uint32 readU32() { if (this.at() == 24ui8) { Optional<uint32> n = parsedNumber::<uint32>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0ui32; } this.expectTag(t: 7ui8); return cast<uint32>(this.getU(n: 4)); }
+    public fn uint64 readU64() { if (this.at() == 24ui8) { Optional<uint64> n = parsedNumber::<uint64>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0ui64; } this.expectTag(t: 8ui8); return this.getU(n: 8); }
+    public unsafe fn float32 readF32() { if (this.at() == 24ui8) { Optional<float32> n = parsedNumber::<float32>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0.0f32; } this.expectTag(t: 9ui8);  return kama_f32_from_bits(b: cast<uint32>(this.getU(n: 4))); }
+    public unsafe fn float64 readF64() { if (this.at() == 24ui8) { Optional<float64> n = parsedNumber::<float64>(text: this.numText()); match (n) { case Some(value: x): { return x; } case None: {} }; this.mismatch(); return 0.0; } this.expectTag(t: 10ui8); return kama_f64_from_bits(b: this.getU(n: 8)); }
     public fn bool readBool() {
         uint8 b = this.next();
         if (b == 12ui8) { return true; }
@@ -246,7 +317,12 @@ type resource KbinNamedDeserializer implements Deserializer {
         this.wrongTag(b: b); return false;
     }
     public fn char readChar() { this.expectTag(t: 14ui8); return cast<char>(cast<uint32>(this.getU(n: 4))); }
-    public fn string readString() { return this.readStr(); }
+    // A `char` reads as one character of text, as JSON writes one — so a string field reads it, and so does an untyped
+    // value (`peekKind` calls a `char` text).
+    public fn string readString() {
+        if (this.at() == 14ui8) { char c = this.readChar(); return "${c}"; }
+        return this.readStr();
+    }
     public fn bool readNull() {
         if (this.at() == 13ui8) { this.pos = this.pos + 1; return true; }   // consume only if actually null
         return false;
@@ -259,7 +335,7 @@ type resource KbinNamedDeserializer implements Deserializer {
         else if (t == 3ui8 || t == 7ui8 || t == 9ui8 || t == 14ui8) { this.pos = this.pos + 4; }
         else if (t == 4ui8 || t == 8ui8 || t == 10ui8) { this.pos = this.pos + 8; }
         else if (t == 11ui8 || t == 12ui8 || t == 13ui8) { }   // bool/null: no payload
-        else if (t == 15ui8) { isize n = cast<isize>(this.getU(n: 4)); this.pos = this.pos + n; }
+        else if (t == 15ui8 || t == 24ui8) { isize n = cast<isize>(this.getU(n: 4)); this.pos = this.pos + n; }
         else if (t == 16ui8) { this.enter(); while (this.moreFields()) { FieldKey k = this.field(); this.skipValue(); } }   // 0x10 already consumed
         else if (t == 18ui8) { this.enter(); while (this.moreElems()) { this.skipValue(); } }
         else { this.err = true; }
@@ -273,6 +349,13 @@ type resource KbinNamedDeserializer implements Deserializer {
     public fn void unknownField() { if (this.refuseUnknown) { this.failWith(kind: DeErrorKind::UnknownField); } else { this.skipValue(); } }
     public const fn DeErrorKind errorKind() { return this.code; }
     public fn bool atKeyedMap() { return false; }
+}
+
+// A number written as text (tag 0x18), read into a fixed width — JSON's rule: a fraction into an integer, or a value
+// the width does not hold, is the stream disagreeing with the schema, so the reader fails `TypeMismatch` on `None`.
+fn Optional<T> parsedNumber<T: Parseable<T>>(const ref string text) {
+    Result<T, ParseError> p = parse::<T>(s: text);
+    return match (p) { case Ok(value: v): Optional::Some(value: v); case Err(error: _): Optional::None; };
 }
 
 // Serializable any `Serializable` value to a KBIN byte buffer. Byte-oriented (binary is not valid UTF-8): returns a

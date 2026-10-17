@@ -1,0 +1,139 @@
+// KR-110: `JsonValue`, the untyped JSON value — a document read without a schema, for keys that are data (glTF's
+// `extensions`) or a shape a program only partly knows. It is an ordinary `Serializable`/`Deserializable` type, so the
+// typed reader IS its parser: the same RFC 8259 numbers, 128-level limit, errors and paths. Each check adds its own bit.
+import {
+    std::collections::DynamicArray, std::collections::OrderedMap, std::memory::Owned,
+    std::serialization::text::json::JsonValue, std::serialization::text::json::JsonNumber,
+    std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer, std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer, std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+    std::serialization::binary::kbin::serializeKbinNumberedBuffer, std::serialization::binary::kbin::deserializeKbinNumberedBuffer,
+};
+
+// A typed schema that keeps a subtree it does not model — the glTF shape.
+@generate(Serializable, Deserializable)
+type resource Asset {
+    @field string version = "";
+    @field(default) JsonValue extensions = JsonValue::Null;
+    public ctor make() { }
+    public const fn const ref JsonValue ext() { return this.extensions; }
+}
+@generate(Serializable, Deserializable)
+type value Port { @field public int32 n; public ctor of(int32 n) { this.n = n; } }
+@generate(Deserializable)
+type value Flag { @field public bool on; public ctor make() { this.on = false; } }
+@generate(Serializable)
+type resource Every {
+    @field int8 a = -8i8; @field uint16 b = 65535ui16; @field int64 c = -9223372036854775807i64; @field uint64 d = 18446744073709551615ui64;
+    @field float32 e = 1.5f32; @field float64 f = 0.1; @field bool g = true; @field char h = 'é'; @field string i = "s";
+    public ctor make() { }
+}
+
+fn string json(Serializable v) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: v);
+    return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
+}
+fn JsonValue read(string src) {
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src);
+    return match (give r) { case Ok(value: v): give v; case Err(error: _): JsonValue::String(value: "read failed"); };
+}
+// The kind a read of `src` fails with.
+fn bool failsWith(string src, DeErrorKind kind) {
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src);
+    return match (give r) {
+        case Ok(value: _): false;
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.kind() == kind; case None: false; };
+    };
+}
+// The error a read of `src` fails with, as its message.
+fn string failure(string src) {
+    Result<JsonValue, Owned<Error>> r = deserializeJsonBuffer::<JsonValue>(src: give src);
+    return match (give r) {
+        case Ok(value: _): "ok";
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.message(); case None: "other"; };
+    };
+}
+
+fn int32 main() {
+    int32 r = 0;
+    // 1: byte-exact — key order, every number's own text (a fraction's trailing zero, `-0`, past 64 bits, past a
+    //    float64's range), and every kind
+    string src = "{\"zeta\":{\"b\":1,\"a\":[true,false,null,\"x\\ny\"]},\"n\":[1.50,-0,18446744073709551617,1e400,-2.5E-3],\"e\":{},\"z\":[]}";
+    if (json(v: read(src: copy src)) == src) { r = r + 1; }
+
+    // 2: a repeated key keeps its first position and takes its last value
+    if (json(v: read(src: "{\"a\":1,\"b\":2,\"a\":3}")) == "{\"a\":3,\"b\":2}") { r = r + 2; }
+
+    // 4: the accessors — has / getRef / get / at / length, and numbers at the width asked for
+    JsonValue doc = read(src: "{\"id\":9007199254740993,\"big\":18446744073709551615,\"f\":0.25,\"list\":[10,20,30],\"s\":\"hi\"}");
+    int64 id = match (doc.getRef(key: "id").asInt64()) { case Some(value: v): v; case None: 0i64; };
+    uint64 big = match (doc.getRef(key: "big").asUint64()) { case Some(value: v): v; case None: 0ui64; };
+    bool bigNotI64 = match (doc.getRef(key: "big").asInt64()) { case Some(value: _): false; case None: true; };
+    float64 f = match (doc.getRef(key: "f").asFloat64()) { case Some(value: v): v; case None: 0.0; };
+    bool fracNotInt = match (doc.getRef(key: "f").asInt64()) { case Some(value: _): false; case None: true; };
+    int64 second = match (doc.getRef(key: "list").at(index: 1).asInt64()) { case Some(value: v): v; case None: 0i64; };
+    bool missing = match (doc.get(key: "nope")) { case Some(value: _): false; case None: true; };
+    bool strNotNum = match (doc.getRef(key: "s").asInt64()) { case Some(value: _): false; case None: true; };
+    if (id == 9007199254740993i64 && big == 18446744073709551615ui64 && bigNotI64 && f == 0.25 && fracNotInt
+        && second == 20i64 && missing && strNotNum && doc.has(key: "list") && !doc.has(key: "nope")
+        && doc.length() == 5 && doc.getRef(key: "list").length() == 3) { r = r + 4; }
+
+    // 8: building one in code, and `JsonNumber`'s only ways in: an integer, a finite float, or valid text
+    OrderedMap<string, JsonValue> m = OrderedMap.empty();
+    m.put(key: "count", value: JsonValue::Number(value: JsonNumber.ofInt64(v: -3i64)));
+    Optional<JsonNumber> half = JsonNumber::ofFloat64(v: 0.5);
+    Optional<JsonNumber> nan = JsonNumber::ofFloat64(v: 0.0 / 0.0);
+    Optional<JsonNumber> bad = JsonNumber::parse(text: "01");
+    Optional<JsonNumber> good = JsonNumber::parse(text: "6.02e23");
+    m.put(key: "half", value: match (give half) { case Some(value: n): JsonValue::Number(value: give n); case None: JsonValue::Null; });
+    m.put(key: "avogadro", value: match (give good) { case Some(value: n): JsonValue::Number(value: give n); case None: JsonValue::Null; });
+    bool refused = match (nan) { case Some(value: _): false; case None: true; } && match (bad) { case Some(value: _): false; case None: true; };
+    JsonValue built = JsonValue::Object(members: give m);
+    if (refused && json(v: built) == "{\"count\":-3,\"half\":0.5,\"avogadro\":6.02e23}") { r = r + 8; }
+
+    // 16: a typed schema holding a subtree it does not model, read and written back unchanged
+    string gltf = "{\"version\":\"2.0\",\"extensions\":{\"KHR_lights\":{\"lights\":[{\"type\":\"point\",\"range\":12.5}]}}}";
+    Result<Asset, Owned<Error>> ar = deserializeJsonBuffer::<Asset>(src: copy gltf);
+    Asset asset = match (give ar) { case Ok(value: a): give a; case Err(error: _): Asset.make(); };
+    bool reachable = asset.ext().getRef(key: "KHR_lights").getRef(key: "lights").at(index: 0).has(key: "range");
+    if (reachable && json(v: asset) == gltf) { r = r + 16; }
+
+    // 32: KBIN named — the tree round-trips, numbers kept as their text; and a number written as text reads back
+    //     into a typed field
+    Result<DynamicArray<uint8>, Owned<Error>> kb = serializeKbinNamedBuffer(v: read(src: copy src));
+    DynamicArray<uint8> bytes = match (give kb) { case Ok(value: b): give b; case Err(error: _): DynamicArray.empty(); };
+    Result<JsonValue, Owned<Error>> kr = deserializeKbinNamedBuffer::<JsonValue>(src: give bytes);
+    JsonValue k2 = match (give kr) { case Ok(value: v): give v; case Err(error: _): JsonValue::Null; };
+    Result<DynamicArray<uint8>, Owned<Error>> pb = serializeKbinNamedBuffer(v: read(src: "{\"n\":8080}"));
+    DynamicArray<uint8> pbytes = match (give pb) { case Ok(value: b): give b; case Err(error: _): DynamicArray.empty(); };
+    Result<Port, Owned<Error>> port = deserializeKbinNamedBuffer::<Port>(src: give pbytes);
+    int32 pn = match (give port) { case Ok(value: p): p.n; case Err(error: _): 0; };
+    if (json(v: k2) == src && pn == 8080) { r = r + 32; }
+
+    // 64: refusals — a document too deep, a number that is no number, a literal that is no literal, and a back end
+    //     that cannot say what comes next (positional, numbered)
+    string deep = "";
+    int32 i = 0;
+    while (i < 200) { deep = deep + "["; i = i + 1; }
+    Result<DynamicArray<uint8>, Owned<Error>> posb = serializeKbinPositionalBuffer(v: Port.of(n: 1));
+    DynamicArray<uint8> posbytes = match (give posb) { case Ok(value: b): give b; case Err(error: _): DynamicArray.empty(); };
+    Result<JsonValue, Owned<Error>> posr = deserializeKbinPositionalBuffer::<JsonValue>(src: give posbytes);
+    bool posRefused = match (give posr) {
+        case Ok(value: _): false;
+        case Err(error: e): match (e.as<DeError>()) { case Some(value: d): d.kind() == DeErrorKind::TypeMismatch; case None: false; };
+    };
+    Result<Flag, Owned<Error>> typed = deserializeJsonBuffer::<Flag>(src: "{\"on\":tzzz}");   // a typed read too
+    bool typedRefused = match (give typed) { case Ok(value: _): false; case Err(error: _): true; };
+    Result<DynamicArray<uint8>, Owned<Error>> numw = serializeKbinNumberedBuffer(v: read(src: "[1]"));
+    bool numRefused = match (give numw) { case Ok(value: _): false; case Err(error: _): true; };
+    if (failsWith(src: give deep, kind: DeErrorKind::TooDeep) && failure(src: "[007]") == "malformed input at `[0]`"
+        && failure(src: "{\"a\":nada}") == "malformed input at `a`" && typedRefused && posRefused && numRefused) { r = r + 64; }
+    // 128: every fixed width KBIN writes reads back as a number's text — and a `char` as text — exactly as the same
+    //      record reads in JSON
+    Result<DynamicArray<uint8>, Owned<Error>> eb = serializeKbinNamedBuffer(v: Every.make());
+    DynamicArray<uint8> ebytes = match (give eb) { case Ok(value: b): give b; case Err(error: _): DynamicArray.empty(); };
+    Result<JsonValue, Owned<Error>> er = deserializeKbinNamedBuffer::<JsonValue>(src: give ebytes);
+    JsonValue ev = match (give er) { case Ok(value: v): give v; case Err(error: _): JsonValue::Null; };
+    if (json(v: ev) == json(v: Every.make())) { r = r + 128; }
+    return r - 198;   // 255 - 198 = 57
+}
