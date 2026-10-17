@@ -1,0 +1,21 @@
+// An iterator that closes its window cannot drive a `foreach`: the loop would mint it, or copy it out of its alias (KR-124).
+@viewable type contract Walks for resource { fn Cursor walk(); }
+type view Cursor implements Iterator<int32> {
+    UnsafePtr<int32> at; int32 left;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; this.left = 2; }
+    public unsafe fn Optional<int32> next() { if (this.left == 0) { return Optional::None; } this.left -= 1; return Optional::Some(value: copy this.at[0]); }
+    unsafe ~Cursor() { this.at[0] = 0; }
+}
+type resource Bag implements Walks, Iterable<int32> {
+    InlineArray<int32>#(1) v;
+    public ctor make() { this.v = [7; 1]; }
+    public unsafe fn Cursor walk() { return Cursor.over(at: addr(of: this.v[0])); }
+    public unsafe fn Cursor iterator() { return Cursor.over(at: addr(of: this.v[0])); }
+}
+fn int32 main()
+{
+    Bag b = Bag.make();
+    int32 s = 0;
+    borrow b.walk() as it { foreach (int32 x in it) { s += x; } }
+    return s;
+}

@@ -1,0 +1,18 @@
+// A recovered panic is a longjmp out of the fault, which would skip a closing window's destructor — the rollback — so an
+@viewable type contract Transacts for resource { fn Tx begin(); }
+type view Tx {
+    UnsafePtr<int32> log; bool done;
+    unsafe ctor over(UnsafePtr<int32> log) { this.log = log; this.done = false; }
+    public unsafe fn void commit() { this.log[0] = 1; this.done = true; }
+    unsafe ~Tx() { if (!this.done) { this.log[0] = 2; } }
+}
+type resource Conn implements Transacts {
+    InlineArray<int32>#(1) log;
+    public ctor make() { this.log = [0; 1]; }
+    public unsafe fn Tx begin() { return Tx.over(log: addr(of: this.log[0])); }
+}
+// `@onPanic` region may not reach one, as it may not reach any owner with a destructor (KR-124).
+@noheap fn int32 guarded(ref Conn c) { borrow c.begin() as tx { } return 0; }
+@noheap @onPanic(recover: 1)
+fn int32 region(ref Conn c) { return guarded(c: ref c); }
+fn int32 main() { Conn c = Conn.make(); return region(c: ref c); }

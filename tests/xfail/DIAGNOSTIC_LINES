@@ -1365,6 +1365,15 @@ variant_untyped	variant_untyped.kama:4
 view_arg_aliases_receiver	view_arg_aliases_receiver.kama:16
 view_arg_aliases_ref	view_arg_aliases_ref.kama:15
 view_chain_over_local	view_chain_over_local.kama:11 view_chain_over_local.kama:14
+view_closes_by_value	view_closes_by_value.kama:14
+view_closes_copy	view_closes_copy.kama:17
+view_closes_foreach	view_closes_foreach.kama:19
+view_closes_generic	view_closes_generic.kama:18
+view_closes_local	view_closes_local.kama:17
+view_closes_onpanic	view_closes_onpanic.kama:15
+view_closes_out	view_closes_out.kama:14
+view_closes_outside_borrow	view_closes_outside_borrow.kama:17
+view_closes_return	view_closes_return.kama:15
 view_collection_elem	view_collection_elem.kama:3
 view_contract_ctor_escape	view_contract_ctor_escape.kama:17 view_contract_ctor_escape.kama:20 view_contract_ctor_escape.kama:21
 view_contract_ctor_infallible	view_contract_ctor_infallible.kama:14 view_contract_ctor_infallible.kama:17 view_contract_ctor_infallible.kama:18
@@ -1374,7 +1383,6 @@ view_ctor_forge	view_ctor_forge.kama:15
 view_ctor_over_byval_param	view_ctor_over_byval_param.kama:19
 view_ctor_over_local	view_ctor_over_local.kama:10
 view_ctor_public	view_ctor_public.kama:10
-view_dtor	view_dtor.kama:2
 view_escape_inline_array	view_escape_inline_array.kama:9
 view_field	view_field.kama:3
 view_from_const_receiver	view_from_const_receiver.kama:7

@@ -144,8 +144,10 @@ A view's constructor is **always private**: a view is handed out by the containe
 - **Codegens like a `value`** — inline, bitwise-copied, no dtor. But it is *not* a transparent data-bag:
   it has an invariant (a borrowed `UnsafePtr<T>` that must not leak, `ptr`/`len` kept consistent), so — like a
   `resource` — its **fields are private-only**.
-- **Owns nothing.** A `view` may **not** declare a `~dtor` and may **not** have an owning/resource field <!-- xfail: view_dtor, view_owns -->
-  (that would make it try to free memory it doesn't own) — the compiler rejects both.
+- **Owns nothing.** A `view` may **not** have an owning/resource field (that would make it try to free memory it <!-- xfail: view_owns -->
+  doesn't own). It **may** declare a `~dtor`, which frees nothing: it **closes its window** — the `borrow` that minted <!-- test: borrow_view_closes -->
+  the view runs it when the window closes, on every path out (a transaction that rolls back unless it committed). Such
+  a view is pinned to its window: a helper takes it `ref`/`const ref`, and nothing copies it (SPEC *The window*).
 - **Second-class borrow (the escape rule).** Exactly like a `contract` value, a `view` may be a
   **parameter or a local** but **not** a field, a collection element, or an `enum` payload — and it may be
   **returned only when it borrows `this` or a `ref`/view parameter** (so the buffer outlives the call, the

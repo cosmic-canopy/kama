@@ -417,6 +417,11 @@ struct ClassInfo {
     // (inline, owns nothing, no dtor) but the escape checker forbids it as a return/field/collection
     // element (like a `contract`). It borrows raw `UnsafePtr<T>` it does not own; see isNonEscapingBorrow.
     bool                              isBorrow = false;
+    // KR-124: a `type view` that declares `~dtor` CLOSES ITS WINDOW — the `borrow` that minted it runs the destructor
+    // when the window closes, on every path out. It stays non-destructible and owns nothing (so every owning and
+    // collection rule is untouched), and it is pinned to its window: no local, by-value parameter, generic argument,
+    // `give`, or mint outside a `borrow` host. A transaction that rolls back unless `commit()` ran is the shape.
+    bool                              closesWindow = false;
     std::vector<FieldInfo>            fields;      // declaration order
     std::set<std::string>            fieldNames;
     std::set<std::string>            constFields;   // `const` data members — write-once in the ctor
@@ -3979,6 +3984,15 @@ private:
     std::string externKey(ClassDeclarationNode* cd);
     bool rejectBareGeneric(const SharedIdentifier& t, const char* what, int line);   // `Src` for `Src<A>` (KR-183)
     bool rootIsTemporary(SharedExpression e) const;   // member/element chain rooted in a by-value call result
+    // KR-124: is `ct` a `type view` that closes its window — and the signature rule that pins one to it.
+    bool closesWindowCType(const std::string& ct) const {
+        auto it = _classes.find(ct); return it != _classes.end() && it->second.closesWindow;
+    }
+    void checkClosingViewSignature(SharedParameterList params, const std::string& retCType, ClassInfo* owner,
+                                   const std::string& member, bool isCtor, int line);
+    bool _closingViewReturnOK = false;   // emitting the `return` of a function allowed to hand one back (its mint)
+    std::set<std::string> _closingViewNames;   // bare names of the views that close their window, as `_viewTypeNames`
+    int _closingViewRefusedLine = -1;           // a declaration refused for one: its initializer is not a second mistake
     // A `borrow` place host (KR-123): the places a write to which would move or free it — a field path's own, an
     // element's container, a place-returning call's receiver and every `ref`/`const ref` argument — and whether it
     // is rooted in no named storage at all.

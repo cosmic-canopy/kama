@@ -427,6 +427,23 @@ a `comptime fn`, which borrows its own locals' elements and field paths and is c
 that returns a place has no compile-time form). A place a `spawn`ed child holds by `ref` cannot be named until its <!-- xfail: borrow_place_held_by_child -->
 `scope` joins it.
 
+**A view that closes its window.** A `type view` may declare `~dtor`. It frees nothing — a view owns nothing — and
+runs when the window that minted the view closes, on every path out of the block (its end, `return`, `break`, <!-- test: borrow_view_closes -->
+`continue`), after the block's own locals, and once; a window's several bindings close in reverse. So a transaction
+is a window that rolls back unless the code committed, with no guard object to store and no closure:
+
+```kama fragment
+borrow conn.begin() as tx { tx.execute(sql: "…"); tx.commit(); }   // ~Tx() rolls back unless commit() ran
+```
+
+Such a view is **pinned to its window**, because a second one is a transaction no window ends — committing a copy
+commits nothing the window sees. A helper takes it `ref`/`const ref`; refused are a local of it, a copy of the alias, <!-- xfail: view_closes_local, view_closes_copy, view_closes_by_value, view_closes_out -->
+a by-value or `out` parameter, a return from anything but its own constructor or a granted mint, a type argument, <!-- xfail: view_closes_return, view_closes_generic, view_closes_outside_borrow, view_closes_foreach -->
+a mint outside a `borrow` host (`conn.begin().commit()`), and a `foreach` over one (call `next()` on the alias). A
+trap aborts without running it, as for every destructor; an `@onPanic` region may not reach one, since recovery <!-- xfail: view_closes_onpanic -->
+skips it — the same rule as for any owner with a destructor. (A database server rolls back an uncommitted
+transaction when its connection drops, so an abort loses nothing the server kept.)
+
 **Why a window and not a `ref` local.** `ref Joint j = this.rig.joint(name: n);` is safe only if its host stays
 frozen from the declaration to `j`'s last use — a region nobody wrote. Rust infers that region (lifetimes and a
 borrow checker); C++ does not check it (`auto& j = …` dangles when the vector grows); C#'s ref locals lean on a GC
@@ -4111,8 +4128,10 @@ every function, so declarations are greppable and self-describing:
   when it borrows `this` or a `ref`/view parameter** (the same structural rule as a `ref T` place-return — no
   lifetime tracking). A **local** of the kind must root in a `borrow` window or a by-value view parameter,
   and its host is frozen for that window's extent, so it cannot outlive the storage it views — see *Slices /
-  spans* for the window rule. A view is also never a `ref`/`out` parameter: it is already a borrow. A view may **not** declare a `~dtor` or own a resource field, and
-  its fields are **private only** (its raw `UnsafePtr<T>` must not leak). A view's **conformance is checked at the
+  spans* for the window rule. A view is also never a `ref`/`out` parameter: it is already a borrow. A view may **not**
+  own a resource field, and its fields are **private only** (its raw `UnsafePtr<T>` must not leak). It **may** declare <!-- test: borrow_view_closes -->
+  a `~dtor`, which **closes its window** rather than freeing anything — see *The window* — and such a view passes
+  only `ref`/`const ref`, the one exception to the rule two sentences up. A view's **conformance is checked at the
   `implements` site**: it may not implement a contract whose `ctor` **member** constructs the implementer from <!-- xfail: view_contract_ctor_infallible, view_contract_ctor_escape -->
   parameters that carry no borrow (no `UnsafePtr<T>`, no `ref`, no view) — such a constructor could only borrow one
   of its own locals, so no body could satisfy it. A member taking something borrowable is fine, and an

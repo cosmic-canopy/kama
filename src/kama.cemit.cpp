@@ -6075,6 +6075,17 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     }
 
     if (auto* v = dynamic_cast<InvocationNode*>(n)) {
+        // KR-124 — a view that closes its window exists only as a `borrow` alias, which `emitBorrow` mints itself.
+        // Made anywhere else (`c.begin().commit()`) nothing would ever close it, so its destructor would not run.
+        if (!_closingViewReturnOK && !_probingTemplate && v->line != _closingViewRefusedLine) {
+            const std::string rc = callReturnTypeRaw(v);
+            if (closesWindowCType(rc)) {
+                unsupported(("a `" + demangleForDisplay(rc) + "` closes its window when it is dropped, so it is made "
+                             "only where a window holds it — `borrow " + unparseExpr(expr) + " as v { … }` — and "
+                             "nothing here would ever close it").c_str(), v);
+                return "0";
+            }
+        }
         return emitInvocation(v);
     }
 
@@ -6541,7 +6552,7 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
         // A move-only value that owns nothing (an empty `resource`/token) is tracked for move
         // analysis but has no destructor — skip the drop.
         auto ci = _classes.find(it->className);
-        if (ci != _classes.end() && !ci->second.destructible) continue;
+        if (ci != _classes.end() && !ci->second.destructible && !ci->second.closesWindow) continue;
         indent(depth);
         if (!it->guard.empty()) *_out << "if (" << it->guard << ") ";   // built only on some paths (guardHoisted)
         *_out << it->className << "__dtor(&" << (it->userName ? kName(it->cVar) : it->cVar) << ");\n";
@@ -6572,7 +6583,7 @@ void CEmitter::recordDestructibleOwner(const std::string& cVar, const std::strin
 {
     if (_probingTemplate || _currentFunc.empty()) return;
     auto ci = _classes.find(className);
-    if (ci == _classes.end() || !ci->second.destructible) return;   // owns nothing: no dtor to skip
+    if (ci == _classes.end() || (!ci->second.destructible && !ci->second.closesWindow)) return;   // no dtor to skip
     if (!_destructibleOwners.count(_currentFunc))
         _destructibleOwners[_currentFunc] = DestructibleSite{ cVar, className, _curLine, diagFile() };
     // Where the call graph should POINT for this owner's drop. The edge itself comes from the C, but the C
@@ -7202,6 +7213,14 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             _scopes.back().declaredNames.push_back(alias);
             frozenNow.push_back({ hp, alias, bn->line });
             _refusedBindings.erase(alias);
+            // A view that CLOSES its window (KR-124): the window's scope owns the alias, so its destructor runs when
+            // the window closes — on every path out, `return`/`break`/`continue` included, after the body's own
+            // locals — exactly once, and an `@onPanic` region that reaches it is refused as for any owner.
+            auto vc = _classes.find(viewCType);
+            if (vc != _classes.end() && vc->second.closesWindow) {
+                _scopes.back().locals.push_back({ alias, viewCType, /*userName=*/true });
+                recordDestructibleOwner(alias, viewCType);
+            }
         }
         // Registered only AFTER every binding is resolved. Eagerly, the second binding of
         // `borrow a.view() as x, a.view() as y` would trip the freeze rule instead of the sibling rule
@@ -8385,7 +8404,13 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // outlive it too — and a container still in scope does not, since the next line may grow
                 // it. `borrow` is the spelling that bounds one, and after the mint generalization every
                 // `@viewable` grant can open a window, so a rejection here always has one.
-                if (isViewCType(ty) && d->initializer) {
+                if (closesWindowCType(ty)) {   // KR-124 — before the window rule, whose remedy is the same window
+                    unsupported(("`" + nm + "` would be a second `" + demangleForDisplay(ty) + "`, and `"
+                                 + demangleForDisplay(ty) + "` closes its window when it is dropped, so it lives only "
+                                 "as the alias of the `borrow` that minted it — `borrow <host>.<mint>() as " + nm
+                                 + " { … }`; a helper takes it `ref`/`const ref`").c_str(), n);
+                    _closingViewRefusedLine = n->line;
+                } else if (isViewCType(ty) && d->initializer) {
                     if (viewLocalBounded(d->initializer)) _scopes.back().boundedViews.insert(nm);
                     else
                         unsupported(("`" + nm + "` is a view of storage that nothing bounds — a view "
@@ -8918,6 +8943,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
         line(n->line);
+        // A view that closes its window is made only by its mint's `return` (KR-124); the signature check has
+        // already refused a function that may not hand one back, so its `return` may build it here.
+        ScopedBool _cvr(_closingViewReturnOK, closesWindowCType(_currentReturnCType));
         if (inParallelForBody()) {   // the body runs on a worker: a C `return` would end its chunk, silently
             unsupported("`return` cannot leave a `parallel_for` body: it runs on a worker, not in the enclosing "
                         "function — let the loop finish, then return", n);
@@ -12232,14 +12260,19 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     // `~dtor` ⟺ `resource`. A `value` owns nothing, so a destructor makes it
                     // a resource; that disagreement is the lesson in the message. A `view` borrows and
                     // owns nothing either — a `~dtor` would try to free memory it doesn't own.
-                    if (ci.isBorrow)
-                        unsupported("a `view` borrows and owns nothing — it may not declare a `~dtor` "
-                                    "(it would free memory it doesn't own)", dd);
-                    if (ci.kind == TypeKind::Value)
-                        unsupported("a `value` owns nothing — a `~dtor` makes it a `resource`; "
-                                    "declare it `type resource`", dd);
-                    ci.hasDtor  = true;
-                    ci.dtorNode = dd;
+                    // ...except that a `view` CAN declare one (KR-124): it frees nothing — it owns nothing — and
+                    // it runs when the window that minted the view closes. See ClassInfo::closesWindow.
+                    if (ci.isBorrow) {
+                        ci.closesWindow = true;
+                        ci.dtorNode = dd;
+                        if (ci.node && ci.node->name && ci.node->name->value) _closingViewNames.insert(*ci.node->name->value);
+                    } else {
+                        if (ci.kind == TypeKind::Value)
+                            unsupported("a `value` owns nothing — a `~dtor` makes it a `resource`; "
+                                        "declare it `type resource`", dd);
+                        ci.hasDtor  = true;
+                        ci.dtorNode = dd;
+                    }
                 } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(mn)) {
                     // a `const` data member — a normal struct field, written
                     // ONCE in the constructor (inline init or `this.f = …`), then
@@ -16418,6 +16451,16 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         }
     }
 
+    // KR-124 — a view that closes its window is no type argument: a generic may copy, store or return its `T`, and any
+    // of those would make a second one, or one no window ends.
+    for (auto& tp : *tmpl->typeParams)
+        if (tp && bind.count(*tp) && closesWindowCType(cType(bind[*tp]))) {
+            unsupported(("`" + demangleForDisplay(cType(bind[*tp])) + "` closes its window when it is dropped, so it is no "
+                         "type argument — `" + key + "` may copy, store or return its `" + *tp + "`. Hand it to a helper "
+                         "that takes it `ref`/`const ref`").c_str(), line);
+            return false;
+        }
+
     // each inferred concrete type must satisfy its parameter's contract bounds (points at this call).
     bool boundsOk = true;
     if (tmpl->typeBounds)
@@ -18610,6 +18653,14 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
                       } }
         else        { iterCType = container; ic = cc;                       // the container IS the iterator
                       iterInit = emitIterable(); }                          // (needs only Iterator<T>, below)
+        // KR-124 — an iterator that closes its window cannot drive a `foreach`: the loop would mint it (and close
+        // nothing) or copy it out of its alias (and advance the copy). Its alias calls `next()` itself.
+        if (ic && ic->closesWindow) {
+            unsupported(("`" + demangleForDisplay(iterCType) + "` closes its window when it is dropped, so a `foreach` "
+                         "can neither mint it nor copy it out of its alias — open it in a window and call `next()` on "
+                         "the alias: `borrow <host>.<mint>() as it { while (…) { match (it.next()) { … }; } }`").c_str(), fe);
+            *_out << "\n"; return;
+        }
         MethodInfo* nextMi = ic ? findMethod(ic, "next", nullptr) : nullptr;
         if (!nextMi || !nextMi->params.empty()) {
             unsupported(("`foreach` over `" + container + "` needs a nullary `iterator()`, or a nullary "
@@ -22113,6 +22164,32 @@ bool CEmitter::namesViewType(SharedIdentifier t) const
     return _viewTypeNames.count(*t->value) > 0 || _viewTypeNames.count(qualify(*t->value)) > 0;
 }
 
+// KR-124 — a view that closes its window is pinned to it: it passes on only `ref`/`const ref` (a copy would run, or
+// skip, its destructor a second time — `t.commit()` on a copy commits nothing the window sees), and only its own
+// constructor or a granted mint hands one back.
+void CEmitter::checkClosingViewSignature(SharedParameterList params, const std::string& retCType, ClassInfo* owner,
+                                         const std::string& member, bool isCtor, int line)
+{
+    if (params)
+        for (auto& p : *params) {
+            if (!p || !p->type) continue;
+            const std::string ct = cType(p->type);
+            if (!closesWindowCType(ct)) continue;
+            const std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "a parameter";
+            if (!paramByRef(p.get()) || paramIsOut(p.get()))
+                unsupported(("`" + nm + "` takes a `" + demangleForDisplay(ct) + "` " + (paramIsOut(p.get()) ? "by `out`" : "by value")
+                             + " — it closes its window when it is dropped, so a helper borrows it: `ref " + demangleForDisplay(ct)
+                             + "` or `const ref " + demangleForDisplay(ct) + "`, and the window still ends it once").c_str(), line);
+        }
+    if (!closesWindowCType(retCType)) return;
+    const bool ownCtor = owner && isCtor && owner->name == retCType;
+    const bool mint = owner && !isCtor && grantedMint(*owner, member);
+    if (!ownCtor && !mint)
+        unsupported(("`" + member + "` returns a `" + demangleForDisplay(retCType) + "`, which closes its window when it is "
+                     "dropped — only its own constructor and a granted mint (`borrow host.<mint>() as v`) hand one back, "
+                     "so that the window holding it is always the one that ends it").c_str(), line);
+}
+
 // A view IS a borrow, so `ref`/`out View<T>` is a borrow of a borrow — and the only thing the extra
 // indirection buys is the power to RESEAT the caller's view, at storage the caller never named. That is
 // finding ④. Zero of these existed in the corpus, so the ban costs nothing and removes the whole
@@ -22120,6 +22197,8 @@ bool CEmitter::namesViewType(SharedIdentifier t) const
 void CEmitter::rejectViewByRef(FunctionParameterNode* p, const std::string& owner, int line)
 {
     if (!p || !paramByRef(p) || !namesViewType(p->type)) return;
+    // ...except a view that closes its window (KR-124), which passes ONLY that way — checkClosingViewSignature.
+    if (p->type && p->type->value && _closingViewNames.count(*p->type->value)) return;
     const std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "a parameter";
     unsupported(("`" + owner + "` takes `" + nm + "` by `" + (paramIsOut(p) ? "out" : "ref")
                  + "` — a view is already a borrow, so it cannot be passed by `ref`/`out`; that would let "
@@ -32834,6 +32913,9 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
 {
     bool isEntry = false;
     std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
+    if (!_probingTemplate && fn->name && fn->name->value)   // KR-124 — see checkClosingViewSignature
+        checkClosingViewSignature(fn->parameters, fn->returnType ? cType(fn->returnType) : std::string(), nullptr,
+                                  *fn->name->value, false, fn->line);
 
     // `unsafe` marks a CONTAINED region, and `main` is the one function that contains everything: an
     // `unsafe fn main` puts the whole program inside the trusted set from the root, so every containment
@@ -33599,7 +33681,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
     if (ci.isIntrinsicColl) return;   // the macro provides these (an extern type's STRUCT is the header's; its members are kama's)
     ScopedStr _ts(_thisType, ci.name);                  // `This` -> this class in method prototypes
     const char* stat = _emitStaticClass ? "static inline " : "";   // specialized instances are header-static inline
-    if (ci.destructible)
+    if (ci.destructible || ci.closesWindow)   // a closing view's runs at its window's close (KR-124)
         *_out << stat << "void " << ci.name << "__dtor(" << ci.name << "* self);\n";
     if (variantNeedsCopyFn(ci))
         *_out << stat << ci.name << " " << ci.name << "__copy(" << ci.name << "* src);\n";
@@ -33859,6 +33941,9 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     ScopedNoHeap _nh(_noHeapActive, hasNoHeapAttr(attrs));
     _currentClass = &owner;
     _currentFunc  = cName;   // a method may be a `Class::method` friend accessor
+    if (memberName && !_probingTemplate)   // KR-124: a view that closes its window passes `ref` and comes from its mint
+        checkClosingViewSignature(params, retType ? std::string(retType) : std::string(), &owner, memberName,
+                                  owner.ctors.count(memberName) != 0, body ? body->line : 0);
     // Register an annotated member for the transitivity pass, exactly as emitFunction does for a free fn.
     if (hasNoHeapAttr(attrs) && !_probingTemplate)
         _noHeapFns[cName] = NoHeapFn{ demangleForDisplay(cName), body ? body->line : 0, diagFile() };
@@ -34228,7 +34313,7 @@ void CEmitter::emitClassDefinitions(ClassInfo& ci)
         // a shell — so the handle root is a SEPARATE synthesized entry point rather than a retarget of it.
         if (ci.isGraphNode) emitGraphHandleRootReader(ci); else emitGraphReadRootDriver(ci);
     }
-    if (ci.destructible)
+    if (ci.destructible || ci.closesWindow)
         emitDtorDefinition(ci);
     if (variantNeedsCopyFn(ci)) emitVariantCopy(ci);   // beside its drop — or alone, for a dtor-less enum
     if (ci.isGraphNode) {

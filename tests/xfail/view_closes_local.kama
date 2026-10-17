@@ -1,0 +1,19 @@
+// A view that closes its window (KR-124) lives only as its window's alias: a local would be a second one, which no window ends.
+@viewable type contract Transacts for resource { fn Tx begin(); }
+type view Tx {
+    UnsafePtr<int32> log; bool done;
+    unsafe ctor over(UnsafePtr<int32> log) { this.log = log; this.done = false; }
+    public unsafe fn void commit() { this.log[0] = 1; this.done = true; }
+    unsafe ~Tx() { if (!this.done) { this.log[0] = 2; } }
+}
+type resource Conn implements Transacts {
+    InlineArray<int32>#(1) log;
+    public ctor make() { this.log = [0; 1]; }
+    public unsafe fn Tx begin() { return Tx.over(log: addr(of: this.log[0])); }
+}
+fn int32 main()
+{
+    Conn c = Conn.make();
+    Tx t = c.begin();
+    return 0;
+}

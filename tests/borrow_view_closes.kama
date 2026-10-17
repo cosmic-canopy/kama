@@ -1,0 +1,74 @@
+// A `type view` may declare `~dtor` (KR-124): it CLOSES ITS WINDOW. The `borrow` that minted it runs the destructor when
+// the window closes — on every path out of the block: its end, `return`, `break`, `continue` — exactly once, after the
+// block's own locals, and a window's several bindings close in reverse order. So a transaction rolls back unless the
+// code committed, with no guard object to store and no closure: the window IS the scope. The view still owns nothing,
+// and it is pinned to its window — a helper takes it `ref`/`const ref`, and no local, copy, by-value parameter,
+// generic argument or mint outside a `borrow` can make a second one (tests/xfail/view_closes_*). Returns 42.
+@viewable type contract Transacts for resource { fn Tx begin(); }
+
+// Each outcome is one decimal digit appended to the connection's log: 1 committed, 2 rolled back, 3 a body local dropped.
+type view Tx {
+    UnsafePtr<int64> log;
+    int64 tag;
+    bool done;
+    unsafe ctor over(UnsafePtr<int64> log, int64 tag) { this.log = log; this.tag = tag; this.done = false; }
+    public unsafe fn void commit() { this.log[0] = this.log[0] * 10i64 + this.tag; this.done = true; }
+    public const fn bool pending() { return !this.done; }
+    unsafe ~Tx() { if (this.done) { return; } this.log[0] = this.log[0] * 10i64 + 2i64; }
+}
+
+type resource Conn implements Transacts {
+    InlineArray<int64>#(1) log;
+    int64 tag;
+    public ctor make(int64 tag) { this.log = [0i64; 1]; this.tag = tag; }
+    public unsafe fn Tx begin() { return Tx.over(log: addr(of: this.log[0]), tag: this.tag); }
+    public const fn int64 history() { return this.log[0]; }
+    public unsafe fn UnsafePtr<int64> logPtr() { return addr(of: this.log[0]); }
+}
+
+// A body local that records its own drop, to show the window closes after it.
+type resource Marker {
+    UnsafePtr<int64> log;
+    public unsafe ctor at(UnsafePtr<int64> log) { this.log = log; }
+    unsafe ~Marker() { this.log[0] = this.log[0] * 10i64 + 3i64; }
+}
+
+fn void finish(ref Tx t) { t.commit(); }                 // a helper ends nothing: it borrows the transaction
+fn bool open(const ref Tx t) { return t.pending(); }
+
+fn void commits(ref Conn c) { borrow c.begin() as tx { finish(t: ref tx); } }
+fn void rollsBack(ref Conn c) { borrow c.begin() as tx { bool p = open(t: tx); } }
+fn int32 early(ref Conn c) { borrow c.begin() as tx { return 5; } }
+unsafe fn void localsFirst(ref Conn c) {
+    UnsafePtr<int64> mlog = c.logPtr();                  // taken before the window: `c` is frozen inside it
+    borrow c.begin() as tx { Marker m = Marker.at(log: mlog); }
+}
+
+fn int32 main() {
+    Conn c = Conn.make(tag: 1i64);
+    commits(c: ref c);                                   // 1
+    rollsBack(c: ref c);                                 // 12
+    if (early(c: ref c) != 5) { return 1; }              // 122 — closed on `return`
+    int32 i = 0;
+    while (i < 3) {
+        borrow c.begin() as tx {
+            i += 1;
+            if (i == 1) { continue; }                    // 1222 — closed on `continue`
+            if (i == 2) { tx.commit(); break; }          // 12221 — committed, then `break`
+        }
+    }
+    if (c.history() != 12221i64) { return 2; }
+
+    // Several bindings close in reverse: `b`'s window ends before `a`'s, each logging into its own connection's log —
+    // so the shared log below records b (rollback 2) then a (commit 7).
+    Conn a = Conn.make(tag: 7i64);
+    Conn b = Conn.make(tag: 8i64);
+    borrow a.begin() as ta, b.begin() as tb { ta.commit(); }
+    if (a.history() != 7i64 || b.history() != 2i64) { return 3; }
+
+    // The body's locals drop first: the Marker logs 3, then the window rolls back with 2, into one log.
+    Conn d = Conn.make(tag: 1i64);
+    localsFirst(c: ref d);
+    if (d.history() != 32i64) { return 4; }
+    return 42;
+}
