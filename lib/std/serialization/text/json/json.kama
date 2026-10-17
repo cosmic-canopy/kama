@@ -870,11 +870,20 @@ type enum JsonValue implements Serializable, Deserializable<This> {
     }
 
     // Whatever the reader finds next, one value deep, recursing for arrays and objects. A failure is reported where
-    // it happened (`servers[2].port`), as a typed read reports one.
+    // it happened (`servers[2].port`), as a typed read reports one. This frame only dispatches: a read recurses once per
+    // level, up to the 128 every reader allows, and wasm's 256 KiB stack gives each level 2 KiB — one function holding
+    // every kind's locals overflowed it there (a debug build keeps each arm's locals in the frame).
     public ctor Result<JsonValue, Owned<Error>> deserialize(Deserializer r) {
         ValueKind k = r.peekKind();
         if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
-        match (k) {
+        return match (k) {
+            case Array: JsonValue::readArray(r: r);
+            case Object: JsonValue::readObject(r: r);
+            case _: JsonValue::readScalar(r: r, kind: k);
+        };
+    }
+    static fn Result<JsonValue, Owned<Error>> readScalar(Deserializer r, ValueKind kind) {
+        match (kind) {
             case Null: {
                 if (!r.readNull()) { r.failWith(kind: DeErrorKind::Malformed); }
                 if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -890,47 +899,47 @@ type enum JsonValue implements Serializable, Deserializable<This> {
                 if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
                 return Result::Ok(value: JsonValue::Number(value: JsonNumber.read(text: give t)));
             }
-            case String: {
+            case _: {
                 string s = r.readString();
                 if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
                 return Result::Ok(value: JsonValue::String(value: give s));
             }
-            case Array: {
-                r.beginArray();
-                DynamicArray<JsonValue> items = DynamicArray.empty();
-                isize index = 0;
-                while (r.moreElems()) {
-                    Result<JsonValue, Owned<Error>> e = JsonValue.deserialize(r: r);
-                    match (give e) {
-                        case Ok(value: v): { items.add(item: give v); }
-                        case Err(error: x): { return Result::Err(error: DeError::inElement(error: give x, index: index)); }
-                    };
-                    index = index + 1;
-                }
-                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
-                return Result::Ok(value: JsonValue::Array(items: give items));
-            }
-            case Object: {
-                r.beginObject(count: 0);
-                OrderedMap<string, JsonValue> members = OrderedMap.empty();
-                while (r.moreFields()) {
-                    FieldKey fk = r.field();
-                    string name = match (give fk) {
-                        case Name(name: n): { := give n; }
-                        case Id(id: _): { r.fail(); := ""; }
-                        case Position(rank: _): { r.fail(); := ""; }
-                    };
-                    if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
-                    Result<JsonValue, Owned<Error>> e = JsonValue.deserialize(r: r);
-                    match (give e) {
-                        case Ok(value: v): { members.put(key: give name, value: give v); }
-                        case Err(error: x): { return Result::Err(error: DeError::inField(error: give x, name: give name)); }
-                    };
-                }
-                r.endObject();
-                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
-                return Result::Ok(value: JsonValue::Object(members: give members));
-            }
         };
+    }
+    static fn Result<JsonValue, Owned<Error>> readArray(Deserializer r) {
+        r.beginArray();
+        DynamicArray<JsonValue> items = DynamicArray.empty();
+        isize index = 0;
+        while (r.moreElems()) {
+            Result<JsonValue, Owned<Error>> e = JsonValue.deserialize(r: r);
+            match (give e) {
+                case Ok(value: v): { items.add(item: give v); }
+                case Err(error: x): { return Result::Err(error: DeError::inElement(error: give x, index: index)); }
+            };
+            index = index + 1;
+        }
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        return Result::Ok(value: JsonValue::Array(items: give items));
+    }
+    static fn Result<JsonValue, Owned<Error>> readObject(Deserializer r) {
+        r.beginObject(count: 0);
+        OrderedMap<string, JsonValue> members = OrderedMap.empty();
+        while (r.moreFields()) {
+            FieldKey fk = r.field();
+            string name = match (give fk) {
+                case Name(name: n): { := give n; }
+                case Id(id: _): { r.fail(); := ""; }
+                case Position(rank: _): { r.fail(); := ""; }
+            };
+            if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+            Result<JsonValue, Owned<Error>> e = JsonValue.deserialize(r: r);
+            match (give e) {
+                case Ok(value: v): { members.put(key: give name, value: give v); }
+                case Err(error: x): { return Result::Err(error: DeError::inField(error: give x, name: give name)); }
+            };
+        }
+        r.endObject();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        return Result::Ok(value: JsonValue::Object(members: give members));
     }
 }
