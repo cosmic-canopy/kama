@@ -590,65 +590,6 @@ is the same. `FixedArray<Op>`, `Box<Op>` (any user generic) and `BindableFunctio
 the same way. Close means a generic type instantiates over an `fnptr` element, including the default rule's answer
 for it (none — an `fnptr` is non-null, 0.9.480), with a fixture holding a registry of callbacks.
 
-### Operators on an enum (KR-96) — support them, or declare a non-goal
-
-Until `0.9.443` an `operator` declared in an enum body parsed and was never registered, so `e + 1` answered
-"define `operator+` on the type" — which the author had done. It is now refused at the declaration ("`type
-enum E` cannot declare an operator — write a named method instead", `tests/xfail/enum_operator.kama`). What
-is open is whether an enum should take operators at all.
-
-- **For:** a scalar enum as an ordinal (`Weekday + 1`, wrapping); a tagged enum as an algebraic value
-  (`Expr + Expr`). C++, Rust (`impl Add for E`), Swift and C# all allow it.
-- **Against:** `|` over enum values is refused ON PURPOSE — the result is no declared variant — and a
-  user-declared `operator|` would reopen exactly that. Comparison is already a contract
-  (`@generate(Equatable)`, `Comparable`), and a named method is already one way to do each of these.
-
-Wanted: a verdict against GOALS (one way to do a thing), and if operators are supported, WHICH (arithmetic
-on a tagged enum but nothing bitwise on a scalar one, say). Then either build it, or record the non-goal in
-SPEC beside the refusal.
-
-**Surveyed on `0.9.630`.** What works and what doesn't:
-
-- Every operator in an enum body is refused, `operator[]` included.
-- `==`/`!=` on a plain enum works. A tagged enum's `==` asks for `Equatable`, and `@generate(Equatable)` works.
-- `|` is refused with a clear message, but it reads "an `Perm`" (an article bug).
-- `cast<uint32>(Perm::Read) | …` works.
-- Bit flags already have a home: `std::fs::Permissions`, a `type value` with `comptime` constants, `operator|` and
-  `has()`.
-
-**A defect:** SPEC (~1905) and the `<` diagnostic both say "an enum with an order implements `Comparable`". But
-`Comparable` is declared `for value, resource, intrinsic` (global.kama ~112), and `implements Comparable<This>` on an
-enum is refused. The documented answer is unreachable, so an enum can never key a `SortedMap`.
-
-Sites:
-
-- global.kama ~112;
-- `rejectMixedOperands` (~2541), which refuses every comparison on an enum before a contract is consulted;
-- `emitBinaryOperator` (~5226), which lowers to `compareTo`.
-
-Steps:
-
-1. Add `enum` to `Comparable`'s `for` list.
-2. Let `<` through `rejectMixedOperands` when the enum satisfies `Comparable`.
-3. Fixture: `<` on a plain and on a tagged enum, plus a `SortedSet<Level>`. Keep `identity_enum_order` and
-   `enum_operator` as xfails.
-4. Write the non-goal into SPEC beside the refusal (~5765), naming the flags idiom.
-5. Fix the article.
-6. Correct this section's claim that C# lets an enum declare operators; it does not.
-
-Size **S**.
-
-**Decided 2026-10-16** (the maintainer took both):
-
-1. **Declared operators on an enum are a NON-GOAL.** Comparison goes through `Equatable`/`Comparable`,
-   flags are a `type value` (as std already does), and ordinal or algebraic operations are named methods. That is one
-   way each, and the `|` refusal stays. The alternatives are arithmetic on tagged enums only, or all operators.
-2. **Add `@generate(Comparable)` for an enum, ordered by declaration**, beside the hand-written `compareTo` the
-   `Comparable` fix makes reachable.
-
-Note: under (1), a plain enum's `==` stays a raw integer compare while `<` goes through `compareTo`. That is
-consistent with the `isSynthCmp` shortcut.
-
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:

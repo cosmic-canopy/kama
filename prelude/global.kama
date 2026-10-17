@@ -109,7 +109,7 @@ type contract Equatable<T is This> for value, resource, enum, intrinsic { const 
 // separate `<`/`==`). The operand is borrowed (`ref This`) — a comparison never consumes it, and a large
 // key (`string`) isn't copied; `Equatable.equals` borrows for the same reason. Primitive conformances
 // below make every int/float/string universally comparable.
-type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }
+type contract Comparable<T is This> for value, resource, enum, intrinsic { const fn Ordering compareTo(const ref T other); }
 // The pluggable memory source — a copyable VALUE handle (C++ `std::pmr::polymorphic_allocator`, Rust
 // `&Bump`, Zig `std.mem.Allocator`). An `Owned<T, A>` box or a container carries `A alloc` BY VALUE and
 // routes every allocation through `this.alloc.allocate(...)` / `this.alloc.deallocate(...)`. FOUNDATIONAL

@@ -1,0 +1,16 @@
+// `@generate(Comparable)` walks each field through its own `compareTo`, so every field must have an order. A
+// `bool` has none in kama (the prelude gives `Comparable` to the numbers and `string`), and the derive says
+// which field stopped it rather than inventing `false < true`.
+@generate(Comparable)
+type value Switch {
+    int32 id;
+    bool on;
+    public ctor make(int32 id) { this.id = id; this.on = true; }
+}
+
+fn int32 main()
+{
+    Switch a = Switch.make(id: 1);
+    Switch b = Switch.make(id: 2);
+    return a < b ? 1 : 0;
+}

@@ -568,7 +568,7 @@ cheaper single-multiply mixer for trusted, well-distributed keys (the `Hasher` c
 in `std::collections`). `string` declares `Equatable` with an empty body, satisfied by its built-in `equals`; each
 integer's is scalar (a conformance on a **primitive** — `this` is the scalar itself). Floats get `Equatable`
 only (exact `==`) — intentionally not hash-keyable. A third prelude contract,
-`type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }` (returning the prelude enum
+`type contract Comparable<T is This> for value, resource, enum, intrinsic { const fn Ordering compareTo(const ref T other); }` (returning the prelude enum
 `Ordering { Less, Equal, Greater }`), gives every int/float/string a total order through the same pure-kama
 `type adapter` blocks — the bound for `PriorityQueue` and the sorted containers. A **user key** declares `implements Hashable, Equatable<This>`
 and provides the two methods. Bounds are **nominal**: the `implements` is required (a coincidental `equals`
@@ -1916,7 +1916,7 @@ uint8 n = a;          // error — an enum is not its underlying integer
 A back = n;           // error — an integer names no variant until it has been checked
 A z = 0;              // error — an enum value is written by name: `A::A0`
 A c = a + A::A1;      // error — the result would be an `A` that is no declared variant
-bool q = (a < A::A1); // error — ordering is `Comparable`, which an enum may implement
+bool q = (a < A::A1); // error — ordering is `Comparable`: `@generate(Comparable)` on `A` gives it one
 ```
 
 (`tests/xfail/identity_enum_cross_enum.kama`, `identity_enum_to_int`, `identity_int_to_enum`,
@@ -4404,23 +4404,26 @@ synthesized body, and the nominal conformance is registered either way.
 | `Formattable` | a field-dump `format(ref Formatter)` — `Type { f: v, … }` |
 | `Equatable` | a memberwise `equals(ref This)`; also what gives the type `==` / `!=` |
 | `Hashable` | a field-walked `hash()`, FNV-combined in declaration order |
+| `Comparable` | a lexicographic `compareTo(const ref This)` over the fields in declaration order; also what gives the type `<` `>` `<=` `>=` and makes it a sorted-container key | <!-- test: generate_comparable -->
 | `BytesViewable` / `Blittable` | `bytes()` / `bytesMut()`, a view of the value's own bytes — plain `value` only; see *The bytes of a plain value* |
 | `of` | a memberwise ctor `T.of(f1:, …)` — **bag only** (a transparent `value`) |
 | `zero` | a zero-init ctor `T.zero()` — bag only |
 
-`Equatable`/`Hashable` walk each field through *its own* `equals`/`hash` — never a bitwise compare, which
-would read padding and be wrong for any type whose equality is not its representation — so every field must
-itself conform, and `@skip` is honored by both (which is what keeps "equal values hash equal" true).
+`Equatable`/`Hashable`/`Comparable` walk each field through *its own* `equals`/`hash`/`compareTo` — never a
+bitwise compare, which would read padding and be wrong for any type whose equality is not its representation —
+so every field must itself conform, and `@skip` is honored by all three (which is what keeps "equal values hash <!-- xfail: generate_comparable_field -->
+equal" true, and `compareTo` answering `Equal` exactly when `equals` answers `true`). A float field is ordered
+by its `Comparable` total order (NaN after every number), as it is in a `SortedSet`, not by IEEE `<`.
 
 **What may carry it.** Any `value`, `resource` or `enum`, generic or not:
 
 | Subject | Derives | Shape |
 | --- | --- | --- |
-| plain `value` / `resource` | all seven | `Type { f: v, … }` |
-| generic `Box<T>` | all seven, **per instantiation** | as above, for each instance |
-| tagged `enum` | the five contract names (`of`/`zero` are a non-goal) | per tag: `Circle { r: 2 }`, or the bare name for a payload-less variant | <!-- xfail: generate_of_on_enum -->
-| payload-less `enum` | the five contract names | the bare variant name; on the wire a plain string `"Green"`, not an object | <!-- test: generate_plain_enum -->
-| generic `enum` (`Optional<T>`, `Msg<T>`) | the five, **per instantiation** | as the tagged/payload-less rows | <!-- test: generate_generic_enum -->
+| plain `value` / `resource` | all eight | `Type { f: v, … }` |
+| generic `Box<T>` | all eight, **per instantiation** | as above, for each instance |
+| tagged `enum` | the six contract names (`of`/`zero` are a non-goal) | per tag: `Circle { r: 2 }`, or the bare name for a payload-less variant | <!-- xfail: generate_of_on_enum -->
+| payload-less `enum` | the six contract names | the bare variant name; on the wire a plain string `"Green"`, not an object | <!-- test: generate_plain_enum -->
+| generic `enum` (`Optional<T>`, `Msg<T>`) | the six, **per instantiation** | as the tagged/payload-less rows | <!-- test: generate_generic_enum -->
 
 A derive on a **generic** type is a *conditional conformance*: the instance carries it exactly when every
 substituted field (or payload) conforms. `@generate(Equatable)` on `Box<T>` cannot hold for every `T`, and
@@ -4437,8 +4440,29 @@ nothing as in one that does, and a generic function may bind its `T` to the cont
 nothing. An instance that misses a gate is refused naming the condition it failed. <!-- xfail: deserialize_custom_alloc -->
 
 A payload-less `enum` derives over its members: it serializes as the bare variant name, formats as it, and
-compares and hashes as its integer — which it still is, with a derive or without: `==`, `cast<IntType>`,
+tests equality and hashes as its integer — which it still is, with a derive or without: `==`, `cast<IntType>`,
 `try cast`, its explicit member values and `match` are unchanged. <!-- test: enum_promoted_scalar_ops -->
+
+**A derived `Comparable` orders an enum by DECLARATION**, then by the live variant's payload, field by field —
+Rust's derived `Ord`, and Swift's synthesized `Comparable`. Declaration order and not the integer, for both
+kinds of enum: a tagged enum has no integer to offer, and one rule beats one that changes when a member writes
+`= 200`. An enum whose integers run against its declaration and that wants them as its order writes
+`compareTo` itself (`implements Comparable<This>`), which is the one place that choice is spelled. Two names
+for one value (`B = K::A`) take the first one's place, so they compare `Equal` as they are `==`. <!-- test: generate_comparable -->
+
+```kama
+@generate(Comparable, Equatable)
+type enum Level { Low, Mid, High }
+
+@generate(Comparable)
+type enum Shape { Dot, Circle(float64 r), Rect(int32 w, int32 h) }
+
+fn bool demo() {
+    return Level::Low < Level::High                              // by declaration
+        && Shape::Dot < Shape::Circle(r: 9.0)                    // the variant first...
+        && Shape::Circle(r: 1.0) < Shape::Circle(r: 2.0);        // ...then its payload
+}
+```
 
 `of`/`zero` on an `enum` is a **non-goal**, not a gap: a variant is already its own memberwise constructor
 (`Shape::Circle(r: 2)`), and `zero` names no variant. So is `Serializable` on the prelude's `Optional`,
@@ -5420,8 +5444,8 @@ type value Cents implements Equatable<This>, Comparable<This> {
 Both contracts **borrow** their operand (`const ref This`) — a comparison never consumes or copies it. `!=` is
 `!equals`; `<=`/`>=` are "not Greater"/"not Less", so there is nothing separate to define. Equality stays
 **explicit**: a `value` that implements neither contract cannot be compared, and there is no auto-generated <!-- xfail: operator_missing -->
-structural equality — but `@generate(Equatable, Hashable)` will synthesize the memberwise walk on request
-(see *Derives*). The `true`/`false` conversion operators are out of scope: there is no implicit truthiness — `if` takes a `bool`,
+structural equality — but `@generate(Equatable, Hashable)` will synthesize the memberwise walk on request,
+and `@generate(Comparable)` the lexicographic order (see *Derives*). The `true`/`false` conversion operators are out of scope: there is no implicit truthiness — `if` takes a `bool`,
 and so does every condition: `while`, `do … while`, `for`'s, `?:`'s, and the operands of `!`, `&&` and `||`. <!-- xfail: cond_not_bool_statements, cond_not_bool_operators, cond_function -->
 A raw pointer, `null` and a `fnptr` are not conditions either. <!-- xfail: cond_raw_pointer, cond_null_fnptr -->
 
@@ -5582,7 +5606,7 @@ fn int32 main() {
   may not name `This` in a signature; it declares the self-type as a **pinned type parameter** instead:
 
   ```kama fragment
-  type contract Comparable<T is This> for value, resource, intrinsic { const fn Ordering compareTo(const ref T other); }
+  type contract Comparable<T is This> for value, resource, enum, intrinsic { const fn Ordering compareTo(const ref T other); }
 
   type value Duration implements Comparable<This> { … }     // conformance: always `This`
   fn T maxOf<T: Comparable<T>>(T a, T b) { … }              // bound: the bound's own parameter
@@ -5802,7 +5826,16 @@ four-ctor matrix*)
 — and its own `comptime` constants and `comptime fn`s, read `E::NAME` and `E::name()`, and `comptime assert`s, <!-- test: comptime_enum_resource_members -->
 which are checked like a type's (all three parsed and did nothing before `0.9.443`) — <!-- xfail: enum_comptime_assert -->
 but **not a field (a `const` one included), a destructor or an operator** — its layout is its tag plus its
-variant payloads, and it owns nothing beyond them; an operation on an enum is a named method. <!-- xfail: enum_field, generic_enum_field, enum_const_field, enum_operator --> Members never change
+variant payloads, and it owns nothing beyond them; an operation on an enum is a named method. <!-- xfail: enum_field, generic_enum_field, enum_const_field, enum_operator -->
+**Operators on an enum are a non-goal**, declared or built in. An enum's values are named variants, so `+`,
+`|` or `<<` over them names no variant; a user `operator|` would reopen exactly the hole the built-in refusal
+closes (`Flag::Read | Flag::Write` is no `Flag`). The two needs that look like operators each have a home
+already. **Order** is a contract, as it is for every type: `@generate(Comparable)` or `implements
+Comparable<This>` gives an enum `<`, and `==` is the one operator it keeps without asking. **A set of flags**
+is a `type value` holding the bits, with `comptime` constants for the members and its own `operator|` and
+`has()`, as `std::fs::Permissions` is — the result of `a | b` is then a value of the type, which is what an
+enum's could never be. C#'s `[Flags]` enum is the shape this rejects: there, `Read | Write` is an enum value
+no member names, and `switch` cannot be exhaustive over it. Members never change
 what an enum IS in C: a payload-less enum stays its integer (`typedef int32_t Color`), and its methods take it
 by value (`bool Color__isWarm(Color self)`), the way a `type adapter` method takes a primitive; a contract
 reaches them through the ordinary vtable. An enum with payloads is a tag plus a union either way.

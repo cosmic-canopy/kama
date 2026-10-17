@@ -523,6 +523,7 @@ friend_unknown	friend_unknown.kama:2
 gen_format_unconformed_field	gen_format_unconformed_field.kama:4
 gencontract_arity	gencontract_arity.kama:5
 gencontract_unsat	gencontract_unsat.kama:15
+generate_comparable_field	generate_comparable_field.kama:4
 generate_eq_unconformed_field	generate_eq_unconformed_field.kama:8
 generate_generic_enum_unmet	generate_generic_enum_unmet.kama:16
 generate_generic_unmet	generate_generic_unmet.kama:16
@@ -600,7 +601,7 @@ identity_enum_arith	identity_enum_arith.kama:16 identity_enum_arith.kama:17 iden
 identity_enum_cmp_cross	identity_enum_cmp_cross.kama:16
 identity_enum_cross_enum	identity_enum_cross_enum.kama:15 identity_enum_cross_enum.kama:16
 identity_enum_int_literal	identity_enum_int_literal.kama:17 identity_enum_int_literal.kama:18
-identity_enum_order	identity_enum_order.kama:14
+identity_enum_order	identity_enum_order.kama:13
 identity_enum_to_int	identity_enum_to_int.kama:9
 identity_int_to_enum	identity_int_to_enum.kama:13
 identity_sig_arity	identity_sig_arity.kama:20

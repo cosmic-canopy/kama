@@ -438,6 +438,10 @@ struct ClassInfo {
     // equality stays a deliberate NON-default: you ask for it. Bodies: emitEqualsDefinition/emitHashDefinition.
     bool                              genEquatable = false;
     bool                              genHashable = false;
+    // `@generate(Comparable)` — a lexicographic `compareTo` (fields in declaration order; an enum's variants
+    // in declaration order, then the live payload's fields) plus the conformance, so `<` and a sorted
+    // container work. Body: emitCompareDefinition / emitEnumCompareDefinition.
+    bool                              genComparable = false;
     // `@generate(BytesViewable|Blittable)` (KR-127) — a byte view of a plain `value`: `bytes()`, and with Blittable
     // `bytesMut()`, verified to have no padding and (Blittable) only numbers. Registered late, once
     // `std::collections::ConstView` is known (registerByteViewMembers); `byteViewsDone` once it has been.
@@ -577,6 +581,11 @@ struct ClassInfo {
     // A payload-less enum that declares members, a contract or `@generate`: this ClassInfo holds those, and
     // the enum itself stays a C integer (`_enums`) — `this` is its value, as a primitive's is (KR-59).
     bool isScalarEnum() const { return isScalarRecv && enumNode != nullptr; }
+    // Any `@generate(...)` flag at all: what decides whether registerDerives has work to do.
+    bool anyGenerate() const {
+        return genSerialize || genDeserialize || genFormat || genEquatable || genHashable || genComparable
+            || genOf || genZero || genBytesViewable;
+    }
 
     // Tagged unions: a payload/generic `enum` is backed by a ClassInfo whose layout is a
     // discriminant tag + a union of per-variant payloads (not the flat `fields`). `variants` drives
@@ -3118,6 +3127,9 @@ private:
     // `self->u.<Variant>.<field>`. The per-FIELD rules are shared with the class side, not copied.
     void emitEnumFormatDefinition(ClassInfo& ci);        // `Circle { r: 2 }` / a bare `Nil`
     void emitEnumEqualsDefinition(ClassInfo& ci);        // tag, then the payload field by field
+    std::string cmpFieldExpr(SharedIdentifier ty, const std::string& a, const std::string& b, int line);
+    void emitCompareDefinition(ClassInfo& ci);           // `@generate(Comparable)`: fields in order
+    void emitEnumCompareDefinition(ClassInfo& ci);       // declaration order of the tag, then the payload
     void emitEnumHashDefinition(ClassInfo& ci);          // FNV over the tag, then the live payload
     // The one place a synth body picks its emitter (variant vs class), and the loop that runs it over
     // every synth method a variant carries. See emitVariantSynthBodies for why a CONCRETE enum reaches

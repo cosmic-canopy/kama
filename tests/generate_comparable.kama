@@ -1,0 +1,76 @@
+// `@generate(Comparable)` (KR-96) — a lexicographic `compareTo`, Rust's derived `Ord`. On a `value` or
+// `resource` it compares the fields in declaration order; on an enum, the members' DECLARATION order first
+// (not their integers — `Code` below declares `Ok = 200` ahead of `Bad = 3`), then the live variant's
+// payload field by field. Each field goes through its own `compareTo`, so a float field takes the
+// `Comparable` total order (NaN after every number) and a `string` its byte order. It is what gives an enum
+// `<` and a place in a sorted container; an enum may also write the order itself (`Rank`).
+import { std::collections::SortedSet, std::collections::DynamicArray };
+
+@generate(Comparable, Equatable)
+type enum Level { Low, Mid, High }
+
+@generate(Comparable, Equatable)
+type enum Code : uint8 { Ok = 200, Bad = 3, Fine = Code::Ok }   // `Fine` is `Ok` under another name
+
+@generate(Comparable, Equatable)
+type enum Shape { Dot, Circle(float64 r), Rect(int32 w, int32 h) }
+
+@generate(Comparable, Equatable)
+type enum Slot<T> { Empty, Full(T item) }
+
+// The order written by hand: an enum implements `Comparable` like any other type.
+type enum Rank implements Comparable<This> {
+    Ace, Two, King;
+
+    public const fn Ordering compareTo(const ref Rank other) {
+        int32 a = this.points();
+        int32 b = other.points();
+        if (a < b) { return Ordering::Less; }
+        if (a > b) { return Ordering::Greater; }
+        return Ordering::Equal;
+    }
+    const fn int32 points() { return match (this) { case Ace: 14; case Two: 2; case King: 13; }; }
+}
+
+@generate(Comparable, Equatable)
+type value Ver {
+    int32 major; int32 minor; float64 weight;
+    public ctor make(int32 major, int32 minor, float64 weight) { this.major = major; this.minor = minor; this.weight = weight; }
+}
+
+@generate(Comparable, Equatable)
+type resource Tag {
+    string name; Ver ver;
+    public ctor make(string name, Ver ver) { this.name = give name; this.ver = ver; }
+}
+
+fn int32 main() {
+    int32 n = 0;
+    if (Level::Low < Level::High && Level::High > Level::Mid) { n += 1; }                     // 1
+    if (!(Level::Mid < Level::Mid) && Level::Mid <= Level::Mid && Level::Mid >= Level::Low) { n += 1; }   // 2
+    if (Code::Ok < Code::Bad) { n += 1; }                                                       // 3: declaration, not 200 vs 3
+    if (Code::Ok.compareTo(other: Code::Fine) == Ordering::Equal) { n += 1; }                    // 4: an alias is its member
+    Shape a = Shape::Circle(r: 1.0);
+    Shape b = Shape::Circle(r: 2.0);
+    Shape c = Shape::Rect(w: 1, h: 1);
+    if (Shape::Dot < a && a < b && b < c) { n += 1; }                                           // 5: variant, then payload
+    if (Shape::Rect(w: 1, h: 2) < Shape::Rect(w: 1, h: 3)) { n += 1; }                          // 6: the second field decides
+    Slot<int32> e = Slot::Empty;
+    Slot<int32> s3 = Slot::Full(item: 3);
+    Slot<int32> s5 = Slot::Full(item: 5);
+    if (e < s3 && s3 < s5) { n += 1; }                                                          // 7: a generic instance
+    if (Rank::Two < Rank::King && Rank::King < Rank::Ace) { n += 1; }                            // 8: by hand
+    Ver v1 = Ver.make(major: 1, minor: 2, weight: 0.5);
+    Ver v2 = Ver.make(major: 1, minor: 2, weight: 0.0 / 0.0);
+    Ver v3 = Ver.make(major: 1, minor: 10, weight: 0.0);
+    if (v1 < v2 && v2 < v3) { n += 1; }                                                         // 9: NaN sorts last
+    Tag t1 = Tag.make(name: "ab", ver: v3);
+    Tag t2 = Tag.make(name: "b", ver: v1);
+    Tag t3 = Tag.make(name: "b", ver: v3);
+    if (t1 < t2 && t2 < t3) { n += 1; }                                                         // 10: string, then a record
+    SortedSet<Level> set = SortedSet.empty();
+    set.add(key: Level::High); set.add(key: Level::Low); set.add(key: Level::Mid); set.add(key: Level::Low);
+    DynamicArray<Level> got = set.elements();
+    if (got.length() == 3 && got[0] == Level::Low && got[1] == Level::Mid && got[2] == Level::High) { n += 1; }   // 11
+    return n;
+}

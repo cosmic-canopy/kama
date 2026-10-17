@@ -3,9 +3,8 @@
 // says so by implementing `Comparable`. A raw C integer comparison on the tag sneaking in underneath
 // that model is exactly what the model exists to prevent.
 //
-// The idiom this replaces is the one the stdlib already uses everywhere it needs an enum's ordinal:
-// `match` it to a number (see `levelBits` in lib/std/log/log.kama, `orderBits` in
-// lib/std/concurrent/atomic.kama) and compare the numbers.
+// The order is one line away, and the message names it: `@generate(Comparable)` orders the members by
+// declaration (tests/generate_comparable.kama), and `implements Comparable<This>` says another order.
 type enum Level : uint8 { Error, Warn, Info, Debug, Trace }
 
 fn int32 main()

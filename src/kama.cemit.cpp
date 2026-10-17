@@ -2553,7 +2553,8 @@ void CEmitter::rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpr
     // yielded an `A` that is no declared variant: a value of an enum type that `match` cannot handle, in
     // a language where `match` is the one construct that reads an enum. ORDERING goes the same way for a
     // second, independent reason — comparison in kama is a contract (`<` lowers to `Comparable.compareTo`)
-    // — so an enum with an order says so by implementing it.
+    // — so an enum with an order says so by implementing it, and one that does never reaches this test:
+    // the contract lowering returns first. Operators on an enum are a NON-GOAL (SPEC § *Enums*, KR-96).
     //
     // `==`/`!=` between two values of the SAME enum is the one operator that survives, and it must: it is
     // how every `match`-free variant test is written. Across two DIFFERENT enums it is the sharpest form
@@ -2565,13 +2566,14 @@ void CEmitter::rejectMixedOperands(int opToken, SharedExpression lhs, SharedExpr
             const std::string& et = idFamilyOf(lt) == IdFamily::Enum ? lt : rt;
             const std::string  en = idTypeName(et);
             if (isComparisonToken(opToken))
-                unsupported(("`" + opName + "` has no meaning over enum `" + en + "` — comparison in kama "
-                             "is a contract, so an enum with an order implements `Comparable`. To order "
-                             "by the underlying value, `match` it to a number first").c_str(), line);
+                unsupported(("`" + opName + "` over enum `" + en + "` needs an order, and comparison in kama "
+                             "is a contract: write `@generate(Comparable)` on `" + en + "` to order its members "
+                             "by declaration, or `implements Comparable<This>` to give another order").c_str(), line);
             else
                 unsupported(("`" + opName + "` has no meaning over enum `" + en + "` — its values are "
-                             "named variants, not numbers, and the result would be an `" + en + "` that is "
-                             "no declared variant. `match` it to a number first, or `cast<…>` it").c_str(),
+                             "named variants, not numbers, and the result would be no declared variant of `"
+                             + en + "`. `match` it to a number first, or `cast<…>` it; a set of flags is a "
+                             "`type value` with an `operator|`, as `std::fs::Permissions` is").c_str(),
                             line);
             return;
         }
@@ -5305,7 +5307,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             else
                 unsupported((dnote.empty()
                              ? (op + " on `" + lc + "` needs `" + need + "` — declare `implements " + need + "<This>` on it"
-                                + (eq ? " (or `@generate(Equatable)`)" : "") + "; " + op + " calls its `" + meth + "`")
+                                + (eq ? " (or `@generate(Equatable)`)" : " (or `@generate(Comparable)`)") + "; " + op + " calls its `" + meth + "`")
                              : (op + " on `" + lc + "` needs `implements " + need + "`" + dnote)).c_str(), line);
             return "0";
         }
@@ -10913,9 +10915,7 @@ void CEmitter::collectEnums(SharedCompilationUnit unit)
             if (ed->attributes)
                 for (auto& at : *ed->attributes)
                     if (at && at->name && *at->name == "generate") parseGenerateAttr(at, ci, ed->line);
-            const bool anyDerive = ci.genSerialize || ci.genDeserialize || ci.genFormat
-                                || ci.genEquatable || ci.genHashable || ci.genOf || ci.genZero
-                                || ci.genBytesViewable;
+            const bool anyDerive = ci.anyGenerate();
             if (ed->typeParams && !ed->typeParams->empty()) {
                 // Generic enum (Optional<T>): a monomorphization TEMPLATE, kept OUT of _classes —
                 // each `Optional<Arg>` becomes a specialized ClassInfo at discovery (registerGenericTypeInst).
@@ -11174,7 +11174,7 @@ std::string CEmitter::derivedUnmetNote(const std::string& cty, const std::string
 // instance is what registers a conformance.
 void CEmitter::parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int line)
 {
-    static const char* kNames = "Serializable, Deserializable, Formattable, Equatable, Hashable, BytesViewable, Blittable, of, zero";
+    static const char* kNames = "Serializable, Deserializable, Formattable, Equatable, Hashable, Comparable, BytesViewable, Blittable, of, zero";
     if (!at || !at->name || *at->name != "generate") return;
     if (!at->args || at->args->empty()) {
         unsupported((std::string("`@generate(...)` needs at least one of ") + kNames).c_str(), line);
@@ -11193,6 +11193,9 @@ void CEmitter::parseGenerateAttr(const SharedAttribute& at, ClassInfo& ci, int l
         // `#[derive(PartialEq, Hash)]`. Registered + validated once the fields are known.
         else if (preludeLeaf(which) == "Equatable") ci.genEquatable = true;
         else if (preludeLeaf(which) == "Hashable")  ci.genHashable = true;
+        // A lexicographic `compareTo`: Rust's `#[derive(PartialOrd, Ord)]`, which orders a struct by its
+        // fields and an enum by its variants' declaration order. It is how an enum gets `<` (KR-96).
+        else if (preludeLeaf(which) == "Comparable") ci.genComparable = true;
         // A byte view of a plain `value` (KR-127): `bytes()`, and with `Blittable` (which refines it) `bytesMut()`.
         else if (preludeLeaf(which) == "BytesViewable") ci.genBytesViewable = true;
         else if (preludeLeaf(which) == "Blittable") ci.genBytesViewable = ci.genBlittable = true;
@@ -11246,6 +11249,7 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
         };
         drop(ci.genEquatable,   "Equatable");
         drop(ci.genHashable,    "Hashable");
+        drop(ci.genComparable,  "Comparable");
         drop(ci.genFormat,      "Formattable");
         drop(ci.genSerialize,   "Serializable");
         drop(ci.genDeserialize, "Deserializable");
@@ -11416,6 +11420,19 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
             if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
             mi.returnType = synthId("uint64", IDENTIFIER_UINT64_VAL);
             ci.methods["hash"] = mi;     // `fn uint64 hash()`
+        }
+    }
+    // `@generate(Comparable)` — pinned like `Equatable`, so the instance is minted here for the same reason.
+    if (ci.genComparable) {
+        addItf(synthConformanceName(resolveUserName("Comparable", nullptr), ci.name));
+        if (!ci.methods.count("compareTo")) {
+            MethodInfo mi; mi.cName = ci.name + "__compareTo"; mi.visibility = Visibility::Public;
+            mi.isSynthCmp = true; mi.isConst = true;
+            if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+            mi.returnType = synthId("Ordering");
+            ParamSig o; o.name = "other"; o.byRef = true; o.isConst = true;
+            o.className = ci.name; mi.params.push_back(o);
+            ci.methods["compareTo"] = mi;   // `fn Ordering compareTo(const ref This other)`
         }
     }
     // `@generate(BytesViewable|Blittable)` (KR-127). Only the refusals that need nothing but the declaration
@@ -14741,9 +14758,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     //   - and on `_classes[mangled]`, not the local `ci`: the map holds the copy every later pass reads.
     // The `_genericTypeInsts` guard at the top of this function is what stops a self-referential template
     // recursing here.
-    if (_classes[mangled].genSerialize || _classes[mangled].genDeserialize || _classes[mangled].genFormat
-        || _classes[mangled].genEquatable || _classes[mangled].genHashable
-        || _classes[mangled].genOf || _classes[mangled].genZero || _classes[mangled].genBytesViewable)
+    if (_classes[mangled].anyGenerate())
         registerDerives(_classes[mangled], synthId(mangled), line);
     registerMergeByKey(_classes[mangled]);   // a per-key map's `mergeFrom` (KR-136)
     // A window minted after registerIntrinsicViews ran gives its plain-bytes elements their bytes itself (KR-127).
@@ -22952,8 +22967,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             // because checkImplCompleteness above must not be asked about a method that has not been
             // synthesized yet. A tagged enum has already been through this in collectEnums, so only a
             // payload-less one reaches it here — `hasGen` is what brought it.
-            if (hasGen && !eci.genSerialize && !eci.genDeserialize && !eci.genFormat
-                && !eci.genEquatable && !eci.genHashable && !eci.genOf && !eci.genZero && !eci.genBytesViewable) {
+            if (hasGen && !eci.anyGenerate()) {
                 for (auto& at : *ed->attributes)
                     if (at && at->name && *at->name == "generate") parseGenerateAttr(at, eci, ed->line);
                 registerDerives(eci, ed->identifier, ed->line);
@@ -33331,9 +33345,10 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
             *_out << stat << cType(mi.returnType) << " " << ci.name << "____mergeStep(" << selfC << ", kama__Deserializer r, kama_merge_log* kama_log);\n";
             continue;
         }
-        if (mi.isSynthCmp) {   // `@generate(Equatable|Hashable)` — keyed by the method name
-            if (kv.first == "equals") *_out << stat << "bool " << ci.name << "__equals(" << selfC << ", " << ci.name << "* other);\n";
-            else                      *_out << stat << "uint64_t " << ci.name << "__hash(" << selfC << ");\n";
+        if (mi.isSynthCmp) {   // `@generate(Equatable|Hashable|Comparable)` — keyed by the method name
+            if (kv.first == "equals")         *_out << stat << "bool " << ci.name << "__equals(" << selfC << ", " << ci.name << "* other);\n";
+            else if (kv.first == "compareTo") *_out << stat << "kama__Ordering " << ci.name << "__compareTo(" << selfC << ", " << ci.name << "* other);\n";
+            else                              *_out << stat << "uint64_t " << ci.name << "__hash(" << selfC << ");\n";
             continue;
         }
         // A VIEW's place-returning method hands back a place inside what the view borrows (`Template<C>.hole(at:)`
@@ -34446,6 +34461,94 @@ void CEmitter::emitHashDefinition(ClassInfo& ci)
     *_out << "}\n\n";
 }
 
+// One field's three-way comparison for the derived `compareTo` — the sibling of eqFieldTest. Every field goes
+// through its type's OWN `compareTo`, a primitive's included: the prelude adapter is where a float's total
+// order lives (NaN after every number, as `Comparable` promises), so an inline `<` here would order a
+// record's float field differently from the same float in a `SortedSet`.
+std::string CEmitter::cmpFieldExpr(SharedIdentifier ty, const std::string& a, const std::string& b, int line)
+{
+    ty = deepSubstType(ty);   // a generic instance's field node is the template's `T` — see eqFieldTest
+    if (ty && ty->builtInVal == IDENTIFIER_STRING_VAL)
+        return "kama_string__compareTo(&(" + a + "), &(" + b + "))";
+    const std::string ct = cType(ty);
+    if (opaqueScalarUnknown(ct)) return "kama__Ordering_Equal";   // probing an opaque `T` — see emitFmtFieldWrite
+    const bool prim = !_classes.count(ct);
+    const std::string key = prim ? primKey(ty) : ct;
+    if (!satisfiesBound(key, "Comparable")) {
+        unsupported(("`@generate(Comparable)` needs every field to be a number, a `string` or a type that "
+                     "`implements Comparable`; field type `" + (ty && ty->value ? *ty->value : ct)
+                     + "` does not").c_str(), line);
+        return "kama__Ordering_Equal";
+    }
+    return key + "__compareTo(" + (prim ? "(" + a + ")" : selfArg(ct, a)) + ", &(" + b + "))";
+}
+
+// The statements that return from a derived `compareTo` as soon as one field differs.
+static void emitCmpStep(std::ostream& out, int depth, const std::string& expr)
+{
+    out << std::string(depth * 4, ' ') << "{ kama__Ordering kama_o = " << expr
+        << "; if (kama_o != kama__Ordering_Equal) { return kama_o; } }\n";
+}
+
+// `@generate(Comparable)` — lexicographic over the fields in declaration order, Rust's derived `Ord`. `@skip`
+// is honored exactly as in `equals`, which is what keeps `compareTo` answering `Equal` exactly when
+// `equals` answers true.
+void CEmitter::emitCompareDefinition(ClassInfo& ci)
+{
+    int line = ci.declLine();
+    *_out << (_emitStaticClass ? "static inline " : "") << "kama__Ordering " << ci.name
+          << "__compareTo(" << ci.name << "* self, " << ci.name << "* other)\n{\n";
+    for (auto& fld : ci.fields) {
+        if (fld.serSkip) continue;
+        emitCmpStep(*_out, 1, cmpFieldExpr(fld.type, "self->" + kMember(ci, fld.name), "other->" + kMember(ci, fld.name), line));
+    }
+    indent(1); *_out << "return kama__Ordering_Equal;\n";
+    *_out << "}\n\n";
+}
+
+// `@generate(Comparable)` on an enum: by the members' DECLARATION order, then the live payload field by field.
+// Declaration order and not the integer: a tagged enum has no integer to offer, and one rule for both kinds
+// beats a rule that changes with whether a member wrote `= 200`. The rank is read with scalarEnumIs' `if`
+// chain rather than a `switch`, for its reason — and a `type extern enum` alias of an earlier member then
+// takes that member's rank, so two names for one value compare `Equal`, as they are `==`.
+void CEmitter::emitEnumCompareDefinition(ClassInfo& ci)
+{
+    int line = ci.declLine();
+    const bool scalar = ci.isScalarEnum();
+    *_out << (_emitStaticClass ? "static inline " : "") << "kama__Ordering " << ci.name
+          << "__compareTo(" << ci.name << (scalar ? " self, " : "* self, ") << ci.name << "* other)\n{\n";
+    auto rank = [&](const char* var, const std::string& operand) {
+        // Every member is TESTED, the first included: were member 0 the initializer instead, an alias of it
+        // declared later would match first and take the later rank.
+        indent(1); *_out << "int32_t " << var << " = 0;\n";
+        for (size_t vi = 0; vi < ci.variants.size(); ++vi) {
+            indent(1); *_out << (vi ? "else if" : "if") << " (" << scalarEnumIs(ci, vi, operand) << ") "
+                             << var << " = " << vi << ";\n";
+        }
+    };
+    rank("kama_a", scalar ? "self" : "self->kama_tag");
+    rank("kama_b", scalar ? "(*other)" : "other->kama_tag");
+    indent(1); *_out << "if (kama_a != kama_b) { return kama_a < kama_b ? kama__Ordering_Less : kama__Ordering_Greater; }\n";
+    bool anyPayload = false;
+    for (auto& v : ci.variants) if (!v.payload.empty()) { anyPayload = true; break; }
+    if (anyPayload) {
+        indent(1); *_out << "switch (self->kama_tag) {\n";
+        for (auto& v : ci.variants) {
+            if (v.payload.empty()) continue;   // the rank test above already settled it
+            indent(1); *_out << "case " << ci.name << "_" << v.name << ": {\n";
+            for (auto& f : v.payload)
+                emitCmpStep(*_out, 2, cmpFieldExpr(f.type, "self->kama_u." + kName(v.name) + "." + kMember(ci, f.name),
+                                                           "other->kama_u." + kName(v.name) + "." + kMember(ci, f.name), line));
+            indent(2); *_out << "break;\n";
+            indent(1); *_out << "}\n";
+        }
+        indent(1); *_out << "default: break;\n";
+        indent(1); *_out << "}\n";
+    }
+    indent(1); *_out << "return kama__Ordering_Equal;\n";
+    *_out << "}\n\n";
+}
+
 // `@generate(Formattable)` — the synthesized infallible field dump: `Type { f1: v1, f2: v2 }` (empty => `Type {}`).
 // The display analog of emitSerializeDefinition; string fields render raw/unquoted (each field dispatches to
 // its own Formattable — no special-case, no escaping runtime). Honors `@skip` via FieldInfo::serSkip.
@@ -35437,8 +35540,9 @@ void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo&
     const bool isEnumType = ci.isVariant || ci.isScalarEnum();
     if (mi.isSynthFormat) { isEnumType ? emitEnumFormatDefinition(ci) : emitFormatDefinition(ci); return; }
     if (mi.isSynthCmp) {                                              // keyed by the method name
-        if (name == "equals") isEnumType ? emitEnumEqualsDefinition(ci) : emitEqualsDefinition(ci);
-        else                  isEnumType ? emitEnumHashDefinition(ci)   : emitHashDefinition(ci);
+        if (name == "equals")         isEnumType ? emitEnumEqualsDefinition(ci)  : emitEqualsDefinition(ci);
+        else if (name == "compareTo") isEnumType ? emitEnumCompareDefinition(ci) : emitCompareDefinition(ci);
+        else                          isEnumType ? emitEnumHashDefinition(ci)    : emitHashDefinition(ci);
         return;
     }
     if (mi.isSynthBytes) { emitBytesDefinition(ci, name); return; }   // KR-127 — never a variant (registerDerives refuses it)
@@ -35457,7 +35561,7 @@ void CEmitter::emitSynthBody(ClassInfo& ci, const std::string& name, MethodInfo&
 // diffed against the corpus to prove it changed nothing, and that proof is worth more than the shuffle.
 void CEmitter::emitVariantSynthBodies(ClassInfo& ci)
 {
-    static const char* kOrder[] = { "serialize", "deserialize", "format", "equals", "hash" };
+    static const char* kOrder[] = { "serialize", "deserialize", "format", "equals", "hash", "compareTo" };
     for (const char* name : kOrder) {
         auto it = ci.methods.find(name);
         if (it == ci.methods.end() || it->second.isAbstract) continue;
