@@ -4,5 +4,5 @@
   "kind": "executable",
   "entry": "src/main.kama",
   "modules": { ".": { "visibility": "internal" } },
-  "select": { "TARGET": { "OLDPC": { "triple": "i386-linux-gnu", "default": true } } }
+  "select": { "TARGET": { "OLDPC": { "triple": "i386-linux-gnu", "cc": "clang", "default": true } } }
 }

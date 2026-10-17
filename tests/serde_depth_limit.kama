@@ -25,8 +25,9 @@ fn void key(ref DynamicArray<uint8> b, uint8 c) {   // a one-letter KBIN field n
 }
 
 fn int32 main() {
-    string junk = "{\"x\":1,\"junk\":";
-    for (int32 i = 0; i < 1000000; i = i + 1) { junk = junk + "["; }
+    string open = "[";   // 2^20 brackets by doubling — appending a million one at a time is quadratic, and under ASan
+    for (int32 i = 0; i < 20; i = i + 1) { open = open + open; }   // building the input outran the harness's limit
+    string junk = "{\"x\":1,\"junk\":" + open;
     bool j1 = match (deserializeJsonBuffer::<P>(src: give junk)) { case Ok(value: p): false; case Err(error: e): tooDeep(d: e.as<DeError>()); };
     if (!j1) { return 1; }
     bool j2 = match (deserializeJsonBuffer::<Tree>(src: nest(levels: 64))) { case Ok(value: t): true; case Err(error: e): false; };
