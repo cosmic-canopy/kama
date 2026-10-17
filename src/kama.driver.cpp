@@ -3303,6 +3303,34 @@ static std::string reservedByCRegister(const std::string& ident)
     return "";
 }
 
+// THE reserved-name rule (KR-111), asked of a project's `name`, of every dependency key and by `kama seed`: "" when an
+// import name is free, else why it is not. `std` and `core` root the standard library, so a package claiming either
+// installs and can never be imported — `import core::v` reaches the floor module and `std::…` the stdlib. `global`
+// named the floor until KR-87, and a name opening a C register collides with kama's own spellings.
+static std::string reservedNameReason(const std::string& ident)
+{
+    if (ident == "std" || ident == "core")
+        return "`" + ident + "` is reserved — an import rooted there resolves to the standard library, so nothing "
+               "could ever import this package";
+    if (ident == "global")
+        return "`global` is reserved — it named the floor until KR-87 retired it, and a package claiming it would "
+               "read as that retired spelling";
+    const std::string creg = reservedByCRegister(ident);
+    if (!creg.empty()) return "`" + ident + "` is reserved — " + creg;
+    return "";
+}
+
+// The compiler's own manifests, the only two allowed the names `std` and `core`: `lib/kama.json` and
+// `lib/core/kama.json` under the stdlib this compiler resolves. By canonical path, so neither a copy nor a project
+// that happens to sit in a folder named `lib` passes for one.
+static bool isCompilerStdlibManifest(const std::string& path)
+{
+    if (path.empty()) return false;
+    const std::string lib = resolveStdlibDir(g_argv0);
+    const std::string p = absolutePath(path);
+    return p == absolutePath(lib + "/kama.json") || p == absolutePath(lib + "/core/kama.json");
+}
+
 // The name to suggest for one that is not a legal project name, or "" when there is none worth offering (KR-142).
 // A `kama-<name>` repository — every `@kama/*` package lives in one — means the package `<name>`: `kama_<name>` is
 // what the hyphen fold alone would give, and that is refused as the compiler's C register. A hint is only ever a
@@ -3389,8 +3417,11 @@ struct ManifestReader {
     // deliberately NOT a `g_selectGroups` entry (its values are triples with toolchains, not bare names),
     // so it has no `SelectGroup::dflt` to write into.
     std::string* defaultTargetOut = nullptr;
-    ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df)
-        : s(src), declared(d), defaults(df) {}
+    // `path` is the manifest's own file: the one thing that tells the standard library's manifests — named `std`
+    // and `core`, which no other may be (KR-111) — from a project claiming those names.
+    std::string manifestPath;
+    ManifestReader(const std::string& src, std::set<std::string>& d, std::set<std::string>& df, const std::string& path)
+        : s(src), declared(d), defaults(df), manifestPath(path) {}
 
     void ws() { while (i < s.size() && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i; }
     bool fail(const char* m) { if (err.empty()) err = m; return false; }
@@ -4012,6 +4043,12 @@ struct ManifestReader {
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {
             std::string name; if (!str(name)) return false;
+            // A dependency is imported by its key's import name, so a reserved one could never be reached (KR-111):
+            // `"core": {…}` installed, and then `import core::v` found the floor module instead.
+            {
+                const std::string why = reservedNameReason(importNameOf(name));
+                if (!why.empty()) return fail("dependency '" + name + "': " + why);
+            }
             ws(); if (i >= s.size() || s[i] != ':') return fail("expected ':' after a dependency name");
             ++i; ws();
             if (i >= s.size() || s[i] != '{') return fail("a dependency value must be an object");
@@ -4484,23 +4521,14 @@ struct ManifestReader {
                                 + ident + "::{ … }`"
                                 + (!hint.empty() ? ". Try \"" + hint + "\"" : ""));
                 }
-                // `global` (§2f.29, retired as a qualifier by KR-87) and the names that would share a C
-                // register (reservedByCRegister). Refused HERE, not only at `kama seed`, because a
-                // project that was not seeded is read here and nowhere else.
-                //
-                // ⚠️ `std` and `core` are reserved too, and they are NOT refused here — measured, not
-                // reasoned: adding them refuses `lib/kama.json`, whose `name` IS "std", and the whole
-                // standard library stops resolving. Nothing legitimate is ever named `global` (the
-                // prelude is embedded and has no manifest at all, §2f.29 as corrected), which is exactly
-                // what makes it the one of the three this rung can hold down. seedValidName refuses all
-                // three, where "am I creating a new project?" is the question being asked.
-                if (ident == "global")
-                    return fail("`name` is \"" + nm + "\", which is reserved: `global` named the floor "
-                                "until KR-87 retired it, and a project claiming it would read as that "
-                                "retired spelling");
-                const std::string creg = reservedByCRegister(ident);
-                if (!creg.empty())
-                    return fail("`name` is \"" + nm + "\", which is reserved: " + creg);
+                // The one reserved-name rule (reservedNameReason). Refused HERE, not only at `kama seed`,
+                // because a project that was not seeded is read here and nowhere else. `std` and `core` are
+                // the standard library's own names, so the compiler's own two manifests — and only they,
+                // by canonical path — may carry them (KR-111; refusing them unconditionally once refused
+                // `lib/kama.json` and broke every stdlib import).
+                const std::string why = reservedNameReason(ident);
+                if (!why.empty() && !((ident == "std" || ident == "core") && isCompilerStdlibManifest(manifestPath)))
+                    return fail("`name` is \"" + nm + "\": " + why);
                 if (nameOut) *nameOut = nm;
             }
             else if (key == "version") { if (versionOut) { if (!str(*versionOut)) return false; } else if (!skipValue()) return false; }
@@ -4670,7 +4698,7 @@ static const ManifestModules& manifestModulesCached(const std::string& manifest)
         std::ifstream in(osp(manifest), std::ios::binary);
         std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         std::set<std::string> declared, defaults;
-        ManifestReader r(src, declared, defaults);
+        ManifestReader r(src, declared, defaults, manifest);
         r.modulesOut = &m.mods;
         r.nameOut    = &rawName;
         // A manifest that does not parse is not an error HERE — this runs on the resolution and editor
@@ -5039,7 +5067,7 @@ static bool loadManifestTargets(const std::string& path, std::map<std::string, T
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> ignoredDeclared, ignoredDefaults;
-    ManifestReader r(src, ignoredDeclared, ignoredDefaults);
+    ManifestReader r(src, ignoredDeclared, ignoredDefaults, path);
     r.targetsOut = &out;
     r.groupsOut  = &groupsOut;
     r.defaultTargetOut = defaultTargetOut;
@@ -5079,7 +5107,7 @@ static bool loadManifestFlags(const std::string& path,
     std::ifstream in(osp(path), std::ios::binary);
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
 }
@@ -5094,7 +5122,7 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.deps = &deps;
     r.devDeps = devDeps;   // optional: also capture `dev-dependencies` (M2.2)
     r.registriesOut = reg; // optional: also capture `registries` config (M3.1b)
@@ -5132,7 +5160,7 @@ static bool loadManifestLocalInstall(const std::string& path, std::map<std::stri
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.overridesOut = &overrides;
     r.registriesOut = &reg;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
@@ -5149,7 +5177,7 @@ static bool loadManifestEntry(const std::string& path, std::string& entryOut, st
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.entryOut = &entryOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
@@ -5163,7 +5191,7 @@ static bool loadManifestOutDir(const std::string& path, std::string& outDir, std
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.outDirOut = &outDir;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
@@ -5179,7 +5207,7 @@ static bool loadManifestArtifactFlags(const std::string& path, bool& webgpu, boo
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.webgpuOut = &webgpu; r.noHeapOut = &noHeap; r.reproFloatOut = &reproFloat;
     r.debugOptimizeOut = debugOptimize;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
@@ -5195,7 +5223,7 @@ static bool loadManifestProjectFlags(const std::string& path, BuildSettings& out
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.linkOut = &out.link; r.cflagsOut = &out.cflags; r.ldflagsOut = &out.ldflags;
     r.cxxflagsOut = &out.cxxflags; r.objcflagsOut = &out.objcflags;
     r.csourcesOut = &out.csources; r.jsLibrariesOut = &out.jsLibraries; r.cincludesOut = &out.cincludes;
@@ -5220,7 +5248,7 @@ static bool loadManifestKind(const std::string& path, std::string& kindOut, std:
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.kindOut = &kindOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
@@ -5235,7 +5263,7 @@ static bool loadManifestToolchain(const std::string& path, std::string& tcOut, s
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.toolchainOut = &tcOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
@@ -5257,7 +5285,7 @@ static bool loadManifestSource(const std::string& path, std::string& out, std::s
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.sourceOut = &out;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
     if (out.empty()) return true;                       // absent: the caller applies the default
@@ -5286,7 +5314,7 @@ static bool loadManifestModules(const std::string& path, std::vector<ModuleNode>
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
     std::string projectName;
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.modulesOut = &out;
     r.nameOut    = &projectName;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; out.clear(); return false; }
@@ -5315,7 +5343,7 @@ static bool loadWorkspace(const std::string& path, std::vector<std::pair<std::st
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.workspaceFile = true;
     r.wsProjectsOut = &out;
     r.deps          = depsOut;
@@ -5331,7 +5359,7 @@ static bool loadManifestLog(const std::string& path, LogConfig& out, std::string
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.logOut = &out;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
@@ -5346,7 +5374,7 @@ static bool loadManifestNameVersion(const std::string& path, std::string& nameOu
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.nameOut = &nameOut; r.versionOut = &versionOut;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
@@ -5361,7 +5389,7 @@ static bool loadManifestPackageMeta(const std::string& path, PackageMeta& meta, 
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.metaOut = &meta; r.kamaReqOut = &kamaReq; r.topKeysOut = &keys;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
@@ -5374,7 +5402,7 @@ static bool loadManifestPublishExclude(const std::string& path, std::vector<std:
     if (!in) { err = "cannot open '" + path + "'"; return false; }
     std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::set<std::string> declared, defaults;   // unused here
-    ManifestReader r(src, declared, defaults);
+    ManifestReader r(src, declared, defaults, path);
     r.publishExcludeOut = &out;
     if (!r.parse()) { err = r.err.empty() ? "malformed JSON" : r.err; return false; }
     return true;
@@ -8163,6 +8191,17 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     if (!kamaReqSatisfied(childReq, "`" + r.name + "`", cerr)) {
                         fprintf(stderr, "kama pkg install: %s\n", cerr.c_str()); return 2;
                     }
+                    // A dependency's KEY is the name a build looks it up by, so it must be the package's own (KR-111):
+                    // a key that differed installed silently and then failed every build with "declares `foo`, but
+                    // it is not installed".
+                    std::string ownName, ownVersion, nerr;
+                    if (loadManifestNameVersion(childManifest, ownName, ownVersion, nerr) && !ownName.empty()
+                        && ownName != r.name) {
+                        fprintf(stderr, "kama pkg install: dependency '%s' (required by %s) is the package '%s' — the "
+                                "key must be the package's own name, which is what a build finds it by; write \"%s\"\n",
+                                r.name.c_str(), r.requestor.c_str(), ownName.c_str(), ownName.c_str());
+                        return 2;
+                    }
                     for (auto& ck : childDeps) { directNames.push_back(ck.first);
                         // storePath is where THIS package's manifest lives — the dir its own path specs
                         // are relative to. For a path dep that is the local package dir itself.
@@ -9447,19 +9486,8 @@ static bool seedValidName(const std::string& name, bool mustBeImportable, std::s
         err = "'" + ident + "' is a kama keyword, so it cannot be a project's root module";
         return false;
     }
-    if (ident == "std" || ident == "core") {
-        err = "'" + ident + "' is reserved — an import rooted there resolves to the standard library, so "
-              "nothing could ever import this package";
-        return false;
-    }
-    // `global` (§2f.29) — retired as a qualifier by KR-87, kept reserved as a name.
-    if (ident == "global") {
-        err = "'global' is reserved — it named the floor until KR-87 retired it, and a project claiming it "
-              "would read as that retired spelling";
-        return false;
-    }
-    const std::string creg = reservedByCRegister(ident);
-    if (!creg.empty()) { err = "'" + ident + "' is reserved — " + creg; return false; }
+    const std::string why = reservedNameReason(ident);   // the one rule the manifest reader also holds
+    if (!why.empty()) { err = why; return false; }
     return true;
 }
 

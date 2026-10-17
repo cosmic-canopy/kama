@@ -3516,62 +3516,6 @@ in the submission signed with that identity, under the hardened runtime (`--opti
 to an `.app`, a `.dmg` or a `.pkg`), so a tarball's binary is checked online at first launch. Shipping a `.pkg`
 instead, so the ticket travels with it, is the open choice.
 
-<a id="s10-std-core-names"></a>
-
-### A project or dependency named `std` or `core` (KR-111)
-
-Measured `0.9.535`: a library whose manifest says `"name": "core"` passes `kama check` only until it has a
-root file. `src/core.kama` is then "two files of module `core`" beside the prelude's own `core.kama`.
-Consumed as a dependency, `import { core::v }` resolves to the floor module and reports that `core` does
-not export `v`. A dependency named `std` installs, and `import { std::v }` then reports "cannot resolve module
-'std'", with a note blaming the compiler's install for a missing `lib/kama.json`. Both names are reserved:
-`kama seed` refuses them, and the resolver treats a `std`/`core` root as the standard library. The manifest
-reader does not refuse them, because its comment records that refusing `std` there broke the stdlib's own
-manifest, `lib/kama.json`, which is named `std`.
-
-The fix is to tell the reader when it reads the stdlib's manifest, or to refuse at the callers that know the
-path, so both names are refused as a project `name` and as a dependency key at `kama pkg install`. It is a
-diagnostic, not a feature: no program can use such a package today.
-
-**Where (surveyed on `0.9.630`).** It reproduces, and the problem is wider than filed:
-
-- A library named `core` fails `kama check` ("`<prelude>/core/src/core.kama` and `src/core.kama` are two files of
-  module `core`"). One named `std` checks OK.
-- An app depending on both (`"std": {"path": "../std"}`, `"core": {…}`) installs ("installed 2 package(s)") and then
-  cannot import either one:
-  - `std` gives "cannot resolve module", with a note blaming the compiler install;
-  - `core` gives "does not export `v`".
-- **Wider:** a dependency KEY that differs from the package's own name installs silently, then reports "declares
-  `foo`, but it is not installed — run `kama pkg install`". A key gets no name check at all.
-
-Sites, in kama.driver.cpp:
-
-- `ManifestReader`'s name branch (~4483), with the comment on why it skips `std`/`core`;
-- `depsObject` (~4005), where the key is read;
-- `seedValidName` (~9441) and `usableNameHint` (~3306);
-- `resolveStdlibDir`/`g_argv0` (~462/474).
-
-Steps:
-
-1. One reserved-name rule, called from three places: the project name; the dependency key, through `importNameOf`
-   (so `@x/core` is caught); and seed.
-2. Exempt only the compiler's own stdlib manifest, by canonical path against `resolveStdlibDir(g_argv0) +
-   "/kama.json"`.
-3. A dependency key must equal the dependency's own name. Refuse it at install, naming both.
-4. Guards: flip `tools/check-manifest.sh` (~655) from accept to reject, and add `corename` and dependency-key cases to
-   check-packages. `check-self-import` and `check-runtime-dir` already hold the stdlib manifest accepted in both
-   layouts.
-5. docs/packages.md names the reserved names.
-
-Trap: an installed compiler checking this repo's `lib/kama.json` would now refuse it. That is acceptable; write it
-down. Size **S**.
-
-**Decided 2026-10-16** (the maintainer): **(a)**, the reader knows its path and exempts the stdlib by identity — one
-rung, the way `global` is handled. About 25 `ManifestReader` call sites gain a path. (Refusing only in build,
-install and publish would leave the next caller to miss it.) `kama seed` and the resolver already reserve both
-names; the manifest reader is the hole. Peers: `cargo new std` refuses the name, and crates.io reserves `std`,
-`core` and `alloc`.
-
 <a id="s10-agent-tooling"></a>
 
 ### kama's own AI-agent tooling (KR-148)

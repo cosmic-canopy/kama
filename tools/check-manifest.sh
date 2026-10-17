@@ -499,22 +499,22 @@ reject oldws 'now lives in kama_workspace.json' "\`projects\` in a kama.json nam
 # chain, which needs no network.
 #
 #   ws/kama_workspace.json
-#   ws/libs/core/kama.json     <- a library
-#   ws/libs/net/kama.json      <- depends on ../core BY PATH
+#   ws/libs/geom/kama.json     <- a library
+#   ws/libs/net/kama.json      <- depends on ../geom BY PATH
 #   ws/libs/app/kama.json      <- depends on ../net; installed FROM here
 #
 # Three links, not two, and that is load-bearing: the top-level-only rule exempts `<root manifest>`, so a
-# dep the installed project declares itself never reaches the gate at all. `core` has to arrive as a
+# dep the installed project declares itself never reaches the gate at all. `geom` has to arrive as a
 # TRANSITIVE request from `net` for the workspace to be what permits it.
 ws="$tmp/ws"
 mkws() {   # mkws <<'JSON' … JSON   — rebuild the tree, workspace file from stdin
-    rm -rf "$ws"; mkdir -p "$ws/libs/core/src" "$ws/libs/net/src" "$ws/libs/app/src"
-    printf '{ "name": "core", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$ws/libs/core/kama.json"
-    printf 'export { v };\nfn int32 v() { return 7; }\n' > "$ws/libs/core/src/core.kama"
+    rm -rf "$ws"; mkdir -p "$ws/libs/geom/src" "$ws/libs/net/src" "$ws/libs/app/src"
+    printf '{ "name": "geom", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$ws/libs/geom/kama.json"
+    printf 'export { v };\nfn int32 v() { return 7; }\n' > "$ws/libs/geom/src/geom.kama"
     printf '%s\n' '{ "name": "net", "version": "0.1.0", "kind": "library",' \
                   '  "modules": { ".": { "visibility": "public" } },' \
-                  '  "dependencies": { "core": { "path": "../core" } } }' > "$ws/libs/net/kama.json"
-    printf 'import { core::v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$ws/libs/net/src/net.kama"
+                  '  "dependencies": { "geom": { "path": "../geom" } } }' > "$ws/libs/net/kama.json"
+    printf 'import { geom::v };\nexport { u };\nfn int32 u() { return v(); }\n' > "$ws/libs/net/src/net.kama"
     printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "library",' \
                   '  "modules": { ".": { "visibility": "public" } },' \
                   '  "dependencies": { "net": { "path": "../net" } } }' > "$ws/libs/app/kama.json"
@@ -636,7 +636,7 @@ accept scopedname "a hyphen in a package SCOPE is routing, not a namespace"
 proj globalname <<'JSON'
 { "name": "global", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
-reject globalname 'which is reserved: `global` named the floor' "a project claiming the retired floor's name"
+reject globalname '`global` is reserved — it named the floor' "a project claiming the retired floor's name"
 
 # KR-88: a project's name heads every C name its modules emit (`<project>__…`), so a name whose prefix would
 # open one of kama's own registers is reserved — a project `k`'s `x` was `k__x`, which is also what a local
@@ -651,15 +651,19 @@ reject cregname_k_tools  'would begin with `k_`'    "a project name starting k_"
 reject cregname_kama     'would begin with `kama_`' "a project named kama (the compiler register)"
 reject cregname_kama_ext 'would begin with `kama_`' "a project name starting kama_"
 
-# ⚠️ Its two companions in the reserved set, `std` and `core`, are deliberately NOT refused on this rung,
-# and the twin below is what stops someone "fixing" that: `lib/kama.json`'s own `name` IS "std", so a
-# reader that refused it would refuse the standard library and nothing anywhere would resolve. (Measured:
-# adding them here broke every stdlib import in one build.) `kama seed` refuses all three, which is where
-# "am I creating a new project?" is the question actually being asked.
-proj stdname <<'JSON'
-{ "name": "std", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+# KR-111: `std` and `core` are reserved too — a package claiming either installs and can never be imported
+# (`import core::v` reaches the floor module). They were NOT refused on this rung once, because `lib/kama.json`'s
+# own `name` IS "std" and refusing it unconditionally refused the standard library; the reader now knows the file it
+# reads, and exempts the compiler's own two manifests by canonical path. `check-self-import` and `check-runtime-dir`
+# hold that exemption in both layouts.
+for rn in std core; do
+proj "${rn}name" <<JSON
+{ "name": "$rn", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
-accept stdname "...while \`std\` is NOT refused here — the stdlib's own manifest is named that"
+done
+reject stdname  'resolves to the standard library' "a project named std"
+reject corename 'resolves to the standard library' "a project named core"
+
 
 # ---------------------------------------------------------------------------------------------------
 echo "check-manifest: the module map states a name and an audience for every node"

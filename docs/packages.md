@@ -158,6 +158,13 @@ same name. Some names are **reserved**: `std` and `core` (the bundled libraries)
 retired qualifier), and — because a project's name heads every C name its modules emit (`<project>__…`,
 [SPEC.md](SPEC.md) *C names*) — `k`, `kama`, and any name starting `k_` or `kama_`, whose prefix would open
 one of kama's own C registers. A monorepo directory may be called anything: it has no name in any file.
+The same rule holds wherever a name is read — a project's `name`, `kama seed`, and every **dependency key**
+(by its import name, so `"@x/core"` is refused too): a dependency named `core` would install and then never be
+reached, since `import core::v` resolves to the floor. Only the compiler's own two manifests, `lib/kama.json`
+(`std`) and `lib/core/kama.json` (`core`), are exempt, recognized by their path under the stdlib the compiler
+resolves — so another compiler's checkout of kama's own `lib/` reads as a project claiming those names. And a
+dependency's key **is** the package's own `name`, because the key is what a build finds it by: `"shapes":
+{ "path": "../geo" }` over a package named `geo` is refused at `kama pkg install`, naming both.
 
 ## Build output — `out`
 
