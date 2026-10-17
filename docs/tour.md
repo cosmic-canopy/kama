@@ -11,7 +11,8 @@ no hidden allocation.
 
 ## Hello, exit code
 
-A program is a `main` that returns an `int32`, and that integer is the process exit status.
+A program is a `main` that returns an `int32`, and that integer is the process exit status. Linux and macOS keep
+only its low byte (`return 256;` exits 0), so a portable program returns 0–255; Windows keeps all 32 bits.
 
 ```kama
 import { core::println };
