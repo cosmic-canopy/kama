@@ -5,7 +5,7 @@
 // a nested call, one inside a generic body (solved per instantiation), a generic TYPE returned, and the
 // argument shapes inference had no arm for — a ternary, a field, an element. The cross-module twin is
 // tests/generic_nested_inference.d.
-import { std::math::abs, std::math::sin, std::math::Real, std::collections::DynamicArray };
+import { core::eprintln, std::math::abs, std::math::sin, std::math::Real, std::collections::DynamicArray };
 
 type value V { public float64 f = -2.5; public ctor make() { } }
 type value Box<T> { public T v; public ctor of(T v) { this.v = v; } }
@@ -36,5 +36,8 @@ fn int32 main() {
     float64 s = abs(x: t > 0.0 ? t : t) + abs(x: v.f) + abs(x: arr[0]) + abs(x: dyn[0]) + cast<float64>(id(x: b.v));
     if (s == 1.0 + 2.5 + 3.0 + 6.0 + 9.0) { n = n + 128; }     // ternary, field, elements
     if (id(x: p).gx() == 4) { n = n + 256; }                    // a method on a generic call's result
-    return n == 511 ? 0 : n;
+    // A miss prints the missing bits and exits 1: an exit status keeps one byte on POSIX, so a check worth 256 or more cannot ride in it.
+    int32 missed = 511 - n;
+    if (missed != 0) { eprintln(s: "generic_nested_inference: missed checks ${missed}"); return 1; }
+    return 0;
 }

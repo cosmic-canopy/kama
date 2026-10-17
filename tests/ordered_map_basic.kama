@@ -1,9 +1,9 @@
 // KR-186: `OrderedMap<K, V>`'s surface, one check per member — it mirrors `Map` and adds what insertion order makes
-// answerable: `first()`/`last()`, `moveToEnd`, and `compact()`. Each check adds its own bit, so a failure names
-// itself in the exit code. ordered_map_model.kama checks the bookkeeping under random operations; this one is the
+// answerable: `first()`/`last()`, `moveToEnd`, and `compact()`. Each check adds its own bit, and a miss prints the
+// missing bits and exits 1 — an exit status keeps one byte on POSIX, so a check worth 256 or more cannot ride in it. ordered_map_model.kama checks the bookkeeping under random operations; this one is the
 // documented behaviour, member by member, including an arena-backed map and an LRU built from the three.
 import {
-    std::collections::OrderedMap, std::collections::Entry, std::collections::DefaultHasher,
+    core::eprintln, std::collections::OrderedMap, std::collections::Entry, std::collections::DefaultHasher,
     std::collections::Arena, std::collections::BumpAllocator,
 };
 
@@ -25,7 +25,7 @@ fn int32 lru() {
     }
     int32 order = 0;
     foreach (int32 k in c) { order = order * 10 + k; }
-    return evicted == 314 && order == 425 ? 1 : 0;   // 3 then 1 then 4 evicted (2 was touched); 4,2,5 remain
+    return evicted == 231 && order == 425 ? 1 : 0;   // the hit on 1 moves it last: 2, 3, then 1 evicted; 4,2,5 remain
 }
 
 fn int32 main() {
@@ -105,5 +105,7 @@ fn int32 main() {
 
     // 1024: the LRU
     r = r + lru() * 1024;
-    return r - 1985;   // 2047 - 1985 = 62 when every bit is set
+    int32 missed = 2047 - r;
+    if (missed != 0) { eprintln(s: "ordered_map_basic: missed checks ${missed}"); return 1; }
+    return 62;
 }

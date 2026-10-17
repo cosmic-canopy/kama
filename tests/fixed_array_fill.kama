@@ -3,7 +3,7 @@
 // declares) and `filled(size:, value:)` gives each a copy of one value; both have allocator twins. Before, a
 // `FixedArray<File>` of 3 closed descriptor 0 three times when it dropped (`File` spells empty `fd = -1`),
 // and a declared field default (`scale = 1.5`) read `0`.
-import { std::collections::FixedArray, std::collections::Arena, std::collections::BumpAllocator };
+import { core::eprintln, std::collections::FixedArray, std::collections::Arena, std::collections::BumpAllocator };
 
 static int32 closes = 0;
 // A raw-handle resource: its empty value is `fd = -1`, which the zero bytes are not.
@@ -51,5 +51,8 @@ fn int32 main() {
     FixedArray<Scaled, BumpAllocator> ar = FixedArray.withAllocator(allocator: arena.handle(), size: 3);
     FixedArray<Tag, BumpAllocator> at = FixedArray.filledWithAllocator(allocator: arena.handle(), size: 2, value: Tag.make(id: 5));
     if (ar[2].scale == 1.5f32 && at[1].id == 5) { r = r + 256; }                  // 511
-    return r - 400;                                                                // 111 (an exit code is one byte)
+    // A miss prints the missing bits and exits 1: an exit status keeps one byte on POSIX, so a check worth 256 or more cannot ride in it.
+    int32 missed = 511 - r;
+    if (missed != 0) { eprintln(s: "fixed_array_fill: missed checks ${missed}"); return 1; }
+    return 111;
 }

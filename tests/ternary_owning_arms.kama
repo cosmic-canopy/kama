@@ -4,7 +4,7 @@
 // place, `(*(f ? &x : &y))`, and a fresh arm there lives in a temporary dropped only when that arm ran.
 // `string z = f ? x : y;` built before this and freed the chosen string twice (exit 133). Each loop pass takes
 // the other arm, so a value freed under its owner is read freed on the second.
-import { core::println, std::collections::DynamicArray };
+import { core::eprintln, core::println, std::collections::DynamicArray };
 
 type enum Cell { Empty, Text(string text) }
 
@@ -23,7 +23,7 @@ type resource Box {
 
 type resource Doc {
     string a; string b;
-    public ctor make() { this.a = "aa".concat(other: "1"); this.b = "bb".concat(other: "22"); }
+    public ctor make() { this.a = "aa".concat(other: "1"); this.b = "bb".concat(other: "222"); }
     public fn string pick(bool f) { return f ? copy this.a : copy this.b; }
     public fn int32 peek(bool f) { return cast<int32>((f ? this.a : this.b).length()); }
     const fn const ref string ra() { return this.a; }
@@ -92,5 +92,8 @@ fn int32 main() {
         }
         println(s: copy x);
     }
-    return bad;
+    // A miss prints the sum of both passes' missed bits and exits 1: an exit status keeps one byte on POSIX, so a check worth 256 or more cannot ride in it — a missed 131072 did, and
+    // hid that `Doc.b` was one byte short of the second pass's `want` for as long as this fixture existed.
+    if (bad != 0) { eprintln(s: "ternary_owning_arms: missed checks ${bad}"); return 1; }
+    return 0;
 }

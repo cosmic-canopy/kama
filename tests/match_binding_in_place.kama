@@ -3,8 +3,10 @@
 // writes, and the arm never writes, `ref`s or `give`s the binding. Then `case Ok(value: b): b.last()` reads the 16 KB
 // `Big` where it lies instead of copying it into `b`. It is a lowering: every case below answers what a copy would,
 // including the four that keep the copy — an arm that writes the binding, one that writes the subject, a `const ref`
-// parameter's payload, and an arm that hands `ref b` to a spawned child. Returns 27 (8,866,843 mod 256).
-import { std::concurrent::Channel };
+// parameter's payload, and an arm that hands `ref b` to a spawned child. Each call is one digit of 8,866,843; the
+// sum is compared whole and the fixture exits 27, because an exit status keeps one byte on POSIX (a digit off by
+// 4 or 8 in the millions vanished mod 256).
+import { core::eprintln, std::concurrent::Channel };
 
 type value Big implements Sendable {
     InlineArray<int32>#(16) xs;
@@ -56,5 +58,6 @@ fn int32 main() {
     int32 sum = readLocal() + readTemp() * 10 + readParam(r: p) * 100 + writesBinding() * 1000 + writesSubject() * 10000
               + readConstRef(r: p) * 100000 + spawnsRef() * 1000000;
     if (inLoop() != 5) { return 1; }
-    return sum;
+    if (sum != 8866843) { eprintln(s: "match_binding_in_place: digits ${sum}, want 8866843"); return 1; }
+    return 27;
 }
