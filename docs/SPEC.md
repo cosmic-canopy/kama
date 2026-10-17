@@ -5789,6 +5789,10 @@ type enum FetchError : uint8 implements Error {
 }
 ```
 
+A method is called on any value of the enum, a member written in place included (`Light::On.lit()`). A generic <!-- test: enum_member_receiver -->
+enum's payload-less member names no instance (`Slot::Empty` is a `Slot<what>`?), so it is a receiver only once <!-- xfail: enum_member_receiver_generic -->
+something gives it a type, as everywhere else it is read.
+
 The `;` separating variants from members is **mandatory**, and it is what makes the body unambiguous: a
 bare `Foo` variant and a `Foo bar;` field are indistinguishable until it appears. An enum may declare
 methods with or without a contract — private unless written `public`, like any member, and `public` when <!-- xfail: enum_method_private, enum_contract_method_not_public -->

@@ -39698,6 +39698,15 @@ std::string CEmitter::receiverScalarCType(SharedExpression e)
                          if (ms != _moduleStatics.end() && ms->second) return cType(ms->second); }
         if (id->value) { const std::string xk = resolveExternConst(*id->value, id->qualifier);
                          if (!xk.empty()) return cType(_externConsts[xk].type); }
+        // ...and an enum member written in place (`Color::Red`), typed as a local of its enum is. Resolved by
+        // name, not by typeOfExpr, which asks this function about an identifier and would recurse.
+        if (id->value && id->qualifier && !id->qualifier->empty()) {
+            auto rest = std::make_shared<StringList>();
+            for (size_t i = 0; i + 1 < id->qualifier->size(); ++i) rest->push_back((*id->qualifier)[i]);
+            auto en = _enums.find(resolveUserName(*id->qualifier->back(), rest));
+            if (en != _enums.end())
+                for (auto& m : en->second.members) if (m.name == *id->value) return en->first;
+        }
         return "";
     }
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
@@ -39939,6 +39948,15 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // builds a receiver pointer, and every store keeps its plain-C semantics. Until 0.9.228 this was
     // refused as "untyped to ownership" with the borrow/own spellings.
     if (cls.empty()) cls = receiverClass(receiver);
+    // An enum VALUE written in place — `Color::Green.n()` — is not a class expression either, so the call
+    // read `Green` as an unknown name, while `Shape::Circle(r: 1).n()` (a call, typed by its return) and
+    // `Color c = Color::Green; c.n()` both worked. The rule is enumOperandClass's: `typeOfExpr` answers for
+    // an enum value in every spelling, and only an enum's class is taken from it.
+    if (cls.empty()) {
+        const std::string t = typeOfExpr(receiver);
+        auto it = _classes.find(t);
+        if (it != _classes.end() && (it->second.isVariant || it->second.isScalarEnum())) cls = t;
+    }
     // A `string` receiver that `exprClass` can't name — a bare literal (`"x".trim()`) or a `+` chain
     // (`(a + b).length()`) — still classes as the `string` primitive. Localizes string knowledge to
     // `exprIsString`; the rvalue is made addressable below (addrOfOperand), like `.concat()` composes.
@@ -40084,6 +40102,14 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // a one-lookup bug. A diagnostic about a name that cannot be resolved must at minimum say which.
         std::string who;
         if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get())) if (rid->value) who = *rid->value;
+        // A generic enum's bare member (`Slot::Empty.isEmpty()`) names no instance — say THAT, as a read of it does.
+        if (auto* rid = dynamic_cast<IdentifierNode*>(receiver.get()))
+            if (rid->value && rid->qualifier && !rid->qualifier->empty()) {
+                auto rest = std::make_shared<StringList>();
+                for (size_t i = 0; i + 1 < rid->qualifier->size(); ++i) rest->push_back((*rid->qualifier)[i]);
+                const std::string& last = *rid->qualifier->back();
+                if (reportUntypedVariant(rid, resolveUserName(last, rest), last, *rid->value, call->line)) return "0";
+            }
         // ⚠️ TWO different failures reach this line, and saying the wrong one is worse than saying
         // nothing. The receiver may be an unknown NAME, or a perfectly good value of a primitive type
         // that simply has no conformance carrying this method — which is what an `isize` hits, since

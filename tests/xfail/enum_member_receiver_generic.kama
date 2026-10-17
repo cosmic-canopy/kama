@@ -1,0 +1,11 @@
+// A generic enum's payload-less member names no instance — `Slot::Empty` is a `Slot<what>`? — so it cannot be
+// a receiver until something gives it a type, as it cannot be read anywhere else without one.
+type enum Slot<T> {
+    Empty, Full(T item);
+    public const fn bool isEmpty() { return match (this) { case Empty: true; case Full(item: i): false; }; }
+}
+
+fn int32 main()
+{
+    return Slot::Empty.isEmpty() ? 1 : 0;
+}

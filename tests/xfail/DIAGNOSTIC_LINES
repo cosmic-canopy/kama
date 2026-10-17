@@ -386,6 +386,7 @@ enum_member_cycle	enum_member_cycle.kama:3
 enum_member_float	enum_member_float.kama:2
 enum_member_not_const	enum_member_not_const.kama:3
 enum_member_out_of_range	enum_member_out_of_range.kama:3
+enum_member_receiver_generic	enum_member_receiver_generic.kama:10
 enum_method_private	enum_method_private.kama:8
 enum_missing_contract_method	enum_missing_contract_method.kama:2
 enum_operator	enum_operator.kama:5
