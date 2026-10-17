@@ -1,1 +1,1 @@
-arithmetic overflow -- the result 32768 does not fit the operand type [-32768, 32767]
+arithmetic overflow -- the result 32768 does not fit the operand type [-32768, 32767] (arith_overflow_i16.kama:10)

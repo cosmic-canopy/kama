@@ -1,1 +1,1 @@
-arithmetic overflow -- the result 128 does not fit the operand type [-128, 127]
+arithmetic overflow -- the result 128 does not fit the operand type [-128, 127] (arith_div_i8_min.kama:14)

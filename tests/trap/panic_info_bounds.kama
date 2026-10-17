@@ -1,0 +1,13 @@
+// KR-179: a bounds trap names its file and line, as `panic` does, and the handler is handed both. It printed
+// `kama: index 8 out of bounds (length 2)`, with no location anywhere a crash report could read it.
+import { core::setPanicHandler, core::PanicInfo, core::eprintln };
+unsafe fn void onPanic(const ref PanicInfo info) {
+    string m = info.message(); string f = info.file(); int32 l = info.line();
+    eprintln(s: "HOOK [${m}] [${f}] ${l}");
+}
+unsafe fn void install() { setPanicHandler(handler: onPanic); }
+fn int32 pick(isize i) { InlineArray<int32>#(2) xs = [1, 2]; return xs[i]; }
+fn int32 main() {
+    install();
+    return pick(i: 8);
+}

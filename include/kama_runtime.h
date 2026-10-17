@@ -454,64 +454,75 @@ static inline void kama_fail_puti(char* buf, size_t* p, size_t cap, long long v)
 // here / the MCU resets); a firmware author provides a strong `kama_panic_handler` to blink an SOS,
 // reset, or log over a peripheral. Weak symbols are supported by clang/gcc = the embedded toolchains.
 __attribute__((weak)) KAMA_NORETURN void kama_panic_handler(void) { for (;;) __builtin_trap(); }
-static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
+static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     (void)i; (void)len;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}   // kama_panic_handler must not return; belt-and-suspenders if a user override does
 }
-static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi) {
+static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     (void)v; (void)lo; (void)hi;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long long lo, unsigned long long hi) {
+static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     (void)v; (void)lo; (void)hi;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsigned long long hi) {
+static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     (void)v; (void)lo; (void)hi;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_simd_arith_fail(int lane) {
+static inline KAMA_NORETURN void kama_simd_arith_fail(int lane, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     (void)lane;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_sdiv_fail(void) {
+static inline KAMA_NORETURN void kama_sdiv_fail(const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_div_zero_fail(void) {
+static inline KAMA_NORETURN void kama_div_zero_fail(const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_shift_fail(long long n, int width) {
+static inline KAMA_NORETURN void kama_shift_fail(long long n, int width, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     (void)n; (void)width;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_fcast_fail(void) {
+static inline KAMA_NORETURN void kama_fcast_fail(const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_wide_arith_fail(const char* op, int width) {
+static inline KAMA_NORETURN void kama_wide_arith_fail(const char* op, int width, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     (void)op; (void)width;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 }
-static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
+static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off, const char* kama_f, int32_t kama_l) {
+    (void)kama_f; (void)kama_l;
     (void)off;
     kama_try_recover();
     kama_panic_handler();
@@ -579,96 +590,95 @@ static inline KAMA_NORETURN void kama__fail(char* buf, size_t cap, size_t msg, s
 }
 #define KAMA__FAIL_BUF char buf[1024]; size_t p = 0; const size_t cap = sizeof buf - 1; \
                        kama_fail_puts(buf, &p, cap, "kama: ")
-static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
+static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
-    kama_fail_puts(buf, &p, cap, "index ");            kama_fail_putu(buf, &p, cap, i);
-    kama_fail_puts(buf, &p, cap, " out of bounds (length "); kama_fail_putu(buf, &p, cap, len);
-    kama_fail_puts(buf, &p, cap, ")");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama_fail_puts(buf, &p, cap, "index ");                     kama_fail_putu(buf, &p, cap, i);
+    kama_fail_puts(buf, &p, cap, " is out of bounds for length "); kama_fail_putu(buf, &p, cap, len);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 // A `cast<T>` whose runtime value does not FIT `T`. Distinct from kama_bounds_fail: nothing is indexed,
 // so the message names the value and the range it missed. Same clean abort, same overridable hook.
-static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi) {
+static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "value ");                         kama_fail_puti(buf, &p, cap, v);
     kama_fail_puts(buf, &p, cap, " does not fit the target range ["); kama_fail_puti(buf, &p, cap, lo);
     kama_fail_puts(buf, &p, cap, ", ");                             kama_fail_putu(buf, &p, cap, hi);
     kama_fail_puts(buf, &p, cap, "]");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 // The unsigned-source twin: the value cannot be printed as signed (it may exceed LLONG_MAX), while the
 // target's floor still can be. Splitting the two is what keeps both ends of the message exact.
-static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long long lo, unsigned long long hi) {
+static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "value ");                         kama_fail_putu(buf, &p, cap, v);
     kama_fail_puts(buf, &p, cap, " does not fit the target range ["); kama_fail_puti(buf, &p, cap, lo);
     kama_fail_puts(buf, &p, cap, ", ");                             kama_fail_putu(buf, &p, cap, hi);
     kama_fail_puts(buf, &p, cap, "]");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 // A sub-`int` SIGNED arithmetic result outside its own type's range. Distinct from kama_narrow_fail_s:
 // a narrowing `cast<int8>(300)` is a conversion the author WROTE, while this is an arithmetic result the
 // author did not — so the message names the operation, not a target.
-static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsigned long long hi) {
+static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "arithmetic overflow -- the result "); kama_fail_puti(buf, &p, cap, v);
     kama_fail_puts(buf, &p, cap, " does not fit the operand type [");   kama_fail_puti(buf, &p, cap, lo);
     kama_fail_puts(buf, &p, cap, ", ");                                kama_fail_putu(buf, &p, cap, hi);
     kama_fail_puts(buf, &p, cap, "]");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 // A signed integer LANE that overflowed. Named separately from kama_arith_fail because the lane index is
 // the thing a reader needs — the other lanes are fine, and "which one" is not otherwise recoverable.
-static inline KAMA_NORETURN void kama_simd_arith_fail(int lane) {
+static inline KAMA_NORETURN void kama_simd_arith_fail(int lane, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "arithmetic overflow in Simd lane "); kama_fail_puti(buf, &p, cap, (long long)lane);
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 // `TYPE_MIN / -1`. Named separately because it can report no value: the result is `-TYPE_MIN`, the one
 // number the type cannot hold, and at 64 bits no wider signed type can hold it either.
-static inline KAMA_NORETURN void kama_sdiv_fail(void) {
+static inline KAMA_NORETURN void kama_sdiv_fail(const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "arithmetic overflow -- TYPE_MIN / -1 has no representable result");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 // The three faults that used to be `-fsanitize-trap` — a bare `ud2` that printed nothing, ran no hook and
 // could not be recovered from. Each is now kama's own check (KAMA_DIV/KAMA_MOD/KAMA_SHL/KAMA_SHR and
 // kama_f2i_chk below), so every fault a kama program can raise takes ONE path: a message, the panic hook,
 // and — inside an `@onPanic` region — recovery. It is also what lets the driver pass no `-fsanitize` at
 // all, which is what emscripten's Wasm Workers (an AudioWorklet) required.
-static inline KAMA_NORETURN void kama_div_zero_fail(void) {
+static inline KAMA_NORETURN void kama_div_zero_fail(const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "division by zero");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
-static inline KAMA_NORETURN void kama_shift_fail(long long n, int width) {
+static inline KAMA_NORETURN void kama_shift_fail(long long n, int width, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "shift by ");        kama_fail_puti(buf, &p, cap, n);
     kama_fail_puts(buf, &p, cap, " is outside the "); kama_fail_puti(buf, &p, cap, (long long)width);
     kama_fail_puts(buf, &p, cap, "-bit width");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
-static inline KAMA_NORETURN void kama_fcast_fail(void) {
+static inline KAMA_NORETURN void kama_fcast_fail(const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "float -> int conversion is out of range (or NaN)");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 // A signed `+ - *` or negation that overflowed a 32/64-bit type (debug tier). Like kama_sdiv_fail it can
 // report no result — the result is the one number the type cannot hold — so it names the operation.
-static inline KAMA_NORETURN void kama_wide_arith_fail(const char* op, int width) {
+static inline KAMA_NORETURN void kama_wide_arith_fail(const char* op, int width, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "arithmetic overflow -- int"); kama_fail_puti(buf, &p, cap, (long long)width);
     kama_fail_puts(buf, &p, cap, " "); kama_fail_puts(buf, &p, cap, op);
     kama_fail_puts(buf, &p, cap, " overflowed");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 // A byte offset that lands INSIDE a UTF-8 character. Distinct from kama_bounds_fail: the offset is in
 // range, so "out of bounds" would name the wrong problem.
-static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
+static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
     kama_fail_puts(buf, &p, cap, "byte offset "); kama_fail_putu(buf, &p, cap, off);
     kama_fail_puts(buf, &p, cap, " splits a UTF-8 character");
-    kama__fail(buf, sizeof buf, 6, p, 0, 0);
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
 #endif
 
@@ -686,15 +696,16 @@ static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
 // `lo`/`hi` are compile-time constants at every call site, so the comparison that cannot fail folds away
 // -- an `int32 -> int64` widening costs nothing and a `uint64 -> int32` narrowing costs one branch. That
 // is why there is no hand-written one-sided variant: `-O2` already emits it.
-static inline long long kama_narrow_chk_s(long long v, long long lo, unsigned long long hi) {
-    if (v < lo) kama_narrow_fail_s(v, lo, hi);
-    if (v >= 0 && (unsigned long long)v > hi) kama_narrow_fail_s(v, lo, hi);
+static inline long long kama_narrow_chk_s(long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
+    if (v < lo) kama_narrow_fail_s(v, lo, hi, kama_f, kama_l);
+    if (v >= 0 && (unsigned long long)v > hi) kama_narrow_fail_s(v, lo, hi, kama_f, kama_l);
     return v;
 }
 // No `lo` test: every numeric target in the language has a floor of 0 or below, so an unsigned source is
 // never under it. `lo` is still carried, for the message.
-static inline unsigned long long kama_narrow_chk_u(unsigned long long v, long long lo, unsigned long long hi) {
-    if (v > hi) kama_narrow_fail_u(v, lo, hi);
+static inline unsigned long long kama_narrow_chk_u(unsigned long long v, long long lo, unsigned long long hi,
+                                                   const char* kama_f, int32_t kama_l) {
+    if (v > hi) kama_narrow_fail_u(v, lo, hi, kama_f, kama_l);
     return v;
 }
 
@@ -710,9 +721,9 @@ static inline unsigned long long kama_narrow_chk_u(unsigned long long v, long lo
 // The message says OVERFLOW rather than reusing `kama_narrow_fail_s`'s "does not fit": a narrowing
 // `cast<int8>(300)` is a conversion the author asked for, while this is an arithmetic result the author
 // did not. Same clean abort, same overridable hook.
-static inline long long kama_arith_chk(long long v, long long lo, unsigned long long hi) {
-    if (v < lo) kama_arith_fail(v, lo, hi);
-    if (v >= 0 && (unsigned long long)v > hi) kama_arith_fail(v, lo, hi);
+static inline long long kama_arith_chk(long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
+    if (v < lo) kama_arith_fail(v, lo, hi, kama_f, kama_l);
+    if (v >= 0 && (unsigned long long)v > hi) kama_arith_fail(v, lo, hi, kama_f, kama_l);
     return v;
 }
 // -- TYPE_MIN / -1, the one signed overflow that is NOT `-fwrapv`'s to define ------------------------
@@ -748,14 +759,14 @@ static inline long long kama_arith_chk(long long v, long long lo, unsigned long 
 // no check, and keeps its own type. No `default:` on purpose: a type nobody listed is a compile error
 // here, not a silently unchecked division.
 #define KAMA_DIV_CHK(NAME, T, TMIN, SIGNED)                                     \
-static inline T NAME(T a, T b) {                                                \
-    if (b == 0) kama_div_zero_fail();                                           \
-    if ((SIGNED) && b == (T)-1 && a == (TMIN)) kama_sdiv_fail();                \
+static inline T NAME(T a, T b, const char* kama_f, int32_t kama_l) {           \
+    if (b == 0) kama_div_zero_fail(kama_f, kama_l);                             \
+    if ((SIGNED) && b == (T)-1 && a == (TMIN)) kama_sdiv_fail(kama_f, kama_l);  \
     return a / b;                                                               \
 }
 #define KAMA_MOD_CHK(NAME, T, SIGNED)                                           \
-static inline T NAME(T a, T b) {                                                \
-    if (b == 0) kama_div_zero_fail();                                           \
+static inline T NAME(T a, T b, const char* kama_f, int32_t kama_l) {           \
+    if (b == 0) kama_div_zero_fail(kama_f, kama_l);                             \
     if ((SIGNED) && b == (T)-1) return 0;                                       \
     return a % b;                                                               \
 }
@@ -767,17 +778,17 @@ KAMA_MOD_CHK(kama_mod_i32, int32_t,  1)
 KAMA_MOD_CHK(kama_mod_i64, int64_t,  1)
 KAMA_MOD_CHK(kama_mod_u32, uint32_t, 0)
 KAMA_MOD_CHK(kama_mod_u64, uint64_t, 0)
-static inline float  kama_div_f32(float a, float b)   { return a / b; }
-static inline double kama_div_f64(double a, double b) { return a / b; }
-#define KAMA_DIV(a, b) _Generic((a) / (b),                                      \
+static inline float  kama_div_f32(float a, float b, const char* kama_f, int32_t kama_l)   { (void)kama_f; (void)kama_l; return a / b; }
+static inline double kama_div_f64(double a, double b, const char* kama_f, int32_t kama_l) { (void)kama_f; (void)kama_l; return a / b; }
+#define KAMA_DIV(a, b, F, L) _Generic((a) / (b),                                      \
     int: kama_div_i32, long: kama_div_i64, long long: kama_div_i64,             \
     unsigned int: kama_div_u32, unsigned long: kama_div_u64,                    \
     unsigned long long: kama_div_u64,                                           \
-    float: kama_div_f32, double: kama_div_f64)((a), (b))
-#define KAMA_MOD(a, b) _Generic((a) % (b),                                      \
+    float: kama_div_f32, double: kama_div_f64)((a), (b), (F), (L))
+#define KAMA_MOD(a, b, F, L) _Generic((a) % (b),                                \
     int: kama_mod_i32, long: kama_mod_i64, long long: kama_mod_i64,             \
     unsigned int: kama_mod_u32, unsigned long: kama_mod_u64,                    \
-    unsigned long long: kama_mod_u64)((a), (b))
+    unsigned long long: kama_mod_u64)((a), (b), (F), (L))
 
 // A shift amount at or past the PROMOTED width, or negative, is UB in C and was `-fsanitize-trap`. Now one
 // branch against the width, then the shift. A signed LEFT shift is done in the unsigned peer, because a
@@ -785,13 +796,13 @@ static inline double kama_div_f64(double a, double b) { return a / b; }
 // so `1 << 31` is legal and `3i8 << 7i8` is -128. The amount is widened to `long long`, so a huge unsigned
 // amount reads as negative and fails the same test.
 #define KAMA_SHL_CHK(NAME, T, UT, W)                                            \
-static inline T NAME(T a, long long n) {                                        \
-    if (n < 0 || n >= (W)) kama_shift_fail(n, (W));                             \
+static inline T NAME(T a, long long n, const char* kama_f, int32_t kama_l) {    \
+    if (n < 0 || n >= (W)) kama_shift_fail(n, (W), kama_f, kama_l);             \
     return (T)((UT)a << n);                                                     \
 }
 #define KAMA_SHR_CHK(NAME, T, W)                                                \
-static inline T NAME(T a, long long n) {                                        \
-    if (n < 0 || n >= (W)) kama_shift_fail(n, (W));                             \
+static inline T NAME(T a, long long n, const char* kama_f, int32_t kama_l) {    \
+    if (n < 0 || n >= (W)) kama_shift_fail(n, (W), kama_f, kama_l);             \
     return a >> n;                                                              \
 }
 KAMA_SHL_CHK(kama_shl_i32, int32_t,  uint32_t, 32)
@@ -802,21 +813,21 @@ KAMA_SHR_CHK(kama_shr_i32, int32_t,  32)
 KAMA_SHR_CHK(kama_shr_i64, int64_t,  64)
 KAMA_SHR_CHK(kama_shr_u32, uint32_t, 32)
 KAMA_SHR_CHK(kama_shr_u64, uint64_t, 64)
-#define KAMA_SHL(a, b) _Generic((a) + 0,                                        \
+#define KAMA_SHL(a, b, F, L) _Generic((a) + 0,                                  \
     int: kama_shl_i32, long: kama_shl_i64, long long: kama_shl_i64,             \
     unsigned int: kama_shl_u32, unsigned long: kama_shl_u64,                    \
-    unsigned long long: kama_shl_u64)((a), (long long)(b))
-#define KAMA_SHR(a, b) _Generic((a) + 0,                                        \
+    unsigned long long: kama_shl_u64)((a), (long long)(b), (F), (L))
+#define KAMA_SHR(a, b, F, L) _Generic((a) + 0,                                  \
     int: kama_shr_i32, long: kama_shr_i64, long long: kama_shr_i64,             \
     unsigned int: kama_shr_u32, unsigned long: kama_shr_u64,                    \
-    unsigned long long: kama_shr_u64)((a), (long long)(b))
+    unsigned long long: kama_shr_u64)((a), (long long)(b), (F), (L))
 
 // An out-of-range (or NaN) float -> int conversion is UB in C and was `-fsanitize-trap`. The check is a
 // range test on the double; the truncation toward zero is still C's own cast, applied by the caller to
 // the value handed back. `hi + 1.0` is exact for every target width — 2^31, 2^63 and 2^64 are all
 // representable — and a NaN fails both comparisons.
-static inline double kama_f2i_chk(double v, long long lo, unsigned long long hi) {
-    if (!(v >= (double)lo && v < (double)hi + 1.0)) kama_fcast_fail();
+static inline double kama_f2i_chk(double v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {
+    if (!(v >= (double)lo && v < (double)hi + 1.0)) kama_fcast_fail(kama_f, kama_l);
     return v;
 }
 
@@ -830,9 +841,9 @@ static inline double kama_f2i_chk(double v, long long lo, unsigned long long hi)
 // in EVERY build, so the emitter calls `kama_arith_chk` (sub-`int`, where the narrowing catches it) or
 // `kama_sdiv_i32`/`_i64` (above) directly rather than through this macro.
 #ifdef NDEBUG
-#  define KAMA_ARITH_NARROW(T, LO, HI, V)  ((T)(V))
+#  define KAMA_ARITH_NARROW(T, LO, HI, V, F, L)  ((T)(V))
 #else
-#  define KAMA_ARITH_NARROW(T, LO, HI, V)  ((T)kama_arith_chk((long long)(V), (LO), (HI)))
+#  define KAMA_ARITH_NARROW(T, LO, HI, V, F, L)  ((T)kama_arith_chk((long long)(V), (LO), (HI), (F), (L)))
 #endif
 // The emitter calls a checker DIRECTLY when it knows the source's signedness. When it does not — a type
 // parameter, a `foreach` binding, an intrinsic with no recorded return type — it emits this instead, and
@@ -847,21 +858,21 @@ static inline double kama_f2i_chk(double v, long long lo, unsigned long long hi)
 //
 // A float/double source takes the range test (kama_f2i_chk) and hands the VALUE back unchanged, so the
 // caller's cast still truncates toward zero (`cast<int32>(3.9f64) == 3`).
-#define KAMA_NARROW(x, LO, HI) _Generic((x),                                    \
-    signed char:        kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
-    char:               kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
-    short:              kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
-    int:                kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
-    long:               kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
-    long long:          kama_narrow_chk_s((long long)(x), (LO), (HI)),          \
-    unsigned char:      kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
-    unsigned short:     kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
-    unsigned int:       kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
-    unsigned long:      kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
-    unsigned long long: kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
-    _Bool:              kama_narrow_chk_u((unsigned long long)(x), (LO), (HI)), \
-    float:  kama_f2i_chk((double)(x), (LO), (HI)),                              \
-    double: kama_f2i_chk((double)(x), (LO), (HI)),                              \
+#define KAMA_NARROW(x, LO, HI, F, L) _Generic((x),                                    \
+    signed char:        kama_narrow_chk_s((long long)(x), (LO), (HI), (F), (L)),          \
+    char:               kama_narrow_chk_s((long long)(x), (LO), (HI), (F), (L)),          \
+    short:              kama_narrow_chk_s((long long)(x), (LO), (HI), (F), (L)),          \
+    int:                kama_narrow_chk_s((long long)(x), (LO), (HI), (F), (L)),          \
+    long:               kama_narrow_chk_s((long long)(x), (LO), (HI), (F), (L)),          \
+    long long:          kama_narrow_chk_s((long long)(x), (LO), (HI), (F), (L)),          \
+    unsigned char:      kama_narrow_chk_u((unsigned long long)(x), (LO), (HI), (F), (L)), \
+    unsigned short:     kama_narrow_chk_u((unsigned long long)(x), (LO), (HI), (F), (L)), \
+    unsigned int:       kama_narrow_chk_u((unsigned long long)(x), (LO), (HI), (F), (L)), \
+    unsigned long:      kama_narrow_chk_u((unsigned long long)(x), (LO), (HI), (F), (L)), \
+    unsigned long long: kama_narrow_chk_u((unsigned long long)(x), (LO), (HI), (F), (L)), \
+    _Bool:              kama_narrow_chk_u((unsigned long long)(x), (LO), (HI), (F), (L)), \
+    float:  kama_f2i_chk((double)(x), (LO), (HI), (F), (L)),                              \
+    double: kama_f2i_chk((double)(x), (LO), (HI), (F), (L)),                              \
     default: (x))
 
 // Signed `+ - *` and negation at 32/64 bits: TRAP in debug, WRAP in release — kama's own check, not the
@@ -877,19 +888,19 @@ static inline double kama_f2i_chk(double v, long long lo, unsigned long long hi)
 // keeps its type. A sub-`int` operand never reaches these — it takes KAMA_ARITH_NARROW (range-checked
 // against its own width) from the emitter, as before.
 #define KAMA_WIDE_ARITH(SUF, T, TMIN, W)                                        \
-static inline T kama_add_##SUF(T a, T b) {                                      \
-    T o; if (__builtin_add_overflow(a, b, &o)) kama_wide_arith_fail("+", (W)); return o; } \
-static inline T kama_sub_##SUF(T a, T b) {                                      \
-    T o; if (__builtin_sub_overflow(a, b, &o)) kama_wide_arith_fail("-", (W)); return o; } \
-static inline T kama_mul_##SUF(T a, T b) {                                      \
-    T o; if (__builtin_mul_overflow(a, b, &o)) kama_wide_arith_fail("*", (W)); return o; } \
-static inline T kama_neg_##SUF(T a) {                                           \
-    if (a == (TMIN)) kama_wide_arith_fail("negation", (W)); return (T)(-a); }
+static inline T kama_add_##SUF(T a, T b, const char* kama_f, int32_t kama_l) { \
+    T o; if (__builtin_add_overflow(a, b, &o)) kama_wide_arith_fail("+", (W), kama_f, kama_l); return o; } \
+static inline T kama_sub_##SUF(T a, T b, const char* kama_f, int32_t kama_l) { \
+    T o; if (__builtin_sub_overflow(a, b, &o)) kama_wide_arith_fail("-", (W), kama_f, kama_l); return o; } \
+static inline T kama_mul_##SUF(T a, T b, const char* kama_f, int32_t kama_l) { \
+    T o; if (__builtin_mul_overflow(a, b, &o)) kama_wide_arith_fail("*", (W), kama_f, kama_l); return o; } \
+static inline T kama_neg_##SUF(T a, const char* kama_f, int32_t kama_l) {      \
+    if (a == (TMIN)) kama_wide_arith_fail("negation", (W), kama_f, kama_l); return (T)(-a); }
 #define KAMA_PLAIN_ARITH(SUF, T)                                                \
-static inline T kama_add_##SUF(T a, T b) { return (T)(a + b); }                 \
-static inline T kama_sub_##SUF(T a, T b) { return (T)(a - b); }                 \
-static inline T kama_mul_##SUF(T a, T b) { return (T)(a * b); }                 \
-static inline T kama_neg_##SUF(T a)      { return (T)(-a); }
+static inline T kama_add_##SUF(T a, T b, const char* f, int32_t l) { (void)f; (void)l; return (T)(a + b); } \
+static inline T kama_sub_##SUF(T a, T b, const char* f, int32_t l) { (void)f; (void)l; return (T)(a - b); } \
+static inline T kama_mul_##SUF(T a, T b, const char* f, int32_t l) { (void)f; (void)l; return (T)(a * b); } \
+static inline T kama_neg_##SUF(T a, const char* f, int32_t l)      { (void)f; (void)l; return (T)(-a); }
 KAMA_WIDE_ARITH(i32, int32_t,            INT32_MIN, 32)
 KAMA_WIDE_ARITH(i64, int64_t,            INT64_MIN, 64)
 KAMA_WIDE_ARITH(l,   long,               LONG_MIN,  (int)(sizeof(long) * 8))
@@ -905,15 +916,15 @@ KAMA_PLAIN_ARITH(f64, double)
     unsigned int: kama_##OP##_u32, unsigned long: kama_##OP##_ul,               \
     unsigned long long: kama_##OP##_ull, float: kama_##OP##_f32, double: kama_##OP##_f64)
 #ifdef NDEBUG
-#  define KAMA_ADD(a, b) ((a) + (b))
-#  define KAMA_SUB(a, b) ((a) - (b))
-#  define KAMA_MUL(a, b) ((a) * (b))
-#  define KAMA_NEG(a)    (-(a))
+#  define KAMA_ADD(a, b, F, L) ((a) + (b))
+#  define KAMA_SUB(a, b, F, L) ((a) - (b))
+#  define KAMA_MUL(a, b, F, L) ((a) * (b))
+#  define KAMA_NEG(a, F, L)    (-(a))
 #else
-#  define KAMA_ADD(a, b) KAMA_VAL_SEL(add, (a) + (b))((a), (b))
-#  define KAMA_SUB(a, b) KAMA_VAL_SEL(sub, (a) - (b))((a), (b))
-#  define KAMA_MUL(a, b) KAMA_VAL_SEL(mul, (a) * (b))((a), (b))
-#  define KAMA_NEG(a)    KAMA_VAL_SEL(neg, (a) + 0)((a))
+#  define KAMA_ADD(a, b, F, L) KAMA_VAL_SEL(add, (a) + (b))((a), (b), (F), (L))
+#  define KAMA_SUB(a, b, F, L) KAMA_VAL_SEL(sub, (a) - (b))((a), (b), (F), (L))
+#  define KAMA_MUL(a, b, F, L) KAMA_VAL_SEL(mul, (a) * (b))((a), (b), (F), (L))
+#  define KAMA_NEG(a, F, L)    KAMA_VAL_SEL(neg, (a) + 0)((a), (F), (L))
 #endif
 // ...and the same operators with the type ALREADY KNOWN (`S` is a fixed-width suffix), which the emitter writes
 // whenever it knows the operand type — see `arithCType` in kama.cemit.cpp. The `_Generic` forms above have
@@ -922,15 +933,15 @@ KAMA_PLAIN_ARITH(f64, double)
 // Here each operand is written once, so the C grows linearly. Same two tiers, for every type — so a float
 // `a * b + c` still cannot contract into an FMA in debug, exactly as under `KAMA_ADD`.
 #ifdef NDEBUG
-#  define KAMA_ADD_T(S, a, b) ((a) + (b))
-#  define KAMA_SUB_T(S, a, b) ((a) - (b))
-#  define KAMA_MUL_T(S, a, b) ((a) * (b))
-#  define KAMA_NEG_T(S, a)    (-(a))
+#  define KAMA_ADD_T(S, a, b, F, L) ((a) + (b))
+#  define KAMA_SUB_T(S, a, b, F, L) ((a) - (b))
+#  define KAMA_MUL_T(S, a, b, F, L) ((a) * (b))
+#  define KAMA_NEG_T(S, a, F, L)    (-(a))
 #else
-#  define KAMA_ADD_T(S, a, b) kama_add_##S((a), (b))
-#  define KAMA_SUB_T(S, a, b) kama_sub_##S((a), (b))
-#  define KAMA_MUL_T(S, a, b) kama_mul_##S((a), (b))
-#  define KAMA_NEG_T(S, a)    kama_neg_##S((a))
+#  define KAMA_ADD_T(S, a, b, F, L) kama_add_##S((a), (b), (F), (L))
+#  define KAMA_SUB_T(S, a, b, F, L) kama_sub_##S((a), (b), (F), (L))
+#  define KAMA_MUL_T(S, a, b, F, L) kama_mul_##S((a), (b), (F), (L))
+#  define KAMA_NEG_T(S, a, F, L)    kama_neg_##S((a), (F), (L))
 #endif
 
 // PLACE operators — compound assignment and `++`/`--` — take the place BY ADDRESS, so `a[idx()] += 1`
@@ -944,25 +955,25 @@ KAMA_PLAIN_ARITH(f64, double)
 #define KAMA_OPSYM_add +
 #define KAMA_OPSYM_sub -
 #define KAMA_OPSYM_mul *
-#define KAMA_VAL_add(a, b) KAMA_ADD(a, b)
-#define KAMA_VAL_sub(a, b) KAMA_SUB(a, b)
-#define KAMA_VAL_mul(a, b) KAMA_MUL(a, b)
-#define KAMA_KIND_NARROW(NAME, T, LO, HI, a, b) KAMA_ARITH_NARROW(T, LO, HI, (long long)(a) KAMA_OPSYM_##NAME (long long)(b))
-#define KAMA_KIND_WIDE(NAME, T, LO, HI, a, b)   KAMA_VAL_##NAME((a), (b))
-#define KAMA_KIND_PLAIN(NAME, T, LO, HI, a, b)  ((a) KAMA_OPSYM_##NAME (b))
+#define KAMA_VAL_add(a, b, F, L) KAMA_ADD(a, b, F, L)
+#define KAMA_VAL_sub(a, b, F, L) KAMA_SUB(a, b, F, L)
+#define KAMA_VAL_mul(a, b, F, L) KAMA_MUL(a, b, F, L)
+#define KAMA_KIND_NARROW(NAME, T, LO, HI, a, b, F, L) KAMA_ARITH_NARROW(T, LO, HI, (long long)(a) KAMA_OPSYM_##NAME (long long)(b), F, L)
+#define KAMA_KIND_WIDE(NAME, T, LO, HI, a, b, F, L)   KAMA_VAL_##NAME((a), (b), F, L)
+#define KAMA_KIND_PLAIN(NAME, T, LO, HI, a, b, F, L)  ((void)(F), (void)(L), (a) KAMA_OPSYM_##NAME (b))
 #define KAMA_PLACE_ARITH(SUF, Q, T, LO, HI, KIND)                               \
-static inline T kama_addeq_##SUF(Q T* p, T b) { T v = (T)KIND(add, T, LO, HI, *p, b); *p = v; return v; } \
-static inline T kama_subeq_##SUF(Q T* p, T b) { T v = (T)KIND(sub, T, LO, HI, *p, b); *p = v; return v; } \
-static inline T kama_muleq_##SUF(Q T* p, T b) { T v = (T)KIND(mul, T, LO, HI, *p, b); *p = v; return v; } \
-static inline T kama_postadd_##SUF(Q T* p, T b) { T o = *p; kama_addeq_##SUF(p, b); return o; }          \
-static inline T kama_postsub_##SUF(Q T* p, T b) { T o = *p; kama_subeq_##SUF(p, b); return o; }
+static inline T kama_addeq_##SUF(Q T* p, T b, const char* kama_f, int32_t kama_l) { T v = (T)KIND(add, T, LO, HI, *p, b, kama_f, kama_l); *p = v; return v; } \
+static inline T kama_subeq_##SUF(Q T* p, T b, const char* kama_f, int32_t kama_l) { T v = (T)KIND(sub, T, LO, HI, *p, b, kama_f, kama_l); *p = v; return v; } \
+static inline T kama_muleq_##SUF(Q T* p, T b, const char* kama_f, int32_t kama_l) { T v = (T)KIND(mul, T, LO, HI, *p, b, kama_f, kama_l); *p = v; return v; } \
+static inline T kama_postadd_##SUF(Q T* p, T b, const char* kama_f, int32_t kama_l) { T o = *p; kama_addeq_##SUF(p, b, kama_f, kama_l); return o; } \
+static inline T kama_postsub_##SUF(Q T* p, T b, const char* kama_f, int32_t kama_l) { T o = *p; kama_subeq_##SUF(p, b, kama_f, kama_l); return o; }
 #define KAMA_PLACE_INT(SUF, Q, T)                                               \
-static inline T kama_diveq_##SUF(Q T* p, T b) { T v = (T)KAMA_DIV(*p, b); *p = v; return v; }            \
-static inline T kama_modeq_##SUF(Q T* p, T b) { T v = (T)KAMA_MOD(*p, b); *p = v; return v; }            \
-static inline T kama_shleq_##SUF(Q T* p, long long n) { T v = (T)KAMA_SHL(*p, n); *p = v; return v; }    \
-static inline T kama_shreq_##SUF(Q T* p, long long n) { T v = (T)KAMA_SHR(*p, n); *p = v; return v; }
+static inline T kama_diveq_##SUF(Q T* p, T b, const char* kama_f, int32_t kama_l) { T v = (T)KAMA_DIV(*p, b, kama_f, kama_l); *p = v; return v; } \
+static inline T kama_modeq_##SUF(Q T* p, T b, const char* kama_f, int32_t kama_l) { T v = (T)KAMA_MOD(*p, b, kama_f, kama_l); *p = v; return v; } \
+static inline T kama_shleq_##SUF(Q T* p, long long n, const char* kama_f, int32_t kama_l) { T v = (T)KAMA_SHL(*p, n, kama_f, kama_l); *p = v; return v; } \
+static inline T kama_shreq_##SUF(Q T* p, long long n, const char* kama_f, int32_t kama_l) { T v = (T)KAMA_SHR(*p, n, kama_f, kama_l); *p = v; return v; }
 #define KAMA_PLACE_FLOAT(SUF, Q, T)                                             \
-static inline T kama_diveq_##SUF(Q T* p, T b) { T v = (T)(*p / b); *p = v; return v; }
+static inline T kama_diveq_##SUF(Q T* p, T b, const char* kama_f, int32_t kama_l) { (void)kama_f; (void)kama_l; T v = (T)(*p / b); *p = v; return v; }
 #define KAMA_PLACE_TYPES(Q, V)                                                                          \
 KAMA_PLACE_ARITH(i8##V,  Q, signed char,        -128,       127,        KAMA_KIND_NARROW) KAMA_PLACE_INT(i8##V,  Q, signed char)        \
 KAMA_PLACE_ARITH(i16##V, Q, short,              -32768,     32767,      KAMA_KIND_NARROW) KAMA_PLACE_INT(i16##V, Q, short)              \
@@ -992,15 +1003,15 @@ KAMA_PLACE_TYPES(volatile, v)
     KAMA_PSEL(OP, u32, unsigned int), KAMA_PSEL(OP, ul, unsigned long),                          \
     KAMA_PSEL(OP, ull, unsigned long long),                                                      \
     KAMA_PSEL(OP, f32, float), KAMA_PSEL(OP, f64, double))
-#define KAMA_ADDEQ(p, b)   KAMA_PLACE_SEL(addeq, p)((p), (b))
-#define KAMA_SUBEQ(p, b)   KAMA_PLACE_SEL(subeq, p)((p), (b))
-#define KAMA_MULEQ(p, b)   KAMA_PLACE_SEL(muleq, p)((p), (b))
-#define KAMA_DIVEQ(p, b)   KAMA_PLACE_SEL(diveq, p)((p), (b))
-#define KAMA_MODEQ(p, b)   KAMA_PLACE_SEL_INT(modeq, p)((p), (b))
-#define KAMA_SHLEQ(p, n)   KAMA_PLACE_SEL_INT(shleq, p)((p), (long long)(n))
-#define KAMA_SHREQ(p, n)   KAMA_PLACE_SEL_INT(shreq, p)((p), (long long)(n))
-#define KAMA_POSTADD(p, b) KAMA_PLACE_SEL(postadd, p)((p), (b))
-#define KAMA_POSTSUB(p, b) KAMA_PLACE_SEL(postsub, p)((p), (b))
+#define KAMA_ADDEQ(p, b, F, L)   KAMA_PLACE_SEL(addeq, p)((p), (b), (F), (L))
+#define KAMA_SUBEQ(p, b, F, L)   KAMA_PLACE_SEL(subeq, p)((p), (b), (F), (L))
+#define KAMA_MULEQ(p, b, F, L)   KAMA_PLACE_SEL(muleq, p)((p), (b), (F), (L))
+#define KAMA_DIVEQ(p, b, F, L)   KAMA_PLACE_SEL(diveq, p)((p), (b), (F), (L))
+#define KAMA_MODEQ(p, b, F, L)   KAMA_PLACE_SEL_INT(modeq, p)((p), (b), (F), (L))
+#define KAMA_SHLEQ(p, n, F, L)   KAMA_PLACE_SEL_INT(shleq, p)((p), (long long)(n), (F), (L))
+#define KAMA_SHREQ(p, n, F, L)   KAMA_PLACE_SEL_INT(shreq, p)((p), (long long)(n), (F), (L))
+#define KAMA_POSTADD(p, b, F, L) KAMA_PLACE_SEL(postadd, p)((p), (b), (F), (L))
+#define KAMA_POSTSUB(p, b, F, L) KAMA_PLACE_SEL(postsub, p)((p), (b), (F), (L))
 
 // InlineArray<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T kama_v[N]; }`). It owns no heap:
 // it copies by value (a plain struct blit), has no destructor, and never decays to a raw pointer.
@@ -1013,16 +1024,16 @@ KAMA_PLACE_TYPES(volatile, v)
 // REACHABLE here, where an unsigned index made it merely unrepresentable, so each check tests it
 // explicitly — the same `i < 0 || i >= len` shape the kama-side collections use.
 #define KAMA_FIXED_FUNCS(T, N, NAME)                                           \
-static inline T      NAME##__get(const NAME* self, ptrdiff_t i) {               \
-    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
+static inline T      NAME##__get(const NAME* self, ptrdiff_t i, const char* kama_f, int32_t kama_l) { \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N), kama_f, kama_l); \
     return self->kama_v[i];                                                          \
 }                                                                               \
-static inline void   NAME##__set(NAME* self, ptrdiff_t i, T x) {                \
-    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
+static inline void   NAME##__set(NAME* self, ptrdiff_t i, T x, const char* kama_f, int32_t kama_l) { \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N), kama_f, kama_l); \
     self->kama_v[i] = x;                                                             \
 }                                                                               \
-static inline T*     NAME##__at(NAME* self, ptrdiff_t i) {                      \
-    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
+static inline T*     NAME##__at(NAME* self, ptrdiff_t i, const char* kama_f, int32_t kama_l) { \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N), kama_f, kama_l); \
     return &self->kama_v[i];                                                         \
 }                                                                               \
 static inline ptrdiff_t NAME##__length(const NAME* self) { (void)self; return (ptrdiff_t)(N); } \
@@ -1087,8 +1098,8 @@ static inline NAME   NAME##__fill(T x) {                                        
 static inline NAME NAME##__splat(T x) {                                         \
     NAME r; for (int i = 0; i < (N); ++i) r[i] = x; return r;                    \
 }                                                                               \
-static inline T NAME##__lane(const NAME* self, ptrdiff_t i) {                   \
-    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N)); \
+static inline T NAME##__lane(const NAME* self, ptrdiff_t i, const char* kama_f, int32_t kama_l) { \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N), kama_f, kama_l); \
     return (*self)[i];                                                          \
 }                                                                               \
 static inline ARR NAME##__toArray(const NAME* self) {                           \
@@ -1169,19 +1180,19 @@ static inline bool  MNAME##__allTrue(const MNAME* self) {                       
 // in release because the whole thing compiles to the bare vector op there. UNSIGNED lanes are not
 // checked — unsigned wrapping is defined and the language says so at every width.
 #define KAMA_SIMD_ICHK(T, UT, N, NAME)                                          \
-static inline NAME NAME##__chkAdd(NAME a, NAME b) {                             \
+static inline NAME NAME##__chkAdd(NAME a, NAME b, const char* kama_f, int32_t kama_l) { \
     NAME r; for (int i = 0; i < (N); ++i) { T o;                                 \
-        if (__builtin_add_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i);     \
+        if (__builtin_add_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i, kama_f, kama_l); \
         r[i] = o; } return r;                                                   \
 }                                                                               \
-static inline NAME NAME##__chkSub(NAME a, NAME b) {                             \
+static inline NAME NAME##__chkSub(NAME a, NAME b, const char* kama_f, int32_t kama_l) { \
     NAME r; for (int i = 0; i < (N); ++i) { T o;                                 \
-        if (__builtin_sub_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i);     \
+        if (__builtin_sub_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i, kama_f, kama_l); \
         r[i] = o; } return r;                                                   \
 }                                                                               \
-static inline NAME NAME##__chkMul(NAME a, NAME b) {                             \
+static inline NAME NAME##__chkMul(NAME a, NAME b, const char* kama_f, int32_t kama_l) { \
     NAME r; for (int i = 0; i < (N); ++i) { T o;                                 \
-        if (__builtin_mul_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i);     \
+        if (__builtin_mul_overflow(a[i], b[i], &o)) kama_simd_arith_fail(i, kama_f, kama_l); \
         r[i] = o; } return r;                                                   \
 }                                                                               \
 /* A signed left shift INTO the sign bit is UB in C, for a vector lane exactly as for a scalar. kama  */\
@@ -1196,13 +1207,13 @@ static inline NAME NAME##__shl(NAME a, NAME b) {                                
 // Debug traps, release wraps — the same two-tier split the scalar types get, and the release arm is the
 // bare vector operator, so a `--release` build's codegen is byte-identical to having no check at all.
 #ifdef NDEBUG
-#  define KAMA_SIMD_ADD(NAME, A, B) ((A) + (B))
-#  define KAMA_SIMD_SUB(NAME, A, B) ((A) - (B))
-#  define KAMA_SIMD_MUL(NAME, A, B) ((A) * (B))
+#  define KAMA_SIMD_ADD(NAME, A, B, F, L) ((A) + (B))
+#  define KAMA_SIMD_SUB(NAME, A, B, F, L) ((A) - (B))
+#  define KAMA_SIMD_MUL(NAME, A, B, F, L) ((A) * (B))
 #else
-#  define KAMA_SIMD_ADD(NAME, A, B) NAME##__chkAdd((A), (B))
-#  define KAMA_SIMD_SUB(NAME, A, B) NAME##__chkSub((A), (B))
-#  define KAMA_SIMD_MUL(NAME, A, B) NAME##__chkMul((A), (B))
+#  define KAMA_SIMD_ADD(NAME, A, B, F, L) NAME##__chkAdd((A), (B), (F), (L))
+#  define KAMA_SIMD_SUB(NAME, A, B, F, L) NAME##__chkSub((A), (B), (F), (L))
+#  define KAMA_SIMD_MUL(NAME, A, B, F, L) NAME##__chkMul((A), (B), (F), (L))
 #endif
 
 // The comparisons live with the DATA vector (they are `a.greaterThan(rhs: b)`) but produce the mask, so
@@ -1308,8 +1319,8 @@ static inline kama_string kama_string__concat(kama_string* self, kama_string oth
 }
 // Bounds-checked byte access: `s[i]` returns the i-th UTF-8 byte (a uint8). Traps on out-of-range.
 // (Codepoints come from `.chars()`; this is the raw byte, honest to the UTF-8-bytes model.)
-static inline uint8_t kama_string__get(kama_string* self, size_t i) {
-    if (i >= self->kama_len) kama_bounds_fail(i, self->kama_len);
+static inline uint8_t kama_string__get(kama_string* self, size_t i, const char* kama_f, int32_t kama_l) {
+    if (i >= self->kama_len) kama_bounds_fail(i, self->kama_len, kama_f, kama_l);
     return (uint8_t)self->kama_data[i];
 }
 
@@ -1339,10 +1350,11 @@ static inline size_t kama_string__floorCharBoundary(kama_string* self, size_t of
 // no error. Trapping matches how indexing already behaves (a bad index aborts rather than invoking UB)
 // and how Rust's `&s[0..2]` panics on a non-char-boundary. For an offset from arithmetic rather than from
 // a search, snap it with `floorCharBoundary` (or use `truncate`) — both are total.
-static inline kama_string kama_string__substring(kama_string* self, size_t start, size_t end) {
-    if (start > end || end > self->kama_len) kama_bounds_fail(end, self->kama_len);
-    if (!kama_utf8_is_boundary(self, start)) kama_utf8_split_fail(start);
-    if (!kama_utf8_is_boundary(self, end))   kama_utf8_split_fail(end);
+static inline kama_string kama_string__substring(kama_string* self, size_t start, size_t end,
+                                                 const char* kama_f, int32_t kama_l) {
+    if (start > end || end > self->kama_len) kama_bounds_fail(end, self->kama_len, kama_f, kama_l);
+    if (!kama_utf8_is_boundary(self, start)) kama_utf8_split_fail(start, kama_f, kama_l);
+    if (!kama_utf8_is_boundary(self, end))   kama_utf8_split_fail(end, kama_f, kama_l);
     size_t n = end - start;
     kama_string r; r.kama_len = n;
     if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
@@ -1357,7 +1369,7 @@ static inline kama_string kama_string__substring(kama_string* self, size_t start
 // search. Total: never traps. One line over the primitive, kept because a caller who never discovers
 // `floorCharBoundary` still writes correct code by reaching for the obvious name.
 static inline kama_string kama_string__truncate(kama_string* self, size_t maxBytes) {
-    return kama_string__substring(self, 0, kama_string__floorCharBoundary(self, maxBytes));
+    return kama_string__substring(self, 0, kama_string__floorCharBoundary(self, maxBytes), 0, 0);
 }
 // Byte offset of the first occurrence of `needle`; an empty needle matches at 0. Internal helper
 // (raw found-flag + offset); the emitter wraps it as `Optional<usize>` for `.find()`. A plain

@@ -1,1 +1,1 @@
-out of bounds
+index 10 is out of bounds for length 3 (string_index_oob.kama:6)

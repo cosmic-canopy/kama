@@ -1,0 +1,1 @@
+HOOK [index 8 is out of bounds for length 2] [panic_info_bounds.kama] 9

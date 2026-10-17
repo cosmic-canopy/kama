@@ -1,1 +1,1 @@
-float -> int conversion is out of range
+float -> int conversion is out of range (or NaN) (float_cast_oob.kama:6)

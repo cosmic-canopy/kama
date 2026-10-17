@@ -1,1 +1,1 @@
-kama: arithmetic overflow -- int32 negation overflowed
+kama: arithmetic overflow -- int32 negation overflowed (neg_min.kama:6)

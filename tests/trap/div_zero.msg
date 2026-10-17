@@ -1,1 +1,1 @@
-kama: division by zero
+kama: division by zero (div_zero.kama:8)

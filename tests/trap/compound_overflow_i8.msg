@@ -1,1 +1,1 @@
-arithmetic overflow -- the result 200
+arithmetic overflow -- the result 200 does not fit the operand type [-128, 127] (compound_overflow_i8.kama:9)

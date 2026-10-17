@@ -1,1 +1,1 @@
-kama: division by zero
+kama: division by zero (mod_zero.kama:6)

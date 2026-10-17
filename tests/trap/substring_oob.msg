@@ -1,1 +1,1 @@
-out of bounds
+index 99 is out of bounds for length 3 (substring_oob.kama:7)

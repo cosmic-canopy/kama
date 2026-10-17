@@ -9,6 +9,8 @@
 #     build a stdlib generic's site named no file at all (`(:33)`).
 # Now: `<package>/<path under its source root>`. The trap fixtures cover a loose file, the prelude and the stdlib;
 # a loose build never shows the PROJECT or DEPENDENCY spelling, so those live here, in a release build.
+# Since 0.9.639 every trap carries one (KR-179) — a bounds miss, a narrowing cast, a divide — and a panic
+# handler is handed the same `file()`/`line()`, so those are held here too, in both packages.
 #
 # check-legs: native
 set -eu
@@ -29,11 +31,13 @@ cat > "$where/geo/kama.json" <<'JSON'
 { "name": "geo", "version": "0.1.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }
 JSON
 cat > "$where/geo/src/geo.kama" <<'K'
-export { area };
+export { area, pick, ratio };
 fn int32 area(int32 w, int32 h) {
     if (w < 0) { panic(msg: "negative width"); }
     return w * h;
 }
+fn int32 pick(isize i) { InlineArray<int32>#(2) xs = [1, 2]; return xs[i]; }
+fn int32 ratio(int32 a, int32 b) { return a / b; }
 K
 cat > "$where/game/kama.json" <<'JSON'
 { "name": "game", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
@@ -76,6 +80,21 @@ expect assert "fn int32 main() {
 }" "game/main.kama:3"
 expect dependency "import { geo::area };
 fn int32 main() { return area(w: -2, h: 3); }" "geo/geo.kama:3"
+expect bounds "fn int32 at(isize i) { InlineArray<int32>#(2) xs = [1, 2]; return xs[i]; }
+fn int32 main() { return at(i: 8); }" "game/main.kama:1"
+expect cast "fn int8 narrow(int32 v) { return cast<int8>(v); }
+fn int32 main() { return cast<int32>(narrow(v: 300)); }" "game/main.kama:1"
+expect divide "fn int32 div(int32 a, int32 b) { return a / b; }
+fn int32 main() { return div(a: 1, b: 0); }" "game/main.kama:1"
+expect dependency-bounds "import { geo::pick };
+fn int32 main() { return pick(i: 9); }" "geo/geo.kama:6"
+expect dependency-divide "import { geo::ratio };
+fn int32 main() { return ratio(a: 1, b: 0); }" "geo/geo.kama:7"
+# ...and the handler is handed the same location the line names.
+expect hook "import { core::setPanicHandler, core::PanicInfo, core::eprintln, geo::pick };
+unsafe fn void onPanic(const ref PanicInfo info) { string f = info.file(); int32 l = info.line(); eprintln(s: \"(hook \${f}:\${l})\"); }
+unsafe fn void install() { setPanicHandler(handler: onPanic); }
+fn int32 main() { install(); return pick(i: 9); }" "hook geo/geo.kama:6"
 
 [ "$fail" = 0 ] || exit 1
-echo "check-panic-locations: PASS (a release build's panic and assert name game/main.kama and a path dependency's geo/geo.kama, and no binary carries the directory it was built in)"
+echo "check-panic-locations: PASS (in a release build, a panic, an assert, a bounds miss, a narrowing cast and a divide name game/main.kama or a path dependency's geo/geo.kama, a handler is handed the same, and no binary carries the directory it was built in)"

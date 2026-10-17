@@ -3461,6 +3461,9 @@ be written **in the language** rather than baked into the compiler. Three builti
   (`game/f.kama`, `std/num/ops.kama`, `@kama/sodium/sodium.kama`, `<prelude>/global.kama`; a loose file is <!-- test: panic_location, panic_location_prelude, panic_location_std -->
   named under the folder its build spans). It is the file the code was WRITTEN in, wherever it was instantiated,
   and no build machine's path reaches the binary (`tools/check-panic-locations.sh`).
+  **Every trap names the same location** — a bounds miss, a narrowing `cast`, an overflow, a divide or shift <!-- test: panic_info_bounds -->
+  fault, a string offset: `kama: index 8 is out of bounds for length 2 (main.kama:7)`, in every build, and a
+  panic handler is handed it (`info.file()`, `info.line()`).
   `debugAssert` is identical but **stripped under `--release`** (dev-only checks); `assert` is always-on.
   For a premise that can be settled before the program runs, use
   **[`comptime assert`](#compile-time-assertions--comptime-assert-)** — same arguments, checked at build. For

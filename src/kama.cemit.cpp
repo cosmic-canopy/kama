@@ -459,6 +459,13 @@ std::string CEmitter::programLocation()
     return it->second;
 }
 
+// The location every trap call carries (KR-179): the file the code was WRITTEN in, package-relative as `panic`'s
+// is, and the line. The two C arguments a checked helper takes last.
+std::string CEmitter::trapLoc(int line)
+{
+    return "\"" + cEscapeStringBody(programLocation()) + "\", " + std::to_string(line < 0 ? 0 : line);
+}
+
 const std::string& CEmitter::diagFile() const
 {
     if (!_collectingUnitPath.empty()) return _collectingUnitPath;
@@ -5098,7 +5105,7 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
                            : token == STAR ? "KAMA_SIMD_MUL" : nullptr;
             if (signedInt && op && lc == rc)
                 return std::string(op) + "(" + sc + ", " + emitOperandByValue(lhs) + ", "
-                     + emitOperandByValue(rhs) + ")";
+                     + emitOperandByValue(rhs) + ", " + trapLoc(line) + ")";
             // ⚠️ A signed `<<` must NOT reach `KAMA_SHL` below: that shim dispatches with `_Generic`,
             // which cannot see a vector type — so a `Simd` operand is a hard C error, not a fallback. The
             // per-lane `__shl` is the same rule (shift in the unsigned peer, so shifting into the sign bit
@@ -5191,16 +5198,17 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
             const std::string l = emitExpression(lhs), r = emitExpression(rhs);
             if (knownInt)
                 return open + "kama_" + (token == LTLT ? "shl_" : "shr_") + arithSuffix(known) + "(" + l
-                     + ", (long long)(" + r + ")))";
-            return open + (token == LTLT ? "KAMA_SHL(" : "KAMA_SHR(") + l + ", " + r + "))";
+                     + ", (long long)(" + r + "), " + trapLoc(line) + "))";
+            return open + (token == LTLT ? "KAMA_SHL(" : "KAMA_SHR(") + l + ", " + r + ", " + trapLoc(line) + "))";
         }
         const std::string l = emitExpression(lhs), r = emitExpression(rhs);
+        const std::string loc = trapLoc(line);
         const std::string body = (!vec && token == SLASH && !known.empty())
-                                   ? std::string("kama_div_") + arithSuffix(known) + "(" + l + ", " + r + ")"
+                                   ? std::string("kama_div_") + arithSuffix(known) + "(" + l + ", " + r + ", " + loc + ")"
                                : (!vec && token == PERCENT && knownInt)
-                                   ? std::string("kama_mod_") + arithSuffix(known) + "(" + l + ", " + r + ")"
-                               : (!vec && token == SLASH)   ? "KAMA_DIV(" + l + ", " + r + ")"
-                               : (!vec && token == PERCENT) ? "KAMA_MOD(" + l + ", " + r + ")"
+                                   ? std::string("kama_mod_") + arithSuffix(known) + "(" + l + ", " + r + ", " + loc + ")"
+                               : (!vec && token == SLASH)   ? "KAMA_DIV(" + l + ", " + r + ", " + loc + ")"
+                               : (!vec && token == PERCENT) ? "KAMA_MOD(" + l + ", " + r + ", " + loc + ")"
                                : l + " " + binaryOperator(token) + " " + r;
         // D-arith, the CHECK half. `resT` non-empty means a sub-`int` result, which is exactly where the
         // language's own overflow rule had a hole: C promotes `int8`/`int16` operands to `int`, so
@@ -5224,8 +5232,8 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         if (!resT.empty() && cNumSigned(resT) && (arithTok || token == SLASH)
             && cNumRangeText(resT, lo, hi)) {
             return arithTok
-                 ? "KAMA_ARITH_NARROW(" + resT + ", " + lo + ", " + hi + ", " + body + ")"
-                 : "((" + resT + ")kama_arith_chk((long long)(" + body + "), " + lo + ", " + hi + "))";
+                 ? "KAMA_ARITH_NARROW(" + resT + ", " + lo + ", " + hi + ", " + body + ", " + loc + ")"
+                 : "((" + resT + ")kama_arith_chk((long long)(" + body + "), " + lo + ", " + hi + ", " + loc + "))";
         }
         // The WIDE half of the division rule — `TYPE_MIN / -1` at 32 and 64 bits, where nothing narrows —
         // is inside `KAMA_DIV` (kama_div_i32/_i64 check the OPERANDS: `INT64_MIN / -1` overflows the very
@@ -5241,10 +5249,10 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
         // With the type known, the helper `_Generic` would have selected is named here instead.
         if (arithTok && !vec && resT.empty() && !known.empty())
             return std::string(token == PLUS ? "KAMA_ADD_T(" : token == MINUS ? "KAMA_SUB_T(" : "KAMA_MUL_T(")
-                 + arithSuffix(known) + ", " + l + ", " + r + ")";
+                 + arithSuffix(known) + ", " + l + ", " + r + ", " + loc + ")";
         if (arithTok && !vec && resT.empty())
             return std::string(token == PLUS ? "KAMA_ADD(" : token == MINUS ? "KAMA_SUB(" : "KAMA_MUL(")
-                 + l + ", " + r + ")";
+                 + l + ", " + r + ", " + loc + ")";
         return open + body + ")";   // primitives — `open` narrows a sub-`int` result
     }
 
@@ -6104,7 +6112,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (collectionElemAccess(ea, coll, recvExpr, idx)) {
                 std::string rhs = emitExpression(v->expression);
                 if (v->token == EQ)
-                    return coll + "__set(&(" + recvExpr + "), " + idx + ", " + rhs + ")";
+                    return coll + "__set(&(" + recvExpr + "), " + idx + ", " + rhs + ", " + trapLoc(v->line) + ")";
                 // Compound (a[i] += x): mutate the element in place through the bounds-checked `*__at`
                 // place — the index is evaluated ONCE (no double `__get`+`__set`), and a nested
                 // `a[i][j] += x` works because `recvExpr` is itself a place.
@@ -6112,8 +6120,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 // index is evaluated once, the sub-`int` result is range-checked, `/=` checks its divisor.
                 if (*placeOpMacro(v->token))
                     return std::string(placeOpMacro(v->token)) + "(" + coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx
-                         + "), (" + rhs + "))";
-                return "((*" + coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + ")) "
+                         + ", " + trapLoc(v->line) + "), (" + rhs + "), " + trapLoc(v->line) + ")";
+                return "((*" + coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + ", " + trapLoc(v->line) + ")) "
                             + assignmentOperator(v->token) + " (" + rhs + "))";
             }
             // A user place-returning `operator[]`: assign/compound-assign THROUGH the place.
@@ -6121,7 +6129,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 std::string place = emitPlace(v->unaryExpression);
                 std::string rhs = emitExpression(v->expression);
                 if (*placeOpMacro(v->token))
-                    return std::string(placeOpMacro(v->token)) + "(&(" + place + "), (" + rhs + "))";
+                    return std::string(placeOpMacro(v->token)) + "(&(" + place + "), (" + rhs + "), " + trapLoc(v->line) + ")";
                 return "(" + place + " " + assignmentOperator(v->token) + " (" + rhs + "))";
             }
             // Raw pointer store `p[i] = v` — only inside an `unsafe fn`.
@@ -6138,7 +6146,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
             if (_typeSubst.empty() && rawElemIsCChar(v->unaryExpression)) { rejectBareCChar(synthId("cchar", IDENTIFIER_CCHAR_VAL), "an element written through the pointer", ea->line); return "0"; }
             if (*placeOpMacro(v->token))
                 return std::string(placeOpMacro(v->token)) + "(&((" + emitExpression(recv) + ")[" + ridx + "]), ("
-                     + emitExpression(v->expression) + "))";
+                     + emitExpression(v->expression) + "), " + trapLoc(v->line) + ")";
             return "((" + emitExpression(recv) + ")[" + ridx + "] "
                        + assignmentOperator(v->token) + " " + emitExpression(v->expression) + ")";
         }
@@ -6164,7 +6172,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // A `hardware` (volatile) static and a `ref` parameter (already a pointer, so `&(*p)`) both work.
         if (*placeOpMacro(v->token))
             return std::string(placeOpMacro(v->token)) + "(&(" + emitExpression(v->unaryExpression) + "), ("
-                 + emitExpression(v->expression) + "))";
+                 + emitExpression(v->expression) + "), " + trapLoc(v->line) + ")";
         std::string lhs = emitExpression(v->unaryExpression);
         std::string rhs = emitExpression(v->expression);
         if (v->token == EQ) rhs = narrowViewValue(lvalueCType(v->unaryExpression), v->expression, rhs, v->line);
@@ -6176,7 +6184,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (collectionElemAccess(ea, coll, recvExpr, idx)) {
             // `__get` borrows its receiver by address (`&recv`); a receiver with no address — a string
             // literal, `s.concat(x)`, `s.bytes()` — is already held in a temporary (indexReceiverPlace).
-            return coll + "__get((" + coll + "*)&(" + recvExpr + "), " + idx + ")";
+            return coll + "__get((" + coll + "*)&(" + recvExpr + "), " + idx + ", " + trapLoc(ea->line) + ")";
         }
         // A user place-returning `operator[]`: read the value out of the place.
         if (indexesUserOp(ea)) return emitPlace(expr);
@@ -6204,7 +6212,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (!uop.empty()) return uop;
         // `++x` is `x += 1` — the place operator, by address: checked at every width, evaluated once.
         return std::string(v->token == PLUSPLUS ? "KAMA_ADDEQ(&(" : "KAMA_SUBEQ(&(")
-             + emitExpression(v->expression) + "), 1)";
+             + emitExpression(v->expression) + "), 1, " + trapLoc(v->line) + ")";
     }
 
     if (auto* v = dynamic_cast<PostIncrDecrNode*>(n)) {
@@ -6213,7 +6221,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         if (!uop.empty()) return uop;
         // `x++` hands back the OLD value (tests/post_increment_expr) through the post variant.
         return std::string(v->token == PLUSPLUS ? "KAMA_POSTADD(&(" : "KAMA_POSTSUB(&(")
-             + emitExpression(v->expression) + "), 1)";
+             + emitExpression(v->expression) + "), 1, " + trapLoc(v->line) + ")";
     }
 
     if (auto* v = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
@@ -6248,14 +6256,15 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 std::string lo, hi;
                 if (v->token == MINUS && cNumSigned(t) && cNumRangeText(t, lo, hi))
                     return "KAMA_ARITH_NARROW(" + t + ", " + lo + ", " + hi + ", -(long long)("
-                         + emitExpression(v->expression) + "))";
+                         + emitExpression(v->expression) + "), " + trapLoc(v->line) + ")";
                 return "(" + t + ")(" + op + emitExpression(v->expression) + ")";
             }
             // ...and at 32/64 bits `-TYPE_MIN` overflows too: KAMA_NEG traps in debug, wraps in release.
             if (v->token == MINUS && (t == "int32_t" || t == "int64_t"))   // operand written once — see KAMA_NEG_T
-                return std::string("KAMA_NEG_T(") + arithSuffix(t) + ", " + emitExpression(v->expression) + ")";
+                return std::string("KAMA_NEG_T(") + arithSuffix(t) + ", " + emitExpression(v->expression) + ", "
+                     + trapLoc(v->line) + ")";
             if (v->token == MINUS && (t.empty() || (cNumBits(t) && !cNumFloat(t)) || cNumFloat(t)))
-                return "KAMA_NEG(" + emitExpression(v->expression) + ")";
+                return "KAMA_NEG(" + emitExpression(v->expression) + ", " + trapLoc(v->line) + ")";
         }
         return "(" + op + emitExpression(v->expression) + ")";
     }
@@ -9227,12 +9236,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // A `const ref` binding is the same bounds-checked place, const as deep as a `const ref` parameter
             // and lowered as one is, to a plain `T*`; over a `comptime` constant the receiver pointer is const.
             *_out << elemTy << "* " << kName(nm) << " = " << (fe->isConstRef ? "(" + elemTy + "*)" : std::string())
-                  << coll << "__at(" << (constRecv ? "(" + coll + "*)" : std::string()) << fp << ", " << ix << ");\n";
+                  << coll << "__at(" << (constRecv ? "(" + coll + "*)" : std::string()) << fp << ", " << ix << ", "
+                  << trapLoc(fe->line) << ");\n";
             _refParams.insert(nm);
             _refBindingOperand[nm] = fe->expression;   // the element lives in the operand
             if (fe->isConstRef) _constLocals.insert(nm);
         } else {
-            *_out << elemTy << " " << kName(nm) << " = " << coll << "__get(" << fp << ", " << ix << ");\n";
+            *_out << elemTy << " " << kName(nm) << " = " << coll << "__get(" << fp << ", " << ix << ", "
+                  << trapLoc(fe->line) << ");\n";
         }
 
         SharedStatement last;
@@ -12410,19 +12421,21 @@ std::string CEmitter::narrowCheck(const std::string& dstCType, SharedExpression 
         // float -> int: a range test on the double (out of range or NaN is a fault the program can name —
         // it was `-fsanitize-trap=float-cast-overflow`), then the cast itself still truncates toward zero.
         if (cNumFloat(src))
-            return "((" + dstCType + ")kama_f2i_chk((double)(" + emitExpression(value) + "), " + lo + ", " + hi + "))";
+            return "((" + dstCType + ")kama_f2i_chk((double)(" + emitExpression(value) + "), " + lo + ", " + hi + ", "
+                 + trapLoc(value->line) + "))";
         if (cNumContains(dstCType, src)) return "";
         const bool sgn = cNumSigned(src);
         return "((" + dstCType + ")kama_narrow_chk_"
              + (sgn ? "s((long long)(" : "u((unsigned long long)(")
-             + emitExpression(value) + "), " + lo + ", " + hi + "))";
+             + emitExpression(value) + "), " + lo + ", " + hi + ", " + trapLoc(value->line) + "))";
     }
     // An UNKNOWN source — a type parameter, a const-generic parameter, an intrinsic with no recorded
     // return type, an `extern fn` result, mixed arithmetic. ⚠️ NEVER a guess and never a skip: `_Generic`
     // asks C the question this classifier could not answer, and evaluates the operand exactly once. Each
     // one that stays unanswered is a check that cannot be proved away, which is why it is worth answering:
     // `tools/check-binding-widen.sh` pins the two binding forms that no longer land here.
-    return "((" + dstCType + ")KAMA_NARROW(" + emitExpression(value) + ", " + lo + ", " + hi + "))";
+    return "((" + dstCType + ")KAMA_NARROW(" + emitExpression(value) + ", " + lo + ", " + hi + ", "
+         + trapLoc(value->line) + "))";
 }
 
 bool CEmitter::primIntRangeC(const std::string& ct, int64_t& lo, int64_t& hi)
@@ -13548,6 +13561,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.params = std::move(params);
         mi.returnType = ret;
         mi.isIntrinsic = true;
+        mi.takesLoc = mname == "get" || mname == "substring";   // the two that trap
         mi.isConst = true;                    // `string` is immutable: every one of its intrinsics reads.
                                               // The ones that "change" a string (`concat`/`trim`/`substring`
                                               // /case) return a NEW owned string and leave the receiver alone.
@@ -13699,6 +13713,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
                          bool isConst) {
         MethodInfo mi; mi.cName = cName + "__" + mname;
         mi.params = std::move(params); mi.returnType = ret; mi.isIntrinsic = true; mi.isConst = isConst;
+        mi.takesLoc = mname == "get" || mname == "set" || mname == "lane";   // a bounds check
         ci.methods[mname] = mi;
     };
     // Same split as the string intrinsics above: `className` keeps its ownership/upcast meaning
@@ -13841,6 +13856,7 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
                          bool isConst) {
         MethodInfo mi; mi.cName = cName + "__" + mname;
         mi.params = std::move(params); mi.returnType = ret; mi.isIntrinsic = true; mi.isConst = isConst;
+        mi.takesLoc = mname == "get" || mname == "set" || mname == "lane";   // a bounds check
         ci.methods[mname] = mi;
     };
     if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
@@ -17978,7 +17994,7 @@ std::string CEmitter::emitPlace(SharedExpression e)
     if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))   // recvExpr is itself a place (recursive)
-            return "(*" + coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + "))";
+            return "(*" + coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + ", " + trapLoc(ea->line) + "))";
         // A user place-returning `operator[]`: `a[i]` -> `(*Class__op_index(&(place of a), i))`.
         // The receiver is emitted as a place too, so a nested `m[i][j]` chains cleanly.
         SharedExpression recv = ea->expression ? ea->expression
@@ -38435,7 +38451,8 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                          + std::string(write ? "write" : "read")
                          + " the elements in the container's own body the way `Map` does").c_str(), srcLine);
     }
-    return emitReorderedCall(clsName + "." + method, mi->cName, self, mi->params, args, srcLine);
+    return emitReorderedCall(clsName + "." + method, mi->cName, self, mi->params, args, srcLine,
+                             mi->takesLoc ? trapLoc(srcLine) : std::string());
 }
 
 // obj.method(args) — the member-access callee form (incl. this.method()).
@@ -40084,7 +40101,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // (a T* into the buffer). No copy, no temp; a plain nested call, strictly ISO C.
         std::string coll, recvExpr, idx;
         if (collectionElemAccess(ea, coll, recvExpr, idx))
-            recvPtr = coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + ")";
+            recvPtr = coll + "__at((" + coll + "*)&(" + recvExpr + "), " + idx + ", " + trapLoc(ea->line) + ")";
         else
             recvPtr = "&(" + emitExpression(receiver) + ")";
     } else if (cls == "kama_string") {

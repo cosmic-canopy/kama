@@ -1,1 +1,1 @@
-splits a UTF-8 character
+splits a UTF-8 character (substring_split_codepoint.kama:10)

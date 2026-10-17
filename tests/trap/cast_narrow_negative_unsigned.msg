@@ -1,1 +1,1 @@
-does not fit the target range [0, 255]
+does not fit the target range [0, 255] (cast_narrow_negative_unsigned.kama:7)

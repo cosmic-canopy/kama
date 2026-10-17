@@ -235,6 +235,7 @@ struct MethodInfo {
     bool                         isOverride = false;
     bool                         isAbstract = false;  // null body
     bool                         isIntrinsic = false; // collection op: body is in kama_runtime.h, not AST
+    bool                         takesLoc = false;    // an intrinsic that can trap: the call passes `"file", line` (KR-179)
     bool                         isConst = false;     // `const fn …` — non-mutating
     // `@serializedGraphEdges` — this nullary accessor hands out the mutable iterator over the elements
     // that carry this container's graph EDGES, so the serde read half rewires them through it. Opt-in and
@@ -1592,6 +1593,7 @@ private:
     std::function<std::string(const std::string&)> _locationResolver;
     std::map<std::string, std::string> _programLocations;   // diagFile() -> its package-relative spelling
     std::string programLocation();                           // the file a location in the program names
+    std::string trapLoc(int line);                           // `"file", line` — the location a trap reports
     std::function<bool(const std::string&, const std::string&)> _moduleVisible;   // (importer, imported) -> §2c
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during

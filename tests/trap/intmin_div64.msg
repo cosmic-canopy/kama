@@ -1,1 +1,1 @@
-TYPE_MIN / -1 has no representable result
+TYPE_MIN / -1 has no representable result (intmin_div64.kama:14)
