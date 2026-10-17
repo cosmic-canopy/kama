@@ -1919,9 +1919,41 @@ only half answers it: growth abandons the old block, and the list is still a poi
    replaced it, with `*Bounded` methods returning `error.OutOfMemory`).
 2. **A full `add` returns a `Result` that hands the item back** — being full is an expected state for a bounded
    list, which is exactly what `--no-heap` and MCU code hold (heapless `Vec::push`, Zig's `appendBounded`).
-3. The uninitialized tail is `slot` storage, so an element is constructed only when it is added.
+3. ~~The uninitialized tail is `slot` storage~~ — corrected 2026-10-17: `slot` is a LOCAL filled through an `out`
+   parameter, proven by flow analysis, and a field whose live prefix is runtime data is not that. Nothing in the
+   language holds in-place storage for `T` without constructing it.
 
-Size **S–M**.
+**Mechanism — ruled 2026-10-17: a kama library type, after two language capabilities (KR-190, KR-191).** GOALS #1
+is explicit that std's containers are "kama generic library types… in the Rust-`Vec` 'unsafe core, safe API' model
+over `unsafe fn`/`UnsafePtr`, not compiler intrinsics with C bodies"; an intrinsic `InlineDynamicArray` (proposed as
+InlineArray's sibling) would be the thing that rules out, and was set aside as a workaround. Writing it in kama needs
+two things the language lacks, measured on `0.9.662`:
+
+- **In-place uninitialized storage (KR-190).** The heap containers get uninitialized memory from an allocator through
+  `UnsafePtr<T>`; nothing gives it in place. An `InlineArray<T>#(N)` field is constructed whole, and dropped whole.
+- **A generic type's kind following its parameters (KR-191).** A declaration is `type value` or `type resource`, fixed:
+  `type value Box<T>` instantiated as `Box<string>` is refused ("a `value` owns nothing, but `Box<string>`
+  transitively owns a resource"), while `InlineArray<string>#(2)` sits in a `type value` because the compiler derives an
+  intrinsic's kind from its element. `InlineDynamicArray<uint8>` must be a value — that is the row's point: inside a
+  `type value`, copied, sent to an isolate, viewed as bytes — and `InlineDynamicArray<string>` a resource that drops
+  its strings.
+
+**The design session's questions** (asked with kama examples and the bytes):
+
+- KR-190: the spelling — a type (`Uninit<T>#(N)`, or another name) or a field marker; zero-filled at construction
+  (deterministic bytes, so a plain holder can still be `BytesViewable`) or truly uninitialized (Rust's
+  `MaybeUninit`, cheaper for a large `N`); what the compiler refuses around it (no implicit copy, drop, serde, format
+  or byte view of the storage itself — the holder hand-writes its copy and drop); how the layout model (`0.9.660`) and
+  `--no-heap` see it.
+- KR-191: the spelling of a conditional kind (a `when [...]` on the kind, a destructor that exists only `when` a
+  parameter owns something, or a kind the compiler derives for a library type as it does for an intrinsic); how
+  `Copyable`, `Sendable`, `BytesViewable` and the `value` rule ("owns nothing") follow it; what C++26
+  (`inplace_vector` is trivially copyable iff `T` is) and Rust (no conditional `Copy` with `Drop`) teach.
+- KR-187 itself, over both: the surface — `add` → `Result` handing the item back, `pop`, `operator[]`
+  (`@trackCaller`), `view()`/`viewMut()` over the live prefix, iterators, `clear`, `insertAt`/`remove`, deep `copy`,
+  serde, `Formattable`, equality.
+
+Size **S–M** once KR-190 and KR-191 exist.
 - **Collections revisit — remaining knobs & optimizations.** The parametric knobs ship (preallocation,
   pluggable `Hasher`, custom `Allocator` on every container and box, all defaulted). What remains:
   - **HashDoS-resistant keyed hashing (deferred).** `DefaultHasher` is deterministic/*unseeded* — right for
