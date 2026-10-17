@@ -249,6 +249,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // out of bounds — hence the explicit `getRef` name, not `operator[]` (which would hide the can-fail nature).
     // The returned `ref V` may not escape and dangles if held across a `put` that rehashes — the same borrow
     // boundary as an array `ref` held across `add`→realloc (the deliberate no-borrow-checker tradeoff).
+    @trackCaller   // a miss names the caller's line (KR-179)
     public unsafe const fn const ref V getRef(const ref K key) {
         isize i = this.slotOf(key: key);
         if (i < 0) { panic(msg: "Map.getRef: absent key"); }
@@ -256,6 +257,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     }
     // The writable twin (kama's unmarked/`Mut` split, as `iterator`/`iterMut`): the same lookup, handing back
     // a place the caller may mutate through — `m.getRefMut(key: k).bump()`.
+    @trackCaller
     public unsafe fn ref V getRefMut(const ref K key) {
         isize i = this.slotOf(key: key);
         if (i < 0) { panic(msg: "Map.getRefMut: absent key"); }

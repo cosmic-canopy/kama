@@ -1,0 +1,1 @@
+is `virtual`, and a call through the vtable slot

@@ -1,0 +1,1 @@
+and an `expose fn` is called by a host

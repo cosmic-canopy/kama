@@ -1,0 +1,9 @@
+// KR-179: std's indexing is `@trackCaller`, so a `DynamicArray` miss names the line that indexed — it named
+// `std/collections/dynamic_array.kama:230`, a line in std, for the commonest crash a shipped program reports.
+import { std::collections::DynamicArray };
+fn int32 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    isize i = xs.length() + 2;
+    return xs[i];   // reported here
+}

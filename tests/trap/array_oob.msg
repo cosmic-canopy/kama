@@ -1,1 +1,1 @@
-out of bounds
+FixedArray index out of bounds (array_oob.kama:7)

@@ -168,6 +168,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     public const fn isize length() { return this.len; }
 
     // Logical index [0..len) front-to-back, bounds-checked — `dq[0]` is the front, `dq[len-1]` the back.
+    @trackCaller   // a miss names the caller's line (KR-179)
     public unsafe ref T operator[](isize i) {
         if (i < 0 || i >= this.len) { panic(msg: "Deque index out of bounds"); }
         isize idx = (this.head + i) % this.cap;

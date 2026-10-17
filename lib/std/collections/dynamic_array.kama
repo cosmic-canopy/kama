@@ -198,12 +198,14 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     public unsafe fn View<T> viewMut() { return View::<T>.over(at: this.data, count: this.len); }
 
     // Borrow the sub-range `[from, from+count)`, bounds-checked (panics on overrun) — the same two halves.
+    @trackCaller   // a miss names the caller's line (KR-179)
     public unsafe const fn ConstView<T> slice(isize from, isize count) {
         // Bounds-checked HERE so the panic names what the author called, then DERIVED: `view()` is this
         // container's single mint site, and `View.slice` is the view narrowing itself.
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "DynamicArray.slice out of bounds"); }
         return this.view().slice(from: from, count: count);
     }
+    @trackCaller
     public unsafe fn View<T> sliceMut(isize from, isize count) {
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "DynamicArray.sliceMut out of bounds"); }
         return this.viewMut().slice(from: from, count: count);
@@ -214,6 +216,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // sorted array or a B-tree node keeping its keys sorted). The tail shift is a raw relocation (one memmove,
     // exactly like `remove`'s); the incoming element is the tracked `give` hand-off into the opened slot (the
     // field-ptr target, like `add`).
+    @trackCaller
     public unsafe fn void insertAt(isize index, T item) {
         if (index < 0 || index > this.len) { panic(msg: "DynamicArray.insertAt index out of bounds"); }
         if (this.len == this.cap) { this.growTo(nc: this.grownCapacity(need: this.len + 1)); }
@@ -226,6 +229,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         this.mods = this.mods + 1;                                     // structural change — invalidates iterators
     }
 
+    @trackCaller
     public unsafe ref T operator[](isize i) {
         if (i < 0 || i >= this.len) { panic(msg: "DynamicArray index out of bounds"); }
         return this.data[i];
@@ -275,6 +279,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // (so it always yields a valid `T`, not an `Optional`). Discard the result to just delete — the returned
     // `T` drops cleanly. The element is relocated OUT bitwise via `takeAt` (the move-out idiom `Deque` uses);
     // a direct `T x = this[index]` is rejected as giving out of an element.
+    @trackCaller
     public unsafe fn T remove(isize index) {
         if (index < 0 || index >= this.len) { panic(msg: "DynamicArray.remove index out of bounds"); }
         T x = this.takeAt(idx: index);                 // move the element out (the slot is now stale)
@@ -313,6 +318,7 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
     // then `give` the local into slot `j`. The two raw stores go through a LOCAL `UnsafePtr<T>` alias `d` — a
     // `this.data[i] = …` would route the owning element through the move-tracker and be rejected (see
     // `remove`). Not a structural change (len/buffer unchanged), so `mods` is untouched, like `operator[]`.
+    @trackCaller
     public unsafe fn void swap(isize i, isize j) {
         if (i < 0 || i >= this.len || j < 0 || j >= this.len) { panic(msg: "DynamicArray.swap index out of bounds"); }
         if (i == j) { return; }

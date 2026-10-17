@@ -1,1 +1,1 @@
-Template.part index out of bounds (<prelude>/global.kama:
+Template.part index out of bounds (panic_location_prelude.kama:4)

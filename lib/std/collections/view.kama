@@ -58,6 +58,7 @@ type view ConstView<T> implements Iterable<T> when [T: Copyable<T>], IterableCon
     // The read-only place. An operator is never `const fn`; the PLACE is const (`T const*` in C), so the
     // caller may read, `copy`, and call `const fn`s through it, and may not assign, `give`, pass it
     // `ref`/`out` or call a non-const method on it — the same deep const a `const ref` parameter has.
+    @trackCaller   // a miss names the caller's line (KR-179)
     public unsafe const ref T operator[](isize i) {
         if (i < 0 || i >= this.len) { panic(msg: "ConstView index out of bounds"); }
         return this.data[i];
@@ -75,6 +76,7 @@ type view ConstView<T> implements Iterable<T> when [T: Copyable<T>], IterableCon
 
     // A sub-view `[from, from+count)` — bounds-checked, zero copy. It borrows `this`, which borrows the
     // buffer, so it is escape-safe.
+    @trackCaller
     public unsafe const fn ConstView<T> slice(isize from, isize count) {
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "ConstView.slice out of bounds"); }
         if (count == 0) { return ConstView::<T>.over(at: this.data, count: 0); }
@@ -102,6 +104,7 @@ type view View<T> implements IterableMut<T>, IterableConst<T>, Iterable<T> when 
     public const fn isize length() { return this.len; }
     public const fn bool  isEmpty() { return this.len == 0; }
 
+    @trackCaller
     public unsafe ref T operator[](isize i) {
         if (i < 0 || i >= this.len) { panic(msg: "View index out of bounds"); }
         return this.data[i];
@@ -137,6 +140,7 @@ type view View<T> implements IterableMut<T>, IterableConst<T>, Iterable<T> when 
     // a local, relocate `d[j]` into slot `i`, then `give` the local into slot `j` — and the two raw
     // stores go through a LOCAL `UnsafePtr<T>` alias, because a `this.data[i] = …` would route the element
     // through the move tracker and be rejected.
+    @trackCaller
     public unsafe fn void swap(isize i, isize j) {
         if (i < 0 || i >= this.len || j < 0 || j >= this.len) { panic(msg: "View.swap index out of bounds"); }
         if (i == j) { return; }
@@ -154,6 +158,7 @@ type view View<T> implements IterableMut<T>, IterableConst<T>, Iterable<T> when 
     // copies bit for bit; an element that owns has its old value dropped and a copy put in its place. A `source`
     // that IS this range changes nothing; one that partly overlaps it traps, before anything is dropped —
     // reading elements this call had already replaced would copy the copies.
+    @trackCaller
     public unsafe fn void copyFrom(ConstView<T> source) when [T: Copyable<T>] {
         if (source.length() != this.len) { panic(msg: "View.copyFrom: the source is not as long as the view"); }
         if (this.len == 0) { return; }
@@ -176,6 +181,7 @@ type view View<T> implements IterableMut<T>, IterableConst<T>, Iterable<T> when 
     // is the writable half, and its derive stays one (`sort` recurses on `items.slice(…)`). Returning it
     // borrows `this` (the view), which itself borrows the underlying buffer, so it's escape-safe. The
     // read-only sub-range is `v.view().slice(…)`.
+    @trackCaller
     public unsafe fn View<T> slice(isize from, isize count) {
         if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "View.slice out of bounds"); }
         if (count == 0) { return View::<T>.over(at: this.data, count: 0); }

@@ -3464,6 +3464,15 @@ be written **in the language** rather than baked into the compiler. Three builti
   **Every trap names the same location** — a bounds miss, a narrowing `cast`, an overflow, a divide or shift <!-- test: panic_info_bounds -->
   fault, a string offset: `kama: index 8 is out of bounds for length 2 (main.kama:7)`, in every build, and a
   panic handler is handed it (`info.file()`, `info.line()`).
+  **`@trackCaller`** on a function, a method or an operator makes every trap and `panic` in its body name its <!-- test: track_caller_ok -->
+  CALLER's line instead — Rust's `#[track_caller]`; inside another `@trackCaller` body the location passes <!-- test: track_caller_chain, track_caller_member -->
+  through, so a chain reports where it was entered. std's indexing, slicing and lookups carry it (`DynamicArray`, <!-- test: track_caller_std -->
+  `FixedArray`, `Deque`, `View`, `Map`/`SortedMap`/`SlotMap` `getRef`, `PriorityQueue.peekRef`, `Template.part`), so
+  `xs[9]` past a `DynamicArray` names the line that indexed. It adds two hidden C parameters every direct call fills,
+  which is why it is refused where no direct call reaches: a function bound to a `fnptr`, a contract member's <!-- xfail: track_caller_fnptr, track_caller_contract, track_caller_virtual -->
+  implementation, a `virtual` method, an `expose fn` (a host calls it), a destructor (nothing calls one) and a <!-- xfail: track_caller_expose, track_caller_dtor, track_caller_ctor -->
+  constructor (built into storage too — a constructor whose input can be wrong returns `Result`). It takes no <!-- xfail: track_caller_args -->
+  arguments.
   `debugAssert` is identical but **stripped under `--release`** (dev-only checks); `assert` is always-on.
   For a premise that can be settled before the program runs, use
   **[`comptime assert`](#compile-time-assertions--comptime-assert-)** — same arguments, checked at build. For

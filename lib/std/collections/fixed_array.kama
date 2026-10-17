@@ -88,6 +88,7 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
 
     public const fn isize length() { return this.size; }
 
+    @trackCaller   // a miss names the caller's line (KR-179)
     public unsafe ref T operator[](isize i) {
         if (i < 0 || i >= this.size) { panic(msg: "FixedArray index out of bounds"); }
         return this.data[i];
@@ -105,12 +106,14 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
     // array's lifetime (passed down, never stored — the `view` kind enforces it).
     public unsafe const fn ConstView<T> view() { return ConstView::<T>.over(at: this.data, count: this.size); }
     public unsafe fn View<T> viewMut() { return View::<T>.over(at: this.data, count: this.size); }
+    @trackCaller
     public unsafe const fn ConstView<T> slice(isize from, isize count) {
         // Bounds-checked HERE so the panic names what the author called, then DERIVED: `view()` is this
         // container's single mint site, and `View.slice` is the view narrowing itself.
         if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.slice out of bounds"); }
         return this.view().slice(from: from, count: count);
     }
+    @trackCaller
     public unsafe fn View<T> sliceMut(isize from, isize count) {
         if (from < 0 || count < 0 || from + count > this.size) { panic(msg: "FixedArray.sliceMut out of bounds"); }
         return this.viewMut().slice(from: from, count: count);

@@ -1,1 +1,1 @@
-out of bounds
+DynamicArray index out of bounds (list_oob.kama:9)

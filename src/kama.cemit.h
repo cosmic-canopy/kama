@@ -103,6 +103,7 @@ struct FuncSig {
     std::string            retCType; // resolved C return type (signature check)
     std::vector<ParamSig>  params;
     bool                   isPlaceReturn = false;  // `fn ref T …` — returns a place (T*), deref'd at the call site
+    bool                   trackCaller = false;    // `@trackCaller`: takes the caller's location as hidden args
     bool                   isConstPlace  = false;  // `fn const ref T …` — the place is read-only (`T const*`)
     bool                   isUnsafe = false;       // `unsafe fn …` — the body may touch raw memory
     // The declaration site. Read by the LSP def-site table, and by `resolveFnPtrTarget` for the one
@@ -236,6 +237,7 @@ struct MethodInfo {
     bool                         isAbstract = false;  // null body
     bool                         isIntrinsic = false; // collection op: body is in kama_runtime.h, not AST
     bool                         takesLoc = false;    // an intrinsic that can trap: the call passes `"file", line` (KR-179)
+    bool                         trackCaller = false; // `@trackCaller`: takes the caller's location as hidden args
     bool                         isConst = false;     // `const fn …` — non-mutating
     // `@serializedGraphEdges` — this nullary accessor hands out the mutable iterator over the elements
     // that carry this container's graph EDGES, so the serde read half rewires them through it. Opt-in and
@@ -1594,6 +1596,11 @@ private:
     std::map<std::string, std::string> _programLocations;   // diagFile() -> its package-relative spelling
     std::string programLocation();                           // the file a location in the program names
     std::string trapLoc(int line);                           // `"file", line` — the location a trap reports
+    // `@trackCaller` (KR-179): the C names of every function and method that takes its caller's location as two
+    // hidden trailing arguments, and whether the body being emitted is one — where `trapLoc` then answers
+    // `kama_cf, kama_cl`, the location it was handed, so a trap or `panic` in it names the caller's line.
+    std::set<std::string> _trackCallerCNames;
+    bool _trackCallerBody = false;
     std::function<bool(const std::string&, const std::string&)> _moduleVisible;   // (importer, imported) -> §2c
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
@@ -3335,7 +3342,7 @@ private:
     // scalar itself (`int32_t self`), not a pointer. It is passed in rather than derived from `selfType`
     // because the conformance registry is keyed by the KAMA type name while `selfType` is the C one.
     std::string paramListC(SharedParameterList params, const char* selfType,
-                           const char* ownerCType = nullptr, bool selfByValue = false);
+                           const char* ownerCType = nullptr, bool selfByValue = false, bool trackCaller = false);
     // `nameOverride`: emit under a supplied mangled name instead of the declared one
     // (used for generic instantiations, whose C name carries the concrete type args).
     void emitFunctionPrototype(FunctionDeclarationNode* fn, const std::string* nameOverride = nullptr);

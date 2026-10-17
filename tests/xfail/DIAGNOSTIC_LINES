@@ -1266,6 +1266,13 @@ this_assign	this_assign.kama:10 this_assign.kama:14
 this_bare_handoff	this_bare_handoff.kama:6
 this_give_in_method	this_give_in_method.kama:6
 this_outside	this_outside.kama:3
+track_caller_args	track_caller_args.kama:2
+track_caller_contract	track_caller_contract.kama:7
+track_caller_ctor	track_caller_ctor.kama:3
+track_caller_dtor	track_caller_dtor.kama:2
+track_caller_expose	track_caller_expose.kama:2
+track_caller_fnptr	track_caller_fnptr.kama:5
+track_caller_virtual	track_caller_virtual.kama:4
 truncate_widening	truncate_widening.kama:6
 try_new_bad_type	try_new_bad_type.kama:5
 try_new_stateful_bare	try_new_stateful_bare.kama:9

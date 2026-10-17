@@ -1,0 +1,3 @@
+// KR-179: `@trackCaller` takes no arguments.
+@trackCaller(depth: 2) fn int32 f() { return 0; }
+fn int32 main() { return f(); }

@@ -862,6 +862,8 @@ type view Template<H = string> {
     public const fn int32 partCount() { return this._nparts; }
     public const fn int32 holeCount() { return this._nholes; }
     // The i-th literal part / hole, BORROWED for the call — `copy` the ones a tag keeps.
+    @trackCaller   // a miss names the caller's line (KR-179)
     public unsafe const fn const ref string part(int32 at) { if (at < 0 || at >= this._nparts) { panic(msg: "Template.part index out of bounds"); } return this._parts[at]; }
+    @trackCaller
     public unsafe const fn const ref H hole(int32 at) { if (at < 0 || at >= this._nholes) { panic(msg: "Template.hole index out of bounds"); } return this._holes[at]; }
 }

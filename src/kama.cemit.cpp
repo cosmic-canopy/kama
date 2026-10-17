@@ -428,6 +428,8 @@ struct ScopedContractNs {
 struct ScopedNoHeap { bool& b; bool prev;
     ScopedNoHeap(bool& b_, bool on) : b(b_), prev(b_) { if (on) b = true; }
     ~ScopedNoHeap() { b = prev; } }; }
+// Sets a flag for the life of a scope and puts the old value back.
+struct ScopedBool { bool& b; bool prev; ScopedBool(bool& b_, bool v) : b(b_), prev(b_) { b = v; } ~ScopedBool() { b = prev; } };
 // Installs a whole substitution for the life of a scope — an adapter's body for one instance of a generic target
 // (`type adapter <Optional> …` over `Optional<int32>`) binds the template's parameters to that instance's
 // arguments. An empty map leaves the current substitution alone.
@@ -463,6 +465,7 @@ std::string CEmitter::programLocation()
 // is, and the line. The two C arguments a checked helper takes last.
 std::string CEmitter::trapLoc(int line)
 {
+    if (_trackCallerBody) return "kama_cf, kama_cl";   // a `@trackCaller` body reports where it was called from
     return "\"" + cEscapeStringBody(programLocation()) + "\", " + std::to_string(line < 0 ? 0 : line);
 }
 
@@ -10243,6 +10246,8 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         sig.retCType = cType(fn->returnType);
         sig.params  = paramSigsOf(fn->parameters);
         sig.isPlaceReturn = fn->isRef;   // `fn ref T …` — the call site derefs the returned place
+        sig.trackCaller = hasAttr(fn->attributes, "trackCaller");
+        if (sig.trackCaller) _trackCallerCNames.insert(sig.cName);
         sig.isConstPlace  = fn->isConstRef;   // `fn const ref T …` — and may only read through it
         sig.isUnsafe = fn->isUnsafe;     // `unsafe fn …` — the body may touch raw memory
         sig.node = fn;                   // decl site for the LSP def-site table (unused by emission)
@@ -11860,6 +11865,14 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                             }
                         mi.isPlaceReturn = md->isRef;  // `fn ref T …` — returns a place (T*), like `operator[]`
                         mi.isConstPlace  = md->isConstRef;   // `fn const ref T …` — a read-only place (T const*)
+                        mi.trackCaller = hasAttr(md->attributes, "trackCaller");
+                        if (mi.trackCaller && md->isCtor) {   // KR-179
+                            unsupported("`@trackCaller` marks a function or method; a constructor is also built into "
+                                        "storage through its `__into` form, which carries no caller location — a "
+                                        "constructor whose input can be wrong returns `Result`", md);
+                            mi.trackCaller = false;
+                        }
+                        if (mi.trackCaller) _trackCallerCNames.insert(mi.cName);
                         mi.noHeap = hasNoHeapAttr(md->attributes);   // the declared half of the no-heap proof
                         mi.serdeGraphEdges = hasAttr(md->attributes, "serializedGraphEdges");
                         mi.visibility = visibilityOf(md->modifiers, Visibility::Private, md->line);
@@ -12046,6 +12059,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                          + "' — kama has no overloading, so a member name may be declared "
                                            "only once in its type; the second body would silently replace the first").c_str(),
                                         md);
+                        if (mi.trackCaller && mi.isVirtual)   // KR-179: a vtable slot carries no caller location
+                            unsupported(("`" + *md->name->value + "` is `virtual`, and a call through the vtable slot "
+                                         "carries no caller location — it cannot be `@trackCaller`. Mark a plain "
+                                         "method it calls instead").c_str(), md);
                         ci.methods[*md->name->value] = mi;
                     }
                 } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
@@ -12075,6 +12092,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     }
                     // Nothing is recorded: the form is rejected above, so no later pass may act on it.
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
+                    if (hasAttr(dd->attributes, "trackCaller"))   // KR-179: RAII calls it — there is no caller
+                        unsupported("`@trackCaller` on a destructor — nothing calls one by name; it runs where its "
+                                    "owner's scope ends, so there is no caller location to report", mn);
                     // `~dtor` ⟺ `resource`. A `value` owns nothing, so a destructor makes it
                     // a resource; that disagreement is the lesson in the message. A `view` borrows and
                     // owns nothing either — a `~dtor` would try to free memory it doesn't own.
@@ -12179,6 +12199,8 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                     mi.isPlaceReturn = d->refReturn;         // `ref T operator[]` — the result is a place (T*)
                     mi.isConstPlace  = d->constRefReturn;    // `const ref T operator[]` — a read-only place (T const*)
                     mi.isUnsafe   = modHas(od->modifiers, "unsafe");   // `unsafe ref T operator[]` — View indexes raw memory
+                    mi.trackCaller = hasAttr(od->attributes, "trackCaller");
+                    if (mi.trackCaller) _trackCallerCNames.insert(mi.cName);
                     mi.visibility = visibilityOf(od->modifiers, Visibility::Public, od->line);   // operators are public by nature
                     ci.methods[opName] = mi;
                 } else if (auto* fg = dynamic_cast<FriendGrantNode*>(mn)) {
@@ -14620,7 +14642,10 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
                  && !whenConditionsHold(mi.whenParams, mi.whenBounds, mi.whenBoundNodes, params, concrete);
         if (drop) it = ci.methods.erase(it); else ++it;
     }
-    for (auto& kv : ci.methods) kv.second.cName = mangled + "__" + kv.first;
+    for (auto& kv : ci.methods) {
+        kv.second.cName = mangled + "__" + kv.first;
+        if (kv.second.trackCaller) _trackCallerCNames.insert(kv.second.cName);   // each instance's own C name
+    }
     // Re-derive ParamSig under substitution so call-site arg typing is concrete (not a stale "T").
     // A `This` PARAMETER (`This operator+(This rhs)`) is this instance, so `_thisType` has to be bound
     // here too — the conformance block below binds it for the same reason, but only after this loop.
@@ -18012,7 +18037,8 @@ std::string CEmitter::emitPlace(SharedExpression e)
                                           + "&(" + indexReceiverPlace(recv, ownerCls, ea->line) + ")");
             std::string idxE = (ea->expressionlist && !ea->expressionlist->empty())
                                    ? emitExpression((*ea->expressionlist)[0]) : "0";
-            return "(*" + op->cName + "(" + recvAddr + ", " + idxE + "))";
+            return "(*" + op->cName + "(" + recvAddr + ", " + idxE
+                 + (_trackCallerCNames.count(op->cName) ? ", " + trapLoc(ea->line) : std::string()) + "))";
         }
     }
     return emitExpression(e);
@@ -22227,6 +22253,12 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
         MethodInfo* mi = findMethod(&tci, m.name, &owner);
         if (!mi) continue;                   // presence is checkImplCompleteness'/the vtable's job
         if (!_conformanceSigChecked.insert(subject + "|" + contract + "|" + m.name).second) continue;
+        // A contract member is called through a slot, whose signature carries no caller location (KR-179).
+        if (mi->trackCaller)
+            unsupported(("`" + m.name + "` implements a member of `" + demangleForDisplay(contract) + "`, which a caller "
+                         "reaches through a contract slot that carries no caller location — it cannot be "
+                         "`@trackCaller`. Mark a plain method it calls instead").c_str(),
+                        mi->node ? mi->node->line : mi->opDecl ? mi->opDecl->line : line);
         // A GRAPH NODE's `deserialize` is the compiler's two-pass driver and returns `Result<Shared<This>,
         // …>`, not `Result<This, …>` — rebuilding a cyclic object graph cannot hand back a value, so the
         // root arrives behind a handle. BOTH sides here are compiler-written: `@generate(Deserializable)`
@@ -25472,6 +25504,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     std::string call = cName + "(" + leadArg;
     bool first = leadArg.empty();
     for (auto& a : argC) { if (!first) call += ", "; first = false; call += a; }
+    // A `@trackCaller` callee is handed this call's location — or, from inside another, the one it was handed.
+    if (_trackCallerCNames.count(cName)) { if (!first) call += ", "; first = false; call += trapLoc(srcLine); }
     // The graph parameter rides here, after every declared argument — see the header note.
     if (!trailingArg.empty()) { if (!first) call += ", "; call += trailingArg; }
     call += ")";
@@ -28218,6 +28252,13 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
 void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t, int line)
 {
     if (t.kind == FnPtrTarget::SigValue) return;   // fnptr types are nominal; identity said it already
+    // A `@trackCaller` function takes its caller's location as two hidden arguments, and a call through a pointer
+    // has no caller location to hand it — the pointer's signature does not carry them.
+    if (_trackCallerCNames.count(t.cName)) {
+        unsupported((t.display + " is `@trackCaller`, so it takes its caller's location, and a call through a "
+                     "`fnptr` has none to hand it — bind a plain function that calls it").c_str(), line);
+        return;
+    }
     auto sit = _sigs.find(sigCName);
     if (sit == _sigs.end()) return;
     if (!sigMatches(sit->second, t.sig)) {
@@ -30497,8 +30538,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 if (a && a->name && a->name->value && *a->name->value == want) return a->expression;
             return nullptr;
         };
-        std::string fileLit = "\"" + cEscapeStringBody(programLocation()) + "\"";
-        std::string lineLit = std::to_string(call->line);
+        std::string fileLit = _trackCallerBody ? "kama_cf" : "\"" + cEscapeStringBody(programLocation()) + "\"";
+        std::string lineLit = _trackCallerBody ? "kama_cl" : std::to_string(call->line);
 
         if (name == "panic") {
             SharedExpression msg = argByName("msg");
@@ -30941,7 +30982,7 @@ bool CEmitter::paramIsOut(FunctionParameterNode* p)
 // C parameter list. ref/out parameters become pointers. When selfType is set,
 // a leading `selfType* self` is prepended (for methods/constructors).
 std::string CEmitter::paramListC(SharedParameterList params, const char* selfType,
-                                 const char* ownerCType, bool selfByValue)
+                                 const char* ownerCType, bool selfByValue, bool trackCaller)
 {
     std::string s;
     bool first = true;
@@ -30988,6 +31029,8 @@ std::string CEmitter::paramListC(SharedParameterList params, const char* selfTyp
                + (paramByRef(p.get()) ? "* " : " ") + kName(nm);   // KR-67 (the host header keeps the kama spelling — D3)
         }
     }
+    // `@trackCaller`: the caller's location, after every declared parameter (`trapLoc` reads them in the body).
+    if (trackCaller) s += std::string(s.empty() ? "" : ", ") + "const char* kama_cf, int32_t kama_cl";
     if (s.empty()) s = "void";
     return s;
 }
@@ -31101,6 +31144,19 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (fn && hasAttr(fn->attributes, "foreignEntry") && hasAttr(fn->attributes, "callerThread"))
                 unsupported("a function is `@foreignEntry` or `@callerThread`, not both", line);
             // no parts.push_back — emits nothing
+        } else if (an == "trackCaller") {
+            // `@trackCaller` (KR-179): a trap or `panic` in this body names its CALLER's line — Rust's
+            // `#[track_caller]`. Emits no `__attribute__`: it adds two hidden parameters (`paramListC`), which
+            // every direct call fills (`emitReorderedCall`, `operator[]`).
+            if (!fn && !onMember)
+                unsupported("`@trackCaller` applies only to a function, not a `static`", line);
+            if (at->args && !at->args->empty())
+                unsupported("`@trackCaller` takes no arguments", line);
+            if (fn && isExposed(fn))
+                unsupported("`@trackCaller` adds the caller's location as hidden arguments, and an `expose fn` "
+                            "is called by a host that cannot pass them — call a `@trackCaller` function from it "
+                            "instead", line);
+            // no parts.push_back — emits nothing
         } else if (an == "onPanic") {
             // `@onPanic(recover: <literal>)` (ROADMAP row 2): a CHECKER flag plus a prologue — emits no
             // `__attribute__`. The body becomes a recoverable region: a panic inside it (or inside anything
@@ -31180,8 +31236,9 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
                          "destructor or operator").c_str(), line);
         } else {
             unsupported(("unknown attribute `@" + an + "` here — expected "
-                         + (onMember ? "`@noheap`, `@foreignEntry`, `@serializedGraphEdges` or `@section(\"...\")`"
-                                     : "`@interrupt`, `@section(\"...\")`, `@noheap`, `@foreignEntry`, "
+                         + (onMember ? "`@noheap`, `@foreignEntry`, `@trackCaller`, `@serializedGraphEdges` or "
+                                       "`@section(\"...\")`"
+                                     : "`@interrupt`, `@section(\"...\")`, `@noheap`, `@foreignEntry`, `@trackCaller`, "
                                        "or `@callerThread`")).c_str(), line);
         }
     }
@@ -32425,7 +32482,8 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::str
                         : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
     *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
           << cType(fn->returnType) << placeRetSuffix(fn->isRef, fn->isConstRef) << " " << name
-          << "(" << paramListC(fn->parameters, nullptr) << ");\n";
+          << "(" << paramListC(fn->parameters, nullptr, nullptr, false, hasAttr(fn->attributes, "trackCaller"))
+          << ");\n";
 }
 
 void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* nameOverride)
@@ -32547,7 +32605,9 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
                         : _emitStaticInlineFn ? "static inline " : (nameOverride ? "static " : "");
     *_out << linkage << declAttrPrefix(fn->attributes, fn, fn->line)
           << cType(fn->returnType) << placeRetSuffix(fn->isRef, fn->isConstRef) << " " << name
-          << "(" << paramListC(fn->parameters, nullptr) << ")\n";
+          << "(" << paramListC(fn->parameters, nullptr, nullptr, false, hasAttr(fn->attributes, "trackCaller"))
+          << ")\n";
+    ScopedBool _tcBody(_trackCallerBody, hasAttr(fn->attributes, "trackCaller"));
 
     _returnIsPlace = fn->isRef;
     _returnIsConstPlace = fn->isConstRef;
@@ -33263,7 +33323,7 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         std::string retC = cType(mi.returnType) + placeRetSuffix(mi.isPlaceReturn, mi.isConstPlace);
         *_out << stat << retC << " " << mi.cName << "("
              << paramListC(plist, mi.isStatic ? nullptr : ci.name.c_str(), ci.name.c_str(),
-                           ci.isScalarRecv) << ");\n";   // static/free: no self
+                           ci.isScalarRecv, mi.trackCaller) << ");\n";   // static/free: no self
         if (ctorBuildsInto(ci, mi, kv.first)) {   // ...and the form that builds into storage (KR-120)
             const std::string rt = ctorReturnCType(ci, mi);
             const std::string ps = paramListC(plist, nullptr, ci.name.c_str(), false);
@@ -33441,6 +33501,9 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // missed, and a missed `@noheap` reads exactly like a body that legitimately allocates nothing.
     // `_memberAttrPrefix` is consumed by the signature line further down.
     _memberAttrPrefix = declAttrPrefix(attrs, nullptr, body ? body->line : 0, AttrSite::Member);
+    // `@trackCaller`: the signature takes the caller's location, and the body reports it (see trapLoc).
+    const bool trackCaller = hasAttr(attrs, "trackCaller");
+    ScopedBool _tcBody(_trackCallerBody, trackCaller);
     // `@noheap` on a method/ctor/dtor/operator, with the same save/set/restore shape emitFunction uses
     // for a free `fn` — the flag is inherited, never cleared, so an inner emission cannot silently
     // escape an enclosing no-heap region.
@@ -33597,7 +33660,7 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     else
         *_out << (_emitStaticClass ? "static inline " : "") << _memberAttrPrefix << retType << " " << cName
               << "(" << paramListC(params, isStatic ? nullptr : owner.name.c_str(), owner.name.c_str(),
-                                   owner.isScalarRecv) << gp << ")\n{\n";   // static: no self
+                                   owner.isScalarRecv, trackCaller) << gp << ")\n{\n";   // static: no self
     emitOnPanicPrologue(1);   // a `@onPanic` method arms itself first thing (no-op otherwise)
 
     checkDefiniteAssignment(body, params);   // owning LOCAL read-before-assign + `out` params (any method/ctor)

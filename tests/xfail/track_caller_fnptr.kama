@@ -1,0 +1,5 @@
+// KR-179: a `@trackCaller` function takes its caller's location as two hidden arguments, and a call through a
+// `fnptr` has none to hand it. Binding one to a pointer is refused; bind a plain function that calls it.
+fnptr int32 Pick(isize i);
+@trackCaller fn int32 pick(isize i) { InlineArray<int32>#(2) xs = [1, 2]; return xs[i]; }
+fn int32 main() { Pick p = pick; return p(i: 0); }

@@ -1,0 +1,14 @@
+// KR-179: a `@trackCaller` function's traps and panics name its CALLER's line — and from inside another one, the
+// line that one was called from, so a chain reports where it was entered (Rust's `#[track_caller]`).
+import { core::setPanicHandler, core::PanicInfo, core::eprintln };
+unsafe fn void onPanic(const ref PanicInfo info) {
+    string m = info.message(); string f = info.file(); int32 l = info.line();
+    eprintln(s: "HOOK [${m}] [${f}] ${l}");
+}
+unsafe fn void install() { setPanicHandler(handler: onPanic); }
+@trackCaller fn int32 at(InlineArray<int32>#(2) xs, isize i) { return xs[i]; }
+@trackCaller fn int32 outer(isize i) { InlineArray<int32>#(2) xs = [1, 2]; return at(xs: xs, i: i); }
+fn int32 main() {
+    install();
+    return outer(i: 5);   // reported here
+}

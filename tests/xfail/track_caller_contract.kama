@@ -1,0 +1,9 @@
+// KR-179: a contract member is reached through a slot whose signature carries no caller location, so the method that
+// implements it cannot be `@trackCaller`.
+type contract Indexed for value { fn int32 at(isize i); }
+type value Pair implements Indexed {
+    public InlineArray<int32>#(2) v;
+    public ctor make() { this.v = [1, 2]; }
+    @trackCaller public fn int32 at(isize i) { return this.v[i]; }
+}
+fn int32 main() { Pair p = Pair.make(); return p.at(i: 0); }

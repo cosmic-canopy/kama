@@ -1,0 +1,32 @@
+// KR-179: every route a `@trackCaller` function is called by passes the caller's location — a free function, a
+// chain of them, a method, a static method, an `operator[]` by index syntax, a generic instance's method, and std's
+// own indexing, slicing and lookups — and nothing traps. Returns 42.
+import { std::collections::DynamicArray, std::collections::Map, std::collections::View };
+
+@trackCaller fn int32 at(InlineArray<int32>#(3) xs, isize i) { return xs[i]; }
+@trackCaller fn int32 viaAt(InlineArray<int32>#(3) xs, isize i) { return at(xs: xs, i: i); }
+
+type resource Box<T> {
+    InlineArray<T>#(2) v;
+    public ctor make(T a, T b) { this.v = [a, b]; }
+    @trackCaller public ref T operator[](isize i) { return this.v[i]; }
+    @trackCaller public fn T get(isize i) { return this[i]; }
+    @trackCaller public static fn int32 pick(InlineArray<int32>#(3) xs) { return xs[2]; }
+}
+
+fn int32 main() {
+    InlineArray<int32>#(3) xs = [1, 2, 3];
+    Box<int32> b = Box.make(a: 4, b: 5);
+    b[0] = 10;                                   // a write through the tracked operator
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 6); d.add(item: 7);
+    d[1] = d[1] + 1;                             // 8
+    Map<string, int32> m = Map.empty();
+    m.put(key: "k", value: 3);
+    int32 fromMap = m.getRef(key: "k");
+    int32 fromView = 0;
+    borrow d.viewMut() as v { fromView = v.slice(from: 1, count: 1)[0]; }   // 8
+    return at(xs: xs, i: 0) + viaAt(xs: xs, i: 1) + Box::<int32>::pick(xs: xs)         // 1 + 2 + 3
+         + b[0] + b.get(i: 1)                                                 // 10 + 5
+         + d[0] + fromView + fromMap + 4;                                     // 6 + 8 + 3 + 4 = 42
+}
