@@ -7230,10 +7230,12 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         if (!cp.empty()) _scopes.back().childBorrows.push_back(Scope::ChildBorrow{ cp, pf->line, "the workers `parallel_spawn` started" });
     }
 
-    // The isolate seam header (and its `-lpthread` link) flows in via
-    // `import std::concurrent;`; without it the spawn/join calls would not compile.
+    // The isolate seam header (and its `-lpthread` link) flows in with an import from `std::concurrent`; without
+    // it the spawn/join calls would not compile. The message names an import that exists: kama has no whole-module
+    // `import std::concurrent;`, which is what it used to recommend.
     if (!externsHeader("kama_isolate.h"))
-        unsupported(("`" + KW + "` requires `import std::concurrent;` (the isolate seam)").c_str(), pf);
+        unsupported(("`" + KW + "` runs on the isolate seam, `std::concurrent` — import it: "
+                     "`import { std::concurrent::Isolate };`").c_str(), pf);
 
     const std::string loopVar = (pf->name && pf->name->value) ? *pf->name->value : "__e";
     std::string elemTy = cType(pf->type);
@@ -19908,7 +19910,8 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     // The seam header (and its `-lpthread` link) flows in via `import std::concurrent;`. Without it the
     // generated spawn call would not compile — give a clear error instead.
     if (!externsHeader("kama_isolate.h"))
-        unsupported("`spawn` requires `import std::concurrent;` (the native isolate seam)", iso);
+        unsupported("`spawn` runs on the isolate seam, `std::concurrent` — import it: "
+                    "`import { std::concurrent::Isolate };`", iso);
 
     auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
     // Must be a BARE top-level fn call: `spawn worker(...)`. A receiver call (`spawn obj.m(...)`) or an

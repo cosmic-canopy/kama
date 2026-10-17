@@ -6263,6 +6263,10 @@ Isolate h = spawn worker(p: give payload);   // the HANDLE owns it; starts now, 
 h.join();                                    // explicit join; `~Isolate()` also joins (RAII)
 ```
 
+`spawn` and `parallel_for` are the language's, and they run on the isolate seam `std::concurrent` brings in (its <!-- xfail: spawn_needs_concurrent, parallel_for_needs_concurrent -->
+header and, natively, `-lpthread`), so a program that uses either imports from it — `import { std::concurrent::Isolate };`
+when it names nothing else there.
+
 A bare `spawn` **must** appear inside a `scope { }`. <!-- xfail: parallel_spawn_no_scope --> The
 handle form need not, and that is its reason to exist: `Isolate` is a `resource`, so its join
 travels with the handle, which may be moved into a **field**. That is how a long-lived service

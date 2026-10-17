@@ -1,0 +1,11 @@
+// `parallel_for` splits its work across isolates, so it needs the seam `std::concurrent` brings in, as `spawn` does
+// (tests/xfail/spawn_needs_concurrent.kama) — and the refusal names an import that exists.
+import { std::collections::DynamicArray };
+
+fn int32 main()
+{
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    parallel_for (ref int32 x in xs, workers: 2) { x += 1; }
+    return 0;
+}

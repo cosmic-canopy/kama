@@ -1,0 +1,12 @@
+// `spawn` is the language's, and it runs on the isolate seam that `std::concurrent` brings in (the header and, natively,
+// `-lpthread`), so a program that spawns imports from it. The refusal names an import that exists: until 0.9.656 it said
+// `import std::concurrent;`, a whole-module import kama does not have.
+type resource Job implements Sendable { int32 n; public ctor make(int32 n) { this.n = n; } }
+fn void work(Job j) { }
+
+fn int32 main()
+{
+    Job j = Job.make(n: 1);
+    scope { spawn work(j: give j); }
+    return 0;
+}

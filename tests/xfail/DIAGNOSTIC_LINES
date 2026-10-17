@@ -959,6 +959,7 @@ owned_contract_string_bare	owned_contract_string_bare.kama:7
 owned_iface_nonimpl	owned_iface_nonimpl.kama:7
 packed_takes_no_arguments	packed_takes_no_arguments.kama:3
 panic_handler_old_signature	panic_handler_old_signature.kama:5
+parallel_for_needs_concurrent	parallel_for_needs_concurrent.kama:9
 parallel_spawn_body_use	parallel_spawn_body_use.kama:10 parallel_spawn_body_use.kama:9
 parallel_spawn_nested_block	parallel_spawn_nested_block.kama:16
 parallel_spawn_no_scope	parallel_spawn_no_scope.kama:13
@@ -1244,6 +1245,7 @@ source_utf8_truncated	source_utf8_truncated.kama:8
 source_utf8_verbatim	source_utf8_verbatim.kama:5
 spawn_bundle_shared	spawn_bundle_shared.kama:13
 spawn_in_nested_block	spawn_in_nested_block.kama:24
+spawn_needs_concurrent	spawn_needs_concurrent.kama:10
 spawn_outside_scope	spawn_outside_scope.kama:11 spawn_outside_scope.kama:15
 spawn_stack_zero	spawn_stack_zero.kama:7
 static_call_nonstatic	static_call_nonstatic.kama:8
