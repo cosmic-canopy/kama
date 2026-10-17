@@ -9,5 +9,5 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 OUT="${1:-$ROOT/out/triangle.html}"
 mkdir -p "$(dirname "$OUT")"
 
-"$ROOT/kama" build "$HERE/triangle.kama" --target wasm --webgpu -o "$OUT"
+"$ROOT/kama" build "$HERE/kama.json" --target wasm -o "$OUT"
 echo "built $OUT (+ .js + .wasm) — open in a WebGPU browser"

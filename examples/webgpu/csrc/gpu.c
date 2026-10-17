@@ -1,19 +1,20 @@
-// Native half of the WebGPU platform seam (see kama_gpu.h). Creates a GLFW window, derives a
+// Native half of the WebGPU platform layer (see gpu.h). Creates a GLFW window, derives a
 // wgpu-native surface from its OS handle, presents, and pumps events. The web half is `static
-// inline` in the header; the driver compiles THIS file only for a native `--webgpu` build (as
-// Objective-C on macOS, where the surface is a CAMetalLayer on the NSWindow's content view).
+// inline` in the header; kama.json compiles THIS file for a native build only — as C on Linux and
+// Windows, and as Objective-C on macOS (gpu_macos.m includes it), where the surface is a CAMetalLayer
+// on the NSWindow's content view.
 //
 // One window per process is all the "first triangle" needs (it mirrors the single-surface app
-// model), so the GLFWwindow is a file static — kama_gpu_pump reaches it without threading a handle
+// model), so the GLFWwindow is a file static — gpu_pump reaches it without threading a handle
 // back through Kama.
 
 #ifndef __EMSCRIPTEN__
 
-#include "kama_gpu.h"
+#include "gpu.h"
 #include <webgpu/wgpu.h>          // wgpu-native extensions (wgpuDevicePoll)
 #include <stddef.h>
 #if !defined(_WIN32)
-#include <time.h>                 // nanosleep — kama_gpu_sleep_ms
+#include <time.h>                 // nanosleep — gpu_sleep_ms
 #include <errno.h>
 #endif
 
@@ -66,7 +67,7 @@ static WGPUSurface surface_from_window(WGPUInstance instance, GLFWwindow* window
     return wgpuInstanceCreateSurface(instance, &sd);
 }
 
-WGPUSurface kama_gpu_surface(WGPUInstance instance, uint32_t width, uint32_t height, const char* title) {
+WGPUSurface gpu_surface(WGPUInstance instance, uint32_t width, uint32_t height, const char* title) {
     if (!glfwInit()) return NULL;
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // WebGPU owns the swapchain, not GL
     g_window = glfwCreateWindow((int)width, (int)height, title ? title : "kama", NULL, NULL);
@@ -74,17 +75,17 @@ WGPUSurface kama_gpu_surface(WGPUInstance instance, uint32_t width, uint32_t hei
     return surface_from_window(instance, g_window);
 }
 
-void kama_gpu_present(WGPUSurface surface) {
+void gpu_present(WGPUSurface surface) {
     wgpuSurfacePresent(surface);
 }
 
-int32_t kama_gpu_pump(WGPUDevice device) {
+int32_t gpu_pump(WGPUDevice device) {
     glfwPollEvents();
     if (device) wgpuDevicePoll(device, 0, NULL);   // wgpu-native: run queued callbacks / reclaim resources
     return (g_window && !glfwWindowShouldClose(g_window)) ? 1 : 0;
 }
 
-// Throttle a frame the loop is not going to present. See the contract in kama_gpu.h for WHY this is
+// Throttle a frame the loop is not going to present. See the contract in gpu.h for WHY this is
 // a seam function rather than a caller's convenience.
 //
 // ⚠️ A plain unconditional sleep, deliberately — NOT glfwWaitEventsTimeout. That call looks like the
@@ -92,8 +93,8 @@ int32_t kama_gpu_pump(WGPUDevice device) {
 // wrong tool here for exactly that reason: a window delivering a steady event stream would wake it
 // immediately every time, and a throttle that can return early is not a throttle. This function
 // exists because a frame loop lost its only throttle; it must not be able to lose this one too.
-// Events wait for the next tick's kama_gpu_pump, at most 8-32 ms later.
-void kama_gpu_sleep_ms(int32_t ms) {
+// Events wait for the next tick's gpu_pump, at most 8-32 ms later.
+void gpu_sleep_ms(int32_t ms) {
     if (ms <= 0) return;
 #if defined(_WIN32)
     Sleep((DWORD)ms);          // windows.h arrives via GLFW_EXPOSE_NATIVE_WIN32 / glfw3native.h

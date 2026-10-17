@@ -931,8 +931,9 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   - **`Atomic` needs no pthread but rides in `std::concurrent`**, which does — so lock-free-without-threads
     is unreachable. Split it to a `std::concurrent::atomic` leaf, or promote it as an always-available seam.
     Only matters once the multicore-MCU track starts (§5).
-  - **`std::gpu` has no kama module.** The `kama_gpu.h` seam exists but programs `extern` the WebGPU C API
-    raw; an idiomatic wrapper is library work on the engine track (§8).
+  - **No GPU module in std, by decision** (2026-10-16): a safe WebGPU binding and a window are first-party
+    packages, `@kama/gpu` and `@kama/window` (KR-25, KR-26), and the C seam left std in `0.9.652` to become the
+    WebGPU example's own platform layer (§8).
 
   Decided NOT to add a convenience-import of the common containers — explicit per-symbol imports stay.
 - **Format/interpolation follow-ups (on the shipped `std::fmt` substrate).** Interpolation, format specifiers,
@@ -2695,7 +2696,8 @@ the wgpu-native SDK (`tools/fetch-webgpu.sh` or `$KAMA_WGPU_DIR`, with an action
 its include, library and rpath, and on wasm passes emscripten's own `--use-port=emdawnwebgpu`. Without it every
 project would hardcode SDK paths and emcc switches. A dependency cannot turn it on for its consumer, by design, so
 `@kama/gpu` should refuse to build — naming the key — when the consumer has not set it, rather than fail on
-"webgpu.h not found". **What leaves std now** is the seam itself (KR-188).
+"webgpu.h not found". The seam itself left std in `0.9.652`: it is `examples/webgpu`'s own platform layer now
+(`csrc/gpu.*`, its `csources`, gated by fact), and the driver knows nothing about it.
 
 - **The safe GPU binding (`@kama/gpu`, KR-25) — no longer "optional polish".** It was filed as `std::gpu`, over a
   C seam with *no kama at all*. The wrapper is the missing kama file, shaped like `std::net`'s `type resource TcpStream
@@ -2727,29 +2729,6 @@ project would hardcode SDK paths and emcc switches. A dependency cannot turn it 
     Android/Quest only via a pushed `.so`). Cross-platform *shipping* scripting is the §7 VM, not this. This buys
     fast native iteration on Linux/Mac/Windows — enough to justify the two tiny primitives.
 
-<a id="s8-seam-out"></a>
-
-### The GPU seam leaves std; the triangle becomes an ordinary project (KR-188)
-
-Decided 2026-10-16 with the package ruling above. Today the driver special-cases one stdlib header: a program that
-writes `extern "kama_gpu.h";` gets `lib/std/gpu/kama_gpu.c` compiled into it (as Objective-C on macOS, for the Metal
-layer), `-I…/std/gpu` and the Homebrew include dirs, and GLFW plus the platform frameworks linked
-(`needsGpu`, kama.driver.cpp ~12985/13276/13402/13515). Only `examples/webgpu/triangle.kama` uses it, and every
-compiler binary embeds the seam because it sits under `lib/`.
-
-The move, one commit:
-1. `examples/webgpu` gets a `kama.json`: `"webgpu": true`, the seam's C as its own `csources` (the macOS half as a
-   `.m`, gated by fact, since csources compiles ObjC since `0.9.380`), and GLFW plus the frameworks in `link`, per OS.
-   That is the pattern any project uses for its own platform layer.
-2. Delete `lib/std/gpu/` and the driver's `needsGpu` branch, with its include and link lines. `--webgpu` stays as
-   it is (§8's opening).
-3. `tests/webgpu/smoke.kama` stays: it uses webgpu.h only, with no seam, and is the `--webgpu` link gate.
-4. A guard that `kama check`s the example and the smoke for native and wasm on every run (no SDK needed), and builds
-   and runs the smoke when the SDK exists, else SKIP — no CI job reaches either today.
-5. Docs: docs/targets.md, ENGINE_READINESS.md, the example's README.
-
-When `@kama/gpu` and `@kama/window` exist, the triangle moves onto them. Size **S**.
-
 <a id="s8-gpu-wrapper"></a>
 
 ### `@kama/gpu` — the safe WebGPU binding, a first-party package (KR-25) — surveyed on `0.9.630`
@@ -2759,14 +2738,13 @@ carry over unchanged, and its "manifest entry" / `check-gpu.sh` steps become the
 
 The current state:
 
-- `lib/std/gpu` holds `kama_gpu.h` (the web half, static inline) and `kama_gpu.c` (native, GLFW), and no kama code.
-  `gpu` is not in `lib/kama.json`, so `import { std::gpu::Device }` gives "cannot resolve module".
-- The seam is four functions: `surface` (it creates the window and the surface together; the native window is a file
-  static `g_window` that is never destroyed), `present`, `pump` and `sleep_ms`.
-- A native `kama build triangle.kama --webgpu` (wgpu-native v29.0.1.1, GLFW 3.4) succeeds. It prints the two
-  documented fnptr warnings, plus a new stray `clang: warning: '-x none' after last input file`. The smoke binary prints
-  "WGPUInstance created", and `kama check` on the triangle passes for native and wasm without the SDK.
-- **Nothing in CI reaches `tests/webgpu/*` or `examples/webgpu`.**
+- The seam is `examples/webgpu/csrc/gpu.h` (the web half, static inline) and `gpu.c` (native, GLFW; macOS compiles
+  it as Objective-C through `gpu_macos.m`) — the example's own `csources` since `0.9.652`, with no kama code.
+- It is four functions: `gpu_surface` (it creates the window and the surface together; the native window is a file
+  static `g_window` that is never destroyed), `gpu_present`, `gpu_pump` and `gpu_sleep_ms`.
+- A native `kama build examples/webgpu/kama.json` (wgpu-native v29.0.1.1, GLFW 3.4) succeeds, printing the two
+  documented fnptr warnings. The smoke binary prints "WGPUInstance created". `tools/check-webgpu.sh` checks both for
+  native and wasm on every run without the SDK, and builds them where it is installed.
 - The triangle leaks more than its five per-frame releases cover: the shader module, the `GetBindGroupLayout` ref, the
   adapter, the instance and the calloc'd `App`. It also hardcodes 512×512 BGRA8.
 - webgpu.h ref-counts all 23 handle types (`Release`/`AddRef`). Releasing the last Device ref destroys it, so its
@@ -2775,9 +2753,9 @@ The current state:
 
 Sites:
 
-- `kama_gpu.c`: `kama_gpu_surface` (~85) and `kama_gpu_pump` (~92). `kama_gpu.h`: the web bodies (~55–75).
-- A new `lib/std/gpu/gpu.kama`, plus the `lib/kama.json` entry.
-- kama.driver.cpp: the `needsGpu` link (~12985, ~13514), and the seam input order behind `-x none` (~13404).
+- The package's own `csrc/` takes over `examples/webgpu/csrc/gpu.*` (surface, pump, the web bodies), and its own
+  `kama.json` the gated GLFW/framework links the example's carries.
+- Its kama module, `gpu.kama`.
 
 The design:
 
@@ -2803,12 +2781,11 @@ The design:
 The commits:
 
 1. Seam rework; `gpu.kama` with Instance, Adapter, Device, Queue, Surface, DeviceRequest and the typed acquire; the
-   manifest entry; the `-x none` fix.
+   package manifest.
 2. The remaining handles, with safe creation for exactly what the triangle uses.
-3. The triangle on `std::gpu` with zero `wgpu*Release` calls; README, ENGINE_READINESS and SPEC.
-4. `tools/check-gpu.sh`: `kama check` the example and fixtures, native and wasm, always (no SDK needed); build, link
-   and run the smoke when `third_party/wgpu` (or emcc) exists, else SKIP. Plus an xfail for a frame used after
-   `present()`.
+3. The triangle on `@kama/gpu` with zero `wgpu*Release` calls; its README and ENGINE_READINESS.
+4. The package's CI: `kama check` its tests, native and wasm, always (no SDK needed); build, link and run them where
+   the SDK (or emcc) exists. Plus an xfail for a frame used after `present()`.
 
 Traps:
 
@@ -2841,7 +2818,7 @@ Its commit 0, a compiler defect (a bound plain enum refused as a `match` subject
 
 The current state:
 
-- Native `kama_gpu_pump` calls `glfwPollEvents` with no callbacks registered, so only the close flag survives.
+- The example's native `gpu_pump` calls `glfwPollEvents` with no callbacks registered, so only the close flag survives.
 - The web pump is `return 1`, with no html5 listeners.
 - No key, mouse, size or focus information exists anywhere.
 - A pull-API prototype worked: a C ring queue, `type enum InputEvent`, `pollEvent() -> Optional<…>`, and
@@ -2852,9 +2829,9 @@ The current state:
 
 Sites:
 
-- `kama_gpu.c`: `kama_gpu_pump` and `g_window`. `kama_gpu.h`: the web pump (~70).
-- A new `kama_window.h`/`.c`.
-- kama.driver.cpp: a `needsWindow` that links GLFW without wgpu.
+- The example's `csrc/gpu.c`: `gpu_pump` and `g_window`; `csrc/gpu.h`: the web pump.
+- The package's own `window.h`/`.c` in `csources`, and its manifest's gated GLFW links (the flag gates of `0.9.651`
+  are what let a package say macOS's frameworks without the compiler's help).
 
 The design:
 

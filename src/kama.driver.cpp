@@ -6809,7 +6809,7 @@ static int writeHostHeaderIfExposed(CEmitter& emitter)
 int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
                         const std::string& outPath, bool emitLines, bool* externsMathH = nullptr,
                         bool* externsNetWeb = nullptr, bool* externsApp = nullptr,
-                        bool* externsGpu = nullptr, bool* externsIsolate = nullptr)
+                        bool* externsIsolate = nullptr)
 {
     std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host
     if (!out) {
@@ -6824,7 +6824,6 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
-    if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
     // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
@@ -6848,7 +6847,6 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
                      bool* externsMathH = nullptr,   // link hint: did the program `extern "<math.h>";`?
                      bool* externsNetWeb = nullptr,  // link hint: did it `extern "kama_net_web.h";`?
                      bool* externsApp = nullptr,     // link hint: did it `extern "kama_app.h";`? (std::app)
-                     bool* externsGpu = nullptr,     // link hint: did it `extern "kama_gpu.h";`? (WebGPU seam)
                      bool* externsIsolate = nullptr, // link hint: did it `extern "kama_isolate.h";`? (isolate seam)
                      bool oneTranslationUnit = false) // the caller folds every module into one C file
 {
@@ -6875,7 +6873,6 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
-    if (externsGpu) *externsGpu = emitter.externsHeader("kama_gpu.h");   // std::gpu seam -> native --webgpu link
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
     // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
@@ -6902,7 +6899,6 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
                                  bool* externsMathH = nullptr,   // link hints (see emitProgramUnits) — a
                                  bool* externsNetWeb = nullptr,   // `build` caller needs these to append the
                                  bool* externsApp = nullptr,      // right link flags (-lm, --js-library, …);
-                                 bool* externsGpu = nullptr,      // the `transpile` command passes none.
                                  bool* externsIsolate = nullptr)  // isolate seam -> native -lpthread
 {
     std::string dir = dirName(outPath);
@@ -6913,7 +6909,7 @@ int transpileProgramToSingleFile(const std::vector<SharedCompilationUnit>& units
     for (size_t i = 0; i < units.size(); ++i)
         cPaths.push_back(dir + "/" + stem + "__u" + std::to_string(i) + ".c.tmp");
     if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines,
-                         externsMathH, externsNetWeb, externsApp, externsGpu, externsIsolate,
+                         externsMathH, externsNetWeb, externsApp, externsIsolate,
                          /*oneTranslationUnit=*/true) != 0) return 1;
 
     std::ofstream out(osp(outPath), std::ios::binary);   // LF on every host
@@ -13042,7 +13038,6 @@ int main(int argc, char** argv)
         bool needsLibm = false;   // set if the program `extern "<math.h>";`'s (std::math / libm) -> link -lm
         bool needsNetWeb = false; // set if the program `extern "kama_net_web.h";`'s (std::net::web) -> --js-library
         bool needsApp = false;    // set if the program `extern "kama_app.h";`'s (std::app) -> wasm -sEXIT_RUNTIME=1
-        bool needsGpu = false;    // set if the program `extern "kama_gpu.h";`'s (WebGPU seam) -> native surface libs
         bool needsPthread = false;// set if the program uses a std::concurrent seam (`kama_isolate.h` / `kama_channel.h`) -> native -lpthread
         g_pruneUnreached = true;  // a build compiles what its program reaches (KR-130); `transpile` never gets here
         std::map<std::string, std::string> cFileUnit;   // a generated `.c` -> the unit it came from (KR-128)
@@ -13056,7 +13051,7 @@ int main(int argc, char** argv)
             // did — leaves exactly the file the failure path was supposed to clean up.
             genFiles.push_back(cPath);
             cFileUnit[cPath] = unitPaths[0];
-            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
+            if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
         } else if (release && !wasm) {
             // UNITY release build: fold every unit into ONE translation unit (the same merge the
@@ -13070,7 +13065,7 @@ int main(int argc, char** argv)
             // stepping; wasm keeps its own path.
             std::string cPath = genDir + "/" + baseName(stripExtension(outPath)) + ".c";
             genFiles.push_back(cPath);       // before the call that writes it — see the single-unit note
-            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
+            if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
         } else {
             std::string headerName = baseName(stripExtension(outPath)) + ".gen.h";
@@ -13098,7 +13093,7 @@ int main(int argc, char** argv)
             }
             genFiles = cPaths;               // before the call that writes them — see the single-unit note
             genFiles.push_back(headerPath);
-            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsGpu, &needsPthread) != 0) return 1;
+            if (emitProgramUnits(units, unitPaths, headerPath, headerName, cPaths, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread) != 0) return 1;
             cFiles   = cPaths;
         }
 
@@ -13331,12 +13326,6 @@ int main(int argc, char** argv)
         if (wasm && webgpu) cmd << "--use-port=emdawnwebgpu ";   // emscripten WebGPU port
         // Native --webgpu: find wgpu-native's webgpu.h / wgpu.h. (wasm gets its header from the port above.)
         if (!wasm && webgpu) cmd << "-I\"" << wgpuDir << "/include\" ";
-        // The WebGPU platform seam (kama_gpu.h) — its include dir on BOTH targets (web = header-only
-        // static-inline; native also compiles kama_gpu.c below). Only when the program externs it.
-        if (needsGpu) cmd << "-I\"" << (resolveStdlibDir(argv[0]) + "/std/gpu") << "\" ";
-        // GLFW usually lives under a Homebrew prefix the bare compiler doesn't search by default. A
-        // nonexistent -I is harmless, so this is safe to key on the target rather than the host.
-        if (!wasm && needsGpu && g_target.isMacOS()) cmd << "-I/opt/homebrew/include -I/usr/local/include ";
         // std::net::web (WebSocket / WebTransport) is a thin JS-glue --js-library, linked only when the
         // program actually externs its header. Both the header (compile) and the glue (link) live next to the
         // module in the stdlib. The glue moves bytes across the wasm/JS boundary via the exported heap views.
@@ -13451,23 +13440,9 @@ int main(int argc, char** argv)
             ccInputs.push_back({ "\"" + cf + "\" ", stripExtension(cf) + ".o", CLang::Kama,
                                  u != cFileUnit.end() && optimizedUnit(u->second) });
         }
-        // Native WebGPU seam: the surface TU (Objective-C on macOS — it attaches a CAMetalLayer to the
-        // NSWindow). Only when the program externs kama_gpu.h AND targets native (the web seam is
-        // header-only static-inline, compiled nowhere).
-        //
-        // It is an INPUT, not a tail flag, and that is also a fix: it used to be appended to `cmd`
-        // unconditionally, so a STATIC build — which compiles each TU on its own — compiled the seam
-        // into *every* archive member. Its object goes in genDir; the `stripExtension(cf) + ".o"` rule
-        // used for module TUs would write it into the stdlib INSTALL directory.
-        if (!wasm && needsGpu) {
-            std::string seam = resolveStdlibDir(argv[0]) + "/std/gpu/kama_gpu.c";
-            ccInputs.push_back({ g_target.isMacOS() ? "-x objective-c \"" + seam + "\" -x none "
-                                                    : "\"" + seam + "\" ",
-                                 genDir + "/kama_gpu.o" });
-        }
-        // The project's own C, and its dependencies' — `csources`. Each is its own translation unit,
-        // exactly like the seam above, and for the same reason its object goes in genDir: `dirname(-o)`
-        // is the one directory a build may write to, and a user's source tree is not it. The OWNER
+        // The project's own C, and its dependencies' — `csources`. Each is its own translation unit, and its
+        // object goes in genDir: `dirname(-o)` is the one directory a build may write to, and a user's source
+        // tree is not it. The OWNER
         // prefix is what keeps two packages that both ship `shim.c` from writing the same object — a
         // silent overwrite in a single invocation, and a RACE under `-j`.
         {
@@ -13569,18 +13544,6 @@ int main(int argc, char** argv)
             link << "-L\"" << wgpuDir << "/lib\" -lwgpu_native ";
             if (!g_target.isWindows())   // no rpath concept in PE/COFF
                 link << "-Wl,-rpath,\"" << absolutePath(wgpuDir) << "/lib\" ";
-        }
-        // The seam's window/surface libraries (GLFW + platform frameworks). Split from wgpu-native
-        // above so a windowless native build (e.g. the link-gate smoke) links only libwgpu_native.
-        if (!wasm && needsGpu && !stopsAtObject) {
-            if (g_target.isMacOS())
-                link << "-L/opt/homebrew/lib -L/usr/local/lib -lglfw "
-                        "-framework Cocoa -framework Metal -framework QuartzCore -framework IOKit "
-                        "-framework CoreFoundation -framework CoreVideo -lobjc ";
-            else if (g_target.isWindows())
-                link << "-lglfw3 -lgdi32 -luser32 -ld3dcompiler ";
-            else
-                link << "-lglfw -lX11 -ldl -lpthread ";
         }
         // Link-time libraries (skipped for --target embedded: it stops at `-c`, so its board link — where
         // the user supplies startup + linker script — owns library selection).

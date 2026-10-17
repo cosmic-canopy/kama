@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Kama WebGPU triangle as a NATIVE desktop app (Mac / Linux / Windows).
-# The SAME triangle.kama the wasm build uses — the surface/present/loop differences live behind the
-# std::gpu seam (lib/std/gpu/kama_gpu.*).
+# The SAME project the wasm build uses — the surface/present/loop differences live in its own platform
+# layer (csrc/gpu.*), which kama.json compiles and links per OS.
 #
 # Prereqs (once):
 #   tools/fetch-webgpu.sh              # fetch the wgpu-native SDK into third_party/wgpu (gitignored)
@@ -15,5 +15,5 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 OUT="${1:-$ROOT/out/triangle}"
 mkdir -p "$(dirname "$OUT")"
 
-"$ROOT/kama" build "$HERE/triangle.kama" --webgpu -o "$OUT"
+"$ROOT/kama" build "$HERE/kama.json" -o "$OUT"
 echo "built $OUT — run it to see the spinning triangle in a native window"

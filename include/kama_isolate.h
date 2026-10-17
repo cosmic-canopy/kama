@@ -5,7 +5,7 @@
 // bundle, and join it. Shared-nothing by construction: the entry takes ownership of the bundle, so
 // no memory is aliased across the thread boundary (the whole M2 concurrency model in one header).
 //
-// A dedicated pay-for-what-you-use header (like kama_os.h / kama_gpu.h), pulled in only by a program
+// A dedicated pay-for-what-you-use header (like kama_os.h / kama_app.h), pulled in only by a program
 // that `extern "kama_isolate.h";`'s — NOT folded into kama_runtime.h, which must stay usable on the
 // freestanding/MCU path where <pthread.h> does not exist. (And pthread_t is not void* on glibc, so
 // the block-scoped-extern trick kama_runtime.h uses elsewhere would be unsafe here.)

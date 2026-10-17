@@ -5,10 +5,15 @@ pipeline up (instance → adapter → device → queue → surface) and draws a 
 background — the graphics "hello triangle", and the first step of the engine track
 ([docs/ENGINE_READINESS.md](../../docs/ENGINE_READINESS.md)).
 
-It is **pure Kama over the WebGPU C API** (Emscripten's `emdawnwebgpu` port): no C glue. Opaque handles
-are `UnsafePtr`, the C descriptor structs are `type extern value` (the header owns the real layout — Kama assigns
-fields *by name*, so declaring only the fields you touch is safe), and the async adapter/device handshake
-rides Kama `fnptr` callbacks with app state threaded through the WebGPU `userdata` pointer.
+It is **pure Kama over the WebGPU C API** (Emscripten's `emdawnwebgpu` port on the web, wgpu-native on the
+desktop). Opaque handles are `UnsafePtr`, the C descriptor structs are `type extern value` (the header owns the real
+layout — Kama assigns fields *by name*, so declaring only the fields you touch is safe), and the async adapter/device
+handshake rides Kama `fnptr` callbacks with app state threaded through the WebGPU `userdata` pointer.
+
+It is also an ordinary **kama project** ([`kama.json`](kama.json)): `"webgpu": true` says it uses WebGPU, and the
+few lines of C that differ between a browser and a desktop window — its platform layer — are its own `csources`,
+gated by fact. That is the shape to copy for a project of your own: nothing in the compiler knows about this
+example.
 
 ## Build & run
 
@@ -64,10 +69,16 @@ you'll see the warning at build time.
 
 ## Native (Mac / Linux / Windows)
 
-The **same** `triangle.kama` also runs as a native desktop app. The web-vs-native differences —
-surface creation, present, and the per-tick event pump — live behind the **`std::gpu` seam**
-([`lib/std/gpu/kama_gpu.h`](../../lib/std/gpu/kama_gpu.h)), so the Kama source is identical across
-targets. Native uses **wgpu-native** (the WebGPU implementation) + **GLFW** (window/surface).
+The **same** `src/triangle.kama` also runs as a native desktop app. The web-vs-native differences — surface
+creation, present, and the per-tick event pump — live in the project's platform layer,
+[`csrc/gpu.h`](csrc/gpu.h): `static inline` bodies for the web, and [`csrc/gpu.c`](csrc/gpu.c) for a native
+window, which macOS compiles as Objective-C through [`csrc/gpu_macos.m`](csrc/gpu_macos.m) (its surface is a
+`CAMetalLayer`). So the Kama source is identical across targets. Native uses **wgpu-native** (the WebGPU
+implementation) + **GLFW** (window/surface).
+
+What each OS links is the manifest's, by fact: GLFW and the Cocoa, Metal and QuartzCore frameworks on macOS
+(`ldflags` entries gated `OS_MACOS`, beside Homebrew's `-L/opt/homebrew/lib`), GLFW and X11 on Linux, GLFW and
+GDI on Windows.
 
 ```sh
 # 1. fetch the wgpu-native SDK (once) -> third_party/wgpu/ (gitignored; not vendored)
@@ -78,8 +89,9 @@ examples/webgpu/build-native.sh                # -> out/triangle
 out/triangle                                    # a 512×512 window: the same spinning triangle
 ```
 
-`--webgpu` on a native build links the fetched wgpu-native lib (via an rpath) + GLFW; `$KAMA_WGPU_DIR`
-overrides the SDK location. wgpu-native is dual-licensed **MIT or Apache-2.0**, at your choice — the same
+`"webgpu": true` (or `--webgpu` on a loose file) is the platform API: on a native build it finds the fetched
+wgpu-native SDK and links it (via an rpath), on the web it selects emscripten's WebGPU port. `$KAMA_WGPU_DIR`
+overrides the SDK location. The window is the project's own business — GLFW here, linked by `kama.json`. wgpu-native is dual-licensed **MIT or Apache-2.0**, at your choice — the same
 permissive terms as kama. It is fetched rather than vendored only because it is several MB; a program
 that ships the library ships its license notice with it.
 
@@ -89,6 +101,9 @@ that ships the library ships its license notice with it.
 
 ## Scope
 
-Browser/WASM (`--target wasm --webgpu`, the `emdawnwebgpu` port) **and** native desktop (above). The
-next steps are an idiomatic safe `gpu::` wrapper and the engine spine (buffers/bindings/pipelines
-beyond a hardcoded triangle) — see [docs/ENGINE_READINESS.md](../../docs/ENGINE_READINESS.md).
+Browser/WASM (`--target wasm`, the `emdawnwebgpu` port) **and** native desktop (above). The next steps are the
+first-party packages `@kama/gpu` (a safe binding: one `resource` per handle, release on drop) and `@kama/window`
+(windows and their events), after which this triangle moves onto them, and the engine spine
+(buffers/bindings/pipelines beyond a hardcoded triangle) — see [docs/ENGINE_READINESS.md](../../docs/ENGINE_READINESS.md).
+`tools/check-webgpu.sh` keeps the example checking for both targets on every run, and builds it where the SDK
+and GLFW are installed.

@@ -43,7 +43,7 @@ optional backend is an import:
 
 So string interpolation works under `--no-std` while `std::fmt` stays optional, and the same shape holds for
 serialization. The reason the split is drawn at cost: a module's link and runtime cost is triggered only when
-its seam header is actually externed — `kama_isolate.h`/`kama_channel.h` pull in `-lpthread` natively, `<math.h>` pulls `-lm`, `kama_gpu.h` pulls the GPU stack, Windows
+its seam header is actually externed — `kama_isolate.h`/`kama_channel.h` pull in `-lpthread` natively, `<math.h>` pulls `-lm`, Windows
 sockets pull `-lws2_32` and Windows entropy (`kama_random.h`) pulls `-lbcrypt`. One is keyed tighter still,
 because its cost is a hosting model rather than a library: a wasm build goes threaded (`-pthread
 -sPROXY_TO_PTHREAD`, a SharedArrayBuffer and the COOP/COEP headers that requires) only when the program

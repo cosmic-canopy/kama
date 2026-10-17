@@ -1,0 +1,41 @@
+{
+  "name": "triangle",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/triangle.kama",
+  "webgpu": true,
+  "cincludes": ["csrc"],
+  "csources": [
+    { "path": "csrc/gpu.c",       "compileFor": ["!ARCH_WASM32", "!OS_MACOS"] },
+    { "path": "csrc/gpu_macos.m", "compileFor": ["OS_MACOS"] }
+  ],
+  "objcflags": [
+    { "flag": "-I/opt/homebrew/include", "compileFor": ["OS_MACOS"] },
+    { "flag": "-I/usr/local/include",    "compileFor": ["OS_MACOS"] }
+  ],
+  "link": [
+    { "name": "glfw",        "compileFor": ["OS_MACOS"] },
+    { "name": "objc",        "compileFor": ["OS_MACOS"] },
+    { "name": "glfw",        "compileFor": ["OS_LINUX"] },
+    { "name": "X11",         "compileFor": ["OS_LINUX"] },
+    { "name": "dl",          "compileFor": ["OS_LINUX"] },
+    { "name": "pthread",     "compileFor": ["OS_LINUX"] },
+    { "name": "glfw3",       "compileFor": ["OS_WINDOWS"] },
+    { "name": "gdi32",       "compileFor": ["OS_WINDOWS"] },
+    { "name": "user32",      "compileFor": ["OS_WINDOWS"] },
+    { "name": "d3dcompiler", "compileFor": ["OS_WINDOWS"] }
+  ],
+  "ldflags": [
+    { "flag": "-L/opt/homebrew/lib",              "compileFor": ["OS_MACOS"] },
+    { "flag": "-L/usr/local/lib",                 "compileFor": ["OS_MACOS"] },
+    { "flag": "-Wl,-framework,Cocoa",             "compileFor": ["OS_MACOS"] },
+    { "flag": "-Wl,-framework,Metal",             "compileFor": ["OS_MACOS"] },
+    { "flag": "-Wl,-framework,QuartzCore",        "compileFor": ["OS_MACOS"] },
+    { "flag": "-Wl,-framework,IOKit",             "compileFor": ["OS_MACOS"] },
+    { "flag": "-Wl,-framework,CoreFoundation",    "compileFor": ["OS_MACOS"] },
+    { "flag": "-Wl,-framework,CoreVideo",         "compileFor": ["OS_MACOS"] }
+  ],
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
+}

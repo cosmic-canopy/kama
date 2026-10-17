@@ -1,11 +1,11 @@
-// triangle.kama — a WebGPU example written in Kama, compiled to WASM.
+// triangle.kama — a WebGPU example written in Kama, for the browser (WASM) and a native window alike.
 //
 // Brings the whole pipeline up and draws a spinning triangle over a colour-cycling
 // background: instance -> adapter -> device -> queue -> surface -> WGSL render
 // pipeline -> per-frame render pass (uniform-fed rotation) -> draw.
 //
-//   ./kama build triangle.kama --target wasm --webgpu -o out/triangle.html
-//   # open out/triangle.html in a WebGPU-capable browser (Chrome/Edge)
+//   ./kama build examples/webgpu/kama.json --target wasm -o out/triangle.html   # a WebGPU browser
+//   ./kama build examples/webgpu/kama.json -o out/triangle                      # a native window
 //
 // It is pure Kama over the WebGPU C API (Emscripten's emdawnwebgpu port): opaque
 // handles are `UnsafePtr`, C structs are `type extern value` (the header owns the real
@@ -18,13 +18,13 @@ import { core::println, std::app::run };
 extern "<webgpu/webgpu.h>";
 extern "<stdlib.h>";
 
-// The platform seam (std::gpu): surface creation, present, and the per-tick pump — the only
-// web-vs-native differences. Same source builds for `--target wasm` and native (see kama_gpu.h).
-extern "kama_gpu.h";
-extern fn UnsafePtr   kama_gpu_surface(UnsafePtr instance, uint32 width, uint32 height, UnsafeConstPtr<cchar> title);
-extern fn void  kama_gpu_present(UnsafePtr surface);
-extern fn int32 kama_gpu_pump(UnsafePtr device);
-extern fn void  kama_gpu_sleep_ms(int32 ms);   // throttles a frame we do NOT present — see frameTick
+// This project's platform layer (csrc/gpu.h): surface creation, present, and the per-tick pump — the only
+// web-vs-native differences. Same source builds for `--target wasm` and native.
+extern "gpu.h";
+extern fn UnsafePtr   gpu_surface(UnsafePtr instance, uint32 width, uint32 height, UnsafeConstPtr<cchar> title);
+extern fn void  gpu_present(UnsafePtr surface);
+extern fn int32 gpu_pump(UnsafePtr device);
+extern fn void  gpu_sleep_ms(int32 ms);   // throttles a frame we do NOT present — see frameTick
 
 // ----- libc -----
 extern fn UnsafePtr calloc(usize count, usize size);
@@ -318,8 +318,8 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     if (st[0].ready == 0) {
         // Still waiting on the async adapter -> device handshake. Pump so the window stays
         // responsive, then sleep — without this the handshake spins a core for its whole duration.
-        keep = kama_gpu_pump(device: null);
-        kama_gpu_sleep_ms(ms: 8);
+        keep = gpu_pump(device: null);
+        gpu_sleep_ms(ms: 8);
         return keep;
     }
 
@@ -356,8 +356,8 @@ unsafe fn int32 frameTick(UnsafePtr state) {
         if (isOccluded(status: status)) {
             if (st[0].occluded == 0) { println(s: "triangle: window occluded — skipping frames"); }
             st[0].occluded = st[0].occluded + 1;
-            keep = kama_gpu_pump(device: st[0].device);
-            kama_gpu_sleep_ms(ms: 32);   // an invisible window has no deadline
+            keep = gpu_pump(device: st[0].device);
+            gpu_sleep_ms(ms: 32);   // an invisible window has no deadline
             return keep;
         }
 
@@ -376,8 +376,8 @@ unsafe fn int32 frameTick(UnsafePtr state) {
             println(s: "triangle: no surface texture for 600 consecutive frames (status ${code}) — stopping");
             return 0;
         }
-        keep = kama_gpu_pump(device: st[0].device);
-        kama_gpu_sleep_ms(ms: 8);
+        keep = gpu_pump(device: st[0].device);
+        gpu_sleep_ms(ms: 8);
         return keep;
     }
     st[0].failStreak = 0;
@@ -415,7 +415,7 @@ unsafe fn int32 frameTick(UnsafePtr state) {
     // Present through the seam: a real wgpuSurfacePresent natively, a no-op on the web (the
     // browser auto-presents the canvas each requestAnimationFrame tick — emdawnwebgpu aborts on
     // an explicit present).
-    kama_gpu_present(surface: surface);
+    gpu_present(surface: surface);
 
     // Release this frame's transient objects. GetCurrentTexture hands back a ref we own,
     // so release `tex` too (matches Emscripten's reference; the surface keeps its own ref) —
@@ -428,7 +428,7 @@ unsafe fn int32 frameTick(UnsafePtr state) {
 
     // Pump the platform: native drains window events + polls the device and returns 0 when the
     // window is closed (ending std::app's `while(tick())`); the web is a no-op that returns 1.
-    keep = kama_gpu_pump(device: st[0].device);
+    keep = gpu_pump(device: st[0].device);
     return keep;
 }
 
@@ -442,7 +442,7 @@ unsafe fn int32 appMain() {
     // Surface via the seam: the page's <canvas id="canvas"> on the web, a real 512×512 window
     // natively. Same call, one window/canvas per app — exactly what the triangle needs.
     string title = "kama — triangle";
-    UnsafePtr surface = kama_gpu_surface(instance: inst, width: 512, height: 512, title: title.cstr());
+    UnsafePtr surface = gpu_surface(instance: inst, width: 512, height: 512, title: title.cstr());
     st[0].surface = surface;
 
     // Kick off the async adapter request; onAdapter -> onDevice -> ready.
