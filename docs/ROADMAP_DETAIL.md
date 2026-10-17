@@ -2000,9 +2000,21 @@ lookup is O(1) and iteration is the entries array. The surface mirrors `Map` (`p
 serde) plus what order adds: `first`/`last`, and `moveToEnd(key:)`. `put` on an existing key replaces the value and
 keeps the position (Python). `OrderedSet<K>` is the same over keys, as `Set` is to `Map`.
 
-**Decisions owed (asked when it is built):** removal — a tombstone compacted on growth (Python; order kept, O(1)),
-against a shifting remove (O(n)) or IndexMap's swap-remove (breaks order, so refused for a type named for order);
-and whether positional access (`at(index:)`) is offered, which tombstones make O(n) until compaction. Size **M**.
+**Decided 2026-10-17** (asked with kama examples; the maintainer refined the first):
+
+1. **Removal is a tombstone, and `remove` never compacts** — it marks the entry dead in O(1), order kept (Python's
+   compact dict). Holes are reclaimed in two places only: an insert that finds the entries array full compacts
+   instead of growing whenever that is enough (Python's rule), and **`compact()`** does it on demand. Rust's
+   `indexmap` has no tombstones — the caller picks `swap_remove` (O(1), reorders) or `shift_remove` (O(n)) per call
+   — and a shifting remove is .NET 9's. The recommendation was automatic compaction with no method ("one way");
+   the maintainer's point carried it: `compact()` does not reach a second state, it chooses WHEN the O(n) cost is
+   paid — the mirror of `reserve()`, which std already offers to move a growth out of the `add` that would pay it.
+   A game frame or an audio callback pays neither inside the critical section, which is why `remove` must never
+   compact on its own either.
+2. **No positional access** — iterate `entries()`, plus `first()`/`last()` and `moveToEnd(key:)`. Python's `dict`
+   and Java's `LinkedHashMap` offer no index, and with tombstones an index is O(n) whenever a hole exists.
+
+Size **M**.
 
 <a id="s5-bounded-vector"></a>
 
@@ -2016,10 +2028,18 @@ it is added — C++26 `std::inplace_vector`, Zig's `BoundedArray`, Rust's `heapl
 only half answers it: growth abandons the old block, and the list is still a pointer, so it cannot sit inside a
 `type value` that is copied, sent to an isolate or viewed as bytes.
 
-**Decisions owed (asked when it is built):** the name (`BoundedArray<T>#(N)`, Zig's word for "length bounded by N",
-against `InlineDynamicArray`, which composes the two existing words); what a full `add` does (a trap with the
-caller's location, as an index miss does, against a `Result` that hands the item back, as `heapless` and Zig do);
-and how the uninitialized tail is held (`slot` storage). Size **S–M**.
+**Decided 2026-10-17:**
+
+1. **`InlineDynamicArray<T>#(N)`** — it composes std's two existing words and fills the grid: `DynamicArray`/
+   `FixedArray` on the heap, `InlineDynamicArray`/`InlineArray` in place. "Inline" is kama's word for "stored in
+   place" already; C++26 says `inplace_vector` only because `inline` is a C++ keyword. Zig's `BoundedArray` is gone
+   from its std as of 0.16 (checked in the installed `lib/zig/std`: `ArrayList.initBuffer` over caller memory
+   replaced it, with `*Bounded` methods returning `error.OutOfMemory`).
+2. **A full `add` returns a `Result` that hands the item back** — being full is an expected state for a bounded
+   list, which is exactly what `--no-heap` and MCU code hold (heapless `Vec::push`, Zig's `appendBounded`).
+3. The uninitialized tail is `slot` storage, so an element is constructed only when it is added.
+
+Size **S–M**.
 - **Collections revisit — remaining knobs & optimizations.** The parametric knobs ship (preallocation,
   pluggable `Hasher`, custom `Allocator` on every container and box, all defaulted). What remains:
   - **HashDoS-resistant keyed hashing (deferred).** `DefaultHasher` is deterministic/*unseeded* — right for
