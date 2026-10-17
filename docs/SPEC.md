@@ -5822,6 +5822,14 @@ the subject's payload, and it cannot be `give`n away (`match (give x)` hands the
 `const` subject's alias is `const`. A binding of a plain value is a copy the arm may change, as a by-value <!-- xfail: match_const_payload_mutate -->
 `foreach` binding is.
 
+**Writing the subject ends its aliases.** The arm may write the subject — `state = State::Ready(…)` is the
+commonest arm there is — but the write replaces the payload an alias points into, so from that write on the <!-- test: match_alias_subject_write_ok -->
+alias is gone, and a use of it is refused. A write is an assignment, a `ref`/`out` argument, or a non-`const fn` <!-- xfail: match_alias_after_subject_write, match_alias_subject_write_ref_arg, match_alias_subject_write_method -->
+on the subject or on what contains it (`this.reset()` writes `this.state`). It counts on every path it may
+have taken, and inside a loop a use anywhere in the loop is refused when the loop writes the subject, because <!-- xfail: match_alias_subject_write_branch, match_alias_subject_write_loop -->
+the next pass runs it after the write. Read what you need first, or `match` again. Writing THROUGH the alias,
+and writing a disjoint sibling field, stay legal.
+
 **A pattern NAMES the fields it binds** — `field: local` — exactly as a call names its arguments; there is
 no positional form, and kama no more exempts a one-field variant here than it exempts a one-argument call
 from a label. The label is the variant's field; the identifier after it is the local it introduces, and it

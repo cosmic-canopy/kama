@@ -1,0 +1,15 @@
+// KR-181. A non-`const fn` on `this` writes `this.state`, the subject, as surely as an assignment does.
+import { std::collections::DynamicArray };
+type enum U { A(DynamicArray<int64> xs), B(int64 p, int64 n, int64 c, int64 m) }
+fn U mk() { DynamicArray<int64> xs = DynamicArray.empty(); xs.add(item: 7i64); return U::A(xs: give xs); }
+type resource M {
+    U state;
+    public ctor make() { this.state = mk(); }
+    fn void reset() { this.state = U::B(p: 1i64, n: 1i64, c: 1i64, m: 0i64); }
+    public fn int64 step() {
+        int64 n = 0i64;
+        match (this.state) { case A(xs: a): { this.reset(); n = a[0]; } case B(p: p, n: q, c: c, m: m): { } };
+        return n;
+    }
+}
+fn int32 main() { M m = M.make(); return cast<int32>(m.step()); }

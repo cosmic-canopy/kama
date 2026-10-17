@@ -785,24 +785,6 @@ Size **L**: (1a) + (2) are M, and decision (4)'s attribute is included.
 Decision (2) is measured and decided: **a location in every build**. Commits: `PanicInfo` and the hook; a location
 on every trap; the caller-location attribute (its spelling settled when built).
 
-<a id="s2-alias-subject-write"></a>
-
-### A `match` arm writes its subject while an owning payload's alias is live (KR-181)
-
-Found surveying KR-131 on `0.9.630`. Given `type enum U { A(DynamicArray<int64> xs), B(int64 p, int64 n, int64 c,
-int64 m) }`, this builds and crashes with exit 139:
-
-```kama
-match (u) { case A(xs: a): { u = U::B(p: 4096i64, n: 1i64, c: 1i64, m: 0i64); n = a[0]; } … };
-```
-
-An owning payload binds as an alias into the subject, the assignment drops the old payload, and `a` then reads freed
-memory. **This is unsound in safe kama.**
-
-A blunt freeze of the subject would refuse the common `state = …` arm, so the rule is narrower: refuse a READ of the
-alias after the subject is written in the same arm ("`a` borrows `u`'s payload, which the assignment above
-replaced"). It shares the write scan and the freeze with KR-131, so fix the two together. Size **S**.
-
 <a id="s2-bound-enum-subject"></a>
 
 ### A plain enum bound by a `match` arm or a `foreach` is not a `match` subject (KR-182)
@@ -2599,7 +2581,8 @@ Sites, all in kama.cemit.cpp:
 
 Fix:
 
-1. Lift the scan into one `writtenRoots(stmt)`, adding `give`, `ref` loops, nested `match` subjects and `spawn`.
+1. The write scan exists since `0.9.632`: `forEachPlaceUse(stmt, fn, /*writesOnly=*/true)` reports every place a
+   statement writes (an assignment or `++`/`--` target, a non-`const fn` receiver, a `ref`/`out` argument, a `give`).
 2. Bind the payload in place (`T* b = &slot`) only when all of these hold:
    - the `match` borrows its subject;
    - the payload is a plain struct;
@@ -2609,7 +2592,8 @@ Fix:
    error, never a miscompile.
 4. Fixture `match_binding_in_place`. Extend `check-construct-frame.sh`: the -O0 frame, and -O2 with the callee in
    another unit.
-5. Fix **KR-181** in the same work; it shares the scan and the freeze.
+5. A use of an owning payload's alias after a write to the subject is refused since `0.9.632` (SPEC *match*,
+   "Writing the subject ends its aliases"); the in-place binding must keep that rule.
 
 Narrow this row to the `match` half. Size **M**, 2–3 commits.
 
@@ -2618,9 +2602,8 @@ changes):
 
 1. **A lowering.** It keeps one spelling and copy semantics. The alternative, a
    `case Ok(value: const ref b)` pattern, is a grammar change, and a pattern binding has no type slot.
-2. Which subjects qualify: **locals and temporaries only.** KR-181's commit probes whether the overlap below is a
-   use-after-free on its own (an `Optional<DynamicArray<…>>` freed through `b` while `a`'s payload is read), and
-   files and fixes it if so.
+2. Which subjects qualify: **locals and temporaries only.** The overlap below was a use-after-free on its own (an
+   `Optional<DynamicArray<…>>` replaced through `b` while `a`'s payload is read), and is fixed separately.
    - A `const ref` parameter is unsound today. `fn two(const ref Optional<int64> a, ref Optional<int64> b)` called
      `two(a: o, b: ref o)` is accepted, so the two borrows overlap.
    - A static that a callee writes behaves the same way. Both were measured: the copy returns 7, while reading in place

@@ -1506,6 +1506,9 @@ private:
     // owns, so `give`ing one out double-frees. Non-giveable: a give of a name in here is a hard error
     // (the consuming `match (give x)` is the way to move a payload out). Scoped per-arm.
     std::set<std::string> _borrowedMatchBindings;
+    // Why a borrowed-`match` alias reads as moved: the subject place written, and the line (KR-181).
+    std::map<std::string, std::pair<std::string, int>> _staleAlias;
+    void noteSubjectWrite(SharedExpression target, int line);
     // ONE name's entry in EVERY per-name local table above (and `_constLocals`/`_constLocalVals` below),
     // so a scoped binding can be undone at scope exit. Those tables are flat maps with no scope of their
     // own; until a `Scope` owned the bindings it introduced, a block-declared local lived to the end of its
@@ -2224,6 +2227,11 @@ private:
                                         // the child reads it while the scope body may too (emitScope).
                                         bool fromChild = false; };
                    std::vector<FrozenPlace> frozen;
+                   // An owning payload of a BORROWING `match` arm, bound as an alias of the subject's slot, with
+                   // the subject's place. A write to an overlapping place replaces the payload the alias points
+                   // into, so it marks the alias moved for the rest of the arm (KR-181).
+                   struct PayloadAlias { std::vector<std::string> subject; std::string alias; };
+                   std::vector<PayloadAlias> payloadAliases;
                    // The places this task scope's children borrow by `ref`, with the line of the `spawn`. The
                    // scope body may not USE an overlapping place after it — read or write — until the scope
                    // joins the child (emitScope scans the statements that follow). A `const ref` borrow is a
@@ -3932,7 +3940,12 @@ private:
     bool rejectFrozenWrite(SharedExpression target, int line);
     // Every PLACE a statement uses — `c`, `c.f`, a method's receiver, an element's container — at its widest
     // nameable extent, so a disjoint sibling field is told apart (see emitScope's child-borrow check).
-    void forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn);   // one sentence for every write shape
+    // `writesOnly`: just the places the statement WRITES — an assignment or `++`/`--` target, a non-`const fn`
+    // receiver, a `ref`/`out` argument, a `give`n place.
+    void forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn,
+                         bool writesOnly = false);   // one sentence for every write shape
+    void rejectSubjectWriteInLoop(SharedStatement armBody, const std::vector<std::string>& subject,
+                                  const std::string& alias);
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a
     // view-ctor's borrowed-pointer argument through `addr(of: …)` and a `recv.dataPtr()` call.

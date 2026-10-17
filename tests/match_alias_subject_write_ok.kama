@@ -1,0 +1,26 @@
+// KR-181: what stays legal in an arm whose owning payload is bound as an alias — writing THROUGH the alias,
+// writing a disjoint sibling field, reading before the write, reading on the other branch, and the
+// transition itself. Returns 14 + 14.
+import { std::collections::DynamicArray };
+type enum U { A(DynamicArray<int64> xs), B(int64 p, int64 n, int64 c, int64 m) }
+fn U mk() { DynamicArray<int64> xs = DynamicArray.empty(); xs.add(item: 7i64); return U::A(xs: give xs); }
+type resource M {
+    U state; int64 hits;
+    public ctor make() { this.state = mk(); this.hits = 0i64; }
+    public fn int64 step(int32 argc) {
+        int64 n = 0i64;
+        match (this.state) {
+            case A(xs: a): {
+                a.add(item: 5i64);                 // write THROUGH the alias: the payload itself
+                this.hits = this.hits + 1i64;      // a disjoint sibling field
+                n = a[0] + a[1];                   // read before the write
+                if (argc > 5) { this.state = U::B(p: 1i64, n: 1i64, c: 1i64, m: 0i64); } else { n = n + cast<int64>(a.length()); }
+                this.state = U::B(p: n, n: 1i64, c: 1i64, m: 0i64);   // the transition, nothing read after
+            }
+            case B(p: p, n: q, c: c, m: m): { n = p; }
+        };
+        return n;
+    }
+}
+fn int32 main() { int32 argc = knob(); M m = M.make(); int64 r = m.step(argc: argc); return cast<int32>(r + m.step(argc: argc)); }
+fn int32 knob() { return 3; }

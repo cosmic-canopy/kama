@@ -5802,7 +5802,12 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // built, and ran (tests/xfail/scope_op_field_leak).
         const bool qualified = v->qualifier && !v->qualifier->empty();
         // A ref/out parameter is a pointer in C; reads dereference it.
-        if (!qualified && _refParams.count(nm)) { recordRef(bindingKeyOf(nm), v); return "(*" + kName(nm) + ")"; }
+        if (!qualified && _refParams.count(nm)) {
+            // A borrowed-`match` alias whose subject was written since is dead (KR-181); `checkNotMoved` says so.
+            if (_borrowedMatchBindings.count(nm) && v != _writeTarget) checkNotMoved(nm, v->line);
+            recordRef(bindingKeyOf(nm), v);
+            return "(*" + kName(nm) + ")";
+        }
         // An unqualified name that is a field of the enclosing class (or an
         // ancestor) and not a local/param resolves to self->[__base.]…field.
         if (!qualified && _currentClass && !_localTypes.count(nm)) {
@@ -6804,27 +6809,48 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
 // `c.f` too, so a disjoint sibling field is told apart. A method call uses its RECEIVER whole (`c.g()` may touch
 // any field of `c`), an element uses its container, and an argument, an index or an operand is a use of its own.
 // A nested `spawn` is skipped: what a second child borrows is judged by the children's disjointness rule.
-void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn)
+void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn,
+                              bool writesOnly)
 {
     std::function<void(SharedExpression, int)> E;
     std::function<void(SharedStatement)> S;
+    auto wrote = [&](SharedExpression t, int ln) {   // a write's target, at its widest nameable extent
+        std::vector<std::string> p = placePath(t);
+        if (!p.empty()) fn(p, ln);
+    };
     E = [&](SharedExpression e, int ln) {
         if (!e) return;
         ASTNode* n = e.get();
         if (n->line) ln = n->line;
         if (dynamic_cast<IdentifierNode*>(n) || dynamic_cast<ThisAccessNode*>(n)) {
+            if (writesOnly) return;
             std::vector<std::string> p = placePath(e);
             if (!p.empty()) fn(p, ln);
         } else if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
-            std::vector<std::string> p = placePath(e);
+            std::vector<std::string> p = writesOnly ? std::vector<std::string>() : placePath(e);
             if (!p.empty()) fn(p, ln); else E(ma->expression, ln);
         } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
-            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) E(ma->expression, ln);
-            if (inv->args) for (auto& a : *inv->args) if (a) E(a->expression, ln);
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
+                if (writesOnly && ma->identifier && ma->identifier->value) {   // a non-`const fn` writes its receiver
+                    std::string cls = exprClass(ma->expression);
+                    if (!cls.empty() && _classes.count(cls))
+                        if (MethodInfo* mi = findMethod(&_classes[cls], *ma->identifier->value, nullptr))
+                            if (!mi->isConst) wrote(ma->expression, ln);
+                }
+                E(ma->expression, ln);
+            }
+            if (inv->args) for (auto& a : *inv->args) if (a) {
+                if (writesOnly && a->modifier && a->modifier->value
+                    && (*a->modifier->value == "ref" || *a->modifier->value == "out"))
+                    wrote(a->expression, ln);
+                E(a->expression, ln);
+            }
         } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
             E(ea->expression ? ea->expression : std::static_pointer_cast<ExpressionNode>(ea->identifier), ln);
             if (ea->expressionlist) for (auto& x : *ea->expressionlist) E(x, ln);
-        } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) { E(as->unaryExpression, ln); E(as->expression, ln);
+        } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
+            if (writesOnly) wrote(as->unaryExpression, ln);
+            E(as->unaryExpression, ln); E(as->expression, ln);
         } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) { E(b->LHS, ln); E(b->RHS, ln);
         } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) { E(l->LHS, ln); E(l->RHS, ln);
         } else if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) { E(t->condition, ln); E(t->LHS, ln); E(t->RHS, ln);
@@ -6832,9 +6858,9 @@ void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const
         } else if (auto* bc = dynamic_cast<BitcastNode*>(n)) { E(bc->unaryExpression, ln);
         } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) { E(ad->operand, ln);
         } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) { E(su->expression, ln);
-        } else if (auto* pre = dynamic_cast<PreIncrDecrNode*>(n)) { E(pre->expression, ln);
-        } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) { E(po->expression, ln);
-        } else if (auto* h = dynamic_cast<HandoffNode*>(n)) { E(h->value, ln);
+        } else if (auto* pre = dynamic_cast<PreIncrDecrNode*>(n)) { if (writesOnly) wrote(pre->expression, ln); E(pre->expression, ln);
+        } else if (auto* po = dynamic_cast<PostIncrDecrNode*>(n)) { if (writesOnly) wrote(po->expression, ln); E(po->expression, ln);
+        } else if (auto* h = dynamic_cast<HandoffNode*>(n)) { if (writesOnly && h->isGive) wrote(h->value, ln); E(h->value, ln);
         } else if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
             if (oc->args) for (auto& a : *oc->args) if (a) E(a->expression, ln);
         } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
@@ -19493,8 +19519,69 @@ void CEmitter::checkNotMoved(const std::string& cVar, int line)
     // "moved" — the storage is valid either way, so using it is fine. A real `give` still sets Moved, so
     // use-after-move on a filled slot is still caught.
     if (it != _moveState.end() && it->second == MoveState::MaybeMoved && _slotDeclared.count(cVar) && !_slotGiven.count(cVar)) return;
-    if (it != _moveState.end() && it->second != MoveState::NotMoved)
+    if (it != _moveState.end() && it->second != MoveState::NotMoved) {
+        auto st = _staleAlias.find(cVar);
+        if (st != _staleAlias.end() && _borrowedMatchBindings.count(cVar)) {
+            unsupported(("`" + cVar + "` borrows the payload of `" + st->second.first + "`, which the write at line "
+                         + std::to_string(st->second.second) + " replaced" + (it->second == MoveState::MaybeMoved
+                             ? " on some paths" : "") + " — the old payload is gone. Read what you need from `"
+                         + cVar + "` before writing `" + st->second.first + "`, or `match` it again").c_str(), line);
+            return;
+        }
         unsupported(("use of `" + cVar + "` after it was moved (a `give` consumed it)").c_str(), line);
+    }
+}
+
+// A write to `target` that overlaps the subject of an enclosing borrowing `match` replaces the payload its
+// owning aliases point into: `case A(xs: a): { u = U::B(…); n = a[0]; }` read freed memory (exit 139). The
+// write itself stays legal — `state = …` is the commonest arm there is — so it is the alias that dies: it
+// reads as MOVED from here, and the move tracker's branch merge and loop rearm decide every later read.
+void CEmitter::noteSubjectWrite(SharedExpression target, int line)
+{
+    std::vector<std::string> p = placePath(target);
+    if (p.empty()) return;
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        for (auto& pa : _scopes[i].payloadAliases)
+            if (placesConflict(pa.subject, p)) {
+                _moveState[pa.alias] = MoveState::Moved;
+                _staleAlias[pa.alias] = { placeText(pa.subject), line };
+            }
+}
+
+// The one order `noteSubjectWrite` cannot see: inside a LOOP, a use that comes first in the text runs after
+// the write on the next pass (`while (c) { n = a[0]; u = U::B(…); }`). So an outermost loop of the arm that
+// both writes the subject and uses the alias — its condition included — is refused at the write. A loop that
+// does only one of the two cannot hold a nested loop that does both, so only outermost loops are checked.
+void CEmitter::rejectSubjectWriteInLoop(SharedStatement armBody, const std::vector<std::string>& subject,
+                                        const std::string& alias)
+{
+    std::function<void(SharedStatement)> S = [&](SharedStatement st) {
+        ASTNode* n = st.get();
+        if (!n) return;
+        if (dynamic_cast<WhileNode*>(n) || dynamic_cast<DoWhileNode*>(n) || dynamic_cast<ForNode*>(n)
+            || dynamic_cast<ForEachNode*>(n)) {
+            int wLine = 0, uLine = 0;
+            forEachPlaceUse(st, [&](const std::vector<std::string>& p, int ln) {
+                if (!wLine && placesConflict(subject, p)) wLine = ln; }, /*writesOnly=*/true);
+            if (!wLine) return;
+            forEachPlaceUse(st, [&](const std::vector<std::string>& p, int ln) {
+                if (!uLine && !p.empty() && p[0] == alias) uLine = ln; });
+            if (uLine)
+                unsupported(("`" + placeText(subject) + "` is written inside this loop while `" + alias + "`, which "
+                             "borrows its payload, is used in the same loop (line " + std::to_string(uLine) + ") — "
+                             "the next pass would use `" + alias + "` after the payload it points into was "
+                             "replaced. Copy what the loop needs out of `" + alias + "` before it, or `match` "
+                             "again inside it").c_str(), wLine);
+        } else if (auto* blk = dynamic_cast<BlockNode*>(n)) {
+            if (blk->statements) for (auto& x : *blk->statements) S(x);
+        } else if (auto* f = dynamic_cast<IfNode*>(n)) { S(f->ifStatement); S(f->elseStatement);
+        } else if (auto* bw = dynamic_cast<BorrowNode*>(n)) { S(bw->body);
+        } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) { S(sc->body);
+        } else if (auto* m = dynamic_cast<MatchNode*>(n)) {
+            if (m->arms) for (auto& arm : *m->arms) if (arm && arm->block) S(arm->block);
+        }
+    };
+    S(armBody);
 }
 
 // The source of a move hand-off. A bare move-only local -> its name (caller marks it moved).
@@ -25978,6 +26065,7 @@ void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
     // The window's freeze rides this helper for the same reason the const rules do: it is on every write
     // path there is. Independent of the const arms below, so a write that is both gets both sentences.
     rejectFrozenWrite(target, srcLine);
+    noteSubjectWrite(target, srcLine);
     recordStaticWrite(target);   // the foreign-entry walk's write fact rides the same "every write path" helper
     std::string root = rootBinding(target);
     // A comptime parameter is a compile-time value, not storage — `F = 3` used to emit
@@ -29018,9 +29106,17 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     borrowedHere.push_back(bn);
                     _refParams.insert(bn);                                   // reads/writes go through the alias
                     _refBindingOperand[bn] = m->subject;                     // ...into the subject's payload
+                    std::vector<std::string> subjPlace = placePath(m->subject);
+                    if (!subjPlace.empty()) {
+                        _scopes.back().payloadAliases.push_back({ subjPlace, bn });
+                        _moveState[bn] = MoveState::NotMoved;   // tracked from here, so a branch merge sees it
+                    }
                     if (isConstReceiver(m->subject)) _constLocals.insert(bn);   // a const subject: a const alias
                 }
                 _localTypes[bn] = (isClass(bcty) || isInterface(bcty) || isSigType(bcty)) ? bcty : "";
+                if (!_scopes.empty() && !_scopes.back().payloadAliases.empty()
+                    && _scopes.back().payloadAliases.back().alias == bn && a->block)
+                    rejectSubjectWriteInLoop(a->block, _scopes.back().payloadAliases.back().subject, bn);
                 // …and the TYPE NODE, which `_localTypes` deliberately drops (it keeps classes only, so a
                 // primitive payload records ""). Without it the classifier cannot answer for a payload
                 // binding, and milestone 6's rule did not hold through one: `int8 n = match (big()) { case
@@ -39664,7 +39760,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // finding ⑤ rides — `a.add(item: 3)` can realloc, and the window's alias would be left pointing
         // at the freed buffer. `const fn` is what makes this precise rather than "any method call": the
         // stdlib marks 247 of them, so a read inside a window stays free.
-        if (rmi && !rmi->isConst && !recvPlace.empty()) rejectFrozenWrite(receiver, call->line);
+        if (rmi && !rmi->isConst && !recvPlace.empty()) { rejectFrozenWrite(receiver, call->line); noteSubjectWrite(receiver, call->line); }
         if (rmi && !rmi->isConst && !recvPlace.empty() && call->args) {
             for (auto& a : *call->args) {
                 if (!a || !a->name || !a->name->value) continue;
