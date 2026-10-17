@@ -785,25 +785,6 @@ Size **L**: (1a) + (2) are M, and decision (4)'s attribute is included.
 Decision (2) is measured and decided: **a location in every build**. Commits: `PanicInfo` and the hook; a location
 on every trap; the caller-location attribute (its spelling settled when built).
 
-<a id="s2-enum-copy-order"></a>
-
-### An enum's copyability depends on the order of its payloads (KR-184)
-
-Found surveying KR-110 and confirmed on `0.9.630`. With `P` a non-Copyable resource,
-
-```kama
-type enum J { Null, Arr(DynamicArray<J> items), Obj(DynamicArray<P> ps) }
-```
-
-fails inside dynamic_array.kama with "`J` has no `copy` method — use `give` to move it". With the two payloads
-swapped it builds, and it also builds when `P` implements `Copyable`.
-
-Cause: `variantCopyable` (kama.cemit.cpp ~19114) asks for an unbaked payload's `fieldCType`. That registers
-`DynamicArray<J>` partway through the check and bakes in the provisional "J copies" answer, which turns out false.
-
-Fix: judge an unbaked payload with `declaredCopyable(f.type)`, and never register an instance during the check. Add
-the failing order to `tests/enum_copy_settled`. Size **S**. The JSON value tree (KR-110) has exactly this shape.
-
 <a id="s2-fnptr-type-arg"></a>
 
 ### An `fnptr` type is not a type argument (KR-107)
@@ -2062,7 +2043,7 @@ What exists today:
 
 Found on the way and filed separately:
 
-- **KR-184:** a recursive enum's copyability depends on payload order, and the tree has exactly that shape.
+- A recursive enum's copyability depended on payload order, and the tree has exactly that shape — fixed `0.9.636`.
 - **KR-185:** the integer reader accepts invalid numbers and aborts on overflow, and deep nesting overflows the stack.
 
 Two more constraints:
@@ -2075,7 +2056,7 @@ Two more constraints:
 Sites: json.kama `numToken`/`readInt`/`readUint`/`skipValue` (~334–555); the prelude's `Serializer` (~360) and
 `Deserializer` (~520).
 
-Steps, after KR-184, KR-185 and KR-186 (`OrderedMap`):
+Steps, after KR-185 and KR-186 (`OrderedMap`):
 
 1. Add `JsonValue`, a Copyable `JsonMember { key, value }`, and `JsonNumber` in json.kama.
 2. Accessors: `has`/`getRef`/`get`/`at`/`length`/`members()`, and `asInt64`/`asUint64`/`asFloat64` returning
@@ -2089,7 +2070,7 @@ Steps, after KR-184, KR-185 and KR-186 (`OrderedMap`):
    - a KBIN-named round trip;
    - an xfail for the positional reader.
 
-Size **M**, plus S each for KR-184 and KR-185.
+Size **M**, plus S for KR-185.
 
 **Decided 2026-10-16** (the maintainer; decision 2 CHANGED from the survey):
 

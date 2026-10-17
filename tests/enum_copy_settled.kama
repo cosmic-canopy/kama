@@ -40,6 +40,14 @@ type resource Tok implements Copyable<This>(bare: give) {
 }
 type enum H { T(Tok t), N }
 
+// KR-184: a collection of itself FIRST, then a collection of something that does not copy. The first payload used
+// to register `DynamicArray<J>` mid-answer, while `J` still "copied", and its `copy` failed inside the stdlib; with
+// the payloads swapped it built. Both orders now judge from what each payload declares, in the enum's own scope.
+type enum J { Null, Arr(DynamicArray<J> items), Obj(DynamicArray<Plain> ps) }
+type enum K { Null, Obj(DynamicArray<Plain> ps), Arr(DynamicArray<K> items) }
+// ...and when every payload copies, so does the enum: `copy` deep-copies through both collections.
+type enum M { Null, Arr(DynamicArray<M> items), Obj(DynamicArray<Tok> ts) }
+
 fn int32 main() {
     Box b = Box.make();
     b.add(e: E::A);
@@ -57,5 +65,25 @@ fn int32 main() {
     H c = copy a;
     int32 got = match (c) { case T(t: x): x.get(); case N: 0; };
     if (got != 5 || copies != 1) { return 3; }
+
+    DynamicArray<Plain> ps = DynamicArray.empty();
+    ps.add(item: Plain.make(v: 1));
+    J j = J::Obj(ps: give ps);
+    DynamicArray<J> js = DynamicArray.empty();
+    js.add(item: give j);
+    J outer = J::Arr(items: give js);
+    int32 nj = match (outer) { case Arr(items: xs): cast<int32>(xs.length()); case Obj(ps: q): -1; case Null: -2; };
+    K k = K::Null;
+    bool kNull = match (k) { case Null: true; case Obj(ps: q): false; case Arr(items: xs): false; };
+    if (nj != 1 || !kNull) { return 4; }
+
+    DynamicArray<Tok> ts = DynamicArray.empty();
+    ts.add(item: Tok.make(id: 9));
+    DynamicArray<M> ms = DynamicArray.empty();
+    ms.add(item: M::Obj(ts: give ts));
+    M m = M::Arr(items: give ms);
+    M m2 = copy m;
+    int32 inner = match (m2) { case Arr(items: xs): cast<int32>(xs.length()); case Obj(ts: q): -1; case Null: -2; };
+    if (inner != 1 || copies != 2) { return 5; }
     return 0;
 }

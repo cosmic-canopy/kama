@@ -19171,7 +19171,19 @@ bool CEmitter::variantCopyable(const ClassInfo& c)
     for (const auto& v : c.variants)
         for (const auto& f : v.payload)
             if (ok) {
-                const std::string ft = fieldCType(c.name, f);
+                // An UNBAKED payload is judged from what its type DECLARES, substituted in this instance. Computing
+                // its C type registers the instance, and that registration asks this very question mid-answer:
+                // in `type enum J { Arr(DynamicArray<J> items), Obj(DynamicArray<P> ps) }` the first payload
+                // baked `DynamicArray<J>` while `J` still "copied", and its `copy` then failed inside the stdlib —
+                // with the payloads swapped it built (KR-184).
+                if (f.cTypeBaked.empty()) {
+                    // In the enum's own scope, so `P` resolves as its declaration wrote it — not under whichever
+                    // instance asked (a `DynamicArray<J>` registration runs in `std::collections`).
+                    ScopedClassHome home(*this, c.name);
+                    if (!declaredCopyable(deepSubstType(f.type))) ok = false;
+                    continue;
+                }
+                const std::string& ft = f.cTypeBaked;
                 if (_classes.count(ft) ? !payloadCopyable(ft) : !declaredCopyable(f.type)) ok = false;
             }
     _variantCopyVisiting.erase(c.name);
