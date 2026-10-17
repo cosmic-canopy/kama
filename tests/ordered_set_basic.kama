@@ -1,0 +1,30 @@
+// KR-186: `OrderedSet<K>` — `OrderedMap<K, Unit>`, as `Set` wraps `Map`: membership in O(1), iteration in the order
+// members were first added, `first()`/`last()`, `moveToEnd`, `compact()`. Adding a member already present keeps its
+// place. Each check adds its own bit.
+import { std::collections::OrderedSet };
+
+fn string listed(const ref OrderedSet<string> s) {
+    string text = "";
+    foreach (string k in s) { text = text + k + ","; }
+    return text;
+}
+
+fn int32 main() {
+    int32 r = 0;
+    OrderedSet<string> s = OrderedSet.withCapacity(capacity: 2);
+    s.add(key: "b"); s.add(key: "a"); s.add(key: "c"); s.add(key: "a");
+    if (listed(s: s) == "b,a,c," && s.length() == 3) { r = r + 1; }                     // order kept, no duplicate
+    if (s.contains(key: "a") && !s.contains(key: "z")) { r = r + 2; }
+    if (s.remove(key: "a") && !s.remove(key: "a") && listed(s: s) == "b,c,") { r = r + 4; }
+    bool moved = s.moveToEnd(key: "b");
+    Optional<string> f = s.first(); Optional<string> l = s.last();
+    bool oldest = match (give f) { case Some(value: k): k == "c"; case None: false; };
+    bool newest = match (give l) { case Some(value: k): k == "b"; case None: false; };
+    bool ends = oldest && newest;
+    if (moved && ends) { r = r + 8; }
+    s.compact(); s.add(key: "d");
+    if (listed(s: s) == "c,b,d,") { r = r + 16; }
+    s.clear();
+    if (s.length() == 0 && listed(s: s) == "") { r = r + 32; }
+    return r - 10;   // 63 - 10 = 53
+}

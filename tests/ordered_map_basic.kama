@@ -1,0 +1,109 @@
+// KR-186: `OrderedMap<K, V>`'s surface, one check per member — it mirrors `Map` and adds what insertion order makes
+// answerable: `first()`/`last()`, `moveToEnd`, and `compact()`. Each check adds its own bit, so a failure names
+// itself in the exit code. ordered_map_model.kama checks the bookkeeping under random operations; this one is the
+// documented behaviour, member by member, including an arena-backed map and an LRU built from the three.
+import {
+    std::collections::OrderedMap, std::collections::Entry, std::collections::DefaultHasher,
+    std::collections::Arena, std::collections::BumpAllocator,
+};
+
+type value Counter { public int32 n; public ctor of(int32 n) { this.n = n; } public fn void bump() { this.n = this.n + 1; } }
+
+// An LRU of capacity 3: a hit moves the key to the end, a miss at capacity evicts the oldest.
+fn int32 lru() {
+    OrderedMap<int32, int32> c = OrderedMap.empty();
+    int32 evicted = 0;
+    InlineArray<int32>#(7) uses = [1, 2, 3, 1, 4, 2, 5];
+    foreach (int32 k in uses) {
+        if (c.contains(key: k)) { bool moved = c.moveToEnd(key: k); continue; }
+        if (c.length() == 3) {
+            int32 old = match (c.first()) { case Some(value: o): o; case None: 0; };
+            Optional<int32> gone = c.remove(key: old);
+            evicted = evicted * 10 + old;
+        }
+        c.put(key: k, value: k * 100);
+    }
+    int32 order = 0;
+    foreach (int32 k in c) { order = order * 10 + k; }
+    return evicted == 314 && order == 425 ? 1 : 0;   // 3 then 1 then 4 evicted (2 was touched); 4,2,5 remain
+}
+
+fn int32 main() {
+    int32 r = 0;
+    OrderedMap<string, int32> m = OrderedMap.withCapacity(capacity: 4);
+    m.put(key: "zeta", value: 1); m.put(key: "alpha", value: 2); m.put(key: "mid", value: 3);
+
+    // 1: iteration is insertion order, not hash or key order
+    string seen = "";
+    foreach (string k in m) { seen = seen + k + ","; }
+    if (seen == "zeta,alpha,mid,") { r = r + 1; }
+
+    // 2: a put on a present key replaces the value and keeps the place
+    m.put(key: "zeta", value: 10);
+    string again = "";
+    foreach (Entry<string, int32> e in m.entries()) { int32 v = e.value(); again = again + e.key() + "=${v},"; }
+    if (again == "zeta=10,alpha=2,mid=3,") { r = r + 2; }
+
+    // 4: get (a copy), getRef (in place), contains, length
+    int32 g = match (m.get(key: "alpha")) { case Some(value: v): v; case None: 0; };
+    if (g == 2 && m.getRef(key: "mid") == 3 && m.contains(key: "mid") && !m.contains(key: "nope") && m.length() == 3) { r = r + 4; }
+
+    // 8: first/last, and moveToEnd makes a key the newest
+    bool ends = match (m.first()) { case Some(value: k): k == "zeta"; case None: false; }
+             && match (m.last()) { case Some(value: k): k == "mid"; case None: false; };
+    bool moved = m.moveToEnd(key: "zeta") && !m.moveToEnd(key: "nope");
+    bool nowLast = match (m.last()) { case Some(value: k): k == "zeta"; case None: false; }
+                && match (m.first()) { case Some(value: k): k == "alpha"; case None: false; };
+    if (ends && moved && nowLast) { r = r + 8; }
+
+    // 16: remove hands the value back and leaves the order of the rest; a miss is None
+    int32 taken = match (m.remove(key: "alpha")) { case Some(value: v): v; case None: 0; };
+    bool miss = match (m.remove(key: "alpha")) { case Some(value: _): false; case None: true; };
+    string rest = "";
+    foreach (string k in m) { rest = rest + k + ","; }
+    if (taken == 2 && miss && rest == "mid,zeta," && m.length() == 2) { r = r + 16; }
+
+    // 32: compact keeps the order; a put after it appends
+    m.compact();
+    m.put(key: "new", value: 7);
+    string after = "";
+    foreach (int32 v in m.values()) { after = after + "${v},"; }
+    if (after == "3,10,7,") { r = r + 32; }
+
+    // 64: values in place — valuesMut and getRefMut write, valuesConst reads
+    OrderedMap<string, Counter> cs = OrderedMap.empty();
+    cs.put(key: "a", value: Counter.of(n: 1)); cs.put(key: "b", value: Counter.of(n: 5));
+    foreach (ref Counter c in cs.valuesMut()) { c.bump(); }
+    cs.getRefMut(key: "a").bump();
+    int32 sum = 0;
+    foreach (const ref Counter c in cs.valuesConst()) { sum = sum * 10 + c.n; }
+    if (sum == 36) { r = r + 64; }
+
+    // 128: a deep copy keeps the order and is independent
+    OrderedMap<string, int32> c2 = copy m;
+    c2.put(key: "mid", value: 99);
+    int32 orig = match (m.get(key: "mid")) { case Some(value: v): v; case None: 0; };
+    string copied = "";
+    foreach (string k in c2) { copied = copied + k + ","; }
+    if (orig == 3 && copied == "mid,zeta,new,") { r = r + 128; }
+
+    // 256: clear empties it; it is usable after
+    m.clear();
+    bool empty = m.length() == 0 && match (m.first()) { case Some(value: _): false; case None: true; };
+    m.put(key: "x", value: 1);
+    if (empty && m.length() == 1) { r = r + 256; }
+
+    // 512: an arena-backed map — every buffer, the index included, drawn from the arena
+    Arena arena = Arena.make(capacity: 65536);
+    OrderedMap<int32, int32, DefaultHasher, BumpAllocator> am = OrderedMap.withAllocator(allocator: arena.handle());
+    int32 i = 0;
+    while (i < 100) { am.put(key: (i * 37) % 100, value: i); i = i + 1; }
+    i = 0;
+    while (i < 100) { if (i % 3 == 0) { Optional<int32> x = am.remove(key: i); } i = i + 1; }
+    int32 firstKey = match (am.first()) { case Some(value: k): k; case None: 0 - 1; };
+    if (am.length() == 66 && firstKey == 37) { r = r + 512; }
+
+    // 1024: the LRU
+    r = r + lru() * 1024;
+    return r - 1985;   // 2047 - 1985 = 62 when every bit is set
+}

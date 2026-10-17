@@ -1,0 +1,66 @@
+import { OrderedMap, MapKeyIter, Hasher };
+export { OrderedSet };
+
+// An insertion-ordered hash set over `K: Hashable + Equatable` (KR-186) — `OrderedMap<K, Unit>`, as `Set` wraps `Map`:
+// O(1) membership, iteration in the order members were first added, `first()`/`last()` (the oldest and the newest)
+// and `moveToEnd` for an LRU. Removal leaves a hole that `compact()` (or the next growth) reclaims — see `OrderedMap`.
+type resource OrderedSet<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
+        implements Iterable<K> when [K: Copyable<K>],
+        Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>, A: default],
+        Sendable when [K: Sendable, H: Sendable, A: Sendable] {
+    OrderedMap<K, Unit, H, A> m;
+
+    public default ctor empty() when [A: default] { }
+    public ctor withCapacity(isize capacity) when [A: default] {
+        OrderedMap<K, Unit, H, A> inner = OrderedMap.withCapacity(capacity: capacity);
+        this.m = give inner;
+    }
+    public ctor withAllocator(A allocator) {
+        OrderedMap<K, Unit, H, A> inner = OrderedMap.withAllocator(allocator: allocator);
+        this.m = give inner;
+    }
+    public ctor withCapacityAndAllocator(A allocator, isize capacity) {
+        OrderedMap<K, Unit, H, A> inner = OrderedMap.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
+        this.m = give inner;
+    }
+
+    // Adding a member already present keeps its place (a set's `put` of an equal key).
+    public fn void add(K key) { this.m.put(key: give key, value: Unit::Unit); }
+    public const fn bool contains(const ref K key) { return this.m.contains(key: key); }
+    public fn bool remove(const ref K key) {
+        Optional<Unit> hit = this.m.remove(key: key);
+        return match (hit) { case Some(value: u): true; case None: false; };
+    }
+    public fn bool moveToEnd(const ref K key) { return this.m.moveToEnd(key: key); }
+    public const fn Optional<K> first() when [K: Copyable<K>] { return this.m.first(); }
+    public const fn Optional<K> last() when [K: Copyable<K>] { return this.m.last(); }
+    public const fn isize length() { return this.m.length(); }
+    public fn void clear() { this.m.clear(); }
+    public fn void reserve(isize n) { this.m.reserve(n: n); }
+    public fn void compact() { this.m.compact(); }
+    public const fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
+
+    // A JSON array of the members, in insertion order; reading one back `add`s each, in document order.
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, K: Copyable<K>] {
+        w.beginArray(count: cast<usize>(this.m.length()));
+        foreach (K k in this.m) {
+            Result<Unit, Owned<Error>> __sr = k.serialize(w: w);
+            match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        }
+        w.endArray();
+        return Result::Ok(value: Unit::Unit);
+    }
+    public ctor Result<OrderedSet<K,H,A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, A: default] {
+        r.beginArray();
+        isize index = 0;
+        while (r.moreElems()) {
+            Result<K, Owned<Error>> __er = K.deserialize(r: r);
+            match (give __er) {
+                case Err(error: e): { return Result::Err(error: DeError::inElement(error: give e, index: index)); }
+                case Ok(value: v):  { this.add(key: give v); }
+            };
+            index = index + 1;
+        }
+        return Result::Ok(value: give this);
+    }
+}

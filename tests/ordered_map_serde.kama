@@ -1,0 +1,82 @@
+// KR-186: an `OrderedMap` serializes in INSERTION order — which is the point of the type: a document read and written
+// back keeps its key order, where `Map` sorts its keys (a hash order is no order). Keys that are all text write a
+// keyed object, `{"zeta":1,"alpha":2}`; any other key writes `Map`'s pair array; KBIN carries the pair array too. A
+// document that repeats a key keeps the key's FIRST position and takes its LAST value (Python's `dict`, and the typed
+// reader's last-wins). `OrderedSet` writes its members as an array, in order.
+import {
+    std::collections::OrderedMap, std::collections::OrderedSet, std::collections::DynamicArray, std::memory::Owned,
+    std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinNamedBuffer, std::serialization::binary::kbin::deserializeKbinNamedBuffer,
+};
+
+@generate(Serializable, Deserializable, Hashable, Equatable)
+type value Pt { @field public int32 x; @field public int32 y; public ctor of(int32 x, int32 y) { this.x = x; this.y = y; } }
+
+@generate(Serializable, Deserializable)
+type resource Doc {
+    @field(default) OrderedMap<string, int32> meta = OrderedMap.empty();
+    @field(default) OrderedSet<string> tags = OrderedSet.empty();
+    public ctor make() { }
+    public fn void fill() {
+        this.meta.put(key: "title", value: 1); this.meta.put(key: "author", value: 2);
+        this.tags.add(key: "kama"); this.tags.add(key: "c"); this.tags.add(key: "kama");
+    }
+}
+
+fn string json(Serializable v) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: v);
+    return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
+}
+
+fn int32 main() {
+    int32 r = 0;
+    OrderedMap<string, int32> m = OrderedMap.empty();
+    m.put(key: "zeta", value: 1); m.put(key: "alpha", value: 2); m.put(key: "mid", value: 3);
+    Optional<int32> gone = m.remove(key: "alpha");
+    m.put(key: "alpha", value: 4);                                       // re-added: now the newest
+
+    // 1: the keyed object, in insertion order (a removed and re-added key is at the end)
+    string text = json(v: m);
+    if (text == "{\"zeta\":1,\"mid\":3,\"alpha\":4}") { r = r + 1; }
+
+    // 2: read back in document order, and written again byte for byte
+    Result<OrderedMap<string, int32>, Owned<Error>> back = deserializeJsonBuffer::<OrderedMap<string, int32>>(src: copy text);
+    OrderedMap<string, int32> b = match (give back) { case Ok(value: v): give v; case Err(error: _): OrderedMap.empty(); };
+    if (json(v: b) == text) { r = r + 2; }
+
+    // 4: a repeated key keeps its first position and takes its last value
+    Result<OrderedMap<string, int32>, Owned<Error>> dup = deserializeJsonBuffer::<OrderedMap<string, int32>>(src: "{\"a\":1,\"b\":2,\"a\":3}");
+    OrderedMap<string, int32> d = match (give dup) { case Ok(value: v): give v; case Err(error: _): OrderedMap.empty(); };
+    if (json(v: d) == "{\"a\":3,\"b\":2}") { r = r + 4; }
+
+    // 8: integer keys are text too, written in insertion order (not numerically, as `Map` sorts them)
+    OrderedMap<int32, string> ports = OrderedMap.empty();
+    ports.put(key: 443, value: "https"); ports.put(key: 80, value: "http");
+    if (json(v: ports) == "{\"443\":\"https\",\"80\":\"http\"}") { r = r + 8; }
+
+    // 16: a key that is not text writes the pair array, in order, and reads back
+    OrderedMap<Pt, int32> grid = OrderedMap.empty();
+    grid.put(key: Pt.of(x: 2, y: 0), value: 20); grid.put(key: Pt.of(x: 1, y: 0), value: 10);
+    string pairs = json(v: grid);
+    Result<OrderedMap<Pt, int32>, Owned<Error>> gb = deserializeJsonBuffer::<OrderedMap<Pt, int32>>(src: copy pairs);
+    OrderedMap<Pt, int32> g2 = match (give gb) { case Ok(value: v): give v; case Err(error: _): OrderedMap.empty(); };
+    Optional<Pt> gf = g2.first();
+    bool firstIs2 = match (gf) { case Some(value: p): p.x == 2; case None: false; };
+    if (pairs == "[{\"key\":{\"x\":2,\"y\":0},\"value\":20},{\"key\":{\"x\":1,\"y\":0},\"value\":10}]" && firstIs2) { r = r + 16; }
+
+    // 32: KBIN — the pair array, order kept through a round trip
+    Result<DynamicArray<uint8>, Owned<Error>> kb = serializeKbinNamedBuffer(v: m);
+    DynamicArray<uint8> bytes = match (give kb) { case Ok(value: v): give v; case Err(error: _): DynamicArray.empty(); };
+    Result<OrderedMap<string, int32>, Owned<Error>> kr = deserializeKbinNamedBuffer::<OrderedMap<string, int32>>(src: give bytes);
+    OrderedMap<string, int32> k2 = match (give kr) { case Ok(value: v): give v; case Err(error: _): OrderedMap.empty(); };
+    if (json(v: k2) == text) { r = r + 32; }
+
+    // 64: OrderedSet — an array of members, in order; and both as fields of a derived record
+    Doc doc = Doc.make();
+    doc.fill();
+    string dj = json(v: doc);
+    Result<Doc, Owned<Error>> db = deserializeJsonBuffer::<Doc>(src: copy dj);
+    Doc d2 = match (give db) { case Ok(value: v): give v; case Err(error: _): Doc.make(); };
+    if (dj == "{\"meta\":{\"title\":1,\"author\":2},\"tags\":[\"kama\",\"c\"]}" && json(v: d2) == dj) { r = r + 64; }
+    return r - 70;   // 127 - 70 = 57
+}

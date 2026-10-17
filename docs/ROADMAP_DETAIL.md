@@ -1536,7 +1536,7 @@ Two more constraints:
 Sites: json.kama `numToken`/`readInt`/`readUint`/`skipValue` (~334–555); the prelude's `Serializer` (~360) and
 `Deserializer` (~520).
 
-Steps, after KR-186 (`OrderedMap`):
+Steps (`OrderedMap` shipped in `0.9.661`):
 
 1. Add `JsonValue`, a Copyable `JsonMember { key, value }`, and `JsonNumber` in json.kama.
 2. Accessors: `has`/`getRef`/`get`/`at`/`length`/`members()`, and `asInt64`/`asUint64`/`asFloat64` returning
@@ -1559,7 +1559,7 @@ Size **M**.
      cannot be built.
    - (b) Three variants: int64, uint64, float64.
    - (c) float64 only, which loses integers past 2^53.
-2. Object storage: **(c), a new general `std::collections::OrderedMap<K, V>`** (KR-186): `Object` is
+2. Object storage: **(c), a new general `std::collections::OrderedMap<K, V>`** (shipped `0.9.661`): `Object` is
    `OrderedMap<string, JsonValue>`. The surveyed (a), a linear list, is O(n²) when a big object is read key by key;
    production libraries index (.NET's `JsonObject` keeps the list and builds a dictionary past 9 properties;
    serde_json's ordered mode is `IndexMap`). Order still round-trips; a duplicate key keeps its first position and
@@ -1976,45 +1976,12 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
   `std::fs`/`std::io` for asset + scene load.
 - **Container / data-structure reach — honest non-goals.** The core containers ship (`DynamicArray`/`FixedArray`/
   `InlineArray`/`string`, `Map`/`Set`, `Deque`, `PriorityQueue`, `SlotMap`, `BitSet`, `SortedMap`/`SortedSet`,
-  `View<T>` — see SPEC). Scheduled 2026-10-16: the insertion-ordered `OrderedMap`/`OrderedSet` (KR-186) and a
-  bounded inline vector (KR-187). **Not** planned as stdlib: general **linked lists** (mostly a cache anti-pattern in
+  `OrderedMap`/`OrderedSet`, `View<T>` — see SPEC). Scheduled 2026-10-16: a bounded inline vector (KR-187). **Not** planned as stdlib: general **linked lists** (mostly a cache anti-pattern in
   data-oriented engines — the useful form is an intrusive free-list / LRU); raw **BSTs** (subsumed by the sorted
   map); **spatial trees** (quadtree/octree/BVH/k-d — engine-specific); **a multimap or multiset** (decided
   2026-10-16: `Map<K, DynamicArray<V>>` answers it, and only C++ ships one); **an LRU cache** (decided 2026-10-16:
   `OrderedMap` plus its move-to-end is the whole of it, Java's `LinkedHashMap` precedent). A concurrent map is §6's
   question, not this list's.
-
-<a id="s5-ordered-map"></a>
-
-### An insertion-ordered map and set — `OrderedMap<K, V>` / `OrderedSet<K>` (KR-186)
-
-Scheduled 2026-10-16 with KR-110, whose JSON `Object` is `OrderedMap<string, JsonValue>`. std orders a map two ways
-today: `Map` by hash (no order) and `SortedMap` by key (a B-tree). The third standard order is INSERTION: Java's
-`LinkedHashMap`/`LinkedHashSet`, Python's `dict`, .NET 9's `OrderedDictionary<K, V>`, Rust's `indexmap` crate. It is
-general-purpose — a config that writes back in the order it was read, a JSON object, a registry listed in
-registration order, an LRU (`moveToEnd`) — so it is a std collection, not a JSON detail.
-
-**Shape.** Python's compact dict: an entries array in insertion order plus a hashed index of entry positions, so a
-lookup is O(1) and iteration is the entries array. The surface mirrors `Map` (`put`/`get`/`getRef`/`getRefMut`/
-`remove`/`contains`/`length`, `values`/`valuesMut`/`valuesConst`/`entries`, `Hasher` and `Allocator` parameters,
-serde) plus what order adds: `first`/`last`, and `moveToEnd(key:)`. `put` on an existing key replaces the value and
-keeps the position (Python). `OrderedSet<K>` is the same over keys, as `Set` is to `Map`.
-
-**Decided 2026-10-17** (asked with kama examples; the maintainer refined the first):
-
-1. **Removal is a tombstone, and `remove` never compacts** — it marks the entry dead in O(1), order kept (Python's
-   compact dict). Holes are reclaimed in two places only: an insert that finds the entries array full compacts
-   instead of growing whenever that is enough (Python's rule), and **`compact()`** does it on demand. Rust's
-   `indexmap` has no tombstones — the caller picks `swap_remove` (O(1), reorders) or `shift_remove` (O(n)) per call
-   — and a shifting remove is .NET 9's. The recommendation was automatic compaction with no method ("one way");
-   the maintainer's point carried it: `compact()` does not reach a second state, it chooses WHEN the O(n) cost is
-   paid — the mirror of `reserve()`, which std already offers to move a growth out of the `add` that would pay it.
-   A game frame or an audio callback pays neither inside the critical section, which is why `remove` must never
-   compact on its own either.
-2. **No positional access** — iterate `entries()`, plus `first()`/`last()` and `moveToEnd(key:)`. Python's `dict`
-   and Java's `LinkedHashMap` offer no index, and with tombstones an index is O(n) whenever a hole exists.
-
-Size **M**.
 
 <a id="s5-bounded-vector"></a>
 

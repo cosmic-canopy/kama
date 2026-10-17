@@ -1,0 +1,410 @@
+import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Entry, DynamicArray, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapKeyText, MapKeyReader };
+export { OrderedMap };
+
+// The `index` table is reset with `memset` (every byte 0xFF is the EMPTY position, -1), as `Map` zeroes its tags.
+extern "<string.h>";
+extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
+
+// An insertion-ordered hash map over `K: Hashable + Equatable` -> `V` (KR-186): lookup is O(1) and iteration runs in
+// the order keys were first put — Python's `dict`, Java's `LinkedHashMap`, .NET 9's `OrderedDictionary`. Beside `Map`
+// (hashed, no order) and `SortedMap` (by key), it is the third order a map can keep: a config that writes back in the
+// order it was read, a JSON object, a registry listed as registered, an LRU (`moveToEnd` on use, evict `first()`).
+//
+// The layout is Python's compact dict: the ENTRIES — three parallel buffers, `keys`/`vals`/`live`, written in order at
+// `used` — and an open-addressing INDEX of entry positions, twice the entries' capacity, probed linearly:
+//
+//   index[i]: -1 = EMPTY (ends a probe), -2 = REMOVED (probed past), p >= 0 = the entry at position p.
+//
+// `remove` is O(1) and NEVER moves an entry: it marks the entry dead (a hole iteration skips) and its index slot
+// REMOVED. Holes are reclaimed in exactly two places, so a program decides when their O(n) cost is paid:
+//   - an insert that finds the entries full rebuilds them — compacting in place when at least half are dead, growing
+//     (and compacting on the way) otherwise, so each rebuild frees at least half its capacity and inserts stay
+//     amortized O(1);
+//   - `compact()`, on demand — `reserve()`'s mirror: one moves a growth, the other a compaction, out of the `put` that
+//     would pay it, so a frame or an audio callback pays neither.
+//
+// Invariants: every position below `head` is dead; when the map is not empty, `head` and `used - 1` are live; the
+// index holds `filled` non-EMPTY slots, never more than `cap` — half its size — so a probe always ends.
+//
+// `put` on a key already present replaces the value and keeps the entry's place (Python's semantics), which is what
+// makes a duplicate key in a document keep its first position and take the last value. Move-only by default, like
+// `Map`: it owns every live key and value and drops them at end of life.
+type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
+        implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>], Iterable<K> when [K: Copyable<K>],
+                   ValuesIterable<MapValueIter<V>> when [V: Copyable<V>], ValuesIterableMut<MapValueIterMut<V>>,
+                   ValuesIterableConst<MapValueIterConst<V>>,
+                   EntriesIterable<MapEntryIter<K,V>> when [K: Copyable<K>, V: Copyable<V>],
+                   Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
+                   MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
+                   Sendable when [K: Sendable, V: Sendable, H: Sendable, A: Sendable] {
+    UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> live = null; UnsafePtr<isize> index = null;
+    isize len = 0; isize used = 0; isize head = 0; isize filled = 0; isize cap = 0; uint32 mods = 0; A alloc;
+
+    // The four-ctor matrix, as `Map`'s: the default-allocator conveniences are gated `when [A: default]`.
+    public default ctor empty() when [A: default] { }
+    public ctor withCapacity(isize capacity) when [A: default] { this.reserve(n: capacity); }
+    public ctor withAllocator(A allocator) { this.alloc = allocator; }
+    public ctor withCapacityAndAllocator(A allocator, isize capacity) {
+        this.alloc = allocator;
+        this.reserve(n: capacity);
+    }
+
+    public const fn isize length() { return this.len; }
+
+    const fn uint64 hashKey(const ref K k) { return H::finish(raw: k.hash()); }
+    const fn bool eqKeys(const ref K a, const ref K b) { return a.equals(other: b); }
+
+    // The INDEX slot that names `key`'s entry, or -1. REMOVED slots are probed past; an EMPTY one ends the run.
+    unsafe const fn isize slotOf(const ref K key) {
+        if (this.cap == 0) { return 0 - 1; }
+        isize mask = this.cap * 2 - 1;
+        isize i = truncate<isize>(this.hashKey(k: key)) & mask;   // low bits of the hash, as `Map.slotOf`
+        while (true) {
+            isize p = this.index[i];
+            if (p == 0 - 1) { return 0 - 1; }
+            if (p >= 0) { if (this.eqKeys(a: this.keys[p], b: key)) { return i; } }
+            i = (i + 1) & mask;
+        }
+        return 0 - 1;
+    }
+
+    // The first slot along `h`'s probe that may take a new key: EMPTY or REMOVED. The key is known to be absent.
+    unsafe const fn isize freeSlot(uint64 h) {
+        isize mask = this.cap * 2 - 1;
+        isize i = truncate<isize>(h) & mask;
+        while (this.index[i] >= 0) { i = (i + 1) & mask; }
+        return i;
+    }
+
+    public const fn bool contains(const ref K key) { return this.slotOf(key: key) >= 0; }
+
+    // Deep-copy the map, order included (present only when both key and value are `Copyable`).
+    public unsafe ctor copy(ref OrderedMap<K,V,H,A> source) when [K: Copyable<K>, V: Copyable<V>] {
+        this.alloc = source.alloc;
+        this.reserve(n: source.len);
+        isize p = source.head;
+        while (p < source.used) {
+            if (source.live[p] == 1ui8) { this.put(key: copy source.keys[p], value: copy source.vals[p]); }
+            p = p + 1;
+        }
+        return this;
+    }
+
+    public unsafe const fn Optional<V> get(const ref K key) when [V: Copyable<V>] {
+        isize s = this.slotOf(key: key);
+        if (s < 0) { return Optional::None; }
+        return Optional::Some(value: copy this.vals[this.index[s]]);
+    }
+
+    // Borrow the stored value in place — `Map.getRef`'s contract: panics on an absent key, and the `ref` may not be
+    // held across a `put`, `moveToEnd` or `compact` (any of which may move the entries).
+    @trackCaller   // a miss names the caller's line (KR-179)
+    public unsafe const fn const ref V getRef(const ref K key) {
+        isize s = this.slotOf(key: key);
+        if (s < 0) { panic(msg: "OrderedMap.getRef: absent key"); }
+        return this.vals[this.index[s]];
+    }
+    // Not `@trackCaller`: it implements `MergeByKey.getRefMut`, reached through a contract slot that carries no
+    // caller location (as `Map.getRefMut`).
+    public unsafe fn ref V getRefMut(const ref K key) {
+        isize s = this.slotOf(key: key);
+        if (s < 0) { panic(msg: "OrderedMap.getRefMut: absent key"); }
+        return this.vals[this.index[s]];
+    }
+
+    // The oldest and the newest key — O(1), since `head` and `used - 1` are live whenever the map is not empty.
+    public unsafe const fn Optional<K> first() when [K: Copyable<K>] {
+        if (this.len == 0) { return Optional::None; }
+        return Optional::Some(value: copy this.keys[this.head]);
+    }
+    public unsafe const fn Optional<K> last() when [K: Copyable<K>] {
+        if (this.len == 0) { return Optional::None; }
+        return Optional::Some(value: copy this.keys[this.used - 1]);
+    }
+
+    // Iteration, in insertion order. Each walks the entries and skips the dead ones — `Map`'s iterators, handed the
+    // entries' `live` flags where `Map` hands its slot tags (both mean "1 = an entry here").
+    public unsafe const fn MapKeyIter<K> iterator() when [K: Copyable<K>] {
+        return MapKeyIter::<K>.make(keys: this.keys, state: this.live, cap: this.used,
+                                    modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    public unsafe const fn MapValueIter<V> values() when [V: Copyable<V>] {
+        return MapValueIter::<V>.make(vals: this.vals, state: this.live, cap: this.used,
+                                      modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    @serializedGraphEdges   // a keyed container's edges are its values (see `Map.valuesMut`)
+    public unsafe fn MapValueIterMut<V> valuesMut() {
+        return MapValueIterMut::<V>.make(vals: this.vals, state: this.live, cap: this.used,
+                                         modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    public unsafe const fn MapValueIterConst<V> valuesConst() {
+        return MapValueIterConst::<V>.make(vals: this.vals, state: this.live, cap: this.used,
+                                           modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+    public unsafe const fn MapEntryIter<K,V> entries() when [K: Copyable<K>, V: Copyable<V>] {
+        return MapEntryIter::<K,V>.make(keys: this.keys, vals: this.vals, state: this.live, cap: this.used,
+                                        modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+
+    // Insert or replace. A new key goes at the end; a present one keeps its place and takes the new value (both the
+    // stored key and value are replaced, as in `Map.put`). The hash is taken before the key moves into the entries.
+    public unsafe fn void put(K key, V value) {
+        isize s = this.slotOf(key: key);
+        if (s >= 0) {
+            isize p = this.index[s];
+            drop(ptr: addr(of: this.keys[p])); drop(ptr: addr(of: this.vals[p]));
+            this.keys[p] = give key; this.vals[p] = give value;
+            this.mods = this.mods + 1;
+            return;
+        }
+        uint64 h = this.hashKey(k: key);
+        if (this.used == this.cap || this.filled == this.cap) { this.makeRoom(); }
+        isize at = this.freeSlot(h: h);
+        if (this.index[at] == 0 - 1) { this.filled = this.filled + 1; }   // a REMOVED slot is already counted
+        isize p = this.used;
+        this.keys[p] = give key; this.vals[p] = give value; this.live[p] = 1ui8;
+        this.index[at] = p;
+        this.used = p + 1; this.len = this.len + 1; this.mods = this.mods + 1;
+    }
+
+    // Remove the entry for `key`, its VALUE moved out (`None` when absent). O(1), and no entry moves: the entry is a
+    // hole until the next rebuild or `compact()`. Removing the oldest or the newest entry moves `head` or `used` past
+    // the holes that border it, which keeps `first()`/`last()` O(1) and stops a queue or a stack from leaving a trail.
+    public unsafe fn Optional<V> remove(const ref K key) {
+        isize s = this.slotOf(key: key);
+        if (s < 0) { return Optional::None; }
+        isize p = this.index[s];
+        this.index[s] = 0 - 2;
+        drop(ptr: addr(of: this.keys[p]));
+        V v = this.takeVal(at: p);
+        this.live[p] = 0ui8;
+        this.len = this.len - 1; this.mods = this.mods + 1;
+        this.vacated(p: p);
+        return Optional::Some(value: give v);
+    }
+
+    // Move `key`'s entry to the end — the newest — keeping its value: an LRU's "used just now". False when absent.
+    // The entry is relocated, not re-inserted, so neither its key nor its value is copied or dropped.
+    public unsafe fn bool moveToEnd(const ref K key) {
+        isize s = this.slotOf(key: key);
+        if (s < 0) { return false; }
+        if (this.index[s] == this.used - 1) { return true; }
+        if (this.used == this.cap) { this.makeRoom(); s = this.slotOf(key: key); }   // a rebuild moves every entry
+        isize p = this.index[s];
+        if (p == this.used - 1) { return true; }
+        isize q = this.used;
+        UnsafePtr<K> ks = this.keys; UnsafePtr<V> vs = this.vals;   // a local slot is the raw-relocate store
+        ks[q] = ks[p]; vs[q] = vs[p];                               // bitwise: ownership moves with the bytes
+        this.live[q] = 1ui8; this.live[p] = 0ui8;
+        this.index[s] = q;
+        this.used = q + 1; this.mods = this.mods + 1;
+        this.vacated(p: p);
+        return true;
+    }
+
+    // Position `p` just died: move `head`/`used` past the dead entries at either end. Empty, the map starts over.
+    unsafe fn void vacated(isize p) {
+        if (this.len == 0) { this.head = 0; this.used = 0; return; }
+        if (p == this.head) { while (this.live[this.head] == 0ui8) { this.head = this.head + 1; } }
+        while (this.live[this.used - 1] == 0ui8) { this.used = this.used - 1; }
+    }
+
+    unsafe fn V takeVal(isize at) {   // move a value out of the buffer (`Map.takeVal`); the caller marks it dead
+        slot V x;
+        relocate(from: this.vals, at: at, into: out x);
+        return give x;
+    }
+
+    public unsafe fn void clear() {
+        isize p = this.head;
+        while (p < this.used) {
+            if (this.live[p] == 1ui8) { drop(ptr: addr(of: this.keys[p])); drop(ptr: addr(of: this.vals[p])); this.live[p] = 0ui8; }
+            p = p + 1;
+        }
+        if (this.cap > 0) { memset(p: cast<UnsafePtr>(this.index), value: 0 - 1, n: cast<usize>(this.cap * 2) * sizeof(isize)); }
+        this.len = 0; this.used = 0; this.head = 0; this.filled = 0; this.mods = this.mods + 1;
+    }
+
+    // Reclaim every hole now, in O(n), so no later `put` pays for it. Order is kept. A no-op with no holes.
+    public unsafe fn void compact() {
+        if (this.cap == 0 || (this.used == this.len && this.filled == this.len && this.head == 0)) { return; }
+        this.compactInPlace();
+    }
+
+    // Preallocate so at least `n` entries fit without a rebuild (a no-op if already big enough, never a shrink).
+    public fn void reserve(isize n) {
+        if (n <= 0) { return; }
+        isize nc = 8;
+        while (nc < n) { nc = nc * 2; }   // a power of two: the index masks a hash
+        if (nc > this.cap) { this.growTo(nc: nc); }
+    }
+
+    // The entries are full, or the index has no slot to spare: rebuild. At least half dead — compact in place;
+    // otherwise grow, which compacts on the way. Either way at least half the capacity is free after.
+    unsafe fn void makeRoom() {
+        if (this.cap == 0) { this.growTo(nc: 8); }
+        else if (this.len * 2 <= this.cap) { this.compactInPlace(); }
+        else { this.growTo(nc: this.cap * 2); }
+    }
+
+    // Slide the live entries down over the holes, in order, and rebuild the index for them.
+    unsafe fn void compactInPlace() {
+        UnsafePtr<K> ks = this.keys; UnsafePtr<V> vs = this.vals;   // a local slot is the raw-relocate store
+        isize w = 0;
+        isize r = this.head;
+        while (r < this.used) {
+            if (this.live[r] == 1ui8) {
+                if (w != r) { ks[w] = ks[r]; vs[w] = vs[r]; this.live[w] = 1ui8; this.live[r] = 0ui8; }
+                w = w + 1;
+            }
+            r = r + 1;
+        }
+        this.used = w; this.head = 0;
+        this.rebuildIndex();
+    }
+
+    // Fresh `nc`-entry buffers (and a `2 * nc` index): the live entries are relocated into them in order, so a grow
+    // also compacts. The old buffers are freed raw — ownership of every entry already left them.
+    unsafe fn void growTo(isize nc) {
+        UnsafePtr<K> nk = cast<UnsafePtr<K>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(K), align: alignof(K))));
+        UnsafePtr<V> nv = cast<UnsafePtr<V>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(V), align: alignof(V))));
+        UnsafePtr<uint8> nl = cast<UnsafePtr<uint8>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc) * sizeof(uint8), align: alignof(uint8))));
+        UnsafePtr<isize> ni = cast<UnsafePtr<isize>>(unwrapPtr(o: this.alloc.allocate(bytes: cast<usize>(nc * 2) * sizeof(isize), align: alignof(isize))));
+        memset(p: cast<UnsafePtr>(nl), value: 0, n: cast<usize>(nc) * sizeof(uint8));
+        isize w = 0;
+        isize r = this.head;
+        while (r < this.used) {
+            if (this.live[r] == 1ui8) { nk[w] = this.keys[r]; nv[w] = this.vals[r]; nl[w] = 1ui8; w = w + 1; }
+            r = r + 1;
+        }
+        if (this.cap > 0) {
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K), align: alignof(K));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V), align: alignof(V));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.live),  bytes: cast<usize>(this.cap) * sizeof(uint8), align: alignof(uint8));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.index), bytes: cast<usize>(this.cap * 2) * sizeof(isize), align: alignof(isize));
+        }
+        this.keys = nk; this.vals = nv; this.live = nl; this.index = ni; this.cap = nc;
+        this.used = w; this.head = 0;
+        this.rebuildIndex();
+    }
+
+    // Every index slot EMPTY, then one per live entry. Called with the entries compacted (`head` 0, no holes).
+    unsafe fn void rebuildIndex() {
+        memset(p: cast<UnsafePtr>(this.index), value: 0 - 1, n: cast<usize>(this.cap * 2) * sizeof(isize));
+        isize p = 0;
+        while (p < this.used) {
+            this.index[this.freeSlot(h: this.hashKey(k: this.keys[p]))] = p;
+            p = p + 1;
+        }
+        this.filled = this.used;
+        this.mods = this.mods + 1;   // every entry may have moved: a live iterator is stale
+    }
+
+    // --- Serialization: `Map`'s two wire forms, in INSERTION order (which is the point of the type) ---
+    // Keys that are all text write a keyed object `{"cpu":2,"mem":512}`, in the order they were put — `Map` sorts its
+    // keys only because a hash order is no order. Any other key, and every map on KBIN, writes the pair array.
+    public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [K: Serializable, V: Serializable] {
+        if (w.keyedMaps()) {
+            DynamicArray<MapKeyText<K>> texts = DynamicArray::<MapKeyText<K>>.withCapacity(capacity: this.len);
+            bool allText = true;
+            isize k = this.head;
+            while (k < this.used && allText) {
+                if (this.live[k] == 1ui8) {
+                    MapKeyText<K> kt = MapKeyText::<K>.make(slot: k);
+                    Serializer probe = kt;
+                    Result<Unit, Owned<Error>> __pk = this.keys[k].serialize(w: ref probe);
+                    match (give __pk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                    allText = kt.isText();
+                    texts.add(item: give kt);
+                }
+                k = k + 1;
+            }
+            if (allText) {
+                w.beginObject(count: cast<usize>(this.len));
+                foreach (ref MapKeyText<K> t in texts) {
+                    w.field(name: copy t.key(), id: 0ui32);
+                    Result<Unit, Owned<Error>> __sv = this.vals[t.at()].serialize(w: w);
+                    match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                }
+                w.endObject();
+                return Result::Ok(value: Unit::Unit);
+            }
+        }
+        w.beginArray(count: cast<usize>(this.len));
+        isize i = this.head;
+        while (i < this.used) {
+            if (this.live[i] == 1ui8) {
+                w.beginObject(count: 2);
+                w.field(name: "key", id: 0ui32);
+                Result<Unit, Owned<Error>> __sk = this.keys[i].serialize(w: w);
+                match (give __sk) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                w.field(name: "value", id: 1ui32);
+                Result<Unit, Owned<Error>> __sv = this.vals[i].serialize(w: w);
+                match (give __sv) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+                w.endObject();
+            }
+            i = i + 1;
+        }
+        w.endArray();
+        return Result::Ok(value: Unit::Unit);
+    }
+    // The key a merge names by its text (MergeByKey), read back as the object form's keys are.
+    public fn Result<K, Owned<Error>> keyFromText(string text) when [K: Deserializable<K>] {
+        MapKeyReader<K> kr = MapKeyReader::<K>.of(text: give text);
+        return K.deserialize(r: kr);
+    }
+    // Either form, in document order: each key is `put`, so a key the document repeats keeps its first position and
+    // takes its last value — Python's `dict`, and the typed reader's last-wins.
+    public ctor Result<OrderedMap<K,V,H,A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, V: Deserializable<V>, A: default] {
+        if (r.atKeyedMap()) {
+            r.beginObject(count: 0);
+            while (r.moreFields()) {
+                FieldKey fk = r.field();
+                string text = match (give fk) {
+                    case Name(name: n): { := give n; }
+                    case Id(id: _): { r.fail(); := ""; }
+                    case Position(rank: _): { r.fail(); := ""; }
+                };
+                if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+                MapKeyReader<K> kr = MapKeyReader::<K>.of(text: copy text);
+                Result<K, Owned<Error>> __ek = K.deserialize(r: kr);
+                K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                Result<V, Owned<Error>> __ev = V.deserialize(r: r);
+                V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: give text)); } };
+                this.put(key: give k, value: give v);
+            }
+            r.endObject();
+            return Result::Ok(value: give this);
+        }
+        r.beginArray();
+        isize index = 0;
+        while (r.moreElems()) {
+            r.beginObject(count: 2);
+            bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
+            Result<K, Owned<Error>> __ek = K.deserialize(r: r);
+            K k = match (give __ek) { case Ok(value: kv): { := give kv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "key"), index: index)); } };
+            bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
+            Result<V, Owned<Error>> __ev = V.deserialize(r: r);
+            V v = match (give __ev) { case Ok(value: vv): { := give vv; } case Err(error: e): { return Result::Err(error: DeError::inElement(error: DeError::inField(error: give e, name: "value"), index: index)); } };
+            bool __f3 = r.moreFields();
+            r.endObject();
+            this.put(key: give k, value: give v);
+            index = index + 1;
+        }
+        return Result::Ok(value: give this);
+    }
+
+    unsafe ~OrderedMap() {
+        isize p = this.head;
+        while (p < this.used) {
+            if (this.live[p] == 1ui8) { drop(ptr: addr(of: this.keys[p])); drop(ptr: addr(of: this.vals[p])); }
+            p = p + 1;
+        }
+        if (this.cap > 0) {
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.keys),  bytes: cast<usize>(this.cap) * sizeof(K), align: alignof(K));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.vals),  bytes: cast<usize>(this.cap) * sizeof(V), align: alignof(V));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.live),  bytes: cast<usize>(this.cap) * sizeof(uint8), align: alignof(uint8));
+            this.alloc.deallocate(pointer: cast<UnsafePtr>(this.index), bytes: cast<usize>(this.cap * 2) * sizeof(isize), align: alignof(isize));
+        }
+    }
+}

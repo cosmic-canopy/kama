@@ -21,7 +21,7 @@ type view MapKeyIter<K: Copyable<K>> implements Iterator<K> {
         this.keys = keys; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<K> next() {
-        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
+        if (this.modsp[0] != this.modsAt) { panic(msg: "a map or set was modified during iteration"); }
         while (this.pos < this.cap) {
             isize p = this.pos; this.pos = this.pos + 1;
             uint8 s = this.state[p];
@@ -40,7 +40,7 @@ type view MapValueIter<V: Copyable<V>> implements Iterator<V> {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<V> next() {
-        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
+        if (this.modsp[0] != this.modsAt) { panic(msg: "a map or set was modified during iteration"); }
         while (this.pos < this.cap) {
             isize p = this.pos; this.pos = this.pos + 1;
             uint8 s = this.state[p];
@@ -64,7 +64,7 @@ type view MapValueIterMut<V> implements IteratorMut<V> {
     // the next occupied one, so asking the question advances the cursor. (`IteratorMut.hasNext` is
     // therefore not a const member either — `SlotMap`'s does the same.)
     public unsafe fn bool hasNext() {
-        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
+        if (this.modsp[0] != this.modsAt) { panic(msg: "a map or set was modified during iteration"); }
         while (this.pos < this.cap) {
             uint8 s = this.state[this.pos];
             if (s == 1ui8) { return true; }            // stop AT the full slot (idempotent — next() consumes it)
@@ -83,7 +83,7 @@ type view MapValueIterConst<V> implements IteratorConst<V> {
         this.vals = vals; this.state = state; this.cap = cap; this.pos = 0; this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn bool hasNext() {   // scans forward past empty slots, as MapValueIterMut's does
-        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
+        if (this.modsp[0] != this.modsAt) { panic(msg: "a map or set was modified during iteration"); }
         while (this.pos < this.cap) {
             uint8 s = this.state[this.pos];
             if (s == 1ui8) { return true; }
@@ -118,7 +118,7 @@ type view MapEntryIter<K: Copyable<K>, V: Copyable<V>> implements Iterator<Entry
         this.modsp = modsp; this.modsAt = modsAt;
     }
     public unsafe fn Optional<Entry<K,V>> next() {
-        if (this.modsp[0] != this.modsAt) { panic(msg: "Map modified during iteration"); }
+        if (this.modsp[0] != this.modsAt) { panic(msg: "a map or set was modified during iteration"); }
         while (this.pos < this.cap) {
             isize p = this.pos; this.pos = this.pos + 1;
             uint8 s = this.state[p];

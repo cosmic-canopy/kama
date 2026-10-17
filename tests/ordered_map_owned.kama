@@ -1,0 +1,47 @@
+// KR-186: `OrderedMap` owns its keys and values, and every path that moves, drops or relocates an entry must account
+// for both exactly once: an overwrite (the stored key and value dropped), a remove (the key dropped, the value handed
+// back), `moveToEnd` (relocated, neither copied nor dropped), `compact()` and the rebuilds an insert triggers (every
+// live entry slid or moved into fresh buffers), `clear()`, a deep `copy`, and end of life. Owning `string` keys and
+// `DynamicArray<string>` values make any double drop or leak visible to the sanitizer leg; the exit code checks that
+// the contents survived every move intact.
+import { std::collections::OrderedMap, std::collections::DynamicArray };
+
+fn DynamicArray<string> words(int32 i) {
+    DynamicArray<string> w = DynamicArray.empty();
+    w.add(item: "w${i}"); w.add(item: "x${i}");
+    return give w;
+}
+
+fn int32 main() {
+    int32 r = 0;
+    OrderedMap<string, DynamicArray<string>> m = OrderedMap.empty();
+    int32 i = 0;
+    while (i < 40) { m.put(key: "k${i}", value: words(i: i)); i = i + 1; }        // grows 8 -> 16 -> 32 -> 64
+    m.put(key: "k3", value: words(i: 300));                                         // overwrite: old value dropped
+    i = 0;
+    while (i < 40) {
+        if (i % 2 == 0) {                                                            // half removed, values reclaimed
+            Optional<DynamicArray<string>> got = m.remove(key: "k${i}");
+            int32 n = match (give got) { case Some(value: v): cast<int32>(v.length()); case None: 100; };
+            r = r + n;
+        }
+        i = i + 1;
+    }
+    if (r == 40) { r = 1; } else { return 90; }                                     // 20 removals x 2 words
+    bool moved = m.moveToEnd(key: "k1") && m.moveToEnd(key: "k3");                  // relocated, not copied
+    m.compact();                                                                    // slid down over the holes
+    i = 40;
+    while (i < 100) { m.put(key: "k${i}", value: words(i: i)); i = i + 1; }       // more rebuilds
+    Optional<string> f = m.first(); Optional<string> l = m.last();
+    string firstKey = match (give f) { case Some(value: k): give k; case None: ""; };
+    string lastKey = match (give l) { case Some(value: k): give k; case None: ""; };
+    if (moved && firstKey == "k5" && lastKey == "k99" && m.length() == 80) { r = r + 2; }
+    if (m.getRef(key: "k3")[0] == "w300" && m.getRef(key: "k1")[1] == "x1") { r = r + 4; }   // contents intact
+
+    OrderedMap<string, DynamicArray<string>> c = copy m;                            // a deep copy
+    c.getRefMut(key: "k1").add(item: "extra");
+    if (m.getRef(key: "k1").length() == 2 && c.getRef(key: "k1").length() == 3) { r = r + 8; }
+    c.clear();                                                                      // drops every entry of the copy
+    if (c.length() == 0) { r = r + 16; }
+    return r + 30;   // 61; the map and the copy's buffers drop at the end of `main`
+}

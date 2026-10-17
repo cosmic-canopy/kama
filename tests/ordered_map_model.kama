@@ -1,0 +1,101 @@
+// KR-186: `OrderedMap` checked against a model — 6000 random operations over 48 keys, each mirrored on a plain pair of
+// lists kept in insertion order, and after EVERY step the two compared whole: the length, `first()`/`last()`, every
+// key's value, and the iteration order of keys, values and entries. The operations are the ones whose bookkeeping can
+// drift: a put that is new (appended) or present (value replaced, place kept), a remove (a hole, `head`/`used` moved
+// past the holes at either end), `moveToEnd` (a relocation), `compact()`, and `clear()` — over a small key space, so
+// the map refills its holes, rebuilds in place when half is dead and grows otherwise, all many times over.
+import { std::collections::OrderedMap, std::collections::DynamicArray, std::collections::Entry };
+
+type value Rng {
+    uint64 s;
+    public ctor seeded(uint64 s) { this.s = s; }
+    public fn int32 below(int32 n) {   // a 64-bit LCG's high bits — deterministic, so a failure reproduces
+        this.s = this.s * 6364136223846793005ui64 + 1442695040888963407ui64;
+        return cast<int32>((this.s >> 33ui64) % cast<uint64>(n));
+    }
+}
+
+type resource Model {
+    DynamicArray<int32> keys; DynamicArray<int32> vals;
+    public ctor make() { this.keys = DynamicArray.empty(); this.vals = DynamicArray.empty(); }
+    public fn void put(int32 k, int32 v) {
+        isize at = this.keys.indexOf(item: k);
+        if (at >= 0) { this.vals[at] = v; return; }
+        this.keys.add(item: k); this.vals.add(item: v);
+    }
+    public fn bool remove(int32 k) {
+        isize at = this.keys.indexOf(item: k);
+        if (at < 0) { return false; }
+        int32 a = this.keys.remove(index: at); int32 b = this.vals.remove(index: at);
+        return true;
+    }
+    public fn bool moveToEnd(int32 k) {
+        isize at = this.keys.indexOf(item: k);
+        if (at < 0) { return false; }
+        int32 a = this.keys.remove(index: at); int32 b = this.vals.remove(index: at);
+        this.keys.add(item: a); this.vals.add(item: b);
+        return true;
+    }
+    public fn void clear() { this.keys.clear(); this.vals.clear(); }
+    public const fn isize length() { return this.keys.length(); }
+    public const fn int32 keyAt(isize i) { return this.keys[i]; }
+    public const fn int32 valAt(isize i) { return this.vals[i]; }
+    public const fn isize find(int32 k) { return this.keys.indexOf(item: k); }
+}
+
+// 0 when the map and the model agree in every observable way, else which check failed.
+fn int32 agree(const ref OrderedMap<int32, int32> m, const ref Model ref_) {
+    if (m.length() != ref_.length()) { return 1; }
+    Optional<int32> f = m.first(); Optional<int32> l = m.last();
+    if (ref_.length() == 0) {
+        bool none = match (f) { case Some(value: _): false; case None: true; } && match (l) { case Some(value: _): false; case None: true; };
+        if (!none) { return 2; }
+    } else {
+        int32 fk = match (f) { case Some(value: k): k; case None: 0 - 1; };
+        int32 lk = match (l) { case Some(value: k): k; case None: 0 - 1; };
+        if (fk != ref_.keyAt(i: 0) || lk != ref_.keyAt(i: ref_.length() - 1)) { return 3; }
+    }
+    isize i = 0;
+    foreach (int32 k in m) { if (i >= ref_.length() || k != ref_.keyAt(i: i)) { return 4; } i = i + 1; }
+    if (i != ref_.length()) { return 5; }
+    i = 0;
+    foreach (int32 v in m.values()) { if (v != ref_.valAt(i: i)) { return 6; } i = i + 1; }
+    i = 0;
+    foreach (Entry<int32, int32> e in m.entries()) {
+        if (e.key() != ref_.keyAt(i: i) || e.value() != ref_.valAt(i: i)) { return 7; }
+        i = i + 1;
+    }
+    int32 k = 0;
+    while (k < 48) {
+        isize at = ref_.find(k: k);
+        Optional<int32> got = m.get(key: k);
+        int32 g = match (got) { case Some(value: v): v; case None: 0 - 1; };
+        if ((at < 0) != (g < 0) || (at >= 0 && g != ref_.valAt(i: at)) || m.contains(key: k) != (at >= 0)) { return 8; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+fn int32 main() {
+    OrderedMap<int32, int32> m = OrderedMap.empty();
+    Model ref_ = Model.make();
+    Rng r = Rng.seeded(s: 20261017ui64);
+    int32 step = 0;
+    while (step < 6000) {
+        int32 op = r.below(n: 100);
+        int32 k = r.below(n: 48);
+        if (op < 45) { m.put(key: k, value: step); ref_.put(k: k, v: step); }
+        else if (op < 80) {
+            Optional<int32> got = m.remove(key: k);
+            bool had = match (got) { case Some(value: _): true; case None: false; };
+            if (had != ref_.remove(k: k)) { return 20; }
+        }
+        else if (op < 95) { if (m.moveToEnd(key: k) != ref_.moveToEnd(k: k)) { return 21; } }
+        else if (op < 99) { m.compact(); }
+        else { m.clear(); ref_.clear(); }
+        int32 bad = agree(m: m, ref_: ref_);
+        if (bad != 0) { return bad; }
+        step = step + 1;
+    }
+    return 60;   // every step agreed
+}

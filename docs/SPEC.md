@@ -710,13 +710,29 @@ forwards an in-place borrow up the tree via the escape checker's chained-ref-ret
 return a place-returning method call whose receiver roots at `this`). `SortedSet<K>` wraps `SortedMap<K, Unit>`,
 as `Set` wraps `Map`.
 
+**`OrderedMap<K: Hashable + Equatable<K>, V>` / `OrderedSet<K>`** keep the third order a map can have: **insertion** <!-- test: ordered_map_basic, ordered_set_basic -->
+(Python's `dict`, Java's `LinkedHashMap`, .NET 9's `OrderedDictionary`). Lookup is O(1) as in `Map`, and every walk —
+`foreach`, `values()`/`valuesMut()`/`valuesConst()`, `entries()`, serde — goes in the order keys were first put; a
+`put` on a present key replaces the value and keeps the place. They mirror `Map`/`Set` member for member (`H` and
+`A` included) and add what order answers: `first()`/`last()` (the oldest and newest key, O(1)) and `moveToEnd(key:)`
+(an entry becomes the newest, its key and value relocated, not copied) — together an LRU: `moveToEnd` on a hit,
+evict `first()` at capacity. The layout is Python's compact dict, entries in order plus a hashed index of their
+positions. **`remove` is O(1) and never moves an entry**: it leaves a hole iteration skips. Holes are reclaimed in
+exactly two places, so a program chooses when their O(n) cost is paid: an insert that finds the entries full
+rebuilds them (in place when at least half are dead, growing otherwise — inserts stay amortized O(1)), and **`compact()`**
+does it on demand. `compact()` is `reserve()`'s mirror — one moves a growth, the other a compaction, out of the
+`put` that would pay it — so a frame or an audio callback pays neither. There is no positional access (`at(index:)`):
+with holes it would be O(n). Serde writes insertion order too: a text-keyed map is a keyed object in the order its <!-- test: ordered_map_serde -->
+keys were put (where `Map` sorts them), a repeated key in a document keeps its first position and takes its last
+value, other keys write `Map`'s pair array, and a text-keyed `OrderedMap` merges per key, keeping its order. <!-- test: ordered_map_merge -->
+
 ### Custom allocators ✅
 
 A collection's memory source is a trailing type parameter `A: Allocator = GlobalAllocator`. Because it
 defaults (default type parameters), `DynamicArray<T>` / `Map<K,V>` / bare `BitSet` are unchanged; the
 allocator is opt-in. Every container that manages its own heap buffer carries it: `DynamicArray`, `Map`,
 `Set`, `Deque<T, A>`, `FixedArray<T, A>`, `BitSet<A>` (its first type parameter, so a plain `BitSet` is now
-the all-defaulted instance), `SlotMap<V, A>`, and `PriorityQueue<T, A>` (which owns no buffer itself — it
+the all-defaulted instance), `SlotMap<V, A>`, `OrderedMap<K, V, H, A>`/`OrderedSet<K, H, A>`, and `PriorityQueue<T, A>` (which owns no buffer itself — it
 threads `A` to its embedded `DynamicArray<T, A>`). A stateful allocator arrives via a named **`ctor`**:
 `withAllocator(allocator:)` for the growable containers, `withAllocator(allocator:, size:)` and
 `filledWithAllocator(allocator:, size:, value:)` for the eager `FixedArray`, and `withAllocator(allocator:, maxOrder:)` for `PriorityQueue`. The ordered containers thread it

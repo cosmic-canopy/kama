@@ -581,10 +581,10 @@ type contract MergeDeserializable<T is This> for value, resource implements Dese
 // A map a merge writes PER KEY (KR-136): `{"limits":{"cpu":4,"mem":null}}` merged into the `limits` a program holds sets
 // `cpu`, removes `mem` and keeps every other entry (RFC 7396), where a field of any other type is replaced whole. A key
 // the data names merges into its entry when the entry's value merges in place — a derived record, or another such map
-// — and replaces it otherwise. `std::collections`' `Map` and `SortedMap` implement it, and the compiler's merge walk
-// drives it, so a map's writes join the record's commit log and the merge stays all or nothing. The members are what
-// that walk needs: the key a text names, and the four operations a per-key write is made of. A map written as its pair
-// array (any map on KBIN) is still replaced whole.
+// — and replaces it otherwise. `std::collections`' `Map`, `SortedMap` and `OrderedMap` implement it, and the compiler's
+// merge walk drives it, so a map's writes join the record's commit log and the merge stays all or nothing. The members
+// are what that walk needs: the key a text names, and the four operations a per-key write is made of. A map written as
+// its pair array (any map on KBIN) is still replaced whole.
 type contract MergeByKey<K, V> for resource {
     fn Result<K, std::memory::Owned<Error>> keyFromText(string text);
     const fn bool contains(const ref K key);

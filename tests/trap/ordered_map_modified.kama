@@ -1,0 +1,20 @@
+// KR-186: an `OrderedMap` changed under a live iterator traps rather than reading moved or freed entries — a `put` can
+// rebuild the entries, and a `remove` or `moveToEnd` reorders them. Safe code cannot get here: the `borrow` window an
+// iterator lives in freezes the map (as a `foreach` does), refused at compile time. This is the check behind that —
+// unsafe code changing the map through a raw alias the window cannot see. The iterators are `Map`'s, so the message
+// names a map or a set, either kind.
+import { std::collections::OrderedMap };
+unsafe fn int32 run() {
+    OrderedMap<int32, int32> m = OrderedMap.empty();
+    m.put(key: 1, value: 10); m.put(key: 2, value: 20);
+    UnsafePtr<OrderedMap<int32, int32>> alias = addr(of: m);
+    int32 seen = 0;
+    borrow m.iterator() as it {
+        Optional<int32> a = it.next();
+        bool moved = alias[0].moveToEnd(key: 1);   // reorders the entries the iterator is walking
+        Optional<int32> b = it.next();             // traps
+        seen = 1;
+    }
+    return seen;
+}
+fn int32 main() { return run(); }

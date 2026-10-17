@@ -1,0 +1,50 @@
+// KR-186: an `OrderedMap` keyed by text merges PER KEY through the prelude's `MergeByKey`, as `Map` does (KR-136) —
+// and keeps its order while it does: a key the document changes keeps its place, `null` removes one, a new key is
+// appended, and an entry whose value merges in place (a derived record) is merged into. All or nothing: a failure
+// anywhere leaves the map as it was.
+import {
+    std::collections::OrderedMap, std::memory::Owned,
+    std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::mergeJsonBuffer,
+};
+
+@generate(Serializable, Deserializable)
+type resource Env {
+    @field(default) int32 cpu = 1;
+    @field(default) int32 mem = 64;
+    public ctor make() { }
+}
+
+@generate(Serializable, Deserializable)
+type resource Cfg {
+    @field(default) OrderedMap<string, int32> caps = OrderedMap.empty();
+    @field(default) OrderedMap<string, Env> envs = OrderedMap.empty();
+    public ctor make() { }
+    public fn void fill() {
+        this.caps.put(key: "cpu", value: 2); this.caps.put(key: "mem", value: 512); this.caps.put(key: "io", value: 3);
+        this.envs.put(key: "prod", value: Env.make()); this.envs.put(key: "dev", value: Env.make());
+    }
+}
+
+fn string json(const ref Cfg c) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: c);
+    return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
+}
+fn bool merged(ref Cfg c, string src) {
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: c);
+    return match (give r) { case Ok(value: _): true; case Err(error: _): false; };
+}
+
+fn int32 main() {
+    int32 r = 0;
+    Cfg c = Cfg.make(); c.fill();
+    // 1: one changed in place, one removed, one appended — the rest keep their order
+    if (merged(c: c, src: "{\"caps\":{\"cpu\":4,\"mem\":null,\"gpu\":1}}")
+        && json(c: c) == "{\"caps\":{\"cpu\":4,\"io\":3,\"gpu\":1},\"envs\":{\"prod\":{\"cpu\":1,\"mem\":64},\"dev\":{\"cpu\":1,\"mem\":64}}}") { r = r + 1; }
+    // 2: a record value is merged into, field by field, and stays where it was
+    if (merged(c: c, src: "{\"envs\":{\"prod\":{\"mem\":128}}}")
+        && json(c: c) == "{\"caps\":{\"cpu\":4,\"io\":3,\"gpu\":1},\"envs\":{\"prod\":{\"cpu\":1,\"mem\":128},\"dev\":{\"cpu\":1,\"mem\":64}}}") { r = r + 2; }
+    // 4: a failure anywhere leaves everything as it was
+    string before = json(c: c);
+    if (!merged(c: c, src: "{\"caps\":{\"cpu\":5,\"zzz\":\"not a number\"}}") && json(c: c) == before) { r = r + 4; }
+    return r + 40;   // 47
+}
