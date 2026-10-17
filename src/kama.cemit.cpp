@@ -21636,7 +21636,7 @@ bool CEmitter::targetLayoutModel(LayoutModel& m, std::string& arch) const
         windows = windows || f == "OS_WINDOWS";
         macos   = macos   || f == "OS_MACOS";
     }
-    auto starts = [&](const char* p) { return arch.compare(0, strlen(p), p) == 0; };
+    auto starts = [&](const char* p) { return arch.rfind(p, 0) == 0; };
     if (arch == "x86_64")                                              m = { 8, 8, macos ? 16 : 0 };
     else if (arch == "aarch64" || arch == "arm64" || arch == "aarch64_be") m = { 8, 8, 16 };
     else if (starts("riscv64") || arch == "wasm64")                    m = { 8, 8, 0 };
