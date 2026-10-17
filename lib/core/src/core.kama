@@ -1,4 +1,4 @@
-export { Args, args, programInvocation, programName, programPath, env, envOr, PanicHandler, setPanicHandler, print, eprint, println, eprintln };
+export { Args, args, programInvocation, programName, programPath, env, envOr, PanicInfo, PanicHandler, setPanicHandler, print, eprint, println, eprintln };
 
 // Module `core` — the runtime capabilities: console output, the command line, the environment, and the
 // fatal-handler hook. A program names each one it uses in its import list (`import { core::println };`),
@@ -109,8 +109,28 @@ unsafe fn string envOr(string name, string dflt) {
 // `@foreignEntry`: the handler runs on whichever thread panicked, which is not necessarily the isolate
 // that registered it — a bounds miss in library code on any isolate, or on a thread a C library created,
 // reaches this slot. So a module `static` the handler reads is a different object there.
-@foreignEntry fnptr void PanicHandler();
+//
+// The handler is handed what went wrong, so a program with no terminal can put it in its own crash report: the
+// message the runtime wrote to stderr (the text after `kama: ` and before the location) and the location, when one
+// is known. Only one thread runs the handler; another that panics meanwhile waits for it, and a panic inside the
+// handler hard-aborts.
+@foreignEntry fnptr void PanicHandler(const ref PanicInfo info);
 extern fn void kama_set_panic_handler(PanicHandler h);
+
+// What a `PanicHandler` is handed. The runtime builds it on the panicking thread's stack, so nothing allocates on
+// the way to the abort; each string it hands out borrows that storage and is valid for the handler's whole run.
+@linkName("kama_panic_info")
+type extern value PanicInfo {
+    // The message, as stderr shows it after `kama: `: "panic: boom", "index 8 out of bounds (length 2)".
+    public unsafe const fn string message() { return kama_panic_info_message(i: this); }
+    // The file the fault is in, as it prints (`main.kama`), or "" when the runtime knows none.
+    public unsafe const fn string file() { return kama_panic_info_file(i: this); }
+    // Its line, or 0 when the runtime knows none.
+    public unsafe const fn int32 line() { return kama_panic_info_line(i: this); }
+}
+extern fn string kama_panic_info_message(const ref PanicInfo i);
+extern fn string kama_panic_info_file(const ref PanicInfo i);
+extern fn int32 kama_panic_info_line(const ref PanicInfo i);
 unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h: handler); }
 
 // ── Console output ──────────────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,11 @@
+export { Vec2, dot, scaled };
+// `@linkName("…")` on a `type extern value` binds a C struct spelled differently from its kama name: kama code
+// writes `Vec2`, and the emitted C says `vec2_t`, which the header declares. Exported like any extern, under the
+// kama name; another file imports `geo::Vec2` and never sees the C spelling.
+extern "geo.h";
+@linkName("vec2_t") @generate(of)
+type extern value Vec2 { public int32 x; public int32 y; }
+extern fn int32 vec2_dot(const ref Vec2 a, const ref Vec2 b);
+extern fn void vec2_scale(ref Vec2 v, int32 k);
+unsafe fn int32 dot(const ref Vec2 a, const ref Vec2 b) { return vec2_dot(a: a, b: b); }
+unsafe fn Vec2 scaled(Vec2 v, int32 k) { vec2_scale(v: ref v, k: k); return v; }

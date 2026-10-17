@@ -1515,6 +1515,10 @@ definition. A file that would rather not repeat it wraps the extern in an ordina
 the wrapper costs nothing, because `--release` folds the program into one translation unit and a
 pass-through compiles to the same instructions as the direct call.
 
+**On a `type extern value` itself, `@linkName` names the C struct** — a header's `vec2_t` bound as kama's <!-- test: linkname_extern_type -->
+`Vec2`. kama code writes the kama name, imports and exports it by that name, and sees it in diagnostics; the
+emitted C spells the struct's own name. (`core::PanicInfo` is the runtime's `kama_panic_info` this way.)
+
 **On a field of a `type extern value`, `@linkName` names the C member** — the same attribute, for a struct
 field a header spelled with a kama keyword or a name the binding would rather not take:
 
@@ -3462,7 +3466,11 @@ be written **in the language** rather than baked into the compiler. Three builti
   **[`comptime assert`](#compile-time-assertions--comptime-assert-)** — same arguments, checked at build. For
   a *bug that can't continue*; recoverable errors use `Result<T, E>`. A custom fatal handler (for a shipped
   game/GUI with no terminal) installs via **`setPanicHandler(handler:)`** (module `core`) — it runs for cleanup/exhibition,
-  then the runtime still terminates. (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.
+  then the runtime still terminates. It is handed **`const ref PanicInfo info`**: `info.message()` is the text <!-- test: panic_info_panic -->
+  stderr shows after `kama: ` (`panic: boom`), and `info.file()`/`info.line()` the location, `""`/`0` when none is
+  known — all built on the panicking thread's stack, so nothing allocates on the way to the abort. One thread runs
+  the hook: another that panics meanwhile waits for it, and a panic inside the hook hard-aborts. A handler written
+  to the old argument-less signature is refused, naming the one it must match. <!-- xfail: panic_handler_old_signature --> (kama aborts on panic — no stack unwinding; ≈ Rust's `panic=abort`.
   The one exception is a declared **`@onPanic` region**, which recovers *before* the hook and never reaches
   it — see *Recoverable regions*.) The
   full always-in-scope surface is catalogued in **[FLOOR.md](FLOOR.md)**.

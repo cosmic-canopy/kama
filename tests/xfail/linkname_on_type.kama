@@ -1,4 +1,5 @@
-// `@linkName` fixes a name a HOST sees. A `type expose value` has one — its struct in the generated header —
+// `@linkName` fixes a C name someone else chose. A `type expose value` has one — its struct in the generated header —
+// and so does a `type extern value` (the C header names its struct) —
 // and an ordinary type has none: its C name is kama's to choose and never leaves the program.
 @linkName("Config")
 type value Settings { public int32 n; public ctor of(int32 n) { this.n = n; } }

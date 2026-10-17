@@ -8,8 +8,9 @@
 #include "kama_unicode.h"
 #include <stdio.h>
 /* what a kama program defines and the runtime header refers to */
-void (*kama_panic_hook)(void) = 0;
+void (*kama_panic_hook)(kama_panic_info*) = 0;
 int kama_in_panic_hook = 0;
+KAMA_ISOLATE_LOCAL int kama__panicking_here = 0;
 void kama__stdio_write_failed(void) {}
 #include <stdlib.h>
 #include <string.h>

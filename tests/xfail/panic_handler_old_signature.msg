@@ -1,0 +1,1 @@
+`fnptr void PanicHandler(const ref PanicInfo info)`

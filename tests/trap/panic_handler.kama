@@ -3,12 +3,12 @@
 // (no infinite recursion), so the process still terminates with a signal exit. Proves: handler runs +
 // re-entrancy-safe + always-terminates.
 
-import { core::setPanicHandler };
+import { core::setPanicHandler, core::PanicInfo };
 
 extern "<unistd.h>";
 extern fn int64 write(int32 fd, UnsafeConstPtr buf, usize n);
 
-unsafe fn void onPanic() {
+unsafe fn void onPanic(const ref PanicInfo info) {
     string m = "HANDLER RAN\n";
     write(fd: 2, buf: m.cstr(), n: cast<usize>(m.length()));
     panic(msg: "re-entrant");   // must NOT recurse — the guard skips the hook and aborts

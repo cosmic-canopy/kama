@@ -30,10 +30,10 @@ KAMA
 
 # main.kama — registers the handler in the ENTRY TU, then triggers a panic that runs in lib's TU.
 cat > "$tmp/main.kama" <<'KAMA'
-import { core::setPanicHandler, lib::boom };
+import { core::setPanicHandler, core::PanicInfo, lib::boom };
 extern "<unistd.h>";
 extern fn int64 write(int32 fd, UnsafeConstPtr buf, usize n);
-unsafe fn void onPanic() {
+unsafe fn void onPanic(const ref PanicInfo info) {
     string m = "HANDLER-RAN-CROSS-TU\n";
     write(fd: 2, buf: m.cstr(), n: cast<usize>(m.length()));
 }

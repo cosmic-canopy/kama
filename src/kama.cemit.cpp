@@ -156,6 +156,8 @@ void CEmitter::line(int srcLine)
 // `Tmpl<arg, arg>`, with trailing DEFAULTED args dropped so `Map<int32, int32>` doesn't read as
 // `Map<int32, int32, DefaultHasher, GlobalAllocator>`. `depth` bounds the recursion through nested args:
 // a diagnostic must never be the thing that hangs the compiler.
+static std::string spellTypeNode(const SharedIdentifier& t);   // below, beside exactBoundName
+
 std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool cRegister) const
 {
     auto identChar = [](char c) { return std::isalnum((unsigned char)c) || c == '_'; };
@@ -179,6 +181,11 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
         // rooted at `main` — which `--no-heap` now routinely does, since `main` is where a program owns
         // the container whose destructor frees.
         if (tok == "kama_main") { out += "main"; continue; }
+        // A `type extern value` keyed by the C name its `@linkName` binds, shown by the name kama code writes.
+        {
+            auto ls = _externLinkShown.find(tok);
+            if (ls != _externLinkShown.end()) { out += ls->second; continue; }
+        }
         // ...and the funnel's two entries into a `@globalAllocator` pool, which a no-heap chain passes through on its
         // way into the pool's body. The reader declared against the contract, so the chain names its member.
         if (tok == "kama__global_allocate")   { out += "GlobalHeap::allocate"; continue; }
@@ -892,8 +899,12 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
             || _genericTypes.count(n)       // a generic-type template resolves to its scoped name too
             || _genericContracts.count(n);  // as does a generic-contract template (`Iterator<T>`)
     };
-    // FFI: extern struct/handle names are global literal C names.
+    // FFI: extern struct/handle names are global literal C names — or, under `@linkName`, the C name it binds.
     if ((!qualifier || qualifier->empty()) && _externNames.count(value)) return value;
+    if (!qualifier || qualifier->empty()) {
+        auto lk = _externLinkKey.find(value);
+        if (lk != _externLinkKey.end()) return lk->second;
+    }
     // A per-symbol import binds a bare local name to a fully-mangled global (`import a::b::{X as Y}`).
     if (!qualifier || qualifier->empty()) {
         auto sa = _nsCtx.symbolAliases.find(value);
@@ -3640,7 +3651,9 @@ std::string CEmitter::importedExtern(const std::string& target) const
 {
     const size_t cut = target.rfind("__");
     if (cut == std::string::npos) return "";
-    const std::string name = target.substr(cut + 2);
+    std::string name = target.substr(cut + 2);
+    auto lk = _externLinkKey.find(name);   // an `@linkName` extern is keyed by its C name
+    if (lk != _externLinkKey.end()) name = lk->second;
     return externExportedFrom(name, target.substr(0, cut)) ? name : std::string();
 }
 
@@ -10191,6 +10204,17 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
             si.noHeap   = hasNoHeapAttr(fn->attributes);   // the declared half of the no-heap proof
             si.foreignEntry = hasAttr(fn->attributes, "foreignEntry");   // ...and of the threading one
             si.callerThread = hasAttr(fn->attributes, "callerThread");
+            si.shown = "fnptr " + (fn->returnType ? spellTypeNode(fn->returnType) : std::string("void")) + " "
+                     + *fn->name->value + "(";
+            if (fn->parameters)
+                for (size_t i = 0; i < fn->parameters->size(); ++i) {
+                    auto& pn = (*fn->parameters)[i];
+                    if (!pn) continue;
+                    std::string mod = pn->modifier && pn->modifier->value ? *pn->modifier->value + " " : std::string();
+                    si.shown += (i ? ", " : "") + std::string(pn->isConst ? "const " : "") + mod
+                              + spellTypeNode(pn->type) + " " + (pn->identifier && pn->identifier->value ? *pn->identifier->value : "");
+                }
+            si.shown += ")";
             if (si.foreignEntry && si.callerThread)
                 unsupported(("`" + *fn->name->value + "` is both `@foreignEntry` and `@callerThread` — a "
                              "callback runs on the calling isolate or it does not; pick the one the C API "
@@ -11435,7 +11459,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
             }
 
         ClassInfo ci;
-        ci.name  = isExt ? *cd->name->value : qualify(*cd->name->value);   // scope-mangle / FFI literal name
+        ci.name  = isExt ? externKey(cd) : qualify(*cd->name->value);   // scope-mangle / FFI literal (or @linkName) name
         ci.kind  = kind;
         ci.isBorrow = cd->typeKind && *cd->typeKind == "view";   // non-escaping borrow (see escape sites)
         if (ci.isBorrow && cd->name && cd->name->value)
@@ -11468,6 +11492,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                              "concrete C struct; expose a concrete value instead").c_str(), cd);
             ci.hostName = linkNameOf(cd->attributes, cd->line);
         }
+        if (isExt) (void)linkNameOf(cd->attributes, cd->line);   // validate the C name `externKey` keyed it under
         if (isExt) {
             _externNames.insert(ci.name);
             if (!ci.declFile.empty()) _externDeclSites[ci.name].insert(ci.declFile);   // rung, FFI side
@@ -11491,9 +11516,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                  + (cd->typeKind ? *cd->typeKind : std::string("?")) + "` — minting is a "
                                  "capability the VIEWED type declares by implementing a marked contract, "
                                  "so put the mark on that contract").c_str(), cd);
-                } else if (*at->name == "linkName" && isExpose) {
+                } else if (*at->name == "linkName" && (isExpose || isExt)) {
                     // The host header's name for the struct (validated in linkNameOf above) — the same one
-                    // override an `expose fn`'s symbol has, for a name someone else chose.
+                    // override an `expose fn`'s symbol has, for a name someone else chose. On an `extern` type it
+                    // is the C name the header gives the struct, when kama would spell it differently.
                 } else if (*at->name == "align" || *at->name == "packed") {
                     // LAYOUT CONTROL — passthrough, the shape `@section` already has for functions and
                     // statics. kama can KNOW a layout (`sizeof`/`alignof` fold, `comptime assert` hands the
@@ -11518,7 +11544,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 } else {
                     unsupported(("unknown type attribute `@" + *at->name
                                  + (*at->name == "linkName" ? "` here — `@linkName` names a C symbol, and only a "
-                                    "`type expose value` has a host-visible name to fix"
+                                    "`type expose value` or a `type extern value` has a C name to fix"
                                     : "` (expected `@generate`, `@align(N)`, `@packed` or `@globalAllocator`)")).c_str(), cd);
                 }
             }
@@ -24210,8 +24236,9 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "KAMA_ISOLATE_LOCAL kama_recover_t* kama_recover_top = 0;\n"
           << "#endif\n";
     *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
-          << "void (*kama_panic_hook)(void) = 0;\n"
+          << "void (*kama_panic_hook)(kama_panic_info*) = 0;\n"
           << "int kama_in_panic_hook = 0;\n"
+          << "KAMA_ISOLATE_LOCAL int kama__panicking_here = 0;\n"
           << "int kama_argc = 0;\n"
           << "char** kama_argv = 0;\n"
           << "int kama__argv_state = 0;\n"
@@ -24586,6 +24613,27 @@ std::string CEmitter::linkNameOf(const SharedAttributeList& attrs, int line)
         return sym;
     }
     return "";
+}
+
+// The key a `type extern value` is registered under: its kama name, which IS its C name, unless `@linkName("…")` binds
+// a C struct spelled otherwise. Read quietly — collection validates the string (`linkNameOf`) — and recorded both
+// ways, so the resolver's extern rung finds it by the kama name and a diagnostic shows that name again.
+std::string CEmitter::externKey(ClassDeclarationNode* cd)
+{
+    const std::string kamaName = *cd->name->value;
+    if (cd->attributes)
+        for (auto& at : *cd->attributes) {
+            if (!at || !at->name || *at->name != "linkName" || !at->args || at->args->size() != 1) continue;
+            auto& a = (*at->args)[0];
+            if (a && !a->name && a->expression)
+                if (auto* str = dynamic_cast<StringNode*>(a->expression.get()))
+                    if (str->value && !str->value->empty()) {
+                        _externLinkKey[kamaName] = *str->value;
+                        _externLinkShown[*str->value] = kamaName;
+                        return *str->value;
+                    }
+        }
+    return kamaName;
 }
 
 // Emit `cName(leadArg, <args reordered to declared param order>)`.
@@ -28158,7 +28206,8 @@ void CEmitter::checkFnPtrBind(const std::string& sigCName, const FnPtrTarget& t,
     if (sit == _sigs.end()) return;
     if (!sigMatches(sit->second, t.sig)) {
         unsupported((t.display + " does not match the " + (t.kind == FnPtrTarget::Method ? "fnptr" : "FunctionPtr")
-                     + " signature" + t.mismatchNote).c_str(), line);
+                     + " signature" + (sit->second.shown.empty() ? std::string() : " `" + sit->second.shown + "`")
+                     + t.mismatchNote).c_str(), line);
         return;   // a shape mismatch already tells the author to look at this bind; one defect, one message
     }
     if (sit->second.noHeap && !t.noHeap)
@@ -40666,7 +40715,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         bool ext = false;
                         if (cd->modifiers) for (auto& mod : *cd->modifiers)
                             if (mod->value && *mod->value == "extern") ext = true;
-                        std::string n = ext ? *cd->name->value : qualify(*cd->name->value);
+                        std::string n = ext ? externKey(cd) : qualify(*cd->name->value);
                         if (!ext) claimType(n, *cd->name->value, cd->line);
                         _classes[n].name = n;
                         if (ext) { _classes[n].isExternStruct = true; _externNames.insert(n); }
@@ -40999,10 +41048,12 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             // An extern this file declares is exported under its literal key, recorded per exporting FILE
             // (many files may declare one C symbol; only the ones that export it offer it).
             if (!exists) {
-                auto ds = _externDeclSites.find(*name);
+                auto lk = _externLinkKey.find(*name);   // under `@linkName`, the key is the C name
+                const std::string ek = lk != _externLinkKey.end() ? lk->second : *name;
+                auto ds = _externDeclSites.find(ek);
                 if (ds != _externDeclSites.end() && ds->second.count(_nsCtx.unitPath)) {
                     exists = true;
-                    _externExportedBy[*name].insert(_nsCtx.unitPath);
+                    _externExportedBy[ek].insert(_nsCtx.unitPath);
                 }
             }
             // A MUTABLE module `static` is a different answer, and it deserves its own sentence rather
@@ -41808,7 +41859,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             if (_classes.count(mangled)) return &_classes[mangled];
             // An extern type keeps its literal key, and many files may declare it: its members' bodies are
             // emitted from the ONE declaration that carries them (the collect-time merge points `node` there).
-            auto ext = _classes.find(*cd->name->value);
+            auto ext = _classes.find(externKey(cd));   // the literal key, or the C name its `@linkName` binds
             if (ext != _classes.end() && ext->second.isExternStruct && ext->second.node == cd) return &ext->second;
         }
         return nullptr;

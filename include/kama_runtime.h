@@ -428,6 +428,25 @@ static inline void kama_try_recover(void) {
 static inline void kama_try_recover(void) { }
 #endif
 
+// What a panic handler is handed (KR-179): the message stderr shows — the text after `kama: ` and before the
+// location — and the location when one is known (`kama_file` is "" and `kama_line` 0 when not). It lives on the
+// panicking thread's stack and points into that thread's message buffer, so nothing allocates on the way to
+// `abort()`, and two isolates panicking at once share nothing. kama names it `core::PanicInfo`.
+typedef struct kama_panic_info { const char* kama_msg; size_t kama_len; const char* kama_file; int32_t kama_line; } kama_panic_info;
+// The bounded appends every trap message is written with: a stack buffer of `cap` bytes, never overrun — an
+// over-long message or path truncates. A number needs at most 20 digits and a sign.
+static inline void kama_fail_puts(char* buf, size_t* p, size_t cap, const char* s) {
+    while (s && *s && *p < cap) buf[(*p)++] = *s++;
+}
+static inline void kama_fail_putu(char* buf, size_t* p, size_t cap, unsigned long long v) {
+    char t[24]; size_t n = 0; kama_u64_to_buf(t, &n, v);
+    for (size_t i = 0; i < n && *p < cap; ++i) buf[(*p)++] = t[i];
+}
+static inline void kama_fail_puti(char* buf, size_t* p, size_t cap, long long v) {
+    char t[24]; size_t n = 0; kama_i64_to_buf(t, &n, v);
+    for (size_t i = 0; i < n && *p < cap; ++i) buf[(*p)++] = t[i];
+}
+
 #if defined(KAMA_TARGET_EMBEDDED)
 // Freestanding trap policy (MCU campaign step 3). On a bare-metal target there is no fd 2 to write
 // to and no `abort` under `-nostdlib`, so every fatal condition (bounds/slice/panic/OOM) funnels
@@ -501,7 +520,7 @@ static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
 // On embedded the fatal handler IS the weak `kama_panic_handler` symbol (firmware provides a strong
 // override at link time), so a runtime setter doesn't apply — this stub lets the prelude `setPanicHandler`
 // surface still compile on --target embedded (a no-op; use the weak-symbol mechanism instead).
-static inline void kama_set_panic_handler(void (*h)(void)) { (void)h; }
+static inline void kama_set_panic_handler(void (*h)(kama_panic_info*)) { (void)h; }
 #else
 // Hosted analogue of the embedded weak `kama_panic_handler`: a settable fatal handler for cleanup/exhibition
 // (a shipped game/GUI with no terminal shows a dialog / flushes a save instead of a bare stderr `abort`).
@@ -519,95 +538,98 @@ static inline void kama_set_panic_handler(void (*h)(void)) { (void)h; }
 // failure in stdlib/library code) reading its own empty copy and silently taking the default abort instead
 // of the user's handler. The re-entrancy flag is likewise one global (a re-entrant panic from any TU during
 // handling skips the hook). (Genuinely isolate-local state uses KAMA_ISOLATE_LOCAL, not plain `static`.)
-extern void (*kama_panic_hook)(void);
+extern void (*kama_panic_hook)(kama_panic_info*);
+// ONE thread runs the hook. The first to panic CLAIMS it (an atomic exchange — it was a plain `int`, so two isolates
+// panicking together both ran it, or the second's `abort()` ended the process while the first was still in its
+// hook); any other thread that panics meanwhile WAITS, so the hook finishes and its own `abort()` ends the process.
+// A panic raised INSIDE the hook is re-entrant: that thread already holds the claim, so it skips the hook and
+// hard-aborts — told apart by `kama__panicking_here`, per thread, defined once in the entry TU.
 extern int kama_in_panic_hook;
-static inline void kama_set_panic_handler(void (*h)(void)) { if (!kama_panic_hook) kama_panic_hook = h; }
-static inline void kama_run_panic_hook(void) {
+extern KAMA_ISOLATE_LOCAL int kama__panicking_here;
+static inline void kama_set_panic_handler(void (*h)(kama_panic_info*)) { if (!kama_panic_hook) kama_panic_hook = h; }
+static inline void kama_run_panic_hook(kama_panic_info* info) {
     kama_try_recover();   /* an armed `@onPanic` region recovers here and never reaches the hook */
-    if (kama_panic_hook && !kama_in_panic_hook) { kama_in_panic_hook = 1; kama_panic_hook(); }
+    if (!kama_panic_hook || kama__panicking_here) return;
+    kama__panicking_here = 1;
+    if (__atomic_exchange_n(&kama_in_panic_hook, 1, __ATOMIC_ACQ_REL)) {
+        for (;;) { __atomic_signal_fence(__ATOMIC_SEQ_CST); }   /* another thread reports; its abort() ends us */
+    }
+    kama_panic_hook(info);
 }
-static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
+// THE failure path. `buf[0..p)` holds the line stderr shows, whose message starts at `msg` (after a `kama: `
+// prefix, when there is one). The location, when `file` is non-null, goes after it — ` (main.kama:7)` — then the
+// line is written to fd 2, the hook is handed the message and the location, and the process aborts.
+static inline KAMA_NORETURN void kama__fail(char* buf, size_t cap, size_t msg, size_t p, const char* file,
+                                            int32_t line) {
     extern void abort(void);
-    char buf[96]; size_t p = 0;
-    const char* a = "kama: index ";              while (*a) buf[p++] = *a++;
-    kama_u64_to_buf(buf, &p, i);
-    const char* b = " out of bounds (length ";    while (*b) buf[p++] = *b++;
-    kama_u64_to_buf(buf, &p, len);
-    const char* c = ")\n";                        while (*c) buf[p++] = *c++;
+    kama_panic_info info;
+    info.kama_msg = buf + msg; info.kama_len = p - msg;
+    info.kama_file = file ? file : ""; info.kama_line = file ? line : 0;
+    if (file) {
+        kama_fail_puts(buf, &p, cap - 1, " (");
+        kama_fail_puts(buf, &p, cap - 1, file);
+        kama_fail_puts(buf, &p, cap - 1, ":");
+        kama_fail_putu(buf, &p, cap - 1, (unsigned long long)(line < 0 ? 0 : line));
+        kama_fail_puts(buf, &p, cap - 1, ")");
+    }
+    buf[p++] = '\n';   /* `cap - 1` above keeps room for it */
     (void)kama_raw_write(2, buf, p);
-    kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
+    kama_run_panic_hook(&info);
     abort();
+}
+#define KAMA__FAIL_BUF char buf[1024]; size_t p = 0; const size_t cap = sizeof buf - 1; \
+                       kama_fail_puts(buf, &p, cap, "kama: ")
+static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len) {
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "index ");            kama_fail_putu(buf, &p, cap, i);
+    kama_fail_puts(buf, &p, cap, " out of bounds (length "); kama_fail_putu(buf, &p, cap, len);
+    kama_fail_puts(buf, &p, cap, ")");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 // A `cast<T>` whose runtime value does not FIT `T`. Distinct from kama_bounds_fail: nothing is indexed,
 // so the message names the value and the range it missed. Same clean abort, same overridable hook.
 static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi) {
-    extern void abort(void);
-    char buf[160]; size_t p = 0;
-    const char* a = "kama: value ";                 while (*a) buf[p++] = *a++;
-    kama_i64_to_buf(buf, &p, v);
-    const char* b = " does not fit the target range [";  while (*b) buf[p++] = *b++;
-    kama_i64_to_buf(buf, &p, lo);
-    const char* c = ", ";                           while (*c) buf[p++] = *c++;
-    kama_u64_to_buf(buf, &p, hi);
-    const char* d = "]\n";                          while (*d) buf[p++] = *d++;
-    (void)kama_raw_write(2, buf, p);
-    kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "value ");                         kama_fail_puti(buf, &p, cap, v);
+    kama_fail_puts(buf, &p, cap, " does not fit the target range ["); kama_fail_puti(buf, &p, cap, lo);
+    kama_fail_puts(buf, &p, cap, ", ");                             kama_fail_putu(buf, &p, cap, hi);
+    kama_fail_puts(buf, &p, cap, "]");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 // The unsigned-source twin: the value cannot be printed as signed (it may exceed LLONG_MAX), while the
 // target's floor still can be. Splitting the two is what keeps both ends of the message exact.
 static inline KAMA_NORETURN void kama_narrow_fail_u(unsigned long long v, long long lo, unsigned long long hi) {
-    extern void abort(void);
-    char buf[160]; size_t p = 0;
-    const char* a = "kama: value ";                 while (*a) buf[p++] = *a++;
-    kama_u64_to_buf(buf, &p, v);
-    const char* b = " does not fit the target range [";  while (*b) buf[p++] = *b++;
-    kama_i64_to_buf(buf, &p, lo);
-    const char* c = ", ";                           while (*c) buf[p++] = *c++;
-    kama_u64_to_buf(buf, &p, hi);
-    const char* d = "]\n";                          while (*d) buf[p++] = *d++;
-    (void)kama_raw_write(2, buf, p);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "value ");                         kama_fail_putu(buf, &p, cap, v);
+    kama_fail_puts(buf, &p, cap, " does not fit the target range ["); kama_fail_puti(buf, &p, cap, lo);
+    kama_fail_puts(buf, &p, cap, ", ");                             kama_fail_putu(buf, &p, cap, hi);
+    kama_fail_puts(buf, &p, cap, "]");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 // A sub-`int` SIGNED arithmetic result outside its own type's range. Distinct from kama_narrow_fail_s:
 // a narrowing `cast<int8>(300)` is a conversion the author WROTE, while this is an arithmetic result the
 // author did not — so the message names the operation, not a target.
 static inline KAMA_NORETURN void kama_arith_fail(long long v, long long lo, unsigned long long hi) {
-    extern void abort(void);
-    char buf[160]; size_t p = 0;
-    const char* a = "kama: arithmetic overflow -- the result ";  while (*a) buf[p++] = *a++;
-    kama_i64_to_buf(buf, &p, v);
-    const char* b = " does not fit the operand type [";          while (*b) buf[p++] = *b++;
-    kama_i64_to_buf(buf, &p, lo);
-    const char* c = ", ";                                        while (*c) buf[p++] = *c++;
-    kama_u64_to_buf(buf, &p, hi);
-    const char* d = "]\n";                                       while (*d) buf[p++] = *d++;
-    (void)kama_raw_write(2, buf, p);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "arithmetic overflow -- the result "); kama_fail_puti(buf, &p, cap, v);
+    kama_fail_puts(buf, &p, cap, " does not fit the operand type [");   kama_fail_puti(buf, &p, cap, lo);
+    kama_fail_puts(buf, &p, cap, ", ");                                kama_fail_putu(buf, &p, cap, hi);
+    kama_fail_puts(buf, &p, cap, "]");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 // A signed integer LANE that overflowed. Named separately from kama_arith_fail because the lane index is
 // the thing a reader needs — the other lanes are fine, and "which one" is not otherwise recoverable.
 static inline KAMA_NORETURN void kama_simd_arith_fail(int lane) {
-    extern void abort(void);
-    char buf[96]; size_t p = 0;
-    const char* a = "kama: arithmetic overflow in Simd lane ";  while (*a) buf[p++] = *a++;
-    kama_i64_to_buf(buf, &p, (long long)lane);
-    const char* b = "\n";                                       while (*b) buf[p++] = *b++;
-    (void)kama_raw_write(2, buf, p);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "arithmetic overflow in Simd lane "); kama_fail_puti(buf, &p, cap, (long long)lane);
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 // `TYPE_MIN / -1`. Named separately because it can report no value: the result is `-TYPE_MIN`, the one
 // number the type cannot hold, and at 64 bits no wider signed type can hold it either.
 static inline KAMA_NORETURN void kama_sdiv_fail(void) {
-    extern void abort(void);
-    const char* m = "kama: arithmetic overflow -- TYPE_MIN / -1 has no representable result\n";
-    size_t n = 0; while (m[n]) ++n;
-    (void)kama_raw_write(2, m, n);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "arithmetic overflow -- TYPE_MIN / -1 has no representable result");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 // The three faults that used to be `-fsanitize-trap` — a bare `ud2` that printed nothing, ran no hook and
 // could not be recovered from. Each is now kama's own check (KAMA_DIV/KAMA_MOD/KAMA_SHL/KAMA_SHR and
@@ -615,58 +637,38 @@ static inline KAMA_NORETURN void kama_sdiv_fail(void) {
 // and — inside an `@onPanic` region — recovery. It is also what lets the driver pass no `-fsanitize` at
 // all, which is what emscripten's Wasm Workers (an AudioWorklet) required.
 static inline KAMA_NORETURN void kama_div_zero_fail(void) {
-    extern void abort(void);
-    const char* m = "kama: division by zero\n";
-    size_t n = 0; while (m[n]) ++n;
-    (void)kama_raw_write(2, m, n);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "division by zero");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 static inline KAMA_NORETURN void kama_shift_fail(long long n, int width) {
-    extern void abort(void);
-    char buf[96]; size_t p = 0;
-    const char* a = "kama: shift by ";                        while (*a) buf[p++] = *a++;
-    kama_i64_to_buf(buf, &p, n);
-    const char* b = " is outside the ";                       while (*b) buf[p++] = *b++;
-    kama_i64_to_buf(buf, &p, (long long)width);
-    const char* c = "-bit width\n";                           while (*c) buf[p++] = *c++;
-    (void)kama_raw_write(2, buf, p);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "shift by ");        kama_fail_puti(buf, &p, cap, n);
+    kama_fail_puts(buf, &p, cap, " is outside the "); kama_fail_puti(buf, &p, cap, (long long)width);
+    kama_fail_puts(buf, &p, cap, "-bit width");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 static inline KAMA_NORETURN void kama_fcast_fail(void) {
-    extern void abort(void);
-    const char* m = "kama: float -> int conversion is out of range (or NaN)\n";
-    size_t n = 0; while (m[n]) ++n;
-    (void)kama_raw_write(2, m, n);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "float -> int conversion is out of range (or NaN)");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 // A signed `+ - *` or negation that overflowed a 32/64-bit type (debug tier). Like kama_sdiv_fail it can
 // report no result — the result is the one number the type cannot hold — so it names the operation.
 static inline KAMA_NORETURN void kama_wide_arith_fail(const char* op, int width) {
-    extern void abort(void);
-    char buf[96]; size_t p = 0;
-    const char* a = "kama: arithmetic overflow -- int";          while (*a) buf[p++] = *a++;
-    kama_i64_to_buf(buf, &p, (long long)width);
-    const char* b = " ";                                        while (*b) buf[p++] = *b++;
-    while (*op) buf[p++] = *op++;
-    const char* c = " overflowed\n";                            while (*c) buf[p++] = *c++;
-    (void)kama_raw_write(2, buf, p);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "arithmetic overflow -- int"); kama_fail_puti(buf, &p, cap, (long long)width);
+    kama_fail_puts(buf, &p, cap, " "); kama_fail_puts(buf, &p, cap, op);
+    kama_fail_puts(buf, &p, cap, " overflowed");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 // A byte offset that lands INSIDE a UTF-8 character. Distinct from kama_bounds_fail: the offset is in
 // range, so "out of bounds" would name the wrong problem.
 static inline KAMA_NORETURN void kama_utf8_split_fail(size_t off) {
-    extern void abort(void);
-    char buf[96]; size_t p = 0;
-    const char* a = "kama: byte offset ";                     while (*a) buf[p++] = *a++;
-    kama_u64_to_buf(buf, &p, off);
-    const char* b = " splits a UTF-8 character\n";            while (*b) buf[p++] = *b++;
-    (void)kama_raw_write(2, buf, p);
-    kama_run_panic_hook();
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "byte offset "); kama_fail_putu(buf, &p, cap, off);
+    kama_fail_puts(buf, &p, cap, " splits a UTF-8 character");
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 }
 #endif
 
@@ -1851,9 +1853,9 @@ static inline kama_string kama_str_take(kama_string* s) {
     return r;
 }
 
-// User-triggerable trap for `panic(msg: …)` and a failed `assert(cond: …)`. Writes
-// "kama: panic: <msg>" to stderr and `abort()`s — the same clean-abort mechanism as the bounds
-// trap (no <stdio.h>, no undefined behavior). Never returns.
+// User-triggerable trap for `panic(msg: …)` and a failed `assert(cond: …)` with no location: the runtime's own
+// fatal conditions (out of memory, a bad copy range). Writes "kama: panic: <msg>" to stderr, runs the hook and
+// `abort()`s — the same path as every trap. Never returns.
 static inline KAMA_NORETURN void kama_panic(kama_string msg) {
 #if defined(KAMA_TARGET_EMBEDDED)
     // Freestanding: no stderr, no `abort`. Route through the overridable weak hook (see kama_bounds_fail).
@@ -1862,12 +1864,10 @@ static inline KAMA_NORETURN void kama_panic(kama_string msg) {
     kama_panic_handler();
     for (;;) {}
 #else
-    extern void abort(void);
-    (void)kama_raw_write(2, "kama: panic: ", 13);
-    if (msg.kama_len) (void)kama_raw_write(2, msg.kama_data, msg.kama_len);
-    (void)kama_raw_write(2, "\n", 1);
-    kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
-    abort();
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "panic: ");
+    for (size_t i = 0; i < msg.kama_len && p < cap; ++i) buf[p++] = ((const char*)msg.kama_data)[i];
+    kama__fail(buf, sizeof buf, 6, p, 0, 0);
 #endif
 }
 
@@ -2162,56 +2162,47 @@ static inline void kama_merge_end(kama_merge_log* l, int commit) {
 }
 
 // --- Fatal diagnostics with source location (panic / assert) -----------------
-// Compose a message + " (file:line)" into a stack buffer, write it to stderr, and terminate — the same
-// clean-abort discipline as kama_panic (no <stdio.h>, no UB, never returns). On embedded there is no
-// stderr/abort, so route through the overridable weak kama_panic_handler (see kama_bounds_fail). Every
-// append is bounded by `cap`, so an over-long condition/message/path truncates rather than overruns.
-static inline KAMA_NORETURN void kama_fail_emit(const char* buf, size_t n) {
+// `panic(msg:)` → "kama: panic: <msg> (file:line)", through the one failure path (kama__fail).
+static inline KAMA_NORETURN void kama_panic_at(kama_string msg, const char* file, int line) {
 #if defined(KAMA_TARGET_EMBEDDED)
-    (void)buf; (void)n;
+    (void)msg; (void)file; (void)line;
     kama_try_recover();
     kama_panic_handler();
     for (;;) {}
 #else
-    extern void abort(void);
-    (void)kama_raw_write(2, buf, n);
-    (void)kama_raw_write(2, "\n", 1);
-    kama_run_panic_hook();   // custom exhibition (dialog / telemetry); runtime still terminates
-    abort();
-#endif
-}
-static inline void kama_fail_puts(char* buf, size_t* p, size_t cap, const char* s) {
-    while (s && *s && *p < cap) buf[(*p)++] = *s++;
-}
-static inline void kama_fail_loc(char* buf, size_t* p, size_t cap, const char* file, int line) {
-    kama_fail_puts(buf, p, cap, " (");
-    kama_fail_puts(buf, p, cap, file);
-    if (*p < cap) buf[(*p)++] = ':';
-    char lb[24]; size_t lp = 0; kama_u64_to_buf(lb, &lp, (size_t)(line < 0 ? 0 : line));
-    for (size_t i = 0; i < lp && *p < cap; ++i) buf[(*p)++] = lb[i];
-    if (*p < cap) buf[(*p)++] = ')';
-}
-// `panic(msg:)` → "kama: panic: <msg> (file:line)".
-static inline KAMA_NORETURN void kama_panic_at(kama_string msg, const char* file, int line) {
-    char buf[1024]; size_t p = 0; const size_t cap = sizeof buf;
-    kama_fail_puts(buf, &p, cap, "kama: panic: ");
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, "panic: ");
     for (size_t i = 0; i < msg.kama_len && p < cap; ++i) buf[p++] = ((const char*)msg.kama_data)[i];
-    kama_fail_loc(buf, &p, cap, file, line);
-    kama_fail_emit(buf, p);
+    kama__fail(buf, sizeof buf, 6, p, file, (int32_t)line);
+#endif
 }
 // A failed `assert`/`debugAssert` → "assertion failed: <cond>[ — <msg>] (file:line)". `cond` is the
 // auto-stringified condition text (may be ""); `msg` is the user message (may be "").
 static inline void kama_assert_fail(const char* cond, kama_string msg, const char* file, int line) {
-    char buf[1024]; size_t p = 0; const size_t cap = sizeof buf;
+#if defined(KAMA_TARGET_EMBEDDED)
+    (void)cond; (void)msg; (void)file; (void)line;
+    kama_try_recover();
+    kama_panic_handler();
+    for (;;) {}
+#else
+    char buf[1024]; size_t p = 0; const size_t cap = sizeof buf - 1;
     kama_fail_puts(buf, &p, cap, "assertion failed");
     if (cond && *cond) { kama_fail_puts(buf, &p, cap, ": "); kama_fail_puts(buf, &p, cap, cond); }
     if (msg.kama_len) {
         kama_fail_puts(buf, &p, cap, " \xE2\x80\x94 ");   // em dash (U+2014), UTF-8
         for (size_t i = 0; i < msg.kama_len && p < cap; ++i) buf[p++] = ((const char*)msg.kama_data)[i];
     }
-    kama_fail_loc(buf, &p, cap, file, line);
-    kama_fail_emit(buf, p);
+    kama__fail(buf, sizeof buf, 0, p, file, (int32_t)line);
+#endif
 }
+// The accessors `core::PanicInfo` reads through. Each string is BORROWED (capacity 0, a no-op drop) — it points into
+// the panicking thread's message buffer, alive for the hook's whole run.
+static inline kama_string kama_panic_info_message(const kama_panic_info* i) { return kama_string_lit(i->kama_msg, i->kama_len); }
+static inline kama_string kama_panic_info_file(const kama_panic_info* i) {
+    size_t n = 0; while (i->kama_file[n]) ++n;
+    return kama_string_lit(i->kama_file, n);
+}
+static inline int32_t kama_panic_info_line(const kama_panic_info* i) { return i->kama_line; }
 
 // --- Floor console output (print / println / eprint / eprintln) --------------
 // Raw unbuffered byte write to a standard fd (1 = stdout, 2 = stderr), no <stdio.h> — the same discipline as

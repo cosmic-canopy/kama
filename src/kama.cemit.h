@@ -151,6 +151,7 @@ struct SigInfo {
                          // changes.
     bool                   foreignEntry = false;
     bool                   callerThread = false;
+    std::string            shown;   // the declaration as written, `fnptr void PanicHandler(const ref PanicInfo info)`
 };
 
 // What a `fnptr`-typed destination is being bound to, as resolved by `resolveFnPtrTarget`. One record
@@ -3923,6 +3924,12 @@ private:
     static int64_t ctAsI(const CTValue& v);
     std::string rootBinding(SharedExpression e) const;
     std::string refReturnRoot(SharedExpression e, bool& isStatic);   // a returned place's root, through ref bindings
+    // A `type extern value` keyed by its C spelling: `@linkName("kama_panic_info") type extern value PanicInfo` is
+    // registered as `kama_panic_info`, which every emitted reference then spells, while kama code names it
+    // `PanicInfo` (the resolver's extern rung maps it) and a diagnostic shows `PanicInfo` again.
+    std::map<std::string, std::string> _externLinkKey;     // kama name -> C name
+    std::map<std::string, std::string> _externLinkShown;   // C name -> kama name
+    std::string externKey(ClassDeclarationNode* cd);
     bool rejectBareGeneric(const SharedIdentifier& t, const char* what, int line);   // `Src` for `Src<A>` (KR-183)
     bool rootIsTemporary(SharedExpression e) const;   // member/element chain rooted in a by-value call result        // the root identifier a write targets
     // The PLACE a expression designates: the base binding plus its chain of field names. This is the

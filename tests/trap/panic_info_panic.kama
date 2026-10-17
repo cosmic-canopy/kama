@@ -1,0 +1,18 @@
+// KR-179: a panic handler is handed what went wrong — the message stderr shows (after `kama: `, before the
+// location) and the location — so a program with no terminal can put it in its own crash report. It used to
+// take no arguments: the facts went to fd 2 and the handler learned nothing.
+import { core::setPanicHandler, core::PanicInfo, core::eprintln };
+
+unsafe fn void onPanic(const ref PanicInfo info) {
+    string m = info.message();
+    string f = info.file();
+    int32 l = info.line();
+    eprintln(s: "HOOK [${m}] [${f}] ${l}");
+}
+unsafe fn void install() { setPanicHandler(handler: onPanic); }
+
+fn int32 main() {
+    install();
+    panic(msg: "boom");
+    return 0;   // unreachable
+}

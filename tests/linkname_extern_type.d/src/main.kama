@@ -1,0 +1,6 @@
+import { linknametype::geo::Vec2, linknametype::geo::dot, linknametype::geo::scaled };
+fn int32 main() {
+    Vec2 a = Vec2.of(x: 1, y: 2);
+    Vec2 b = scaled(v: Vec2.of(x: 3, y: 4), k: 2);   // (6, 8), scaled by C
+    return dot(a: a, b: b) + b.x;                    // 6 + 16 + 6 = 28
+}

@@ -1,0 +1,6 @@
+// KR-179: a `PanicHandler` takes the `PanicInfo` it is handed. A handler written to the old, argument-less
+// signature is refused, and the message names the signature it must match.
+import { core::setPanicHandler };
+unsafe fn void onPanic() { }
+unsafe fn void install() { setPanicHandler(handler: onPanic); }
+fn int32 main() { install(); return 0; }

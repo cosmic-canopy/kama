@@ -1,0 +1,1 @@
+HOOK [panic: boom] [panic_info_panic.kama] 16
