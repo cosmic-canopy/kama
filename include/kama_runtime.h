@@ -272,11 +272,16 @@ static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v,
 // virtual member declared `@noheap` (every implementation is checked against it), a `@noheap fnptr`
 // signature, or a destructor slot that cannot run anything allocating. It expands to its argument and
 // changes no code: it exists so the call graph, which is read back out of this C, can tell a proven slot
-// from an unproven one. EVERY OTHER call through a member (`x->m(…)`, `x.m(…)`) is an allocation fact for
-// the body containing it, because nothing says which function runs — see buildCallGraph. Soundness is
-// therefore the DEFAULT and the marker is the exception, which is the way round that fails safe: forget it
-// and a provable call is refused with a diagnostic, rather than an unprovable one passing silently.
+// from an unproven one.
 #define KAMA_NOHEAP_SLOT(f) (f)
+// A call through slot `f` of a vtable of type `V` (KR-39) — a contract member, a virtual method, a destructor
+// behind a handle. Also changes no code. The call graph reads every vtable INSTANCE this C defines (a
+// `const V Impl__as_C = { .k_m = &Impl__m, … }`), so the slot is an edge to each function any instance of `V`
+// installs there: the program's whole callee set, which is sound because nothing else can be in it (only a host
+// that forges a vtable across `expose`, which kama cannot see). A member call with no marker resolves to the
+// same slot across every vtable type, a superset; one no vtable has — a `fnptr` field — stays an allocation fact
+// for the body containing it, the default that fails safe — see buildCallGraph.
+#define KAMA_SLOT(V, f) (f)
 
 // ---- Collections ----------------------------------------------------------
 // Generic collections are monomorphized per element type from these templates.

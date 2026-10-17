@@ -1847,7 +1847,12 @@ private:
     // `reported`: the gate already refused this site where it was written (only a `@noheap` body does), so the
     // walk must not say it again. Every other fact is the walk's to report — if a root reaches it.
     struct AllocSite { std::string what; int line = 0; std::string file; bool indirect = false; bool reported = false; };
-    struct CallEdge  { int line = 0; };
+    struct CallEdge  { int line = 0; std::string via; };   // `via`: the slot a dispatched hop went through (KR-39)
+    // KR-39: every vtable instance the emitted C defines, read back — V -> slot -> the functions installed there.
+    struct SlotTarget { std::string fn; std::string via; };   // `via` renders the hop: `Shape.area [Sq]`
+    std::map<std::string, std::map<std::string, std::vector<SlotTarget>>> _vtblSlots;
+    std::map<std::string, std::vector<SlotTarget>> _slotsByField;   // a slot's targets across EVERY vtable type
+    void readVtableInstances(const std::string& text);
     // `fromFlag` distinguishes a body the AUTHOR annotated from one `--no-heap` seeded. Both are roots of
     // the same walk, but they are two different claims and must not borrow each other's sentence: telling
     // an author their function "is `@noheap`" when they wrote no attribute names a cause that is not there.

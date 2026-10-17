@@ -894,22 +894,34 @@ a literal, an `InlineArray<T>#(N)` with a `borrow` window and an in-place `sortU
 object — the whole of it legal, with no annotation anywhere but the one attribute.
 
 Where the compiler **cannot** see the callee, the target must **declare** the promise, and the call is
-otherwise rejected rather than assumed harmless: a `fnptr` or bound function pointer has no knowable <!-- xfail: noheap_fnptr_call, noheap_contract_member -->
-target at all, and a contract member or `virtual` method is dispatched through a slot. Marking the
-**contract member** `@noheap` is what lets the proof cross it — every implementation is then checked <!-- xfail: noheap_contract_impl -->
-against that promise, exactly as `const fn` already works on a contract
-([tests/noheap_contract.kama](../tests/noheap_contract.kama)). A virtual call the compiler devirtualizes
-(a `final` class, a `final fn`, or a method nobody overrides) is a direct call and needs no annotation.
+otherwise rejected rather than assumed harmless: a `fnptr` or bound function pointer has no knowable <!-- xfail: noheap_fnptr_call -->
+target at all. A **contract member** or **`virtual` method** is different. It is dispatched through a slot, but a
+slot holds only a function some vtable the program builds installed there, and a build sees every one of them, so
+a call through it is an edge to **every implementer the program defines** — the class-hierarchy analysis that
+whole-program C++ compilers and Java JITs use. The call is legal exactly when each of those is, and the refusal <!-- test: noheap_contract_member, noheap_contract_two -->
+names the slot it went through and the implementer that allocates: `` `total` -> `Area.area [Blob]` -> <!-- xfail: noheap_contract_impl_slot -->
+`Blob::area` -> … ``. The proof is over the program as built, so adding an implementer that allocates
+refuses every `@noheap` call through that slot, naming it. Marking the **contract member** `@noheap` states the <!-- xfail: noheap_contract_impl -->
+promise once instead: every implementation is then checked against it, exactly as `const fn` already works
+on a contract ([tests/noheap_contract.kama](../tests/noheap_contract.kama)). A generic body bound by the <!-- xfail: noheap_generic_bound_alloc -->
+contract (`fn measure<T: Area>(T x)`) calls each instance directly, and its chain names the instance as
+written, `measure<Blob>`. A virtual call the compiler devirtualizes (a `final` class, a `final fn`, or a
+method nobody overrides) is a direct call. One limit is outside any kama build: a host calling an
+`expose fn` can hand it a contract value whose vtable it built in C, and that vtable's functions are
+unchecked C, like an unmarked `extern fn`.
 
 **A destructor is a slot like any other.** Dropping an `Owned`/`Shared`/`Weak` handle over a **contract** or
-a **virtual base** runs the concrete object's `~T()` through the vtable, and which one that is is a runtime
-fact, so the drop is rejected in a no-heap region like any other slot call, even when the handle's own storage is an arena. <!-- xfail: noheap_drop_contract_box, noheap_drop_contract_box_heap, noheap_drop_virtual_box -->
-Two things prove it, and both are declarations rather than inference:
+a **virtual base** runs the concrete object's `~T()` through the vtable, so the drop is an edge to every
+implementer's or subclass's destructor, and it is refused in a no-heap region when any of them frees to <!-- xfail: noheap_drop_contract_box, noheap_drop_contract_box_heap, noheap_drop_virtual_box -->
+the system heap — even when the handle's own storage is an arena: `` `Shape.dtor [Circle]` -> `Circle::dtor` ``.
+Two declarations state the promise instead of leaving it to the implementers of the day:
 `@noheap ~Base()`, which **every subclass destructor is then held to** — a subclass that owns a field which
 frees must say so, and is refused when it cannot — and a contract declared **`for value`**, whose <!-- xfail: noheap_dtor_override -->
 implementations own nothing and therefore have no destructor to dispatch
 ([tests/noheap_drop_box_ok.kama](../tests/noheap_drop_box_ok.kama)). A handle over a **concrete** type is
-unaffected: its destructor is a direct call the analysis already reads.
+unaffected: its destructor is a direct call the analysis already reads. With a declared pool
+(`@globalAllocator`) every implementer's destructor frees into it, so a boxed error builds under <!-- test: noheap_pool_serde -->
+`--no-heap` ([tests/noheap_pool_serde.d](../tests/noheap_pool_serde.d)).
 
 The **`fnptr` seam has the same escape, spelled on the signature**: `@noheap fnptr int32 Op(int32 x);` <!-- test: noheap_fnptr -->
 makes the promise part of the named type, so every function bound to it must itself be `@noheap` — in <!-- xfail: noheap_fnptr_bind, noheap_fnptr_bind_arg -->
@@ -3812,7 +3824,7 @@ share its name: a parameter `decode` is called through, whatever `decode` the pr
 
 A signature may carry **`@noheap`**, which makes non-allocating part of the type: `@noheap fnptr int32 <!-- test: noheap_fnptr -->
 Op(int32 x);` requires every function bound to it to be `@noheap` too, and in exchange a call through the
-slot is legal inside a no-heap region — the escape hatch for the blind seam. See *No-heap subset*.
+slot is legal inside a no-heap region — the one slot whose target no build can see. See *No-heap subset*.
 
 **Unbound method references** — `Type::method` (zero-cost). A method lowers to `Class__method(Class* self,
 …)`, so it's a function pointer whose **first parameter is the receiver**; the object is passed explicitly:

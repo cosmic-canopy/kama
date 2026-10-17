@@ -1,7 +1,8 @@
 // Dropping a box through a virtual BASE runs the most-derived destructor, read off the object's vtable at run
-// time: `~Square` frees its `DynamicArray` here. `~Shape` promises nothing, so the drop cannot be proven. This
-// built clean until 0.9.353 — `Shape__vdrop` was read, but the slot call inside it was not a fact. The escape
-// hatch is `@noheap ~Shape()`, checked against every subclass (tests/noheap_drop_box_ok.kama).
+// time: `~Square` frees its `DynamicArray` here. Since KR-39 the slot is an edge to every class's destructor in the
+// hierarchy, so the refusal names the one that frees (`Shape.dtor [Square]` -> `Square::dtor` -> …). This built clean
+// until 0.9.353 — `Shape__vdrop` was read, but the slot call inside it was not a fact. `@noheap ~Shape()` still
+// promises it for every subclass (tests/noheap_drop_box_ok.kama).
 import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator, std::collections::DynamicArray };
 type virtual(maxDepth: 1) resource Shape {
     public ctor make() { }

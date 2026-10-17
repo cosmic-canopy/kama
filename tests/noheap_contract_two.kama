@@ -1,0 +1,22 @@
+// A `@noheap` body dispatching through a contract slot is proven over EVERY implementer the program defines (KR-39) —
+// here two, neither allocating. A generic bound was always provable (it lowers to a direct call per instance,
+// `measure<Sq>`), and is pinned here beside it. One allocating implementer refuses either form, naming it:
+// tests/xfail/noheap_contract_impl_slot and tests/xfail/noheap_generic_bound_alloc. Returns 9.
+type contract Area for value { fn int32 area(); }
+type value Sq implements Area {
+    int32 s;
+    public ctor make(int32 s) { this.s = s; }
+    public fn int32 area() { return this.s * this.s; }
+}
+type value Rect implements Area {
+    int32 w; int32 h;
+    public ctor make(int32 w, int32 h) { this.w = w; this.h = h; }
+    public fn int32 area() { return this.w * this.h; }
+}
+@noheap fn int32 total(Area a, Area b) { return a.area() + b.area(); }
+@noheap fn int32 measure<T: Area>(T x) { return x.area(); }
+fn int32 main() {
+    Sq s = Sq.make(s: 2);
+    Rect r = Rect.make(w: 1, h: 3);
+    return total(a: s, b: r) + measure(x: s) - 2;   // 4 + 3 + 4 - 2
+}

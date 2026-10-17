@@ -1,0 +1,21 @@
+// A contract slot can run any implementer the program defines (KR-39), so a `@noheap` body calling through it is
+// refused when one of them allocates — and the chain names the slot and the implementer: `Area.area [Blob]`.
+import { std::collections::DynamicArray };
+type contract Area for resource { fn int32 area(); }
+type resource Sq implements Area {
+    int32 s;
+    public ctor make(int32 s) { this.s = s; }
+    public fn int32 area() { return this.s * this.s; }
+}
+type resource Blob implements Area {
+    DynamicArray<int32> seen;
+    public ctor make() { this.seen = DynamicArray.empty(); }
+    public fn int32 area() { this.seen.add(item: 1); return 1; }
+}
+@noheap fn int32 total(Area a) { return a.area(); }
+fn int32 main()
+{
+    Sq s = Sq.make(s: 2);
+    Blob b = Blob.make();
+    return total(a: s) + total(a: b);
+}

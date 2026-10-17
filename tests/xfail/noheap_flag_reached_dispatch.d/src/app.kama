@@ -8,8 +8,11 @@
 // tests/noheap_flag_unreached_dispatch.d). It now records the fact and lets the reachability walk report
 // it — so what must not regress is exactly this: a dispatch on a live call path is STILL an error.
 //
-// A contract slot is unprovable by construction: which `Sink` runs is a runtime fact, so the compiler
-// cannot know whether `emit` allocates. That is the whole reason `@noheap` on a contract MEMBER exists.
+// Since KR-39 a contract slot is an edge to every implementer the program defines, so it is refused exactly when
+// one of them allocates — here `Logger.emit`, which grows a `DynamicArray`. `Logger.emit` is reached ONLY through the
+// slot (`push` -> `Sink.emit [Logger]`), so the refusal is the proof that the slot is followed; it anchors on the
+// innermost body the author wrote, the implementer. With `Counter` alone the program builds
+// (tests/noheap_contract_member.kama).
 import { std::collections::DynamicArray };
 
 type contract Sink for resource { fn void emit(int32 v); }
@@ -18,6 +21,12 @@ type resource Counter implements Sink {
     int32 total = 0;
     public default ctor make() { }
     public fn void emit(int32 v) { this.total = this.total + v; }
+}
+
+type resource Logger implements Sink {
+    DynamicArray<int32> seen;
+    public default ctor make() { this.seen = DynamicArray.empty(); }
+    public fn void emit(int32 v) { this.seen.add(item: v); }
 }
 
 // The innermost body the author wrote — the frame the diagnostic must anchor on.

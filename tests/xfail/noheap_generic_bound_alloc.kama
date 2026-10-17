@@ -1,0 +1,15 @@
+// A generic bound is a direct call per instance, so `measure<Blob>` is proven or refused on `Blob.area` itself — and
+// the chain names the instance as written, `measure<Blob>`, not its mangled C name (KR-39).
+import { std::collections::DynamicArray };
+type contract Area for resource { fn int32 area(); }
+type resource Blob implements Area {
+    DynamicArray<int32> seen;
+    public ctor make() { this.seen = DynamicArray.empty(); }
+    public fn int32 area() { this.seen.add(item: 1); return 1; }
+}
+@noheap fn int32 measure<T: Area>(ref T x) { return x.area(); }
+fn int32 main()
+{
+    Blob b = Blob.make();
+    return measure(x: ref b);
+}

@@ -18027,7 +18027,9 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
         indent(d); *_out << "size_t kama_n = self->kama_vtbl->kama_vsize ? KAMA_NOHEAP_SLOT(self->kama_vtbl->kama_vsize)(self->kama_obj) : self->kama_vtbl->kama_size;\n";
         indent(d); *_out << "size_t kama_a = self->kama_vtbl->kama_valign ? KAMA_NOHEAP_SLOT(self->kama_vtbl->kama_valign)(self->kama_obj) : self->kama_vtbl->kama_align;\n";
         if (dispatches) {
-            indent(d); *_out << "if (self->kama_vtbl->kama_dtor) self->kama_vtbl->kama_dtor(self->kama_obj);\n";
+            // KR-39: a slot the call graph resolves to every implementer's destructor (KAMA_SLOT, kama_runtime.h).
+            indent(d); *_out << "if (self->kama_vtbl->kama_dtor) KAMA_SLOT(" << info.elemClass
+                             << "_vtbl, self->kama_vtbl->kama_dtor)(self->kama_obj);\n";
         }
         indent(d); *_out << release("kama_obj", "kama_n", "kama_a") << ";\n";
     };
@@ -31769,7 +31771,8 @@ void CEmitter::rejectIfNoHeap(const char* what, int line)
 //
 // The escape hatch is `@noheap` ON THE SIGNATURE — a `@noheap fnptr`, whose every bind is checked against
 // the promise, so the call through it is provable and never reaches here. This gate is what makes that
-// declaration necessary rather than decorative. A contract member and a `virtual` slot have the same pair.
+// declaration necessary rather than decorative. A contract member or `virtual` slot never reaches here: the call
+// graph resolves it to every implementer the program defines (KAMA_SLOT, kama_runtime.h).
 void CEmitter::rejectNoHeapIndirect(const char* what, int line)
 {
     if (_probingTemplate) return;
@@ -32227,7 +32230,31 @@ void CEmitter::ensureRuntimeHeaders()
 // namespace path nobody can spell. Used by all four walks that render a chain, so the rule cannot drift.
 std::string CEmitter::displayBody(const std::string& cName) const
 {
-    return _headerBodies.count(cName) ? cName : demangleForDisplay(cName);
+    if (_headerBodies.count(cName)) return cName;
+    // A generic function's instance reads as its template and its arguments — `measure<Sq>`, not the mangled
+    // `measure::k_Fk39a2::Sq` a no-heap chain printed (KR-39).
+    auto gi = _genericInsts.find(cName);
+    if (gi != _genericInsts.end()) {
+        std::string s = demangleForDisplay(gi->second.templateKey) + "<";
+        for (size_t i = 0; i < gi->second.typeArgs.size(); ++i) s += (i ? ", " : "") + spellTypeNode(gi->second.typeArgs[i]);
+        return s + ">";
+    }
+    // ...and a generic TYPE's member as the instance, then the member: `Owned<Error>::dtor`, where the body name
+    // read `Owned_kama::Error_kama::GlobalAllocator::dtor`.
+    for (size_t p = cName.rfind("__"); p != std::string::npos && p > 0; p = cName.rfind("__", p - 1)) {
+        const std::string owner = cName.substr(0, p), member = demangleForDisplay(cName.substr(p + 2));
+        if (_genericTypeInsts.count(owner)) return demangleForDisplay(owner) + "::" + member;
+        // A box over a CONTRACT is an intrinsic, not a generic instance: `Owned<Error>`, its allocator shown only when
+        // it is not the default (the reading `Map<int32, int32>` gets for its defaulted parameters).
+        auto co = _collections.find(owner);
+        if (co != _collections.end() && co->second.elemIsInterface) {
+            const char* head = co->second.kind == CollKind::Shared ? "Shared" : co->second.kind == CollKind::Weak ? "Weak" : "Owned";
+            const std::string a = co->second.allocType;
+            const bool dflt = a.empty() || a.find("GlobalAllocator") != std::string::npos;
+            return std::string(head) + "<" + demangleForDisplay(co->second.elemClass) + (dflt ? "" : ", " + demangleForDisplay(a)) + ">::" + member;
+        }
+    }
+    return demangleForDisplay(cName);
 }
 
 void CEmitter::buildCallGraph()
@@ -32271,6 +32298,7 @@ void CEmitter::buildCallGraph()
     defined.erase("kama_alloc"); defined.erase("kama_alloc_zeroed"); defined.erase("kama_free");
 
     _callEdges.clear();
+    readVtableInstances(_emittedC);   // KR-39: what each dispatch slot can run, before any body is scanned
     // Emitted C first, so a fact it already recorded wins: it names the CONSTRUCT ("a deep `copy` of `X`"),
     // and a derived one can only name the symbol.
     scanCBodies(_emittedC, bodies, defined, std::string());
@@ -32279,6 +32307,65 @@ void CEmitter::buildCallGraph()
         keep.reserve(_headerBodyLists[i].size());
         for (const CBody& b : _headerBodyLists[i]) if (!shadowed.count(b.name)) keep.push_back(b);
         scanCBodies(_headerTexts[i].text, keep, defined, _headerTexts[i].file);
+    }
+}
+
+// KR-39 — every vtable instance in the emitted C: a file-scope `[static ]const V Name = { .slot = …, … };`, as the three
+// vtable emitters write it (a contract's `Impl__as_C`, an intrinsic's thunked one, a class hierarchy's `Class__vtable`).
+// Each `.slot = <cast>&fn` entry installs `fn` in `slot` of every `V`; `0` installs nothing. Sound because it is the
+// whole program's callee set — a duplicated per-TU `static const` instance only repeats the same entries.
+void CEmitter::readVtableInstances(const std::string& t)
+{
+    _vtblSlots.clear(); _slotsByField.clear();
+    auto identChar = [](char c) { return isalnum((unsigned char)c) || c == '_'; };
+    for (size_t ls = 0; ls < t.size(); ) {
+        size_t le = t.find('\n', ls); if (le == std::string::npos) le = t.size();
+        const std::string line = t.substr(ls, le - ls);
+        size_t at = 0;
+        if (line.compare(0, 7, "static ") == 0) at = 7;
+        if (line.compare(at, 6, "const ") == 0 && line.size() > 4 && line.compare(line.size() - 3, 3, "= {") == 0) {
+            std::istringstream hs(line.substr(at + 6));
+            std::string type, name;
+            hs >> type >> name;
+            size_t body = le + 1, close = t.find("\n};", le);
+            if (!type.empty() && !name.empty() && close != std::string::npos) {
+                const bool contract = type.size() > 5 && type.compare(type.size() - 5, 5, "_vtbl") == 0;
+                const bool klass = !contract && type.size() > 7 && type.compare(type.size() - 7, 7, "_vtable") == 0;
+                if (contract || klass) {
+                    std::string owner = contract ? type.substr(0, type.size() - 5) : type.substr(0, type.size() - 7);
+                    std::string impl = name;
+                    size_t as = name.find("__as_");
+                    if (as != std::string::npos) impl = name.substr(0, as);
+                    else if (name.size() > 8 && name.compare(name.size() - 8, 8, "__vtable") == 0) impl = name.substr(0, name.size() - 8);
+                    const std::string entries = t.substr(body, close - body);
+                    int depth = 0; size_t from = 0;
+                    auto take = [&](const std::string& e) {
+                        size_t dot = e.find('.'), eq = e.find('=');
+                        if (dot == std::string::npos || eq == std::string::npos || eq < dot) return;
+                        std::string field = e.substr(dot + 1, eq - dot - 1);
+                        while (!field.empty() && field.back() == ' ') field.pop_back();
+                        size_t amp = e.rfind('&');
+                        if (amp == std::string::npos) return;   // `0`, a size, a type name: nothing runs
+                        size_t s0 = amp + 1; while (s0 < e.size() && e[s0] == ' ') ++s0;
+                        size_t s1 = s0; while (s1 < e.size() && identChar(e[s1])) ++s1;
+                        const std::string fn = e.substr(s0, s1 - s0);
+                        if (fn.empty()) return;
+                        const std::string member = field == "kama_dtor" ? std::string("dtor")
+                                                 : (field.compare(0, 2, "k_") == 0 ? field.substr(2) : field);
+                        const std::string via = demangleForDisplay(owner) + "." + member + " [" + demangleForDisplay(impl) + "]";
+                        _vtblSlots[type][field].push_back({ fn, via });
+                        _slotsByField[field].push_back({ fn, via });
+                    };
+                    for (size_t i = 0; i < entries.size(); ++i) {
+                        const char c = entries[i];
+                        if (c == '(') ++depth; else if (c == ')') --depth;
+                        else if ((c == ',' || c == '\n') && depth == 0) { take(entries.substr(from, i - from)); from = i + 1; }
+                    }
+                    take(entries.substr(from));
+                }
+            }
+        }
+        ls = le + 1;
     }
 }
 
@@ -32336,7 +32423,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
         else for (size_t d = s.find("#line ", prevClose); d != std::string::npos && d < b.open; d = s.find("#line ", d + 6))
             readDirective(d);
         prevClose = b.close;
-        struct Ref { std::string name; int line; bool call; };
+        struct Ref { std::string name; int line; bool call; std::string via = std::string(); };
         std::vector<Ref> refs;
         std::set<std::string> declared;
         // A parameter is an identifier followed by `,` `)` or `[` in the header's parameter list.
@@ -32354,6 +32441,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
         // A slot call is an allocation fact unless the emitter proved it from a declaration and wrapped it
         // in that marker — see kama_runtime.h for why the unmarked case is the one that must be sound.
         int pdepth = 0, provenAt = 0;
+        int slotAt = 0; std::string slotType;   // inside `KAMA_SLOT(V, …)` (KR-39): the vtable type the call reads
         for (size_t i = b.open + 1; i < b.close; ) {
             const char c = s[i];
             if (c == '\n') { lineStart = true; ++i; continue; }
@@ -32370,7 +32458,9 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
                 // `->` is one token for the member test below.
                 if (c == '-' && i + 1 < n && s[i + 1] == '>') { prevTok = "->"; i += 2; continue; }
                 if (c == '(') ++pdepth;
-                if (c == ')') { if (provenAt && pdepth == provenAt) provenAt = 0; if (pdepth) --pdepth; }
+                if (c == ')') { if (provenAt && pdepth == provenAt) provenAt = 0;
+                                if (slotAt && pdepth == slotAt) { slotAt = 0; slotType.clear(); }
+                                if (pdepth) --pdepth; }
                 prevTok = std::string(1, c); ++i; continue;
             }
             size_t e = i; while (e < b.close && identChar(s[e])) ++e;
@@ -32408,6 +32498,12 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             else if (!member && next == '(' && _heapSymbols.count(id) && !_allocSites.count(b.name))
                 _allocSites[b.name] = AllocSite{ "calls `" + id + "`, which is `@heap`", line, file };
             if (!member && next == '(' && id == "KAMA_NOHEAP_SLOT" && !provenAt) provenAt = pdepth + 1;
+            if (!member && next == '(' && id == "KAMA_SLOT" && !provenAt && !slotAt) {
+                size_t v0 = f + 1; while (v0 < b.close && isspace((unsigned char)s[v0])) ++v0;
+                size_t v1 = v0; while (v1 < b.close && identChar(s[v1])) ++v1;
+                slotType = s.substr(v0, v1 - v0);
+                slotAt = pdepth + 1;
+            }
             // A CALL THROUGH A MEMBER is a call the compiler cannot see the target of. C has no methods, so
             // `x->m(…)` / `x.m(…)` is always a function pointer read out of a struct: a contract or virtual
             // slot, a `fnptr` field, a vtable's `__dtor`. Read here rather than recorded at the sites that
@@ -32427,13 +32523,29 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             // the author cannot edit. The hole this leaves is narrow: a runtime callback's target is handed
             // over as a VALUE, and a body name passed as a value is already an edge (above), so the target is
             // reached through the graph rather than guessed at through the slot.
-            if (!header && member && !provenAt && !_allocSites.count(b.name)) {
+            // KR-39: a slot of a vtable this program defines is no blind call — it is an edge to every function an
+            // instance installs there (`KAMA_SLOT(V, …)` names the type; an unmarked call takes the slot across every
+            // type, a superset). Only a member no vtable has — a `fnptr` field — is still a fact.
+            if (!header && member && !provenAt) {
                 size_t g = f;
                 if (next == ')') { ++g; while (g < b.close && isspace((unsigned char)s[g])) ++g; }
-                if ((next == '(' || (next == ')' && g < b.close && s[g] == '(')))
-                    _allocSites[b.name] = AllocSite{ id == "kama_dtor"
-                        ? "the destructor of the object behind a contract or base-class handle"
-                        : ("`" + id + "` through a dispatch slot"), line, file, /*indirect=*/true };
+                if ((next == '(' || (next == ')' && g < b.close && s[g] == '('))) {
+                    const std::vector<SlotTarget>* ts = nullptr;
+                    bool knownType = false;
+                    if (slotAt) {
+                        auto v = _vtblSlots.find(slotType);
+                        knownType = true;   // a `V` no instance installs: no implementer exists, so nothing runs
+                        if (v != _vtblSlots.end()) { auto fl = v->second.find(id); if (fl != v->second.end()) ts = &fl->second; }
+                    } else {
+                        auto fl = _slotsByField.find(id);
+                        if (fl != _slotsByField.end()) ts = &fl->second;
+                    }
+                    if (ts) { for (const SlotTarget& tg : *ts) if (defined.count(tg.fn)) refs.push_back(Ref{ tg.fn, line, true, tg.via }); }
+                    else if (!knownType && !_allocSites.count(b.name))
+                        _allocSites[b.name] = AllocSite{ id == "kama_dtor"
+                            ? "the destructor of the object behind a contract or base-class handle"
+                            : ("`" + id + "` through a dispatch slot"), line, file, /*indirect=*/true };
+                }
             }
             prevTok = id;
             i = e;
@@ -32446,7 +32558,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             if (!r.call && declared.count(r.name)) continue;
             int at = r.line;
             if (drops != _dropSiteLines.end()) { auto d = drops->second.find(r.name); if (d != drops->second.end()) at = d->second; }
-            out.emplace(r.name, CallEdge{ at });
+            out.emplace(r.name, CallEdge{ at, r.via });
         }
         line = 0; file.clear();   // a following body with no directive of its own must not inherit this one's
     }
@@ -32598,8 +32710,16 @@ void CEmitter::checkNoHeapTransitive()
         }
 
         std::string path;
-        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            if (it != chain.rbegin()) {   // a dispatched hop names the slot it went through (KR-39)
+                auto fe = _callEdges.find(*std::prev(it));
+                if (fe != _callEdges.end()) {
+                    auto e = fe->second.find(*it);
+                    if (e != fe->second.end() && !e->second.via.empty()) path += " -> `" + e->second.via + "`";
+                }
+            }
             path += (path.empty() ? "`" : " -> `") + displayBody(*it) + "`";
+        }
 
         const AllocSite& site = _allocSites[hit];
         // A position only when there is an honest one to give — see the leaf's record for the case that
@@ -33043,7 +33163,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         // ...and register the body, so the transitivity pass can walk out from it once every call edge
         // in the program is known. Registered even when the flag is already on from an enclosing body:
         // the diagnostic should name the function the author actually annotated.
-        if (!_probingTemplate) _noHeapFns[name] = NoHeapFn{ demangleForDisplay(name), fn->line, diagFile() };
+        if (!_probingTemplate) _noHeapFns[name] = NoHeapFn{ displayBody(name), fn->line, diagFile() };   // `measure<Blob>`
     } else if (_noHeapProgram && !_probingTemplate) {
         // `--no-heap` seeds the SAME walk with every user body, which is what finally applies the
         // `GlobalAllocator` leaf program-wide. The flag already rejects a direct allocation in any body;
@@ -33051,7 +33171,7 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
         // the transitive walk can see it — and the walk ran over annotated roots only.
         const std::string disp = demangleForDisplay(name);
         if (isUserBody(declFileOf(name), disp))
-            _noHeapFns[name] = NoHeapFn{ disp, fn->line, diagFile(), /*fromFlag=*/true };
+            _noHeapFns[name] = NoHeapFn{ displayBody(name), fn->line, diagFile(), /*fromFlag=*/true };
     }
     // `@foreignEntry` on the body itself: the declared root for a pointer handed to C by a route no bind
     // can see. Registered like a `@noheap` root; the walk runs once every call edge is known.
@@ -33653,13 +33773,12 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
         // runtime fact, so the proof crosses only where the CONTRACT declared it may. A member that does
         // carry `@noheap` has had every implementation checked against it (see checkConformanceSignatures),
         // so the call is provable and nothing is recorded.
-        if (!m.noHeap)
-            rejectNoHeapIndirect(("`" + iface + "." + method + "`, a contract member not declared "
-                                  "`@noheap`").c_str(), srcLine);
+        // An unmarked member is no blind seam any more (KR-39): the call graph reads every vtable instance the
+        // program emitted, so the slot below is an edge to each implementer, and the walk decides.
         // A member that IS `@noheap` is proven, so the call carries the marker the call graph reads back
         // out of the C — without it the slot call would be a fact like any other (see buildCallGraph).
         const std::string slot = m.noHeap ? ("KAMA_NOHEAP_SLOT((" + recv + ").kama_vtbl->" + kName(method) + ")")
-                                          : ("(" + recv + ").kama_vtbl->" + kName(method));
+                                          : ("KAMA_SLOT(" + iface + "_vtbl, (" + recv + ").kama_vtbl->" + kName(method) + ")");
         // Read under the instance's arguments, as its vtbl slot was: a generic contract's `A` is `SocketAddr`
         // in `DatagramSocket<SocketAddr>`, and read bare it reached C as `(A*)`. Only the SIGNATURE — the
         // arguments are the caller's expressions and are emitted in the caller's scope below.
@@ -33703,7 +33822,8 @@ void CEmitter::emitClassPrototypes(ClassInfo& ci)
         *_out << "static inline void " << ci.name << "__vdrop(" << ci.name << "* self) {\n";
         indent(1); *_out << "const " << ci.vtableRoot << "_vtable* __vt = self->" << vptrPrefix(&ci) << "kama_vptr;\n";
         indent(1); *_out << "if (__vt && __vt->kama_dtor) "
-                         << (provenDrop ? "KAMA_NOHEAP_SLOT(__vt->kama_dtor)" : "__vt->kama_dtor") << "(self);\n";
+                         << (provenDrop ? "KAMA_NOHEAP_SLOT(__vt->kama_dtor)" : "KAMA_SLOT(" + ci.vtableRoot + "_vtable, __vt->kama_dtor)")
+                         << "(self);\n";
         *_out << "}\n";
         // `sizeof(ptr: p)` / `alignof(ptr: p)` on a base pointer: the layout of the object it really holds (the
         // vptr names the most-derived vtable). A constructed object's vptr is never null; the fallback covers a
@@ -33946,12 +34066,12 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
                                   owner.ctors.count(memberName) != 0, body ? body->line : 0);
     // Register an annotated member for the transitivity pass, exactly as emitFunction does for a free fn.
     if (hasNoHeapAttr(attrs) && !_probingTemplate)
-        _noHeapFns[cName] = NoHeapFn{ demangleForDisplay(cName), body ? body->line : 0, diagFile() };
+        _noHeapFns[cName] = NoHeapFn{ displayBody(cName), body ? body->line : 0, diagFile() };
     // ...and the `--no-heap` seeding, judged by the OWNER's file. `declFileOf` is keyed by the tables a
     // top-level name lives in, and a method's mangled `Class__method` is in none of them — it would
     // answer "" for every member and quietly seed nothing. The class is what was collected from a file.
     else if (_noHeapProgram && !_probingTemplate && isUserBody(owner.declFile, demangleForDisplay(cName)))
-        _noHeapFns[cName] = NoHeapFn{ demangleForDisplay(cName), body ? body->line : 0,
+        _noHeapFns[cName] = NoHeapFn{ displayBody(cName), body ? body->line : 0,
                                       diagFile(), /*fromFlag=*/true };
 
     if (hasAttr(attrs, "foreignEntry") && !_probingTemplate)   // a `@foreignEntry` member is a root too
@@ -38971,14 +39091,9 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
         bool monomorphic = sc.isFinalClass || mi->isFinal
                          || !_overriddenSlots.count(std::make_pair(sc.vtableRoot, method));
         if (!monomorphic) {
-            // The no-heap gate for a virtual call, and note where it sits: AFTER devirtualization. A call
-            // the compiler proved has exactly one possible target is a direct call — it fell through to the
-            // ordinary path below, where the edge is recorded and the callee analysed like any other. Only
-            // a genuinely dynamic slot is a blind seam, so `final`, a `final fn` and a virtual method
-            // nobody overrides all stay usable inside a `@noheap` region without an annotation.
-            if (!mi->noHeap)
-                rejectNoHeapIndirect(("`" + clsName + "." + method + "`, a virtual method not declared "
-                                      "`@noheap`").c_str(), srcLine);
+            // A genuinely dynamic slot (devirtualization above already turned a one-target call into a direct
+            // one). It is no blind seam any more (KR-39): the call graph reads every class vtable the program
+            // emitted, so the slot is an edge to each override, and the walk decides — see KAMA_SLOT.
             // Dynamic dispatch through the vptr (at offset 0 via the vtable root).
             const std::string& root = sc.vtableRoot;
             std::string slotOwner = owner->name;
@@ -38990,7 +39105,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
             // A `@noheap` virtual method is proven — every override is checked against it — so the slot
             // call is marked for the call graph, exactly as a `@noheap` contract member's is.
             std::string slot = vptr + "->" + kName(method);
-            if (mi->noHeap) slot = "KAMA_NOHEAP_SLOT(" + slot + ")";
+            slot = mi->noHeap ? "KAMA_NOHEAP_SLOT(" + slot + ")" : "KAMA_SLOT(" + root + "_vtable, " + slot + ")";
             return emitReorderedCall(clsName + "." + method, slot, self, mi->params, args, srcLine);
         }
     }

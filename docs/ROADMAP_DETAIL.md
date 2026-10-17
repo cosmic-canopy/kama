@@ -1889,69 +1889,6 @@ Capabilities built on the finished language — the substrate the engine needs (
 networking). The MCU/embedded language surface and the const-eval ladder are done ([SPEC.md](SPEC.md),
 [MCU_READINESS.md](MCU_READINESS.md)). Remaining forward work:
 
-<a id="s5-noheap-contract-slot"></a>
-
-### `@noheap` across a contract slot (KR-39) — surveyed on `0.9.630`
-
-**The generic-bound case is already solved, but nothing pins it.** `@noheap fn int64 measure<T: Shape>(T sh)` lowers
-to a direct `measure__Sq(…)` call and builds, and it is refused with a chain when `Sq.area` allocates. No fixture holds
-this.
-
-Still refused:
-
-- a local upcast in the body (`Sq q…; Shape sh = q; sh.area()`): "a contract member not declared `@noheap`";
-- a contract parameter under `--no-heap`;
-- `tests/global_allocator_serde.kama --no-heap`, at the drop of `Owned<Error>` (the `kama_dtor` slot).
-
-**What "knowable" means.** In a whole-program build, every contract or virtual slot can hold only a function that some
-emitted vtable instance installed (`const V Impl__as_C = { .k_area = &Impl__area, … }`). Refinement emits its own
-`Sp__as_Drawable` (verified). So the callee set is finite and visible, heterogeneous collections included. Only `fnptr`
-slots, bound function pointers and runtime-header callbacks stay blind.
-
-Sites:
-
-- `emitInterfaceDispatch` (~32892, the immediate `rejectNoHeapIndirect`);
-- `emitIfaceHandleFuncs` (~17674, `kama_dtor`);
-- `__vdrop` (~32960) and the virtual sites (~38051, ~38151);
-- `buildCallGraph` (~31497; the member-call facts at ~31690) and `checkNoHeapTransitive` (~31762);
-- kama_runtime.h ~279, beside `KAMA_NOHEAP_SLOT`.
-
-Fix:
-
-1. `#define KAMA_SLOT(V, f) (f)` wraps every unproven slot call (`KAMA_SLOT(<C>_vtbl, recv.kama_vtbl->k_m)`).
-   Emission stops refusing, so the walk decides for `@noheap` and `--no-heap` alike.
-2. `buildCallGraph` parses the emitted vtable initializers (three emit sites: ~15120, ~32635, ~36392) into a map
-   V → slot → targets. The per-TU `static const` duplicates are unioned by V.
-3. A `KAMA_SLOT(` adds an edge to every target; a null slot adds none. The hop renders as
-   `Shape.area [Sq2] -> Sq2::area`.
-4. Fixtures:
-   - flip `xfail/noheap_contract_member` to positive;
-   - give `noheap_flag_reached_dispatch.d` an allocating implementer;
-   - update `noheap_drop_{contract_box,virtual_box}`'s `.msg`;
-   - a two-implementer positive, and an xfail where one implementer allocates;
-   - a `--no-heap` + pool copy of `global_allocator_serde` that must BUILD;
-   - pin the generic-bound case.
-5. Rewrite SPEC's *No-heap subset* ("blind seam", "a runtime fact"), and KR-79's "inherits KR-39" note.
-
-Traps:
-
-- Intrinsic implementers go through `__thunk` bodies, which is fine.
-- Keep the `!header` exclusion (`kama__loop_step`).
-- Without a pool, the serde drop stays refused, now naming the implementer.
-- `expose fn measure(Shape sh)` builds, so a host-forged vtable is unchecked C. Say so in SPEC.
-- **A display defect seen on the way:** chains print `measure::k_Fk39a2::Sq` and
-  `Owned_kama::Error_kama::GlobalAllocator::dtor`, i.e. generic instances are not demangled. Fix it with this row.
-
-Size **M**.
-
-**Decided 2026-10-16** (the maintainer took all three):
-
-1. The callee set: **every vtable instance in the emitted, pruned C** — sound, and the least code (class-hierarchy
-   analysis, as clang's `-fwhole-program-vtables` and Java JITs use). The
-   alternative is only the vtables named by reached bodies, which needs a fixed point.
-2. **The same rule for virtual and destructor slots** — one rule.
-3. **Keep `@noheap` on a contract member,** as an optional promise checked at the implementers.
-
 <a id="s5-sizeof-comptime"></a>
 
 ### A struct's `sizeof` and `alignof` as a compile-time value (KR-94) — surveyed on `0.9.630`
@@ -2028,10 +1965,10 @@ released, delegating to a global allocator that defaults to `malloc`/`free` and 
 replace; every raw site in emitted C, the runtime headers, the OS seam and the prelude moved onto them,
 which also ended the ~20 blocks allocated by one family and freed by another (correct before only because
 every family was libc); error boxing draws from an allocator like every other box; and `--no-heap` judges
-what the program REACHES, consistently, rather than every imported body. What it did NOT close is KR-39
-(a provable callee behind a contract slot), which it turned from theoretical into measured — see the
-serde note under *Non-goals* below; it shares its reach walk with tier 1 of the devirtualization ladder
-(KR-23).
+what the program REACHES, consistently, rather than every imported body. A provable callee behind a
+contract slot was left open, turned from theoretical into measured — see the serde note under *Non-goals*
+below — and shipped in `0.9.659`: a slot is an edge to every implementer the program defines (SPEC
+*No-heap subset*).
 
 ⚠️ **`docs/design/allocation.md` was DELETED when the last row shipped** (`0.9.412`), by the maintenance
 rule for `docs/design/`. This section and SPEC are its record; the reasoning behind each step is in the
@@ -2093,10 +2030,9 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
   change is source-breaking for every hand-written serde in every consumer, and it puts an allocator
   parameter in the signature of the most-implemented contract kama has. If a per-arena error is ever
   wanted, it is wanted for fallible APIs in general and belongs to a design for those, not to serde.
-  ⚠️ What that left unproven is **KR-39**, and this is its first concrete consumer: the same serde
-  fixture under `--no-heap` is still refused, because dropping a boxed error dispatches a destructor
-  through a contract the walk cannot resolve — the pool is irrelevant to that verdict. KR-39's row used
-  to say it waited on this one; the dependency ran the other way.
+  What that left unproven shipped in `0.9.659`: dropping a boxed error dispatches a destructor
+  through a contract, and the walk now resolves the slot to every implementer's destructor, so the same
+  serde program builds under `--no-heap` with a pool (`tests/noheap_pool_serde.d`).
 - **A per-isolate override of the DEFAULT allocator is a NON-GOAL.** What it would redirect is exactly
   what crosses isolates by construction — a spawn bundle allocated in the parent is freed in the child,
   strings and boxes travel over channels, a channel's ring is shared by both ends — so each would be
@@ -2234,8 +2170,8 @@ idea that a machine-checked invariant belongs in the source rather than in a com
 
 **Unscoped — design first.** The open questions are the surface (one marker per property, a parameterized
 `@requires(…)`, or a region construct), whether a property is declared per function like `@noheap` or per
-build like `--no-heap` or both, how a property crosses a contract slot (the KR-39 problem, which every one
-of these inherits verbatim), and whether user-defined properties are a goal or a non-goal. Nothing is
+build like `--no-heap` or both, how a property crosses a contract slot (as `--no-heap` does since `0.9.659`:
+an edge to every implementer the program defines, which any property on the same walk inherits), and whether user-defined properties are a goal or a non-goal. Nothing is
 built until that is written down and a verdict recorded here, per the surface-item rule in AGENTS.md.
 
 ### Embedded / bare-metal MCU (Pi Pico · Arduino · ESP32) — toolchain packaging

@@ -1,1 +1,1 @@
-but `nhdisp::push` dispatches `nhdisp::Sink.emit`
+but `nhdisp::Logger::emit` reaches heap allocation
