@@ -4920,7 +4920,12 @@ fn int64 measure(Shape sh) { return sh.area(); }       // accept "any shape" —
 A contract is represented as a fat pointer `{obj, vtbl}` (an implementation detail of type erasure — never
 something you spell). Both a `value` and a `resource` may `implements` any number of contracts; a method that
 satisfies a contract method **must be declared `public`** (the contract is public — a hidden implementer
-would be reachable through the contract but not by name). A contract may **refine** another (`type contract
+would be reachable through the contract but not by name). The contract's own members take no visibility word: <!-- xfail: contract_member_private, contract_member_protected, contract_member_public -->
+each is public by definition, so `public` is redundant and `private`/`protected` could not hold. A member
+fewer callers may reach is a **non-goal**: a call through the contract reaches the member on every implementer,
+so what restricts the caller is a parameter only that caller can build — a key type whose `ctor` it alone is <!-- test: contract_member_key --> <!-- xfail: contract_member_key_outsider -->
+granted (`friend driver[mint]`) — and, inside a hierarchy, a `protected` method of the extensible `resource`.
+A contract may **refine** another (`type contract
 Animated for value, resource implements Drawable { … }`) for capability layering, without inheritance, and an
 implementer of the refining contract implements its parents too, as Swift's protocol inheritance and Rust's <!-- test: contract_refinement_implies -->
 supertraits do. A `Sprite implements Animated` satisfies a `Drawable` bound and binds to a `Drawable` value with

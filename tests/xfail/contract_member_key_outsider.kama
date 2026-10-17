@@ -1,0 +1,24 @@
+// KR-8 — the other half of tests/contract_member_key.kama: a function the key does not grant cannot build a
+// `DriverKey`, so it cannot call `hidden` through `Tok` at all.
+type value DriverKey {
+    friend driver[mint];
+    int32 unused;
+    ctor mint() { this.unused = 0; }
+}
+
+type contract Tok for value { fn int32 hidden(DriverKey key); }
+
+type value Impl implements Tok {
+    int32 v;
+    public ctor make() { this.v = 42; }
+    public fn int32 hidden(DriverKey key) { return this.v; }
+}
+
+fn int32 driver(Tok t) { return t.hidden(key: DriverKey.mint()); }
+fn int32 outsider(Tok t) { return t.hidden(key: DriverKey.mint()); }
+
+fn int32 main()
+{
+    Impl i = Impl.make();
+    return driver(t: i) + outsider(t: i);
+}

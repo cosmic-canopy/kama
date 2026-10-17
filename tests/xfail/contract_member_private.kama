@@ -1,0 +1,17 @@
+// KR-8. A contract member is public by definition: a call through the contract reaches it on every
+// implementer. `private` used to parse and be dropped — `outsider` below called the "private" member through `Tok`.
+type contract Tok for value { private fn int32 hidden(); }
+
+type value Impl implements Tok {
+    int32 v;
+    public ctor make() { this.v = 42; }
+    public fn int32 hidden() { return this.v; }
+}
+
+fn int32 outsider(Tok t) { return t.hidden(); }
+
+fn int32 main()
+{
+    Impl i = Impl.make();
+    return outsider(t: i);
+}

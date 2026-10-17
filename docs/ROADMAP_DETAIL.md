@@ -2073,67 +2073,9 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
     `View`, so the write and wire passes need **no contract**. Only read/**build** does — you cannot iterate a
     container into existence. Element receivers are proven: `xs[0].m()` and `foreach (ref T e in xs)` both
     compile, so **no language ruling gates the walk**.
-  - ⚠️ **`private` on a contract member is a THIRD accepted-and-inert surface — measured 2026-09-09.** It
-    parses, and the marker is silently dropped: with the member declared `private` on the contract and the
-    implementer `public`, a call through a contract-typed value (`ref Tok t; t.hidden();`) compiles clean.
-    So the forced-`public` rule is load-bearing **only because the other half was never built** — nothing
-    checks a contract member's declared visibility at the call site. There is exactly ONE enforcement site
-    today (the conformance check that refuses a non-`public` implementer); the contract declaration itself
-    accepts `private` without recording it. That is the same defect class as `friend`-on-contract before
-    `0.9.266`, and it wants an `xfail` regardless of whether the feature lands.
-  - ⚠️ **SUPERSEDED — the container seam needs no contract.** Restricted-private contract members were
-    proposed as the mechanism for a checked read/build seam. Building the architecture out showed the seam
-    is not there: a container reads itself through its own `deserialize`, which already knows how to build
-    one, so nothing needs a private member. Row 8 keeps its place on expressiveness alone. The bullet below
-    is kept for provenance.
-  - **Direction: restricted-private contract members.** The forced-`public` rule exists only because a public
-    member with a private implementer is "reachable through the interface but not by name: a leak"; a
-    **private** contract member is self-consistent, so **mixed contracts are fine — public members stay fair
-    game**. `private` with **no grant** is "only the compiler may call it", with no new concept: the emitter
-    writes C directly, and users may still IMPLEMENT it, which keeps third-party containers extensible. One
-    rule changes: an implementing method matches the member's declared visibility. ⚠️ This **reverses** the
-    `0.9.266` removal of `friend` on a contract — that removal was right (it was accepted and INERT), so
-    `tests/xfail/friend_on_contract` and its doc claim change in the same commit and the new rule must fail
-    closed on both holes. `friend X[members]` already grants fields, methods and ctors alike (measured).
-  - **A fourth visibility (`internal`/`compiler`) — genuinely OPTIONAL, not scheduled.** `internal` is already
-    taken at module level (package scope). The only gap it closes over `private`-with-no-grant is stopping the
-    declaring type from calling its OWN member, and kama polices that nowhere. Revisit only if protocol misuse
-    actually bites.
-  - **Surveyed on `0.9.630` (KR-8) — the inert visibility words, and the verdict owed.**
-    - `private` and `protected` on a contract member are accepted and do nothing. `type contract Tok for value
-      { private fn int32 hidden(); }`, with a `public` implementer and `fn int32 outsider(Tok t) { return
-      t.hidden(); }`, builds and prints 42. A generic bound `<T: Tok>` behaves the same, and `protected` on a resource
-      contract prints 9.
-    - **KEYWORDS.md:45 is false.** It says `protected` is "an error on … a `contract`", and it builds.
-    - A `private` implementer is refused ("must be declared `public`"), and so is `friend` on a contract.
-    - No `.kama` file in the repo writes a visibility word on a contract member.
-    - What the feature would buy already works: give the member a key parameter type whose ctor is
-      `friend driver[mint]`. `driver` calls it, and `outsider` is refused ("'mint' is private in 'DriverKey'").
-
-    Sites: `rejectInertModifiers` (~27321; the `0.9.443` inert-modifier work deliberately left these words unchecked here), `collectInterfaces`
-    (~10432; the friend refusal is at ~10573), `emitClassInterfaceVtables` (the public check, ~32705), and
-    `emitInterfaceDispatch` (~32892).
-
-    The fix for (1):
-    - a contract arm in `rejectInertModifiers` refusing `private`/`protected`/`public` ("a contract member is public
-      by definition");
-    - xfails `contract_member_{private,protected,public}`;
-    - a SPEC *Contracts* sentence with its marker, which also makes KEYWORDS true;
-    - record the non-goal, naming the key pattern, as a bullet here, and delete the row.
-
-    Keep `friend_on_contract`. `enum_contract_method_not_public` and intrinsic/adapter implementers stay forced
-    `public`. Size **S**.
-
-    **Decided 2026-10-16** (the maintainer; it had been parked "to consider" for the compiler-only-member case, and
-    that need left when the container seam turned out to need no contract):
-    1. **Refuse all three words and declare restricted-private a NON-GOAL.** The key-type pattern answers
-       it (measured), and so do `protected` hooks on an extensible resource. One way, no cross-type grant rule, and
-       nothing in the corpus breaks.
-    2. Refuse now and leave the row "to consider". That is not an allowed verdict (scheduled / optional / non-goal).
-    3. Build it (M–L). It reverses `0.9.266`, and the generic-bound path calls `Impl::hidden` directly, so a
-       contract-level grant would have to open every implementer's private method.
-
-    Sub-decision: a redundant `public` is refused too.
+  - **Restricted-private contract members are a NON-GOAL** (decided 2026-10-16, shipped `0.9.646`). A contract
+    member is public by definition and takes no visibility word; who may call it is said by a parameter only that
+    caller can build (a key type whose `ctor` it alone is granted). SPEC § *Contracts* records it beside the refusal.
   - **Open questions, ANSWERED 2026-09-09 by probe:**
     - **Is `ObjectGraph<T>` load-bearing after `43dd3dd`? NO.** A pure-`Owned` tree round-trips **by value**
       today with no `ObjectGraph` anywhere, re-encoding byte-identically — which is the case that originally
@@ -3879,7 +3821,7 @@ text (S); symbol-named modes (M); call hierarchy (M); the guard (S); the dogfood
     `csources`/`cincludes`, six modules, proven native (debug/release), wasm and through a file-registry
     publish→install round trip. What it forced in-tree: `kama seed --license`, the `cincludes` key,
     the move-only propagation fix, `csources` as gnu11, `std::digest`; what it rowed: the four rows above
-    NOW and the member-visibility question that is now KR-8. Its AGENTS.md § "This package" is the first draft of
+    NOW and the member-visibility question (a non-goal since `0.9.646`, SPEC § *Contracts*). Its AGENTS.md § "This package" is the first draft of
     the library-kind guidance addendum.
 
       **Decided direction:** follow where the ecosystem landed rather than per-developer signing keys.

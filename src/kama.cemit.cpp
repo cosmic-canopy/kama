@@ -27715,6 +27715,15 @@ void CEmitter::rejectInertModifiers(ASTNode* member, const ClassInfo* owner, Mem
             if (!(ctx == MemberOwner::Type && (kind == K::Field || kind == K::Method || kind == K::Ctor)))
                 msg = "`immutable` is a TYPE qualifier (`type immutable value T`) asserting DEEP immutability of "
                       "the whole type — " + noun() + " cannot carry it";
+        } else if (ctx == MemberOwner::Contract && (w == "public" || w == "protected" || w == "private")) {
+            // KR-8. All three parsed and were dropped, so a `private` member was reached through any value of the
+            // contract. A member visible to fewer callers is a NON-GOAL: a call through the contract reaches it
+            // on every implementer, and a parameter only the intended caller can build already says who may call.
+            msg = w == "public"
+                ? "a `contract` member is public by definition — drop `public`"
+                : "a `contract` member is public by definition: a call through the contract reaches it on every "
+                  "implementer, so `" + w + "` could not hold. To let one caller alone call it, give it a key "
+                  "parameter whose `ctor` only that caller may call (`friend caller[mint]`)";
         } else if (w == "protected") {
             // A value's field and method are answered by their arms; these three never were.
             if (ctx == MemberOwner::Type && owner && !extensible
