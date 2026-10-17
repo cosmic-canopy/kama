@@ -1,0 +1,5 @@
+// KR-183. A generic contract written bare — `Src` for `type contract Src<A>` — names no type: it passed `kama check`
+// and failed in the C compiler ("unknown type name 'k_…__Src'") in every position. Refused, naming what is missing.
+type contract Src<A> for value { fn A get(); }
+type value Holder { public Src s; }
+fn int32 main() { return 0; }

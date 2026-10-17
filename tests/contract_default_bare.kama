@@ -1,0 +1,18 @@
+// KR-183: a generic contract whose parameters all default is a complete type spelled bare, as `BitSet` is —
+// SPEC *Default type parameters*. `implements Dg` and a `Dg` parameter used to name nothing ("unknown contract in
+// implements", then clang). A bare BOUND on a non-defaulted contract keeps its meaning: any instance.
+type contract Dg<A = int32> for value { fn A get(); }
+type value Lit implements Dg { public ctor make() { } public fn int32 get() { return 7; } }
+type value Two implements Dg<int32> { public ctor make() { } public fn int32 get() { return 9; } }
+fn int32 take(Dg d) { return d.get(); }
+fn int32 takeFull(Dg<int32> d) { return d.get(); }
+fn int32 bound<S: Dg>(S s) { return s.get(); }
+fn int32 main() {
+    Lit l = Lit.make(); Two t = Two.make();
+    Dg d = l;
+    Lit2 l2 = Lit2.make();
+    return take(d: d) + takeFull(d: t) + bound(s: l) + anySrc(s: l2);   // 7 + 9 + 7 + 1 = 24
+}
+type contract Src<A> for value { fn A get(); }
+type value Lit2 implements Src<int64> { public ctor make() { } public fn int64 get() { return 2i64; } }
+fn int32 anySrc<S: Src>(S s) { return 1; }

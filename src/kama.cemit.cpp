@@ -3027,9 +3027,26 @@ bool CEmitter::isTypeKey(const std::string& k) const
 // compiler analysis IS emission, every other body rule lives in this walk, and an uncalled generic's body
 // is re-emitted by the template probe, so it is judged as well (KR-46, decided 2026-09-14). A declaration
 // that `@compileFor` drops is judged by neither walk — its own open question, not this one.
+// A generic written with no type arguments names no type: `fn take(Src s)` over `type contract Src<A>` passed
+// `kama check` and failed in C ("unknown type name 'k_…__Src'"), and so did a field, a return, a type argument
+// and — for a contract — a local (KR-183). An all-defaulted generic is the exception: spelled bare, it is its
+// defaulted instance (`BitSet`). A bare contract in a BOUND is a different, legal reading (any instance) and
+// never reaches here.
+bool CEmitter::rejectBareGeneric(const SharedIdentifier& t, const char* what, int line)
+{
+    if (!t || !t->value || t->genericArg || t->builtInVal != 0) return false;
+    const std::string k = resolveUserNameImpl(*t->value, t->qualifier);
+    if (!_genericTypes.count(k) && !_genericContracts.count(k)) return false;
+    if (allTypeParamsDefaulted(k)) return false;
+    unsupported(("`" + *t->value + "` takes a type argument — write `" + *t->value + "<…>` in " + what).c_str(),
+                line);
+    return true;
+}
+
 void CEmitter::checkBodyType(const SharedIdentifier& t, const char* what, int line)
 {
     if (!t || !t->value) return;
+    if (rejectBareGeneric(t, what, line)) return;
     // A C spelling this file's own `extern fn` introduced (see `_externCSpellings`) is the header's to judge.
     if (!t->qualifier || t->qualifier->empty()) {
         auto cs = _externCSpellings.find(refFilePath());
@@ -3891,6 +3908,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
             return;
         }
         if (tp.count(*t->value)) return;
+        if (std::string(noun) == "type" && rejectBareGeneric(t, what, t->line)) return;
         checkQualifiedExport(t, what);
         checkNoLeak(t, what);
         checkTypeResolves(t, cType(t), what, t->line, noun);
@@ -4416,7 +4434,7 @@ std::string CEmitter::cType(SharedIdentifier type)
     // param name is substituted above. (A bare type-param isn't in _genericTypes, so this never fires for one.)
     if (type->value && !type->genericArg) {
         std::string tmpl = resolveUserName(*type->value, type->qualifier, type.get());
-        if (_genericTypes.count(tmpl) && allTypeParamsDefaulted(tmpl))
+        if ((_genericTypes.count(tmpl) || _genericContracts.count(tmpl)) && allTypeParamsDefaulted(tmpl))
             return genericTypeMangle(tmpl, nullptr);
     }
     switch (type->builtInVal) {
@@ -8115,14 +8133,6 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             };
             if (lvd) noteInits(lvd->variables.get());
             if (cvd) noteInits(cvd->variables.get());
-            // a bare generic type without a type argument (`Box b` instead of `Box<int32> b`)
-            // is not a usable type — the template is not a concrete class. EXCEPTION: an all-defaulted
-            // generic (`BitSet` == `BitSet<GlobalAllocator>`) is a complete type spelled bare.
-            if (declType->value && !declType->genericArg
-                && _genericTypes.count(resolveUserName(*declType->value, declType->qualifier))
-                && !allTypeParamsDefaulted(resolveUserName(*declType->value, declType->qualifier)))
-                unsupported(("generic type `" + *declType->value + "` needs a type argument, e.g. `"
-                             + *declType->value + "<int32>`").c_str(), n);
             // Not in the template probe: there `N` is a comptime PARAMETER with no binding, which is not a fault.
             SharedExpression init0 = lvd && lvd->variables && !lvd->variables->empty() ? (*lvd->variables)[0]->initializer
                                    : cvd && cvd->variables && !cvd->variables->empty() ? (*cvd->variables)[0]->initializer
@@ -13005,7 +13015,8 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
             else if (elem->genericArg) base += "_" + mangleElem(elem->genericArg);
             // A bare all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`) mangles to its
             // defaulted instance name, matching cType (so a `DynamicArray<BitSet>` element mangles right).
-            else if (_genericTypes.count(base) && allTypeParamsDefaulted(base)) return genericTypeMangle(base, nullptr);
+            else if ((_genericTypes.count(base) || _genericContracts.count(base)) && allTypeParamsDefaulted(base))
+                return genericTypeMangle(base, nullptr);
             return base;
         }
     }
@@ -13347,10 +13358,15 @@ std::string CEmitter::missingViewCause(const std::string& cls, const std::string
 
 bool CEmitter::allTypeParamsDefaulted(const std::string& tmpl) const
 {
-    auto p = _genericTypeParams.find(tmpl);
-    if (p == _genericTypeParams.end() || p->second.empty()) return false;
-    auto d = _genericTypeDefaults.find(tmpl);
-    if (d == _genericTypeDefaults.end() || d->second.size() != p->second.size()) return false;
+    // A generic contract defaults its trailing parameters by the same rule a type does (SPEC *Default type
+    // parameters*), so `type contract Dg<A = SocketAddr>` spelled bare is `Dg<SocketAddr>` too (KR-183).
+    const bool isType = _genericTypeParams.count(tmpl) != 0;
+    const auto& params = isType ? _genericTypeParams : _genericContractParams;
+    const auto& defaults = isType ? _genericTypeDefaults : _genericContractDefaults;
+    auto p = params.find(tmpl);
+    if (p == params.end() || p->second.empty()) return false;
+    auto d = defaults.find(tmpl);
+    if (d == defaults.end() || d->second.size() != p->second.size()) return false;
     for (auto& def : d->second) if (!def) return false;        // a null entry = a required param
     return true;
 }
@@ -14913,9 +14929,11 @@ unsigned CEmitter::implKindsOf(const std::string& contract, const std::string& t
 // scanTypeForGenericTypes). Driven by scanTypeForCollections at each type node.
 void CEmitter::scanTypeForGenericContracts(SharedIdentifier t)
 {
-    if (!t || !t->value || !t->genericArg) return;
+    if (!t || !t->value) return;
     std::string tmpl = resolveUserName(*t->value, t->qualifier);
-    if (_genericContracts.count(tmpl)) registerGenericContractInst(tmpl, t->genericArgs);
+    if (!_genericContracts.count(tmpl)) return;
+    if (t->genericArg) registerGenericContractInst(tmpl, t->genericArgs);
+    else if (allTypeParamsDefaulted(tmpl)) registerGenericContractInst(tmpl, nullptr);   // bare = its defaults
 }
 
 // Build one specialized InterfaceInfo per `Iterator<Arg>` (the exact parallel of
@@ -14925,8 +14943,8 @@ void CEmitter::scanTypeForGenericContracts(SharedIdentifier t)
 // registers `Optional_int32` before this instance's vtable references it.
 void CEmitter::registerGenericContractInst(const std::string& tmpl_, SharedIdentifierList args)
 {
-    if (!args || args->empty()) return;
     const std::string tmpl = preludeKey(tmpl_);   // a compiler-written leaf names a prelude contract
+    if ((!args || args->empty()) && !allTypeParamsDefaulted(tmpl)) return;   // bare: only when every param defaults
     const std::vector<std::string>& params = _genericContractParams[tmpl];
 
     // Substitute each arg through the active _typeSubst, then absolutize (both under the caller's ctx, BEFORE
@@ -14938,7 +14956,7 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl_, SharedIdent
     // payload). A shallow "bare-param only" substitution would instead leave `Entry<K,V>` un-monomorphized
     // (a dangling `Optional_Entry_K_V`). Mirrors registerGenericTypeInst exactly.
     // Bind positional + named args, then fill trailing defaults (mirror of registerGenericTypeInst).
-    int line = args->front() ? args->front()->line : 0;
+    int line = args && !args->empty() && args->front() ? args->front()->line : 0;
     ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
     auto dit = _genericContractDefaults.find(tmpl);
     const std::vector<SharedIdentifier> emptyDefs;
@@ -20207,15 +20225,27 @@ void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIden
         // reported a second time as "unknown contract in implements", naming no name.
         // `nodes` is the AST's own list and stays whole; only the resolved names drop the entry.
         if (itfNode && !_interfaces.count(base) && !_genericContracts.count(base)) continue;
-        if (itfNode && itfNode->genericArg && _genericContracts.count(base)) {
+        // A generic contract spelled bare is its all-defaulted instance (`implements Dg` == `implements
+        // Dg<SocketAddr>`), as a bare all-defaulted TYPE is; with a parameter that has no default it names no
+        // contract at all, which the vtable emit used to report as "unknown contract in implements", naming
+        // nothing (KR-183).
+        const bool bareDefaulted = itfNode && !itfNode->genericArg && _genericContracts.count(base)
+                                && allTypeParamsDefaulted(base);
+        if (itfNode && !itfNode->genericArg && _genericContracts.count(base) && !bareDefaulted) {
+            unsupported(("`" + names[i] + "` takes a type argument — write `implements " + names[i] + "<…>`").c_str(),
+                        itfNode);
+            continue;
+        }
+        if (itfNode && (itfNode->genericArg || bareDefaulted) && _genericContracts.count(base)) {
             const std::string inst = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
             // Kept for diagnostics (contractInstOf): an instance named here is not registered as an interface
             // until something binds it, so nothing else could spell `kama__Comparable_string` back.
             if (!_contractInstSpelling.count(inst)) {
                 GenericTypeInst gi{ base, inst, {} };
-                for (auto& a : *itfNode->genericArgs) gi.typeArgs.push_back(deepSubstType(a));
+                if (itfNode->genericArgs) for (auto& a : *itfNode->genericArgs) gi.typeArgs.push_back(deepSubstType(a));
                 _contractInstSpelling[inst] = gi;
             }
+            if (bareDefaulted) registerGenericContractInst(base, nullptr);
             base = inst;
         }
         kept.push_back(base);

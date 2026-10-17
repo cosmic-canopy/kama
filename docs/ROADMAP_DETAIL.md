@@ -306,7 +306,8 @@ Sites:
 The break is narrower than feared. A bare bound `<S: DatagramSocket>` keeps compiling, because it is checked per
 instantiation. Contract values, `implements` and `RecvFrom` spellings do break.
 
-**Blocked on KR-183** (a bare generic contract used as a value type reaches C): fix that first. Size **S**.
+Unblocked by `0.9.635`: a bare generic contract in a type position is refused by name, and a defaulted one is
+filled, rather than reaching C. Size **S**.
 
 **Decided 2026-10-16** (the maintainer):
 
@@ -316,8 +317,7 @@ instantiation. Contract values, `implements` and `RecvFrom` spellings do break.
 2. Take the break and spell `<SocketAddr>` everywhere. A default `<A = SocketAddr>` is the wrong tool: default type
    parameters are for POLICY knobs nobody thinks about (a hasher, an allocator), and the address is what kind of
    socket this is. A default would make a bare `DatagramSocket` silently mean "the IP one", and give one contract
-   two spellings. (That a defaulted parameter on a contract is not filled in `implements` is a separate defect,
-   folded into KR-183.)
+   two spellings. (A defaulted contract parameter is filled in `implements` and every type position since `0.9.635`.)
 3. A zero-length `recvFrom` is `InvalidInput` on both. UDP answers `Ok(0, 0.0.0.0:0)` today, which invents a
    sender.
 
@@ -784,25 +784,6 @@ Size **L**: (1a) + (2) are M, and decision (4)'s attribute is included.
 
 Decision (2) is measured and decided: **a location in every build**. Commits: `PanicInfo` and the hook; a location
 on every trap; the caller-location attribute (its spelling settled when built).
-
-<a id="s2-bare-generic-contract"></a>
-
-### A generic contract written bare as a value type reaches the C compiler (KR-183)
-
-Found surveying KR-108 on `0.9.630`. With `type contract Src<A> …`, the declaration `fn take(Src s)` (no type
-argument) passes `kama check` ("OK"), and the build then fails in C with `unknown type name 'k_Fq7__Src'`. The
-refusal exists only for a local (kama.cemit.cpp ~8090); a parameter, a field, a return type and a generic argument go
-unchecked.
-
-Fix: one refusal for a bare generic contract — or any bare generic type — in every type position, naming what is
-missing ("`Src` takes a type argument — `Src<…>`"), with an xfail per position. Size **S**.
-
-**A sibling defect, folded in (2026-10-16).** SPEC *Default type parameters* fills a defaulted trailing parameter
-wherever the use site omits it, but on a contract that holds only in some positions: with `type contract Dg<A =
-SocketAddr>`, a bare `implements Dg` is "unknown contract in implements". So the refusal fires only when a parameter
-WITHOUT a default is missing, and a defaulted contract parameter is filled in `implements`, a parameter, a field, a
-return and a generic argument alike — a positive fixture per position beside the xfails. It blocks KR-108: once
-`DatagramSocket<A>` lands, every user's `fn f(DatagramSocket d)` would hit it.
 
 <a id="s2-enum-copy-order"></a>
 

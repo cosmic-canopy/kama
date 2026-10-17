@@ -55,6 +55,12 @@ atomic_nonscalar	atomic_nonscalar.kama:12
 attr_on_extern	attr_on_extern.kama:5
 attr_on_fnptr	attr_on_fnptr.kama:6
 bad_type_kind	bad_type_kind.kama:2
+bare_generic_contract_field	bare_generic_contract_field.kama:4
+bare_generic_contract_implements	bare_generic_contract_implements.kama:4
+bare_generic_contract_local	bare_generic_contract_local.kama:5
+bare_generic_contract_param	bare_generic_contract_param.kama:5
+bare_generic_contract_return	bare_generic_contract_return.kama:5
+bare_generic_contract_type_arg	bare_generic_contract_type_arg.kama:4
 bare_variant_name	bare_variant_name.kama:5
 base_bypasses_private	base_bypasses_private.kama:26
 base_class_no_ctor	base_class_no_ctor.kama:5

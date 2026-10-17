@@ -1,1 +1,1 @@
-needs a type argument
+takes a type argument

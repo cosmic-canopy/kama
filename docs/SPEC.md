@@ -5622,6 +5622,11 @@ fn int32 main() {
   Wrap<bool, float64> c = Wrap.make(a: true,  b: 3.5);   // U overridden positionally
   Wrap<bool, U: int32> d = /* … */;                 // named override — same instance as `Wrap<bool>`
   ```
+  A generic whose parameters ALL default is a complete type spelled bare — `BitSet` is `BitSet<GlobalAllocator>`, <!-- test: contract_default_bare -->
+  and with `type contract Dg<A = SocketAddr>`, `implements Dg`, a `Dg` parameter, field or local all name
+  `Dg<SocketAddr>`. A generic with a parameter that has no default names no type when spelled bare, and is <!-- xfail: generic_bare_use, bare_generic_contract_param, bare_generic_contract_field, bare_generic_contract_return, bare_generic_contract_type_arg, bare_generic_contract_local, bare_generic_contract_implements -->
+  refused in every position, naming what is missing. A bare **bound** is the one exception, and a different
+  reading: `fn f<S: Src>(S s)` accepts an `S` implementing `Src` at any argument.
   Defaults are a **`type`** feature — a `type value`/`resource`/`contract` or a `type enum`. A default
   fills in an argument the *use site* omitted, and a **function's** type arguments are not written at the
   use site at all: inference reads them off the arguments, or a turbofish spells them. So there is nothing

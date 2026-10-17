@@ -1,0 +1,5 @@
+// KR-183, inside a type argument: `Owned<Src>` names the bare contract one level down.
+import { std::memory::Owned };
+type contract Src<A> for value { fn A get(); }
+fn int32 take(Owned<Src> s) { return 0; }
+fn int32 main() { return 0; }

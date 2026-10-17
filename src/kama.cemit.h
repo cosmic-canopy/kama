@@ -3923,6 +3923,7 @@ private:
     static int64_t ctAsI(const CTValue& v);
     std::string rootBinding(SharedExpression e) const;
     std::string refReturnRoot(SharedExpression e, bool& isStatic);   // a returned place's root, through ref bindings
+    bool rejectBareGeneric(const SharedIdentifier& t, const char* what, int line);   // `Src` for `Src<A>` (KR-183)
     bool rootIsTemporary(SharedExpression e) const;   // member/element chain rooted in a by-value call result        // the root identifier a write targets
     // The PLACE a expression designates: the base binding plus its chain of field names. This is the
     // whole safety core of the view model — see `placesConflict`. Not `const`: resolving a bare field
