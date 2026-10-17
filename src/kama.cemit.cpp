@@ -2386,8 +2386,8 @@ void CEmitter::rejectNumericConversion(const std::string& dstCType, SharedExpres
     const std::string dstName = primKeyOfCType(dstCType);
     const std::string srcName = primKeyOfCType(src);
     unsupported((std::string(what) + (isInit ? " is declared `" : " expects `") + dstName
-                 + "`, so it cannot be " + (isInit ? "initialized with " : "given ") + "a `" + srcName
-                 + "` — kama has no implicit numeric conversion. Convert it explicitly: `cast<" + dstName
+                 + "`, so it cannot be " + (isInit ? "initialized with " : "given ") + aOrAn(srcName)
+                 + " — kama has no implicit numeric conversion. Convert it explicitly: `cast<" + dstName
                  + ">(…)`").c_str(), line);
 }
 
@@ -2486,32 +2486,32 @@ void CEmitter::rejectTypeIdentityMismatch(const std::string& dstCType, SharedExp
     // tests/try_cast_enum.kama says so), while int -> enum is fallible by construction, which is the
     // whole reason `try cast` exists.
     if (srcF == IdFamily::Enum && dstF == IdFamily::Enum)
-        unsupported((head + "a `" + srcName + "` — these are two distinct enums, and sharing a tag width "
+        unsupported((head + aOrAn(srcName) + " — these are two distinct enums, and sharing a tag width "
                      "does not make a value of one name a variant of the other. `match` on it, or write "
                      "the `" + dstName + "` variant you mean").c_str(), line);
     else if (srcF == IdFamily::Enum && dstF == IdFamily::Num)
-        unsupported((head + "a `" + srcName + "` — an enum is not its underlying integer. That direction "
+        unsupported((head + aOrAn(srcName) + " — an enum is not its underlying integer. That direction "
                      "is total, so convert it explicitly: `cast<" + dstName + ">(…)`").c_str(), line);
     else if (srcF == IdFamily::Num && dstF == IdFamily::Enum)
-        unsupported((head + "a `" + srcName + "` — an integer names no variant of `" + dstName + "` until "
+        unsupported((head + aOrAn(srcName) + " — an integer names no variant of `" + dstName + "` until "
                      "it has been checked against them. Write the variant (`" + dstName + "::…`), or "
                      "`try cast<" + dstName + ">(…)` for a value from outside").c_str(), line);
     else if (srcF == IdFamily::Sig && dstF == IdFamily::Sig)
-        unsupported((head + "a `" + srcName + "` — these are two distinct signature types" + sigShapeNote(src, dstCType)
+        unsupported((head + aOrAn(srcName) + " — these are two distinct signature types" + sigShapeNote(src, dstCType)
                      + ". A function pointer is not converted; declare the value at the signature it is "
                        "called through").c_str(), line);
     // Only literals reach here (the non-literal crossings went back to `rejectNumericConversion` above),
     // so the message is about what the literal MEANS rather than about a conversion. `char` is a
     // codepoint: `'A'` is how one is written, and an integer is one only after somebody decides it is.
     else if (dstF == IdFamily::Char)
-        unsupported((head + "a `" + srcName + "` — a `char` is one Unicode codepoint, not a number. Write "
+        unsupported((head + aOrAn(srcName) + " — a `char` is one Unicode codepoint, not a number. Write "
                      "the character (`'A'`), or `cast<char>(…)` if the integer really is a scalar "
                      "value").c_str(), line);
     else if (srcF == IdFamily::Char)
-        unsupported((head + "a `" + srcName + "` — a `char` is one Unicode codepoint, not a number. "
+        unsupported((head + aOrAn(srcName) + " — a `char` is one Unicode codepoint, not a number. "
                      "Convert it explicitly: `cast<" + dstName + ">(…)`").c_str(), line);
     else
-        unsupported((head + "a `" + srcName + "`").c_str(), line);
+        unsupported((head + aOrAn(srcName)).c_str(), line);
 }
 
 // Milestone 6, the OPERAND half — the seventh position. D2 read literally: mixing two numeric types in
@@ -2659,11 +2659,15 @@ std::string CEmitter::wrapperHint(const std::string& dstCType, const std::string
     return "";
 }
 
-// "a `Step`" / "an `Optional<Step>`": the article for a name a message quotes.
+// "a `Step`" / "an `Optional<Step>`": the article for a name a message quotes. By SOUND, not letter: `usize`,
+// `uint8`, `Unit` and `Unix` begin with "you" and take "a"; a `u` sounds as a vowel only before `n` and a letter
+// other than `i` (`an UnsafePtr`, `an Unordered…`).
 std::string CEmitter::aOrAn(const std::string& name)
 {
-    const char c = name.empty() ? 'x' : (char)(name[0] | 0x20);   // ASCII fold: names start with a letter or `_`
-    const bool vowel = c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u';
+    auto low = [&](size_t i) { return i < name.size() ? (char)(name[i] | 0x20) : 'x'; };   // ASCII fold
+    const char c = low(0);
+    const bool vowel = c == 'a' || c == 'e' || c == 'i' || c == 'o'
+                    || (c == 'u' && low(1) == 'n' && low(2) != 'i');
     return std::string(vowel ? "an `" : "a `") + name + "`";
 }
 
@@ -18184,7 +18188,7 @@ std::string CEmitter::indexReceiverPlace(SharedExpression recv, const std::strin
     if (owned) {
         if (!_hoistOK) {
             unsupported(("indexing `" + unparseExpr(recv) + "` needs its value held until the element is read, and "
-                         "a `" + demangleForDisplay(cls) + "` must then be dropped — there is no statement slot "
+                         + aOrAn(demangleForDisplay(cls)) + " must then be dropped — there is no statement slot "
                          "for that here; bind it to a local first").c_str(), line);
             return "(*(" + cls + "[]){ " + emitExpression(recv) + " })";
         }
@@ -18798,7 +18802,7 @@ std::string CEmitter::ternaryArmHandoff(const SharedExpression& arm, const std::
         const bool canCopy = isSmartPtrClass(cls) ? smartKind(cls) != CollKind::Owned : isCopyable(cls);
         unsupported(("cannot move `" + what + "` in one arm of a `?:` — it would be moved on one path and still "
                      "live on the other; " + (canCopy ? "say `copy " + what + "` in the arm"
-                                                      : "a `" + shown + "` has no `copy`, so move it on every path "
+                                                      : aOrAn(shown) + " has no `copy`, so move it on every path "
                                                         "or none, or hold it in an `Optional`")).c_str(), line);
         return emitExpression(v);
     };
@@ -19027,7 +19031,7 @@ std::string CEmitter::intoHandleArm(const std::string& dstC, const SharedExpress
             const std::string what = unparseExpr(v);
             unsupported(("cannot move `" + what + "` in one arm of a `?:` — it would be moved on one path and still "
                          "live on the other; " + (canCopy ? "say `copy " + what + "` in the arm"
-                                                          : "a `" + demangleForDisplay(bc.empty() ? sc : bc) + "` has no "
+                                                          : aOrAn(demangleForDisplay(bc.empty() ? sc : bc)) + " has no "
                                                             "`copy`, so move it on every path or none, or choose with "
                                                             "`if`/`else`")).c_str(), line);
             return "(" + dstC + "){0}";
@@ -23561,7 +23565,7 @@ std::string CEmitter::contractBorrowOf(const std::string& iface, SharedExpressio
         const std::vector<std::string> up = refinedAncestors(c);
         if (std::find(up.begin(), up.end(), iface) != up.end())
             return "(" + iface + "){ (" + val + ").kama_obj, (" + val + ").kama_vtbl->" + upSlot(iface) + " }";
-        unsupported(("a `" + demangleForDisplay(c) + "` value is not a `" + demangleForDisplay(iface) + "` — `"
+        unsupported((aOrAn(demangleForDisplay(c)) + " value is not " + aOrAn(demangleForDisplay(iface)) + " — `"
                      + demangleForDisplay(c) + "` does not refine it, so " + what + " cannot take it").c_str(), line);
         return val;
     } else return val;

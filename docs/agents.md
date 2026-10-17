@@ -229,7 +229,7 @@ error; it is a proof that none of the ones kama can see are there.
 Rust/Swift/Go rule. `int8 a = big;` is an error and wants `cast<int8>(big)`:
 
 ```
-error: a local is declared `int8`, so it cannot be initialized with a `int32` — kama has no implicit
+error: a local is declared `int8`, so it cannot be initialized with an `int32` — kama has no implicit
 numeric conversion. Convert it explicitly: `cast<int8>(…)`
 ```
 
