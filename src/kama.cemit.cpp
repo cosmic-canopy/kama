@@ -29744,6 +29744,12 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // clang objected — "cannot take the address of an rvalue" — while `Optional<T> o = f(s: "lit");` one
     // line up compiled. A check/build divergence, and the kind a fixture only finds by being written.
     _hoistOK = true;
+    // A subject that is not a place lands in a temporary, and a ctor call builds INTO it (KR-120), as `T x = T.make(…)`
+    // does: the value form had GCC at -O2 build a 16 KB `Result` in its own temporary and copy it — 32,832 bytes of
+    // frame where clang elides to one (tools/check-construct-frame.sh, found by CI's Linux and Windows legs).
+    const bool toTemp = !dynamic_cast<ThisAccessNode*>(m->subject.get()) && !subjPlaceCall && !subjLvalue;
+    std::string tempName;
+    if (toTemp) { tempName = "kama_msubj" + std::to_string(_tempCounter++); offerCtorInto(m->subject, "&" + tempName, subjCls); }
     // A PLACE, for the same reason the assignment target one file over is one: `subjLvalue` below already
     // CLAIMS an element access is an lvalue and then takes its address, and `emitExpression` of an
     // intrinsic-collection element is the by-value `Coll__get(…)` — so `match (os[0])` emitted
@@ -29751,6 +29757,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // classify-one-way/spell-the-other shape as the element store. `emitPlace` falls through to
     // `emitExpression` for every other subject, so a value-producing subject is untouched.
     std::string subjExpr = emitPlace(m->subject);
+    const bool builtInPlace = toTemp && takeCtorInto();
     _variantTargetType = pvt; _matchTargetCType = pmt; _hoistOK = ph;
     flushHoisted(depth);
     if (dynamic_cast<ThisAccessNode*>(m->subject.get())) {
@@ -29764,8 +29771,13 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth); *_out << subjCls << "* " << sp << " = &(" << subjExpr << ");\n";
     } else {
         subjLocMark = _scopes.empty() ? 0 : _scopes.back().locals.size();
-        subjOwner = "kama_msubj" + std::to_string(_tempCounter++);
-        indent(depth); *_out << subjCls << " " << subjOwner << " = " << subjExpr << ";\n";
+        subjOwner = tempName;
+        if (builtInPlace) {   // the into call, a statement, fills the temporary declared just before it
+            indent(depth); *_out << subjCls << " " << subjOwner << ";\n";
+            indent(depth); *_out << subjExpr << ";\n";
+        } else {
+            indent(depth); *_out << subjCls << " " << subjOwner << " = " << subjExpr << ";\n";
+        }
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
         recordDestructibleLocal(subjOwner, subjCls);   // see the drop below
     }
