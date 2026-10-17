@@ -412,7 +412,10 @@ stderr_tail() { [ -s "$1" ] && tail -n 5 "$1" | sed 's/^/  stderr: /'; return 0;
 # NTSTATUS tells them apart — 0xC0000005 access violation, 0xC0000374 heap corruption, 0xC00000FD stack overflow,
 # 0xC0000409 a fail-fast — so the program is run once more under PowerShell, which reports the whole status.
 windows_status() {   # $1 = the native executable
-    [ "$TRAP_STYLE" = windows ] || return 0
+    # The OS is read here, not TRAP_STYLE: that is assigned below the fixture phases, and under `set -u` reading it
+    # here killed the worker before it wrote a verdict — a failing fixture went uncounted (the tally below now
+    # refuses that too).
+    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ;; *) return 0 ;; esac
     command -v powershell.exe >/dev/null 2>&1 || return 0
     local w st; w=$(cygpath -w "$1" 2>/dev/null) || return 0
     st=$(cd "$(dirname -- "$1")" && powershell.exe -NoProfile -NonInteractive -Command "& '$w' *> \$null; \$LASTEXITCODE" 2>/dev/null | tr -d '\r')
@@ -573,8 +576,9 @@ test_one() {
     if [ "$actual" = "$expected" ]; then
         echo "PASS $name (exit $actual)" >"$out"; echo PASS >"$res"
     else
+        echo FAIL >"$res"   # the verdict first: nothing below may keep it from being written
         { echo "FAIL $name (got $actual, expected $expected)"; stderr_tail "$TMP/$name.san"
-          [ "$actual" = 127 ] && [ "$WASM" != 1 ] && windows_status "$exe"; } >"$out"; echo FAIL >"$res"
+          if [ "$actual" = 127 ] && [ "$WASM" != 1 ]; then windows_status "$exe"; fi; } >"$out"
     fi
 }
 
@@ -623,6 +627,11 @@ for src in "$TESTS_DIR"/*.kama; do
             PASS) pass=$((pass+1));;
             FAIL) fail=$((fail+1));;
         esac
+    elif selected "$src"; then
+        # A fixture that was run and left no verdict is a failure, never a silence: a worker that dies (an unbound
+        # variable under `set -u`, a killed subshell) used to drop its fixture from the count, so a run could read
+        # "0 failed" with one failing.
+        echo "FAIL $name (no verdict — the harness worker running it ended without writing one)"; fail=$((fail+1))
     fi
 done
 
@@ -711,7 +720,8 @@ multi_one() {
     if [ "$actual" = "$expected" ]; then
         echo "PASS $name (multi-file, exit $actual)" >"$out"; echo PASS >"$res"
     else
-        { echo "FAIL $name (got $actual, expected $expected)"; stderr_tail "$TMP/$name.san"; } >"$out"; echo FAIL >"$res"
+        echo FAIL >"$res"   # the verdict first, as in test_one
+        { echo "FAIL $name (got $actual, expected $expected)"; stderr_tail "$TMP/$name.san"; } >"$out"
     fi
 }
 
@@ -732,6 +742,8 @@ for dir in "$TESTS_DIR"/*.d; do
             PASS) pass=$((pass+1));;
             FAIL) fail=$((fail+1));;
         esac
+    elif selected "$dir"; then   # see the single-file tally: no verdict is a failure
+        echo "FAIL $name (no verdict — the harness worker running it ended without writing one)"; fail=$((fail+1))
     fi
 done
 
