@@ -7579,7 +7579,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         indent(d+1); *_out << "if (!" << A << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
         // A one-element slice, so the synthesized worker body — a `foreach` over its slice — runs the
         // body exactly once, for this element. Identical machinery to parallel_for, chunk size 1.
-        indent(d+1); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << W << ", 1);\n";
+        indent(d+1); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << W << ", 1"
+                          << (sliceMi->trackCaller ? ", " + trapLoc(pf->line) : std::string()) << ");\n";
         for (size_t i = 0; i < caps.size(); ++i) {
             indent(d+1); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
         }
@@ -7612,7 +7613,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                        << ") " << C << " = " << CH << ";\n";
     indent(d+1); *_out << argTy << "* " << A << " = (" << argTy << "*)kama_alloc(" << layoutOf(argTy) << ");\n";
     indent(d+1); *_out << "if (!" << A << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-    indent(d+1); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << F << ", " << C << ");\n";
+    indent(d+1); *_out << A << "->slice = " << sliceMi->cName << "(&" << V << ", " << F << ", " << C
+                      << (sliceMi->trackCaller ? ", " + trapLoc(pf->line) : std::string()) << ");\n";
     for (size_t i = 0; i < caps.size(); ++i) {
         indent(d+1); *_out << A << "->c" << i << " = " << caps[i].addr << ";\n";
     }

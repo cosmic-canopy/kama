@@ -257,7 +257,6 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     }
     // The writable twin (kama's unmarked/`Mut` split, as `iterator`/`iterMut`): the same lookup, handing back
     // a place the caller may mutate through — `m.getRefMut(key: k).bump()`.
-    @trackCaller
     public unsafe fn ref V getRefMut(const ref K key) {
         isize i = this.slotOf(key: key);
         if (i < 0) { panic(msg: "Map.getRefMut: absent key"); }

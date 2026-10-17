@@ -3467,7 +3467,8 @@ be written **in the language** rather than baked into the compiler. Three builti
   **`@trackCaller`** on a function, a method or an operator makes every trap and `panic` in its body name its <!-- test: track_caller_ok -->
   CALLER's line instead — Rust's `#[track_caller]`; inside another `@trackCaller` body the location passes <!-- test: track_caller_chain, track_caller_member -->
   through, so a chain reports where it was entered. std's indexing, slicing and lookups carry it (`DynamicArray`, <!-- test: track_caller_std -->
-  `FixedArray`, `Deque`, `View`, `Map`/`SortedMap`/`SlotMap` `getRef`, `PriorityQueue.peekRef`, `Template.part`), so
+  `FixedArray`, `Deque`, `View`, `Map`/`SortedMap`/`SlotMap` `getRef`, `SlotMap.getRefMut`, `PriorityQueue.peekRef`,
+  `Template.part`; a `getRefMut` that implements `MergeByKey` cannot, below), so
   `xs[9]` past a `DynamicArray` names the line that indexed. It adds two hidden C parameters every direct call fills,
   which is why it is refused where no direct call reaches: a function bound to a `fnptr`, a contract member's <!-- xfail: track_caller_fnptr, track_caller_contract, track_caller_virtual -->
   implementation, a `virtual` method, an `expose fn` (a host calls it), a destructor (nothing calls one) and a <!-- xfail: track_caller_expose, track_caller_dtor, track_caller_ctor -->

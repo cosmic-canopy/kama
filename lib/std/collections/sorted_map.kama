@@ -280,7 +280,6 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
         return this.kids[i].getRef(key: key);
     }
     // The writable twin: the same walk, handing back a place the caller may mutate through.
-    @trackCaller
     public fn ref V getRefMut(const ref K key) {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
@@ -713,7 +712,6 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
     public fn Optional<V> get(const ref K key) when [V: Copyable<V>] { return this.root.get(key: key); }
     @trackCaller
     public const fn const ref V getRef(const ref K key) { return this.root.getRef(key: key); }   // read-only place
-    @trackCaller
     public fn ref V getRefMut(const ref K key) { return this.root.getRefMut(key: key); }        // the writable twin
 
     // Insert or overwrite. Consumes both key and value (the tree owns what it stores). If the root is full,
