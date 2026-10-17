@@ -1,0 +1,18 @@
+// A contract may require a `static fn` beside instance members. The static one is called on a TYPE — `T::step(…)` in
+// a generic bound by the contract, resolved per instance — and has no vtable slot, since there is no receiver to
+// dispatch on (tests/xfail/contract_static_through_value). The instance members still dispatch through a value, and
+// the slot the static member does not take moves nothing else in the table.
+type contract Stepper for value { static fn int32 step(int32 n); fn int32 size(); fn int32 twice(); }
+type value Big implements Stepper {
+    int32 s;
+    public ctor of(int32 s) { this.s = s; }
+    public static fn int32 step(int32 n) { return n + 10; }
+    public fn int32 size() { return this.s; }
+    public fn int32 twice() { return this.s * 2; }
+}
+fn int32 viaBound<T: Stepper>(T t) { return T::step(n: t.size()); }    // static: on the type
+fn int32 viaValue(Stepper s) { return s.size() + s.twice(); }           // instance: through the value
+fn int32 main() {
+    Big b = Big.of(s: 3);
+    return viaBound(t: b) + viaValue(s: b);   // 13 + 9 = 22
+}

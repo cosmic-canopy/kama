@@ -4273,7 +4273,9 @@ declaration — not at the call sites, and not by the C compiler:
   conformance promises, not decoration;
 - the **receiver** matches: a contract member may be declared `static fn` (`Hasher::finish` is
   zero-state, so `H::finish(raw)` monomorphizes to a direct call), and `static` must then agree on both
-  sides. A required `ctor` is exempt — one is static by construction;
+  sides. A required `ctor` is exempt — one is static by construction. A static member is called on a TYPE: <!-- test: contract_static_member -->
+  it has no receiver, so a contract value cannot dispatch it and has no slot for it, and `h.finish(raw: 5)`
+  through a value is refused, naming the `T::finish(…)` spelling; <!-- xfail: contract_static_through_value -->
 - **`const fn`** on the member is honored, and so is **`const`** on a parameter. Only in one
   direction: an implementation may be *more* const than the member asks, which widens where it can be
   called and breaks nothing.

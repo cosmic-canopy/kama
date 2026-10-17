@@ -1,0 +1,1 @@
+`finish` is a `static fn` of `Fin`, so it has no receiver for a value to dispatch on

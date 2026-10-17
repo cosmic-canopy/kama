@@ -1,0 +1,8 @@
+// A contract's `static fn` member has no receiver, so a contract VALUE cannot dispatch it. It used to: the member was
+// installed in the vtable cast to a signature with a `self` it does not take, so `h.finish(raw: 5)` handed the
+// object pointer to `finish` as `raw` — it answered 96, not 6. A static member is called on a type, `H::finish(…)`
+// in a generic bound by the contract (tests/contract_static_member).
+type contract Fin for value { static fn uint64 finish(uint64 raw); }
+type value Plus implements Fin { public ctor make() { } public static fn uint64 finish(uint64 raw) { return raw + 1ui64; } }
+fn uint64 viaValue(Fin h) { return h.finish(raw: 5ui64); }
+fn int32 main() { Plus p = Plus.make(); return cast<int32>(viaValue(h: p)); }

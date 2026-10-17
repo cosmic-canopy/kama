@@ -15424,7 +15424,7 @@ std::string CEmitter::scalarSlotThunk(const std::string& key, const std::string&
 void CEmitter::emitScalarSlotThunks(ClassInfo& ci, InterfaceInfo& ii, const std::string& key)
 {
     for (auto& m : ii.methods) {
-        if (m.isCtor) continue;           // a contract-required ctor has no slot
+        if (m.isCtor || m.isStatic) continue;   // a contract-required ctor or static member has no slot
         MethodInfo* mi = findMethod(&ci, m.name, nullptr);
         if (!mi) continue;
         std::string ret = cType(m.returnType) + placeRetSuffix(m.isPlaceReturn, m.isConstPlace);
@@ -15461,7 +15461,7 @@ std::string CEmitter::renderIntrinsicContractVtbl(const std::string& key, const 
         if (pci->isScalarRecv) emitScalarSlotThunks(*pci, ii->second, key);
         *_out << "static const " << cn << "_vtbl " << key << "__as_" << cn << " = {\n";
         for (auto& m : ii->second.methods) {
-            if (m.isCtor) continue;
+            if (m.isCtor || m.isStatic) continue;
             MethodInfo* mi = findMethod(pci, m.name, nullptr);
             if (!mi) continue;
             indent(1);
@@ -33743,7 +33743,9 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     ContractSubst _cs(*this, ii);   // bind T->int32 for a generic-contract instance (`Iterator_int32`)
     *_out << "struct " << ii.name << "_vtbl {\n";
     for (auto& m : ii.methods) {
-        if (m.isCtor) continue;   // a contract-required `ctor` (HeapOwner::adopt) is not dispatchable — no slot
+        // A contract-required `ctor` (HeapOwner::adopt) or `static fn` (Hasher::finish) has no receiver, so a value cannot
+        // dispatch it — no slot. A static one is called on a type (`H::finish(raw:)`), resolved at monomorphization.
+        if (m.isCtor || m.isStatic) continue;
         indent(1);
         // a place-returning contract method (`fn ref T m()`) is lowered to a `T*`-returning slot
         // (`T const*` for `const ref T`).
@@ -33870,6 +33872,10 @@ void CEmitter::emitClassInterfaceVtables(ClassInfo& ci)
             // overrides. A one-direction copy used to live here and named the contract by its internal
             // instance key; one check, one message.
             }
+            // A `static fn` member is checked above and has no slot: it was installed here cast to a signature
+            // with a `self` it does not take, so a call through a value read the object pointer as its first
+            // argument (`h.finish(raw: 5)` answered 96, not 6).
+            if (m.isStatic) continue;
             indent(1);
             if (ci.isScalarRecv)
                 *_out << "." << kName(m.name) << " = &" << scalarSlotThunk(ci.name, ii.name, m.name) << ",\n";
@@ -34045,6 +34051,13 @@ std::string CEmitter::emitInterfaceDispatch(const std::string& fatExpr, const st
     for (auto& m : it->second.methods) {
         if (m.name != method) continue;
         recordNodeRef(site, m.nameId.get());   // M6 B3c: a fat-pointer call references the CONTRACT's method
+        if (m.isStatic) {   // no receiver to dispatch on — and no slot (see emitInterfaceTypes)
+            const std::string shown = demangleForDisplay(iface);
+            unsupported(("`" + method + "` is a `static fn` of `" + shown + "`, so it has no receiver for a value to "
+                         "dispatch on — call it on a type: `T::" + method + "(…)` in a generic bound by `" + shown
+                         + "`").c_str(), srcLine);
+            return "0";
+        }
         // The no-heap gate for a contract call. The slot is the blind seam: which implementation runs is a
         // runtime fact, so the proof crosses only where the CONTRACT declared it may. A member that does
         // carry `@noheap` has had every implementation checked against it (see checkConformanceSignatures),

@@ -302,6 +302,7 @@ contract_return_mismatch	contract_return_mismatch.kama:9
 contract_return_mismatch_adapter	contract_return_mismatch_adapter.kama:5
 contract_return_mismatch_enum	contract_return_mismatch_enum.kama:5
 contract_static_mismatch	contract_static_mismatch.kama:12
+contract_static_through_value	contract_static_through_value.kama:7
 contract_type_arg	contract_type_arg.kama:9
 contract_value_not_refined	contract_value_not_refined.kama:14
 contract_with_body	contract_with_body.kama:2
