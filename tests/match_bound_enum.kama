@@ -1,0 +1,17 @@
+// KR-182: a plain enum bound by a `match` arm (an `Optional` payload, a variant field) or by a `foreach` is a
+// `match` subject like any local. It was refused as "an integer" since 0.9.614, because those binders record the
+// binding's type node rather than a C type — the sibling of 0.9.628's module-static fix.
+import { std::collections::DynamicArray };
+type enum Key { A, B, C }
+type enum Ev { KeyDown(Key key), Quit }
+fn int32 score(Key k) { return match (k) { case A: 1; case B: 2; case C: 3; }; }
+fn int32 main() {
+    int32 total = 0;
+    Optional<Key> ok = Optional::Some(value: Key::B);
+    match (ok) { case Some(value: k): { int32 v = match (k) { case A: 10; case B: 20; case C: 30; }; total = total + v; } case None: { } };
+    Ev e = Ev::KeyDown(key: Key::C);
+    match (e) { case KeyDown(key: k): { match (k) { case A: { total = total + 100; } case B: { total = total + 200; } case C: { total = total + 300; } }; } case Quit: { } };
+    DynamicArray<Key> ks = DynamicArray.empty(); ks.add(item: Key::A); ks.add(item: Key::C);
+    foreach (Key k in ks) { int32 v = match (k) { case A: 1000; case B: 2000; case C: 3000; }; total = total + v; }
+    return total - 4300 + score(k: Key::A);   // 20 + 300 + 4000 = 4320 → 21
+}

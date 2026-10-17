@@ -785,26 +785,6 @@ Size **L**: (1a) + (2) are M, and decision (4)'s attribute is included.
 Decision (2) is measured and decided: **a location in every build**. Commits: `PanicInfo` and the hook; a location
 on every trap; the caller-location attribute (its spelling settled when built).
 
-<a id="s2-bound-enum-subject"></a>
-
-### A plain enum bound by a `match` arm or a `foreach` is not a `match` subject (KR-182)
-
-Found surveying KR-26 and confirmed on `0.9.630`. Each of these is refused with "`match` branches on an enum's
-variants — an integer, a string or a bool branches with `if`/`else if`":
-
-- `case Some(value: k): { r = match (k) { case A: … } }`
-- `case KeyDown(key: k): match (k)`
-- `foreach (Key k in ks) { … match (k) … }`
-
-That is the message `0.9.614` gave a number subject, here said of an enum. Copying into a local
-(`Key kk = k;`) or passing the value to a function works.
-
-Cause: `exprEnumType` (kama.cemit.cpp ~29220) reads `_localCTypes`. The arm binder in `emitMatchSwitch` (~28995) sets
-only `_localTypes`, and the `foreach` binder sets neither. This is the sibling of the module-static fix in `0.9.628`.
-
-Fix: record the C type at both binders. Add a fixture `match_bound_enum` covering an arm binding, an `Optional`
-payload and a `foreach` element. Size **S**. It blocks KR-26's input idiom.
-
 <a id="s2-bare-generic-contract"></a>
 
 ### A generic contract written bare as a value type reaches the C compiler (KR-183)
@@ -3293,7 +3273,7 @@ Size **L** (4 commits).
 ### `@kama/window` — a window and its events, a first-party package (KR-26) — surveyed on `0.9.630`
 
 A PACKAGE since 2026-10-16 (§8's opening); the survey was written for a std module, and its design carries over.
-Commit 0 below (KR-182) is a compiler defect and ships in this repo regardless.
+Its commit 0, a compiler defect (a bound plain enum refused as a `match` subject), shipped in this repo as `0.9.634`.
 
 The current state:
 
@@ -3301,8 +3281,7 @@ The current state:
 - The web pump is `return 1`, with no html5 listeners.
 - No key, mouse, size or focus information exists anywhere.
 - A pull-API prototype worked: a C ring queue, `type enum InputEvent`, `pollEvent() -> Optional<…>`, and
-  `try cast<Key>(n)` falling back to `Unknown`. It needs **KR-182** fixed first, because a bound key cannot be matched
-  today; that is commit 0.
+  `try cast<Key>(n)` falling back to `Unknown`. It needed a bound key to be matchable, which `0.9.634` made true.
 - A downstream engine writes its own GLFW/html5 platform layer today, because the seam's window is unreachable and its
   events are discarded. This module must make that layer unnecessary: several windows, size and scale, and a native
   handle.
@@ -3336,7 +3315,7 @@ The design:
 
 The commits:
 
-0. KR-182.
+0. (Shipped `0.9.634`: a bound plain enum is a `match` subject.)
 1. The native seam: Window, Event, Key, headless, `needsWindow`, and the manifest entry.
 2. The web html5 glue, resize/DPR, and pointer lock.
 3. Gamepad.

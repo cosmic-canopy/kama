@@ -29381,6 +29381,11 @@ std::string CEmitter::exprEnumType(SharedExpression e)
         }
         auto it = _localCTypes.find(*id->value);              // a local / param of enum type
         if (it != _localCTypes.end()) { std::string r = asEnum(it->second); if (!r.empty()) return r; }
+        // A `match` arm or `foreach` binding records its TYPE NODE, not a C type — those binders leave
+        // `_localCTypes` alone by design — so `case KeyDown(key: k): match (k)` and `foreach (Key k in ks)
+        // { match (k) … }` were refused as "an integer" (KR-182; the sibling of the module-static rung below).
+        auto tn = _localTypeNodes.find(*id->value);
+        if (tn != _localTypeNodes.end() && tn->second) { std::string r = asEnum(cType(tn->second)); if (!r.empty()) return r; }
         if (_currentClass) {                                  // a bare field reference inside a method
             ClassInfo* owner = findFieldOwner(_currentClass, *id->value);
             if (owner)

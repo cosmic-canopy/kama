@@ -72,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-182 | **A plain enum bound by a `match` arm or a `foreach` is not a `match` subject** — refused as "an integer" since `0.9.614`; the sibling of `0.9.628`'s static fix, and commit 0 of KR-26 | S | [§2](ROADMAP_DETAIL.md#s2-bound-enum-subject) |
 | KR-183 | **A generic contract written bare as a value type reaches the C compiler** — `fn take(Src s)` passes `kama check`, then "unknown type name" in C; blocks KR-108 | S | [§2](ROADMAP_DETAIL.md#s2-bare-generic-contract) |
 | KR-184 | **An enum's copyability depends on the order of its payloads** — `Arr(DynamicArray<J>)` before a non-Copyable payload fails, swapped builds; blocks KR-110 | S | [§2](ROADMAP_DETAIL.md#s2-enum-copy-order) |
 | KR-185 | **The JSON reader takes invalid numbers, aborts on overflow, and overflows the stack on deep input** — `[1.5]` reads 1 and `[007]` 7; an int64 overflow traps the process; 10⁶ `[` is a SIGSEGV | S | [§4](ROADMAP_DETAIL.md#s4-json-numbers) |
