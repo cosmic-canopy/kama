@@ -1434,6 +1434,13 @@ write would land in storage nothing can read back. The repair is whichever the c
 local if it really writes, or say `const ref` if it never did. Prefer `const ref` for any parameter you
 only read; it is what makes the borrow usable at a call site.
 
+**No borrow in a call overlaps a mutable one.** Two `ref`/`out` arguments naming overlapping places hand the <!-- xfail: ref_arg_overlap, ref_arg_overlap_field, ref_arg_overlap_receiver -->
+callee two mutable borrows of one object, and so does a `ref`/`out` argument overlapping the receiver of a
+non-`const fn`. A `const ref` argument is a borrow too: overlapping a mutable argument or such a receiver, it
+lets the callee change or free what it reads (`two(a: o, b: ref o)`, `b.absorb(other: b)`). Each is refused at <!-- xfail: const_ref_arg_aliases_ref, const_ref_arg_aliases_receiver -->
+the call. The test is the window's prefix test over places, so disjoint fields stay legal:
+`f(a: ref p.lo, b: p.hi)`.
+
 "Every path" is a real flow merge, not "assigned somewhere": an `if`/`else` in which **both** arms assign
 counts, a lone `if` does not, and an arm that ends in `return`/`break`/`continue` never reaches the join
 and so owes nothing to it.

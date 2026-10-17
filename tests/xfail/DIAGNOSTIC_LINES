@@ -220,6 +220,8 @@ const_ptr_store_field	const_ptr_store_field.kama:11
 const_ptr_to_mut_arg	const_ptr_to_mut_arg.kama:9
 const_ptr_to_mut_local	const_ptr_to_mut_local.kama:6
 const_ref_addr_widen	const_ref_addr_widen.kama:6
+const_ref_arg_aliases_receiver	const_ref_arg_aliases_receiver.kama:9
+const_ref_arg_aliases_ref	const_ref_arg_aliases_ref.kama:14
 const_ref_as_mut_return	const_ref_as_mut_return.kama:13
 const_ref_compound	const_ref_compound.kama:10
 const_ref_contract_mismatch	const_ref_contract_mismatch.kama:13

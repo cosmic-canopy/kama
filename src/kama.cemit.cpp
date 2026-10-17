@@ -24728,6 +24728,17 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     // SAME prefix test the view model uses for `borrow`: `f(a: x, b: ref x.lo)` conflicts because `{x}` is
     // a prefix of `{x, lo}`. `out` is `byRef && !isConst`, so a fill overlapping a borrow is caught too.
     std::vector<std::vector<std::string>> mutableArgPlaces;
+    // A `const ref` argument is a borrow too, a read-only one, and the callee may change or free what it reads
+    // through it by writing the mutable one: `two(a: o, b: ref o)` with `b = Optional::None` then a read of
+    // `a`'s payload read a released value. Compared in both directions, so argument order cannot hide it.
+    std::vector<std::pair<std::vector<std::string>, std::string>> constArgPlaces;   // place -> param name
+    auto constArgConflict = [&](const std::vector<std::string>& place, const std::string& constName,
+                                const std::string& mutName) {
+        unsupported(("`" + placeText(place) + "` is passed both as the read-only `const ref` argument `" + constName
+                     + "` and as the mutable `ref`/`out` argument `" + mutName + "` in one call — the callee "
+                       "could change or free what it reads through `" + constName + "`. Pass distinct places, "
+                       "or copy one into a local first").c_str(), srcLine);
+    };
     auto checkArgOverlap = [&](const std::vector<std::string>& path, const std::string& pname) {
         if (path.empty()) return;                    // not a nameable place — nothing to compare
         for (auto& seen : mutableArgPlaces)
@@ -24736,6 +24747,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                              "one call (`" + pname + "` aliases an earlier `ref`/`out` argument) — the "
                              "callee would hold two mutable borrows of the same object; pass distinct "
                              "places, or read one into a local first").c_str(), srcLine);
+        for (auto& c : constArgPlaces)
+            if (placesConflict(c.first, path)) constArgConflict(path, c.second, pname);
         mutableArgPlaces.push_back(path);
     };
     // A VIEW argument is a borrow too, and one whose root the test above cannot see: `bad(d: ref d, v:
@@ -24872,6 +24885,13 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
             if (!mp.empty())
                 for (auto& vr : viewArgRoots)     // the other direction: the view argument came first
                     if (placesConflict(vr.first, mp)) viewArgConflict(vr.first, vr.second, p.name);
+        } else if (p.byRef && p.isConst) {
+            std::vector<std::string> cp = placePath(argExpr);
+            if (!cp.empty()) {
+                for (auto& seen : mutableArgPlaces)   // the other direction: the mutable argument came first
+                    if (placesConflict(seen, cp)) constArgConflict(cp, p.name, "an earlier argument");
+                constArgPlaces.push_back({ cp, p.name });
+            }
         } else if (!p.byRef && isViewCType(p.className)) {
             checkViewArgOverlap(viewRootPlace(argExpr), p.name);
         }
@@ -39781,10 +39801,21 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                                     call);
                     continue;
                 }
-                if (!ps || !ps->byRef || ps->isConst) continue;
+                if (!ps || !ps->byRef) continue;
                 SharedExpression ax = a->expression;
                 if (auto* h = dynamic_cast<HandoffNode*>(ax.get())) ax = h->value;
                 std::vector<std::string> ap = placePath(ax);
+                // A READ-ONLY borrow of the receiver's own storage is no safer: `d.appendAll(src: d)` may grow
+                // `d` and leave `src` pointing at the buffer it freed.
+                if (ps->isConst) {
+                    if (!ap.empty() && placesConflict(recvPlace, ap))
+                        unsupported(("`" + placeText(ap) + "` is passed as the `const ref` argument `" + ps->name
+                                     + "` while `" + placeText(recvPlace) + "` is the receiver of non-`const fn` `"
+                                     + method + "` — the method may change or free what it reads through `"
+                                     + ps->name + "`. Pass a distinct place, copy it into a local first, or "
+                                     "declare `" + method + "` a `const fn` if it does not mutate").c_str(), call);
+                    continue;
+                }
                 if (!ap.empty() && placesConflict(recvPlace, ap))
                     unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
                                  + "` while `" + placeText(recvPlace) + "` is its receiver — a non-`const "

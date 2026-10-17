@@ -2603,12 +2603,11 @@ changes):
 1. **A lowering.** It keeps one spelling and copy semantics. The alternative, a
    `case Ok(value: const ref b)` pattern, is a grammar change, and a pattern binding has no type slot.
 2. Which subjects qualify: **locals and temporaries only.** The overlap below was a use-after-free on its own (an
-   `Optional<DynamicArray<…>>` replaced through `b` while `a`'s payload is read), and is fixed separately.
-   - A `const ref` parameter is unsound today. `fn two(const ref Optional<int64> a, ref Optional<int64> b)` called
-     `two(a: o, b: ref o)` is accepted, so the two borrows overlap.
-   - A static that a callee writes behaves the same way. Both were measured: the copy returns 7, while reading in place
+   `Optional<DynamicArray<…>>` replaced through `b` while `a`'s payload is read); since `0.9.633` the call
+   `two(a: o, b: ref o)` is refused, so a `const ref` parameter no longer overlaps a `ref` one.
+   - A static that a callee writes is the remaining case: measured, the copy returns 7, while reading in place
      would read the overwritten payload.
-   - Widening to those subjects first needs a refusal of a `const ref` argument that overlaps a `ref` one.
+   - That refusal is what widening to `const ref` parameters needed; a static a callee writes still bars statics.
 
 <a id="s5-noheap-contract-slot"></a>
 

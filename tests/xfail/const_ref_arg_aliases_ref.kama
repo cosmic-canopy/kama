@@ -1,0 +1,15 @@
+// A `const ref` argument is a read-only borrow, and a mutable argument naming the same storage lets the callee
+// change or free what it reads: `two(a: o, b: ref o)` replaced `o`'s payload through `b`, then read it through
+// `a` (a released value; here a bounds panic). Refused at the call, in either argument order.
+import { std::collections::DynamicArray };
+fn int64 two(const ref Optional<DynamicArray<int64>> a, ref Optional<DynamicArray<int64>> b) {
+    int64 r = 0i64;
+    match (a) { case Some(value: xs): { b = Optional::None; r = xs[0]; } case None: { } };
+    return r;
+}
+fn int32 main() {
+    DynamicArray<int64> d = DynamicArray.empty();
+    d.add(item: 7i64);
+    Optional<DynamicArray<int64>> o = Optional::Some(value: give d);
+    return cast<int32>(two(a: o, b: ref o));
+}

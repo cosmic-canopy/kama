@@ -1,0 +1,9 @@
+// The receiver form: a non-`const fn` borrows its receiver mutably, so `b.absorb(other: b)` may grow `b`'s storage
+// while `other` still points into it.
+import { std::collections::DynamicArray };
+type resource Bag {
+    DynamicArray<int64> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); this.xs.add(item: 1i64); }
+    public fn void absorb(const ref Bag other) { this.xs.reserve(n: 1024); this.xs.add(item: other.xs[0]); }
+}
+fn int32 main() { Bag b = Bag.make(); b.absorb(other: b); return 0; }
