@@ -77,6 +77,20 @@ static inline char* kama__sized_strdup(const char* s) {
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
 #endif
+// ...and, in a program whose every header is kama's own or standard C (the compiler says so with
+// KAMA_OWN_HEADERS_ONLY), GDI, USER and windef's `min`/`max` macros too: nothing kama calls lives there (KR-68).
+// Never otherwise. <windows.h> is include-guarded, so a user's C header after this one could not get them back.
+#if defined(KAMA_OWN_HEADERS_ONLY)
+#  ifndef NOGDI
+#    define NOGDI
+#  endif
+#  ifndef NOUSER
+#    define NOUSER
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#endif
 // The readiness poller uses select() (see kama_poller_wait — WSAPoll mis-handles a connecting socket).
 // FD_SETSIZE caps how many sockets fit one fd_set; raise it from the default 64 for the server selector.
 // MUST be defined before <winsock2.h>.

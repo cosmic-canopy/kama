@@ -64,6 +64,17 @@ static inline void kama_sleep_ns(uint64_t ns) {
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
 #endif
+#if defined(KAMA_OWN_HEADERS_ONLY)   // the trims kama_os.h explains (KR-68)
+#  ifndef NOGDI
+#    define NOGDI
+#  endif
+#  ifndef NOUSER
+#    define NOUSER
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#endif
 #include <windows.h>
 // QueryPerformanceCounter is monotonic; convert ticks -> ns without overflow (split whole seconds + remainder,
 // since counter*1e9 overflows uint64 within seconds).

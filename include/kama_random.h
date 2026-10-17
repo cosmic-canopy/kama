@@ -37,6 +37,17 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
 #endif
+#if defined(KAMA_OWN_HEADERS_ONLY)   // the trims kama_os.h explains (KR-68)
+#  ifndef NOGDI
+#    define NOGDI
+#  endif
+#  ifndef NOUSER
+#    define NOUSER
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#endif
 #include <windows.h>
 #include <bcrypt.h>
 static inline int32_t kama_entropy(uint8_t* buf, size_t n) {

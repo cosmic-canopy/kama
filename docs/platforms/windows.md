@@ -289,6 +289,11 @@ Worth knowing before debugging, because each of these produced a confident wrong
   `std::net`. So `kama_os.h` declares `if_nametoindex` itself (`0.9.377`). Before adding a Windows SDK header to
   the seam, diff its `clang -dM -E` lowercase macros against the current set. Even without it, `<windef.h>` leaves
   `near`, `far`, `pascal` and `cdecl` defined.
+- **kama's `<windows.h>` is trimmed only in a program whose every C header is kama's own or standard C**
+  (`0.9.647`). There the runtime headers also define `NOGDI`, `NOUSER` and `NOMINMAX`, which drop GDI, USER and
+  `min`/`max` for the whole TU. Name one header of your own (`extern "my.h";`) and no TU is trimmed: `<windows.h>`
+  is include-guarded, so what a trim removed could never come back for your header, and a release build folds every
+  module into one TU. A `NOMINMAX` in your own `cflags` is respected either way.
 - **A kama name can no longer be rewritten by any of that (KR-67, `0.9.390`–`0.9.398`).** Every name kama
   owns reaches C prefixed — `k_` for what the user owns, `kama_` for what the compiler owns (SPEC § *C
   names*) — so `float32 near`, a parameter `far`, a contract slot `min` and a local `errno` all compile

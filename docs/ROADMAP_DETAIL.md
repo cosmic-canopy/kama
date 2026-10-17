@@ -3028,46 +3028,6 @@ rather than here, so there is one number to keep current. Forward work:
   precedes the FFI headers; and the FFI headers precede the shared header because they pull system headers
   whose functions the shared header's emitted bodies hand-declare ("cannot apply asm label to function after
   its first use").
-- **The OS seam needs 25 system headers because it ships bodies (KR-68).** One generated `<name>.gen.h` carries every
-  ⚠️ **Re-scoped 2026-09-18: the FAN-OUT half shipped separately (`0.9.408`, the entry above) and should be measured before this row —
-  it may retire it.** What remains here is DEPTH. Once each TU carries only the headers it needs, the seam's
-  weight is paid only by the TUs that genuinely use it, and the question becomes whether making it lighter is
-  still worth the inlining it costs. Answer that with a measurement taken AFTER that change, not before.
-  The original statement, kept because its Windows numbers are the reason the row exists: one generated
-  `<name>.gen.h` carries every
-  `extern` header a build touches, and every module's `.c` includes it, so importing `std::fs` ANYWHERE puts the
-  platform headers in front of EVERY module. Measured 2026-09-17 on the Windows VM while scoping the C-names work (shipped `0.9.398`, SPEC § *C names*):
-  preprocessing `#include "kama_os.h"` took ~263 ms against ~121 ms for `kama_runtime.h` alone (5 runs each,
-  process start included), and one such TU sees 21,748 macros. ⚠️ That box is QEMU + x86_64 emulation, so read the
-  RATIO and re-measure natively before acting. ✅ **Re-measured natively on macOS 2026-09-18** (min of 5,
-  `clang -E`): `kama_runtime.h` 22.3 ms / 1,112 macros, `kama_os.h` 27.9 ms / 4,269 macros — so **5.6 ms and
-  ~3,200 macros per TU here, against the VM's 2x and 21,748**. The row is therefore mostly a WINDOWS win, and
-  the macro surface, not kama's own body text, is what costs: `kama_os.h` pulls **25 system headers**
-  (`<windows.h>`, `<winsock2.h>`, `<dirent.h>`, …). **So the win is getting the system `#include`s out of the
-  header, and moving the bodies to a TU is what ENABLES that** — plain prototypes over plain C types need none
-  of them. Scoping the row as "bodies out of headers" understates it and aims at the smaller half.
-  ⚠️ **Also measured and deliberately unrowed:** `kama_runtime.h` is the DOMINANT per-TU cost on macOS —
-  a TU with the seam removed still pays 18.30 ms of its 22.51, so the OS seam is 4.21 ms of it. Nothing
-  examines that 18 ms, and much of `kama_runtime.h` is macro-generated inline bodies a given TU never calls.
-  Left unfiled on purpose: it wants a measurement of what a TU actually USES before anyone proposes a fix,
-  and neither this row nor the fan-out change needs it to proceed.
-  The shape of a fix: the OS seam behind plain prototypes with its
-  bodies in one TU, keeping `static inline` only where inlining measurably pays — it trades inlining of the thin
-  syscall wrappers (the performance invariant applies) for less preprocessing per TU on every platform, and it
-  shrinks the macro surface as a side effect. **Not** a fix for the name-collision class (shipped `0.9.398`, SPEC § *C names*): a user's own `extern "<vendor.h>"` bleeds
-  into their own TU either way, which is why names must be safe by construction instead.
-  **The no-heap verdict reads these bodies, and the TU it moves them to must join that scan in the same commit.**
-  Since `0.9.401` what a runtime extern does with the heap is DERIVED from its body text (SPEC § *No-heap
-  subset*), so bodies leaving the headers without the scan following them deletes every
-  `std::fs`/`std::process`/`std::net` allocation fact — silently, and in the ACCEPTING direction.
-  **This costs the row nothing.** The two are on different axes: KR-68 is per-TU C PREPROCESSING, paid N times
-  by clang, while the scan is ONE text read per kama invocation, measured at **under 0.4 ms — below the noise
-  floor** (2026-09-18: 1.72 ms vs 2.11 ms warm, min of 40, on a hello-world under `--no-heap`; an earlier
-  23.8 ms reading was cold page cache, not work). Same bytes, different path: the scanner already takes a LIST
-  of texts — that is how twelve headers became twelve segments — so `kama_os.c` is a thirteenth entry, one line
-  in the driver's glob. ⚠️ `tools/check-header-scan.sh` is the tripwire: it plants an allocation in a staged
-  header and requires the refusal, so a scan that quietly stopped finding bodies fails the gate rather than the
-  user.
 - **Bench methodology (don't re-chase).** Measure wasm at the optimizing tier (`node --no-liftoff`). Short
   workloads skew under parallel load — run with nothing else competing. Keep all LLVM-AOT languages at the same
   `-O` level (`-O3`), or the optimization level dominates a tiny kernel.
@@ -3312,55 +3272,39 @@ rather than here, so there is one number to keep current. Forward work:
   loads the whole module by design: nothing pins a file, and seeding from the importing file's tokens would
   be unsound, since a type reached only through inference is never spelled.
 
-<a id="s9-os-seam-bodies"></a>
+<a id="s9-tu-header-cost"></a>
 
-### The OS seam's bodies (KR-68) — surveyed on `0.9.630`, with a correction
+### What a user TU parses (KR-68)
 
-Measured interleaved, min of 30, with clang on macOS:
+**What is open.** Every user TU includes the program's `gen.h`, which carries the prelude's `static inline` bodies and
+every generic instance, and `kama_runtime.h`, much of which is macro-generated bodies a given TU never calls. In a
+`std::fs` program `main.gen.h` is 9,431 lines against `kama_runtime.h`'s 1,291 expanded. Measured 2026-09-18 on
+macOS: a TU with the OS seam removed still paid 18.30 ms of its 22.51 ms to `kama_runtime.h` — though about 13 ms of
+any TU is clang starting up (2026-10-15). Nobody has measured what a TU actually USES of either, and that measurement
+comes before any proposal. Size `?`.
 
-- A `std::fs` program has 14 TUs. **4 of them include `kama_os.h`, all stdlib modules; `main.c` does not.**
-- The per-unit cache reuses them. After editing `main.kama` only `main.o` rebuilt, so the seam's depth is a
-  CLEAN-build cost only.
+**Settled, and why the row was re-pointed (decided 2026-10-16, shipped `0.9.647`).** The row began as "move the OS
+seam's ~158 `static inline` bodies into one implementation TU, so `kama_os.h` stops pulling 25 system headers into
+every TU". Two later facts retired it:
 
-| Clang step | empty file | + `kama_runtime.h` | + `kama_os.h` |
-|---|---|---|---|
-| preprocess (`-E`) | 12.9 ms | 17.4 ms | 22.6 ms |
-| parse (`-fsyntax-only`) | 13.3 ms | 23.3 ms | 33.1 ms |
+- `0.9.408` gives each TU only the headers its own text names, so on macOS only the stdlib TUs that call the
+  seam include it (4 of 14 in a `std::fs` program, `main.c` not among them), and the per-unit cache skips them after
+  the first build. The seam's depth is a clean-build cost only.
+- Measured interleaved, min of 30, clang on macOS: preprocessing an empty file / `+ kama_runtime.h` / `+ kama_os.h`
+  costs 12.9 / 17.4 / 22.6 ms, and parsing 13.3 / 23.3 / 33.1 ms. That is about 10 ms per seam TU, about 40 ms per clean
+  build. **An implementation TU compiling all the bodies at -O2 costs 105.7 ms against 33.2**, so the split is a net
+  loss.
 
-So the seam costs about 10 ms per seam TU, about 40 ms per clean build. **An implementation TU compiling all 158 seam
-bodies at -O2 costs 105.7 ms, against 33.2 ms.** On macOS, moving the bodies into their own TU is a net LOSS.
-
-**A correction to the row.** Of the "~18 of 22.5 ms" attributed to `kama_runtime.h`, about 13 ms is clang starting up.
-In a user TU, `main.gen.h` (9,431 lines) is more text than `kama_runtime.h` (1,291 expanded lines).
-
-Sites: `include/kama_os.h`; the runtime-header glob (kama.driver.cpp ~2840); `ensureRuntimeHeaders` (~31418); the
-per-TU include derivation (~41796–41930); `tools/check-header-scan.sh`.
-
-If the split were ever wanted, this is the protocol. It needs native Windows only; the VM is QEMU and inflates times.
-
-- P1: lines and macros per seam TU.
-- P2: a clean `--no-cache` build, A/B interleaved, min of at least 20, at `-j1` and at the default `-j`. Variant B
-  puts the bodies under `#ifdef KAMA_OS_IMPLEMENTATION` in the same header, so the scan and its guard are unchanged,
-  plus one emitted implementation TU.
-- P3: an incremental build; expect no difference.
-- P4: release micro-benchmarks — a 1-byte pipe read/write ×1M, `exists` ×100k, and a poller with 1k ready
-  descriptors.
-- P5: binary size with dead-strip.
-- Ship B only if it beats noise on P2 and is within noise on P4 and P5.
-
-Blockers:
-
-- There is no native Windows box.
-- The implementation TU's own codegen cost.
-- It must repeat the feature-macro ordering; getting that wrong caused the `global_allocator_isolates` hang.
-- `kama_time.h` and `kama_random.h` also include `<windows.h>`, so splitting the seam alone does not remove it.
-
-Size **S** for the verdict and the trims.
-
-**Decided 2026-10-16** (the maintainer): **retire the body-split design.** It is a loss on macOS, and the cache
-already removes the incremental cost. Keep the Windows-only trims (`NOGDI`/`NOUSER`/`NOMINMAX`-style defines before
-`<windows.h>`, which keep inlining; standard Windows C practice), and re-point the row at the real per-TU cost:
-`gen.h` and runtime parsing in user TUs.
+What shipped instead are the Windows trims. `kama_os.h`, `kama_time.h` and `kama_random.h` already defined
+`WIN32_LEAN_AND_MEAN`, which only stops `<windows.h>` pulling sub-headers a user can still include. They now also
+define `NOGDI`, `NOUSER` and `NOMINMAX`, which remove declarations and macros for the rest of the TU — and
+`<windows.h>` is include-guarded, so a user's own C header after them could never get `CreateWindowExW` or `min`
+back. A native release build folds every module into one TU behind `gen.h`'s includes, so the trims are gated per
+PROGRAM: the compiler writes `KAMA_OWN_HEADERS_ONLY` ahead of each TU's headers only when every header any unit names
+is one kama ships or one of C's own (emitIncludes). Measured with zig's mingw-w64 headers (the toolchain's), a
+`std::net` TU preprocesses to 77,037 lines against 81,765 and parses in 200.6 ms against 204.0 (min of 15,
+interleaved): about 3 ms per seam TU. A program with any C header of its own keeps the full `<windows.h>`.
+`tools/check-header-scan.sh` stays: the no-heap verdict reads these bodies where they are.
 
 <a id="s10"></a>
 

@@ -8,10 +8,10 @@
 # marks, and deleting them moved the whole question behind a code path nothing observed directly. A scan that
 # silently found nothing would fail OPEN: programs accepted, `--no-heap` quietly meaning less than it says.
 #
-# It is also the tripwire for KR-68. That row proposes moving the OS seam behind plain prototypes with its
-# bodies in one TU. If that lands as written, the bodies this scan reads are gone from the headers and every
-# `std::fs`/`std::process`/`std::net` allocation fact disappears — silently, and in the accepting direction.
-# This guard fails loudly instead, and whoever takes KR-68 gets told that the scan must then read that TU too.
+# It is also a tripwire for moving the OS seam's bodies out of its header (one implementation TU behind plain
+# prototypes) — retired 2026-10-16 as a measured loss, but proposed twice. If it ever lands, the bodies this scan
+# reads are gone from the headers and every `std::fs`/`std::process`/`std::net` allocation fact disappears —
+# silently, and in the accepting direction. This guard fails loudly instead: the scan must then read that TU too.
 #
 # The method is mutation: stage a private copy of the runtime tree, plant an allocation in a header that
 # NOTHING declares to kama, and require the verdict to change. The planted call is `malloc(` inside a header

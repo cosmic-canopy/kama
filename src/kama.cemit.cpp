@@ -42265,6 +42265,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
         if (!_moduleHeaderName.empty()) {
             if (_featureOnPanic)     *_out << "#define KAMA_ONPANIC 1\n";
             if (_featureGlobalAlloc) *_out << "#define KAMA_GLOBAL_ALLOCATOR 1\n";
+            if (_ownHeadersOnly)     *_out << "#define KAMA_OWN_HEADERS_ONLY 1\n";   // see emitIncludes
             *_out << "#include \"kama_runtime.h\"\n";
         }
         emitUnitIncludes(text);
@@ -42373,6 +42374,28 @@ void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units, boo
         }
     } else {
         _sharedExternHeaders = all;   // single TU: the header and the body are one file, so there is no fan-out
+    }
+    // KR-68 — may kama's runtime trim `<windows.h>` (NOGDI, NOUSER, NOMINMAX)? Only where nothing in the TU could
+    // need what that removes, and `<windows.h>` is include-guarded, so a C header of the user's own included after
+    // a trimmed one would find `CreateWindowExW` or `min` gone for good. A native release build folds every module
+    // into ONE TU, behind this header's includes, so the question is asked of the whole PROGRAM: every header any
+    // unit names is one kama ships or one of C's own. The answer is written ahead of the first header that could
+    // pull `<windows.h>` — here, and in each module's prologue (emitModuleContent).
+    {
+        static const std::set<std::string> kStdC = {
+            "<assert.h>", "<complex.h>", "<ctype.h>", "<errno.h>", "<fenv.h>", "<float.h>", "<inttypes.h>",
+            "<iso646.h>", "<limits.h>", "<locale.h>", "<math.h>", "<setjmp.h>", "<signal.h>", "<stdalign.h>",
+            "<stdarg.h>", "<stdatomic.h>", "<stdbool.h>", "<stddef.h>", "<stdint.h>", "<stdio.h>", "<stdlib.h>",
+            "<stdnoreturn.h>", "<string.h>", "<tgmath.h>", "<threads.h>", "<time.h>", "<uchar.h>", "<wchar.h>",
+            "<wctype.h>" };
+        auto own = [&](const std::string& h) {
+            if (kStdC.count(h)) return true;
+            for (const CHeader& sh : _headerTexts) if (sh.file == h) return true;   // an install with none trims nothing
+            return false;
+        };
+        _ownHeadersOnly = !all.empty();
+        for (const std::string& h : all) if (!own(h)) { _ownHeadersOnly = false; break; }
+        if (_ownHeadersOnly) *_out << "#define KAMA_OWN_HEADERS_ONLY 1\n";
     }
     for (const std::string& h : _sharedExternHeaders) {
         if (h[0] == '<') *_out << "#include " << h << "\n";       // <stdlib.h>
