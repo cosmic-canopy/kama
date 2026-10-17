@@ -1940,6 +1940,15 @@ two things the language lacks, measured on `0.9.662`:
 
 **The design session's questions** (asked with kama examples and the bytes):
 
+- KR-190, first (the maintainer's, 2026-10-17): **does `slot` stay beside it, or go?** Today `slot T x;` is a LOCAL that
+  an `out` argument fills, its fill PROVEN by flow analysis, which is what lets the compiler elide its drop and refuse
+  every read before the fill — safe code. KR-190's storage is different in kind: which elements are live is RUNTIME
+  data (a `len`), so no flow analysis can prove it, and it is reached through `UnsafePtr`. The options: keep both (one
+  is a proven local, the other unsafe storage — two mechanisms for two different questions); fold `slot` into the
+  general mechanism and free the reserved word (one way, if the general form can still give a local its proven,
+  safe fill); or let the general mechanism be a safe proven form where the shape is static and unsafe only where
+  liveness is data. Whether it is **unsafe-only** is the same question from the other side: Rust's `MaybeUninit` is
+  unsafe to read and its `ArrayVec`s are the safe API over it, as `InlineDynamicArray` would be here.
 - KR-190: the spelling — a type (`Uninit<T>#(N)`, or another name) or a field marker; zero-filled at construction
   (deterministic bytes, so a plain holder can still be `BytesViewable`) or truly uninitialized (Rust's
   `MaybeUninit`, cheaper for a large `N`); what the compiler refuses around it (no implicit copy, drop, serde, format
