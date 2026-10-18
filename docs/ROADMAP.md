@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-198**
+**Next id: KR-199**
 
 ## The shape
 
@@ -77,6 +77,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-195 | **`replace(place: o, with: Optional::None)` does not infer `T` from `place:`** — "cannot infer generic type parameter 'T'", though `place:` is a typed local or field. A typed `with` local, or the turbofish, builds | S | [§2](ROADMAP_DETAIL.md#s2-replace-infer) |
 | KR-196 | **Some semantic errors still report column 0** — a generic-inference failure, an unmet bound and the "takes a raw pointer, so it must be declared `unsafe`" refusal print `file:line:0`, where most diagnostics carry the column | S | [§10](ROADMAP_DETAIL.md#s10-column-zero) |
 | KR-197 | **Two debug-tier frames still hold a large value twice** — a large value returned into a local (`Big b = newBig(…)` lowers to a declaration and then an assignment: 32,824 B for a 16 KB `Big` at -O0), and a `[v; N]` field initializer, filled by value in the constructor (35,400 B for 35 KB of arrays). A frame-size flag on a debug build trips on both; release is clean | M | [§5](ROADMAP_DETAIL.md#s5-debug-frame-copies) |
+| KR-198 | **Two holes in the diagnostic channel** — in a multi-module `kama build`, a refusal raised while the shared header is emitted prints no file at all (``:10:4: error: an `InlineArray<T>#(N)` element must be a `value`…``; `kama check` names it); and `unsupported(what, node)` on a synthesized node calls itself with the same arguments, so the compiler would recurse until its stack overflows | S | [§10](ROADMAP_DETAIL.md#s10-diag-no-file) |
 | KR-101 | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net. The compiler already writes deflate/gzip and tar, in C++, for `kama publish` (`src/kama.archive.cpp`, `0.9.452`); the stdlib half — kama code a program can call — **wants a maintainer verdict: stdlib or package** | — | [§1](ROADMAP_DETAIL.md#s1) |

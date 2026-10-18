@@ -288,6 +288,11 @@ natively on std's `TcpStream`/`Poller`, server-sent events, a native WebSocket c
 upgrade on std's `sha1` + base64), and TLS through `@kama/tls`. Native WebTransport (QUIC + TLS 1.3) is a package on
 `@kama/tls` too, not std.
 
+**Streamed bodies (2026-10-15).** The server reads a request body in pieces as it arrives and writes a response
+in pieces, with the body limit set per route. A server that reads a whole body before the handler sees it caps
+every upload at one limit and holds it all in memory. A program can chunk uploads at the application level to get
+around that, but the package should not require it.
+
 <a id="s2"></a>
 
 ## 2. Deferred language bits (tracked)
@@ -2913,6 +2918,36 @@ leftovers: a caller still passing only a line stays column 0, and a diagnostic a
 instantiation site keeps its line and drops the column, which belonged to the template. The first two above are
 the second kind; the third is the first kind, at a declaration that has a column of its own. Close means each
 names the column of the call, the type argument or the declaration, with the reported column checked by a guard.
+
+<a id="s10-diag-no-file"></a>
+
+### Two holes in the diagnostic channel (KR-198)
+
+Found 2026-10-18 on `0.9.667`, while reproducing a reported gap.
+
+**A diagnostic with no file.** Two modules, `main.kama` and `voice/voice.kama`; `main` holds a resource in an
+`InlineArray`:
+
+```kama
+type resource GameAudio { int32 started = 0; public ctor make() { } }
+fn int32 main() { InlineArray<GameAudio>#(1) a = [GameAudio.make()]; return 0; }
+```
+
+`kama build main.kama voice/voice.kama` prints ``:10:4: error: an `InlineArray<T>#(N)` element must be a `value`…``
+with an empty file name. The next error, the array literal, names `main.kama`, and `kama check` names it for both.
+One file alone names it. The refusal is raised in `registerFixed` (`kama.cemit.cpp`), which the shared header's
+pass (`emitHeaderContent`, under `_inHeaderPass`) reaches when it registers the local's instance. That pass runs
+before the per-module loop sets `_sourcePath`, and the emitter is built with no path, so `diagFile()` has none of
+its three answers. The harness already refuses an xfail whose diagnostic has no file. A positive build has no
+such check. Close means a refusal raised in the header pass names the unit whose declaration asked for the
+instance, and a multi-file xfail holds it.
+
+**A recursion in the helper.** `CEmitter::unsupported(const char*, const ASTNode* at, const std::string&)` does
+`if (at->synthesized) { unsupported(rawWhat, at, subject); return; }`. That is the same overload with the same
+arguments. The comment above it says the intent: "a synthesized node names no source text, so it gives its line
+only", i.e. `unsupported(rawWhat, at->line, subject)`. It has not been seen to fire, so no refusal is known to be
+raised at a synthesized node through this overload today. Eight sites mark a node `synthesized`. Close means the
+line-only call, and a probe that reaches it.
 
 <a id="s10-release-signing"></a>
 
