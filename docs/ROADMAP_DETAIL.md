@@ -314,10 +314,18 @@ A listener made non-blocking, a client that sends nothing for 300 ms, and one `r
 `kama_accept` (`include/kama_os.h`) is `accept4(…, SOCK_CLOEXEC)` on Linux, which does not carry `O_NONBLOCK`, and
 plain `accept` elsewhere, which on the BSDs does. Windows's `accept` gives the new socket the listener's properties
 by its documentation, and is unmeasured here. A server loop written and tested on macOS stalls on Linux at its first
-idle client. Recommended: **an accepted stream starts in its listener's mode on every OS, set explicitly**, since the
-std listener knows its own mode. A non-blocking listener means an event loop, and an event loop wants non-blocking
-streams. Until then the workaround is a `setNonBlocking(on: true)` on every accepted stream. Close means a fixture
-on each OS, and `accept()`'s comment saying what the stream's mode is.
+idle client. Recommended: **an accepted stream starts in its listener's mode on every OS.** A non-blocking listener
+means an event loop, and an event loop wants non-blocking streams. Until then the workaround is a
+`setNonBlocking(on: true)` on every accepted stream.
+
+The fix site is the C seam, not kama state. `TcpListener` keeps no mode flag, and `adopt(descriptor:)` can hand it a
+descriptor whose mode kama never set, so the listener's own flags are the only truth. On Linux, `kama_accept` reads
+`fcntl(fd, F_GETFL)` and adds `SOCK_NONBLOCK` to `accept4`'s flags when `O_NONBLOCK` is set, which is what the BSDs
+already do. Windows is measured on the CI leg, and set with `ioctlsocket(FIONBIO)` if it does not inherit. Windows
+cannot query a socket's mode, so a std flag would be needed there. `UnixListener.accept()` calls the same
+`kama_accept` and splits the same way (measured: inherited non-blocking on macOS, blocking for the full 300 ms on
+Linux), so the one change fixes both. Close means a fixture for both listeners on each OS, and both
+`accept()` comments saying what the stream's mode is.
 
 <a id="s1-poller-waker"></a>
 
@@ -516,7 +524,7 @@ for it (none — an `fnptr` is non-null, 0.9.480), with a fixture holding a regi
 
 <a id="s2-sizeof-unemitted"></a>
 
-### A `comptime` `sizeof`/`alignof` of a generic instance nothing else names fails in clang (KR-199)
+### A module `comptime` or `static` whose initializer names a generic instance nothing else does fails in clang (KR-199)
 
 Found 2026-10-18 on `0.9.667`, measuring layouts for the KR-190 design brief.
 
@@ -528,12 +536,17 @@ fn int32 main() { return cast<int32>(A); }
 `kama check` answers OK. `kama build` fails in clang: `use of undeclared identifier 'InlineArray_uint8_16'`, at the
 `_Static_assert` that `noteBakedLayout` (`kama.cemit.cpp`) writes for every folded layout (shipped `0.9.660`, SPEC *Writing a collection in kama*). The
 same happens for a user generic (`sizeof(Pair<int64>)`, `k_F…__Pair_int64`), for `Optional<int64>`, and for
-`alignof`. The fold is right: 16. What is missing is the type's C definition. `noteBakedLayout` names `cType(t)`,
-which gives the instance's C name without registering the instance, and a `comptime` initializer is folded before
-anything else asks for it. The same `sizeof` in a function body builds (16), and so does the constant once the
-program uses the type anywhere else, which is why every fixture passed. Close means a fold registers the instance
-it names, as a use in a body does, with fixtures for an intrinsic, a user generic and `Optional` named only in a
-`comptime` initializer.
+`alignof`. The fold is right: 16. What is missing is the type's C definition.
+
+A module `static` fails the same way (`static usize S = sizeof(Pair<int64>);`), through its own C initializer, so
+the hole is older than the layout check; only the `comptime` form arrived with `0.9.660`. **The root cause is one
+line.** The collection pre-pass registers the instance a `sizeof` operand names (`scanExprForCollections`, an earlier
+fix that shipped), and the module sweep that drives it (`kama.cemit.cpp`, the `ModuleVariableDeclaration` arm,
+`scanTypeForCollections(mv->type)`) scans a module variable's TYPE and never its initializer. A local `comptime`, a
+type-associated one and a module `comptime assert` are all scanned, which is why the same `sizeof` in a function
+body builds. Every fixture passed because each used the type elsewhere. Close means the arm scanning each
+declarator's initializer too, with fixtures for an intrinsic, a user generic, `Optional` and `alignof` named only in
+a module `comptime`, plus the `static` form.
 
 <a id="s2-exit-status"></a>
 
