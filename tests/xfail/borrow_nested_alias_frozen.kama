@@ -1,0 +1,25 @@
+// A window reached through the enclosing window's alias freezes that alias for its block: inside the savepoint
+// `inner`, the outer transaction `tx` cannot be used — `tx.conn()` is a non-`const` call on it, and could commit
+// the outer transaction while the inner one is open. tests/borrow_nested_through_alias is the legal shape. Up to
+// 0.9.671 the alias was not frozen, so this built.
+@viewable type contract Transacts for resource { fn Tx transaction(); }
+type view Tx {
+    UnsafePtr<Conn> c;
+    unsafe ctor over(UnsafePtr<Conn> c) { this.c = c; }
+    public unsafe fn ref Conn conn() { return this.c[0]; }
+    unsafe ~Tx() { this.c[0].leave(); }
+}
+type resource Conn implements Transacts {
+    int32 open = 0;
+    public ctor make() { this.open = 0; }
+    public unsafe fn Tx transaction() { this.open = this.open + 1; return Tx.over(c: addr(of: this)); }
+    public fn void leave() { this.open = this.open - 1; }
+}
+
+fn int32 main() {
+    Conn c = Conn.make();
+    borrow c.transaction() as tx {
+        borrow tx.conn().transaction() as inner { tx.conn().leave(); }
+    }
+    return 0;
+}

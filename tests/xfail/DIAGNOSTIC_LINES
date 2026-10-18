@@ -102,8 +102,10 @@ borrow_frozen_give	borrow_frozen_give.kama:13
 borrow_frozen_mutate	borrow_frozen_mutate.kama:13
 borrow_frozen_ref_arg	borrow_frozen_ref_arg.kama:14
 borrow_frozen_spawn	borrow_frozen_spawn.kama:17
+borrow_mint_call_receiver_frozen	borrow_mint_call_receiver_frozen.kama:18
 borrow_mint_not_a_view	borrow_mint_not_a_view.kama:30
 borrow_mint_takes_args	borrow_mint_takes_args.kama:12
+borrow_nested_alias_frozen	borrow_nested_alias_frozen.kama:22
 borrow_nested_same_place	borrow_nested_same_place.kama:13
 borrow_not_viewable	borrow_not_viewable.kama:18
 borrow_place_comptime_call	borrow_place_comptime_call.kama:7

@@ -1,0 +1,1 @@
+`tx` is frozen by the enclosing `borrow`

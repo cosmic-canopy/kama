@@ -1,0 +1,22 @@
+// A window minted on a call that returns a place freezes that call's receiver, as a place host does
+// (xfail/borrow_place_frozen_receiver): `h.items()` can return any part of `h`, so `h.items().add(…)` inside the
+// window could grow the very buffer `v` views. Up to 0.9.671 a call receiver froze nothing: this built, the growth
+// freed the buffer, and the write through `v` landed in freed memory, in safe code.
+import { std::collections::DynamicArray };
+
+type resource Holder {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); }
+    public fn ref DynamicArray<int32> items() { return this.xs; }
+}
+
+fn int32 main() {
+    Holder h = Holder.make();
+    h.items().add(item: 1);
+    borrow h.items().viewMut() as v {
+        int32 i = 0;
+        while (i < 1000) { h.items().add(item: i); i = i + 1; }
+        v[0] = 99;
+    }
+    return 0;
+}

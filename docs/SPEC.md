@@ -406,12 +406,15 @@ Three rules, and together they are what lets the paragraph above say "cannot dan
    argument, no `give` out of them, no non-`const fn` receiver overlapping them. The roots: a field path itself, an
    element's container, a mint's or a place-returning call's receiver, and every `ref`/`const ref` argument of
    that call — the signature lets the result point at any of them, so freezing the receiver alone would be unsound
-   for a free `fn ref`. Conflict is a **prefix test over places**, so a *disjoint sibling field stays fully
+   for a free `fn ref`. A mint on such a call (`borrow h.items().viewMut() as v`) freezes the call's roots the same <!-- xfail: borrow_mint_call_receiver_frozen -->
+   way, so `h.items().add(…)` cannot grow the buffer `v` views. Conflict is a **prefix test over places**, so a *disjoint sibling field stays fully
    mutable*: `borrow this.buf.view() as b { this.hits = this.hits + 1; … }` is legal, because two distinct
    fields cannot overlap in storage. Reads are untouched — a `const fn` call, an index, a `foreach` over the
    frozen host, and (under a view) an element write, which cannot realloc. One storage takes one name: two <!-- xfail: borrow_place_overlap, borrow_place_nested_same, borrow_two_bindings_overlap, borrow_nested_same_place -->
    bindings over one container, or a window inside a window over the same storage, are refused — `xs[0]` and
-   `xs[1]` are disjoint only when the indices are, which nothing proves in general.
+   `xs[1]` are disjoint only when the indices are, which nothing proves in general. A window reached THROUGH an <!-- test: borrow_nested_through_alias -->
+   enclosing window's alias is not a second name: `borrow tx.conn().transaction() as inner` freezes `tx` for its <!-- xfail: borrow_nested_alias_frozen -->
+   block, so one name is usable at a time (a reborrow), and the windows close inside out.
 2. **Nothing leaves the block.** A view alias may not be reseated; a place alias is no value to store, `give` <!-- xfail: borrow_alias_reseat, borrow_place_give -->
    cannot move out of the host it points into (`replace(place:, with:)` swaps a value in), and a `fn ref` result
    is judged by what the alias points into — a place inside a local is refused, as returning the local's own <!-- xfail: borrow_place_fn_ref_local -->

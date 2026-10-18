@@ -7123,8 +7123,19 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                              + "`, which is free").c_str(), bn);
                 continue;
             }
-            std::vector<std::string> hp = placePath(recvExpr);
-            if (!hp.empty()) {
+            // The receiver's ROOTS, frozen for the block as a place host's are: the receiver itself when it is a place
+            // (`a.viewMut()`), and when it is a call returning a place (`h.items().viewMut()`, `tx.conn().transaction()`),
+            // that call's receiver and every `ref` argument, since the signature lets the result point into any of
+            // them. A call receiver froze nothing, so `h.items().add(…)` inside the window could grow the buffer the
+            // view pointed at — a write through it landed in freed memory, in safe code (up to 0.9.671).
+            std::vector<std::vector<std::string>> hostRoots;
+            {
+                std::vector<std::string> direct = placePath(recvExpr);
+                if (!direct.empty()) hostRoots.push_back(direct);
+                else borrowHostRoots(recvExpr, hostRoots);
+            }
+            bool rootRefused = false;
+            for (const std::vector<std::string>& hp : hostRoots) {
                 // An ENCLOSING window already froze this storage. Two windows over one buffer are the
                 // same two mutable views the sibling rule below rejects, merely spelled across statements.
                 const Scope::FrozenPlace* outer = frozenConflict(hp);
@@ -7133,14 +7144,14 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                                  + std::to_string(outer->line) + " until its `scope` joins it — a mutable "
                                  "view of it here would race with the child; open the window after the "
                                  "`scope`").c_str(), bn);
-                    continue;
+                    rootRefused = true; break;
                 } else if (outer) {
                     unsupported(("`" + placeText(hp) + "` is already borrowed by an enclosing `borrow` "
                                  "(opened at line " + std::to_string(outer->line) + " as `" + outer->alias
                                  + "`) — that would be two mutable views of one buffer; derive from `"
                                  + outer->alias + "` with `.slice(…)` instead, which is free").c_str(),
                                 bn);
-                    continue;
+                    rootRefused = true; break;
                 }
                 bool clash = false;
                 for (auto& pr : bound)
@@ -7153,9 +7164,10 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                         clash = true;
                         break;
                     }
-                if (clash) continue;
+                if (clash) { rootRefused = true; break; }
                 bound.push_back({ hp, alias });
             }
+            if (rootRefused) continue;
             const std::string hostCls = exprClass(recvExpr);
             if (hostCls.empty() || !_classes.count(hostCls)) {
                 unsupported(("`borrow` needs a container that can mint a view; `" + alias
@@ -7219,7 +7231,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             _localCTypes[alias] = viewCType;
             _localTypeNodes[alias] = vmi->returnType;
             _scopes.back().declaredNames.push_back(alias);
-            frozenNow.push_back({ hp, alias, bn->line });
+            for (const std::vector<std::string>& hp : hostRoots) frozenNow.push_back({ hp, alias, bn->line });
             _refusedBindings.erase(alias);
             // A view that CLOSES its window (KR-124): the window's scope owns the alias, so its destructor runs when
             // the window closes — on every path out, `return`/`break`/`continue` included, after the body's own

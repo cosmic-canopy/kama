@@ -1,0 +1,38 @@
+// A window inside a window, reached through the outer window's alias, is a reborrow, not a second name for the
+// storage: `borrow tx.conn().transaction() as inner` freezes `tx` for its block (tests/xfail/borrow_nested_alias_frozen),
+// so exactly one name is usable at a time, and the windows close inside out. What is refused is a second window
+// from the same ROOT, where both names stay live (xfail/borrow_nested_same_place). A savepoint is the shape:
+// a transaction view reached through a connection, nested through the outer transaction. Returns 42.
+@viewable type contract Transacts for resource { fn Tx transaction(); }
+
+type view Tx {
+    UnsafePtr<Conn> c;
+    unsafe ctor over(UnsafePtr<Conn> c) { this.c = c; }
+    public unsafe fn ref Conn conn() { return this.c[0]; }
+    unsafe ~Tx() { this.c[0].leave(); }
+}
+
+type resource Conn implements Transacts {
+    int32 open = 0;
+    int32 trail = 0;   // each close, as a digit: the depth it closed at
+    public ctor make() { this.open = 0; this.trail = 0; }
+    public unsafe fn Tx transaction() { this.open = this.open + 1; return Tx.over(c: addr(of: this)); }
+    public fn void leave() { this.trail = this.trail * 10 + this.open; this.open = this.open - 1; }
+    public const fn int32 depth() { return this.open; }
+    public const fn int32 closes() { return this.trail; }
+}
+
+fn int32 main() {
+    Conn c = Conn.make();
+    int32 outer = 0;
+    int32 inside = 0;
+    borrow c.transaction() as tx {
+        outer = tx.conn().depth();
+        borrow tx.conn().transaction() as inner { inside = inner.conn().depth(); }
+    }
+    if (outer != 1) { return 1; }
+    if (inside != 2) { return 2; }
+    if (c.depth() != 0) { return 3; }
+    if (c.closes() != 21) { return 4; }   // the savepoint closed first (at depth 2), then the transaction
+    return 42;
+}
