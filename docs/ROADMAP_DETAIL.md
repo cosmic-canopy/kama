@@ -2126,6 +2126,103 @@ two things the language lacks, measured on `0.9.662`:
   serde, `Formattable`, equality.
 
 Size **S–M** once KR-190 and KR-191 exist.
+
+#### The session's material — measured 2026-10-18 on `0.9.667`
+
+**What `slot` is, in bytes.** A proven fill, not uninitialized memory:
+
+```kama
+slot Conn c;                 // Conn: a resource, `int32 fd = -1`, a destructor
+openInto(dst: out c);        // fn void openInto(out Conn dst) { dst = Conn.tcp(fd: 3); }
+return c.id();
+```
+
+```c
+k_Fp1_slot__Conn k_c = {0};
+k_c.k_fd = ((-1));                                // the field defaults: a drop before the fill would free nothing
+k_Fp1_slot__openInto((k_Fp1_slot__Conn*)&(k_c));  // the callee overwrites the whole value
+...
+k_Fp1_slot__Conn__dtor(&k_c);                     // dropped normally once filled
+```
+
+**What a bounded list can be today.** Only an `InlineArray` holds `T` in place, and it constructs every element:
+- `int32`: `type value Bounded4 { InlineArray<int32>#(4) items; int32 len = 0; … }` is 20 bytes, all four ints
+  zeroed. That is fine.
+- `string`: the same shape as a `type resource` is 104 bytes (4 × 24 + `len` + padding). It builds four empty
+  strings up front and drops all four. It works, but only because `string` has a default.
+- A resource element: `InlineArray<Conn>#(4)` is refused ("an `InlineArray<T>#(N)` element must be a `value`").
+  There is nothing to hold four `Conn`s in place.
+- One generic over both: `type value Box<T> { public T v; … }` with `Box<string>` is refused ("a `value` owns
+  nothing, but `Box<string>` transitively owns a resource"). A single generic cannot be a `value` for `int32` and a
+  `resource` for `string`. That is KR-191.
+
+**Grammar facts.** A destructor takes no `when [...]` (`unsafe ~Holder() when [T: default] { }` is a parse error).
+A type declaration does take a conditional conformance: `type value Pair<T> implements Sendable when [T: Sendable]`
+builds. The only structural bound is `default`. No bound says "owns nothing".
+
+**Decision 1 — does `slot` stay?** The two answer different questions:
+- `slot` asks: will this local be filled before it is read? The compiler proves the answer per path, so the code is
+  safe.
+- KR-190 asks: which of these N places hold a value? The answer is a runtime `len`, so no compile-time proof is
+  possible.
+
+The options:
+- **A. Keep `slot` exactly as it is; KR-190 is a separate std type.** Two mechanisms for two questions; the
+  reserved word keeps its one meaning.
+- **B. One word in two positions.** `slot` on a local is the proven hole; `slot` on a field is unmanaged storage.
+  One word would then cover a safe, proven rule and an unsafe, manual one, and the difference would be invisible
+  at the use.
+- **C. Retire `slot` for the general type.** An `out` hole would become `InlineStorage<Conn>#(1)` plus an unsafe
+  read, or the compiler would have to prove fills for a library type, which is `slot` again under a longer name.
+
+**Recommended: A.** The prose that says "raw slot" for a pointer element (SPEC's raw-store paragraph, and its
+"a safe `Slot<T>`/`MaybeUninit` wrapper … is a tracked design spike") is reworded to point at KR-190, so the word
+means only the hole.
+
+**Decision 2 — unsafe-only?** **Recommended: yes.** Reading, writing or dropping a place in the storage is an
+`unsafe fn`'s business, because only the holder knows which places are live. The safe face is the holder, as
+`DynamicArray` is safe over `UnsafePtr` (Rust: `MaybeUninit` is unsafe, `ArrayVec` is safe over it; C++: aligned
+storage plus placement new inside `inplace_vector`).
+
+**Decision 3 — a type or a field marker.** **Recommended: a std type**, because it composes as a field, a local or
+an element, it is greppable, and it carries its own refusals: no implicit copy, drop, serde, format or byte view of
+the storage itself. The name follows the in-place family (`InlineArray`, `InlineDynamicArray`):
+**`InlineStorage<T>#(N)`** (recommended) or `Uninit<T>#(N)`. Its C is `_Alignas(T) uint8_t bytes[N * sizeof(T)]`.
+It is reached through `ptr()` → `UnsafePtr<T>` in an `unsafe fn`, the shape every heap container already uses.
+
+**Decision 4 — zero-filled or truly uninitialized.** **Recommended: zero-filled at construction.**
+- Undefined bytes exist in kama only behind a pointer, in memory an allocator handed back (a `DynamicArray`'s spare
+  capacity), and only unsafe code reaches them. Every value has defined bytes; even a `slot` holds its field defaults
+  (above). In-place storage lives inside a value that is copied, sent and viewed as bytes, so it should stay on that
+  side of the line.
+- The cost is what `InlineArray` pays today: one `memset` of `N × sizeof(T)`.
+
+The consequence to rule with it: a popped element's bytes stay behind in the dead tail. So the holder's `==`,
+`copy` and serde read the live prefix only, and its byte view (if it has one) must either re-zero a vacated place or
+not exist.
+
+**Decision 5 — how the kind follows `T` (KR-191).**
+- **A. The kind follows from which members exist.** Gate the destructor, and the copy constructor, with `when`,
+  and add one structural bound for "owns something":
+  `unsafe ~InlineDynamicArray() when [T: resource] { … }`. The existing rule (`~dtor` ⟺ `resource`) then decides
+  the instance's kind. This is how the compiler already derives an intrinsic's kind from its element. It is also
+  how C++26's `inplace_vector` is trivially copyable exactly when `T` is, through C++20's conditionally trivial
+  special members (a destructor with a `requires` clause, P0848). It is a **grammar change**: `when` on a
+  destructor, the four artifacts plus the editor pins.
+- **B. Derive the kind of a library generic type from its fields**, with no declaration. This is implicit, against
+  GOALS' explicit-over-implicit.
+- **C. A kind expression on the declaration.** New syntax for one case.
+
+**Recommended: A.** It also settles `Copyable` (a resource instance is copied by its gated copy ctor), `Sendable`
+(`implements Sendable when [T: Sendable]`, which already builds) and `BytesViewable` (the same conditional
+conformance, with Decision 4's dead-tail caveat). Rust cannot express any of this: `Copy` and `Drop` exclude each
+other, so `ArrayVec` is never `Copy`.
+
+**Decision 6 — KR-187's surface.** Confirm the list above. `add` returning `Result` with the item handed back is
+already decided.
+
+**Order once ruled:** KR-190 (a std type over a new intrinsic storage) → KR-191 (grammar + bound) → KR-187
+(kama library code). Each lands with fixtures on native, ASan and wasm.
 - **Collections revisit — remaining knobs & optimizations.** The parametric knobs ship (preallocation,
   pluggable `Hasher`, custom `Allocator` on every container and box, all defaulted). What remains:
   - **HashDoS-resistant keyed hashing (deferred).** `DefaultHasher` is deterministic/*unseeded* — right for
