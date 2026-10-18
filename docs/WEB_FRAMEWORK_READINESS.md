@@ -46,7 +46,7 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 | A `Poller` wakeup another isolate can trigger | ❌ workaround: a stream pair as a wake channel | KR-201 |
 | A DNS lookup a loop can poll, with a deadline | ❌ `resolve` blocks | KR-202 |
 | Constant-time comparison of secrets | ❌ std warns against `==` and offers nothing else | KR-203 |
-| Percent-encoding and a URL type | ❌ verdict owed: std or a package | KR-204 |
+| Percent-encoding and a URL type | ❌ ruled for std (strict RFC 3986, plus form encoding); not yet built | KR-204 |
 | Listener backlog and reuse-port | ❌ backlog fixed at 128, no reuse-port | KR-206 |
 | `sendfile` | ❌ file responses copy through user space | KR-207 |
 | An in-memory `ReliableStream` pair for tests | ❌ each package writes its own | KR-208 |

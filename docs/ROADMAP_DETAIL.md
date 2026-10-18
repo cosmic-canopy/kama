@@ -341,12 +341,45 @@ into an early exit, and a hand-written loop has no such guarantee.
 #### Percent-encoding and a URL type (KR-204)
 
 std has no URL or URI type and no percent-encoding (`lib/` and `include/` searched; only base64's URL-safe alphabet
-mentions a URL). A URL is not HTTP's alone: std's `WsConnection.connect(url)` and
-`WtConnection.connect(url)` take one as a bare string, and connection strings and `file:` URLs are URLs too. Go
-(`net/url`), Python (`urllib.parse`), Zig (`std.Uri`) and C# (`System.Uri`) keep it in std; Rust uses the `url`
-crate. **Verdict owed. Recommended: std**, with `std::encoding` gaining percent-encoding (per-component sets) and a URL
-type beside the transports that take one. The other question to rule is which grammar: RFC 3986, which servers
-parse, or the WHATWG URL Standard, which browsers parse.
+mentions a URL). A URL is not HTTP's alone: std's `WsConnection.connect(url)` and `WtConnection.connect(url)` take one
+as a bare string, and connection strings and `file:` URLs are URLs too.
+
+**What other languages do.**
+
+| | where | grammar |
+|---|---|---|
+| Go | std `net/url` (`PathEscape`, `QueryEscape`, `Values` for forms) | RFC 3986, "except where it deviates for compatibility" |
+| Python | std `urllib.parse` | RFC 3986, lenient |
+| Zig | std `std.Uri`, which `std.http.Client` takes | RFC 3986 |
+| C# / Java | `System.Uri` / `java.net.URI` | RFC 3986 (C#), RFC 2396 (Java) |
+| Swift | Foundation `URL`, `URLComponents` | RFC 3986 since iOS 17 / macOS 14, with a strict mode (`encodingInvalidCharacters: false`) |
+| curl | its own URL API since 2018 | RFC 3986 since 2005 |
+| C++ | none in std; Boost.URL (strict RFC 3986), ada (WHATWG, Node's parser) | — |
+| Rust | none in std; the `url` crate (WHATWG), `http::Uri` (request-target) | — |
+| JS, browsers | the global `URL` | WHATWG URL Standard |
+
+The two grammars disagree on real input. Given `http://EXAMPLE.com/a b\c`, RFC 3986 has no component that allows
+the space (0x20) or the backslash (0x5C), so the input is not a URL; WHATWG repairs it to `http://example.com/a%20b/c`
+(host lowercased, the space encoded, `\` read as `/` for a special scheme). Two parsers that disagree are an attack
+class, not a style difference: Orange Tsai's "A New Era of SSRF" (Black Hat USA 2017) found zero-days in the URL
+parsers of Python, PHP, Perl, Ruby, Java, JavaScript, wget and curl by feeding one URL to a checker and a fetcher that
+read it differently. curl's answer was one parser for every decision in a program.
+
+**Verdict (the maintainer, 2026-10-18): std, strict RFC 3986, plus form encoding.**
+1. **std.** A URL is the address type of std's own transports, and most standard libraries carry one.
+2. **Strict RFC 3986.** `Url.parse` refuses what RFC 3986 does not allow, naming the byte and its offset, and never
+   repairs: WHATWG's repairs are exactly where parsers disagree, and a silent rewrite is implicit. RFC 3986 is also
+   the grammar HTTP itself uses (RFC 9110's `http`/`https` URIs). A component is kept as written; decoding and
+   comparison (case, percent-encoding normalization) are explicit operations.
+3. **Percent-encoding in `std::encoding`**, beside base64 and hex, with RFC 3986's per-component sets (path segment,
+   query, fragment, userinfo). Encoding text a user typed is an explicit call, not a parser's leniency.
+4. **`application/x-www-form-urlencoded` too** (space as `+`): a separate format, defined by the WHATWG URL Standard's
+   §5, which every server reads from form bodies and queries. Go and Python ship it beside their RFC 3986 parser.
+5. **`WsConnection.connect` and `WtConnection.connect` take a `Url`**, not a string.
+6. **IDNA (non-ASCII hosts) is a later, explicit conversion**, since RFC 3986 is ASCII.
+
+Size M. What remains to decide at build time is the surface (`Url`'s accessors, reference resolution per RFC 3986 §5
+for redirects, normalization per §6), which follows from the above.
 
 <a id="s1-listen-options"></a>
 
@@ -538,9 +571,39 @@ caught each of the four.
    harness passes, as `KAMA_ALLOC_CHECK` is for the sanitizer leg. That guard needs an emitter branch and `--cc`
    plumbing on the native leg, which today picks its compiler itself.
 
-**Recommendation: 1.** kama refuses or traps every other silent narrowing, and this is the worst one: `return 256;`
-reports success. Option 1 keeps every `main` as it is, keeps Windows's full range, and puts the guard where the
-hazard is.
+**What other languages do — both sides of the boundary.**
+
+| | what `main` returns | `return 256;` on Linux | a parent reading a child killed by a signal |
+|---|---|---|---|
+| C, C++, D | `int` | exits 0, no word | `WIFSIGNALED` macros on an `int` |
+| Go | nothing; `os.Exit(int)` asks for 0–125 "for portability" | 0, no word | `ExitCode()` returns −1 |
+| Python | `sys.exit(int)`: "most systems require 0–127, undefined results otherwise" | 0, no word | `returncode` is −N |
+| Java, .NET | `int` | 0, no word | 128+N |
+| Swift | `exit(Int32)` | 0, no word | `terminationStatus` plus a separate `terminationReason` |
+| Rust | `ExitCode`, built `From<u8>`; Windows-only `ExitCodeExt::from_raw(u32)` | refused by type | `code() -> Option<i32>`; Unix-only `signal()` |
+| Zig | `u8` | refused by type | `Term`, a tagged union: `Exited: u8`, `Signal`, `Stopped`, `Unknown` |
+
+POSIX requires `waitid` to report all 32 bits; FreeBSD does, Linux and macOS truncate at exit, and every shell reads
+one byte. Only Rust and Zig designed this boundary rather than inheriting C's; both put the range in the type, on
+both sides, and neither traps — with the right type there is nothing left to trap.
+
+**Verdict (the maintainer, 2026-10-18): typed, on both sides.** Option 1 above was a patch, not the answer, by
+kama's own rules: a narrowing `cast<T>` traps in EVERY build and a constant that does not fit is refused, so a
+debug-only exit trap would be a second, weaker rule for one narrowing; and GOALS #5 asks for explicit casts for
+narrowing, where `fn int32 main()` narrows implicitly at exit.
+1. **`fn uint8 main()` is the one portable signature.** A literal is typed by its destination, so `return 55;` is
+   unchanged and `return 256;` is refused on every OS. A computed status narrows explicitly: `cast<uint8>(x)` (traps
+   in every build) or `truncate<uint8>(x)`. No check at exit.
+2. **`fn uint32 main()` is also accepted, on Windows only** — the platform's own type carries its delta (an installer's
+   1603 or 3010 needs it). Elsewhere it is refused, naming `fn uint8 main()` and the `@compileFor(OS_WINDOWS)` twin.
+3. **`fn int32 main()` is refused**, with the fix-it.
+4. **The parent's side follows: `std::process::ExitStatus` becomes per-platform twins** sharing `success()` —
+   POSIX `Exited(uint8 code) | Signaled(int32 signal)`, Windows `Exited(uint32 code)` — replacing `code = -1` as a
+   sentinel for "signalled" (GOALS 3b).
+5. **`std::app::quit(int32 code)`, the other exit path, takes the same types.**
+
+A source break in every program and package, pre-1.0. Size M; built once the next session's plan has re-audited
+the ruling against GOALS.md.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
@@ -2167,33 +2230,63 @@ two things the language lacks, measured on `0.9.662`:
   `type value`, copied, sent to an isolate, viewed as bytes — and `InlineDynamicArray<string>` a resource that drops
   its strings.
 
-**The design session's questions** (asked with kama examples and the bytes):
+**Ruled 2026-10-18 (the design session; each re-audited against GOALS.md at the next session's plan, before
+any code).** Each with what other languages do, and the production answer:
 
-- KR-190, first (the maintainer's, 2026-10-17): **does `slot` stay beside it, or go?** Today `slot T x;` is a LOCAL that
-  an `out` argument fills, its fill PROVEN by flow analysis, which is what lets the compiler elide its drop and refuse
-  every read before the fill — safe code. KR-190's storage is different in kind: which elements are live is RUNTIME
-  data (a `len`), so no flow analysis can prove it, and it is reached through `UnsafePtr`. The options: keep both (one
-  is a proven local, the other unsafe storage — two mechanisms for two different questions); fold `slot` into the
-  general mechanism and free the reserved word (one way, if the general form can still give a local its proven,
-  safe fill); or let the general mechanism be a safe proven form where the shape is static and unsafe only where
-  liveness is data. Whether it is **unsafe-only** is the same question from the other side: Rust's `MaybeUninit` is
-  unsafe to read and its `ArrayVec`s are the safe API over it, as `InlineDynamicArray` would be here.
-- KR-190: the spelling — a type (`Uninit<T>#(N)`, or another name) or a field marker; zero-filled at construction
-  (deterministic bytes, so a plain holder can still be `BytesViewable`) or truly uninitialized (Rust's
-  `MaybeUninit`, cheaper for a large `N`); what the compiler refuses around it (no implicit copy, drop, serde, format
-  or byte view of the storage itself — the holder hand-writes its copy and drop); how the layout model (`0.9.660`) and
-  `--no-heap` see it.
-- KR-191: the spelling of a conditional kind (a `when [...]` on the kind, a destructor that exists only `when` a
-  parameter owns something, or a kind the compiler derives for a library type as it does for an intrinsic); how
-  `Copyable`, `Sendable`, `BytesViewable` and the `value` rule ("owns nothing") follow it; what C++26
-  (`inplace_vector` is trivially copyable iff `T` is) and Rust (no conditional `Copy` with `Drop`) teach.
-- KR-187 itself, over both: the surface — `add` → `Result` handing the item back, `pop`, `operator[]`
-  (`@trackCaller`), `view()`/`viewMut()` over the live prefix, iterators, `clear`, `insertAt`/`remove`, deep `copy`,
-  serde, `Formattable`, equality.
+1. **`slot` stays exactly as it is; KR-190 is a separate type.** The two answer different questions: `slot` asks
+   whether a local is filled before it is read (proven per path, safe), KR-190 which of N places hold a value (a
+   runtime `len`, unprovable). Every language with the proof keeps two mechanisms — Rust (`let x;` + definite
+   initialization, and `MaybeUninit<T>`), C# (`out` + definite assignment, and `Unsafe.SkipInit`/`stackalloc`),
+   Swift (deferred `let`, and unsafe pointers); only Zig has one word (`undefined`), by giving the proof up. SPEC's
+   "raw slot" (the raw-store paragraph) and its "`Slot<T>`/`MaybeUninit` spike" line are reworded to point at
+   KR-190, so `slot` means only the proven hole.
+2. **Safe to declare, unsafe to reach.** An `InlineStorage<T>#(N)` field or local holds no `T`, so declaring and
+   constructing one is safe; its one way in is `unsafe fn UnsafePtr<T> ptr()` (and a `const` twin), the reach every
+   heap container uses. Rust's `MaybeUninit::write` is safe because a leak is safe in Rust; in kama, overwriting a
+   live `T` silently skips its destructor, which RAII forbids, so there is no safe write. The holder is the safe
+   face (Rust's `ArrayVec`, C++'s `inplace_vector`).
+3. **A built-in type, `InlineStorage<T>#(N)`**, `InlineArray`'s never-constructed sibling, lowered by the compiler
+   to `_Alignas(T) uint8_t bytes[N * sizeof(T)]`. A type composes as a field, a local or a member, is greppable,
+   and carries its refusals (no implicit copy, drop, `==`, format, serde or byte view of the storage itself); a
+   field marker (C#'s `fixed`, `[InlineArray(N)]`) would be new grammar that cannot be a local. Rust (`MaybeUninit`)
+   and C++ (`alignas` storage; `std::aligned_storage` was deprecated in C++23 as easy to misuse) are types too.
+   Not `Uninit<T>`: under decision 4 the bytes are not uninitialized.
+4. **Zero-filled at construction, and the holder keeps every byte outside its live prefix zero.** A `pop` or
+   `remove` re-zeroes the place it vacates (`sizeof(T)` bytes). Undefined bytes exist in kama only behind an
+   allocator's pointer, reached only by unsafe code, and in-place storage lives inside a value that is copied, sent
+   and viewed as bytes: uninitialized bytes there would leak stack contents and make byte equality nondeterministic
+   (MSan, which this repo runs, would report each copy). Rust and C++26 leave it uninitialized; C# and Go zero it;
+   clang (`-ftrivial-auto-var-init=zero`), the Linux kernel (`CONFIG_INIT_STACK_ALL_ZERO`) and the Windows kernel
+   (by default since 2019) zero stack variables because uninitialized-memory leaks kept shipping. The invariant
+   also means a popped secret never reaches a copy, a send or a byte view, and a holder of plain bytes can be
+   `BytesViewable` deterministically; `==`, `copy` and serde still read the live prefix element by element.
+5. **KR-191: a conditional kind clause.** `type resource InlineDynamicArray<T> value when [T: value]` — a
+   resource, and a value when `T` is one; `value` joins `default` as a structural bound (a primitive, a `value`, a
+   value-kind enum or intrinsic instance). A value instance has no destructor and no copy constructor, by the
+   existing rule that a value owns nothing, so neither needs its own `when`. The base kind is `resource`, so the
+   declaration obeys the stricter rules (private fields). C++ makes triviality conditional (`requires` on the
+   special members, P0848; `inplace_vector` is trivially copyable iff `T` is), Rust `Copy` (`derive` emits
+   `impl<T: Copy>`; a `Drop` impl excludes it, so `ArrayVec` is never `Copy`), Swift `Copyable` (`extension Box:
+   Copyable where T: Copyable`, SE-0427; a `deinit` excludes it): each makes the cheap property the conditional one
+   over an owning base, which is the clause's shape. `Copyable` and `Sendable` follow by the conditional
+   conformances that already build. A GRAMMAR CHANGE: `kama.y`, `docs/grammar.bnf`, `tree-sitter-kama/` and its
+   parse-errors test, then the Zed and Helix pins as a second commit. It serves any generic record (`Pair<T>`), not
+   only containers.
+6. **KR-187's surface is `DynamicArray`'s, bounded.** The same names and semantics, except: each growth op
+   (`add`, `insertAt`) returns `Result<Unit, CapacityFull<T>>`, where `CapacityFull<T>` implements `Error` and hands
+   the item back (`Result`'s `E` is bound by `Error`, so the item cannot be the error itself, as it is in Rust's
+   heapless); `addAll` is all-or-nothing; no `withCapacity`/`reserve`/allocator ctor, and `capacity()` is `N`; a
+   `deserialize` of more than `N` items is an `Err`, never a truncation. Then `pop`, `remove`, `operator[]`
+   (`@trackCaller`), `view`/`viewMut`/`slice`/`sliceMut` and the three iterators over the live prefix, `swap`,
+   `clear`, `contains`/`indexOf`/`equals` when `T` is `Equatable`, `copy` (bitwise for a value instance, deep for a
+   `Copyable` resource), serde, `Formattable`, and `BytesViewable` when `T` is plain. C++26 has three pushes
+   (`push_back` throws, `try_push_back`, `unchecked_push_back`) and arrayvec two (`push` panics, `try_push`); one
+   spelling is GOALS #4, and being full is an expected state, not a trap.
 
-Size **S–M** once KR-190 and KR-191 exist.
+**Order:** KR-190 (the built-in storage) → KR-191 (the clause and the bound) → KR-187 (kama library code). Each
+lands with fixtures on native, ASan and wasm.
 
-#### The session's material — measured 2026-10-18 on `0.9.667`
+#### The evidence the rulings rest on — measured 2026-10-18 on `0.9.667`/`0.9.671`
 
 **What `slot` is, in bytes.** A proven fill, not uninitialized memory:
 
@@ -2226,69 +2319,16 @@ k_Fp1_slot__Conn__dtor(&k_c);                     // dropped normally once fille
 A type declaration does take a conditional conformance: `type value Pair<T> implements Sendable when [T: Sendable]`
 builds. The only structural bound is `default`. No bound says "owns nothing".
 
-**Decision 1 — does `slot` stay?** The two answer different questions:
-- `slot` asks: will this local be filled before it is read? The compiler proves the answer per path, so the code is
-  safe.
-- KR-190 asks: which of these N places hold a value? The answer is a runtime `len`, so no compile-time proof is
-  possible.
+**What decides a kind today** (probed on `0.9.671`). A destructor makes a type a `resource` (`type value V { …
+~V() { } }` is refused: "a `value` owns nothing — a `~dtor` makes it a `resource`"), but the converse does not hold:
+a `type resource R` with no destructor is still move-only (`R b = a; R c = a;` is "use of `a` after it was moved"),
+and `type value Outer { Box<int32> b; }` over a `type resource Box<T>` is refused ("holds a move-only resource").
+A generic `type enum E<T>` is the one declared kind that follows its parameters: `E<int32>` sits in a `type value`,
+`E<string>` is refused there. So gating a destructor alone cannot make an instance a `value`: the kind WORD has to
+be conditional. The brief's option A said otherwise, and was wrong.
 
-The options:
-- **A. Keep `slot` exactly as it is; KR-190 is a separate std type.** Two mechanisms for two questions; the
-  reserved word keeps its one meaning.
-- **B. One word in two positions.** `slot` on a local is the proven hole; `slot` on a field is unmanaged storage.
-  One word would then cover a safe, proven rule and an unsafe, manual one, and the difference would be invisible
-  at the use.
-- **C. Retire `slot` for the general type.** An `out` hole would become `InlineStorage<Conn>#(1)` plus an unsafe
-  read, or the compiler would have to prove fills for a library type, which is `slot` again under a longer name.
 
-**Recommended: A.** The prose that says "raw slot" for a pointer element (SPEC's raw-store paragraph, and its
-"a safe `Slot<T>`/`MaybeUninit` wrapper … is a tracked design spike") is reworded to point at KR-190, so the word
-means only the hole.
 
-**Decision 2 — unsafe-only?** **Recommended: yes.** Reading, writing or dropping a place in the storage is an
-`unsafe fn`'s business, because only the holder knows which places are live. The safe face is the holder, as
-`DynamicArray` is safe over `UnsafePtr` (Rust: `MaybeUninit` is unsafe, `ArrayVec` is safe over it; C++: aligned
-storage plus placement new inside `inplace_vector`).
-
-**Decision 3 — a type or a field marker.** **Recommended: a std type**, because it composes as a field, a local or
-an element, it is greppable, and it carries its own refusals: no implicit copy, drop, serde, format or byte view of
-the storage itself. The name follows the in-place family (`InlineArray`, `InlineDynamicArray`):
-**`InlineStorage<T>#(N)`** (recommended) or `Uninit<T>#(N)`. Its C is `_Alignas(T) uint8_t bytes[N * sizeof(T)]`.
-It is reached through `ptr()` → `UnsafePtr<T>` in an `unsafe fn`, the shape every heap container already uses.
-
-**Decision 4 — zero-filled or truly uninitialized.** **Recommended: zero-filled at construction.**
-- Undefined bytes exist in kama only behind a pointer, in memory an allocator handed back (a `DynamicArray`'s spare
-  capacity), and only unsafe code reaches them. Every value has defined bytes; even a `slot` holds its field defaults
-  (above). In-place storage lives inside a value that is copied, sent and viewed as bytes, so it should stay on that
-  side of the line.
-- The cost is what `InlineArray` pays today: one `memset` of `N × sizeof(T)`.
-
-The consequence to rule with it: a popped element's bytes stay behind in the dead tail. So the holder's `==`,
-`copy` and serde read the live prefix only, and its byte view (if it has one) must either re-zero a vacated place or
-not exist.
-
-**Decision 5 — how the kind follows `T` (KR-191).**
-- **A. The kind follows from which members exist.** Gate the destructor, and the copy constructor, with `when`,
-  and add one structural bound for "owns something":
-  `unsafe ~InlineDynamicArray() when [T: resource] { … }`. The existing rule (`~dtor` ⟺ `resource`) then decides
-  the instance's kind. This is how the compiler already derives an intrinsic's kind from its element. It is also
-  how C++26's `inplace_vector` is trivially copyable exactly when `T` is, through C++20's conditionally trivial
-  special members (a destructor with a `requires` clause, P0848). It is a **grammar change**: `when` on a
-  destructor, the four artifacts plus the editor pins.
-- **B. Derive the kind of a library generic type from its fields**, with no declaration. This is implicit, against
-  GOALS' explicit-over-implicit.
-- **C. A kind expression on the declaration.** New syntax for one case.
-
-**Recommended: A.** It also settles `Copyable` (a resource instance is copied by its gated copy ctor), `Sendable`
-(`implements Sendable when [T: Sendable]`, which already builds) and `BytesViewable` (the same conditional
-conformance, with Decision 4's dead-tail caveat). Rust cannot express any of this: `Copy` and `Drop` exclude each
-other, so `ArrayVec` is never `Copy`.
-
-**Decision 6 — KR-187's surface.** Confirm the list above. `add` returning `Result` with the item handed back is
-already decided.
-
-**Order once ruled:** KR-190 (a std type over a new intrinsic storage) → KR-191 (grammar + bound) → KR-187
-(kama library code). Each lands with fixtures on native, ASan and wasm.
 - **Collections revisit — remaining knobs & optimizations.** The parametric knobs ship (preallocation,
   pluggable `Hasher`, custom `Allocator` on every container and box, all defaulted). What remains:
   - **HashDoS-resistant keyed hashing (deferred).** `DefaultHasher` is deterministic/*unseeded* — right for
@@ -3102,6 +3142,19 @@ leftovers: a caller still passing only a line stays column 0, and a diagnostic a
 instantiation site keeps its line and drops the column, which belonged to the template. The first two above are
 the second kind; the third is the first kind, at a declaration that has a column of its own. Close means each
 names the column of the call, the type argument or the declaration, with the reported column checked by a guard.
+
+<a id="s10-wgpu-sdk-platform"></a>
+
+### The wgpu-native SDK directory is not platform-scoped (KR-209)
+
+Found 2026-10-18 on `0.9.671`, running `./dev test linux` on a macOS box. `tools/check-webgpu.sh` failed in the
+container: `third_party/wgpu/lib/libwgpu_native.a: error adding symbols: archive has no index`. The Linux leg linked
+the macOS SDK. `tools/fetch-webgpu.sh` fetches the SDK for `uname -s`/`uname -m` but unpacks it into one
+`third_party/wgpu/`, the compiler's `--webgpu` default (`src/kama.driver.cpp`) and the guard both read that one
+path, and the container bind-mounts the host's checkout. Every other build artifact is scoped by platform
+(`out/<os>-<arch>/`, AGENTS.md) for exactly this reason. CI never sees it: its legs fetch no SDK, so the guard
+skips the build there. Close means the SDK lands in, and is read from, `third_party/wgpu/<os>-<arch>/` (the fetch,
+the driver's default, the guard, `examples/webgpu`), and the guard passes on both legs of one box.
 
 <a id="s10-diag-no-file"></a>
 
