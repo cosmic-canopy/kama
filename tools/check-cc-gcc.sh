@@ -90,6 +90,25 @@ if command -v cc >/dev/null 2>&1; then
     [ "$crc" = 7 ] || fail "the \`cc\`-built hello-world exited $crc, expected 7"
 fi
 
+# 5. kama's C from clang and a C++ `csources` unit from g++, in one build. Each command carries the flags of
+#    the driver that RUNS it: clang's `-mno-incremental-linker-compatible` (Windows) once rode the shared
+#    prefix into g++, which refuses it by name, so every Windows build with a `.cpp` csource and `--cxx g++`
+#    failed (0.9.573–0.9.666). Both arms: `-j 4` compiles each unit on its own; `-j 1` compiles kama's C in
+#    the one invocation that links, with the C++ driver.
+MIXED=""
+if command -v clang >/dev/null 2>&1 && command -v g++ >/dev/null 2>&1; then
+    CX="$ROOT/tests/csources_cxx.d"; want=$(cat "$CX/expect")
+    for j in 1 4; do
+        if ! "$KAMA" build "$CX/kama.json" --cc clang --cxx g++ -j "$j" -o "$TMP/cx$j" > "$TMP/cx$j.log" 2>&1; then
+            sed 's/^/    /' "$TMP/cx$j.log" >&2
+            fail "\`--cc clang --cxx g++\` did not build a C++ \`csources\` unit at -j $j"
+        fi
+        xrc=0; "$TMP/cx$j" || xrc=$?
+        [ "$xrc" = "$want" ] || fail "the clang+g++ build at -j $j exited $xrc, expected $want"
+    done
+    MIXED=", clang's C beside g++'s C++ at -j 1 and -j 4"
+fi
+
 ALSO=""
 command -v cc >/dev/null 2>&1 && ALSO=", and so does cc"
-echo "check-cc-gcc: PASS (gcc builds a program, the FFI callback seam and functions ending in an exhaustive match$ALSO)"
+echo "check-cc-gcc: PASS (gcc builds a program, the FFI callback seam and functions ending in an exhaustive match$ALSO$MIXED)"

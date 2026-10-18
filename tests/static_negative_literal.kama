@@ -1,0 +1,19 @@
+// A module `static` may start negative. `-1` lowered to the trapping negation (`KAMA_NEG_T(…)`), which is not a C
+// constant expression, so `kama check` passed and clang refused the file-scope initializer ("initializer element
+// is not a compile-time constant"), up to 0.9.666. A negated literal is a constant: each type's minimum included.
+static int8 a = -128;
+static int32 b = -2147483648;
+static int64 c = -9223372036854775808;
+static float64 d = -1.5;
+static int32 seen = -1;
+static int32 plus = +3;
+
+fn int32 main() {
+    if (a != -128) { return 1; }
+    if (b + 1 != -2147483647) { return 2; }
+    if (c + 1 != -9223372036854775807) { return 3; }
+    if (d * 2.0 != -3.0) { return 4; }
+    if (seen != -1 || plus != 3) { return 5; }
+    seen = seen - 1;
+    return seen == -2 ? 42 : 6;
+}

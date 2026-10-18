@@ -1,0 +1,28 @@
+// An `fnptr` type imported from another module, as the parameter type of a function and of a method declared
+// HERE. These signatures registered before the module declaring `Op`, so the parameter kept the written name
+// `Op` where the C typedef is `voice__Op`, up to 0.9.666. A function passed straight to it was refused ("`twice`
+// is a function, and argument `f` wants a value"), and when a later argument was a call, the temporary that
+// sequences the earlier one was declared `Op kama_seqarg1 = …`, which `kama check` passed and clang refused.
+import { voice::Op };
+
+fn int32 apply(Op f, int32 v) { return f(x: v); }
+
+type resource Mixer {
+    int32 total = 0;
+    public ctor make() { }
+    public fn void run(Op render, int32 v) { this.total = this.total + render(x: v); }
+    public const fn int32 sum() { return this.total; }
+}
+
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 one() { return 1; }
+
+fn int32 main() {
+    int32 a = apply(f: twice, v: 3);      // a function straight to the parameter: 6
+    Op g = twice;
+    int32 b = apply(f: g, v: one());      // a call after it sequences `g` into a temporary: 2
+    Mixer m = Mixer.make();
+    m.run(render: twice, v: 10);          // 20
+    m.run(render: g, v: one());           // 2
+    return a + b + m.sum();               // 30
+}

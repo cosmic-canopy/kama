@@ -6271,6 +6271,14 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                              "it is not a number; `cast<usize>(p)` makes the address one").c_str(), v);
                 return "0";
             }
+            // A negated LITERAL is a constant, and the trapping forms below are not C constant expressions:
+            // `static int32 seen = -1;` passed `kama check` and clang refused its file-scope initializer
+            // ("initializer element is not a compile-time constant"), up to 0.9.666. There is nothing to trap: a
+            // literal is checked against its type as the value written, sign included, so each type's minimum
+            // (`-128` as an `int8`, `-9223372036854775808` as an `int64`) builds warning-free this way too.
+            if ((v->token == MINUS || v->token == PLUS) && isNumericLiteral(v->expression.get()))
+                return "(" + (cNumBits(t) && cNumBits(t) < 32 && !cNumFloat(t) ? "(" + t + ")" : std::string())
+                     + "(" + op + emitExpression(v->expression) + "))";
             if (cNumBits(t) && cNumBits(t) < 32 && !cNumFloat(t)) {
                 // `-x` on a signed sub-`int` is the one unary overflow (`-(-128i8)` is 128): range-checked
                 // like the binary half, trapping in debug and truncating in release.
@@ -10148,13 +10156,28 @@ void CEmitter::refreshStaleParamTypes()
         return ty && ty->genericArgs && ty->nTypeArgs >= 0
             && (int)ty->genericArgs->size() > ty->nTypeArgs;
     };
+    // ...and an `fnptr` type declared in a file whose signatures register AFTER this one's: `cType` keeps the
+    // written name (`Op`) of a type it does not know yet, where the typedef is `voice__Op`. A call then neither
+    // bound a function to it ("`twice` is a function, and argument `f` wants a value") nor declared a temporary
+    // C could compile (`Op kama_seqarg1 = …`), up to 0.9.666. Restricted to a bare name some `fnptr` declares,
+    // and kept only when the fresh answer IS a signature type, so it stays as self-checking as the rest.
+    auto namesASig = [&](const SharedIdentifier& ty) {
+        if (!ty || !ty->value || ty->genericArgs) return false;
+        const std::string tail = "__" + *ty->value;
+        for (auto& s : _sigs)
+            if (s.first == *ty->value
+                || (s.first.size() > tail.size() && s.first.compare(s.first.size() - tail.size(), tail.size(), tail) == 0))
+                return true;
+        return false;
+    };
     auto refresh = [&](std::vector<ParamSig>& sigs, SharedParameterList decl, const std::string& declFile,
                        const ClassInfo* owner) {
         if (!decl) return;
         size_t i = 0;
         for (auto& p : *decl) {
             if (i >= sigs.size()) break;
-            if (p && p->type && hasComptimeArgs(p->type) && stale(sigs[i].className)) {
+            const bool lateSig = p && p->type && !isSigType(sigs[i].className) && namesASig(p->type);
+            if (p && p->type && (hasComptimeArgs(p->type) || lateSig) && stale(sigs[i].className)) {
                 NsCtx saved = _nsCtx;
                 // The DECLARING file's whole context, not a rebuilt one: the type spells the constant the
                 // way that file imports it (bare, after `import { m::MAX_CREW }`), so the usings and
@@ -10170,7 +10193,7 @@ void CEmitter::refreshStaleParamTypes()
                 }
                 const std::string fresh = (found || owner) ? cType(p->type) : std::string();
                 _nsCtx = saved;
-                if (!fresh.empty() && !stale(fresh)) sigs[i].className = fresh;
+                if (!fresh.empty() && (lateSig ? isSigType(fresh) : !stale(fresh))) sigs[i].className = fresh;
             }
             ++i;
         }
@@ -31217,6 +31240,9 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                          "a call result that is dropped at the end of the statement, so the pointer would "
                          "dangle; bind the value to a local first, then take the address through that").c_str(),
                         call);
+        // `this` is already `self`, a pointer (addrOfOperand's rule): `&(self)` was a `T**`, which `kama check`
+        // passed and clang refused (`addr(of: this)` in a method, up to 0.9.666).
+        if (dynamic_cast<ThisAccessNode*>(a.get())) return "(" + addrOfOperand(a, "", call->line) + ")";
         return "(&(" + emitPlace(a) + "))";
     }
 

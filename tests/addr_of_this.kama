@@ -1,0 +1,34 @@
+// `addr(of: this)` in a method is the receiver's own address. `this` lowers to `self`, already a pointer, and
+// `addr(of:)` took its address once more: `&(self)`, a `T**`, which `kama check` passed and clang refused (up to
+// 0.9.666). A `const fn`'s `this` gives an `UnsafeConstPtr<T>`, as every const place does. A resource and a
+// value type, each written through the pointer and read back through the receiver.
+type resource Conn {
+    int64 n = 7;
+    public ctor make() { }
+    public unsafe fn UnsafePtr<Conn> self() { return addr(of: this); }
+    public unsafe const fn UnsafeConstPtr<Conn> view() { return addr(of: this); }
+    public const fn int64 get() { return this.n; }
+    public fn void set(int64 v) { this.n = v; }
+}
+
+type value P {
+    public int32 x;
+    public ctor make(int32 x) { this.x = x; }
+    public unsafe fn UnsafePtr<P> at() { return addr(of: this); }
+}
+
+unsafe fn int32 run() {
+    Conn c = Conn.make();
+    UnsafePtr<Conn> p = c.self();
+    p[0].set(v: 9);
+    if (c.get() != 9) { return 1; }
+    UnsafeConstPtr<Conn> q = c.view();
+    if (q[0].get() != 9) { return 2; }
+    P v = P.make(x: 3);
+    UnsafePtr<P> pv = v.at();
+    pv[0].x = 5;
+    if (v.x != 5) { return 3; }
+    return 42;
+}
+
+fn int32 main() { return run(); }

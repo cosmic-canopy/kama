@@ -222,8 +222,9 @@ type adapter <string> implements Sendable { }
 // `DynamicArray<float*>.contains` work — but they are NOT `Hashable`: float hash keys are a footgun
 // (NaN != NaN, ±0.0), and there is no bit-reinterpret cast, so a value-cast hash would collide badly. Add
 // on demand if ever needed via a bit-cast helper. `string` is absent for the opposite reason — its
-// `Equatable` comes free from the built-in `equals`.
-type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, float32, float64>
+// `Equatable` comes free from the built-in `equals`. `bool` and `char` were absent for no reason at all, so
+// `==` on two `Optional<bool>` was refused for a field that "does not implement `Equatable`" (up to 0.9.666).
+type adapter <int8, int16, int32, int64, uint8, uint16, uint32, uint64, isize, usize, float32, float64, bool, char>
     implements Equatable<This> {
     public const fn bool equals(const ref This other) { return this == other; }
 }

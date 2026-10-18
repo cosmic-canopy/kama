@@ -13153,14 +13153,6 @@ int main(int argc, char** argv)
         // Results are bit-identical either way. Same placement rule as the flag above: fixed base, so a
         // raw `cflags` can put `-fmath-errno` back.
         cmd << "-fno-math-errno ";
-        // A Windows object carries no build time. clang 23 began writing the compile time into every COFF
-        // object's `TimeDateStamp` for the mingw triple too, where clang 22 and gcc write 0 — so two builds of
-        // one unchanged source differed by those four bytes, and check-build-jobs.sh could no longer tell
-        // `-j 10` from `-j 1` (measured: msys2 clang 23.1.3, `SOURCE_DATE_EPOCH` ignored). This is the switch
-        // that writes 0; only an `/INCREMENTAL` link reads the stamp, and no kama link is one. clang family
-        // only: gcc refuses the flag by name. It also reaches the per-TU link line, where clang 23 accepts it
-        // without an unused-argument warning.
-        if (g_target.isWindows() && ccFamily(compiler) == CcFamily::Clang) cmd << "-mno-incremental-linker-compatible ";
         // The target's own toolchain settings from kama.json (a sysroot and any extra compile flags).
         if (!g_target.sysroot.empty()) cmd << "--sysroot=\"" << g_target.sysroot << "\" ";
         // ⚠️ The span the user's `cflags` occupy is RECORDED, because the per-TU path reuses this whole
@@ -13510,6 +13502,19 @@ int main(int argc, char** argv)
         // `randombytes.c` uses emscripten's `EM_ASM`, which refuses `-std=c*`; C++ is `gnu++17`, which is
         // what clang and GCC 11+ already default to, pinned so a compiler upgrade does not change a build.
         // C++ drops the C-only `-Werror=` promotions, which g++ warns on per TU.
+        // A Windows object carries no build time. clang 23 began writing the compile time into every COFF
+        // object's `TimeDateStamp` for the mingw triple too, where clang 22 and gcc write 0 — so two builds of
+        // one unchanged source differed by those four bytes, and check-build-jobs.sh could no longer tell
+        // `-j 10` from `-j 1` (measured: msys2 clang 23.1.3, `SOURCE_DATE_EPOCH` ignored). This is the switch
+        // that writes 0; only an `/INCREMENTAL` link reads the stamp, and no kama link is one.
+        // ⚠️ Asked of the driver that RUNS the command, and spliced in per command rather than written into
+        // the shared prefix: gcc and g++ refuse the flag by name, and a C++ unit compiles with the C++ driver.
+        // In the prefix (0.9.573–0.9.666) it reached `--cxx g++` beside `--cc clang`, and every Windows build
+        // with a `.cpp` csource failed. Placed where the prefix had it, before `cflags`, which may override it.
+        auto noStamp = [&](const std::string& driver) {
+            return g_target.isWindows() && ccFamily(driver) == CcFamily::Clang
+                ? std::string("-mno-incremental-linker-compatible ") : std::string();
+        };
         auto prefixFor = [&](const std::string& prefix, CLang l) {
             std::string p = prefix;
             const bool cxxLang = l == CLang::Cxx || l == CLang::ObjCxx;
@@ -13519,6 +13524,7 @@ int main(int argc, char** argv)
             // measured, a C++ csource built from this repo's root compiled `0.9.378` as a header. Quoted
             // includes still search `.`, so a header there stays findable.
             if (cxxLang) p.replace(dotIncPos, 4, "-iquote . ");   // the 4 bytes of "-I. "
+            p.insert(stdEnd, noStamp(cxxLang ? cxxDriver : compiler));
             if (l != CLang::Kama)
                 p.replace(stdPos, stdEnd - stdPos,
                           cxxLang ? std::string(" -std=gnu++17 ")
@@ -13962,7 +13968,13 @@ int main(int argc, char** argv)
                 }
                 for (auto& o : objs) oneObjs.add("\"" + toolPath(o) + "\" ");
                 cmd << oneIns.text << oneObjs.text << linkGc << link.str() << "-o \"" << toolPath(linkOut) << "\"";
-                rc = runCmd(fitCommand(linkDriver(cmd.str()), { &incList, &oneObjs, &oneIns }, genFiles));
+                // This invocation compiles kama's C with the LINK driver, so its flags are that driver's: under
+                // `--cc clang --cxx g++`, g++ was handed clang's `-Wno-error=incompatible-function-pointer-types`,
+                // which gcc refuses by name, and no `-j 1` build holding C++ could compile.
+                std::string one = cmd.str();
+                one.insert(stdEnd, noStamp(cxxLinks ? cxxDriver : compiler));
+                if (cxxLinks) one.replace(stdPos, stdEnd - stdPos, " -std=c11 " + ccWarnFlags(cxxDriver));
+                rc = runCmd(fitCommand(linkDriver(one), { &incList, &oneObjs, &oneIns }, genFiles));
             }
         }
 

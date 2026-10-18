@@ -1,0 +1,19 @@
+// `bool` and `char` are `Equatable`, as every number is. They were missing from the prelude's list, so `==` on two
+// `Optional<bool>`, `DynamicArray<bool>.contains` and a `<T: Equatable<T>>` bound met by `bool` or `char` were all
+// refused, naming a field or type that "does not implement `Equatable`" (up to 0.9.666). (`==` on `Optional<char>`
+// is still refused, for a different reason: KR-193.)
+import { std::collections::DynamicArray };
+
+fn bool same<T: Equatable<T>>(const ref T a, const ref T b) { return a.equals(other: b); }
+
+fn int32 main() {
+    Optional<bool> a = Optional::Some(value: true);
+    Optional<bool> b = Optional::Some(value: true);
+    Optional<bool> n = Optional::None;
+    if (!(a == b) || a == n) { return 1; }
+    DynamicArray<bool> flags = DynamicArray.empty();
+    flags.add(item: false);
+    if (!flags.contains(item: false) || flags.contains(item: true)) { return 2; }
+    if (!same(a: true, b: true) || same(a: 'a', b: 'b') || !same(a: 'z', b: 'z')) { return 3; }
+    return 42;
+}
