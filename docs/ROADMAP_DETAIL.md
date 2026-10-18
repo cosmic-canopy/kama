@@ -322,6 +322,57 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
+<a id="s2-prelude-instance-derives"></a>
+
+### `==` on `Optional<char>` is refused, though `char` is `Equatable` (KR-193)
+
+Measured 2026-10-18 on `0.9.667`, after `bool` and `char` joined the prelude's `Equatable` adapter list (they had
+been missing for no recorded reason). `Optional<bool> == Optional<bool>` now builds, and `char` meets a
+`<T: Equatable<T>>` bound. `Optional<char> == Optional<char>` is still refused: *"`Some`'s field `value` (`char`)
+does not implement `Equatable`"*. The difference is where the instance is first named. `prelude/global.kama`
+declares an iterator's `fn Optional<char> next()`, so `Optional<char>` is registered while signatures are
+collected, and `registerDerives` judges its fields then, before the adapter conformances are filed
+(`_intrinsicConformances`, filled in the pass after signature collection). The derive is dropped for good. A
+program's own `fn Optional<bool> pick()` registers later and keeps it (measured: it builds and compares).
+Close means a derive is judged against the full conformance table, wherever the instance was first named,
+with `Optional<char>` added to `tests/equatable_bool_char.kama`. Unprobed: which other prelude-named instances
+lose a derive the same way.
+
+<a id="s2-unreachable-move"></a>
+
+### A use-after-move is reported in code no path reaches (KR-194)
+
+Measured on `0.9.666`:
+
+```kama
+import { std::collections::DynamicArray };
+fn DynamicArray<int32> f() {
+    DynamicArray<int32> xs = DynamicArray.empty(); int32 n = 0;
+    while (true) { n = n + 1; xs.add(item: n); if (xs.length() < 3) { continue; } return give xs; }
+    return give xs;
+}
+fn int32 main() { DynamicArray<int32> a = f(); return cast<int32>(a.length()) - 3; }
+```
+
+is refused at the trailing `return give xs;` with *"use of `xs` after it was moved (a `give` consumed it)"*. A
+`while (true)` with no `break` has no exit, so nothing after it runs. Without the `continue` it builds, and
+without the trailing `return` it builds and returns 0. `0.9.595` taught the move pass that a loop body
+which always leaves has no next pass. This body leaves on one path and loops on the other, and the code after
+the loop is still checked as if it could run. Close means nothing after a loop with no `break` is reachable to the
+move check, and the program above builds.
+
+<a id="s2-replace-infer"></a>
+
+### `replace(place:, with: Optional::None)` does not infer `T` from `place:` (KR-195)
+
+Measured on `0.9.666`: `Optional<int32> o = …; Optional<int32> old = replace(place: o, with: Optional::None);`
+reports *"cannot infer generic type parameter 'T' — argument 'with' is not a literal or a locally-typed value"*,
+and so does `replace(place: this.conn, with: Optional::None)` on a field. `place:` is a typed local or field, and
+`T` is its type. Binding `with` to a typed local first, or writing `replace::<Optional<int32>>(…)`, builds.
+Close means inference takes `T` from any argument that types it, not only from `with`, so `Optional::None` (a
+variant constructor typed by its destination) is checked against the `T` that `place:` gives. The error also
+reports column 0 (KR-196).
+
 <a id="s2-fnptr-type-arg"></a>
 
 ### An `fnptr` type is not a type argument (KR-107)
@@ -1961,6 +2012,29 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
   `OrderedMap` plus its move-to-end is the whole of it, Java's `LinkedHashMap` precedent). A concurrent map is §6's
   question, not this list's.
 
+<a id="s5-debug-frame-copies"></a>
+
+### Two debug-tier frames still hold a large value twice (KR-197)
+
+Measured 2026-10-18 on `0.9.667` (msys2 clang 23.1.3, `-O0`, `"cflags": ["-Wframe-larger-than=20000"]`). The
+constructor work since `0.9.559` builds a value where it lives, and `tools/check-construct-frame.sh` holds
+that down. Two shapes are outside it:
+
+- **A large value returned into a local.** With `type value Big { public InlineArray<float32>#(4096) a; public
+  int32 n; … }` (16,388 B), `fn Big newBig(int32 k) { Big r = Big.blank(); r.n = k; return r; }` and
+  `Big b = newBig(k: 3);` in `main`, `main`'s frame is 32,824 B. The local lowers to `Big k_b; k_b = newBig(…);`,
+  a declaration and then an assignment, so the call's result cannot be built in `k_b`. The guard's header leaves
+  this shape unasserted on the grounds that clang uses the caller's slot at -O0, and it would, for an
+  initializer. `newBig` itself, and `Big b = Big.blank();`, are each under the limit.
+- **A `[v; N]` field initializer.** `type value Det { InlineArray<float32>#(8192) fft = [0.0; 8192];
+  InlineArray<float32>#(640) hist = [0.0; 640]; … public ctor tuned(int32 k) { … } }` built with
+  `new Det.tuned(k: 2)` gives `Det__tuned__into` a 35,400 B frame: the initializer lowers to
+  `(*self).k_fft = InlineArray_float32_8192__fill(0.0f);`, a by-value fill into a temporary. The same fill
+  written in the constructor body is in place and under the limit.
+
+`--release` is clean for both. Close means both lower in place at -O0, and `check-construct-frame.sh` asserts
+them (the first by emitting an initializer rather than an assignment).
+
 <a id="s5-bounded-vector"></a>
 
 ### A bounded inline vector — capacity in place, length 0..N, no heap (KR-187)
@@ -2822,6 +2896,23 @@ interleaved): about 3 ms per seam TU. A program with any C header of its own kee
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
+
+<a id="s10-column-zero"></a>
+
+### Some semantic errors still report column 0 (KR-196)
+
+Measured on `0.9.666`. Most diagnostics carry their column. These three print `file:line:0`:
+- a generic-inference failure: `return ident(x: Optional::None);` gives *"cannot infer generic type parameter 'T'"*;
+- an unmet bound: `mx(a: p)` against `<T: Comparable<T>>` gives *"type argument `P` … does not satisfy bound
+  `Comparable`"*;
+- the refusal of a method that takes a raw pointer without `unsafe`: `public fn void start(UnsafePtr p)` gives
+  *"`start` takes a raw pointer, so it must be declared `unsafe`"*.
+
+`0.9.612` moved the diagnostic channel from a line to a node, and its commit records the two
+leftovers: a caller still passing only a line stays column 0, and a diagnostic attributed to the author's
+instantiation site keeps its line and drops the column, which belonged to the template. The first two above are
+the second kind; the third is the first kind, at a declaration that has a column of its own. Close means each
+names the column of the call, the type argument or the declaration, with the reported column checked by a guard.
 
 <a id="s10-release-signing"></a>
 

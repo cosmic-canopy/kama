@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-193**
+**Next id: KR-198**
 
 ## The shape
 
@@ -72,6 +72,11 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-193 | **`==` on `Optional<char>` is refused, though `char` is `Equatable`** — an instance the PRELUDE names in a signature (`Optional<char>`, its iterator's `next()`) has its derives judged before the primitives' conformances are filed, so its `@generate(Equatable)` is dropped. The same instance first named in a program's own signature is judged later and keeps it | S? | [§2](ROADMAP_DETAIL.md#s2-prelude-instance-derives) |
+| KR-194 | **A use-after-move is reported in code no path reaches** — `while (true) { …; if (c) { continue; } return give xs; } return give xs;` is refused at the trailing `return`, after a loop with no `break`. Without the `continue`, or without the trailing `return`, it builds | S | [§2](ROADMAP_DETAIL.md#s2-unreachable-move) |
+| KR-195 | **`replace(place: o, with: Optional::None)` does not infer `T` from `place:`** — "cannot infer generic type parameter 'T'", though `place:` is a typed local or field. A typed `with` local, or the turbofish, builds | S | [§2](ROADMAP_DETAIL.md#s2-replace-infer) |
+| KR-196 | **Some semantic errors still report column 0** — a generic-inference failure, an unmet bound and the "takes a raw pointer, so it must be declared `unsafe`" refusal print `file:line:0`, where most diagnostics carry the column | S | [§10](ROADMAP_DETAIL.md#s10-column-zero) |
+| KR-197 | **Two debug-tier frames still hold a large value twice** — a large value returned into a local (`Big b = newBig(…)` lowers to a declaration and then an assignment: 32,824 B for a 16 KB `Big` at -O0), and a `[v; N]` field initializer, filled by value in the constructor (35,400 B for 35 KB of arrays). A frame-size flag on a debug build trips on both; release is clean | M | [§5](ROADMAP_DETAIL.md#s5-debug-frame-copies) |
 | KR-101 | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net. The compiler already writes deflate/gzip and tar, in C++, for `kama publish` (`src/kama.archive.cpp`, `0.9.452`); the stdlib half — kama code a program can call — **wants a maintainer verdict: stdlib or package** | — | [§1](ROADMAP_DETAIL.md#s1) |
