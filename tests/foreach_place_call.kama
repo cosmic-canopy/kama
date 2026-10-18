@@ -1,0 +1,47 @@
+// `foreach` straight over a call that returns a PLACE — `fn ref T` or `fn const ref T` — iterates the storage its owner
+// keeps. Two defects lived here, one per lowering path, and each is pinned below:
+//   1. A built-in collection (`string`, `InlineArray`) returned as `const ref` passed `check` and failed in clang: the
+//      loop's pointer dropped the `const` the call's `T const*` carries ("… discards qualifiers"). A `const ref`
+//      PARAMETER never hit it, because a parameter lowers to a plain pointer.
+//   2. A std collection (`DynamicArray`) returned by `ref` or `const ref` was taken for an OWNING value: copied into a
+//      temporary and dropped after the loop, which freed the buffer the field still owned — and the owner freed it
+//      again at scope exit ("double free detected"; an abort natively, and the san leg names it). The `const ref`
+//      half had a compile failure of its own waiting behind the abort, the same `const` as defect 1.
+// The second and third loops over `items()` read the field AFTER an earlier loop over it: had any loop dropped the
+// buffer, they would read freed memory.
+import { std::collections::DynamicArray };
+
+type resource Bag {
+    string name;
+    InlineArray<int32>#(3) fixed;
+    DynamicArray<int32> xs;
+    public ctor make(string name) {
+        this.name = give name;
+        this.fixed = [1, 2, 3];
+        this.xs = DynamicArray.empty();
+        this.xs.add(item: 4);
+        this.xs.add(item: 5);
+    }
+    public const fn const ref string text() { return this.name; }
+    public const fn const ref InlineArray<int32>#(3) three() { return this.fixed; }
+    public const fn const ref DynamicArray<int32> items() { return this.xs; }
+    public fn ref DynamicArray<int32> itemsMut() { return this.xs; }
+}
+
+fn int32 main() {
+    Bag b = Bag.make(name: "abc");
+    int32 bytes = 0;
+    foreach (uint8 c in b.text()) { bytes = bytes + cast<int32>(c); }          // 97 + 98 + 99 = 294
+    int32 fixed = 0;
+    foreach (int32 y in b.three()) { fixed = fixed + y; }                     // 6
+    int32 fixedAt = 0;
+    foreach (const ref int32 y in b.three()) { fixedAt = fixedAt + y; }       // 6, bound in place
+    int32 viaConst = 0;
+    foreach (int32 x in b.items()) { viaConst = viaConst + x; }               // 9
+    int32 viaRef = 0;
+    foreach (int32 x in b.itemsMut()) { viaRef = viaRef + x; }                // 9
+    int32 again = 0;
+    foreach (const ref int32 x in b.items()) { again = again + x; }           // 9, after two loops over the field
+    if (bytes != 294) { return 1; }
+    return fixed + fixedAt + viaConst + viaRef + again;                       // 6 + 6 + 9 + 9 + 9 = 39
+}

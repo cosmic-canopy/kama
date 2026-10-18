@@ -1296,7 +1296,9 @@ static inline void kama_string__dtor(kama_string* self) {
 // one. The ACCESSOR returns `ptrdiff_t`, because a length is kama's `isize`. The narrowing is safe by
 // construction: no allocation may exceed PTRDIFF_MAX (the same bound Rust puts on a single allocation,
 // for the same reason — a byte offset between two points in one object must be representable).
-static inline ptrdiff_t kama_string__length(kama_string* self) { return (ptrdiff_t)self->kama_len; }
+// Both readers take a CONST string, as every other collection's `__length`/`__get` already does: a `foreach` over
+// a read-only place hands them a `kama_string const*`, which is what a `const ref string` result lowers to.
+static inline ptrdiff_t kama_string__length(const kama_string* self) { return (ptrdiff_t)self->kama_len; }
 // FFI: the underlying NUL-terminated bytes, for passing to a C `const char*`.
 static inline const char* kama_string__cstr(kama_string* self) { return self->kama_data; }
 static inline bool kama_string__equals(kama_string* self, kama_string other) {
@@ -1324,7 +1326,7 @@ static inline kama_string kama_string__concat(kama_string* self, kama_string oth
 }
 // Bounds-checked byte access: `s[i]` returns the i-th UTF-8 byte (a uint8). Traps on out-of-range.
 // (Codepoints come from `.chars()`; this is the raw byte, honest to the UTF-8-bytes model.)
-static inline uint8_t kama_string__get(kama_string* self, size_t i, const char* kama_f, int32_t kama_l) {
+static inline uint8_t kama_string__get(const kama_string* self, size_t i, const char* kama_f, int32_t kama_l) {
     if (i >= self->kama_len) kama_bounds_fail(i, self->kama_len, kama_f, kama_l);
     return (uint8_t)self->kama_data[i];
 }

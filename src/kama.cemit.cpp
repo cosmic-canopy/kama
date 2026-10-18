@@ -9333,6 +9333,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             if (rid->value) constRecv = _constStatics.count(resolveUserNameImpl(*rid->value, rid->qualifier)) != 0
                                      || _constStatics.count(qualify(*rid->value)) != 0
                                      || _constStatics.count(resolveModuleVarImpl(*rid->value, rid->qualifier)) != 0;   // imported
+        // ...and so is a call that returns a `const ref` place: it lowers to `T const*`, the other C spelling of a
+        // read-only place. `foreach (uint8 c in b.text())` over a `const fn const ref string text()` passed `check`
+        // and then failed in clang — "initializing 'kama_string *' with … 'const kama_string *' discards
+        // qualifiers" — and an `InlineArray` returned the same way failed identically. A `const ref` PARAMETER never
+        // hit it, because it lowers to a plain pointer; this is the one read-only place whose C type carries the
+        // `const`. (A std collection such as `DynamicArray` iterates through its own iterator and never came here.)
+        if (auto* inv = dynamic_cast<InvocationNode*>(fe->expression.get()))
+            constRecv = constRecv || invocationIsConstPlace(inv);
         // `foreach (ref T e in K)` would hand out a mutable `T*` into a constant. Reject it here rather
         // than emitting code the C compiler has to catch: the `ref` binding exists to write back, and
         // there is nothing writable to bind to.
@@ -18614,6 +18622,18 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     std::string ownTemp, ownSrc;
     auto operandAddr = [&](bool allowTemp) -> std::string {
         if (!placePath(fe->expression).empty()) return "&(" + emitIterable() + ")";
+        // A call that returns a PLACE (`fn ref T`, `fn const ref T`) is a borrow of storage its owner keeps, not an
+        // owning value: iterate it where it lives. Taking it for an owning temporary copied the collection's header
+        // into `kama_fo…` and dropped that after the loop, freeing the buffer the field still owned — then the owner
+        // freed it again. `foreach (int32 x in b.items())` over a `DynamicArray` field aborted with "double free
+        // detected", while the same place passed to a `const ref` parameter and iterated there was fine.
+        // A `const ref` place lowers to `T const*`, and `iterator()` takes a plain `T*` — a `const fn` is ABI-neutral —
+        // so it gets the cast every method call on a `const ref` result already gets (`b.items().length()` emits the
+        // same one). Sound for the same reason: a plain loop only reads, and a `ref` loop over a read-only place is
+        // refused before this lambda is ever called (the KR-175 check just below its definition).
+        if (auto* inv = dynamic_cast<InvocationNode*>(fe->expression.get()))
+            if (invocationReturnsPlace(inv))
+                return (invocationIsConstPlace(inv) ? "(" + container + "*)" : std::string()) + "&(" + emitIterable() + ")";
         if (allowTemp && !isViewCType(container) && isClass(container)) {
             ownTemp = "kama_fo" + std::to_string(id);
             ownSrc = emitIterable();
