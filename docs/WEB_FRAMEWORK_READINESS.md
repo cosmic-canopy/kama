@@ -1,101 +1,69 @@
-# kama web-framework readiness gap analysis
+# kama web-framework readiness
 
-This document assesses what kama needs to build a **Node.js-like web/server framework** — an HTTP server with
-routing, middleware, JSON, and (the crux) an **async event loop** that multiplexes thousands of connections on a
-small number of threads. Status: ✅ have · 🟡 partial · ❌ missing.
+What kama gives a **web server or framework**: an HTTP server with routing, middleware and JSON, and an event loop
+that multiplexes many connections over few threads. Status: ✅ have · 🟡 partial · ❌ missing. Checked against
+`0.9.668` (2026-10-18).
 
-The key distinction throughout: **language gaps** (the compiler/runtime must change) vs **library gaps** (pure
-kama work, unblocked today). A web framework is *mostly* library work — the HTTP parser, router, and middleware
-chain are ordinary kama. The old **language**-level question — the **async/concurrency model** — is now
-**answered and shipped** (the concurrency campaign: isolates + channels + `scope` + `Atomic<T>` +
-`parallel_for`, ROADMAP_DETAIL §6), so the event-loop scheduler is now a *library* over `Poller`. The one remaining
-language ergonomic is **capturing closures** (a Tier-1 nice-to-have); everything else is library or FFI reach.
+**HTTP itself is not std's.** std carries the transports and the building blocks. HTTP/1.1, server-sent events,
+the native WebSocket and the browser's `fetch`/`EventSource` are the first-party package **`@kama/http`** (KR-173), as
+TLS is `@kama/tls`. TLS, regex, HTTP and ciphers are declared non-goals for std
+([ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1), the same line Rust's std draws. So a gap below is either std's, with a
+row, or a package's.
 
-Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (net/std foundation), §6 (concurrency — the isolate model, **shipped**),
-and [ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundation).
+Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the rows below), §6 (concurrency), and
+[ENGINE_READINESS.md](ENGINE_READINESS.md) (the shared FFI/dispatch foundation).
 
-## What kama already has (the foundation)
+## What kama has
 
-- **Native sockets (`std::net`)** — `TcpListener` (bind/listen/accept) + `TcpStream` (connect/read/writeAll),
-  `UdpSocket`, blocking **and** non-blocking modes (`setNonBlocking`), RAII auto-close. Web transports
-  (WebSocket/WebTransport) exist for the *browser* side, unified with native via the `ReliableStream` /
-  `DatagramSocket<SocketAddr>` contracts.
-- **Readiness multiplexing** — `std::net::Poller` wraps `poll(2)` / `WSAPoll`: register many sockets, `wait(timeoutMs)`,
-  query per-fd `{readable, writable}`. This is the substrate an event loop is built *on* (the loop itself is missing).
-- **Contracts + virtual dispatch** — first-class interfaces (fat pointers) and inheritance vtables, so a
-  `type contract HttpHandler { fn Result<Response, Error> handle(ref Request); }` with many implementations
-  (middleware, route handlers) works today. This is the plugin/middleware backbone.
-- **Intrinsic serialization + JSON** — `@generate` Serializable/Deserializable with a `std::serialization::text::json` backend
-  (`serializeJsonBuffer`/`deserializeJsonBuffer::<T>`). JSON request/response bodies work out of the box.
-- **UTF-8 strings + growable bytes** — `string` (find/split/substring/trim/replace/startsWith/…, byte index `s[i]`,
-  `.chars()` codepoints), `DynamicArray<uint8>` as a growable buffer, and `View<T>` for non-owning slices — enough
-  to hand-parse HTTP/1.1 (the `examples/httpd` static server proves the composition).
-- **Callables** — free `fnptr` + `BindableFunctionPtr<Sig>` (binds a receiver object) cover handler registration.
-- **String formatting + interpolation** — the `Formattable` contract + `Formatter` sink, and `${expr}`
-  interpolation (compile-time, statically checked). Covers logging + response text today; the planned **tagged
-  strings** (`html"…"` auto-escaping holes, `sql"…"` parameterized queries) target exactly the web XSS/injection
-  safety story, and the AST is already tag-ready. (See [SPEC.md](SPEC.md) "Formatting & string interpolation".)
-- **The error model + files** — `Result`/`Optional` (no exceptions), `std::fs` (read/write/stat/readDir).
+- **Sockets (`std::net`).** `TcpListener`/`TcpStream`, `UdpSocket` and Unix-domain streams and datagrams, blocking
+  or non-blocking (`setNonBlocking`), closed by RAII. In the browser, WebSocket, WebTransport and the WebRTC
+  DataChannel sit behind the same `ReliableStream` / `DatagramSocket<A>` contracts.
+- **Readiness (`std::net::Poller`).** It wraps `poll(2)` on Linux and macOS and `select()` on Windows (WSAPoll
+  mis-reports a connecting socket). `add`, `wait(timeoutMs)`, and `readyFor(fd)` with `{readable, writable}`. It is the
+  substrate a loop is built on.
+- **DNS.** `resolve`/`resolveOne` over `getaddrinfo`, IPv4 and IPv6. It blocks; a lookup a loop can poll is
+  KR-202.
+- **Concurrency.** Isolates (`spawn`), ownership-moving channels, `scope`, `Atomic<T>` and `parallel_for`, native
+  (OS threads) and wasm (Web Workers). A `TcpStream` is `Sendable`, so an accepted connection can move to a worker.
+- **Time.** `std::time`: a monotonic `Instant`/`Duration`, sleep, and the wall clock.
+- **Bytes and text.** `string`, `DynamicArray<uint8>`, views; `std::encoding` (base64 with the URL-safe pair, hex,
+  UTF-8); `std::fmt` formatting and `${…}` interpolation; tagged strings (`html"…"` escapes its holes, `sql"…"` sends
+  its values out of band).
+- **Hashing.** `std::digest`: SHA-1, SHA-256, SHA-512, HMAC and PBKDF2 (enough for `Sec-WebSocket-Accept` and signed
+  cookies).
+- **Serialization.** `@generate(Serializable, Deserializable)` with a JSON back end, and `JsonValue` for a document
+  with no schema.
+- **Files, processes, errors.** `std::fs` (with `seek`, `readAt`, `writeAt`), `std::process`, `std::io` streams,
+  `Result`/`Optional`.
+- **Dispatch.** Contracts and virtual methods, so a handler contract with many implementations (middleware, routes)
+  works; `fnptr` and `BindableFunctionPtr` register them.
 
-A dynamic JSON HTTP API is **buildable today** on a single thread with a hand-written `Poller` loop. What's
-missing to make it *Node-like* (ergonomic async, timeouts, scale) is below.
+## What std still owes a server (each a row)
 
----
+| Need | Status | Row |
+|---|---|---|
+| An accepted stream in its listener's mode on every OS | ❌ Linux and macOS differ today | KR-200 |
+| A `Poller` wakeup another isolate can trigger | ❌ workaround: a stream pair as a wake channel | KR-201 |
+| A DNS lookup a loop can poll, with a deadline | ❌ `resolve` blocks | KR-202 |
+| Constant-time comparison of secrets | ❌ std warns against `==` and offers nothing else | KR-203 |
+| Percent-encoding and a URL type | ❌ verdict owed: std or a package | KR-204 |
+| Listener backlog and reuse-port | ❌ backlog fixed at 128, no reuse-port | KR-206 |
+| `sendfile` | ❌ file responses copy through user space | KR-207 |
+| An in-memory `ReliableStream` pair for tests | ❌ each package writes its own | KR-208 |
+| Coverage-guided fuzzing | ❌ design first | KR-205 |
+| A non-blocking `File`; a pipe in the `Poller` on Windows | ❌ | KR-7 |
+| An event-loop scheduler and a timer wheel | ❌ libraries over `Poller` and `std::time` | KR-3 |
+| Capturing closures | 🟡 sized, not scheduled: a handler object's fields hold the captures | §1 |
 
-## Tier 0 — The hard blockers (what makes it "Node-like" vs a toy)
+## What the package builds
 
-| Feature | Kind | Status | Why a server needs it | Effort |
-|---|---|---|---|---|
-| **Async task model / event loop** | ~~language~~ → now **library** | 🟡 the **language primitives are shipped** (concurrency campaign complete, 2026-07-23) — isolates (`spawn`) + ownership-transferring `channel<T>` + structured-concurrency `scope` + `Atomic<T>` + disjoint-slice `parallel_for`, native + wasm, TSan/ASan-proven (ROADMAP_DETAIL §6). What remains is **not a language gap**: a single-thread **scheduler / event-loop library** over the existing `Poller` — block a task on a channel, run other ready work (Go/Erlang style, deliberately **not** `async/await` function-coloring). The concurrency design explicitly makes the scheduler a *library* on the primitives, not language surface. Still the biggest **build**, but no longer blocked by the compiler. | **L (library)** |
-| **Timers / monotonic clock (`std::time`)** | library (+thin FFI) | ✅ **`std::time` shipped** (concurrency M1 — monotonic `Instant`/`Duration`, native `clock_gettime` / wasm `emscripten_get_now` / Win QPC). The **timer wheel** (`setTimeout`/keep-alive expiry off the poll timeout) is the remaining piece — pure kama library on the shipped clock. | **S (lib)** |
-| **HTTP/1.1 (+ WebSocket upgrade) parser & server** | library | ❌ missing — only a ~200-line static-file `examples/httpd` proof | Request/response types, header parsing, chunked/`Content-Length` bodies, keep-alive, status constants. **Pure kama library work — not blocked by the language**; it just doesn't exist yet. | **M–L** |
-| **TLS / HTTPS** | package (FFI) | ❌ missing — a package, not `std` (ROADMAP_DETAIL §1); `@kama/tls` over Mbed TLS is planned | Public-facing servers need TLS. An FFI binding to a C TLS stack behind a `ReliableStream`-shaped wrapper, so handlers are transport-agnostic — or TLS terminated at a reverse proxy. | **L** |
+HTTP/1.1 parsing and serving, keep-alive, chunked and streamed bodies with a per-route limit, routing and
+middleware, server-sent events, the native WebSocket (RFC 6455, on std's SHA-1 and base64), the browser's `fetch`
+and `EventSource`, and HTTPS through `@kama/tls`. Form and multipart body codecs belong there too (percent-encoding
+waits on KR-204), and regex is a package of its own.
 
-## Tier 1 — Core ergonomics & reach (needed soon after Tier 0)
+## Native vs wasm
 
-| Feature | Kind | Status | Why | Effort |
-|---|---|---|---|---|
-| **Capturing closures** | **language** | 🟡 partial — free `fnptr` + `BindableFunctionPtr` only; no inline lambda that captures locals | Route handlers and middleware want to capture request context / config inline. Today you thread context through a handler *object* (a `type resource` whose fields hold the captures) and register `BindableFunctionPtr` methods — workable but verbose. Closures under the RAII/move model are sized but not scheduled (ROADMAP_DETAIL §1, *Capturing closures*), not a blocker. | **M–L** |
-| **DNS resolution** | library (FFI) | ❌ missing — numeric hosts only (`"127.0.0.1:8080"`) | An HTTP *client* (proxies, upstreams, webhooks) needs name resolution; a bare listener does not. Thin `getaddrinfo` FFI. | **S–M** |
-| **Concurrency / threads** | **language + runtime** | ✅ **shipped** — isolates + `channel<T>` + `scope` + `Atomic<T>` + `parallel_for`, native (OS threads) **and** wasm (Web Workers over SharedArrayBuffer), TSan/ASan-proven (ROADMAP_DETAIL §6, campaign complete). A single event-loop thread saturates one core; kama's shared-nothing isolates (1:1 to OS threads / WASM workers) are the worker/cluster equivalent, `give` moving data across a channel zero-copy. The multi-core scale-out substrate now exists — a scheduler that fans handlers across isolates is a library on top. | done (lang/runtime) |
-| **`std::io` / `std::process`** | library | 🟡 partial — `std::fs` shipped; stdout/stderr, argv, env, exit are ad-hoc C FFI in examples | Structured logging, config from env/argv, graceful exit codes. Thin kama wrappers over the C calls already used. | **S** |
-
-## Tier 2 — Framework polish (library / FFI; not language gaps)
-
-| Feature | Status | Why | Effort |
-|---|---|---|---|
-| **Body codecs**: `x-www-form-urlencoded`, `multipart/form-data` | ❌ missing (JSON ✅) | HTML form posts + file uploads. Pure kama parsers over the byte buffer. | **M** |
-| **Regex** | ❌ missing | Route patterns, validation. A byte-oriented engine in kama, or a `<regex.h>`/PCRE FFI. | **M–L** |
-| **Crypto / hashing / base64** | base64 + hex ✅ (`std::encoding`, strict, URL-safe pair for JWT); OS entropy ✅ (`std::random::entropy`); crypto ❌ (internal FNV-1a is not exposed) | Cookie signing, JWT signatures, `Sec-WebSocket-Accept` (SHA-1). A libsodium package — crypto is a declared non-goal for `std`. | **M** |
-| **Middleware / routing DSL** | ✅ ready to build — contracts + virtual dispatch | `type contract HttpHandler` + a chain/dispatcher is ordinary kama; the language support is done. | done (lang) |
-| **Connection pooling / keep-alive / streaming bodies** | ❌ missing | Throughput + backpressure. Rides on the event loop + timers above. | **M** |
-
-## Native vs WASM
-
-A Node.js replacement is a **native binary** (kama → C → clang). `TcpListener` + `Poller` are native; a browser
-cannot bind a listening socket, so the WASM path is for **clients** (WebSocket/WebTransport to your server), not
-for hosting the server. The `ReliableStream`/`DatagramSocket<SocketAddr>` contracts already let one codebase target both
-sides.
-
----
-
-## Recommended sequence
-
-1. ✅ **`std::time` shipped** (monotonic clock — concurrency M1). The **timer wheel** on top of it (a small
-   kama library) is the remaining piece for every timeout in the loop.
-2. **The async task model — now a *library*, not a language gap.** The primitives (isolates / `channel` /
-   `scope` / `parallel_for`) are shipped (ROADMAP_DETAIL §6); build the single-thread **scheduler over `Poller`**
-   (block a task on a channel, run other ready work) as a kama library. The defining feature; everything
-   ergonomic hangs off it. Single-threaded loop first, then fan across the (already-shipped) isolates.
-3. **HTTP/1.1 library** (parser + request/response + keep-alive) on top of the loop — pure kama, unblocked.
-4. **DNS** + **`std::io`/`std::process`** wrappers — fill the client + operational gaps.
-5. **TLS** (FFI) and **capturing closures** (the one remaining language ergonomic) — production-facing polish.
-6. **Multi-core scale-out** (isolates + `parallel_for` are shipped — wire the scheduler across them), then the
-   Tier-2 codecs/regex/crypto library reach.
-
-**Bottom line:** the framework is **not blocked by the type system** — contracts, JSON, sockets, byte
-handling, and now the **full concurrency substrate** (isolates + channels + `scope` + `Atomic<T>` +
-`parallel_for`, plus `std::time`) are all shipped. The Node-defining **async task/event-loop model has moved
-from a language investment to a *library* one** — a scheduler over `Poller` on the shipped primitives. The one
-remaining **language** ergonomic is **capturing closures** (Tier 1, a nice-to-have, not a blocker). Everything
-else — the HTTP/timer-wheel/scheduler layers and FFI reach — is ordinary kama that can proceed today.
+A server is a native binary. A browser cannot bind a listening socket, so wasm is the client side: WebSocket,
+WebTransport and `fetch` to the server. The `ReliableStream` and `DatagramSocket<A>` contracts let one codebase
+serve both.
