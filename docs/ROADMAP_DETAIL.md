@@ -198,6 +198,8 @@ Everything else here is library or toolchain work that does **not** gate the tag
    output today; streaming a running child's stdout as it arrives is the piece left. **And a non-blocking `File`**
    (filed 2026-10-14): `kama_set_nonblocking` exists for POSIX descriptors, but `File` has no non-blocking mode, and
    on Windows both it and the `Poller` reach sockets only, so a child's pipe cannot be read without blocking there.
+   An HTTP server meets both (reported 2026-10-18): `stat`, `open` and `read` of a file being served block its loop,
+   and on Windows an application cannot watch its own child's pipe in its server loop.
 2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN is COMPLETE** (M2a 2026-08-04; M2b
    `0.9.190`–`0.9.195` and M2c `0.9.196`–`0.9.197`, both 2026-09-05: sleep + wall clock, DNS, fs completion,
    `std::path`, stdio handles + `readLine`/`Lines`, then `std::random` and `std::encoding`). Its brief is
@@ -292,6 +294,126 @@ upgrade on std's `sha1` + base64), and TLS through `@kama/tls`. Native WebTransp
 in pieces, with the body limit set per route. A server that reads a whole body before the handler sees it caps
 every upload at one limit and holds it all in memory. A program can chunk uploads at the application level to get
 around that, but the package should not require it.
+
+### Reported by an HTTP package, 2026-10-18 (KR-200..208)
+
+Each was run on `0.9.668` on macOS and, where the OS matters, on Linux (the `localhost/kama-dev` container), or shown
+absent from std's source.
+
+<a id="s1-accept-mode"></a>
+
+#### An accepted stream's blocking mode depends on the OS (KR-200)
+
+A listener made non-blocking, a client that sends nothing for 300 ms, and one `read` on the accepted stream:
+
+| OS | the accepted stream | the `read` |
+|---|---|---|
+| macOS (BSD) | non-blocking, inherited | `WouldBlock` at 0 ms |
+| Linux | blocking | waits the full 300 ms, then `Ok(0)` |
+
+`kama_accept` (`include/kama_os.h`) is `accept4(…, SOCK_CLOEXEC)` on Linux, which does not carry `O_NONBLOCK`, and
+plain `accept` elsewhere, which on the BSDs does. Windows's `accept` gives the new socket the listener's properties
+by its documentation, and is unmeasured here. A server loop written and tested on macOS stalls on Linux at its first
+idle client. Recommended: **an accepted stream starts in its listener's mode on every OS, set explicitly**, since the
+std listener knows its own mode. A non-blocking listener means an event loop, and an event loop wants non-blocking
+streams. Until then the workaround is a `setNonBlocking(on: true)` on every accepted stream. Close means a fixture
+on each OS, and `accept()`'s comment saying what the stream's mode is.
+
+<a id="s1-poller-waker"></a>
+
+#### A `Poller` wakeup another isolate can trigger (KR-201)
+
+`Poller` has `add`, `remove`, `wait` and `readyFor`, and nothing ends a `wait` early. A `Channel` is a mutex and a
+condition variable, so a `Poller` cannot watch one. A loop that hands work to an isolate (a lookup, a file read, an
+accepted stream sent to a worker) learns it is done only at its timeout. The workaround runs: a `UnixStreamPair`, one
+end in the `Poller`, the other moved to the isolate as a `Descriptor`, a byte written to wake (50 ms observed against
+a 5000 ms timeout). It costs two descriptors and a drained byte per wake, and every program rediscovers it. Mio,
+libuv and tokio each ship a waker for this (eventfd on Linux, a pipe or kqueue's `EVFILT_USER` elsewhere).
+Recommended: a `Sendable` waker made by and registered with a `Poller`. It would be an eventfd on Linux and a pipe on
+macOS (the `Poller` is `poll(2)` there). On Windows, whose `Poller` is `select()` over sockets, it would be the
+loopback stream pair that `UnixStreamPair`'s twin already uses.
+
+<a id="s1-async-dns"></a>
+
+#### A DNS lookup a loop can poll, with a deadline (KR-202)
+
+`resolve` is `getaddrinfo`, and its own comment says it "BLOCKS, possibly for seconds, and cannot be given a
+timeout … Resolve on another isolate". A client inside a server's loop needs a lookup it polls like any socket.
+libuv and tokio run `getaddrinfo` on a worker thread; Go has its own resolver; Rust's std blocks. Recommended: the
+worker form, completing through KR-201's waker, with a deadline after which the caller stops waiting (the worker
+finishes and its answer is dropped). No DNS exists in a browser, so the request is native-only.
+
+<a id="s1-constant-time"></a>
+
+#### Constant-time equality in `std::digest` (KR-203)
+
+`lib/std/digest/digest.kama` warns: "`==` leaks, through timing, how many leading bytes matched; a verifier compares
+every byte before deciding". std has no such verifier. Go has `crypto/subtle.ConstantTimeCompare`, Python
+`hmac.compare_digest` and Node `crypto.timingSafeEqual`, all in their std; Rust has the `subtle` crate. HTTP compares
+secrets constantly: credentials, bearer tokens, signed cookies, webhook signatures. Recommended: an equality over two
+`ConstView<uint8>` in `std::digest`, which the warning then names. Unequal lengths answer false at once, since a
+length is not the secret. The loop accumulates differences behind an optimization barrier the C compiler cannot turn
+into an early exit, and a hand-written loop has no such guarantee.
+
+<a id="s1-url"></a>
+
+#### Percent-encoding and a URL type (KR-204)
+
+std has no URL or URI type and no percent-encoding (`lib/` and `include/` searched; only base64's URL-safe alphabet
+mentions a URL). A URL is not HTTP's alone: std's `WsConnection.connect(url)` and
+`WtConnection.connect(url)` take one as a bare string, and connection strings and `file:` URLs are URLs too. Go
+(`net/url`), Python (`urllib.parse`), Zig (`std.Uri`) and C# (`System.Uri`) keep it in std; Rust uses the `url`
+crate. **Verdict owed. Recommended: std**, with `std::encoding` gaining percent-encoding (per-component sets) and a URL
+type beside the transports that take one. The other question to rule is which grammar: RFC 3986, which servers
+parse, or the WHATWG URL Standard, which browsers parse.
+
+<a id="s1-listen-options"></a>
+
+#### Listener options: the backlog, and reuse-port where the OS balances it (KR-206)
+
+A second `TcpListener.bind` on a bound port is `AddrInUse` on macOS and Linux. `SO_REUSEADDR` is always set and
+cannot be configured (`lib/std/net/net.kama:327`), and the backlog is fixed at 128 (`:333`). Several isolates cannot
+each accept on one port; the workaround is one accepting isolate handing each `TcpStream` to a worker over a
+`Channel`, a hop per connection. Reuse-port differs by OS:
+- Linux's `SO_REUSEPORT` balances connections across the sockets.
+- FreeBSD's balanced form is `SO_REUSEPORT_LB`.
+- macOS takes the option without balancing (to be measured).
+- Windows has no equivalent.
+
+Per the platform rule, a platform's delta lives in its own type: the backlog everywhere, and reuse-port where the OS
+balances. The spelling is to be decided.
+
+<a id="s1-sendfile"></a>
+
+#### `sendfile` (KR-207)
+
+std has no `sendfile`, `splice`, `copy_file_range` or `TransmitFile`. A file response copies through user space, a
+`readAt` and a write per chunk. Linux and macOS both have `sendfile(2)` with different signatures, and Windows has
+`TransmitFile`. Rust's std reaches `sendfile`/`splice` only inside `io::copy`; kama has no generic copy to hide it
+in, so this is a stream method, file to socket. Scheduled rather than optional: it is the standard way a server
+serves a file, and the package's benchmarks say how much it is worth.
+
+<a id="s1-memory-stream"></a>
+
+#### An in-memory connected `ReliableStream` pair (KR-208)
+
+std has `StringWriter` and `SliceReader`, one direction each, and no connected pair implementing `ReliableStream`.
+Each protocol package writes its own for tests with the same behaviour: non-blocking, `WouldBlock` when empty, 0 after
+the far end shuts. Go ships `net.Pipe`. Recommended: a pair in std with exactly that behaviour. The hooks a test uses
+to stall writes stay in the test, as a wrapper over it.
+
+<a id="s1-fuzz"></a>
+
+#### Coverage-guided fuzzing (KR-205)
+
+`kama --help` has no fuzz command, and no doc mentions libFuzzer. A parser that reads bytes from strangers wants a
+coverage-guided target. Without one, a package runs a seeded mutation loop under an ASan build, which finds only what
+random bytes find. **Design first.** The questions:
+- the entry: a `fn` over a `ConstView<uint8>`, with a marker or a manifest key;
+- whether `kama fuzz` drives it or a documented harness does;
+- toolchain reach: clang's `-fsanitize=fuzzer` needs a clang with the libFuzzer runtime. Linux's and Homebrew's
+  LLVM have one, and Apple's clang does not;
+- how a corpus and crashes are kept in a project.
 
 <a id="s2"></a>
 

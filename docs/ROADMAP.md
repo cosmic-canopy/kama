@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-200**
+**Next id: KR-209**
 
 ## The shape
 
@@ -72,6 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-200 | **An accepted `TcpStream`'s blocking mode depends on the OS** — from a non-blocking listener, macOS hands back a non-blocking stream and Linux a blocking one (`accept4` does not carry `O_NONBLOCK`), so a loop written on macOS stalls on Linux at the first idle client. Nothing in kama sets the mode | S | [§1](ROADMAP_DETAIL.md#s1-accept-mode) |
 | KR-199 | **A `comptime` `sizeof`/`alignof` of a generic instance nothing else names fails in clang** — `comptime usize A = sizeof(Pair<int64>);` (or `InlineArray<uint8>#(16)`, `Optional<int64>`) passes `kama check`, and the layout check `0.9.660` added names a C type that is never emitted ("use of undeclared identifier"). The same `sizeof` in a function body builds. In every release since `0.9.660` | S | [§2](ROADMAP_DETAIL.md#s2-sizeof-unemitted) |
 | KR-193 | **`==` on `Optional<char>` is refused, though `char` is `Equatable`** — an instance the PRELUDE names in a signature (`Optional<char>`, its iterator's `next()`) has its derives judged before the primitives' conformances are filed, so its `@generate(Equatable)` is dropped. The same instance first named in a program's own signature is judged later and keeps it | S? | [§2](ROADMAP_DETAIL.md#s2-prelude-instance-derives) |
 | KR-194 | **A use-after-move is reported in code no path reaches** — `while (true) { …; if (c) { continue; } return give xs; } return give xs;` is refused at the trailing `return`, after a loop with no `break`. Without the `continue`, or without the trailing `return`, it builds | S | [§2](ROADMAP_DETAIL.md#s2-unreachable-move) |
@@ -81,6 +82,14 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-198 | **Two holes in the diagnostic channel** — in a multi-module `kama build`, a refusal raised while the shared header is emitted prints no file at all (``:10:4: error: an `InlineArray<T>#(N)` element must be a `value`…``; `kama check` names it); and `unsupported(what, node)` on a synthesized node calls itself with the same arguments, so the compiler would recurse until its stack overflows | S | [§10](ROADMAP_DETAIL.md#s10-diag-no-file) |
 | KR-101 | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-3 | **Job system / event-loop scheduler** — libraries on the shipped concurrency primitives; the pool is sized, **scheduling** is what is missing | ? | [§6](ROADMAP_DETAIL.md#s6) |
+| KR-201 | **A `Poller` wakeup another isolate can trigger** — a `Sendable` waker whose `wake()` ends a `wait` elsewhere (eventfd, a pipe, a loopback pair on Windows). Today a loop learns that handed-off work is done only at its timeout | S–M | [§1](ROADMAP_DETAIL.md#s1-poller-waker) |
+| KR-202 | **A DNS lookup a loop can poll, with a deadline** — `resolve` is `getaddrinfo`, which blocks for seconds and takes no timeout. On KR-201 | M | [§1](ROADMAP_DETAIL.md#s1-async-dns) |
+| KR-203 | **Constant-time equality in `std::digest`** — std warns that comparing a tag with `==` leaks through timing, and offers nothing else | S | [§1](ROADMAP_DETAIL.md#s1-constant-time) |
+| KR-204 | **Percent-encoding and a URL type** — std has neither, while its own WebSocket and WebTransport connect take a URL as a bare string. **Wants a verdict: std (recommended) or a package** | M | [§1](ROADMAP_DETAIL.md#s1-url) |
+| KR-206 | **Listener options: the backlog, and reuse-port where the OS balances it** — the backlog is fixed at 128 and `SO_REUSEPORT` cannot be set, so several isolates cannot accept on one port | S–M | [§1](ROADMAP_DETAIL.md#s1-listen-options) |
+| KR-207 | **`sendfile`** — a file response copies through user space; Linux and macOS have `sendfile`, Windows `TransmitFile` | S–M | [§1](ROADMAP_DETAIL.md#s1-sendfile) |
+| KR-208 | **An in-memory connected `ReliableStream` pair** — every package that speaks a protocol writes its own test pipe (Go's `net.Pipe`) | S | [§1](ROADMAP_DETAIL.md#s1-memory-stream) |
+| KR-205 | **Coverage-guided fuzzing** — no `kama fuzz` and no documented libFuzzer harness, though every parser that reads a stranger's bytes wants one. Design first | M? | [§1](ROADMAP_DETAIL.md#s1-fuzz) |
 | KR-5 | **`std::io` transform adapters** — compression et al., composing with serde and net. The compiler already writes deflate/gzip and tar, in C++, for `kama publish` (`src/kama.archive.cpp`, `0.9.452`); the stdlib half — kama code a program can call — **wants a maintainer verdict: stdlib or package** | — | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-7 | **`std::process`** — live/streaming child-stream reads, and a non-blocking `File` (a child's pipe read without blocking) | — | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-19 | **MCU toolchain packaging** — board presets, vendor-HAL glue, a real-hardware flash pass; AVR later | — | [§5](ROADMAP_DETAIL.md#s5) |
