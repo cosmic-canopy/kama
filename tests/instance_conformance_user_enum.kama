@@ -1,0 +1,70 @@
+// The same defect as tests/instance_conformance_import, against a fact a USER type files: its own `implements`,
+// resolved after the contracts are linked. `Optional<Sh>`, minted through `Iterator<Sh>`, had no `==` though `Sh`
+// implements `Equatable`; `Optional<Shape>`, through `Iterator<Shape>`, was not `Sendable` though `Shape` is; and
+// `Map<Key, int32>`, through a contract member, reported that `Key` does not satisfy `Hashable`. Returns 42.
+import { std::collections::Map };
+
+type enum Sh implements Equatable<This> {
+    Circle, Square;
+    public const fn bool equals(const ref Sh other) {
+        return match (this) {
+            case Circle: match (other) { case Circle: true; case Square: false; };
+            case Square: match (other) { case Circle: false; case Square: true; };
+        };
+    }
+}
+
+type value Shapes implements Iterator<Sh> {
+    bool done;
+    public ctor start() { this.done = false; }
+    public fn Optional<Sh> next() {
+        if (this.done) { return Optional::None; }
+        this.done = true;
+        return Optional::Some(value: Sh::Square);
+    }
+}
+
+type enum Shape implements Sendable { Dot(int32 x), Line(int32 a, int32 b) }
+
+type value Outlines implements Iterator<Shape> {
+    bool done;
+    public ctor start() { this.done = false; }
+    public fn Optional<Shape> next() {
+        if (this.done) { return Optional::None; }
+        this.done = true;
+        return Optional::Some(value: Shape::Dot(x: 5));
+    }
+}
+
+type enum Batch implements Sendable { One(Optional<Shape> s), Empty }
+
+type enum Key implements Hashable, Equatable<This> {
+    A, B;
+    public const fn uint64 hash() { return match (this) { case A: 0ui64; case B: 1ui64; }; }
+    public const fn bool equals(const ref Key other) { return this.hash() == other.hash(); }
+}
+
+type contract Tally<T> for resource { fn Map<T, int32> counts(); }
+
+type resource Keys implements Tally<Key> {
+    int32 unused;
+    public ctor make() { this.unused = 0; }
+    public fn Map<Key, int32> counts() { Map<Key, int32> m = Map.empty(); m.put(key: Key::B, value: 2); return m; }
+}
+
+fn int32 main() {
+    Shapes s = Shapes.start();
+    Optional<Sh> got = s.next();
+    Optional<Sh> square = Optional::Some(value: Sh::Square);
+    Optional<Sh> circle = Optional::Some(value: Sh::Circle);
+    if (!(got == square) || got == circle) { return 1; }
+    Outlines o = Outlines.start();
+    Batch b = Batch::One(s: o.next());
+    bool dot = match (b) { case One(s: x): match (x) { case Some(value: v): match (v) { case Dot(x: n): n == 5; case _: false; }; case None: false; }; case _: false; };
+    if (!dot) { return 2; }
+    Keys k = Keys.make();
+    Map<Key, int32> m = k.counts();
+    int32 two = match (m.get(key: Key::B)) { case Some(value: v): v; case None: 0; };
+    if (two != 2) { return 3; }
+    return 42;
+}

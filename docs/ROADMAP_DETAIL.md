@@ -457,22 +457,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-prelude-instance-derives"></a>
-
-### `==` on `Optional<char>` is refused, though `char` is `Equatable` (KR-193)
-
-Measured 2026-10-18 on `0.9.667`, after `bool` and `char` joined the prelude's `Equatable` adapter list (they had
-been missing for no recorded reason). `Optional<bool> == Optional<bool>` now builds, and `char` meets a
-`<T: Equatable<T>>` bound. `Optional<char> == Optional<char>` is still refused: *"`Some`'s field `value` (`char`)
-does not implement `Equatable`"*. The difference is where the instance is first named. `prelude/global.kama`
-declares an iterator's `fn Optional<char> next()`, so `Optional<char>` is registered while signatures are
-collected, and `registerDerives` judges its fields then, before the adapter conformances are filed
-(`_intrinsicConformances`, filled in the pass after signature collection). The derive is dropped for good. A
-program's own `fn Optional<bool> pick()` registers later and keeps it (measured: it builds and compares).
-Close means a derive is judged against the full conformance table, wherever the instance was first named,
-with `Optional<char>` added to `tests/equatable_bool_char.kama`. Unprobed: which other prelude-named instances
-lose a derive the same way.
-
 <a id="s2-unreachable-move"></a>
 
 ### A use-after-move is reported in code no path reaches (KR-194)

@@ -1,7 +1,8 @@
 // `bool` and `char` are `Equatable`, as every number is. They were missing from the prelude's list, so `==` on two
 // `Optional<bool>`, `DynamicArray<bool>.contains` and a `<T: Equatable<T>>` bound met by `bool` or `char` were all
-// refused, naming a field or type that "does not implement `Equatable`" (up to 0.9.666). (`==` on `Optional<char>`
-// is still refused, for a different reason: KR-193.)
+// refused, naming a field or type that "does not implement `Equatable`" (up to 0.9.666). `==` on `Optional<char>`
+// stayed refused for another reason: the prelude's `Chars` iterator names `Optional<char>` through `Iterator<char>`,
+// which built the instance before the adapter table said `char` is `Equatable` (up to 0.9.668).
 import { std::collections::DynamicArray };
 
 fn bool same<T: Equatable<T>>(const ref T a, const ref T b) { return a.equals(other: b); }
@@ -15,5 +16,9 @@ fn int32 main() {
     flags.add(item: false);
     if (!flags.contains(item: false) || flags.contains(item: true)) { return 2; }
     if (!same(a: true, b: true) || same(a: 'a', b: 'b') || !same(a: 'z', b: 'z')) { return 3; }
+    Optional<char> x = Optional::Some(value: 'x');
+    Optional<char> y = Optional::Some(value: 'x');
+    Optional<char> z = Optional::Some(value: 'z');
+    if (!(x == y) || x == z) { return 4; }
     return 42;
 }

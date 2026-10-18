@@ -2483,9 +2483,6 @@ private:
                                  const std::string& what, int line);
     bool methodTrackCaller(ClassMethodDeclarationNode* md, const std::string& cName);   // KR-179, every member kind
     MethodInfo enumMethodInfo(ClassMethodDeclarationNode* md, const std::string& tkey, const std::string& contract);
-    // Generic enums (KR-44): a template's members + `implements` are filled in collectEnumConformances; an
-    // instance cut before that is refreshed, one cut after takes them at registration.
-    std::set<std::string> _filledEnumTemplates;
     std::vector<std::string> instanceInterfaces(const ClassInfo& ci, const std::string& mangled,
                                                 const std::vector<std::string>& params,
                                                 const std::vector<SharedIdentifier>& concrete);
@@ -2506,6 +2503,18 @@ private:
     struct InstSite { std::string file; int line = 0; std::string label; };
     std::map<std::string, InstSite> _instSites;   // instance mangled name -> the user site that instantiated it
     InstSite _attrSite;                           // active while a foreign template's instance is emitted
+    // A generic type instance is judged ONCE, when it is built: its conditional members and conformances, its
+    // derives and its bound checks. So none is built before every fact those read is filed — the adapter table,
+    // class `implements` (linkBases) and enum `implements` plus the generic-enum templates
+    // (collectEnumConformances). collectProgram closes the gate at entry; a request made while it is closed is
+    // queued with the caller's context and replayed, in order, by openInstances.
+    struct PendingTypeInst {
+        std::string tmpl; SharedIdentifierList args; NsCtx ctx; std::string unitPath, thisType; InstSite attrSite;
+        std::map<std::string, SharedIdentifier> subst; std::map<std::string, ConstBinding> comptime;
+    };
+    bool _instancesOpen = true;
+    std::vector<PendingTypeInst> _pendingTypeInsts;
+    void openInstances();
     void recordInstSite(const std::string& mangled, const std::string& templateKey,
                         const std::vector<SharedIdentifier>& args, int line);
     void attributeToInstSite(std::string& file, int& line, std::string& message) const;
@@ -2520,7 +2529,6 @@ private:
     };
     void checkWhenParams(const SharedIdentifierList& whenParams, const SharedStringList& typeParams,
                          const std::string& owner, int line);
-    void instantiateEnumMembers(const GenericTypeInst& gi);
     // The impl must supply every method the contract requires.
     void checkImplCompleteness(ClassInfo& tci, const std::string& contract,
                                const std::string& tkey, int line);

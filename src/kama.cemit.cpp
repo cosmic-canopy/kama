@@ -14582,6 +14582,12 @@ bool CEmitter::genericInstBinding(const std::string& tmpl, SharedIdentifierList 
 
 void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifierList args)
 {
+    // Asked for before the conformance facts are filed: queue it, exactly as asked (see `_instancesOpen`).
+    if (!_instancesOpen) {
+        _pendingTypeInsts.push_back({ tmpl_, args, _nsCtx, _collectingUnitPath, _thisType, _attrSite,
+                                      _typeSubst, _comptimeSubst });
+        return;
+    }
     const std::string tmpl = preludeKey(tmpl_);   // a compiler-written leaf names a prelude generic
     // Empty args is valid ONLY for a bare all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`);
     // otherwise there is nothing to instantiate. Below, `args` may be null/empty (defaults fill every slot).
@@ -14917,12 +14923,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         }
     }
     // Resolve the `implements` list under THIS instance's subst (linkBases skips generic instances).
-    if (ci.baseTypesDecl() && ci.baseTypesDecl()->interfaces && (!ci.enumNode || _filledEnumTemplates.count(tmpl))) {
+    if (ci.baseTypesDecl() && ci.baseTypesDecl()->interfaces) {
         ci.interfaces = instanceInterfaces(ci, mangled, params, concrete);
         closeUnderRefinement(ci.interfaces);   // and what each refines (KR-133)
     }
     _classes[mangled] = ci;
-    if (ci.enumNode && _filledEnumTemplates.count(tmpl)) checkEnumInstanceConformances(_classes[mangled], tmpl);
+    if (ci.enumNode) checkEnumInstanceConformances(_classes[mangled], tmpl);
     applyTemplateAdapters(mangled);     // a `type adapter` over this generic — under its own module's context
 
     // Transitive close: register any collection / generic type the substituted members use.
@@ -15000,6 +15006,32 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     _typeSubst = savedSubst;
     _comptimeSubst = savedComptime;
     _nsCtx = savedCtx;
+}
+
+// Build every instance asked for while the gate was closed, in the order asked, each under the context it was
+// asked in. A build may ask for more (its member types); with the gate open those are built at once.
+void CEmitter::openInstances()
+{
+    _instancesOpen = true;
+    std::vector<PendingTypeInst> pending;
+    pending.swap(_pendingTypeInsts);
+    const NsCtx savedCtx = _nsCtx;
+    const std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    const std::map<std::string, ConstBinding> savedComptime = _comptimeSubst;
+    for (auto& p : pending) {
+        _nsCtx = p.ctx;
+        _typeSubst = p.subst;
+        _comptimeSubst = p.comptime;
+        ScopedStr _cu(_collectingUnitPath, p.unitPath);
+        ScopedStr _ts(_thisType, p.thisType);
+        const InstSite savedAttr = _attrSite;
+        _attrSite = p.attrSite;
+        registerGenericTypeInst(p.tmpl, p.args);
+        _attrSite = savedAttr;
+    }
+    _nsCtx = savedCtx;
+    _typeSubst = savedSubst;
+    _comptimeSubst = savedComptime;
 }
 
 // A `when [P: B]` gate conditions a member or a conformance on one of the declaring type's OWN parameters. A
@@ -15171,50 +15203,6 @@ void CEmitter::checkEnumInstanceConformances(ClassInfo& inst, const std::string&
         _polyDispatchContracts.insert(c);   // dynamic dispatch through a fat pointer + boxing into `Owned<C>`
         checkImplCompleteness(inst, c, bare, inst.declLine());
     }
-}
-
-// Bring an instance cut BEFORE its generic enum's template was filled (collectEnumConformances) up to date:
-// a prelude derive or a signature scan registers `Result<…>`/`Optional<…>` instances long before contracts
-// exist. The template's methods and `implements` list are applied exactly as registerGenericTypeInst would
-// have applied them, and ADDED to what the instance already holds — its derived members stay.
-void CEmitter::instantiateEnumMembers(const GenericTypeInst& gi)
-{
-    auto ci = _classes.find(gi.mangledName);
-    auto ti = _genericTypes.find(gi.templateKey);
-    if (ci == _classes.end() || ti == _genericTypes.end()) return;
-    const std::vector<std::string>& params = _genericTypeParams[gi.templateKey];
-    NsCtx savedCtx = _nsCtx;
-    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
-    _nsCtx = _genericTypeCtx[gi.templateKey];
-    _typeSubst.clear();
-    for (size_t i = 0; i < params.size() && i < gi.typeArgs.size(); ++i) _typeSubst[params[i]] = gi.typeArgs[i];
-    ClassInfo& inst = ci->second;
-    {
-        ScopedStr _ts(_thisType, gi.mangledName);
-        for (auto& kv : ti->second.methods) {
-            if (inst.methods.count(kv.first)) continue;
-            const MethodInfo& tm = kv.second;
-            if (!tm.whenParams.empty()
-                && !whenConditionsHold(tm.whenParams, tm.whenBounds, tm.whenBoundNodes, params, gi.typeArgs))
-                continue;
-            MethodInfo mi = tm;
-            mi.cName  = gi.mangledName + "__" + kv.first;
-            mi.params = paramSigsOf(tm.node->params);
-            inst.methods[kv.first] = mi;
-        }
-    }
-    if (inst.baseTypesDecl() && inst.baseTypesDecl()->interfaces)
-        for (auto& c : instanceInterfaces(inst, gi.mangledName, params, gi.typeArgs))
-            if (std::find(inst.interfaces.begin(), inst.interfaces.end(), c) == inst.interfaces.end())
-                inst.interfaces.push_back(c);
-    closeUnderRefinement(inst.interfaces);
-    for (auto& kv : inst.methods) {
-        scanTypeForCollections(kv.second.returnType);
-        if (kv.second.node) for (auto& p : *kv.second.node->params) if (p) scanTypeForCollections(p->type);
-    }
-    _typeSubst = savedSubst;
-    _nsCtx = savedCtx;
-    checkEnumInstanceConformances(_classes[gi.mangledName], gi.templateKey);
 }
 
 // A contract's method-prototype list — from _interfaces (a concrete contract or a specialized
@@ -23453,7 +23441,7 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                 // against that instance's arguments, exactly as a generic class's are. `@generate` never
                 // needs this path (collectEnums applies it per instance). The template is filled HERE and
                 // not in collectEnums because a `when` bound names a contract, and contracts are collected
-                // after enums; an instance cut before now is refreshed below.
+                // after enums. No instance exists yet: none is built until collectProgram opens the gate.
                 auto tt = _genericTypes.find(name);
                 if (tt == _genericTypes.end()) continue;   // errored earlier — already diagnosed
                 ClassInfo& tmpl = tt->second;
@@ -23469,13 +23457,6 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
                         }
                         tmpl.methods[mname] = enumMethodInfo(md, name, /*contract=*/"");
                     }
-                // From here on a new instance takes its `implements` list at registration; the ones cut
-                // earlier are refreshed. Copied first: a refresh scans member types, which can register more.
-                _filledEnumTemplates.insert(name);
-                std::vector<GenericTypeInst> earlier;
-                for (auto& kv : _genericTypeInsts)
-                    if (kv.second.templateKey == name) earlier.push_back(kv.second);
-                for (auto& gi : earlier) instantiateEnumMembers(gi);
                 continue;
             }
 
@@ -23483,8 +23464,12 @@ void CEmitter::collectEnumConformances(const std::vector<SharedCompilationUnit>&
             // `This` bound so a PINNED contract mangles to this enum (`Comparable<This>` -> `Comparable_Color`).
             std::vector<std::string> ifaces;
             if (hasIfaces) for (auto& i : *ifaceNodes) if (i && i->value) ifaces.push_back(*i->value);
+            // ...and mint each generic-contract instance it names, as linkBases does for a class: a bound
+            // (`Map`'s `K: Equatable<K>`) matches a conformance through the instance's template, and a generic
+            // type instance built before this enum's first use would otherwise judge it without one.
             { ScopedStr _ts(_thisType, name); ScopedThis _tt(_typeSubst, synthId(name));
-              resolveInterfaceNames(ifaces, ifaceNodes); }
+              resolveInterfaceNames(ifaces, ifaceNodes);
+              if (hasIfaces) for (auto& i : *ifaceNodes) scanTypeForGenericContracts(i); }
 
             // A payload-less enum gets its member ClassInfo here; a tagged one already has its `_classes` entry.
             auto ci = _classes.find(name);
@@ -41642,6 +41627,7 @@ static unsigned implementerKind(const ClassInfo& ci)
 
 void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnits)
 {
+    _instancesOpen = false;   // until every conformance fact is filed (openInstances, below)
     // the prelude (Optional/Result) is collected FIRST, in the global namespace (empty scope),
     // so its generic templates register under bare names resolvable unqualified from every file.
     std::vector<SharedCompilationUnit> units;
@@ -41910,19 +41896,14 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         collectInterfaces(u);
         collectClasses(u);
     }
-    linkBases();
-    linkContracts();    // merge refined-parent methods into each contract before vtables are built
-    // `type enum E implements C` — after linkContracts (completeness needs the merged contract methods),
-    // before buildVtables, so an enum's conformance is in place when vtables are built.
-    collectEnumConformances(units);
-    checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
-    buildVtables();
-    _layoutsReady = true;   // every class has its fields, base and vptr: a layout fold may answer (foldLayout)
-    resolveFriends();   // after all classes/functions are registered
-    // Pre-scan `type adapter` blocks into _intrinsicConformances (target primKey -> contracts) BEFORE
-    // collectCollections. A `Map<string, V>` local drives a generic-type-arg bound check DURING collection,
-    // which is earlier than the methods are injected; without this the check would falsely reject
-    // `string: Hashable`. The real methods + coherence are still handled below.
+    // Pre-scan `type adapter` blocks into _intrinsicConformances (target primKey -> contracts) BEFORE the first
+    // generic type instance is built (openInstances, below): an instance judges its conditional conformances,
+    // members and derives, and its bound checks, once, against this table. Filled after collectEnumConformances,
+    // as it used to be, it was empty for every instance an earlier pass asked for — a contract's method
+    // signature (`Iterator<char>`'s `Optional<char> next()`) or a concrete enum's (std json's `asInt64`) — so
+    // `Optional<int64>` was not `Sendable` and `Optional<char>` had no `==` in any program that named one that
+    // way. Needs only what the per-unit loop above filed: the contracts (pinned parameters, refinements) and the
+    // declared type names. The real methods + coherence are still handled after collectCollections.
     //
     // The contract is stored RESOLVED, under the declaring file's namespace — a bare name would conflate
     // two same-named contracts in different namespaces, so a bound on one would be satisfied by a
@@ -41962,6 +41943,16 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             }
         }
     }
+    linkBases();
+    linkContracts();    // merge refined-parent methods into each contract before vtables are built
+    // `type enum E implements C` — after linkContracts (completeness needs the merged contract methods),
+    // before buildVtables, so an enum's conformance is in place when vtables are built.
+    collectEnumConformances(units);
+    openInstances();   // every class, enum and adapter conformance is filed: build what the passes above asked for
+    checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
+    buildVtables();
+    _layoutsReady = true;   // every class has its fields, base and vptr: a layout fold may answer (foldLayout)
+    resolveFriends();   // after all classes/functions are registered
     // ...and the byte views (KR-127), for the same reason: `Holder<T: BytesViewable<ConstView<uint8>>>` is judged
     // during collectCollections, while `bytes()` — a derived type's, and `string`'s own — is registered only by
     // registerIntrinsicViews, once `ConstView` is known. Unverified here; a type the sweep refuses has them erased.

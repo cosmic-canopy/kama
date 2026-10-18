@@ -1,0 +1,66 @@
+// The same defect as tests/instance_conformance_import, with no import at all: a type implementing `Iterator<int64>`
+// names `Optional<int64>` through the contract's `next()`, and a contract member naming `DynamicArray<T>` or
+// `Map<T, int32>` names those for each `implements`. Each instance was minted while the contracts were linked, before
+// the adapter table was filed, so `Optional<int64>` had no `==` and was not `Sendable`, `DynamicArray<int64>` lost
+// `contains` (it is `when [T: Equatable]`) and was not `Sendable`, and `Map<int64, int32>` reported that `int64` does
+// not satisfy `Hashable` — a false error against `Map`'s own bound. Returns 42.
+import { std::collections::DynamicArray, std::collections::Map };
+
+type value Counter implements Iterator<int64> {
+    int64 n;
+    public ctor start() { this.n = 0i64; }
+    public fn Optional<int64> next() {
+        if (this.n >= 3i64) { return Optional::None; }
+        this.n = this.n + 1i64;
+        return Optional::Some(value: this.n);
+    }
+}
+
+type value Flip implements Iterator<bool> {
+    bool done;
+    public ctor start() { this.done = false; }
+    public fn Optional<bool> next() {
+        if (this.done) { return Optional::None; }
+        this.done = true;
+        return Optional::Some(value: true);
+    }
+}
+
+type contract Source<T> for resource { fn DynamicArray<T> items(); fn Map<T, int32> counts(); }
+
+type resource Ints implements Source<int64> {
+    int32 unused;
+    public ctor make() { this.unused = 0; }
+    public fn DynamicArray<int64> items() { DynamicArray<int64> d = DynamicArray.empty(); d.add(item: 7i64); return d; }
+    public fn Map<int64, int32> counts() { Map<int64, int32> m = Map.empty(); m.put(key: 7i64, value: 1); return m; }
+}
+
+type enum Chunk implements Sendable { Data(int32 n), Done(Optional<int64> rows) }
+
+type resource Batch implements Sendable {
+    DynamicArray<int64> xs;
+    public ctor of(DynamicArray<int64> xs) { this.xs = give xs; }
+    public const fn bool has(int64 x) { return this.xs.contains(item: x); }
+}
+
+fn int32 main() {
+    Counter it = Counter.start();
+    Optional<int64> first = it.next();
+    Optional<int64> one = Optional::Some(value: 1i64);
+    if (!(first == one)) { return 1; }
+    Chunk c = Chunk::Done(rows: give first);
+    bool sent = match (c) { case Done(rows: r): r == one; case _: false; };
+    if (!sent) { return 2; }
+    Flip f = Flip.start();
+    Optional<bool> t = f.next();
+    Optional<bool> yes = Optional::Some(value: true);
+    if (!(t == yes)) { return 3; }
+    Ints s = Ints.make();
+    DynamicArray<int64> d = s.items();
+    if (!d.contains(item: 7i64)) { return 4; }
+    Map<int64, int32> m = s.counts();
+    if (!m.contains(key: 7i64)) { return 5; }
+    Batch b = Batch.of(xs: give d);
+    if (!b.has(x: 7i64) || b.has(x: 8i64)) { return 6; }
+    return 42;
+}

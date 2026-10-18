@@ -1,0 +1,37 @@
+// A generic type instance is judged once, when it is built — its conditional conformances and members, its derives
+// and its bound checks — and an instance an earlier pass asked for used to be built before the `type adapter` table
+// said that `int64` is `Sendable` and `Equatable`. Importing std's JSON was enough to trigger it: `JsonValue`'s
+// `asInt64()` names `Optional<int64>` in a concrete enum's method, so in any program with that import
+// `Optional<int64>`, `Optional<uint64>` and `Optional<float64>` were not `Sendable` and had no `==`, and a type
+// holding one could not declare `implements Sendable` (0.9.667, 0.9.668). Each declaration below compiles only when
+// the verdict is right; each check returns its own code. Returns 42.
+import { std::serialization::text::json::JsonNumber };
+
+type enum Chunk implements Sendable { Data(int32 n), Done(Optional<int64> rows) }
+
+type resource Holder implements Sendable {
+    Optional<int64> rows;
+    Optional<uint64> big;
+    Optional<float64> ratio;
+    public ctor of(int64 rows) {
+        this.rows = Optional::Some(value: rows);
+        this.big = Optional::Some(value: 7ui64);
+        this.ratio = Optional::None;
+    }
+    public const fn bool sameRows(const ref Optional<int64> other) { return this.rows == other; }
+    public const fn bool sameBig(const ref Optional<uint64> other) { return this.big == other; }
+}
+
+fn int32 main() {
+    Chunk c = Chunk::Done(rows: Optional::Some(value: 3i64));
+    Optional<int64> three = Optional::Some(value: 3i64);
+    bool done = match (c) { case Done(rows: r): r == three; case _: false; };
+    if (!done) { return 1; }
+    Holder h = Holder.of(rows: 3i64);
+    if (!h.sameRows(other: three)) { return 2; }
+    Optional<uint64> seven = Optional::Some(value: 7ui64);
+    if (!h.sameBig(other: seven)) { return 3; }
+    Optional<int64> none = Optional::None;
+    if (h.sameRows(other: none)) { return 4; }
+    return 42;
+}
