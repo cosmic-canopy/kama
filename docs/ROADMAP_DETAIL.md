@@ -392,6 +392,27 @@ is the same. `FixedArray<Op>`, `Box<Op>` (any user generic) and `BindableFunctio
 the same way. Close means a generic type instantiates over an `fnptr` element, including the default rule's answer
 for it (none — an `fnptr` is non-null, 0.9.480), with a fixture holding a registry of callbacks.
 
+<a id="s2-sizeof-unemitted"></a>
+
+### A `comptime` `sizeof`/`alignof` of a generic instance nothing else names fails in clang (KR-199)
+
+Found 2026-10-18 on `0.9.667`, measuring layouts for the KR-190 design brief.
+
+```kama
+comptime usize A = sizeof(InlineArray<uint8>#(16));
+fn int32 main() { return cast<int32>(A); }
+```
+
+`kama check` answers OK. `kama build` fails in clang: `use of undeclared identifier 'InlineArray_uint8_16'`, at the
+`_Static_assert` that `noteBakedLayout` (`kama.cemit.cpp`) writes for every folded layout (shipped `0.9.660`, SPEC *Writing a collection in kama*). The
+same happens for a user generic (`sizeof(Pair<int64>)`, `k_F…__Pair_int64`), for `Optional<int64>`, and for
+`alignof`. The fold is right: 16. What is missing is the type's C definition. `noteBakedLayout` names `cType(t)`,
+which gives the instance's C name without registering the instance, and a `comptime` initializer is folded before
+anything else asks for it. The same `sizeof` in a function body builds (16), and so does the constant once the
+program uses the type anywhere else, which is why every fixture passed. Close means a fold registers the instance
+it names, as a use in a body does, with fixtures for an intrinsic, a user generic and `Optional` named only in a
+`comptime` initializer.
+
 <a id="s2-exit-status"></a>
 
 ### `main`'s status past what the platform's exit status carries (KR-192)

@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-199**
+**Next id: KR-200**
 
 ## The shape
 
@@ -72,6 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-199 | **A `comptime` `sizeof`/`alignof` of a generic instance nothing else names fails in clang** — `comptime usize A = sizeof(Pair<int64>);` (or `InlineArray<uint8>#(16)`, `Optional<int64>`) passes `kama check`, and the layout check `0.9.660` added names a C type that is never emitted ("use of undeclared identifier"). The same `sizeof` in a function body builds. In every release since `0.9.660` | S | [§2](ROADMAP_DETAIL.md#s2-sizeof-unemitted) |
 | KR-193 | **`==` on `Optional<char>` is refused, though `char` is `Equatable`** — an instance the PRELUDE names in a signature (`Optional<char>`, its iterator's `next()`) has its derives judged before the primitives' conformances are filed, so its `@generate(Equatable)` is dropped. The same instance first named in a program's own signature is judged later and keeps it | S? | [§2](ROADMAP_DETAIL.md#s2-prelude-instance-derives) |
 | KR-194 | **A use-after-move is reported in code no path reaches** — `while (true) { …; if (c) { continue; } return give xs; } return give xs;` is refused at the trailing `return`, after a loop with no `break`. Without the `continue`, or without the trailing `return`, it builds | S | [§2](ROADMAP_DETAIL.md#s2-unreachable-move) |
 | KR-195 | **`replace(place: o, with: Optional::None)` does not infer `T` from `place:`** — "cannot infer generic type parameter 'T'", though `place:` is a typed local or field. A typed `with` local, or the turbofish, builds | S | [§2](ROADMAP_DETAIL.md#s2-replace-infer) |
