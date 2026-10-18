@@ -15682,6 +15682,11 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
     for (auto& decl : *unit->codeDeclarationList) {
         if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
             scanTypeForCollections(mv->type);   // register e.g. `InlineArray<uint8,256>` used only by a static
+            // ...and what its initializer names, which may be named nowhere else: `comptime usize A =
+            // sizeof(Pair<int64>);` folds to 16, and the `_Static_assert` that checks the fold (or a static's C
+            // initializer) then names a type whose definition was never emitted.
+            seedParams(SharedParameterList());
+            if (mv->variables) for (auto& v : *mv->variables) if (v && v->initializer) scanExprForCollections(v->initializer);
         } else if (dynamic_cast<ComptimeAssertNode*>(decl.get()) || dynamic_cast<ConstLocalVariableDeclaration*>(decl.get())) {
             seedParams(SharedParameterList());  // module scope: no locals, and nothing may leak into the next body
             scanStmtForCollections(std::dynamic_pointer_cast<StatementNode>(decl));

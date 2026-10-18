@@ -1,0 +1,23 @@
+// A module `comptime` or `static` whose initializer is the only place a generic instance is named. Every value
+// folded right, and the build failed in clang ("use of undeclared identifier") because the module sweep that
+// registers instances read such a declaration's TYPE and never its initializer: the instance's C definition was
+// never written for the `_Static_assert` (or the static's initializer) that names it — the `comptime` form from
+// 0.9.660 to 0.9.668, the `static` form before that. A local `comptime` was always scanned, which is why the same
+// `sizeof` in a function body built. Each instance below is named here and nowhere else. Returns 42.
+type value Pair<T> { public T a; public T b; public ctor of(T a, T b) { this.a = a; this.b = b; } }
+type value Triple<T> { public T a; public T b; public T c; public ctor of(T a, T b, T c) { this.a = a; this.b = b; this.c = c; } }
+
+comptime usize ARRAY = sizeof(InlineArray<uint8>#(16));
+comptime usize PAIR = sizeof(Pair<int64>);
+comptime usize OPTIONAL = sizeof(Optional<int64>);
+comptime usize ALIGN = alignof(Triple<int16>);
+static usize STATIC = sizeof(Pair<int32>);
+
+fn int32 main() {
+    if (ARRAY != 16) { return 1; }
+    if (PAIR != 16) { return 2; }
+    if (OPTIONAL < 16 || OPTIONAL % 8 != 0) { return 3; }
+    if (ALIGN != 2) { return 4; }
+    if (STATIC != 8) { return 5; }
+    return 42;
+}
