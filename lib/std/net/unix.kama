@@ -429,7 +429,8 @@ type resource UnixListener implements Sendable {
         return Result::Ok(value: UnixListener.own(fd: fd, created: give made));
     }
 
-    // Accept the next connection (blocking; `WouldBlock` in non-blocking mode). EINTR-retried.
+    // Accept the next connection (blocking; `WouldBlock` in non-blocking mode). EINTR-retried. The stream starts
+    // in this listener's mode on every OS: from a non-blocking listener, a non-blocking stream.
     public unsafe fn Result<UnixStream, IoError> accept() {
         while (true) {
             isize cfd = kama_accept(fd: this.fd);

@@ -16,7 +16,8 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 ## What kama has
 
 - **Sockets (`std::net`).** `TcpListener`/`TcpStream`, `UdpSocket` and Unix-domain streams and datagrams, blocking
-  or non-blocking (`setNonBlocking`), closed by RAII. In the browser, WebSocket, WebTransport and the WebRTC
+  or non-blocking (`setNonBlocking`), closed by RAII. An accepted stream starts in its listener's mode on every OS,
+  so a non-blocking listener hands an event loop non-blocking streams. In the browser, WebSocket, WebTransport and the WebRTC
   DataChannel sit behind the same `ReliableStream` / `DatagramSocket<A>` contracts.
 - **Readiness (`std::net::Poller`).** It wraps `poll(2)` on Linux and macOS and `select()` on Windows (WSAPoll
   mis-reports a connecting socket). `add`, `wait(timeoutMs)`, and `readyFor(fd)` with `{readable, writable}`. It is the
@@ -42,7 +43,6 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 
 | Need | Status | Row |
 |---|---|---|
-| An accepted stream in its listener's mode on every OS | ❌ Linux and macOS differ today | KR-200 |
 | A `Poller` wakeup another isolate can trigger | ❌ workaround: a stream pair as a wake channel | KR-201 |
 | A DNS lookup a loop can poll, with a deadline | ❌ `resolve` blocks | KR-202 |
 | Constant-time comparison of secrets | ❌ std warns against `==` and offers nothing else | KR-203 |

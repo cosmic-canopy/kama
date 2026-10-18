@@ -338,7 +338,8 @@ type resource TcpListener implements Sendable {
         return Result::Ok(value: TcpListener.make(fd: fd));
     }
 
-    // Accept the next incoming connection (blocking). EINTR-retried.
+    // Accept the next incoming connection. EINTR-retried. The stream starts in this listener's mode on every OS:
+    // from a non-blocking listener, a non-blocking stream (and `Err(WouldBlock)` here when none is queued).
     public unsafe fn Result<TcpStream, IoError> accept() {
         while (true) {
             isize cfd = kama_accept(fd: this.fd);

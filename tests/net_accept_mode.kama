@@ -1,0 +1,128 @@
+// An accepted stream starts in its listener's blocking mode, on every OS. Linux's `accept4` did not carry
+// `O_NONBLOCK` over from the listener, while the BSDs' `accept` does, so a non-blocking listener handed back a
+// non-blocking stream on macOS and a BLOCKING one on Linux: a server loop written on macOS stalled on Linux at its
+// first idle client (up to 0.9.668). Each case accepts a peer that sends nothing and reads once. A non-blocking
+// stream answers `WouldBlock` at once, and the peer closes when told; a blocking one waits for the peer to close on
+// its own. A peer never waits longer than its timeout, so a wrong mode is a wrong answer here, never a hang.
+// TCP and Unix streams alike. Returns 42.
+import { std::net::TcpListener, std::net::TcpStream, std::net::UnixListener, std::net::UnixStream, std::io::IoError,
+         std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::RecvResult,
+         std::concurrent::SendResult, std::collections::FixedArray, std::time::Duration, std::time::sleep };
+
+fn bool isWouldBlock(const ref IoError e) { return match (e.kind()) { case WouldBlock: true; case _: false; }; }
+
+// What one read on a silent peer answers: 1 `WouldBlock`, 2 the peer's close (`Ok(0)`), 3 anything else.
+fn int32 readKind(Result<isize, IoError> r) {
+    return match (r) { case Ok(value: n): n == 0 ? 2 : 3; case Err(error: e): isWouldBlock(e: e) ? 1 : 3; };
+}
+
+// The peer: connects, sends nothing, and closes once told to — or at its timeout, whichever comes first. A `spawn`
+// entry takes one moved bundle.
+type resource Peer implements Sendable {
+    uint16 port;
+    string path;
+    Receiver<int32> done;
+    int64 ms;
+    public ctor of(uint16 port, string path, Receiver<int32> done, int64 ms) {
+        this.port = port; this.path = give path; this.done = give done; this.ms = ms;
+    }
+    public fn void waitForDone() { RecvResult<int32> r = this.done.recvTimeout(timeout: Duration.fromMillis(ms: this.ms)); }
+    public const fn uint16 tcpPort() { return this.port; }
+    public const fn const ref string unixPath() { return this.path; }
+}
+fn void tcpPeer(Peer p) {
+    string host = "127.0.0.1";
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: p.tcpPort());
+    p.waitForDone();
+}
+fn void unixPeer(Peer p) {
+    Result<UnixStream, IoError> rc = UnixStream.connect(path: p.unixPath());
+    p.waitForDone();
+}
+
+// A non-blocking listener may answer `WouldBlock` until the handshake lands: wait on a wall-clock budget.
+fn Optional<TcpStream> acceptTcp(ref TcpListener l) {
+    int32 tries = 0;
+    while (tries < 5000) {
+        Result<TcpStream, IoError> ra = l.accept();
+        match (give ra) {
+            case Ok(value: s): { return Optional::Some(value: give s); }
+            case Err(error: e): { if (!isWouldBlock(e: e)) { return Optional::None; } }
+        };
+        sleep(d: Duration.fromMillis(ms: 1i64));
+        tries = tries + 1;
+    }
+    return Optional::None;
+}
+fn Optional<UnixStream> acceptUnix(ref UnixListener l) {
+    int32 tries = 0;
+    while (tries < 5000) {
+        Result<UnixStream, IoError> ra = l.accept();
+        match (give ra) {
+            case Ok(value: s): { return Optional::Some(value: give s); }
+            case Err(error: e): { if (!isWouldBlock(e: e)) { return Optional::None; } }
+        };
+        sleep(d: Duration.fromMillis(ms: 1i64));
+        tries = tries + 1;
+    }
+    return Optional::None;
+}
+
+fn int32 readTcp(TcpStream s) { FixedArray<uint8> buf = FixedArray.make(size: 1); return readKind(r: s.read(into: buf.viewMut())); }
+fn int32 readUnix(UnixStream s) { FixedArray<uint8> buf = FixedArray.make(size: 1); return readKind(r: s.read(into: buf.viewMut())); }
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+fn bool isOk(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
+
+// A non-blocking case gives its peer 5 s, and ends as soon as the read answers; a blocking one waits out 300 ms.
+fn int64 peerMs(bool nonBlocking) { return nonBlocking ? 5000i64 : 300i64; }
+
+fn int32 tcpCase(bool nonBlocking) {
+    string host = "127.0.0.1";
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 9; } };
+    if (nonBlocking && !isOk(r: l.setNonBlocking(on: true))) { return 9; }
+    uint16 port = portOf(l: l);
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    Receiver<int32> rx = ch.receiver();
+    int32 kind = 8;
+    Peer peer = Peer.of(port: port, path: "", done: give rx, ms: peerMs(nonBlocking: nonBlocking));
+    scope {
+        spawn tcpPeer(p: give peer);
+        {
+            Sender<int32> tx = ch.sender();
+            Optional<TcpStream> a = acceptTcp(l: ref l);
+            kind = match (give a) { case Some(value: s): readTcp(s: give s); case None: 7; };
+            SendResult<int32> sr = tx.send(item: 1);
+        }
+    }
+    return kind;
+}
+
+fn int32 unixCase(bool nonBlocking, string path) {
+    Result<UnixListener, IoError> rl = UnixListener.bind(path: path);
+    UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 9; } };
+    if (nonBlocking && !isOk(r: l.setNonBlocking(on: true))) { return 9; }
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    Receiver<int32> rx = ch.receiver();
+    int32 kind = 8;
+    Peer peer = Peer.of(port: 0ui16, path: copy path, done: give rx, ms: peerMs(nonBlocking: nonBlocking));
+    scope {
+        spawn unixPeer(p: give peer);
+        {
+            Sender<int32> tx = ch.sender();
+            Optional<UnixStream> a = acceptUnix(l: ref l);
+            kind = match (give a) { case Some(value: s): readUnix(s: give s); case None: 7; };
+            SendResult<int32> sr = tx.send(item: 1);
+        }
+    }
+    return kind;
+}
+
+fn int32 main() {
+    if (tcpCase(nonBlocking: true) != 1)  { return 1; }   // non-blocking listener -> non-blocking stream
+    if (tcpCase(nonBlocking: false) != 2) { return 2; }   // blocking listener -> blocking stream
+    if (unixCase(nonBlocking: true, path: "accept-nb.sock") != 1)  { return 3; }
+    if (unixCase(nonBlocking: false, path: "accept-b.sock") != 2)  { return 4; }
+    return 42;
+}

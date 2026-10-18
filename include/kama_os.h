@@ -2385,9 +2385,15 @@ static inline int32_t   kama_set_reuseaddr(ptrdiff_t fd) {
     int one = 1; return (int32_t)setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &one, (socklen_t)sizeof one);
 }
 static inline int32_t   kama_listen(ptrdiff_t fd, int32_t backlog) { return (int32_t)listen((int)fd, (int)backlog); }
+// The accepted socket starts in the listener's blocking mode on every OS. The BSDs' accept() inherits O_NONBLOCK;
+// Linux's accept4() does not, so it is read off the listener and passed on — a non-blocking listener means an event
+// loop, and on Linux its first idle client used to block it. The listener's flags are the only truth: kama keeps no
+// mode of its own, and an adopted descriptor arrives with whatever mode its maker set.
 static inline ptrdiff_t kama_accept(ptrdiff_t fd) {
 #if defined(__linux__)
-    ptrdiff_t c = (ptrdiff_t)accept4((int)fd, (struct sockaddr*)0, (socklen_t*)0, SOCK_CLOEXEC);
+    int fl = fcntl((int)fd, F_GETFL);
+    int nb = (fl >= 0 && (fl & O_NONBLOCK)) ? SOCK_NONBLOCK : 0;
+    ptrdiff_t c = (ptrdiff_t)accept4((int)fd, (struct sockaddr*)0, (socklen_t*)0, SOCK_CLOEXEC | nb);
 #elif defined(__EMSCRIPTEN__)
     ptrdiff_t c = (ptrdiff_t)accept((int)fd, (struct sockaddr*)0, (socklen_t*)0);
 #else

@@ -295,37 +295,10 @@ in pieces, with the body limit set per route. A server that reads a whole body b
 every upload at one limit and holds it all in memory. A program can chunk uploads at the application level to get
 around that, but the package should not require it.
 
-### Reported by an HTTP package, 2026-10-18 (KR-200..208)
+### Reported by an HTTP package, 2026-10-18 (KR-201..208)
 
 Each was run on `0.9.668` on macOS and, where the OS matters, on Linux (the `localhost/kama-dev` container), or shown
 absent from std's source.
-
-<a id="s1-accept-mode"></a>
-
-#### An accepted stream's blocking mode depends on the OS (KR-200)
-
-A listener made non-blocking, a client that sends nothing for 300 ms, and one `read` on the accepted stream:
-
-| OS | the accepted stream | the `read` |
-|---|---|---|
-| macOS (BSD) | non-blocking, inherited | `WouldBlock` at 0 ms |
-| Linux | blocking | waits the full 300 ms, then `Ok(0)` |
-
-`kama_accept` (`include/kama_os.h`) is `accept4(…, SOCK_CLOEXEC)` on Linux, which does not carry `O_NONBLOCK`, and
-plain `accept` elsewhere, which on the BSDs does. Windows's `accept` gives the new socket the listener's properties
-by its documentation, and is unmeasured here. A server loop written and tested on macOS stalls on Linux at its first
-idle client. Recommended: **an accepted stream starts in its listener's mode on every OS.** A non-blocking listener
-means an event loop, and an event loop wants non-blocking streams. Until then the workaround is a
-`setNonBlocking(on: true)` on every accepted stream.
-
-The fix site is the C seam, not kama state. `TcpListener` keeps no mode flag, and `adopt(descriptor:)` can hand it a
-descriptor whose mode kama never set, so the listener's own flags are the only truth. On Linux, `kama_accept` reads
-`fcntl(fd, F_GETFL)` and adds `SOCK_NONBLOCK` to `accept4`'s flags when `O_NONBLOCK` is set, which is what the BSDs
-already do. Windows is measured on the CI leg, and set with `ioctlsocket(FIONBIO)` if it does not inherit. Windows
-cannot query a socket's mode, so a std flag would be needed there. `UnixListener.accept()` calls the same
-`kama_accept` and splits the same way (measured: inherited non-blocking on macOS, blocking for the full 300 ms on
-Linux), so the one change fixes both. Close means a fixture for both listeners on each OS, and both
-`accept()` comments saying what the stream's mode is.
 
 <a id="s1-poller-waker"></a>
 
