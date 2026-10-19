@@ -32249,9 +32249,18 @@ std::vector<CEmitter::CBody> CEmitter::parseCBodies(const std::string& s, bool e
         // A directive or comment at depth 0 before any of a declaration's text is not part of it — the file's
         // `#include`s are not the first function's, and pruning that function must leave them.
         const bool before = depth == 0 && seg.find_first_not_of(' ') == std::string::npos;
-        if (lineStart && c == '#') { i = skipDirective(i); if (before) segStart = i; continue; }
+        // ...and a directive or a `//` comment ends WITH its newline, which `skip…` stops at: a declaration starts
+        // one past it. Starting at it, pruning an unreached function cut the line break that ended an `#include`,
+        // so the next text joined the directive (`#include "p.gen.h"static void* …`) and clang refused the file.
+        auto pastNewline = [&](size_t e) { return e < n && s[e] == '\n' ? e + 1 : e; };
+        if (lineStart && c == '#') { i = skipDirective(i); if (before) segStart = pastNewline(i); continue; }
         lineStart = false;
-        if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); if (before) segStart = i; continue; }
+        if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) {
+            const bool lineComment = s[i + 1] == '/';
+            i = skipComment(i);
+            if (before) segStart = lineComment ? pastNewline(i) : i;
+            continue;
+        }
         if (c == '"' || c == '\'') { size_t e = skipLiteral(i); if (depth == 0) seg.append(s, i, e - i); i = e; continue; }
         if (c == '{') {
             if (depth == 0) {

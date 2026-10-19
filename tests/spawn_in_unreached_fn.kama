@@ -1,0 +1,24 @@
+// A `spawn` inside a function nothing calls. The function is pruned from the C, and so is the isolate trampoline its
+// `spawn` wrote, which sat right after the `#include` of the program's header. The cut started AT the newline that
+// ended the `#include`, so the next trampoline joined that line (`#include "p.gen.h"static void* …`) and clang
+// refused the file (0.9.668 to 0.9.672). A pruned function's text now starts one past the newline that ends a
+// directive or a line comment. The used isolate answers over a channel. Returns 42.
+import { std::concurrent::Isolate, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::SendResult };
+
+type resource Job implements Sendable {
+    Sender<int32> reply;
+    public ctor of(Sender<int32> reply) { this.reply = give reply; }
+    public fn void answer(int32 v) { SendResult<int32> r = this.reply.send(item: v); }
+}
+
+fn void neverSpawned(Job j) { j.answer(v: 1); }
+fn void work(Job j) { j.answer(v: 42); }
+
+fn void neverCalled(Sender<int32> s) { Job j = Job.of(reply: give s); scope { spawn neverSpawned(j: give j); } }
+
+fn int32 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    Job j = Job.of(reply: ch.sender());
+    scope { spawn work(j: give j); }
+    return match (ch.receiver().recv()) { case Some(value: v): v; case None: 9; };
+}
