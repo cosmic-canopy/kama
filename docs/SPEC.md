@@ -1521,7 +1521,10 @@ callee two mutable borrows of one object, and so does a `ref`/`out` argument ove
 non-`const fn`. A `const ref` argument is a borrow too: overlapping a mutable argument or such a receiver, it
 lets the callee change or free what it reads (`two(a: o, b: ref o)`, `b.absorb(other: b)`). Each is refused at <!-- xfail: const_ref_arg_aliases_ref, const_ref_arg_aliases_receiver -->
 the call. The test is the window's prefix test over places, so disjoint fields stay legal:
-`f(a: ref p.lo, b: p.hi)`.
+`f(a: ref p.lo, b: p.hi)`. A receiver that is an element is compared by what holds it, so an argument that
+CONTAINS the receiver is refused too: `this.items[0].touch(owner: ref this)` would let the method grow <!-- xfail: ref_arg_holds_receiver, ref_arg_holds_receiver_local -->
+`this.items` and move its own `this`. A receiver behind a contract — an `Owned<Handler>` element — is judged <!-- xfail: ref_arg_holds_receiver_contract -->
+by the contract member's signature, the only one in view.
 
 "Every path" is a real flow merge, not "assigned somewhere": an `if`/`else` in which **both** arms assign
 counts, a lone `if` does not, and an arm that ends in `return`/`break`/`continue` never reaches the join

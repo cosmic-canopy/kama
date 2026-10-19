@@ -1,0 +1,22 @@
+// The same refusal through a contract: the receiver `this.hs[0]` is an `Owned<Handler>` element, dispatched
+// through the contract's slot, so the only signature in view is the contract member's — and it is what the
+// check reads. A handler that empties `app.hs` frees itself mid-call. Accepted up to 0.9.673: the receiver's
+// class has no `handle` of its own, so the check never ran.
+import { std::collections::DynamicArray, std::memory::Owned };
+
+type contract Handler for resource { fn void handle(ref App app); }
+
+type resource H implements Handler {
+    int32 calls = 0;
+    public ctor make() { }
+    public fn void handle(ref App app) { app.clear(); this.calls = this.calls + 1; }
+}
+
+type resource App {
+    DynamicArray<Owned<Handler>> hs;
+    public ctor make() { this.hs = DynamicArray.empty(); Owned<Handler> h = new H.make(); this.hs.add(item: give h); }
+    public fn void clear() { this.hs.clear(); }
+    public fn void run() { this.hs[0].handle(app: ref this); }
+}
+
+fn int32 main() { App a = App.make(); a.run(); return 0; }

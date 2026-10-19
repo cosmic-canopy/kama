@@ -40959,20 +40959,42 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // at the freed buffer. `const fn` is what makes this precise rather than "any method call": the
         // stdlib marks 247 of them, so a read inside a window stays free.
         if (rmi && !rmi->isConst && !recvPlace.empty()) { rejectFrozenWrite(receiver, call->line); noteSubjectWrite(receiver, call->line); }
-        if (rmi && !rmi->isConst && !recvPlace.empty() && call->args) {
+        // ...and an argument may not overlap the receiver's ROOTS: an element receiver (`this.items[0]`) has no
+        // place of its own, but it lives in its container, so `this.items[0].touch(owner: ref this)` hands the
+        // method a mutable borrow of the array that holds its own `this` — growing it moved `this` out from
+        // under the call (a use-after-free in safe code, up to 0.9.673). Both directions of the prefix test.
+        std::vector<std::vector<std::string>> recvRoots;
+        if (!recvPlace.empty()) recvRoots.push_back(recvPlace);
+        else borrowHostRoots(receiver, recvRoots);
+        const std::string recvText = recvPlace.empty() ? unparseExpr(receiver) : placeText(recvPlace);
+        auto overlapsReceiver = [&](const std::vector<std::string>& p) {
+            for (auto& r : recvRoots) if (placesConflict(r, p)) return true;
+            return false;
+        };
+        // The method's signature: the receiver class's own member, or — a contract receiver, also one reached
+        // through a smart pointer (`this.hs[0]` over `DynamicArray<Owned<Handler>>`) — the contract's, the only
+        // signature visible behind the vtable slot.
+        bool mutating = rmi && !rmi->isConst;
+        std::vector<ParamSig> calleeSigs;
+        if (rmi) calleeSigs = rmi->params;
+        else if (isInterface(mcls))
+            if (const std::vector<InterfaceMethod>* need = contractMethods(mcls))
+                for (auto& nm : *need)
+                    if (nm.name == method) { mutating = !nm.isConst; calleeSigs = paramSigsOf(nm.params); break; }
+        if (mutating && !recvRoots.empty() && call->args) {
             for (auto& a : *call->args) {
                 if (!a || !a->name || !a->name->value) continue;
                 const ParamSig* ps = nullptr;
-                for (auto& p : rmi->params) if (p.name == *a->name->value) { ps = &p; break; }
+                for (auto& p : calleeSigs) if (p.name == *a->name->value) { ps = &p; break; }
                 // A by-value VIEW argument over the receiver's own storage: `b.eat(v: b.view())`. The
                 // receiver is borrowed mutably by a non-`const fn`, so this is the argument-list aliasing
                 // rule with the receiver as the mutable side — and the receiver never reaches that rule,
                 // which only ever compares arguments with each other.
                 if (ps && !ps->byRef && isViewCType(ps->className)) {
                     std::vector<std::string> vr = viewRootPlace(a->expression);
-                    if (!vr.empty() && placesConflict(recvPlace, vr))
+                    if (!vr.empty() && overlapsReceiver(vr))
                         unsupported(("`" + placeText(vr) + "` is borrowed by the view argument `" + ps->name
-                                     + "` while `" + placeText(recvPlace) + "` is the receiver of non-`const "
+                                     + "` while `" + recvText + "` is the receiver of non-`const "
                                      "fn` `" + method + "` — the method may grow the very storage that "
                                      "window views, leaving it dangling. Mint the view inside `" + method
                                      + "`, or declare it a `const fn` if it does not mutate").c_str(),
@@ -40986,21 +41008,29 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 // A READ-ONLY borrow of the receiver's own storage is no safer: `d.appendAll(src: d)` may grow
                 // `d` and leave `src` pointing at the buffer it freed.
                 if (ps->isConst) {
-                    if (!ap.empty() && placesConflict(recvPlace, ap))
+                    if (!ap.empty() && overlapsReceiver(ap))
                         unsupported(("`" + placeText(ap) + "` is passed as the `const ref` argument `" + ps->name
-                                     + "` while `" + placeText(recvPlace) + "` is the receiver of non-`const fn` `"
+                                     + "` while `" + recvText + "` is the receiver of non-`const fn` `"
                                      + method + "` — the method may change or free what it reads through `"
                                      + ps->name + "`. Pass a distinct place, copy it into a local first, or "
                                      "declare `" + method + "` a `const fn` if it does not mutate").c_str(), call);
                     continue;
                 }
-                if (!ap.empty() && placesConflict(recvPlace, ap))
-                    unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
-                                 + "` while `" + placeText(recvPlace) + "` is its receiver — a non-`const "
-                                 "fn` borrows its receiver mutably, so this hands the method two mutable "
-                                 "borrows of the same object; pass a distinct place, read it into a local "
-                                 "first, or declare `" + method + "` a `const fn` if it does not mutate")
-                                    .c_str(), call);
+                if (!ap.empty() && overlapsReceiver(ap)) {
+                    if (recvPlace.empty())   // the receiver lives INSIDE the argument (an element of it)
+                        unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
+                                     + "`, and it holds `" + recvText + "`, the receiver — through it the method "
+                                     "could grow or empty what holds its own `this`, moving it out from under the "
+                                     "call. Pass only what the method needs, or call it on a value moved out of "
+                                     "the collection first").c_str(), call);
+                    else
+                        unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
+                                     + "` while `" + recvText + "` is its receiver — a non-`const "
+                                     "fn` borrows its receiver mutably, so this hands the method two mutable "
+                                     "borrows of the same object; pass a distinct place, read it into a local "
+                                     "first, or declare `" + method + "` a `const fn` if it does not mutate")
+                                        .c_str(), call);
+                }
             }
         }
     }

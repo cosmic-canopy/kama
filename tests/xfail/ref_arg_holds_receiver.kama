@@ -1,0 +1,20 @@
+// A `ref` argument that HOLDS the receiver is refused, as one equal to it is (xfail/ref_arg_overlap_receiver).
+// `this.items[0]` lives in `this.items`, so passing `ref this` to its method lets the method grow that array and
+// move its own `this` out from under the call. Up to 0.9.673 an element receiver had no place to compare, the
+// check never ran, and the write through `this` after the growth was a use-after-free in safe code.
+import { std::collections::DynamicArray };
+
+type resource Item {
+    int32 calls = 0;
+    public ctor make() { }
+    public fn void touch(ref Owner owner) { owner.grow(); this.calls = this.calls + 1; }
+}
+
+type resource Owner {
+    DynamicArray<Item> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: Item.make()); }
+    public fn void grow() { int32 i = 0; while (i < 1000) { this.items.add(item: Item.make()); i = i + 1; } }
+    public fn void run() { this.items[0].touch(owner: ref this); }
+}
+
+fn int32 main() { Owner o = Owner.make(); o.run(); return 0; }

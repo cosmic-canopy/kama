@@ -1138,6 +1138,9 @@ reach_variant_expr_private	main.kama:2
 reach_variant_expr_unimported	main.kama:2
 reach_variant_expr_unknown	reach_variant_expr_unknown.kama:2
 recover_multi_error	recover_multi_error.kama:16 recover_multi_error.kama:22 recover_multi_error.kama:27
+ref_arg_holds_receiver	ref_arg_holds_receiver.kama:17
+ref_arg_holds_receiver_contract	ref_arg_holds_receiver_contract.kama:19
+ref_arg_holds_receiver_local	ref_arg_holds_receiver_local.kama:18
 ref_arg_overlap	ref_arg_overlap.kama:11
 ref_arg_overlap_field	ref_arg_overlap_field.kama:13
 ref_arg_overlap_receiver	ref_arg_overlap_receiver.kama:11

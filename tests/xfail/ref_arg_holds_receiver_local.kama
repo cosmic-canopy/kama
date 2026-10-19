@@ -1,0 +1,18 @@
+// The same refusal on a local, from a free function that a `friend` grant lets reach the field:
+// `a.cs[0].handle(app: ref a)` lets `handle` grow `a.cs` and move its own `this`. Accepted up to 0.9.673.
+import { std::collections::DynamicArray };
+
+type resource C {
+    int32 calls = 0;
+    public ctor make() { }
+    public fn void handle(ref App app) { app.grow(); this.calls = this.calls + 1; }
+}
+
+type resource App {
+    friend main[cs];
+    DynamicArray<C> cs;
+    public ctor make() { this.cs = DynamicArray.empty(); this.cs.add(item: C.make()); }
+    public fn void grow() { int32 i = 0; while (i < 1000) { this.cs.add(item: C.make()); i = i + 1; } }
+}
+
+fn int32 main() { App a = App.make(); a.cs[0].handle(app: ref a); return 0; }
