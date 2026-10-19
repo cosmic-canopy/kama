@@ -503,6 +503,7 @@ fnptr_bind_arg_shape	fnptr_bind_arg_shape.kama:11
 fnptr_bind_extern_agg_shape	fnptr_bind_extern_agg_shape.kama:16
 fnptr_call_result_narrowed	fnptr_call_result_narrowed.kama:12 fnptr_call_result_narrowed.kama:13 fnptr_call_result_narrowed.kama:14
 fnptr_null_check	fnptr_null_check.kama:4
+for_clause_discards_owning	for_clause_discards_owning.kama:12
 for_on_type	for_on_type.kama:1
 foreach_char_over_string	foreach_char_over_string.kama:12
 foreach_const_ref_write	foreach_const_ref_write.kama:12

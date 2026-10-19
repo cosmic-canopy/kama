@@ -10028,6 +10028,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
     if (dynamic_cast<ExpressionStatementNode*>(n)) {
         line(n->line);
+        if (emitDiscardedValue(std::dynamic_pointer_cast<ExpressionNode>(stmt), depth)) return;
         bool ph = _hoistOK; _hoistOK = true;                       // allow inline-ctor hoisting
         std::string s = emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt));
         _hoistOK = ph;
@@ -10041,6 +10042,48 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     indent(depth);
     unsupported("statement", n);
     *_out << "\n";
+}
+
+// The C type a statement that discards `e` must drop, or "" when there is nothing to drop: `e` is not a call, or
+// returns a place (`ref`/`const ref` — the value belongs to someone else), or its type owns nothing. A call is the
+// only expression statement that can produce a fresh owning value: an assignment and `++`/`--` produce none, a
+// statement-position `match` brings its arms back through here one by one, and `new` is refused outside an
+// initializer.
+std::string CEmitter::discardedOwningType(SharedExpression e)
+{
+    auto* iv = dynamic_cast<InvocationNode*>(e.get());
+    if (!iv || invocationReturnsPlace(iv)) return "";
+    const std::string ct = typeOfExpr(e);
+    if (ct.empty() || isInterface(ct)) return "";
+    auto ci = _classes.find(ct);
+    return (ci != _classes.end() && ci->second.destructible) ? ct : "";
+}
+
+// A discarded value is dropped where the statement ends, as every other temporary is. Through 0.9.675 the statement
+// lowered to a bare C call: `mkh();` leaked the value and never ran `~H()`, and `xs.remove(index: 0);` — the one
+// removal shape, "discard to drop" — leaked what it removed. The value lands in a temporary (built in place when it
+// is a constructor call, as a `match` subject is, so a large value is not built twice) and is dropped on the next
+// line; it is registered as an owner so the `@onPanic` walk and the drop-site lines see it like any other.
+bool CEmitter::emitDiscardedValue(SharedExpression e, int depth)
+{
+    const std::string ct = discardedOwningType(e);
+    if (ct.empty()) return false;
+    const std::string tmp = "kama_disc" + std::to_string(_tempCounter++);
+    bool ph = _hoistOK; _hoistOK = true;
+    offerCtorInto(e, "&" + tmp, ct);
+    const std::string s = emitExpression(e);
+    const bool builtInPlace = takeCtorInto();
+    _hoistOK = ph;
+    flushHoisted(depth);
+    if (builtInPlace) {   // the into call, a statement, fills the temporary declared just before it
+        indent(depth); *_out << ct << " " << tmp << ";\n";
+        indent(depth); *_out << s << ";\n";
+    } else {
+        indent(depth); *_out << ct << " " << tmp << " = " << s << ";\n";
+    }
+    recordDestructibleOwner(tmp, ct);
+    indent(depth); *_out << ct << "__dtor(&" << tmp << ");\n";
+    return true;
 }
 
 // A brace-wrapped body for if/while/for/do. Reuses an existing block as-is.
@@ -10107,8 +10150,15 @@ std::string CEmitter::inlineStatement(SharedStatement stmt)
         return s;
     }
 
-    if (dynamic_cast<ExpressionStatementNode*>(n))
-        return emitExpression(std::dynamic_pointer_cast<ExpressionNode>(stmt));
+    if (dynamic_cast<ExpressionStatementNode*>(n)) {
+        auto e = std::dynamic_pointer_cast<ExpressionNode>(stmt);
+        // A `for` clause is one C expression with no statement after it to drop in, so a value it would discard
+        // cannot be dropped there — refused rather than leaked, as every discarded owning value is dropped.
+        if (!discardedOwningType(e).empty())
+            unsupported("a `for` clause cannot drop the value this call returns, because it owns memory — call it in "
+                        "the loop body, where the end of the statement drops it", n);
+        return emitExpression(e);
+    }
 
     unsupported("for-clause statement", n);
     return "";
@@ -30109,6 +30159,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         } else if (resultTemp) {
             emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, kMatchArm);   // `case X: give x;`
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
+        } else if (emitDiscardedValue(a->body, depth + 2)) {   // an arm whose value owns: dropped as a statement's is
+            emitScopeCleanup(_scopes.back(), depth + 2);
         } else {
             bool ph = _hoistOK; _hoistOK = true;
             std::string av = emitExpression(a->body);
@@ -30412,6 +30464,8 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         } else if (resultTemp) {
             emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, kMatchArm);   // `case X: give x;`
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
+        } else if (emitDiscardedValue(a->body, depth + 2)) {   // an arm whose value owns: dropped as a statement's is
+            emitScopeCleanup(_scopes.back(), depth + 2);
         } else {
             bool ph = _hoistOK; _hoistOK = true;
             std::string av = emitExpression(a->body);

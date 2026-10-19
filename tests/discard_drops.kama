@@ -1,0 +1,60 @@
+// A value a statement discards is dropped there, at the end of the statement — the rule a temporary follows
+// everywhere else. Through 0.9.675 it was not: `mkh();` lowered to a bare C call, so the returned value leaked and
+// its destructor never ran — a `File` stayed open, a `Shared` count never fell — and `xs.remove(index: 0);`, which
+// SPEC's one removal shape says "drops cleanly", leaked what it removed (its fixture's element had no destructor).
+// Every way a statement can produce an owning value is below; `dropped` must count each exactly once, measured
+// BEFORE the locals' own drops at the end of `run`.
+import { core::eprintln, std::collections::DynamicArray, std::memory::Shared };
+
+static int32 dropped = 0;
+
+type resource H {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+    ~H() { dropped = dropped + 1; }
+}
+type enum Slot { Full(H h), Empty }
+type enum Pick { A, B }
+
+fn H mkh(int32 id) { return H.make(id: id); }
+fn Optional<H> some(int32 id) { return Optional::Some(value: H.make(id: id)); }
+fn Slot full(int32 id) { return Slot::Full(h: H.make(id: id)); }
+fn Shared<H> shared(int32 id) { return new H.make(id: id); }
+fn DynamicArray<H> pair() {
+    DynamicArray<H> xs = DynamicArray.empty();
+    xs.add(item: H.make(id: 1)); xs.add(item: H.make(id: 2));
+    return give xs;
+}
+fn string text(int32 n) { string s = "a heap-backed string, long enough to leave any inline buffer"; return s + "!"; }
+fn void nothing() { }
+
+fn int32 run() {
+    DynamicArray<H> hs = DynamicArray.empty();
+    hs.add(item: H.make(id: 10)); hs.add(item: H.make(id: 11));
+
+    mkh(id: 1);                      // a function's owning result           1
+    H.make(id: 2);                   // a constructor's                      2
+    some(id: 4);                     // an Optional holding one              3
+    full(id: 5);                     // an enum payload                      4
+    shared(id: 6);                   // the only Shared handle               5
+    pair();                          // a collection of two                  7
+    hs.remove(index: 0);             // what a removal hands back            8
+    Optional<int32> o = Optional::Some(value: 1);
+    match (o) { case Some(value: _): mkh(id: 9); case None: mkh(id: 9); };   // a statement `match`'s arm  9
+    Pick p = Pick::B;
+    match (p) { case A: mkh(id: 10); case B: mkh(id: 10); };                // a plain-enum `match`'s  10
+    text(n: 7);                      // a string: no count, ASan/LSan see it
+    nothing();                       // a void call: nothing to drop
+
+    int32 seen = dropped;
+    if (seen != 10) { eprintln(s: "discard_drops: dropped ${seen}, want 10"); return 1; }
+    return 42;
+}
+
+fn int32 main() {
+    int32 r = run();
+    if (r != 42) { return r; }
+    if (dropped != 11) { eprintln(s: "discard_drops: after run, dropped ${dropped}, want 11"); return 2; }
+    return 42;
+}

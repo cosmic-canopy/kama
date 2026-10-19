@@ -3842,6 +3842,11 @@ private:
     // match (value discarded). Both build the switch via `emitMatchSwitch`.
     std::string emitMatch(MatchNode* m);
     void        emitMatchStatement(MatchNode* m, int depth);
+    // A statement that discards a FRESH owning value (a call's result, not a place) drops it on the spot, as
+    // the end of a statement drops any temporary. Emits the statement and answers true, or answers false
+    // and emits nothing (no value, a place, or a value that owns nothing).
+    bool        emitDiscardedValue(SharedExpression e, int depth);
+    std::string discardedOwningType(SharedExpression e);   // the C type such a statement must drop, or ""
     void        emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int depth);
     // A `match` over a plain (payload-less) enum lowers to a C `switch` on the integer value,
     // with the same compile-time exhaustiveness + `_` wildcard as the tagged-union path.
