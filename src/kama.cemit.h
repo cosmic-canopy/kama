@@ -2627,6 +2627,16 @@ private:
     // A `Fixed<T,N>` intrinsic instance (a value-semantics collection). Its indexing/foreach reuse the
     // collection machinery, but it is carved out of ownership (never destructible, copies freely).
     bool isFixedColl(const std::string& cls) const;
+    // An `InlineArray`'s kind follows its element. A PLAIN one holds values (copied bitwise, nothing to drop); an
+    // OWNING one holds elements that own something, and owns them: it drops each, moves, and copies deeply.
+    bool isPlainFixed(const std::string& cls) const;
+    bool isOwningFixed(const std::string& cls) const;
+    bool fixedCopyAllocates(const std::string& cls) const;   // does a deep copy of this owning InlineArray allocate
+    void emitOwningFixedFuncs(const CollectionInfo& info, bool protosOnly);   // its __dtor/__copy/__fillCopy(Into)
+    // One element copied as a statement: a handle retains, an owning value deep-copies, a plain value blits. At a use
+    // site `atUseSite` routes through copyCall (which records the no-heap fact); in an emitted body it spells the call.
+    std::string elemCopyStmt(const std::string& elemCls, const std::string& dst, const std::string& src, bool atUseSite);
+    std::string arrayElemHandoff(const SharedExpression& el, const std::string& cls, int line);   // one `[…]` element of an owning array
     bool isSimdColl(const std::string& cls) const;
     bool isMaskColl(const std::string& cls) const;
     std::string emitArrayLiteral(ArrayLiteralNode* al, const std::string* into = nullptr);   // `[a,b,c]` / `[v; N]` -> a Fixed value

@@ -1,0 +1,53 @@
+// `copy` of an `InlineArray` whose element owns something is a deep copy, element by element, and a `foreach` by
+// value yields a copy per pass — as a `DynamicArray` does. Through 0.9.676 both were bitwise: the copy shared each
+// string's buffer, so replacing an element of either freed the other's (a use-after-free in safe code, which ASan
+// reports here as a read of freed memory), and a loop binding written in the body freed the array's own element.
+// Exits 42 only when every original survives every write to its copy.
+import { core::eprintln };
+
+static int32 copies = 0;
+
+type resource C implements Copyable<This>(bare: give) {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public ctor copy(ref C source) { copies = copies + 1; C r = C.make(id: source.id); return give r; }
+    ~C() { }
+    public const fn int32 get() { return this.id; }
+}
+
+fn int32 run() {
+    int32 missed = 0;
+    string seed = "q";
+    string want = "q, a heap-backed string, long enough to leave any inline buffer";
+
+    InlineArray<string>#(2) a = [seed + ", a heap-backed string, long enough to leave any inline buffer", "y"];
+    InlineArray<string>#(2) b = copy a;
+    b[0] = "x";                                      // replaces the copy's string, never the original's
+    if (a[0] != want) { missed = missed + 1; }
+    if (b[0] != "x")  { missed = missed + 2; }
+    foreach (string s in a) { s = "z"; }             // writes the pass's own copy
+    if (a[0] != want) { missed = missed + 4; }
+
+    InlineArray<Optional<string>>#(2) o = [Optional::Some(value: seed + ", a heap-backed string, long enough to leave any inline buffer"), Optional::None];
+    InlineArray<Optional<string>>#(2) p = copy o;
+    Optional<string> none = Optional::None;
+    p[0] = give none;
+    bool kept = match (o[0]) { case Some(value: v): v == want; case None: false; };
+    if (!kept) { missed = missed + 8; }
+
+    InlineArray<InlineArray<string>#(2)>#(2) n = [[seed + ", a heap-backed string, long enough to leave any inline buffer", "a"], ["b", "c"]];
+    InlineArray<InlineArray<string>#(2)>#(2) m = copy n;
+    m[0][0] = "w";
+    if (n[0][0] != want) { missed = missed + 16; }
+
+    InlineArray<C>#(2) cs = [C.make(id: 1), C.make(id: 2)];
+    InlineArray<C>#(2) ds = copy cs;                 // one `copy` per element
+    if (copies != 2 || ds[1].get() != 2) { missed = missed + 32; }
+    InlineArray<C>#(3) f = [C.make(id: 7); 3];       // a fill copies its one value three times
+    if (copies != 5 || f[2].get() != 7) { missed = missed + 64; }
+
+    if (missed != 0) { eprintln(s: "inline_array_owning_copy: missed ${missed}, copies ${copies}"); }
+    return missed;
+}
+
+fn int32 main() { return run() == 0 ? 42 : 1; }

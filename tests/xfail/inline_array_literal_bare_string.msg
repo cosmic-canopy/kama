@@ -1,0 +1,1 @@
+say `give s` (move) or `copy s` (deep)

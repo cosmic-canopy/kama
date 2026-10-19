@@ -1,0 +1,75 @@
+// A `foreach` binding that the loop hands a COPY owns it, so writing the binding drops the copy it held. It did not:
+// `foreach (string s in xs) { s = "z"; }` overwrote each pass's copy without freeing it — over a `DynamicArray`
+// through 0.9.677, and over an `InlineArray` of strings once that began handing out copies — so a loop that wrote its
+// binding leaked one string per pass. Proven by exhaustion, as global_allocator_pool.kama proves its pool: the heap
+// here is 32 slots, the loops below make 300 copies, and a leak runs the pool dry long before the end.
+import { std::concurrent::Atomic, std::collections::DynamicArray };
+
+// 32 slots of 1024 bytes. A free slot links to the next through its first word; a spin lock guards the list.
+// Every field starts at zero, which is the only way the instance ever starts: an empty list, nothing bumped yet.
+@globalAllocator type resource Pool implements GlobalHeap {
+    InlineArray<uint64>#(4096) storage;   // 32 KiB, 8-aligned
+    Atomic<int32> lock;                   // 0 = free
+    Atomic<usize> bumped;                 // slots handed out by the bump so far
+    Atomic<usize> head;                   // free list: slot index + 1, 0 = empty
+
+    unsafe fn usize origin() { UnsafePtr<uint64> p = addr(of: this.storage[0]); return cast<usize>(p); }
+    fn void acquire() { int32 open = 0; while (!this.lock.compareExchange(expected: open, desired: 1)) { open = 0; } }
+    fn void release() { this.lock.store(value: 0); }
+
+    public unsafe fn Optional<UnsafePtr> allocate(usize bytes, usize align) {
+        if (bytes + align - 1 > 1024) { return Optional::None; }
+        this.acquire();
+        usize slot = 0;
+        usize h = this.head.load();
+        if (h != 0) {
+            slot = h - 1;
+            UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+            this.head.store(value: link[0]);
+        } else {
+            slot = this.bumped.load();
+            if (slot == 32) { this.release(); return Optional::None; }
+            this.bumped.store(value: slot + 1);
+        }
+        this.release();
+        usize at = (this.origin() + slot * 1024 + align - 1) & ~(align - 1);
+        return Optional::Some(value: cast<UnsafePtr>(at));
+    }
+    public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) {
+        usize slot = (cast<usize>(pointer) - this.origin()) / 1024;
+        this.acquire();
+        UnsafePtr<usize> link = cast<UnsafePtr<usize>>(this.origin() + slot * 1024);
+        link[0] = this.head.load();
+        this.head.store(value: slot + 1);
+        this.release();
+    }
+    // A new block, the bytes, and the old block back — the whole of `reallocate` for an allocator with nothing smarter.
+    public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) {
+        Optional<UnsafePtr> fresh = this.allocate(bytes: newBytes, align: align);
+        match (fresh) {
+            case Some(value: q): {
+                UnsafePtr<uint8> d = cast<UnsafePtr<uint8>>(q);
+                UnsafePtr<uint8> s = cast<UnsafePtr<uint8>>(pointer);
+                copyElements(ptr: d, from: s, count: cast<isize>(bytes < newBytes ? bytes : newBytes));
+                this.deallocate(pointer: pointer, bytes: bytes, align: align);
+            }
+            case None: { }
+        };
+        return fresh;
+    }
+}
+
+fn int32 main() {
+    string seed = "q";
+    DynamicArray<string> xs = DynamicArray.empty();
+    xs.add(item: seed + ", a string that takes a slot of its own");
+    InlineArray<string>#(2) a = [seed + ", another heap string", seed + ", and a third"];
+    int32 passes = 0;
+    int32 i = 0;
+    while (i < 100) {
+        foreach (string s in xs) { s = "z"; passes = passes + 1; }   // the iterator's copy, freed by the write
+        foreach (string s in a)  { s = "z"; passes = passes + 1; }   // the array's copies, likewise
+        i = i + 1;
+    }
+    return passes == 300 ? 42 : 1;
+}

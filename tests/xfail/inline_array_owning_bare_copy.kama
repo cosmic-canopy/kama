@@ -1,0 +1,9 @@
+// An `InlineArray` of strings owns its strings, so `b = a` would make two owners of each one. Through 0.9.676 it
+// was accepted and copied the bytes: `b[0] = "x"` then freed `a[0]`'s buffer, and reading `a[0]` read freed memory.
+// A hand-off of one says which it means, as for any collection: `give a` (move) or `copy a` (deep).
+fn int32 main() {
+    string seed = "q";
+    InlineArray<string>#(2) a = [seed + ", a heap-backed string, long enough to leave any inline buffer", "y"];
+    InlineArray<string>#(2) b = a;
+    return cast<int32>(b[1].length());
+}

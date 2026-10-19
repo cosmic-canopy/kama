@@ -1,0 +1,7 @@
+// A `type value` owns nothing and is copied bitwise, so it cannot hold an `InlineArray` whose elements own
+// something. Through 0.9.676 one of strings was accepted here, and every copy of `V` shared its strings' buffers.
+type value V {
+    InlineArray<string>#(2) s;
+    public ctor make() { this.s = ["a", "b"]; }
+}
+fn int32 main() { V v = V.make(); return 0; }

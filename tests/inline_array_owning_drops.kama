@@ -1,0 +1,73 @@
+// An `InlineArray` whose element owns something owns it too: it drops each element, moves rather than copies, and
+// says so at every hand-off, as a `DynamicArray` does. Through 0.9.676 its kind ignored the element: the array was
+// copied bitwise and never dropped, so `b = a` left two owners of each string and `b[0] = "x"` freed `a[0]`'s
+// (a safe-code use-after-free), while every element of a local, a field or a payload leaked. Each position an
+// owning array can stand in is below, and `dropped` must count each element exactly once, at the right moment.
+import { core::eprintln };
+
+static int32 dropped = 0;
+
+type resource H {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+    ~H() { dropped = dropped + 1; }
+}
+type resource Holder {
+    InlineArray<H>#(2) hs;
+    public ctor make() { this.hs = [H.make(id: 1), H.make(id: 2)]; }
+    public const fn int32 first() { return this.hs[0].get(); }
+}
+type enum Carry { Two(InlineArray<H>#(2) xs), Nil }
+
+fn InlineArray<H>#(2) pair(int32 first) {
+    InlineArray<H>#(2) a = [H.make(id: first), H.make(id: first + 1)];
+    return give a;
+}
+fn int32 sum(InlineArray<H>#(2) xs) { return xs[0].get() + xs[1].get(); }   // owns `xs`: drops both on return
+
+fn int32 at(int32 step, int32 want) {
+    if (dropped == want) { return 0; }
+    eprintln(s: "inline_array_owning_drops: step ${step}: dropped ${dropped}, want ${want}");
+    return 1;
+}
+
+fn int32 run() {
+    int32 bad = 0;
+    {
+        InlineArray<H>#(2) a = [H.make(id: 1), H.make(id: 2)];
+        a[0] = H.make(id: 3);                        // the replaced element drops          1
+        bad = bad + at(step: 1, want: 1);
+    }                                                // the local drops both                3
+    bad = bad + at(step: 2, want: 3);
+    {
+        InlineArray<H>#(2) a = pair(first: 10);       // a return
+        InlineArray<H>#(2) b = give a;               // a move: `a` drops nothing after it
+        bad = bad + at(step: 3, want: 3);
+        int32 s = sum(xs: give b);                   // a by-value parameter                5
+        bad = bad + at(step: 4, want: 5) + (s == 21 ? 0 : 100);
+    }
+    bad = bad + at(step: 5, want: 5);
+    {
+        Holder h = Holder.make();
+        bad = bad + (h.first() == 1 ? 0 : 100);
+    }                                                // a resource's field                  7
+    bad = bad + at(step: 6, want: 7);
+    {
+        Carry c = Carry::Two(xs: pair(first: 20));
+    }                                                // an enum payload                     9
+    bad = bad + at(step: 7, want: 9);
+    {
+        Optional<InlineArray<H>#(2)> o = Optional::Some(value: pair(first: 30));
+    }                                                // an `Optional`                       11
+    bad = bad + at(step: 8, want: 11);
+    {
+        InlineArray<InlineArray<H>#(2)>#(2) n = [pair(first: 40), pair(first: 50)];
+    }                                                // nested                              15
+    bad = bad + at(step: 9, want: 15);
+    pair(first: 60);                                  // discarded                           17
+    bad = bad + at(step: 10, want: 17);
+    return bad;
+}
+
+fn int32 main() { return run() == 0 ? 42 : 1; }

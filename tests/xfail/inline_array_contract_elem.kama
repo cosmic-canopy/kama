@@ -1,0 +1,7 @@
+// An `InlineArray` stores its elements in place, and a contract has no layout to store: its elements hold a handle,
+// `Owned<C>` or `Shared<C>`. Every other element type is allowed, and an owning one makes the array own it.
+type contract Shape for value, resource { const fn int32 area(); }
+fn int32 main() {
+    slot InlineArray<Shape>#(2) shapes;
+    return 0;
+}

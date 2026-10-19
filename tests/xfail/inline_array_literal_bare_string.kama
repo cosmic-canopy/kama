@@ -1,0 +1,7 @@
+// An element of an array literal is handed off to the array. A named `string` there says which hand-off it means
+// — `give s` or `copy s` — as it does in `xs.add(item: …)`; bare, it would be two owners of one buffer.
+fn int32 main() {
+    string s = "a heap-backed string, long enough to leave any inline buffer";
+    InlineArray<string>#(2) a = [s, "y"];
+    return 0;
+}

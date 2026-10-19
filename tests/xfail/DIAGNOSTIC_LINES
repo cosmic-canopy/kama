@@ -264,7 +264,6 @@ const_view_write	const_view_write.kama:9
 constgen_arity	constgen_arity.kama:4 constgen_arity.kama:5
 constgen_count	constgen_count.kama:3
 constgen_oob	constgen_oob.kama:4
-constgen_resource_elem	constgen_resource_elem.kama:3 constgen_resource_elem.kama:5
 constparam_as_type	constparam_as_type.kama:8
 constparam_assign	constparam_assign.kama:8
 constparam_shadow_field	constparam_shadow_field.kama:5
@@ -678,6 +677,13 @@ init_kind_string_from_method	init_kind_string_from_method.kama:11
 init_kind_string_from_sizeof	init_kind_string_from_sizeof.kama:3
 init_kind_string_from_ternary	init_kind_string_from_ternary.kama:5
 init_result_into_string	init_result_into_string.kama:8
+inline_array_contract_elem	inline_array_contract_elem.kama:5
+inline_array_fill_not_copyable	inline_array_fill_not_copyable.kama:5
+inline_array_foreach_not_copyable	inline_array_foreach_not_copyable.kama:7
+inline_array_literal_bare_string	inline_array_literal_bare_string.kama:5
+inline_array_owning_bare_copy	inline_array_owning_bare_copy.kama:7
+inline_array_owning_in_value	inline_array_owning_in_value.kama:3
+inline_array_owning_static	inline_array_owning_static.kama:4
 inline_array_size_local	inline_array_size_local.kama:5
 inline_array_size_runtime_static	inline_array_size_runtime_static.kama:7
 inline_array_size_unknown	inline_array_size_unknown.kama:5

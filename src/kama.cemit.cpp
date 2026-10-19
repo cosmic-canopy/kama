@@ -1501,9 +1501,11 @@ void CEmitter::noteScopedBinding(const std::string& name)
 // the binder through the outer entry and pile cascade errors on top of the one true message. One binder,
 // one diagnostic, which is what makes the `xfail` fixtures for this rule assert exactly one error.
 //
-// `_localCTypes` is deliberately never WRITTEN for these binders (see bindArmPayloadTypes: a
-// `foreach (string s …)` binding is a borrow on the indexed path and an owned value on the iterator path,
-// and an entry perturbs `ownsByValue` LHS detection). Erasing is not writing.
+// `_localCTypes` is written for a binder only when the binding OWNS its value: a `foreach` binding the loop hands a
+// copy (the iterator path, and an owning `InlineArray`'s), whose assignment must drop the copy it held — through
+// 0.9.677 `foreach (string s in xs) { s = "z"; }` leaked one string per pass, because without the entry the write was
+// a bare blit. A borrowed binder (a plain array's element, a `match` payload — see bindArmPayloadTypes) gets none:
+// an entry would make its assignment drop what it borrows. Erasing is not writing.
 void CEmitter::hideShadowedLocal(const std::string& name, bool refBinder)
 {
     _localCTypes.erase(name);
@@ -8202,7 +8204,7 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
         // `default` ctor — e.g. a raw-handle `resource` field) is NOT yet live. Seed its `local.field`
         // move-state Moved so the first `f.field = give …` does NOT drop the zeroed slot (which for a raw
         // handle would e.g. close(0)).
-        if (!filled && isMoveOnlyValue(fcls))
+        if (!filled && (isMoveOnlyValue(fcls) || isOwningFixed(fcls)))
             _moveState[mk + "." + f.name] = MoveState::Moved;
     }
     // Construction-model M8 Phase E: a polymorphic (vtable-carrying) value sets its `__vptr` directly — the
@@ -8567,12 +8569,12 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // a contradiction. Spell `T x = T.empty();` to get the default.
                 // A local about to be filled in place (`[v; N]`) is written element by element before anything
                 // reads it, so zeroing it first is only a second pass over the same storage.
-                const bool fillInit = d->initializer && isFillLiteral(d->initializer.get()) && isFixedColl(ty);
+                const bool fillInit = d->initializer && isFillLiteral(d->initializer.get()) && isPlainFixed(ty);
                 bool zeroInit = (_classes[ty].isIntrinsicColl || _classes[ty].isExternStruct
                     || !d->initializer) && !fillInit;
                 *_out << ty << " " << kName(nm) << (zeroInit ? " = {0}" : "") << ";\n";
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
-                if (_classes[ty].destructible || isMoveOnlyValue(ty)) recordDestructibleLocal(nm, ty, /*userName=*/true);  // track empty resources for move analysis
+                if (_classes[ty].destructible || isMoveOnlyValue(ty) || isOwningFixed(ty)) recordDestructibleLocal(nm, ty, /*userName=*/true);  // track empty resources for move analysis
                 // `slot T x;` — a HOLE, so it is not live and must NOT be dropped. Seed the state the
                 // move analysis already uses for "this local owns nothing right now": scope cleanup skips
                 // a Moved local, and an assignment's drop-the-old-value step is suppressed the same way.
@@ -8901,7 +8903,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         if (doGive) *_out << smartPtrInvalidate(emitExpression(init), k, isInterface(_classes[ty].collElemClass)) << "\n";
                         else        *_out << kName(nm) << ".kama_ctrl->" << (k == CollKind::Weak ? "kama_weak" : "kama_strong") << "++;\n";
                     } else if (_classes.count(ty) && _classes[ty].isIntrinsicColl
-                               && !isFixedColl(ty) && !isValueVectorKind(_classes[ty].collKind)
+                               && !isPlainFixed(ty) && !isValueVectorKind(_classes[ty].collKind)
                                && isNamedValue(init.get())) {
                         // a collection move/deep-copy isn't a plain `=` — require a marker. (A
                         // `Fixed` is a value: the plain `=` above already copied it — no marker. A
@@ -9412,6 +9414,21 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             _refParams.insert(nm);
             _refBindingOperand[nm] = fe->expression;   // the element lives in the operand
             if (fe->isConstRef) _constLocals.insert(nm);
+        } else if (isOwningFixed(coll)) {
+            // An owning element is handed to the pass as a COPY, which the pass drops — what a `DynamicArray`'s
+            // iterator yields. Through 0.9.676 the binding was the element's own bytes, so `s = "z"` in the body
+            // freed the array's string. An element that does not copy is borrowed instead.
+            if (!payloadCopyable(elemTy)) {
+                const std::string tn = fe->type ? kamaTypeText(fe->type) : "T";
+                unsupported(("`foreach (" + tn + " " + nm + " in …)` takes a copy of each element, and "
+                             + aOrAn(demangleForDisplay(elemTy)) + " does not copy — borrow each one with `foreach "
+                             "(const ref " + tn + " " + nm + " in …)`, or `ref` to write it").c_str(), n);
+            }
+            *_out << elemTy << " " << kName(nm) << ";\n";
+            indent(depth + 2);
+            *_out << elemCopyStmt(elemTy, kName(nm), fp + "->kama_v[" + ix + "]", true) << "\n";
+            recordDestructibleLocal(nm, elemTy, /*userName=*/true);   // dropped at the end of the pass
+            _localCTypes[nm] = elemTy;                                  // ...and by a write to it, as any owned local
         } else {
             *_out << elemTy << " " << kName(nm) << " = " << coll << "__get(" << fp << ", " << ix << ", "
                   << trapLoc(fe->line) << ");\n";
@@ -9612,7 +9629,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     checkConstWrite(as->unaryExpression, n->line);
                     bool named  = isNamedValue(rhs.get());
                     bool isColl = _classes[et].isIntrinsicColl && !isSmartPtrClass(et);   // List/Array/string element
-                    bool copyable = isColl || isCopyable(et);
+                    bool copyable = isFixedColl(et) ? payloadCopyable(et) : (isColl || isCopyable(et));
                     bool doCopy;
                     if (handoff == 2) {
                         if (!copyable) unsupported(("`copy` of a `" + et + "` element needs a `Copyable` element "
@@ -9840,6 +9857,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 std::string lname;
                 if (auto* lid = dynamic_cast<IdentifierNode*>(as->unaryExpression.get()))
                     if (lid->value && (!lid->qualifier || lid->qualifier->empty())) lname = *lid->value;
+                // Whether the target holds a value to drop is asked by its MOVE KEY, as every other assignment asks:
+                // `this.f` in a constructor starts unfilled, and dropping its zeroed bytes runs element destructors
+                // on nothing (an owning `InlineArray` of resources). A bare local's key is its name.
+                const std::string lkey = lvalueMoveKey(as->unaryExpression);
 
                 if (isNamedValue(rhs.get())) {
                     // A bindable reaches this branch too (it is an intrinsic that owns), but only `give`
@@ -9875,7 +9896,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                         line(n->line);
                         flushHoisted(depth);
                         src = copyFirst(lty, src, depth);
-                        if (assignTargetLive(lname)) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
+                        if (assignTargetLive(lkey)) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
+                        if (!lkey.empty()) _moveState[lkey] = MoveState::NotMoved;
                         indent(depth); *_out << b << " = " << src << ";\n";
                         return;
                     }
@@ -9883,8 +9905,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     std::string mv = moveOnlySource(rhs, n->line);
                     if (!lname.empty() && !mv.empty() && mv == lname)
                         unsupported("handing a value onto itself would use it after it was dropped", n);
-                    const bool live = assignTargetLive(lname);
-                    if (!lname.empty()) _moveState[lname] = MoveState::NotMoved;   // target live again
+                    const bool live = assignTargetLive(lkey);
+                    if (!lkey.empty()) _moveState[lkey] = MoveState::NotMoved;   // target live again
                     std::string b = emitExpression(as->unaryExpression), src = emitExpression(rhs);
                     line(n->line);
                     if (live) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
@@ -9912,7 +9934,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 line(n->line);
                 flushHoisted(depth);                                   // Formatter build + operand temps first…
                 indent(depth); *_out << lty << " " << t << " = " << rv << ";\n";
-                if (assignTargetLive(lname)) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
+                if (assignTargetLive(lkey)) { indent(depth); *_out << lty << "__dtor(&" << b << ");\n"; }
+                if (!lkey.empty()) _moveState[lkey] = MoveState::NotMoved;
                 indent(depth); *_out << b << " = " << t << ";\n";
                 return;
             }
@@ -9984,7 +10007,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 bool ph = _hoistOK; _hoistOK = true;
                 std::string pm = _matchTargetCType, pv = _variantTargetType;
                 _matchTargetCType = _variantTargetType = lhsCType;
-                if (isFillLiteral(as->expression.get()) && isFixedColl(lhsCType)) {   // filled where it lives
+                if (isFillLiteral(as->expression.get()) && isPlainFixed(lhsCType)) {   // filled where it lives
                     const std::string st = emitArrayLiteral(static_cast<ArrayLiteralNode*>(as->expression.get()), &lhs);
                     _matchTargetCType = pm; _variantTargetType = pv;
                     _hoistOK = ph;
@@ -13289,6 +13312,76 @@ bool CEmitter::isFixedColl(const std::string& cls) const
     return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Fixed;
 }
 
+// Read off the element by computeDestructible, so a question asked before that pass answers "plain".
+bool CEmitter::isOwningFixed(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Fixed
+        && (it->second.destructible || it->second.moveOnly);
+}
+
+bool CEmitter::isPlainFixed(const std::string& cls) const { return isFixedColl(cls) && !isOwningFixed(cls); }
+
+// A deep copy of an owning `InlineArray` allocates exactly when its element's does in a RUNTIME function (a
+// `string`'s `kama_string__copy`), whose body is not kama the call graph can read. A class element's copy is an
+// emitted body with facts of its own, reached through the emitted `__copy` loop.
+bool CEmitter::fixedCopyAllocates(const std::string& cls) const
+{
+    auto co = _collections.find(cls);
+    if (co == _collections.end()) return false;
+    const std::string& e = co->second.elemCType;
+    if (isFixedColl(e)) return fixedCopyAllocates(e);
+    auto it = _classes.find(e);
+    return it != _classes.end() && it->second.isIntrinsicColl && !isSmartPtrClass(e) && ownsByValue(e);
+}
+
+std::string CEmitter::elemCopyStmt(const std::string& e, const std::string& dst, const std::string& src, bool atUseSite)
+{
+    if (isSmartPtrClass(e))   // a handle comes across bitwise; a copy is one more reference
+        return dst + " = " + src + "; " + dst + ".kama_ctrl->"
+             + (smartKind(e) == CollKind::Weak ? "kama_weak" : "kama_strong") + "++;";
+    if (ownsByValue(e))
+        return dst + " = " + (atUseSite ? copyCall(e, src) : e + "__copy((" + e + "*)&(" + src + "))") + ";";
+    return dst + " = " + src + ";";
+}
+
+// An owning `InlineArray`'s own functions — what a `DynamicArray`'s destructor and copy constructor do, for N
+// elements in place: drop each, copy each, or fill each from one value. The prototypes go out beside
+// KAMA_FIXED_FUNCS; the bodies after every class's prototypes, because an element's `__dtor`/`__copy` may belong
+// to a type the header declares later. A plain `InlineArray` has none: it is its bytes.
+void CEmitter::emitOwningFixedFuncs(const CollectionInfo& info, bool protosOnly)
+{
+    const std::string& N = info.cName;
+    const std::string& E = info.elemCType;
+    if (!isOwningFixed(N)) return;
+    auto ec = _classes.find(E);
+    const bool drops  = _classes[N].destructible && ec != _classes.end() && ec->second.destructible;
+    const bool copies = payloadCopyable(E);
+    const std::string n = "(size_t)(" + std::to_string(info.constValue) + ")";
+    if (protosOnly) {
+        if (drops) *_out << "static inline void " << N << "__dtor(" << N << "* self);\n";
+        if (copies) {
+            *_out << "static inline " << N << " " << N << "__copy(" << N << "* src);\n";
+            *_out << "static inline void " << N << "__fillCopyInto(" << N << "* self, " << E << "* v);\n";
+            *_out << "static inline " << N << " " << N << "__fillCopy(" << E << "* v);\n";
+        }
+        return;
+    }
+    if (drops)
+        *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n"
+              << "    for (size_t i = 0; i < " << n << "; ++i) " << E << "__dtor(&self->kama_v[i]);\n}\n\n";
+    if (copies) {
+        *_out << "static inline " << N << " " << N << "__copy(" << N << "* src) {\n"
+              << "    " << N << " r;\n"
+              << "    for (size_t i = 0; i < " << n << "; ++i) { " << elemCopyStmt(E, "r.kama_v[i]", "src->kama_v[i]", false) << " }\n"
+              << "    return r;\n}\n\n";
+        *_out << "static inline void " << N << "__fillCopyInto(" << N << "* self, " << E << "* v) {\n"
+              << "    for (size_t i = 0; i < " << n << "; ++i) { " << elemCopyStmt(E, "self->kama_v[i]", "(*v)", false) << " }\n}\n\n";
+        *_out << "static inline " << N << " " << N << "__fillCopy(" << E << "* v) { " << N << " r; " << N
+              << "__fillCopyInto(&r, v); return r; }\n\n";
+    }
+}
+
 bool CEmitter::isSimdColl(const std::string& cls) const
 {
     auto it = _classes.find(cls);
@@ -13997,13 +14090,17 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     std::string elemMangle = mangleElem(elem);
     std::string elemClass  = isClass(elemCType) ? elemCType : "";
 
-    // The element must OWN NOTHING (a `value` or primitive): an `InlineArray` is a plain value with no
-    // per-element dtor, so a `resource`/interface/destructible element would leak or dangle.
-    if (isInterface(elemCType) || (!elemClass.empty() && isMoveOnlyValue(elemClass))) {
+    // An `InlineArray`'s kind follows its element: over a value it is a value array (copied bitwise, nothing to
+    // drop); over an element that owns something — a `string`, a resource, an owning enum, an owning array — it owns
+    // its elements as a `DynamicArray` does, dropping, moving and deep-copying them (computeDestructible derives
+    // that from the element once every type's facts are settled). Through 0.9.676 this check refused a declared
+    // `resource` and nothing else, so a `string` or `Optional<string>` element made a "value" that was copied
+    // bitwise and never dropped: two owners of each buffer, and a use-after-free in safe code. A contract names
+    // no layout, so it is the one element refused.
+    if (isInterface(elemCType)) {
         std::string nm = (elem && elem->value) ? *elem->value : elemCType;
-        unsupported(("an `InlineArray<T>#(N)` element must be a `value` (it owns nothing) — `" + nm +
-                     "` is a `resource`/contract, which would leak; wrap it in an owning `FixedArray`/"
-                     "`DynamicArray` instead").c_str(), fixedType);
+        unsupported(("an `InlineArray<T>#(N)` element is stored in place, and `" + nm + "` is a contract, which has "
+                     "no layout — hold `Owned<" + nm + ">` or `Shared<" + nm + ">` elements instead").c_str(), fixedType);
         return;
     }
 
@@ -14025,7 +14122,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     ci.isIntrinsicColl = true;
     ci.collKind = CollKind::Fixed;
     ci.collElemClass = elemClass;
-    ci.destructible = false;                   // a value — owns no heap
+    ci.destructible = false;                   // until computeDestructible reads the element
     auto addMethod = [&](const std::string& mname, std::vector<ParamSig> params, SharedIdentifier ret,
                          bool isConst) {
         MethodInfo mi; mi.cName = cName + "__" + mname;
@@ -18303,6 +18400,7 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                 *_out << "KAMA_FIXED_FUNCS(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName << ")\n";
                 emitFixedView(info);   // ...and the `View<T>` mint the macro cannot name
+                emitOwningFixedFuncs(info, /*protosOnly=*/true);   // an owning array's drop/copy, defined below
             }
         }
         else if (info.kind == CollKind::Simd) {
@@ -18913,8 +19011,10 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         // and must drop it each iteration. This is sound because a `next()` returning an owning value into
         // its `Optional<T>` must hand it off with `give`/`copy` (a bare named payload is rejected at variant
         // construction), so the yield is always a fresh/owned value, never an alias the iterator still owns.
-        if (_classes.count(elemTy) && _classes[elemTy].destructible)
+        if (_classes.count(elemTy) && _classes[elemTy].destructible) {
             recordDestructibleLocal(nm, elemTy, /*userName=*/true);
+            _localCTypes[nm] = elemTy;   // an owned binding: writing it drops the copy it held (see hideShadowedLocal)
+        }
     }
     SharedStatement last;
     if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
@@ -18981,10 +19081,12 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al, const std::string* 
         std::string s = isSimd ? ("(" + ty + "){") : ("(" + ty + "){ .kama_v = {");
         // Each element by value — an inline constructor element (`[Point(x:1,y:2), …]`) is
         // materialized into a hoisted temp (ISO C, no statement-expression), like an operator operand.
+        // An owning array takes each element as a hand-off, as `DynamicArray.add` does (arrayElemHandoff).
+        const bool owning = !isSimd && isOwningFixed(ty);
         for (size_t i = 0; i < al->elements->size(); ++i) {
             const SharedExpression& el = (*al->elements)[i];
             if (isLiteralExpr(el.get())) claimFloatLiterals(el, elemCType, "an element", false, al->line);
-            s += (i ? ", " : " ") + emitOperandByValue(el);
+            s += (i ? ", " : " ") + (owning ? arrayElemHandoff(el, elemCType, al->line) : emitOperandByValue(el));
         }
         s += isSimd ? " }" : " } }";
         return s;
@@ -19003,6 +19105,30 @@ std::string CEmitter::emitArrayLiteral(ArrayLiteralNode* al, const std::string* 
     // `[v; N]` on a lane batch IS a splat — the same literal, and the operation every SIMD API names
     // separately. One spelling covers both because they mean the same thing: N copies of one value.
     if (isLiteralExpr(al->fillValue.get())) claimFloatLiterals(al->fillValue, elemCType, "an element", false, al->line);
+    // An owning element is COPIED into every place, never blitted: `[s; 3]` over a `string` made three owners of one
+    // buffer. The value is read where it lies (a named one stays live) or built once into a temporary the scope
+    // drops, and each element is its own deep copy — so the element has to copy.
+    if (!isSimd && isOwningFixed(ty)) {
+        if (!payloadCopyable(elemCType)) {
+            unsupported(("a fill `[v; N]` copies `v` into every element, and " + aOrAn(demangleForDisplay(elemCType))
+                         + " does not copy — write the elements out, `[a, b, …]`").c_str(), al);
+            return "0";
+        }
+        std::string src;
+        if (isNamedValue(al->fillValue.get())) src = "(" + elemCType + "*)&(" + emitPlace(al->fillValue) + ")";
+        else if (!_hoistOK) {
+            unsupported("this fill `[v; N]` builds `v` once and copies it, which needs a statement slot — bind the "
+                        "array to a local first", al);
+            return "0";
+        } else {
+            const std::string t = "kama_fillv" + std::to_string(_tempCounter++);
+            _hoisted.push_back(elemCType + " " + t + " = " + emitOperandByValue(al->fillValue) + ";");
+            recordDestructibleLocal(t, elemCType);
+            src = "&" + t;
+        }
+        if (into) return ty + "__fillCopyInto(&(" + *into + "), " + src + ")";
+        return ty + "__fillCopy(" + src + ")";
+    }
     if (into && !isSimd) return ty + "__fillInto(&(" + *into + "), " + emitOperandByValue(al->fillValue) + ")";
     return ty + (isSimd ? "__splat(" : "__fill(") + emitOperandByValue(al->fillValue) + ")";
 }
@@ -19163,6 +19289,73 @@ std::string CEmitter::ternaryArmHandoff(const SharedExpression& arm, const std::
         return movedOnOnePath();
     }
     return emitExpression(v);                                                          // a plain value copies
+}
+
+// One element of an array literal that builds an OWNING `InlineArray`, as the expression the array owns — the
+// hand-off the same value makes into a `DynamicArray` with `add(item: …)`. A fresh value moves in with no marker;
+// `give x` moves `x`; `copy x` deep-copies it (a handle retains); a bare name takes its type's bare default where
+// that is a hand-off — a `Shared` retains, an `Owned` or a resource moves, a `Copyable(bare: copy)` resource
+// copies — and a `string`, collection or owning array says which it means, as at every other hand-off of one.
+std::string CEmitter::arrayElemHandoff(const SharedExpression& el, const std::string& cls, int line)
+{
+    auto* h = dynamic_cast<HandoffNode*>(el.get());
+    SharedExpression v = h ? h->value : el;
+    const bool named = isNamedValue(v.get());
+    if (!named) {
+        if (h) unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", line);
+        return emitOperandByValue(v);
+    }
+    const std::string what = unparseExpr(v);
+    const std::string shown = demangleForDisplay(cls);
+    auto it = _classes.find(cls);
+    const bool smart = isSmartPtrClass(cls);
+    const bool coll  = !smart && it != _classes.end() && it->second.isIntrinsicColl;
+    auto needsSlot = [&]() {
+        unsupported(("handing `" + what + "` to an array literal here needs a statement slot — bind the array to a "
+                     "local first").c_str(), line);
+        return emitExpression(v);
+    };
+    // A move relocates the bytes and records the source as moved, so its own drop is skipped; a string or
+    // collection source is also emptied and a handle source nulled, as a declaration's `give` does.
+    auto moveIn = [&]() -> std::string {
+        if (!_hoistOK) return needsSlot();
+        if (coll) giveOfBorrowedBinding(v, line);
+        const std::string t = "kama_aelt" + std::to_string(_tempCounter++);
+        const std::string val = emitPlace(v);
+        std::string st = cls + " " + t + " = " + val + ";";
+        if (smart) st += " " + smartPtrInvalidate(val, smartKind(cls), isInterface(it->second.collElemClass));
+        else if (coll) st += " " + moveNullStmt(cls, val);
+        _hoisted.push_back(st);
+        std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv);
+        return t;
+    };
+    auto copyIn = [&]() -> std::string {
+        if (smart) {
+            if (smartKind(cls) == CollKind::Owned) {
+                unsupported("an `Owned` is unique — it can't be `copy`'d; use `give` to move it", line);
+                return emitExpression(v);
+            }
+            if (!_hoistOK) return needsSlot();
+            const std::string t = "kama_aelt" + std::to_string(_tempCounter++);
+            _hoisted.push_back(cls + " " + t + "; " + elemCopyStmt(cls, t, emitPlace(v), true));
+            return t;
+        }
+        if (!payloadCopyable(cls)) {
+            unsupported(notCopyableMessage(cls, "use `give` to move it").c_str(), line);
+            return emitExpression(v);
+        }
+        return ownsByValue(cls) ? copyCall(cls, emitPlace(v)) : emitExpression(v);
+    };
+    if (h) return h->isGive ? moveIn() : copyIn();
+    if (smart) return smartKind(cls) == CollKind::Owned ? moveIn() : copyIn();
+    if (coll) {
+        unsupported(("an element of an array literal is handed off, and `" + what + "` is " + aOrAn(shown) + " — "
+                     "say `give " + what + "` (move) or `copy " + what + "` (deep)").c_str(), line);
+        return emitExpression(v);
+    }
+    if (isMoveOnlyValue(cls))
+        return (isCopyable(cls) && it->second.bareDefault == COPY) ? copyIn() : moveIn();
+    return emitExpression(v);   // a plain value copies
 }
 
 // One arm of an owning ternary that is a PLACE, as a `cls*`. A named arm is addressed where it lives (cast,
@@ -19541,6 +19734,9 @@ std::string CEmitter::smartPtrInvalidate(const std::string& expr, CollKind kind,
 // could be built and called, and never stored anywhere. One helper, five sites, dispatched on the class.
 std::string CEmitter::moveNullStmt(const std::string& cls, const std::string& expr) const
 {
+    // An `InlineArray` has no buffer of its own to empty: a move relocates its bytes, and the move state stops the
+    // source's drop.
+    if (isFixedColl(cls)) return "";
     if (isBindableClass(cls))
         return "(" + expr + ").kama_obj = NULL; (" + expr + ").kama_ctrl = NULL; (" + expr + ").kama_fn = NULL; ("
              + expr + ").kama_release = NULL;";
@@ -19606,8 +19802,9 @@ bool CEmitter::ownsByValue(const std::string& cls) const
     // needs no `give`/`copy` marker. This is the most central of the several places the question "is this
     // an intrinsic that owns something" is asked, and asking it as `!isFixedColl` alone made every
     // `Simd`/`Mask` argument demand an ownership marker it has no meaning for.
+    // An OWNING `InlineArray` (one whose element owns something) is a transfer like any collection.
     return it != _classes.end() && it->second.isIntrinsicColl
-        && !isFixedColl(cls) && !isValueVectorKind(it->second.collKind);
+        && !isPlainFixed(cls) && !isValueVectorKind(it->second.collKind);
 }
 
 
@@ -19705,7 +19902,11 @@ bool CEmitter::payloadCopyable(const std::string& t)
     const ClassInfo& ci = it->second;
     if (ci.isVariant) return variantCopyable(ci);
     if (ci.kind == TypeKind::Value || ci.isExternStruct) return true;   // owns nothing: bitwise
-    if (ci.isIntrinsicColl && (ci.collKind == CollKind::Fixed || isValueVectorKind(ci.collKind))) return true;
+    if (ci.isIntrinsicColl && isValueVectorKind(ci.collKind)) return true;
+    if (ci.isIntrinsicColl && ci.collKind == CollKind::Fixed) {   // an `InlineArray` copies as its element does
+        auto co = _collections.find(t);
+        return co == _collections.end() || payloadCopyable(co->second.elemCType);
+    }
     return ci.copyable;   // a resource only by declaring `Copyable`; a string; a collection whose elements copy
 }
 
@@ -19889,6 +20090,8 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
         if (it->second.isVariant)                              // an enum → when every payload copies
             return const_cast<CEmitter*>(this)->variantCopyable(it->second);
+        if (it->second.isIntrinsicColl && (it->second.collKind == CollKind::Fixed || isValueVectorKind(it->second.collKind)))
+            return const_cast<CEmitter*>(this)->payloadCopyable(it->first);   // an `InlineArray` as its element; a lane batch
         return it->second.copyable;                            // a resource → only if `implements Copyable`
     }
     // A graph is read back as `Shared<X>`: the root arrives behind a handle because a cycle cannot be
@@ -21315,6 +21518,18 @@ void CEmitter::computeDestructible()
         for (auto& kv : _classes) {
             ClassInfo& ci = kv.second;
             if (ci.destructible || ci.isExternStruct) continue;   // kama doesn't own external structs
+            // An `InlineArray` owns what its element owns: it drops when the element does, and moves when the
+            // element must be handed off rather than blitted (a string, a resource, an owning enum or array).
+            if (ci.isIntrinsicColl && ci.collKind == CollKind::Fixed) {
+                auto co = _collections.find(kv.first);
+                auto ec = co == _collections.end() ? _classes.end() : _classes.find(co->second.elemCType);
+                if (ec == _classes.end()) continue;
+                const bool fd = ec->second.destructible;
+                const bool fm = fd || ec->second.moveOnly || isSmartPtrClass(ec->first) || ownsByValue(ec->first);
+                if (fd) { ci.destructible = true; changed = true; }
+                if (fm && !ci.moveOnly) { ci.moveOnly = true; changed = true; }
+                continue;
+            }
             // a specialized instance's fields are typed in `T` — resolve them under its binding
             // (and the template's scope) so `Box<Resource>` correctly sees the owned resource.
             bool inst = ci.isGenericInst && _genericTypeInsts.count(ci.name);
@@ -21380,6 +21595,17 @@ void CEmitter::computeDestructible()
         bool known = !info.elemClass.empty() && it != _classes.end();
         info.elemDestructible = known && it->second.destructible;
         info.elemCopyable     = known && it->second.copyable;   // deep-copy each element
+        // An `InlineArray`'s copy gates read these too. Its element "owns" when it must be handed off rather than
+        // blitted — a dtor-less resource included — and copies as payloadCopyable says, which also answers whether
+        // the array itself is `Copyable`.
+        if (info.kind == CollKind::Fixed) {
+            auto ec = _classes.find(info.elemCType);
+            info.elemDestructible = ec != _classes.end()
+                && (ec->second.destructible || ec->second.moveOnly || isSmartPtrClass(ec->first) || ownsByValue(ec->first));
+            info.elemCopyable = payloadCopyable(info.elemCType);
+            auto self = _classes.find(info.cName);
+            if (self != _classes.end()) self->second.copyable = info.elemCopyable;
+        }
     }
     // A `value` owns nothing. `destructible` (computed above, transitively over base + owned fields +
     // collections + smart-ptrs) is exactly "owns something to drop", so a destructible `value` is a
@@ -27251,7 +27477,11 @@ bool CEmitter::isDefaultFillable(const std::string& c)
         case CollKind::String: case CollKind::Simd: case CollKind::Mask: return true;
         case CollKind::Fixed: {                            // element by element
             auto co = _collections.find(c);
-            return co != _collections.end() && isDefaultFillable(co->second.elemCType);
+            if (co == _collections.end() || !isDefaultFillable(co->second.elemCType)) return false;
+            // A fill blits one value into every place, so an element whose default is a CONSTRUCTOR call (not all
+            // zero bytes) and that owns something would be N owners of one value: such an array is assigned whole.
+            const std::string& e = co->second.elemCType;
+            return defaultValueExpr(e).empty() || !(isMoveOnlyValue(e) || ownsByValue(e) || isSmartPtrClass(e));
         }
         default: return false;                             // Owned / Shared / Weak / Bindable
     }
@@ -30853,7 +31083,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                     field = val;
                 }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl
-                       && !isFixedColl(argCls) && handoff) {
+                       && !isPlainFixed(argCls) && handoff) {
                 // Hand a heap collection/`string` into the union: `copy` deep-copies (`__copy`; the union owns
                 // the clone, the source survives), `give` transfers the struct (buffer) and nulls the
                 // source so its scope-drop is a no-op (the union now owns it, dropped by the tag dtor).
@@ -30882,7 +31112,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                     field = t;
                 }
             } else if (!argCls.empty() && _classes.count(argCls) && _classes[argCls].isIntrinsicColl
-                       && !isFixedColl(argCls) && isNamedValue(argExpr.get())) {
+                       && !isPlainFixed(argCls) && isNamedValue(argExpr.get())) {
                 // A bare NAMED heap collection/`string` into a variant would alias (the union owns it AND the
                 // source frees it → double-free / dangle). Ownership transfer must be explicit — `give`
                 // (move) or `copy` (deep). A fresh rvalue payload (a call result / literal) needs no marker.
@@ -30893,7 +31123,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 // Primitive / plain value / fresh smart-ptr rvalue (factory result): consumed in place.
                 // A `give`/`copy` on a plain value (primitive or `value` struct) is a no-op — a value is
                 // always copied — so only a stray marker on a fell-through resource rvalue is an error.
-                bool plainValue = argCls.empty() || isFixedColl(argCls)   // InlineArray: a value that owns nothing
+                bool plainValue = argCls.empty() || isPlainFixed(argCls)   // an InlineArray of values owns nothing
                     || (_classes.count(argCls) && _classes[argCls].kind == TypeKind::Value);
                 // A tagged-union (enum) value accepts `give` into the outer variant — the tag+payload copies
                 // bitwise (a no-op move for a non-owning enum like `Result::Ok(value: give myEnum)` in
@@ -32196,7 +32426,7 @@ std::string CEmitter::copiedThrough(const std::string& ty, SharedExpression v, i
     // collection too, so without this the collection rule below answered `__copy` and the handle was
     // retained twice: `Rc<Shape> b = copy a;` leaked its object.
     if (isSmartPtrClass(ty) && isSmartPtrLValue(v)) return "";
-    if (c->second.isIntrinsicColl && !isFixedColl(ty) && !isValueVectorKind(c->second.collKind)) {
+    if (c->second.isIntrinsicColl && !isPlainFixed(ty) && !isValueVectorKind(c->second.collKind)) {
         if (handoff != 2) return "";
         auto ci = _collections.find(ty);
         return (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable) ? "" : ty;
@@ -32224,7 +32454,8 @@ std::string CEmitter::copyCall(const std::string& cls, const std::string& lvalue
     // recorded here instead. This is the same reason `GlobalAllocator` had to be named: every chain ends
     // in C, and the leaf is wherever the C is known to allocate.
     auto ci = _classes.find(cls);
-    if (ci != _classes.end() && ci->second.isIntrinsicColl && ownsByValue(cls)) {
+    if (ci != _classes.end() && ci->second.isIntrinsicColl && ownsByValue(cls)
+        && (!isFixedColl(cls) || fixedCopyAllocates(cls))) {
         // Recorded for every body and refused only in a `@noheap` one, like every other site (rejectIfNoHeap).
         // The prelude deep-copies a string in `Template.part` (`return copy this._parts[at]`), and that body is
         // emitted into every build — which is why the flag could never refuse this where it is written.
@@ -42627,6 +42858,11 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // specialized generic-type instance prototypes (ctor/dtor/method), `static`.
     for (const std::string& m : _genericTypeInstOrder)
         emitGenericTypeInst(_genericTypeInsts[m], /*phase=*/1);
+    // An owning `InlineArray`'s bodies, after every prototype its element's `__dtor`/`__copy` may be: a class's
+    // (above), and a generic instance's such as `Optional<string>`'s (just now).
+    for (const std::string& cName : _collectionOrder)
+        if (_collections.count(cName) && _collections[cName].kind == CollKind::Fixed)
+            emitOwningFixedFuncs(_collections[cName], /*protosOnly=*/false);
     // Prototypes for kama's OWN free functions. kama never emits prototypes for
     // `extern` C functions: an `extern` decl is purely kama's call signature
     // (name + named params, for lowering) — the C prototype comes from the header
@@ -42945,7 +43181,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
     // typedef over a primitive, so there is no struct, no element dtor and nothing to tear down. Allow
     // both; reject heap collections, smart pointers, destructible and move-only values.
     bool isValueArray = _classes.count(ty)
-                     && (_classes[ty].collKind == CollKind::Fixed || isValueVectorKind(_classes[ty].collKind));
+                     && (isPlainFixed(ty) || isValueVectorKind(_classes[ty].collKind));   // an owning array owns memory
     if (!isPtr && !isValueArray && _classes.count(ty)
         && (_classes[ty].destructible || _classes[ty].isIntrinsicColl
             || isSmartPtrClass(ty) || isMoveOnlyValue(ty))) {
@@ -42956,7 +43192,7 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
         // outlive a frame, `adopt` takes it back to destroy. GOALS §3a/§3e; the design for a destructible
         // static is kept in ROADMAP_DETAIL §2 should an isolate/MCU case ever pull it.
         if (!declOnly)
-            unsupported(("a module `static` must be a value, UnsafePtr, `InlineArray` or `Simd` — `" + ty
+            unsupported(("a module `static` must be a value, UnsafePtr, `Simd`, or an `InlineArray` of values — `" + ty
                          + "` owns memory. A `static` is the MCU shape, not a home for a resource: persistence is "
                          "ownership, so keep it in an `Owned<" + ty + ">`, and `release()` it to a foreign API's "
                          "userdata slot when it must outlive a frame").c_str(), mv);

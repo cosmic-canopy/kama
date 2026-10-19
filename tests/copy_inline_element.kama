@@ -13,7 +13,7 @@ fn int32 main() {
     string b = "x";
     b = copy sides[0];                                // assignment
     int32 r = len(s: copy sides[i]);                  // argument
-    string c = pick(a: sides, i: 0);                  // return
+    string c = pick(a: copy sides, i: 0);             // return (the array owns its strings: passing it is a hand-off)
     Held h = Held::One(s: copy sides[1]);             // payload
     DynamicArray<string> xs = DynamicArray.empty();
     xs.add(item: copy sides[0]);                      // collection argument

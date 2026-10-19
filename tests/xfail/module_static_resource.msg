@@ -1,1 +1,1 @@
-must be a value, UnsafePtr, `InlineArray` or `Simd`
+must be a value, UnsafePtr, `Simd`, or an `InlineArray` of values

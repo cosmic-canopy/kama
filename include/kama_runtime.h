@@ -1018,11 +1018,13 @@ KAMA_PLACE_TYPES(volatile, v)
 #define KAMA_POSTADD(p, b, F, L) KAMA_PLACE_SEL(postadd, p)((p), (b), (F), (L))
 #define KAMA_POSTSUB(p, b, F, L) KAMA_PLACE_SEL(postsub, p)((p), (b), (F), (L))
 
-// InlineArray<T,N> — a fixed-size, bounds-checked VALUE array (`struct { T kama_v[N]; }`). It owns no heap:
-// it copies by value (a plain struct blit), has no destructor, and never decays to a raw pointer.
-// The element must be a `value` (owns nothing), so there is no per-element dtor/copy. This is how
-// kama reintroduces raw arrays SAFELY — indexing is bounds-checked (a runtime trap), the size is
-// part of the type (monomorphized per (T,N)), and the whole thing is a first-class value.
+// InlineArray<T,N> — a fixed-size, bounds-checked array stored in place (`struct { T kama_v[N]; }`). It never
+// decays to a raw pointer. Over a value element it owns nothing: it copies by a plain struct blit and has no
+// destructor. Over an element that owns something it owns its elements, and the compiler emits its per-element
+// `__dtor`/`__copy`/`__fillCopy` beside these macros (emitOwningFixedFuncs) — `__get`/`__set`/`__fill` below are
+// then never a hand-off of an element, only the bitwise reads and writes the emitted code builds on. This is how
+// kama reintroduces raw arrays SAFELY — indexing is bounds-checked (a runtime trap), and the size is part of the
+// type (monomorphized per (T,N)).
 #define KAMA_FIXED_TYPE(T, N, NAME) typedef struct NAME { T kama_v[N]; } NAME;
 // Indices are `ptrdiff_t` (kama's `isize`), not `size_t`: an index is a SIZE, and kama's size type is
 // signed so that `len - 1` on an empty container is -1 rather than SIZE_MAX. That makes the negative case

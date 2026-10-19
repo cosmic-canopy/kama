@@ -3705,6 +3705,18 @@ container chooses whether to pay for it. `FixedArray`/`InlineArray` are fixed-si
 need no guard. (The iterator's back-pointer to the counter uses the `addr(of: place)` builtin — the
 address of a place as an `UnsafePtr<T>`; safe to take, `unsafe` to deref.)
 
+**An `InlineArray`'s kind follows its element's.** Over a value — a number, a `type value`, a plain enum — it is a
+value: copied bitwise, with nothing to drop, and it may sit in a `type value` or a module `static`. Over an element
+that owns something — a `string`, a resource, an owning enum, an owning array — it owns its elements, as a
+`DynamicArray` does, and drops each one at the end of its scope. <!-- test: inline_array_owning_drops -->
+A hand-off of one says `give` (move) or `copy` (deep, element by element); a bare `b = a` is refused. <!-- xfail: inline_array_owning_bare_copy -->
+`foreach (T x in a)` hands each pass a copy the pass drops, and is refused when the element does not copy (borrow with `const ref`). <!-- xfail: inline_array_foreach_not_copyable -->
+`[v; N]` copies `v` into every place, and is refused when the element does not copy. <!-- xfail: inline_array_fill_not_copyable -->
+Each element of a literal is handed off as `xs.add(item: …)` would take it, so a bare named `string` there is refused. <!-- xfail: inline_array_literal_bare_string -->
+Such an array owns memory, so it is refused in a `type value` and as a module `static`. <!-- xfail: inline_array_owning_in_value, inline_array_owning_static -->
+A contract element is refused: it has no layout to store in place. <!-- xfail: inline_array_contract_elem -->
+Copies are independent: writing one never reaches the other. <!-- test: inline_array_owning_copy -->
+
 **Every contiguous container hands out the same two bridges, `InlineArray` included.** `dataPtr()` <!-- test: inline_array_view, const_dataptr -->
 (a `const fn`) returns an `UnsafeConstPtr<T>` for C and `dataPtrMut()` the writable `UnsafePtr<T>` —
 both safe to obtain, `unsafe` to dereference; `string.cstr()` is the same read-only bridge — and `view()` returns
@@ -5256,7 +5268,7 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   The one place the copy is a trap rather than a guarantee is a thread **kama did not create** — a C
   callback — which sees every static at its declared initialiser; that is what `@foreignEntry` regions
   check at compile time (see *Foreign entry points* under *No-heap subset*). <!-- xfail: foreign_entry_static_read -->
-- **The MCU shape, deliberately.** The type must be a **value, `UnsafePtr`, `InlineArray` or `Simd`**
+- **The MCU shape, deliberately.** The type must be a **value, `UnsafePtr`, `Simd`, or an `InlineArray` of values**
   (owns nothing, needs no teardown); a destructible `resource`, `string`, or smart pointer is rejected — <!-- xfail: module_static_resource -->
   and the rejection states the stance, not a queue entry: **persistence is ownership.** A resource that
   must outlive a frame lives in an `Owned<T>`, and `release()` hands it to a foreign API's userdata slot
@@ -5666,8 +5678,10 @@ fn int32 main() {
   API — and it is treated as move-only, because an instantiation may bind it to one. A parameter whose
   bounds are all declared `for value` is a value at every instantiation, so it is copyable
   (`tests/xfail/generic_unbounded_call`, `tests/xfail/generic_wrong_bound_call`), and so is one the
-  signature puts where only a value may stand: an `InlineArray`'s or a `Simd`'s element, or the parameter a
-  `type value` generic holds (`fn T unwrap<T>(Box<T> b) { return b.v; }` copies). Copying any other `T` — out
+  signature puts where only a value may stand: a `Simd`'s element, or the parameter a `type value` generic holds
+  (`fn T unwrap<T>(Box<T> b) { return b.v; }` copies). An `InlineArray`'s element is read as a value too when the
+  template is checked, and an instance over an owning element is checked as instantiated (`first<string>` refuses
+  `return a[0];`), since an `InlineArray`'s kind follows its element. Copying any other `T` — out
   of a field, out of a collection — needs `T: Copyable<T>` and says `copy`, since a bare hand-off of a `T`
   whose copying is its own choice would move. Arithmetic is `T: Additive<T>` or `T: Arithmetic<T>`, comparison
   `T: Comparable<T>`.
