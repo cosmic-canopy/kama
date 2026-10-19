@@ -1695,14 +1695,24 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <sys/wait.h>     // waitpid, WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG, WNOHANG  (std::process)
 #include <signal.h>       // kill, SIGKILL, SIGTERM  (std::process)
 
-// NOT <unistd.h>: on macOS its `write`/`read` carry a `__DARWIN_ALIAS_C` asm label, and a header that
-// declares one of them unlabeled first makes clang error "cannot apply asm label to function after its
-// first use." kama_runtime.h's `write` now carries the matching label (see kama_raw_write), so this
-// header only needs to keep `read` off that collision course. Declaring the handful we need directly
-// also keeps libc decls out of user code, matching kama_runtime.h's block-scoped-extern style.
+// NOT <unistd.h>: declaring the handful we need directly keeps libc decls out of user code, matching
+// kama_runtime.h's block-scoped-extern style. On macOS, <unistd.h> gives `read`, `write` and `close` a
+// `__DARWIN_ALIAS_C` asm label, and clang refuses a labelled declaration that follows an unlabelled one
+// ("cannot apply asm label to function after its first use") — so these three carry the same label, as
+// `pread`/`pwrite` below and kama_raw_write do, and a <unistd.h> may come before or after this header.
+// Through 0.9.676 they did not: a unit that included this header and then kama_isolate.h (which pulls
+// <unistd.h> for `sysconf`), or a C header a program names for FFI, stopped in clang — a release build
+// that made a `std::process::Command` beside `std::concurrent` was the shape that found it.
+// tools/check-header-order.sh compiles every pair of these headers, both ways, to hold it.
+#if defined(__APPLE__)
+extern long read(int, void*, size_t)        __asm("_read");
+extern long write(int, const void*, size_t) __asm("_write");
+extern int  close(int)                      __asm("_close");
+#else
 extern long read(int, void*, size_t);
 extern long write(int, const void*, size_t);
 extern int  close(int);
+#endif
 extern int  unlink(const char*);
 // std::process (fork/exec/pipe): hand-declared for the same reason as read/write above. These have no
 // asm-label alias on macOS, so redeclaring is safe even if a socket header transitively pulls <unistd.h>.
