@@ -641,7 +641,57 @@ narrowing, where `fn int32 main()` narrows implicitly at exit.
 5. **`std::app::quit(int32 code)`, the other exit path, takes the same types.**
 
 A source break in every program and package, pre-1.0. Size M; built once the next session's plan has re-audited
-the ruling against GOALS.md.
+the ruling against GOALS.md. (Re-audited 2026-10-19: confirmed. Probed on `0.9.675`: a release build traps on
+`cast<uint8>(300)` too, so the narrowing the verdict relies on is checked in every build.)
+
+<a id="s2-discarded-result"></a>
+
+### A discarded `Result` is refused, and `_ = expr;` is the one explicit discard (KR-214)
+
+**What happens today** (measured 2026-10-19, `0.9.675`):
+
+```kama
+fn Result<Unit, PErr> f() { return Result::Err(error: PErr::Failed); }
+fn int32 main() { f(); return 0; }       // builds; the Err is dropped without a word
+```
+
+GOALS 3d says a fallible operation's outcome is a value "which `match` forces the caller to handle", and SPEC says
+`readLine`'s `Result` "is the spelling that cannot be ignored". Neither is true of a call in statement position.
+It matters most where the `Err` carries something back: KR-187's `add` on a full list hands the item back in its
+`Err`, and `xs.add(item: s);` would drop `s` silently. std's channels have the same shape outside `Result`:
+`send` returns `SendResult<T> { Sent, Undelivered(T item) }`, which SPEC says means "nothing is silently lost", and
+`tx.send(item: x);` loses `x` silently. (Separately, and fixed before this row: a discarded owning value was not
+dropped at all — the C was a bare call, so `mkh();` never ran `~H()`.)
+
+**What other languages do.**
+
+| | an ignored error result | the explicit discard |
+|---|---|---|
+| Zig | a compile error (any ignored non-`void` value) | `_ = f();` |
+| Rust | `#[must_use]` on `Result`: a warning | `let _ = f();` |
+| Swift | an unused result: a warning; `@discardableResult` opts out | `_ = f()` |
+| C# | silent | `_ = F();` (C# 7 discards) |
+| Go | silent (left to `errcheck`) | `_ = f()` |
+| C++17 | `[[nodiscard]]`: a warning | `(void)f();` |
+
+kama has no warning channel (a standing ruling), so the answer is an error or nothing.
+
+**Ruled 2026-10-19 (the maintainer):**
+1. **A `Result` in statement position is refused**, naming the fix: "handle it with `match`, or write `_ = f();` to
+   drop it". `Optional` and plain returns stay discardable: `xs.remove(index: i);` dropping what it removed is the
+   one removal shape (SPEC *Collections*), and absence is not failure.
+2. **`_ = expr;` is the one explicit discard**: it drops the value, owning or not, the way the end of a statement
+   drops a temporary. `_` is already the discard in a pattern (`case Rect(w: _, h: _)`), and C#, Swift, Zig and Go
+   spell the statement this way.
+3. **`_` can no longer name a binding** (`int32 _ = 3;` built on `0.9.675`), so `_ =` never assigns.
+4. **std's channels return `Result`**, as every other fallible std operation does (the prelude's `Unit` exists to
+   keep "ONE error convention (always Result)"): `send` returns `Result<Unit, Undelivered<T>>`, and
+   `tryRecv`/`recvTimeout` return `Result<T, RecvError>` with `RecvError { Empty, Closed }` — Rust's shape
+   (`SendError<T>`, `TryRecvError::{Empty, Disconnected}`). `Undelivered<T>` is the one-variant enum `{ Item(T item) }`,
+   as KR-187's `CapacityFull<T>` is (§5).
+
+Measured corpus cost: one discarded `Result` in tests (`tests/fs_owner.kama`), none in `lib/`, about 14 discarded
+channel sends. Size S–M; built 2026-10-19 before KR-187.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
@@ -2255,20 +2305,46 @@ reference, and runtime exclusivity enforcement traps an overlapping access to a 
 since Swift 5, at a small cost the optimizer removes where it can prove no overlap. C++'s `shared_ptr` is
 unchecked.
 
-**Ruled 2026-10-19 (the maintainer): runtime exclusivity in the control block — Swift's model.**
-1. A mutable `Shared<T>`'s control block records a borrow state while a mutable borrow rooted in its payload is
-   live: a `borrow` window, a `ref` derived from it, or a non-`const` method's `this`. A mutating access through any
-   handle during it TRAPS, in every build — the same category as a bounds miss (GOALS #3a: traps, not UB) — and the
-   message names both accesses.
-2. `Shared<immutable T>` (the atomic flavor, kama_ctrl.h) cannot be mutated, so it carries no state and pays
-   nothing. The mutable path pays a check and two stores per mutating access; measure it on the Shared-heavy corpus
-   and the engine before and after.
-3. No source change. Rust's model (a read-only `Shared` plus an explicit cell) is sound too, but it breaks every
+**Ruled 2026-10-19 (the maintainer): runtime exclusivity in the control block, trapping only while a borrow is
+live.** Amended the same day by the GOALS audit, which measured the first version wrong twice (decisions 2 and 3,
+and the paragraph after the list).
+1. A mutable `Shared<T>`'s control block counts the borrows into its payload that are live across a call. A mutating
+   access through any handle while the count is non-zero TRAPS, in every build — the same category as a bounds miss
+   (GOALS #3a: traps, not UB) — and the message names both the borrow and the mutation. Reads never trap: a read
+   cannot free what a borrow points into.
+2. **Every live borrow counts, shared ones too.** Measured on `0.9.675`: a `const` method holding a window, re-entered
+   by a mutation through another handle, is the same heap-use-after-free as the mutable case —
+   ```kama
+   public const fn int32 peekAfter(ref Hook h) {
+       borrow this.items.view() as v { h.poke(); return v[0]; }   // h.poke() calls b.grow() on the same Core
+   }
+   ```
+   ASan: `heap-use-after-free … READ of size 4 … in Core__peekAfter`. The first version counted only mutable borrows.
+3. **The count moves only where a borrow is live, not for every call.** This is the runtime twin of the window rule:
+   statically, a window freezes its host's roots, compared as places; at run time, the same freeze is extended to
+   aliases the place test cannot see. The compiler marks exactly the extents that hold a borrow into a payload across
+   a call: a `borrow` window or a `ref` whose root is a `Shared` deref, and a call through a `Shared` into a method
+   whose summary says it holds a `this`-rooted borrow across a call (the summary is transitive over calls on `this`;
+   a contract slot, a `virtual` method or an `fnptr` is assumed to hold one). A method that holds nothing across its
+   calls marks nothing, so `set(v)` → `hook.fire()` → `other.bump()` runs; `foreach (o in this.observers) { o.changed(); }`
+   re-entered by `addObserver` traps, because that one could dangle.
+4. `Shared<immutable T>` (the atomic flavor, kama_ctrl.h) cannot be mutated, so it carries no state and pays
+   nothing. The mutable path pays an increment and a decrement around each marked extent and a compare at each mutating
+   access; measure it on the Shared-heavy corpus and the engine before and after.
+5. No source change. Rust's model (a read-only `Shared` plus an explicit cell) is sound too, but it breaks every
    mutating `Shared` user and adds a wrapper type for one rule.
-4. Folded in, the related hole the report found: the plain refcount keeps `strong == 1` while the last handle's
+6. Folded in, the related hole the report found: the plain refcount keeps `strong == 1` while the last handle's
    value is destroyed, so a `Weak` held by something that value owns upgrades inside its destructor and can mutate a
    value halfway through being dropped (measured: `upgradedDuringTeardown=true`, no ASan fault). A `Weak` upgraded
    during teardown answers `None`, as Rust's does.
+
+**What the comparison actually says.** Rust's `RefCell` is the whole value for the whole borrow (a `borrow_mut`
+during any `borrow` panics: `BorrowMutError`). Swift's exclusivity is per stored property, and a `for x in
+self.items` holds no access at all, because the array is copied on write. Java's fail-fast iterator traps exactly
+when the collection it is walking changes. kama's rule is Swift's in placement (implicit, always on, no source
+change) and Java's in precision (only while a borrow is live). The first version called itself "Swift's model" and
+was RefCell's granularity: it counted a non-`const` method's `this` for the whole call, so any re-entrant mutation
+through another handle trapped, whether or not anything could dangle.
 
 <a id="s5-bounded-vector"></a>
 
@@ -2305,8 +2381,11 @@ two things the language lacks, measured on `0.9.662`:
   `UnsafePtr<T>`; nothing gives it in place. An `InlineArray<T>#(N)` field is constructed whole, and dropped whole.
 - **A generic type's kind following its parameters (KR-191).** A declaration is `type value` or `type resource`, fixed:
   `type value Box<T>` instantiated as `Box<string>` is refused ("a `value` owns nothing, but `Box<string>`
-  transitively owns a resource"), while `InlineArray<string>#(2)` sits in a `type value` because the compiler derives an
-  intrinsic's kind from its element. `InlineDynamicArray<uint8>` must be a value — that is the row's point: inside a
+  transitively owns a resource"). (`InlineArray<string>#(2)` also sat in a `type value`, which this paragraph used to
+  read as the compiler deriving an intrinsic's kind from its element. It was a defect: the element check missed every
+  owning element that is not a declared resource, so the strings were copied bitwise and never dropped — a safe-code
+  use-after-free, measured 2026-10-19 and fixed by making an InlineArray's kind follow its element.)
+  `InlineDynamicArray<uint8>` must be a value — that is the row's point: inside a
   `type value`, copied, sent to an isolate, viewed as bytes — and `InlineDynamicArray<string>` a resource that drops
   its strings.
 
@@ -2363,6 +2442,29 @@ any code).** Each with what other languages do, and the production answer:
    (`push_back` throws, `try_push_back`, `unchecked_push_back`) and arrayvec two (`push` panics, `try_push`); one
    spelling is GOALS #4, and being full is an expected state, not a trap.
 
+**Amended 2026-10-19 by the GOALS audit (the maintainer, before any code).** Each ruling above was re-checked goal
+by goal and probed on `0.9.675`; these are the corrections, and they override the text above where the two differ:
+
+- **(2) The accessors are `unsafe const fn UnsafeConstPtr<T> dataPtr()` and `unsafe fn UnsafePtr<T> dataPtrMut()`.**
+  kama has no overloading on `const`, so "`ptr()` and a `const` twin" cannot be spelled; these are the names
+  `DynamicArray` and `FixedArray` already use (`dynamic_array.kama:189`, `fixed_array.kama:101`), one way.
+- **(3) `InlineStorage<T>`'s kind follows `T`, as `MaybeUninit<T>` is `Copy` exactly when `T` is.** Over a plain `T`
+  it is a value and copies bitwise — which is what lets `InlineDynamicArray<uint8>` be a value at all. Over an owning
+  `T` it is move-only, with no implicit copy. It never drops, either way: which places hold a `T` is the holder's
+  knowledge. `N` is positive, as for `InlineArray` (`#(0)` is refused there today).
+- **(5) A kind word cannot name a type.** `type contract value for value { … }` and `type value value { … }` both
+  built on `0.9.675`, which would make the bound `[T: value]` ambiguous; `value`, `resource`, `view`, `contract`,
+  `adapter` and `intrinsic` are refused as TYPE names, and stay legal as field, binding and parameter names
+  (`Result::Ok(value: …)`). No type in the corpus is named so. This is the greppability rule: `grep 'type value'`
+  finds kinds. Measured besides: `[T: value]` already parses (a bound is any `type_name`), so the bound is checker
+  work, and only the kind clause is new grammar. One function, `isPlainType`, answers "is this instance a value"
+  for the clause, the `value` bound, `InlineArray` and `InlineStorage`.
+- **(6) `CapacityFull<T>` is the one-variant enum `type enum CapacityFull<T> implements Error { Item(T item) }`.** A
+  record cannot hand its field back: kama refuses `give this.field` and has no consuming method, so `match (give e)
+  { case Item(item: x): … }` is the one way out, and std's channels take the same shape (`Undelivered<T>`, KR-214).
+  And the hand-back is only as good as the caller's attention: on `0.9.675` a discarded `Result` built silently, so
+  `xs.add(item: s);` on a full list would have dropped `s` without a word. KR-214 refuses that, and lands first.
+
 **Order:** KR-190 (the built-in storage) → KR-191 (the clause and the bound) → KR-187 (kama library code). Each
 lands with fixtures on native, ASan and wasm.
 
@@ -2388,7 +2490,9 @@ k_Fp1_slot__Conn__dtor(&k_c);                     // dropped normally once fille
 - `int32`: `type value Bounded4 { InlineArray<int32>#(4) items; int32 len = 0; … }` is 20 bytes, all four ints
   zeroed. That is fine.
 - `string`: the same shape as a `type resource` is 104 bytes (4 × 24 + `len` + padding). It builds four empty
-  strings up front and drops all four. It works, but only because `string` has a default.
+  strings up front. ~~and drops all four~~ — corrected 2026-10-19: it dropped none. No destructor path handled an
+  `InlineArray` of an owning element, and a copy of one aliased its strings (the defect A2 of that session, fixed
+  by making an `InlineArray`'s kind follow its element).
 - A resource element: `InlineArray<Conn>#(4)` is refused ("an `InlineArray<T>#(N)` element must be a `value`").
   There is nothing to hold four `Conn`s in place.
 - One generic over both: `type value Box<T> { public T v; … }` with `Box<string>` is refused ("a `value` owns
