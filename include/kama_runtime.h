@@ -1289,6 +1289,17 @@ static inline kama_string kama_string_lit(const char* s, size_t n) {
     return r;
 }
 
+// A string's buffer, or kama's "out of memory" panic, which is what every other allocation in this header answers
+// an exhausted heap with. The string operations below used to write through the NULL `kama_alloc` returns — a full
+// `@globalAllocator` pool, or a block larger than the pool serves — and crashed with a segfault at the first byte,
+// with no message and no `@onPanic`. `kama_panic` is defined further down, after the types its body needs.
+static inline KAMA_NORETURN void kama_panic(kama_string msg);
+static inline char* kama__str_alloc(size_t n) {
+    char* p = (char*)kama_alloc(n, 1);
+    if (!p) kama_panic(kama_string_lit("out of memory", 13));
+    return p;
+}
+
 // RAII: free only heap-owned strings; borrowed views are a no-op.
 static inline void kama_string__dtor(kama_string* self) {
     if (self->kama_cap) kama_free(self->kama_data, self->kama_cap, 1);
@@ -1311,7 +1322,7 @@ static inline bool kama_string__equals(kama_string* self, kama_string other) {
 static inline kama_string kama_string__copy(const kama_string* self) {
     kama_string r; r.kama_len = self->kama_len;
     if (self->kama_len == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
-    char* buf = (char*)kama_alloc(self->kama_len + 1, 1);
+    char* buf = kama__str_alloc(self->kama_len + 1);
     kama_copy(buf, self->kama_data, self->kama_len);
     buf[self->kama_len] = '\0';
     r.kama_data = buf; r.kama_cap = self->kama_len + 1;   // heap-owned
@@ -1320,7 +1331,7 @@ static inline kama_string kama_string__copy(const kama_string* self) {
 // Returns a fresh heap-owned string (the caller binds it -> RAII frees it).
 static inline kama_string kama_string__concat(kama_string* self, kama_string other) {
     size_t n = self->kama_len + other.kama_len;
-    char*  buf = (char*)kama_alloc(n + 1, 1);
+    char*  buf = kama__str_alloc(n + 1);
     if (self->kama_len) kama_copy(buf, self->kama_data, self->kama_len);
     if (other.kama_len) kama_copy(buf + self->kama_len, other.kama_data, other.kama_len);
     buf[n] = '\0';
@@ -1367,7 +1378,7 @@ static inline kama_string kama_string__substring(kama_string* self, size_t start
     size_t n = end - start;
     kama_string r; r.kama_len = n;
     if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
-    char* buf = (char*)kama_alloc(n + 1, 1);
+    char* buf = kama__str_alloc(n + 1);
     kama_copy(buf, self->kama_data + start, n);
     buf[n] = '\0';
     r.kama_data = buf; r.kama_cap = n + 1;   // heap-owned
@@ -1412,7 +1423,7 @@ static inline kama_string kama_string__slice_owned(kama_string* self, size_t lo,
     size_t n = hi - lo;
     kama_string r; r.kama_len = n;
     if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
-    char* buf = (char*)kama_alloc(n + 1, 1);
+    char* buf = kama__str_alloc(n + 1);
     kama_copy(buf, self->kama_data + lo, n);
     buf[n] = '\0';
     r.kama_data = buf; r.kama_cap = n + 1;
@@ -1449,7 +1460,7 @@ static inline kama_string kama_string__replace(kama_string* self, kama_string ol
     size_t n = self->kama_len - count * old.kama_len + count * with.kama_len;
     kama_string r; r.kama_len = n;
     if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
-    char* buf = (char*)kama_alloc(n + 1, 1);
+    char* buf = kama__str_alloc(n + 1);
     size_t w = 0, i = 0;
     while (i + old.kama_len <= self->kama_len) {
         if (kama_cmp(self->kama_data + i, old.kama_data, old.kama_len) == 0) {
@@ -1466,7 +1477,7 @@ static inline kama_string kama_string__replace(kama_string* self, kama_string ol
 // (an ASCII byte never occurs inside a multibyte sequence). Full Unicode casing is deferred.
 static inline kama_string kama_string__toLower(kama_string* self) {
     if (self->kama_len == 0) { kama_string r; r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0; return r; }
-    char* buf = (char*)kama_alloc(self->kama_len + 1, 1);
+    char* buf = kama__str_alloc(self->kama_len + 1);
     for (size_t i = 0; i < self->kama_len; ++i) {
         char c = self->kama_data[i];
         buf[i] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
@@ -1476,7 +1487,7 @@ static inline kama_string kama_string__toLower(kama_string* self) {
 }
 static inline kama_string kama_string__toUpper(kama_string* self) {
     if (self->kama_len == 0) { kama_string r; r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0; return r; }
-    char* buf = (char*)kama_alloc(self->kama_len + 1, 1);
+    char* buf = kama__str_alloc(self->kama_len + 1);
     for (size_t i = 0; i < self->kama_len; ++i) {
         char c = self->kama_data[i];
         buf[i] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
@@ -1539,7 +1550,7 @@ static inline ptrdiff_t kama_utf8_bad_offset(const uint8_t* src, ptrdiff_t start
 static inline kama_string kama_string_from_raw(const uint8_t* base, ptrdiff_t start, ptrdiff_t len) {
     kama_string r;
     if (start < 0 || len <= 0) { r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0; return r; }   // defensive: caller (Split) always passes >=0
-    char* buf = (char*)kama_alloc((size_t)len + 1, 1);
+    char* buf = kama__str_alloc((size_t)len + 1);
     kama_copy(buf, base + start, (size_t)len);
     buf[len] = '\0';
     r.kama_data = buf; r.kama_len = (size_t)len; r.kama_cap = (size_t)len + 1;
@@ -1855,7 +1866,7 @@ static inline void kama_str_push(kama_string* s, const kama_string* add) {
     if (s->kama_cap == 0 || need > s->kama_cap) {
         size_t ncap = s->kama_cap ? s->kama_cap : 16;
         while (ncap < need) ncap *= 2;
-        char* nb = (char*)kama_alloc(ncap, 1);
+        char* nb = kama__str_alloc(ncap);
         if (s->kama_len) kama_copy(nb, s->kama_data, s->kama_len);
         if (s->kama_cap) kama_free(s->kama_data, s->kama_cap, 1);       // free the old heap buffer; a cap==0 literal isn't freed
         s->kama_data = nb; s->kama_cap = ncap;
@@ -2582,7 +2593,7 @@ static inline int kama_program_path(kama_string* out) {
     unsigned long got = GetModuleFileNameW((struct HINSTANCE__*)0, w, 32768u);
     int n = (got > 0 && got < 32768u) ? WideCharToMultiByte(65001u, 0, w, -1, (char*)0, 0, (const char*)0, (int*)0) : 0;
     if (n > 1) {
-        char* s = (char*)kama_alloc((size_t)n, 1);
+        char* s = kama__str_alloc((size_t)n);
         WideCharToMultiByte(65001u, 0, w, -1, s, n, (const char*)0, (int*)0);
         out->kama_data = s; out->kama_len = (size_t)n - 1; out->kama_cap = (size_t)n;                     // the from_raw shape
         kama_free(w, 32768u * sizeof(wchar_t), _Alignof(wchar_t)); return 1;
@@ -2624,7 +2635,7 @@ static inline int kama_env_lookup(const char* name, kama_string* out) {
     kama_free(wname, (size_t)wn * sizeof(wchar_t), _Alignof(wchar_t));
     int n = (got > 0 && got < need) ? WideCharToMultiByte(65001u, 0, wval, -1, (char*)0, 0, (const char*)0, (int*)0) : 0;
     if (n > 0) {
-        char* s = (char*)kama_alloc((size_t)n, 1);
+        char* s = kama__str_alloc((size_t)n);
         WideCharToMultiByte(65001u, 0, wval, -1, s, n, (const char*)0, (int*)0);
         out->kama_data = s; out->kama_len = (size_t)n - 1; out->kama_cap = (size_t)n;                 // the from_raw shape
     }
