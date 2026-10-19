@@ -54,8 +54,20 @@ tag or wait for 2.0.
   For `std`: deflate and tar are frozen, patent-free standards (Go and Python ship both); kama's own package
   format already IS one, so a registry or package tool written in kama needs it; gzip `Content-Encoding` for
   `examples/httpd` and the web-framework direction, and PNG's inflate on the engine track, are known consumers;
-  an unused stdlib module costs a program nothing (measured when the modular stdlib was declared a non-goal, `0.9.360`). A package fits a format that churns
-  (zstd, brotli). Needs the inflate half too — the compiler has only a compressor. Unscoped until the verdict.
+  an unused stdlib module costs a program nothing (measured when the modular stdlib was declared a non-goal, `0.9.360`). Needs
+  the inflate half too — the compiler has only a compressor.
+
+  **Ruled 2026-10-19 (the maintainer): std.** Asked again by an HTTP package, which needs both halves, streaming,
+  with a limit on the decoded size. What others ship: deflate/zlib/gzip in std in Go, Python, Zig (both
+  directions, 0.16 checked), C#, Java and Node; Rust none (crates). brotli in C# and Node; zstd in Python 3.14
+  (`compression.zstd`, PEP 784), Node (experimental) and Zig (decode only); Go has an internal zstd decoder and an
+  open proposal. All five formats are frozen RFCs (1950–1952, 7932, 8878), so "a format that churns" was wrong:
+  what differs is implementation size (brotli's 122 KB dictionary, the zstd and brotli encoders). So:
+  1. **Now (this row):** deflate, zlib and gzip in both directions, and tar, as streaming `std::io` adapters; every
+     decoder takes a REQUIRED output limit (bytes, or a ratio), so a decompression bomb is refused by construction.
+     The compiler's C++ writer for `kama publish` stays: the compiler cannot run kama.
+  2. **Later, as their own std rows:** zstd (KR-212) and brotli (KR-213), decode first — a program must read what
+     others send (a `.tar.zst`, a server it does not control); a kama writer can always choose gzip.
 
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
@@ -380,6 +392,32 @@ read it differently. curl's answer was one parser for every decision in a progra
 
 Size M. What remains to decide at build time is the surface (`Url`'s accessors, reference resolution per RFC 3986 §5
 for redirects, normalization per §6), which follows from the above.
+
+<a id="s1-fd-limit"></a>
+
+#### Running out of descriptors: a kind, and the limit (KR-210)
+
+Measured on `0.9.673` under `ulimit -n 32`: `accept` fails with `IoErrorKind::Other`, OS code 24 (`kindOf`,
+lib/std/io/io.kama, maps neither EMFILE nor ENFILE), and std has nothing to read or raise `RLIMIT_NOFILE`. The OSes
+then differ: macOS drops the connection `accept` could not take, while Linux keeps it queued, so a level-triggered
+loop polling the listener spins until a descriptor frees. The limit varies widely: a launchd job starts at 256, a
+shell here at 1048576, the Linux container at 524288.
+
+**What others do.** Rust: `ErrorKind::TooManyOpenFiles` (EMFILE + ENFILE, "the process or the whole system has
+reached its limit on the number of open files or sockets"), unstable; no limit API in std. Go: no kind
+(`errors.Is(err, syscall.EMFILE)`), and since 1.19 a program importing `os` raises its soft limit to the hard one
+at startup (restored for children). The JVM (`-XX:+MaxFDLimit`, on by default; capped at `OPEN_MAX` on macOS) and
+Node raise it automatically too. Python: no kind; an explicit `resource.setrlimit`.
+
+**Ruled 2026-10-19 (the maintainer):**
+1. `IoErrorKind::TooManyOpenFiles`, Rust's name and scope: EMFILE and ENFILE on POSIX, `WSAEMFILE` and
+   `ERROR_TOO_MANY_OPEN_FILES` on Windows.
+2. An explicit API in `std::process`: `openFileLimit()` answering the soft and hard limits, and
+   `raiseOpenFileLimit()` setting soft to hard (capped at `OPEN_MAX` on macOS, where a higher value is refused).
+   Never raised implicitly: the low default protects C code using `select()`, which breaks above descriptor 1023,
+   and a `csources` library may be such code — the program decides, never a runtime or a library.
+3. POSIX only, by the platform-deltas rule: Windows has no per-process descriptor limit for sockets (they are
+   bounded by memory), so the type is absent there rather than faked.
 
 <a id="s1-listen-options"></a>
 
@@ -2189,6 +2227,48 @@ that down. Two shapes are outside it:
 
 `--release` is clean for both. Close means both lower in place at -O0, and `check-construct-frame.sh` asserts
 them (the first by emitting an initializer rather than an assignment).
+
+<a id="s5-shared-exclusivity"></a>
+
+### A borrow through one `Shared` handle dangles when another mutates the value (KR-211)
+
+Measured on `0.9.673`, reported by an HTTP package:
+
+```kama
+Shared<Core> a = new Core.make();
+Shared<Core> b = a;
+borrow a.first() as x {   // fn ref int32 first() { return this.items[0]; }
+    b.grow();             // grows this.items: the buffer x points into is freed
+    x = 7;
+}
+```
+
+`kama check` passes and nothing is `unsafe`; an ASan build reports `heap-use-after-free … WRITE of size 4` at
+`x = 7`, and a release build writes into freed memory silently. A window freezes its host's roots, compared as
+places, and `a` and `b` are two locals, though both reach one value through `Shared.derefMut()`. No static rule
+closes it: a method running through one handle can re-enter through another (an observer, a callback), and the
+two handles need not even be in the same function.
+
+**What others do.** Rust: `Rc<T>` derefs to `&T` only, so mutation needs `RefCell<T>`, whose runtime borrow flag
+panics on a conflicting `borrow_mut` — explicit in the type. Swift: a class reference is mutable through any
+reference, and runtime exclusivity enforcement traps an overlapping access to a class property, in release builds
+since Swift 5, at a small cost the optimizer removes where it can prove no overlap. C++'s `shared_ptr` is
+unchecked.
+
+**Ruled 2026-10-19 (the maintainer): runtime exclusivity in the control block — Swift's model.**
+1. A mutable `Shared<T>`'s control block records a borrow state while a mutable borrow rooted in its payload is
+   live: a `borrow` window, a `ref` derived from it, or a non-`const` method's `this`. A mutating access through any
+   handle during it TRAPS, in every build — the same category as a bounds miss (GOALS #3a: traps, not UB) — and the
+   message names both accesses.
+2. `Shared<immutable T>` (the atomic flavor, kama_ctrl.h) cannot be mutated, so it carries no state and pays
+   nothing. The mutable path pays a check and two stores per mutating access; measure it on the Shared-heavy corpus
+   and the engine before and after.
+3. No source change. Rust's model (a read-only `Shared` plus an explicit cell) is sound too, but it breaks every
+   mutating `Shared` user and adds a wrapper type for one rule.
+4. Folded in, the related hole the report found: the plain refcount keeps `strong == 1` while the last handle's
+   value is destroyed, so a `Weak` held by something that value owns upgrades inside its destructor and can mutate a
+   value halfway through being dropped (measured: `upgradedDuringTeardown=true`, no ASan fault). A `Weak` upgraded
+   during teardown answers `None`, as Rust's does.
 
 <a id="s5-bounded-vector"></a>
 
