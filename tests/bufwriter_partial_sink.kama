@@ -1,0 +1,87 @@
+// `BufWriter` over a sink that takes part of a write. A drain that stops partway keeps what the sink took off the
+// buffer, so a retry resumes there; up to 0.9.673 it forgot, and every retry resent the buffer from byte 0 (a sink
+// taking 3 bytes and then blocking received the first 3 bytes over and over, 12003 bytes for 5000 written, and the
+// flush never finished). And `write` takes all of its bytes or none: an `Err` buffered nothing, where it used to
+// buffer them and THEN report the drain's error, so a caller that wrote again sent them twice. Returns 42.
+import { std::io::Writer, std::io::BufWriter, std::io::IoError, std::io::IoErrorKind,
+         std::collections::ConstView, std::collections::FixedArray, std::memory::Shared };
+
+type resource Tally {
+    isize got = 0;
+    bool open = true;
+    public ctor make() { }
+    public fn void add(isize n) { this.got = this.got + n; }
+    public fn void setOpen(bool on) { this.open = on; }
+    public const fn bool isOpen() { return this.open; }
+    public const fn isize total() { return this.got; }
+}
+
+// Takes at most 3 bytes, then answers WouldBlock on the next call, and so on.
+type resource Trickle implements Writer {
+    Shared<Tally> tally;
+    bool blockNext = false;
+    public ctor make(Shared<Tally> tally) { this.tally = give tally; }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        if (this.blockNext) { this.blockNext = false; return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        this.blockNext = true;
+        isize n = bytes.length() < 3 ? bytes.length() : 3;
+        this.tally.add(n: n);
+        return Result::Ok(value: n);
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+}
+
+// Takes everything while open, and answers WouldBlock while shut.
+type resource Gate implements Writer {
+    Shared<Tally> tally;
+    public ctor make(Shared<Tally> tally) { this.tally = give tally; }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        if (!this.tally.isOpen()) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        this.tally.add(n: bytes.length());
+        return Result::Ok(value: bytes.length());
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+}
+
+fn bool ok(Result<isize, IoError> r) { return match (r) { case Ok(value: n): true; case Err(error: e): false; }; }
+fn bool done(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
+
+fn int32 trickle() {
+    Shared<Tally> tally = new Tally.make();
+    Shared<Tally> mine = tally;
+    BufWriter<Trickle> w = BufWriter.make(inner: Trickle.make(tally: give tally));
+    FixedArray<uint8> data = FixedArray.make(size: 5000);
+    if (!ok(r: w.write(bytes: data.view()))) { return 1; }   // buffered whole: nothing to drain yet
+    int32 tries = 0;
+    bool flushed = false;
+    while (!flushed && tries < 4000) { flushed = done(r: w.flush()); tries = tries + 1; }
+    if (!flushed) { return 2; }
+    if (mine.total() != 5000) { return 3; }   // every byte once
+    return 0;
+}
+
+fn int32 gate() {
+    Shared<Tally> tally = new Tally.make();
+    Shared<Tally> mine = tally;
+    BufWriter<Gate> w = BufWriter.make(inner: Gate.make(tally: give tally));
+    FixedArray<uint8> first = FixedArray.make(size: 4000);
+    FixedArray<uint8> more = FixedArray.make(size: 200);
+    if (!ok(r: w.write(bytes: first.view()))) { return 11; }   // fits the 4096-byte buffer
+    mine.setOpen(on: false);
+    if (ok(r: w.write(bytes: more.view()))) { return 12; }    // would not fit; the drain blocks: Err
+    mine.setOpen(on: true);
+    if (!done(r: w.flush())) { return 13; }
+    if (mine.total() != 4000) { return 14; }                  // the refused 200 were not taken
+    if (!ok(r: w.write(bytes: more.view()))) { return 15; }   // written again, once
+    if (!done(r: w.flush())) { return 16; }
+    if (mine.total() != 4200) { return 17; }
+    return 0;
+}
+
+fn int32 main() {
+    int32 t = trickle();
+    if (t != 0) { return t; }
+    int32 g = gate();
+    if (g != 0) { return g; }
+    return 42;
+}

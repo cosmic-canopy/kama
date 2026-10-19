@@ -180,47 +180,62 @@ type resource SliceReader implements Reader, Sendable {
 // so a wrapper owns its sink (exactly as a collection owns its `A: Allocator`). Flush drains the buffer
 // through the inner writer's own `write` (monomorphic — no contract upcast). Its internal buffer is the
 // ring-buffer layer of the substrate.
+//
+// A non-blocking sink is fine. `write` takes ALL of its bytes or none: `Ok(n)` buffered every one, and `Err`
+// took nothing. It drains the buffer before taking bytes that would not fit, and returns the drain's error
+// untouched; a write larger than the buffer is buffered whole, so no caller ever sees a short count from a
+// `BufWriter` (Go's bufio makes the same all-or-error promise). A drain that stops partway — `WouldBlock` after
+// the sink took part of the buffer — keeps what it sent off the buffer, so the next `flush` or `write`
+// continues where it stopped, as Rust's `BufWriter` does. Up to 0.9.673 a failed drain forgot what it had sent,
+// so every retry resent the buffer from byte 0 and a sink that takes a little and then blocks never saw the end,
+// and a `write` answering `Err` had already buffered its bytes.
 type resource BufWriter<W: Writer> implements Writer {
     W inner;
     DynamicArray<uint8> buf;
+    isize sent;   // bytes at the front of `buf` the sink already took: what a drain resumes after
     isize cap;
 
     public ctor make(W inner) {
         this.inner = give inner;
         DynamicArray<uint8> b = DynamicArray.empty();
         this.buf = give b;
+        this.sent = 0;
         this.cap = 4096;
     }
 
     public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         isize n = bytes.length();
+        if (this.buf.length() - this.sent + n > this.cap) {
+            Result<Unit, IoError> dr = this.drain();
+            match (dr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+        }
         isize i = 0;
         while (i < n) { this.buf.add(item: bytes[i]); i = i + 1; }
-        if (this.buf.length() >= this.cap) {
-            Result<Unit, IoError> fr = this.flush();
-            match (fr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-        }
         return Result::Ok(value: n);
     }
 
     public fn Result<Unit, IoError> flush() {
+        Result<Unit, IoError> dr = this.drain();
+        match (dr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+        return this.inner.flush();
+    }
+
+    // Everything buffered, to the sink. On an error, `sent` keeps what the sink took.
+    fn Result<Unit, IoError> drain() {
         isize total = this.buf.length();
-        isize off = 0;
-        while (off < total) {
-            Result<isize, IoError> wr = this.inner.write(bytes: this.buf.slice(from: off, count: total - off));
+        while (this.sent < total) {
+            Result<isize, IoError> wr = this.inner.write(bytes: this.buf.slice(from: this.sent, count: total - this.sent));
             match (wr) {
                 case Err(error: e): { return Result::Err(error: e); }
                 case Ok(value: m): {
-                    // `Writer.write` answers `Result<isize, IoError>`, so `m` is already an `isize` —
-                    // both casts here were residue from when it answered `usize`, and the `==` compared
-                    // across the two. Nothing caught it because the payload binding had no type.
                     if (m == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
-                    off = off + m;
+                    this.sent = this.sent + m;
                 }
             };
         }
         this.buf.clear();
-        return this.inner.flush();
+        this.sent = 0;
+        return Result::Ok(value: Unit::Unit);
     }
 }
 
