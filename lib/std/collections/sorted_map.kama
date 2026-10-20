@@ -624,19 +624,6 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
         return this.leaf || this.kids[n].keysAreText();
     }
 
-    // In-order emit of each entry: `keyed`, as `"text":v` in the object the map opened — the in-order walk IS the
-    // order an object's keys are written in (KR-136) — and otherwise as a `{"key":k,"value":v}` object of a SORTED
-    // pair array (key/value through a `ref` helper so a primitive element's adapter `serialize` resolves).
-    //
-    // ⚠️ MARKED because the element write lives HERE, not in `SortedMap.serialize`. A B-tree's entries are
-    // spread over a tree of nodes, so an in-order write is a recursion over nodes — and a graph write has
-    // to carry its object table into that recursion or every `Shared` value is written inline and
-    // duplicated (measured: three entries, the shared leaf written twice, and a read that then failed with
-    // "unresolved reference"). `Map` needs no mark on anything but its accessor because it writes its one
-    // flat `vals` array in its own body. ⚠️ Reached only by `SortedMap`, which the grant above says: member
-    // visibility is per TYPE, so a sibling type needs naming even inside one file, and the grant is what
-    // its `@serializedGraphEdges` mark already implied.
-    @serializedGraphEdges
     // The in-order walk `SortedMap.format` writes with (KR-216); `first` threads the `, ` separator through the recursion.
     private const fn void formatInto(ref Formatter f, ref bool first) when [K: Formattable, V: Formattable] {
         isize i = 0; isize n = this.keys.length();
@@ -654,6 +641,19 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     static fn void formatKey(const ref K x, ref Formatter f) when [K: Formattable] { x.format(f: ref f); }
     static fn void formatValue(const ref V x, ref Formatter f) when [V: Formattable] { x.format(f: ref f); }
 
+    // In-order emit of each entry: `keyed`, as `"text":v` in the object the map opened — the in-order walk IS the
+    // order an object's keys are written in (KR-136) — and otherwise as a `{"key":k,"value":v}` object of a SORTED
+    // pair array (key/value through a `ref` helper so a primitive element's adapter `serialize` resolves).
+    //
+    // ⚠️ MARKED because the element write lives HERE, not in `SortedMap.serialize`. A B-tree's entries are
+    // spread over a tree of nodes, so an in-order write is a recursion over nodes — and a graph write has
+    // to carry its object table into that recursion or every `Shared` value is written inline and
+    // duplicated (measured: three entries, the shared leaf written twice, and a read that then failed with
+    // "unresolved reference"). `Map` needs no mark on anything but its accessor because it writes its one
+    // flat `vals` array in its own body. ⚠️ Reached only by `SortedMap`, which the grant above says: member
+    // visibility is per TYPE, so a sibling type needs naming even inside one file, and the grant is what
+    // its `@serializedGraphEdges` mark already implied.
+    @serializedGraphEdges
     private const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w, bool keyed) when [K: Serializable, V: Serializable] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
