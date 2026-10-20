@@ -6,4 +6,4 @@
 // RESERVED WORD: `volatile` is a C keyword, and kama reserves the whole C set because a kama name that is
 // one emits C that does not compile. Either way it is rejected, which is all this fixture claims.
 static volatile int32 reg = 0;
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

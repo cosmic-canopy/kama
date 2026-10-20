@@ -5,7 +5,7 @@ import { std::collections::DynamicArray, std::collections::View, std::random::Rn
 fn T pick<T>(T a, T b) { return b; }
 fn T id<T>(T x) { return x; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     DynamicArray<int32> xs = DynamicArray::<int32>.withCapacity(capacity: 4);
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 30);
@@ -22,5 +22,5 @@ fn int32 main() {
     Rng g = Rng.seeded(seed: 7ui64);
     isize d = range(rng: g, lo: 0, hi: xs.length());
     if (d >= 0 && d < 3)                     { r = r + 16; }
-    return r;   // 31
+    return cast<uint8>(r);   // 31
 }

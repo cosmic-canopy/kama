@@ -41,7 +41,7 @@ fn int32 drainSum(Reader r) {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // 1..=10 → 55 bytes of content; sum of values 1..10 = 55.
     string payload = makePayload(n: 10);
     if (payload.length() != 10) { return 1; }

@@ -18,8 +18,8 @@ type final resource Box extends Shape {
     protected override fn void put(int32 v) { this.n = v; }
     protected override fn int32 val() { return this.n; }
 }
-fn int32 main() {
+fn uint8 main() {
     Box b = Box.make();   // named ctor; the built object carries a valid vptr
     b.set(v: 41);
-    return b.plus1();    // virtual dispatch -> Box.val() = 41, +1 = 42
+    return cast<uint8>(b.plus1());    // virtual dispatch -> Box.val() = 41, +1 = 42
 }

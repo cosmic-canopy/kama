@@ -6,10 +6,10 @@ type value Grid {
     public InlineArray<int32>#(4) cells;
     public fn int32 at(int32 i) { return this.cells[i]; }
 }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(4) c = [3, 6, 9, 12];
     Grid g = Grid.of(cells: c);                         // InlineArray as a by-value field
     InlineArray<InlineArray<int32>#(2)>#(2) m = [[1, 2], [3, 4]];  // nested InlineArray
     InlineArray<int32>#(2) row = m[1];                       // the inner row is a value copy
-    return g.at(i: 2) + row[0] + row[1];              // 9 + 3 + 4 = 16
+    return cast<uint8>(g.at(i: 2) + row[0] + row[1]);              // 9 + 3 + 4 = 16
 }

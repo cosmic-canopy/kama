@@ -21,7 +21,7 @@ trap 'rm -rf "$tmp"' EXIT
 # A program that logs one line at every level, with tags, so the filter's effect is observable on stderr.
 cat > "$tmp/log.kama" <<'KAMA'
 import { std::log::logError, std::log::logWarn, std::log::logInfo, std::log::logDebug, std::log::logTrace };
-fn int32 main() {
+fn uint8 main() {
     logError(tag: "net", msg: "err-line");
     logWarn(tag: "", msg: "warn-line");
     logInfo(tag: "audio", msg: "info-line");
@@ -66,7 +66,7 @@ fi
 cat > "$tmp/sink.kama" <<'KAMA'
 import { core::println, std::log::setLogSink, std::log::logInfo };
 fn void mySink(int32 level, string tag, string msg) { println(s: "SINK:${level}:${msg}"); }
-fn int32 main() {
+fn uint8 main() {
     setLogSink(s: mySink);
     logInfo(tag: "x", msg: "routed");
     return 0;
@@ -117,7 +117,7 @@ grep -qF "net-debug" "$tmp/e6c" || { echo "check-log: FAIL — --log=debug did n
 mkdir -p "$tmp/proj2/src"
 cat > "$tmp/proj2/src/merge.kama" <<'KAMA'
 import { std::log::logInfo, std::log::logDebug };
-fn int32 main() {
+fn uint8 main() {
     logDebug(tag: "net", msg: "net-debug");     // base net=trace  -> shown
     logDebug(tag: "audio", msg: "audio-debug"); // local audio=debug -> shown
     logInfo(tag: "db", msg: "db-info");         // global warn      -> dropped
@@ -147,7 +147,7 @@ rm -f "$tmp/proj/kama.local.json"
 cat > "$tmp/v2.kama" <<'KAMA'
 import { core::println, std::log::logInfo, std::log::logDebug };
 fn string expensive() { println(s: "BUILT"); return "payload"; }
-fn int32 main() {
+fn uint8 main() {
     logInfo(tag: "x", msg: "info-line");
     logDebug(tag: "net", msg: expensive());
     return 0;
@@ -171,7 +171,7 @@ grep -qF "[DEBUG] net: payload" "$tmp/v8b.err" || { echo "check-log: FAIL — v2
 # appear ONLY in each level's interpolation, so a transpile-grep proves presence/absence unambiguously.
 cat > "$tmp/strip.kama" <<'KAMA'
 import { std::log::logInfo, std::log::logDebug, std::log::logTrace };
-fn int32 main() {
+fn uint8 main() {
     int32 n = 1;
     logInfo(tag: "x", msg: "KEEPME ${n}");
     logDebug(tag: "y", msg: "DROPDEBUG ${n}");
@@ -198,7 +198,7 @@ done
 # program importing BOTH failed in clang on macOS while each alone was fine — no fixture imported the two.
 cat > "$tmp/logproc.kama" <<'KAMA'
 import { std::log::logInfo, std::process::Command };
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: "true");
     logInfo(tag: "proc", msg: "built a command");
     return 0;

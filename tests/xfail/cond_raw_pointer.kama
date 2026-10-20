@@ -8,4 +8,4 @@ unsafe fn int32 f(UnsafePtr<int32> p) {
     bool b = p && true;
     return p ? 1 : n;
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

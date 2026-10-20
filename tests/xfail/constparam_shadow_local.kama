@@ -8,4 +8,4 @@ fn int32 f(int32 x) comptime(int32 F) {
     int32 F = 5;   // ERROR: the local shadows the const generic param `F`
     return F + x;
 }
-fn int32 main() { return f(x: 1)#(16); }
+fn uint8 main() { return cast<uint8>(f(x: 1)#(16)); }

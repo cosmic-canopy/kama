@@ -10,7 +10,7 @@
 // now infers `Optional<E>` too.
 type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
 fn int32 takeE(E v) { return v.n; }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<E>#(2) xs = [E.of(n: 2), E.of(n: 3)];
     int32 r = 0;
     if (r == 1) {
@@ -21,5 +21,5 @@ fn int32 main() {
             match (Optional::Some(value: m)) { case Some(value: e): { r = r + takeE(v: e); } case None: { } };
         }
     }
-    return r;   // 5
+    return cast<uint8>(r);   // 5
 }

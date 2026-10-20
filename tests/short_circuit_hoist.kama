@@ -64,9 +64,9 @@ fn int32 run() {
     return r;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = run();
     // Built: 7, 9, 10, 12 — four Trackers, every one dropped exactly once by the time `run` has returned
     // (a hoisted temporary lives to the end of its scope, as it always has).
-    return r + made * 10 + drops;   // 1 + 40 + 4 = 45
+    return cast<uint8>(r + made * 10 + drops);   // 1 + 40 + 4 = 45
 }

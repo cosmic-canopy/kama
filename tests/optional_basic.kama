@@ -5,9 +5,9 @@ fn int32 unwrap(Optional<int32> o, int32 dflt)
         case None: dflt;
     };
 }
-fn int32 main()
+fn uint8 main()
 {
     Optional<int32> a = Optional::Some(value: 42);
     Optional<int32> b = Optional::None;
-    return unwrap(o: a, dflt: 0) + unwrap(o: b, dflt: -1);
+    return cast<uint8>(unwrap(o: a, dflt: 0) + unwrap(o: b, dflt: -1));
 }

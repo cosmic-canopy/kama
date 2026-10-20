@@ -33,7 +33,7 @@ bad() { echo "  FAIL: $1" >&2; fail=1; }
 app() {
     d="$tmp/$1"; shift
     rm -rf "$d"; mkdir -p "$d/src"
-    printf 'fn int32 main() { return 7; }\n' > "$d/src/app.kama"
+    printf 'fn uint8 main() { return 7; }\n' > "$d/src/app.kama"
     for dep in "$@"; do
         mkdir -p "$d/vendor/$dep/src"
         printf 'public fn int32 %s_ping() { return 1; }\n' "$dep" > "$d/vendor/$dep/src/$dep.kama"
@@ -149,10 +149,10 @@ app noheap geo <<'JSON'
   "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$tmp/noheap/src/app.kama" <<'KAMA'
-fn int32 main() {
+fn uint8 main() {
     string a = "x";
     string b = a + "y";
-    return cast<int32>(b.length()) + 5;   // 7
+    return cast<uint8>(cast<int32>(b.length()) + 5);   // 7
 }
 KAMA
 cat > "$tmp/noheap/vendor/geo/kama.json" <<'JSON'
@@ -763,7 +763,7 @@ JSON
 cat > "$tmp/emmerge/src/app.kama" <<'KAMA'
 import { std::net::web::WsConnection };
 
-fn int32 main() { return 7; }
+fn uint8 main() { return 7; }
 KAMA
 line=$(emline emmerge)
 printf '%s' "$line" | grep -qF -- "-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8,ccall" \
@@ -995,7 +995,7 @@ cat > "$fp/src/main.kama" <<'KAMA'
 // multiply and add written as two statements. Under clang's default `-ffp-contract=on` the
 // one-expression form may fuse into an FMA and the two-statement form may not, so on a target WITH an
 // FMA the two disagree — which is what makes a cross-target program's numerics depend on its target.
-fn int32 main() {
+fn uint8 main() {
     int32 differ = 0;
     int32 i = 1;
     while (i <= 64) {
@@ -1008,7 +1008,7 @@ fn int32 main() {
         if (fused != split) { differ = differ + 1; }
         i = i + 1;
     }
-    return differ;
+    return cast<uint8>(differ);
 }
 KAMA
 cat > "$fp/kama.json" <<'JSON'

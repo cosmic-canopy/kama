@@ -2,4 +2,4 @@
 // refused where the generic is declared, with the bound to write — even though `main` calls it with an `int32`,
 // which adds. (tests/arith_bound has it written.)
 fn T twice<T>(T x) { return x + x; }
-fn int32 main() { return twice(x: 21); }
+fn uint8 main() { return cast<uint8>(twice(x: 21)); }

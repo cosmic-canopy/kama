@@ -31,7 +31,7 @@ type value Buf<T> comptime(int32 N) {
     public fn int32 size() { return N; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Fx#(16) a = Fx#(16).of(raw: 65536);      // 1.0 in Q16.16
     Fx#(8)  b = Fx#(8).of(raw: 512);         // 2.0 in Q8
     Fx#(16) c = Fx#(16).whole(units: 3);     // ctor reads F: 3 << 16
@@ -52,5 +52,5 @@ fn int32 main() {
     Cap<int32>#(9) f = Cap::Full(x: 1);
     if (e.cap() == 4 && f.cap() == 9)     { n = n + 1; }
     if (Cap::<bool>#(4)::twice() == 8)    { n = n + 1; }
-    return n;   // 10
+    return cast<uint8>(n);   // 10
 }

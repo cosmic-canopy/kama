@@ -9,4 +9,4 @@ fn void pick(bool c) {
     slot int32 v;
     if (c) { fill(d: out v); }   // ERROR: the declaration is outside this branch
 }
-fn int32 main() { pick(c: true); return 7; }
+fn uint8 main() { pick(c: true); return 7; }

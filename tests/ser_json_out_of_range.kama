@@ -13,7 +13,7 @@ type value Small {
     public const fn int8 get() { return this.n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // In range — including a NEGATIVE, whose sign bit is the half a width-only rule would miss.
     Result<string, Owned<Error>> e = serializeJsonBuffer(v: Small.make(n: 0i8 - 56i8));
     string js = match (give e) { case Ok(value: s): give s; case Err(error: _x): { return 250; } };

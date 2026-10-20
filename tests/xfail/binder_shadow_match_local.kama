@@ -5,10 +5,10 @@
 // The LABEL is the variant's field name and is unrestricted; only the BINDING is a new name.
 type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
 fn int32 takeE(E v) { return v.n; }
-fn int32 main() {
+fn uint8 main() {
     Optional<E> inner = Optional::Some(value: E.of(n: 5));
     string m = "boom";
     int32 r = 0;
     match (inner) { case Some(value: m): { r = takeE(v: m); } case None: { } };   // ERROR: shadows `m`
-    return r + cast<int32>(m.length());
+    return cast<uint8>(r + cast<int32>(m.length()));
 }

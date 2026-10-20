@@ -3,7 +3,7 @@
 type enum PErr implements Error { Failed; public const fn string message() { return "failed"; } }
 type enum Pick { A, B }
 fn Result<Unit, PErr> f() { return Result::Err(error: PErr::Failed); }
-fn int32 main() {
+fn uint8 main() {
     Pick p = Pick::A;
     match (p) { case A: f(); case B: 0; };
     return 0;

@@ -38,7 +38,7 @@ type resource Bag {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Owned<Leaf>> xs = DynamicArray.empty();
     xs.add(item: new Leaf.make(v: 7));
     xs.add(item: new Leaf.make(v: 11));
@@ -48,7 +48,7 @@ fn int32 main() {
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: b);
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     // Each element is a nested object — byte-identical to a `DynamicArray<Leaf>` of the same values.
-    if (j != "{\"kids\":[{\"v\":7},{\"v\":11},{\"v\":24}]}") { return cast<int32>(j.length()); }
+    if (j != "{\"kids\":[{\"v\":7},{\"v\":11},{\"v\":24}]}") { return cast<uint8>(j.length()); }
 
     Result<Bag, Owned<Error>> back = deserializeJsonBuffer::<Bag>(src: copy j);
     Bag b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
@@ -72,8 +72,8 @@ fn int32 main() {
     Owned<Leaf> one = new Leaf.make(v: 42);
     Result<string, Owned<Error>> orr = serializeJsonBuffer(v: one);
     string oj = match (give orr) { case Ok(value: x): give x; case Err(error: e): { return 247; } };
-    if (oj != "{\"v\":42}") { return cast<int32>(oj.length()); }
+    if (oj != "{\"v\":42}") { return cast<uint8>(oj.length()); }
     Result<Owned<Leaf>, Owned<Error>> oback = deserializeJsonBuffer::<Owned<Leaf>>(src: give oj);
     Owned<Leaf> one2 = match (give oback) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
-    return one2.get();
+    return cast<uint8>(one2.get());
 }

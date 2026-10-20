@@ -6,4 +6,4 @@ type resource Handle implements Rankable {
     public ctor make(int32 fd) { this.fd = fd; }
     public fn int32 rank() { return this.fd; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

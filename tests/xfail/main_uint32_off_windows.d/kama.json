@@ -1,0 +1,8 @@
+{
+  "name": "uint32mainlinux",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "select": { "TARGET": { "LINUX": { "triple": "x86_64-linux-gnu", "cc": "clang", "default": true } } }
+}

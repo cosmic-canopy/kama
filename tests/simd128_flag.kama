@@ -34,7 +34,7 @@ fn int32 sum4(InlineArray<int32>#(4) a) {
     return t;
 }
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(4) v = [1, 2, 3, 4];
-    return laneWidth() - 128 + sum4(a: v);   // 0 + 10 = 10 on every target the harness runs
+    return cast<uint8>(laneWidth() - 128 + sum4(a: v));   // 0 + 10 = 10 on every target the harness runs
 }

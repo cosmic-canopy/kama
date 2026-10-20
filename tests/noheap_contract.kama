@@ -8,4 +8,4 @@ type value Counter implements Sink {
     @noheap public fn int32 write(int32 x) { return this.seed + x; }
 }
 @noheap fn int32 tick(Sink s, int32 n) { return s.write(x: n); }
-fn int32 main() { Counter c = Counter.make(seed: 12); return tick(s: c, n: 6); }
+fn uint8 main() { Counter c = Counter.make(seed: 12); return cast<uint8>(tick(s: c, n: 6)); }

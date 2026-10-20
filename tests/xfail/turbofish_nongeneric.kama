@@ -1,3 +1,3 @@
 // Turbofish type arguments on a non-generic function are rejected (they'd be silently meaningless).
 fn int32 plain(int32 x) { return x; }
-fn int32 main() { return plain::<int32>(x: 1); }
+fn uint8 main() { return cast<uint8>(plain::<int32>(x: 1)); }

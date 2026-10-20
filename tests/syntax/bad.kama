@@ -8,7 +8,7 @@
 //
 // Nothing here needs to be reachable or type-correct — it needs to be REJECTED.
 
-fn int32 main() {
+fn uint8 main() {
     string e1 = "\e";
     string e2 = "\x41";
     string e3 = "\q";

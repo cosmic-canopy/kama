@@ -2,4 +2,4 @@
 // other half of the point: nothing about the two declarations is in conflict.
 import { twomodname::alpha::helper, twomodname::beta::helper as bhelper };
 
-fn int32 main() { return helper() + bhelper(); }   // 7 + 9 = 16
+fn uint8 main() { return cast<uint8>(helper() + bhelper()); }   // 7 + 9 = 16

@@ -23,7 +23,7 @@ fn int32 build() {
     return x.head();          // 9;  x drops at build's end -> exactly one trace(3)
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 h = build();
-    return h + traceGet();   // 9 + 3 = 12   (a double-drop would fold to 9 + 96)
+    return cast<uint8>(h + traceGet());   // 9 + 3 = 12   (a double-drop would fold to 9 + 96)
 }

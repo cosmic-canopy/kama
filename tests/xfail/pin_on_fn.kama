@@ -2,4 +2,4 @@
 // has no implementing type for `This` to name.
 fn int32 weigh<T is This>(T x) { return 0; }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -20,7 +20,7 @@ fn DynamicArray<int32> mkList() {
 }
 fn uint8 second(const ref string s) { return s.bytes()[1]; }                  // the peer's repro
 
-fn int32 main() {
+fn uint8 main() {
     string s = "abcd";
     int32 total = 0;
     if (second(s: s) == 98) { total = total + 1; }                            // 'b'
@@ -35,5 +35,5 @@ fn int32 main() {
     DynamicArray<string> names = DynamicArray.empty();
     names.add(item: s + " and a tail long enough to live on the heap");
     if (names[0][1] == 98) { total = total + 128; }                            // an element, not a copy
-    return total;                                                              // 255
+    return cast<uint8>(total);                                                              // 255
 }

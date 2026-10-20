@@ -141,7 +141,7 @@ mkdir -p "$tmp/c5/src" "$tmp/c5/dest"
 #    wants three translation units, not a dependency graph.
 printf 'fn int32 twice(int32 v) { return v * 2; }\n'  > "$tmp/c5/src/math.kama"
 printf 'fn int32 area(int32 w) { return w * w; }\n'   > "$tmp/c5/src/shapes.kama"
-printf 'fn int32 main() { return 0; }\n'              > "$tmp/c5/src/main.kama"
+printf 'fn uint8 main() { return 0; }\n'              > "$tmp/c5/src/main.kama"
 if ( cd "$tmp/c5" && "$KAMA" build src/*.kama -o dest/app >/dev/null 2>&1 ); then
     expect_listing "$tmp/c5/src" "main.kama math.kama shapes.kama " \
         "case 5: a multi-unit build wrote intermediates next to the modules"
@@ -163,7 +163,7 @@ fi
 #    own: the bundle is there. It is now there at every -j, since the driver consolidates the debug map
 #    on the per-TU path too (a Mach-O debug map pointing at deleted objects is not debuggable).
 mkdir -p "$tmp/c6"
-printf 'fn int32 main() { return 0; }\n' > "$tmp/c6/app.kama"
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/c6/app.kama"
 if ( cd "$tmp/c6" && "$KAMA" build app.kama --no-cache -o app >/dev/null 2>&1 ); then
     [ -e "$tmp/c6/.kama-cache" ] && bad "case 6: --no-cache still wrote the object cache"
     expect_no_intermediates "$tmp/c6" "case 6: the --no-cache build left intermediates behind"

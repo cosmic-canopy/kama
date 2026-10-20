@@ -1,0 +1,7 @@
+// A computed status narrows explicitly, and `cast<uint8>` traps — in every build — when the value does not fit, rather
+// than letting the OS keep its low byte: 300 exited 44 while `main` returned an `int32`, a status nobody wrote.
+fn uint8 main() {
+    int32 r = 299;
+    r = r + 1;
+    return cast<uint8>(r);
+}

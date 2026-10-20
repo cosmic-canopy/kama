@@ -5,4 +5,4 @@
 // whose tests kept a private `knownAnswer` in four files.
 import { perfile::geo::runA, perfile::geo::runB };
 
-fn int32 main() { return runA() + runB(); }   // 14 + 26 = 40
+fn uint8 main() { return cast<uint8>(runA() + runB()); }   // 14 + 26 = 40

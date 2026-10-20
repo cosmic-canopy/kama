@@ -1,4 +1,4 @@
 // KR-179: a constructor is also built into storage through its `__into` form, which carries no caller location.
 // A constructor whose input can be wrong returns `Result` — the language's answer for a caller's bad input there.
 type value P { public int32 x; @trackCaller public ctor make(int32 x) { this.x = x; } }
-fn int32 main() { P p = P.make(x: 1); return p.x; }
+fn uint8 main() { P p = P.make(x: 1); return cast<uint8>(p.x); }

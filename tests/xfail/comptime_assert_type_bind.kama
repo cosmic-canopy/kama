@@ -13,8 +13,8 @@ type value W<T> comptime(int32 F) {
     public ctor of(T v) { this.v = v; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     W<int32>#(16) ok  = W::<int32>#(16).of(v: 1i32);   // 16 < 32 — fine
     W<int8>#(16)  bad = W::<int8>#(16).of(v: 1i8);     // 16 < 8 is false
-    return cast<int32>(ok.v) + cast<int32>(bad.v);
+    return cast<uint8>(cast<int32>(ok.v) + cast<int32>(bad.v));
 }

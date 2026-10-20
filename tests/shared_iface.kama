@@ -13,7 +13,7 @@ fn Weak<Shape> orphan() {                                  // returns an already
     Weak<Shape> w = s.downgrade();
     return give w;                                          // s dies at fn-end
 }
-fn int32 main() {
+fn uint8 main() {
     Shared<Shape> a = new Sq.make(s: 6);                        // area 36
     Shared<Shape> b = a;                                   // retain: a and b share one Sq
     Weak<Shape> live = a.downgrade();                      // weak to the live Sq
@@ -24,5 +24,5 @@ fn int32 main() {
     Weak<Shape> dead = orphan();                           // its Shared already died
     Optional<Shared<Shape>> du = dead.tryUpgrade();        // None (expired)
     int32 duv = match (du) { case Some(value: d): 0; case None: 1; };   // 1
-    return sum + duv;                                       // 109; each Sq freed exactly once
+    return cast<uint8>(sum + duv);                                       // 109; each Sq freed exactly once
 }

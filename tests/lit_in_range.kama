@@ -29,7 +29,7 @@ type enum Tag { Small(int8 v), None }
 fn void take(int8 x) { }
 fn int8 giveMax() { return 127; }
 
-fn int32 main() {
+fn uint8 main() {
     int8   local     = 100;          // the boundaries of every width the table knows
     int8   lo        = -128;
     uint8  ulo       = 0;
@@ -66,5 +66,5 @@ fn int32 main() {
     if (fromConst == 18446744073709551615ui64) { count = count + 1; }
     int8 fromSmall = SMALL;                         // a module const now reaches the classifier
     if (cast<int32>(fromSmall) == 100) { count = count + 1; }
-    return count;   // 15
+    return cast<uint8>(count);   // 15
 }

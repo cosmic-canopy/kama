@@ -126,10 +126,10 @@ fn int32 exchange() {
     return got;                               // 0+1+2+3+4
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 before = drain();
     int32 sum = exchange();
     int32 after = drain();
     if (before != after) { return 1; }
-    return sum;                               // 10
+    return cast<uint8>(sum);                               // 10
 }

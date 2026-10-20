@@ -15,4 +15,4 @@ type value Holder<T> {
         undefinedFunction(a: 1);     // ERROR: no such function, at any instantiation
     }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

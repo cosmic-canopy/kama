@@ -3,7 +3,7 @@
 // `T`'s default (an `int32`'s is 0). `copy` carries the allocator over.
 import { std::collections::FixedArray, std::collections::Arena, std::collections::BumpAllocator };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Arena arena = Arena.make(capacity: 65536);
 
@@ -17,5 +17,5 @@ fn int32 main() {
     cp[0] = 99;
     if (fa[0] == 0 && cp[0] == 99) { r = r + 10; }                     // independent buffers
 
-    return r;   // 30
+    return cast<uint8>(r);   // 30
 }

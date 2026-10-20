@@ -9,7 +9,7 @@ type enum A : uint8  { A0, A1, A2 }
 type enum B : uint8  { B0, B1, B2 }
 type enum W : uint32 { W0, W1, W2 }
 
-fn int32 main()
+fn uint8 main()
 {
     A a = A::A2;
     B b = a;

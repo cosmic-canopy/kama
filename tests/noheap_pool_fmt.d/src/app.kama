@@ -61,8 +61,8 @@ import { std::concurrent::Atomic };
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = 7;
     string s = "${n}";          // the pool's storage, not the system heap
-    return cast<int32>(s.length()) + 41;   // "7" -> 1 + 41 = 42
+    return cast<uint8>(cast<int32>(s.length()) + 41);   // "7" -> 1 + 41 = 42
 }

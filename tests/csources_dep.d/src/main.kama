@@ -2,4 +2,4 @@
 // is an undefined symbol at link time and no manifest key could say so.
 import { cshim::triple };
 
-fn int32 main() { return triple(n: 7); }   // 21
+fn uint8 main() { return cast<uint8>(triple(n: 7)); }   // 21

@@ -8,4 +8,4 @@ type value Cell {
     public ctor make() { this.n = 5; }
     public unsafe const fn UnsafePtr<int32> leak() { return addr(of: this.n); }   // -> REJECT
 }
-fn int32 main() { Cell c = Cell.make(); return 0; }
+fn uint8 main() { Cell c = Cell.make(); return 0; }

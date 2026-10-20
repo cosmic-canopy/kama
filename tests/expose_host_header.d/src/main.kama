@@ -24,6 +24,6 @@ expose fn int32 green(Rgb c) { return cast<int32>(c.g); }
 
 unsafe fn int32 viaHost() { return host_run(); }
 
-fn int32 main() {
-    return viaHost() + (classify(side: 0) == Kind::Dot ? 0 : 100);   // kama calls the same function by kama name
+fn uint8 main() {
+    return cast<uint8>(viaHost() + (classify(side: 0) == Kind::Dot ? 0 : 100));   // kama calls the same function by kama name
 }

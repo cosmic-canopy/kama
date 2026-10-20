@@ -40,7 +40,7 @@ COPY="$tmp/copy/out/$plat/kama"
 # `Optional` is declared in the prelude and used here, so `--def` on it must land in prelude/global.kama.
 cat > "$tmp/probe.kama" <<'KEOF'
 fn Optional<int32> pick() { return Optional::None; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KEOF
 
 # 1. UNTOUCHED COPY — the path is offered, and it is right. Without this the guard would pass for the

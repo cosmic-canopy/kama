@@ -6,4 +6,4 @@ fn ref int32 leak()
     xs.add(item: 1);
     borrow xs[0] as e { return e; }
 }
-fn int32 main() { return leak(); }
+fn uint8 main() { return cast<uint8>(leak()); }

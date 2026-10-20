@@ -9,7 +9,7 @@ import { std::concurrent::Isolate, std::collections::DynamicArray, std::collecti
 fn int32 sum(ConstView<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
 fn void grow(ref DynamicArray<int32> d) { int32 i = 0; while (i < 4096) { d.add(item: 7); i = i + 1; } }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
     a.add(item: 1); a.add(item: 2);
     int32 r = 0;
@@ -17,5 +17,5 @@ fn int32 main() {
         scope { spawn grow(d: ref a); }
         r = sum(xs: v);                  // the original 2-element buffer, long since freed
     }
-    return r;
+    return cast<uint8>(r);
 }

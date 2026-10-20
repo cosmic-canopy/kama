@@ -1,0 +1,1 @@
+write `fn uint8 main()`

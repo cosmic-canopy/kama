@@ -6,9 +6,9 @@ type value Pair<T> {
     public ctor make(T x, T y) { this.a = x; this.b = y; }
     public ref T operator[](usize i) { if (i == 0) { return this.a; } return this.b; }
 }
-fn int32 main() {
+fn uint8 main() {
     Pair<int32> p = Pair.make(x: 5, y: 6);
     p[0] = 50;
     p[1] += 4;             // 10
-    return p[0] + p[1];    // 60
+    return cast<uint8>(p[0] + p[1]);    // 60
 }

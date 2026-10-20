@@ -8,4 +8,4 @@ fn int32 cb(int32 x) { return x + 1; }
 
 expose fn Op kama_get_cb() { return cb; }   // ERROR: `Op` says nothing about its thread
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

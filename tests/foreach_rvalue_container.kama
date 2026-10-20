@@ -11,8 +11,8 @@ fn DynamicArray<int32> make() {
     return give d;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 t = 0;
     foreach (int32 x in make()) { t = t + x; }
-    return t;
+    return cast<uint8>(t);
 }

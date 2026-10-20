@@ -22,7 +22,7 @@ fn int32 total<I: Iterator<int32>>(I it) {
     return sum;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Map<int32, int32> m = Map.withCapacity(capacity: 8);
     m.put(key: 1, value: 10);
     m.put(key: 2, value: 20);
@@ -46,5 +46,5 @@ fn int32 main() {
         sort(items: v);                       // `sort` takes a View directly and still does
     }
 
-    return a + b + c;                         // 30 + 7 + 7 (an exit code, so keep it under 256)
+    return cast<uint8>(a + b + c);                         // 30 + 7 + 7 (an exit code, so keep it under 256)
 }

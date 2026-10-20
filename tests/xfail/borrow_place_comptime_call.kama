@@ -8,4 +8,4 @@ comptime fn int32 viaCall()
     return q.x;
 }
 comptime int32 K = viaCall();
-fn int32 main() { return K; }
+fn uint8 main() { return cast<uint8>(K); }

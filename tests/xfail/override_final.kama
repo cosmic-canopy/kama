@@ -17,4 +17,4 @@ type final resource Leaf extends Mid {
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 h() { return 2; }              // ERROR: h is `final` in Mid
 }
-fn int32 main() { Leaf l = Leaf.make(); return l.go(); }
+fn uint8 main() { Leaf l = Leaf.make(); return cast<uint8>(l.go()); }

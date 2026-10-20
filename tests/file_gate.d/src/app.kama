@@ -11,4 +11,4 @@
 // manifest. Exactly one is admitted to any build, so both legs of the suite return the same 41.
 import { platformValue };
 
-fn int32 main() { return platformValue() + 1; }
+fn uint8 main() { return cast<uint8>(platformValue() + 1); }

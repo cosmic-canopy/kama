@@ -10,7 +10,7 @@ import {
     std::collections::BumpAllocator,
 };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Arena arena = Arena.make(capacity: 65536);                              // 64 KiB caller-owned region
 
@@ -26,5 +26,5 @@ fn int32 main() {
     int32 v = match (o) { case Some(value: x): x; case None: 0 - 1; };
     if (m.length() == 100 && v == 51) { r = r + 20; }
 
-    return r;   // 40
+    return cast<uint8>(r);   // 40
 }

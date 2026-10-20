@@ -8,10 +8,10 @@ fn void pick(bool leaf, out int32 v) {
     if (leaf) { v = 10; return; }                    // assigns, then returns, inside a lone `if`
     v = 20;
 }
-fn int32 main() {
+fn uint8 main() {
     int32 a = 0; classify(n: 0 - 3, kind: out a);    // 1
     int32 b = 0; classify(n: 5,     kind: out b);    // 2
     int32 c = 0; pick(leaf: true,   v: out c);       // 10
     int32 d = 0; pick(leaf: false,  v: out d);       // 20
-    return a + b + c + d;                            // 33
+    return cast<uint8>(a + b + c + d);                            // 33
 }

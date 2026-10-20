@@ -78,7 +78,7 @@ fn uint16 freePort() {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
     uint16 dead = freePort();                          // nothing bound here any more
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
@@ -87,7 +87,7 @@ fn int32 main() {
             uint16 live = portOf(l: l);
             int32 a = connectListening(port: live);
             int32 b = connectDead(port: dead);
-            := ((a == 0) && (b == 0)) ? 55 : (90 + a * 4 + b);
+            := cast<uint8>(((a == 0) && (b == 0)) ? 55 : (90 + a * 4 + b));
         }
         case Err(error: e): 80;
     };

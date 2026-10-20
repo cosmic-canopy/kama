@@ -166,7 +166,7 @@ fn int32 dropsOnBreak() {
     return drops;   // one Probe per pass: 2
 }
 
-fn int32 main() {
+fn uint8 main() {
     if (whilePlain() != 3) { return 1; }
     if (whileHalf() != 4) { return 2; }
     if (doWhile() != 2) { return 3; }

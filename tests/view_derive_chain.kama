@@ -25,8 +25,8 @@ type resource Bag {
     public unsafe const fn ConstView<int32> tail() { return this.slice(from: 1, count: 2).slice(from: 1, count: 1); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Bag b = Bag.make();
     b.add(v: 10); b.add(v: 20); b.add(v: 11); b.add(v: 99);
-    return sum(xs: b.slice(from: 0, count: 3)) + sum(xs: b.tail());   // 41 + 11 = 52
+    return cast<uint8>(sum(xs: b.slice(from: 0, count: 3)) + sum(xs: b.tail()));   // 41 + 11 = 52
 }

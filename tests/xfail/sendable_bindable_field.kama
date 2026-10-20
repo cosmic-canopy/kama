@@ -15,11 +15,11 @@ type resource Handler implements Sendable {
     public ctor make(BindableFunctionPtr<Get> cb) { this.cb = give cb; }
 }
 fn void worker(Handler h) { }
-fn int32 main() {
+fn uint8 main() {
     Shared<Probe> p = new Probe.make(id: 1);
     BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     Handler h = Handler.make(cb: give g);
     Isolate w = spawn worker(h: give h);
     w.join();
-    return p.read(d: 0);
+    return cast<uint8>(p.read(d: 0));
 }

@@ -7,4 +7,4 @@ comptime fn int32 impure() { return runtimeHelper(); }   // ERROR: calls a non-c
 
 comptime int32 BAD = impure();
 
-fn int32 main() { return BAD; }
+fn uint8 main() { return cast<uint8>(BAD); }

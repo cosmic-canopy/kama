@@ -9,7 +9,7 @@ type value Counter {
     public fn void bump(int32 by) { this.n = this.n + by; }   // mutates the stored element
 }
 
-fn int32 main()
+fn uint8 main()
 {
     DynamicArray<Counter> xs = DynamicArray.empty();
     Counter a = Counter.make(start: 10);
@@ -31,5 +31,5 @@ fn int32 main()
     ar[0].bump(by: 4);                            // 3 -> 7
     sum = sum + ar[0].get();                      // 55 + 7 = 62
 
-    return sum;                                  // 62
+    return cast<uint8>(sum);                                  // 62
 }

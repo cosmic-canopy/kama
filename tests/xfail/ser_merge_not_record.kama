@@ -10,7 +10,7 @@ type value Celsius implements Deserializable<This> {
 @generate(Deserializable)
 type enum Mode { Quiet, Loud }
 type value Plain { public int32 a; public ctor make() { this.a = 1; } }
-fn int32 main() {
+fn uint8 main() {
     Celsius c = Celsius.make();
     Result<Unit, Owned<Error>> r1 = mergeJsonBuffer(src: "1.5", into: c);
     Mode m = Mode::Quiet;

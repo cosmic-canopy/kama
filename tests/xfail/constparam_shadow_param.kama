@@ -6,4 +6,4 @@
 fn int32 f(int32 F) comptime(int32 F) {   // ERROR: the parameter shadows the const generic param `F`
     return F;
 }
-fn int32 main() { return f(F: 3)#(16); }
+fn uint8 main() { return cast<uint8>(f(F: 3)#(16)); }

@@ -1,5 +1,5 @@
 // The initializer is a `string` LOCAL rather than a literal — the same rule reaching through a name.
-fn int32 main() {
+fn uint8 main() {
     string s = "hi";
     int32 x = s;
     return 0;

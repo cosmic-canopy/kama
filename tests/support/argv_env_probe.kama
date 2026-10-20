@@ -6,7 +6,7 @@
 
 import { core::env, core::envOr, core::programInvocation, core::programName, core::programPath, core::args };
 
-fn int32 main() {
+fn uint8 main() {
     // Random access over the user args (argv[0] excluded).
     if (args().count() != 3) { return 1; }
     string a0 = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };

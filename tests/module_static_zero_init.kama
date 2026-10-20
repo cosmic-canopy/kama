@@ -2,8 +2,8 @@
 static int32 z;
 static bool flag;
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = z + 42;              // z == 0
     if (flag == false) { r = r; } // flag == false (zero)
-    return r;                     // 42
+    return cast<uint8>(r);                     // 42
 }

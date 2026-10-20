@@ -14,4 +14,4 @@
 @compileFor(PROFILING)  fn int32 plat() { return 99; }
 @compileFor(!PROFILING) fn int32 plat() { return 2; }
 
-fn int32 main() { return tel() + plat(); }
+fn uint8 main() { return cast<uint8>(tel() + plat()); }

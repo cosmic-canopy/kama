@@ -18,7 +18,7 @@ type resource Bad implements Sendable {
     DynamicArray<Shared<Leaf>> xs;   // the refcount, one indirection down
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<Bad> ch = Channel.bounded(capacity: 2);   // ERROR: `Bad`'s field `xs` reaches a shared refcount
     return 0;
 }

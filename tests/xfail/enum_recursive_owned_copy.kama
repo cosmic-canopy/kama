@@ -6,7 +6,7 @@ type enum J {
     List(DynamicArray<J> items),
     Box(Owned<J> inner)
 }
-fn int32 main() {
+fn uint8 main() {
     J a = J::Num(n: 1);
     J b = copy a;   // ERROR: `J` holds an `Owned<J>`, which does not copy
     return 0;

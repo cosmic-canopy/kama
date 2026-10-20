@@ -6,4 +6,4 @@ fn void neverCalled<T>(T unused) {
     string s = "x";
     s.noSuchMethod();            // ERROR: concrete receiver, no such method
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -8,7 +8,7 @@ type value Pt {
 }
 fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
 fn int32 takeRef(ref int32 v) { return v; }
-fn int32 main() {
+fn uint8 main() {
     slot Pt p;
     int32 a = p.y;                              // a field
     int32 b = p.inner.z;                        // a field of a field
@@ -18,5 +18,5 @@ fn int32 main() {
     p.y++;                                      // a read-modify-write
     foreach (int32 v in p.arr) { a += v; }      // iterating a field
     fill(dst: out p);
-    return a + b + c + d + e;
+    return cast<uint8>(a + b + c + d + e);
 }

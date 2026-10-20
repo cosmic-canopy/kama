@@ -2,4 +2,4 @@
 // be freed. Through 0.9.676 one of strings was accepted, as if it owned nothing. An `InlineArray` of values is still
 // a fine `static`.
 static InlineArray<string>#(2) names;
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

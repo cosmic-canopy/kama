@@ -3,7 +3,7 @@
 import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::ExitStatus,
          std::io::IoError, std::collections::FixedArray };
 
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "exit"); c.arg(a: "0");
     c.stdin(s: Stdio::Piped);

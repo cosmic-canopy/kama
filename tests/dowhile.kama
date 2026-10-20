@@ -4,7 +4,7 @@ fn int32 pick(int32 x)
     else if (x == 2) { return 20; }
     else { return 0; }
 }
-fn int32 main()
+fn uint8 main()
 {
     int32 total = 0;
     int32 i = 0;
@@ -13,5 +13,5 @@ fn int32 main()
         total += pick(x: i);
         i++;
     } while (i < 4);
-    return total;
+    return cast<uint8>(total);
 }

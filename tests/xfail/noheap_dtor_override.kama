@@ -12,4 +12,4 @@ type final resource Square extends Shape {
     public ctor make(int32 s) { this.base = Base.make(); this.parts.add(item: s); }
     ~Square() { }
 }
-fn int32 main() { Square s = Square.make(s: 5); return 0; }
+fn uint8 main() { Square s = Square.make(s: 5); return 0; }

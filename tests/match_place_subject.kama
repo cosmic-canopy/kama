@@ -37,7 +37,7 @@ type resource Holder {
 
 fn const ref Cell first(const ref DynamicArray<Cell> cells) { return cells[0]; }
 
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.make();
     int32 total = 0;
     for (int32 i = 0; i < 3; i++) {

@@ -4,7 +4,7 @@
 fnptr int32 Comparator(int32 a, int32 b);
 fn int32 cmp(int32 a, int32 b) { return a - b; }
 
-fn int32 main() {
+fn uint8 main() {
     Comparator c = cmp;                  // bind, used directly (no wrapper) — zero-cost
-    return c(a: 9, b: 2) + 35;           // named invoke: (9-2)+35 = 42
+    return cast<uint8>(c(a: 9, b: 2) + 35);           // named invoke: (9-2)+35 = 42
 }

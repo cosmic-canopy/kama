@@ -4,4 +4,4 @@
 fn void neverCalled<T>(T unused) {
     undefinedFunction(a: 1);     // ERROR: no such function
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

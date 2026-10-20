@@ -24,8 +24,8 @@ type final resource Leaf extends Base
     protected final override fn int32 tick() { return 5; }
     protected override fn int32 run() { return this.tick(); }   // `this` is a Leaf; tick is final -> direct
 }
-fn int32 main()
+fn uint8 main()
 {
     Leaf m = Leaf.make();
-    return m.midGo();
+    return cast<uint8>(m.midGo());
 }

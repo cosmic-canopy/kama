@@ -7,7 +7,7 @@
 // It is a LEXICAL rejection since §2e.28: `int` is a C keyword, and kama reserves the whole C set because
 // a kama name that is one emits C that does not compile. The width guidance moved with it — the point of
 // this fixture is that the message still teaches, not merely that the spelling is refused.
-fn int32 main() {
+fn uint8 main() {
     int x = 5;
     return x;
 }

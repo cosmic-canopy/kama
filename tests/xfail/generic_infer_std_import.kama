@@ -4,7 +4,7 @@
 // generic_infer_* fixtures import nothing, which is why none of them saw it. The row pins the position.
 import { std::math::sqrt };
 fn T pick<T>(T a, T b) { return a; }
-fn int32 main() {
+fn uint8 main() {
     int32 x = pick(a: 3, b: 2.5);
-    return x;
+    return cast<uint8>(x);
 }

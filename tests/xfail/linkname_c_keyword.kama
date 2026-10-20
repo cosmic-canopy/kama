@@ -2,4 +2,4 @@
 // no C symbol can be spelled as one and the emitted call would not compile.
 extern "<stdlib.h>";
 @linkName("switch") extern fn int32 abs(int32 x);
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -66,9 +66,9 @@ done
     printf 'import {\n'
     for i in $(seq 1 $NTU); do printf '    w%d::v%d,\n' "$i" "$i"; done
     printf '};\n'
-    printf '\nfn int32 main() {\n    int32 t = 0;\n'
+    printf '\nfn uint8 main() {\n    int32 t = 0;\n'
     for i in $(seq 1 $NTU); do printf '    t = t + v%d();\n' "$i"; done
-    printf '    return t - %d;\n}\n' "$(( NTU * (NTU + 1) / 2 ))"
+    printf '    return cast<uint8>(t - %d);\n}\n' "$(( NTU * (NTU + 1) / 2 ))"
 } > "$tmp/src/multi.kama"
 # The whole operand set, deliberately UNQUOTED at every use below: one argument per file (mktemp paths
 # carry no spaces). $MULTI was one file back when the other fifteen were found on disk.

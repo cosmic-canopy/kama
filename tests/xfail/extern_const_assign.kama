@@ -2,4 +2,4 @@
 // write target.
 extern "stdio.h";
 extern const int32 BUFSIZ;
-fn int32 main() { BUFSIZ = 3; return 0; }
+fn uint8 main() { BUFSIZ = 3; return 0; }

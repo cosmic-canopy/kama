@@ -6,4 +6,4 @@ type value Box<T> {
     public fn T get() { return this.v; }
 }
 fn T generic<T>(Box<T> b) { return b.get(); }
-fn int32 main() { return generic(b: Box.empty()); }
+fn uint8 main() { return generic(b: Box.empty()); }

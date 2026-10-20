@@ -12,7 +12,7 @@ fn void zap(ref DynamicArray<Big> a) {
     foreach (const ref Big b in a) { b.w = 9; }   // -> REJECT
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Big> a = DynamicArray.empty();
     a.add(item: Big.make(w: 1));
     zap(a: a);

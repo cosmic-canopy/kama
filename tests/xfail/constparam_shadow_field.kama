@@ -6,4 +6,4 @@ type value Fx comptime(int32 F) {
     public ctor of(int32 v) { this.F = v; }
     public fn int32 get() { return F; }
 }
-fn int32 main() { Fx#(16) a = Fx#(16).of(v: 3); return a.get(); }
+fn uint8 main() { Fx#(16) a = Fx#(16).of(v: 3); return cast<uint8>(a.get()); }

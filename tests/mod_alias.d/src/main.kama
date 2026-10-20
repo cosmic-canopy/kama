@@ -4,4 +4,4 @@
 // every name a file uses is in its import list, under its own name or an `as` one.
 import { modalias::geo::area, modalias::util::three as t };
 
-fn int32 main() { return area() + t(); }   // 7 + 3 = 10
+fn uint8 main() { return cast<uint8>(area() + t()); }   // 7 + 3 = 10

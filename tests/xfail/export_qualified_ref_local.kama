@@ -16,4 +16,4 @@ fn int32 depth() {
     return 0;
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

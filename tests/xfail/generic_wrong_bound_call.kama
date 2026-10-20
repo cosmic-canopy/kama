@@ -4,4 +4,4 @@
 fn void neverCalled<T: Comparable<T>>(T x) {
     x.hash();                  // ERROR: `Comparable` declares `compareTo`, not `hash`
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

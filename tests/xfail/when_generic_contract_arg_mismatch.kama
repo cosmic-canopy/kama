@@ -7,7 +7,7 @@ type value Wrap<P> {
     public ctor of(P inner) { this.inner = inner; }
     public fn int32 pullInt() when [P: Source<int32>] { return 0; }
 }
-fn int32 main() {
+fn uint8 main() {
     Wrap<int32> w = Wrap::<int32>.of(inner: 3);
     return w.pullInt();
 }

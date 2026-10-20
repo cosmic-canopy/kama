@@ -22,7 +22,7 @@ type resource Node {
     public ctor make(int32 v) { this.v = v; this.next = Optional::None; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<uint8> bytes = DynamicArray.empty();     // `DynamicArray` deliberately NOT imported
     Result<Shared<Node>, Owned<Error>> r = deserializeKbinPositionalBuffer::<Shared<Node>>(src: give bytes);
     return 0;

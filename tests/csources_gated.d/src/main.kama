@@ -8,6 +8,6 @@ extern fn int32 kama_test_gated_include();
 
 unsafe fn int32 check() { return kama_test_gated_side() + kama_test_gated_include(); }
 
-fn int32 main() {
-    return check();   // 1 + 10 on every target; a wrong gate gives 100 or more, or fails to link
+fn uint8 main() {
+    return cast<uint8>(check());   // 1 + 10 on every target; a wrong gate gives 100 or more, or fails to link
 }

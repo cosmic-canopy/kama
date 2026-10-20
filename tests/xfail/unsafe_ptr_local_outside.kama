@@ -3,7 +3,7 @@
 // in a body, which is what the marker exists to make greppable.
 extern fn UnsafePtr kmalloc(usize n);
 
-fn int32 main() {
+fn uint8 main() {
     UnsafePtr<int32> p = cast<UnsafePtr<int32>>(kmalloc(n: cast<usize>(4)));
     return 0;
 }

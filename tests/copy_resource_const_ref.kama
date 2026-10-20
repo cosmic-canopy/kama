@@ -11,4 +11,4 @@ type resource R implements Copyable<This>(bare: copy) {
     public const fn int32 get() { return this.v; }
 }
 fn int32 first(const ref DynamicArray<R> xs) { R r = copy xs[0]; return r.get(); }
-fn int32 main() { DynamicArray<R> xs = DynamicArray.empty(); xs.add(item: R.make(v: 40)); R a = copy xs[0]; return first(xs: xs) + a.get() - 40; }   // 41 + 41 - 40 = 42
+fn uint8 main() { DynamicArray<R> xs = DynamicArray.empty(); xs.add(item: R.make(v: 40)); R a = copy xs[0]; return cast<uint8>(first(xs: xs) + a.get() - 40); }   // 41 + 41 - 40 = 42

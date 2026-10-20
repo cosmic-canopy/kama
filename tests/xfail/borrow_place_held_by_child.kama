@@ -2,7 +2,7 @@
 // own rule answers first: the body may not use what a child holds, read or write, until the join.
 import { std::collections::DynamicArray, std::concurrent::Isolate };
 fn void work(ref DynamicArray<int32> xs) { }
-fn int32 main()
+fn uint8 main()
 {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 1);

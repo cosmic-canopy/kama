@@ -88,7 +88,7 @@ fn int32 libArgCount() { return args().count(); }
 KAMA
 cat > "$libdir/main.kama" <<'KAMA'
 import { core::args, lib::libArgCount };
-fn int32 main() {
+fn uint8 main() {
     int32 mc = args().count();     // main's TU
     int32 lc = libArgCount();      // lib's TU — must see the SAME argv
     if (mc != lc) { return 3; }    // cross-TU mismatch (the bug)

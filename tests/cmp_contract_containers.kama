@@ -17,7 +17,7 @@ type value Cents implements Equatable<This>, Comparable<This>, Hashable {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // `<`/`>`/`<=`/`>=` route through `compareTo`; `==`/`!=` through `equals`.
@@ -50,5 +50,5 @@ fn int32 main() {
     tiers.add(key: Cents.of(v: 1));
     r = r + cast<int32>(tiers.length());              // 2
 
-    return cast<int32>(r);   // 6 + 2 + 42 + 2 = 52
+    return cast<uint8>(r);   // 6 + 2 + 42 + 2 = 52
 }

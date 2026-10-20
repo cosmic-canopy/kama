@@ -11,4 +11,4 @@ type value Circle implements Shape {
     fn int64 area() { return this.r * this.r; }   // line 11 — not public, and this is line 11 OF THIS FILE
 }
 
-fn int32 main() { Circle c = Circle.make(r: 2); return 0; }
+fn uint8 main() { Circle c = Circle.make(r: 2); return 0; }

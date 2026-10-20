@@ -2,4 +2,4 @@
 // (error boxes, a `substring`, a growing buffer), and was refused 28 times under `--no-heap` for being imported.
 // Nothing here calls it, so nothing here is reached (KR-47).
 import { std::serialization::text::json::deserializeJsonBuffer };
-fn int32 main() { return 42; }
+fn uint8 main() { return 42; }

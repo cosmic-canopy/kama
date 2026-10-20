@@ -3,7 +3,7 @@
 // position and reached clang as an assignment of a `Geo` to a `Shared<Geo>` (KR-15).
 import { std::memory::Shared };
 type enum Geo { Circle(int32 r), Point }
-fn int32 main() {
+fn uint8 main() {
     Shared<Geo> g = Geo::Circle(r: 4);
     return 0;
 }

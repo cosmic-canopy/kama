@@ -13,7 +13,7 @@ fn uint16 freePort() {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
     uint16 port = freePort();                       // nothing bound here any more
     Result<TcpStream, IoError> rc = TcpStream.connect(host: host, port: port);

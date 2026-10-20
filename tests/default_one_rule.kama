@@ -8,7 +8,7 @@ type value Scaled { public int32 n; public float32 scale = 1.5f32; public defaul
 // A ctor's fill of a field it leaves unassigned is the same default, element by element for an InlineArray.
 type value Grid { public InlineArray<Scaled>#(2) cells; public int32 w; public ctor make(int32 w) { this.w = w; } }
 type resource Holder<T> { T item; public ctor fresh() when [T: default] { this.item = T.default(); } public fn ref T get() { return this.item; } }
-fn int32 main() {
+fn uint8 main() {
     Holder<int32> a = Holder.fresh();
     Holder<bool> b = Holder.fresh();
     Holder<string> s = Holder.fresh();
@@ -29,5 +29,5 @@ fn int32 main() {
     if (direct == Level::Info) { r = r + 32; }                    // 63
     Grid g = Grid.make(w: 1);
     if (g.cells[0].n == 3 && g.cells[1].scale == 1.5f32) { r = r + 64; }            // 127
-    return r;
+    return cast<uint8>(r);
 }

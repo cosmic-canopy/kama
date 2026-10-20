@@ -8,4 +8,4 @@ unsafe fn int32 g(const ref string s) {
     return 0;
 }
 
-fn int32 main() { string s = "abc"; return g(s: s); }
+fn uint8 main() { string s = "abc"; return cast<uint8>(g(s: s)); }

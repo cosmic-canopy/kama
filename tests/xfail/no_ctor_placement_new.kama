@@ -1,7 +1,7 @@
 // The allocator-aware form — `new(allocator: a) Empty()` routes through the same ban, before the boxing.
 import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 type value Empty { public int32 v; }
-fn int32 main() {
+fn uint8 main() {
     Arena a = Arena.make(capacity: 1024);
     Owned<Empty, BumpAllocator> h = new(allocator: a.handle()) Empty();   // ERROR: no ctor to call
     return 0;

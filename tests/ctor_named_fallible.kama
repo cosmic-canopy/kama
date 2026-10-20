@@ -15,10 +15,10 @@ type value Percent {
         return Result::Ok(value: p);
     }
 }
-fn int32 main() {
+fn uint8 main() {
     Result<Percent, PercentErr> ok  = Percent.of(v: 42);
     Result<Percent, PercentErr> bad = Percent.of(v: 250);
     int32 a = match (ok)  { case Ok(value: p): p.v; case Err(error: e): 0 - 1; };   // 42
     int32 b = match (bad) { case Ok(value: p): p.v; case Err(error: e): 0 - 1; };   // -1
-    return a + b + 1;   // 42
+    return cast<uint8>(a + b + 1);   // 42
 }

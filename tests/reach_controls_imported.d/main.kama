@@ -67,7 +67,7 @@ fn int32 z_turbofish<X>() { return 0; }
 fn int32 main_turbofish() { return z_turbofish::<ShownErr>(); }
 
 // a serde turbofish type argument
-fn int32 main_turbofish_deser() { string s = "{\"v\":1}"; deserializeJsonBuffer::<ShownVal>(src: give s); return 0; }
+fn int32 main_turbofish_deser() { string s = "{\"v\":1}"; _ = deserializeJsonBuffer::<ShownVal>(src: give s); return 0; }
 
 // a `cast<UnsafePtr<X>>` type argument
 unsafe fn int32 f_cast_arg(UnsafePtr p) { UnsafePtr w = cast<UnsafePtr>(cast<UnsafePtr<ShownVal>>(p)); return 0; }
@@ -143,7 +143,7 @@ fn int32 main_const_generic_arg() { return 0; }
 fn int32 main_existing_instance() { Result<Shown, ShownErr> r = Shown.parse(n: 1); return 0; }
 
 // Each position fails with its own exit code, so a red run names the position.
-fn int32 main() {
+fn uint8 main() {
     if (main_local() != 0) { return 1; }
     if (main_optional_local() != 0) { return 2; }
     if (main_result_local() != 0) { return 3; }

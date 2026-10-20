@@ -11,7 +11,7 @@ fn Step mk() { return Step::Stop; }
 fn P mkp() { return P.make(); }
 fn Optional<Step> back() { return mk(); }
 fn void take(Optional<Step> o) { }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Step> xs = DynamicArray.empty();
     xs.add(item: Step::Go(n: 7));
     Optional<Step> first = xs.remove(index: 0);

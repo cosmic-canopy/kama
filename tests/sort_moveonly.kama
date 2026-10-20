@@ -33,7 +33,7 @@ type value ByValue implements Order<Tag> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Tag> ts = DynamicArray::<Tag>.empty();
     ts.add(item: Tag.make(n: 4));
     ts.add(item: Tag.make(n: 1));
@@ -46,5 +46,5 @@ fn int32 main() {
         int32 ok = isSortedWith(items: v, by: by) ? 1 : 0;
         r = v[0].value() * 1000 + v[1].value() * 100 + v[2].value() * 10 + v[3].value() + ok - 1195;
     }
-    return r;   // 1234 + 1 - 1195 = 40
+    return cast<uint8>(r);   // 1234 + 1 - 1195 = 40
 }

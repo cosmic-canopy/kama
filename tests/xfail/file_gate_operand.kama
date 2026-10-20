@@ -11,4 +11,4 @@
 // on the wasm leg, and this fixture — which must FAIL to build — would fail to fail there.
 file @compileFor(NO_SUCH_FLAG_IS_EVER_ACTIVE);
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

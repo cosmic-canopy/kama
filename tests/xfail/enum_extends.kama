@@ -4,4 +4,4 @@ type enum Bad extends Thing {
     A, B;
     public fn int32 g() { return 2; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

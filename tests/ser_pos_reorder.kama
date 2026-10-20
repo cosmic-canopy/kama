@@ -31,7 +31,7 @@ type value Mirror {
     public ctor make(int32 t, int32 s, int32 f) { this.third = t; this.second = s; this.first = f; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // Wire: declared (1,2,3), emitted ascending-id => 3, 2, 1
     Result<DynamicArray<uint8>, Owned<Error>> w = serializeKbinPositionalBuffer(v: Wire.make(a: 1, b: 2, c: 3));
     DynamicArray<uint8> wb = match (give w) { case Ok(value: v): give v; case Err(error: e): { return 250; } };

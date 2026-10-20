@@ -10,7 +10,7 @@ import {
 
 fn int32 unwrap(Optional<int32> o) { return match (o) { case Some(value: x): x; case None: 0 - 1; }; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // pushBack then popFront == FIFO order.
@@ -66,5 +66,5 @@ fn int32 main() {
     int32 okc = match (res) { case Ok(value: b): (b[0] + b[2] + cast<int32>(b.length())); case Err(error: e): 0 - 1; };
     if (okc == 7 + 9 + 3) { r = r + 10; }   // 19
 
-    return r;   // 10+10+10+5+5+10+10+10+10+10+10 = 100
+    return cast<uint8>(r);   // 10+10+10+5+5+10+10+10+10+10+10 = 100
 }

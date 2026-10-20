@@ -7,7 +7,7 @@ type enum A : uint8 { A0, A1, A2 }
 
 fn uint8 opaque(uint8 n) { return n; }
 
-fn int32 main()
+fn uint8 main()
 {
     uint8 n = opaque(n: 200);
     A a = n;

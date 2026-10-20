@@ -16,7 +16,7 @@ type extern value div_t {
 
 fn int32 sumDiv(div_t d) { return d.quot + d.rem; }
 
-fn int32 main() {
+fn uint8 main() {
     div_t d  = div_t.of(quot: 3, rem: 2);           // memberwise -> 5
     div_t d2 = div_t.whole(q: 40);                  // partial through a ctor: rem is 0 -> 40
     div_t z  = div_t.zero();                        // partial through `zero` + a store
@@ -24,7 +24,7 @@ fn int32 main() {
     d = div_t.of(quot: 10, rem: 5);                 // reassignment -> 15
     int32 inl = sumDiv(d: div_t.of(quot: 7, rem: 8));   // inline in argument position -> 15
     div_t s = d + d2;                               // an operator -> 50 + 5
-    return sumDiv(d: d) + sumDiv(d: d2) + sumDiv(d: z) + inl   // 15 + 40 + 6 + 15 = 76
+    return cast<uint8>(sumDiv(d: d) + sumDiv(d: d2) + sumDiv(d: z) + inl   // 15 + 40 + 6 + 15 = 76
          + s.back(d: 1) - 55                        // 55 - 55
-         + div_t::seven();                          // 83
+         + div_t::seven());                          // 83
 }

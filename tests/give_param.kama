@@ -11,12 +11,12 @@ fn int32 peek(Shared<Counter> s) { return s.get(); }
 // Factory: a fresh Owned rvalue (no marker needed when passed on).
 fn Owned<Counter> make(int32 n) { Owned<Counter> c = new Counter.make(n: n); return c; }
 
-fn int32 main() {
+fn uint8 main() {
     Owned<Counter> a = new Counter.make(n: 20);
     int32 w = sink(c: give a);            // move `a` into sink; `a` is consumed
     int32 x = sink(c: make(n: 7));        // fresh rvalue handed straight in
     Shared<Counter> s = new Counter.make(n: 22);
     int32 y = peek(s: s);                 // copy/retain; `s` survives the call
     int32 z = s.get();                    // still alive
-    return w + x + y + z;                 // 20 + 7 + 22 + 22 = 71
+    return cast<uint8>(w + x + y + z);                 // 20 + 7 + 22 + 22 = 71
 }

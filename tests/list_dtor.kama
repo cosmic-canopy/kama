@@ -5,7 +5,7 @@ import { std::collections::DynamicArray };
 // M26f-2: `add(item:)` takes the element BY VALUE, and a `resource` (destructible) value
 // MOVES on a bare hand-off — so each source local (a,b,c) is moved INTO the list and its
 // own dtor is suppressed (no double-drop). Only the 3 list elements destruct: ~[1,2,4] ->
-// fold ((1*31+2)*31+4)=1027 -> exit 1027 & 0xFF = 3.
+// fold ((1*31+2)*31+4)=1027; `main` returns its low byte, `truncate<uint8>` = 3, on purpose.
 extern fn void kama_trace(int32 code);
 extern fn int32 kama_trace_get();
 unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
@@ -30,8 +30,8 @@ fn int32 build()
     // scope exit: a,b,c were moved into xs (dtors suppressed); xs -> ~[1,2,4]
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 r = build();
-    return traceGet();
+    return truncate<uint8>(traceGet());
 }

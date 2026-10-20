@@ -33743,17 +33743,28 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
                     "every line in the trusted region. Move the raw work into a helper `unsafe fn` and "
                     "call it from `main` (calling an `unsafe fn` from safe code is allowed)", fn);
 
-    // `main`'s result is the process's exit status, typed as the platform's status is (KR-192): `uint8` everywhere —
-    // the one byte Linux, macOS and the BSDs keep, so `return 256;` is refused rather than exiting 0 — and on Windows
-    // also `uint32`, the 32 bits `ExitProcess` takes. Arguments come from `args()`. A `fn void main()` used to pass
-    // `kama check` and then fail in clang on the synthesized `return (int)kama_main();`. `int32` is accepted while the
-    // corpus moves to `uint8`.
+    // `main`'s result is the process's exit status, typed as the platform's status is: `uint8` everywhere — the one
+    // byte Linux, macOS and the BSDs keep — and on Windows also `uint32`, the 32 bits `ExitProcess` takes. An `int32`
+    // status was truncated by the OS at exit with no word: `return 256;` exited 0, success, and `return -962;` exited
+    // 62, which is how a fixture hid a failing check behind its expected value for months. Now a literal that does not
+    // fit is refused where it is written and a computed status narrows explicitly. Arguments come from `args()`. (A
+    // `fn void main()` used to pass `kama check` and then fail in clang on the synthesized `return (int)kama_main();`.)
     if (isEntry) {
         const std::string ret = cType(fn->returnType);
-        const bool typed = ret == "uint8_t" || (ret == "uint32_t" && _activeFlags.count("OS_WINDOWS")) || ret == "int32_t";
-        if (!typed || (fn->parameters && !fn->parameters->empty()))
-            unsupported("`main` is declared `fn int32 main()` — it returns the exit status (0 for success) and "
-                        "takes no parameters; command-line arguments come from `args()`", fn);
+        const bool windows = _activeFlags.count("OS_WINDOWS") != 0;
+        if (fn->parameters && !fn->parameters->empty())
+            unsupported("`main` takes no parameters — command-line arguments come from `args()`", fn);
+        else if (ret == "uint32_t" && !windows)
+            unsupported("`fn uint32 main()` is Windows' exit status, and this target keeps one byte of it — write "
+                        "`fn uint8 main()`, and keep a 32-bit status in a `@compileFor(OS_WINDOWS)` twin", fn);
+        else if (ret == "int32_t")
+            unsupported("`main` returns the exit status in the platform's own type — write `fn uint8 main()` (the one "
+                        "byte Linux and macOS keep; `fn uint32 main()` on Windows). An `int32` was truncated at exit "
+                        "without a word; narrow a computed status with `cast<uint8>(…)`, which traps if it does not "
+                        "fit, or `truncate<uint8>(…)` to keep its low bits", fn);
+        else if (ret != "uint8_t" && ret != "uint32_t")
+            unsupported("`main` is declared `fn uint8 main()` — it returns the exit status (0 for success), the one "
+                        "byte every platform keeps (`fn uint32 main()` on Windows)", fn);
     }
 
     // `expose fn` crosses to a host over a raw C ABI — an owned-by-value type (kama `string`,

@@ -76,7 +76,7 @@ type final resource Plain {
     fn int32 read(int32 d) { return this.v + d; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     { Owned<Derived, Check> d = new(allocator: Check.make()) Derived.make(a: 1); }                 // 1 free
     { Owned<Base, Check> b = new(allocator: Check.make()) Derived.make(a: 1); }                    // 1
     { Shared<Base, Check> s = new(allocator: Check.make()) Derived.make(a: 1); }                   // 2 (+ctrl)
@@ -92,6 +92,6 @@ fn int32 main() {
         if (g(d: 1) != 3) { return 91; }
     }
     { Shared<Base, Check> s = new(allocator: Check.make()) Derived.make(a: 1); Shared<Base, Check> t = copy s; }  // 2, once
-    if (mismatches != 0) { return 100 + mismatches; }
-    return frees;
+    if (mismatches != 0) { return cast<uint8>(100 + mismatches); }
+    return cast<uint8>(frees);
 }

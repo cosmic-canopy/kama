@@ -26,11 +26,11 @@ type resource Table {
     public fn void on(Owned<Handler<Click>> h) { this.handlers.add(item: give h); }
     public fn void fire(ref Click e) { foreach (ref Owned<Handler<Click>> h in this.handlers.iterMut()) { h.call(e: ref e); } }
 }
-fn int32 main() {
+fn uint8 main() {
     Table t = Table.make();
     t.on(h: new Counter.make(weight: 2));
     t.on(h: new Logger.make());
     Click c = Click.of(x: 10, y: 22, acc: 0);
     t.fire(e: ref c); t.fire(e: ref c);   // Counter: 20 then 40 (stateful) -> 60; Logger: +1 twice -> 62
-    return c.acc - 20;
+    return cast<uint8>(c.acc - 20);
 }

@@ -17,4 +17,4 @@ unsafe fn int32 go() {
          + takes_pair(p: m)                            // 23
          + host_calls();                               // 7, through kama's `sum_pair`
 }
-fn int32 main() { return go(); }                       // 72
+fn uint8 main() { return cast<uint8>(go()); }                       // 72

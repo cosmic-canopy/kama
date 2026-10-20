@@ -11,4 +11,4 @@ fn isize neverCalled<T>(ref DynamicArray<T> d) {
     View<T> v = d.viewMut();                // ERROR: nothing bounds the storage `v` views
     return v.length();
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

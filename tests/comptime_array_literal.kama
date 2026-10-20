@@ -4,4 +4,4 @@
 // admitted the literal: same evaluator, same bake, the `[v; N]` fill form included.
 comptime InlineArray<int32>#(4) T = [1, 2, 3, 36];
 comptime InlineArray<uint8>#(3) Z = [7ui8; 3];
-fn int32 main() { return T[3] + cast<int32>(Z[2]) - 1; }   // 36 + 7 - 1 = 42
+fn uint8 main() { return cast<uint8>(T[3] + cast<int32>(Z[2]) - 1); }   // 36 + 7 - 1 = 42

@@ -19,7 +19,7 @@ type value Two   { @field public int32 a; @field public int32 b;
 type value Three { @field public int32 a; @field public int32 b; @field public int32 c;
     public ctor make(int32 a, int32 b, int32 c) { this.a = a; this.b = b; this.c = c; } }
 
-fn int32 main() {
+fn uint8 main() {
     // TOO SHORT: two fields on the wire, three expected -> the reader runs off the end.
     Result<DynamicArray<uint8>, Owned<Error>> s = serializeKbinPositionalBuffer(v: Two.make(a: 1, b: 2));
     DynamicArray<uint8> sb = match (give s) { case Ok(value: v): give v; case Err(error: e): { return 250; } };

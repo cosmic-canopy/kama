@@ -39,10 +39,10 @@ type resource Holder {
     public fn void reset(int64 v) { this.slots = [v; (1024)]; }
     public const fn int64 last() { return this.slots[1023]; }
 }
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.make(blank: 2i64);
     h.reset(v: 3i64);
-    return cast<int32>(local(s: 7i64, i: 3) + h.last());
+    return cast<uint8>(local(s: 7i64, i: 3) + h.last());
 }
 KAMA
 "$KAMA" transpile "$tmp/fill.kama" -o "$tmp/fill.c" --no-line >/dev/null 2>"$tmp/t.err" || { cat "$tmp/t.err" >&2; fail "transpile failed"; }

@@ -28,11 +28,11 @@ type value Maker {
     public fn G next() { return G.of(k: this.start + 1); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     if (use(g: makeG(k: 4)) != 4) { return 1; }                  // value call result
     if (measure(s: makeBag(n: 3)) != 3) { return 2; }            // destructible call result
     if (measure(s: shareBag(n: 5)) != 5) { return 3; }           // a `Shared<T>` call result, deref'd to T
     Maker m = Maker.of(start: 6);
     if (use(g: m.next()) != 7) { return 4; }                     // method call result
-    return use(g: makeG(k: use(g: makeG(k: 9))));                // nested: 9
+    return cast<uint8>(use(g: makeG(k: use(g: makeG(k: 9)))));                // nested: 9
 }

@@ -3,7 +3,7 @@
 // fixture can force cheaply, so it is the one that pins the seam. Returns 7.
 import { std::fs::readDir, std::io::IoError, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     string missing = "/nonexistent-kama-dir-3f9a/x";
     return match (readDir(path: missing)) { case Ok(value: names): 30; case Err(error: e): 7; };
 }

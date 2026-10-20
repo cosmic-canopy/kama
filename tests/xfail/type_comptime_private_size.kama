@@ -4,4 +4,4 @@ type value V { public int32 x; comptime int32 SECRET = 3; public ctor make() { t
 @generate(zero)
 type value W { public InlineArray<int32>#(V::SECRET) a; }
 
-fn int32 main() { W w = W.zero(); return cast<int32>(w.a.length()) - 3; }
+fn uint8 main() { W w = W.zero(); return cast<uint8>(cast<int32>(w.a.length()) - 3); }

@@ -19,7 +19,7 @@ type enum Color { Red, Green }
 fn T ident<T>(T x) { return x; }
 fn Color pick(int32 n) { return n > 0 ? Color::Red : Color::Green; }
 
-fn int32 main()
+fn uint8 main()
 {
     // the SUBJECT is walked
     int32 a = match (pick(n: ident::<int32>(x: 3))) { case Red: 1; case Green: 0; };          // 1
@@ -37,5 +37,5 @@ fn int32 main()
     Optional<int32> o = Optional::Some(value: 16);
     int32 f = match (o) { case Some(value: x): ident(x: x); case None: 0; };                  // 16
 
-    return a + b + d + e + f;   // 1 + 2 + 4 + 8 + 16 = 31
+    return cast<uint8>(a + b + d + e + f);   // 1 + 2 + 4 + 8 + 16 = 31
 }

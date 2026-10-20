@@ -31,7 +31,7 @@ type value Circle implements Shape {
     public fn int32 area() { return this.r * this.r; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);   // declared FIRST → drops LAST (outlives the boxes)
 
     // concrete + placement: `adoptIn(raw, alloc)` into a library HeapOwner box
@@ -46,5 +46,5 @@ fn int32 main() {
     int32 b = match (gb) { case Ok(value: x): 100;      case Err(error: e): 0 - 1; };   // -1
     int32 c = match (s)  { case Ok(value: x): x.area(); case Err(error: e): 0 - 1; };   // 36
     int32 d = match (sb) { case Ok(value: x): 100;      case Err(error: e): 0 - 1; };   // -1
-    return a + b + c + d;   // 10 - 1 + 36 - 1 = 44
+    return cast<uint8>(a + b + c + d);   // 10 - 1 + 36 - 1 = 44
 }

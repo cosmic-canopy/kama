@@ -4,4 +4,4 @@
 @align(64)
 static uint32 dmaBuf;
 
-fn int32 main() { return cast<int32>(dmaBuf); }
+fn uint8 main() { return cast<uint8>(dmaBuf); }

@@ -10,7 +10,7 @@ type value Frame {
     public ctor make() { this.small = [1; (Buf::CAP)]; this.wide = [2; (Buf::WIDE)]; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Frame f = Frame.make();
-    return cast<int32>(f.small.length()) * 10 + cast<int32>(f.wide.length());   // 46
+    return cast<uint8>(cast<int32>(f.small.length()) * 10 + cast<int32>(f.wide.length()));   // 46
 }

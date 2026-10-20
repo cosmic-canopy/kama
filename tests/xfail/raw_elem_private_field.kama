@@ -11,4 +11,4 @@ unsafe fn int32 peek() {
     UnsafePtr<Vault> p = addr(of: v);
     return p[0].secret;
 }
-fn int32 main() { return peek(); }
+fn uint8 main() { return cast<uint8>(peek()); }

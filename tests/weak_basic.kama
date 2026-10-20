@@ -9,13 +9,13 @@ type value Counter
     public fn int32 get() { return this.value; }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Shared<Counter> s = new Counter.make(start: 40);
     Weak<Counter> w = s.downgrade();              // weak ref (does not keep alive)
     Optional<Shared<Counter>> up = w.tryUpgrade();
     return match (up) {
-        case Some(value: s2): s2.get() + 2;              // alive -> 40 + 2 = 42
+        case Some(value: s2): cast<uint8>(s2.get() + 2);              // alive -> 40 + 2 = 42
         case None: 0;
     };
 }

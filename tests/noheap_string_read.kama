@@ -7,4 +7,4 @@
     if (a.startsWith(prefix: "h")) { n = n + 10; }
     return n + cast<int32>(a.get(index: 0));
 }
-fn int32 main() { string x = "hi"; return tick(a: ref x); }   // 2 + 10 + 'h'(104) = 116
+fn uint8 main() { string x = "hi"; return cast<uint8>(tick(a: ref x)); }   // 2 + 10 + 'h'(104) = 116

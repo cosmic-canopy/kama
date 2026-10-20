@@ -19,4 +19,4 @@ type resource App {
     public fn void run() { this.hs[0].handle(app: ref this); }
 }
 
-fn int32 main() { App a = App.make(); a.run(); return 0; }
+fn uint8 main() { App a = App.make(); a.run(); return 0; }

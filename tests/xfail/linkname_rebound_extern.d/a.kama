@@ -4,4 +4,4 @@
 extern "<stdlib.h>";
 extern fn int32 abs(int32 x);
 unsafe fn int32 a() { return abs(x: -1); }
-fn int32 main() { return a(); }
+fn uint8 main() { return cast<uint8>(a()); }

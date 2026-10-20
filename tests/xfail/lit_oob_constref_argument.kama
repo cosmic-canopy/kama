@@ -5,7 +5,7 @@
 // temp (emitReorderedCall's `__primtmp` arm). That arm takes the PARAMETER's C type, which is only sound
 // because the literal was range-checked against that same type first — this fixture is what says so.
 fn void take(const ref int8 x) { }
-fn int32 main() {
+fn uint8 main() {
     take(x: 300);
     return 0;
 }

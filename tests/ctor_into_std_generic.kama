@@ -12,7 +12,7 @@ type resource Entry {
     public const fn isize size() { return this.id.length(); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Result<Map<string, DynamicArray<Entry>>, Owned<Error>> r =
         deserializeJsonBuffer::<Map<string, DynamicArray<Entry>>>(src: "[{\"key\": \"s\", \"value\": [{\"id\": \"1-1\"}]}]");
     isize n = match (r) { case Ok(value: m): m.length(); case Err(error: e): -1; };                      // 1

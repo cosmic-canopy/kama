@@ -96,7 +96,7 @@ type value Probe {
 }
 comptime int32 SLACK = Probe::useSlack();
 
-fn int32 main() {
+fn uint8 main() {
     Box<int32> b = Box::<int32>.make(v: 11);
     if (reader::<int32>(b: b) != 11) { return 1; }
 

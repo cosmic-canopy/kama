@@ -8,7 +8,7 @@ fn void addTo(ref Atomic<float64> cell, float64 delta) {
     float64 seen = cell.load();
     while (!cell.compareExchange(expected: ref seen, desired: seen + delta)) { }
 }
-fn int32 main() {
+fn uint8 main() {
     Atomic<float32> a = Atomic.make(value: 1.5f32);
     Atomic<float64> b = Atomic.make(value: 10.0);
     a.store(value: 2.5f32);
@@ -19,5 +19,5 @@ fn int32 main() {
     if (prior == 2.5f32) { r = r + 1; }
     if (a.load() == 4.0f32) { r = r + 2; }
     if (b.load() == 38.0) { r = r + 4; }
-    return r + 35;   // 7 + 35 = 42
+    return cast<uint8>(r + 35);   // 7 + 35 = 42
 }

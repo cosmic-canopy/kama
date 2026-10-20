@@ -15,7 +15,7 @@ fn int32 valueOf(Optional<Owned<Cell, BumpAllocator>> c) {
     return match (c) { case Some(value: x): x.get(); case None: 0 - 1; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 64);      // declared FIRST → drops LAST (outlives every box)
 
     // Fits: the Cell is placed inside the arena region, and the handle frees through the SAME allocator
@@ -32,5 +32,5 @@ fn int32 main() {
         y = y + refused;
     }
     int32 f = valueOf(c: give filler);                                         // 1
-    return x + f + (y > 0 ? 11 : 0);   // 30 + 1 + 11 = 42, and the 11 says the arena really did refuse
+    return cast<uint8>(x + f + (y > 0 ? 11 : 0));   // 30 + 1 + 11 = 42, and the 11 says the arena really did refuse
 }

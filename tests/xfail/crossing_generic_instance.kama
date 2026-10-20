@@ -3,4 +3,4 @@
 extern "stdio.h";
 type value Box<T> { public T v; public ctor of(T v) { this.v = v; } }
 extern fn int32 takes_box(Box<int32> b);
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

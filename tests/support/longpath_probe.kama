@@ -30,7 +30,7 @@ fn string comp(int32 i) {
     return "d${i}" + "_23456789_123456789_123456789_12345678";
 }
 
-fn int32 main() {
+fn uint8 main() {
     // `base` is a reserved word in kama, so the short working directory is `work`.
     string work = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };
     if (work.isEmpty()) { return 1; }
@@ -57,7 +57,7 @@ fn int32 main() {
         case Ok(value: m): (m.isDir() ? 0 : 4);
         case Err(error: e): 5;
     };
-    if (stDir != 0) { return stDir; }
+    if (stDir != 0) { return cast<uint8>(stDir); }
 
     // ---- write / read a file at the bottom ---------------------------------------------------
     string f = join(path: deep, with: "leaf.txt");
@@ -72,7 +72,7 @@ fn int32 main() {
         case Ok(value: got): (got.length() == cast<isize>(14) ? 0 : 7);
         case Err(error: e): 8;
     };
-    if (rd != 0) { return rd; }
+    if (rd != 0) { return cast<uint8>(rd); }
 
     // ---- APPEND to the deep file -------------------------------------------------------------
     // The one OpenMode the rest of this probe never reaches: `writeFile` opens Write and `readFile`
@@ -88,14 +88,14 @@ fn int32 main() {
             };
         }
     };
-    if (ap != 0) { return ap; }
+    if (ap != 0) { return cast<uint8>(ap); }
 
     // ---- stat the deep FILE (size, not a directory) ------------------------------------------
     int32 stFile = match (stat(path: f)) {
         case Ok(value: m): (m.isDir() ? 9 : ((m.size == cast<usize>(18)) ? 0 : 10));   // 14 written + 4 appended
         case Err(error: e): 11;
     };
-    if (stFile != 0) { return stFile; }
+    if (stFile != 0) { return cast<uint8>(stFile); }
 
     // ---- permissions on the deep path (KR-92): made, read back and changed through the same wide seam ----
     string pf = join(path: deep, with: "private.txt");
@@ -108,7 +108,7 @@ fn int32 main() {
         case Ok(value: m): (m.permissions == priv ? 0 : 41);
         case Err(error: e): 42;
     };
-    if (pm != 0) { return pm; }
+    if (pm != 0) { return cast<uint8>(pm); }
     match (setPermissions(path: pf, permissions: Permissions::OwnerRead)) {
         case Err(error: e): { return 43; }
         case Ok(value: u): { }
@@ -133,7 +133,7 @@ fn int32 main() {
             := hit;
         }
     };
-    if (seen != 0) { return seen; }
+    if (seen != 0) { return cast<uint8>(seen); }
 
     // ---- rename within the deep directory ----------------------------------------------------
     string f2 = join(path: deep, with: "moved.txt");

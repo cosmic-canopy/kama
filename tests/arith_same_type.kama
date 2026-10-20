@@ -5,7 +5,7 @@
 //
 // The fixture is POSITIVE on purpose. An `xfail` never links, so it never reaches ASan or the wasm
 // leg; a rule about what a value IS has to be run, not merely rejected.
-fn int32 main()
+fn uint8 main()
 {
     int32 r = 0;
 
@@ -76,5 +76,5 @@ fn int32 main()
     uint32 v1 = 4000000000ui32;
     if (v1 + v1 == 3705032704ui32)           { r = r + 4; }
 
-    return r;   // 48
+    return cast<uint8>(r);   // 48
 }

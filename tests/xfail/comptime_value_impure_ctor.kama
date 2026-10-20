@@ -5,4 +5,4 @@ type value P { int32 x; public ctor loud(int32 x) { println(s: "hi"); this.x = x
 
 comptime P K = P.loud(x: 1);
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

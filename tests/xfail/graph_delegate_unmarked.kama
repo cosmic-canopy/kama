@@ -48,7 +48,7 @@ type resource Holder<T> implements Serializable when [T: Serializable] {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Leaf> dup = new Leaf.make(v: 7);
     Shared<Leaf> dup2 = dup;
     Shared<Holder<Shared<Leaf>>> h = new Holder::<Shared<Leaf>>.make();

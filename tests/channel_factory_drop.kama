@@ -26,7 +26,7 @@ fn Sender<int32> orphanSender() {
     return ch.sender();
 }
 
-fn int32 main() {
+fn uint8 main() {
     {
         Channel<int32> never = Channel.bounded(capacity: 4);   // no endpoint at all: the factory frees the queue
     }
@@ -54,7 +54,7 @@ fn int32 main() {
         _ = only.send(item: give a);
         _ = only.send(item: give b);
     }
-    if (g_dropped != 2) { return 10 + g_dropped; }
+    if (g_dropped != 2) { return cast<uint8>(10 + g_dropped); }
 
     {
         // The factory goes FIRST, with both sides minted: the endpoints hold the queue on without it.
@@ -63,7 +63,7 @@ fn int32 main() {
         bool one = match (t) { case Some(value: k): k.ident() == 3; case None: false; };
         if (!one) { return 4; }
     }
-    return g_dropped == 3 ? 42 : 20 + g_dropped;
+    return cast<uint8>(g_dropped == 3 ? 42 : 20 + g_dropped);
 }
 
 fn Receiver<Token> orphanTokens() {

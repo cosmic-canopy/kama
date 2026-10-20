@@ -2,9 +2,9 @@
 // it once moved `t` silently, where `string u = t;` is refused for want of a marker — and a later read of `t`
 // was then blamed on a `give` nobody wrote.
 type enum E { A, B }
-fn int32 main() {
+fn uint8 main() {
     E e = E::A;
     string t = "abc";
     string u = match (e) { case A: t; case B: "q"; };   // ERROR: say `give t` or `copy t`
-    return cast<int32>(u.length() + t.length());
+    return cast<uint8>(u.length() + t.length());
 }

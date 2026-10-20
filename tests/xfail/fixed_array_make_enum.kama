@@ -2,7 +2,7 @@
 // three zero bytes, none of which is a `Code`, and a `match` on one aborted.
 import { std::collections::FixedArray };
 type enum Code : uint8 { Ok = 3, Bad = 200 }
-fn int32 main() {
+fn uint8 main() {
     FixedArray<Code> a = FixedArray.make(size: 3);
     return 0;
 }

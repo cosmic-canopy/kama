@@ -7,4 +7,4 @@ type value Box {
     public ctor make(int32 x) { this.x = x; }
     public fn int32 plus(int32 self) { return this.x + self; }
 }
-fn int32 main() { Box b = Box.make(x: 2); return b.plus(self: 1); }
+fn uint8 main() { Box b = Box.make(x: 2); return cast<uint8>(b.plus(self: 1)); }

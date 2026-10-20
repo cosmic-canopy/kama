@@ -5,4 +5,4 @@ unsafe fn UnsafePtr<uint8> past(UnsafePtr<uint8> p) {
     return p + 4;
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

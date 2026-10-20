@@ -8,7 +8,7 @@ type value V implements Equatable<This> {
     public V operator-() { return V.of(x: -this.x); }
     public const fn bool equals(const ref V other) { return this.x == other.x; }
 }
-fn int32 main() {
+fn uint8 main() {
     V a = V.of(x: 5); V b = V.of(x: 3); V c = V.of(x: 8);
     V zero = V.of(x: 0);
     int32 r = 0;
@@ -16,5 +16,5 @@ fn int32 main() {
     while (a + b == c) { r = r + 10; c = zero; }   // and a while condition (re-evaluated each pass)
     V chain = a + b + c + a;                        // deep chain
     if (-(a + b) == zero) { r = r + 100; }          // unary of nested, compared, in a condition (false)
-    return r + chain.x;                             // 11 + 13 = 24
+    return cast<uint8>(r + chain.x);                             // 11 + 13 = 24
 }

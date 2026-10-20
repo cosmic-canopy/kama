@@ -6,7 +6,7 @@
 // materialises the literal into a temp typed from the PARAMETER (`kama_char`, not the `uint32_t` the arm
 // used to write), and that is only sound because an integer never reaches it.
 fn void takeC(const ref char c) { }
-fn int32 main() {
+fn uint8 main() {
     takeC(c: 65);
     return 0;
 }

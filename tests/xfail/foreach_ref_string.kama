@@ -1,9 +1,9 @@
 // A `string` is immutable, so a `foreach` over it binds each byte by value — there is no element to bind by
 // place, writable or not. Through 0.9.603 `foreach (ref uint8 b in s)` passed the compiler and emitted a call
 // the runtime does not have, so the C compiler failed on code the author never wrote.
-fn int32 main() {
+fn uint8 main() {
     string s = "abc";
     int32 n = 0;
     foreach (ref uint8 b in s) { n = n + 1; }   // -> REJECT
-    return n;
+    return cast<uint8>(n);
 }

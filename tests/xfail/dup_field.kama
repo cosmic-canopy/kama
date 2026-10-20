@@ -7,4 +7,4 @@ type resource Box {
     isize count;                                  // ERROR: duplicate field
     public ctor make() { this.count = 1; }
 }
-fn int32 main() { Box b = Box.make(); return 0; }
+fn uint8 main() { Box b = Box.make(); return 0; }

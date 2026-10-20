@@ -28,7 +28,7 @@ type resource Bag {
     public fn ref DynamicArray<int32> itemsMut() { return this.xs; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Bag b = Bag.make(name: "abc");
     int32 bytes = 0;
     foreach (uint8 c in b.text()) { bytes = bytes + cast<int32>(c); }          // 97 + 98 + 99 = 294
@@ -43,5 +43,5 @@ fn int32 main() {
     int32 again = 0;
     foreach (const ref int32 x in b.items()) { again = again + x; }           // 9, after two loops over the field
     if (bytes != 294) { return 1; }
-    return fixed + fixedAt + viaConst + viaRef + again;                       // 6 + 6 + 9 + 9 + 9 = 39
+    return cast<uint8>(fixed + fixedAt + viaConst + viaRef + again);                       // 6 + 6 + 9 + 9 + 9 = 39
 }

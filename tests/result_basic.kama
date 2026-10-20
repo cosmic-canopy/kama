@@ -11,7 +11,7 @@ fn int32 divide(int32 a, int32 b)
         case Err(error: e): 0 - 1;
     };
 }
-fn int32 main()
+fn uint8 main()
 {
-    return divide(a: 20, b: 4) + divide(a: 1, b: 0);
+    return cast<uint8>(divide(a: 20, b: 4) + divide(a: 1, b: 0));
 }

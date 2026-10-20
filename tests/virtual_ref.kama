@@ -17,8 +17,8 @@ fn int32 measure(ref Shape sh)
 {
     return sh.area();
 }
-fn int32 main()
+fn uint8 main()
 {
     Square sq = Square.make(s: 6);
-    return measure(sh: ref sq);
+    return cast<uint8>(measure(sh: ref sq));
 }

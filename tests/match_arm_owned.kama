@@ -22,11 +22,11 @@ fn Box boxCase(Optional<int32> o) {
         case None: Box.make(x: 0);
     };
 }
-fn int32 main() {
+fn uint8 main() {
     Optional<int32> some9 = Optional::Some(value: 9);
     Optional<int32> none  = Optional::None;
     Optional<int32> some7 = Optional::Some(value: 7);
     int32 r = listCase(o: some9) + listCase(o: none);   // (9+1) + (0+1) = 11
     Box b = boxCase(o: some7);                           // 7
-    return r + b.val();                                  // 11 + 7 = 18
+    return cast<uint8>(r + b.val());                                  // 11 + 7 = 18
 }

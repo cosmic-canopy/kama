@@ -9,12 +9,12 @@ import {
     std::collections::DynamicArray,
 };
 
-fn int32 main() {
+fn uint8 main() {
     string self = "_fs_raii.tmp";
     DynamicArray<uint8> data = DynamicArray.empty();
     data.add(item: cast<uint8>(65));
     int32 w = match (writeFile(path: self, bytes: data)) { case Ok(value: x): 0; case Err(error: e): 40; };
-    if (w != 0) { return w; }
+    if (w != 0) { return cast<uint8>(w); }
 
     int32 i = 0;
     while (i < 5000) {
@@ -23,7 +23,7 @@ fn int32 main() {
             case Ok(value: f):  0;                     // f drops here -> fd closed (RAII)
             case Err(error: e): 41;                    // fires if fds leaked and hit the limit
         };
-        if (rc != 0) { return rc; }
+        if (rc != 0) { return cast<uint8>(rc); }
         i = i + 1;
     }
 

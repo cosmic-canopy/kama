@@ -11,7 +11,7 @@ fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case 
 // The OS's own code for an unclassified failure (0 when there is none).
 fn int32 otherCode(const ref IoError e) { return match (e.rawOsError()) { case Some(value: c): c; case None: 0; }; }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
     TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
@@ -32,7 +32,7 @@ fn int32 main() {
             case Err(error: e): match (e.kind()) { case BrokenPipe: 1; case ConnectionReset: 1; case Other: 100 + otherCode(e: e) % 100; case _: 5; };
         };
         if (got == 1) { return 42; }
-        if (got >= 5) { return got; }
+        if (got >= 5) { return cast<uint8>(got); }
         i = i + 1;
     }
     return 6;   // 64 writes of 4 KiB into a closed peer and no error

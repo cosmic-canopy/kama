@@ -9,11 +9,11 @@ fn string envOr(string name, string dflt) { return "mine"; }
 
 fn int32 pick(int32 a, int32 b) { return a + b; }
 
-fn int32 main() {
+fn uint8 main() {
     string mine = envOr(name: "KAMA_NOT_SET", dflt: "1");            // this file's own
     string fromCore = coreEnvOr(name: "KAMA_NOT_SET", dflt: "7");    // core's, under its import name
     int32 r = pick(a: 20, b: 15);                                    // 35
     if (mine == "mine") { r = r + 4; }                               // 39
     if (fromCore == "7") { r = r + 3; }                              // 42
-    return r;
+    return cast<uint8>(r);
 }

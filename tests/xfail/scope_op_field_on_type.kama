@@ -4,4 +4,4 @@ type value V {
     public int32 n;
     public ctor make() { this.n = 1; }
 }
-fn int32 main() { return V::n; }   // ERROR: `n` is a field. Read it from a value (`obj.n`)
+fn uint8 main() { return V::n; }   // ERROR: `n` is a field. Read it from a value (`obj.n`)

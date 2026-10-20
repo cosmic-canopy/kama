@@ -2,11 +2,11 @@ import { std::collections::DynamicArray };
 // Writing a field through a subscript is now valid: arr[i].field = v (a place, not an rvalue copy).
 @generate(of)
 type value P { public int32 x; public int32 y; }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<P>#(2) f = [P.of(x: 1, y: 2), P.of(x: 3, y: 4)];
     f[1].x = 40;                        // field write through a InlineArray subscript
     DynamicArray<P> l = DynamicArray.empty();
     l.add(item: P.of(x: 5, y: 6));
     l[0].y = 70;                        // field write through a DynamicArray subscript
-    return f[1].x + f[0].x + l[0].y + l[0].x;   // 40 + 1 + 70 + 5 = 116
+    return cast<uint8>(f[1].x + f[0].x + l[0].y + l[0].x);   // 40 + 1 + 70 + 5 = 116
 }

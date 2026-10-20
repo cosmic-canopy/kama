@@ -15,7 +15,7 @@ type resource Pair {
     public ctor make(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;                    // second owner of the SAME leaf
     Shared<Pair> p = new Pair.make(a: give leaf, b: give l2);
@@ -24,7 +24,7 @@ fn int32 main() {
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     // root Pair = id 1; a and b share the leaf = id 2 (written once)
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"a\":2,\"b\":2}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":42}}]}") {
-        return cast<int32>(j.length());
+        return cast<uint8>(j.length());
     }
     // Round-trip: decode into a Shared<Pair>, re-encode, and require the exact same wire (id dedup survived).
     Result<Shared<Pair>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Pair>>(src: copy j);

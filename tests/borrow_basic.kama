@@ -49,7 +49,7 @@ type resource Box {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box bx = Box.make();
     bx.add(v: 10); bx.add(v: 20);
     bx.addSpare(v: 6);
@@ -77,5 +77,5 @@ fn int32 main() {
         multi = multi + sum(xs: x.slice(from: 0, count: 1));   // a DERIVE is free — no new window
     }                                           // + 3 = 12
 
-    return boxed + viaLocal + multi + filled - 16;   // 30 + 11 + 12 + 5 - 16 = 42
+    return cast<uint8>(boxed + viaLocal + multi + filled - 16);   // 30 + 11 + 12 + 5 - 16 = 42
 }

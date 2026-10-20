@@ -2,4 +2,4 @@
 // come from one.
 extern "stdio.h";
 extern const int32 BUFSIZ;
-fn int32 main() { InlineArray<uint8>#(BUFSIZ) buf = [0; 4]; return 0; }
+fn uint8 main() { InlineArray<uint8>#(BUFSIZ) buf = [0; 4]; return 0; }

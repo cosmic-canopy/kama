@@ -19,7 +19,7 @@ fn int32 failsWith(const ref string text) {
     return match (r) { case Ok(value: b): 0; case Err(error: e): errCode(e: e); };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // Encode: DE AD BE EF, two lowercase digits per byte, and a zero byte keeps both digits.
@@ -79,5 +79,5 @@ fn int32 main() {
     };
     if (via.equals(other: "Zm9vYmFy"))                                    { r = r + 128; }
 
-    return r;   // 255
+    return cast<uint8>(r);   // 255
 }

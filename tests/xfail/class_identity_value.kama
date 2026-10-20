@@ -12,10 +12,10 @@ type value Mat4 { public int32 a; public ctor make(int32 a) { this.a = a; } }
 type value Vec4 { public int32 b; public ctor make(int32 b) { this.b = b; } }
 fn int32 takesMat(Mat4 m) { return m.a; }
 fn Mat4 badReturn() { Vec4 v = Vec4.make(b: 1); return v; }
-fn int32 main() {
+fn uint8 main() {
     Vec4 v = Vec4.make(b: 3);
     Mat4 init = v;                       // a local initializer
     Mat4 assigned = Mat4.make(a: 1);
     assigned = v;                        // an assignment
-    return takesMat(m: v) + init.a + assigned.a + badReturn().a;   // an argument
+    return cast<uint8>(takesMat(m: v) + init.a + assigned.a + badReturn().a);   // an argument
 }

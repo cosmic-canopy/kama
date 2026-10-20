@@ -1,7 +1,7 @@
 // Formattable specifiers M2: minimum field width + zero-pad. `W` space-pads (right-aligns), `0W` zero-pads (the
 // sign stays ahead of the zeros); on a float a width composes with a precision (`W.N` / `0W.N`). The killer
 // case is zero-padded columns/timestamps (`${h:02}:${m:02}`). Exit is a bitset (127 = all seven checks).
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     int32 n = 42i32;
@@ -28,5 +28,5 @@ fn int32 main() {
     string clock = "${h:02}:${m:02}:${s:02}";
     if (clock == "09:05:03") { r = r + 64; }     // zero-padded columns in one string
 
-    return r;   // 1+2+4+8+16+32+64 = 127
+    return cast<uint8>(r);   // 1+2+4+8+16+32+64 = 127
 }

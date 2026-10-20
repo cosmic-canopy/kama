@@ -9,4 +9,4 @@ type value Bad implements Counter {
     public fn int64 count() { return 4294967296; }        // contract says `int32` -> REJECT
 }
 fn int32 viaContract(Counter c) { return c.count(); }
-fn int32 main() { Bad b = Bad.make(); return viaContract(c: b); }
+fn uint8 main() { Bad b = Bad.make(); return cast<uint8>(viaContract(c: b)); }

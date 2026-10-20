@@ -16,7 +16,7 @@ type resource Rec {
         return s;
     }
 }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> tg = DynamicArray.empty(); tg.add(item: 5); tg.add(item: 6);
     Optional<int32> par = Optional::Some(value: 3);
     Optional<int32> nx = Optional::None;
@@ -24,5 +24,5 @@ fn int32 main() {
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: r);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };        // {"id":10,"parent":3,"next":null,"tags":[5,6]}
     Result<Rec, Owned<Error>> res = deserializeJsonBuffer::<Rec>(src: give j);
-    return match (res) { case Ok(value: q): q.score(); case Err(error: e): 0 - 1; };   // 10+3+7+5+6 = 31
+    return match (res) { case Ok(value: q): cast<uint8>(q.score()); case Err(error: e): 255; };   // 10+3+7+5+6 = 31
 }

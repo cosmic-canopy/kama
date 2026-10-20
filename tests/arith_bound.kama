@@ -17,7 +17,7 @@ type value Money implements Arithmetic<This> {
     public This operator/(This rhs) { return Money.of(cents: this.cents * 100i64 / rhs.cents); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 ok = 0;
     if (twice(x: 21) == 42) { ok = ok + 1; }
     if (twice(x: 100ui8) == 200ui8) { ok = ok + 1; }
@@ -28,5 +28,5 @@ fn int32 main() {
     if (twice(x: h).toInt() == 6) { ok = ok + 1; }
     Money m = twice(x: Money.of(cents: 250i64));
     if (m.cents == 500i64) { ok = ok + 1; }
-    return ok == 7 ? 42 : ok;
+    return cast<uint8>(ok == 7 ? 42 : ok);
 }

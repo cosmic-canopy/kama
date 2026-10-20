@@ -16,7 +16,7 @@ type resource Conn implements Transacts {
     public fn void leave() { this.open = this.open - 1; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Conn c = Conn.make();
     borrow c.transaction() as tx {
         borrow tx.conn().transaction() as inner { tx.conn().leave(); }

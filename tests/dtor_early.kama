@@ -20,8 +20,8 @@ fn int32 f(bool c)
     return 9;
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 r = f(c: true);
-    return traceGet();
+    return cast<uint8>(traceGet());
 }

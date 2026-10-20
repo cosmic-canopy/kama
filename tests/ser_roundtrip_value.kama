@@ -8,10 +8,10 @@ type value Vec {
     public ctor make(int32 x, int32 y, int32 z) { this.x = x; this.y = y; this.z = z; }
     public fn int32 dot() { return this.x + this.y + this.z; }
 }
-fn int32 main() {
+fn uint8 main() {
     Vec v = Vec.make(x: 10, y: 20, z: 12);
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: v);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     Result<Vec, Owned<Error>> res = deserializeJsonBuffer::<Vec>(src: give j);
-    return match (res) { case Ok(value: q): q.dot(); case Err(error: e): 0 - 1; };   // 42
+    return match (res) { case Ok(value: q): cast<uint8>(q.dot()); case Err(error: e): 255; };   // 42
 }

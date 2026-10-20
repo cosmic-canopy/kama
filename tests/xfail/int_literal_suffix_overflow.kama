@@ -4,7 +4,7 @@
 //
 // This is the wrong way round from the unsuffixed literal, which always checked: here the author has
 // STATED the width, which is more information, not less.
-fn int32 main() {
+fn uint8 main() {
     int8 a = 300i8;   // 300 is not an int8; it was becoming 44
     return cast<int32>(a);
 }

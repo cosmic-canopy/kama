@@ -20,10 +20,10 @@ type value Boxed<T> {
     public fn This same() { return Boxed::<T>.of(v: this.v); }   // the generic instance's `This`
 }
 
-fn int32 main() {
+fn uint8 main() {
     Tally t = Tally.make(total: 10);
     Tally m = t.merge(other: t);        // 20 — the named-receiver call that used to fail
     Tally d = t.twice();                // 20
     Boxed<int32> b = Boxed::<int32>.of(v: 2);
-    return m.total + d.total + b.same().v;   // 20 + 20 + 2 = 42
+    return cast<uint8>(m.total + d.total + b.same().v);   // 20 + 20 + 2 = 42
 }

@@ -18,7 +18,7 @@
     public ctor make(string name, int32 n) { this.name = give name; this.n = n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     Stat s = Stat.of(hp: 30i32, alive: true);
@@ -48,5 +48,5 @@ fn int32 main() {
     string g = "unit=${s}.";
     if (g == "unit=Stat { hp: 30, alive: true }.") { r = r + 32; }
 
-    return r;   // 1+2+4+8+16+32 = 63
+    return cast<uint8>(r);   // 1+2+4+8+16+32 = 63
 }

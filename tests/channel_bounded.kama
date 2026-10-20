@@ -18,7 +18,7 @@ fn void producer(Sender<int32> tx) {
     }
 }   // ~Sender() closes the sender side → a blocked/next recv returns None once drained
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();
@@ -36,5 +36,5 @@ fn int32 main() {
     }
 
     h.join();
-    return sum;   // 1+2+…+9 = 45
+    return cast<uint8>(sum);   // 1+2+…+9 = 45
 }

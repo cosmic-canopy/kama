@@ -1,7 +1,7 @@
 // The built-in fixed array takes its own lowering, and the same rule (KR-175): a `const` local is read-only, so a
 // `ref` loop over it is refused. Only a `comptime` constant was checked here through 0.9.603.
-fn int32 main() {
+fn uint8 main() {
     const InlineArray<int32>#(3) a = [1, 2, 3];
     foreach (ref int32 x in a) { x = 9; }   // -> REJECT
-    return a[0];
+    return cast<uint8>(a[0]);
 }

@@ -7,7 +7,7 @@
 // wrapped to INT32_MIN at parse time, the unary minus then wrapped a Node that was ALREADY negative,
 // and the emitter wrote `--2147483648` — which the C compiler reads as a pre-decrement of a literal and
 // rejects with "expression is not assignable". The corpus worked around it as `0i32 - 2147483647i32 - 1i32`.
-fn int32 main() {
+fn uint8 main() {
     int32 min      = -2147483648;
     int32 viaChain = 0i32 - 2147483647i32 - 1i32;   // what the workaround spelled
     int64 wide     = -2147483648i64;                 // the suffixed form, for comparison
@@ -17,5 +17,5 @@ fn int32 main() {
     if (cast<int64>(min) == wide)     { n = n + 1; }
     if (-2147483647 == min + 1i32)    { n = n + 1; }   // a negative literal one INSIDE the range
     if (min < -2147483647)            { n = n + 1; }   // and it really is the smallest
-    return n;   // 4
+    return cast<uint8>(n);   // 4
 }

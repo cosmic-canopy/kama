@@ -7,4 +7,4 @@ fn BindableFunctionPtr<Get> mk() {
     Owned<Probe> p = new Probe.make(id: 1);
     return BindableFunctionPtr.bind(obj: p, method: Probe::read);
 }
-fn int32 main() { BindableFunctionPtr<Get> g = mk(); return g(d: 1); }
+fn uint8 main() { BindableFunctionPtr<Get> g = mk(); return cast<uint8>(g(d: 1)); }

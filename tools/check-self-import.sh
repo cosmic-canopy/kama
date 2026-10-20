@@ -155,7 +155,7 @@ mkdir -p "$tmp/app/my/mod"
 cp "$tmp/proj/src/mod/"*.kama "$tmp/app/my/mod/"
 cat > "$tmp/app/app.kama" <<'EOF'
 import { my::mod::Aye, my::mod::useBee };
-fn int32 main() { Aye a = Aye.of(x: 1); return a.x + useBee(); }
+fn uint8 main() { Aye a = Aye.of(x: 1); return cast<uint8>(a.x + useBee()); }
 EOF
 if ! "$KAMA" build "$tmp/app/app.kama" "$tmp/app/my/mod/a.kama" "$tmp/app/my/mod/b.kama" \
         "$tmp/app/my/mod/c.kama" -o "$tmp/app/app" > "$tmp/build.out" 2>&1; then

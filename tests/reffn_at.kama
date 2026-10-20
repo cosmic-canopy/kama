@@ -7,11 +7,11 @@ type value Buf {
 }
 fn ref int32 at(ref Buf b, usize i) { return b.d[i]; }
 fn void bump(ref int32 v) { v = v + 100; }
-fn int32 main() {
+fn uint8 main() {
     Buf b = Buf.make();
     at(b: ref b, i: 0) = 5;
     at(b: ref b, i: 1) = 10;
     at(b: ref b, i: 0) += 1;                 // 6
     bump(v: ref at(b: ref b, i: 1));         // 110
-    return at(b: ref b, i: 0) + at(b: ref b, i: 1);   // 6 + 110 = 116
+    return cast<uint8>(at(b: ref b, i: 0) + at(b: ref b, i: 1));   // 6 + 110 = 116
 }

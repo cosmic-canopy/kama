@@ -16,7 +16,7 @@ type resource Counter {
 // the contract — here a BOUND, which monomorphizes to the identical direct call.
 fn Ordering cmp<T: Comparable<T>>(ref T a, ref T b) { return a.compareTo(other: b); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // (a) owning string keys, lexicographic order, enough to split.
@@ -64,5 +64,5 @@ fn int32 main() {
     // the remaining Counters drop when `cm` leaves scope — ASan verifies no leak / double-free
     if (cm.length() < 40) { r = r + 5; }
 
-    return r;   // 9 asserts * 5 = 45
+    return cast<uint8>(r);   // 9 asserts * 5 = 45
 }

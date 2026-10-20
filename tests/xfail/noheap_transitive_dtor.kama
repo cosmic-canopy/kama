@@ -8,4 +8,4 @@ type resource Device {
     public ctor open(int32 id) { this.id = id; }
     @noheap ~Device() { int32 unused = helper(x: 1); }
 }
-fn int32 main() { Device d = Device.open(id: 1); return 0; }
+fn uint8 main() { Device d = Device.open(id: 1); return 0; }

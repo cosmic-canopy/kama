@@ -15,7 +15,7 @@ type value Record {
     public ctor make(isize offset, int32 tag) { this.offset = offset; this.tag = tag; return this; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Record r = Record.make(offset: 1, tag: 2);
     return 0;
 }

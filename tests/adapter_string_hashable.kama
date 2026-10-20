@@ -12,11 +12,11 @@ fn bool sameKey<K: Hashable + Equatable<K>>(K a, K b) {
     return a.hash() == b.hash() && a.equals(other: b);
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     if (hashOf(k: "kama") == hashOf(k: "kama")) { r = r + 10; }   // deterministic — equal keys hash equal
     if (hashOf(k: "kama") != hashOf(k: "lang")) { r = r + 11; }   // distinct content differs (FNV-1a)
     if (sameKey(a: "kam" + "a", b: "kama"))      { r = r + 10; }  // content-based: concat == literal
     if (!sameKey(a: "kama", b: "lang"))          { r = r + 11; }  // different content, not equal
-    return r;                                                      // 42
+    return cast<uint8>(r);                                                      // 42
 }

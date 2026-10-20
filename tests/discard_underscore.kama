@@ -23,7 +23,7 @@ fn Result<H, Oops> attempt(bool ok) {
 fn Result<Unit, Oops> plain() { calls = calls + 1; return Result::Err(error: Oops::Plain); }
 fn H fresh() { calls = calls + 1; return H.make(id: 3); }
 
-fn int32 main() {
+fn uint8 main() {
     _ = attempt(ok: true);    // an `Ok` holding a resource: it drops           1
     _ = attempt(ok: false);   // an `Err` holding one: it drops                 2
     _ = plain();              // an `Err` holding nothing: evaluated, no drop

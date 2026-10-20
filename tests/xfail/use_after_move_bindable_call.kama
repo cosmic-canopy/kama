@@ -10,9 +10,9 @@ type value Probe {
     fn int32 read(int32 d) { return this.id + d; }
 }
 fn int32 sink(BindableFunctionPtr<Get> f) { return f(d: 1); }
-fn int32 main() {
+fn uint8 main() {
     Owned<Probe> p = new Probe.make(id: 1);
     BindableFunctionPtr<Get> a = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     int32 r = sink(f: give a);
-    return a(d: 1);    // ERROR: use of `a` after it was moved
+    return cast<uint8>(a(d: 1));    // ERROR: use of `a` after it was moved
 }

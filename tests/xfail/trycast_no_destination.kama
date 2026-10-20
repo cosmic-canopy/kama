@@ -2,7 +2,7 @@
 // destination. A local, an argument and a return type all supply one (try_cast_value_position); nested
 // inside another expression there is nothing to read, and the diagnostic must name the two verbs that DO
 // work in this position.
-fn int32 main() {
+fn uint8 main() {
     int32 v = 300;
-    return cast<int32>(try cast<int8>(v));
+    return cast<uint8>(try cast<int8>(v));
 }

@@ -5,4 +5,4 @@ type value Buf {
     public ctor make() { this.d = [0; 4]; }
 }
 fn ref int32 bad(Buf b, usize i) { return b.d[i]; }
-fn int32 main() { Buf b = Buf.make(); return bad(b: b, i: 0); }
+fn uint8 main() { Buf b = Buf.make(); return cast<uint8>(bad(b: b, i: 0)); }

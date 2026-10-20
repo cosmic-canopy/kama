@@ -42,7 +42,7 @@ fn int32 kindOf(Result<int32, Owned<Error>> r) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 seen = kindOf(r: io()) + kindOf(r: late()) + kindOf(r: detailed()) + kindOf(r: held());   // 1 + 2 + 4 + 8
     // The copy handed out and the boxed original: two `Detailed`, each dropped once (2). The `Probe` is retained by
     // the copy and released by both, so it is dropped once, when the last goes (10).

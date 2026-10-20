@@ -8,4 +8,4 @@ import { std::collections::DynamicArray };
     foreach (string s in a) { n = n + cast<int32>(s.length()); }
     return n;
 }
-fn int32 main() { DynamicArray<string> x = DynamicArray.empty(); return tick(a: ref x); }
+fn uint8 main() { DynamicArray<string> x = DynamicArray.empty(); return cast<uint8>(tick(a: ref x)); }

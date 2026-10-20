@@ -13,7 +13,7 @@ fn int32 checkNames(ref DynamicArray<string> names) {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     string dot = ".";
-    return match (readDir(path: dot)) { case Ok(value: names): checkNames(names: names); case Err(error: e): 30; };
+    return match (readDir(path: dot)) { case Ok(value: names): cast<uint8>(checkNames(names: names)); case Err(error: e): 30; };
 }

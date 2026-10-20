@@ -8,4 +8,4 @@ type value Box {
     public const fn isize get() { return 111; }
     public const fn isize get() { return 222; }   // ERROR: duplicate method
 }
-fn int32 main() { Box b = Box.make(); return cast<int32>(b.get()); }
+fn uint8 main() { Box b = Box.make(); return cast<uint8>(b.get()); }

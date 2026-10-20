@@ -11,4 +11,4 @@ type view Span {
     }
 }
 // The rejection is at the CONSTRUCTOR's declaration, so nothing has to call it to observe it.
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -7,7 +7,7 @@
 // width guidance moved into that message rather than dying with the type-position arm it used to live in.
 // ⚠️ `uint` is NOT a C keyword and so is NOT reserved; tests/xfail/uint_retired.kama still takes the
 // type-position path. That asymmetry is deliberate and asserted in tools/check-c-keywords.sh.
-fn int32 main() {
+fn uint8 main() {
     double d = 1.0;
     return 0;
 }

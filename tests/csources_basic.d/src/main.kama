@@ -7,6 +7,6 @@ extern fn int32 kama_test_add(int32 a, int32 b);
 // `csources`, which changes where the C comes from and not what calling into it means.
 unsafe fn int32 addTwo() { return kama_test_add(a: 17, b: 12); }
 
-fn int32 main() {
-    return addTwo();   // 29
+fn uint8 main() {
+    return cast<uint8>(addTwo());   // 29
 }

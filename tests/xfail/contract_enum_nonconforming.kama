@@ -9,8 +9,8 @@ type enum Color : uint8 { Red, Green, Blue }
 
 fn uint64 hashVia(Hashable h) { return h.hash(); }
 
-fn int32 main()
+fn uint8 main()
 {
     Color c = Color::Green;
-    return cast<int32>(hashVia(h: c));
+    return cast<uint8>(hashVia(h: c));
 }

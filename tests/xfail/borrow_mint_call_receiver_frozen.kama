@@ -10,7 +10,7 @@ type resource Holder {
     public fn ref DynamicArray<int32> items() { return this.xs; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.make();
     h.items().add(item: 1);
     borrow h.items().viewMut() as v {

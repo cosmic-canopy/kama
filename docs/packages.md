@@ -58,7 +58,7 @@ myapp/
 
 ```kama
 // src/app.kama
-fn int32 main() {
+fn uint8 main() {
     return 0;
 }
 ```
@@ -123,7 +123,7 @@ one.
 
 | `--kind` | writes | on disk |
 |---|---|---|
-| `executable` | `kama.json` with `kind` + `entry` | `src/app.kama` with `fn int32 main()` |
+| `executable` | `kama.json` with `kind` + `entry` | `src/app.kama` with `fn uint8 main()` |
 | `library` | `kama.json` with `kind` + a `modules` map | `src/<name>.kama` with an `export { … };` |
 | `monorepo` | `kama_workspace.json` | one seeded library per `--members` name |
 

@@ -10,9 +10,9 @@ comptime fn InlineArray<int32>#(4) mk() {
 }
 comptime InlineArray<int32>#(4) TABLE = mk();
 
-fn int32 main() {
+fn uint8 main() {
     int32 sum = 0;
     foreach (int32 v in TABLE) { sum = sum + v; }   // 10+20+30+40 = 100
     int32 viaIndex = TABLE[0] + TABLE[3];           // 50 — the index path was always warning-free
-    return sum - viaIndex - 16;                     // 100 - 50 - 16 = 34
+    return cast<uint8>(sum - viaIndex - 16);                     // 100 - 50 - 16 = 34
 }

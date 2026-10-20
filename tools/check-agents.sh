@@ -208,7 +208,7 @@ echo "check-agents: the documented \`check\` boundary"
 # so when the next rule extends this boundary, correct the docs and then the assertion, in that order,
 # and never by weakening it.
 bad_kama="$tmp/typebad.kama"
-printf 'fn int32 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$bad_kama"
+printf 'fn uint8 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$bad_kama"
 if "$KAMA" check "$bad_kama" >/dev/null 2>&1; then
     bad "\`check\` no longer catches a KIND mismatch — the docs promise it does"
 else
@@ -217,7 +217,7 @@ fi
 # ...and the far end: WIDTH is checked too — kama has no implicit numeric conversion, so `int8 a = big`
 # is an error and wants `cast<int8>(big)`.
 width_kama="$tmp/typewidth.kama"
-printf 'fn int32 main() {\n    int32 big = 300;\n    int8 a = big;\n    return 0;\n}\n' > "$width_kama"
+printf 'fn uint8 main() {\n    int32 big = 300;\n    int8 a = big;\n    return 0;\n}\n' > "$width_kama"
 if "$KAMA" check "$width_kama" >/dev/null 2>&1; then
     bad "\`check\` no longer catches a WIDTH mismatch — the docs promise no implicit numeric conversion"
 else
@@ -228,7 +228,7 @@ fi
 # is satisfiable by rejecting `int8 a = 100;` too, which would make the language unusable and this guard
 # green. Both halves, same reasoning as the kind pair above.
 lit_kama="$tmp/typelit.kama"
-printf 'fn int32 main() {\n    int8 a = 100;\n    float32 f = 3;\n    int8 b = 2 + 3;\n    return 0;\n}\n' > "$lit_kama"
+printf 'fn uint8 main() {\n    int8 a = 100;\n    float32 f = 3;\n    int8 b = 2 + 3;\n    return 0;\n}\n' > "$lit_kama"
 if "$KAMA" check "$lit_kama" >/dev/null 2>&1; then
     ok "\`check\` still accepts a literal typed by its destination (\`int8 a = 100\`)"
 else

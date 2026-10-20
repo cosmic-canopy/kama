@@ -5,8 +5,8 @@ type resource Impl implements Child, Parent {
     public fn int32 take(ConstView<uint8> bytes) { return this.n + cast<int32>(bytes.length()); }
     public fn int32 extra() { return this.n + 1; }
 }
-fn int32 main() {
+fn uint8 main() {
     Impl i = Impl.make(n: 41);
     Child c = i;
-    return c.extra();
+    return cast<uint8>(c.extra());
 }

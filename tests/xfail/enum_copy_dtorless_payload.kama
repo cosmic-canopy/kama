@@ -3,7 +3,7 @@
 // `destructible`; it is refused by kama, naming the payload.
 type resource Plain { int32 id; public ctor make(int32 id) { this.id = id; } }
 type enum P { Q(Plain p), N }
-fn int32 main() {
+fn uint8 main() {
     P a = P::Q(p: Plain.make(id: 5));
     P b = copy a;
     return 0;

@@ -10,7 +10,7 @@ type resource Counter {
     public const fn int32 get() { return this.n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // (a) core: stable handles; get/contains/remove; stale-handle + slot-reuse detection.
@@ -54,5 +54,5 @@ fn int32 main() {
     if (taken == 200) { r = r + 5; }                   // reclaimed Counter read, then dropped
     if (cm.length() == 1) { r = r + 5; }               // h1's Counter still owned; drops at scope exit
 
-    return r;   // 15 asserts * 5 = 75 (kept < 256 — exit codes are 8-bit)
+    return cast<uint8>(r);   // 15 asserts * 5 = 75 (kept < 256 — exit codes are 8-bit)
 }

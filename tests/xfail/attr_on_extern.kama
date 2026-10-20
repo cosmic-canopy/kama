@@ -3,4 +3,4 @@
 // an `extern "<h>";`, an `extern fn` or a `fnptr`. Before this, a stray attribute here was accepted in
 // silence — there is no emitter path for a bodyless form, so nothing ever looked at its attributes.
 @noheap extern "stdio.h";
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

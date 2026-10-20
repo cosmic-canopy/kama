@@ -20,11 +20,11 @@ fn Box<int32> make(int32 v) {
     return give b;                            // move the box out (inner dtor suppressed)
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 g = 0;
     {
         Box<int32> a = make(v: 5);           // owns a Box_int32
         g = a.get();                         // 5
     }                                        // a drops here -> ~Box fires once (trace = 7)
-    return g + traceGet();            // 5 + 7 = 12
+    return cast<uint8>(g + traceGet());            // 5 + 7 = 12
 }

@@ -69,7 +69,7 @@ fat value that is one of two things, chosen automatically:
   build a new buffer, e.g. `concat`).
 
 ```kama
-fn int32 main() {
+fn uint8 main() {
     string s = "ab";                    // borrowed literal — no alloc
     string t = s.concat(other: "cd");   // heap-owned, RAII-freed at scope exit
     bool eq = s.equals(other: t);   isize len = s.length();
@@ -104,7 +104,7 @@ Two ways to traverse it, kept distinct by type so bytes and characters never blu
   while the string is.
 
 ```kama
-fn int32 main() {
+fn uint8 main() {
     string s = "A\u{E9}\u{20AC}";           // "Aé€" — 6 UTF-8 bytes, 3 codepoints
     int32 n = 0;
     foreach (char c in s.chars()) { n = n + 1; }   // n == 3 (codepoints, not bytes)
@@ -235,7 +235,7 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
 
   ```kama
   @generate(Formattable, of) type value Stat { public int32 hp; public bool alive; }
-  fn int32 main() {
+  fn uint8 main() {
       Stat st = Stat.of(hp: 30i32, alive: true);
       string s = "${st}";   // "Stat { hp: 30, alive: true }"
       return 0;
@@ -295,7 +295,7 @@ bounds-checked. (Reading `a[i]` still yields a copy.)
 import { std::collections::FixedArray, std::collections::DynamicArray };
 @generate(of) type value Point { public int32 x; public int32 y; }
 
-fn int32 main() {
+fn uint8 main() {
     FixedArray<int32> a = FixedArray.make(size: 4);   // fixed buffer, each element int32's default (0)
     a[0] = 10;  a[1] = 20;                          // bounds-checked []
     int32 first = a[0];
@@ -355,7 +355,7 @@ buffer**, so neither can dangle — without a borrow checker, and without lifeti
 import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
 fn void uploadToGpu(ConstView<float32> window) { }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<float32> verts = DynamicArray.empty();  // … fill …
     borrow verts.viewMut() as all {                         // a WINDOW — `verts` is frozen inside it
         View<float32> mid = all.slice(from: 2, count: 4);   // a sub-range [2, 6) — a derive, no new window
@@ -631,7 +631,7 @@ is not enough), the same rule as `foreach`.
 ```kama
 import { std::collections::Map, std::collections::Set };
 
-fn int32 main() {
+fn uint8 main() {
     Map<string, int32> counts = Map.empty();
     counts.put(key: "a", value: 1);
     counts.put(key: "a", value: 2);                        // overwrite (drops the old value)
@@ -784,7 +784,7 @@ a **named `ctor`** (`DynamicArray.withAllocator(allocator:)`), which assigns `al
 ```kama
 import { std::collections::DynamicArray, std::collections::Map, std::collections::Arena, std::collections::BumpAllocator };
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 1 << 16);                             // caller-owned; drops last
     DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());
     Map<int32, int32, A: BumpAllocator> m = Map.withAllocator(allocator: arena.handle());  // named arg skips H
@@ -1140,7 +1140,7 @@ arena and be bulk-reclaimed on `reset()`:
 import { std::collections::Arena, std::collections::BumpAllocator };
 type resource Node { int32 v; public ctor make(int32 v) { this.v = v; } }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 1 << 12);                  // drops last (outlives the box)
     Owned<Node, BumpAllocator>  n = new(allocator: arena.handle()) Node.make(v: 42);
     Shared<Node, BumpAllocator> s = new(allocator: arena.handle()) Node.make(v: 7);   // pointee AND ctrl from the arena
@@ -1305,7 +1305,7 @@ type resource Res implements Copyable<This>(bare: copy) {   // a bare hand-off d
     public ctor make() { this.items = DynamicArray.empty(); }
     public ctor copy(ref Res source) { this.items = copy source.items; }     // the Copyable ctor
 }
-fn int32 main() {
+fn uint8 main() {
     Res a = Res.make();
     Res b = copy a;   // deep copy — a stays valid, b has its own buffer
     Res c = give b;   // move — b consumed
@@ -1341,7 +1341,7 @@ type value BoxP implements Deref<Point>, DerefMut<Point> {
     public const fn const ref Point deref() { return this.inner; }
     public fn ref Point derefMut() { return this.inner; }
 }
-fn int32 main() {
+fn uint8 main() {
     BoxP b = BoxP.make(p: Point.make(x: 30, y: 12));
     int32 s = b.sum();   // auto-deref -> Point__sum(BoxP__derefMut(&b))  (42)
     int32 x = b.x;       // auto-deref -> BoxP__derefMut(&b)->x           (30)
@@ -1472,14 +1472,14 @@ type resource Builder {
     public ctor make() { this.batch = Batch.make(); }
     public fn Batch finish() { return replace(place: this.batch, with: Batch.make()); }   // a fresh batch stays
 }
-fn int32 main() { Builder b = Builder.make(); Batch done = b.finish(); return 0; }
+fn uint8 main() { Builder b = Builder.make(); Batch done = b.finish(); return 0; }
 ```
 
 ## Functions ✅
 
 ```kama
 fn int32 add(int32 a, int32 b) { return a + b; }
-fn int32 main() { return add(b: 20, a: 10); }   // named args; reordered to declared order
+fn uint8 main() { return cast<uint8>(add(b: 20, a: 10)); }   // named args; reordered to declared order
 ```
 **Arguments are evaluated in the order they are written**, left to right, whatever order the parameters are <!-- test: arg_order -->
 declared in: `add(b: f(), a: g())` calls `f` first. An enum variant's payload is evaluated the same way. So
@@ -1499,7 +1499,7 @@ C leaves a call's argument order unspecified; kama does not.
 
 ```kama
 fn void divmod(int32 a, int32 b, out int32 q, out int32 r) { q = a / b; r = a % b; }
-fn int32 main() {
+fn uint8 main() {
     slot int32 quotient; slot int32 rem;
     divmod(a: 17, b: 5, q: out quotient, r: out rem);   // 3, 2
     return 0;
@@ -1560,7 +1560,7 @@ unsafe fn int32 demo() {          // calling an `extern fn` is the unsafe seam
     free(p: p);
     return cast<int32>(sqrt(x: 1764.0));   // 42
 }
-fn int32 main() { return demo(); }   // safe code may call an `unsafe fn`
+fn uint8 main() { return cast<uint8>(demo()); }   // safe code may call an `unsafe fn`
 ```
 
 **The FFI rule (one sentence): declare C types/functions by `extern`-including their header.** An `extern`
@@ -2123,12 +2123,12 @@ and the zero cost, on a tier the fixture suite cannot build.
 
 ```kama
 import { std::math::Vec3, std::math::Mat4 };
-fn int32 main() {
+fn uint8 main() {
     Mat4 vp = Mat4.perspective(fovyRad: 1.0472f32, aspect: 1.777f32, near: 0.1f32, far: 100.0f32)
             * Mat4.lookAt(eye: Vec3.of(x: 0.0f32, y: 2.0f32, z: 5.0f32),
                            center: Vec3.zero(), up: Vec3.unitY());   // method chaining
     Vec3 p = vp.transformPoint(p: Vec3.of(x: 1.0f32, y: 0.0f32, z: 0.0f32));
-    return cast<int32>(p.length());
+    return cast<uint8>(p.length());
 }
 ```
 
@@ -2467,7 +2467,7 @@ they take the same view buffers but do **not** implement `Reader`/`Writer`.)
 
 ```kama
 import { std::fs::writeFile, std::collections::DynamicArray };
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<uint8> data = DynamicArray.empty();
     data.add(item: 104ui8);                              // "h" — a file is bytes
     match (writeFile(path: "out.txt", bytes: data)) {
@@ -2501,7 +2501,7 @@ unsafe fn int32 demo() {                   // calling an `extern fn` is the unsa
     frexp(value: 1764.0, exp: addr(of: e));// addr(of: x) = &x  — controlled out-param
     return r.quot + r.rem + e;             // 5 + 11 = 16
 }
-fn int32 main() { return demo(); }
+fn uint8 main() { return cast<uint8>(demo()); }
 ```
 
 `type extern value Foo { ... }` is an **external** struct provided by an included header / linked code —
@@ -2638,7 +2638,7 @@ crosses an isolate.
 
 ```kama
 import { std::time::Date, std::time::Timestamp, std::time::unixNow };
-fn int32 main() {
+fn uint8 main() {
     Date due = match (Date.make(year: 2026, month: 9ui8, day: 16ui8)) { case Ok(value: d): d; case Err(error: e): { return 1; } };
     Timestamp t = unixNow();
     Date today = t.date();                       // plus hour() minute() second() nanosecond() weekday(), in UTC
@@ -2743,7 +2743,7 @@ modern successor API converged on (Rust, `pathlib`, C#), not the shell tools' `d
 
 ```kama
 import { std::path::join, std::path::parent, std::path::fileName, std::path::extension };
-fn int32 main() {
+fn uint8 main() {
     Optional<string> dir  = parent(path: "/a/b/c.txt");     // Some("/a/b")
     Optional<string> name = fileName(path: "/a/b/c.txt");   // Some("c.txt")
     Optional<string> ext  = extension(path: "/a/b.tar.gz"); // Some("gz") — the LAST dot, WITHOUT the dot
@@ -2874,7 +2874,7 @@ made.
 import { std::uuid::Uuid, std::uuid::UuidError, std::collections::Map };
 type value Account { public int64 balance; }
 
-fn int32 main() {
+fn uint8 main() {
     Uuid id  = Uuid.v7();                               // later ids compare greater
     Uuid tok = Uuid.v4();                               // 122 random bits, no timestamp
     string s = "${id}";                                 // "01932c07-a4b2-7c3e-8f1a-5b6c7d8e9f00"
@@ -2963,7 +2963,7 @@ A program reads its own command-line arguments and environment through module **
 name like any other module's symbols (`import { core::args, core::envOr };`). `core` is embedded in the
 compiler, so it **survives `--no-std`**. It is not a `std::` module because it cannot be one: arguments
 enter through the compiler-synthesized `main` wrapper (which stashes `argc/argv` into a runtime global
-before `kama_main` runs), so a `--no-std` user could not reimplement them. The user's `fn int32 main()`
+before `kama_main` runs), so a `--no-std` user could not reimplement them. The user's `fn uint8 main()`
 signature is unchanged.
 
 ```
@@ -3022,7 +3022,7 @@ import { std::log::logInfo, std::log::logWarn, std::log::logError, std::log::log
 @generate(Formattable, of) type value Mix { public int32 voices; public float32 gain; }
 fn string dumpState() { return "voices=8 gain=0.5"; }
 
-fn int32 main() {
+fn uint8 main() {
     string version = "1.2.0";
     Mix state = Mix.of(voices: 8, gain: 0.5f32);
     logInfo(tag: "boot", msg: "starting ${version}");   // tag may be "" (untagged)
@@ -3075,7 +3075,7 @@ output stays clean), colored on a tty. Install your own — the filter runs upst
 ```kama
 import { std::log::setLogSink };
 fn void mySink(int32 level, string tag, string msg) { /* route to a file / engine console / telemetry */ }
-fn int32 main() {
+fn uint8 main() {
     setLogSink(s: mySink);   // set once at startup, before spawning isolates — like setPanicHandler
     return 0;
 }
@@ -3207,7 +3207,7 @@ a `const T*` C API with no cast and no mutable borrow — Rust's `*const T`, Swi
 the FFI seam. A `const UnsafePtr<T>` *parameter* is unchanged: a const binding of a mutable pointer, <!-- test: unsafe_const_ptr -->
 still lowered `const T*`, which is why it accepts either pointer.
 | **call** an `unsafe fn` | | unrestricted |
-| `unsafe` on **`main`** | `unsafe fn int32 main()` | **rejected** — see below |
+| `unsafe` on **`main`** | `unsafe fn uint8 main()` | **rejected** — see below |
 
 Two of these are worth their own sentence, because the obvious weaker version of each is wrong.
 
@@ -3227,6 +3227,15 @@ when there is none, by the walk every uninstantiated generic gets. <!-- xfail: r
 a double-close primitive by effect; roughly half the stdlib's extern declarations are pointer-free. Danger at
 this boundary is a property of the callee's *effect*, which kama cannot see, not of its signature, which it
 can — so a type-based carve-out would look like a rule and behave like a hole.
+
+**`main` returns the process's exit status, in the platform's own type.** `fn uint8 main()` is the one portable signature — the one byte Linux and macOS keep — and on Windows `fn uint32 main()` is accepted too, for the 32 bits it keeps; a program that wants them writes it as a `@compileFor(OS_WINDOWS)` twin. <!-- test: main_status_twins -->
+Any other return type is refused, and `fn int32 main()` names the fix: an `int32` status was truncated by the OS at exit with no word, so `return 256;` exited 0. <!-- xfail: main_int32, main_void -->
+`fn uint32 main()` is refused off Windows, where the status keeps one byte. <!-- xfail: main_uint32_off_windows -->
+A literal status that does not fit is refused where it is written. <!-- xfail: main_status_literal_oob -->
+A computed one narrows explicitly: `cast<uint8>(n)` traps in every build when `n` does not fit, and `truncate<uint8>(n)` keeps its low bits on purpose. <!-- test: trap/main_status_cast -->
+Rust (`ExitCode` from a `u8`) and Zig (`fn main() u8`) put the range in the type the same way; every other language
+inherits C's `int` and the truncation. `std::process`'s `ExitStatus` is the parent's side of the same rule, and
+`std::app::quit` takes the same types.
 
 **`main` may not be `unsafe`.** It encloses the whole program, so the marker would put every line in <!-- xfail: unsafe_main -->
 the trusted region and stop marking anything — the same shape as an `extern fn` call that needed no
@@ -3749,7 +3758,7 @@ A **lane batch**: N numbers the CPU operates on as one value. It is an intrinsic
 per `(T, N)`, lowering to a C `vector_size` typedef — so `a + b` is one machine instruction, not a loop.
 
 ```kama
-fn int32 main() {
+fn uint8 main() {
     Simd<float32>#(4) a = [1.0f32, 2.0f32, 3.0f32, 4.0f32];   // an array literal — lanes written out
     Simd<float32>#(4) k = [10.0f32; 4];                        // the fill form IS a splat
     Simd<float32>#(4) c = a * k + a;                           // elementwise; C's own operators
@@ -3848,7 +3857,7 @@ kama has no naked function pointers. **`fnptr`** declares an explicit, named fun
 fnptr int32 Comparator(int32 a, int32 b);       // an explicit function-pointer TYPE
 fn int32 cmp(int32 a, int32 b) { return a - b; }
 
-fn int32 main() {
+fn uint8 main() {
     Comparator c = cmp;                             // bind by name (positional, type-checked) — used directly
     int32 r = c(a: 9, b: 2);                        // named invoke through the pointer
     return 0;
@@ -3883,7 +3892,7 @@ slot is legal inside a no-heap region — the one slot whose target no build can
 @generate(of) type value Vec2 { public int32 x; public int32 y; fn int32 dot(ref Vec2 o) { return this.x*o.x + this.y*o.y; } }
 fnptr int32 DotFn(ref Vec2 self, ref Vec2 o);   // receiver is an explicit first param
 
-fn int32 main() {
+fn uint8 main() {
     Vec2 u = Vec2.of(x: 1, y: 2);   Vec2 v = Vec2.of(x: 3, y: 4);
     DotFn d = Vec2::dot;            // unbound (`::` = no instance, no binding) — zero-cost
     int32 n = d(self: ref u, o: ref v);
@@ -3903,7 +3912,7 @@ type value Scaler { int32 k; public ctor make(int32 k){ this.k = k; }
                public fn int32 apply(int32 a, int32 b){ return (a - b) * this.k; } }
 fn int32 sub(int32 a, int32 b) { return a - b; }
 
-fn int32 main() {
+fn uint8 main() {
     Owned<Scaler>  s  = new Scaler.make(k: 3);     // (constructed as Owned)
     BindableFunctionPtr<Compare> c  = BindableFunctionPtr.bind(obj: s,  method: Scaler::apply);  // MOVE-in (sole owner)
     Shared<Scaler> s2 = new Scaler.make(k: 2);
@@ -4331,7 +4340,7 @@ type value Counter {
     public fn void add(int32 n) { value = value + n; } // method (implicit self)
     public fn int32 get() { return value; }
 }
-fn int32 main() {
+fn uint8 main() {
     Counter c = Counter.make(start: 40);   // stack value — dot-on-type construction, not `new`
     c.add(n: 2);                            // a `value` copies on hand-off
     return 0;
@@ -4396,7 +4405,7 @@ type resource Buffer {
     public ctor make(int32 size) { this.size = size; }        // the value under construction is `this`
     public ctor withCapacity(int32 n) { return Buffer.make(size: n); }   // reuse = an ordinary call
 }
-fn int32 main() {
+fn uint8 main() {
     Buffer b = Buffer.make(size: 8);          // dot-on-type: construction
     Owned<Buffer> h = new Buffer.make(size: 8);   // `new` composes — heap, an owning handle
     return 0;
@@ -4835,7 +4844,7 @@ type resource Buffer {
     }
     ~Buffer() { /* … */ }
 }
-fn int32 main() {
+fn uint8 main() {
     Result<Owned<Buffer>, SizeError> b = new Buffer.create(size: 8);   // fallible `new` -> Result<Owned<T>, E>
     return 0;
 }
@@ -5234,7 +5243,7 @@ type value Vec2 {
     public float64 x;  public float64 y;   // all-public transparent value → `@generate(of)` gives `Vec2.of(x:, y:)`
     public static fn float64 dot(Vec2 left, Vec2 right) { return left.x*right.x + left.y*right.y; }
 }
-fn int32 main() {
+fn uint8 main() {
     Vec2 a = Vec2.of(x: 1.0, y: 2.0);   Vec2 b = Vec2.of(x: 3.0, y: 4.0);
     float64 d = Vec2::dot(left: a, right: b);
     return 0;
@@ -5627,7 +5636,7 @@ type contract Shape for value, resource { fn int64 area(); }
 type value Pair<A, B> { public A a; public B b; public ctor make(A a, B b){ this.a = a; this.b = b; } }
 fn T max<T: Comparable<T>>(T a, T b) { if (a > b) { return give a; } return give b; }   // generic fn — args INFERRED from the call
 
-fn int32 main() {
+fn uint8 main() {
     Pair<int32, bool> p = Pair.make(a: 1, b: true);         // generic type (args inferred from the LHS)
     int32 m = max(a: 3, b: 4);                              // -> max<int32>, a static specialized C fn
     DynamicArray<Shared<Shape>> scene = DynamicArray.empty();   // nested generics, no space (the `>>` split)
@@ -5651,7 +5660,7 @@ fn int32 main() {
   the type — `Box::<int32>.make(...)` / `new Box::<int32>.make(...)` (turbofish on the type, uniform).
   ```kama
   fn T zero<T>() { return cast<T>(0); }   // T appears only in the return — inference can't see it
-  fn int32 main() {
+  fn uint8 main() {
       int32 x = zero::<int32>();          // turbofish supplies it
       int64 y = zero::<int64>();
       return 0;
@@ -5920,7 +5929,7 @@ carry payloads, and the enum may be generic):
 type enum Color { Red, Green = 5, Blue }     // plain: Red=0, Green=5, Blue=6
 type enum Shape { Circle(float64 r), Rect(float64 w, float64 h) }   // tagged union (payloads)
 
-fn int32 main() {
+fn uint8 main() {
     Color c = Color::Blue;                    // variants are scope-resolved with ::
     return 0;
 }
@@ -6196,7 +6205,7 @@ import {
     geometry::graphics::scale,
     physics::Body as PhysBody,        // `as` renames
 };
-fn int32 main() {
+fn uint8 main() {
     Texture t = ...;                    // imported, bare
     PhysBody b = ...;                   // renamed with `as`
     int32 n = scale(x: 3);
@@ -6487,7 +6496,7 @@ needs them.
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
 fn void producer(Sender<int32> tx) { _ = tx.send(item: 1); }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();
@@ -6501,7 +6510,7 @@ fn int32 main() {
 
 `send(item:)` returns `Result<Unit, Undelivered<T>>` — a channel whose receivers are all gone hands the item
 **back** in the `Err` (`Undelivered<T> { Item(T item) }`, taken apart with `match (give e) { case Item(item: x): … }`)
-rather than dropping it on the floor, so nothing is lost, and since a discarded `Result` is refused, nothing is lost
+rather than dropping it on the floor, so nothing is lost, and since a discarded `Result` is refused, nothing is lost <!-- xfail: discarded_result -->
 silently: the sender decides what to do, or says `_ = tx.send(…);`. `recv()` returns `Optional<T>`: `None` means the channel is
 closed and empty, which is why dropping the last `Sender` is how a producer signals end-of-stream.
 
@@ -6735,7 +6744,7 @@ two answer different halves of the same question and neither is complete alone.
 ```kama
 import { std::concurrent::Atomic, std::concurrent::MemoryOrder };
 
-fn int32 main() {
+fn uint8 main() {
     Atomic<int32> counter = Atomic.make(value: 0);
     counter.fetchAdd(delta: 1);
     int32 now = counter.load();
@@ -7130,7 +7139,7 @@ type resource User { @field(name: "user_name") string name; @field int32 age;
 type resource Node { @field int32 id; @field Optional<Shared<Node>> next; @field Optional<Weak<Node>> back;
     public ctor make(int32 id) { this.id = id; this.next = Optional::None; this.back = Optional::None; } }
 
-fn int32 main() {
+fn uint8 main() {
     Result<string, Owned<Error>> r = serializeJsonBuffer(v: User.make(name: "ada", age: 36));   // Ok: {"user_name":"ada","age":36}
     string j = match (give r) { case Ok(value: x): give x; case Err(error: e): ""; };
     Result<User, Owned<Error>> u = deserializeJsonBuffer::<User>(src: give j);                   // by value

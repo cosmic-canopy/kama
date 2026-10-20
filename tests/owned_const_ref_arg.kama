@@ -9,10 +9,10 @@ type resource Q implements Sized { int32 n; public ctor make(int32 n) { this.n =
 fn int32 read(const ref P p) { return p.x; }
 fn void bump(ref P p) { p.x = p.x + 1; }
 fn int32 readQ(const ref Q q) { return q.size(); }
-fn int32 main() {
+fn uint8 main() {
     Owned<P> b = new P.make(x: 7);
     bump(p: b);                                   // the writable half, through derefMut()
     Shared<P> s = new P.make(x: 2);
     Owned<Q> q = new Q.make(n: 3);
-    return read(p: b) + read(p: s) + readQ(q: q);  // 8 + 2 + 3
+    return cast<uint8>(read(p: b) + read(p: s) + readQ(q: q));  // 8 + 2 + 3
 }

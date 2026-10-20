@@ -62,7 +62,7 @@ type resource Blade
     ~Blade() { }   // runs here, deterministically, when the owner goes out of scope
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Steel steel = Steel.make(carbon: 3);
 
@@ -70,7 +70,7 @@ fn int32 main()
     // Each arm names the field it binds, exactly as a call names its arguments.
     return match (Blade.temper(steel: steel, folds: 14))
     {
-        case Ok(value: blade): blade.sharpness();
+        case Ok(value: blade): cast<uint8>(blade.sharpness());
         case Err(error: e):    1;
     };
 }

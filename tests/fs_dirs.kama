@@ -31,7 +31,7 @@ fn isize appendTwice(const ref string path) {
     return total;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     string root = "_fs_dirs.tmp";
     string deep = join(path: join(path: root, with: "a"), with: "b");
@@ -89,5 +89,5 @@ fn int32 main() {
         r = r - 1;
     }
 
-    return r;   // 255
+    return cast<uint8>(r);   // 255
 }

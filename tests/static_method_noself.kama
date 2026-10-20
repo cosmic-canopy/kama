@@ -4,6 +4,6 @@ type value Config {
     public ctor make(int32 v) { this.v = v; }
     public static fn int32 answer() { return 42; }
 }
-fn int32 main() {
-    return Config::answer();
+fn uint8 main() {
+    return cast<uint8>(Config::answer());
 }

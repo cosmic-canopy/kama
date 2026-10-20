@@ -23,4 +23,4 @@ unsafe fn int32 run() {
     return takes(v: ref q);      // ERROR: `Plain` is not `Tagged`, so `Queue<Plain>` is not either
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

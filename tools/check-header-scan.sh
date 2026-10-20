@@ -37,7 +37,7 @@ extern "<kama_runtime.h>";
 extern fn UnsafePtr probe_planted_alloc(usize n);
 unsafe fn int32 grab() { UnsafePtr p = probe_planted_alloc(n: 8); return 0; }
 @noheap fn int32 tick() { return grab(); }
-fn int32 main() { return tick(); }
+fn uint8 main() { return cast<uint8>(tick()); }
 EOF
 
 # 1. BASELINE — the same symbol, with a body in the same header that allocates NOTHING. The program builds.
@@ -95,7 +95,7 @@ cp "$tmp/kama_runtime.h.orig" "$tmp/stage/kama_runtime.h"
 #    because it is the half that depends on the header text being read.)
 sed -n '/^@globalAllocator/,/^}$/p' "$ROOT/tests/global_allocator_pool.kama" > "$tmp/pool.inc"
 { echo 'import { std::concurrent::Atomic };'; cat "$tmp/pool.inc"
-  echo 'fn int32 main() { int32 n = 7; string s = "${n}"; return cast<int32>(s.length()); }'
+  echo 'fn uint8 main() { int32 n = 7; string s = "${n}"; return cast<uint8>(s.length()); }'
 } > "$tmp/pool.kama"
 if ! "$STAGED" build --no-heap "$tmp/pool.kama" -o "$tmp/pool.out" >/dev/null 2>"$tmp/pool.err"; then
     echo "  $(cat "$tmp/pool.err")" >&2

@@ -326,7 +326,7 @@
 #                               ^ source.kama string.quoted.double.asm.kama punctuation.definition.string.end.kama
 #                                ^^^^^ source.kama
 >
->fn int32 main() {
+>fn uint8 main() {
 #^^ source.kama keyword.other.kama
 #  ^ source.kama
 #   ^^^^^ source.kama storage.type.primitive.kama

@@ -6,9 +6,9 @@ comptime int32 CAP2 = CAP + 1;                     // cross-const ref -> baked t
 
 static InlineArray<int32>#(CAP) g_buf;            // module static array sized by the constant (4 zeros)
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(CAP2) local = [7; (CAP2)];    // 5 sevens
     int32 t = 0;
     foreach (int32 e in local) { t = t + e; }          // 35
-    return t + cast<int32>(g_buf.length()) + CAP;      // 35 + 4 + 4 = 43
+    return cast<uint8>(t + cast<int32>(g_buf.length()) + CAP);      // 35 + 4 + 4 = 43
 }

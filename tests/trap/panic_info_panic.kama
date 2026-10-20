@@ -11,7 +11,7 @@ unsafe fn void onPanic(const ref PanicInfo info) {
 }
 unsafe fn void install() { setPanicHandler(handler: onPanic); }
 
-fn int32 main() {
+fn uint8 main() {
     install();
     panic(msg: "boom");
     return 0;   // unreachable

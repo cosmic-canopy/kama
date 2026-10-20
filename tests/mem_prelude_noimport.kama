@@ -9,7 +9,7 @@ type value Counter
     public fn int32 get() { return this.value; }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Owned<Counter> o = new Counter.make(start: 9);
     o.bump();                                     // 10
@@ -22,5 +22,5 @@ fn int32 main()
         case None: 0;
     };
 
-    return o.get() + fromWeak + 12;               // 10 + 20 + 12 = 42
+    return cast<uint8>(o.get() + fromWeak + 12);               // 10 + 20 + 12 = 42
 }

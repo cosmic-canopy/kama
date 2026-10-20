@@ -13,11 +13,11 @@ type enum Color implements Hashable, Equatable<This> {
     public const fn bool equals(const ref Color other) { return this.hash() == other.hash(); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Map<Color, int32> m = Map.empty();
     m.put(key: Color::Red,  value: 5);
     m.put(key: Color::Blue, value: 9);
     int32 a = match (m.get(key: Color::Red))  { case Some(value: x): x; case None: 0; };
     int32 b = match (m.get(key: Color::Blue)) { case Some(value: x): x; case None: 0; };
-    return a + b + cast<int32>(m.length());   // 5 + 9 + 2 = 16
+    return cast<uint8>(a + b + cast<int32>(m.length()));   // 5 + 9 + 2 = 16
 }

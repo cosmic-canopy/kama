@@ -10,7 +10,7 @@ fn int32 check(string got, string want, int32 bit) {
     return bit;
 }
 
-fn int32 main() {
+fn uint8 main() {
     float64 tenth = 0.1;
     float64 sum = 0.1 + 0.2;
     float32 third = 0.3f32;

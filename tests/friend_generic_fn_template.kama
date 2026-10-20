@@ -15,7 +15,7 @@ type resource Box {
 fn T reader<T: Deserializable<T>>(const ref Box b, T fallback) { int32 s = b.secret(); return fallback; }
 fn int32 count<T>(const ref Box b, T unused) { return b.secret(); }
 
-fn int32 main() {
+fn uint8 main() {
     Box b = Box.make(v: 7);
     println(s: "reader is never instantiated");
     return count::<bool>(b: b, unused: true) == 7 ? 0 : 1;

@@ -47,7 +47,7 @@ fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
     return true;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Sq> sq = new Sq.make(side: 4);
     Shared<Shape> sa = sq;                 // retain-upcast into the fat contract handle
     Shared<Circle> ci = new Circle.make(r: 2);

@@ -20,8 +20,8 @@ fn int32 build()
     return 0;   // `a` drops here -> Array_Probe__dtor -> 3x Probe__dtor
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 r = build();
-    return traceGet();
+    return truncate<uint8>(traceGet());
 }

@@ -5,12 +5,12 @@
 extern "<stdlib.h>";
 extern fn clong strtol(UnsafeConstPtr<cchar> s, UnsafePtr end, int32 radix);
 unsafe fn clong parse(const ref string s) { return strtol(s: s.cstr(), end: null, radix: 10); }
-fn int32 main() {
+fn uint8 main() {
     string a = "40"; string b = "2";
     clong x = parse(s: a);
     clong y = parse(s: b);
     clong z = x + y;
     culong u = 7;
-    if (z > x && u == 7) { return cast<int32>(z); }
+    if (z > x && u == 7) { return cast<uint8>(z); }
     return 0;
 }

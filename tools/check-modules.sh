@@ -50,7 +50,7 @@ fn int32 rootHelper() {
     Owned<Cell> boxed = new Cell.make(x: 7);
     return boxed.get();
 }
-fn int32 main() { return rootHelper(); }
+fn uint8 main() { return cast<uint8>(rootHelper()); }
 KAMA
 printf 'fn int32 n() { return 1; }\n'          > "$p/src/net/net.kama"
 printf 'fn int32 w() { return 1; }\n'          > "$p/src/net/web/web.kama"
@@ -147,7 +147,7 @@ import {
     geo::deep::nested,
 };
 fn int32 helper() { return 1; }
-fn int32 main() { return area() + nested() + helper(); }
+fn uint8 main() { return cast<uint8>(area() + nested() + helper()); }
 KAMA
 printf 'export { area };\nfn int32 area() { return 2; }\n'       > "$l/geo/area.kama"
 printf 'export { nested };\nfn int32 nested() { return 3; }\n'   > "$l/geo/deep/nested.kama"

@@ -10,7 +10,7 @@ fn bool hashIs(const ref string text, const ref string want) {
     return got.equals(other: want);
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     if (DIGESTBYTES == 20)                                                                           { r = r + 1; }
     if (hashIs(text: "", want: "da39a3ee5e6b4b0d3255bfef95601890afd80709"))                          { r = r + 2; }
@@ -37,5 +37,5 @@ fn int32 main() {
     InlineArray<uint8>#(20) two = s.finish();
     string twoHex = hexEncode(bytes: two.view());
     if (twoHex.equals(other: "84983e441c3bd26ebaae4aa1f95129e5e54670f1"))                            { r = r + 32; }
-    return r;   // 63
+    return cast<uint8>(r);   // 63
 }

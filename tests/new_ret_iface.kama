@@ -4,4 +4,4 @@ import { std::memory::Owned };
 type contract Shape for value { fn int32 area(); }
 type value Square implements Shape { int32 s; public ctor make(int32 s){ this.s = s; } public fn int32 area(){ return this.s*this.s; } }
 fn Owned<Shape> make(int32 s) { return new Square.make(s: s); }
-fn int32 main() { Owned<Shape> a = make(s: 7); return a.area(); }
+fn uint8 main() { Owned<Shape> a = make(s: 7); return cast<uint8>(a.area()); }

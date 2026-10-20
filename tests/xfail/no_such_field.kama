@@ -5,4 +5,4 @@ type value V {
     public int32 n;
     public ctor make() { this.n = 1; }
 }
-fn int32 main() { V v = V.make(); return v.zz; }   // ERROR: `V` has no field `zz`
+fn uint8 main() { V v = V.make(); return v.zz; }   // ERROR: `V` has no field `zz`

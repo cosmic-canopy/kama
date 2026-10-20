@@ -12,7 +12,7 @@ fn BindableFunctionPtr<Get> make(int32 id) {
     BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     return g;
 }
-fn int32 main() {
+fn uint8 main() {
     BindableFunctionPtr<Get> g = make(id: 1);
-    return g(d: 41);                                 // 1 + 41 = 42
+    return cast<uint8>(g(d: 41));                                 // 1 + 41 = 42
 }

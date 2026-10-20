@@ -69,32 +69,32 @@ expect() {
     fi
 }
 
-expect project "fn int32 main() {
+expect project "fn uint8 main() {
     panic(msg: \"here\");
     return 0;
 }" "game/main.kama:2"
-expect assert "fn int32 main() {
+expect assert "fn uint8 main() {
     int32 n = 0;
     assert(cond: n == 1, msg: \"\");
     return 0;
 }" "game/main.kama:3"
 expect dependency "import { geo::area };
-fn int32 main() { return area(w: -2, h: 3); }" "geo/geo.kama:3"
+fn uint8 main() { return cast<uint8>(area(w: -2, h: 3)); }" "geo/geo.kama:3"
 expect bounds "fn int32 at(isize i) { InlineArray<int32>#(2) xs = [1, 2]; return xs[i]; }
-fn int32 main() { return at(i: 8); }" "game/main.kama:1"
+fn uint8 main() { return cast<uint8>(at(i: 8)); }" "game/main.kama:1"
 expect cast "fn int8 narrow(int32 v) { return cast<int8>(v); }
-fn int32 main() { return cast<int32>(narrow(v: 300)); }" "game/main.kama:1"
+fn uint8 main() { return cast<uint8>(narrow(v: 300)); }" "game/main.kama:1"
 expect divide "fn int32 div(int32 a, int32 b) { return a / b; }
-fn int32 main() { return div(a: 1, b: 0); }" "game/main.kama:1"
+fn uint8 main() { return cast<uint8>(div(a: 1, b: 0)); }" "game/main.kama:1"
 expect dependency-bounds "import { geo::pick };
-fn int32 main() { return pick(i: 9); }" "geo/geo.kama:6"
+fn uint8 main() { return cast<uint8>(pick(i: 9)); }" "geo/geo.kama:6"
 expect dependency-divide "import { geo::ratio };
-fn int32 main() { return ratio(a: 1, b: 0); }" "geo/geo.kama:7"
+fn uint8 main() { return cast<uint8>(ratio(a: 1, b: 0)); }" "geo/geo.kama:7"
 # ...and the handler is handed the same location the line names.
 expect hook "import { core::setPanicHandler, core::PanicInfo, core::eprintln, geo::pick };
 unsafe fn void onPanic(const ref PanicInfo info) { string f = info.file(); int32 l = info.line(); eprintln(s: \"(hook \${f}:\${l})\"); }
 unsafe fn void install() { setPanicHandler(handler: onPanic); }
-fn int32 main() { install(); return pick(i: 9); }" "hook geo/geo.kama:6"
+fn uint8 main() { install(); return cast<uint8>(pick(i: 9)); }" "hook geo/geo.kama:6"
 
 [ "$fail" = 0 ] || exit 1
 echo "check-panic-locations: PASS (in a release build, a panic, an assert, a bounds miss, a narrowing cast and a divide name game/main.kama or a path dependency's geo/geo.kama, a handler is handed the same, and no binary carries the directory it was built in)"

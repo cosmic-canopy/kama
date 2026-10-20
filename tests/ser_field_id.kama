@@ -16,7 +16,7 @@ type value Rec {
     public ctor make(int32 a, int32 b, int32 old) { this.a = a; this.b = b; this.old = old; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Result<string, Owned<Error>> j = serializeJsonBuffer(v: Rec.make(a: 1, b: 2, old: 9));
     string s = match (give j) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
     // ascending id, and the deprecated field is absent

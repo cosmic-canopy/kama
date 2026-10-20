@@ -17,12 +17,12 @@ type resource Registry {
 
 static Handler g_default;
 
-fn int32 main() {
+fn uint8 main() {
     g_default = onFire;
     Registry r = Registry.make(h: onFire);
     int32 a = r.dispatch(ev: 10);      // 20
     r.install(h: onWater);             // re-bound, and the new one is what runs
     int32 b = r.dispatch(ev: 10);      // 110
     int32 c = g_default(ev: 6);        // 12 — through a module `static`
-    return a + b + c;                  // 142
+    return cast<uint8>(a + b + c);                  // 142
 }

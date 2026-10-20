@@ -5,4 +5,4 @@ type value V {
     public int32 n = k;
     public ctor make(int32 k) { }
 }
-fn int32 main() { V v = V.make(k: 5); return v.n; }
+fn uint8 main() { V v = V.make(k: 5); return cast<uint8>(v.n); }

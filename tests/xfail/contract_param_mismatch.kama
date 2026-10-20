@@ -6,4 +6,4 @@ type value Bad implements Adder {
     public ctor make() { }
     public fn int32 add(int64 x) { return cast<int32>(x); }   // contract says `int32` -> REJECT
 }
-fn int32 main() { Bad b = Bad.make(); return b.add(x: 0); }
+fn uint8 main() { Bad b = Bad.make(); return cast<uint8>(b.add(x: 0)); }

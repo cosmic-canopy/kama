@@ -1,10 +1,10 @@
 type enum E { A(int32 n), B }
-fn int32 main()
+fn uint8 main()
 {
     E e = E::A(n: 3);
     int32 r = match (e) {
         case A(n: n): { int32 t = n + 1; }
         case B: 0;
     };
-    return r;
+    return cast<uint8>(r);
 }

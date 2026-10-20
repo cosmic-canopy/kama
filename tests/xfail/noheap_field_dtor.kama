@@ -13,4 +13,4 @@ type resource Box {
     public ctor make() { this.items = DynamicArray.empty(); }
 }
 @noheap fn int32 tick(int32 n) { Box b = Box.make(); return n; }
-fn int32 main() { return tick(n: 7); }
+fn uint8 main() { return cast<uint8>(tick(n: 7)); }

@@ -7,4 +7,4 @@ type contract RawSink for value {
     unsafe fn void put(UnsafePtr<int32> p);
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

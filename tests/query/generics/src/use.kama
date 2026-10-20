@@ -6,7 +6,7 @@
 
 import { genericprobe::Box, genericprobe::firstOr };
 
-fn int32 main() {
+fn uint8 main() {
     Box<int32> bi = Box::<int32>.of(v: 0);
     // L11: col 7 = `v` through Box<int32>, L12 col 7 = `get` through the same instance
     bi.v = 1;
@@ -19,5 +19,5 @@ fn int32 main() {
     bs.replace(next: true);
 
     int32 f = firstOr(fallback: 7);       // L20 col 14 = the generic free fn, col 22 = its label
-    return a + f + (b ? 0 : 1);
+    return cast<uint8>(a + f + (b ? 0 : 1));
 }

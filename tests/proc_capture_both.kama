@@ -2,7 +2,7 @@
 // proving run()'s concurrent drain of both pipes.
 import { core::envOr, std::process::Command, std::process::Output, std::io::IoError, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "echo2"); c.arg(a: "out"); c.arg(a: "err");
     Result<Output, IoError> r = c.run();
@@ -15,7 +15,7 @@ fn int32 main() {
             else if (e != 4) { code = 61; }
             else if (o.stdout()[0] != cast<uint8>(111)) { code = 62; }   // 'o'
             else if (o.stderr()[0] != cast<uint8>(101)) { code = 63; }   // 'e'
-            := code;
+            := cast<uint8>(code);
         }
         case Err(error: x): 64;
     };

@@ -29,12 +29,12 @@ type value Acc implements Sendable {
 
 fn void accumulate(ref Acc a) { a.run(); }   // borrows the caller's bundle (`ref`), no move
 
-fn int32 main() {
+fn uint8 main() {
     Acc lower = Acc.range(lo: 0,  hi: 50);
     Acc upper = Acc.range(lo: 50, hi: 100);
     scope {
         spawn accumulate(a: ref lower);   // borrows `lower`  (root distinct from `upper`)
         spawn accumulate(a: ref upper);   // borrows `upper`  (disjoint cell -> no race)
     }                                     // BARRIER: both joined before `lower`/`upper` are read
-    return (lower.total + upper.total) % 256;   // sum 0..99 = 4950; 4950 % 256 = 86
+    return cast<uint8>((lower.total + upper.total) % 256);   // sum 0..99 = 4950; 4950 % 256 = 86
 }

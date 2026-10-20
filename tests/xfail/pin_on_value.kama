@@ -3,4 +3,4 @@
 // it silently would let a declaration say nothing at all.
 type value Holder<T is This> { public int32 x; }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

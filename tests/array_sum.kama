@@ -1,6 +1,6 @@
 // FixedArray<T>: fixed buffer, indexed assignment, foreach iteration, RAII free.
 import { std::collections::FixedArray };
-fn int32 main()
+fn uint8 main()
 {
     FixedArray<int32> a = FixedArray.make(size: 5);
     a[0] = 10;
@@ -19,5 +19,5 @@ fn int32 main()
     total += a[0];   // +10
     total = total - a[4];   // -11
 
-    return total;   // 42 + 10 - 11 = 41
+    return cast<uint8>(total);   // 42 + 10 - 11 = 41
 }

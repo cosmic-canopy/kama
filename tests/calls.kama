@@ -6,7 +6,7 @@ fn int32 triple(int32 x)
 {
     return add(a: x, b: add(a: x, b: x));
 }
-fn int32 main()
+fn uint8 main()
 {
-    return triple(x: 14);
+    return cast<uint8>(triple(x: 14));
 }

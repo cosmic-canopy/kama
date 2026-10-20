@@ -13,8 +13,8 @@ type value Scale<T: Weighable> {
     public ctor make(int32 f) { this.factor = f; }
     public fn int32 apply(T x) { return this.factor * x.weight(); }
 }
-fn int32 main() {
+fn uint8 main() {
     Scale<Rock> s = Scale.make(f: 3);
     Rock r = Rock.make(g: 14);
-    return s.apply(x: r);   // 3 * 14 = 42
+    return cast<uint8>(s.apply(x: r));   // 3 * 14 = 42
 }

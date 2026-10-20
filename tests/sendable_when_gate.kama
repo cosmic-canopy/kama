@@ -26,7 +26,7 @@ type resource Bundle implements Sendable {
     }
 }
 fn void work(Bundle b) { int32 s = b.sum(); }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Leaf> items = DynamicArray.empty();
     items.add(item: Leaf.make(v: 10));
     items.add(item: Leaf.make(v: 20));
@@ -34,5 +34,5 @@ fn int32 main() {
     int32 local = b.sum();                       // 11 + 1 + 10 + 20 = 42
     Isolate iso = spawn work(b: give b);
     iso.join();
-    return local;
+    return cast<uint8>(local);
 }

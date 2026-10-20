@@ -2,7 +2,7 @@
 // exit. The helper's `sleep 1000` (ms) is alive at the immediate tryWait, exits 0 after wait().
 import { core::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
 
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "sleep"); c.arg(a: "1000");
     Result<Process, IoError> sr = c.start();
@@ -13,7 +13,7 @@ fn int32 main() {
         case Ok(value: opt): match (opt) { case None: 0; case Some(value: s): 111; };   // expect still-running
         case Err(error: e): 112;
     };
-    if (phase1 != 0) { return phase1; }
+    if (phase1 != 0) { return cast<uint8>(phase1); }
 
     Result<ExitStatus, IoError> wr = p.wait();
     return match (wr) { case Ok(value: s): (s.success() ? 42 : 113); case Err(error: e): 114; };

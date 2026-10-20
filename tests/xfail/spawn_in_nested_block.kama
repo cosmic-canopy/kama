@@ -16,7 +16,7 @@ type resource Job {
 
 fn void run(Job j) { }   // the bundle is consumed here; the body is irrelevant to the rule under test
 
-fn int32 main() {
+fn uint8 main() {
     int32 i = 0;
     scope {
         while (i < 3) {

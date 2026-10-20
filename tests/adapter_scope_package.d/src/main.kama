@@ -10,7 +10,7 @@ type adapter <int32> implements Tagged { public fn int32 tag() { return 30; } }
 
 fn int32 tagOf<T: Tagged>(ref T v) { return v.tag(); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 x = 5;
     if (heaviness(v: ref x) != 12) { return 1; }   // the dependency's conformance
     if (tagOf(v: ref x) != 30) { return 2; }       // this package's conformance

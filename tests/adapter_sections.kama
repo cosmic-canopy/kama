@@ -31,10 +31,10 @@ type adapter <float32, float64> implements Tagged {
 
 fn int32 rate<T: Tagged>(T v) { return v.tag() * v.scale(); }
 
-fn int32 main() {
+fn uint8 main() {
     int8 a = 0; int16 b = 0; int32 c = 0; int64 d = 0;
     int32 r = rate(v: a) + rate(v: b) + rate(v: c) + rate(v: d);   // (1+2+3+4)*2 = 20
     float32 e = 0.0; float64 f = 0.0;
     r = r + rate(v: e) + rate(v: f);                                // + 90 + 90 = 200
-    return r;
+    return cast<uint8>(r);
 }

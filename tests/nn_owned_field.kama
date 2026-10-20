@@ -16,10 +16,10 @@ type resource Holder {
     }
     public fn int32 total() { return this.a.get() + this.b.get(); }
 }
-fn int32 main() {
+fn uint8 main() {
     Owned<Box> a = new Box.make(v: 10);
     Shared<Box> b = new Box.make(v: 20);
     Holder h = Holder.make(a: give a, b: give b);
     h.bump();                       // a: 10 -> 11
-    return h.total();               // 11 + 20 = 31
+    return cast<uint8>(h.total());               // 11 + 20 = 31
 }

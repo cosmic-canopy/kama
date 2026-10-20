@@ -3,7 +3,7 @@
 // would be a second way to say the same thing.
 import { std::fmt::parseRadix, std::fmt::ParseError };
 
-fn int32 main() {
+fn uint8 main() {
     string hex  = "ff";
     string HEX  = "FF";        // case-insensitive
     string bin  = "1011";
@@ -24,5 +24,5 @@ fn int32 main() {
     int32 ve = match (e) { case Ok(value: v): 0; case Err(error: x): 1; };   // InvalidDigit
     int32 vf = match (f) { case Ok(value: v): cast<int32>(v); case Err(error: x): 0; };  // 255
 
-    return (va - 255) + (vb - 255) + vc + vd + ve + (vf - 255) - 5;   // 11 + 35 + 1 - 5 = 42
+    return cast<uint8>((va - 255) + (vb - 255) + vc + vd + ve + (vf - 255) - 5);   // 11 + 35 + 1 - 5 = 42
 }

@@ -8,9 +8,9 @@ type resource Holder<A: Allocator = GlobalAllocator> {
     public fn int32 count() { return this.n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.make();
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 7);
-    return h.count() + xs[0] - 7;
+    return cast<uint8>(h.count() + xs[0] - 7);
 }

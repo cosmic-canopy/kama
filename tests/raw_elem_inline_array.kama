@@ -17,4 +17,4 @@ unsafe fn int32 run() {
     return total + xs[2];                             // 40
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

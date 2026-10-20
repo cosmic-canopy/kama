@@ -117,11 +117,11 @@ fn int32 collections() {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = raw();
-    if (r != 0) { return r; }
+    if (r != 0) { return cast<uint8>(r); }
     r = collections();
-    if (r != 0) { return r; }
+    if (r != 0) { return cast<uint8>(r); }
     if (built != dropped) { return 30; }   // every copy and every original, dropped exactly once
     return 0;
 }

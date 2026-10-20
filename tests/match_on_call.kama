@@ -5,12 +5,12 @@ fn Weak<Counter> orphan()
     Shared<Counter> s = new Counter.make(n: 5);
     return s.downgrade();   // s dies at fn-end -> the returned weak is already expired
 }
-fn int32 main()
+fn uint8 main()
 {
     Shared<Counter> s = new Counter.make(n: 7);
     Weak<Counter> live = s.downgrade();
     Weak<Counter> gone = orphan();
     int32 a = match (live.tryUpgrade()) { case Some(value: sh): sh.get(); case None: 0; };
     int32 b = match (gone.tryUpgrade()) { case Some(value: sh): sh.get(); case None: 100; };
-    return a + b;   // 7 + 100 = 107
+    return cast<uint8>(a + b);   // 7 + 100 = 107
 }

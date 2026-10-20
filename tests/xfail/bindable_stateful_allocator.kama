@@ -4,9 +4,9 @@
 import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 fnptr int32 Get(int32 d);
 type final resource Probe { int32 id; public ctor make(int32 id) { this.id = id; } fn int32 read(int32 d) { return this.id + d; } }
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 256);
     Owned<Probe, BumpAllocator> p = new(allocator: arena.handle()) Probe.make(id: 1);
     BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
-    return g(d: 41);
+    return cast<uint8>(g(d: 41));
 }

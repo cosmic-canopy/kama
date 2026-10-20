@@ -22,10 +22,10 @@ type resource Holder {
     }
     public fn int32 get() { return this.a.get(); }
 }
-fn int32 main() {
+fn uint8 main() {
     Result<Holder, HolderErr> ok  = Holder.make(v: 42);
     Result<Holder, HolderErr> bad = Holder.make(v: -5);
     int32 a = match (ok)  { case Ok(value: h): h.get(); case Err(error: e): 0 - 1; };   // 42
     int32 b = match (bad) { case Ok(value: h): 100;     case Err(error: e): 0 - 1; };   // -1
-    return a + b + 1;   // 42 - 1 + 1 = 42
+    return cast<uint8>(a + b + 1);   // 42 - 1 + 1 = 42
 }

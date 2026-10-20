@@ -6,4 +6,4 @@
 // ⚠️ The import is the test and must not be tidied away as unused. The json and hex siblings are
 // tests/noheap_flag_import_json.d and tests/noheap_flag_import_hex.d.
 import { std::uuid::Uuid };
-fn int32 main() { return 42; }
+fn uint8 main() { return 42; }

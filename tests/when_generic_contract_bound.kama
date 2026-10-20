@@ -37,7 +37,7 @@ type value Holder<P: Source<Pt>> {
     public fn int32 x() { return this.inner.pull().x; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Wrap<Nums> w = Wrap::<Nums>.of(inner: Nums.of(n: 5));
     if (w.pullInt() != 5) { return 1; }
     Wrap<Pts> wp = Wrap::<Pts>.of(inner: Pts.of());
@@ -47,5 +47,5 @@ fn int32 main() {
     if (takeInt::<Nums>(p: Nums.of(n: 4)) != 4) { return 4; }
     if (takeWide::<int32>(p: 21) != 42) { return 5; }
     Holder<Pts> h = Holder::<Pts>.of(inner: Pts.of());
-    return h.x() + 30;                                           // 37
+    return cast<uint8>(h.x() + 30);                                           // 37
 }

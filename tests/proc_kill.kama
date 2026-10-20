@@ -4,17 +4,17 @@
 // 0), so the portable assertion is `!success()`; both platforms agree the child did not exit cleanly.
 import { core::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
 
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "sleep"); c.arg(a: "10000");
     Result<Process, IoError> sr = c.start();
     Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 100; } };
     Result<Unit, IoError> kr = p.kill();
     int32 k = match (kr) { case Ok(value: u): 0; case Err(error: e): 101; };
-    if (k != 0) { return k; }
+    if (k != 0) { return cast<uint8>(k); }
     Result<ExitStatus, IoError> wr = p.wait();
     return match (wr) {
-        case Ok(value: s): { int32 cc = 42; if (s.success()) { cc = 102; } := cc; }
+        case Ok(value: s): { int32 cc = 42; if (s.success()) { cc = 102; } := cast<uint8>(cc); }
         case Err(error: e): 104;
     };
 }

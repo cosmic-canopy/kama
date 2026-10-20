@@ -26,8 +26,8 @@ type value Mover implements Sink<Pt> {
 fn int32 viaInt(Sink<int32> s, int32 v) { int32 w = v; return s.take(a: v) + s.put(a: ref w) + w; }   // 3 + 4 + 4
 fn int32 viaPt(Sink<Pt> s, Pt p) { Pt q = p; return s.take(a: p) + s.put(a: ref q) + q.x; }          // 5 + 10 + 10
 
-fn int32 main() {
+fn uint8 main() {
     Counter c = Counter.make();
     Mover m = Mover.make();
-    return viaInt(s: c, v: 3) + viaPt(s: m, p: Pt.make(x: 5));   // 11 + 25
+    return cast<uint8>(viaInt(s: c, v: 3) + viaPt(s: m, p: Pt.make(x: 5)));   // 11 + 25
 }

@@ -18,14 +18,14 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 cat > "$tmp/trap.kama" <<'KAMA'
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(2) a = [0; 2];
     int32 i = 2;
-    return a[i];   // out of bounds: traps in a debug build
+    return cast<uint8>(a[i]);   // out of bounds: traps in a debug build
 }
 KAMA
 cat > "$tmp/seven.kama" <<'KAMA'
-fn int32 main() { return 7; }
+fn uint8 main() { return 7; }
 KAMA
 
 "$KAMA" build "$tmp/trap.kama" -o "$tmp/trap" >/dev/null 2>&1

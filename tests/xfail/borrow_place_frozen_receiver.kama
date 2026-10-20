@@ -1,7 +1,7 @@
 // A call host freezes its RECEIVER for the block (KR-123): `m.put` could grow or rehash the map and move the entry `v`
 // names. Write through `v`, or after the window closes.
 import { std::collections::Map, std::collections::DynamicArray };
-fn int32 main()
+fn uint8 main()
 {
     Map<string, int32> m = Map.empty();
     m.put(key: "a", value: 1);

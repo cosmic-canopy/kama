@@ -6,4 +6,4 @@ unsafe fn int32 go() {
     div_t e = div(numer: 9, denom: 4);                          // 2 r 1
     return d.back(d: 10) + absval(x: -7) + e.quot * 100;        // 32 + 7 + 200
 }
-fn int32 main() { return go() % 256; }                          // 239
+fn uint8 main() { return cast<uint8>(go() % 256); }                          // 239

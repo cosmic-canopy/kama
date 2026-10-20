@@ -34,15 +34,15 @@ fn int32 verdict(Result<isize, IoError> r) {
     return match (r) { case Ok(value: n): 20 + cast<int32>(n / 100); case Err(error: e): 10; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     string s = "";
     int32 i = 0;
     while (i < 3000) { s = "${s}x"; i = i + 1; }
-    if (args().count() == 0) { return verdict(r: writeText(path: "out.txt", text: s)); }   // `./w` text, `./w file`
+    if (args().count() == 0) { return cast<uint8>(verdict(r: writeText(path: "out.txt", text: s))); }   // `./w` text, `./w file`
     DynamicArray<uint8> b = DynamicArray.empty();
     i = 0;
     while (i < 3000) { b.add(item: 120ui8); i = i + 1; }
-    return verdict(r: writeFile(path: "out.bin", bytes: b));
+    return cast<uint8>(verdict(r: writeFile(path: "out.bin", bytes: b)));
 }
 EOF
 "$KAMA" build "$tmp/w.kama" -o "$tmp/w" > "$tmp/build.log" 2>&1 || fail "the probe did not build:" "$tmp/build.log"

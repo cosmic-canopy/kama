@@ -4,7 +4,7 @@
 // Hangul syllable, and text that is already in form. Returns 0.
 import { std::unicode::normalize, std::unicode::isNormalized, std::unicode::NormalizationForm };
 
-fn int32 main() {
+fn uint8 main() {
     // NFKC: the compatibility variants fold — full-width A, the fi ligature, roman numeral nine
     if (normalize(s: "\u{FF21}\u{FB01}", form: NormalizationForm::Nfkc) != "Afi") { return 1; }
     if (normalize(s: "\u{2168}", form: NormalizationForm::Nfkc) != "IX") { return 2; }

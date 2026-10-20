@@ -16,7 +16,7 @@ fn ref int32 bigger(ref int32 a, ref int32 b) { if (a > b) { return a; } return 
 fn void inc(ref int32 x) { x += 1; }
 fn T ident<T>(T x) { return x; }                  // a generic call infers its `T` from an alias, as from a local
 
-fn int32 main() {
+fn uint8 main() {
     Map<string, int32> m = Map.empty();
     m.put(key: "a", value: 10);
     borrow m.getRefMut(key: "a") as v { v += 5; inc(x: ref v); }                 // a `ref` call with an argument: 16

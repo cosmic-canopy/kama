@@ -3,7 +3,7 @@ fn int32 classify(int32 n)
     if (n > 0) { return 1; }
     else { return 0; }
 }
-fn int32 main()
+fn uint8 main()
 {
     int32 i = 0;
     int32 count = 0;
@@ -12,5 +12,5 @@ fn int32 main()
         if (classify(n: i) == 1) { count += 1; }
         i++;
     }
-    return count;
+    return cast<uint8>(count);
 }

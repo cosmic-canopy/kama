@@ -25,7 +25,7 @@ fn DynamicArray<uint8> prefix(ref DynamicArray<uint8> b, isize n) {
     for (isize i = 0; i < n; i = i + 1) { p.add(item: b[i]); }
     return give p;
 }
-fn int32 main() {
+fn uint8 main() {
     int32 score = 0;
     Cmd c = Cmd::Create(name: "matt");
     Result<DynamicArray<uint8>, Owned<Error>> e_r = serializeKbinNamedBuffer(v: c);
@@ -41,5 +41,5 @@ fn int32 main() {
     isize m = qb.length();
     if (decodes(src: prefix(b: ref qb, n: m)))      { score = score + 8; }    // complete -> Ok
     if (!decodes(src: prefix(b: ref qb, n: m - 1))) { score = score + 16; }   // a unit variant missing its end -> Err
-    return score;   // 31
+    return cast<uint8>(score);   // 31
 }

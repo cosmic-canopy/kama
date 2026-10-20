@@ -3,4 +3,4 @@ import { cx::m::twice };
 
 comptime int32 SIX = twice(n: 3);
 
-fn int32 main() { return SIX; }
+fn uint8 main() { return cast<uint8>(SIX); }

@@ -19,4 +19,4 @@ type resource Holder implements Windowed<Span> {
     public unsafe fn Span window() { return Span.over(at: addr(of: this.cell), count: 1); }
 }
 
-fn int32 main() { Holder h = Holder.make(); return h.window().length() - 1; }
+fn uint8 main() { Holder h = Holder.make(); return cast<uint8>(h.window().length() - 1); }

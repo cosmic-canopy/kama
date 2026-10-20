@@ -18,7 +18,7 @@ type resource Slot implements Sendable {
 
 fn void writer(Slot s) { s.run(); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = 0;
     int32 b = 0;
     Slot sa = Slot.make(cell: ref a, value: 30i32);
@@ -29,5 +29,5 @@ fn int32 main() {
             spawn writer(s: give sb);   // inner child -> joined at the INNER brace
         }                               // inner BARRIER: `b` is written and visible here
     }                                   // outer BARRIER: `a` is joined here
-    return a + b;   // 30 + 12 = 42
+    return cast<uint8>(a + b);   // 30 + 12 = 42
 }

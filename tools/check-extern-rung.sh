@@ -82,7 +82,7 @@ unsafe fn int32 work() {
     free(p: p);
     return helper();
 }
-fn int32 main() { return work(); }'
+fn uint8 main() { return cast<uint8>(work()); }'
 rc=0; "$KAMA" check "$tmp/leak/kama.json" > "$tmp/leak.out" 2>&1 || rc=$?
 if [ "$rc" -eq 0 ]; then
     bad "a file calling an extern declared only in a SIBLING was accepted (the rung leak)"
@@ -99,7 +99,7 @@ fi
 mkdir -p "$tmp/prel"
 cat > "$tmp/prel/x.kama" <<'EOF'
 unsafe fn int32 work() { UnsafePtr p = malloc(n: cast<usize>(8)); free(p: p); return 0; }
-fn int32 main() { return work(); }
+fn uint8 main() { return cast<uint8>(work()); }
 EOF
 rc=0; "$KAMA" check "$tmp/prel/x.kama" > "$tmp/prel.out" 2>&1 || rc=$?
 if [ "$rc" -eq 0 ]; then
@@ -120,7 +120,7 @@ extern "<stdlib.h>";
 extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);
 unsafe fn int32 work() { UnsafePtr p = malloc(n: cast<usize>(64)); free(p: p); return helper(); }
-fn int32 main() { return work() - 1; }'
+fn uint8 main() { return cast<uint8>(work() - 1); }'
 if ! "$KAMA" build "$tmp/repeat/kama.json" -o "$tmp/repeat.bin" > "$tmp/repeat.out" 2>&1; then
     bad "re-declaring an extern in each file that calls it was refused — that is the SPEC idiom"
     sed -n 1,3p "$tmp/repeat.out" >&2
@@ -140,7 +140,7 @@ unsafe fn UnsafePtr fromA() { return malloc(n: cast<usize>(64)); }' \
 extern "<stdlib.h>";
 extern fn int32 malloc(int32 n);
 unsafe fn int32 work() { UnsafePtr q = fromA(); return malloc(n: 8); }
-fn int32 main() { return work(); }'
+fn uint8 main() { return cast<uint8>(work()); }'
 rc=0; "$KAMA" check "$tmp/ret/kama.json" > "$tmp/ret.out" 2>&1 || rc=$?
 if [ "$rc" -eq 0 ]; then
     bad "two declarations of \`malloc\` with different return types were accepted"
@@ -165,7 +165,7 @@ unsafe fn void copyInA(UnsafePtr d, UnsafePtr s) { memcpy(dst: d, src: s, n: cas
 extern "<string.h>";
 extern fn UnsafePtr memcpy(UnsafePtr src, UnsafePtr dst, usize n);
 unsafe fn void copyInMain(UnsafePtr d, UnsafePtr s) { memcpy(dst: d, src: s, n: cast<usize>(4)); }
-fn int32 main() { return 0; }'
+fn uint8 main() { return 0; }'
 rc=0; "$KAMA" check "$tmp/swap/kama.json" > "$tmp/swap.out" 2>&1 || rc=$?
 if [ "$rc" -eq 0 ]; then
     bad "two \`memcpy\` declarations with SWAPPED parameter names were accepted — named args reorder off"
@@ -190,7 +190,7 @@ unsafe fn int32 quotInA() { div_t r = div(numer: 17, denom: 5); return r.quot; }
 extern "<stdlib.h>";
 type extern value div_t { int64 quot; int64 rem; }
 extern fn div_t div(int32 numer, int32 denom);
-fn int32 main() { return quotInA(); }'
+fn uint8 main() { return cast<uint8>(quotInA()); }'
 rc=0; "$KAMA" check "$tmp/estruct/kama.json" > "$tmp/estruct.out" 2>&1 || rc=$?
 if [ "$rc" -eq 0 ]; then
     bad "two \`type extern value div_t\` declarations with different field types were accepted"
@@ -211,7 +211,7 @@ extern fn UnsafePtr malloc(usize n);
 extern fn void free(UnsafePtr p);' \
 'import { expo::malloc, expo::free as release };
 unsafe fn int32 work() { UnsafePtr p = malloc(n: cast<usize>(8)); release(p: p); return 0; }
-fn int32 main() { return work(); }'
+fn uint8 main() { return cast<uint8>(work()); }'
 if ! "$KAMA" build "$tmp/expo/kama.json" -o "$tmp/expo.bin" > "$tmp/expo.out" 2>&1; then
     bad "\`export { malloc }\` + \`import\` was refused — an extern is an ordinary file-private declaration"
     sed -n 1,3p "$tmp/expo.out" >&2
@@ -231,7 +231,7 @@ unsafe fn UnsafePtr alloc(usize n) { return malloc(n: n); }
 unsafe fn void release(UnsafePtr p) { free(p: p); }' \
 'import { wrap::alloc, wrap::release };
 unsafe fn int32 work() { UnsafePtr p = alloc(n: cast<usize>(64)); release(p: p); return 0; }
-fn int32 main() { return work(); }'
+fn uint8 main() { return cast<uint8>(work()); }'
 if ! "$KAMA" build "$tmp/wrap/kama.json" -o "$tmp/wrap.bin" > "$tmp/wrap.out" 2>&1; then
     bad "wrapping an extern in an ordinary \`fn\` and exporting THAT was refused — that is the sharing path"
     sed -n 1,3p "$tmp/wrap.out" >&2

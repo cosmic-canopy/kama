@@ -5,4 +5,4 @@
 // other alias left — and the rule had to move with it or retire silently along with the form.
 import { std::collections::Map as global };
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

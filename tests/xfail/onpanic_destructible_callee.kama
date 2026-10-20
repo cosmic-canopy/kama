@@ -10,4 +10,4 @@ fn int32 leaf() { Token t = Token.make(id: 1); return t.get(); }
 fn int32 mid() { return leaf(); }
 @noheap @onPanic(recover: 0)
 fn int32 region(isize i) { return mid(); }   // ERROR: region -> mid -> leaf owns `t`
-fn int32 main() { return region(i: 0); }
+fn uint8 main() { return cast<uint8>(region(i: 0)); }

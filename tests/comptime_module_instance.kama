@@ -13,7 +13,7 @@ comptime usize OPTIONAL = sizeof(Optional<int64>);
 comptime usize ALIGN = alignof(Triple<int16>);
 static usize STATIC = sizeof(Pair<int32>);
 
-fn int32 main() {
+fn uint8 main() {
     if (ARRAY != 16) { return 1; }
     if (PAIR != 16) { return 2; }
     if (OPTIONAL < 16 || OPTIONAL % 8 != 0) { return 3; }

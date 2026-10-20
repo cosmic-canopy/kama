@@ -7,7 +7,7 @@
 // did not exist. A check that only sees the cases its neighbours could not classify is not a check.
 type value Plain { public int32 v = 0; public ctor make() { this.v = 0; } }
 
-fn int32 main()
+fn uint8 main()
 {
     Plain p = Plain.make();
     Hashable h = p;

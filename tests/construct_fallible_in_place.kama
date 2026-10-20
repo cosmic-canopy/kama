@@ -40,7 +40,7 @@ fn Result<Big, Code> made(int64 v) { return Big.make(v: v); }
 type enum Side { Left, Right }
 fn Result<Big, Code> pick(Side s) { return match (s) { case Left: Big.make(v: 1i64); case Right: Big.make(v: 2i64); }; }
 
-fn int32 main() {
+fn uint8 main() {
     int64 s = 0i64;
     {
         Result<Big, Code> a = Big.make(v: 3i64);        // 3 + 3 + 3 + 3 = 12

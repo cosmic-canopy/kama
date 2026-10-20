@@ -4,7 +4,7 @@
 import { std::memory::Owned, std::io::IoError };
 type value Big { public int32 w; public ctor make(int32 w) { this.w = w; } }
 fn bool viaRef(const ref Optional<Owned<Big>> o) { return o.isSome(); }
-fn int32 main() {
+fn uint8 main() {
     Optional<int32> a = Optional::Some(value: 3);
     Optional<int32> b = Optional::None;
     Optional<Owned<Big>> c = Optional::Some(value: new Big.make(w: 1));
@@ -14,5 +14,5 @@ fn int32 main() {
     if (b.isNone()) { n = n + 2; }
     if (viaRef(o: c)) { n = n + 4; }
     if (r.isOk() && !r.isErr()) { n = n + 8; }
-    return n;
+    return cast<uint8>(n);
 }

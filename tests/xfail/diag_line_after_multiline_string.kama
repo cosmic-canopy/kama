@@ -32,8 +32,8 @@ epsilon
 ";
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 bad = "not a number";
-    return bad;
+    return cast<uint8>(bad);
 }

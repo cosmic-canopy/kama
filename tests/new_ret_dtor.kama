@@ -12,4 +12,4 @@ type resource Cell {
     unsafe ~Cell() { free(p: cast<UnsafePtr>(this.buf)); }
 }
 fn Owned<Cell> make(int32 v) { return new Cell.make(v: v); }
-fn int32 main() { Owned<Cell> a = make(v: 42); return a.get(); }
+fn uint8 main() { Owned<Cell> a = make(v: 42); return cast<uint8>(a.get()); }

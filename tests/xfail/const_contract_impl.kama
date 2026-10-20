@@ -8,4 +8,4 @@ type value A implements Readable {
     public ctor make(int32 n) { this.n = n; }
     public fn int32 read() { return this.n; }             // not `const fn` -> REJECT
 }
-fn int32 main() { A a = A.make(n: 0); return a.read(); }
+fn uint8 main() { A a = A.make(n: 0); return cast<uint8>(a.read()); }

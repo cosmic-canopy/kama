@@ -8,8 +8,8 @@
 // own generic can state its own invariants the same way, and why nothing in the compiler mentions `Fixed`.
 import { std::num::Fixed };
 
-fn int32 main() {
+fn uint8 main() {
     Fixed<int32>#(16) ok  = Fixed::<int32>#(16).one();   // 16 fractional bits in 32 — fine
     Fixed<int8>#(16)  bad = Fixed::<int8>#(16).one();    // 16 in 8 — the assert fails, naming BOTH halves
-    return ok.raw + cast<int32>(bad.raw);
+    return cast<uint8>(ok.raw + cast<int32>(bad.raw));
 }

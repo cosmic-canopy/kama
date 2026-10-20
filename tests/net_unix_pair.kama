@@ -36,7 +36,7 @@ fn bool peerIsMe(ref UnixStream s) {
     return match (s.peerCredentials()) { case Ok(value: p): p.processId() == currentProcessId(); case Err(error: e): false; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     Result<UnixStreamPair, IoError> rp = UnixStreamPair.open();
     UnixStreamPair p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
     if (send(s: ref p.first(), v: 5ui8) != 1 || recv(s: ref p.second()) != 5) { return 2; }    // first -> second

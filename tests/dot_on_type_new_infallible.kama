@@ -19,9 +19,9 @@ type resource Circle implements Shape {
     public unsafe fn int32 area() { return this.buf[0] * this.buf[0]; }
     unsafe ~Circle() { free(p: cast<UnsafePtr>(this.buf)); }
 }
-fn int32 main() {
+fn uint8 main() {
     Owned<Box>    o = new Box.make(v: 3);       // intrinsic concrete Owned
     Shared<Box>   s = new Box.make(v: 4);       // intrinsic Shared (ctrl block)
     Owned<Shape>  c = new Circle.make(r: 5);    // type-erased interface element (vtable + ~Circle via slot)
-    return o.get() + s.get() + c.area();        // 3 + 4 + 25 = 32
+    return cast<uint8>(o.get() + s.get() + c.area());        // 3 + 4 + 25 = 32
 }

@@ -7,7 +7,7 @@
 // Both directions, and the `==` that reads as a comparison of two different types and is not.
 // `lib/std/ascii/ascii.kama` has always written `cast<uint32>(c)` on every line — this is the rule that
 // discipline was already following.
-fn int32 main()
+fn uint8 main()
 {
     char c = 'a';
     uint32 u = 65ui32;

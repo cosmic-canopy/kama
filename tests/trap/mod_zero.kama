@@ -1,7 +1,7 @@
 // Integer remainder by zero traps just like division. Runtime-opaque zero divisor so it isn't folded.
 import { std::num::int32Min };
-fn int32 main() {
+fn uint8 main() {
     int32 zero = int32Min() - int32Min();   // 0, opaque
     int32 a = 10;
-    return a % zero;                          // mod-by-zero traps
+    return cast<uint8>(a % zero);                          // mod-by-zero traps
 }

@@ -10,4 +10,4 @@ fn void helper<T>(T value, isize count) { }
 fn void neverCalled<T>(T x) {
     helper::<T>(value: x, cont: 1);     // ERROR: no parameter named `cont`
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

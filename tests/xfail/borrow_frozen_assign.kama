@@ -4,7 +4,7 @@ import { std::collections::View, std::collections::ConstView, std::collections::
 
 fn int32 sum(ConstView<int32> xs) { int32 t = 0; foreach (int32 x in xs) { t = t + x; } return t; }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
     a.add(item: 1); a.add(item: 2);
     DynamicArray<int32> b = DynamicArray.withCapacity(capacity: 2);
@@ -14,5 +14,5 @@ fn int32 main() {
         a = give b;                  // the buffer `v` views is dropped here
         r = sum(xs: v);
     }
-    return r;
+    return cast<uint8>(r);
 }

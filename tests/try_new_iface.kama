@@ -20,10 +20,10 @@ type value Square implements Shape {
 
 fn int32 areaOf(Optional<Owned<Shape>> h) { return match (h) { case Some(value: s): s.area(); case None: 0 - 1; }; }
 
-fn int32 main() {
+fn uint8 main() {
     Optional<Owned<Shape>> c = try new Circle.make(r: 5);    // 25 through the vtbl
     Optional<Owned<Shape>> q = try new Square.make(s: 8);    // 16 — a different concrete, same handle type
     // ARGUMENT position, straight into a contract-typed handle — the value-position hoist and the
     // interface boxing composing, with no local to name the box.
-    return areaOf(h: give c) + areaOf(h: give q) + areaOf(h: try new Square.make(s: 4));   // 25+16+8
+    return cast<uint8>(areaOf(h: give c) + areaOf(h: give q) + areaOf(h: try new Square.make(s: 4)));   // 25+16+8
 }

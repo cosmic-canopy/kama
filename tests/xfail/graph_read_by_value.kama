@@ -12,7 +12,7 @@ type resource Node {
     public ctor make(int32 id) { this.id = id; this.next = Optional::None; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Result<Node, Owned<Error>> back = deserializeJsonBuffer::<Node>(src: "{}");
     return match (give back) { case Ok(value: n): 0; case Err(error: e): 1; };
 }

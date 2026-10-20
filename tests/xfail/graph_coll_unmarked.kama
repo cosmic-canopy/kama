@@ -38,7 +38,7 @@ type resource Pair2<T> implements IterableMut<T>,
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Pair2<Shared<Leaf>> p = Pair2::<Shared<Leaf>>.make(a: new Leaf.make(v: 1), b: new Leaf.make(v: 2));
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: p);
     return match (give jr) { case Ok(value: x): 0; case Err(error: e): 1; };

@@ -68,9 +68,9 @@ fn int32 layProject(const ref string dir) {
     string manifest = "{\n  \"name\": \"cpprobe\",\n  \"version\": \"0.1.0\",\n  \"kind\": \"executable\",\n"
                     + "  \"entry\": \"src/main.kama\",\n  \"modules\": { \".\": { \"visibility\": \"internal\" } }\n}\n";
     if (!put(path: join(path: dir, with: "kama.json"), text: manifest)) { return 2; }
-    string util = "export { answer };\nfn int32 answer() { return 42; }\n";
+    string util = "export { answer };\nfn uint8 answer() { return 42; }\n";
     if (!put(path: join(path: src, with: "util.kama"), text: util)) { return 2; }
-    string mainSrc = "import { cpprobe::answer };\nfn int32 main() { return answer(); }\n";
+    string mainSrc = "import { cpprobe::answer };\nfn uint8 main() { return answer(); }\n";
     if (!put(path: join(path: src, with: "main.kama"), text: mainSrc)) { return 2; }
     return 0;
 }
@@ -89,7 +89,7 @@ fn int32 layDepProject(const ref string dir) {
     string libManifest = "{\n  \"name\": \"helper\",\n  \"version\": \"0.1.0\",\n  \"kind\": \"library\",\n"
                        + "  \"entry\": \"src/helper.kama\",\n  \"modules\": { \".\": { \"visibility\": \"public\" } }\n}\n";
     if (!put(path: join(path: lib, with: "kama.json"), text: libManifest)) { return 2; }
-    string helper = "export { bump };\nfn int32 bump(int32 v) { return v + 5; }\n";
+    string helper = "export { bump };\nfn uint8 bump(uint8 v) { return v + 5; }\n";
     if (!put(path: join(path: join(path: lib, with: "src"), with: "helper.kama"), text: helper)) { return 2; }
 
     string appManifest = "{\n  \"name\": \"cpdep\",\n  \"version\": \"0.1.0\",\n  \"kind\": \"executable\",\n"
@@ -98,7 +98,7 @@ fn int32 layDepProject(const ref string dir) {
     if (!put(path: join(path: app, with: "kama.json"), text: appManifest)) { return 2; }
     // 37 + 5 = 42, the same answer every other case here asserts — so one `arc != 42` check covers both
     // shapes, and a dependency that resolved to nothing cannot produce it.
-    string mainSrc = "import { helper::bump };\nfn int32 main() { return bump(v: 37); }\n";
+    string mainSrc = "import { helper::bump };\nfn uint8 main() { return bump(v: 37); }\n";
     if (!put(path: join(path: join(path: app, with: "src"), with: "main.kama"), text: mainSrc)) { return 2; }
     return 0;
 }
@@ -212,7 +212,7 @@ fn int32 runDepCase(const ref string kama, const ref string dir, const ref strin
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     string kama   = match (args().get(at: 0)) { case Some(value: v): copy v; case None: ""; };
     string work   = match (args().get(at: 1)) { case Some(value: v): copy v; case None: ""; };
     string suffix = match (args().get(at: 2)) { case Some(value: v): copy v; case None: ""; };
@@ -243,27 +243,27 @@ fn int32 main() {
 
     // (i) runs in place — a program in a non-ASCII directory is an everyday thing to start.
     int32 r1 = runCase(kama: kama, dir: uni,  outName: outName, caseId: 10, runFrom: "");
-    if (r1 != 0) { return r1; }
+    if (r1 != 0) { return cast<uint8>(r1); }
     // (i-b) the same project with a non-ASCII OUTPUT NAME — what `kama build 日本語.kama` asks for by
     // default, and a different ceiling from the directory: a file that does not exist yet has no 8.3
     // alias for the linker to borrow.
     int32 r1b = runCase(kama: kama, dir: uni,  outName: cjk() + suffix, caseId: 50, runFrom: "");
-    if (r1b != 0) { return r1b; }
+    if (r1b != 0) { return cast<uint8>(r1b); }
     int32 r2 = runCase(kama: kama, dir: deep, outName: outName, caseId: 20, runFrom: join(path: work, with: "run2"));
-    if (r2 != 0) { return r2; }
+    if (r2 != 0) { return cast<uint8>(r2); }
     int32 r3 = runCase(kama: kama, dir: both, outName: outName, caseId: 30, runFrom: join(path: work, with: "run3"));
-    if (r3 != 0) { return r3; }
+    if (r3 != 0) { return cast<uint8>(r3); }
 
     // (iv) the CONTROL, and it runs FIRST of the pair on purpose: if a path dependency is broken outright
     // the deep case would fail too, and without this the guard would blame the length for it.
     int32 r4 = runDepCase(kama: kama, dir: depShort, outName: outName, caseId: 60,
                           runFrom: join(path: work, with: "run4"));
-    if (r4 != 0) { return r4; }
+    if (r4 != 0) { return cast<uint8>(r4); }
     // (v) the same pair at the bottom of the deep tree — `.kama/deps/helper` past 260. RED before 0.9.303:
     // `kama pkg install: cannot link dependency 'helper'`, and with the link absent nothing builds through it.
     int32 r5 = runDepCase(kama: kama, dir: depDeep, outName: outName, caseId: 70,
                           runFrom: join(path: work, with: "run5"));
-    if (r5 != 0) { return r5; }
+    if (r5 != 0) { return cast<uint8>(r5); }
 
     // No teardown here, on purpose: the script's `rm -rf` trap owns it. A first draft removed the trees
     // itself and failed under load — Windows keeps a just-exited executable's image open a moment past

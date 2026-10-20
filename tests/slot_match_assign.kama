@@ -65,7 +65,7 @@ fn void nestedMatch(int32 x, out int32 dst) {
     };
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 total = 0;
 
@@ -103,5 +103,5 @@ fn int32 main()
     }
     total = total + g;                       // 32
 
-    return total;                            // 1 + 1 + 2 + 4 + 8 + 16 + 32 = 64
+    return cast<uint8>(total);                            // 1 + 1 + 2 + 4 + 8 + 16 + 32 = 64
 }

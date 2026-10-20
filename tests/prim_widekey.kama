@@ -3,7 +3,7 @@
 // though intentionally NOT hashable. Exercises the newly-added int64 / uint32 / float32 conformances.
 import { std::collections::Map, std::collections::Set, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // int64 keys — large values that would collide if truncated to int32
@@ -27,5 +27,5 @@ fn int32 main() {
     if (fs.contains(item: 2.5f32)) { r = r + 5; }
     if (!fs.contains(item: 9.9f32)) { r = r + 5; }
 
-    return r;   // 10+5+5+5+5+5 = 35
+    return cast<uint8>(r);   // 10+5+5+5+5+5 = 35
 }

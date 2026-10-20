@@ -38,25 +38,25 @@ fail=0
 # error on a different path entirely (rejectConstOutOfRange).
 cat > "$tmp/add.kama" <<'EOF'
 import { std::num::int32Max };
-fn int32 main() {
+fn uint8 main() {
     int32 m = int32Max();
     int32 one = int32Max() - int32Max() + 1;
-    return m + one;
+    return truncate<uint8>(m + one);   // the wrapped int32Min; its low byte, on purpose
 }
 EOF
 cat > "$tmp/div.kama" <<'EOF'
 import { std::num::int32Min };
-fn int32 main() {
+fn uint8 main() {
     int32 neg1 = 0 - 1;
-    return int32Min() / neg1;
+    return truncate<uint8>(int32Min() / neg1);   // likewise
 }
 EOF
 cat > "$tmp/div64.kama" <<'EOF'
 import { std::num::int64Min };
-fn int32 main() {
+fn uint8 main() {
     int64 neg1 = 0i64 - 1i64;
     int64 q = int64Min() / neg1;
-    return cast<int32>(q & 1i64);
+    return cast<uint8>(q & 1i64);
 }
 EOF
 
@@ -126,7 +126,7 @@ if command -v clang >/dev/null 2>&1; then
     cat > "$tmp/parity.kama" <<'EOF'
 expose fn int32 padd(int32 a, int32 b) { return a + b; }
 expose fn int32 pmul(int32 a, int32 b) { return a * b; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 EOF
     "$KAMA" transpile "$tmp/parity.kama" -o "$tmp/parity.c" >/dev/null 2>&1 || {
         echo "check-release-arith: FAIL — transpile failed on the parity probe" >&2; exit 1; }

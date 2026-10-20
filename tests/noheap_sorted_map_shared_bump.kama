@@ -18,4 +18,4 @@ unsafe fn int32 run() {
     BumpAllocator bump = BumpAllocator.make(buffer: addr(of: store[0]), offset: addr(of: used), capacity: 8192);
     return tick(bump: bump);
 }
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

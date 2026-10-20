@@ -27,7 +27,7 @@ fn int32 pairOf(E e) {
     return match (e) { case Pair(a: a, b: b): a * 10 + b; case Text(a: a, b: b): 0 - 1; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     // A copy written before a give reads the value before it moves.
     string s = "hello";
     if (both(a: copy s, b: give s) != "hello|hello") { return 1; }

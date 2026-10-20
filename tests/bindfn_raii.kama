@@ -17,7 +17,7 @@ fn int32 use() {
     BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     return g(d: 41);                                 // 42; on exit g drops -> Probe::~ once
 }
-fn int32 main() {
+fn uint8 main() {
     int32 r = use();
-    return traceGet();                        // single dtor -> 9
+    return cast<uint8>(traceGet());                        // single dtor -> 9
 }

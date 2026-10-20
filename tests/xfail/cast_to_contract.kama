@@ -14,7 +14,7 @@ type value Circle implements Shape {
 
 fn int64 measure(Shape s) { return s.area(); }
 
-fn int32 main() {
+fn uint8 main() {
     Circle c = Circle.make(r: 6);
-    return cast<int32>(measure(s: cast<Shape>(c)));   // write `Shape s = c;` or just `measure(s: c)`
+    return cast<uint8>(measure(s: cast<Shape>(c)));   // write `Shape s = c;` or just `measure(s: c)`
 }

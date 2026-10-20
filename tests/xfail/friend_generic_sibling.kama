@@ -18,8 +18,8 @@ type value Tree<K> {
     public const fn int32 sibling(const ref Node<int64> o)       { return o.peek(); }      // ERROR
 }
 
-fn int32 main() {
+fn uint8 main() {
     Node<int64> b = Node::<int64>.make(k: 2i64);
     Tree<int32> t = Tree::<int32>.make();
-    return t.sibling(o: b);
+    return cast<uint8>(t.sibling(o: b));
 }

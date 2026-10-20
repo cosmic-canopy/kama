@@ -3,7 +3,7 @@
 // the element to opt into `Copyable` (see coll_copy_resource), or `give` to move the collection.
 import { std::collections::DynamicArray };
 type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ this.items.add(item: v); } ~Res(){} }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Res> a = DynamicArray.empty();
     DynamicArray<Res> b = copy a;   // ERROR: elements own resources but aren't Copyable
     return 0;

@@ -13,4 +13,4 @@ type value B { public Shape s; }
 type value C { public UnsafePtr<uint8> p; }
 @generate(BytesViewable)
 type value D { public Inner i; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

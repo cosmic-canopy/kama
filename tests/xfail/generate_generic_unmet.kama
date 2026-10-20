@@ -10,7 +10,7 @@ type value Box<T> { public T v; }
 
 type value Plain { public int32 n; public ctor of(int32 n) { this.n = n; } }   // conforms to nothing
 
-fn int32 main() {
+fn uint8 main() {
     Box<Plain> a = Box::<Plain>.of(v: Plain.of(n: 5));
     Box<Plain> b = Box::<Plain>.of(v: Plain.of(n: 5));
     if (a == b) { return 1; }

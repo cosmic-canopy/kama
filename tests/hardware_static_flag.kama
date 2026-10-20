@@ -5,8 +5,8 @@ static hardware int32 value = 0;
 
 fn void isr() { value = 42; ready = true; }   // stands in for an interrupt handler
 
-fn int32 main() {
+fn uint8 main() {
     isr();
-    if (ready) { return value; }
+    if (ready) { return cast<uint8>(value); }
     return 0;
 }

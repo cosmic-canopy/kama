@@ -4,4 +4,4 @@ import { std::collections::DynamicArray };
 // scope-dtor'd temp and dropped exactly once. ASan/LeakSanitizer-clean == the chain receiver was freed.
 type resource Widget { DynamicArray<int32> parts; public ctor make(int32 s){ this.parts.add(item: s); } public fn int32 area(){ return this.parts[0]*this.parts[0]; } }
 type resource Builder { int32 seed; public ctor create(int32 s){ this.seed = s; } public fn Widget make(){ return Widget.make(s: this.seed); } }
-fn int32 main() { Builder b = Builder.create(s: 7); return b.make().area(); }
+fn uint8 main() { Builder b = Builder.create(s: 7); return cast<uint8>(b.make().area()); }

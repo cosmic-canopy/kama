@@ -16,7 +16,7 @@ type value Order {
     public ctor make(Uuid id, int32 qty) { this.id = id; this.qty = qty; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Uuid id = match (Uuid.parse(text: "017f22e2-79b0-7cc3-98c4-dc0c0c07398f")) {
         case Ok(value: u): u;
@@ -65,5 +65,5 @@ fn int32 main() {
     bool refused = match (nb) { case Ok(value: x): false; case Err(error: e): true; };
     if (refused) { r = r + 32; }
 
-    return r;
+    return cast<uint8>(r);
 }

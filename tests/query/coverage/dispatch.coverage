@@ -74,7 +74,7 @@
 44:10 t decl:local
 44:14 twice ref:function
 44:20 n ref:param
-46:11 direct ref:local
-46:20 viaContract ref:local
-46:34 got ref:local
-46:40 t ref:local
+46:23 direct ref:local
+46:32 viaContract ref:local
+46:46 got ref:local
+46:52 t ref:local

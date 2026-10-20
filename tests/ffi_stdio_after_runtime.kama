@@ -5,7 +5,7 @@
 // the parse runs, not only compiles. Returns 0.
 extern "<stdio.h>";
 
-fn int32 main() {
+fn uint8 main() {
     float64 x = 0.1;
     string s = "${x}";
     return s == "0.1" ? 0 : 1;

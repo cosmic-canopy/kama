@@ -8,4 +8,4 @@ static int32 g;
 
 fn ref int32 shadow() { int32 g = 5; return g; }
 
-fn int32 main() { return shadow(); }
+fn uint8 main() { return cast<uint8>(shadow()); }

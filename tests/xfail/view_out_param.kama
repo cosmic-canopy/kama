@@ -6,10 +6,10 @@ import { std::collections::View, std::collections::DynamicArray };
 
 fn void fill(out View<int32> v, ref DynamicArray<int32> src) { v = src.viewMut(); }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
     a.add(item: 7);
     slot View<int32> v;
     fill(v: out v, src: ref a);
-    return v[0];
+    return cast<uint8>(v[0]);
 }

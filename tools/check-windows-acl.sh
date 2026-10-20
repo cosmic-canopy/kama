@@ -98,7 +98,7 @@ unsafe fn int32 run() {
     return 0;
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }
 EOF
 "$KAMA" build "$tmp/acl.kama" -o "$tmp/acl.exe" > "$tmp/build.log" 2>&1 \
     || { sed -n '1,20p' "$tmp/build.log" >&2; fail "the probe did not build"; }
@@ -177,7 +177,7 @@ unsafe fn int32 again() {
     return 0;
 }
 
-fn int32 main() { return again(); }
+fn uint8 main() { return cast<uint8>(again()); }
 EOF
 "$KAMA" build "$tmp/again.kama" -o "$tmp/again.exe" > "$tmp/build.log" 2>&1 \
     || { sed -n '1,20p' "$tmp/build.log" >&2; fail "the second probe did not build"; }

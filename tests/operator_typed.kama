@@ -18,7 +18,7 @@ type value Mat2 {
         return Mat2.of(r0: this * m.r0, r1: this * m.r1);   // reuses mat*vec on each column-ish row
     }
 }
-fn int32 main() {
+fn uint8 main() {
     Vec2 v = Vec2.of(x: 3, y: 4);
     Vec2 a = v * 2;      // v * s  (method) -> (6, 8)
     Vec2 b = 2 * v;      // s * v  (free)   -> (6, 8)
@@ -26,5 +26,5 @@ fn int32 main() {
     Vec2 mv = s * v;     // mat * vec -> (6, 8)
     Mat2 ss = s * s;     // mat * mat -> scale by 4-ish (r0=(4,0), r1=(0,4))
     Vec2 mmv = ss * v;   // (12, 16)
-    return a.x + a.y + b.x + b.y + mv.x + mv.y + mmv.x + mmv.y;   // 14+14+14+28 = 70
+    return cast<uint8>(a.x + a.y + b.x + b.y + mv.x + mv.y + mmv.x + mmv.y);   // 14+14+14+28 = 70
 }

@@ -141,7 +141,7 @@ fi
 # this rule. The split is computed, not listed, so it tracks kama's own keyword table.
 refused=0; skipped=0
 while read -r w; do
-    printf 'type value Probe { public int32 %s; }\nfn int32 main() { return 0; }\n' "$w" > "$tmp/p.kama"
+    printf 'type value Probe { public int32 %s; }\nfn uint8 main() { return 0; }\n' "$w" > "$tmp/p.kama"
     if "$KAMA" check "$tmp/p.kama" > "$tmp/p.log" 2>&1; then
         bad "\`$w\` is a C keyword but is accepted as a field name — the emitted C will not compile"
         continue
@@ -163,7 +163,7 @@ else
 fi
 
 # ---- 3. the `uint` asymmetry, both halves --------------------------------------------------------------
-printf 'fn int32 main() { uint x = 5; return 0; }\n' > "$tmp/u.kama"
+printf 'fn uint8 main() { uint x = 5; return 0; }\n' > "$tmp/u.kama"
 if "$KAMA" check "$tmp/u.kama" > "$tmp/u.log" 2>&1; then
     bad "\`uint\` is accepted"
 elif grep -qF 'is a reserved word' "$tmp/u.log"; then
@@ -178,7 +178,7 @@ fi
 # than simply becoming "reserved".
 for pair in 'int:int32' 'double:float64' 'float:float32'; do
     w=${pair%%:*}; want=${pair##*:}
-    printf 'fn int32 main() { %s x = 5; return 0; }\n' "$w" > "$tmp/t.kama"
+    printf 'fn uint8 main() { %s x = 5; return 0; }\n' "$w" > "$tmp/t.kama"
     "$KAMA" check "$tmp/t.kama" > "$tmp/t.log" 2>&1 || true
     if grep -qF 'is a reserved word' "$tmp/t.log" && grep -qF "$want" "$tmp/t.log"; then
         ok "\`$w\` is reserved AND still names \`$want\`"

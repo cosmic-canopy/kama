@@ -60,7 +60,7 @@ type resource Leaf { @field int32 v; public ctor make(int32 v) { this.v = v; } }
 @generate(Serializable, Deserializable)
 type resource Pair { @field Shared<Leaf> a; public ctor make(Shared<Leaf> a) { this.a = give a; } }
 
-fn int32 main() {
+fn uint8 main() {
     if (strict(src: "{\"voices\":3}") != "ok") { return 1; }
     if (strict(src: "{\"voicez\":3}") != "unknown field `voicez`") { return 2; }
     if (said(c: deserializeJsonBuffer::<Config>(src: "{\"voicez\":3}")) != "ok, voices unchanged") { return 3; }   // lenient: skipped

@@ -8,11 +8,11 @@
 fn isize slen(const ref string s) { return s.length(); }
 fn string mk() { return "abcd"; }
 
-fn int32 main() {
+fn uint8 main() {
     string pre = "xy";
     isize a = slen(s: "hello");         // 5  — literal
     isize b = slen(s: pre + "zzz");     // 5  — concat rvalue
     isize c = slen(s: mk());            // 4  — call result
     isize d = slen(s: pre);             // 2  — named lvalue (unchanged path)
-    return cast<int32>(a + b + c + d);               // 16
+    return cast<uint8>(a + b + c + d);               // 16
 }

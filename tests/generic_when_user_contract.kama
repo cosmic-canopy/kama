@@ -42,4 +42,4 @@ unsafe fn int32 run() {
     return direct + viaWhen + gated;            // 7 + 10 + 20 = 37
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

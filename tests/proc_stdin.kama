@@ -10,7 +10,7 @@ import { core::envOr,
     std::collections::DynamicArray,
 };
 
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "cat");
     c.stdin(s: Stdio::Piped);
@@ -24,7 +24,7 @@ fn int32 main() {
     input.add(item: cast<uint8>(10));    // '\n'
     Result<isize, IoError> wr = p.stdin().writeAll(bytes: input);
     int32 w = match (wr) { case Ok(value: n): 0; case Err(error: e): 141; };
-    if (w != 0) { return w; }
+    if (w != 0) { return cast<uint8>(w); }
     p.closeStdin();                       // EOF so `cat` finishes
 
     Result<DynamicArray<uint8>, IoError> rd = p.stdout().readAll();
@@ -35,7 +35,7 @@ fn int32 main() {
             if (n != 3) { code = 142; }
             else if (got[0] != cast<uint8>(104)) { code = 143; }
             else if (got[2] != cast<uint8>(10)) { code = 144; }
-            := code;
+            := cast<uint8>(code);
         }
         case Err(error: e): 145;
     };

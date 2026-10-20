@@ -14,7 +14,7 @@ type resource Box<T> {
     @trackCaller public static fn int32 pick(InlineArray<int32>#(3) xs) { return xs[2]; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(3) xs = [1, 2, 3];
     Box<int32> b = Box.make(a: 4, b: 5);
     b[0] = 10;                                   // a write through the tracked operator

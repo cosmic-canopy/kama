@@ -47,7 +47,7 @@ NOTE='is a reserved word, so it cannot be used as a name here'
 probe() {
     {
         echo 'type value Thing { public int32 a; public ctor make() { this.a = 0; } }'
-        echo 'fn int32 main()'
+        echo 'fn uint8 main()'
         echo '{'
         echo "$1"
         echo '    return 0;'
@@ -90,7 +90,7 @@ probe '    if (true) { } else else { }'  reject 'a doubled `else`'
 # vanished from every such message, and this assertion is what said so. The display now folds the contextual words
 # into the name they are, so a binding site shows `expecting IDENTIFIER` and the note lists the six. The NOTE's
 # gate reads the uncapped expected-token SET, not this prose, which is the whole reason that indirection exists.
-printf 'fn int32 main() { isize out = 1; return 0; }\n' > "$tmp/d.kama"
+printf 'fn uint8 main() { isize out = 1; return 0; }\n' > "$tmp/d.kama"
 "$KAMA" check "$tmp/d.kama" > "$tmp/d.log" 2>&1 || true
 if grep -qF 'syntax error, unexpected OUT, expecting IDENTIFIER — `out` is a reserved word' "$tmp/d.log"; then
     ok "bison's own wording is preserved ahead of the note"

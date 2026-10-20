@@ -16,7 +16,7 @@ fn void producer(Sender<int32> tx) {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 0);   // 0 == rendezvous (unbuffered)
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();
@@ -34,5 +34,5 @@ fn int32 main() {
     }
 
     h.join();
-    return sum;   // 1+2+3+4+5 = 15
+    return cast<uint8>(sum);   // 1+2+3+4+5 = 15
 }

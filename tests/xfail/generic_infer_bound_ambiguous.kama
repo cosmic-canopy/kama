@@ -11,8 +11,8 @@ type value Two implements Tagged<int32>, Tagged<int64> {
 
 fn int32 idOf<S: Tagged<A>, A>(ref S s) { return s.id(); }
 
-fn int32 main()
+fn uint8 main()
 {
     Two t = Two.make();
-    return idOf(s: ref t);
+    return cast<uint8>(idOf(s: ref t));
 }

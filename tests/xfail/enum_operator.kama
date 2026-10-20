@@ -5,4 +5,4 @@ type enum E { A, B;
     public E operator+(int32 n) { return E::B; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

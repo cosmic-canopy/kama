@@ -14,4 +14,4 @@ type resource Box2 {
     public fn int32 get() { return this.h.n; }
 }
 
-fn int32 main() { Box2 b = Box2.make(); return b.get(); }
+fn uint8 main() { Box2 b = Box2.make(); return cast<uint8>(b.get()); }

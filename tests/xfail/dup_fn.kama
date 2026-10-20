@@ -4,4 +4,4 @@
 fn int32 id(int32 x) { return x; }
 fn int32 id(int32 x) { return x + 1; }
 
-fn int32 main() { return id(x: 3); }
+fn uint8 main() { return cast<uint8>(id(x: 3)); }

@@ -15,7 +15,7 @@ fn bool startsWith(const ref string s, const ref string p) {
 }
 fn bool hasCode(const ref IoError e) { return match (e.rawOsError()) { case Some(value: c): c != 0; case None: false; }; }
 
-fn int32 main() {
+fn uint8 main() {
     // An OS failure: the kind, its code, and the OS's words after the code.
     Result<File, IoError> r = File.open(path: "io-error-model/missing.txt", mode: OpenMode::Read);
     IoError nf = match (give r) { case Ok(value: f): { return 1; } case Err(error: e): e; };

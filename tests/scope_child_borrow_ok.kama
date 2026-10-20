@@ -16,7 +16,7 @@ type value World implements Sendable {
 fn void worker(ref Counter c) { c.bump(); }
 fn void reader(const ref Counter c) { int64 v = c.value(); }
 fn void tick(ref Atomic<int64> a) { a.fetchAdd(delta: 1i64); }
-fn int32 main() {
+fn uint8 main() {
     Counter c = Counter.make();
     World w = World.make();
     Atomic<int64> hits = Atomic.make(value: 0i64);
@@ -31,5 +31,5 @@ fn int32 main() {
         hits.fetchAdd(delta: 1i64);               // an Atomic is the sanctioned shared cell
     }
     int64 total = c.value() + w.bodies.value() + w.springs.value() + hits.load();   // after the scope: fine
-    return cast<int32>(total);                    // 1 + 1 + 1 + 2
+    return cast<uint8>(total);                    // 1 + 1 + 1 + 2
 }

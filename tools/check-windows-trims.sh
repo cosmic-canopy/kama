@@ -23,7 +23,7 @@ fail() { echo "check-windows-trims: FAIL — $1" >&2; exit 1; }
 mkdir -p "$tmp/own" "$tmp/rel" "$tmp/user"
 cat > "$tmp/own/main.kama" <<'EOF'
 import { std::fs::exists, std::time::monotonicNow, std::time::Instant, std::random::Rng, std::net::TcpListener, std::io::IoError };
-fn int32 main() {
+fn uint8 main() {
     Instant t = monotonicNow();
     Rng r = Rng.fromEntropy();
     Result<TcpListener, IoError> l = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
@@ -37,7 +37,7 @@ import { std::fs::exists };
 extern "own.h";
 extern fn int32 own_twice(int32 x);
 unsafe fn int32 twice(int32 x) { return own_twice(x: x); }
-fn int32 main() { return exists(path: ".") ? twice(x: 0) : 1; }
+fn uint8 main() { return cast<uint8>(exists(path: ".") ? twice(x: 0) : 1); }
 EOF
 
 # 1. A std-only program: every TU it writes carries the gate.

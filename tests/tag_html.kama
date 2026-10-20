@@ -2,7 +2,7 @@
 // construction — only interpolated, untrusted values are escaped). Exit code is a bitset of the checks (7 = all).
 import { std::fmt::html };
 
-fn int32 main() {
+fn uint8 main() {
     string name = "Alice";
     string bad = "<&'\">";               // the five HTML metacharacters, as an untrusted value
     int32 r = 0;
@@ -16,5 +16,5 @@ fn int32 main() {
     string c = html"x${name}y${bad}z";
     if (c == "xAlicey&lt;&amp;&#39;&quot;&gt;z") { r = r + 4; }         // 3: interleave — only holes escaped
 
-    return r;
+    return cast<uint8>(r);
 }

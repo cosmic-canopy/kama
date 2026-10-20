@@ -34,7 +34,7 @@ fn bool merged(ref Cfg c, string src) {
     return match (give r) { case Ok(value: _): true; case Err(error: _): false; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Cfg c = Cfg.make(); c.fill();
     // 1: one changed in place, one removed, one appended — the rest keep their order
@@ -46,5 +46,5 @@ fn int32 main() {
     // 4: a failure anywhere leaves everything as it was
     string before = json(c: c);
     if (!merged(c: c, src: "{\"caps\":{\"cpu\":5,\"zzz\":\"not a number\"}}") && json(c: c) == before) { r = r + 4; }
-    return r + 40;   // 47
+    return cast<uint8>(r + 40);   // 47
 }

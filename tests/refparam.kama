@@ -2,8 +2,8 @@ fn int32 firstOf(ref int32 a, int32 b)
 {
     return a;
 }
-fn int32 main()
+fn uint8 main()
 {
     int32 x = 42;
-    return firstOf(a: ref x, b: 7);
+    return cast<uint8>(firstOf(a: ref x, b: 7));
 }

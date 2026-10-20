@@ -10,7 +10,7 @@
 // are pinned.
 type enum A : uint8 { A0, A1, A2 }
 
-fn int32 main()
+fn uint8 main()
 {
     A a = A::A0;
     A sum = a + A::A1;

@@ -18,7 +18,7 @@
 // the round trip intact through both an ASSIGNMENT and an INITIALIZER. The assignment path is the one
 // that saturated; the initializer took a different route through the emitter and was always correct,
 // which is most of why it went unnoticed for so long. Both are pinned here.
-fn int32 main() {
+fn uint8 main() {
     uint32 assigned = 0ui32;
     assigned = 4294967295ui32;
     if (assigned != 4294967295ui32) { return 1; }

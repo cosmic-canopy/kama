@@ -4,4 +4,4 @@
 // say what the one legal spelling is instead of "syntax error".
 comptime check(cond: sizeof(int32) == 4, msg: "not a thing");
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

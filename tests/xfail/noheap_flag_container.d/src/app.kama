@@ -13,4 +13,4 @@
 import { std::collections::DynamicArray };
 fn int32 grow(ref DynamicArray<int32> l, int32 n) { l.add(item: n); return 1; }
 fn int32 mid(ref DynamicArray<int32> l, int32 n) { return grow(l: ref l, n: n); }
-fn int32 main() { DynamicArray<int32> a = DynamicArray.empty(); return mid(l: ref a, n: 7); }
+fn uint8 main() { DynamicArray<int32> a = DynamicArray.empty(); return mid(l: ref a, n: 7); }

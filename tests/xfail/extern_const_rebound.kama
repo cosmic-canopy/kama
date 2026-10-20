@@ -3,4 +3,4 @@
 extern "stdio.h";
 extern const int32 BUFSIZ;
 @linkName("BUFSIZ") extern const int32 bufferSize;
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

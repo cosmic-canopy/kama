@@ -26,7 +26,7 @@ import { std::serialization::text::json::serializeJsonBuffer,
          std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
          std::collections::SlotMap, std::collections::Handle, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     SlotMap<int32> sm = SlotMap.empty();
     Handle a = sm.insert(value: 10);
     Handle b = sm.insert(value: 20);
@@ -86,5 +86,5 @@ fn int32 main() {
     int32 vc2 = match (back.get(handle: c2)) { case Some(value: v): v; case None: 0 - 1; };
     if (vc2 != 30) { return 238; }                        // a handle that went through the wire resolves
 
-    return va + vc + vd - 55;                             // 10 + 30 + 40 - 55
+    return cast<uint8>(va + vc + vd - 55);                             // 10 + 30 + 40 - 55
 }

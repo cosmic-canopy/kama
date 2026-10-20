@@ -4,7 +4,7 @@
 type resource Job implements Sendable { int32 n; public ctor make(int32 n) { this.n = n; } }
 fn void work(Job j) { }
 
-fn int32 main()
+fn uint8 main()
 {
     Job j = Job.make(n: 1);
     scope { spawn work(j: give j); }

@@ -21,7 +21,7 @@ type resource Tag implements Copyable<This>(bare: copy) {
     public const fn const ref string text() { return this.t; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     E e = E::B;
     // Into an existing local, and into a field.
     string s = "init";

@@ -30,7 +30,7 @@ src="$tmp/has_new.kama"
 cat > "$src" <<'EOF'
 import { std::memory::Owned };
 type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
-fn int32 main() { Owned<Box> b = new Box.make(v: 3); return b.get(); }
+fn uint8 main() { Owned<Box> b = new Box.make(v: 3); return cast<uint8>(b.get()); }
 EOF
 
 # 1. REJECT — `--no-heap` must reject the heap allocation with the specific diagnostic.
@@ -110,11 +110,11 @@ fi
 sortsrc="$tmp/nhsort.kama"
 cat > "$sortsrc" <<'EOF'
 import { std::collections::View, std::collections::sortUnstable };
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(3) a = [3, 1, 2];
     borrow a.viewMut() as v {
         sortUnstable(items: v);
-        return v[0] * 100 + v[1] * 10 + v[2];
+        return cast<uint8>(v[0] * 100 + v[1] * 10 + v[2]);
     }
 }
 EOF
@@ -147,7 +147,7 @@ cat > "$transrc" <<'EOF'
 import { std::memory::Owned };
 type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 fn int32 helper(int32 x) { Owned<Box> b = new Box.make(v: x); return b.get(); }
-fn int32 main() { return helper(x: 3); }
+fn uint8 main() { return cast<uint8>(helper(x: 3)); }
 EOF
 if "$KAMA" build --no-heap "$transrc" -o "$tmp/g.out" >/dev/null 2>"$tmp/tr.err"; then
     echo "check-noheap: FAIL — '--no-heap' accepted a program whose allocation is one call away" >&2; exit 1
@@ -164,7 +164,7 @@ fi
 # rather than at the helper. Asserted on the message, because "it failed" is what a guard that has stopped
 # testing anything also reports.
 attrsrc="$tmp/attr.kama"
-sed 's/^fn int32 main/@noheap fn int32 main/' "$transrc" > "$attrsrc"
+sed 's/^fn uint8 main/@noheap fn uint8 main/' "$transrc" > "$attrsrc"
 if "$KAMA" build "$attrsrc" -o "$tmp/i.out" >/dev/null 2>"$tmp/at.err"; then
     echo "check-noheap: FAIL — '@noheap' accepted a program whose allocation is one call away" >&2; exit 1
 fi
@@ -185,7 +185,7 @@ import { std::collections::DynamicArray };
 fn int32 grow(ref DynamicArray<int32> l, int32 n) { l.add(item: n); return 1; }
 fn int32 mid(ref DynamicArray<int32> l, int32 n) { return grow(l: ref l, n: n); }
 fn int32 tick(ref DynamicArray<int32> l, int32 n) { return mid(l: ref l, n: n); }
-fn int32 main() { DynamicArray<int32> a = DynamicArray.empty(); return tick(l: ref a, n: 7); }
+fn uint8 main() { DynamicArray<int32> a = DynamicArray.empty(); return cast<uint8>(tick(l: ref a, n: 7)); }
 EOF
 if "$KAMA" build --no-heap "$leafsrc" -o "$tmp/l.out" >/dev/null 2>"$tmp/leaf.err"; then
     echo "check-noheap: FAIL — '--no-heap' reached malloc through a container" >&2; exit 1
@@ -233,7 +233,7 @@ unsafe fn int32 run() {
     DynamicArray<int32, BumpAllocator> a = DynamicArray.withAllocator(allocator: bump);
     return grow(l: a, n: 41);   // 1 + 41
 }
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }
 EOF
 if ! "$KAMA" build --no-heap "$arenasrc" -o "$tmp/ar.out" >/dev/null 2>"$tmp/ar.err"; then
     echo "check-noheap: FAIL — a bump-allocated container over owned storage must still build under '--no-heap':" >&2
@@ -250,7 +250,7 @@ fi
 heaparena="$tmp/nhheaparena.kama"
 cat > "$heaparena" <<'EOF'
 import { std::collections::Arena };
-fn int32 main() { Arena arena = Arena.make(capacity: 64); return 0; }
+fn uint8 main() { Arena arena = Arena.make(capacity: 64); return 0; }
 EOF
 if "$KAMA" build --no-heap "$heaparena" -o "$tmp/ha.out" >/dev/null 2>"$tmp/ha.err"; then
     echo "check-noheap: FAIL — an Arena (a heap region) built under '--no-heap'" >&2; exit 1
@@ -295,7 +295,7 @@ extern fn UnsafePtr malloc(usize n);
     public unsafe fn void deallocate(UnsafePtr pointer, usize bytes, usize align) { }
 }
 type value Box { public int32 v = 0; public ctor make(int32 v) { this.v = v; } }
-fn int32 main() { Owned<Box> b = new Box.make(v: 3); return b.v; }
+fn uint8 main() { Owned<Box> b = new Box.make(v: 3); return cast<uint8>(b.v); }
 EOF
 if "$KAMA" build --no-heap "$tmp/heappool.kama" -o "$tmp/hp.out" >/dev/null 2>"$tmp/hp.err"; then
     echo "check-noheap: FAIL — '--no-heap' accepted a global allocator that calls malloc" >&2; exit 1

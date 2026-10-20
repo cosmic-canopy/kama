@@ -10,4 +10,4 @@ type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     public unsafe fn ref T derefMut() { return this.p[0]; }
     unsafe ~Box() { free(p: cast<UnsafePtr>(this.p)); }
 }
-fn int32 main() { Box<Shape> b = new Square.make(s: 4); return 0; }   // ERROR: Square does not implement Shape
+fn uint8 main() { Box<Shape> b = new Square.make(s: 4); return 0; }   // ERROR: Square does not implement Shape

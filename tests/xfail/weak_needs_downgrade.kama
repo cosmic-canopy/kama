@@ -10,7 +10,7 @@ type resource Holder { Weak<Shape> w; public ctor make(Shared<Shape> s) { this.w
 type enum E { None, P(Weak<Shape> w) }
 fn int32 g(Weak<Shape> w) { return 0; }
 fn Weak<Shape> r(Shared<Shape> s) { return s; }
-fn int32 main() {
+fn uint8 main() {
     Shared<Shape> s = new Sq.make(s: 2);
     Weak<Shape>   a = s;
     Weak<Shape>   b = s.downgrade();
@@ -23,5 +23,5 @@ fn int32 main() {
     Weak<Shape>   d = o;
     Shared<Other> t = new Other.make();
     Weak<Shape>   f = t;                     // another element: not a weak of `t` at all
-    return x;
+    return cast<uint8>(x);
 }

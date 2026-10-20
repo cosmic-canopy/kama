@@ -3,4 +3,4 @@
 fn int32 f(Result<int32, int32> r) {
     match (r) { case Ok(value: v): { return v; } case Err(error: e): { return 0; } }
 }
-fn int32 main() { return f(r: Result::Ok(value: 3)); }
+fn uint8 main() { return f(r: Result::Ok(value: 3)); }

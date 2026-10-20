@@ -20,9 +20,9 @@ type value Box<T> {
     public static fn int32 tag() { return 40; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // the only mention of either instance is the static call itself
     int32 arity = Pair::<int32, int32>::arity();
     int32 tag   = Box::<int32>::tag();
-    return tag + arity;   // 40 + 2 = 42
+    return cast<uint8>(tag + arity);   // 40 + 2 = 42
 }

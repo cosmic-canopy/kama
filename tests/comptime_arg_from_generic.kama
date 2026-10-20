@@ -23,7 +23,7 @@ fn int32 firstWrapped(InlineArray<int32>#(M) xs) comptime(int32 M) {
 // `M` inferred from a user generic type's value slot.
 fn int32 sizeOf(Buf<int32>#(M) b) comptime(int32 M) { return b.size() * 10; }
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(3) v = [7, 8, 9];
     InlineArray<int32>#(5) w = [1, 2, 3, 4, 5];
     InlineArray<int64>#(2) x = [4i64, 5i64];
@@ -35,5 +35,5 @@ fn int32 main() {
     if (firstWrapped(xs: w)#(5) == 1)       { n = n + 16; }
     Buf<int32>#(3) b = Buf::<int32>#(3).make(a: v);
     if (sizeOf(b: b) == 30)                 { n = n + 32; }
-    return n;
+    return cast<uint8>(n);
 }

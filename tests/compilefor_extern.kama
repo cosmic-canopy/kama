@@ -13,4 +13,4 @@
 // from safe code is allowed — so the gate is invisible to `main` on both tiers.
 unsafe fn int32 absolute(int32 v) { return abs(v: v); }
 
-fn int32 main() { return absolute(v: 0 - 42); }
+fn uint8 main() { return cast<uint8>(absolute(v: 0 - 42)); }

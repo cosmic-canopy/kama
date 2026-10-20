@@ -2,7 +2,7 @@
 // order is hash-arbitrary), and round-trips through decode. String keys exercise an owning-key round-trip.
 import { std::collections::SortedMap, std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
-fn int32 main() {
+fn uint8 main() {
     SortedMap<string, int32> m = SortedMap.empty();
     m.put(key: "cherry", value: 3); m.put(key: "apple", value: 1);
     m.put(key: "banana", value: 2); m.put(key: "date", value: 4);
@@ -26,5 +26,5 @@ fn int32 main() {
         }
         case Err(error: e): { r = 0 - 1; }
     };
-    return r;   // 30
+    return cast<uint8>(r);   // 30
 }

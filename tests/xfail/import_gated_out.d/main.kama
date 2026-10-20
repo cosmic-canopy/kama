@@ -4,4 +4,4 @@
 // tests/net_unix_datagram.d is that shape. The refusal names the gate rather than calling the name unknown.
 import { plat::onlyNoHeap };
 @compileFor(NOHEAP) fn int32 useIt() { return onlyNoHeap(); }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

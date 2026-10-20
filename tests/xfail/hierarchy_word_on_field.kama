@@ -8,4 +8,4 @@ type virtual(maxDepth: 1) resource B {
     public ctor make() { this.h = 1; }
 }
 
-fn int32 main() { B b = B.make(); return 0; }
+fn uint8 main() { B b = B.make(); return 0; }

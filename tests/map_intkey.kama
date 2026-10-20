@@ -3,7 +3,7 @@
 // itself). Same generic `<K: Hashable + Equatable>` path as string/user keys; the entity-ID case.
 import { std::collections::Map, std::collections::Set };
 
-fn int32 main() {
+fn uint8 main() {
     Map<int32, int32> sq = Map.empty();
     int32 i = 0;
     while (i < 100) { sq.put(key: i, value: i * i); i = i + 1; }  // forces grows; splitmix hash spreads
@@ -23,5 +23,5 @@ fn int32 main() {
     r = r + s.length();                           // 2
     int32 one = 1;
     if (s.contains(key: one)) { r = r + 3; }
-    return cast<int32>(r);   // 100+5+5+5+2+3 = 120
+    return cast<uint8>(r);   // 100+5+5+5+2+3 = 120
 }

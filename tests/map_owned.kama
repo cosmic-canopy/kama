@@ -10,7 +10,7 @@ fn DynamicArray<string> mk(string a, string b) {
     return xs;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Map<string, DynamicArray<string>> m = Map.empty();
     m.put(key: "fruits",  value: mk(a: "apple", b: "pear"));
     m.put(key: "veggies", value: mk(a: "kale",  b: "corn"));
@@ -23,5 +23,5 @@ fn int32 main() {
     bool rmv = match (m.remove(key: "veggies")) { case Some(value: xs): true; case None: false; };  // reclaimed DynamicArray + key drop
     if (rmv) { r = r + 1; }                                  // -> 5
     r = r + cast<int32>(m.length());                                      // +1 -> 6
-    return cast<int32>(r);   // 6 (m's remaining entry dropped at scope exit)
+    return cast<uint8>(r);   // 6 (m's remaining entry dropped at scope exit)
 }

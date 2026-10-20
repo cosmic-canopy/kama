@@ -67,4 +67,4 @@ unsafe fn int32 run() {
     return p;
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

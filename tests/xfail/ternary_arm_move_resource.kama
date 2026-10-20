@@ -3,7 +3,7 @@ type resource Res {
     string s;
     public ctor make(string s) { this.s = give s; }
 }
-fn int32 main() {
+fn uint8 main() {
     bool f = true;
     Res a = Res.make(s: "a".concat(other: "b"));
     Res b = Res.make(s: "c".concat(other: "d"));

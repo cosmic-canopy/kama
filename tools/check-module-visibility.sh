@@ -58,7 +58,7 @@ app() {
   "modules": { ".": { "visibility": "internal" } },
   "dependencies": { "geo": { "path": "../geo" } } }
 JSON
-    printf 'import { %s };\n\nfn int32 main() { return %s; }\n' "$1" "$2" > "$tmp/app/src/main.kama"
+    printf 'import { %s };\n\nfn uint8 main() { return cast<uint8>(%s); }\n' "$1" "$2" > "$tmp/app/src/main.kama"
     "$KAMA" pkg install "$tmp/app/kama.json" >/dev/null 2>&1 || true
 }
 

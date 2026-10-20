@@ -3,7 +3,7 @@
 // VERBATIM — even when a value contains its own leading spaces. Exit code is a bitset of the checks (7 = all).
 import { std::fmt::stripIndent };
 
-fn int32 main() {
+fn uint8 main() {
     string name = "Bob";
     string indented = "    x";            // a value carrying its own leading spaces — must survive untouched
     int32 r = 0;
@@ -23,5 +23,5 @@ fn int32 main() {
         val=${indented}";
     if (s3 == "val=    x") { r = r + 4; }                                // 3: a hole value's own spaces stay verbatim
 
-    return r;
+    return cast<uint8>(r);
 }

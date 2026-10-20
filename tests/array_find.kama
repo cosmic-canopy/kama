@@ -9,7 +9,7 @@ type value Tag implements Equatable<This> {
     public const fn bool equals(const ref Tag other) { return this.id == other.id; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     FixedArray<Tag> a = FixedArray.filled(size: 3, value: Tag.make(id: 0));   // Tag elects no default
     Tag t0 = Tag.make(id: 10); Tag t1 = Tag.make(id: 20); Tag t2 = Tag.make(id: 30);
     a[0] = t0; a[1] = t1; a[2] = t2;
@@ -20,5 +20,5 @@ fn int32 main() {
     if (a.contains(item: q20)) { r = r + 10; }   // +10
     r = r + a.indexOf(item: q30);                // +2 -> 12
     if (a.indexOf(item: q99) < 0) { r = r + 8; } // +8 -> 20 (absent)
-    return cast<int32>(r);   // 20
+    return cast<uint8>(r);   // 20
 }

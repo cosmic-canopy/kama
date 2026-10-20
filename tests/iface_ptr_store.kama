@@ -20,9 +20,9 @@ fn Owned<Shape> makeShape(int32 s) {                      // RETURN an owned int
     Owned<Shape> o = new Sq.make(s: s);
     return give o;
 }
-fn int32 main() {
+fn uint8 main() {
     Shared<Shape> a = new Sq.make(s: 3);
     Holder h = Holder.make(s: give a);                          // move the shared into the field
     Owned<Shape> m = makeShape(s: 5);                     // returned owned interface
-    return h.area() + m.area();                            // 9 + 25 = 34; h and m drop -> each Sq freed once
+    return cast<uint8>(h.area() + m.area());                            // 9 + 25 = 34; h and m drop -> each Sq freed once
 }

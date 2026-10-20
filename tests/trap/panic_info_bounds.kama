@@ -7,7 +7,7 @@ unsafe fn void onPanic(const ref PanicInfo info) {
 }
 unsafe fn void install() { setPanicHandler(handler: onPanic); }
 fn int32 pick(isize i) { InlineArray<int32>#(2) xs = [1, 2]; return xs[i]; }
-fn int32 main() {
+fn uint8 main() {
     install();
-    return pick(i: 8);
+    return cast<uint8>(pick(i: 8));
 }

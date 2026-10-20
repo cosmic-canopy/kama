@@ -58,9 +58,9 @@ import { std::concurrent::Atomic };
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     string acc = "x";
     int32 i = 0;
     while (i < 2000) { acc = acc + "x"; i = i + 1; }
-    return cast<int32>(acc.length()) & 0x7F;
+    return truncate<uint8>(acc.length());   // never reached: the pool runs out first
 }

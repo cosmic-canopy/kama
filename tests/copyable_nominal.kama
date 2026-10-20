@@ -8,8 +8,8 @@ type resource R {
     public ctor copy(ref R source) { return R.make(n: source.n); }   // a method named `copy` — NOT the Copyable opt-in
     public fn int32 get() { return this.n; }
 }
-fn int32 main() {
+fn uint8 main() {
     R a = R.make(n: 42);
     R b = a;            // MOVE (move-only — a lone `copy()` doesn't opt in); a is consumed
-    return b.get();     // 42
+    return cast<uint8>(b.get());     // 42
 }

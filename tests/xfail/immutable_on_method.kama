@@ -10,4 +10,4 @@ type value Reg {
     public immutable fn int32 get() { return this.id; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

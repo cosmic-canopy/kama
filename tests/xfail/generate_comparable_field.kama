@@ -8,7 +8,7 @@ type value Switch {
     public ctor make(int32 id) { this.id = id; this.on = true; }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Switch a = Switch.make(id: 1);
     Switch b = Switch.make(id: 2);

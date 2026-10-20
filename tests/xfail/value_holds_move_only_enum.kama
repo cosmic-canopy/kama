@@ -2,4 +2,4 @@
 type resource Token { public ctor make() { } }
 type enum E { Cell(Token t), Empty }
 type value Holder { public E e; public ctor make() { this.e = E::Empty; } }
-fn int32 main() { Holder h = Holder.make(); Holder k = h; return 0; }
+fn uint8 main() { Holder h = Holder.make(); Holder k = h; return 0; }

@@ -11,4 +11,4 @@ type value Thing { public int32 n; public ctor make(int32 n) { this.n = n; } }
 
 fn Thing makeThing(int32 n) { return Thing.make(n: n); }
 
-fn int32 main() { return makeThing(n: 0).n; }
+fn uint8 main() { return cast<uint8>(makeThing(n: 0).n); }

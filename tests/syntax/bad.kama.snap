@@ -17,7 +17,7 @@
 >// Nothing here needs to be reachable or type-correct — it needs to be REJECTED.
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >
->fn int32 main() {
+>fn uint8 main() {
 #^^ source.kama keyword.other.kama
 #  ^ source.kama
 #   ^^^^^ source.kama storage.type.primitive.kama

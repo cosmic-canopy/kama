@@ -6,7 +6,7 @@ type value Point {
     public int32 x;
     public ctor make(int32 x) { this.x = x; return this; }
 }
-fn int32 main() {
+fn uint8 main() {
     Point p = Point::make(x: 42);   // ERROR: `::` is scope resolution — construct with `Point.make(...)`
-    return p.x;
+    return cast<uint8>(p.x);
 }

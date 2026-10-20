@@ -14,7 +14,7 @@ type resource Worker implements Sendable {
     public fn int32 go() { return this.job.run(); }
 }
 fn void work(Worker w) { int32 r = w.go(); }
-fn int32 main() {
+fn uint8 main() {
     Owned<Job> j = new Task.make(n: 21);
     Worker w = Worker.make(job: give j);
     Isolate iso = spawn work(w: give w);

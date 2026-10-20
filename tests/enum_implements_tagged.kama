@@ -28,7 +28,7 @@ type enum DiskError implements Error {
 
 fn int32 describe(Error e) { string m = e.message(); return cast<int32>(m.length()); }
 
-fn int32 main() {
+fn uint8 main() {
     Reading a = Reading::Ok(value: 7);
     Reading b = Reading::Failed(code: 3);
     int32 r = a.magnitude();            // 7
@@ -39,5 +39,5 @@ fn int32 main() {
     r = r + describe(e: d);             // 14 + 4 = 18
     DiskError m = DiskError::Missing;
     r = r + describe(e: m);             // 18 + 4 = 22
-    return cast<int32>(r);
+    return cast<uint8>(r);
 }

@@ -19,7 +19,7 @@ fn void producer(Sender<Msg<int32>> tx) {
     _ = tx.send(item: Msg::Stop);
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<Msg<int32>> ch = Channel.bounded(capacity: 4);
     Sender<Msg<int32>>   tx = ch.sender();
     Receiver<Msg<int32>> rx = ch.receiver();
@@ -37,5 +37,5 @@ fn int32 main() {
         };
     }
     h.join();
-    return sum;   // 1 + … + 9 = 45
+    return cast<uint8>(sum);   // 1 + … + 9 = 45
 }

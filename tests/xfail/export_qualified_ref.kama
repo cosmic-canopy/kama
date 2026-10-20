@@ -18,4 +18,4 @@ type resource Keeper {
     public ctor make(std::collections::BTreeNode<int32, int32> node) { this.node = give node; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

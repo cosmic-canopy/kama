@@ -4,7 +4,7 @@
 
 import { core::println, core::eprint, core::args, core::Args, core::env, core::envOr };
 
-fn int32 main() {
+fn uint8 main() {
     println(s: "core");                                  // stdout
     eprint(s: "");                                       // stderr, empty: a harmless no-op write
     Args a = args();
@@ -13,5 +13,5 @@ fn int32 main() {
     if (fallback == "1") { r = r + 1; }                  // 41
     bool unset = match (env(name: "KAMA_CORE_IMPORT_UNSET")) { case Some(value: v): false; case None: true; };
     if (unset) { r = r + 1; }                            // 42
-    return r;
+    return cast<uint8>(r);
 }

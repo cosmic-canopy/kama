@@ -13,7 +13,7 @@ import {
     std::collections::BumpAllocator,
 };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Arena arena = Arena.make(capacity: 65536);           // declared FIRST → drops LAST (outlives the containers)
 
@@ -57,5 +57,5 @@ fn int32 main() {
 
     // the containers drop here (their interior boxes/arrays no-op-deallocate into the arena; each root box
     // is freed via libc); then `arena` drops last, freeing its one buffer. ASan-clean.
-    return r;   // 8 asserts * 10 = 80
+    return cast<uint8>(r);   // 8 asserts * 10 = 80
 }

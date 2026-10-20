@@ -6,4 +6,4 @@
 fn void neverCalled<T>(T unused) {
     int32 x = "not an int";      // ERROR: no implicit conversion, and this is concrete
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

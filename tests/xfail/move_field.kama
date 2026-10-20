@@ -6,4 +6,4 @@ type resource Box {
     public ctor make(int32 v) { this.r = Res.make(v: v); }
     public fn Res steal() { return give this.r; }   // ERROR: cannot give out of a field
 }
-fn int32 main() { Box b = Box.make(v: 0); return 0; }
+fn uint8 main() { Box b = Box.make(v: 0); return 0; }

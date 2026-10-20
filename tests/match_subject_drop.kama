@@ -89,6 +89,6 @@ fn int32 viaGiveOut() {
     return -2;
 }
 
-fn int32 main() {
-    return viaReturn(v: 1) + viaFallThrough(v: 2) + viaBreak(v: 4) + viaContinue(v: 8) + viaGiveOut();
+fn uint8 main() {
+    return cast<uint8>(viaReturn(v: 1) + viaFallThrough(v: 2) + viaBreak(v: 4) + viaContinue(v: 8) + viaGiveOut());
 }   // 1 + 2 + 4 + 24 + 4 = 35

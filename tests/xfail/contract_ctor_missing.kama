@@ -6,7 +6,7 @@ type value Broken implements Factory {
     public int32 v;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Broken b = Broken.create(seed: 1);
-    return b.v;
+    return cast<uint8>(b.v);
 }

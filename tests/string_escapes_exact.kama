@@ -2,7 +2,7 @@
 // differ: `\u{0}` was DELETED (length 2); a NUL and the other control bytes were written raw into the C
 // source, where clang warned; and `??=` / `??!` are C TRIGRAPHS, which strict C turned into `#` / `|` while
 // kama still said 5 bytes — so length() counted, and a read walked, past the literal's end.
-fn int32 main() {
+fn uint8 main() {
     string nul = "a\u{0}b";
     if (cast<int32>(nul.length()) != 3) { return 1; }
     if (nul != "a\0b") { return 2; }

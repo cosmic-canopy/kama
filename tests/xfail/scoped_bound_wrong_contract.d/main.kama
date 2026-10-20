@@ -6,7 +6,7 @@
 // compiled. It then produced a wrong-but-plausible program: the call resolved to markx's `mark`.
 import { markx::Marker, marky::needsMarker };
 
-fn int32 main() {
+fn uint8 main() {
     int32 x = 5;
     return needsMarker(v: ref x);
 }

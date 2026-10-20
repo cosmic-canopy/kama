@@ -100,7 +100,7 @@ the cursor's lexical context, then one tab-separated `kind⇥label⇥detail` row
 ```console
 $ kama query tests/query/shapes.kama --complete 24:5
 trigger=bare recv= callee= prefix=in active=-1 filled=
-function	main	fn int32 main()
+function	main	fn uint8 main()
 function	midpoint	fn Point midpoint(a: Point, b: Point)
 ```
 

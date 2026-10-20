@@ -11,4 +11,4 @@ type value W implements Writer2 {
     public ctor make() { }
     public fn int32 put(int32 data) { return data; }     // the contract calls it `bytes` -> REJECT
 }
-fn int32 main() { W w = W.make(); return w.put(data: 0); }
+fn uint8 main() { W w = W.make(); return cast<uint8>(w.put(data: 0)); }

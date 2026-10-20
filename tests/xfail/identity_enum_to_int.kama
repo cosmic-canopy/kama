@@ -3,9 +3,9 @@
 // What is rejected is writing no conversion at all.
 type enum A : uint8 { A0, A1, A2 }
 
-fn int32 main()
+fn uint8 main()
 {
     A a = A::A2;
     uint8 n = a;
-    return cast<int32>(n);
+    return cast<uint8>(n);
 }

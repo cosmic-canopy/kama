@@ -31,7 +31,7 @@ type value ByField implements Order<Rec> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Rec> rs = DynamicArray::<Rec>.empty();
     rs.add(item: Rec.make(dept: 2, id: 1));
     rs.add(item: Rec.make(dept: 1, id: 2));
@@ -65,5 +65,5 @@ fn int32 main() {
         hi = dv[39] == 7 ? 1 : 0;
     }
 
-    return ok * 40 + lo + hi;   // 42
+    return cast<uint8>(ok * 40 + lo + hi);   // 42
 }

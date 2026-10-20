@@ -1,4 +1,4 @@
-fn int32 main()
+fn uint8 main()
 {
     Optional<int32> inner = Optional::Some(value: 5);
     Optional<Optional<int32>> outer = Optional::Some(value: inner);
@@ -6,5 +6,5 @@ fn int32 main()
         case Some(value: o): match (o) { case Some(value: x): x; case None: -1; };
         case None: -2;
     };
-    return r;
+    return cast<uint8>(r);
 }

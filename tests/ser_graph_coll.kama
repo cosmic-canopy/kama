@@ -50,12 +50,12 @@ fn DynamicArray<Shared<Leaf>> build() {
     return give xs;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Bag> bag = new Bag.make(kids: build());
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: bag);
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Bag\",\"value\":{\"kids\":[2,3,2]}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") {
-        return cast<int32>(j.length());
+        return cast<uint8>(j.length());
     }
     Result<Shared<Bag>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Bag>>(src: copy j);
     Shared<Bag> b2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
@@ -71,7 +71,7 @@ fn int32 main() {
     Result<string, Owned<Error>> rr = serializeJsonBuffer(v: xs);
     string rj = match (give rr) { case Ok(value: x): give x; case Err(error: e): { return 255; } };
     if (rj != "{\"root\":[1,2,1],\"objects\":[{\"id\":1,\"type\":\"Leaf\",\"value\":{\"v\":7}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") {
-        return cast<int32>(rj.length());
+        return cast<uint8>(rj.length());
     }
     Result<DynamicArray<Shared<Leaf>>, Owned<Error>> rback =
         deserializeJsonBuffer::<DynamicArray<Shared<Leaf>>>(src: copy rj);
@@ -87,5 +87,5 @@ fn int32 main() {
     DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 246; } };
     Result<Shared<Bag>, Owned<Error>> pb = deserializeKbinPositionalBuffer::<Shared<Bag>>(src: give bytes);
     Shared<Bag> b3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 245; } };
-    return b3.sum();
+    return cast<uint8>(b3.sum());
 }

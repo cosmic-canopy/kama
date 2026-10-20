@@ -4,7 +4,7 @@
 // bits (`bitcast`), every width keeps hashing equal values equal, and an unsigned width is unchanged.
 import { std::collections::Map, std::collections::Set };
 
-fn int32 main() {
+fn uint8 main() {
     Map<int32, int32> m = Map.empty();
     m.put(key: -1, value: 10);
     m.put(key: -2147483648, value: 20);
@@ -22,5 +22,5 @@ fn int32 main() {
     if (m.length() == 3 && m.contains(key: -1) && m.contains(key: -2147483648)) { n = n + 1; }
     if (s.length() == 1 && s.contains(key: -5i64)) { n = n + 2; }
     if (small.contains(key: -128i8) && sz.contains(key: -7) && big.contains(key: 18446744073709551615ui64)) { n = n + 4; }
-    return n;   // 7
+    return cast<uint8>(n);   // 7
 }

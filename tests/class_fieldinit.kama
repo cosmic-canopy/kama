@@ -10,8 +10,8 @@ type value Box
         return w * h;
     }
 }
-fn int32 main()
+fn uint8 main()
 {
     Box b = Box.make();
-    return b.area();
+    return cast<uint8>(b.area());
 }

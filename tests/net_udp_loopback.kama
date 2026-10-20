@@ -72,7 +72,7 @@ fn int32 exchange(ref UdpSocket a, ref UdpSocket b, int32 n) {
     return 55;
 }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
     uint16 zero = cast<uint16>(0);
     int32 n = 1200;
@@ -81,7 +81,7 @@ fn int32 main() {
         case Ok(value: a): {
             Result<UdpSocket, IoError> rb = UdpSocket.bind(host: host, port: zero);
             := match (rb) {
-                case Ok(value: b): exchange(a: a, b: b, n: n);
+                case Ok(value: b): cast<uint8>(exchange(a: a, b: b, n: n));
                 case Err(error: e): 80;
             };
         }

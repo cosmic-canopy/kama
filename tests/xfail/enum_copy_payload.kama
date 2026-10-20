@@ -4,7 +4,7 @@
 type resource Res { int32 v; public ctor make(int32 v) { this.v = v; } ~Res() { } }
 type enum Handle { Open(Res r), Closed }
 
-fn int32 main() {
+fn uint8 main() {
     Handle h = Handle::Open(r: Res.make(v: 1));
     Handle h2 = copy h;
     return 0;

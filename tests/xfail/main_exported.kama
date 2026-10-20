@@ -5,4 +5,4 @@
 // plainly listed it. The check therefore has to run BEFORE `qualify`.
 export { main };
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

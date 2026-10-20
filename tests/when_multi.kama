@@ -8,9 +8,9 @@ type resource Box2<A, B> implements Copyable<This>(bare: give) when [A: Copyable
     public fn int32 tag() { return 42; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box2<int32, int32> p = Box2.make(a: 1, b: 2);
     Box2<int32, int32> q = copy p;   // both int32 Copyable -> copy() exists -> compiles + runs
     p.tag();
-    return q.tag();   // 42
+    return cast<uint8>(q.tag());   // 42
 }

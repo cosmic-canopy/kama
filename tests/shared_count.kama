@@ -9,12 +9,12 @@ type value Counter
     public fn int32 get() { return this.value; }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Shared<Counter> a = new Counter.make(start: 40);
     {
         Shared<Counter> b = a;   // retain (strong=2); shared state
         b.bump();                // a sees it too -> 41
     }                            // b drops (strong=2->1, NOT freed)
-    return a.get();              // 41 — a still valid (refcount kept it alive)
+    return cast<uint8>(a.get());              // 41 — a still valid (refcount kept it alive)
 }

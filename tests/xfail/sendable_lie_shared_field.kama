@@ -8,7 +8,7 @@ type resource Bad implements Sendable {
     Shared<Leaf> s;   // ERROR: `Leaf` is not `immutable`, so the shared refcount is not atomic
     public ctor make(Shared<Leaf> s) { this.s = give s; }
 }
-fn int32 main() {
+fn uint8 main() {
     Shared<Leaf> s = new Leaf.make(v: 1);
     Bad b = Bad.make(s: copy s);
     return 0;

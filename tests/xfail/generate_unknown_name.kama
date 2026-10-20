@@ -3,4 +3,4 @@
 // like it worked until the missing conformance failed somewhere far away).
 @generate(of, Equtable)
 type value P { public int32 x; }
-fn int32 main() { P p = P.of(x: 1); return p.x; }
+fn uint8 main() { P p = P.of(x: 1); return cast<uint8>(p.x); }

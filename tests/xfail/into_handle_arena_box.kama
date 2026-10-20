@@ -8,8 +8,8 @@ type value Circle implements Shape {
     public ctor make(int32 r) { this.r = r; }
     public fn int32 area() { return this.r * this.r; }
 }
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);
     Shared<Shape, BumpAllocator> s = Circle.make(r: 3);
-    return s.area();
+    return cast<uint8>(s.area());
 }

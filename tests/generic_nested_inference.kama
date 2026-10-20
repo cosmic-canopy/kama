@@ -17,7 +17,7 @@ fn int32 takeBox<T>(Box<T> b) { return 7; }
 fn T g<T: Real<T>>(T x) { return abs(x: sin(x: x)); }     // nested, inside a generic body
 fn T twice<T>(T x) { return id(x: id(x: x)); }
 
-fn int32 main() {
+fn uint8 main() {
     float64 t = -1.0;
     V v = V.make();
     InlineArray<float64>#(2) arr = [-3.0, 4.0];

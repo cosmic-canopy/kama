@@ -14,9 +14,9 @@ fnptr int32 H(int32 a, int32 b);
 
 fn int32 f1(int32 x) { return x + 1; }
 
-fn int32 main()
+fn uint8 main()
 {
     F fp = f1;
     H hp = fp;
-    return hp(a: 10, b: 20);
+    return cast<uint8>(hp(a: 10, b: 20));
 }

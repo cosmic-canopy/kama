@@ -5,8 +5,8 @@
 import { std::collections::DynamicArray };
 type enum U { A(DynamicArray<int64> xs), B(int64 p, int64 n, int64 c, int64 m) }
 fn U mk() { DynamicArray<int64> xs = DynamicArray.empty(); xs.add(item: 7i64); return U::A(xs: give xs); }
-fn int32 main() {
+fn uint8 main() {
     U u = mk(); int64 n = 0i64;
     match (u) { case A(xs: a): { u = U::B(p: 4096i64, n: 1i64, c: 1i64, m: 0i64); n = a[0]; } case B(p: p, n: q, c: c, m: m): { } };
-    return cast<int32>(n);
+    return cast<uint8>(n);
 }

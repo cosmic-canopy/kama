@@ -2,7 +2,7 @@
 // iteration by `seed.concat(...)` and must RAII-drop each pass (per-iteration drop slot in the
 // loop-and-a-half rewrite). A missing drop leaks once per iteration (ASan catches it); the loop
 // is counter-bounded so it terminates, and the owned temp is re-evaluated every pass.
-fn int32 main()
+fn uint8 main()
 {
     string seed = "xy";
     int32 r = 0;
@@ -15,5 +15,5 @@ fn int32 main()
     // for: same, iter clause advances k; 4 passes.
     for (int32 k = 0; seed.concat(other: seed).length() > 0 && k < 4; k = k + 1) { r = r + 10; }
 
-    return r;   // 3 + 40 = 43
+    return cast<uint8>(r);   // 3 + 40 = 43
 }

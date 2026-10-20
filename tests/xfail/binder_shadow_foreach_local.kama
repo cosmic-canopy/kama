@@ -9,10 +9,10 @@
 // are not shadowing.
 type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
 fn int32 takeE(E v) { return v.n; }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<E>#(2) xs = [E.of(n: 2), E.of(n: 3)];
     string m = "boom";
     int32 r = 0;
     foreach (E m in xs) { r = r + takeE(v: m); }   // ERROR: shadows the enclosing local `m`
-    return r + cast<int32>(m.length());
+    return cast<uint8>(r + cast<int32>(m.length()));
 }

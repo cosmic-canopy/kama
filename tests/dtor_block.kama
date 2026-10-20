@@ -15,11 +15,11 @@ type resource Res
     }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     {
         Res a = Res.make(id: 1);
         Res b = Res.make(id: 2);
     }
-    return traceGet();
+    return cast<uint8>(traceGet());
 }

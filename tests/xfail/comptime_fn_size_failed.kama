@@ -6,4 +6,4 @@ type value Board {
     public InlineArray<isize>#(M) s;
     public ctor e() { this.s[0] = 1; }
 }
-fn int32 main() { Board b = Board.e(); return cast<int32>(b.s[0]); }
+fn uint8 main() { Board b = Board.e(); return cast<uint8>(b.s[0]); }

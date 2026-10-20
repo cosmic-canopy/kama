@@ -1,6 +1,6 @@
 // An arm's own binding is a named value too: handed on from an arm it says `give` (tests/match_arm_handoff.kama).
-fn int32 main() {
+fn uint8 main() {
     Optional<string> o = Optional::Some(value: "inner");
     string w = match (give o) { case Some(value: x): x; case None: ""; };   // ERROR: say `give x`
-    return cast<int32>(w.length());
+    return cast<uint8>(w.length());
 }

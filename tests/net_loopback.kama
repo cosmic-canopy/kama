@@ -64,12 +64,12 @@ fn int32 runServer(ref TcpListener listener, uint16 port, int32 n) {
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
     int32 n = 8000;
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
     return match (rl) {
-        case Ok(value: listener): { uint16 port = portOf(l: listener); := runServer(listener: listener, port: port, n: n); }
+        case Ok(value: listener): { uint16 port = portOf(l: listener); := cast<uint8>(runServer(listener: listener, port: port, n: n)); }
         case Err(error: e): 80;
     };
 }

@@ -3,4 +3,4 @@ type value Box {
     public int8 v = 300;
     public ctor make() { this.v = 0i8; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

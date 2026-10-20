@@ -3,4 +3,4 @@
 import { std::collections::ConstView, std::collections::View };
 @generate(BytesViewable)
 type value Hdr { public uint8 tag; public uint32 len; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

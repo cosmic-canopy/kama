@@ -54,7 +54,7 @@ fn int32 viaOk() {
     return taken.get();
 }
 
-fn int32 main() {
+fn uint8 main() {
     if (viaErr() != 7) { return 240; }
     if (LIVE != 0) { return 241; }          // the Err path constructed nothing, so nothing to drop
     if (viaOk() != 11) { return 242; }
@@ -67,5 +67,5 @@ fn int32 main() {
     if (viaErr() != 7) { return 246; }
     if (LIVE != 0) { return 247; }
 
-    return viaOk() + viaErr() + 7;          // 11 + 7 + 7
+    return cast<uint8>(viaOk() + viaErr() + 7);          // 11 + 7 + 7
 }

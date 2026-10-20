@@ -26,4 +26,4 @@ type resource Holder implements Windowed<Span> {
     }
 }
 
-fn int32 main() { Holder h = Holder.make(); int32 k = 1; return h.window(keep: ref k).length(); }
+fn uint8 main() { Holder h = Holder.make(); int32 k = 1; return cast<uint8>(h.window(keep: ref k).length()); }

@@ -8,4 +8,4 @@ type resource Holder {
     @field Shared<Geo> g;
     public ctor make(Shared<Geo> g) { this.g = give g; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

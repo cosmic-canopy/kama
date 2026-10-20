@@ -6,4 +6,4 @@ type enum Door {
     private const fn int32 code() { return 7; }
 }
 fn int32 inspect(Door d) { return d.code(); }   // ERROR: code is not in the grant
-fn int32 main() { return inspect(d: Door::Open); }
+fn uint8 main() { return cast<uint8>(inspect(d: Door::Open)); }

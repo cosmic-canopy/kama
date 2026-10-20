@@ -10,9 +10,9 @@ type value Probe {
     public ctor make(int32 id) { this.id = id; }
     fn int32 read(int32 d) { return this.id + d; }
 }
-fn int32 main() {
+fn uint8 main() {
     Owned<Probe> p = new Probe.make(id: 1);
     BindableFunctionPtr<Get> a = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     BindableFunctionPtr<Get> b = a;    // ERROR: a bindable hand-off must say `give`
-    return b(d: 1);
+    return cast<uint8>(b(d: 1));
 }

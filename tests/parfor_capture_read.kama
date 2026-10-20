@@ -5,7 +5,7 @@
 // threaded in and the generated C would fail to compile.
 import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View, std::concurrent::cpuCount };
 
-fn int32 main() {
+fn uint8 main() {
     int32 dt = 3;                                    // captured, read-only, by every worker
     DynamicArray<int32> a = DynamicArray.empty();
     int32 i = 0;
@@ -18,5 +18,5 @@ fn int32 main() {
     int32 s = 0;
     isize j = 0;
     while (j < a.length()) { s = s + a[j]; j = j + 1; }   // 12 * 3 = 36
-    return cast<int32>(s % 256);                                       // 36
+    return cast<uint8>(s % 256);                                       // 36
 }

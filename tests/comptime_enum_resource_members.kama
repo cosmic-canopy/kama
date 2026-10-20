@@ -23,8 +23,8 @@ type resource Pool {
 
 comptime int32 FOUR = Suit::squared(n: Suit::COUNT);
 
-fn int32 main() {
+fn uint8 main() {
     Suit s = Suit::Hearts;
     Pool p = Pool.make();
-    return s.weight() + FOUR + Pool::CAPACITY + Suit::COUNT * 10;   // 7 + 4 + 8 + 20 = 39
+    return cast<uint8>(s.weight() + FOUR + Pool::CAPACITY + Suit::COUNT * 10);   // 7 + 4 + 8 + 20 = 39
 }

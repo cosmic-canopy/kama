@@ -2,7 +2,7 @@
 // nothing to leave. It compiled to a no-op (a C `break` ending the arm's `switch` case) until `0.9.521`.
 type enum Color { Red, Green }
 
-fn int32 main() {
+fn uint8 main() {
     Color c = Color::Red;
     match (c) {
         case Red: { break; }

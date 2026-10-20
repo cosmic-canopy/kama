@@ -15,8 +15,8 @@ type resource Res {
 
 fn int32 consume(Res r) { return r.head(); }            // r owned by callee, drops at fn-end
 
-fn int32 main() {
+fn uint8 main() {
     Res a = Res.make(v: 1);        // fresh rvalue — bare, legal
     consume(r: give a);       // move a into the callee; a's dtor suppressed in main
-    return traceGet();  // exactly one drop -> 5   (a silent copy would fold to 160)
+    return cast<uint8>(traceGet());  // exactly one drop -> 5   (a silent copy would fold to 160)
 }

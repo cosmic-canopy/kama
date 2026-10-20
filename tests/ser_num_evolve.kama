@@ -46,7 +46,7 @@ type resource V2 {                          // a `resource`: it owns a `string`,
     public const fn bool noteIs(string s) { return this.note.equals(other: s); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // A V2 stream read by the OLD declaration: three unknown ids skip, the two known ones land correctly
     // even though V2 declared them in the opposite order.
     Result<DynamicArray<uint8>, Owned<Error>> n = serializeKbinNumberedBuffer(v: V2.make(a: 11, b: 22));

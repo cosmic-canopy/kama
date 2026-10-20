@@ -16,10 +16,10 @@ type value Slot {
 
 fn int32 blend(int32 __base) { return __base + 1; }   // the emitter's inherited-base member
 
-fn int32 main() {
+fn uint8 main() {
     int32 __ret_0 = 3;                         // the emitter's return temp
     int32 __match0 = 4;                        // the emitter's match subject temp
     Slot s = Slot.make(__vptr: 5, __size: 6);
     // 3 + 4 + 5 + 6 + 1 = 19
-    return __ret_0 + __match0 + s.__vptr + s.__size + blend(__base: 0);
+    return cast<uint8>(__ret_0 + __match0 + s.__vptr + s.__size + blend(__base: 0));
 }

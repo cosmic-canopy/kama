@@ -1,6 +1,6 @@
 // Owned UTF-8 String: borrowed literals (cap==0), heap-owned concat (cap>0),
 // length/equals, RAII frees only the owned result.
-fn int32 main()
+fn uint8 main()
 {
     string a = "ab";
     string b = "ab";
@@ -12,5 +12,5 @@ fn int32 main()
     if (a.equals(other: c)) { r = r + 1000; }   // not equal -> skipped
     r = r + ab.length();   // 4
     r = r + a.length();    // 2
-    return cast<int32>(r);              // 100 + 4 + 2 = 106
+    return cast<uint8>(r);              // 100 + 4 + 2 = 106
 }

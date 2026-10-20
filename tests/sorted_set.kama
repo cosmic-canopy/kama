@@ -3,7 +3,7 @@
 // as the map. Exercised with int members (forcing splits/merges) and a copy for independence.
 import { std::collections::SortedSet, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     SortedSet<int32> s = SortedSet.empty();
 
@@ -43,5 +43,5 @@ fn int32 main() {
     s.remove(key: 30); s.add(key: 100);
     if (cp.length() == 49 && cp.contains(key: 30) && !cp.contains(key: 100)) { r = r + 5; }
 
-    return r;   // 9 asserts * 5 = 45
+    return cast<uint8>(r);   // 9 asserts * 5 = 45
 }

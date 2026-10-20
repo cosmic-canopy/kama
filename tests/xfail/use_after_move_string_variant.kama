@@ -3,8 +3,8 @@
 // and was always refused. Three sites, one missing mark each — the gate that selects them
 // (`isIntrinsicColl && !isFixedColl && !isValueVectorKind`) is why the class looked string-shaped.
 type enum Msg { Text(string body), None }
-fn int32 main() {
+fn uint8 main() {
     string a = "hello.ppm";
     Msg m = Msg::Text(body: give a);
-    return cast<int32>(a.length());   // ERROR: use of `a` after it was moved
+    return cast<uint8>(a.length());   // ERROR: use of `a` after it was moved
 }

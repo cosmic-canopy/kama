@@ -5,4 +5,4 @@
 // C++ forbids calling `main` outright; Rust and Go make it uncallable.
 fn int32 helper() { return main(); }
 
-fn int32 main() { return helper(); }
+fn uint8 main() { return cast<uint8>(helper()); }

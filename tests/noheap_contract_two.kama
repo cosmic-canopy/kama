@@ -15,8 +15,8 @@ type value Rect implements Area {
 }
 @noheap fn int32 total(Area a, Area b) { return a.area() + b.area(); }
 @noheap fn int32 measure<T: Area>(T x) { return x.area(); }
-fn int32 main() {
+fn uint8 main() {
     Sq s = Sq.make(s: 2);
     Rect r = Rect.make(w: 1, h: 3);
-    return total(a: s, b: r) + measure(x: s) - 2;   // 4 + 3 + 4 - 2
+    return cast<uint8>(total(a: s, b: r) + measure(x: s) - 2);   // 4 + 3 + 4 - 2
 }

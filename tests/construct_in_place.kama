@@ -55,7 +55,7 @@ fn int64 run() {
     return l.sum() + h.sum() + o.sum() + e.sum() + z.sum() + r.sum() + p.sum() + w.sum();   // 95
 }
 
-fn int32 main() {
+fn uint8 main() {
     int64 s = run();
     // One `Tracked`, built in `w.t`, dropped once when `w` is.
     return s == 95i64 && drops == 1 ? 42 : 1;

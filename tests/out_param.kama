@@ -4,10 +4,10 @@ fn void divmod(int32 a, int32 b, out int32 q, out int32 r)
     q = a / b;
     r = a % b;
 }
-fn int32 main()
+fn uint8 main()
 {
     int32 quotient = 0;
     int32 remainder = 0;
     divmod(a: 17, b: 5, q: out quotient, r: out remainder);
-    return quotient * 10 + remainder;   // 3*10 + 2
+    return cast<uint8>(quotient * 10 + remainder);   // 3*10 + 2
 }

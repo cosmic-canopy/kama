@@ -11,12 +11,12 @@ type value Point implements Matchable<This> {
     public fn This clone() { This c = Point.make(x: this.x); return c; }   // self-returning (This local + return)
 }
 fn bool same<T: Matchable<T>>(T a, T b) { return a.equals(other: b); }  // static dispatch via the bound
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.make(x: 7);
     Point q = p.clone();          // This -> Point: q == Point(7)
     Point r = Point.make(x: 9);
     int32 s = 0;
     if (same(a: p, b: q)) { s = s + 40; }    // 7 == 7 -> +40
     if (same(a: p, b: r)) { s = s + 100; }   // 7 == 9 -> no
-    return s + 2;                            // 40 + 2 = 42
+    return cast<uint8>(s + 2);                            // 40 + 2 = 42
 }

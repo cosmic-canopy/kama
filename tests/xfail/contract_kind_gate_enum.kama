@@ -5,4 +5,4 @@ type enum Color implements Drawable {
     Red, Green;
     public fn int32 draw() { return 1; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

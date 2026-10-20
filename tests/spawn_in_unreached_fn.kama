@@ -16,9 +16,9 @@ fn void work(Job j) { j.answer(v: 42); }
 
 fn void neverCalled(Sender<int32> s) { Job j = Job.of(reply: give s); scope { spawn neverSpawned(j: give j); } }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 1);
     Job j = Job.of(reply: ch.sender());
     scope { spawn work(j: give j); }
-    return match (ch.receiver().recv()) { case Some(value: v): v; case None: 9; };
+    return match (ch.receiver().recv()) { case Some(value: v): cast<uint8>(v); case None: 9; };
 }

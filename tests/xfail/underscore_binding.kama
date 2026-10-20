@@ -1,6 +1,6 @@
 // `_` is the discard — in a pattern (`case V(x: _)`) and as the target of `_ = f();` — so nothing may be
 // named `_`. Through 0.9.679 `int32 _ = 3;` was an ordinary local, and `_ = f();` after it would have assigned to it.
-fn int32 main() {
+fn uint8 main() {
     int32 _ = 3;
     return 0;
 }

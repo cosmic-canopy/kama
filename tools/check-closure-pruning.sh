@@ -90,7 +90,7 @@ fi
 cat >"$tmp/gated.kama" <<'EOF'
 import { std::collections::sort };
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 EOF
 "$KAMA" check --each "$tmp/gated.kama" "$tmp/gated.kama" >/dev/null 2>"$tmp/twice.err" || true
 counts=$(sed -n 's/.*OK (\([0-9]*\) unit.*/\1/p' "$tmp/twice.err" | sort -u | wc -l | tr -d ' ')
@@ -107,7 +107,7 @@ fi
 cat >"$tmp/nosuch.kama" <<'EOF'
 import { std::collections::NoSuchThingAtAll };
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 EOF
 rc_p=0; "$KAMA" check "$tmp/nosuch.kama" >/dev/null 2>"$tmp/nosuch.p" || rc_p=$?
 rc_f=0; KAMA_NO_PRUNE=1 "$KAMA" check "$tmp/nosuch.kama" >/dev/null 2>"$tmp/nosuch.f" || rc_f=$?
@@ -124,7 +124,7 @@ fi
 cat >"$tmp/nosuchmem.kama" <<'EOF'
 import { std::memory::NoSuchThingAtAll };
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 EOF
 rc_p=0; "$KAMA" check "$tmp/nosuchmem.kama" >/dev/null 2>"$tmp/nosuchmem.p" || rc_p=$?
 rc_f=0; KAMA_NO_PRUNE=1 "$KAMA" check "$tmp/nosuchmem.kama" >/dev/null 2>"$tmp/nosuchmem.f" || rc_f=$?
@@ -151,7 +151,7 @@ fi
 cat >"$tmp/selfimp.kama" <<'EOF'
 import { std::net::TcpListener };
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 EOF
 if "$KAMA" check "$tmp/selfimp.kama" >/dev/null 2>&1; then
     ok "a module that imports from its own namespace still resolves"
@@ -170,11 +170,11 @@ import {
     std::log::logInfo,
 };
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> d = DynamicArray.empty();
     d.add(item: 7);
     logInfo(tag: "guard", msg: "one");
-    return d[0];
+    return cast<uint8>(d[0]);
 }
 EOF
 if "$KAMA" build "$tmp/single.kama" -o "$tmp/single" >"$tmp/single.log" 2>&1; then
@@ -209,9 +209,9 @@ fi
 cat >"$tmp/nameless.kama" <<'EOF'
 import { std::fmt::parse, std::fmt::ParseError };
 
-fn int32 main() {
+fn uint8 main() {
     Result<int32, ParseError> r = parse::<int32>(s: "7");
-    return match (r) { case Ok(value: v): v; case Err(error: e): 1; };
+    return match (r) { case Ok(value: v): cast<uint8>(v); case Err(error: e): 1; };
 }
 EOF
 if "$KAMA" build "$tmp/nameless.kama" -o "$tmp/nameless" >"$tmp/nameless.log" 2>&1; then
@@ -228,10 +228,10 @@ import { std::concurrent::Atomic };
 
 fn void bump(ref Atomic<int32> c) { c.fetchAdd(delta: 1i32); }
 
-fn int32 main() {
+fn uint8 main() {
     Atomic<int32> a = Atomic.make(value: 0i32);
     scope { spawn bump(c: ref a); }
-    return a.load();
+    return cast<uint8>(a.load());
 }
 EOF
 if "$KAMA" check "$tmp/seam.kama" >"$tmp/seam.log" 2>&1; then
@@ -247,7 +247,7 @@ fi
 cat >"$tmp/tagged.kama" <<'EOF'
 import { std::fmt::html };
 
-fn int32 main() {
+fn uint8 main() {
     string name = "x";
     string s = html"<b>${name}</b>";
     return s.length() > 0 ? 0 : 1;

@@ -21,9 +21,9 @@ type resource Rc<T> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<Thi
     unsafe ~Rc() { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { usize n = sizeof(ptr: this.p); usize a = alignof(ptr: this.p); drop(ptr: this.p); GlobalAllocator.make().deallocate(pointer: cast<UnsafePtr>(this.p), bytes: n, align: a); if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); } } }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Rc<Shape> a = new Circle.make(r: 5);   // refcounted, fat {obj,vtbl,ctrl}
     Rc<Shape> b = copy a;             // retain — same Circle, strong=2 (compiler-provided Shared IFACE)
     Rc<Shape> q = new Square.make(s: 4);   // heterogeneous
-    return a.area() + b.area() + q.area();   // 25 + 25 + 16 = 66
+    return cast<uint8>(a.area() + b.area() + q.area());   // 25 + 25 + 16 = 66
 }

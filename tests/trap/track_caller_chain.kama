@@ -8,7 +8,7 @@ unsafe fn void onPanic(const ref PanicInfo info) {
 unsafe fn void install() { setPanicHandler(handler: onPanic); }
 @trackCaller fn int32 at(InlineArray<int32>#(2) xs, isize i) { return xs[i]; }
 @trackCaller fn int32 outer(isize i) { InlineArray<int32>#(2) xs = [1, 2]; return at(xs: xs, i: i); }
-fn int32 main() {
+fn uint8 main() {
     install();
-    return outer(i: 5);   // reported here
+    return cast<uint8>(outer(i: 5));   // reported here
 }

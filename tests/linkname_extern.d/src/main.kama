@@ -8,6 +8,6 @@ extern "adder.h";
 
 unsafe fn int32 compute() { return cMatch(a: 6, b: 4) + plus(a: 17, b: 1); }   // 24 + 18
 
-fn int32 main() {
-    return compute();   // 42
+fn uint8 main() {
+    return cast<uint8>(compute());   // 42
 }

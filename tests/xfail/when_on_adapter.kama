@@ -3,4 +3,4 @@ type contract Tag for intrinsic { fn int32 tag(); }
 type adapter <int32> implements Tag when [Q: Tag] {
     public fn int32 tag() { return 1; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -11,7 +11,7 @@ type resource Sq implements Shape {
     public ctor make(int32 s) { this.side.add(item: s); }
     public fn int32 area() { return this.side[0] * this.side[0]; }
 }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Shared<Shape>> xs = DynamicArray.empty();
     Shared<Shape> a = new Sq.make(s: 3);
     Shared<Shape> b = new Sq.make(s: 4);
@@ -21,5 +21,5 @@ fn int32 main() {
     xs.add(item: give c);
     int32 sum = 0;
     foreach (ref Shared<Shape> s in xs) { sum = sum + s.area(); } // borrow each handle; polymorphic dispatch
-    return sum;                                                // 9 + 16 + 25 = 50; xs drops -> each Sq freed once
+    return cast<uint8>(sum);                                                // 9 + 16 + 25 = 50; xs drops -> each Sq freed once
 }

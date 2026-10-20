@@ -7,7 +7,7 @@ import { std::num::FixedBacking };
 
 fn int64 widen<B: FixedBacking<B>>(B b) { return b.wide(); }
 
-fn int32 main() {
+fn uint8 main() {
     int64 x = 42i64;
-    return cast<int32>(widen(b: x));   // ERROR: int64 does not satisfy bound FixedBacking
+    return cast<uint8>(widen(b: x));   // ERROR: int64 does not satisfy bound FixedBacking
 }

@@ -2,4 +2,4 @@
 // (scope-prefixed) and nothing outside the program links against it. `expose` is how a function gets a
 // fixed symbol; the attribute then names it.
 @linkName("helper") fn int32 helper() { return 1; }
-fn int32 main() { return helper(); }
+fn uint8 main() { return cast<uint8>(helper()); }

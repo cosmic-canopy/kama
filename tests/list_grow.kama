@@ -1,7 +1,7 @@
 import { std::collections::DynamicArray };
 // DynamicArray<T>: growable. add() past the doubling threshold (cap 0->4->8->16),
 // then sum via [] indexing and length().
-fn int32 main()
+fn uint8 main()
 {
     DynamicArray<int32> xs = DynamicArray.empty();
     for (int32 i = 1; i <= 10; i = i + 1)
@@ -15,5 +15,5 @@ fn int32 main()
     {
         total = total + xs[j];
     }
-    return total;   // 1+2+...+10 = 55
+    return cast<uint8>(total);   // 1+2+...+10 = 55
 }

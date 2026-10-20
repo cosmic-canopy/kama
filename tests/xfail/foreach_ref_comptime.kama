@@ -9,7 +9,7 @@ comptime fn InlineArray<int32>#(4) mk() {
 }
 comptime InlineArray<int32>#(4) TABLE = mk();
 
-fn int32 main() {
+fn uint8 main() {
     foreach (ref int32 v in TABLE) { v = 0; }
     return 0;
 }

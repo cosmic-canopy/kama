@@ -13,4 +13,4 @@ type resource Cell {
     unsafe ~Cell() { free(p: cast<UnsafePtr>(this.buf)); }
 }
 fn int32 sink(Owned<Cell> c) { return c.get(); }   // c drops at fn-end -> Cell ~dtor frees buf
-fn int32 main() { return sink(c: new Cell.make(v: 36)); }
+fn uint8 main() { return cast<uint8>(sink(c: new Cell.make(v: 36))); }

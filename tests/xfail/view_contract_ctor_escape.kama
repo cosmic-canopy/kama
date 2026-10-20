@@ -21,4 +21,4 @@ type view Span implements FromWide<This> {
     public unsafe ctor fromWide(int64 v) { this.p = addr(of: v); this.n = 1; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

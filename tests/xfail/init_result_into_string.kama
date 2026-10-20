@@ -4,7 +4,7 @@ import { std::serialization::text::json::serializeJsonBuffer };
 
 @generate(Serializable) type value P { @field int32 x; public ctor make(int32 x) { this.x = x; } }
 
-fn int32 main() {
+fn uint8 main() {
     string t = serializeJsonBuffer(v: P.make(x: 1));   // -> REJECT
     return 0;
 }

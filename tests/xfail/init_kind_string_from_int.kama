@@ -1,5 +1,5 @@
 // The same crossing in the other direction.
-fn int32 main() {
+fn uint8 main() {
     string s = 3;
     return 0;
 }

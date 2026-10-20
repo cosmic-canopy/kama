@@ -9,4 +9,4 @@ type value Pair {
 
 unsafe fn int32 first(Pair p) { return p[0]; }   // -> REJECT
 
-fn int32 main() { return first(p: Pair.of(a: 1, b: 2)); }
+fn uint8 main() { return cast<uint8>(first(p: Pair.of(a: 1, b: 2))); }

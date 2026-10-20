@@ -8,4 +8,4 @@
 @packed
 type enum Color : uint8 { Red, Green, Blue }
 
-fn int32 main() { return cast<int32>(Color::Blue); }
+fn uint8 main() { return cast<uint8>(Color::Blue); }

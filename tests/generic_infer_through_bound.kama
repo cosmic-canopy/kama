@@ -39,12 +39,12 @@ fn B pullUnboxed<S: Source<A>, A: Boxed<B>, B>(ref S s) {
     return a.unbox();
 }
 
-fn int32 main() {
+fn uint8 main() {
     Ints i = Ints.make();
     Words w = Words.make();
     Cells c = Cells.make();
     int32 a = pull(s: ref i);                    // 5
     string b = pull(s: ref w);                   // "ab"
     int32 d = pullUnboxed(s: ref c);             // 9
-    return a + cast<int32>(b.length()) + d;      // 16
+    return cast<uint8>(a + cast<int32>(b.length()) + d);      // 16
 }

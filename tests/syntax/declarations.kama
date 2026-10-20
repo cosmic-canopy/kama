@@ -65,7 +65,7 @@ fn int32 twice(int32 n) { return n + n; }
 // `asm(...)` needs an `unsafe fn`, and `main` may not be one — it encloses the whole program.
 unsafe fn void nop() { asm("nop"); }
 
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.make(x: 20);
     int32 a = p.get();
     a += 1;
@@ -76,5 +76,5 @@ fn int32 main() {
     culong cu = 2;
     if (cl > 0 && cu > 1) { nop(); }
     nop();
-    return a + b;
+    return cast<uint8>(a + b);
 }

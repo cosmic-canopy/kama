@@ -17,10 +17,10 @@ unsafe fn int32 viaPointer() {
     return p[0] + p[1] + p[2];                 // raw read needs `unsafe` — 42
 }
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(4) b = [4, 2, 3, 1];
     // A `borrow` window: the InlineArray carries the `Viewable<View<T>>` grant, so it may host one.
     borrow b.viewMut() as v { sortUnstable(items: v); }     // stdlib algorithm over a stack array
     InlineArray<int32>#(3) c = [1, 2, 3];
-    return viaPointer() + sum(v: c.view()) + b.get(index: 0);   // 42 + 6 + 1 = 49
+    return cast<uint8>(viaPointer() + sum(v: c.view()) + b.get(index: 0));   // 42 + 6 + 1 = 49
 }

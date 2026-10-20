@@ -2,4 +2,4 @@
 import { m::LIMIT };
 
 fn int32 scaled(int32 LIMIT) { return LIMIT * 2; }
-fn int32 main() { return scaled(LIMIT: 2) - LIMIT; }
+fn uint8 main() { return cast<uint8>(scaled(LIMIT: 2) - LIMIT); }

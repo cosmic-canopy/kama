@@ -3,4 +3,4 @@ import { std::memory::Shared };
 // balances it. No double kama_ctrl_new (the library-adopt path must not also allocate a ctrl).
 type value C { int32 n; public ctor make(int32 n){ this.n = n; } public fn int32 get(){ return this.n; } }
 fn Shared<C> mk(int32 n) { return new C.make(n: n); }
-fn int32 main() { Shared<C> s = mk(n: 5); Shared<C> t = copy s; return s.get() + t.get(); }
+fn uint8 main() { Shared<C> s = mk(n: 5); Shared<C> t = copy s; return cast<uint8>(s.get() + t.get()); }

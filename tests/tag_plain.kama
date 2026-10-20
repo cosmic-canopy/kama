@@ -2,7 +2,7 @@
 // parts are passed through untouched (html does NOT escape literals — only holes). Exit bitset (3 = both).
 import { std::fmt::html, std::fmt::stripIndent };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     string h = html"<p>raw & <ok></p>";                 // no holes → the literal is emitted verbatim, unescaped
@@ -13,5 +13,5 @@ fn int32 main() {
         beta";
     if (s == "alpha\nbeta") { r = r + 2; }               // no holes → pure template dedent
 
-    return r;
+    return cast<uint8>(r);
 }

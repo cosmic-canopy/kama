@@ -21,8 +21,8 @@ fn int32 build()
     //             ~a (strong 1->0: ~Probe -> 2; weak==0: free ctrl)
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 r = build();
-    return traceGet();   // fold(1,2) = 33
+    return cast<uint8>(traceGet());   // fold(1,2) = 33
 }

@@ -21,8 +21,8 @@ type value Pair<T> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Pair<int32> pi = Pair::<int32>.make(a: 7, b: 9);
     Pair<int64> pl = Pair::<int64>.make(a: 100, b: 200);
-    return pi.first() + cast<int32>(pl.first());   // 107
+    return cast<uint8>(pi.first() + cast<int32>(pl.first()));   // 107
 }

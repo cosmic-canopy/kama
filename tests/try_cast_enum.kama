@@ -18,7 +18,7 @@ type enum Code  : uint8 { Ok = 3, Warn = 5, Bad = 200 }   // explicit: a set, te
 
 fn uint8 opaque(uint8 n) { return n; }
 
-fn int32 main()
+fn uint8 main()
 {
     Optional<Color> good = try cast<Color>(opaque(n: 2));     // Blue
     Optional<Color> bad  = try cast<Color>(opaque(n: 200));   // past the run -> None
@@ -35,5 +35,5 @@ fn int32 main()
 
     int32 e = cast<int32>(Code::Bad);                          // enum -> int, still total   200
 
-    return a + b + c + d + e;                                  // 3 + 9 + 5 + 7 + 200 = 224
+    return cast<uint8>(a + b + c + d + e);                                  // 3 + 9 + 5 + 7 + 200 = 224
 }

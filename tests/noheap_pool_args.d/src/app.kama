@@ -58,8 +58,8 @@ import { core::args, std::concurrent::Atomic };
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = 0;
     foreach (string a in args()) { n = n + cast<int32>(a.length()); }
-    return n + 42;              // run with no arguments: 0 + 42
+    return cast<uint8>(n + 42);              // run with no arguments: 0 + 42
 }

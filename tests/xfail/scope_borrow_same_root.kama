@@ -18,11 +18,11 @@ type value Acc implements Sendable {
 
 fn void accumulate(ref Acc a) { a.run(); }
 
-fn int32 main() {
+fn uint8 main() {
     Acc shared = Acc.range(lo: 0, hi: 100);
     scope {
         spawn accumulate(a: ref shared);   // borrows `shared`
         spawn accumulate(a: ref shared);   // ERROR: second child borrows the SAME root -> would race
     }
-    return shared.total % 256;
+    return cast<uint8>(shared.total % 256);
 }

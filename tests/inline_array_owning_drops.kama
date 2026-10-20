@@ -70,4 +70,4 @@ fn int32 run() {
     return bad;
 }
 
-fn int32 main() { return run() == 0 ? 42 : 1; }
+fn uint8 main() { return run() == 0 ? 42 : 1; }

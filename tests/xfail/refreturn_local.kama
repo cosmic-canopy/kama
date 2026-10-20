@@ -4,4 +4,4 @@ type value B {
     public ctor make() { this.d = [0; 4]; }
     public fn ref int32 bad(usize i) { InlineArray<int32>#(4) local = [0; 4]; return local[i]; }
 }
-fn int32 main() { B b = B.make(); return b.bad(i: 0); }
+fn uint8 main() { B b = B.make(); return cast<uint8>(b.bad(i: 0)); }

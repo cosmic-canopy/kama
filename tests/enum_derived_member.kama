@@ -44,7 +44,7 @@ fn int32 fromWire(uint8 b) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     r = r + cast<int32>(Flag::Write) + cast<int32>(Flag::Exec) + cast<int32>(Flag::All);   // 13
     r = r + cast<int32>(Flag::Last) - cast<int32>(Flag::Later);                             // -1  → 12
@@ -52,5 +52,5 @@ fn int32 main() {
     r = r + cast<int32>(Signed::Big) - cast<int32>(Signed::Mask);                            // -44 → -31
     r = r + cast<int32>(Alias::Everything) + cast<int32>(Alias::Nothing);                    // +7  → -24
     r = r + fromWire(b: 7ui8) + fromWire(b: 199ui8) + fromWire(b: 3ui8);                     // 7+199+0 → 182
-    return r - 140;   // 42
+    return cast<uint8>(r - 140);   // 42
 }

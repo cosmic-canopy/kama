@@ -6,7 +6,7 @@
 fn T pick<T>(T a, T b) { return b; }
 fn T first<T>(T a, T b) { return a; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     isize n = 40;
     isize a = pick(a: 2, b: n);                       // literal after the typed sibling
@@ -26,5 +26,5 @@ fn int32 main() {
     if (h == 2i64)                   { r = r + 32; }
     int64 neg = first(a: -1, b: w);                   // a negated literal defers too
     if (neg == -1i64)                { r = r + 64; }
-    return r;   // 127
+    return cast<uint8>(r);   // 127
 }

@@ -13,7 +13,7 @@ fn int32 f32s(string src) {
     return match (r) { case Ok(value: xs): 1; case Err(error: e): 0; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 bad = 0;
     if (f64s(src: "[1.5,5e-324,1e-400]") != 1) { bad = bad + 1; }
     if (f64s(src: "[1e400]") != 0) { bad = bad + 1; }
@@ -21,5 +21,5 @@ fn int32 main() {
     if (f64s(src: "[1e]") != 0) { bad = bad + 1; }
     if (f32s(src: "[1.5,1e-50]") != 1) { bad = bad + 1; }
     if (f32s(src: "[1e39]") != 0) { bad = bad + 1; }
-    return bad;
+    return cast<uint8>(bad);
 }

@@ -21,7 +21,7 @@ fn void producer(Sender<Owned<Box>> tx) {
     _ = tx.send(item: give b);   // the unique box pointer relocates into the queue
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<Owned<Box>> ch = Channel.bounded(capacity: 2);
     Sender<Owned<Box>>   tx = ch.sender();
     Receiver<Owned<Box>> rx = ch.receiver();
@@ -39,5 +39,5 @@ fn int32 main() {
     }
 
     h.join();
-    return got;   // 42
+    return cast<uint8>(got);   // 42
 }

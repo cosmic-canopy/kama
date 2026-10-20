@@ -7,7 +7,7 @@
 // declaration (tests/generate_comparable.kama), and `implements Comparable<This>` says another order.
 type enum Level : uint8 { Error, Warn, Info, Debug, Trace }
 
-fn int32 main()
+fn uint8 main()
 {
     Level a = Level::Warn;
     bool quieter = (a < Level::Debug);

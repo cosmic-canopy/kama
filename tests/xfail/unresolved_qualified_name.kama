@@ -4,4 +4,4 @@ type value Foo {
     public int32 n;
     public ctor make() { this.n = 1; }
 }
-fn int32 main() { return Foo::Bar; }   // ERROR: `Foo` has no member `Bar`
+fn uint8 main() { return Foo::Bar; }   // ERROR: `Foo` has no member `Bar`

@@ -5,7 +5,7 @@
 // (`Map_int32_int32_DefaultHasher` vs `Map_int32_int32_FastHasher`) — proof `H` is threaded + selected.
 import { std::collections::Map, std::collections::Set, std::collections::FastHasher };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     Map<int32, int32> strong = Map.empty();                 // DefaultHasher (filled by the default)
@@ -50,5 +50,5 @@ fn int32 main() {
     i = 0; while (i < 64) { s.add(key: i); s.add(key: i); i = i + 1; }   // duplicate adds are idempotent
     if (s.length() == 64 && s.contains(key: 7) && !s.contains(key: 64)) { r = r + 10; }
 
-    return r;   // 10+10+5+5+10+10 = 50
+    return cast<uint8>(r);   // 10+10+5+5+10+10 = 50
 }

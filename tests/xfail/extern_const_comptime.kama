@@ -3,4 +3,4 @@
 extern "stdio.h";
 extern const int32 BUFSIZ;
 comptime int32 N = BUFSIZ;
-fn int32 main() { return N; }
+fn uint8 main() { return cast<uint8>(N); }

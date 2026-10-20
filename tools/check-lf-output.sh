@@ -29,7 +29,7 @@ mkdir -p "$tmp/dep/src" "$tmp/app/src" "$tmp/out"
 printf '{ "name": "dep", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$tmp/dep/kama.json"
 printf 'export { seven };\nfn int32 seven() { return 7; }\n' > "$tmp/dep/src/dep.kama"
 printf '{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",\n  "dependencies": { "dep": { "path": "../dep" } }, "modules": { ".": { "visibility": "internal" } } }\n' > "$tmp/app/kama.json"
-printf 'import { dep::seven };\nfn int32 main() { return seven(); }\n' > "$tmp/app/src/main.kama"
+printf 'import { dep::seven };\nfn uint8 main() { return cast<uint8>(seven()); }\n' > "$tmp/app/src/main.kama"
 
 "$KAMA" pkg install "$tmp/app/kama.json" > "$tmp/install.log" 2>&1 || fail "pkg install failed:" "$tmp/install.log"
 [ -f "$tmp/app/kama.lock" ] || fail "pkg install wrote no kama.lock"

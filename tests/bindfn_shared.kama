@@ -18,8 +18,8 @@ fn int32 use() {
     BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     return g(d: 41) + p.read(d: 0);                  // 42 (via bindable) + 1 (via shared) = 43
 }
-fn int32 main() {
+fn uint8 main() {
     int32 r = use();
     if (r != 43) { return 1; }
-    return traceGet();                        // single dtor -> 9
+    return cast<uint8>(traceGet());                        // single dtor -> 9
 }

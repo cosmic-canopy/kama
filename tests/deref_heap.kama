@@ -21,7 +21,7 @@ type resource OwnPoint implements Deref<Point>, DerefMut<Point> {
     unsafe ~OwnPoint() { free(p: cast<UnsafePtr>(this.p)); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     OwnPoint o = OwnPoint.make(v: Point.of(x: 30, y: 12));
-    return o.sum() + o.x;   // 42 + 30 = 72 (then RAII frees the heap Point)
+    return cast<uint8>(o.sum() + o.x);   // 42 + 30 = 72 (then RAII frees the heap Point)
 }

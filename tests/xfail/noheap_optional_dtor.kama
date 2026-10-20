@@ -5,4 +5,4 @@
 // ⚠️ Compiled clean until the no-heap call graph was read from the emitted C (found building KR-47).
 import { std::collections::DynamicArray };
 @noheap fn int32 tick(int32 n) { Optional<DynamicArray<int32>> o = Optional::None; return n; }
-fn int32 main() { return tick(n: 7); }
+fn uint8 main() { return cast<uint8>(tick(n: 7)); }

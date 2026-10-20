@@ -10,7 +10,7 @@ type resource Res {
 }
 fn void take(Res r) { }
 fn void fill(out Res r) { r = Res.make(id: 9); }
-fn int32 main() {
+fn uint8 main() {
     bool c = true;
     {
         slot Res x;

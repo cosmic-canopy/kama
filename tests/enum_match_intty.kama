@@ -20,7 +20,7 @@ type enum Shape : uint8 { Circle(int32 r), Empty }
 // still exhaustive over the variants and must lower the same way.
 type enum Code : uint8 { Ok = 3, Bad = 200 }
 
-fn int32 main()
+fn uint8 main()
 {
     Color c = Color::Green;
     int32 a = match (c) {                        // plain, pinned tag
@@ -41,5 +41,5 @@ fn int32 main()
         case Bad: 30;
     };                                           // 30
 
-    return a + b + d;                            // 2 + 10 + 30 = 42
+    return cast<uint8>(a + b + d);                            // 2 + 10 + 30 = 42
 }

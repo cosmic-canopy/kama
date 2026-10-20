@@ -55,7 +55,7 @@ comptime assert(cond: alignof(Al) == 16, msg: "@align(16) raises the alignment")
 fn int32 idN() comptime(int32 N) { return N; }
 fn int32 same(usize a, usize b) { if (a == b) { return 1; } return 0; }
 
-fn int32 main() {
+fn uint8 main() {
     comptime usize LOCAL = sizeof(Box<uint32>);     // a LOCAL constant
     int32 n = same(a: LOCAL, b: sizeof(Box<uint32>)) + same(a: Cfg::UNIT, b: sizeof(Box<uint16>))
             + same(a: Cfg::ALIGN, b: alignof(int32));
@@ -103,5 +103,5 @@ fn int32 main() {
           + same(a: S29, b: sizeof(Optional<string>)) + same(a: S30, b: sizeof(Mask<float32>#(4)))
           + same(a: S31, b: sizeof(Frame)) + same(a: S32, b: sizeof(clong));
     Frame f = Frame.make();
-    return n + same(a: cast<usize>(f.raw.length()), b: sizeof(Header));   // 46 when every fold is C's own answer
+    return cast<uint8>(n + same(a: cast<usize>(f.raw.length()), b: sizeof(Header)));   // 46 when every fold is C's own answer
 }

@@ -12,4 +12,4 @@ import { std::concurrent::Atomic };
     public unsafe fn Optional<UnsafePtr> reallocate(UnsafePtr pointer, usize bytes, usize newBytes, usize align) { return Optional::None; }
 }
 
-fn int32 main() { return cast<int32>(globalHeap::<Pool>().live.load()); }
+fn uint8 main() { return cast<uint8>(globalHeap::<Pool>().live.load()); }

@@ -26,7 +26,7 @@ fn bool malformed(Result<Booking, Owned<Error>> res) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Timestamp at = Timestamp.fromUnixNanos(n: 1789567387123000000i64);
     Booking o = Booking.make(at: at, checkIn: at.date());
@@ -56,5 +56,5 @@ fn int32 main() {
     string badDate = "{\"at\":\"2026-09-16T14:03:07Z\",\"checkIn\":\"2026-02-30\"}";
     if (malformed(res: deserializeJsonBuffer::<Booking>(src: give badDate))) { r = r + 32; }
 
-    return r;   // 63
+    return cast<uint8>(r);   // 63
 }

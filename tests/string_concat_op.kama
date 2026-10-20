@@ -1,6 +1,6 @@
 // `+` concatenation and `==`/`!=` on the `string` primitive (the compiler special-cases the
 // operands to concat/equals — `string` is a primitive, not a user overload). Chains compose.
-fn int32 main() {
+fn uint8 main() {
     string a = "ab";
     string b = "cd";
     string ab = a + b;                     // "abcd"
@@ -11,5 +11,5 @@ fn int32 main() {
     if (ab != "abcd") { r = r + 100; }     // false -> skipped
     r = r + ab.length();      // +4
     r = r + abc.length();     // +6
-    return cast<int32>(r);                              // 13
+    return cast<uint8>(r);                              // 13
 }

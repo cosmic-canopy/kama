@@ -1,0 +1,21 @@
+// The parent reads a child's status in the platform's own type: POSIX `ExitStatus::Exited(uint8 code)`, Windows
+// `Exited(uint32 code)`. A POSIX child exiting 200 reads back 200 (not -56, as an `int32` view of a byte could); a
+// Windows child exiting 70000 reads back 70000, its full 32 bits — the one end-to-end test of a status past a byte,
+// since MSYS's shell shows only one. `procutil` is built with the twin `main`s that carry each.
+import { core::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
+
+@compileFor(!OS_WINDOWS) fn string wantArg() { return "200"; }
+@compileFor(OS_WINDOWS)  fn string wantArg() { return "70000"; }
+@compileFor(!OS_WINDOWS) fn bool isWanted(ExitStatus s) { return match (s) { case Exited(code: c): c == 200; case _: false; }; }
+@compileFor(OS_WINDOWS)  fn bool isWanted(ExitStatus s) { return match (s) { case Exited(code: c): c == 70000; case _: false; }; }
+
+fn uint8 main() {
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "exit"); c.arg(a: wantArg());
+    Result<Process, IoError> sr = c.start();
+    Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 80; } };
+    return match (p.wait()) {
+        case Ok(value: s): isWanted(s: s) && !s.success() ? 42 : 81;
+        case Err(error: e): 83;
+    };
+}

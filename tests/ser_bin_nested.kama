@@ -23,12 +23,12 @@ type resource Scene {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> ids = DynamicArray.empty(); ids.add(item: 7); ids.add(item: 8);
     DynamicArray<Pt> pts = DynamicArray.empty(); pts.add(item: Pt.make(x: 1, y: 2)); pts.add(item: Pt.make(x: 3, y: 4));
     Scene s = Scene.make(name: "lvl1", ids: give ids, pts: give pts);
     Result<DynamicArray<uint8>, Owned<Error>> e_r = serializeKbinNamedBuffer(v: s);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
     Result<Scene, Owned<Error>> res = deserializeKbinNamedBuffer::<Scene>(src: give bytes);
-    return match (res) { case Ok(value: b): b.score(); case Err(error: e): 0 - 1; };
+    return match (res) { case Ok(value: b): cast<uint8>(b.score()); case Err(error: e): 255; };
 }

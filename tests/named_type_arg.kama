@@ -12,7 +12,7 @@ type value Cfg<T, M = Tag1, N = Tag2> {
     public ctor make(T v, M m, N n) { this.value = v; this.mid = m; this.last = n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // Both defaults: M = Tag1, N = Tag2.
@@ -27,5 +27,5 @@ fn int32 main() {
     Cfg<int32, Tag3> c = Cfg.make(v: 1, m: Tag3.make(), n: Tag2.make());
     if (c.mid.code == 3 && c.last.code == 2) { r = r + 10; }
 
-    return r;   // 30
+    return cast<uint8>(r);   // 30
 }

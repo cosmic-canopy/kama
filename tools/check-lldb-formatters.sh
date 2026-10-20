@@ -67,7 +67,7 @@ fn int32 probe(int32 near)
     Weak<Leaf> w = sh.downgrade();
     return near + pt.x + cast<int32>(xs.length()) + cast<int32>(m.length()) + sh2.get();
 }
-fn int32 main() { return probe(near: 1); }
+fn uint8 main() { return cast<uint8>(probe(near: 1)); }
 KAMA
 BPLINE=22   # the `return` — every local above it is live by then
 

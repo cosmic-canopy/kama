@@ -7,4 +7,4 @@ type value Nums implements Source<int32> {
     public fn int32 pull() { return this.n; }
 }
 fn int32 take<P: Source<string>>(P p) { return 1; }
-fn int32 main() { return take::<Nums>(p: Nums.of(n: 5)); }
+fn uint8 main() { return cast<uint8>(take::<Nums>(p: Nums.of(n: 5))); }

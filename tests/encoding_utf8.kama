@@ -38,7 +38,7 @@ unsafe fn int32 check(const ref DynamicArray<uint8> b, bool wantOk, isize wantAt
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // Well-formed: ASCII, 2-byte, 3-byte and 4-byte leads all round-trip.
     DynamicArray<uint8> ok2 = buf(src: [104ui8, 195ui8, 169ui8, 0ui8], n: 3);          // "hé"
     if (check(b: ref ok2, wantOk: true, wantAt: -1) != 0) { return 10; }
@@ -88,7 +88,7 @@ fn int32 main() {
         case Ok(value: s):  s.equals(other: src) ? 0 : 90;
         case Err(error: e): 91;
     };
-    if (rc != 0) { return rc; }
+    if (rc != 0) { return cast<uint8>(rc); }
 
     return 0;
 }

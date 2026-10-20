@@ -2,4 +2,4 @@
 // A kama body's allocations are already seen, so on a body the attribute would be a second, unchecked claim
 // about the same thing — refused by name rather than as an unknown attribute (KR-47).
 @heap fn int32 f() { return 0; }
-fn int32 main() { return f(); }
+fn uint8 main() { return cast<uint8>(f()); }

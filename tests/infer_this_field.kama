@@ -22,7 +22,7 @@ type value Box<T> {
     public const fn T magnitude() { return abs(x: this.v); }                            // inside a generic type
 }
 
-fn int32 main() {
+fn uint8 main() {
     Camera c = Camera.make(yaw: 0.0f32);
     int32 r = 0;
     if (c.facing() == 1.0f32) { r = r + 1; }
@@ -30,5 +30,5 @@ fn int32 main() {
     if (c.whole()) { r = r + 1; }
     Box<float64> b = Box.make(v: -7.5);
     if (b.magnitude() == 7.5) { r = r + 1; }
-    return r;                                               // 4
+    return cast<uint8>(r);                                               // 4
 }

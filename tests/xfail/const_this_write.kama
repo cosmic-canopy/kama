@@ -6,8 +6,8 @@ type value Counter {
     public ctor make(int32 start) { this.n = start; }
     public const fn void bad() { this.n = this.n + 1; }   // writes through `const this` -> REJECT
 }
-fn int32 main() {
+fn uint8 main() {
     Counter c = Counter.make(start: 1);
     c.bad();
-    return c.n;
+    return cast<uint8>(c.n);
 }

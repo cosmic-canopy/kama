@@ -8,8 +8,8 @@ type value Widget implements Factory {
     public ctor create(int32 seed) { this.v = seed + 1; return this; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Widget a = Widget.create(seed: 41);   // dot-on-type ctor call        -> v = 42
     Widget b = Widget.create(seed: 7);    // `::` coexistence bridge       -> v = 8
-    return a.v + b.v;                      // 42 + 8 = 50
+    return cast<uint8>(a.v + b.v);                      // 42 + 8 = 50
 }

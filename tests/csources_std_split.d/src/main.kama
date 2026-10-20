@@ -9,6 +9,6 @@ unsafe fn int32 modes() {
     return kama_test_kama_tu_is_iso() * 10 + kama_test_csources_tu_is_iso();
 }
 
-fn int32 main() {
-    return modes();   // 10: kama's C is ISO, the csources entry is GNU
+fn uint8 main() {
+    return cast<uint8>(modes());   // 10: kama's C is ISO, the csources entry is GNU
 }

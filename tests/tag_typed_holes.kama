@@ -23,7 +23,7 @@ fn int32 sumOf(Template<Coded> t) {
 }
 fn int32 firstOf(Template<Coded> t) { Coded c = t.hole(at: 0); return c.code(); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = 5;
     Optional<int32> b = Optional::Some(value: 7);
     Optional<int32> c = Optional::None;

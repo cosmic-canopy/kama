@@ -15,8 +15,8 @@ unsafe fn void fill(out int32 dst) {
     // `dst` is never assigned. Rejected.
 }
 
-fn int32 main() {
+fn uint8 main() {
     slot int32 v;
     fill(dst: out v);
-    return v;
+    return cast<uint8>(v);
 }

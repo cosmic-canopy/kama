@@ -1,6 +1,6 @@
 // `_ =` discards what an expression produces. A named local is dropped by the end of its scope, and a
 // `{ … }` block ends that scope sooner, so `_ = give s;` would be a second way to say either — refused (GOALS #4).
-fn int32 main() {
+fn uint8 main() {
     string s = "a heap string, long enough to leave any inline buffer";
     _ = give s;
     return 0;

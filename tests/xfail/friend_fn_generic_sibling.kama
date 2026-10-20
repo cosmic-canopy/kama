@@ -7,7 +7,7 @@ type value Box<T> {
     friend reader[v];
 }
 fn int32 reader<T>(const ref Box<int32> b) { return b.v; }
-fn int32 main() {
+fn uint8 main() {
     Box<int32> b = Box::<int32>.make(v: 1);
-    return reader::<int64>(b: b);
+    return cast<uint8>(reader::<int64>(b: b));
 }

@@ -10,4 +10,4 @@
     vtor[0] = vtor[0] + 1;   // service the tick through the MMIO handle
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

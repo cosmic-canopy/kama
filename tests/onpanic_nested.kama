@@ -8,9 +8,9 @@ fn int32 outer(int32 d, int32 n) {
     InlineArray<int32>#(2) a = [1; 2];
     return r + a[n];                                           // n = 5 -> bounds miss -> 1000
 }
-fn int32 main() {
+fn uint8 main() {
     int32 a = outer(d: 2, n: 0);    // 5 + 1 = 6
     int32 b = outer(d: 0, n: 0);    // 100 + 1 = 101
     int32 c = outer(d: 2, n: 5);    // 1000
-    return a + b + c - 1065;        // 42
+    return cast<uint8>(a + b + c - 1065);        // 42
 }

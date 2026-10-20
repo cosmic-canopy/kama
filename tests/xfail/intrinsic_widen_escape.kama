@@ -8,4 +8,4 @@ fn Hashable leak() {
     return h;
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

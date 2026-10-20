@@ -16,4 +16,4 @@ comptime fn int32 never(int32 n) {
     InlineArray<int32>#(2) t = [1, 2]; foreach (ref int32 v in t) { v = 2; }
     return n;
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

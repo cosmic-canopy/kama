@@ -17,4 +17,4 @@ type resource Bag {
     public ctor make(Owned<Shared<Leaf>> k) { this.k = give k; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -11,7 +11,7 @@ type enum Maybe<T> { Has(T v), Nope }
 type resource Holder { Shared<Geo> g; public ctor of(Shared<Geo> g) { this.g = g; } public fn int32 kind() { int32 k = match (this.g) { case Point: 50; case _: 0; }; return k; } }
 fn Shared<Geo> make() { return new Geo::Label(s: "hello"); }
 fn int32 size(Shared<Geo> g) { int32 n = match (g) { case Circle(r: r): r; case Label(s: s): cast<int32>(s.length()); case Point: 100; }; return n; }
-fn int32 main() {
+fn uint8 main() {
     Owned<Geo> o = new Geo::Circle(r: 4);
     Shared<Geo> sh = new Geo::Label(s: "abc");
     Shared<Geo> sh2 = sh;
@@ -25,5 +25,5 @@ fn int32 main() {
     int32 f = size(g: sh);                                                             // 3
     int32 r = a + b + c + d + e + f;
     match (o) { case Circle(r: x): { r = r + x; } case _: { } };                       // 4, statement position
-    return r;                                                                          // 78
+    return cast<uint8>(r);                                                                          // 78
 }

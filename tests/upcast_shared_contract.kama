@@ -28,6 +28,6 @@ fn int32 owned_case() {
     return w.area();                                   // 25
 }
 
-fn int32 main() {
-    return shared_case() + owned_case();               // 108 + 25 = 133
+fn uint8 main() {
+    return cast<uint8>(shared_case() + owned_case());               // 108 + 25 = 133
 }

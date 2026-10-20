@@ -3,4 +3,4 @@
 import { core::setPanicHandler };
 unsafe fn void onPanic() { }
 unsafe fn void install() { setPanicHandler(handler: onPanic); }
-fn int32 main() { install(); return 0; }
+fn uint8 main() { install(); return 0; }

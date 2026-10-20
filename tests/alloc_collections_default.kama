@@ -10,7 +10,7 @@ import {
     std::collections::PriorityQueue,
 };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     Deque<int32> d = Deque.empty(); d.pushBack(item: 7);
@@ -30,5 +30,5 @@ fn int32 main() {
     int32 pv = match (p) { case Some(value: x): x; case None: 0 - 1; };
     if (pv == 1) { r = r + 5; }
 
-    return r;   // 25
+    return cast<uint8>(r);   // 25
 }

@@ -55,12 +55,12 @@ fn int32 roundTrip(ref UnixListener l) {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     {
         Result<UnixListener, IoError> rl = UnixListener.bind(path: "stream.sock");
         UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
         int32 r = roundTrip(l: l);
-        if (r != 0) { return r; }
+        if (r != 0) { return cast<uint8>(r); }
         if (!isAddrInUse(r: UnixListener.bind(path: "stream.sock"))) { return 31; }   // a live listener's path
         if (!exists(path: "stream.sock")) { return 32; }
     }   // the listener drops here, and its socket file with it

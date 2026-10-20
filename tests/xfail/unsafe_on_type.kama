@@ -3,4 +3,4 @@
 // guarantee the seam exists for. Mark the members that touch raw memory instead.
 type unsafe value V { public int32 x; }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -118,7 +118,7 @@ unsafe fn int32 run() {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = run();
-    return r == 0 ? 42 : r;
+    return cast<uint8>(r == 0 ? 42 : r);
 }

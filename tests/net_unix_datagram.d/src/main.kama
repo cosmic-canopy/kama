@@ -5,10 +5,10 @@
 // so the FILE is the unit, as it is for any platform-specific code. Returns 55.
 import { unixdgram::datagrams, unixdgram::abstractNames };
 
-fn int32 main() {
+fn uint8 main() {
     int32 d = datagrams();
-    if (d != 0) { return d; }
+    if (d != 0) { return cast<uint8>(d); }
     int32 a = abstractNames();
-    if (a != 0) { return a; }
+    if (a != 0) { return cast<uint8>(a); }
     return 55;
 }

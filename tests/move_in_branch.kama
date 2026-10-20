@@ -22,7 +22,7 @@ fn int32 pick(int32 c) {
     return 0;                          // a's dtor skipped (already moved)
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = pick(c: 1);
-    return traceGet();          // exactly one drop -> 7
+    return cast<uint8>(traceGet());          // exactly one drop -> 7
 }

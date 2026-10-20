@@ -18,4 +18,4 @@ type view Span implements Zeroed<This> {
     public unsafe ctor zero() { int64 t = 0i64; this.p = addr(of: t); this.n = 0; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

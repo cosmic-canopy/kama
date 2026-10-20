@@ -30,7 +30,7 @@ type value Acc implements Sendable {
 
 fn void accumulate(ref Acc a) { a.run(); }
 
-fn int32 main() {
+fn uint8 main() {
     Acc acc = Acc.range(lo: 0, hi: 100);
     int32 enabled = 1;
     if (enabled == 1) {
@@ -38,5 +38,5 @@ fn int32 main() {
             spawn accumulate(a: ref acc);   // a direct statement of ITS scope — the `if` is outside
         }                                   // BARRIER: joined here, before `acc` is read
     }
-    return acc.total % 256;   // sum 0..99 = 4950; 4950 % 256 = 86
+    return cast<uint8>(acc.total % 256);   // sum 0..99 = 4950; 4950 % 256 = 86
 }

@@ -95,7 +95,7 @@ cat > "$proj/kama.json" <<'JSON'
 JSON
 cat > "$proj/src/app.kama" <<'KAMA'
 @compileFor(TELMETRY) fn int32 typo() { return 1; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 if "$KAMA" build "$proj/kama.json" -o "$proj/app" >/dev/null 2>"$tmp/strict.err"; then
     echo "check-compilefor: FAIL — strict manifest accepted an undeclared @compileFor flag (TELMETRY)" >&2
@@ -118,7 +118,7 @@ cat > "$res/kama.json" <<'JSON'
   "flags": { "WINDOWS": {} }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 cat > "$res/src/app.kama" <<'KAMA'
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 if "$KAMA" build "$res/kama.json" -o "$res/app" >/dev/null 2>"$tmp/reserved.err"; then
     echo "check-compilefor: FAIL — a manifest declared the built-in target name WINDOWS as a user flag" >&2
@@ -154,7 +154,7 @@ fi
 cat > "$tmp/derived.kama" <<'KAMA'
 @compileFor(OS_LINUX)  fn int32 pick() { return 1; }
 @compileFor(!OS_LINUX) fn int32 pick() { return 2; }
-fn int32 main() { return pick(); }
+fn uint8 main() { return cast<uint8>(pick()); }
 KAMA
 "$KAMA" transpile --no-line "$tmp/derived.kama" --target aarch64-linux-gnu -o "$tmp/derived_linux.c" >/dev/null
 if ! grep -q 'kama_ret_0 = 1;' "$tmp/derived_linux.c"; then
@@ -186,7 +186,7 @@ cat > "$sel/src/app.kama" <<'KAMA'
 @compileFor(!RELEASE) fn int32 b() { return 0; }
 @compileFor(XBOX)     fn int32 c() { return 100; }
 @compileFor(PS5)      fn int32 c() { return 200; }
-fn int32 main() { return a() + b() + c(); }
+fn uint8 main() { return cast<uint8>(a() + b() + c()); }
 KAMA
 # default: BUILD_TYPE=DEBUG (built-in), CONSOLE=XBOX (manifest `default: true`) -> 0 + 0 + 100
 "$KAMA" build "$sel/kama.json" -o "$sel/dflt" >/dev/null 2>&1
@@ -263,7 +263,7 @@ cat > "$loc/kama.local.json" <<'JSON'
 JSON
 cat > "$loc/src/local.kama" <<'KAMA'
 @compileFor(LOCALFLAG) fn int32 gated() { return 42; }
-fn int32 main() { return gated(); }
+fn uint8 main() { return cast<uint8>(gated()); }
 KAMA
 localc="$tmp/local.c"
 if ! "$KAMA" transpile --no-line "$loc/kama.json" -o "$localc" >/dev/null 2>"$tmp/local.err"; then
@@ -300,7 +300,7 @@ cat > "$fg/kama.json" <<'JSON'
 JSON
 cat > "$fg/src/app.kama" <<'KAMA'
 import { platformValue };
-fn int32 main() { return platformValue(); }
+fn uint8 main() { return cast<uint8>(platformValue()); }
 KAMA
 cat > "$fg/src/impl_host.kama" <<'KAMA'
 file @compileFor(!ARCH_WASM32);
@@ -367,7 +367,7 @@ cat > "$allg/kama.json" <<'JSON'
 JSON
 cat > "$allg/src/app.kama" <<'KAMA'
 file @compileFor(NEVER_ON);
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 if "$KAMA" build "$allg/kama.json" -o "$allg/app" >/dev/null 2>"$tmp/fg_empty.err"; then
     echo "check-compilefor: FAIL — a project whose every file is gated out produced a build" >&2

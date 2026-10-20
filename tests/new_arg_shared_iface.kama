@@ -4,4 +4,4 @@ import { std::memory::Shared };
 type contract Shape for value { fn int32 area(); }
 type value Square implements Shape { int32 s; public ctor make(int32 s){ this.s = s; } public fn int32 area(){ return this.s*this.s; } }
 fn int32 take(Shared<Shape> c) { return c.area(); }
-fn int32 main() { return take(c: new Square.make(s: 6)); }
+fn uint8 main() { return cast<uint8>(take(c: new Square.make(s: 6))); }

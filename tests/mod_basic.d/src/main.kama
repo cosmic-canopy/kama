@@ -7,7 +7,7 @@ import {
     modbasic::shapes::Box,
 };
 
-fn int32 main()
+fn uint8 main()
 {
     int32 s = add(a: 10, b: 5);            // 15
     Counter c = Counter.make(start: 0);
@@ -22,5 +22,5 @@ fn int32 main()
     xs.add(item: o.area());
     int32 total = 0;
     foreach (int32 v in xs) { total = total + v; }
-    return total;                          // 15 + 1 + 12 + 10 = 38
+    return cast<uint8>(total);                          // 15 + 1 + 12 + 10 = 38
 }

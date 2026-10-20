@@ -29,12 +29,12 @@ type value Both<T> comptime(int32 F) {
     public fn int32 bits() { return F; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = Box::<int32>.of(v: 1).two();          //  2 — a type parameter
     int32 b = Shift#(3).of(v: 2).shifted();        // 16 — a const parameter, read in the body
     int32 c = Both::<int32>#(8).of(v: 1).bits();     //  8 — one of each
     // A field access off the same receiver always worked (it does not go through method resolution);
     // keep it here so a regression tells the two paths apart.
     int32 d = Box::<int32>.of(v: 16).v;             // 16
-    return a + b + c + d;                           // 2 + 16 + 8 + 16 = 42
+    return cast<uint8>(a + b + c + d);                           // 2 + 16 + 8 + 16 = 42
 }

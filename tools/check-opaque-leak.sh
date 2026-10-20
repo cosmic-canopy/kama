@@ -60,7 +60,7 @@ type value NeverUsed<T: Comparable<T>> {
     public const fn Ordering vs(const ref T other) { return this.item.compareTo(other: other); }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 EOF
 
 # ---- 1. the emitted C ---------------------------------------------------------------------------------
@@ -94,7 +94,7 @@ import { std::collections::DynamicArray };
 fn void neverCalled<T>(ref DynamicArray<T> src) {
     T item = src.get(index: 0);
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 EOF
 
 dout=$("$KAMA" check "$tmp/bad.kama" 2>&1 || true)

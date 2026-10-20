@@ -4,7 +4,7 @@
 // floor/ceil/range), sorted iteration, clear, and deep copy. Exit code sums the asserts.
 import { std::collections::SortedMap, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     SortedMap<int32, int32> m = SortedMap.empty();
 
@@ -83,5 +83,5 @@ fn int32 main() {
     int32 re = match (m.get(key: 7)) { case Some(value: v): v; case None: 0 - 1; };
     if (re == 77 && cp.length() == 100) { r = r + 5; }
 
-    return r;   // 13 asserts * 5 = 65 (poison adds 1000s if delete is wrong)
+    return cast<uint8>(r);   // 13 asserts * 5 = 65 (poison adds 1000s if delete is wrong)
 }

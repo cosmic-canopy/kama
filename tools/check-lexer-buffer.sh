@@ -27,8 +27,8 @@ fails=0
 runs=0
 for word in give copy; do
     # The program up to the padding, and after it: the word sits at `prefixLen + padLen + suffixHead`.
-    head="fn int32 take(string s) { return cast<int32>(s.length()); }
-fn int32 main() {
+    head="fn uint8 take(string s) { return cast<uint8>(s.length()); }
+fn uint8 main() {
     string s = \"ab\";
     // "
     tail="

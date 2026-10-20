@@ -18,9 +18,9 @@ fn Shared<Shape, BumpAllocator> make(BumpAllocator alloc, int32 r) {
 
 fn int32 areaOf(Shared<Shape, BumpAllocator> s) { return s.area(); }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);
     Shared<Shape, BumpAllocator> s = make(alloc: arena.handle(), r: 9);   // 81, via return-position new
     int32 viaArg = areaOf(s: make(alloc: arena.handle(), r: 4));          // 16, via arg-position hoisted new
-    return s.area() + viaArg;                                             // 97
+    return cast<uint8>(s.area() + viaArg);                                             // 97
 }

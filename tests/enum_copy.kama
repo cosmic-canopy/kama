@@ -86,9 +86,9 @@ fn int32 run() {
 
 fn void sinkValue(Value v) { }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = run();
-    if (r != 0) { return r; }
+    if (r != 0) { return cast<uint8>(r); }
     if (built != dropped) { return 8; }   // the copies and the Shared's one Doc, each dropped once
     return 0;
 }

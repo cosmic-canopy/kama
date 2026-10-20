@@ -6,4 +6,4 @@ type value W {
     public ctor make() { this.hits = 3; }
     public fn int32 get() { return hits; }
 }
-fn int32 main() { W w = W.make(); return w.get(); }
+fn uint8 main() { W w = W.make(); return cast<uint8>(w.get()); }

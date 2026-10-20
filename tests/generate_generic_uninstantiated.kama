@@ -18,7 +18,7 @@ type value Kept<T> {
     public T v;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Kept<int32> a = Kept::<int32>.of(v: 20);
     Kept<int32> b = Kept::<int32>.of(v: 20);
     Kept<int32> c = Kept::<int32>.of(v: 3);
@@ -28,5 +28,5 @@ fn int32 main() {
     if (a != c) { n = n + 20; }
     string s = "${c}";
     if (!s.equals(other: "Kept { v: 3 }")) { return 1; }
-    return n + c.v;                          // 43
+    return cast<uint8>(n + c.v);                          // 43
 }

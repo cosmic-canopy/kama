@@ -48,11 +48,11 @@ type value World implements Sendable {
 
 fn void step(ref Acc a) { a.run(); }   // borrows ONE component array, not the world
 
-fn int32 main() {
+fn uint8 main() {
     World w = World.make();
     scope {
         spawn step(a: ref w.bodies);    // place {w, bodies}
         spawn step(a: ref w.springs);   // place {w, springs} — neither is a prefix of the other
     }                                   // BARRIER: both joined before the totals are read
-    return (w.bodies.total + w.springs.total) % 256;   // sum 0..99 = 4950; 4950 % 256 = 86
+    return cast<uint8>((w.bodies.total + w.springs.total) % 256);   // sum 0..99 = 4950; 4950 % 256 = 86
 }

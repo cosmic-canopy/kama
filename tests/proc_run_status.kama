@@ -6,7 +6,7 @@ import { core::envOr, std::process::Command, std::process::Output, std::process:
 // POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.
 fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<int64>(c); case _: -1; }; }
 
-fn int32 main() {
+fn uint8 main() {
     Command t = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     t.arg(a: "exit"); t.arg(a: "0");
     Result<Output, IoError> tr = t.run();
@@ -14,7 +14,7 @@ fn int32 main() {
         case Ok(value: o): (o.status().success() ? 0 : 91);
         case Err(error: e): 92;
     };
-    if (a != 0) { return a; }
+    if (a != 0) { return cast<uint8>(a); }
 
     Command f = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     f.arg(a: "exit"); f.arg(a: "1");
@@ -23,6 +23,6 @@ fn int32 main() {
         case Ok(value: o): ((codeOf(s: o.status()) == 1) ? 0 : 93);
         case Err(error: e): 94;
     };
-    if (b != 0) { return b; }
+    if (b != 0) { return cast<uint8>(b); }
     return 42;
 }

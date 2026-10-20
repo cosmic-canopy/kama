@@ -8,4 +8,4 @@ type resource Box {
     public fn void leak(ref Box other) { other.p = this.p; }   // no marker, no deref, raw pointer moved
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

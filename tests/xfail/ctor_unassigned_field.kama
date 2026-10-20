@@ -7,4 +7,4 @@ type value Rect {
     public int32 size;                 // never assigned below
     public ctor make(int32 w) { this.w = w; }
 }
-fn int32 main() { Rect r = Rect.make(w: 3); return r.w; }
+fn uint8 main() { Rect r = Rect.make(w: 3); return cast<uint8>(r.w); }

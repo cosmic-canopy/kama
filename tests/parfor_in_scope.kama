@@ -6,7 +6,7 @@ import { std::concurrent::Isolate, std::collections::DynamicArray, std::collecti
 
 fn void bump(ref int32 x) { x = x + 100; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 side = 0;
     DynamicArray<int32> a = DynamicArray.empty();
     int32 i = 0;
@@ -22,5 +22,5 @@ fn int32 main() {
     int32 s = side;                                    // 100
     isize j = 0;
     while (j < a.length()) { s = s + a[j]; j = j + 1; }   // 100 + 6*2 = 112
-    return cast<int32>(s % 256);                                       // 112
+    return cast<uint8>(s % 256);                                       // 112
 }

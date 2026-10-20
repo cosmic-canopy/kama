@@ -12,7 +12,7 @@ fn void producer(Sender<int32> tx) {
     while (i < 50) { _ = tx.send(item: i); i = i + 1; }
 }                                    // ~Sender drops ONE share here — the side stays open for the peer
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32> t0 = ch.sender();
     Sender<int32> t1 = ch.sender();   // a SECOND sender on the same channel
@@ -32,5 +32,5 @@ fn int32 main() {
             }
         }
     }                                 // BARRIER: both producers joined here
-    return got;                       // 100 iff neither producer's items were cut short
+    return cast<uint8>(got);                       // 100 iff neither producer's items were cut short
 }

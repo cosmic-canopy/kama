@@ -35,7 +35,7 @@ fn const ref string pick(const ref string a, const ref string key) { calls = cal
 
 fn string viaReturn(const ref B b) { return copy b.get(key: "r"); }
 
-fn int32 main() {
+fn uint8 main() {
     B b = B.make();
     // A declaration, from a method, a free function and a chain — each call made once.
     string s = copy b.get(key: "x");

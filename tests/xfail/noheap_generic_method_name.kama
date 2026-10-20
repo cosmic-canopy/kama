@@ -15,4 +15,4 @@ import { std::collections::DynamicArray };
     DynamicArray<string> l = DynamicArray.empty();
     return n;
 }
-fn int32 main() { return tick(n: 7); }
+fn uint8 main() { return cast<uint8>(tick(n: 7)); }

@@ -2,4 +2,4 @@
 // anything evaluated at run time.
 @generate(Serializable, Deserializable)
 type value R { @field(id: "three") int32 a; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

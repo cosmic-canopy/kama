@@ -67,7 +67,7 @@ kama emits portable C, so the practical path on a real board is to hand that C t
 
 - **Object link** (Cortex-M, matches the flow above): `kama build --target embedded --cc "<vendor-gcc flags>"`
   → an object; link it with the vendor startup + linker script. The object exposes `kama_main()` (your
-  `fn int32 main()`); call it from the SDK's `main`/`app_main`.
+  `fn uint8 main()`); call it from the SDK's `main`/`app_main`.
 - **Transpile** (any target): `kama transpile app.kama -o app.c` → drop `app.c` into the SDK project as a source
   file and call `kama_main()` from the vendor entry point.
 

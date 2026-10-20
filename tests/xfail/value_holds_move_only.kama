@@ -3,4 +3,4 @@
 // exited 15 (`k.a.store(5)` left `h.a` at 1), while `Atomic<int32> y = x;` on its own is a move.
 import { std::concurrent::Atomic };
 type value Holder { public Atomic<int32> a; public ctor make() { this.a = Atomic.make(value: 1); } }
-fn int32 main() { Holder h = Holder.make(); Holder k = h; k.a.store(value: 5); return h.a.load() * 10 + k.a.load(); }
+fn uint8 main() { Holder h = Holder.make(); Holder k = h; k.a.store(value: 5); return cast<uint8>(h.a.load() * 10 + k.a.load()); }

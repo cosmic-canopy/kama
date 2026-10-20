@@ -6,8 +6,8 @@ unsafe fn void shift(ref FixedArray<uint8> b) {
     UnsafePtr<uint8> p = b.dataPtrMut();
     copyElements(ptr: addr(of: p[1]), from: p, count: 4);
 }
-fn int32 main() {
+fn uint8 main() {
     FixedArray<uint8> b = FixedArray.make(size: 8);
     shift(b: b);
-    return cast<int32>(b[1]);
+    return cast<uint8>(b[1]);
 }

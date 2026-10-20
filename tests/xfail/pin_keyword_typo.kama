@@ -2,4 +2,4 @@
 // which means a typo in that position has to be caught rather than silently reduced as some other form.
 type contract Weighable<T iss This> for value { fn int32 weigh(ref T other); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

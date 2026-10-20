@@ -10,12 +10,12 @@ fn T identity<T>(T x)
 {
     return x;
 }
-fn int32 main()
+fn uint8 main()
 {
     int32 hi = max(a: 3, b: 4);        // max__int32   -> 4
     int32 lo = max(a: 10, b: 2);       // same instantiation (dedup) -> 10
     float64 f = max(a: 1.5, b: 2.5);   // max__float64 -> 2.5
     int32 id = identity(x: 8);         // identity__int32 -> 8
     string s = identity(x: "abcde");   // identity__string
-    return hi + lo + id + cast<int32>(f) + cast<int32>(s.length());   // 4+10+8+2+5 = 29
+    return cast<uint8>(hi + lo + id + cast<int32>(f) + cast<int32>(s.length()));   // 4+10+8+2+5 = 29
 }

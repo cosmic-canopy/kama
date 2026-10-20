@@ -24,7 +24,7 @@ type value Holder {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<Point>#(2) ps = [Point.at(x: 3), Point.at(x: 9)];
     borrow ps.viewMut() as v { v[0] = v[1]; }            // face 1: a plain user element
     borrow ps.view() as c { if (c.length() != 2 || c[0].x != 9) { return 240; } }
@@ -42,5 +42,5 @@ fn int32 main() {
 
     DynamicArray<Point> d = DynamicArray.empty();        // the import that brought `View` in
     d.add(item: Point.at(x: 1));
-    return ps[0].x + fs[1].e + d[0].x;                   // 9 + 3 + 1
+    return cast<uint8>(ps[0].x + fs[1].e + d[0].x);                   // 9 + 3 + 1
 }

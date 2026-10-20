@@ -3,6 +3,6 @@
 // One expression, two answers, and neither the language nor the machine agreed with the other.
 comptime int32 N = cast<int8>(300);
 
-fn int32 main() {
-    return N;
+fn uint8 main() {
+    return cast<uint8>(N);
 }

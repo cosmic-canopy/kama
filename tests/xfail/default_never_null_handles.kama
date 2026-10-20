@@ -3,7 +3,7 @@
 // crashed on the first call through an element, in safe code.
 type contract Shape for value, resource { fn int32 area(); }
 type resource Holder<T> { T item; public ctor fresh() when [T: default] { this.item = T.default(); } public fn ref T get() { return this.item; } }
-fn int32 main() {
+fn uint8 main() {
     Holder<Owned<Shape>> h = Holder.fresh();
     return 0;
 }

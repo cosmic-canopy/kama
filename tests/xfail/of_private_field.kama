@@ -4,4 +4,4 @@ type value Bad {
     public int32 x;
     int32 y;   // private (value fields default private) — removes bag eligibility
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

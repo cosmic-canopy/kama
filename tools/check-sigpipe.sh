@@ -52,7 +52,7 @@ cc -o "$tmp/disp" "$tmp/disp.c" > "$tmp/b0.log" 2>&1 || { echo "check-sigpipe: t
 # 1. stdout into a closed pipe still ends the program by SIGPIPE.
 cat > "$tmp/loud.kama" <<'KAMA'
 import { core::println };
-fn int32 main() {
+fn uint8 main() {
     int32 i = 0;
     while (i < 1000000) { println(s: "line"); i = i + 1; }
     return 0;
@@ -69,11 +69,11 @@ done
 # 2. A spawned child gets SIGPIPE back at its default.
 cat > "$tmp/spawn.kama" <<'KAMA'
 import { std::process::Command, std::process::Output, std::io::IoError };
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: "sh");
     c.arg(a: "-c"); c.arg(a: "yes | head -n 1 >/dev/null");
     Result<Output, IoError> r = c.run();
-    return match (give r) { case Ok(value: o): cast<int32>(o.stderr().length()); case Err(error: e): 99; };
+    return match (give r) { case Ok(value: o): cast<uint8>(o.stderr().length()); case Err(error: e): 99; };
 }
 KAMA
 "$KAMA" build "$tmp/spawn.kama" -o "$tmp/spawn" > "$tmp/b2.log" 2>&1 || { bad "spawn.kama did not build"; cat "$tmp/b2.log" >&2; }

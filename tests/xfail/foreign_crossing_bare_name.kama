@@ -4,4 +4,4 @@ extern fn void c_register(UnsafePtr cb);
 unsafe fn void install() {
     c_register(cb: cast<UnsafePtr>(handler));   // ERROR: no `fnptr` type carries the contract
 }
-fn int32 main() { install(); return 0; }
+fn uint8 main() { install(); return 0; }

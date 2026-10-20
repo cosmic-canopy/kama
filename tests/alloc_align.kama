@@ -25,7 +25,7 @@ unsafe fn bool alignedWide(Owned<Wide> o) {
 }
 unsafe fn bool alignedArray(ref DynamicArray<Wide> xs) { return cast<usize>(xs.dataPtr()) % alignof(Wide) == 0; }
 
-fn int32 main() {
+fn uint8 main() {
     if (alignof(V) != 16 || alignof(Wide) != 64) { return 90; }
     Arena arena = Arena.make(capacity: 1024);
     Owned<Pad, BumpAllocator> pad = new(allocator: arena.handle()) Pad.make();   // leave the bump at an odd offset

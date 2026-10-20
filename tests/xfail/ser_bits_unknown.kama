@@ -4,4 +4,4 @@
 // them into the smallest integer carrier in their own type.
 @generate(Serializable, Deserializable)
 type value R { @bits(3) int32 a; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -2,8 +2,8 @@
 // carried, now through the one alias form that survives.
 import { nsalias::graphics::Texture as Tex, nsalias::graphics::scale as gscale };
 
-fn int32 main()
+fn uint8 main()
 {
     Tex t = Tex.make(id: 20);            // alias in type + ctor position
-    return t.get() + gscale(x: 11);      // 20 + 22 = 42
+    return cast<uint8>(t.get() + gscale(x: 11));      // 20 + 22 = 42
 }

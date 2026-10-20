@@ -35,7 +35,7 @@ fn int32 portOf(const ref UdpSocket s) {
     return match (r) { case Ok(value: a): cast<int32>(a.port); case Err(error: e): -1; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
     uint16 zero = cast<uint16>(0);
     Result<UdpSocket, IoError> ra = UdpSocket.bind(host: host, port: zero);
@@ -45,7 +45,7 @@ fn int32 main() {
             := match (rb) {
                 case Ok(value: b): {
                     int32 bport = portOf(s: b);
-                    := (bport <= 0) ? 60 : run(a: a, b: b, bport: bport);
+                    := (bport <= 0) ? 60 : cast<uint8>(run(a: a, b: b, bport: bport));
                 }
                 case Err(error: e): 59;
             };

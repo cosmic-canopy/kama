@@ -81,7 +81,7 @@ fn int32 additive() {
     return ok;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = checks() + handles() + additive();
-    return r == 12 ? 42 : r;
+    return cast<uint8>(r == 12 ? 42 : r);
 }

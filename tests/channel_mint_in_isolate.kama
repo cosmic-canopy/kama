@@ -18,7 +18,7 @@ fn void producer(Channel<int32> ch) {
     while (i < 10) { _ = tx.send(item: i); i = i + 1; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Receiver<int32> rx = ch.receiver();
     int32 got = 0;
@@ -33,5 +33,5 @@ fn int32 main() {
             };
         }
     }
-    return got;   // 10 iff the receiver waited for a sender that did not exist yet
+    return cast<uint8>(got);   // 10 iff the receiver waited for a sender that did not exist yet
 }

@@ -26,13 +26,13 @@ BOUND=10
 CAP=20   # seconds per run; the old shape took ~1.9 s here, so only a far worse regression reaches it
 
 { echo 'fn int32 f(int32 x) { return x; }'
-  printf 'fn int32 main() { int32 x = 1; int32 s = f(x: x)'
+  printf 'fn uint8 main() { int32 x = 1; int32 s = f(x: x)'
   i=1; while [ $i -lt $N ]; do printf ' + f(x: x)'; i=$((i+1)); done
-  echo "; return s - $N; }"; } > "$tmp/chain.kama"
+  echo "; return cast<uint8>(s - $N); }"; } > "$tmp/chain.kama"
 { echo 'fn int32 f(int32 x) { return x; }'
-  printf 'fn int32 main() { int32 x = 1; int32 s = f(x: x);'
+  printf 'fn uint8 main() { int32 x = 1; int32 s = f(x: x);'
   i=1; while [ $i -lt $N ]; do printf ' s = s + f(x: x);'; i=$((i+1)); done
-  echo " return s - $N; }"; } > "$tmp/stmts.kama"
+  echo " return cast<uint8>(s - $N); }"; } > "$tmp/stmts.kama"
 
 # best <file>: the fastest of three `kama check` runs, in seconds; "cap" if one hit the cap or failed.
 best() {

@@ -30,4 +30,4 @@ type value WasmClock implements Clock {
 @compileFor(!ARCH_WASM32) fn int32 platformTick() { NativeClock c = NativeClock.make(); return c.tick(); }
 @compileFor(ARCH_WASM32) fn int32 platformTick() { WasmClock   c = WasmClock.make();   return c.tick(); }
 
-fn int32 main() { return platformTick(); }
+fn uint8 main() { return cast<uint8>(platformTick()); }

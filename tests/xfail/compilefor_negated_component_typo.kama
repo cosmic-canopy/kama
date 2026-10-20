@@ -6,4 +6,4 @@
 @compileFor(!OS_WINODWS)
 fn int32 everywhereButWindows() { return 3; }
 
-fn int32 main() { return everywhereButWindows() - 3; }
+fn uint8 main() { return cast<uint8>(everywhereButWindows() - 3); }

@@ -4,7 +4,7 @@
 // as "too narrow" instead of "cannot tell". Found writing std::random's fixture for the full unsigned width.
 fn T id<T>(T x) { return x; }
 
-fn int32 main() {
+fn uint8 main() {
     uint64 a = id(x: 5ui64);
     uint64 b = id(x: 18446744073709551615ui64);
     uint64 c = id(x: 9223372036854775808ui64);    // int64Max + 1, the first value that needs the fix

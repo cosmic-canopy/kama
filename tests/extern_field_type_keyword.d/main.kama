@@ -43,7 +43,7 @@ fn int32 doubled(int32 type) { return type * 2; }     // 6. a PARAMETER, and REA
 
 unsafe fn int32 viaC(ref BufBinding b) { return bufKind(b: addr(of: b)); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     BufBinding b = BufBinding.zero();
@@ -65,5 +65,5 @@ fn int32 main() {
 
     if (doubled(type: 21) == 42) { r = r + 64; }      // an argument LABEL
 
-    return r;
+    return cast<uint8>(r);
 }

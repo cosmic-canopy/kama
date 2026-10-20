@@ -22,7 +22,7 @@ fn int32 run(int32 c) {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 x = run(c: 0);
-    return traceGet();                // exactly one drop -> 2
+    return cast<uint8>(traceGet());                // exactly one drop -> 2
 }

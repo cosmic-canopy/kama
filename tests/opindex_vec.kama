@@ -20,11 +20,11 @@ type resource Vec<T> {
     public fn int32 length() { return this.len; }
     unsafe ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }
-fn int32 main() {
+fn uint8 main() {
     Vec<int32> v = Vec.make(n: 3);
     v[0] = 40;  v[1] = 2;  v[2] = 0;
     v[2] += 100;
     int32 s = 0;  int32 i = 0;
     while (i < v.length()) { s = s + v[i]; i = i + 1; }
-    return s;   // 142; buffer freed by RAII (ASan-clean)
+    return cast<uint8>(s);   // 142; buffer freed by RAII (ASan-clean)
 }

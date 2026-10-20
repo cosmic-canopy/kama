@@ -8,7 +8,7 @@ type value Money {
     public Money operator+(Money r) { return Money.of(cents: this.cents + r.cents); }   // fine — not a comparison
     public bool operator==(Money r) { return this.cents == r.cents; }                   // rejected
 }
-fn int32 main() {
+fn uint8 main() {
     Money a = Money.of(cents: 5);
     Money b = Money.of(cents: 5);
     if (a == b) { return 1; }

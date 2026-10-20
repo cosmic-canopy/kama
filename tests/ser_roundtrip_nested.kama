@@ -27,7 +27,7 @@ type resource Parent {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Child mainC = Child.make(v: 5, tag: "xyz");            // weight 8
     Child kid1  = Child.make(v: 1, tag: "a");              // weight 2
     Child kid2  = Child.make(v: 2, tag: "bb");             // weight 4
@@ -40,5 +40,5 @@ fn int32 main() {
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: p);
     string j = match (give j_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     Result<Parent, Owned<Error>> res = deserializeJsonBuffer::<Parent>(src: give j);
-    return match (res) { case Ok(value: q): q.total(); case Err(error: e): 0 - 1; };   // 10 + 8 + 5 + (2+4) = 29
+    return match (res) { case Ok(value: q): cast<uint8>(q.total()); case Err(error: e): 255; };   // 10 + 8 + 5 + (2+4) = 29
 }

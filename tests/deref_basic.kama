@@ -14,9 +14,9 @@ type value BoxP implements Deref<Point>, DerefMut<Point> {
     public fn ref Point derefMut() { return this.inner; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     BoxP b = BoxP.make(p: Point.of(x: 30, y: 12));
     int32 viaMethod = b.sum();   // auto-deref to a Point method -> 42
     int32 viaField  = b.x;       // auto-deref to a Point field  -> 30
-    return viaMethod + viaField; // 72
+    return cast<uint8>(viaMethod + viaField); // 72
 }

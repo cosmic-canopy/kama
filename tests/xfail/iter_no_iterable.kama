@@ -14,9 +14,9 @@ type value Range {                       // has iterator() but does NOT `impleme
     public ctor make(int32 n) { this.n = n; }
     public fn RangeIter iterator() { return RangeIter.make(cur: 0, end: this.n); }
 }
-fn int32 main() {
+fn uint8 main() {
     Range r = Range.make(n: 3);
     int32 s = 0;
     foreach (int32 x in r) { s = s + x; }   // ERROR: Range does not `implements Iterable<int32>`
-    return s;
+    return cast<uint8>(s);
 }

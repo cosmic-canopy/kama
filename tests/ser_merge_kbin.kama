@@ -34,7 +34,7 @@ fn DynamicArray<uint8> bytes(Result<DynamicArray<uint8>, Owned<Error>> r) {
 }
 fn bool ok(Result<Unit, Owned<Error>> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 score = 0;
     Mix m = Mix.of(gain: 1, pan: -5);
     if (ok(r: mergeKbinNamedBuffer(src: bytes(r: serializeKbinNamedBuffer(v: GainOnly.of(gain: 7))), into: m))
@@ -56,5 +56,5 @@ fn int32 main() {
     DynamicArray<uint8> cut = DynamicArray.empty();
     for (isize i = 0; i + 1 < full.length(); i++) { cut.add(item: full[i]); }
     if (!ok(r: mergeKbinPositionalBuffer(src: give cut, into: m)) && m.gain == 4 && m.pan == 6) { score = score + 6; }
-    return score;                                                        // 42
+    return cast<uint8>(score);                                                        // 42
 }

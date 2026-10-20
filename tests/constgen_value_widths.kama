@@ -16,12 +16,12 @@ fn bool   big32() comptime(uint32 F) { return F > 2147483647ui32; }   // above I
 fn int64  wide64() comptime(int64 F)  { return F; }
 fn bool   u64hi() comptime(uint64 F) { return F == 18446744073709551615ui64; }   // the full 64-bit range
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = 0;
     if (neg8()#(-1) == -1)                                       { n = n + 1; }
     if (small()#(-300) == -300)                                  { n = n + 1; }
     if (big32()#(4294967295ui32))                                  { n = n + 1; }
     if (wide64()#(9223372036854775807i64) == 9223372036854775807i64) { n = n + 1; }
     if (u64hi()#(18446744073709551615ui64))                        { n = n + 1; }
-    return n;   // 5
+    return cast<uint8>(n);   // 5
 }

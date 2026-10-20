@@ -28,7 +28,7 @@ fn string json(Serializable v) {
     return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     OrderedMap<string, int32> m = OrderedMap.empty();
     m.put(key: "zeta", value: 1); m.put(key: "alpha", value: 2); m.put(key: "mid", value: 3);
@@ -78,5 +78,5 @@ fn int32 main() {
     Result<Doc, Owned<Error>> db = deserializeJsonBuffer::<Doc>(src: copy dj);
     Doc d2 = match (give db) { case Ok(value: v): give v; case Err(error: _): Doc.make(); };
     if (dj == "{\"meta\":{\"title\":1,\"author\":2},\"tags\":[\"kama\",\"c\"]}" && json(v: d2) == dj) { r = r + 64; }
-    return r - 70;   // 127 - 70 = 57
+    return cast<uint8>(r - 70);   // 127 - 70 = 57
 }

@@ -54,7 +54,7 @@ fn string merged(ref Cfg c, string src) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     Cfg c = Cfg.make(); c.fill();
     // Per key: one set, one removed, one added, one kept.
     if (merged(c: c, src: "{\"caps\":{\"cpu\":4,\"mem\":null,\"gpu\":1}}") != "ok") { return 1; }

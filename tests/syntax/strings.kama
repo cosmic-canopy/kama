@@ -6,7 +6,7 @@
 // member/index accessors (no CALL — `${s.length()}` is a lexical error) and a format specifier is
 // `[-+.0-9A-Za-z]+`, so `${s:>8}` is one too.
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = 0;
     string esc = "tab\there\nnewline \"quoted\" \\ back \$dollar \u{E9} \u{1F600}";
     string verb = @"say ""hi"" — the doubled quote is the escape, and the line CONTINUES";
@@ -22,5 +22,5 @@ fn int32 main() {
     if (interp.length() > 0) { n = n + 1; }
     if (c1 == 'a' && c2 == '\n' && c3 == '\'') { n = n + 1; }
     if (c4 == '\u{E9}' && c5 == 'é' && c6 == '😀') { n = n + 1; }
-    return n;
+    return cast<uint8>(n);
 }

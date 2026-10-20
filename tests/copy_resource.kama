@@ -17,12 +17,12 @@ type resource Res implements Copyable<This>(bare: give) {
 fn int32 twice(Res r) { return r.head() * 2; }              // r owned by callee, dropped at fn-end
 fn Res clone(Res src) { return copy src; }                  // return a `copy`; src drops at fn-end
 
-fn int32 main() {
+fn uint8 main() {
     Res a = Res.make(v: 7);
     Res b = copy a;                 // init copy: a stays valid, b has its own buffer
     int32 t = twice(r: copy a);     // argument copy: fresh copy into the callee; a still valid
     Res c = clone(src: give b);     // argument give (move b into clone) + return copy
     Res d = Res.make(v: 100);
     d = copy a;                     // assignment copy: drop d's old value, deep-copy a into it
-    return a.head() + c.head() + d.head() + t;   // 7 + 7 + 7 + 14 = 35   (a, c, d all drop cleanly)
+    return cast<uint8>(a.head() + c.head() + d.head() + t);   // 7 + 7 + 7 + 14 = 35   (a, c, d all drop cleanly)
 }

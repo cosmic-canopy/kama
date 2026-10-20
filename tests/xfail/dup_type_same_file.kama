@@ -4,4 +4,4 @@
 type value T { public int32 a; public ctor make() { this.a = 1; } }
 type value T { public int32 b; public ctor make() { this.b = 2; } }   // -> REJECT
 
-fn int32 main() { T t = T.make(); return 0; }
+fn uint8 main() { T t = T.make(); return 0; }

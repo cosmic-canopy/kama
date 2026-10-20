@@ -9,7 +9,7 @@ import {
     std::collections::lowerBound,
 };
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 20); xs.add(item: 30); xs.add(item: 40);
     int32 a = 0; int32 b = 0; int32 c = 0; int32 d = 0; int32 e = 0; int32 g = 0;
@@ -34,5 +34,5 @@ fn int32 main() {
         g = cast<int32>(lowerBound(items: v, target: t20));   // 1 — first position a 20 could go
     }
 
-    return a + b + c + d + e + g;   // 1 + 7 + 4 + 0 + 5 + 1 = 18
+    return cast<uint8>(a + b + c + d + e + g);   // 1 + 7 + 4 + 0 + 5 + 1 = 18
 }

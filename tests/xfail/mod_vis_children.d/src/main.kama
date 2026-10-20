@@ -2,4 +2,4 @@
 // it is refused — while `sub::deep` reaches it, which `mod_vis_children_ok` pins as the positive twin.
 import { vischild::sub::s };
 
-fn int32 main() { return s(); }
+fn uint8 main() { return s(); }

@@ -47,7 +47,7 @@ type resource Ticket {
     ~Ticket() { released = released + 100; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Result<Pool, Why> a = Pool.fill(n: -1);
     if (released != 1) { return 1; }                        // `~Pool` ran on the abandoned, complete pool
     Result<Pool, Why> b = Pool.fill(n: 1);                  // kept: nothing released yet

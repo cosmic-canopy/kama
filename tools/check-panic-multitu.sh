@@ -37,7 +37,7 @@ unsafe fn void onPanic(const ref PanicInfo info) {
     string m = "HANDLER-RAN-CROSS-TU\n";
     write(fd: 2, buf: m.cstr(), n: cast<usize>(m.length()));
 }
-fn int32 main() {
+fn uint8 main() {
     setPanicHandler(handler: onPanic);
     boom();          // the panic originates in lib's TU — the handler must still fire
     return 0;

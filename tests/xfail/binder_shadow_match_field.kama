@@ -14,4 +14,4 @@ type value Counter {
         return t;
     }
 }
-fn int32 main() { Counter c = Counter.make(); return c.pick(); }
+fn uint8 main() { Counter c = Counter.make(); return cast<uint8>(c.pick()); }

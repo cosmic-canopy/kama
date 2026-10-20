@@ -5,4 +5,4 @@ type value V { public int32 x; comptime int32 SECRET = 7; public ctor make() { t
 
 comptime int32 LEAK = V::SECRET + 1;
 
-fn int32 main() { return LEAK - 8; }
+fn uint8 main() { return cast<uint8>(LEAK - 8); }

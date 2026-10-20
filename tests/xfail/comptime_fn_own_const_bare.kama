@@ -5,4 +5,4 @@ type value Palette {
     public comptime fn int32 scaled(int32 n) { return n * K; }
 }
 comptime int32 NINE = Palette::scaled(n: 3);
-fn int32 main() { return NINE; }
+fn uint8 main() { return cast<uint8>(NINE); }

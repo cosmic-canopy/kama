@@ -14,4 +14,4 @@ fn Result<int32, Owned<Error>> f(int32 which) {
 fn int32 elen(Result<int32, Owned<Error>> r) {
     return match (r) { case Ok(value: v): v; case Err(error: e): { string m = e.message(); := cast<int32>(m.length()); } };
 }
-fn int32 main() { return elen(r: f(which: 0)) + elen(r: f(which: 1)) + elen(r: f(which: 2)); }  // 9+2+3 = 14
+fn uint8 main() { return cast<uint8>(elen(r: f(which: 0)) + elen(r: f(which: 1)) + elen(r: f(which: 2))); }  // 9+2+3 = 14

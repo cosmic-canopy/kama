@@ -7,4 +7,4 @@ fn Template make() {
     Template t = keep"x=${a}";
     return t;
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

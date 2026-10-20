@@ -21,7 +21,7 @@ type enum Side<T> { L, R; public fn int32 k() { return 3; } }   // payload-less:
 
 fn int32 viaContract(ref Tag t) { return t.tag(); }
 
-fn int32 main() {
+fn uint8 main() {
     Maybe<int32> m = Maybe::Has(v: 3);
     Maybe<int32> n = Maybe::<int32>::none();
     Maybe<Tagged> t = Maybe::Has(v: Tagged.of(v: 5));
@@ -36,5 +36,5 @@ fn int32 main() {
     r = r + sd.k();                      // 3
     Tag tv = t;
     r = r + viaContract(t: tv);          // 105 again, through the vtbl
-    return r - 100;                      // 1 + 2 + 30 + 105 + 10 + 3 + 105 - 100 = 156
+    return cast<uint8>(r - 100);                      // 1 + 2 + 30 + 105 + 10 + 3 + 105 - 100 = 156
 }

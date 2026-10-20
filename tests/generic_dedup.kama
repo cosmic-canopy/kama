@@ -10,9 +10,9 @@ fn int32 lo(int32 p, int32 q)
 {
     return min(a: p, b: q);        // args typed from lo's params -> min__int32
 }
-fn int32 main()
+fn uint8 main()
 {
     int32 x = lo(p: 5, q: 9);      // via lo()  -> min__int32 -> 5
     int32 y = min(a: 42, b: 99);   // direct    -> min__int32 -> 42 (same instantiation)
-    return x + y - 5;              // 5 + 42 - 5 = 42
+    return cast<uint8>(x + y - 5);              // 5 + 42 - 5 = 42
 }

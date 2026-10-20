@@ -35,7 +35,7 @@ fn int32 takeS(string s) { return cast<int32>(s.length()); }
 fn int32 lenOf(const ref string s) { return cast<int32>(s.length()); }
 fn string mk(int32 n) { return "xxxxxxxxxx".substring(start: 0, end: cast<isize>(n)); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 bad = 0;
     for (int32 i = 0; i < 2; i++) {
         bool f = i == 0;

@@ -12,4 +12,4 @@ type resource M {
         return n;
     }
 }
-fn int32 main() { M m = M.make(); return cast<int32>(m.step()); }
+fn uint8 main() { M m = M.make(); return cast<uint8>(m.step()); }

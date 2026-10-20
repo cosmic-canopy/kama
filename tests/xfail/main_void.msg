@@ -1,1 +1,1 @@
-is declared `fn int32 main()`
+is declared `fn uint8 main()`

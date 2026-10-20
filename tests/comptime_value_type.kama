@@ -29,7 +29,7 @@ comptime Segment SEG = Segment.make(b: Point.of(x: 5, y: 1), a: ORIGIN); // a ne
 comptime int32 SEG_DX = SEG.dx();                                       // a method, run at compile time
 comptime bool EQ = Perm::RW == (Perm::R | Perm::W);                     // `@generate(Equatable)` equality
 
-fn int32 main() {
+fn uint8 main() {
     Perm p = Perm::R | Perm::W;          // at run time: a constant's address is never taken — it is copied
     Perm q = Perm::RW;
     int32 bad = 0;
@@ -41,5 +41,5 @@ fn int32 main() {
     if (ORIGIN.x != 0 || UNIT_X.x != 1) { bad = bad + 32; }        // a field of a module constant
     comptime Perm LOCAL = Perm::R | Perm::X;                       // a local one
     if (LOCAL.raw() != 5ui32) { bad = bad + 64; }
-    return bad + 42;
+    return cast<uint8>(bad + 42);
 }

@@ -4,4 +4,4 @@
 // the same check; this covers the `fnptr` arm, which relaxing that check for `@noheap` could otherwise
 // have opened in silence.
 @interrupt fnptr void Isr();
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

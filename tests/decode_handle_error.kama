@@ -10,7 +10,7 @@
 // round-tripping: a handle on the wire is what makes `SlotMap`'s serde promise usable (tests/ser_graph_slotmap.kama).
 import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
          std::collections::Handle };
-fn int32 main() {
+fn uint8 main() {
     // good input -> Ok, and the fields survive the round trip
     Handle h = Handle.of(index: 7, generation: 3ui32);
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: h);
@@ -31,5 +31,5 @@ fn int32 main() {
             case None: 0 - 3;
         };
     };
-    return okv + errv;   // 10 + 32 = 42
+    return cast<uint8>(okv + errv);   // 10 + 32 = 42
 }

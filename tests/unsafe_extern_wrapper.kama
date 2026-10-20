@@ -9,4 +9,4 @@ extern fn int32 abs(int32 x);
 unsafe fn int32 absRaw(int32 v) { return abs(x: v); }          // free, unsafe, makes the C call
 fn int32 abs32(int32 v) { return absRaw(v: v); }               // safe public API over it
 
-fn int32 main() { return abs32(v: 0 - 41) + 1; }
+fn uint8 main() { return cast<uint8>(abs32(v: 0 - 41) + 1); }

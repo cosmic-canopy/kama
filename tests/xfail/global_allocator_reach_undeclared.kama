@@ -6,4 +6,4 @@ type resource Pool {
     public fn isize liveCount() { return 0; }
 }
 
-fn int32 main() { return cast<int32>(globalHeap::<Pool>().liveCount()); }
+fn uint8 main() { return cast<uint8>(globalHeap::<Pool>().liveCount()); }

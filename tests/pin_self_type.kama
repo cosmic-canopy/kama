@@ -18,11 +18,11 @@ fn int32 viaBound<T: Weighable<T>>(T a, T b) { return a.weigh(other: b); }
 // the contract VALUE in parameter position — a fat pointer, one indirect call
 fn int32 viaValue(Weighable<Widget> w, ref Widget other) { return w.weigh(other: other); }
 
-fn int32 main() {
+fn uint8 main() {
     Widget a = Widget.make(w: 20);
     Widget b = Widget.make(w: 22);
     if (viaBound::<Widget>(a: a, b: b) != 42) { return 1; }
     Weighable<Widget> h = a;                       // a contract value over a self-typed contract
     if (h.weigh(other: b) != 42) { return 2; }
-    return viaValue(w: a, other: b);
+    return cast<uint8>(viaValue(w: a, other: b));
 }

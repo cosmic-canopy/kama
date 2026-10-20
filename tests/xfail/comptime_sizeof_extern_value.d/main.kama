@@ -6,4 +6,4 @@ extern "rec.h";
 type extern value Sample { public int16 level; public float32 gain; }
 type value Rec { public Sample s; public uint8 tag; }
 comptime usize R = sizeof(Rec);
-fn int32 main() { return cast<int32>(R); }
+fn uint8 main() { return cast<uint8>(R); }

@@ -15,10 +15,10 @@ fn isize churn() {
     return globalHeap::<Pool>().liveCount();
 }
 
-fn int32 main() {
+fn uint8 main() {
     isize start = globalHeap::<Pool>().liveCount();   // 0
     isize inner = churn();                            // 2 — the box and the container buffer
     isize after = globalHeap::<Pool>().liveCount();   // 0 — both returned
     if (start != 0 || after != 0) { return 90; }
-    return cast<int32>(inner) + 5;                    // 2 + 5 = 7
+    return cast<uint8>(cast<int32>(inner) + 5);                    // 2 + 5 = 7
 }

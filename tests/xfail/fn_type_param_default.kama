@@ -9,4 +9,4 @@
 // rather than the cause.
 fn int32 f<T = int32>() { return 7; }
 
-fn int32 main() { return f(); }
+fn uint8 main() { return f(); }

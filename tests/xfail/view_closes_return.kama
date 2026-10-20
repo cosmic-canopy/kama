@@ -13,4 +13,4 @@ type resource Conn implements Transacts {
 }
 // ends it (KR-124).
 fn Tx leak(ref Conn c) { return c.begin(); }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

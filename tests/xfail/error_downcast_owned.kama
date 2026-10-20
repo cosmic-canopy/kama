@@ -12,4 +12,4 @@ type enum LoadError implements Error {
 }
 fn Result<int32, Owned<Error>> mk() { Owned<Probe> sp = new Probe.make(); return Result::Err(error: LoadError::Wrapped(probe: give sp)); }
 fn int32 peek(Owned<Error> e) { return match (e.as<LoadError>()) { case Some(value: x): 1; case None: 0; }; }   // ERROR: LoadError owns resources
-fn int32 main() { Result<int32, Owned<Error>> r = mk(); return match (give r) { case Ok(value: v): v; case Err(error: e): peek(e: give e); }; }
+fn uint8 main() { Result<int32, Owned<Error>> r = mk(); return match (give r) { case Ok(value: v): cast<uint8>(v); case Err(error: e): cast<uint8>(peek(e: give e)); }; }

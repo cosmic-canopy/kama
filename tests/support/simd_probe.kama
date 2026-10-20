@@ -35,7 +35,7 @@ expose fn void simdProbeAddAll(View<Vec4> dst, ConstView<Vec4> a, ConstView<Vec4
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     isize n = 256;
     FixedArray<Vec4> a = FixedArray.make(size: n);
     FixedArray<Vec4> b = FixedArray.make(size: n);

@@ -3,7 +3,7 @@
 // per-type public doors `File.make(fd:)`, `TcpStream.make(fd:)` and `UnixStream.make(fd:)` are private now, each
 // type's own. (One door, not a checked one: adopting a number something else owns still closes it twice.)
 import { std::fs::File };
-fn int32 main() {
+fn uint8 main() {
     File f = File.make(fd: 1);
     return 0;
 }

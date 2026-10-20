@@ -10,7 +10,7 @@ type enum Msg<T> { Put(T v), Nop }
 
 type value Plain { public int32 n; public ctor of(int32 n) { this.n = n; } }   // conforms to nothing
 
-fn int32 main() {
+fn uint8 main() {
     Msg<Plain> a = Msg::Put(v: Plain.of(n: 5));
     Msg<Plain> b = Msg::Put(v: Plain.of(n: 5));
     if (a == b) { return 1; }

@@ -7,4 +7,4 @@ type value Hidden { public int32 n; public ctor make(int32 n) { this.n = n; } }
 
 type value Box { public Hidden h; public ctor make(Hidden h) { this.h = h; } }
 
-fn int32 main() { return Box.make(h: Hidden.make(n: 0)).h.n; }
+fn uint8 main() { return cast<uint8>(Box.make(h: Hidden.make(n: 0)).h.n); }

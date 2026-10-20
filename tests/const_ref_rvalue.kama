@@ -21,7 +21,7 @@ fn int32 two() { return 2; }
 fn Color pick() { return Color::Blue; }
 fn Pt mk() { return Pt.make(x: 4, y: 5); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = 5;
     int32 b = 6;
     bool c = true;
@@ -45,5 +45,5 @@ fn int32 main() {
     Map<int32, int32> m = Map.empty();
     m.put(key: 6, value: 60);
     if (m.contains(key: a + 1))        { r = r + 1; }     // a stdlib `const ref K`
-    return r;                                             // 13
+    return cast<uint8>(r);                                             // 13
 }

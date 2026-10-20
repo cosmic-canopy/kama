@@ -8,7 +8,7 @@
 // Not changed, on purpose: a count at or past the width still folds unbounded, so `uint8 b = 1ui8 << 8;`
 // keeps its out-of-range refusal (at runtime that shift traps); and an UNSUFFIXED left operand states no
 // width, so `uint32 m = 0xFF << 24;` keeps the conversion refusal that says to write `0xFFui32`.
-fn int32 main() {
+fn uint8 main() {
     int32 d = 1i32 << 31;
     int8 e = 3i8 << 7i8;
     int64 f = 1i64 << 63;
@@ -25,5 +25,5 @@ fn int32 main() {
     if (h != 240ui8) { r = r + 16; }
     if (i != -1i16) { r = r + 32; }
     if (j != 15ui64) { r = r + 64; }
-    return r;
+    return cast<uint8>(r);
 }

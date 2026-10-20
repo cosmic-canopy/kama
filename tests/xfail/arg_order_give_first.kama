@@ -3,8 +3,8 @@
 // `a, b` and the arguments written `b, a` — the move check once walked the declared order, accepted this, and
 // handed `a` an empty string.
 fn string both(string a, string b) { return "${a}|${b}"; }
-fn int32 main() {
+fn uint8 main() {
     string s = "hello";
     string r = both(b: give s, a: copy s);   // ERROR: `s` is read after the give written before it
-    return cast<int32>(r.length());
+    return cast<uint8>(r.length());
 }

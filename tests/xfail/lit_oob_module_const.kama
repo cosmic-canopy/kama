@@ -6,7 +6,7 @@
 //
 // `moduleStaticCTypeRaw` is the unfiltered lookup, the same extraction `indexElemTypeRaw` is.
 comptime int32 NEG = -1;
-fn int32 main() {
+fn uint8 main() {
     uint8 u = NEG;
-    return cast<int32>(u);
+    return cast<uint8>(u);
 }

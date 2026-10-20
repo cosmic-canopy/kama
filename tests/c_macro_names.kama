@@ -38,7 +38,7 @@ fn int32 pickHigher(int32 a, int32 b) { if (a > b) { return a; } return b; }
 // Parameter: `far` is <windef.h>.
 fn int32 widen(int32 far) { return far + 1; }
 
-fn int32 main() {
+fn uint8 main() {
     // Locals: `errno` is a macro everywhere, `_LP64` is predefined on macOS and Linux.
     int32 errno = 3;
     int32 _LP64 = 4;
@@ -62,5 +62,5 @@ fn int32 main() {
     if (exists(path: ".") && sa.port == 80ui16) { seam = 1; }
 
     // 3 + 4 + 5 + 6 + 3 + 8 + 9 + 2 + 1 + 1 = 42
-    return errno + _LP64 + environ + f.near + f.st_mtime + payload + lo + hi + widen(far: 0) + seam;
+    return cast<uint8>(errno + _LP64 + environ + f.near + f.st_mtime + payload + lo + hi + widen(far: 0) + seam);
 }

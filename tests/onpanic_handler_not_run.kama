@@ -11,9 +11,9 @@ unsafe fn void hook(const ref PanicInfo info) { kama_trace(code: 9); }
 @noheap @onPanic(recover: 0)
 fn int32 region(InlineArray<int32>#(2) a, isize i) { return a[i]; }
 unsafe fn void install() { setPanicHandler(handler: hook); }
-fn int32 main() {
+fn uint8 main() {
     install();
     InlineArray<int32>#(2) a = [5; 2];
     int32 r = region(a: a, i: 9);    // recovered as 0; the hook must not have run
-    return r + traceGet() + 42;      // 0 + 0 + 42
+    return cast<uint8>(r + traceGet() + 42);      // 0 + 0 + 42
 }

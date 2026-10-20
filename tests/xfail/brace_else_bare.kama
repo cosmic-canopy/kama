@@ -1,6 +1,6 @@
 // Mandatory braces: the `else` arm needs a block too. Only another `if` is accepted there — that is
 // an `else if` chain link, not a bare body (see tests/braces_ok.kama).
-fn int32 main() {
+fn uint8 main() {
     int32 x = 1;
     if (x > 0) { return 1; }
     else

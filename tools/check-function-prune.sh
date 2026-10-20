@@ -51,9 +51,9 @@ fnptr int64 Step(int64 v);
 fn int64 twice(int64 v) { return v * 2i64; }        // reached only as a `fnptr` value
 fn int64 apply(Step f, int64 v) { return f(v: v); }
 expose fn int32 hostEntry() { return 7; }           // called by no kama code: the host's way in
-fn int32 main() {
+fn uint8 main() {
     Square s = Square.make(side: 3i64);
-    return cast<int32>(used(v: 1i64) + apply(f: twice, v: 5i64) + area(s: s));   // 2 + 10 + 9
+    return cast<uint8>(used(v: 1i64) + apply(f: twice, v: 5i64) + area(s: s));   // 2 + 10 + 9
 }
 K
 "$KAMA" pkg install "$tmp/app/kama.json" >"$tmp/i.log" 2>&1 || { cat "$tmp/i.log" >&2; fail "the project did not install"; }

@@ -7,4 +7,4 @@ unsafe fn UnsafePtr make() { return kmalloc(n: cast<usize>(8)); }
 
 fn void churn() { kfree(p: make()); kfree(p: make()); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -1,8 +1,8 @@
-fn int32 main()
+fn uint8 main()
 {
     int32 a = 100;
     int32 b = 7;
     int32 q = a / b;
     int32 r = a % b;
-    return q + r;
+    return cast<uint8>(q + r);
 }

@@ -32,7 +32,7 @@ type resource Job implements Sendable {
 fn void worker(ref Job j) { j.run(); }
 fn void owned(Job j) { j.run(); }
 
-fn int32 main() {
+fn uint8 main() {
     // The motivating case: the same depth on the main thread and in an isolate, on the stated default.
     int64 depth = SHARED;
     if (down(n: depth) != depth) { return 1; }

@@ -13,7 +13,7 @@ type resource Bad implements Sendable {
     Shared<Leaf> s;   // a non-atomic shared refcount — not sendable
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<Bad> ch = Channel.bounded(capacity: 2);   // ERROR: `Bad`'s field `s` shares a non-atomic refcount
     return 0;
 }

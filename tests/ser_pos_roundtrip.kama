@@ -65,13 +65,13 @@ type resource Rec {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Result<DynamicArray<uint8>, Owned<Error>> b = serializeKbinPositionalBuffer(v: Rec.make());
     DynamicArray<uint8> bytes = match (give b) { case Ok(value: v): give v; case Err(error: e): { return 250; } };
     Result<Rec, Owned<Error>> d = deserializeKbinPositionalBuffer::<Rec>(src: give bytes);
     Rec r = match (give d) { case Ok(value: v): give v; case Err(error: e): { return 251; } };
 
     int32 bad = r.verify();
-    if (bad != 0) { return bad; }
+    if (bad != 0) { return cast<uint8>(bad); }
     return 42;
 }

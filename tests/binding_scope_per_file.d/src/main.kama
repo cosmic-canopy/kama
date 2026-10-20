@@ -3,9 +3,9 @@
 // dependency's file-private `extern` (vendor/shadowlib) are neither, so a binding may take them.
 import { bindscope::m::Tally, bindscope::m::twice, bindscope::m::sumTo, shadowlib::one };
 
-fn int32 main() {
+fn uint8 main() {
     int32 free = one();   // shadowlib declares `extern fn void free(UnsafePtr p)`, privately
     Tally t = Tally.make();
     int32 r = twice(label: 10) + sumTo(n: 3) + t.label + free;   // 20 + (6 + 3 + 5) + 0 + 1
-    return r == 35 ? 42 : r;
+    return cast<uint8>(r == 35 ? 42 : r);
 }

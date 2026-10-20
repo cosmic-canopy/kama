@@ -2,4 +2,4 @@
 type contract Tag for value {
     fn int32 tag() when [T: Tag];
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

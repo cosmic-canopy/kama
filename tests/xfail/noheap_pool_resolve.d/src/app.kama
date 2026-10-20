@@ -67,4 +67,4 @@ unsafe fn int32 lookup() {
     Result<DynamicArray<SocketAddr>, IoError> r = resolve(host: "localhost", port: 80);
     return 0;
 }
-fn int32 main() { return lookup(); }
+fn uint8 main() { return cast<uint8>(lookup()); }

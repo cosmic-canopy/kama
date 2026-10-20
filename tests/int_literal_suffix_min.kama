@@ -13,7 +13,7 @@
 //
 // INT64_MIN carries a second half: `-9223372036854775808LL` is not a C literal either, because the
 // magnitude is one past LLONG_MAX and no signed type holds it. The emitter writes what <stdint.h> writes.
-fn int32 main() {
+fn uint8 main() {
     int8  a = -128i8;
     int16 b = -32768i16;
     int32 c = -2147483648i32;
@@ -35,5 +35,5 @@ fn int32 main() {
     if (127i8 == 127i8 && 32767i16 == 32767i16)     { n = n + 1; }
     if (2147483647i32 == 2147483647i32)             { n = n + 1; }
 
-    return n;   // 10
+    return cast<uint8>(n);   // 10
 }

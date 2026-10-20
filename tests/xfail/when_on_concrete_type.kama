@@ -9,4 +9,4 @@ type value V {
 type enum E { A, B;
     public fn int32 t() when [T: Tag] { return 1; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

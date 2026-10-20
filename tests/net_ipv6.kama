@@ -155,10 +155,10 @@ fn int32 udpHops() {
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = udpLoopback() + udpDualStack() + udpWrongFamily() + udpHops()
             + tcp(bindHost: "::1", dialHost: "::1", flag: 8)
             + tcp(bindHost: "::", dialHost: "127.0.0.1", flag: 16)   // dual-stack TCP
             + tcp(bindHost: "::", dialHost: "::1", flag: 32);
-    return r;   // 127
+    return cast<uint8>(r);   // 127
 }

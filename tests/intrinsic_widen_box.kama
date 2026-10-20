@@ -11,7 +11,7 @@ import { std::memory::Owned, std::memory::Shared };
 
 fn uint64 sumOf(Owned<Hashable> a, Owned<Hashable> b) { return a.hash() + b.hash(); }
 
-fn int32 main() {
+fn uint8 main() {
     Owned<Hashable> boxed = 20;
     if (boxed.hash() != 20ui64) { return 1; }
 

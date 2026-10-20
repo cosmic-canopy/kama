@@ -4,7 +4,7 @@
 // handle. Reads come back BY VALUE, on the stack.
 import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
-fn int32 main() {
+fn uint8 main() {
     int32 iv = 42;
     Result<string, Owned<Error>> a = serializeJsonBuffer(v: iv);
     string aj = match (give a) { case Ok(value: s): give s; case Err(error: e): { return 250; } };

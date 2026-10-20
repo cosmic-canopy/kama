@@ -14,4 +14,4 @@ type resource Holder {
     }
 }
 
-fn int32 main() { Holder h = Holder.make(); h.bad() = 5; return 0; }
+fn uint8 main() { Holder h = Holder.make(); h.bad() = 5; return 0; }

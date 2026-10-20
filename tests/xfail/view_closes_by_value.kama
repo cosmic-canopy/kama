@@ -12,4 +12,4 @@ type resource Conn implements Transacts {
     public unsafe fn Tx begin() { return Tx.over(log: addr(of: this.log[0])); }
 }
 fn void use(Tx t) { }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

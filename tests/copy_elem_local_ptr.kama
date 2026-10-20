@@ -55,4 +55,4 @@ unsafe fn int32 run() {
     return cast<int32>(store[0].count()) + 6;   // 7
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

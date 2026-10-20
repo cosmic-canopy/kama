@@ -53,7 +53,7 @@ fn int32 inLoop() {
     return sum;   // 0 + 2 + 3
 }
 
-fn int32 main() {
+fn uint8 main() {
     Res p = make(v: 8);
     int32 sum = readLocal() + readTemp() * 10 + readParam(r: p) * 100 + writesBinding() * 1000 + writesSubject() * 10000
               + readConstRef(r: p) * 100000 + spawnsRef() * 1000000;

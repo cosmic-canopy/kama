@@ -3,7 +3,7 @@
 // RFC's own example.
 import { std::digest::sha1::Sha1, std::encoding::base64::encode as b64Encode };
 
-fn int32 main() {
+fn uint8 main() {
     string key = "dGhlIHNhbXBsZSBub25jZQ==";
     string guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     Sha1 h = Sha1.make();

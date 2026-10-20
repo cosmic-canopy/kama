@@ -1,7 +1,7 @@
 // Set<K> = a thin wrapper over Map<K, Unit>: add (idempotent) / contains / remove / length, string keys.
 import { std::collections::Set };
 
-fn int32 main() {
+fn uint8 main() {
     Set<string> s = Set.empty();
     s.add(key: "a");
     s.add(key: "b");
@@ -15,5 +15,5 @@ fn int32 main() {
     if (s.remove(key: "b")) { r = r + 7; }          // +7
     if (!s.contains(key: "b")) { r = r + 3; }       // +3
     r = r + s.length();              // +2
-    return cast<int32>(r);   // 3+5+5+7+3+2 = 25
+    return cast<uint8>(r);   // 3+5+5+7+3+2 = 25
 }

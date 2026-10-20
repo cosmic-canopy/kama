@@ -19,7 +19,7 @@ type value World implements Sendable {
 fn void step(ref Acc a)    { a.total = a.total + 1; }
 fn void reset(ref World w) { w.bodies.total = 0; }   // touches the very field `step` is given
 
-fn int32 main() {
+fn uint8 main() {
     World w = World.make();
     scope {
         spawn reset(w: ref w);            // place {w}

@@ -28,7 +28,7 @@ type resource Holder {
 fn ref int32 fromParam(ref DynamicArray<int32> xs) { foreach (ref int32 e in xs) { return e; } return xs[0]; }
 fn ref int32 fromStatic() { foreach (ref int32 e in g) { return e; } return g[0]; }
 
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.make();
     h.nested() = 10;
     h.viaMatch() = 20;
@@ -36,5 +36,5 @@ fn int32 main() {
     xs.add(item: 1);
     fromParam(xs: ref xs) = 30;
     fromStatic() = 40;
-    return h.nested() + h.viaMatch() + xs[0] + g[0];   // 10 + 20 + 30 + 40
+    return cast<uint8>(h.nested() + h.viaMatch() + xs[0] + g[0]);   // 10 + 20 + 30 + 40
 }

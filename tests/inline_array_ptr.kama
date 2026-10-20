@@ -23,4 +23,4 @@ unsafe fn int32 typed() {
     InlineArray<UnsafePtr<uint8>>#(2) b = [q, q];
     borrow b.view() as v { return cast<int32>(v.length()); }
 }
-fn int32 main() { return raw() * 10 + typed(); }   // 30 + 2
+fn uint8 main() { return cast<uint8>(raw() * 10 + typed()); }   // 30 + 2

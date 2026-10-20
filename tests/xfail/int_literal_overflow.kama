@@ -7,7 +7,7 @@
 // known, so that spelling now COMPILES and is pinned in tests/int_literal_wide.kama. What survives here
 // is the case the parse error was really protecting: a literal typed by its own MAGNITUDE, which would let
 // editing a constant silently retype the expression around it.
-fn int32 main() {
+fn uint8 main() {
     if (4294967295 > 3) { return 1; }   // needs `4294967295i64`, or a destination
     return 0;
 }

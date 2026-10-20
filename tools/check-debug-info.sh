@@ -40,7 +40,7 @@ fn int32 work(int32 seed)
     foreach (int32 v in xs) { total = total + v; }
     return total;
 }
-fn int32 main() { return work(seed: 7); }
+fn uint8 main() { return cast<uint8>(work(seed: 7)); }
 KAMA
 BPLINE=6        # `int32 total = 0;` — a statement, so it carries a #line of its own
 

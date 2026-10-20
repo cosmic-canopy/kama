@@ -39,4 +39,4 @@ unsafe fn int32 run() {
          + (cast<int32>(FORMAT_BYTES) - 4);                                    //  0: `: int32`
 }
 
-fn int32 main() { return run(); }   // 50
+fn uint8 main() { return cast<uint8>(run()); }   // 50

@@ -8,8 +8,8 @@ import { std::collections::DynamicArray, std::collections::Arena, std::collectio
     l.add(item: n);
     return cast<int32>(l.length()) + n;
 }
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 65536);
     DynamicArray<int32, BumpAllocator> a = DynamicArray.withAllocator(allocator: arena.handle());
-    return tick(l: a, n: 16);   // 1 + 16
+    return cast<uint8>(tick(l: a, n: 16));   // 1 + 16
 }

@@ -42,7 +42,7 @@ type value Bag {
     public const fn string at1() { return "x1=${this.xs[1]}"; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Node nd = Node.make(id: 7i32);
 
@@ -55,5 +55,5 @@ fn int32 main() {
     Bag b = Bag.make();
     if (b.at1().equals(other: "x1=22")) { r = r + 32; }
 
-    return r;   // 63
+    return cast<uint8>(r);   // 63
 }

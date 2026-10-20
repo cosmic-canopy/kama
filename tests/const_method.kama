@@ -9,9 +9,9 @@ type value Counter {
     public const fn int32 doubled() { return this.value() * 2; }  // const calling const: OK
     public fn void bump() { this.n = this.n + 1; }                // mutating
 }
-fn int32 main() {
+fn uint8 main() {
     const Counter c = Counter.make(n: 9);
     Counter m = Counter.make(n: 14);
     m.bump();                                       // mutable receiver: OK
-    return c.value() + c.doubled() + m.value();     // 9 + 18 + 15 = 42
+    return cast<uint8>(c.value() + c.doubled() + m.value());     // 9 + 18 + 15 = 42
 }

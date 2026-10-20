@@ -3,4 +3,4 @@
 // incompatible type. A C-owned layout crossing into C is a `type extern value`.
 type expose value Point { public int32 x; public ctor of(int32 x) { this.x = x; } }
 extern fn int32 c_takes_point(Point p);
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

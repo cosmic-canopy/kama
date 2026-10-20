@@ -13,7 +13,7 @@ expose fn int32 add(int32 a, int32 b)
     return a + b;
 }
 
-fn int32 main()
+fn uint8 main()
 {
-    return add(a: 40, b: 2);
+    return cast<uint8>(add(a: 40, b: 2));
 }

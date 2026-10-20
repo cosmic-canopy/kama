@@ -7,7 +7,7 @@ type value Cell {
     public ctor make() { this.n = 5; }
     public const fn ref int32 place() { return this.n; }   // a const method handing out a place -> REJECT
 }
-fn int32 main() {
+fn uint8 main() {
     const Cell c = Cell.make();
     c.place() = 99;
     return 0;

@@ -39,7 +39,7 @@ fn int64 meanMicros(int64 ms, int32 runs) {
     return monotonicNow().since(earlier: t0).asMicros() / cast<int64>(runs);
 }
 
-fn int32 main() {
+fn uint8 main() {
     int64 one   = meanMicros(ms: 1i64, runs: 60);
     int64 eight = meanMicros(ms: 8i64, runs: 60);
     print(s: "one ${one}\n");

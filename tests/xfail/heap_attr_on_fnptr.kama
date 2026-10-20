@@ -3,4 +3,4 @@
 // and `@noheap` on the signature is the promise that governs that — so `@heap` here is refused by name.
 @heap fnptr int32 Op(int32 x);
 fn int32 dbl(int32 x) { return x * 2; }
-fn int32 main() { Op f = dbl; return f(x: 21) - 42; }
+fn uint8 main() { Op f = dbl; return cast<uint8>(f(x: 21) - 42); }

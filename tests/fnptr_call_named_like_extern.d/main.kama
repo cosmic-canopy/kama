@@ -10,6 +10,6 @@ fn int32 callIt(F compress, int32 x) {
     return y;
 }
 
-fn int32 main() {
-    return callIt(compress: dbl, x: 20);   // 40
+fn uint8 main() {
+    return cast<uint8>(callIt(compress: dbl, x: 20));   // 40
 }

@@ -10,7 +10,7 @@ import {
 
 fn int32 isNotFound(IoError e) { return match (e.kind()) { case NotFound: 1; case _: 0; }; }
 
-fn int32 main() {
+fn uint8 main() {
     string missing = "_no_such_file_zzz.tmp";
 
     int32 a = match (readFile(path: missing)) { case Ok(value: b): 10; case Err(error: e): isNotFound(e: e); };

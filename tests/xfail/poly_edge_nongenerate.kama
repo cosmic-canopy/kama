@@ -26,7 +26,7 @@ type resource Scene {
     public ctor make(Shared<Shape> s) { this.s = give s; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Sq> sq = new Sq.make(side: 4);
     Shared<Shape> edge = sq;
     Scene sc = Scene.make(s: give edge);

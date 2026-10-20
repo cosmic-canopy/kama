@@ -29,7 +29,7 @@ fn int32 tripled<T>(T x) { return C * 3; }                                     /
 
 fn int32 onlyB() { return B + D; }                                             // 6
 
-fn int32 main() {
+fn uint8 main() {
     Holder<int64> h = Holder::<int64>.make(v: 1i64);
-    return h.sum() + tripled::<bool>(x: true) + onlyB();                       // 27 + 33 + 6
+    return cast<uint8>(h.sum() + tripled::<bool>(x: true) + onlyB());                       // 27 + 33 + 6
 }

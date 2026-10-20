@@ -14,7 +14,7 @@ fn bool unknownIsNotFound() {
 @compileFor(OS_WINDOWS)
 fn bool unknownIsNotFound() { return true; }   // a SID is not made from a number there
 
-fn int32 main() {
+fn uint8 main() {
     if (!nonEmpty(r: homeDirectory())) { return 1; }
     Result<UserId, IoError> me = currentUser();
     Result<string, IoError> own = match (me) { case Ok(value: u): u.homeDirectory(); case Err(error: e): Result::Err(error: e); };

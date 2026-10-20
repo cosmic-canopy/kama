@@ -6,4 +6,4 @@
 fn T id<T>(T x) { return x; }
 fn T id<T>(T x) { return x + x; }
 
-fn int32 main() { return id(x: 3); }
+fn uint8 main() { return cast<uint8>(id(x: 3)); }

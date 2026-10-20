@@ -16,7 +16,7 @@ type value Leaf { int32 v; }
 
 type enum E implements Sendable { A, B(Shared<Leaf> s) }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<E> ch = Channel.bounded(capacity: 2);   // ERROR: variant `B`'s payload `s` holds the refcount
     return 0;
 }

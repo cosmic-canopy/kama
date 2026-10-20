@@ -13,7 +13,7 @@ fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
 fn void fillProbe(out Probe dst) { dst = Probe.make(id: 4); }
 fn int32 takeRef(ref int32 v) { return v; }
 fn int32 inScope() { slot Probe q; scope { fillProbe(dst: out q); } return q.get(); }
-fn int32 main() {
+fn uint8 main() {
     slot Pt p;
     fill(dst: out p);
     int32 a = p.y + p.inner.z + p.arr[1] + p.inner.get() + takeRef(v: ref p.y) + p.sum();   // 7+9+2+9+7+8 = 42
@@ -22,5 +22,5 @@ fn int32 main() {
     const int32 c = p.y;                         // 8
     string s = "${p.y}";                         // "8"
     int32 k = inScope();                         // 4, and one drop
-    return a + c + cast<int32>(s.length()) + k * 10 + drops;   // 48 + 8 + 1 + 40 + 1 = 98
+    return cast<uint8>(a + c + cast<int32>(s.length()) + k * 10 + drops);   // 48 + 8 + 1 + 40 + 1 = 98
 }

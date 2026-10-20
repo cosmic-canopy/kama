@@ -24,4 +24,4 @@ unsafe fn int32 run() {
          + (USAGE_UNIFORM == 64 ? 1 : 900);                               //  1
 }
 
-fn int32 main() { return run(); }   // 92
+fn uint8 main() { return cast<uint8>(run()); }   // 92

@@ -4,4 +4,4 @@ type enum Bad implements Error {
     int32 count;
     public const fn string message() { return "x"; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

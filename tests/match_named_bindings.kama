@@ -19,7 +19,7 @@ fn int32 areaOutOfOrder(Shape s) {
     };
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Shape r = Shape::Rect(w: 3, h: 5);
     int32 a = areaInOrder(s: r);        // 15
@@ -32,5 +32,5 @@ fn int32 main()
     };
     Shape e = Shape::Empty;
     int32 d = match (e) { case Rect(w: w, h: h): 1; case Circle(radius: q): 1; case Empty: 3; };
-    return a + b + c + d;               // 15 + 15 + 9 + 3 = 42
+    return cast<uint8>(a + b + c + d);               // 15 + 15 + 9 + 3 = 42
 }

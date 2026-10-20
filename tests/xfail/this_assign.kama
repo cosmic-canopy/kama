@@ -13,4 +13,4 @@ type value P {
 type enum Light { Red, Green;
     public fn void advance() { this = Light::Green; }  // ERROR: a method assigns fields, or returns
 }
-fn int32 main() { P p = P.two(a: 1); return p.sum(); }
+fn uint8 main() { P p = P.two(a: 1); return cast<uint8>(p.sum()); }

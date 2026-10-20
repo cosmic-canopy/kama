@@ -76,7 +76,7 @@ fn int32 agree(const ref OrderedMap<int32, int32> m, const ref Model ref_) {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     OrderedMap<int32, int32> m = OrderedMap.empty();
     Model ref_ = Model.make();
     Rng r = Rng.seeded(s: 20261017ui64);
@@ -94,7 +94,7 @@ fn int32 main() {
         else if (op < 99) { m.compact(); }
         else { m.clear(); ref_.clear(); }
         int32 bad = agree(m: m, ref_: ref_);
-        if (bad != 0) { return bad; }
+        if (bad != 0) { return cast<uint8>(bad); }
         step = step + 1;
     }
     return 60;   // every step agreed

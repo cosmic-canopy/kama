@@ -11,7 +11,7 @@ fn void takeB(B b) { }
 
 fn B asB(A a) { return a; }
 
-fn int32 main()
+fn uint8 main()
 {
     A a = A::A2;
     takeB(b: a);

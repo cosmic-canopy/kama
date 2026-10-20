@@ -17,8 +17,8 @@ fn int32 build()
     return 0;   // p drops -> Owned_Probe__dtor -> Probe__dtor + free
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 r = build();
-    return traceGet();   // fold(7) = 7
+    return cast<uint8>(traceGet());   // fold(7) = 7
 }

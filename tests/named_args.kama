@@ -2,7 +2,7 @@ fn int32 sub(int32 a, int32 b)
 {
     return a - b;
 }
-fn int32 main()
+fn uint8 main()
 {
-    return sub(b: 8, a: 50);
+    return cast<uint8>(sub(b: 8, a: 50));
 }

@@ -3,4 +3,4 @@
 // call that was meant: `pi()`.
 import { std::math::pi };
 fn float32 take(float32 v) { return v; }
-fn int32 main() { float32 a = 2.0f32; float32 x = a * pi; return 0; }
+fn uint8 main() { float32 a = 2.0f32; float32 x = a * pi; return 0; }

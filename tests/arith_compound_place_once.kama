@@ -5,7 +5,7 @@
 import { std::collections::DynamicArray };
 static int32 calls = 0;
 fn isize idx() { calls = calls + 1; return 1; }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 10); a.add(item: 20); a.add(item: 30);
     a[idx()] += 5;                        // a[1] = 25, calls = 1
@@ -16,5 +16,5 @@ fn int32 main() {
     s += 27i8;                            // 127: fits, no trap
     int64 w = 1i64;
     w <<= 40i64;                          // 2^40, checked amount
-    return a[1] - 50 + calls + old + cast<int32>(s) - 127 + cast<int32>(w >> 40i64) - 1 + i;   // 0+2+5+0+0+6 = 13
+    return cast<uint8>(a[1] - 50 + calls + old + cast<int32>(s) - 127 + cast<int32>(w >> 40i64) - 1 + i);   // 0+2+5+0+0+6 = 13
 }

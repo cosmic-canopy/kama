@@ -13,9 +13,9 @@ type resource Blob implements Area {
     public fn int32 area() { this.seen.add(item: 1); return 1; }
 }
 @noheap fn int32 total(Area a) { return a.area(); }
-fn int32 main()
+fn uint8 main()
 {
     Sq s = Sq.make(s: 2);
     Blob b = Blob.make();
-    return total(a: s) + total(a: b);
+    return cast<uint8>(total(a: s) + total(a: b));
 }

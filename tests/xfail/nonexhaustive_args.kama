@@ -1,3 +1,3 @@
 // KR-176: `@nonExhaustive` takes no arguments — it says only that the enum may gain cases later.
 @nonExhaustive(since: 1) type enum Mode { A, B }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

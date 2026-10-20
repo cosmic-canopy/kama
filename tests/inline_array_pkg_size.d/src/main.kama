@@ -8,8 +8,8 @@
 // stopped being a container. The package boundary is load-bearing; the same shape in one file always
 // compiled, which is what made it take three attempts to pin down.
 import { geom::Box };            // NOTE: `geom::N` is deliberately NOT imported.
-fn int32 main() {
+fn uint8 main() {
     Box b = Box.make();
     isize sum = b.cells[0] + b.cells[1] + b.cells[2] + b.cells[3];
-    return cast<int32>(sum);     // 0 + 10 + 20 + 30
+    return cast<uint8>(sum);     // 0 + 10 + 20 + 30
 }

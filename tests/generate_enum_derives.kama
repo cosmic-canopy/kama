@@ -31,7 +31,7 @@ type enum Shape { Circle(int32 r), Rect(int32 w, int32 h), Nil }
 @generate(Serializable, Deserializable)
 type enum NoUnit { A(int32 x), B(int32 y) }
 
-fn int32 main() {
+fn uint8 main() {
     Shape a = Shape::Circle(r: 2);
     Shape b = Shape::Circle(r: 2);
     Shape c = Shape::Nil;
@@ -74,5 +74,5 @@ fn int32 main() {
     int32 rej = match (bad) { case Ok(value: q2): 0 - 50; case Err(error: e2): 17; };
     n = n + rej;                                     // 17
 
-    return n;                                        // 1+2+4+7+9+5+17 = 45
+    return cast<uint8>(n);                                        // 1+2+4+7+9+5+17 = 45
 }

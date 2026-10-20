@@ -15,10 +15,10 @@ type resource Tally implements Visitor<int32> {
     public const fn int32 matched() { return this.matches; }
     public const fn int32 total() { return this.sum; }
 }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 5); xs.add(item: 20); xs.add(item: 30); xs.add(item: 1);
     Tally t = Tally.make(threshold: 10);
     each(xs: ref xs, v: ref t);                        // borrowed for the call, not moved
-    return t.total() - t.matched() * 4;                // 50 - 8 = 42: the state came back
+    return cast<uint8>(t.total() - t.matched() * 4);                // 50 - 8 = 42: the state came back
 }

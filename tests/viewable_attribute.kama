@@ -32,10 +32,10 @@ type resource Buf implements Spanned<Span>, Counted {
     public unsafe fn Span counter() { return this.span(); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Buf b = Buf.empty();
     b.add(v: 10); b.add(v: 20); b.add(v: 12);
     int32 sum = 0;                                    // a sum of `int32` ELEMENTS, so it is an `int32`
     foreach (int32 v in b.span()) { sum = sum + v; }
-    return sum + cast<int32>(b.size());   // 42 + 3 = 45 — the one real conversion
+    return cast<uint8>(sum + cast<int32>(b.size()));   // 42 + 3 = 45 — the one real conversion
 }

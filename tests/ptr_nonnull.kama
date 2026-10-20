@@ -13,4 +13,4 @@ unsafe fn int32 probe() {
     };
     return r;
 }
-fn int32 main() { return probe(); }
+fn uint8 main() { return cast<uint8>(probe()); }

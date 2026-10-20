@@ -44,7 +44,7 @@ unsafe fn void localsFirst(ref Conn c) {
     borrow c.begin() as tx { Marker m = Marker.at(log: mlog); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Conn c = Conn.make(tag: 1i64);
     commits(c: ref c);                                   // 1
     rollsBack(c: ref c);                                 // 12

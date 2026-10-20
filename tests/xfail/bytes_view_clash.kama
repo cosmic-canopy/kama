@@ -2,4 +2,4 @@
 import { std::collections::ConstView, std::collections::View };
 @generate(BytesViewable)
 type value Id { public uint32 v; public fn uint32 bytes() { return 4; } }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

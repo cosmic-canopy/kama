@@ -9,4 +9,4 @@ type view Span {
     UnsafePtr<int32> at; int32 count;
     public unsafe ctor over(UnsafePtr<int32> at, int32 count) { this.at = at; this.count = count; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

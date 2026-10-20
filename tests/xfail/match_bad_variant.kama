@@ -1,5 +1,5 @@
 type enum Shape { Circle(float64 r), Empty }
-fn int32 main()
+fn uint8 main()
 {
     Shape s = Shape::Empty;
     int32 k = match (s) {
@@ -7,5 +7,5 @@ fn int32 main()
         case Triangle(a: a): 2;   // named form, so this fails on the VARIANT, not on parsing
         case Empty: 0;
     };
-    return k;
+    return cast<uint8>(k);
 }

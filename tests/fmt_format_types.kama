@@ -2,7 +2,7 @@
 // rendering through the `Formattable` contract via `${…}`. Exit code 15 = all four checks passed.
 import { std::net::SocketAddr, std::net::IpAddr };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // char -> its UTF-8 character (ASCII + a 3-byte snowman U+2603)
@@ -29,5 +29,5 @@ fn int32 main() {
     string rendered = "${a}";
     if (rendered == "127.0.0.1:8080") { r = r + 8; }
 
-    return r;   // 1 + 2 + 4 + 8 = 15
+    return cast<uint8>(r);   // 1 + 2 + 4 + 8 = 15
 }

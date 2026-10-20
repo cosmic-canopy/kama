@@ -37,10 +37,10 @@ type resource Rc<T> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<Thi
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Rc<Counter> a = new Counter.make(start: 10);
     Rc<Counter> b = copy a;   // retain — a and b share one Counter + one ctrl
     int32 x = a.bump();       // auto-deref -> 11
     int32 y = b.n;            // auto-deref field -> 11 (shared object)
-    return x + y;             // 22 (both drop; object + ctrl each freed once)
+    return cast<uint8>(x + y);             // 22 (both drop; object + ctrl each freed once)
 }

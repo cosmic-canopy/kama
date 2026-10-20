@@ -7,4 +7,4 @@ import { std::math::Vec4 };
 
 comptime assert(cond: sizeof(Vec4) == 15, msg: "Vec4 is not 15 bytes");
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -582,7 +582,7 @@ fn void main()
 Contextual words name bindings; `give x` and `truncate<T>(…)` stay keywords
 ===============================================================================
 
-fn int32 main()
+fn uint8 main()
 {
     int32 give = 3;
     give = give + 1;

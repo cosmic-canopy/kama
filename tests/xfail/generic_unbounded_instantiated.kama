@@ -9,4 +9,4 @@ type value W {
     public fn int32 get() { return this.n; }
 }
 fn int32 feed<T>(T w) { return w.get(); }   // ERROR: `T` is unbounded, so it promises nothing
-fn int32 main() { return feed(w: W.make()); }
+fn uint8 main() { return cast<uint8>(feed(w: W.make())); }

@@ -39,7 +39,7 @@ type adapter <DynamicArray<uint8>> implements Sized {
 type adapter <char> implements Sized { public const fn int32 size() { string s = "[${this}]"; return cast<int32>(s.length()); } }
 fn int32 sizeOf<T: Sized>(const ref T v) { return v.size(); }
 
-fn int32 main() {
+fn uint8 main() {
     Tok t = Tok.make(s: "ab".concat(other: "c"));
     Tok d = t.dup();
     DynamicArray<uint8> bytes = DynamicArray.empty();

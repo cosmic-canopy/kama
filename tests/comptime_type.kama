@@ -10,10 +10,10 @@ type value Palette {
     public ctor make(int32 v) { this.v = v; }
     public const fn int32 seeded() { return this.v + Palette::SEED; }   // private const OK inside the type
 }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(Palette::SIZE) buf = [Palette::MAX; (Palette::SIZE)];   // 4 slots, each 255
     int32 t = 0;
     foreach (int32 e in buf) { t = t + e; }        // 1020
     Palette p = Palette.make(v: 5);
-    return t - 1000 + p.seeded();                  // 20 + (5 + 100) = 125
+    return cast<uint8>(t - 1000 + p.seeded());                  // 20 + (5 + 100) = 125
 }

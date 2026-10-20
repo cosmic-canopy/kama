@@ -33,7 +33,7 @@ fn int32 readOne(ref TcpStream c) {
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: 0ui16);
     TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
@@ -59,5 +59,5 @@ fn int32 main() {
     }
     // The address values cross too — a pool hands a worker where to connect.
     Channel<SocketAddr> addrs = Channel.bounded(capacity: 1);
-    return total == 123 ? 42 : total;
+    return cast<uint8>(total == 123 ? 42 : total);
 }

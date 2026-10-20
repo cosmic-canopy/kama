@@ -21,7 +21,7 @@ type resource Own<T> implements Deref<T>, DerefMut<T> {
     unsafe ~Own() { free(p: cast<UnsafePtr>(this.p)); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Own<Point> o = Own.make(v: Point.of(x: 30, y: 12));
-    return o.sum() + o.x;   // 42 + 30 = 72 (RAII frees the heap Point)
+    return cast<uint8>(o.sum() + o.x);   // 42 + 30 = 72 (RAII frees the heap Point)
 }

@@ -22,7 +22,7 @@ type value Handle {
 fn isize bump(isize file) { return file + 1; }
 fn void fill(out int32 file) { file = 7; }
 
-fn int32 main()
+fn uint8 main()
 {
     isize file = 4;              // a local named `file`
     file = file + 1;             // ...read and written like any other name
@@ -34,5 +34,5 @@ fn int32 main()
     slot int32 filled;
     fill(file: out filled);       // a `file:` label on an `out` argument — 7
 
-    return cast<int32>(n) + filled;   // 21 + 7 = 28
+    return cast<uint8>(cast<int32>(n) + filled);   // 21 + 7 = 28
 }

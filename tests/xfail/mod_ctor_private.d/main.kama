@@ -1,1 +1,1 @@
-fn int32 main() { return secret::Hidden.make(n: 3).n; }
+fn uint8 main() { return secret::Hidden.make(n: 3).n; }

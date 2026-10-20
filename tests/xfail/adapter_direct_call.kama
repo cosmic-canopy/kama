@@ -5,7 +5,7 @@
 //
 // Both legal spellings are shown in tests/comparable.kama: a bound, and a contract value. A user type
 // that declares `implements C` in its OWN body is untouched by this — its methods are its own.
-fn int32 main() {
+fn uint8 main() {
     int32 n = 42;
-    return cast<int32>(n.hash());   // `hash` is Hashable's, not int32's
+    return cast<uint8>(n.hash());   // `hash` is Hashable's, not int32's
 }

@@ -4,7 +4,7 @@
 // would be rejected, see xfail/parfor_write_capture). Deterministic total regardless of K. Run under TSan.
 import { std::concurrent::Atomic, std::collections::DynamicArray, std::collections::View, std::concurrent::cpuCount };
 
-fn int32 main() {
+fn uint8 main() {
     Atomic<int32> total = Atomic.make(value: 0i32);
     DynamicArray<int32> a = DynamicArray.empty();
     int32 i = 0;
@@ -13,5 +13,5 @@ fn int32 main() {
     parallel_for (ref int32 e in a, workers: cpuCount()) {
         total.fetchAdd(delta: e);        // shared atomic reduction — allowed (Atomic is race-free)
     }
-    return total.load() % 256;           // 50 * 2 = 100
+    return cast<uint8>(total.load() % 256);           // 50 * 2 = 100
 }

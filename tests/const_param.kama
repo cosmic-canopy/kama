@@ -10,7 +10,7 @@ type value Vec2 {
 fn int32 dist2(const ref Vec2 a, const int32 bias) {   // read-only borrow + const value
     return a.lenSq() + bias;                            // const method call on a const borrow: OK
 }
-fn int32 main() {
+fn uint8 main() {
     Vec2 v = Vec2.make(x: 3, y: 4);
-    return dist2(a: ref v, bias: 17);                   // 25 + 17 = 42
+    return cast<uint8>(dist2(a: ref v, bias: 17));                   // 25 + 17 = 42
 }

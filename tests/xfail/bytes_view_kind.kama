@@ -5,4 +5,4 @@ import { std::collections::ConstView, std::collections::View };
 type enum Phase : uint8 { Lobby, Play }
 @generate(BytesViewable)
 type resource Conn { uint32 fd; public ctor make() { this.fd = 0; } }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

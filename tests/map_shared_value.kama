@@ -67,4 +67,4 @@ fn int32 run() {
     return av + bv + cv;   // 18
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

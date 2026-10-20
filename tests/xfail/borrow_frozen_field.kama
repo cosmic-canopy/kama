@@ -15,4 +15,4 @@ type resource Box {
     }
 }
 
-fn int32 main() { Box bx = Box.make(); return bx.total(); }
+fn uint8 main() { Box bx = Box.make(); return cast<uint8>(bx.total()); }

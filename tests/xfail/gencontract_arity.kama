@@ -4,4 +4,4 @@ type contract Seq<T> for value { fn Optional<T> next(); }
 
 fn void take(Seq<int32, int32> it) { }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

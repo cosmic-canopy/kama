@@ -4,7 +4,7 @@
 // `Uuid.parse(text:)` has, where importing `Uuid` alone is the natural spelling. Exit 5.
 import { lib::Widget };
 
-fn int32 main() {
+fn uint8 main() {
     Widget w = match (Widget.make(n: 3)) {            // a dot-on-type ctor
         case Ok(value: v): v;
         case Err(error: e): { return 100; }
@@ -17,5 +17,5 @@ fn int32 main() {
         case Ok(value: v): 50;
         case Err(error: e): 0;
     };
-    return g.n + refused;
+    return cast<uint8>(g.n + refused);
 }

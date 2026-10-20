@@ -5,7 +5,7 @@
 // bound and through a contract value — a declared target gets the ordinary `T__as_C` vtable.
 import { core::println, std::collections::DynamicArray, adapted::model::User, adapted::model::Color, adapted::model::Conn,
          adapted::db::codeOf, adapted::db::viaValue };
-fn int32 main() {
+fn uint8 main() {
     User u = User.make(id: 4);
     Color c = Color::Blue;
     Conn k = Conn.open(fd: 7);
@@ -24,5 +24,5 @@ fn int32 main() {
     if (codeOf(v: some) != 5 || codeOf(v: none) != -1 || codeOf(v: ou) != 20) { bad = bad + 32; }
     if (viaValue(p: u) != 40 || viaValue(p: c) != 3 || viaValue(p: bytes) != 2 || viaValue(p: some) != 5) { bad = bad + 64; }
     println(s: "bad=${bad}");
-    return bad;
+    return cast<uint8>(bad);
 }

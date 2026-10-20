@@ -2,4 +2,4 @@
 // owns something and is destroyed by kama, which C cannot honor. A host holds one through a pointer instead,
 // where the generated header names it opaquely.
 type expose resource Handle { public ctor make() { } }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

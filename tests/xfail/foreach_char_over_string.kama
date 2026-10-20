@@ -6,9 +6,9 @@
 // the loop walked BYTES and bound each one to a `char`, so iterating "é" (U+00E9, UTF-8 C3 A9) yielded
 // two `char`s with codepoints 195 and 169 instead of one with 233. `char` is documented as a Unicode
 // scalar value that "can't silently mix with ints", and this was exactly that silent mix.
-fn int32 main() {
+fn uint8 main() {
     string s = "é";
     int32 n = 0;
     foreach (char c in s) { n = n + 1; }
-    return n;
+    return cast<uint8>(n);
 }

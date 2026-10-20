@@ -6,7 +6,7 @@
 // digit separators landed (0.9.226). What the snapshot pins
 // here is the SUFFIX SPLIT: `i32` in `42i32` must colour like the `int32` keyword, not like the digits.
 
-fn int32 main() {
+fn uint8 main() {
     int32 dec = 42;
     int32 suf = 42i32;
     uint32 usuf = 42ui32;

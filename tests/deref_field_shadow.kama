@@ -21,9 +21,9 @@ type value Wrap implements Deref<Payload>, DerefMut<Payload> {
     public fn int32 ownTag() { return this.tag; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Wrap w = Wrap.make(p: Payload.make(tag: 1, n: 10), tag: 20);
     w.retag(t: 30);
     // 30 (wrapper, via method) + 10 (pointee `n`, auto-deref) + 30 (wrapper `tag` wins over pointee) + 1
-    return w.ownTag() + w.n + w.tag + w.deref().tag;    // 71
+    return cast<uint8>(w.ownTag() + w.n + w.tag + w.deref().tag);    // 71
 }

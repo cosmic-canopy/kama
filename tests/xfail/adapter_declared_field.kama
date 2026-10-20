@@ -4,4 +4,4 @@ type adapter <Optional> implements Tagged {
     int32 extra;
     public const fn int32 tag() { return 1; }
 }
-fn int32 main() { Optional<int32> o = Optional::None; return 0; }
+fn uint8 main() { Optional<int32> o = Optional::None; return 0; }

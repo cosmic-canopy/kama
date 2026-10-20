@@ -3,4 +3,4 @@ type resource Base {
     public ctor make() { }
     @trackCaller public virtual fn int32 f() { return 1; }
 }
-fn int32 main() { Base b = Base.make(); return b.f(); }
+fn uint8 main() { Base b = Base.make(); return cast<uint8>(b.f()); }

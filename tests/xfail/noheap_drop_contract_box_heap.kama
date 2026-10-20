@@ -10,4 +10,4 @@ type value Circle implements Shape {
     public fn int32 area() { return this.r; }
 }
 @noheap fn int32 finish(Owned<Shape> o) { return 0; }
-fn int32 main() { Owned<Shape> a = new Circle.make(r: 5); return finish(o: give a); }
+fn uint8 main() { Owned<Shape> a = new Circle.make(r: 5); return cast<uint8>(finish(o: give a)); }

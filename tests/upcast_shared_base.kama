@@ -31,6 +31,6 @@ fn int32 owned_case() {
     return shp.area();                                   // 25 — destroyed through base handle (virtual dtor)
 }
 
-fn int32 main() {
-    return shared_case() + owned_case();                // 72 + 25 = 97
+fn uint8 main() {
+    return cast<uint8>(shared_case() + owned_case());                // 72 + 25 = 97
 }

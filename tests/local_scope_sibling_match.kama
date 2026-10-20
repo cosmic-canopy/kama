@@ -12,7 +12,7 @@
 // Fixed at the root: a `Scope` owns the table entries its binders displace and restores them on pop.
 type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
 fn int32 takeE(E v) { return v.n; }
-fn int32 main() {
+fn uint8 main() {
     Optional<E> inner = Optional::Some(value: E.of(n: 5));
     int32 r = 0;
     if (r == 1) {
@@ -21,5 +21,5 @@ fn int32 main() {
     } else {
         match (inner) { case Some(value: m): { r = takeE(v: m); } case None: { } };
     }
-    return r;   // 5
+    return cast<uint8>(r);   // 5
 }

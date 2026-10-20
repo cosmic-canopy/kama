@@ -18,7 +18,7 @@ type resource Slot implements Sendable {
 
 fn void writer(Slot s) { s.run(); }   // owns the moved bundle; writes through its own slot
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = 0;
     int32 b = 0;
     Slot sa = Slot.make(cell: ref a, value: 20i32);
@@ -27,5 +27,5 @@ fn int32 main() {
         spawn writer(s: give sa);   // deferred-join child — runs concurrently
         spawn writer(s: give sb);   // another child — disjoint cell
     }                               // BARRIER: both joined here, before `a`/`b` are read
-    return a + b;   // 42 iff both children ran and were joined
+    return cast<uint8>(a + b);   // 42 iff both children ran and were joined
 }

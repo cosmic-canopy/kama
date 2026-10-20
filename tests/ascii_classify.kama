@@ -17,7 +17,7 @@ import {
     std::ascii::digitValue,
 };
 
-fn int32 main() {
+fn uint8 main() {
     char a  = 'a';
     char Z  = 'Z';
     char n7 = '7';
@@ -50,5 +50,5 @@ fn int32 main() {
     int32 v16 = match (d16) { case Some(value: v): v; case None: 0; };
     int32 v10 = match (d10) { case Some(value: v): v; case None: 2; };
 
-    return t * 3 + v16 + v10;   // 10*3 + 10 + 2 = 42
+    return cast<uint8>(t * 3 + v16 + v10);   // 10*3 + 10 + 2 = 42
 }

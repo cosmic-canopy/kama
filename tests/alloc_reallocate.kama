@@ -51,9 +51,9 @@ fn int32 run() {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = run();
-    if (r != 0) { return r; }
+    if (r != 0) { return cast<uint8>(r); }
     if (built != dropped) { return 7; }
     return 0;
 }

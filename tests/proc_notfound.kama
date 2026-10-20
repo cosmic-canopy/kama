@@ -8,7 +8,7 @@ import { std::process::Command, std::process::Output, std::io::IoError, std::pro
 // POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.
 fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<int64>(c); case _: -1; }; }
 
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: "this_binary_does_not_exist_xyzzy");
     Result<Output, IoError> r = c.run();
     return match (give r) {

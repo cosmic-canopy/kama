@@ -44,7 +44,7 @@ type value W<T> {
 // (1) inside a generic FUNCTION's body — the instance exists only under the substitution.
 fn usize sizeOfBoxOf<T>(T x) { return sizeof(Box<T>); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 bad = 0;
     // (1) a stdlib generic, and one nested in another.
     if (sizeof(DynamicArray<int64>) < sizeof(usize)) { bad = bad + 1; }
@@ -60,5 +60,5 @@ fn int32 main() {
     W<int16> w = W::<int16>.make(w: 1i16);
     if (w.boxed() != 4) { bad = bad + 64; }
     if (w.local() != 2) { bad = bad + 128; }
-    return bad;   // 0: every instance registered and sized
+    return cast<uint8>(bad);   // 0: every instance registered and sized
 }

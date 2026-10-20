@@ -6,7 +6,7 @@ comptime int32 NINE = Palette::scaled(n: Palette::K);
 comptime int32 FOUR = Suit::squared(n: Suit::COUNT);
 comptime int32 WALKED = walk(n: 1);
 
-fn int32 main() {
+fn uint8 main() {
     comptime int32 LOCAL = LIMIT + EIGHT;
     comptime assert(cond: LOCAL == 12, msg: "a body assertion");
     InlineArray<int32>#(LIMIT) a = [0; (LIMIT)];

@@ -10,4 +10,4 @@ fn int32 f(Tag t) comptime(int32 F) {
         case B: 0;
     };
 }
-fn int32 main() { return f(t: Tag::A(v: 3))#(16); }
+fn uint8 main() { return cast<uint8>(f(t: Tag::A(v: 3))#(16)); }

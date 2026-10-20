@@ -18,7 +18,7 @@ type resource Slot implements Sendable {
 
 fn void writer(Slot s) { s.run(); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 c0 = 0;
     int32 c1 = 0;
     int32 c2 = 0;
@@ -33,5 +33,5 @@ fn int32 main() {
         spawn writer(s: give s2);
         spawn writer(s: give s3);
     }                               // BARRIER: all four joined here
-    return c0 + c1 + c2 + c3;   // 1 + 2 + 4 + 8 = 15
+    return cast<uint8>(c0 + c1 + c2 + c3);   // 1 + 2 + 4 + 8 = 15
 }

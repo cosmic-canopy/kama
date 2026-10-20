@@ -2,7 +2,7 @@
 // by-value view parameter. Sibling of view_escape_inline_array — that one covers the return path, this
 // one the local. (`tests/inline_array_view.kama` shows both accepted spellings.)
 import { std::collections::View, std::collections::ConstView };
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(3) a = [1, 2, 3];
     ConstView<int32> v = a.view();     // nothing holds `a` still for the view's lifetime
     return v.length() == 3 ? 0 : 1;

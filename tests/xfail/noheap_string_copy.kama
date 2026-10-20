@@ -3,4 +3,4 @@
 // one place — the same argument the destructor edge makes. NOTE the sibling control: a string LITERAL
 // local is borrowed (`cap == 0`) and allocates nothing, so it stays legal here.
 @noheap fn int32 tick(ref string a) { string c = copy a; return cast<int32>(c.length()); }
-fn int32 main() { string x = "ab"; return tick(a: ref x); }
+fn uint8 main() { string x = "ab"; return cast<uint8>(tick(a: ref x)); }

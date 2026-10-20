@@ -5,7 +5,7 @@ fn int32 charCount(ref string s) {
     foreach (char c in s.chars()) { n = n + 1; }
     return n;
 }
-fn int32 main() {
+fn uint8 main() {
     string empty = ""; string a = "a"; string abc = "abc";
     string e = "é"; string cafe = "café"; string hello = "hello";
     int32 r = 0;
@@ -36,5 +36,5 @@ fn int32 main() {
     if (fll == 2)    { r = r + 1; }   // find in middle
     if (fo == 4)     { r = r + 1; }   // find at end
     if (fz == 0 - 1) { r = r + 1; }   // not found -> None
-    return r;   // 23
+    return cast<uint8>(r);   // 23
 }

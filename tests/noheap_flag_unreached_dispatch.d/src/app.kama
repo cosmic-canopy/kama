@@ -18,11 +18,11 @@
 // for an entirely different and correct reason.
 import { std::collections::SlotMap, std::collections::Handle };
 
-fn int32 main() {
+fn uint8 main() {
     // A handle built and read with no map in sight: `Handle` is a plain value, so none of this allocates
     // and none of it reaches the serde body that dispatches.
     Handle h = Handle.of(index: 2, generation: 3ui32);
     InlineArray<int32>#(4) xs = [0; 4];
     xs[cast<isize>(h.generation)] = cast<int32>(h.index) + 23;
-    return xs[3];
+    return cast<uint8>(xs[3]);
 }

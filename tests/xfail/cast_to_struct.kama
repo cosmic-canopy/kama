@@ -9,8 +9,8 @@ type value Pair {
     public ctor make(int32 a, int32 b) { this.a = a; this.b = b; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int64 bits = 7i64;
     Pair p = cast<Pair>(bits);
-    return p.a;
+    return cast<uint8>(p.a);
 }

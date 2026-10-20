@@ -1,4 +1,4 @@
-fn int32 main()
+fn uint8 main()
 {
     int32 sum = 0;
     int32 i = 0;
@@ -9,5 +9,5 @@ fn int32 main()
         if ((i % 2) == 0) { continue; }
         sum += i;
     }
-    return sum;
+    return cast<uint8>(sum);
 }

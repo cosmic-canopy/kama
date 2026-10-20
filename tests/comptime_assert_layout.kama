@@ -33,7 +33,7 @@ type value Vertex {
     comptime assert(cond: sizeof(Vertex) == 20, msg: "vertex buffer stride");
 }
 
-fn int32 main() {
+fn uint8 main() {
     Vertex v = Vertex.of(pos: Vec3.of(x: 1.0f32, y: 2.0f32, z: 3.0f32), uv: Vec2.of(x: 4.0f32, y: 5.0f32));
-    return cast<int32>(sizeof(Vec4)) + cast<int32>(v.uv.x);   // 16 + 4
+    return cast<uint8>(cast<int32>(sizeof(Vec4)) + cast<int32>(v.uv.x));   // 16 + 4
 }

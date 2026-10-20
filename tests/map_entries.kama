@@ -4,7 +4,7 @@
 // with the key (`iterator()`) and value (`values()`) iterators.
 import { std::collections::Map, std::collections::Entry };
 
-fn int32 main() {
+fn uint8 main() {
     // (a) int32 -> int32: sum key+value across every entry.
     Map<int32, int32> m = Map.empty();
     m.put(key: 1, value: 10);
@@ -21,5 +21,5 @@ fn int32 main() {
     foreach (Entry<int32, string> e in sm.entries()) { b = b + e.key() + cast<int32>(e.value().length()); }
     // (1+2) + (2+3) = 3 + 5 = 8
 
-    return a + b;   // 66 + 8 = 74 (kept < 256 — exit codes are 8-bit)
+    return cast<uint8>(a + b);   // 66 + 8 = 74 (kept < 256 — exit codes are 8-bit)
 }

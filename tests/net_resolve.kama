@@ -32,7 +32,7 @@ fn bool invalidInput(const ref string host) {
 // The port the OS picked for `bind(port: 0)`. No fixture pins a port, so no two can collide (KR-105).
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // The parser: a good address round-trips through the text renderer.

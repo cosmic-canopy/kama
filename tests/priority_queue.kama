@@ -18,7 +18,7 @@ type resource Task implements Comparable<This> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // (a) min-heap: push out of order, drain in ascending order.
@@ -57,5 +57,5 @@ fn int32 main() {
     int32 borrowed = pq.peekRef().priority();           // borrow the new root in place, no removal
     if (borrowed == 20) { r = r + 5; }                  // remaining Tasks (20, 30) drop at scope exit
 
-    return r;   // 9 asserts * 5 = 45 (kept < 256 — exit codes are 8-bit)
+    return cast<uint8>(r);   // 9 asserts * 5 = 45 (kept < 256 — exit codes are 8-bit)
 }

@@ -9,4 +9,4 @@ import {
     visok::narrow::pub::p,
 };
 
-fn int32 main() { return oth() + d() + p(); }   // 2 + 5 + 9 = 16
+fn uint8 main() { return cast<uint8>(oth() + d() + p()); }   // 2 + 5 + 9 = 16

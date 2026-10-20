@@ -217,7 +217,7 @@ fn int32 fail(ref string host, uint16 port) {
     return 1;
 }
 
-fn int32 main() {
+fn uint8 main() {
     string host    = envOr(name: "HTTPD_HOST", dflt: "127.0.0.1");
     string root    = envOr(name: "HTTPD_ROOT", dflt: "public");
     string portStr = envOr(name: "HTTPD_PORT", dflt: "8080");
@@ -225,7 +225,7 @@ fn int32 main() {
 
     Result<TcpListener, IoError> rl = TcpListener.bind(host: host, port: port);
     return match (rl) {
-        case Ok(value: listener): run(listener: listener, host: host, root: root, port: port);
-        case Err(error: e):       fail(host: host, port: port);
+        case Ok(value: listener): cast<uint8>(run(listener: listener, host: host, root: root, port: port));
+        case Err(error: e):       cast<uint8>(fail(host: host, port: port));
     };
 }

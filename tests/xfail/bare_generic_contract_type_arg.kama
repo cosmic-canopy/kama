@@ -2,4 +2,4 @@
 import { std::memory::Owned };
 type contract Src<A> for value { fn A get(); }
 fn int32 take(Owned<Src> s) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

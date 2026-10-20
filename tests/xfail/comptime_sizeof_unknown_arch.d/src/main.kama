@@ -6,4 +6,4 @@
 // before emission, which is the toolchain's answer and not the one under test.
 type value Header { public uint32 tag; public float64 stamp; }
 comptime usize H = sizeof(Header);
-fn int32 main() { return cast<int32>(H); }
+fn uint8 main() { return cast<uint8>(H); }

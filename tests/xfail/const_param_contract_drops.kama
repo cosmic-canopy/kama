@@ -10,4 +10,4 @@ type value P implements Same<This> {
     public const fn int32 get() { return this.x; }
 }
 fn bool viaContract(const ref P a, const ref P b) { Same<P> s = a; return s.same(other: b); }
-fn int32 main() { P a = P.make(x: 1); const P b = P.make(x: 2); bool r = viaContract(a: a, b: b); return b.get(); }
+fn uint8 main() { P a = P.make(x: 1); const P b = P.make(x: 2); bool r = viaContract(a: a, b: b); return cast<uint8>(b.get()); }

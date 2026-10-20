@@ -8,8 +8,8 @@ type value Fx comptime(int32 F) {
     public ctor of(int32 raw) { this.raw = raw; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Fx#(16) good = Fx#(16).of(raw: 1);   // this instantiation is fine
     Fx#(40) bad  = Fx#(40).of(raw: 2);   // this one is not
-    return good.raw + bad.raw;
+    return cast<uint8>(good.raw + bad.raw);
 }

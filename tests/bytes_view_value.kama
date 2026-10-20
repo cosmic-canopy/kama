@@ -35,7 +35,7 @@ fn bool same(ConstView<uint8> b, InlineArray<uint8>#(12) want, isize n) {
 // A bound on a generic TYPE is judged early, before any `bytes()` is registered; `string` failed it until 0.9.575.
 type resource Holder<T: BytesViewable<ConstView<uint8>>> { T v; public ctor make(T v) { this.v = give v; } public fn uint32 total() { return sum(v: this.v); } }
 
-fn int32 main() {
+fn uint8 main() {
     int32 ok = 0;
     Round r = Round.make(tick: 7);
     InlineArray<uint8>#(12) w1 = [0ui8; 12];
@@ -59,5 +59,5 @@ fn int32 main() {
 
     Holder<string> h = Holder.make(v: "ab");
     if (h.total() == 97 + 98) { ok = ok + 3; }
-    return ok;                                                          // 42
+    return cast<uint8>(ok);                                                          // 42
 }

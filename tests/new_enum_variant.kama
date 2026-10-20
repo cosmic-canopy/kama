@@ -10,7 +10,7 @@ type enum Geo { Circle(int32 r), Point;
 type enum Maybe<T> { Has(T v), Nope }
 fn Shared<Geo> make() { return new Geo::Circle(r: 9); }                 // a return value
 fn int32 measure(Owned<Geo> g) { return g.size(); }
-fn int32 main() {
+fn uint8 main() {
     Shared<Geo> g = new Geo::Circle(r: 4);                             // a declaration
     Shared<Geo> g2 = g;                                               // …shared
     Owned<Geo> p = new Geo::Point();                                   // a payload-less variant
@@ -18,5 +18,5 @@ fn int32 main() {
     Optional<Owned<Geo>> t = try new Geo::Circle(r: 5);                // the non-panic form
     int32 tv = match (t) { case Some(value: o): o.size(); case None: 0; };
     Shared<Geo> k = make();
-    return g.size() + g2.size() + p.size() + tv + k.size() + measure(g: new Geo::Circle(r: 2));   // 4+4+100+5+9+2 = 124
+    return cast<uint8>(g.size() + g2.size() + p.size() + tv + k.size() + measure(g: new Geo::Circle(r: 2)));   // 4+4+100+5+9+2 = 124
 }

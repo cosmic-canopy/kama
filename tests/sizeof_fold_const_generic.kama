@@ -6,12 +6,12 @@
 // `::<sizeof(int32)>` form stays a parse error deliberately.)
 fn int32 idN() comptime(int32 N) { return N; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = idN()#(sizeof(int32));            // 4
     int32 b = idN()#(sizeof(uint16) * 8);       // 16 — const arithmetic over the fold
     // a size position: the fold drives both the type's length and the fill count
     InlineArray<int32>#(sizeof(int64)) buf = [3; (sizeof(int64))];
     int32 t = 0;
     foreach (int32 e in buf) { t = t + e; }        // 8 slots of 3 = 24
-    return a + b + t + cast<int32>(buf.length());  // 4 + 16 + 24 + 8 = 52
+    return cast<uint8>(a + b + t + cast<int32>(buf.length()));  // 4 + 16 + 24 + 8 = 52
 }

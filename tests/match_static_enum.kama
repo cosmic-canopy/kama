@@ -16,4 +16,4 @@ unsafe fn int32 pick() {
     return a + b;
 }
 
-fn int32 main() { return pick(); }
+fn uint8 main() { return cast<uint8>(pick()); }

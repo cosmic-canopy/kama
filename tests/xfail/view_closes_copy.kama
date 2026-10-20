@@ -11,7 +11,7 @@ type resource Conn implements Transacts {
     public ctor make() { this.log = [0; 1]; }
     public unsafe fn Tx begin() { return Tx.over(log: addr(of: this.log[0])); }
 }
-fn int32 main()
+fn uint8 main()
 {
     Conn c = Conn.make();
     borrow c.begin() as tx { Tx again = tx; }

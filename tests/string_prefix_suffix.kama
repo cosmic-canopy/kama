@@ -1,5 +1,5 @@
 // `startsWith(prefix:)` / `endsWith(suffix:)` — true/false, empty and whole-string cases.
-fn int32 main() {
+fn uint8 main() {
     string s = "hello";
     int32 r = 0;
     if (s.startsWith(prefix: "he")) { r = r + 1; }
@@ -8,5 +8,5 @@ fn int32 main() {
     if (s.endsWith(suffix: "he")) { r = r + 100; }     // skipped
     if (s.startsWith(prefix: "")) { r = r + 4; }       // empty -> true
     if (s.endsWith(suffix: "hello")) { r = r + 8; }    // whole -> true
-    return r;                                          // 15
+    return cast<uint8>(r);                                          // 15
 }

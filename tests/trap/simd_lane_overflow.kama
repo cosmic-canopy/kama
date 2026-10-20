@@ -11,10 +11,10 @@
 // which would pass as "exited 0, expected a trap" rather than silently, but the offset makes a broken
 // build exit 7 and say so unambiguously. Verified against the unchecked compiler.
 import { std::num::int32Max };
-fn int32 main() {
+fn uint8 main() {
     int32 big = int32Max();                       // runtime-opaque
     Simd<int32>#(4) a = [big, 1, 1, 1];
     Simd<int32>#(4) b = [1; 4];
     Simd<int32>#(4) c = a + b;                     // lane 0 overflows -> trap
-    return c.lane(index: 0) + 7;
+    return cast<uint8>(c.lane(index: 0) + 7);
 }

@@ -57,11 +57,11 @@ type value Handle {
     public fn int32 get() { return this.fd; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Res r = Res.make(v: 4);                  // 4 + 3 = 7
     Early a = Early.make(x: 2);              // 2 + 1 = 3
     Early b = Early.make(x: -5);             // -5 + 9 = 4
     int32 f = match (Fal.make(n: 6)) { case Ok(value: v): v.get(); case Err(error: e): 0; };
     Handle h = Handle.open(raw: 9);          // 10
-    return r.get() + a.sum() + b.sum() + f + h.get();   // 7 + 3 + 4 + 6 + 10 = 30
+    return cast<uint8>(r.get() + a.sum() + b.sum() + f + h.get());   // 7 + 3 + 4 + 6 + 10 = 30
 }

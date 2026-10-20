@@ -48,7 +48,7 @@ type value Pair<T: Arithmetic<T>> {
     public fn T sum() { return this.a + this.b; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 near = 1;
     int32 k_near = 2;
     k_Box b = k_Box.make(k_x: near);
@@ -58,7 +58,7 @@ fn int32 main() {
     Optional<string> first = Optional::Some(value: "cd");
     int32 n = match (first) { case Some(value: s): cast<int32>(s.length()); case None: 0; };
     InlineArray<int32>#(4) quad = [1, 2, 3, 4];
-    return b.k_x + p.sum() + cast<int32>(names.length()) + n + quad[0];
+    return cast<uint8>(b.k_x + p.sum() + cast<int32>(names.length()) + n + quad[0]);
 }
 KAMA
 

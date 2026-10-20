@@ -12,7 +12,7 @@ type resource Conn implements Transacts {
     public unsafe fn Tx begin() { return Tx.over(log: addr(of: this.log[0])); }
 }
 fn int32 peek<T>(const ref T x) { return 1; }
-fn int32 main()
+fn uint8 main()
 {
     Conn c = Conn.make();
     borrow c.begin() as tx { int32 k = peek(x: tx); }

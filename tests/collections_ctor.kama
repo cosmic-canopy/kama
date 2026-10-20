@@ -14,7 +14,7 @@ import {
     std::collections::BitSet,
     std::collections::PriorityQueue,
 };
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.empty();          // default-marked empty ctor
     a.add(item: 10); a.add(item: 20);                      // 10+20 = 30
 
@@ -56,5 +56,5 @@ fn int32 main() {
     int32 bv  = match (viaBridge.get(key: 8)) { case Some(value: x): x; case None: 0; }; // 8
 
     // 30 + 5 + 7 + 1 + 1 + 4 + 1 + 99 + 6 + 8 = 162
-    return a[0] + a[1] + ac[0] + mv + cast<int32>(sc) + cast<int32>(dl) + smv + cast<int32>(bc) + pk + m2v + bv - 100;   // 162 - 100 = 62
+    return cast<uint8>(a[0] + a[1] + ac[0] + mv + cast<int32>(sc) + cast<int32>(dl) + smv + cast<int32>(bc) + pk + m2v + bv - 100);   // 162 - 100 = 62
 }

@@ -30,7 +30,7 @@ unsafe fn bool sameStorage(const ref string s) {
     borrow s.bytes() as pv { return cast<usize>(pv.dataPtr()) == cast<usize>(s.cstr()); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     string s = "hello";
 
     // 1-3: length, element, and the whole window in one `borrow`

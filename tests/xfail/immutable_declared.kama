@@ -7,4 +7,4 @@ type value Evil implements Immutable {
     public ctor make() { this.v = 1; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

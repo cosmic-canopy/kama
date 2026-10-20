@@ -8,12 +8,12 @@ type resource H implements Copyable<This>(bare: copy) {
 }
 fn int32 useIt(H h) { return h.get(); }
 fn H makeCopy(H src) { H local = src; return local; }
-fn int32 main() {
+fn uint8 main() {
     H a = H.make(id: 10);
     H b = a;                    // init: retain
     int32 r1 = useIt(h: a);     // argument: retain, a stays valid
     H c = makeCopy(src: b);     // argument + init + return
     H d = H.make(id: 5);
     d = a;                      // reassign: release old d, retain a
-    return b.get() + r1 + c.get() + d.get();   // 10 * 4 = 40
+    return cast<uint8>(b.get() + r1 + c.get() + d.get());   // 10 * 4 = 40
 }

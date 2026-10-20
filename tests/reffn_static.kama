@@ -23,11 +23,11 @@ fn ref int32 ticks() { return g_ticks; }
 fn ref int32 hits() { return g_counters.hitCount; }        // a FIELD of a static root, as `this.f` is of `this`
 fn void bump(ref int32 v) { v = v + 100; }
 
-fn int32 main() {
+fn uint8 main() {
     ticks() = 5;
     ticks() += 2;                  // 7
     hits() = 1;
     bump(v: ref hits());           // 101 — the place passes as a `ref` argument
     g_counters.misses = 3;         // written directly, read back through the place below
-    return ticks() + hits() + g_counters.misses;   // 7 + 101 + 3 = 111
+    return cast<uint8>(ticks() + hits() + g_counters.misses);   // 7 + 101 + 3 = 111
 }

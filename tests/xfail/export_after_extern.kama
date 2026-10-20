@@ -2,4 +2,4 @@
 // them. The parse error used to be a bare "unexpected EXPORT", which did not say the rule.
 extern fn int32 puts(UnsafeConstPtr<uint8> s);
 export { main };
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

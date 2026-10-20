@@ -9,4 +9,4 @@ type value Box<T> {
 type enum M<T> implements Tag when [Q: Tag] { A(T x), B;
     public fn int32 tag() { return 1; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

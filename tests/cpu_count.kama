@@ -8,7 +8,7 @@
 // twice, since a per-call query that drifted would be worse than useless for sizing a pool.
 import { std::concurrent::cpuCount };
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = cpuCount();
     if (n < 1) { return 1; }
     if (cpuCount() != n) { return 2; }   // stable across calls — a pool is sized from it once

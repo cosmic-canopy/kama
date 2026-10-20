@@ -4,4 +4,4 @@ type value T {
     public int32 n;
     public default ctor of(int32 n) { this.n = n; return this; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

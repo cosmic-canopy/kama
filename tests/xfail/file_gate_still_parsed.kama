@@ -10,4 +10,4 @@
 // rejects, which is what makes it an error here rather than a file nobody reads.
 file @compileFor(NO_SUCH_FLAG_IS_EVER_ACTIVE);
 
-fn int32 main() { return }
+fn uint8 main() { return }

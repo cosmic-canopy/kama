@@ -52,7 +52,7 @@ fn int32 inside() { slot Box b; Box::into(dst: out b); return b.read(); }
 KEOF
 cat > "$tmp/proj/src/main.kama" <<'KEOF'
 import { parity::geo::Box, parity::geo::inside };
-fn int32 main() { slot Box b; Box::into(dst: out b); return b.read() + inside(); }
+fn uint8 main() { slot Box b; Box::into(dst: out b); return cast<uint8>(b.read() + inside()); }
 KEOF
 
 ( cd "$tmp/proj" && "$KAMA" build kama.json -o "$tmp/proj/out.bin" --keep-c ) >"$tmp/build.log" 2>&1 || {
@@ -111,7 +111,7 @@ fn int32 inside() { Holder h = makeHolder(); return takesOther(o: h.k); }
 KEOF
 cat > "$tmp/arg/src/main.kama" <<'KEOF'
 import { argp::geo::inside };
-fn int32 main() { return inside(); }
+fn uint8 main() { return cast<uint8>(inside()); }
 KEOF
 ( cd "$tmp/arg" && "$KAMA" check kama.json ) >"$tmp/inside.log" 2>&1 && in_ok=1 || in_ok=0
 
@@ -122,7 +122,7 @@ fn int32 inside() { return 0; }
 KEOF
 cat > "$tmp/arg/src/main.kama" <<'KEOF'
 import { argp::geo::Holder, argp::geo::makeHolder, argp::geo::takesOther };
-fn int32 main() { Holder h = makeHolder(); return takesOther(o: h.k); }
+fn uint8 main() { Holder h = makeHolder(); return cast<uint8>(takesOther(o: h.k)); }
 KEOF
 ( cd "$tmp/arg" && "$KAMA" check kama.json ) >"$tmp/outside.log" 2>&1 && out_ok=1 || out_ok=0
 

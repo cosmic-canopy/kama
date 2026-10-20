@@ -25,7 +25,7 @@ fn int32 peek(const ref Box<int32> b) { return b.get(); }
 fn T generic<T>(Box<T> b) { return b.get(); }
 fn int32 pairB<A>(Pair<A> p) { return p.second(); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 x = 4;
     if (take(b: Box.of(v: 3)) != 3) { return 1; }                   // a concrete parameter
     if (take(b: Box.empty()) != 0) { return 2; }                    // ...with nothing to infer from
@@ -35,5 +35,5 @@ fn int32 main() {
     if (Box.of(v: 8).get() != 8) { return 6; }                      // a receiver
     Host h = Host.of(k: 10);
     if (h.add(b: Box.of(v: 2)) != 12) { return 7; }                 // a method-call argument
-    return pairB(p: Pair.of(a: true)) + 20;                         // a defaulted parameter: 25
+    return cast<uint8>(pairB(p: Pair.of(a: true)) + 20);                         // a defaulted parameter: 25
 }

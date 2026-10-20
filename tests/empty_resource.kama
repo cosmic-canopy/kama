@@ -2,7 +2,7 @@
 // though it owns nothing to drop. `give` moves it; the source is consumed.
 type resource Token { public ctor make() { } }
 fn int32 use(Token t) { return 7; }              // t moves into the callee
-fn int32 main() {
+fn uint8 main() {
     Token a = Token.make();
-    return use(t: give a);                       // move a; a consumed
+    return cast<uint8>(use(t: give a));                       // move a; a consumed
 }

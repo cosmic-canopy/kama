@@ -10,6 +10,6 @@ extern fn int32 host_sum();
 
 unsafe fn int32 viaHost() { return host_sum(); }
 
-fn int32 main() {
-    return tick() + btick() + viaHost();   // 1 + 20 + 21 = 42
+fn uint8 main() {
+    return cast<uint8>(tick() + btick() + viaHost());   // 1 + 20 + 21 = 42
 }

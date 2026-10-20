@@ -6,7 +6,7 @@ fn Optional<DynamicArray<int32>> takeIf(bool cond, DynamicArray<int32> xs) {
     if (cond) { return Optional::Some(value: give xs); }
     return Optional::None;
 }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 40); a.add(item: 2);
 
@@ -24,8 +24,8 @@ fn int32 main() {
     Optional<DynamicArray<int32>> opt2 = takeIf(cond: true, xs: give b);
     DynamicArray<int32> res2 = match (give opt2) {
         case Some(value: v): { := give v; }
-        case None:    { return 0 - 1; }
+        case None:    { return 1; }   // a failure: anything but 142
     };
     int32 n = 0; foreach (int32 x in res2) { n = n + x; }        // 100
-    return sum + n;   // 42 + 100 = 142
+    return cast<uint8>(sum + n);   // 42 + 100 = 142
 }

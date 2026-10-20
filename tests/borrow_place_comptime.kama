@@ -20,4 +20,4 @@ comptime fn int32 indexStays() {
 }
 
 comptime int32 K = firstPlusOne() + indexStays();
-fn int32 main() { return K; }
+fn uint8 main() { return cast<uint8>(K); }

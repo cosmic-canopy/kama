@@ -14,7 +14,7 @@ type resource R {
     public ctor make() { this.xs = DynamicArray.empty(); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     R local = R.make();
     drop(value: local);        // the old place form — gone
     return 0;

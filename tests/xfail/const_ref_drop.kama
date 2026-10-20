@@ -18,7 +18,7 @@ unsafe fn void dropEarly(ref DynamicArray<Noisy> xs) {
     drop(ptr: ro);                             // -> REJECT
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Noisy> xs = DynamicArray.empty();
     xs.add(item: Noisy.make());
     dropEarly(xs: xs);

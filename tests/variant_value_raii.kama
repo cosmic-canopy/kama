@@ -1,9 +1,9 @@
 import { std::collections::DynamicArray };
 type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){return this.items[0];} }
 type enum Wrap { Has(Res r), Empty }
-fn int32 main()
+fn uint8 main()
 {
     Wrap w = Wrap::Has(r: Res.make(v: 42));
     Wrap e = Wrap::Empty;
-    return match (w) { case Has(r: r): r.head(); case Empty: 0; };
+    return match (w) { case Has(r: r): cast<uint8>(r.head()); case Empty: 0; };
 }

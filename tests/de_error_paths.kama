@@ -83,7 +83,7 @@ fn int32 check(string src, string want) {
     return got == want ? 1 : 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 ok = 0;
     // a nested record's field, missing and of the wrong type
     ok = ok + check(src: "{\"server\": {\"host\": \"a\"}, \"backups\": [], \"limits\": [], \"max-conn\": 3}",
@@ -108,7 +108,7 @@ fn int32 main() {
                     want: "unexpected end of input at `server.host`|server.host|UnexpectedEnd");
     ok = ok + check(src: "{\"server\": {\"port\": 1, \"host\": \"a\"}, \"backups\": [], \"limits\": [], \"max-conn\": 3, @}",
                     want: "malformed input|-|Malformed");
-    if (ok != 9) { return ok; }
+    if (ok != 9) { return cast<uint8>(ok); }
 
     // an enum payload names its variant
     Result<Shape, Owned<Error>> s = deserializeJsonBuffer::<Shape>(src: "{\"tag\": \"Circle\", \"value\": {\"radius\": \"big\"}}");

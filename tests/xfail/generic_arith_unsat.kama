@@ -7,9 +7,9 @@ type value Plain {
 
 fn T sum<T: Arithmetic<T>>(T a, T b) { return a + b; }
 
-fn int32 main() {
+fn uint8 main() {
     Plain p = Plain.make(v: 1);
     Plain q = Plain.make(v: 2);
     Plain r = sum(a: p, b: q);   // Plain does not satisfy Arithmetic
-    return r.v;
+    return cast<uint8>(r.v);
 }

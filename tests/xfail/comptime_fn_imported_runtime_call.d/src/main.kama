@@ -2,7 +2,7 @@
 // is — before, the importer did not know it as a comptime fn at all and said "unknown function".
 import { cx::m::twice };
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = 3;
     return twice(n: n);
 }

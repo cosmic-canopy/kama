@@ -7,7 +7,7 @@ type value Pair { public int32 lo; public int32 hi;
 fn void mix(ref Pair whole, ref int32 part) { whole.hi = part; }
 fn void bump(ref int32 a, ref int32 b) { a = a + b; }
 
-fn int32 main() {
+fn uint8 main() {
     Pair p = Pair.make(lo: 1, hi: 2);
     bump(a: p.lo, b: p.hi);      // legal — disjoint sibling fields
     mix(whole: p, part: p.lo);   // rejected — `{p}` is a prefix of `{p, lo}`

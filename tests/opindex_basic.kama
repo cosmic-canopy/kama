@@ -5,11 +5,11 @@ type value Grid3 {
     public ctor make() { this.cells = [0; 9]; }
     public ref int32 operator[](usize i) { return this.cells[i]; }
 }
-fn int32 main() {
+fn uint8 main() {
     Grid3 g = Grid3.make();
     g[0] = 5;
     g[4] = 10;
     g[0] += 1;             // compound through the place
     int32 x = g[4];        // read (copy out)
-    return g[0] + x;       // 6 + 10 = 16
+    return cast<uint8>(g[0] + x);       // 6 + 10 = 16
 }

@@ -4,4 +4,4 @@
 type contract Tag for value { fn int32 tag(); }
 fn int32 needTag<T: Tag>(T x) { return x.tag(); }
 fn int32 outer<T>(T x) { return needTag(x: x); }
-fn int32 main() { return outer(x: 5); }
+fn uint8 main() { return cast<uint8>(outer(x: 5)); }

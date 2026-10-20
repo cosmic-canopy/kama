@@ -7,11 +7,11 @@ type resource Shelf<T> {
     public fn T fresh() when [T: default] { T t = T.default(); return t; }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Shelf<Item> s = Shelf::<Item>.make();
     Item made = s.fresh();                                    // a field fill inside Shelf<Item>'s body
     FixedArray<Item> row = FixedArray::<Item>.make(size: 2);  // ...and inside std's FixedArray<Item>
     s.put(item: Item.make(w: 7));
-    return made.score() + row[1].score() - 84 + 3;            // 42 + 42 - 84 + 3 = 3
+    return cast<uint8>(made.score() + row[1].score() - 84 + 3);            // 42 + 42 - 84 + 3 = 3
 }

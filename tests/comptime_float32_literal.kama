@@ -14,7 +14,7 @@ comptime float32 C = cast<float32>(0.1);
 comptime float32 BIG = 3.0e38f32 * 10.0;          // past float32's range at compile time: `inf`
 comptime float64 QUIET = 0.0 / 0.0;               // `nan`
 
-fn int32 main() {
+fn uint8 main() {
     float32 nine = 9.0;
     float32 tenth = 0.1;
     int32 r = 0;
@@ -25,5 +25,5 @@ fn int32 main() {
     if (C == tenth) { r = r + 16; }
     if (BIG > 3.0e38f32) { r = r + 32; }
     if (QUIET != QUIET) { r = r + 64; }
-    return r;                                     // 127
+    return cast<uint8>(r);                                     // 127
 }

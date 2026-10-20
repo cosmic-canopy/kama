@@ -4,7 +4,7 @@
 // in C, so without a rule it lands on the primitive-operator path and compiles in silence.
 //
 // (The other half is that `select` lives on the mask, so it cannot be handed a data vector by mistake.)
-fn int32 main() {
+fn uint8 main() {
     Simd<float32>#(4) a = [1.0f32; 4];
     Mask<float32>#(4) m = a.greaterThan(rhs: a);
     Mask<float32>#(4) p = m * m;

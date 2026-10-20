@@ -5,7 +5,7 @@
 // Construction is an ARRAY LITERAL, the same spelling `InlineArray` uses: `[a, b, c, d]` writes the
 // lanes out and `[v; N]` splats. One way to spell "N values of T", which is what the two shapes have in
 // common; everything below it differs.
-fn int32 main() {
+fn uint8 main() {
     Simd<float32>#(4) a = [1.0f32, 2.0f32, 3.0f32, 4.0f32];
     Simd<float32>#(4) t = [10.0f32; 4];                  // splat -> 10,10,10,10
 
@@ -82,5 +82,5 @@ fn int32 main() {
     r = r + cast<int32>(dq.floor().lane(index: 1));                 //  0  => 90
     r = r + cast<int32>(dq.ceil().lane(index: 1));                  //  1  => 91
 
-    return r;
+    return cast<uint8>(r);
 }

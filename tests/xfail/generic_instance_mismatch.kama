@@ -7,7 +7,7 @@ import { std::io::IoError };
 
 fn Result<isize, IoError> count() { return Result::Ok(value: 1); }
 
-fn int32 main() {
+fn uint8 main() {
     Result<Unit, IoError> r = count();   // -> REJECT
     return 0;
 }

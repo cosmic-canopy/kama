@@ -4,4 +4,4 @@ type resource R { int32 h = 0; public ctor make() { this.h = 1; } }
 
 comptime R K = R.make();
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

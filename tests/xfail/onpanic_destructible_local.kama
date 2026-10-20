@@ -11,4 +11,4 @@ fn int32 region(isize i) {
     Token t = Token.make(id: 1);     // ERROR: owns `t`, which has a destructor
     return t.get();
 }
-fn int32 main() { return region(i: 0); }
+fn uint8 main() { return cast<uint8>(region(i: 0)); }

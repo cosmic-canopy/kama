@@ -13,4 +13,4 @@ fn void accumulate(Acc a) { a.run(); }
     scope { spawn accumulate(a: give acc); }
     return 0;
 }
-fn int32 main() { return tick(); }
+fn uint8 main() { return cast<uint8>(tick()); }

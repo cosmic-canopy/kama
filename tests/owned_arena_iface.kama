@@ -12,10 +12,10 @@ type value Circle implements Shape {
     public fn int32 area() { return this.r * this.r; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);         // declared FIRST → drops LAST (outlives the boxes)
 
     Owned<Shape, BumpAllocator> a = new(allocator: arena.handle()) Circle.make(r: 5);   // 25, via the vtbl
     Owned<Shape, BumpAllocator> b = new(allocator: arena.handle()) Circle.make(r: 4);   // 16
-    return a.area() + b.area();                     // 41; each Circle lives inside the arena region
+    return cast<uint8>(a.area() + b.area());                     // 41; each Circle lives inside the arena region
 }

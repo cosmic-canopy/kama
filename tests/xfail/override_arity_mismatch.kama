@@ -10,4 +10,4 @@ type final resource Dog extends Animal {
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 own(int32 extra) { return extra; }   // base takes none
 }
-fn int32 main() { Dog d = Dog.make(); return d.total() - 0; }
+fn uint8 main() { Dog d = Dog.make(); return cast<uint8>(d.total() - 0); }

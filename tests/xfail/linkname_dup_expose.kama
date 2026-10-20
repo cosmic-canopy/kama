@@ -3,4 +3,4 @@
 // is over what the host sees.
 expose fn int32 update() { return 1; }                                  // exports `linkname_dup_expose_update`
 @linkName("linkname_dup_expose_update") expose fn int32 tick() { return 2; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -702,7 +702,7 @@ file @compileFor(!ARCH_WASM32);
 
 import { std::io::print };
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 
 --------------------------------------------------------------------------------
 
@@ -731,7 +731,7 @@ fn int32 main() { return 0; }
 `file` still names a binding everywhere else
 ================================================================================
 
-fn int32 main()
+fn uint8 main()
 {
     isize file = 4;
     return cast<int32>(file + h.file);

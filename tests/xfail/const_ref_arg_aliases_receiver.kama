@@ -6,4 +6,4 @@ type resource Bag {
     public ctor make() { this.xs = DynamicArray.empty(); this.xs.add(item: 1i64); }
     public fn void absorb(const ref Bag other) { this.xs.reserve(n: 1024); this.xs.add(item: other.xs[0]); }
 }
-fn int32 main() { Bag b = Bag.make(); b.absorb(other: b); return 0; }
+fn uint8 main() { Bag b = Bag.make(); b.absorb(other: b); return 0; }

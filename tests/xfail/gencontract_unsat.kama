@@ -10,7 +10,7 @@ type value Widget {
 
 fn int32 pick<T: Ranked<int32>>(T a) { return 0; }
 
-fn int32 main() {
+fn uint8 main() {
     Widget w = Widget.make(id: 1);
-    return pick(a: w);   // ERROR: Widget does not satisfy bound Ranked
+    return cast<uint8>(pick(a: w));   // ERROR: Widget does not satisfy bound Ranked
 }

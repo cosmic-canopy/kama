@@ -16,10 +16,10 @@ type final resource Derived extends Base
     unsafe ~Derived() { kama_trace(code: 2); }
     protected override fn int32 kind() { return 1; }
 }
-fn int32 main()
+fn uint8 main()
 {
     {
         Derived d = Derived.make();
     }
-    return traceGet();
+    return cast<uint8>(traceGet());
 }

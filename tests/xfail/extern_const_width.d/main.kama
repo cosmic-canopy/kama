@@ -3,4 +3,4 @@
 // makes it a BUILD failure that `kama check` cannot see (run_tests.sh `analysis_skip`).
 extern "wide.h";
 extern const int32 WIDE_MASK;
-fn int32 main() { return WIDE_MASK == 0 ? 0 : 1; }
+fn uint8 main() { return WIDE_MASK == 0 ? 0 : 1; }

@@ -25,7 +25,7 @@ type enum Grade implements Equatable<This> {
     public const fn bool equals(const ref Grade other) { return true; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Color a = Color::Red;
     Color b = Color::Red;
     Color c = Color::Green;
@@ -47,5 +47,5 @@ fn int32 main() {
 
     if (Grade::Low == Grade::High) { n = n + 8; }   // the declared `equals`, not the tags
 
-    return n;   // 1 + 2 + 5 + 10 + 20 + 6 + 8 = 52
+    return cast<uint8>(n);   // 1 + 2 + 5 + 10 + 20 + 6 + 8 = 52
 }

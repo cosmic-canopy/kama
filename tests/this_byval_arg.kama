@@ -8,9 +8,9 @@ type value V {
     public fn int32 twice()  { return V::sum(p: this, q: this); }   // bare `this` in both by-value slots
     public fn int32 dbl()    { return this.addSelf(other: this); }  // this.method(x: this)
 }
-fn int32 main() {
+fn uint8 main() {
     V v = V.of(a: 21);
     int32 t = v.twice();       // 42
     int32 d = v.dbl();         // 42
-    return (t == d) ? t : 0;   // 42
+    return cast<uint8>((t == d) ? t : 0);   // 42
 }

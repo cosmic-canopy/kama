@@ -17,7 +17,7 @@ fn int32 f32(const ref string s) {
                        case Err(error: e): match (e) { case InvalidDigit: 2; case OutOfRange: 3; case Empty: 4; case _: 5; }; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 bad = 0;
     // range: overflow only
     if (f64(s: "5e-324") != 1) { bad = bad + 1; }                     // the smallest subnormal
@@ -42,5 +42,5 @@ fn int32 main() {
     if (f32(s: "1e39") != 3) { bad = bad + 1; }
     if (f32(s: "1e-50") != 1 || f32(s: "1e-45") != 1) { bad = bad + 1; }
     if (f32(s: "0x10") != 2) { bad = bad + 1; }
-    return bad;
+    return cast<uint8>(bad);
 }

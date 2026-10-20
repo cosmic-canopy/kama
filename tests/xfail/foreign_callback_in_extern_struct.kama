@@ -20,4 +20,4 @@ unsafe fn int32 install() {
     return c_submit(d: d);
 }
 
-fn int32 main() { return install(); }
+fn uint8 main() { return cast<uint8>(install()); }

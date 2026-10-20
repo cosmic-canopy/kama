@@ -6,7 +6,7 @@ type value Feather {
     public ctor make(int32 g) { this.g = g; }
 }
 fn int32 heft<T: Weighable>(T x) { return x.weight(); }
-fn int32 main() {
+fn uint8 main() {
     Feather f = Feather.make(g: 1);
-    return heft(x: f);   // ERROR: Feather does not satisfy bound Weighable
+    return cast<uint8>(heft(x: f));   // ERROR: Feather does not satisfy bound Weighable
 }

@@ -10,4 +10,4 @@ fn int32 code(IoErrorKind k) {
         case MessageTooLong: 13; case BrokenPipe: 14; case InvalidInput: 15; case Interrupted: 16; case Other: 17;
     };
 }
-fn int32 main() { return code(k: IoErrorKind::Other); }
+fn uint8 main() { return cast<uint8>(code(k: IoErrorKind::Other)); }

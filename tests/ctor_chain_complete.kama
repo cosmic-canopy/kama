@@ -15,7 +15,7 @@ type resource Holder {
     public ctor zeroed() { return Holder.make(v: 0); }                                     // ctor -> ctor delegation
     public fn int32 get() { return this.a.get(); }
 }
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.zeroed();
-    return h.get() + 42;           // 0 + 42 = 42
+    return cast<uint8>(h.get() + 42);           // 0 + 42 = 42
 }

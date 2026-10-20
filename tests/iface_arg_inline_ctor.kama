@@ -4,4 +4,4 @@
 type contract Shape for value { fn int32 area(); }
 type value Square implements Shape { int32 s; public ctor make(int32 s){ this.s = s; } public fn int32 area(){ return this.s*this.s; } }
 fn int32 useShape(Shape a) { return a.area(); }
-fn int32 main() { return useShape(a: Square.make(s: 7)); }
+fn uint8 main() { return cast<uint8>(useShape(a: Square.make(s: 7))); }

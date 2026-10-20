@@ -8,7 +8,7 @@ import {
     std::fmt::f32Str,
     std::fmt::boolStr,
 };
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     if (i64Str(v: 0i64) == "0")                                          { r = r + 1; }
     if (i64Str(v: 42i64) == "42")                                        { r = r + 1; }
@@ -25,5 +25,5 @@ fn int32 main() {
     if (f64Str(v: 0.5) == "0.5")                                         { r = r + 1; }
     if (f64Str(v: 2.0) == "2")                                           { r = r + 1; }
     if (f32Str(v: 1.5f32) == "1.5")                                      { r = r + 1; }
-    return r;   // 15
+    return cast<uint8>(r);   // 15
 }

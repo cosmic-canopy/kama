@@ -15,4 +15,4 @@ type resource Rc implements Copyable<This>(bare: copy) {
     public unsafe ctor copy(ref Rc source) { Rc::retain(source: source); return Rc.make(c: source.c); }
     static unsafe fn void retain(const ref Rc source) { source.c[0].strong = source.c[0].strong + 1; }   // ERROR: const is deep
 }
-fn int32 main() { Rc a = Rc.adopt(); Rc b = copy a; return 0; }
+fn uint8 main() { Rc a = Rc.adopt(); Rc b = copy a; return 0; }

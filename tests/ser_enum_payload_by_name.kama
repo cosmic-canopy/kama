@@ -41,7 +41,7 @@ fn string why(Result<Shape, Owned<Error>> r) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"h\":2,\"w\":3}}")) != 32) { return 1; }
     if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"w\":1,\"h\":2,\"w\":3}}")) != 32) { return 2; }
     if (rect(r: deserializeJsonBuffer::<Shape>(src: "{\"tag\":\"Rect\",\"value\":{\"d\":9,\"h\":2,\"w\":3}}")) != 32) { return 3; }
@@ -55,7 +55,7 @@ fn int32 main() {
         };
         case Err(error: _): 10;
     };
-    if (named != 0) { return 10 + named; }
+    if (named != 0) { return cast<uint8>(10 + named); }
     // KBIN named, written by the other declaration order.
     Result<DynamicArray<uint8>, Owned<Error>> b = serializeKbinNamedBuffer(v: ShapeHW::Rect(h: 2, w: 3));
     DynamicArray<uint8> bytes = match (give b) { case Ok(value: v): { := give v; } case Err(error: _): { return 30; } };

@@ -64,7 +64,7 @@ type resource Shapes {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 7);
     Shared<Holder> h = new Holder.make(l: give leaf);
     Result<string, Owned<Error>> hr = serializeJsonBuffer(v: h);

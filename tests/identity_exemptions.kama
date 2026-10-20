@@ -24,7 +24,7 @@ fn int32 viaMatch(Color c) {
 
 fn Optional<Color> maybe(Color c) { return Optional::Some(value: c); }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 acc = 0;
 
@@ -68,5 +68,5 @@ fn int32 main()
     // enum's ordinal (`levelBits`, `orderBits`).
     acc = acc + viaMatch(c: Color::Blue);                            // 219
 
-    return acc - 177;                                                // 42
+    return cast<uint8>(acc - 177);                                                // 42
 }

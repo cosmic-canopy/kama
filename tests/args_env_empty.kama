@@ -13,7 +13,7 @@
 
 import { core::env, core::envOr, core::programInvocation, core::programName, core::programPath, core::args };
 
-fn int32 main() {
+fn uint8 main() {
     if (args().count() != 0) { return 1; }
 
     int32 seen = 0;

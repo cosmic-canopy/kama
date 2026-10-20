@@ -9,7 +9,7 @@
 // ⚠️ The note is gated on the parser having WANTED an identifier. `unexpected ELSE` in a malformed `if`
 // is not a naming mistake, and a note there would be noise — so the gate is part of the claim, not an
 // optimisation.
-fn int32 main()
+fn uint8 main()
 {
     isize base = 1;
     return cast<int32>(base);

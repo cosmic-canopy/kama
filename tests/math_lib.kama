@@ -37,7 +37,7 @@ type value Mat3 {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Vec3 a = Vec3.of(x: 1, y: 2, z: 3);
     Vec3 b = Vec3.of(x: 4, y: 5, z: 6);
 
@@ -64,5 +64,5 @@ fn int32 main() {
     acc = acc + x.x + x.y + x.z;                     // +0  -> 68
     acc = acc + t.x + t.y + t.z;                     // +20 -> 88
     if (a == a) { acc = acc + 10; }                  // +10 -> 98
-    return acc;                                       // 98
+    return cast<uint8>(acc);                                       // 98
 }

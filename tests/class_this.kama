@@ -15,9 +15,9 @@ type value Accum
         return this.total;
     }
 }
-fn int32 main()
+fn uint8 main()
 {
     Accum a = Accum.make(init: 40);
     a.bump();
-    return a.run();
+    return cast<uint8>(a.run());
 }

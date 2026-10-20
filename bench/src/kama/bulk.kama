@@ -12,7 +12,7 @@ fn isize chunk(isize k) {
     return 65536;
 }
 
-fn int32 main()
+fn uint8 main()
 {
     isize srcLen = 65536;
     isize target = 4194304;
@@ -39,5 +39,5 @@ fn int32 main()
         total += s;
     }
     uint64 m = total % 256;
-    return cast<int32>(m);
+    return cast<uint8>(m);
 }

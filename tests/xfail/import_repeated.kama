@@ -2,4 +2,4 @@
 // it is exactly the leftover a scripted edit makes, adding an import beside one already there. The same symbol
 // under a second name (`core::println as say`) is a different binding and stays legal.
 import { core::println, core::println };
-fn int32 main() { println(s: "x"); return 0; }
+fn uint8 main() { println(s: "x"); return 0; }

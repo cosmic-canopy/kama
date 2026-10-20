@@ -14,7 +14,7 @@ import { std::collections::Map, std::serialization::text::json::serializeJsonBuf
 @generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
 type enum Color { Red, Green = 5, Blue }
 
-fn int32 main() {
+fn uint8 main() {
     Color g = Color::Green;
     Color r = Color::Red;
 
@@ -47,5 +47,5 @@ fn int32 main() {
     Result<Color, Owned<Error>> bad = deserializeJsonBuffer::<Color>(src: "\"Puce\"");
     int32 rej = match (bad) { case Ok(value: c2): 0 - 50; case Err(error: e3): 20; };
 
-    return red + blue + bv + rej;   // 4 + 8 + 5 + 20 = 37
+    return cast<uint8>(red + blue + bv + rej);   // 4 + 8 + 5 + 20 = 37
 }

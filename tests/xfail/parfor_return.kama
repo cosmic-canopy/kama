@@ -9,7 +9,7 @@ fn void scale(ref DynamicArray<int32> xs) {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 1);
     scale(xs: xs);

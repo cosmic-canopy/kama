@@ -10,9 +10,9 @@ type value Rock implements Weighable {
 fn T heavier<T: Weighable>(T a, T b) {
     return a.weight() >= b.weight() ? a : b;
 }
-fn int32 main() {
+fn uint8 main() {
     Rock a = Rock.make(g: 20);
     Rock b = Rock.make(g: 17);
     Rock h = heavier(a: a, b: b);   // the heavier Rock (g = 20)
-    return h.weight();              // 20
+    return cast<uint8>(h.weight());              // 20
 }

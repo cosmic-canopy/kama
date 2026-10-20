@@ -1,1 +1,1 @@
-comptime int32 N = 5; fn int32 main() { int8 x = N; return 0; }
+comptime int32 N = 5; fn uint8 main() { int8 x = N; return 0; }

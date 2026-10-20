@@ -15,11 +15,11 @@ fn int32 sumHeads(ref DynamicArray<Res> xs) {
     foreach (ref Res r in xs) { s = s + r.head(); }   // borrow each element (resources aren't yielded by value)
     return s;
 }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Res> a = DynamicArray.empty();
     Res r1 = Res.make(v: 10);  a.add(item: give r1);
     Res r2 = Res.make(v: 20);  a.add(item: give r2);
     DynamicArray<Res> b = copy a;                                  // deep copy — each Res gets its own buffer
     int32 s = sumHeads(xs: ref a) + sumHeads(xs: ref b);   // 30 + 30 = 60 (both lists valid, independent)
-    return s;                                              // a and b drop -> 4 Res freed cleanly
+    return cast<uint8>(s);                                              // a and b drop -> 4 Res freed cleanly
 }

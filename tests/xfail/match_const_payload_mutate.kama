@@ -4,4 +4,4 @@ fn int32 grow(const ref Optional<DynamicArray<int64>> o) {
     match (o) { case Some(value: a): { a.add(item: 2i64); } case None: { } };
     return 0;
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

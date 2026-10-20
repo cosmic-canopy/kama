@@ -61,7 +61,7 @@ fn Shared<World> build() {
     return new World.make(items: give sm, a: ka, b: kb);
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<World> w = build();
     if (w.sum() != 25) { return 240; }                // 7 + 7 + 11 — the shared leaf counts under BOTH
 
@@ -91,5 +91,5 @@ fn int32 main() {
     Shared<World> w3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 245; } };
     if (w3.sum() != 25) { return 244; }
     if (!w3.sharedAcross()) { return 247; }
-    return w3.sum() - 2;                              // 27 - 2 = 25, the same total as the other containers
+    return cast<uint8>(w3.sum() - 2);                              // 27 - 2 = 25, the same total as the other containers
 }

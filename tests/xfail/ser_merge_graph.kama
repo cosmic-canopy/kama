@@ -3,7 +3,7 @@
 import { std::memory::Shared, std::memory::Owned, std::serialization::text::json::mergeJsonBuffer };
 @generate(Serializable, Deserializable)
 type resource Node { @field int32 v; @field Optional<Shared<Node>> next; public ctor make() { this.v = 1; this.next = Optional::None; } }
-fn int32 main() {
+fn uint8 main() {
     Node n = Node.make();
     Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: "{\"v\":2}", into: n);
     return 0;

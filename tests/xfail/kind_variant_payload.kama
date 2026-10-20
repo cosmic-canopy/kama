@@ -2,7 +2,7 @@
 // `emitReorderedCall`, so it is a fourth hand-off site with its own check.
 type enum Msg { Text(string t), None }
 
-fn int32 main() {
+fn uint8 main() {
     Msg m = Msg::Text(t: 5);
     return 0;
 }

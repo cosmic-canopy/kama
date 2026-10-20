@@ -2,4 +2,4 @@
 // case the package adds later — and the package's own exhaustive match builds unchanged. Returns 21.
 import { codes::Code, codes::weight };
 fn int32 local(Code c) { return match (c) { case High: 10; case _: 0; }; }
-fn int32 main() { return weight(c: Code::High) + local(c: Code::High) + weight(c: Code::Low); }
+fn uint8 main() { return cast<uint8>(weight(c: Code::High) + local(c: Code::High) + weight(c: Code::Low)); }

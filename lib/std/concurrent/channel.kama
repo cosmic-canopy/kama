@@ -9,7 +9,7 @@ export { Channel, Sender, Receiver, Undelivered, RecvError };
 //
 //     import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver };
 //     fn void producer(Sender<int32> tx) { int32 i = 0; while (i < 10) { _ = tx.send(item: i); i = i + 1; } }
-//     fn int32 main() {
+//     fn uint8 main() {
 //         Channel<int32> ch = Channel.bounded(capacity: 4);
 //         Sender<int32>   tx = ch.sender();
 //         Receiver<int32> rx = ch.receiver();

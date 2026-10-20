@@ -10,4 +10,4 @@ unsafe fn int32 len(const ref string s) {
     UnsafeConstPtr<uint8> bytes = cast<UnsafeConstPtr<uint8>>(p);   // reading the bytes is a cast away
     return cast<int32>(strlen(s: p)) + cast<int32>(bytes[0]) - 97;  // "abc": 3 + 0
 }
-fn int32 main() { string s = "abc"; return len(s: s) + 39; }   // 42
+fn uint8 main() { string s = "abc"; return cast<uint8>(len(s: s) + 39); }   // 42

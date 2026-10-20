@@ -23,9 +23,9 @@ fn string tag(Band b) {
 
 fn isize slen(const ref string s) { return s.length(); }
 
-fn int32 main() {
+fn uint8 main() {
     if (score(b: Band::Low,  n: 0)  != 0)   { return 90; }
     if (score(b: Band::High, n: 5)  != 110) { return 92; }
     if (slen(s: tag(b: Band::Mid))  != 3)   { return 93; }   // "mid"
-    return score(b: Band::Mid, n: 19);                       // (19 + 2) * 2 = 42
+    return cast<uint8>(score(b: Band::Mid, n: 19));                       // (19 + 2) * 2 = 42
 }

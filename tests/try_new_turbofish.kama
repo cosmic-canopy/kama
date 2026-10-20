@@ -9,7 +9,7 @@ type resource Box<T: Copyable<T>> {   // `get` hands out a copy, so `T` copies
     public fn T get() { return copy this.v; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Optional<Owned<Box<int32>>> b = try new Box::<int32>.make(v: 42);
-    return match (b) { case Some(value: x): x.get(); case None: 0 - 1; };
+    return match (b) { case Some(value: x): cast<uint8>(x.get()); case None: 255; };
 }

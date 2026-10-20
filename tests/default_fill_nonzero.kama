@@ -14,7 +14,7 @@ type resource Holder {
     public fn int32 read() { return this.c.value(); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.make();
-    return h.read();   // 7 (filled), NOT 0 (zero-init)
+    return cast<uint8>(h.read());   // 7 (filled), NOT 0 (zero-init)
 }

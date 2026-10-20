@@ -7,8 +7,8 @@ import { cfg::CAP, cfg::doubled };
 
 unsafe fn int32 viaAddr() { UnsafeConstPtr<int32> p = addr(of: CAP); return p[0]; }   // 8
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(CAP) buf = [1; (CAP)];     // the constant sizes a type, across modules
     int32 copied = CAP;                             // read as a value
-    return CAP + copied + cast<int32>(buf.length()) + viaAddr() + doubled();
+    return cast<uint8>(CAP + copied + cast<int32>(buf.length()) + viaAddr() + doubled());
 }                                                   // 8 + 8 + 8 + 8 + 16 = 48

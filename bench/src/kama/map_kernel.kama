@@ -41,7 +41,7 @@ type resource IntMap {
     }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 N = 100000;
     int32 PASSES = 10;
@@ -63,5 +63,5 @@ fn int32 main()
         }
         p = p + 1;
     }
-    return cast<int32>(sum % 256ui64);
+    return cast<uint8>(sum % 256ui64);
 }

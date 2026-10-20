@@ -9,7 +9,7 @@ type value P {
     public ctor make() { this.x = 0; }
 }
 type enum E { A, B; public comptime int8 M = 300; }
-fn int32 main() {
+fn uint8 main() {
     const int8 g = 300;
     comptime int32 L = sizeof(float64);
     return 0;

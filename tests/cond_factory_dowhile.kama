@@ -10,8 +10,8 @@ type value V implements Comparable<This> {
         return Ordering::Equal;
     }
 }
-fn int32 main() {
+fn uint8 main() {
     int32 i = 0;
     do { i = i + 1; } while (V.make(x: i) < V.make(x: 3));   // factory call in a do/while condition
-    return i;                                                // 1,2 loop; V(3) < V(3) false -> stop -> 3
+    return cast<uint8>(i);                                                // 1,2 loop; V(3) < V(3) false -> stop -> 3
 }

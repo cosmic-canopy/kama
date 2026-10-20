@@ -8,4 +8,4 @@ type value Bag<T: Shape> comptime(int32 N) {
     public fn int32 first() { return this.vs[0].aera(); }   // ERROR: `Shape` declares no `aera`
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

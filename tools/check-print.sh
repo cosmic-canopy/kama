@@ -35,7 +35,7 @@ fi
 # 2. STDERR + STREAM SEPARATION — a probe that writes to both streams.
 cat > "$tmp/streams.kama" <<'KAMA'
 import { core::println, core::eprintln };
-fn int32 main() {
+fn uint8 main() {
     println(s: "on-stdout");
     eprintln(s: "on-stderr");
     return 0;

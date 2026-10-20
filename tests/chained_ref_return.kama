@@ -31,7 +31,7 @@ type resource Tree {
     public fn ref int32 at(int32 c, int32 i) { return this.root.at(c: c, i: i); }  // another forward layer
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     Owned<Node> root = new Node.make(leaf: false);
@@ -52,5 +52,5 @@ fn int32 main() {
     // (c) the other slots are unchanged
     if (t.at(c: 0, i: 0) == 10) { r = r + 10; }
 
-    return r;   // 30
+    return cast<uint8>(r);   // 30
 }

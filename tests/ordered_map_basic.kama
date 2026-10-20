@@ -28,7 +28,7 @@ fn int32 lru() {
     return evicted == 231 && order == 425 ? 1 : 0;   // the hit on 1 moves it last: 2, 3, then 1 evicted; 4,2,5 remain
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     OrderedMap<string, int32> m = OrderedMap.withCapacity(capacity: 4);
     m.put(key: "zeta", value: 1); m.put(key: "alpha", value: 2); m.put(key: "mid", value: 3);

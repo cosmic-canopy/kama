@@ -14,7 +14,7 @@ type resource Builder {
     public fn Batch finish() { return replace(place: this.batch, with: Batch.make(v: 2i64)); }
     public const fn int64 now() { return this.batch.first(); }
 }
-fn int32 main() {
+fn uint8 main() {
     int64 r = 0i64;
     {
         Builder b = Builder.make();

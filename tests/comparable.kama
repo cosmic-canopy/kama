@@ -27,7 +27,7 @@ fn int32 sign(Ordering o) {
     return match (o) { case Less: 0 - 1; case Equal: 0; case Greater: 1; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // int32 three-way — less / equal / greater.
@@ -56,5 +56,5 @@ fn int32 main() {
     if (maxOf(a: 4, b: 9) == 9) { r = r + 5; }
     if (maxOf(a: 8, b: 2) == 8) { r = r + 5; }
 
-    return r;   // 12 assertions * 5 = 60
+    return cast<uint8>(r);   // 12 assertions * 5 = 60
 }

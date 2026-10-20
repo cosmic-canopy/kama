@@ -4,8 +4,8 @@ type enum Color
     Green = 5,
     Blue
 }
-fn int32 main()
+fn uint8 main()
 {
     Color c = Color::Blue;
-    return cast<int32>(c);
+    return cast<uint8>(c);
 }

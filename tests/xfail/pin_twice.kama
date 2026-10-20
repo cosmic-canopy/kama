@@ -2,4 +2,4 @@
 // and says nothing. One pin per contract.
 type contract Pairable<T is This, U is This> for value { fn int32 mix(ref T a, ref U b); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -27,7 +27,7 @@ type value Row<T: Shape> comptime(int32 N) {
     public fn int32 total() { int32 t = 0; foreach (T c in this.cells) { t = t + c.area(); } return t; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Row<Sq>#(3) r = Row::<Sq>#(3).make(cells: [Sq.make(s: 1), Sq.make(s: 2), Sq.make(s: 3)]);
-    return r.total();
+    return cast<uint8>(r.total());
 }

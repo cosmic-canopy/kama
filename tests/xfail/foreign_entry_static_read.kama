@@ -9,4 +9,4 @@ fn void setup() { gain = 7; }
 @foreignEntry fn void render(int32 frames) {
     int32 g = gain;   // ERROR: `setup` assigns `gain` outside the region
 }
-fn int32 main() { setup(); return 0; }
+fn uint8 main() { setup(); return 0; }

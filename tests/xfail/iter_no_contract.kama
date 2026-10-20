@@ -8,9 +8,9 @@ type value Counter {
         int32 v = this.cur; this.cur = this.cur + 1; return Optional::Some(value: v);
     }
 }
-fn int32 main() {
+fn uint8 main() {
     Counter c = Counter.make(end: 3);
     int32 s = 0;
     foreach (int32 x in c) { s = s + x; }   // ERROR: Counter does not `implements Iterator<int32>`
-    return s;
+    return cast<uint8>(s);
 }

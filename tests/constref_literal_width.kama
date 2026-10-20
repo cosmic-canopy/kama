@@ -19,7 +19,7 @@ fn bool eq64(const ref int64 a, const ref int64 b) { return a == b; }
 fn bool isThree(const ref float64 v) { return v == 3.0; }
 fn bool isA(const ref char c) { return c == 'a'; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // 1. The reported shape — a container whose element is wider than a bare literal's default type.
@@ -52,5 +52,5 @@ fn int32 main() {
     //    wrote, which was the last place leaking the pre-0.9.104 spelling.
     if (isThree(v: 3) && isA(c: 'a')) { r = r + 32; }
 
-    return r;
+    return cast<uint8>(r);
 }

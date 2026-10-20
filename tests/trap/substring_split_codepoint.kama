@@ -4,9 +4,9 @@
 // from valid input, in the safe surface, with no `unsafe` and no error.
 // The offset is built from an opaque source so it is not constant-folded (as in substring_oob).
 import { std::num::int32Max };
-fn int32 main() {
+fn uint8 main() {
     string s = "AéZ";
     isize mid = cast<isize>(int32Max() - int32Max() + 2);         // 2, opaque; splits the é
     string cut = s.substring(start: 0, end: mid);   // -> split trap
-    return cast<int32>(cut.length());
+    return cast<uint8>(cut.length());
 }

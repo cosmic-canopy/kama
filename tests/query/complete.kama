@@ -128,11 +128,11 @@ fn int32 receivers() {
     return direct + chained + viaCall + viaChain + viaIndex + viaOwned + inherited + labelled;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Cell c = Cell.zero();
     c.value = 5;
     int32 lvl = (Level::High == Level::Low) ? 1 : 0;
-    return statements(n: 1) + receivers() + measure(item: c) + lvl;
+    return cast<uint8>(statements(n: 1) + receivers() + measure(item: c) + lvl);
 }
 
 // M4.2 — a `::` head is always a TYPE or a NAMESPACE (SPEC forbids `::` on a value). Appended AFTER main

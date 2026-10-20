@@ -2,4 +2,4 @@
 // not the duplicate-name rule. `dup_module_fn.d` is the twin: the same shape with an ordinary name
 // BUILDS, because `alpha::helper` and `beta::helper` are distinct symbols while both `main`s are
 // `kama_main`. The pair is what makes the split legible.
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

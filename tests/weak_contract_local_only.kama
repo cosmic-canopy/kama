@@ -24,6 +24,6 @@ fn int32 viaDowngrade() {
     Optional<Shared<Shape>> bu = w.tryUpgrade();
     return match (bu) { case Some(value: u): u.area(); case None: 0; };   // 4
 }
-fn int32 main() {
-    return viaReseat() + viaDowngrade();                                   // 40
+fn uint8 main() {
+    return cast<uint8>(viaReseat() + viaDowngrade());                                   // 40
 }

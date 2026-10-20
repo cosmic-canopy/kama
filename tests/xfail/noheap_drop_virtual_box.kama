@@ -15,8 +15,8 @@ type final resource Square extends Shape {
     ~Square() { }
 }
 @noheap fn int32 finish(Owned<Shape, BumpAllocator> o) { return 0; }
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);
     Owned<Shape, BumpAllocator> o = new(allocator: arena.handle()) Square.make(s: 5);
-    return finish(o: give o);
+    return cast<uint8>(finish(o: give o));
 }

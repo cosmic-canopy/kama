@@ -5,7 +5,7 @@ type value P {
     public ctor make() { this.a = 0; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     P p = P.make();
     return 0;
 }

@@ -6,4 +6,4 @@ type expose value Outer {
     public Inner inner;
     public ctor of(Inner inner) { this.inner = inner; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

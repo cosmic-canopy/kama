@@ -17,7 +17,7 @@
 # partial — a signature excerpt, a statement shown out of its function — is fenced ```kama fragment.
 # The site (`tools/site/render.mjs`) and GitHub both read only the first word of the info string, so it
 # renders exactly like ```kama; nothing about it is hidden. Prefer making a block whole (add the missing
-# declaration or a `fn int32 main()`) over marking it: a fragment is a snippet nothing checks.
+# declaration or a `fn uint8 main()`) over marking it: a fragment is a snippet nothing checks.
 # Blocks meant to be REJECTED are not this guard's business — check-doc-claims.sh pins those to a
 # `tests/xfail/` fixture, and they belong in a fragment fence here.
 set -eu

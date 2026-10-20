@@ -24,7 +24,7 @@ fn void scan(Shared<Asset> s) {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Vec3 lo = Vec3.make(a: 1i32, b: 2i32, c: 3i32);
     Vec3 hi = Vec3.make(a: 4i32, b: 5i32, c: 6i32);
     Shared<Asset> a = new Asset.make(lo: lo, hi: hi, tag: 42i32);
@@ -36,5 +36,5 @@ fn int32 main() {
         Shared<Asset> c3 = a;
         spawn scan(s: give c3);
     }                                // all joined; every child handle released before `a` drops
-    return a.tag;                    // 42
+    return cast<uint8>(a.tag);                    // 42
 }

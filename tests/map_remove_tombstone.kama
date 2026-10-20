@@ -10,7 +10,7 @@ fn string keyN(int32 n) {
     return s;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Map<string, int32> m = Map.empty();
     int32 i = 0;
     while (i < 30) { m.put(key: keyN(n: i), value: i); i = i + 1; }
@@ -30,5 +30,5 @@ fn int32 main() {
     m.put(key: keyN(n: 4), value: 400);               // reuse a tombstone
     if (m.contains(key: keyN(n: 4))) { r = r + 5; }   // -> 40
     r = r + cast<int32>(m.length());                               // +16 -> 56
-    return cast<int32>(r);   // 56
+    return cast<uint8>(r);   // 56
 }

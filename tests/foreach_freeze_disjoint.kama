@@ -24,7 +24,7 @@ type resource Box {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box bx = Box.make();
     bx.add(v: 10); bx.add(v: 20);
     int32 r = bx.tally();                     // 30 + 2 = 32
@@ -46,5 +46,5 @@ fn int32 main() {
         r = r + got;
     }                                                 // + 11
 
-    return cast<int32>(r + cast<int32>(other.length()) - 52);   // 32 + 9 + 11 + 3 - 52 = 3
+    return cast<uint8>(r + cast<int32>(other.length()) - 52);   // 32 + 9 + 11 + 3 - 52 = 3
 }

@@ -3,4 +3,4 @@
 // `@generate(of)` / `@generate(zero)` (a C struct's fields are public, so it is a data bag).
 extern "<stdlib.h>";
 type extern value div_t { public int32 quot; public int32 rem; }
-fn int32 main() { div_t d = div_t(quot: 1, rem: 2); return d.quot; }
+fn uint8 main() { div_t d = div_t(quot: 1, rem: 2); return cast<uint8>(d.quot); }

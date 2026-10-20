@@ -33,7 +33,7 @@ type resource Worker implements Sendable {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 k = cpuCount();                      // one worker per core — unwritable before this construct
     Channel<int32> ch = Channel.bounded(capacity: 4);
     DynamicArray<Worker> workers = DynamicArray.empty();
@@ -54,5 +54,5 @@ fn int32 main() {
     int32 total = 0;
     isize j = 0;
     while (j < workers.length()) { total = total + workers[j].tally(); j = j + 1; }
-    return total;                              // 100 iff every item reached exactly one worker
+    return cast<uint8>(total);                              // 100 iff every item reached exactly one worker
 }

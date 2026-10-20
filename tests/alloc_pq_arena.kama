@@ -3,7 +3,7 @@
 // threads the arena to that inner array and chooses direction. Both a min- and a max-heap share the arena.
 import { std::collections::PriorityQueue, std::collections::Arena, std::collections::BumpAllocator };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Arena arena = Arena.make(capacity: 65536);
 
@@ -19,5 +19,5 @@ fn int32 main() {
     int32 mv = match (m0) { case Some(value: x): x; case None: 0 - 1; };
     if (mv == 9) { r = r + 15; }                                      // max-heap: largest out first
 
-    return r;   // 30
+    return cast<uint8>(r);   // 30
 }

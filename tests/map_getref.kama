@@ -10,7 +10,7 @@ type resource Counter {
     public const fn int32 get() { return this.n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Map<int32, Counter> m = Map.empty();
     m.put(key: 1, value: Counter.make(n: 10));
     m.put(key: 2, value: Counter.make(n: 20));
@@ -22,5 +22,5 @@ fn int32 main() {
     int32 r = 0;
     r = r + m.getRef(key: 1).get();   // 12 (mutation stuck across re-borrows)
     r = r + m.getRef(key: 2).get();   // 21
-    return r;   // 33 (m drops both Counters at scope exit)
+    return cast<uint8>(r);   // 33 (m drops both Counters at scope exit)
 }

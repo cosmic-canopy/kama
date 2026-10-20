@@ -46,7 +46,7 @@ cat > "$TMP/p/kama.json" <<'JSON'
 JSON
 printf 'export { bump };\n\nfn int32 bump(int32 x) { return x + 1; }\n'        > "$TMP/p/src/lib.kama"
 printf 'export { spare };\n\nfn int32 spare(int32 x) { return x * 2; }\n'      > "$TMP/p/src/spare.kama"
-printf 'import { oc::bump };\n\nfn int32 main() { return bump(x: 6); }\n'      > "$TMP/p/src/main.kama"
+printf 'import { oc::bump };\n\nfn uint8 main() { return cast<uint8>(bump(x: 6)); }\n'      > "$TMP/p/src/main.kama"
 
 build() { ( cd "$TMP/p" && "$KAMA" build kama.json -o out "$@" ) >"$TMP/build.log" 2>&1 \
           || { sed 's/^/    /' "$TMP/build.log" >&2; bad "the build failed ($*)"; return 1; }; }
@@ -112,7 +112,7 @@ cat > "$TMP/h/main.kama" <<'KAMA'
 extern "vals.h";
 extern fn int32 vals_answer();
 unsafe fn int32 go() { return vals_answer(); }
-fn int32 main() { return go(); }
+fn uint8 main() { return cast<uint8>(go()); }
 KAMA
 ( cd "$TMP/h" && "$KAMA" build main.kama -o app ) >/dev/null 2>&1 || bad "the FFI build failed"
 rc=0; ( cd "$TMP/h" && ./app ) || rc=$?

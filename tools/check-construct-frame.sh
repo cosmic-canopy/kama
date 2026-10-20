@@ -63,7 +63,7 @@ type value Outer {
 fn int64 local(int64 v) { Big b = Big.make(v: v); return b.last(); }
 fn int64 heap(int64 v) { Owned<Big> p = new Big.make(v: v); return p.last(); }
 fn int64 outer(int64 v) { Outer o = Outer.make(v: v); return o.last(); }
-fn int32 main() { return cast<int32>(local(v: 1i64) + heap(v: 2i64) + outer(v: 3i64) + fallible(v: 4i64)
+fn uint8 main() { return cast<uint8>(local(v: 1i64) + heap(v: 2i64) + outer(v: 3i64) + fallible(v: 4i64)
                                      + matchedLocal(v: 5i64) + matchedTemp(v: 6i64)); }
 KAMA
 "$KAMA" transpile "$tmp/cf.kama" -o "$tmp/cf.c" --no-line >/dev/null 2>"$tmp/t.err" || { cat "$tmp/t.err" >&2; fail "transpile failed"; }

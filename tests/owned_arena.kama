@@ -12,7 +12,7 @@ type value Node {
     public fn void bump() { this.v = this.v + 1; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);         // declared FIRST → drops LAST (outlives the box)
 
     Owned<Node, BumpAllocator> n = new(allocator: arena.handle()) Node.make(v: 40);
@@ -24,5 +24,5 @@ fn int32 main() {
     Owned<Node, BumpAllocator> m = new(allocator: arena.handle()) Node.make(v: 100);
     r = r + m.get();                                // 142
 
-    return r;                                        // 142
+    return cast<uint8>(r);                                        // 142
 }

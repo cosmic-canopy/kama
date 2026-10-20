@@ -3,4 +3,4 @@
 // declare them once and export the type from that file.
 extern "<stdlib.h>";
 type extern value div_t { public int32 quot; public int32 rem; public fn int32 sum() { return this.quot + this.rem; } }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

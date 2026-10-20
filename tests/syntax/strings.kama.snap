@@ -13,7 +13,7 @@
 >// `[-+.0-9A-Za-z]+`, so `${s:>8}` is one too.
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >
->fn int32 main() {
+>fn uint8 main() {
 #^^ source.kama keyword.other.kama
 #  ^ source.kama
 #   ^^^^^ source.kama storage.type.primitive.kama

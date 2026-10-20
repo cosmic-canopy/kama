@@ -27,7 +27,7 @@ fn int32 run() {
     return t.value();
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 v = run();                       // 41, and exactly one drop on the way out
-    return (drops == 1) ? v + 1 : 0;       // 42
+    return cast<uint8>((drops == 1) ? v + 1 : 0);       // 42
 }

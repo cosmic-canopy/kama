@@ -152,7 +152,7 @@ fn int32 armsAndPayloads(bool first) {
     return ok == 4 && drops - before == want ? 1 : 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = locals() + assignments() + returns() + arguments() + armsAndPayloads(first: true) + armsAndPayloads(first: false);
-    return r == 6 ? 42 : r;
+    return cast<uint8>(r == 6 ? 42 : r);
 }

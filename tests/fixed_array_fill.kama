@@ -29,7 +29,7 @@ fn int32 handles() {
     return r;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     FixedArray<int32> zs = FixedArray.make(size: 4);
     if (zs[0] == 0 && zs[3] == 0) { r = r + 1; }                                  // 1

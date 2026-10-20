@@ -14,4 +14,4 @@ type resource Holder {
         return r;
     }
 }
-fn int32 main() { return Holder::broken(); }
+fn uint8 main() { return cast<uint8>(Holder::broken()); }

@@ -1,7 +1,7 @@
 // A fill `[v; N]` copies `v` into every element; a resource that does not copy has no `copy` to do it with, and a
 // bitwise fill would make N owners of one value.
 type resource H { int32 id; public ctor make(int32 id) { this.id = id; } ~H() { } }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<H>#(3) a = [H.make(id: 1); 3];
     return 0;
 }

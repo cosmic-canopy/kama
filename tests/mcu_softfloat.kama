@@ -9,7 +9,7 @@ fn bool close(float64 a, float64 b) {
     return e < 0.000001f64;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     float64 d = (1.5f64 * 2.0f64 + 0.25f64) / 0.5f64;      // 6.5
     if (close(a: d, b: 6.5f64)) { r = r + 11; }
@@ -20,5 +20,5 @@ fn int32 main() {
     float64 g = 100.0f64 / 8.0f64;                         // 12.5 (division libcall)
     if (close(a: g, b: 12.5f64)) { r = r + 11; }
 
-    return r;   // 33
+    return cast<uint8>(r);   // 33
 }

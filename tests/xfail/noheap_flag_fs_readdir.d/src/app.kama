@@ -12,9 +12,9 @@
 // refusal comes from the OS seam this row rewrote, so it is the one worth pinning here.
 import { std::fs::readDir, std::io::IoError, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     return match (readDir(path: "nh")) {
-        case Ok(value: names): cast<int32>(names.length());
+        case Ok(value: names): cast<uint8>(names.length());
         case Err(error: e): 1;
     };
 }

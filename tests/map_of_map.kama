@@ -4,10 +4,10 @@
 // does not import it" (measured on 0.9.577). A `Set` or a `SortedMap` as the value always built.
 import { std::collections::Map };
 
-fn int32 main() {
+fn uint8 main() {
     Map<string, Map<string, int32>> m = Map.empty();
     Map<string, int32> inner = Map.empty();
     inner.put(key: "a", value: 4);
     m.put(key: "x", value: give inner);
-    return m.contains(key: "x") ? cast<int32>(m.length()) + 4 : 0;   // 5
+    return cast<uint8>(m.contains(key: "x") ? cast<int32>(m.length()) + 4 : 0);   // 5
 }

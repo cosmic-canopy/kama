@@ -2,4 +2,4 @@
 // conformance site spelled uniformly `implements C<This, …>`.
 type contract Weighable<U, T is This> for value { fn int32 weigh(ref T other, U scale); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -33,7 +33,7 @@ say_fail() { echo "  FAIL: $1" >&2; fail=1; }
 # A program that needs the runtime header but nothing else — so the ONLY thing under test is whether the
 # C compile can find kama_runtime.h.
 cat > "$tmp/p.kama" <<'KAMA'
-fn int32 main() {
+fn uint8 main() {
     return 0;
 }
 KAMA
@@ -92,10 +92,10 @@ fi
 # stdlib through it.
 cat > "$tmp/s.kama" <<'KAMA'
 import { std::collections::DynamicArray };
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 7);
-    return xs[0];
+    return cast<uint8>(xs[0]);
 }
 KAMA
 

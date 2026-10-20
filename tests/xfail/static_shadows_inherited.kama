@@ -12,4 +12,4 @@ type final resource D extends B {
     public ctor make() { this.base = B.make(); this.k = 1; }
 }
 
-fn int32 main() { D d = D.make(); return D::m() - 2; }
+fn uint8 main() { D d = D.make(); return cast<uint8>(D::m() - 2); }

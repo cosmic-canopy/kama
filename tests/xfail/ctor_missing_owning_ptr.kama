@@ -7,4 +7,4 @@ type resource Holder {
     Owned<Box> a;
     public ctor make() { return this; }   // ERROR: `a` never set before return
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

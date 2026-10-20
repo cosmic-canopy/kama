@@ -6,4 +6,4 @@
 // and saying why, instead of a parse error naming a token.
 file @noheap;
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

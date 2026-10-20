@@ -6,7 +6,7 @@ fn int32 score(Msg m)
         case _: 0;
     };
 }
-fn int32 main()
+fn uint8 main()
 {
     Msg a = Msg::Move(dx: 10, dy: 20);
     Msg b = Msg::Stop;
@@ -16,5 +16,5 @@ fn int32 main()
         case Stop: total = 1;
         case Reset: total = 2;
     };
-    return score(m: a) + score(m: b) + total;
+    return cast<uint8>(score(m: a) + score(m: b) + total);
 }

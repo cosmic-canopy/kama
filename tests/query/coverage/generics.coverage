@@ -69,9 +69,9 @@
 17:21 q decl:local
 17:25 Sq ref:value
 17:28 make ref:ctor
-17:43 f ref:generic-fn
-17:45 x ref:param
-17:48 q ref:local
+17:55 f ref:generic-fn
+17:57 x ref:param
+17:60 q ref:local
 21:5 value -
 21:11 Rack decl:generic-type
 21:16 T decl:type-param

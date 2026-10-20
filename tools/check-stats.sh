@@ -35,7 +35,7 @@ jget() {
 #   blank:   8                                                                 = 1
 cat > "$tmp/lines.kama" <<'KAMA'
 // one
-fn int32 main() {
+fn uint8 main() {
     string url = "https://example.com/x";   // not a comment inside that string
     string block = @"first
 
@@ -46,7 +46,7 @@ third";
        continues here
        and ends here */
     println(s: url); println(s: block);
-    return n - 1;
+    return cast<uint8>(n - 1);
 }
 KAMA
 "$KAMA" stats "$tmp/lines.kama" --json > "$tmp/lines.json" 2>"$tmp/lines.err" \
@@ -68,7 +68,7 @@ comptime int32 LIMIT = 4;
 unsafe fn int32 raw() { return 1; }
 extern "<string.h>";
 extern fn isize strlen(UnsafeConstPtr<uint8> s);
-fn int32 main() { Box<int32> b = Box.make(v: 1); return b.v - 1; }
+fn uint8 main() { Box<int32> b = Box.make(v: 1); return cast<uint8>(b.v - 1); }
 KAMA
 "$KAMA" stats "$tmp/kinds.kama" --json > "$tmp/kinds.json" 2>"$tmp/kinds.err" \
     || fail "stats failed on the kinds fixture:" "$tmp/kinds.err"
@@ -94,7 +94,7 @@ cat > "$tmp/gated.kama" <<'KAMA'
 fn int32 onlyWasm() {
     return 23;
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 "$KAMA" stats "$tmp/gated.kama" --json > "$tmp/gated.json" 2>"$tmp/gated.err" \
     || fail "stats failed on the gated fixture:" "$tmp/gated.err"

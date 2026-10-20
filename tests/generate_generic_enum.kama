@@ -14,7 +14,7 @@ import { std::collections::Map, std::serialization::text::json::serializeJsonBuf
 @generate(Equatable, Hashable, Formattable, Serializable, Deserializable)
 type enum Msg<T> { Put(T v), Nop }
 
-fn int32 main() {
+fn uint8 main() {
     Msg<int32> a  = Msg::Put(v: 3);
     Msg<int32> a2 = Msg::Put(v: 3);
     Msg<int32> c  = Msg::Put(v: 4);     // same tag, DIFFERENT payload
@@ -53,5 +53,5 @@ fn int32 main() {
         case Err(error: e2): 0 - 1;
     };
 
-    return acc + ha + hc + hn + bv;   // 7 + 6 + 9 + 5 + 4 = 31
+    return cast<uint8>(acc + ha + hc + hn + bv);   // 7 + 6 + 9 + 5 + 4 = 31
 }

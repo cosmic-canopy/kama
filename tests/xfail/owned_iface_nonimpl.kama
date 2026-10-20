@@ -3,7 +3,7 @@ import { std::memory::Owned };
 // not implement the interface is a compile error (there'd be no valid vtable to dispatch through).
 type contract Shape for value { fn int32 area(); }
 type value Blob { int32 n; public ctor make(int32 n){ this.n = n; } }   // does NOT implement Shape
-fn int32 main() {
+fn uint8 main() {
     Owned<Shape> s = new Blob.make(n: 5);   // ERROR: Blob does not implement Shape
-    return s.area();
+    return cast<uint8>(s.area());
 }

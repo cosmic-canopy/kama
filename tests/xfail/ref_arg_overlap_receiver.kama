@@ -6,7 +6,7 @@ type value Pair { public int32 lo; public int32 hi;
     public ctor make(int32 lo, int32 hi) { this.lo = lo; this.hi = hi; }
     public fn void absorb(ref Pair other) { this.lo = other.hi; } }
 
-fn int32 main() {
+fn uint8 main() {
     Pair p = Pair.make(lo: 1, hi: 2);
     p.absorb(other: p);
     return 0;

@@ -2,4 +2,4 @@
 // spelling is refused with the new one, rather than as an unknown kind word.
 type contract Counted for intrinsic { const fn int32 count(); }
 type intrinsic <int32> implements Counted { public const fn int32 count() { return this; } }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -9,8 +9,8 @@ import { std::collections::View, std::collections::ConstView, std::collections::
 
 fn int32 bad(ref DynamicArray<int32> d, ConstView<int32> v) { d.reserve(n: 64); return v[0]; }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
     d.add(item: 1); d.add(item: 2);
-    return bad(d: ref d, v: d.view());
+    return cast<uint8>(bad(d: ref d, v: d.view()));
 }

@@ -1,7 +1,7 @@
 import { mk::Impl, mk::Maker };
 
-fn int32 main() {
+fn uint8 main() {
     Impl i = Impl.make(seed: 20);
     Maker m = i;
-    return m.build().n + m.plain();   // 20 + 20
+    return cast<uint8>(m.build().n + m.plain());   // 20 + 20
 }

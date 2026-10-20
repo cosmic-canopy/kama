@@ -8,4 +8,4 @@ type value Mixer {
     public ctor make(int32 gain) { this.gain = gain; }
     @noheap public fn int32 fill(int32 n) { return helper(x: n + this.gain); }
 }
-fn int32 main() { Mixer m = Mixer.make(gain: 1); return m.fill(n: 6); }
+fn uint8 main() { Mixer m = Mixer.make(gain: 1); return cast<uint8>(m.fill(n: 6)); }

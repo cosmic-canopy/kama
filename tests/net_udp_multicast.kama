@@ -166,6 +166,6 @@ fn int32 v6Options() {
     };
 }
 
-fn int32 main() {
-    return v4() + v6() + unknownInterface() + wrongFamily() + v6Options();   // 31
+fn uint8 main() {
+    return cast<uint8>(v4() + v6() + unknownInterface() + wrongFamily() + v6Options());   // 31
 }

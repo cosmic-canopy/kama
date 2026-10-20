@@ -3,7 +3,7 @@
 // and once it had one, the scope rule read the untyped receiver as "cannot tell" and let it build. It answers
 // the same as the local now.
 import { std::math::sin };
-fn int32 main() {
+fn uint8 main() {
     float64 t = 1.0;
     float64 r = sin(x: t).abs();
     return 0;

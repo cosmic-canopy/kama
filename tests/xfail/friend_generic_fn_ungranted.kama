@@ -8,4 +8,4 @@ type resource Box {
 }
 fn T reader<T: Deserializable<T>>(const ref Box b, T fallback) { int32 s = b.secret(); return fallback; }
 fn T other<T: Deserializable<T>>(const ref Box b, T fallback) { int32 s = b.secret(); return fallback; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -2,7 +2,7 @@
 // named the prelude (`<prelude>/global.kama:865`), and before 0.9.558 the USER's file at the prelude's line —
 // `panic_location_prelude.kama:713` in a seven-line file. (`panic_location_std` holds an unmarked std body.)
 fn int32 tag(Template t) { return t.part(at: 9).length() > 0 ? 1 : 0; }
-fn int32 main() {
+fn uint8 main() {
     int32 n = 1;
-    return tag"a${n}b";
+    return cast<uint8>(tag"a${n}b");
 }

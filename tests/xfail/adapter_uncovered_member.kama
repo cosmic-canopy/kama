@@ -5,4 +5,4 @@ type adapter <int8, int16, int32> implements C {
     <int8>  { public fn int32 f() { return 1; } }
     <int16> { public fn int32 f() { return 2; } }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

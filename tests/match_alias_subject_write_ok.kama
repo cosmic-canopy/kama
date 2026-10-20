@@ -22,5 +22,5 @@ type resource M {
         return n;
     }
 }
-fn int32 main() { int32 argc = knob(); M m = M.make(); int64 r = m.step(argc: argc); return cast<int32>(r + m.step(argc: argc)); }
+fn uint8 main() { int32 argc = knob(); M m = M.make(); int64 r = m.step(argc: argc); return cast<uint8>(r + m.step(argc: argc)); }
 fn int32 knob() { return 3; }

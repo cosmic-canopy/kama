@@ -12,4 +12,4 @@ extern "<vendor_pool.h>";
 @heap extern fn UnsafePtr vendor_block_alloc(usize n);
 unsafe fn int32 grab() { UnsafePtr p = vendor_block_alloc(n: 4); return 0; }
 @noheap fn int32 tick() { return grab(); }
-fn int32 main() { return tick(); }
+fn uint8 main() { return cast<uint8>(tick()); }

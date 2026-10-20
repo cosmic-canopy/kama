@@ -17,7 +17,7 @@ type resource Square implements Shape
     public ctor make(int64 s) { this.s = s; }
     public fn int64 area() { return this.s * this.s; }
 }
-fn int32 main()
+fn uint8 main()
 {
     DynamicArray<Owned<Shape>> shapes = DynamicArray.empty();
     for (int32 j = 0; j < 512; j++)
@@ -33,6 +33,6 @@ fn int32 main()
         sum += cast<uint64>(shapes[idx].area());
     }
     uint64 m = sum % 256;
-    return cast<int32>(m);
+    return cast<uint8>(m);
     // shapes drops here -> each Owned<Shape> frees its object (deterministic, no GC)
 }

@@ -36,7 +36,7 @@ type resource Worker implements Sendable {
 
 fn void worker(Worker w) { w.run(); }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     int32 t0 = 0;
     int32 t1 = 0;
@@ -55,5 +55,5 @@ fn int32 main() {
             while (i < 20) { _ = tx.send(item: i); i = i + 1; }
         }
     }                                        // BARRIER: both workers joined before the tallies are read
-    return t0 + t1;                          // 20 iff every item reached exactly one worker
+    return cast<uint8>(t0 + t1);                          // 20 iff every item reached exactly one worker
 }

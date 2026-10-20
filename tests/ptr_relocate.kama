@@ -16,7 +16,7 @@ type resource Tag {
     ~Tag() { drops = drops + 1; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // A DynamicArray whose element is moved OUT through `remove` — the path that goes via `takeAt`,
     // which is now `relocate` behind an `out`.
     DynamicArray<Tag> a = DynamicArray.empty();
@@ -25,5 +25,5 @@ fn int32 main() {
     Tag t = a.remove(index: 1);            // relocated out; the stale slot is vacated by `len`
     int32 v = t.get();                     // 32
     if (a.length() != 1 || drops != 0) { return 1; }   // nothing dropped yet — one in the array, one held
-    return v + a[0].get();                 // 32 + 10 = 42
+    return cast<uint8>(v + a[0].get());                 // 32 + 10 = 42
 }

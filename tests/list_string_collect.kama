@@ -1,11 +1,11 @@
 // The ergonomic the lazy `split` enables: collect its owned pieces into a `DynamicArray<string>`
 // (`add(item: give p)`), then iterate by value. All owned, all freed once — ASan-clean.
 import { std::collections::DynamicArray };
-fn int32 main() {
+fn uint8 main() {
     string path = "usr/local/bin";
     DynamicArray<string> parts = DynamicArray.empty();
     foreach (string p in path.split(separator: "/")) { parts.add(item: give p); }
     isize n = 0;
     foreach (string q in parts) { n = n + q.length(); }   // 3 + 5 + 3 = 11
-    return cast<int32>(n);
+    return cast<uint8>(n);
 }

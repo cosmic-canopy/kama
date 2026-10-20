@@ -8,4 +8,4 @@ type value Buf<T> comptime(int32 N) {
     public ctor of(T v) { this.v = v; }
     public fn int32 cap() { return N; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

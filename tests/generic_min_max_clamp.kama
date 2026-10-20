@@ -13,7 +13,7 @@ type value Version implements Comparable<This> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     if (min(a: 3, b: 7) == 3 && max(a: 3, b: 7) == 7)                          { r = r + 1; }
     isize n = 40;
@@ -33,5 +33,5 @@ fn int32 main() {
     Version v3 = Version.of(major: 3, minor: 1);   // a ctor call is not inferable as an argument — bind it
     Version c = clamp(x: v3, lo: v1, hi: v2);
     if (lo.major == 1 && hi.major == 2 && c.major == 2 && c.minor == 0)         { r = r + 128; }
-    return r;   // 255
+    return cast<uint8>(r);   // 255
 }

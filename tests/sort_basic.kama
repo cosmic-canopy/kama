@@ -9,7 +9,7 @@ import {
     std::collections::isSorted,
 };
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray::<int32>.empty();
     xs.add(item: 5); xs.add(item: 1); xs.add(item: 4); xs.add(item: 1); xs.add(item: 3);
     int32 a = 0;
@@ -41,5 +41,5 @@ fn int32 main() {
         d = wv[0].equals(other: "apple") ? 5 : 0;
     }
 
-    return a + b + c + d;                            // 7 + 29 + 9 + 5 = 50
+    return cast<uint8>(a + b + c + d);                            // 7 + 29 + 9 + 5 = 50
 }

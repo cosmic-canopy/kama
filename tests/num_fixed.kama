@@ -7,7 +7,7 @@
 // is what says the generic re-derives exactly what the hand-rolled one did. The generic's OWN behaviour —
 // a second backing, a second F, the bad-pairing rejection — is tests/num_fixed_generic.kama.
 import { std::num::Fixed };
-fn int32 main() {
+fn uint8 main() {
     Fixed<int32>#(16) one  = Fixed::<int32>#(16).one();
     Fixed<int32>#(16) f1   = Fixed::<int32>#(16).fromInt(n: 1);
     Fixed<int32>#(16) f2   = Fixed::<int32>#(16).fromInt(n: 2);
@@ -31,5 +31,5 @@ fn int32 main() {
     if (f3.satMul(r: f4) == f12)                                      { r = r + 4; }   // in range: same as operator*
     // saturating: int32Max + 1 clamps (never traps) instead of overflowing.
     if (Fixed::<int32>#(16).of(raw: 2147483647i32).satAdd(r: one).raw == 2147483647i32) { r = r + 2; }
-    return r;   // 42
+    return cast<uint8>(r);   // 42
 }

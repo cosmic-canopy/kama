@@ -40,7 +40,7 @@ type value Card implements Titled {
     public fn int32 rank(ref Wrapped w) { return w.v; }    // `ref` on both sides
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 x = 4;
     Boxer b = x;
     Cell c = Cell.of(n: 10);

@@ -6,4 +6,4 @@ type value V {
     public ctor make() { this.n = 1; }
     public fn int32 m() { return this.n; }
 }
-fn int32 main() { V v = V.make(); return v.m; }   // ERROR: `v.m` names a method — call it (`v.m(...)`)
+fn uint8 main() { V v = V.make(); return v.m; }   // ERROR: `v.m` names a method — call it (`v.m(...)`)

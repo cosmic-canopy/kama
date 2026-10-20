@@ -50,9 +50,9 @@ type value Keep<T> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = Box::<A>.make(item: A.make(n: 1)).run(o: Optional::Some(value: B.make(n: 2)));   // 20
     int32 b = pick::<int32>(a: 17, o: Optional::Some(value: 1i8));                             // 17
     int64 c = Keep::<int64>.make(item: 5i64).pass(o: Optional::Some(value: 1));                // 5
-    return a + b + cast<int32>(c);   // 20 + 17 + 5 = 42
+    return cast<uint8>(a + b + cast<int32>(c));   // 20 + 17 + 5 = 42
 }

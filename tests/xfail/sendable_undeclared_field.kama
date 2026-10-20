@@ -7,4 +7,4 @@ type resource Renderer implements Sendable {
     GlContext gl;   // ERROR: `GlContext` does not declare `implements Sendable`
     public ctor make(GlContext gl) { this.gl = give gl; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

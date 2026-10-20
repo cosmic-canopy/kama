@@ -6,4 +6,4 @@ import { cfg::CAP };
 
 unsafe fn int32 viaAddr() { UnsafePtr<int32> p = addr(of: CAP); return p[0]; }   // -> REJECT
 
-fn int32 main() { return viaAddr(); }
+fn uint8 main() { return cast<uint8>(viaAddr()); }

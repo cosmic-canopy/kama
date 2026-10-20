@@ -11,4 +11,4 @@
 @compileFor(OS_WINODWS)
 fn int32 platformValue() { return 3; }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

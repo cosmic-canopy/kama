@@ -17,4 +17,4 @@ type resource Owner {
     public fn void run() { this.items[0].touch(owner: ref this); }
 }
 
-fn int32 main() { Owner o = Owner.make(); o.run(); return 0; }
+fn uint8 main() { Owner o = Owner.make(); o.run(); return 0; }

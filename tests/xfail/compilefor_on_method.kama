@@ -8,4 +8,4 @@ type value Probe {
     public ctor make(int32 n) { this.n = n; }
     @compileFor(DEBUG) public fn int32 trace() { return 251; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

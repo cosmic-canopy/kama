@@ -2,4 +2,4 @@
 // contract OPERATOR arm did not look.
 type contract Addable<T is This> for value { unsafe T operator+(T rhs); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

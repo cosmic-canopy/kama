@@ -8,4 +8,4 @@ fn int32 f(int32 x) comptime(int32 F) {
     F = 3;   // ERROR: `F` is a const generic parameter
     return x;
 }
-fn int32 main() { return f(x: 1)#(16); }
+fn uint8 main() { return cast<uint8>(f(x: 1)#(16)); }

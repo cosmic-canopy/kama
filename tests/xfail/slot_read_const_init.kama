@@ -2,10 +2,10 @@
 // `const` declaration, so both of these compiled — the second copied a whole unfilled slot.
 type value Pt { public int32 x; public int32 y = 7; public ctor make(int32 x) { this.x = x; } }
 fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
-fn int32 main() {
+fn uint8 main() {
     slot Pt p;
     const int32 y = p.y;
     const Pt q = p;
     fill(dst: out p);
-    return y + q.x;
+    return cast<uint8>(y + q.x);
 }

@@ -7,7 +7,7 @@ type value Box { public int64 n; public ctor make(int64 n) { this.n = n; } publi
 type value P { public int64 n; public ctor make(int64 n) { this.n = n; } }
 fn int64 opened(int64 v) { return match (Optional::Some(value: Box.make(n: v))) { case Some(value: b): b.n; case None: 0i64; }; }
 fn DynamicArray<int64> fresh() { DynamicArray<int64> xs = DynamicArray.empty(); xs.add(item: 3i64); return give xs; }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int64> xs = DynamicArray.empty();
     xs.add(item: 1i64);
     Optional<DynamicArray<int64>> o = Optional::Some(value: give xs);

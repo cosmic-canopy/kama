@@ -12,7 +12,7 @@ fn Map<string, int32> build() {
     return give m;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // Local-decl inference: K=int32, V=int32 inferred from the LHS, capacity preallocated.
@@ -43,5 +43,5 @@ fn int32 main() {
     int32 hp = match (ohp) { case Some(value: x): x; case None: 0; };
     if (b.length() == 2 && hp == 100) { r = r + 15; }
 
-    return r;   // 10+10+10+15 = 45
+    return cast<uint8>(r);   // 10+10+10+15 = 45
 }

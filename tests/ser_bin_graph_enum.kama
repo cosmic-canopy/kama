@@ -76,7 +76,7 @@ fn Shared<World> build() {
     return new World.make(l: give leaf, g: give geo, tree: give root);
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<World> w = build();
 
     Result<DynamicArray<uint8>, Owned<Error>> n1 = serializeKbinNamedBuffer(v: w);

@@ -44,7 +44,7 @@ fn void producer(Sender<DynamicArray<int32>> tx) {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<DynamicArray<int32>> ch = Channel.bounded(capacity: 0);   // rendezvous: synchronous hand-off
     Sender<DynamicArray<int32>> t0 = ch.sender();
     Sender<DynamicArray<int32>> t1 = ch.sender();
@@ -71,5 +71,5 @@ fn int32 main() {
             }
         }
     }
-    return total % 256;   // exactly 8 arrays x 20 = 160
+    return cast<uint8>(total % 256);   // exactly 8 arrays x 20 = 160
 }

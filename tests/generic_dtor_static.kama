@@ -25,12 +25,12 @@ type resource Plain {
     ~Plain() { drops = drops + 1; }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     {
         Box<int32> a = Box.make(v: 1);
         Box<int64> b = Box.make(v: 2i64);
         Plain p = Plain.make(v: 3);
     }
-    return drops == 3 ? 42 : drops;   // 42 = one drop per value; anything else is the count that was seen
+    return cast<uint8>(drops == 3 ? 42 : drops);   // 42 = one drop per value; anything else is the count that was seen
 }

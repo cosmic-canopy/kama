@@ -2,7 +2,7 @@
 // grow past word boundaries, set-algebra over differing word lengths, ascending set-bit iteration, deep copy.
 import { std::collections::BitSet };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // (a) set / test / clear / toggle, growing past word boundaries (64, 128, ...).
@@ -65,5 +65,5 @@ fn int32 main() {
     orig.clearAll();
     if (orig.isEmpty() && orig.count() == 0) { r = r + 5; }
 
-    return r;   // 24 asserts * 5 = 120 (< 256; exit codes are 8-bit)
+    return cast<uint8>(r);   // 24 asserts * 5 = 120 (< 256; exit codes are 8-bit)
 }

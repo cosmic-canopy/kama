@@ -9,7 +9,7 @@ type value Inner { public int32 deep; }
 @generate(of)
 type value Outer { public Inner inner; }
 
-fn int32 main() {
+fn uint8 main() {
     Outer o = Outer.of(inner: Inner.of(deep: 1));
     return o::inner::deep;   // ERROR: `o` is a value — write `o.inner.deep`
 }

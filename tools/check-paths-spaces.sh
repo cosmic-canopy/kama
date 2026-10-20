@@ -94,7 +94,7 @@ a="$tmp/my project"
 mkdir -p "$a"
 cat >"$a/app.kama" <<'EOF'
 import { core::print };
-fn int32 main() { print(s: "spaced project\n"); return 31; }
+fn uint8 main() { print(s: "spaced project\n"); return 31; }
 EOF
 try "A (spaced project dir, single module)" "$a" "app.kama" "$a/app.exe" 31
 
@@ -114,7 +114,7 @@ fn int32 bump(int32 v) { return v + 1; }
 EOF
 cat >"$b/src/main.kama" <<'EOF'
 import { core::print, spc::helper::bump };
-fn int32 main() { print(s: "spaced multi\n"); return bump(v: 31); }
+fn uint8 main() { print(s: "spaced multi\n"); return cast<uint8>(bump(v: 31)); }
 EOF
 try "B (spaced project dir, multi-module)" "$b" "kama.json" "$b/out/app.exe" 32
 
@@ -140,7 +140,7 @@ cp "$KAMA" "$d_inst/kama$exe_suffix"
 cp -r "$ROOT/include" "$d_inst/"
 cat >"$d_proj/app.kama" <<'EOF'
 import { core::print };
-fn int32 main() { print(s: "spaced install\n"); return 33; }
+fn uint8 main() { print(s: "spaced install\n"); return 33; }
 EOF
 if [ ! -x "$d_inst/kama$exe_suffix" ]; then
     note "D: could not stage an install tree at $d_inst"
@@ -154,7 +154,7 @@ e="$tmp/filename"
 mkdir -p "$e"
 cat >"$e/my app.kama" <<'EOF'
 import { core::print };
-fn int32 main() { print(s: "spaced filename\n"); return 34; }
+fn uint8 main() { print(s: "spaced filename\n"); return 34; }
 EOF
 try "E (spaced source FILE name)" "$e" "my app.kama" "$e/app.exe" 34
 

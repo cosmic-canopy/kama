@@ -6,4 +6,4 @@ type value Vec2 {
     public Vec2 operator+(Vec2 rhs)   { return Vec2.make(x: this.x + rhs.x); }   // op_add (same-type)
     public Vec2 operator+(Vec2 other) { return Vec2.make(x: this.x - other.x); } // op_add AGAIN — duplicate
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

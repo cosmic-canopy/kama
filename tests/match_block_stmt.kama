@@ -1,5 +1,5 @@
 type enum Msg { Move(int32 dx, int32 dy), Stop, Reset }
-fn int32 main()
+fn uint8 main()
 {
     Msg a = Msg::Move(dx: 3, dy: 4);
     int32 total = 100;
@@ -8,5 +8,5 @@ fn int32 main()
         case Stop: { total = 0; }
         case Reset: { total = 1; }
     };
-    return total;
+    return cast<uint8>(total);
 }

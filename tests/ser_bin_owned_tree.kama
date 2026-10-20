@@ -37,7 +37,7 @@ fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
     return true;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Owned<Child> c = new Child.make(v: 7);
     Parent p = Parent.make(kid: give c);
     p.adopt(c: new Child.make(v: 3));

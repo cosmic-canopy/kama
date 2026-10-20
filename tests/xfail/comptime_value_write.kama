@@ -3,7 +3,7 @@
 comptime P K = P.of(x: 1);
 fn void poke(ref P p) { p.x = 2; }
 
-fn int32 main() {
+fn uint8 main() {
     K.x = 3;
     poke(p: ref K);
     return 0;

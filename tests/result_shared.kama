@@ -5,12 +5,12 @@ type enum ProbeErr implements Error {
     public const fn string message() { return "failed"; }
 }
 type resource Probe { int32 id; public ctor make(int32 id){ this.id=id; } ~Probe(){} public fn int32 val(){return this.id;} }
-fn int32 main()
+fn uint8 main()
 {
     Shared<Probe> s = new Probe.make(id: 8);
     Result<Shared<Probe>, ProbeErr> ok  = Result::Ok(value: copy s);
     Result<Shared<Probe>, ProbeErr> err = Result::Err(error: ProbeErr::Failed);
     int32 a = match (ok)  { case Ok(value: p): p.val(); case Err(error: e): 3; };
     int32 b = match (err) { case Ok(value: p): p.val(); case Err(error: e): 3; };
-    return a + b;
+    return cast<uint8>(a + b);
 }

@@ -23,4 +23,4 @@ type final resource Leaf extends Base {
         return base.n;                   // ERROR: likewise
     }
 }
-fn int32 main() { Leaf l = Leaf.make(); return l.rank(); }
+fn uint8 main() { Leaf l = Leaf.make(); return cast<uint8>(l.rank()); }

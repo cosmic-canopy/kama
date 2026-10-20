@@ -25,4 +25,4 @@ fn int32 loop() {
     }
     return r;   // 9
 }
-fn int32 main() { return plain() + loop(); }   // 14
+fn uint8 main() { return cast<uint8>(plain() + loop()); }   // 14

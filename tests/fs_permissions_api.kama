@@ -75,7 +75,7 @@ unsafe fn int32 recorded() {
 @compileFor(OS_WINDOWS)
 fn int32 recorded() { return 0; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 bad = api() + recorded();
     return bad == 0 ? 42 : 1;
 }

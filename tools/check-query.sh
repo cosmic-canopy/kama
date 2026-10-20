@@ -409,7 +409,7 @@ echo "check-query: --diagnostics"
 # Same list `kama check` prints, on stdout, without a pass/fail exit.
 expect --project --diagnostics -- "no diagnostics"
 dbad="$tmp/diagbad.kama"
-printf 'fn int32 main() {\n    nope(a: 1);\n    return 0;\n}\n' > "$dbad"
+printf 'fn uint8 main() {\n    nope(a: 1);\n    return 0;\n}\n' > "$dbad"
 if "$KAMA" query "$dbad" --diagnostics 2>/dev/null | grep -q "error: call to unknown function"; then
     echo "  ok: --diagnostics reports an analysis error on stdout"
 else
@@ -430,7 +430,7 @@ fi
 # usage(), in docs/agents.md and in AGENTS.md, and all three are pinned here so none can quietly become
 # a lie. (check-agents.sh asserts the same set; docs/agents.md names both guards.)
 tbad="$tmp/typebad.kama"
-printf 'fn int32 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$tbad"
+printf 'fn uint8 main() {\n    int32 x = "oops";\n    return 0;\n}\n' > "$tbad"
 if "$KAMA" check "$tbad" >/dev/null 2>&1; then
     echo "  FAIL: \`check\` no longer catches a kind mismatch — the docs promise it does" >&2
     fail=1
@@ -438,7 +438,7 @@ else
     echo "  ok: \`check\` catches a kind mismatch (\`int32 x = \"oops\"\`)"
 fi
 twide="$tmp/typewidth.kama"
-printf 'fn int32 main() {\n    int32 big = 300;\n    int8 a = big;\n    return 0;\n}\n' > "$twide"
+printf 'fn uint8 main() {\n    int32 big = 300;\n    int8 a = big;\n    return 0;\n}\n' > "$twide"
 if "$KAMA" check "$twide" >/dev/null 2>&1; then
     echo "  FAIL: \`check\` no longer catches a width mismatch — the docs promise no implicit conversion" >&2
     fail=1
@@ -446,7 +446,7 @@ else
     echo "  ok: \`check\` catches a width mismatch (\`int8 a = big\`)"
 fi
 tlit="$tmp/typelit.kama"
-printf 'fn int32 main() {\n    int8 a = 100;\n    float32 f = 3;\n    int8 b = 2 + 3;\n    return 0;\n}\n' > "$tlit"
+printf 'fn uint8 main() {\n    int8 a = 100;\n    float32 f = 3;\n    int8 b = 2 + 3;\n    return 0;\n}\n' > "$tlit"
 if "$KAMA" check "$tlit" >/dev/null 2>&1; then
     echo "  ok: \`check\` still accepts a literal typed by its destination (\`int8 a = 100\`)"
 else
@@ -512,7 +512,7 @@ done
 # `check --json` puts the verdict in the document AND keeps the exit code, so neither a script reading
 # stdout nor one testing `$?` has to change when --json is added.
 cjbad="$tmp/checkjson.kama"
-printf 'fn int32 main() {\n    nope(a: 1);\n    return 0;\n}\n' > "$cjbad"
+printf 'fn uint8 main() {\n    nope(a: 1);\n    return 0;\n}\n' > "$cjbad"
 out=$("$KAMA" check "$cjbad" --json 2>/dev/null || true)
 rc=0; "$KAMA" check "$cjbad" --json >/dev/null 2>&1 || rc=$?
 if printf '%s' "$out" | grep -qF '"ok":false' && [ "$rc" != 0 ]; then
@@ -538,7 +538,7 @@ fi
 # there is no name, or "has a subject" stops distinguishing anything and every diagnostic looks
 # actionable to an editor.
 sjbad="$tmp/subject.kama"
-printf 'fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n' > "$sjbad"
+printf 'fn uint8 main() {\n    Nonexistent thing;\n    return 0;\n}\n' > "$sjbad"
 out=$("$KAMA" check "$sjbad" --json 2>/dev/null || true)
 if printf '%s' "$out" | grep -qF '"subject":"Nonexistent"'; then
     echo "  ok: --json carries a diagnostic's \`subject\` (the name a quick fix acts on)"
@@ -630,9 +630,9 @@ cat > "$dep/app/kama.json" <<'JSON'
 JSON
 cat > "$dep/app/src/app.kama" <<'KAMA'
 import { geo::Point };
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.of(x: 7);
-    return p.x;
+    return cast<uint8>(p.x);
 }
 KAMA
 if (cd "$dep/app" && "$KAMA" pkg install >/dev/null 2>&1); then
@@ -734,7 +734,7 @@ FIXTURE="$ROOT/lib/std/process/process.kama"
 # that has nothing to do with what it tests. The columns are still literal: they point INSIDE the line
 # (just past `this.`), which is the thing under test.
 qline() { grep -n -m1 -F "$1" "$FIXTURE" | cut -d: -f1; }
-expect --complete "$(qline 'return this.signal == 0'):43"     -- "field	code	int32"                       # a plain `this.`
+expect --complete "$(qline 'return this.st; }'):54"           -- "field	st	ExitStatus"                     # a plain `this.` (Output)
 
 # ---------------------------------------------------------------------------------------------------
 # M4.2 — after `::`. A `::` head is always a TYPE or a NAMESPACE (SPEC forbids `::` on a value, and the
@@ -783,7 +783,7 @@ expect --complete 162:4 -- "type	Cell"                       # a type declared i
 expect --complete 162:4 -- "type	DynamicArray"               # ... one reached through an import
 expect --complete 162:4 -- "function	print	"                         # a capability this file IMPORTS from `core`
 reject --complete 162:4 -- "	args	"                            # ... and not one it does not (KR-87)
-expect --complete 162:4 -- "function	main	fn int32 main()"    # `main` is the one name the resolver rewrites
+expect --complete 162:4 -- "function	main	fn uint8 main()"    # `main` is the one name the resolver rewrites
 expect --complete 162:4 -- "keyword	foreach"                  # the lexer's own keyword table
 # The C-ABI plumbing behind the floor is spellable but is NOT language surface. A user's own extern is.
 expect --complete 162:4 -- "function	myOwnFfi"
@@ -831,7 +831,7 @@ expect --sighelp 116:14 -- "sig=cells.add(item: Cell)"                 # a gener
 expect --sighelp 102:42 -- "sig=Optional::Some(value: T)"              # a variant case, payload as labels
 expect --sighelp 149:33 -- "sig=Stat::zero() -> int32 active=-1"       # a static with no parameters
 expect --sighelp 152:24 -- "sig=Stat.of(n: int32) -> Stat"             # a named ctor, dot-on-type
-expect --sighelp 135:52 -- "sig=measure(item: T) -> int32"             # a generic free fn
+expect --sighelp 135:64 -- "sig=measure(item: T) -> int32"             # a generic free fn
 expect --sighelp 121:36 -- "sig=derived.total() -> int32"              # reached THROUGH Owned<Derived>'s Deref
 expect --sighelp 162:4  -- "no signature"                              # not inside a call at all
 

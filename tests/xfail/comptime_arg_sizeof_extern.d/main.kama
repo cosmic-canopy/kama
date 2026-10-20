@@ -4,4 +4,4 @@
 extern "rec.h";
 type extern value Sample { public int16 level; public float32 gain; }
 fn int32 idN() comptime(int32 N) { return N; }
-fn int32 main() { return idN()#(cast<int32>(sizeof(Sample))); }
+fn uint8 main() { return idN()#(cast<int32>(sizeof(Sample))); }

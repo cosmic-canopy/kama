@@ -230,7 +230,7 @@ const_contract_recv	const_contract_recv.kama:11
 const_escape_obj	const_escape_obj.kama:4
 const_escape_ref	const_escape_ref.kama:3
 const_generic_qualified_private_local	main.kama:4
-const_give	const_give.kama:7 const_give.kama:8
+const_give	const_give.kama:7
 const_intrinsic_set	const_intrinsic_set.kama:4
 const_override_drops	const_override_drops.kama:14
 const_param_contract_drops	const_param_contract_drops.kama:9
@@ -367,6 +367,10 @@ diag_no_mangled_name	diag_no_mangled_name.kama:13
 digit_sep_after_prefix	digit_sep_after_prefix.kama:2
 digit_sep_double	digit_sep_double.kama:2
 digit_sep_trailing	digit_sep_trailing.kama:2
+discard_named_value	discard_named_value.kama:5
+discarded_result	discarded_result.kama:6
+discarded_result_for_clause	discarded_result_for_clause.kama:7
+discarded_result_match_arm	discarded_result_match_arm.kama:8
 dot_on_type_const_read	dot_on_type_const_read.kama:9
 dot_on_type_field	dot_on_type_field.kama:7
 dot_on_type_field_read	dot_on_type_field_read.kama:7
@@ -770,6 +774,9 @@ local_scope_shadow_match_cond_move	local_scope_shadow_match_cond_move.kama:17
 local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21
 main_called	main_called.kama:6
 main_exported	main_exported.kama:6
+main_int32	main_int32.kama:4
+main_status_literal_oob	main_status_literal_oob.kama:3
+main_uint32_off_windows	main.kama:4
 main_void	main_void.kama:4
 match_alias_after_subject_write	match_alias_after_subject_write.kama:10
 match_alias_subject_write_branch	match_alias_subject_write_branch.kama:7
@@ -1324,6 +1331,7 @@ type_comptime_private_size	type_comptime_private_size.kama:5
 type_param_as_value	type_param_as_value.kama:4
 type_param_shadows_type	type_param_shadows_type.kama:10
 uint_retired	uint_retired.kama:5
+underscore_binding	underscore_binding.kama:4
 unimplemented_pure	unimplemented_pure.kama:4
 unimported_type_param	unimported_type_param.kama:6
 uninit_read	uninit_read.kama:5
@@ -1375,7 +1383,7 @@ value_owns_resource	value_owns_resource.kama:3
 variant_untyped	variant_untyped.kama:4
 view_arg_aliases_receiver	view_arg_aliases_receiver.kama:16
 view_arg_aliases_ref	view_arg_aliases_ref.kama:15
-view_chain_over_local	view_chain_over_local.kama:11 view_chain_over_local.kama:14
+view_chain_over_local	view_chain_over_local.kama:11
 view_closes_by_value	view_closes_by_value.kama:14
 view_closes_copy	view_closes_copy.kama:17
 view_closes_foreach	view_closes_foreach.kama:19

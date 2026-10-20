@@ -7,9 +7,9 @@ fnptr int32 G(int32 y);
 
 fn int32 f1(int32 x) { return x + 1; }
 
-fn int32 main()
+fn uint8 main()
 {
     F fp = f1;
     G gp = fp;
-    return gp(y: 1);
+    return cast<uint8>(gp(y: 1));
 }

@@ -2,7 +2,7 @@
 // by-value iterator, present for a Copyable key) and guards against mid-iteration structural change.
 import { std::collections::Map, std::collections::Set };
 
-fn int32 main() {
+fn uint8 main() {
     Map<int32, int32> m = Map.empty();
     int32 i = 0;
     while (i < 10) { m.put(key: i, value: i * i); i = i + 1; }
@@ -23,5 +23,5 @@ fn int32 main() {
     foreach (string x in s) { lensum = lensum + x.length(); count = count + 1; }
     if (count == 3)  { r = r + 10; }                  // 3 distinct
     if (lensum == 6) { r = r + 12; }                  // 2+3+1
-    return r;   // 42
+    return cast<uint8>(r);   // 42
 }

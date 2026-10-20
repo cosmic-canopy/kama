@@ -7,7 +7,7 @@ import {
     std::collections::BumpAllocator,
 };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Arena arena = Arena.make(capacity: 65536);
 
@@ -23,5 +23,5 @@ fn int32 main() {
     int32 rv = match (rem) { case Some(value: x): x; case None: 0 - 1; };
     if (rv == 10 && !sm.contains(handle: h0) && sm.length() == 50) { r = r + 10; }
 
-    return r;   // 30
+    return cast<uint8>(r);   // 30
 }

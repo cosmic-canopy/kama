@@ -1,5 +1,5 @@
 // Mandatory braces: a `for` body must be a block.
-fn int32 main() {
+fn uint8 main() {
     int32 sum = 0;
     for (int32 i = 0; i < 4; i = i + 1)
         sum = sum + i;   // ERROR: not braced

@@ -6,9 +6,9 @@ fn Optional<int8> narrow(int32 v) { return try cast<int8>(v); }
 
 fn int32 unwrap(Optional<int8> o) { return match (o) { case Some(value: x): cast<int32>(x); case None: 0 - 1; }; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = unwrap(o: narrow(v: 100));            // 100 — fits int8, through the return position
     int32 b = unwrap(o: narrow(v: 300));            // -1  — does not fit, `None` rather than a trap
     int32 c = unwrap(o: try cast<int8>(20));        // 20  — ARGUMENT position
-    return a + b + c;   // 119
+    return cast<uint8>(a + b + c);   // 119
 }

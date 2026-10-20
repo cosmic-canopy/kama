@@ -10,7 +10,7 @@ type value Pt implements Formattable {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     int32 n = 7i32;
     string who = "kama";
@@ -46,5 +46,5 @@ fn int32 main() {
     string h = "b0=${who[0]}";
     if (h == "b0=107") { r = r + 64; }
 
-    return r;   // 1+2+4+8+16+32+64 = 127
+    return cast<uint8>(r);   // 1+2+4+8+16+32+64 = 127
 }

@@ -11,7 +11,7 @@ type value BoxP implements Deref<Point>, DerefMut<Point> {
     public const fn const ref Point deref() { return this.inner; }
     public fn ref Point derefMut() { return this.inner; }
 }
-fn int32 main() {
+fn uint8 main() {
     BoxP b = BoxP.make(p: Point.make(x: 1));
     return b.nonexistent();   // not on BoxP, not on Point -> unknown method
 }

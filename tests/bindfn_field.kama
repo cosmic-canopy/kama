@@ -29,7 +29,7 @@ fn int32 use() {
     Handler h = Handler.make(cb: give g);
     return h.fire();                          // 42; `h` drops here -> the bindable -> Probe::~ once
 }
-fn int32 main() {
+fn uint8 main() {
     if (use() != 42) { return 1; }
-    return traceGet();                        // single dtor -> 9
+    return cast<uint8>(traceGet());                        // single dtor -> 9
 }

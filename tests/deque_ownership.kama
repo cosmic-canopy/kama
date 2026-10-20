@@ -7,7 +7,7 @@ import { std::collections::Deque };
 @generate(of)
 type value Cell { public int32 v; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // (1) VALUE elements stored inline; `operator[]` returns `ref Cell`, so a write goes THROUGH the borrow
@@ -41,5 +41,5 @@ fn int32 main() {
     int32 wv = match (weaks[0].tryUpgrade()) { case Some(value: s): s.v; case None: 0 - 1; };
     if (wv == 9) { r = r + 10; }
 
-    return r;   // 40
+    return cast<uint8>(r);   // 40
 }

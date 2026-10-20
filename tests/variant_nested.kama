@@ -1,8 +1,8 @@
-fn int32 main()
+fn uint8 main()
 {
     Optional<Optional<int32>> nn = Optional::Some(value: Optional::Some(value: 5));
     Optional<Optional<int32>> no = Optional::Some(value: Optional::None);
     int32 a = match (nn) { case Some(value: i): match (i) { case Some(value: x): x; case None: -1; }; case None: -2; };
     int32 b = match (no) { case Some(value: i): match (i) { case Some(value: x): x; case None: 99; }; case None: -2; };
-    return a + b;
+    return cast<uint8>(a + b);
 }

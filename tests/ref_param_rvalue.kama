@@ -16,7 +16,7 @@ type value Point implements Hashable, Equatable<This> {
     public const fn bool equals(const ref Point other) { return this.x == other.x && this.y == other.y; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Map<int32, int32> m = Map.empty();
     m.put(key: 5, value: 50);
     int32 r = 0;
@@ -30,5 +30,5 @@ fn int32 main() {
     int32 pv = match (pm.get(key: Point.make(x: 1, y: 2))) { case Some(value: x): x; case None: 0; };  // inline ctor key
     if (pv == 99)                          { r = r + 10; }
     if (!pm.contains(key: Point.make(x: 9, y: 9))) { r = r + 12; }            // inline ctor, absent
-    return r;   // 42
+    return cast<uint8>(r);   // 42
 }

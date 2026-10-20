@@ -4,4 +4,4 @@
 
 comptime P K = P.of(x: 1, p: null);
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -9,10 +9,10 @@ fn int32 area(Event e)
         case Quit: 0;
     };
 }
-fn int32 main()
+fn uint8 main()
 {
     Event a = Event::Resize(size: Vec2.of(x: 4.0, y: 3.0));
     Event b = Event::Click(x: 10, y: 5);
     Event c = Event::Quit;
-    return area(e: a) + area(e: b) + area(e: c);
+    return cast<uint8>(area(e: a) + area(e: b) + area(e: c));
 }

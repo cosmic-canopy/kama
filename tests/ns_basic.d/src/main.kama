@@ -3,10 +3,10 @@
 // module path is written (KR-87), and every use after it is bare.
 import { nsbasic::graphics::Texture, nsbasic::physics::Texture as PhysTexture, nsbasic::graphics::scale };
 
-fn int32 main()
+fn uint8 main()
 {
     Texture g = Texture.make(id: 10);                     // graphics::Texture
     PhysTexture p = PhysTexture.make(m: 7);               // physics::Texture, by its alias
     int32 s = scale(x: 3);                                // -> 6
-    return g.get() + p.get() + s;                         // 10 + 7 + 6 = 23
+    return cast<uint8>(g.get() + p.get() + s);                         // 10 + 7 + 6 = 23
 }

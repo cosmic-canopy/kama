@@ -10,4 +10,4 @@ type resource R {
     }
     public const fn int32 get() { return this.x; }
 }
-fn int32 main() { R r = R.make(early: true); return r.get(); }
+fn uint8 main() { R r = R.make(early: true); return cast<uint8>(r.get()); }

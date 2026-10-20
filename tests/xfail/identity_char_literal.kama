@@ -7,7 +7,7 @@
 //
 // Same reasoning as tests/xfail/identity_enum_int_literal.kama, and the same answer: write the value the
 // way the type spells it, or say `cast<…>` and mean it.
-fn int32 main()
+fn uint8 main()
 {
     char d = 65ui32;
     uint32 n = 'a';

@@ -11,4 +11,4 @@ unsafe fn View<int32> bad() {
     return a.viewMut().slice(from: 0, count: 1);   // roots at `a`, a local -> dangles
 }
 
-fn int32 main() { return bad().length(); }
+fn uint8 main() { return cast<uint8>(bad().length()); }

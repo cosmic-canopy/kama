@@ -12,7 +12,7 @@ type extern value Desc { public Op f; public int32 n; }
 
 fn int32 wrong(int32 a, int32 b) { return a + b; }   // two params, not one
 
-fn int32 main() {
+fn uint8 main() {
     Desc d = Desc.of(f: wrong, n: 1);   // ERROR: `wrong` does not match `Op`
-    return d.n;
+    return cast<uint8>(d.n);
 }

@@ -38,7 +38,7 @@ cat > "$proj/kama.json" <<'JSON'
 JSON
 cat > "$proj/src/app.kama" <<'KAMA'
 import { platformValue };
-fn int32 main() { return platformValue(); }
+fn uint8 main() { return cast<uint8>(platformValue()); }
 KAMA
 cat > "$proj/src/impl_host.kama" <<'KAMA'
 file @compileFor(!ARCH_WASM32);
@@ -82,7 +82,7 @@ for axis in 'ARCH_WASM32:--target WASM' '!DEBUG:--release' 'TELEMETRY:--define T
     cat > "$ax/src/app.kama" <<KAMA
 @compileFor($gate)
 fn int32 rotted(Zork z) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
     if "$KAMA" check "$ax/kama.json" >/dev/null 2>"$tmp/axis.err"; then
         fail "a broken declaration behind @compileFor($gate) passed the cover" "$tmp/axis.err"
@@ -95,7 +95,7 @@ done
 cat > "$ax/src/app.kama" <<'KAMA'
 @compileFor(ARCH_WASM32)
 fn int32 rotted(Zork z) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 "$KAMA" check "$ax/kama.json" --release >/dev/null 2>"$tmp/one.err" \
     || fail "an explicit configuration reported a gate belonging to another one:" "$tmp/one.err"
@@ -122,7 +122,7 @@ grep -qF "[--target" "$tmp/wasm.err" \
 cat > "$tmp/unreachable.kama" <<'KAMA'
 @compileFor(ARCH_RISCV64)
 fn int32 future(Zork z) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 if "$KAMA" check "$tmp/unreachable.kama" >/dev/null 2>"$tmp/unreach.err"; then
     fail "a gate no known target can activate was accepted — it is checked by nobody, so it is an error"
@@ -142,7 +142,7 @@ JSON
 cat > "$decl/src/app.kama" <<'KAMA'
 @compileFor(ARCH_RISCV64)
 fn int32 future(Zork z) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 if "$KAMA" check "$decl/kama.json" >/dev/null 2>"$tmp/decl.err"; then
     fail "declaring the target made the gate legal but did not bring it into the cover:" "$tmp/decl.err"
@@ -159,7 +159,7 @@ for pair in 'DEBUG, RELEASE:BUILD_TYPE' 'OS_LINUX, OS_WINDOWS:triple component' 
     cat > "$tmp/never.kama" <<KAMA
 @compileFor($gate)
 fn int32 never() { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
     if "$KAMA" check "$tmp/never.kama" >/dev/null 2>"$tmp/never.err"; then
         fail "@compileFor($gate) can never be active, and the check accepted it"
@@ -180,7 +180,7 @@ done
 cat > "$tmp/arches.kama" <<'KAMA'
 @compileFor(ARCH_AARCH64) fn int32 armRot(Zork z) { return 0; }
 @compileFor(ARCH_X86_64)  fn int32 x86Rot(Nope n) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 if "$KAMA" check "$tmp/arches.kama" >/dev/null 2>"$tmp/arch.err"; then
     fail "neither arch's rot was found — the cover reaches no arch at all" "$tmp/arch.err"
@@ -195,7 +195,7 @@ grep -qF "Nope" "$tmp/arch.err" \
 cat > "$tmp/board.kama" <<'KAMA'
 @compileFor(OS_ESP32)
 fn int32 boardOnly() { return 1; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 "$KAMA" check --target xtensa-esp32-elf "$tmp/board.kama" >/dev/null 2>"$tmp/board.err" \
     || fail "a gate naming this build's OWN triple component was refused:" "$tmp/board.err"
@@ -204,7 +204,7 @@ KAMA
 cat > "$tmp/rot1.kama" <<'KAMA'
 @compileFor(ARCH_WASM32)
 fn int32 rotted(Zork z) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 KAMA
 cp "$tmp/rot1.kama" "$tmp/rot2.kama"
 "$KAMA" check --each "$tmp/rot1.kama" "$tmp/rot2.kama" >"$tmp/each.out" 2>/dev/null || true

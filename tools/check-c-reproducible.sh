@@ -58,7 +58,7 @@ mkdir -p "$tmp/src/a" "$tmp/src/b" "$tmp/one" "$tmp/two"
 cat > "$tmp/src/main.kama" <<'EOF'
 import { a::helper };
 fn int32 priv() { return 7; }
-fn int32 main() { return helper() + priv() - 7; }
+fn uint8 main() { return cast<uint8>(helper() + priv() - 7); }
 EOF
 
 # Two siblings sharing a basename, in different modules. Under the old rule these were `x_1.c` and `x_2.c`;
@@ -180,7 +180,7 @@ fi
 # `my-prog` and `my_prog` are the reachable shape: two files CAN live in one directory under those names,
 # and a `-` is not legal in a C identifier, so both fold to the same stem.
 mkdir -p "$tmp/clash"
-printf 'fn int32 main() { return 0; }\n'   > "$tmp/clash/my-prog.kama"
+printf 'fn uint8 main() { return 0; }\n'   > "$tmp/clash/my-prog.kama"
 printf 'fn int32 helper() { return 2; }\n' > "$tmp/clash/my_prog.kama"
 
 if "$KAMA" build "$tmp/clash/my-prog.kama" "$tmp/clash/my_prog.kama" -o "$tmp/clash/app" \

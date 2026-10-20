@@ -11,4 +11,4 @@ unsafe fn int32 run() {
     return takes(v: ref h);      // ERROR: `Hot` is not `immutable`, so it cannot satisfy `Immutable`
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

@@ -16,7 +16,7 @@ fn void producer(Sender<int32> tx) {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 1);
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();
@@ -35,5 +35,5 @@ fn int32 main() {
     }
 
     h.join();
-    return ok;   // 20 iff every value arrived exactly once, in order
+    return cast<uint8>(ok);   // 20 iff every value arrived exactly once, in order
 }

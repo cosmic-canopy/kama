@@ -4,4 +4,4 @@
 extern "onearg.h";
 extern fn int32 onearg_answer();
 unsafe fn int32 answer() { return onearg_answer(); }
-fn int32 main() { return answer(); }
+fn uint8 main() { return cast<uint8>(answer()); }

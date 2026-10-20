@@ -4,4 +4,4 @@ type value Widget {
     public ctor make(int32 x) { this.x = x; }
     static virtual fn int32 f() { return 0; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

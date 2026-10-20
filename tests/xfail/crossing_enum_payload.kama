@@ -4,4 +4,4 @@
 extern "stdio.h";
 type enum Shape { Circle(int32 r), Point }
 extern fn int32 takes_shape(Shape s);
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

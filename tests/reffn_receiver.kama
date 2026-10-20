@@ -4,4 +4,4 @@ import { std::collections::DynamicArray };
 // borrowed Widget's buffer would be freed twice (double-free with `x`'s own drop). ASan-clean == no dup free.
 type resource Widget { DynamicArray<int32> parts; public ctor make(int32 s){ this.parts.add(item: s); } public fn int32 area(){ return this.parts[0]*this.parts[0]; } }
 fn ref Widget pick(ref Widget w) { return w; }
-fn int32 main() { Widget x = Widget.make(s: 6); return pick(w: ref x).area(); }
+fn uint8 main() { Widget x = Widget.make(s: 6); return cast<uint8>(pick(w: ref x).area()); }

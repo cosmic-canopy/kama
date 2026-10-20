@@ -7,7 +7,7 @@ type value Glyph implements Formattable {
     public const fn void format(ref Formatter f) { f.writeChar(c: this.ch); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     char c = 'A';
@@ -22,5 +22,5 @@ fn int32 main() {
     string b = "snow=${g.ch}";
     if (b == "snow=☃") { r = r + 4; }
 
-    return r;   // 1+2+4 = 7
+    return cast<uint8>(r);   // 1+2+4 = 7
 }

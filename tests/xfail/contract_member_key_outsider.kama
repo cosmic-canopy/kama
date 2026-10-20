@@ -17,8 +17,8 @@ type value Impl implements Tok {
 fn int32 driver(Tok t) { return t.hidden(key: DriverKey.mint()); }
 fn int32 outsider(Tok t) { return t.hidden(key: DriverKey.mint()); }
 
-fn int32 main()
+fn uint8 main()
 {
     Impl i = Impl.make();
-    return driver(t: i) + outsider(t: i);
+    return cast<uint8>(driver(t: i) + outsider(t: i));
 }

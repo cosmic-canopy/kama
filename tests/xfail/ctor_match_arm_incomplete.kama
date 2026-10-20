@@ -13,4 +13,4 @@ type value Plain {
         };
     }
 }
-fn int32 main() { return match (Plain.fromCode(code: 3)) { case Ok(value: p): p.x; case Err(error: e): 9; }; }
+fn uint8 main() { return match (Plain.fromCode(code: 3)) { case Ok(value: p): cast<uint8>(p.x); case Err(error: e): 9; }; }

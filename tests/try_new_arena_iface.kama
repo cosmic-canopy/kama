@@ -15,7 +15,7 @@ fn int32 areaOf(Optional<Owned<Shape, BumpAllocator>> h) {
     return match (h) { case Some(value: s): s.area(); case None: 0 - 1; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 32);      // room for a couple of Circles, not for many
 
     Optional<Owned<Shape, BumpAllocator>> a = try new(allocator: arena.handle()) Circle.make(r: 5);
@@ -27,5 +27,5 @@ fn int32 main() {
         int32 no = match (more) { case Some(value: s): 0; case None: 1; };
         refused = refused + no;
     }
-    return x + (refused > 0 ? 17 : 0);   // 42 — and the 17 says the exhausted arena answered None
+    return cast<uint8>(x + (refused > 0 ? 17 : 0));   // 42 — and the 17 says the exhausted arena answered None
 }

@@ -43,7 +43,7 @@ type resource Hand implements Serializable {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // (1) `dup` appears twice in the collection and must be written ONCE, both slots carrying its id.
     Shared<Leaf> dup = new Leaf.make(v: 7);
     Shared<Leaf> dup2 = dup;
@@ -57,7 +57,7 @@ fn int32 main() {
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     // Bag is id 1 (the root node); the two distinct leaves are 2 and 3; slot 0 and slot 2 share id 2.
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Bag\",\"value\":{\"kids\":[2,3,2]}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") {
-        return cast<int32>(j.length());
+        return cast<uint8>(j.length());
     }
 
     // (2) The hand-written participant as a ROOT: written inline, its two handles to ONE leaf both id 1.
@@ -67,7 +67,7 @@ fn int32 main() {
     Result<string, Owned<Error>> hr = serializeJsonBuffer(v: h);
     string hj = match (give hr) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     if (hj != "{\"root\":{\"a\":1,\"b\":1},\"objects\":[{\"id\":1,\"type\":\"Leaf\",\"value\":{\"v\":9}}]}") {
-        return cast<int32>(hj.length());
+        return cast<uint8>(hj.length());
     }
     return 42;
 }

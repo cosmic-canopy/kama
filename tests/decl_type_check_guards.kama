@@ -21,10 +21,10 @@ fn int32 twice(int32 v) { return v * 2; }
 
 fn int32 applyScorer(Scorer f, int32 v) { return f(v: v); }                                     // (3)
 
-fn int32 main()
+fn uint8 main()
 {
     int32 a = pickFirst(a: 20, b: 99);
     Tally t = Tally.make(total: 1).merge(other: Tally.make(total: 1));
     Scorer s = twice;
-    return a + applyScorer(f: s, v: 10) + t.total;   // 20 + 20 + 2 = 42
+    return cast<uint8>(a + applyScorer(f: s, v: 10) + t.total);   // 20 + 20 + 2 = 42
 }

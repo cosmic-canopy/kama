@@ -1,7 +1,7 @@
 // A free function returning a value is neither a place nor a view (KR-123).
 type value In { public int32 x; public ctor make() { this.x = 1; } }
 fn In mk() { return In.make(); }
-fn int32 main()
+fn uint8 main()
 {
     borrow mk() as v { }
     return 0;

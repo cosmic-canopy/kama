@@ -83,10 +83,10 @@ unsafe fn int32 echoChild() {
 @compileFor(OS_WINDOWS)
 unsafe fn int32 nothingLeaks() { return 0; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = echoChild();
-    if (a != 0) { return a; }
+    if (a != 0) { return cast<uint8>(a); }
     int32 b = nothingLeaks();
-    if (b != 0) { return b; }
+    if (b != 0) { return cast<uint8>(b); }
     return 42;
 }

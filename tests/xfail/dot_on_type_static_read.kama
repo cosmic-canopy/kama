@@ -4,4 +4,4 @@ type value Plain {
     public ctor make() { }
     public static fn int32 tag() { return 5; }
 }
-fn int32 main() { int32 t = Plain.tag; return t; }   // ERROR: call it with `Plain::tag(...)`
+fn uint8 main() { int32 t = Plain.tag; return cast<uint8>(t); }   // ERROR: call it with `Plain::tag(...)`

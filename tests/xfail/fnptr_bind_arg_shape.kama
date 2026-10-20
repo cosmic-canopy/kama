@@ -8,4 +8,4 @@
 fnptr int32 F(int32 a);
 fn int32 two(int32 a, int32 b) { return a + b; }
 fn int32 run(F f, int32 n) { return f(a: n); }
-fn int32 main() { return run(f: two, n: 1); }
+fn uint8 main() { return cast<uint8>(run(f: two, n: 1)); }

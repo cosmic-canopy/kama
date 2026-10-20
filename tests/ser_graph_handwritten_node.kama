@@ -86,7 +86,7 @@ type resource Node implements Serializable, Deserializable<This> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Node> a = new Node.make(v: 1);
     Shared<Node> b = new Node.make(v: 2);
     a.setNext(n: b);                               // a owns b
@@ -95,12 +95,12 @@ fn int32 main() {
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     // Both nodes in the table; the back-edge writes a's id, so the walk terminates.
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Node\",\"value\":{\"v\":1,\"next\":2,\"back\":null}},{\"id\":2,\"type\":\"Node\",\"value\":{\"v\":2,\"next\":null,\"back\":1}}]}") {
-        return cast<int32>(j.length());
+        return cast<uint8>(j.length());
     }
     Result<Shared<Node>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Node>>(src: copy j);
     Shared<Node> a2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
     Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: a2);
     string j2 = match (give jr2) { case Ok(value: x): give x; case Err(error: e): { return 252; } };
     if (j2 != j) { return 253; }                   // identical: the cycle came back a cycle
-    return a2.val();                               // 1
+    return cast<uint8>(a2.val());                               // 1
 }

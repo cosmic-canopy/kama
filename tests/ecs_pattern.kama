@@ -69,7 +69,7 @@ fn int32 tickAll<T: Tickable>(View<T> items) {
     return sum;
 }
 
-fn int32 main()
+fn uint8 main()
 {
     // component storage — one contiguous array per component type
     DynamicArray<Transform> xf = DynamicArray.withCapacity(capacity: 4);
@@ -89,5 +89,5 @@ fn int32 main()
     SlotMap<Health> ents = SlotMap.empty();
     ents.insert(value: Health.make(hp: 3));
 
-    return cast<int32>(xf[0].x) + cast<int32>(xf[1].y) + ticks;   // 2 + 7 + 32 = 41
+    return cast<uint8>(cast<int32>(xf[0].x) + cast<int32>(xf[1].y) + ticks);   // 2 + 7 + 32 = 41
 }

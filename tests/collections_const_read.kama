@@ -23,7 +23,7 @@ fn int32 keysOfMutable() {
     foreach (int32 k in m.keys()) { t = t * 10 + k; }
     return t;                                                         // ascending: 12
 }
-fn int32 main() {
+fn uint8 main() {
     if (keysOfMutable() != 12) { return 1; }
     Map<string, int32> m = Map.empty(); m.put(key: "a", value: 2);
     Set<int32> s = Set.empty(); s.add(key: 3);
@@ -33,5 +33,5 @@ fn int32 main() {
     SlotMap<int32> sm = SlotMap.empty(); sm.insert(value: 7);
     SortedSet<int32> ss = SortedSet.empty(); ss.add(key: 8);
     SortedMap<int32, int32> so = SortedMap.empty(); so.put(key: 1, value: 1);
-    return m1(m: m) + s1(s: s) + d1(d: d) + b1(b: b) + q1(q: q) + sm1(s: sm) + ss1(s: ss) + so1(m: so);
+    return cast<uint8>(m1(m: m) + s1(s: s) + d1(d: d) + b1(b: b) + q1(q: q) + sm1(s: sm) + ss1(s: ss) + so1(m: so));
 }

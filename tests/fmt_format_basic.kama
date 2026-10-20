@@ -13,7 +13,7 @@ type value Point implements Formattable {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // a primitive renders through its Formattable conformance
@@ -38,5 +38,5 @@ fn int32 main() {
     string s = f.finish();                         // "p=(3, 4) n=-7"
     if (s == "p=(3, 4) n=-7") { r = r + 8; }
 
-    return r;                                       // 1 + 2 + 4 + 8 = 15
+    return cast<uint8>(r);                                       // 1 + 2 + 4 + 8 = 15
 }

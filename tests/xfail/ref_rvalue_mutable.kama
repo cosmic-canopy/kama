@@ -4,8 +4,8 @@
 // with the same two repairs. See tests/const_ref_rvalue for the `const ref` half.
 fn void bump(ref int32 v) { v = v + 1; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = 5;
     bump(v: a + 1);
-    return a;
+    return cast<uint8>(a);
 }

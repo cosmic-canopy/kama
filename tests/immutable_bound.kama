@@ -36,4 +36,4 @@ unsafe fn int32 run() {
     return f.get() + a + b;            // 30 + 5 + 7 = 42
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

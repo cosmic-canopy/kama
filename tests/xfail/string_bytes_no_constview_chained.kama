@@ -1,6 +1,6 @@
 // The same cause, reached through a call made ON the missing result: `s.bytes().length()` used to report
 // only that the receiver of `length` has no type. What is missing is `bytes()`, and the message says why.
-fn int32 main() {
+fn uint8 main() {
     string s = "abc";
-    return cast<int32>(s.bytes().length());
+    return cast<uint8>(s.bytes().length());
 }

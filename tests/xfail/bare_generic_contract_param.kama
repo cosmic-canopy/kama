@@ -3,4 +3,4 @@
 type contract Src<A> for value { fn A get(); }
 type value Lit implements Src<int32> { public ctor make() { } public fn int32 get() { return 7; } }
 fn int32 take(Src s) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

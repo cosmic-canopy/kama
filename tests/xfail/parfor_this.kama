@@ -14,10 +14,10 @@ type value Bumper {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Bumper b = Bumper.of(bias: 5);
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 1i32);
     b.bumpAll(a: ref a);
-    return a[0] % 256;
+    return cast<uint8>(a[0] % 256);
 }

@@ -5,4 +5,4 @@ import { std::collections::View };
 
 type contract Sink for resource { fn void take(ref View<int32> v); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

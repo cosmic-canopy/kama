@@ -6,7 +6,7 @@ import { std::collections::DynamicArray };
 type enum Held { One(string s), Nil }
 fn int32 len(string s) { return cast<int32>(s.length()); }
 fn string pick(InlineArray<string>#(2) a, isize i) { return copy a[i]; }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<string>#(2) sides = ["Left", "Right"];
     isize i = 1;
     string a = copy sides[i];                         // declaration
@@ -18,5 +18,5 @@ fn int32 main() {
     DynamicArray<string> xs = DynamicArray.empty();
     xs.add(item: copy sides[0]);                      // collection argument
     int32 hl = match (h) { case One(s: s): cast<int32>(s.length()); case Nil: 0; };
-    return cast<int32>(a.length()) + cast<int32>(b.length()) + r + cast<int32>(c.length()) + hl + cast<int32>(xs[0].length());   // 5+4+5+4+5+4
+    return cast<uint8>(cast<int32>(a.length()) + cast<int32>(b.length()) + r + cast<int32>(c.length()) + hl + cast<int32>(xs[0].length()));   // 5+4+5+4+5+4
 }

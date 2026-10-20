@@ -3,4 +3,4 @@
 // declaration now (KR-46), whether or not the generic is used.
 type value V { public int32 a; }
 fn int32 g<X: V>(X x) { return 0; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

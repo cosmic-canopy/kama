@@ -3,7 +3,7 @@
 // real program hits far more often than the bare `int32 x = "…"` the spine was built on.
 fn string maker() { return "s"; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 x = maker();
     return 0;
 }

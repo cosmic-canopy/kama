@@ -5,7 +5,7 @@
 import { std::concurrent::Isolate };
 type resource Quiet { int32 n; public ctor make(int32 n) { this.n = n; } }
 fn void worker(Quiet q) { }
-fn int32 main() {
+fn uint8 main() {
     Quiet q = Quiet.make(n: 1);
     Isolate w = spawn worker(q: give q);   // ERROR: `Quiet` does not declare `implements Sendable`
     w.join();

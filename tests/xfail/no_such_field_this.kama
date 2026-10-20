@@ -4,4 +4,4 @@ type value V {
     public ctor make() { this.n = 1; }
     public fn int32 get() { return this.zz; }   // ERROR: `V` has no field `zz`
 }
-fn int32 main() { V v = V.make(); return v.get(); }
+fn uint8 main() { V v = V.make(); return cast<uint8>(v.get()); }

@@ -12,13 +12,13 @@ type value Circle implements Shape {
     public fn int32 area() { return this.r * this.r; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Optional<Shared<Shape>> h = try new Circle.make(r: 6);
     return match (h) {
         case Some(value: s): {
             Shared<Shape> alias = copy s;      // second strong reference to the same boxed Circle
-            := s.area() + alias.area();        // 36 + 36
+            := cast<uint8>(s.area() + alias.area());        // 36 + 36
         }
-        case None: 0 - 1;
+        case None: 255;
     };
 }

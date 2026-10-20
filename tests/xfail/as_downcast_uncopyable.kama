@@ -7,6 +7,6 @@ type resource Held implements Error {
     public const fn string message() { return copy this.what; }
 }
 fn Result<int32, Owned<Error>> f() { return Result::Err(error: Held.make()); }
-fn int32 main() {
-    return match (f()) { case Ok(value: v): v; case Err(error: e): match (e.as<Held>()) { case Some(value: h): 1; case None: 2; }; };
+fn uint8 main() {
+    return cast<uint8>(match (f()) { case Ok(value: v): v; case Err(error: e): match (e.as<Held>()) { case Some(value: h): 1; case None: 2; }; });
 }

@@ -6,7 +6,7 @@ type value Box {
     public fn int32 get() { return this.n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box b = Box.make(n: 3);
     string s = b.get();
     return 0;

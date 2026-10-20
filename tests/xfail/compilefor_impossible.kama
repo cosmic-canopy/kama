@@ -9,4 +9,4 @@
 @compileFor(DEBUG, RELEASE)
 fn int32 unreachableEverywhere() { return 251; }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

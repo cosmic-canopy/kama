@@ -9,7 +9,7 @@ fn int32 first<U: Coded>(const ref Optional<U> o) {
     return match (o) { case Some(value: v): v.code(); case None: 0; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     Optional<int32> o = Optional::Some(value: 4);
     Optional<int32> n = Optional::None;
     return first(o: o) == 5 && first(o: n) == 0 ? 0 : 1;

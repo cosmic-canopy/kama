@@ -6,7 +6,7 @@ import { std::digest::pbkdf2, std::digest::sha256::Sha256, std::digest::sha256::
          std::encoding::base64::encode as b64Encode, std::encoding::base64::decode as b64Decode,
          std::encoding::base64::DecodeError, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     string password = "pencil";
     string saltText = "W22ZaJ0SNY7soEsUEjb6gQ==";
     Result<DynamicArray<uint8>, DecodeError> decoded = b64Decode(text: saltText);
@@ -30,5 +30,5 @@ fn int32 main() {
     int32 r = 0;
     if (b64Encode(bytes: proof.view()).equals(other: "dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=")) { r = r + 1; }
     if (b64Encode(bytes: serverSignature.view()).equals(other: "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=")) { r = r + 2; }
-    return r;   // 3
+    return cast<uint8>(r);   // 3
 }

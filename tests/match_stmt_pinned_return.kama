@@ -53,10 +53,10 @@ fn int32 trailing(Tri t)
     return 0;
 }
 
-fn int32 main()
+fn uint8 main()
 {
-    return pick(t: Tri::A) + pick(t: Tri::C)            // 1 + 4
+    return cast<uint8>(pick(t: Tri::A) + pick(t: Tri::C)            // 1 + 4
          + radius(s: Shape::Circle(r: 10))              // 10
          + plain(p: Plain::Y)                           // 16
-         + trailing(t: Tri::B);                         // 32   = 63
+         + trailing(t: Tri::B));                         // 32   = 63
 }

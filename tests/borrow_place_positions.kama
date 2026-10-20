@@ -34,7 +34,7 @@ fn void swapFirst<T: Copyable<T>>(ref DynamicArray<T> a, ref DynamicArray<T> b) 
     borrow a[0] as x, b[0] as y { T t = copy x; x = copy y; y = t; }    // several bindings, a generic body
 }
 fn void work(ref DynamicArray<int32> part) { borrow part[0] as e { e += 1; } }
-fn int32 main() {
+fn uint8 main() {
     Rig r = Rig.make();
     r.bumpAt(k: 0); r.viaRef(k: 1);
     if (r.at(k: 0) != 11 || r.at(k: 1) != 102) { return 1; }

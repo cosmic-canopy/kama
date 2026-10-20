@@ -7,4 +7,4 @@ type value V {
     public static V operator+(V rhs) { return V.of(x: this.x + rhs.x); }
 }
 
-fn int32 main() { V a = V.of(x: 1); V b = a + a; return b.x - 2; }
+fn uint8 main() { V a = V.of(x: 1); V b = a + a; return cast<uint8>(b.x - 2); }

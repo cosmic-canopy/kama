@@ -1,6 +1,6 @@
 // `out` marks a parameter a callee fills; the local filled later is a `slot`. A bare "unexpected OUT" said neither.
 fn void fill(out int32 q) { q = 3; }
-fn int32 main() {
+fn uint8 main() {
     out int32 q;
     fill(q: out q);
     return q;

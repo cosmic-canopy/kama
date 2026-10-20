@@ -6,9 +6,9 @@
 // iterator protocol (every std::collections container, which iterates via `iterator()`/`next()`).
 import { std::collections::FixedArray };
 
-fn int32 main() {
+fn uint8 main() {
     FixedArray<int32> a = FixedArray::<int32>.make(size: 2);
     int32 n = 0;
     foreach (bool v in a) { n = n + 1; }
-    return n;
+    return cast<uint8>(n);
 }

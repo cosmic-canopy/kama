@@ -7,4 +7,4 @@ type value V {
     public ctor make() { this.x = 7; }
     public fn int32 g() { return S::x; }   // ERROR: `S` has no variant `x`
 }
-fn int32 main() { V v = V.make(); return v.g(); }
+fn uint8 main() { V v = V.make(); return cast<uint8>(v.g()); }

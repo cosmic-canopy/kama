@@ -4,9 +4,9 @@ type value Vec2 {
     public ctor make(int32 x) { this.x = x; }
     public Vec2 operator-(Vec2 rhs) { return Vec2.make(x: this.x - rhs.x); }   // only `-` defined
 }
-fn int32 main() {
+fn uint8 main() {
     Vec2 a = Vec2.make(x: 3);
     Vec2 b = Vec2.make(x: 1);
     Vec2 c = a + b;   // no operator+
-    return c.x;
+    return cast<uint8>(c.x);
 }

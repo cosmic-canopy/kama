@@ -2,7 +2,7 @@
 // (no wall-clock-dependent values); the eight flags sum to 255.
 import { std::time::Duration, std::time::Instant, std::time::monotonicNow };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     Duration a = Duration.fromMillis(ms: 5i64);     // 5_000_000 ns
@@ -20,5 +20,5 @@ fn int32 main() {
     if (!(t1 < t0))                         { r = r + 64; }               // monotonic: never backward
     if (t0.since(earlier: t0) == Duration.zero()) { r = r + 128; }       // self-delta is exactly zero
 
-    return r;   // 255
+    return cast<uint8>(r);   // 255
 }

@@ -9,7 +9,7 @@ type value V {
     public V operator-()       { return V.of(x: -this.x); }          // … coexists with unary minus
     public V operator*(int32 s){ return V.of(x: this.x * s); }
 }
-fn int32 main() {
+fn uint8 main() {
     V a = V.of(x: 10); V b = V.of(x: 3); V c = V.of(x: 1);
 
     V r1 = a + b + c;        // 14  — left-nested chain
@@ -23,5 +23,5 @@ fn int32 main() {
     acc += b;                // 13
     acc = acc + r1 + r2 + r3 + r4 + r5;   // 13 + (14-7+6+26-13) = 13 + 26 = 39
 
-    return acc.x;            // 39
+    return cast<uint8>(acc.x);            // 39
 }

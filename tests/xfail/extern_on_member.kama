@@ -6,4 +6,4 @@ type value V {
     public ctor make() { this.x = 1; }
 }
 
-fn int32 main() { V v = V.make(); return v.get() - 1; }
+fn uint8 main() { V v = V.make(); return cast<uint8>(v.get() - 1); }

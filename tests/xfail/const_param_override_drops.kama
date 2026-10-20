@@ -16,4 +16,4 @@ type final resource Derived extends Base
     public ctor make() { this.base = Base.make(); this.m = 2; }
     protected override const fn int32 peek(ref P p) { p.set(v: 99); return p.get(); }   // -> REJECT: drops `const` from `const ref`
 }
-fn int32 main() { Derived d = Derived.make(); const P q = P.make(x: 1); int32 r = d.read(p: q); return q.get(); }
+fn uint8 main() { Derived d = Derived.make(); const P q = P.make(x: 1); int32 r = d.read(p: q); return cast<uint8>(q.get()); }

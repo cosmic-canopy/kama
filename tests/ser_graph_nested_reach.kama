@@ -18,7 +18,7 @@ type resource Pair {
     public ctor make(Inner x, Owned<Inner> y) { this.x = give x; this.y = give y; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;
     Shared<Pair> p = new Pair.make(x: Inner.make(l: give leaf), y: new Inner.make(l: give l2));
@@ -27,7 +27,7 @@ fn int32 main() {
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     // ONE table: the Pair (its nested parts inline) and the one Leaf both parts share.
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Pair\",\"value\":{\"x\":{\"l\":2},\"y\":{\"l\":2}}},{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":42}}]}") {
-        return cast<int32>(j.length());
+        return cast<uint8>(j.length());
     }
     Result<Shared<Pair>, Owned<Error>> back = deserializeJsonBuffer::<Shared<Pair>>(src: copy j);
     match (back) {

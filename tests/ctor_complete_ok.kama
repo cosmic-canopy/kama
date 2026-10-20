@@ -17,7 +17,7 @@ type resource Holder {
     }
     public fn int32 get() { return this.a.get(); }
 }
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.make(v: 42);
-    return h.get();               // 42
+    return cast<uint8>(h.get());               // 42
 }

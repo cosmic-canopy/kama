@@ -4,4 +4,4 @@ type enum E { A, B;
     public final fn int32 one() { return 1; }
 }
 
-fn int32 main() { E e = E::A; return e.one() - 1; }
+fn uint8 main() { E e = E::A; return cast<uint8>(e.one() - 1); }

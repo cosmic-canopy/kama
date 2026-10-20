@@ -10,4 +10,4 @@ type resource Bag implements Sized {
     public fn int32 size() { return this.n; }
     public fn bool isEmpty() { return this.n == 0; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -6,7 +6,7 @@
 // Covering both is also what forced the stdlib's `ref string` family (`fs`, `log`, `fmt::parse`,
 // `net`, `process`) to say `const ref`, which is what those callees always meant.
 fn void take(ref string s) { s = "other"; }
-fn int32 main() {
+fn uint8 main() {
     take(s: "literal");
     return 0;
 }

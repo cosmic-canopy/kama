@@ -3,7 +3,7 @@
 import { std::fmt::sql, std::fmt::SqlQuery };
 @generate(of)
 type value Point { public int32 x; public int32 y; }
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.of(x: 1, y: 2);
     SqlQuery q = sql"insert into pts values (${p})";
     return 0;

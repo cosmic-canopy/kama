@@ -15,7 +15,7 @@ type value Ranges {
 comptime int32 NINE = sub(b: 1, a: 10);        // 9
 comptime int32 SEVEN = viaSub(y: 3, x: 10);    // 7
 
-fn int32 main() {
+fn uint8 main() {
     comptime int32 FOUR = sub(b: 6, a: 10);    // 4
-    return (NINE - 9) + (SEVEN - 7) + (FOUR - 4) + Ranges::WIDE;   // 42
+    return cast<uint8>((NINE - 9) + (SEVEN - 7) + (FOUR - 4) + Ranges::WIDE);   // 42
 }

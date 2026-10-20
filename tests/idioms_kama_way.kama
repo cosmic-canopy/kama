@@ -61,7 +61,7 @@ type value Plain {
 }
 fn W pick<W>(W a, W b) { if (true) { return a; } return b; }
 
-fn int32 main()
+fn uint8 main()
 {
     // (5) A `match` SUBJECT may be a CALL RESULT — no intermediate binding needed. (This was the page's
     //     one real gap; `tests/match_call_plain_enum.kama` covers every call shape.)
@@ -107,6 +107,6 @@ fn int32 main()
     borrow scores.getRefMut(key: "ana") as sc { sc = sc + 1; }
     int32 placed = rig.turn(k: 0) - 16 + scores.getRef(key: "ana") - 2;   // 0
 
-    return a + q + r + v + s + ok - cast<int32>(msg.length()) + eight - cast<int32>(keep) - cast<int32>(bnd) + placed;
+    return cast<uint8>(a + q + r + v + s + ok - cast<int32>(msg.length()) + eight - cast<int32>(keep) - cast<int32>(bnd) + placed);
     // 33 + 8 - 1 - 1 + 0 = 39
 }

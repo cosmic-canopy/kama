@@ -21,9 +21,9 @@ fn Point midpoint(Point a, Point b) {
     return m;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.at(x: 0, y: 0);
     p.x = 4; p.y = 6;
     Widget w = Widget.make(at: p);
-    return w.originX();
+    return cast<uint8>(w.originX());
 }

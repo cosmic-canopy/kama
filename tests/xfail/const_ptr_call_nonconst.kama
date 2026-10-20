@@ -22,4 +22,4 @@ unsafe fn int32 run() {
     return h.peek();
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

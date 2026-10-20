@@ -17,10 +17,10 @@ fn void worker(Payload p) {
     int32 x = p.get();
 }
 
-fn int32 main() {
+fn uint8 main() {
     Payload p = Payload.make(value: 7i32);
     scope {
         spawn worker(p: give p);   // `p` is moved into the child here
     }
-    return p.get();              // ERROR: use of `p` after it was moved
+    return cast<uint8>(p.get());              // ERROR: use of `p` after it was moved
 }

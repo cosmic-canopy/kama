@@ -2,4 +2,4 @@
 // `@skip` win silently would drop a field the author explicitly asked to keep reading.
 @generate(Serializable, Deserializable)
 type value R { @field @deprecated @skip int32 a; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

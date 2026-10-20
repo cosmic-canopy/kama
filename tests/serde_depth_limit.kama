@@ -24,7 +24,7 @@ fn void key(ref DynamicArray<uint8> b, uint8 c) {   // a one-letter KBIN field n
     b.add(item: 15ui8); b.add(item: 1ui8); b.add(item: 0ui8); b.add(item: 0ui8); b.add(item: 0ui8); b.add(item: c);
 }
 
-fn int32 main() {
+fn uint8 main() {
     string open = "[";   // 2^20 brackets by doubling — appending a million one at a time is quadratic, and under ASan
     for (int32 i = 0; i < 20; i = i + 1) { open = open + open; }   // building the input outran the harness's limit
     string junk = "{\"x\":1,\"junk\":" + open;

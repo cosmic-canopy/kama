@@ -4,4 +4,4 @@
 // the spelling instead.
 type value Point { public int32 x; public ctor of(int32 x) { this.x = x; } }
 unsafe fn int32 readX(UnsafePtr<Point> p) { return p.x; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

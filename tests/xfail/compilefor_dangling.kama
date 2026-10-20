@@ -5,4 +5,4 @@
 // build drops `onlyRelease` and the call dangles.
 @compileFor(RELEASE) fn int32 onlyRelease() { return 1; }
 
-fn int32 main() { return onlyRelease(); }
+fn uint8 main() { return cast<uint8>(onlyRelease()); }

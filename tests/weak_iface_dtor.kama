@@ -39,10 +39,10 @@ fn int32 makeAndWeaken(int32 r, out RcWeak<Shape> w) {
     return a.area();            // 49, read while `a` is still live
 }   // a drops: strong 0 -> Circle __dtor frees buf; ctrl stays (weak=1)
 
-fn int32 main() {
+fn uint8 main() {
     slot RcWeak<Shape> w;
     int32 v = makeAndWeaken(r: 7, w: out w);
     Optional<Rc<Shape>> o = w.tryUpgrade();
     int32 up = match (o) { case Some(value: r): r.area(); case None: 0; };   // 0 (expired)
-    return v + up;                  // 49
+    return cast<uint8>(v + up);                  // 49
 }

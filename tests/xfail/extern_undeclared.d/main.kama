@@ -2,4 +2,4 @@
 // declares nor imports it, and the prelude's own declaration must not stand in for either.
 import { helper };
 unsafe fn int32 work() { UnsafePtr p = malloc(n: cast<usize>(64)); free(p: p); return helper(); }
-fn int32 main() { return work(); }
+fn uint8 main() { return cast<uint8>(work()); }

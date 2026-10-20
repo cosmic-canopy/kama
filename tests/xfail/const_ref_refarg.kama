@@ -6,8 +6,8 @@ type value Cell {
     public const fn const ref int32 place() { return this.n; }
 }
 fn void poke(ref int32 x) { x = 99; }
-fn int32 main() {
+fn uint8 main() {
     Cell c = Cell.make();
     poke(x: ref c.place());   // -> REJECT
-    return c.place();
+    return cast<uint8>(c.place());
 }

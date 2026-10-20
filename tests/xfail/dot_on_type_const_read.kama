@@ -6,4 +6,4 @@ type value V {
     public comptime int32 N = 4;
     public ctor make() { }
 }
-fn int32 main() { return V.N; }   // ERROR: read it as `V::N`
+fn uint8 main() { return V.N; }   // ERROR: read it as `V::N`

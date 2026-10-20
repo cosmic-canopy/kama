@@ -15,7 +15,7 @@
 #include <stdint.h>
 
 extern uint32_t _sidata, _sdata, _edata, _sbss, _ebss, _estack;
-extern int kama_main(void);   /* the user's `fn int32 main()` (external in the emitted C) */
+extern int kama_main(void);   /* the user's `fn uint8 main()` (external in the emitted C) */
 extern int main(void);        /* kama's freestanding wrapper: runs kama_main then `for(;;)` */
 
 #ifdef KAMA_MCU_SEMIHOST_EXIT

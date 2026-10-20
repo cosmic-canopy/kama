@@ -32,7 +32,7 @@ fn bool bytesEqual(ref DynamicArray<uint8> a, ref DynamicArray<uint8> b) {
     return true;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Leaf> leaf = new Leaf.make(v: 42);
     Shared<Leaf> l2 = leaf;                       // second owner of the SAME leaf
     Shared<Pair> p = new Pair.make(a: give leaf, b: give l2);

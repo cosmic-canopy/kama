@@ -9,4 +9,4 @@ unsafe fn void install() {
     Cb h = handler;
     c_register(cb: h);   // ERROR: `Cb`'s threading contract cannot be inferred
 }
-fn int32 main() { install(); return 0; }
+fn uint8 main() { install(); return 0; }

@@ -11,10 +11,10 @@ type value Mat {
     public ctor make() { Row r2 = Row.make(); this.rows = [r2; 2]; }
     public ref Row operator[](usize i) { return this.rows[i]; }
 }
-fn int32 main() {
+fn uint8 main() {
     Mat m = Mat.make();
     m[0][1] = 7;           // nested place: m[0] (ref Row) then [1] (ref int32)
     m[1][0] = 9;
     m[0].a = 3;            // field write through m[0] (a Row place)
-    return m[0][0] + m[0][1] + m[1][0];   // 3 + 7 + 9 = 19
+    return cast<uint8>(m[0][0] + m[0][1] + m[1][0]);   // 3 + 7 + 9 = 19
 }

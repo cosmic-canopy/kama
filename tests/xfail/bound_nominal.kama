@@ -10,7 +10,7 @@ type value Rock {
     public fn int32 weight() { return this.g; }   // has the method, but no `implements Weighable`
 }
 fn int32 heavier<T: Weighable>(T x) { return x.weight(); }
-fn int32 main() {
+fn uint8 main() {
     Rock r = Rock.make(g: 5);
-    return heavier(x: r);   // ERROR: Rock does not satisfy bound Weighable (no `implements`)
+    return cast<uint8>(heavier(x: r));   // ERROR: Rock does not satisfy bound Weighable (no `implements`)
 }

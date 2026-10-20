@@ -67,7 +67,7 @@ EOF
 done
 cat > "$p/src/main.kama" <<'EOF'
 import { run_a, run_b };
-fn int32 main() { return cast<int32>(run_a() + run_b()); }   // 18
+fn uint8 main() { return cast<uint8>(run_a() + run_b()); }   // 18
 EOF
 
 for tier in --debug --release; do

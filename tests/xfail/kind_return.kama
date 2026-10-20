@@ -4,4 +4,4 @@ fn int32 f() {
     return "no";
 }
 
-fn int32 main() { return f(); }
+fn uint8 main() { return cast<uint8>(f()); }

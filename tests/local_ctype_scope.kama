@@ -23,10 +23,10 @@ type value B {
     public fn int32 get() { return this.v; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     A a = A.make();
     a.seed();
     B b = B.make();
     b.set(n: 42);
-    return b.get();
+    return cast<uint8>(b.get());
 }

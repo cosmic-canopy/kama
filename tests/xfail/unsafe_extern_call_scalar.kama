@@ -4,4 +4,4 @@
 extern fn int32 kama_close_socket(isize fd);
 
 fn int32 shut(isize fd) { return kama_close_socket(fd: fd) + kama_close_socket(fd: fd); }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

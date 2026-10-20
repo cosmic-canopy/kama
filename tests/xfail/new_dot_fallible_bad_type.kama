@@ -14,7 +14,7 @@ type value Box {
         this.v = v; return Result::Ok(value: this);
     }
 }
-fn int32 main() {
+fn uint8 main() {
     Owned<Box> p = new Box.tryMake(v: 7);   // ERROR: declare `Result<Owned<Box>, BoxErr>`
     return 0;
 }

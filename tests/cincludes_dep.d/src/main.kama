@@ -4,4 +4,4 @@
 // reach it through the manifest key. Without it: `cinc/cinc.h` not found, from the C compiler.
 import { cinc::eleven };
 
-fn int32 main() { return eleven(n: 3); }   // 33
+fn uint8 main() { return cast<uint8>(eleven(n: 3)); }   // 33

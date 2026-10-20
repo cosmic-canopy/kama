@@ -12,4 +12,4 @@ fn int32 f() comptime(int32 F) {
     foreach (int32 F in xs) { t = t + F; }   // ERROR: the loop variable shadows the const generic param `F`
     return t;
 }
-fn int32 main() { return f()#(16); }
+fn uint8 main() { return cast<uint8>(f()#(16)); }

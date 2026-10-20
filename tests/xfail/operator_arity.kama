@@ -4,4 +4,4 @@ type value Vec2 {
     public ctor make(int32 x) { this.x = x; }
     public Vec2 operator*() { return Vec2.make(x: this.x); }   // `*` has no unary form
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

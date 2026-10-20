@@ -31,7 +31,7 @@ type value Buf<T> comptime(int32 N) {
     public fn int32 size() { return N; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = 0;
     if (idN()#(3) == 3)   { n = n + 1; }
     if (idN()#(16) == 16) { n = n + 1; }      // a second instantiation binds its OWN N
@@ -44,5 +44,5 @@ fn int32 main() {
     InlineArray<int32>#(3) v = [1, 2, 3];
     Buf<int32>#(3) buf = Buf::<int32>#(3).make(a: v);
     if (buf.size() == 3) { n = n + 1; }
-    return n;   // 5
+    return cast<uint8>(n);   // 5
 }

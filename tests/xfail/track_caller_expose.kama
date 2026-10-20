@@ -1,3 +1,3 @@
 // KR-179: a host calls an `expose fn`, and a host cannot pass the hidden caller location.
 @trackCaller expose fn int32 entry(int32 x) { return x; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

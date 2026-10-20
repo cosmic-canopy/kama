@@ -11,7 +11,7 @@ type value Entry implements Pairing<int32, int32> {
 
 fn int32 combine<P: Pairing<int32, int32>>(P p) { return p.key() + p.val(); }
 
-fn int32 main() {
+fn uint8 main() {
     Entry e = Entry.make(k: 30, v: 12);
-    return combine(p: e);   // 42
+    return cast<uint8>(combine(p: e));   // 42
 }

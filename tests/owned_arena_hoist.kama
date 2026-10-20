@@ -16,10 +16,10 @@ fn Owned<Node, BumpAllocator> make(BumpAllocator a, int32 v) {
     return new(allocator: a) Node.make(v: v);
 }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);
     int32 r = consume(b: new(allocator: arena.handle()) Node.make(v: 42));   // arg position → 42
     Owned<Node, BumpAllocator> m = make(a: arena.handle(), v: 100);     // return position
     r = r + m.get();                                                    // 142
-    return r;                                                           // 142
+    return cast<uint8>(r);                                                           // 142
 }

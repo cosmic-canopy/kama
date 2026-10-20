@@ -7,4 +7,4 @@ type value V {
     public ctor make(int32 x) { this.x = x; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

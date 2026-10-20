@@ -1,0 +1,4 @@
+// `main` returns the exit status in the platform's own type: `fn uint8 main()`, the one byte Linux and macOS keep
+// (`fn uint32 main()` on Windows). An `int32` status was truncated at exit without a word — `return 256;` exited 0,
+// success, and `return -962;` exited 62 — so it is refused, naming the signature and the explicit narrowing.
+fn int32 main() { return 0; }

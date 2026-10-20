@@ -15,4 +15,4 @@ type resource App {
     public fn void grow() { int32 i = 0; while (i < 1000) { this.cs.add(item: C.make()); i = i + 1; } }
 }
 
-fn int32 main() { App a = App.make(); a.cs[0].handle(app: ref a); return 0; }
+fn uint8 main() { App a = App.make(); a.cs[0].handle(app: ref a); return 0; }

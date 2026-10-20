@@ -10,4 +10,4 @@ type value Widget implements Weighable<Widget> {
     public fn int32 weigh(ref Widget other) { return this.w + other.w; }
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

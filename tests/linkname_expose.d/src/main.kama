@@ -8,6 +8,6 @@ extern fn int32 kama_test_call_tick();
 
 unsafe fn int32 viaHost() { return kama_test_call_tick(); }
 
-fn int32 main() {
-    return viaHost();   // 42
+fn uint8 main() {
+    return cast<uint8>(viaHost());   // 42
 }

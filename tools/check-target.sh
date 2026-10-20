@@ -273,7 +273,7 @@ case "$(uname -s)" in
           fs)  imp='import { std::fs::exists };' ;;
           net) imp='import { std::net::parseIp };' ;;
         esac
-        printf '%s\nfn int32 main() { return 0; }\n' "$imp" > "$tmp/gui_$what.kama"
+        printf '%s\nfn uint8 main() { return 0; }\n' "$imp" > "$tmp/gui_$what.kama"
         if ! "$KAMA" build --subsystem windows "$tmp/gui_$what.kama" -o "$tmp/gui_$what.exe" \
              >/dev/null 2>"$tmp/gui_$what.err"; then
             echo "check-target: FAIL — --subsystem windows cannot compile a program using std::$what" >&2
@@ -287,7 +287,7 @@ case "$(uname -s)" in
     #     handed a stdout, and the parent of a redirect usually has a console too, so the attach succeeded
     #     and the file got NOTHING. `app > log.txt` wrote 0 bytes where a console build wrote 13.
     #     The console build is the control: the two must agree, whatever the number is.
-    printf 'import { core::print };\nfn int32 main() { print(s: "redirected\\n"); return 0; }\n' > "$tmp/gui_out.kama"
+    printf 'import { core::print };\nfn uint8 main() { print(s: "redirected\\n"); return 0; }\n' > "$tmp/gui_out.kama"
     # ⚠️ Checked, and loudly. These two were unchecked, so when `print` became an import-or-error `core`
     # capability (KR-87) both builds failed, neither exe existed, and the assertion below read the two
     # missing outputs as "0 bytes == 0 bytes" — `set -e` then killed the guard with NO message at all.
@@ -681,7 +681,7 @@ fi
 # by TRIPLE and BUILD TYPE because both vary independently and a collision between them is SILENT — you
 # get yesterday's binary and no diagnostic. Belongs in this guard because the scoping IS the target axis.
 od="$tmp/outdir"; mkdir -p "$od/src"
-printf 'fn int32 main() { return 9; }\n' > "$od/src/app.kama"
+printf 'fn uint8 main() { return 9; }\n' > "$od/src/app.kama"
 printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }\n' > "$od/kama.json"
 
 ( cd "$od" && "$KAMA" build kama.json ) >/dev/null 2>"$tmp/od1.err" || {
@@ -720,7 +720,7 @@ printf '{ "name": "od", "version": "0.1.0", "kind": "executable", "entry": "src/
 # A LOOSE .kama with no manifest is NOT a project and keeps landing beside itself — `kama build hello.kama`
 # -> ./hello is the documented first experience, and one file is not a project.
 loose="$tmp/loose"; mkdir -p "$loose"
-printf 'fn int32 main() { return 9; }\n' > "$loose/hello.kama"
+printf 'fn uint8 main() { return 9; }\n' > "$loose/hello.kama"
 ( cd "$loose" && "$KAMA" build hello.kama ) >/dev/null 2>&1
 [ -x "$loose/hello" ] && [ ! -d "$loose/out" ] || {
     echo "check-target: FAIL — a manifest-less build changed behavior (expected ./hello, no out/)" >&2; exit 1; }
@@ -733,8 +733,8 @@ printf 'fn int32 main() { return 9; }\n' > "$loose/hello.kama"
 # No host can check this for the others by running a fixture, which is why it is here: the stubbed `--cc echo`
 # build needs no toolchain for the target.
 absent="$tmp/absent"; mkdir -p "$absent"
-printf 'import { std::net::UnixDatagram };\nfn int32 main() { return match (UnixDatagram.unbound()) { case Ok(value: d): 0; case Err(error: e): 1; }; }\n' > "$absent/dgram.kama"
-printf 'import { std::net::UnixAddr };\nfn int32 main() { return match (UnixAddr.fromAbstract(name: "n")) { case Ok(value: a): 0; case Err(error: e): 1; }; }\n' > "$absent/abstract.kama"
+printf 'import { std::net::UnixDatagram };\nfn uint8 main() { return match (UnixDatagram.unbound()) { case Ok(value: d): 0; case Err(error: e): 1; }; }\n' > "$absent/dgram.kama"
+printf 'import { std::net::UnixAddr };\nfn uint8 main() { return match (UnixAddr.fromAbstract(name: "n")) { case Ok(value: a): 0; case Err(error: e): 1; }; }\n' > "$absent/abstract.kama"
 absentBuild() {   # absentBuild <program> <target> — succeeds iff the program builds for that target
     "$KAMA" build --release --cc "echo" "$absent/$1.kama" --target "$2" -o "$tmp/absent_out" >"$tmp/absent.out" 2>&1
 }

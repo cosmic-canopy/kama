@@ -2,7 +2,7 @@
 // refused: its writes would land in a temporary about to be dropped.
 import { std::collections::SortedMap };
 
-fn int32 main() {
+fn uint8 main() {
     SortedMap<int32, int32> m = SortedMap.empty();
     m.put(key: 1, value: 0);
     foreach (ref int32 k in m.keys()) { k = 9; }   // -> REJECT

@@ -15,11 +15,11 @@ type enum Holder {
     Boxed(Shared<Probe> p)
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Holder h = Holder::Plain;
     return match (h) {
         case Plain:        42;
-        case Boxed(p: q):  q.value();
+        case Boxed(p: q):  cast<uint8>(q.value());
     };
 }

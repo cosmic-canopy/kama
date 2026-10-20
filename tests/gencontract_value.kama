@@ -24,7 +24,7 @@ fn int32 drain(Iterator<int32> it) {                 // `it` is a fat pointer {o
     return total;
 }
 
-fn int32 main() {
+fn uint8 main() {
     IntRange r = IntRange.make(start: 1, end: 5);         // coerced to Iterator<int32> at the call
-    return drain(it: r);                             // 10
+    return cast<uint8>(drain(it: r));                             // 10
 }

@@ -56,7 +56,7 @@ type resource Hand implements Serializable, Deserializable<This> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shared<Leaf> one = new Leaf.make(v: 9);
     Shared<Leaf> same = one;                     // the SAME leaf behind both fields
     Hand h = Hand.make(a: give one, b: give same);
@@ -64,7 +64,7 @@ fn int32 main() {
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     // ONE table entry, both fields carrying its id — not two inline copies.
     if (j != "{\"root\":{\"a\":1,\"b\":1},\"objects\":[{\"id\":1,\"type\":\"Leaf\",\"value\":{\"v\":9}}]}") {
-        return cast<int32>(j.length());
+        return cast<uint8>(j.length());
     }
     Result<Hand, Owned<Error>> back = deserializeJsonBuffer::<Hand>(src: copy j);
     Hand h2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
@@ -72,5 +72,5 @@ fn int32 main() {
     Result<string, Owned<Error>> jr2 = serializeJsonBuffer(v: h2);
     string j2 = match (give jr2) { case Ok(value: x): give x; case Err(error: e): { return 252; } };
     if (j2 != j) { return 253; }
-    return h2.sum();
+    return cast<uint8>(h2.sum());
 }

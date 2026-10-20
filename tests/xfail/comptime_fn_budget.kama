@@ -7,4 +7,4 @@ comptime fn int32 spin() {
 }
 comptime int32 BAD = spin();
 
-fn int32 main() { return BAD; }
+fn uint8 main() { return cast<uint8>(BAD); }

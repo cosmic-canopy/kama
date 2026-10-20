@@ -92,11 +92,11 @@ fn isize churn() {
     return heap().liveCount();        // inside: the box + the array are live
 }
 
-fn int32 main() {
+fn uint8 main() {
     isize start = globalHeap::<Pool>().liveCount();        // 0 — nothing allocated yet
     isize inner = churn();                                 // 2 — a box and a container buffer
     isize after = heap().liveCount();                      // 0 again — both dropped at the scope end
     if (start != 0) { return 90; }
     if (after != start) { return 91; }                     // a leak or a double-free lands here
-    return cast<int32>(inner) * 10 + cast<int32>(after) + 3;   // 2*10 + 0 + 3 = 23
+    return cast<uint8>(cast<int32>(inner) * 10 + cast<int32>(after) + 3);   // 2*10 + 0 + 3 = 23
 }

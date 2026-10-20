@@ -12,7 +12,7 @@
 // writes, or declare the parameter `const ref` if it never did. The stdlib was the second case in 94
 // places, and every one of them now says so.
 fn void bump(ref int64 v) { v = v + 1; }
-fn int32 main() {
+fn uint8 main() {
     bump(v: 1);
     return 0;
 }

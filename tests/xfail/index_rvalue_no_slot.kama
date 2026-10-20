@@ -4,8 +4,8 @@
 // refused. The message says to bind the value first.
 import { std::collections::DynamicArray };
 fn DynamicArray<int32> mkList() { DynamicArray<int32> l = DynamicArray.empty(); l.add(item: 4); return l; }
-fn int32 main() {
+fn uint8 main() {
     int32 n = 0;
     do { n = n + 1; } while (mkList()[0] > n);
-    return n;
+    return cast<uint8>(n);
 }

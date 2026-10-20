@@ -15,4 +15,4 @@ type resource Conn implements Transacts {
 @noheap fn int32 guarded(ref Conn c) { borrow c.begin() as tx { } return 0; }
 @noheap @onPanic(recover: 1)
 fn int32 region(ref Conn c) { return guarded(c: ref c); }
-fn int32 main() { Conn c = Conn.make(); return region(c: ref c); }
+fn uint8 main() { Conn c = Conn.make(); return cast<uint8>(region(c: ref c)); }

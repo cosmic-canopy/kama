@@ -16,8 +16,8 @@ type value Paint {
     @field public int32 n;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Paint p = Paint.of(c: Color::Green, n: 1);
     Result<string, Owned<Error>> r = serializeJsonBuffer(v: p);
-    return match (r) { case Ok(value: s): cast<int32>(s.length()); case Err(error: e): 9; };
+    return match (r) { case Ok(value: s): cast<uint8>(s.length()); case Err(error: e): 9; };
 }

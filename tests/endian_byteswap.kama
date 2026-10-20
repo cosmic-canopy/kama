@@ -9,7 +9,7 @@ import {
     std::num::byteswapF64,
 };
 
-fn int32 main() {
+fn uint8 main() {
     uint32 a   = byteswapU32(x: cast<uint32>(16909060));   // 0x01020304 -> 0x04030201 = 67305985
     int32  ok1 = (a == cast<uint32>(67305985)) ? 1 : 0;
 
@@ -25,5 +25,5 @@ fn int32 main() {
     float64 d  = 2.25;
     int32  ok5 = (byteswapF64(x: byteswapF64(x: d)) == d) ? 1 : 0;
 
-    return ok1 + ok2 * 2 + ok3 * 4 + ok4 * 8 + ok5 * 16;   // 31 when every swap is correct
+    return cast<uint8>(ok1 + ok2 * 2 + ok3 * 4 + ok4 * 8 + ok5 * 16);   // 31 when every swap is correct
 }

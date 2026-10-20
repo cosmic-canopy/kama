@@ -75,7 +75,7 @@ fn int32 drain() {
     return n;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Owned<Point> a = new Point.at(x: 3, y: 4);                // a box
     DynamicArray<int32> grown = DynamicArray.empty();         // a container that grows
     int32 i = 0;
@@ -84,5 +84,5 @@ fn int32 main() {
     int32 first = drain();                                    // 32 - (box, array, string, `held`) = 28
     int32 again = drain();                                    // every slot came back
     if (first != again) { return 1; }
-    return first + a.x + cast<int32>(s.length()) - cast<int32>(grown.length());   // 28 + 3 + 11 - 20 = 22
+    return cast<uint8>(first + a.x + cast<int32>(s.length()) - cast<int32>(grown.length()));   // 28 + 3 + 11 - 20 = 22
 }

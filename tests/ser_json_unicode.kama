@@ -27,7 +27,7 @@ type resource CharBox {
     public fn int32 code() { return cast<int32>(this.c); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // "Aé€😀z" — 1 + 2 + 3 + 4 + 1 = 11 UTF-8 bytes, 5 codepoints.
     string want = "A\u{E9}\u{20AC}\u{1F600}z";
 

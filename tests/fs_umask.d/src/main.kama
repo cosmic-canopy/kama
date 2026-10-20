@@ -38,4 +38,4 @@ unsafe fn int32 check() {
 @compileFor(OS_WINDOWS)
 fn int32 check() { return 0; }
 
-fn int32 main() { return check() + 42; }
+fn uint8 main() { return cast<uint8>(check() + 42); }

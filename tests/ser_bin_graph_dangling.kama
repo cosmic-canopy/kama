@@ -21,7 +21,7 @@ type resource Pair {
     public ctor make(Shared<Leaf> a, Shared<Leaf> b) { this.a = give a; this.b = give b; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // Craft {root:1, objects:[{id:1, type:Pair, value:{a:2, b:2}}]} through the ordinary token protocol —
     // the envelope IS ordinary tokens now — with id 2 (the Leaf) MISSING from the table.
     KbinNamedSerializer<StringWriter> w = KbinNamedSerializer::<StringWriter>.make(sink: StringWriter.make());

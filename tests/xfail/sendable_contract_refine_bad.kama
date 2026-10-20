@@ -7,4 +7,4 @@ type resource Bad implements Job {   // ERROR: `Job` requires `Sendable` of ever
     public ctor make(int32 n) { this.n = n; }
     public fn int32 run() { return this.n; }
 }
-fn int32 main() { Bad b = Bad.make(n: 1); return b.run(); }
+fn uint8 main() { Bad b = Bad.make(n: 1); return cast<uint8>(b.run()); }

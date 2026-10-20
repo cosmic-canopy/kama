@@ -6,4 +6,4 @@
 extern "rec.h";
 type extern value Sample { public int16 level; public float32 gain; }
 comptime assert(cond: sizeof(Sample) == 8, msg: "a Sample is a level and a gain");
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -34,7 +34,7 @@ type adapter <Uuid> implements Arg {
 
 fn void feed(ref Sink s, Arg a) { a.put(into: ref s); }
 
-fn int32 main() {
+fn uint8 main() {
     Sink s = Sink.make();
     DynamicArray<uint8> bytes = DynamicArray.empty();
     bytes.add(item: 1ui8);
@@ -45,5 +45,5 @@ fn int32 main() {
     feed(s: ref s, a: bytes);       // 1
     feed(s: ref s, a: xs);          // 16
     feed(s: ref s, a: Uuid.nil());  // 20
-    return cast<int32>(s.total());  // 42
+    return cast<uint8>(s.total());  // 42
 }

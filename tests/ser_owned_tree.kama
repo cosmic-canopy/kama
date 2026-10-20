@@ -40,13 +40,13 @@ fn Tree build() {
     return give root;   // 20 + 10 + 5 + 7 = 42
 }
 
-fn int32 main() {
+fn uint8 main() {
     Tree t = build();
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: t);
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 250; } };
     // An Owned child is written as a nested object, exactly as a by-value child would be.
     if (j != "{\"v\":20,\"left\":{\"v\":10,\"left\":{\"v\":5,\"left\":null,\"right\":null},\"right\":null},\"right\":{\"v\":7,\"left\":null,\"right\":null}}") {
-        return cast<int32>(j.length());
+        return cast<uint8>(j.length());
     }
     Result<Tree, Owned<Error>> back = deserializeJsonBuffer::<Tree>(src: give j);
     Tree t2 = match (give back) { case Ok(value: x): give x; case Err(error: e): { return 251; } };
@@ -57,5 +57,5 @@ fn int32 main() {
     DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 253; } };
     Result<Tree, Owned<Error>> pb = deserializeKbinPositionalBuffer::<Tree>(src: give bytes);
     Tree t3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 254; } };
-    return t3.sum();
+    return cast<uint8>(t3.sum());
 }

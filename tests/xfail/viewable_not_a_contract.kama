@@ -7,4 +7,4 @@
     public unsafe ctor over(UnsafePtr<int32> p, int32 n) { this.p = p; this.n = n; }
     public fn int32 length() { return this.n; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

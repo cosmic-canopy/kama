@@ -66,7 +66,7 @@ type value Leaky {
 EOF
 cat > "$tmp/app.kama" <<'EOF'
 import { lib::thing::Leaky };
-fn int32 main() { Leaky l = Leaky(); return 0; }
+fn uint8 main() { Leaky l = Leaky(); return 0; }
 EOF
 
 out=$("$KAMA" check "$tmp/app.kama" "$tmp/lib/thing/broken.kama" 2>&1 || true)
@@ -89,7 +89,7 @@ cat > "$tmp/solo.kama" <<'EOF'
 type value Leaky {
     public fn int32 peek(UnsafePtr<int32> p) { return 0; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }
 EOF
 
 out2=$("$KAMA" check "$tmp/solo.kama" 2>&1 || true)
@@ -113,10 +113,10 @@ type value Box<T> {
     public ctor make(T item) { this.item = item; }
     public fn int32 bad() { int32 x = "not an int"; return 0; }
 }
-fn int32 main() {
+fn uint8 main() {
     Box<int32> a = Box.make(item: 1);
     Box<bool>  b = Box.make(item: true);
-    return a.bad() + b.bad();
+    return cast<uint8>(a.bad() + b.bad());
 }
 EOF
 
@@ -148,7 +148,7 @@ type value Deep {
 EOF
 cat > "$tmp/consumer.kama" <<'EOF'
 import { lib::body::Deep };
-fn int32 main() { Deep d = Deep.make(); return d.oops(); }
+fn uint8 main() { Deep d = Deep.make(); return cast<uint8>(d.oops()); }
 EOF
 
 out4=$("$KAMA" check "$tmp/consumer.kama" "$tmp/lib/body/deep.kama" 2>&1 || true)
@@ -184,7 +184,7 @@ type value Holder<T> {
 EOF
 cat > "$tmp/instantiator.kama" <<'EOF'
 import { lib::tmpl::Holder };
-fn int32 main() { Holder<int32> h = Holder.make(item: 1); return h.oops(); }
+fn uint8 main() { Holder<int32> h = Holder.make(item: 1); return cast<uint8>(h.oops()); }
 EOF
 
 out5=$("$KAMA" check "$tmp/instantiator.kama" "$tmp/lib/tmpl/holder.kama" 2>&1 || true)
@@ -217,7 +217,7 @@ want() {   # want <output> <substring> <claim>
 
 # 6a. Loose, with no project anywhere above: the operands ARE the compilation, and this one is not.
 mkdir -p "$tmp/loose"
-printf 'import { nowhere::v };\nfn int32 main() { return v(); }\n' > "$tmp/loose/solo.kama"
+printf 'import { nowhere::v };\nfn uint8 main() { return cast<uint8>(v()); }\n' > "$tmp/loose/solo.kama"
 out6=$("$KAMA" check "$tmp/loose/solo.kama" 2>&1 || true)
 want "$out6" "cannot resolve module 'nowhere'" "an unresolved module names itself"
 want "$out6" "modules are the files on the command line" "...and says a loose build compiles only what it was given"
@@ -263,7 +263,7 @@ want "$out6d" 'declares no dependency named `geo`' "...and a name that is not th
 mkdir -p "$tmp/m7/geo"
 printf 'export { v };\nfn int32 v() { return 1; }\n' > "$tmp/m7/geo/a.kama"
 printf 'import { v };\nfn int32 use() { return v(); }\n'  > "$tmp/m7/geo/b.kama"
-printf 'fn int32 main() { return 0; }\n' > "$tmp/m7/main.kama"
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/m7/main.kama"
 
 # 7a. `a.kama` is deliberately NOT an operand. It is on disk, it declares `v`, it exports it — and the
 #     build never read it, so an `export` list is the wrong thing to send the reader off to edit.
@@ -320,7 +320,7 @@ type value NoHash {
     public int32 v;
     public ctor make(int32 v) { this.v = v; }
 }
-fn int32 main() {
+fn uint8 main() {
     Keyed<NoHash> k = Keyed.make(key: NoHash.make(v: 1));   // line 7 — the mistake, in THIS file
     return 0;
 }
@@ -365,9 +365,9 @@ fi
 # itself. The strict-numeric instrument reports from exactly those bodies, on a correct program, and it
 # formats `diagFile()` into every row. It is the only observable of this class that a passing build has.
 cat > "$tmp/tiny.kama" <<'EOF'
-fn int32 main() {
+fn uint8 main() {
     int32 a = 2;
-    return a;
+    return cast<uint8>(a);
 }
 EOF
 TINY=$(wc -l < "$tmp/tiny.kama" | tr -d ' ')
@@ -422,8 +422,8 @@ cat > "$tmp/p10/kama.json" <<'JSON'
 JSON
 cat > "$tmp/p10/src/main.kama" <<'KAMA'
 import { std::math::sqrt, p10::sub::plain, p10::sub::twice };
-fn int32 main() {
-    return plain() + twice::<int32>(x: 1);
+fn uint8 main() {
+    return cast<uint8>(plain() + twice::<int32>(x: 1));
 }
 KAMA
 cat > "$tmp/p10/src/sub/b.kama" <<'KAMA'
@@ -474,7 +474,7 @@ fi
 #      called generic. Counted here because an xfail row records a line, and both errors were on one line.
 cat > "$tmp/tf.kama" <<'KAMA'
 import { std::math::sin };
-fn int32 main() { float64 t = 1.0; float64 r = sin::<float64, float64>(x: t); return 0; }
+fn uint8 main() { float64 t = 1.0; float64 r = sin::<float64, float64>(x: t); return 0; }
 KAMA
 out10b=$("$KAMA" check "$tmp/tf.kama" 2>&1 || true)
 n10b=$(printf '%s\n' "$out10b" | grep -c 'error:' || true)
@@ -509,7 +509,7 @@ if ! printf '%s\n' "$out11l" | grep -q '^kama: src/b.kama FAILED (1 error)$'; th
 fi
 
 # ---- 12. a semantic diagnostic carries its column (KR-147) -------------------------------------------------
-printf 'fn int32 main() {\n    int32 total = 0;\n    total = "text";\n    return total;\n}\n' > "$tmp/col.kama"
+printf 'fn uint8 main() {\n    int32 total = 0;\n    total = "text";\n    return cast<uint8>(total);\n}\n' > "$tmp/col.kama"
 out12=$("$KAMA" check "$tmp/col.kama" 2>&1 || true)
 if ! printf '%s\n' "$out12" | grep -q 'col\.kama:3:4: error: an assignment expects a number'; then
     echo "check-diag-file: FAIL — a semantic diagnostic did not carry the assignment's column (3:4):"

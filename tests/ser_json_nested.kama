@@ -16,7 +16,7 @@ type resource Person {
         this.name = give name; this.age = age; this.address = give address;
     }
 }
-fn int32 main() {
+fn uint8 main() {
     Address a = Address.make(city: "New \"York\"", zip: 10001);
     Person p = Person.make(name: "Sam", age: 30, address: give a);
     Result<string, Owned<Error>> j_r = serializeJsonBuffer(v: p);
@@ -24,5 +24,5 @@ fn int32 main() {
     if (j == "{\"name\":\"Sam\",\"age\":30,\"addr\":{\"city\":\"New \\\"York\\\"\",\"zip\":10001}}") { return 0; }
     isize n = j.length();
     if (n == 0) { return 255; }
-    return cast<int32>(n);
+    return cast<uint8>(n);
 }

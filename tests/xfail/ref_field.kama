@@ -4,4 +4,4 @@ type value Holder {
     ref int32 slot0;
     public ctor make() { }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

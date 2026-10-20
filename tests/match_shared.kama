@@ -7,7 +7,7 @@ type resource Probe
     public fn int32 val() { return this.id; }
 }
 type enum Box { Full(Shared<Probe> p), Empty }
-fn int32 main()
+fn uint8 main()
 {
     Shared<Probe> s = new Probe.make(id: 42);
     Box a = Box::Full(p: copy s);
@@ -20,5 +20,5 @@ fn int32 main()
         case Full(p: p): p.val();
         case Empty: 7;
     };
-    return v + w;
+    return cast<uint8>(v + w);
 }

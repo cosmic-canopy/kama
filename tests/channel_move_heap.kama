@@ -18,7 +18,7 @@ fn void producer(Sender<DynamicArray<int32>> tx) {
     _ = tx.send(item: give a);   // the array is relocated into the queue; `a` is left zeroed (drop = no-op)
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<DynamicArray<int32>> ch = Channel.bounded(capacity: 2);
     Sender<DynamicArray<int32>>   tx = ch.sender();
     Receiver<DynamicArray<int32>> rx = ch.receiver();
@@ -36,5 +36,5 @@ fn int32 main() {
     }
 
     h.join();
-    return total;   // 60
+    return cast<uint8>(total);   // 60
 }

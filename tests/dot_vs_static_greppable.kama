@@ -8,8 +8,8 @@ type value Vec2 {
     public ctor make(int32 x, int32 y) { this.x = x; this.y = y; return this; }
     public static fn int32 dot(Vec2 a, Vec2 b) { return a.x * b.x + a.y * b.y; }
 }
-fn int32 main() {
+fn uint8 main() {
     Vec2 a = Vec2.make(x: 2, y: 3);      // construction — dot-on-type
     Vec2 b = Vec2.make(x: 4, y: 5);
-    return Vec2::dot(a: a, b: b);         // utility — scope resolution, 8 + 15 = 23
+    return cast<uint8>(Vec2::dot(a: a, b: b));         // utility — scope resolution, 8 + 15 = 23
 }

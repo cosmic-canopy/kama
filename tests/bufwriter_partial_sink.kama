@@ -78,10 +78,10 @@ fn int32 gate() {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 t = trickle();
-    if (t != 0) { return t; }
+    if (t != 0) { return cast<uint8>(t); }
     int32 g = gate();
-    if (g != 0) { return g; }
+    if (g != 0) { return cast<uint8>(g); }
     return 42;
 }

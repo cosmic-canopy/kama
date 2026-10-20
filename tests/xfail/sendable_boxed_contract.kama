@@ -16,11 +16,11 @@ type resource Worker implements Sendable {
     public ctor make(Owned<Job> job) { this.job = give job; }
 }
 fn void worker(Worker w) { }
-fn int32 main() {
+fn uint8 main() {
     Shared<Leaf> s = new Leaf.make(v: 1);
     Owned<Job> j = new Bad.make(s: copy s);
     Worker w = Worker.make(job: give j);
     Isolate iso = spawn worker(w: give w);
     iso.join();
-    return s.v;
+    return cast<uint8>(s.v);
 }

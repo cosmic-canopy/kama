@@ -91,7 +91,7 @@ fn int32 run(ref TcpListener l) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
-    return match (TcpListener.bind(host: host, port: 0ui16)) { case Ok(value: l): run(l: l); case Err(error: e): 68; };
+    return match (TcpListener.bind(host: host, port: 0ui16)) { case Ok(value: l): cast<uint8>(run(l: l)); case Err(error: e): 68; };
 }

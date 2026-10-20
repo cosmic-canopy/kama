@@ -3,7 +3,7 @@
 import { std::collections::DynamicArray };
 type resource Res { DynamicArray<int32> items; public ctor make(int32 v){ this.items.add(item: v); } ~Res(){} public fn int32 head(){ return this.items[0]; } }
 fn int32 sink(Res r) { return r.head(); }
-fn int32 main() {
+fn uint8 main() {
     Res a = Res.make(v: 1);                       // declared outside the loop
     for (int32 i = 0; i < 3; i = i + 1) {
         sink(r: give a);                     // ERROR: would move `a` again next iteration

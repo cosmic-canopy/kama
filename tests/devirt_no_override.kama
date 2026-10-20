@@ -7,8 +7,8 @@ type virtual(maxDepth: 1) resource Widget
     protected virtual fn int32 pixels() { return 42; }
 }
 fn int32 draw(ref Widget w) { return w.render(); }
-fn int32 main()
+fn uint8 main()
 {
     Widget w = Widget.make();
-    return draw(w: ref w);
+    return cast<uint8>(draw(w: ref w));
 }

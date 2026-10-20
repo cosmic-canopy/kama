@@ -8,10 +8,10 @@ type value Point {
     public ctor make(int32 x, int32 y) { this.x = x; this.y = y; }
     public fn int32 sum() { return this.x + this.y; }
 }
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.make(x: 30, y: 12);
     Result<string, Owned<Error>> je = serializeJsonBuffer(v: p);
     string j = match (give je) { case Ok(value: s): give s; case Err(error: e): { return 250; } };
     Result<Point, Owned<Error>> pr = deserializeJsonBuffer::<Point>(src: give j);
-    return match (pr) { case Ok(value: q): q.sum(); case Err(error: e): 0 - 1; };   // 42
+    return match (pr) { case Ok(value: q): cast<uint8>(q.sum()); case Err(error: e): 255; };   // 42
 }

@@ -11,7 +11,7 @@ fn int32 kindOf(ref string s) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     string empty   = "";
     string garbage = "abc";
     string partial = "12x";          // strict: a trailing byte is an error, not a prefix parse
@@ -32,5 +32,5 @@ fn int32 main() {
     Result<int32, ParseError> ro = parse::<int32>(s: over);
     int32 msg = match (ro) { case Ok(value: v): 0; case Err(error: x): x.message().length() > 0 ? 30 : 0; };
 
-    return a + b + c + d + e + f + g + msg;   // 1+2+2+2+3+3+0+30 = 43
+    return cast<uint8>(a + b + c + d + e + f + g + msg);   // 1+2+2+2+3+3+0+30 = 43
 }

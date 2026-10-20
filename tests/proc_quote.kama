@@ -5,7 +5,7 @@
 // is `a b"c\d` (7 bytes) -> stdout "a b\"c\\d\n" (8 bytes).
 import { core::envOr, std::process::Command, std::process::Output, std::io::IoError, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "echo");
     c.arg(a: "a b\"c\\d");
@@ -19,7 +19,7 @@ fn int32 main() {
             else if (o.stdout()[3] != cast<uint8>(34))  { code = 82; }   // '"'
             else if (o.stdout()[5] != cast<uint8>(92))  { code = 83; }   // '\'
             else if (o.stdout()[7] != cast<uint8>(10))  { code = 84; }   // '\n'
-            := code;
+            := cast<uint8>(code);
         }
         case Err(error: x): 85;
     };

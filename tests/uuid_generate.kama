@@ -10,7 +10,7 @@ fn bool rfcVariant(Uuid u) {
     return (b[8] & 0xC0ui8) == 0x80ui8;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     Uuid a = Uuid.v4();
@@ -57,5 +57,5 @@ fn int32 main() {
     int64 now = unixNow().asUnixMillis();
     if (last.version() == 7ui8 && lastMs >= ms && lastMs <= now + 25i64) { r = r + 32; }
 
-    return r;
+    return cast<uint8>(r);
 }

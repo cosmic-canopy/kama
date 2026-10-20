@@ -2,7 +2,7 @@
 import { std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer, std::collections::DynamicArray };
 @generate(Serializable, Deserializable, of)
 type value Point { @field public int32 x; @field public int32 y; }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Point> ps = DynamicArray.empty(); ps.add(item: Point.of(x: 1, y: 2)); ps.add(item: Point.of(x: 3, y: 4));
     Result<string, Owned<Error>> __enc1 = serializeJsonBuffer(v: ps);
     string __encStr1 = match (give __enc1) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
@@ -15,5 +15,5 @@ fn int32 main() {
     string __encStr2 = match (give __enc2) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 250; } };
     Result<DynamicArray<DynamicArray<int32>>, Owned<Error>> r2 = deserializeJsonBuffer::<DynamicArray<DynamicArray<int32>>>(src: give __encStr2);
     int32 b2 = match (r2) { case Ok(value: b): b[0][0] + b[0][1]; case Err(error: e): 0 - 1; };  // 11
-    return a + b2;   // 18
+    return cast<uint8>(a + b2);   // 18
 }

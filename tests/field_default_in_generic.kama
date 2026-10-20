@@ -13,9 +13,9 @@ type resource Item {
     public fn int32 rank() { return match (this.kind) { case First: 1; case Second: 2; }; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Item> list = DynamicArray.empty();
     list.add(item: Item.make(name: "a", kind: Kind::Second));
     list.add(item: Item.make(name: "b", kind: Kind::First));
-    return list[0].rank() * 10 + list[1].rank();   // 21
+    return cast<uint8>(list[0].rank() * 10 + list[1].rank());   // 21
 }

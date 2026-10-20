@@ -90,9 +90,9 @@ type value Box<T> {
 EOF
     cat > "$tmp/c/user.kama" <<'EOF'
 import { lib::Box };
-fn int32 main() {
+fn uint8 main() {
     Box<int32> b = Box.make(item: 1);
-    return b.size();
+    return cast<uint8>(b.size());
 }
 EOF
     ( cd "$tmp/c" && "$KAMA" build user.kama lib/box.kama -o out.bin --keep-c >/dev/null 2>&1 ) || {

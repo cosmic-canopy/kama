@@ -4,4 +4,4 @@
 // `kama check` cannot see (run_tests.sh `analysis_skip`).
 extern "level.h";
 type extern enum Level : uint8 { LEVEL_LOW, LEVEL_HIGH }
-fn int32 main() { Level l = Level::LEVEL_HIGH; return l == Level::LEVEL_HIGH ? 0 : 1; }
+fn uint8 main() { Level l = Level::LEVEL_HIGH; return l == Level::LEVEL_HIGH ? 0 : 1; }

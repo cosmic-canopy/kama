@@ -89,4 +89,4 @@ fn int32 nested(int32 seed) {
     return acc;
 }
 
-fn int32 main() { return nested(seed: 40); }   // 40 + 2
+fn uint8 main() { return cast<uint8>(nested(seed: 40)); }   // 40 + 2

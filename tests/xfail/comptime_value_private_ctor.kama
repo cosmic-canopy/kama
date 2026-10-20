@@ -4,4 +4,4 @@ type value P { int32 x; ctor secret(int32 x) { this.x = x; } public ctor make() 
 
 comptime P K = P.secret(x: 1);
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

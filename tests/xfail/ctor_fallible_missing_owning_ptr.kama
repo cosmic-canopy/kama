@@ -14,4 +14,4 @@ type resource Holder {
         return Result::Ok(value: this);   // ERROR: `a` never set
     }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

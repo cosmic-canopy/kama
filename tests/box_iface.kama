@@ -16,8 +16,8 @@ type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     unsafe ~Box() { usize n = sizeof(ptr: this.p); usize a = alignof(ptr: this.p); GlobalAllocator.make().deallocate(pointer: cast<UnsafePtr>(this.p), bytes: n, align: a); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box<Shape> a = new Circle.make(r: 5);   // 25
     Box<Shape> b = new Square.make(s: 4);   // 16 (heterogeneous — different concrete types, one Box<Shape>)
-    return a.area() + b.area();        // 41 (virtual dispatch)
+    return cast<uint8>(a.area() + b.area());        // 41 (virtual dispatch)
 }

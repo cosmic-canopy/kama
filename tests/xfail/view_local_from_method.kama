@@ -11,9 +11,9 @@ type resource Box {
     public fn void push(int32 v) { this.buf.add(item: v); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box b = Box.make();
     View<int32> v = b.peek();
     b.push(v: 2); b.push(v: 3); b.push(v: 4);   // reallocs
-    return v[0];
+    return cast<uint8>(v[0]);
 }

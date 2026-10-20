@@ -12,4 +12,4 @@ type resource Impl implements Tok {
     public fn void begin() { }
 }
 fn void driver(ref Tok t) { t.begin(); }
-fn int32 main() { Impl i = Impl.make(); return 0; }
+fn uint8 main() { Impl i = Impl.make(); return 0; }

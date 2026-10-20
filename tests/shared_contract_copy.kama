@@ -21,7 +21,7 @@ type resource Registry {
         return Optional::Some(value: give res);
     }
 }
-fn int32 main() {
+fn uint8 main() {
     Registry g = Registry.make();
     {
         Shared<Leaf> s = new Leaf.make(v: 3);
@@ -32,5 +32,5 @@ fn int32 main() {
     int32 t = match (give r) { case Some(value: h): h.tag(); case None: 0; };
     Optional<Shared<Node>> miss = g.resolve(id: 2ui64);
     int32 m = match (give miss) { case Some(value: h): 100; case None: 10; };
-    return t + m;   // 3 + 10
+    return cast<uint8>(t + m);   // 3 + 10
 }

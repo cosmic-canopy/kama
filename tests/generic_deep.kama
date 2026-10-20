@@ -14,12 +14,12 @@ type value Box<T>
     public ctor make(T v) { this.value = v; }
     public fn T unbox() { return this.value; }
 }
-fn int32 main()
+fn uint8 main()
 {
     Pair<int32, int32> p = Pair.make(x: 30, y: 4);
     Box<Pair<int32, int32>> b1 = Box.make(v: p);
     Box<Box<Pair<int32, int32>>> b2 = Box.make(v: b1);      // triple close `>>>`, no spaces
     Box<Pair<int32, int32>> mid = b2.unbox();
     Pair<int32, int32> q = mid.unbox();
-    return q.first() + 12;                              // 30 + 12 = 42
+    return cast<uint8>(q.first() + 12);                              // 30 + 12 = 42
 }

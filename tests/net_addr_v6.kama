@@ -21,7 +21,7 @@ fn int32 refuse(const ref string text) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 bad = 0;
     int32 checks = 0;
 
@@ -120,6 +120,6 @@ fn int32 main() {
     };
     checks = checks + 2;
 
-    if (checks != 45) { print(s: "checks=${checks}\n"); return bad + 100; }
-    return bad;
+    if (checks != 45) { print(s: "checks=${checks}\n"); return cast<uint8>(bad + 100); }
+    return cast<uint8>(bad);
 }

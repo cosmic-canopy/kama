@@ -10,4 +10,4 @@ unsafe fn int32 run() {
     cp[0].world[0].step();                // ERROR: `world` only reads its `World`
     return w.n;
 }
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

@@ -7,4 +7,4 @@ type value Holder<T> {
     public ctor make(T v) { this.v = v; }
     public fn int32 get() { A m = this.v; return m.a; }
 }
-fn int32 main() { Holder<B> h = Holder.make(v: B.make(b: 2)); return h.get(); }
+fn uint8 main() { Holder<B> h = Holder.make(v: B.make(b: 2)); return cast<uint8>(h.get()); }

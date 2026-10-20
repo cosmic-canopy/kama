@@ -14,4 +14,4 @@ unsafe fn int32 run() {
     UnsafePtr<int32> last = match (xs.pop()) { case Some(value: p): p; case None: null; };
     return sum + last[0];                    // 7 + 4
 }
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

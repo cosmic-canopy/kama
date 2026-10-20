@@ -3,7 +3,7 @@
 //
 // What integer lanes add over float ones is the BITWISE half — `& | ^ << >>` are C's own operators on a
 // vector type, and they are the reason a mask can be built by hand as well as by comparison.
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // int32 x 4 — the common case.
@@ -43,5 +43,5 @@ fn int32 main() {
     // is why `Mask` carries T. This one is 8 lanes of int16, not 4 of int32.
     Mask<int16>#(8) m = n16.greaterThan(rhs: [4i16; 8]);
     if (m.allTrue()) { r = r + 6; }              //      => 100
-    return r;
+    return cast<uint8>(r);
 }

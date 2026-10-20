@@ -11,7 +11,7 @@ type resource Box {
     public fn int32 eat(ConstView<int32> v) { this.buf.reserve(n: 64); return v[0]; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box b = Box.make();
-    return b.eat(v: b.view());
+    return cast<uint8>(b.eat(v: b.view()));
 }

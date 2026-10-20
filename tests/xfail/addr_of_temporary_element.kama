@@ -7,4 +7,4 @@ unsafe fn int32 run() {
     UnsafeConstPtr<uint8> cp = addr(of: f.view()[0]);
     return cast<int32>(cp[0]);
 }
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

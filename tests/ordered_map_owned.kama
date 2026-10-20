@@ -12,7 +12,7 @@ fn DynamicArray<string> words(int32 i) {
     return give w;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     OrderedMap<string, DynamicArray<string>> m = OrderedMap.empty();
     int32 i = 0;
@@ -43,5 +43,5 @@ fn int32 main() {
     if (m.getRef(key: "k1").length() == 2 && c.getRef(key: "k1").length() == 3) { r = r + 8; }
     c.clear();                                                                      // drops every entry of the copy
     if (c.length() == 0) { r = r + 16; }
-    return r + 30;   // 61; the map and the copy's buffers drop at the end of `main`
+    return cast<uint8>(r + 30);   // 61; the map and the copy's buffers drop at the end of `main`
 }

@@ -7,9 +7,9 @@ fn void step(InlineArray<int32>#(2) a, isize i) {
     int32 x = a[i];                  // i = 7 -> bounds miss -> return
     reached = reached + 10;          // not reached on the faulting call
 }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(2) a = [0; 2];
     step(a: a, i: 0);                // reached = 11
     step(a: a, i: 7);                // reached = 12
-    return reached + 30;             // 42
+    return cast<uint8>(reached + 30);             // 42
 }

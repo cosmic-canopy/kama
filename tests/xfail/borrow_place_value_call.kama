@@ -1,6 +1,6 @@
 // A method that returns a VALUE is neither a place nor a view, so `borrow` has nothing to hold (KR-123).
 import { std::collections::Map, std::collections::DynamicArray };
-fn int32 main()
+fn uint8 main()
 {
     DynamicArray<int32> xs = DynamicArray.empty();
     borrow xs.length() as n { }

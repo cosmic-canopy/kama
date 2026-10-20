@@ -7,7 +7,7 @@ type value Cursor {
     public ctor make(usize position, bool eof) { this.position = position; this.eof = eof; return this; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Cursor c = Cursor.make(position: 0, eof: false);
     return 0;
 }

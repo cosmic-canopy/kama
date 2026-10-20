@@ -13,12 +13,12 @@ type resource Sink {
 
 fn void put<T: Serializable>(ref Sink s, const ref T v) { s.add(value: v); }
 
-fn int32 main() {
+fn uint8 main() {
     Sink s = Sink.make();
     DynamicArray<Uuid> ids = DynamicArray.empty();
     ids.add(item: Uuid.fromBytes(bytes: [1ui8; 16]));
     put::<DynamicArray<Uuid>>(s: ref s, v: ids);
     DynamicArray<int32> xs = DynamicArray.empty();
     put(s: ref s, v: xs);
-    return cast<int32>(s.count()) - 2;
+    return cast<uint8>(cast<int32>(s.count()) - 2);
 }

@@ -63,12 +63,12 @@ import { core::println };
 
 fn int32 add(int32 a, int32 b) { return a + b; }
 
-fn int32 main()
+fn uint8 main()
 {
     string name = "kama";
     int32 x = add(a: 40, b: 2);        // every argument is named at the call site
     println(s: "hello from ${name}: ${x}");
-    return x;                          // the exit code
+    return cast<uint8>(x);             // the exit status: one byte, narrowed explicitly
 }
 ```
 

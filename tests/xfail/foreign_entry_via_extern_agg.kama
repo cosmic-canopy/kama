@@ -14,8 +14,8 @@ type extern value Desc { public Cb f; public int32 n; }
 
 fn int32 render(int32 n) { return n + gain; }   // ERROR: reads a static `main` assigns
 
-fn int32 main() {
+fn uint8 main() {
     gain = 7;
     Desc d = Desc.of(f: render, n: 1);
-    return d.n;
+    return cast<uint8>(d.n);
 }

@@ -23,7 +23,7 @@ type value Reg {
 fn isize bump(isize slot) { return slot + 1; }
 fn void fill(out int32 slot) { slot = 7; }
 
-fn int32 main()
+fn uint8 main()
 {
     isize slot = 4;              // a local named `slot`
     slot = slot + 1;             // ...read and written like any other name
@@ -35,5 +35,5 @@ fn int32 main()
     slot int32 filled;           // ...and `slot` still LEADS a declaration
     fill(slot: out filled);      // filled through an `out` parameter — 7
 
-    return cast<int32>(n) + filled;   // 21 + 7 = 28
+    return cast<uint8>(cast<int32>(n) + filled);   // 21 + 7 = 28
 }

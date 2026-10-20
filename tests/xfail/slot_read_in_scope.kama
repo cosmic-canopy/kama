@@ -4,7 +4,7 @@ type value Pt { public int32 x; public int32 y = 7; public ctor make(int32 x) { 
 fn void fill(out Pt dst) { dst = Pt.make(x: 1); }
 fn void fillI(out int32 dst) { dst = 5; }
 fn void work(int32 v) { }
-fn int32 main() {
+fn uint8 main() {
     slot Pt p;
     slot int32 x;
     int32 y = 0;
@@ -13,5 +13,5 @@ fn int32 main() {
     uint32 u = bitcast<uint32>(x);
     fill(dst: out p);
     fillI(dst: out x);
-    return y + cast<int32>(u);
+    return cast<uint8>(y + cast<int32>(u));
 }

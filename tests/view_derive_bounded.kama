@@ -24,7 +24,7 @@ fn int32 halves(View<int32> items) {
 // 4: the result roots at the argument, so it is bounded exactly when the argument was.
 fn View<int32> firstHalf(View<int32> xs) { return xs.slice(from: 0, count: 2); }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 4);
     a.add(item: 1); a.add(item: 2); a.add(item: 3); a.add(item: 4);
 
@@ -38,5 +38,5 @@ fn int32 main() {
         View<int32> fh = firstHalf(xs: w);        // 4: a free fn's result over a bounded argument
         r = r + sum(xs: fh);                      // + 3 = 380
     }
-    return r - 338;   // 42
+    return cast<uint8>(r - 338);   // 42
 }

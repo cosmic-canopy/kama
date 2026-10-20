@@ -20,7 +20,7 @@ fn int32 viaParam(F decode, int32 x) {
     return y;
 }
 
-fn int32 main() {
+fn uint8 main() {
     F decode = dbl;
     int32 a = viaParam(decode: decode, x: 5);    // 10
     int32 b = decode(x: 6);                      // 12
@@ -28,5 +28,5 @@ fn int32 main() {
     int32 c = r.decode(x: 10);                   // 20
     BindableFunctionPtr<F> bound = dbl;
     int32 d = bound(x: 1);                       // 2
-    return a + b + c + d;                        // 44
+    return cast<uint8>(a + b + c + d);                        // 44
 }

@@ -1,7 +1,7 @@
 // A value is not a `match` pattern: `match` branches on an enum's variants, and an integer, a string or a bool
 // branches with `if`/`else if` — one construct per concept, and kama has no `switch` (SPEC *Control flow*).
 // The grammar used to say only "unexpected DEC_LITERAL_NO_SUFFIX, expecting IDENTIFIER"; it names the rule (KR-164).
-fn int32 main() {
+fn uint8 main() {
     int32 n = 2;
     int32 r = match (n) { case 1: 10; case _: 0; };   // -> REJECT
     return r;

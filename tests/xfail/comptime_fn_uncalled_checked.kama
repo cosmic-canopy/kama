@@ -2,4 +2,4 @@
 // names a parameter `twice` does not have. It was never read, so it built.
 comptime fn int32 twice(int32 n) { return n * 2; }
 comptime fn int32 never() { return twice(m: 3); }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -12,11 +12,11 @@ fn void scale(ref DynamicArray<int32> xs) {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     for (int32 i = 1; i <= 6; i = i + 1) { xs.add(item: i); }
     scale(xs: xs);
     int32 s = 0;
     foreach (int32 x in xs) { s = s + x; }
-    return s;   // 10 + 2 + 30 + 4 + 50 + 6
+    return cast<uint8>(s);   // 10 + 2 + 30 + 4 + 50 + 6
 }

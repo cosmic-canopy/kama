@@ -34,7 +34,7 @@ type value Board {
     public const fn isize total() { isize t = 0; isize i = 0; while (i < DERIVED) { t = t + this.s[i].a; i = i + 1; } return t; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Board bd = Board.e();                                        // 0+1+2+3 = 6
     InlineArray<isize>#(DERIVED) xs = [1, 2, 3, 4];
     InlineArray<isize>#(TWICE) t = [1, 1, 1, 1, 1, 1, 1, 1];     // 8
@@ -42,7 +42,7 @@ fn int32 main() {
     // after collection, so no reader of a const-generic size could see its result.
     InlineArray<isize>#(CREW) c = [2, 0, 0, 0, 0, 3];            // 2+3 = 5
     Box<isize> bx = Box.of(v: 5);                                // 4
-    return cast<int32>(bd.total()) + cast<int32>(sumAll(xs: xs)) + cast<int32>(t.length())
+    return cast<uint8>(cast<int32>(bd.total()) + cast<int32>(sumAll(xs: xs)) + cast<int32>(t.length())
          + cast<int32>(Code::B) + cast<int32>(bx.sizeOf()) + cast<int32>(tally(xs: c))    // 6+10+8+12+4+5
-         + cast<int32>(SLOTS + SEATS);                                                     // + 6+4 = 55
+         + cast<int32>(SLOTS + SEATS));                                                     // + 6+4 = 55
 }

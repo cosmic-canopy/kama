@@ -1,2 +1,2 @@
 import { helper };
-fn int32 main() { return helper(); }
+fn uint8 main() { return helper(); }

@@ -1,6 +1,6 @@
 // A window inside a window over the same storage would give one place two names (KR-123): reach it through the outer alias.
 import { std::collections::Map, std::collections::DynamicArray };
-fn int32 main()
+fn uint8 main()
 {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 1);

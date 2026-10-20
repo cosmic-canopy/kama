@@ -6,4 +6,4 @@ type value Widget { public int32 w; }
 
 type contract Weighable<T is Widget> for value { fn int32 weigh(ref T other); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -11,10 +11,10 @@ type value Counter {
 fn void touch(const ref DynamicArray<Counter> xs) {
     xs[0].bump(by: 1);          // non-const method on a const-borrowed element -> REJECT
 }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Counter> xs = DynamicArray.empty();
     Counter a = Counter.make(start: 1);
     xs.add(item: a);
     touch(xs: ref xs);
-    return xs[0].get();
+    return cast<uint8>(xs[0].get());
 }

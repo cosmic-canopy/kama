@@ -52,9 +52,9 @@ fn int32 run() {
     return 42;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = run();
-    if (r != 42) { return r; }
+    if (r != 42) { return cast<uint8>(r); }
     if (dropped != 11) { eprintln(s: "discard_drops: after run, dropped ${dropped}, want 11"); return 2; }
     return 42;
 }

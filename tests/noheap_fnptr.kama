@@ -22,9 +22,9 @@ static Op g_handler;
 @noheap fn int32 tick(Op f, int32 n) { return f(x: n); }             // through a PARAMETER
 @noheap fn int32 viaStatic(int32 n) { return g_handler(x: n); }      // through a module `static`
 
-fn int32 main() {
+fn uint8 main() {
     Op local = dbl;              // a local INITIALIZER
     g_handler = dbl;             // an ASSIGNMENT
     Reg r = Reg.make(h: dbl);
-    return tick(f: local, n: 3) + tick(f: dbl, n: 4) + viaStatic(n: 5) + r.dispatch(x: 9);
+    return cast<uint8>(tick(f: local, n: 3) + tick(f: dbl, n: 4) + viaStatic(n: 5) + r.dispatch(x: 9));
 }   // 6 + 8 + 10 + 18 = 42

@@ -3,7 +3,7 @@
 // must be a safe no-op (never shrinks), and reserve on an already-populated map must resize + rehash cleanly.
 import { std::collections::Map, std::collections::Set };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // reserve() up front, then a bulk insert with no incremental rehash.
@@ -43,5 +43,5 @@ fn int32 main() {
     i = 0; while (i < 64) { s.add(key: i); s.add(key: i); i = i + 1; }   // duplicate adds
     if (s.length() == 64 && s.contains(key: 7) && !s.contains(key: 64)) { r = r + 10; }
 
-    return r;   // 10+10+5+10+10 = 45
+    return cast<uint8>(r);   // 10+10+5+10+10 = 45
 }

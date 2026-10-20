@@ -48,7 +48,7 @@ type enum K { Null, Obj(DynamicArray<Plain> ps), Arr(DynamicArray<K> items) }
 // ...and when every payload copies, so does the enum: `copy` deep-copies through both collections.
 type enum M { Null, Arr(DynamicArray<M> items), Obj(DynamicArray<Tok> ts) }
 
-fn int32 main() {
+fn uint8 main() {
     Box b = Box.make();
     b.add(e: E::A);
     Box2 b2 = Box2.make();

@@ -32,11 +32,11 @@ fn void worker(Payload p) {   // owns the bundle by value (the caller `give`s it
     p.run();
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 result = 0;
     Payload p = Payload.make(dst: ref result, value: 42i32);
     scope {
         spawn worker(p: give p);   // deferred-join child on a fresh OS thread with the moved bundle
     }                              // BARRIER: the child is joined here, before `result` is read
-    return result;               // 42 iff the isolate ran
+    return cast<uint8>(result);               // 42 iff the isolate ran
 }

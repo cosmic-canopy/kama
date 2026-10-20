@@ -25,11 +25,11 @@ type final resource Square extends Shape {
 @noheap fn int32 dropSink(Owned<Sink, BumpAllocator> o) { return 1; }
 @noheap fn int32 dropShared(Shared<Sink, BumpAllocator> o) { return 2; }
 @noheap fn int32 dropShape(Owned<Shape, BumpAllocator> o) { return 4; }
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);
     Owned<Sink, BumpAllocator> a = new(allocator: arena.handle()) Dot.make(r: 3);
     Shared<Sink, BumpAllocator> b = new(allocator: arena.handle()) Dot.make(r: 3);
     Owned<Shape, BumpAllocator> c = new(allocator: arena.handle()) Square.make(s: 5);
     int32 got = c.area();                                                 // 25
-    return got + dropSink(o: give a) + dropShared(o: give b) + dropShape(o: give c);   // 25 + 7
+    return cast<uint8>(got + dropSink(o: give a) + dropShared(o: give b) + dropShape(o: give c));   // 25 + 7
 }

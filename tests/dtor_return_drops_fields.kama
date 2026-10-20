@@ -51,7 +51,7 @@ type final resource Derived extends Base {
     ~Derived() { return; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     { Plain a = Plain.make(done: true); }          // 1 Inner
     { Plain b = Plain.make(done: false); }         // 1 Inner (falls off the end: the old path)
     { InMatch c = InMatch.make(mode: Mode::Quick); }   // 1 Inner
@@ -62,5 +62,5 @@ fn int32 main() {
     if (innerDrops == 7) { r = r + 1; }
     if (localDrops == 1) { r = r + 2; }
     if (baseDrops == 1)  { r = r + 4; }
-    return r;                                      // 7
+    return cast<uint8>(r);                                      // 7
 }

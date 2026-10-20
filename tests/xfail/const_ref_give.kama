@@ -11,8 +11,8 @@ type resource Bag {
     public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: Token.make(id: 1)); }
     public const fn const ref Token at(isize i) { return this.items[i]; }
 }
-fn int32 main() {
+fn uint8 main() {
     Bag b = Bag.make();
     Token t = give b.at(i: 0);   // -> REJECT
-    return t.id();
+    return cast<uint8>(t.id());
 }

@@ -3,4 +3,4 @@
 // implementer and its caller are forced by their own types.
 fn int32 peek(UnsafePtr<int32> p) { return 0; }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

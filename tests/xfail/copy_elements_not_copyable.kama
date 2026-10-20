@@ -4,4 +4,4 @@ type resource Token { int32 v; public ctor make() { this.v = 1; } ~Token() { } }
 unsafe fn void fill(UnsafePtr<Token> d, UnsafePtr<Token> s) {
     copyElements(ptr: d, from: s, count: 1);
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

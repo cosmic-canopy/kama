@@ -31,7 +31,7 @@ type final resource Baro extends Sensor {
 // Dispatch through the contract, not the base — this is the binding that used to fail to compile.
 fn int32 viaContract(ref Reportable r) { return r.report(); }
 
-fn int32 main() {
+fn uint8 main() {
     Thermo t = Thermo.make();
     Baro b = Baro.make();
 

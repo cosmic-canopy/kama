@@ -27,11 +27,11 @@ type value Later { public int32 y; public comptime int32 BASE = 40; public ctor 
 comptime float64 TAU = Geo::PI * 2.0;                       // 6.5
 comptime int32 FROM_FLOAT = cast<int32>(TAU * 2.0);         // 13
 
-fn int32 main() {
+fn uint8 main() {
     comptime int32 LOCAL = sq(n: 2) + Geo::NINE;            // 13 — a local runs the interpreter too
     comptime float64 HALF_TAU = TAU / 2.0;                  // 3.25
     InlineArray<int32>#(LOCAL) cells = [0; (LOCAL)];         // ...and sizes an array
     int32 r = cast<int32>(Geo::RAMP.get(index: 3));         // 30
-    return (FROM_FLOAT - 13) + (cast<int32>(cells.length()) - 13) + (r - 30) + (Geo::LATER - 41)
-         + (Geo::SEES_HIDDEN - 14) + (cast<int32>(HALF_TAU * 4.0) - 13) + 42;
+    return cast<uint8>((FROM_FLOAT - 13) + (cast<int32>(cells.length()) - 13) + (r - 30) + (Geo::LATER - 41)
+         + (Geo::SEES_HIDDEN - 14) + (cast<int32>(HALF_TAU * 4.0) - 13) + 42);
 }

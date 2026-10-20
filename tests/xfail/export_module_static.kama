@@ -8,4 +8,4 @@
 export { COUNT };
 
 static int32 COUNT = 5;
-fn int32 main() { return COUNT; }
+fn uint8 main() { return cast<uint8>(COUNT); }

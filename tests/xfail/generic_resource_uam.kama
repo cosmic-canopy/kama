@@ -4,8 +4,8 @@
 // flows to each monomorphized instance.
 type resource Box<T: Copyable<T>> { T value; public ctor make(T v){ this.value = v; } ~Box(){} public fn T get(){ return copy this.value; } }
 fn int32 take(Box<int32> b) { return b.get(); }
-fn int32 main() {
+fn uint8 main() {
     Box<int32> a = Box.make(v: 1);
     take(b: give a);
-    return a.get();   // ERROR: use of `a` after it was moved
+    return cast<uint8>(a.get());   // ERROR: use of `a` after it was moved
 }

@@ -39,8 +39,8 @@ frame() {
 }
 
 URI="file:///t.kama"
-BAD='fn int32 main() {\n    return 0\n}\n'     # missing semicolon -> syntax error on line 3 (LSP line 2)
-GOOD='fn int32 main() {\n    return 0;\n}\n'   # fixed
+BAD='fn uint8 main() {\n    return 0\n}\n'     # missing semicolon -> syntax error on line 3 (LSP line 2)
+GOOD='fn uint8 main() {\n    return 0;\n}\n'   # fixed
 
 # M2 fixture: a decl-rich buffer (its own URI) driving hover / go-to-definition / document symbols. The
 # layout is fixed — the query positions below are tied to it (kama line 1-based/col 0-based -> LSP 0/0):
@@ -52,7 +52,7 @@ GOOD='fn int32 main() {\n    return 0;\n}\n'   # fixed
 # M4.6 fixture: a buffer that has NEVER parsed — `p.` on line 5 is a syntax error, so there is no
 # last-good index at all. This is the state a NEW file is in the first time completion is wanted.
 NURI="file:///new.kama"
-NEWB='type value P { public int32 x; public fn int32 twice() { return this.x * 2; } }\nfn int32 main() {\n    P p;\n    p.\n    return 0;\n}\n'
+NEWB='type value P { public int32 x; public fn int32 twice() { return this.x * 2; } }\nfn uint8 main() {\n    P p;\n    p.\n    return 0;\n}\n'
 
 # M4.9 fixture: the campaign-exit STAMP_LOC checklist. A generic type's decl name and a named ctor's
 # name are both built mid-action from a raw IDENTIFIER, so without an explicit stamp they inherit their
@@ -81,7 +81,7 @@ IIB='type contract Weighable { fn int32 weight(ref This wpeer); }\ntype adapter 
 # broken member is discarded but the TYPE stays declared, which is what keeps a half-typed member from
 # cascading "undeclared type" over every use of it.
 RURI="file:///recover.kama"
-RECOV='type value H {\n    public int32 x;\n    public int32 = ;\n}\nfn int32 a() {\n    int32 v = 1\n    return v;\n}\nfn int32 main() {\n    int32 w = 2\n    return w;\n}\n'
+RECOV='type value H {\n    public int32 x;\n    public int32 = ;\n}\nfn int32 a() {\n    int32 v = 1\n    return v;\n}\nfn uint8 main() {\n    int32 w = 2\n    return w;\n}\n'
 
 # M5.4 fixture: the one recovery outcome that MUST suppress semantics. A malformed type HEAD is dropped
 # whole by the top-level arm while the functions after it survive and still use the name — so every use
@@ -97,7 +97,7 @@ XDROP='type value ! Widget {\n    public int32 w;\n}\nfn int32 use() {\n    Widg
 # lives only in `_refIndex`, never in `_positions`, so an exact-array assertion here is what proves the
 # facade's own overlap filter runs.
 TOKURI="file:///semtok.kama"
-TOKB='type value P {\n    int32 x;\n    public ctor make(int32 v) { this.x = v; }\n}\nfn int32 main() { P p = P.make(v: 1); return p.x; }\n'
+TOKB='type value P {\n    int32 x;\n    public ctor make(int32 v) { this.x = v; }\n}\nfn uint8 main() { P p = P.make(v: 1); return p.x; }\n'
 
 # TOKG is the GENERIC-body fixture. It documented the M6 A2-era gap (nothing inside a generic type's body
 # reached the reference index) as an exact array, precisely so that closing it in B3 could not be silent —
@@ -111,9 +111,9 @@ TOKB='type value P {\n    int32 x;\n    public ctor make(int32 v) { this.x = v; 
 #
 # Layout (LSP 0-based lines, 0-based chars):
 #   L2 `    public fn int32 get() { return this.x; }` -> `get` decl at 20..23
-#   L4 `fn int32 main() { P p = P.zero(); p.x = 1; return p.get(); }` -> the CALL `get` at 52..55
+#   L4 `fn uint8 main() { P p = P.zero(); p.x = 1; return p.get(); }` -> the CALL `get` at 52..55
 MRURI="file:///methodrename.kama"
-MREN='type value P {\n    public int32 x;   public ctor zero() { this.x = 0; }\n    public fn int32 get() { return this.x; }\n}\nfn int32 main() { P p = P.zero(); p.x = 1; return p.get(); }\n'
+MREN='type value P {\n    public int32 x;   public ctor zero() { this.x = 0; }\n    public fn int32 get() { return this.x; }\n}\nfn uint8 main() { P p = P.zero(); p.x = 1; return p.get(); }\n'
 
 # The generic half. TWO instantiations, each with its OWN call, on purpose: a single-instantiation fixture
 # passes under designs that canonicalize the instance key onto the template, which would break the moment a
@@ -122,14 +122,14 @@ MREN='type value P {\n    public int32 x;   public ctor zero() { this.x = 0; }\n
 #   L2 `    public fn T get() { return this.v; }` -> `get` decl at 16..19
 #   L4 `... return bs.get() ? bi.get() : 0; }`   -> the two calls at 108..111 and 119..122
 MGURI="file:///genrename.kama"
-MGEN='type value Box<T> {\n    public T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> bi = Box::<int32>.of(v: 1); Box<bool> bs = Box::<bool>.of(v: false); return bs.get() ? bi.get() : 0; }\n'
+MGEN='type value Box<T> {\n    public T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn uint8 main() { Box<int32> bi = Box::<int32>.of(v: 1); Box<bool> bs = Box::<bool>.of(v: false); return bs.get() ? bi.get() : 0; }\n'
 
 # KR-134 — a contract member, two implementations, a concrete call and a call through the contract. Go-to-
 # implementation lists the two implementations; find-references lists the member's own USES (the declaration and
 # the fat-pointer call — `c.speak()` is Cat's); rename still moves all five, because the group is rename's relation.
 #   L0 `speak` at 43; L1/L2 the implementations at 75; L3 `c.speak()` at 82, `s.speak()` at 94
 IGURI="file:///implgroup.kama"
-IGSRC='type contract Speaker for value { fn int32 speak(); }\ntype value Cat implements Speaker { public ctor make() { } public fn int32 speak() { return 9; } }\ntype value Dog implements Speaker { public ctor make() { } public fn int32 speak() { return 1; } }\nfn int32 main() { Cat c = Cat.make(); Owned<Speaker> s = new Dog.make(); return c.speak() + s.speak(); }\n'
+IGSRC='type contract Speaker for value { fn int32 speak(); }\ntype value Cat implements Speaker { public ctor make() { } public fn int32 speak() { return 9; } }\ntype value Dog implements Speaker { public ctor make() { } public fn int32 speak() { return 1; } }\nfn uint8 main() { Cat c = Cat.make(); Owned<Speaker> s = new Dog.make(); return c.speak() + s.speak(); }\n'
 
 # M6 B3f — the `::` QUALIFIER of a name. Before the grammar carried per-segment positions a qualifier was a
 # list of plain STRINGS, so `Color` in `Color::Green` was indexed nowhere: renaming the enum rewrote its
@@ -137,9 +137,9 @@ IGSRC='type contract Speaker for value { fn int32 speak(); }\ntype value Cat imp
 # spellings are in this buffer on purpose, since a fixture with only the annotation passes while broken.
 # Layout (LSP 0-based lines, 0-based chars):
 #   L0 `type enum Color { Red, Green, Blue }`                  -> `Color` decl at 10..15
-#   L1 `fn int32 main() { Color c = Color::Green; ...`         -> annotation at 18..23, QUALIFIER at 28..33
+#   L1 `fn uint8 main() { Color c = Color::Green; ...`         -> annotation at 18..23, QUALIFIER at 28..33
 QRURI="file:///qualrename.kama"
-QREN='type enum Color { Red, Green, Blue }\nfn int32 main() { Color c = Color::Green; return match (c) { case Red: 1; case Green: 2; case Blue: 3; }; }\n'
+QREN='type enum Color { Red, Green, Blue }\nfn uint8 main() { Color c = Color::Green; return match (c) { case Red: 1; case Green: 2; case Blue: 3; }; }\n'
 
 # KR-97 — the same half-applied rename one layer down. A type's `comptime` constant had no def site and its
 # read recorded nothing, so the `Palette` in `Palette::K` was indexed nowhere: F2 on the type rewrote the
@@ -147,9 +147,9 @@ QREN='type enum Color { Red, Green, Blue }\nfn int32 main() { Color c = Color::G
 # (`Op f = dbl;`) was the same hole. Layout (LSP 0-based lines, 0-based chars):
 #   L0 `type value Palette { public int32 hue; public comptime int32 K = 3; }` -> `Palette` 11..18, `K` 61..62
 #   L1 `fn int32 dbl(int32 x) { return x + x; }`                               -> `dbl` 9..12
-#   L3 `fn int32 main() { Op f = dbl; return Palette::K + f(x: 1); }`          -> `dbl` 25..28, `Palette` 37..44, `K` 46..47
+#   L3 `fn uint8 main() { Op f = dbl; return Palette::K + f(x: 1); }`          -> `dbl` 25..28, `Palette` 37..44, `K` 46..47
 CTURI="file:///ctrename.kama"
-CTREN='type value Palette { public int32 hue; public comptime int32 K = 3; }\nfn int32 dbl(int32 x) { return x + x; }\nfnptr int32 Op(int32 x);\nfn int32 main() { Op f = dbl; return Palette::K + f(x: 1); }\n'
+CTREN='type value Palette { public int32 hue; public comptime int32 K = 3; }\nfn int32 dbl(int32 x) { return x + x; }\nfnptr int32 Op(int32 x);\nfn uint8 main() { Op f = dbl; return Palette::K + f(x: 1); }\n'
 
 # ...and inside COMPILE-TIME code, which the emit walk never entered: a `comptime fn` body is not emitted as C,
 # a compile-time initializer is folded, and the interpreter that folds it reads only the branches it takes. So
@@ -161,10 +161,10 @@ CTREN='type value Palette { public int32 hue; public comptime int32 K = 3; }\nfn
 #   L2 `comptime int32 NINE = Palette::scaled(n: Palette::K) + walk(n: 1);`   -> `Palette` 22..29, 41..48; `scaled` 31..37
 #   L3 `type value Pt { public int32 x; public ctor at(int32 x) { this.x = x; } }` -> the field `x` 29..30, `this.x` 63..64
 CTBURI="file:///ctbody.kama"
-CTBODY='type value Palette { public int32 hue; public comptime int32 K = 3; public comptime fn int32 scaled(int32 n) { return n * Palette::K; } }\ncomptime fn int32 walk(int32 n) { Pt p = Pt.at(x: n); return n > 100 ? Palette::K : p.x; }\ncomptime int32 NINE = Palette::scaled(n: Palette::K) + walk(n: 1);\ntype value Pt { public int32 x; public ctor at(int32 x) { this.x = x; } }\nfn int32 main() { return NINE; }\n'
+CTBODY='type value Palette { public int32 hue; public comptime int32 K = 3; public comptime fn int32 scaled(int32 n) { return n * Palette::K; } }\ncomptime fn int32 walk(int32 n) { Pt p = Pt.at(x: n); return n > 100 ? Palette::K : p.x; }\ncomptime int32 NINE = Palette::scaled(n: Palette::K) + walk(n: 1);\ntype value Pt { public int32 x; public ctor at(int32 x) { this.x = x; } }\nfn uint8 main() { return NINE; }\n'
 
 TOKGURI="file:///semtokgen.kama"
-TOKG='type value Box<T> {\n    T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn int32 main() { Box<int32> b = Box::<int32>.of(v: 7); return b.get(); }\n'
+TOKG='type value Box<T> {\n    T v;   public ctor of(T v) { this.v = v; }\n    public fn T get() { return this.v; }\n}\nfn uint8 main() { Box<int32> b = Box::<int32>.of(v: 7); return b.get(); }\n'
 
 QURI="file:///shapes.kama"
 SHP='type value Point { public int32 x;   public ctor zero() { this.x = 0; } }\nfn Point mid(Point a) { return a; }\nfn int32 use() { Point p = Point.zero(); Point q = mid(a: p); return q.x; }\n'
@@ -196,7 +196,7 @@ WW='export { Widget, defaultSize };\ntype value Widget {\n    public int32 size;
 
 # Semantic-diagnostic fixture: an undeclared type in a body (kama line 2 -> LSP line 1).
 SURI="file:///sem.kama"
-SEM='fn int32 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
+SEM='fn uint8 main() {\n    Nonexistent thing;\n    return 0;\n}\n'
 
 # ---- auto-import quick fix (textDocument/codeAction) -----------------------------------------------
 #
@@ -273,7 +273,7 @@ cat > "$dep/app/kama.json" <<'JSON'
 JSON
 cat > "$dep/app/src/app.kama" <<'KAMA'
 import { geo::Point };
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.of(x: 7);
     return p.x;
 }
@@ -329,7 +329,7 @@ CIURI=$(furi "$tmp/impl/src/sink.kama")
 CISRC='import { std::io::Writer, std::io::IoError, std::collections::ConstView };\ntype resource Sink implements Writer {\n    int32 n;\n    public fn Result<usize, IoError> write(ConstView<uint8> bytes) { this.n = 1; return Result::Ok(value: cast<usize>(this.n)); }\n    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }\n}\n'
 
 DURI=$(furi "$dep/app/src/app.kama")
-DSRC='import { geo::Point };\nfn int32 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
+DSRC='import { geo::Point };\nfn uint8 main() {\n    Point p = Point.of(x: 7);\n    return p.x;\n}\n'
 
 # M6 A3 fixture: a FREE-RIDING workspace member. `libs/net` imports `config` without declaring it — so
 # net builds where it sits and nowhere else, and nothing in an editor said so. A build
@@ -738,7 +738,7 @@ expect '"semanticTokensProvider":{"legend":{"tokenTypes":["class","struct","inte
 # Exact array, because every interesting property of the encoding is positional. Decoded, 5 ints per token
 # (deltaLine, deltaStartChar, length, type, modifiers), against
 #   type value P {\n    int32 x;\n    public ctor make(int32 v) { this.x = v; }\n}\n
-#   fn int32 main() { P p = P.make(v: 1); return p.x; }
+#   fn uint8 main() { P p = P.make(v: 1); return p.x; }
 #   L1c11 P     struct+decl     L2c10 x    property+decl  L3c16 make method+decl
 #   L3c27 v     parameter+decl  L3c37 x    property       L3c41 v    parameter
 #   L5c9  main  function+decl   L5c18 P    struct         L5c20 p    variable+decl
@@ -759,7 +759,7 @@ expect '"id":55,"result":{"data":[0,11,1,1,1,1,10,1,7,1,1,16,4,6,1,0,11,1,9,1,0,
 # This assertion PINNED the pre-B3 gap as an exact array so that closing it could not be silent. B3 closed
 # it, so it changed — which is the whole point. In
 #   type value Box<T> {\n    T v;\n    public fn T get() { return this.v; }\n}\n
-#   fn int32 main() { slot Box<int32> b; b.v = 7; return b.get(); }
+#   fn uint8 main() { slot Box<int32> b; b.v = 7; return b.get(); }
 # the tokens are now L1c11 Box (class+decl), L2c6 v (property+decl), L3c16 get (method+decl), L3c36 v
 # (property, the `this.v` inside the generic BODY), L5c9 main, L5c18 Box, L5c29/32/48 b, L5c34 v, L5c50 get.
 # Before B3 only Box, main, Box and the three `b`s were here: nothing inside a generic body reached the
@@ -962,7 +962,7 @@ echo "check-lsp: auto-import quick fix"
 # ⚠️ THE EDIT IS AN INSERTION, AND THAT IS WHAT THESE RANGES PIN. The first version emitted the anchor
 # through the diagnostic range helper, whose "unknown end" arm widens a point to ONE CHARACTER so a
 # squiggle is always visible — correct there, and destructive here, because a one-character TextEdit
-# REPLACES. Measured before the fix: the new-block edit ate the file's first byte (`fn int32 main()` ->
+# REPLACES. Measured before the fix: the new-block edit ate the file's first byte (`fn uint8 main()` ->
 # `n int32 main()`) and the join-a-block edit overwrote the `std` it aimed at. Both fixtures below assert
 # `start` == `end`, which is the only thing that tells the two apart.
 expect '"id":71,"result":[{"title":"add `import { Widget };`","kind":"quickfix"' \
@@ -1224,7 +1224,7 @@ fi
 GATE="$tmp/gated"
 mkdir -p "$GATE/src"
 printf '{"name":"probe","version":"0.1.0","kind":"executable","entry":"src/app.kama","modules":{".":{"visibility":"internal"}}}' > "$GATE/kama.json"
-printf 'import { Helper };\nfn int32 main() { Helper h = Helper.make(n: 1); return h.n; }\n' > "$GATE/src/app.kama"
+printf 'import { Helper };\nfn uint8 main() { Helper h = Helper.make(n: 1); return h.n; }\n' > "$GATE/src/app.kama"
 printf 'export { Helper };\ntype value Helper { public int32 n; public ctor make(int32 n) { this.n = n; } }\n' > "$GATE/src/shared.kama"
 # Correct, and excluded from a host build by its own gate.
 printf 'file @compileFor(ARCH_WASM32);\nimport { Helper };\nexport { platformValue };\nfn int32 platformValue() { Helper h = Helper.make(n: 3); return h.n; }\n' > "$GATE/src/impl_wasm.kama"

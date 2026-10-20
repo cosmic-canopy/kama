@@ -4,4 +4,4 @@ type enum E { A, B;
     comptime assert(cond: false, msg: "an enum's assertion is checked too");
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

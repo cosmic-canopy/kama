@@ -23,7 +23,7 @@ type value Span {
     public ctor make(isize lo, usize n) { this.lo = lo; this.n = n; return this; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // 1. Formattable, through an interpolation hole — the reported symptom, both signednesses.
@@ -71,5 +71,5 @@ fn int32 main() {
     string t = "${sp}";
     if (t == "Span { lo: -4, n: 6 }") { r = r + 32; }
 
-    return r;
+    return cast<uint8>(r);
 }

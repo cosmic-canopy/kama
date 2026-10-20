@@ -23,7 +23,7 @@ type value Holder {
     public fn F get() { return this.cb; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Holder h = Holder.make();
     g_s = thrice;
     F a = g_s;                   // a module `static`
@@ -32,5 +32,5 @@ fn int32 main() {
     F d = h.get();               // a method's result
     F e = thrice;
     e = h.get();                 // assigned, not initialized
-    return h.viaField() + h.viaElement() + a(x: 1) + b(x: 1) + c(x: 1) + d(x: 1) + e(x: 1);   // 10+6+3+2+3+2+2 = 28
+    return cast<uint8>(h.viaField() + h.viaElement() + a(x: 1) + b(x: 1) + c(x: 1) + d(x: 1) + e(x: 1));   // 10+6+3+2+3+2+2 = 28
 }

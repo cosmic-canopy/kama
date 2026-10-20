@@ -8,4 +8,4 @@ type value Flags { public bool live; public uint8 a; public uint16 b; }
 type value Glyph { public char c; }
 @generate(Blittable)
 type value Turn { public Phase p; public uint8 a; public uint16 b; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

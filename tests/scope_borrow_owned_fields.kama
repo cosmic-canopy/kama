@@ -43,11 +43,11 @@ type value World implements Sendable {
 
 fn void step(ref Acc a) { a.run(); }
 
-fn int32 main() {
+fn uint8 main() {
     Owned<World> w = new World.make();   // heap, but a UNIQUE handle
     scope {
         spawn step(a: ref w.bodies);
         spawn step(a: ref w.springs);
     }
-    return (w.bodies.total + w.springs.total) % 256;   // 4950 % 256 = 86
+    return cast<uint8>((w.bodies.total + w.springs.total) % 256);   // 4950 % 256 = 86
 }

@@ -4,4 +4,4 @@ type value Bad {
     @field int32 x;
     int32 unmarked;
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

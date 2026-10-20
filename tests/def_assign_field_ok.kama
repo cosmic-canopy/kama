@@ -13,4 +13,4 @@ type resource Holder {
         return h.a.get();              // then read -> ok. (42)
     }
 }
-fn int32 main() { return Holder::build(v: 42); }
+fn uint8 main() { return cast<uint8>(Holder::build(v: 42)); }

@@ -6,4 +6,4 @@ type extern value div_t {
     @linkName("quot") int32 quotient;
     int32 rem;
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

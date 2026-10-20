@@ -19,4 +19,4 @@ unsafe fn void request() {
     c_request(ci: ci);
 }
 
-fn int32 main() { request(); return 0; }
+fn uint8 main() { request(); return 0; }

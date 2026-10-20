@@ -4,6 +4,6 @@
 // unwritable, and the diagnostic says the word is reserved rather than naming a bare token.
 fn void assert(bool cond, string msg) { }
 
-fn int32 main() {
+fn uint8 main() {
     return 0;
 }

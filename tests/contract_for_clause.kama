@@ -34,11 +34,11 @@ type adapter <int8, int16> implements Sized { public fn int32 size() { return 4;
 // A contract-supplied method on a primitive is reached the only way it can be — through a generic bound.
 fn int32 sizeOf<T: Sized>(T x) { return x.size(); }
 
-fn int32 main() {
+fn uint8 main() {
     Sprite s = Sprite.make(z: 10);
     Card   c = Card.make(r: 32);
     Shade  d = Shade::Dark;
     int8   b = 0ui8;
     // 10 + 32 = 42; the rest cancel: 1 (Card) + 2 (Shade) + 4 (int8) = 7, minus 7.
-    return s.draw() + c.rank() + c.size() + d.size() + sizeOf(x: b) - 7;
+    return cast<uint8>(s.draw() + c.rank() + c.size() + d.size() + sizeOf(x: b) - 7);
 }

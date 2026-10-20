@@ -11,13 +11,15 @@ no hidden allocation.
 
 ## Hello, exit code
 
-A program is a `main` that returns an `int32`, and that integer is the process exit status. Linux and macOS keep
-only its low byte (`return 256;` exits 0), so a portable program returns 0–255; Windows keeps all 32 bits.
+A program is a `main` that returns a `uint8`, and that byte is the process exit status — the one byte Linux and
+macOS keep, so a status they would truncate (`return 256;`) is refused where it is written. A status computed in a <!-- xfail: main_status_literal_oob -->
+wider type narrows explicitly, `return cast<uint8>(n);`, which traps if `n` does not fit. Windows keeps 32 bits, and a
+program that wants them says so with a twin, `@compileFor(OS_WINDOWS) fn uint32 main()`.
 
 ```kama
 import { core::println };
 
-fn int32 main()
+fn uint8 main()
 {
     string name = "world";
     println(s: "hello, ${name}");
@@ -25,7 +27,7 @@ fn int32 main()
 }
 ```
 
-Declarations read *type first, then name* — `fn int32 main()` is a function returning `int32`, and
+Declarations read *type first, then name* — `fn uint8 main()` is a function returning `uint8`, and
 `string name` is a variable. Every numeric type carries its width — `int8` … `int64`, `uint8` …
 `uint64`, `float32`, `float64`, and `isize` for sizes and indices — and `int` on its own is a reserved word, not an alias, so a width is
 never implied. The rest are `bool`, `char` and `string`. Comments are `//` and `/* */`.
@@ -50,9 +52,9 @@ fn int32 sub(int32 a, int32 b)
     return a - b;
 }
 
-fn int32 main()
+fn uint8 main()
 {
-    return sub(b: 8, a: 50);   // 42
+    return cast<uint8>(sub(b: 8, a: 50));   // 42
 }
 ```
 
@@ -65,11 +67,11 @@ adds a parameter cannot silently shift the meaning of existing calls.
 ```kama
 fn void bump(ref int32 n) { n = n + 1; }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 count = 41;
     bump(n: ref count);
-    return count;   // 42
+    return cast<uint8>(count);   // 42
 }
 ```
 
@@ -179,7 +181,7 @@ type resource Handle
     ~Handle() { println(s: "closing ${this.id}"); }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     {
         Handle a = Handle.make(id: 1);
@@ -196,7 +198,7 @@ source afterwards is a **compile error**, not a crash. <!-- xfail: use_after_mov
 ```kama
 type resource Counter { int32 n; public ctor make(int32 n) { this.n = n; } ~Counter() { } }
 
-fn int32 main()
+fn uint8 main()
 {
     Owned<Counter> a = new Counter.make(n: 20);
     Owned<Counter> b = give a;      // moved — `a` is dead from here, and the compiler knows it
@@ -241,7 +243,7 @@ to take one apart, it is exhaustive, and it produces a value:
 ```kama
 type enum Shape { Circle(float64 radius), Rect(float64 w, float64 h), Empty }
 
-fn int32 main()
+fn uint8 main()
 {
     Shape s = Shape::Rect(w: 3.0, h: 4.0);
     float64 area = match (s) {
@@ -249,7 +251,7 @@ fn int32 main()
         case Rect(w: width, h: height): width * height;
         case Empty:                     0.0;
     };
-    return cast<int32>(area);   // 12
+    return cast<uint8>(area);   // 12
 }
 ```
 
@@ -398,11 +400,11 @@ type resource Inventory
     ~Inventory() { }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Inventory inv = Inventory.make();
     inv.addPotion();
-    return inv.addPotion();              // 2
+    return cast<uint8>(inv.addPotion());              // 2
 }
 ```
 
@@ -433,12 +435,12 @@ fn float64 measure(const ref Vec2 v)     // borrowed and read-only: no copy, no 
     return v.lengthSq();
 }
 
-fn int32 main()
+fn uint8 main()
 {
     const Vec2 unit = Vec2.make(x: 1.0, y: 0.0);
     Vec2 v = Vec2.make(x: 3.0, y: 4.0);
     v.scale(k: 2.0);
-    return cast<int32>(measure(v: v) + measure(v: unit));    // 101
+    return cast<uint8>(measure(v: v) + measure(v: unit));    // 101
 }
 ```
 
@@ -459,7 +461,7 @@ import, and is a `value`.
 ```kama
 import { std::collections::DynamicArray };
 
-fn int32 main()
+fn uint8 main()
 {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 1);
@@ -470,7 +472,7 @@ fn int32 main()
 
     int32 total = 0;
     foreach (int32 x in xs) { total = total + x; }
-    return total;   // 30
+    return cast<uint8>(total);   // 30
 }
 ```
 
@@ -480,7 +482,7 @@ fn int32 main()
 ```kama
 import { core::println };
 
-fn int32 main()
+fn uint8 main()
 {
     int32 folds = 12;
     string name = "kama";
@@ -520,7 +522,7 @@ type resource Player
     ~Player() { }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Result<string, Owned<Error>> written = serializeJsonBuffer(v: Player.make(name: "ada", level: 7));
     string json = match (give written) {
@@ -531,7 +533,7 @@ fn int32 main()
 
     Result<Player, Owned<Error>> back = deserializeJsonBuffer::<Player>(src: give json);
     return match (back) {
-        case Ok(value: p):  p.levelOf();                        // 7
+        case Ok(value: p):  cast<uint8>(p.levelOf());                        // 7
         case Err(error: e): 1;
     };
 }
@@ -563,7 +565,7 @@ import { core::args, core::envOr, core::println,
          std::time::unixNow, std::time::Date, std::log::logInfo, std::log::logWarn,
          std::process::Command, std::process::Output };
 
-fn int32 main()
+fn uint8 main()
 {
     Date today = unixNow().date();                              // UTC; a `Timestamp` is the instant
     logInfo(tag: "boot", msg: "started ${today}");               // leveled; filtered by --log / KAMA_LOG
@@ -614,7 +616,7 @@ fn void producer(Sender<int32> tx)
     while (i <= 9) { _ = tx.send(item: i); i = i + 1; }
 }   // the sender closes as it drops, so the receiver sees the end of the stream
 
-fn int32 main()
+fn uint8 main()
 {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32>   tx = ch.sender();
@@ -631,7 +633,7 @@ fn int32 main()
         };
     }
     h.join();
-    return sum;   // 45
+    return cast<uint8>(sum);   // 45
 }
 ```
 

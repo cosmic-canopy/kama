@@ -43,7 +43,7 @@ fn void answer(Receiver<UnixStream> rx) {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Result<UnixListener, IoError> rl = UnixListener.bind(path: "peer.sock");
     UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
     Result<UnixStream, IoError> rc = UnixStream.connect(path: "peer.sock");
@@ -51,9 +51,9 @@ fn int32 main() {
     Result<UnixStream, IoError> ra = l.accept();
     UnixStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
     int32 r = check(s: s);                 // the server's view of the client…
-    if (r != 0) { return r; }
+    if (r != 0) { return cast<uint8>(r); }
     r = check(s: c);                       // …and the client's of the server
-    if (r != 0) { return 20 + r; }
+    if (r != 0) { return cast<uint8>(20 + r); }
     // The accepted stream moves to a worker isolate, which answers the client on it.
     Channel<UnixStream> ch = Channel.bounded(capacity: 1);
     Receiver<UnixStream> rx = ch.receiver();
@@ -67,5 +67,5 @@ fn int32 main() {
             got = match (c.read(into: buf.viewMut())) { case Ok(value: n): n == 1 ? cast<int32>(buf[0]) : 90; case Err(error: e): 91; };
         }   // the sender closes, the worker's recv() ends, and the scope joins it
     }
-    return got == 7 ? 42 : got;
+    return cast<uint8>(got == 7 ? 42 : got);
 }

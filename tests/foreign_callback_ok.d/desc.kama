@@ -45,4 +45,4 @@ unsafe fn int32 run() {
     return c_submit(d: d) + i.cb(n: i.mode) + t.f(x: 10);   // 5 + 30 + 20 = 55
 }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

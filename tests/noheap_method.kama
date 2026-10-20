@@ -13,10 +13,10 @@ type resource Device {
     public const fn int32 handle() { return this.id; }
     @noheap ~Device() { }   // teardown at the end of a real-time scope allocates nothing either
 }
-fn int32 main() {
+fn uint8 main() {
     Device d = Device.open(id: 1);
     Mixer a = Mixer.make(gain: 2);
     Mixer b = Mixer.make(gain: 2);
     Mixer c = a + b;                 // gain 4
-    return c.fill(n: 5) + d.handle();  // 4*5 + 1 = 21
+    return cast<uint8>(c.fill(n: 5) + d.handle());  // 4*5 + 1 = 21
 }

@@ -14,7 +14,7 @@ fn void worker(Bundle b) {
     while (i < 1000) { box = box + 1; i = i + 1; }   // this isolate's OWN copy of box; discarded at exit
 }
 
-fn int32 main() {
+fn uint8 main() {
     box = 7;                        // main's own copy
     Bundle a = Bundle.make();
     Bundle b = Bundle.make();
@@ -22,5 +22,5 @@ fn int32 main() {
         spawn worker(b: give a);    // disjoint moved bundle per isolate
         spawn worker(b: give b);
     }                               // BARRIER: both isolates joined
-    return box;                     // still 7 — the workers never touched main's copy
+    return cast<uint8>(box);                     // still 7 — the workers never touched main's copy
 }

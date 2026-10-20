@@ -8,8 +8,8 @@ type resource Blob implements Area {
     public fn int32 area() { this.seen.add(item: 1); return 1; }
 }
 @noheap fn int32 measure<T: Area>(ref T x) { return x.area(); }
-fn int32 main()
+fn uint8 main()
 {
     Blob b = Blob.make();
-    return measure(x: ref b);
+    return cast<uint8>(measure(x: ref b));
 }

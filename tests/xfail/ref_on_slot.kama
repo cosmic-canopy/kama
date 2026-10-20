@@ -8,8 +8,8 @@
 // s)` hole — every fixture used a correct spelling, so the wrong one was never typed and never checked.
 fn void fill(ref int32 x) { x = 5; }
 
-fn int32 main() {
+fn uint8 main() {
     slot int32 q;
     fill(x: ref q);   // ERROR: `ref` borrows a live value; a slot has none yet — this wants `out`
-    return q;
+    return cast<uint8>(q);
 }

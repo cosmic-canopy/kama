@@ -15,4 +15,4 @@ unsafe fn View<int32> forge(ref DynamicArray<int32> a) {
     return View::<int32>.over(at: a.dataPtrMut(), count: 999999);
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

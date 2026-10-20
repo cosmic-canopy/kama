@@ -4,7 +4,7 @@
 // Exit code is a bitset of the checks (63 = all six, including the injection-safety assertion).
 import { std::collections::DynamicArray, std::fmt::sql, std::fmt::SqlQuery, std::fmt::SqlValue };
 
-fn int32 main() {
+fn uint8 main() {
     int32 id = 42;
     string name = "Alice";
     string evil = "' OR 1=1 --";          // a classic SQL-injection payload
@@ -35,5 +35,5 @@ fn int32 main() {
     SqlQuery q5 = sql"update t set note = ${nothing}";
     if (q5.param(at: 0) == SqlValue::Null) { r = r + 32; }                                          // 6: an explicit SqlValue
 
-    return r;
+    return cast<uint8>(r);
 }

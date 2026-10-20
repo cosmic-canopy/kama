@@ -12,4 +12,4 @@ type resource Bag {
         return s;
     }
 }
-fn int32 main() { Bag b = Bag.make(); b.add(v: 20); b.add(v: 22); return b.sum(); }   // 42
+fn uint8 main() { Bag b = Bag.make(); b.add(v: 20); b.add(v: 22); return cast<uint8>(b.sum()); }   // 42

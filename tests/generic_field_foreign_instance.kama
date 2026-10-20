@@ -21,7 +21,7 @@ type value Box<T> {
     public fn T mine() { return this.item; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box<int64> b = Box::<int64>.make(item: 22i64);
-    return b.grab(r: Reader::<int32>.make(item: 20)) + cast<int32>(b.mine());   // 20 + 22 = 42
+    return cast<uint8>(b.grab(r: Reader::<int32>.make(item: 20)) + cast<int32>(b.mine()));   // 20 + 22 = 42
 }

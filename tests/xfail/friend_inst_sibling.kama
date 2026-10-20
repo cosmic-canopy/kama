@@ -9,8 +9,8 @@ type value Lens<T> {
     public ctor make() { return this; }
     public const fn int32 read(const ref Cell x) { return x.c; }
 }
-fn int32 main() {
+fn uint8 main() {
     Cell c = Cell.make(c: 1);
     Lens<int64> l = Lens::<int64>.make();
-    return l.read(x: c);
+    return cast<uint8>(l.read(x: c));
 }

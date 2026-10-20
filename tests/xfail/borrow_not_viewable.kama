@@ -13,7 +13,7 @@ type resource Wrapper {
     public unsafe const fn ConstView<int32> view() { return this.inner.view(); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Wrapper w = Wrapper.make();
     borrow w.view() as v {
         return v.length();

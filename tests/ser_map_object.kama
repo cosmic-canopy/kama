@@ -58,7 +58,7 @@ fn string read(string src) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     Limits a = Limits.make(); a.caps3(reversed: false); a.rest();
     Limits b = Limits.make(); b.caps3(reversed: true); b.rest();
     string want = "{\"caps\":{\"alpha\":2,\"mid\":3,\"zeta\":1},\"ports\":{\"-1\":\"neg\",\"80\":\"http\",\"443\":\"https\"},"

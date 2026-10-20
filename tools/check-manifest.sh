@@ -30,7 +30,7 @@ bad() { echo "  FAIL: $1" >&2; fail=1; }
 #   proj <name> <<'JSON' … JSON
 proj() {
     d="$tmp/$1"; rm -rf "$d"; mkdir -p "$d/src"
-    printf 'fn int32 main() { return 7; }\n' > "$d/src/app.kama"
+    printf 'fn uint8 main() { return 7; }\n' > "$d/src/app.kama"
     cat > "$d/kama.json"
 }
 
@@ -295,7 +295,7 @@ mkdir -p "$dep/app/src" "$dep/geo/src"
 printf '%s\n' '{ "name": "app", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",' \
               '  "modules": { ".": { "visibility": "internal" } },' \
               '  "dependencies": { "geo": { "path": "../geo" } } }' > "$dep/app/kama.json"
-printf 'import { geo::v };\nfn int32 main() { return v(); }\n' > "$dep/app/src/main.kama"
+printf 'import { geo::v };\nfn uint8 main() { return cast<uint8>(v()); }\n' > "$dep/app/src/main.kama"
 printf '{ "name": "geo", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$dep/geo/kama.json"
 
 # A package root's `source` is the WHOLE answer: `geo.kama` sits BESIDE the source root, not in it, so
@@ -357,7 +357,7 @@ echo "check-manifest: \`link\` names native libraries once, per project"
 # without needing the library to exist. There was no manifest key for this before: only per-target
 # `ldflags` and the CLI `--link`, so a project needing -lm everywhere had nowhere to say so once.
 mkdir -p "$tmp/lnk/src"
-printf 'fn int32 main() { return 0; }\n' > "$tmp/lnk/src/app.kama"
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/lnk/src/app.kama"
 cat > "$tmp/lnk/kama.json" <<'JSON'
 { "name": "lnk", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "link": ["m"], "modules": { ".": { "visibility": "internal" } } }
 JSON
@@ -417,7 +417,7 @@ echo "check-manifest: \`webgpu\` is a project property, not a flag to remember"
 # nothing makes "the key reached the build" observable on a machine with no wgpu-native drop, which is
 # every machine that has not run tools/fetch-webgpu.sh.
 mkdir -p "$tmp/wg/src"
-printf 'fn int32 main() { return 7; }\n' > "$tmp/wg/src/app.kama"
+printf 'fn uint8 main() { return 7; }\n' > "$tmp/wg/src/app.kama"
 cat > "$tmp/wg/kama.json" <<'JSON'
 { "name": "wg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "webgpu": true, "modules": { ".": { "visibility": "internal" } } }
 JSON

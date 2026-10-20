@@ -9,7 +9,7 @@ fn string listed(const ref OrderedSet<string> s) {
     return text;
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     OrderedSet<string> s = OrderedSet.withCapacity(capacity: 2);
     s.add(key: "b"); s.add(key: "a"); s.add(key: "c"); s.add(key: "a");
@@ -26,5 +26,5 @@ fn int32 main() {
     if (listed(s: s) == "c,b,d,") { r = r + 16; }
     s.clear();
     if (s.length() == 0 && listed(s: s) == "") { r = r + 32; }
-    return r - 10;   // 63 - 10 = 53
+    return cast<uint8>(r - 10);   // 63 - 10 = 53
 }

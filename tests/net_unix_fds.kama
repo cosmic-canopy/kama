@@ -28,7 +28,7 @@ fn bool kindRule(Descriptor socketCopy) {
     return match (File.adopt(descriptor: give socketCopy)) { case Ok(value: f): true; case Err(error: e): false; };
 }
 
-fn int32 main() {
+fn uint8 main() {
     if (match (writeText(path: "payload.txt", text: "kama fd passing")) { case Ok(value: n): false; case Err(error: e): true; }) { return 2; }
     Result<File, IoError> rf = File.open(path: "payload.txt", mode: OpenMode::Read);
     File f = match (give rf) { case Ok(value: x): give x; case Err(error: e): { return 3; } };

@@ -11,7 +11,7 @@ fn isize count<T: Viewable<ConstView<int64>>>(const ref T c) { isize k = 0; borr
 
 fn uint32 sum(ConstView<uint8> b) { uint32 s = 0; for (isize i = 0; i < b.length(); i++) { s = s + cast<uint32>(b[i]); } return s; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 ok = 0;
     InlineArray<uint16>#(3) a = [258ui16; 3];                       // 0x0102: bytes 2, 1 on a little-endian host
     if (a.bytes().length() == 6 && sum(b: a.bytes()) == 9) { ok = ok + 8; }
@@ -33,5 +33,5 @@ fn int32 main() {
 
     InlineArray<bool>#(2) bs = [true; 2];                           // read-only: a `bool` cannot be written
     if (sum(b: bs.bytes()) == 2) { ok = ok + 6; }
-    return ok;                                                      // 42
+    return cast<uint8>(ok);                                                      // 42
 }

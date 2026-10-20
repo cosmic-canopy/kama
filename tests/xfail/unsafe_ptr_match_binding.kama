@@ -13,4 +13,4 @@ fn void churn(ref A a) {
     match (a.get(n: cast<usize>(64))) { case Some(value: p): { kfree(p: p); kfree(p: p); } case None: { } };
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

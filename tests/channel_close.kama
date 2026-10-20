@@ -10,7 +10,7 @@ import {
 
 fn void producer(Sender<int32> tx) { }   // sends nothing; ~Sender() closes the sender side
 
-fn int32 main() {
+fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     Sender<int32>   tx = ch.sender();
     Receiver<int32> rx = ch.receiver();
@@ -28,5 +28,5 @@ fn int32 main() {
     }
 
     h.join();
-    return got + 7;   // 7 iff recv returned None with zero items (closed + drained), no hang
+    return cast<uint8>(got + 7);   // 7 iff recv returned None with zero items (closed + drained), no hang
 }

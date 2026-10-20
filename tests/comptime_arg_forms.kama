@@ -23,7 +23,7 @@ type value Holder<T> {
     public ctor of(T v) { this.v = v; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Holder<InlineArray<int32>#(2)> h = Holder::<InlineArray<int32>#(2)>.of(v: [4, 5]);
 
     // CHAINED: the compile-time group is the name's last list, and a method call follows it.
@@ -36,5 +36,5 @@ fn int32 main() {
     InlineArray<int32>
 #(3) wrapped = [10, 20, 30];
 
-    return h.v[1] + b + s + wrapped[2];   // 5 + 3 + 5 + 30 = 43
+    return cast<uint8>(h.v[1] + b + s + wrapped[2]);   // 5 + 3 + 5 + 30 = 43
 }

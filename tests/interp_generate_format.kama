@@ -3,7 +3,7 @@
 @generate(of, Formattable)
 type value Point { public int32 x; public int32 y; }
 
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.of(x: 3, y: 4);
     string bare   = "${p}";
     string woven  = "point ${p} here";

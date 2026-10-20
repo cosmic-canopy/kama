@@ -1,2 +1,2 @@
 import { geo::viaSibling };
-fn int32 main() { return viaSibling(); }
+fn uint8 main() { return cast<uint8>(viaSibling()); }

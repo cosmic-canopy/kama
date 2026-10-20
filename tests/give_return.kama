@@ -9,8 +9,8 @@ fn Owned<Counter> makeOwned(int32 n) { Owned<Counter> c = new Counter.make(n: n)
 // `copy`: retain on return (the refcount-bump path).
 fn Shared<Counter> makeShared(int32 n) { Shared<Counter> s = new Counter.make(n: n); return copy s; }
 
-fn int32 main() {
+fn uint8 main() {
     Owned<Counter> a = makeOwned(n: 40);
     Shared<Counter> b = makeShared(n: 2);
-    return a.get() + b.get();    // 40 + 2 = 42
+    return cast<uint8>(a.get() + b.get());    // 40 + 2 = 42
 }

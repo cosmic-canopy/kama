@@ -5,7 +5,7 @@
 // (`parallel_spawn` shares the lowering and the gate; tests/parallel_spawn_pool.kama is the declaring twin.)
 import { std::concurrent::cpuCount, std::collections::DynamicArray };
 type value Cell { public int32 v; public ctor make(int32 v) { this.v = v; } }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Cell> xs = DynamicArray.empty();
     xs.add(item: Cell.make(v: 1));
     parallel_for (ref Cell c in xs, workers: cpuCount()) {   // ERROR: `Cell` does not declare `implements Sendable`

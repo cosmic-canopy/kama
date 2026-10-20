@@ -1,7 +1,7 @@
 import { std::collections::DynamicArray };
 // M26f-2 — moving a `resource` value DECLARED INSIDE a loop body is fine (it's fresh each
 // iteration). 3 iterations, each moves its own `a` into sink -> 3 drops of code 1:
-// ((1*31+1)*31+1)=993 -> exit 993 & 0xFF = 225.
+// ((1*31+1)*31+1)=993; `main` returns its low byte, `truncate<uint8>` = 225, on purpose.
 extern fn void kama_trace(int32 code);
 extern fn int32 kama_trace_get();
 unsafe fn int32 traceGet() { return kama_trace_get(); }   // the FFI call, contained — `main` may not be `unsafe`
@@ -15,10 +15,10 @@ type resource Res {
 
 fn int32 sink(Res r) { return r.head(); }
 
-fn int32 main() {
+fn uint8 main() {
     for (int32 i = 0; i < 3; i = i + 1) {
         Res a = Res.make(v: i);      // fresh each iteration
         sink(r: give a);        // moved into sink; a's own dtor skipped
     }
-    return traceGet();   // 3 drops -> 225
+    return truncate<uint8>(traceGet());   // 3 drops -> 993, whose low byte is 225
 }

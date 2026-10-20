@@ -12,4 +12,4 @@ type value M implements Maker {
     public static fn int32 make2(int32 n) { return n; }   // contract declares an instance method -> REJECT
 }
 fn int32 viaContract(Maker m) { return m.make2(n: 7); }
-fn int32 main() { M m = M.make(v: 3); return viaContract(m: m) - 7; }
+fn uint8 main() { M m = M.make(v: 3); return cast<uint8>(viaContract(m: m) - 7); }

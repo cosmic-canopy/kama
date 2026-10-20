@@ -2,8 +2,8 @@
 // `copy` — a bare one would leave two owners of one buffer (KR-37).
 type contract Show for intrinsic { fn int32 width(); }
 type adapter <string> implements Show { public fn int32 width() { return cast<int32>(this.length()); } }
-fn int32 main() {
+fn uint8 main() {
     string sv = "abcd";
     Owned<Show> o = sv;
-    return o.width();
+    return cast<uint8>(o.width());
 }

@@ -4,4 +4,4 @@
 // one, since only the C compiler reads the header (run_tests.sh `analysis_skip`).
 extern "keys.h";
 extern const int32 KEY_SPACEBAR;
-fn int32 main() { return KEY_SPACEBAR == 32 ? 0 : 1; }
+fn uint8 main() { return KEY_SPACEBAR == 32 ? 0 : 1; }

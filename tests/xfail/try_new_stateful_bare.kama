@@ -4,8 +4,8 @@
 // `try new(allocator: …)` exists, the diagnostic can point at it. Same rule as the infallible `new`.
 import { std::memory::Owned, std::collections::Arena, std::collections::BumpAllocator };
 type value Cell { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 64);
     Optional<Owned<Cell, BumpAllocator>> c = try new Cell.make(v: 7);   // ERROR: needs try new(allocator: …)
-    return match (c) { case Some(value: x): x.get(); case None: 0; };
+    return match (c) { case Some(value: x): cast<uint8>(x.get()); case None: 0; };
 }

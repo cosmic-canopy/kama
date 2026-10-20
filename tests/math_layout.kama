@@ -8,7 +8,7 @@
 // model kama folds compile-time sizes from (KR-94). It runs on native, ASan and wasm: three ABIs.
 import { std::math::Vec2, std::math::Vec3, std::math::Vec4, std::math::Mat4 };
 
-fn int32 main() {
+fn uint8 main() {
     // the contiguous-layout claim: no padding, so each vector is exactly its float32 count
     if (sizeof(Vec2) != 8)  { return 1; }    // 2 x float32
     if (sizeof(Vec3) != 12) { return 2; }    // 3 x float32

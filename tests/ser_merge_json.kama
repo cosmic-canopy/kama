@@ -59,7 +59,7 @@ type value Pair<T> { @field public T a; @field public T b; public ctor make(T a,
 fn bool ok(Result<Unit, Owned<Error>> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
 fn string why(Result<Unit, Owned<Error>> r) { return match (r) { case Ok(value: u): ""; case Err(error: e): e.message(); }; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 score = 0;
     Settings s = Settings.make();
     s.setVoices(v: 12);                                                  // changed at run time
@@ -86,5 +86,5 @@ fn int32 main() {
 
     Pair<int32> p = Pair.make(a: 1, b: 2);
     if (ok(r: mergeJsonBuffer(src: "{\"b\":5}", into: p)) && p.a == 1 && p.b == 5) { score = score + 2; }
-    return score;                                                        // 42
+    return cast<uint8>(score);                                                        // 42
 }

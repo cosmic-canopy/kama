@@ -8,7 +8,7 @@
 // only place the difference is visible at all. It shows up in a debug build and in `--keep-c` output.
 fn Optional<int32> src() { return Optional::Some(value: 7i32); }
 
-fn int32 main() {
+fn uint8 main() {
     int64 s = 0i64;
 
     // (a) a `match`-arm payload binding — `v` is an `int32`, so `cast<int64>` is a widening.
@@ -18,5 +18,5 @@ fn int32 main() {
     InlineArray<int32>#(3) xs = [5i32; 3];
     foreach (int32 e in xs) { s = s + cast<int64>(e); }
 
-    return cast<int32>(s);   // 7 + (5 * 3) = 22
+    return cast<uint8>(s);   // 7 + (5 * 3) = 22
 }

@@ -37,4 +37,4 @@ unsafe fn int32 run() {
 
 fn void solo(Job j) { }
 
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

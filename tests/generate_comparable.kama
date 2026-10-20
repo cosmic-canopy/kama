@@ -44,7 +44,7 @@ type resource Tag {
     public ctor make(string name, Ver ver) { this.name = give name; this.ver = ver; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = 0;
     if (Level::Low < Level::High && Level::High > Level::Mid) { n += 1; }                     // 1
     if (!(Level::Mid < Level::Mid) && Level::Mid <= Level::Mid && Level::Mid >= Level::Low) { n += 1; }   // 2
@@ -72,5 +72,5 @@ fn int32 main() {
     set.add(key: Level::High); set.add(key: Level::Low); set.add(key: Level::Mid); set.add(key: Level::Low);
     DynamicArray<Level> got = set.elements();
     if (got.length() == 3 && got[0] == Level::Low && got[1] == Level::Mid && got[2] == Level::High) { n += 1; }   // 11
-    return n;
+    return cast<uint8>(n);
 }

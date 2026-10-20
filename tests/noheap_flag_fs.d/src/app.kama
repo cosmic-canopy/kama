@@ -40,7 +40,7 @@ fn bool put(const ref string path, OpenMode mode) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     if (!ok(r: createDir(path: "nh"))) { return 1; }
     if (!exists(path: "nh"))           { return 2; }
 
@@ -57,7 +57,7 @@ fn int32 main() {
         case Ok(value: m): (m.isDir() ? 6 : ((m.size == cast<usize>(8)) ? 0 : 7));
         case Err(error: e): 8;
     };
-    if (sz != 0) { return sz; }
+    if (sz != 0) { return cast<uint8>(sz); }
 
     // KR-92: permissions, set at creation and after — the Windows branch builds its access list in the
     // caller's frame (kama_os.h), so these stay heap-free on every target too.
@@ -70,7 +70,7 @@ fn int32 main() {
         case Ok(value: m): (m.permissions == priv ? 0 : 16);
         case Err(error: e): 17;
     };
-    if (pm != 0) { return pm; }
+    if (pm != 0) { return cast<uint8>(pm); }
     if (!ok(r: setPermissions(path: "nh/p", permissions: Permissions::OwnerRead))) { return 18; }
     if (!ok(r: remove(path: "nh/p"))) { return 19; }
     if (!ok(r: createDirWith(path: "nh/d", permissions: priv | Permissions::OwnerExecute))) { return 20; }

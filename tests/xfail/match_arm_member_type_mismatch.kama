@@ -12,7 +12,7 @@ type value Reader<T> {
     public T item;
     public ctor make(T item) { this.item = item; return this; }
 }
-fn int32 main() {
+fn uint8 main() {
     Optional<Reader<int32>> o = Optional::Some(value: Reader.make(item: 7));
     Reader<int32> wrong = match (o) { case Some(value: v): v.item; case None: Reader.make(item: 0); };
     return 0;

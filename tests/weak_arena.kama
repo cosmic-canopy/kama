@@ -18,7 +18,7 @@ fn Weak<Counter, BumpAllocator> orphan(BumpAllocator alloc) {
     return s.downgrade();
 }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);                          // outlives the returned Weak
     Weak<Counter, BumpAllocator> w = orphan(alloc: arena.handle());  // its Shared already died
 

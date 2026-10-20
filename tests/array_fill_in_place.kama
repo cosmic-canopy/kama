@@ -17,7 +17,7 @@ fn int32 sum(const ref InlineArray<int32>#(16) xs) {
 
 fn InlineArray<int32>#(16) made(int32 v) { return [v; (16)]; }   // a value position keeps the value form
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(16) a = [3; (16)];
     if (sum(xs: a) != 48) { return 1; }
     a[5] = 10;

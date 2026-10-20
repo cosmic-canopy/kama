@@ -6,7 +6,7 @@
 // ends (no fd leak -> no EMFILE). Stays ASan-clean under KAMA_SAN.
 import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::io::IoError };
 
-fn int32 main() {
+fn uint8 main() {
     int32 i = 0;
     while (i < 3000) {
         Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));

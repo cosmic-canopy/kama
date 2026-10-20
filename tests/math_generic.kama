@@ -23,7 +23,7 @@ import {
     std::math::cbrt,
 };
 
-fn int32 main() {
+fn uint8 main() {
     int32 t = 0;
     if (sqrt(x: 144.0) == 12.0) { t = t + 1; }
     if (pow(x: 2.0, y: 10.0) == 1024.0) { t = t + 1; }
@@ -52,5 +52,5 @@ fn int32 main() {
     float32 s0 = sin(x: 0.0f32);
     if (abs(x: s0) < 0.000001f32) { t = t + 1; }
 
-    return t;   // 16
+    return cast<uint8>(t);   // 16
 }

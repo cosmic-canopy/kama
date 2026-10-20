@@ -24,9 +24,9 @@ type value G<T> {
     }
     public ctor make(T item) { this.item = item; }
 }
-fn int32 main()
+fn uint8 main()
 {
     int32 a = match (G::<int32>.open(item: 40)) { case Ok(value: v): v.item; case Err(error: e): 0; };  // 40
     int32 b = G::<int32>.make(item: 2).item;                                                            // 2
-    return a + b;   // 42
+    return cast<uint8>(a + b);   // 42
 }

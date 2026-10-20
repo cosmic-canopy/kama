@@ -5,4 +5,4 @@ type resource Buf {
     public unsafe UnsafePtr<int32> data;
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

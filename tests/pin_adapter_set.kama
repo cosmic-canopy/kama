@@ -12,10 +12,10 @@ type adapter <int8, int16, int32> implements Weighable<This> {
 
 fn int32 total<T: Weighable<T>>(T a, T b) { return a.weigh(other: b); }
 
-fn int32 main() {
+fn uint8 main() {
     int8 e = 1i8; int8 f = 2i8;
     int16 c = 3i16; int16 d = 4i16;
     if (total::<int8>(a: e, b: f) != 3)  { return 1; }
     if (total::<int16>(a: c, b: d) != 7) { return 2; }
-    return total::<int32>(a: 20, b: 22);
+    return cast<uint8>(total::<int32>(a: 20, b: 22));
 }

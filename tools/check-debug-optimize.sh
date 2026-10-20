@@ -35,7 +35,7 @@ cat > "$tmp/app/kama.json" <<'JSON'
   "dependencies": { "voice": { "path": "../voice" } },
   "debug": { "optimize": ["voice"] } }
 JSON
-printf 'import { voice::mix, voice::wrap };\nfn int32 main() { if (mix(n: 10i64) != 135i64) { return 1; } return wrap(x: 1); }\n' \
+printf 'import { voice::mix, voice::wrap };\nfn uint8 main() { if (mix(n: 10i64) != 135i64) { return 1; } return cast<uint8>(wrap(x: 1)); }\n' \
     > "$tmp/app/src/main.kama"
 
 # The shim answers the driver's `-v` family question the way the real compiler does, records a compile, and runs it.

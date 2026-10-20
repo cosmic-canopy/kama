@@ -7,11 +7,11 @@
 // `ident(x: m)` must infer `E` from `m`'s own declaration rather than from a binding that has ended.
 type value E { public int32 n; public ctor of(int32 n) { this.n = n; } }
 fn T ident<T>(T x) { return x; }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(2) xs = [3, 4];
     E m = E.of(n: 2);
     int32 r = 0;
     foreach (int32 n in xs) { r = r + n; }   // 7 — the elements
     E k = ident(x: m);                        // T = E, not the loop element's int32
-    return r + k.n;                           // 9
+    return cast<uint8>(r + k.n);                           // 9
 }

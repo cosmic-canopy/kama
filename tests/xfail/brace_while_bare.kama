@@ -1,5 +1,5 @@
 // Mandatory braces: a loop body must be a block.
-fn int32 main() {
+fn uint8 main() {
     int32 x = 0;
     while (x < 4)
         x = x + 1;   // ERROR: not braced

@@ -11,7 +11,7 @@ type value Crate implements Weighable, Named {
 fn int32 describe<K: Weighable + Named>(K x) {
     return x.weight() + x.tag();   // one method from each bound contract
 }
-fn int32 main() {
+fn uint8 main() {
     Crate c = Crate.make(g: 5);
-    return describe(x: c);   // 5 + 100 = 105
+    return cast<uint8>(describe(x: c));   // 5 + 100 = 105
 }

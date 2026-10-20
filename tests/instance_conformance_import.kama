@@ -22,7 +22,7 @@ type resource Holder implements Sendable {
     public const fn bool sameBig(const ref Optional<uint64> other) { return this.big == other; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Chunk c = Chunk::Done(rows: Optional::Some(value: 3i64));
     Optional<int64> three = Optional::Some(value: 3i64);
     bool done = match (c) { case Done(rows: r): r == three; case _: false; };

@@ -22,7 +22,7 @@ type resource Counter {
     public const fn int32 get() { return this.n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // 300 keys inserted in a scrambled order: stride 7 mod 300 hits every residue exactly once, since
     // gcd(7, 300) = 1. (301 would NOT work — 301 = 7 x 43 — and the first draft of this fixture used it
     // and inserted only the multiples of 7.) Built by real splits rather than in ascending order, and

@@ -46,7 +46,7 @@ fn int32 run(ref UdpSocket a, ref UdpSocket b) {
     return 55;
 }
 
-fn int32 main() {
+fn uint8 main() {
     string host = "127.0.0.1";
     uint16 zero = cast<uint16>(0);
     Result<UdpSocket, IoError> ra = UdpSocket.bind(host: host, port: zero);
@@ -54,7 +54,7 @@ fn int32 main() {
         case Ok(value: a): {
             Result<UdpSocket, IoError> rb = UdpSocket.bind(host: host, port: zero);
             := match (rb) {
-                case Ok(value: b): run(a: a, b: b);
+                case Ok(value: b): cast<uint8>(run(a: a, b: b));
                 case Err(error: e): 70;
             };
         }

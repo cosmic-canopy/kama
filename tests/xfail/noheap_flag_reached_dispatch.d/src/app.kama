@@ -33,7 +33,7 @@ type resource Logger implements Sink {
 fn void push(Sink s, int32 v) { s.emit(v: v); }
 fn void mid(Sink s, int32 v) { push(s: s, v: v); }
 
-fn int32 main() {
+fn uint8 main() {
     Counter c = Counter.make();
     mid(s: c, v: 7);
     return 0;

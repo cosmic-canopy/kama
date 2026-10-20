@@ -6,6 +6,6 @@ type value Vec2 {
     public ctor make(int32 x) { this.x = x; return this; }
     public static fn int32 twice(int32 n) { return n + n; }
 }
-fn int32 main() {
+fn uint8 main() {
     return Vec2.twice(n: 3);   // ERROR: `twice` is a static fn — call it with `Vec2::twice(...)`
 }

@@ -1,0 +1,4 @@
+// `fn uint32 main()` is Windows' exit status. Every other target keeps one byte of it, so there it is refused, naming
+// `fn uint8 main()` and the `@compileFor(OS_WINDOWS)` twin that keeps the 32 bits where they exist. The target is
+// pinned to Linux, so the refusal is the same on every host (a Windows host included).
+fn uint32 main() { return 70000; }

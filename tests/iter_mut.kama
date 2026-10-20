@@ -17,9 +17,9 @@ type resource Vec<T> implements IterableMut<T> {
     public unsafe fn VecIterMut<T> iterMut() { return VecIterMut.make(data: this.data, len: this.len); }
     unsafe ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }
-fn int32 main() {
+fn uint8 main() {
     Vec<int32> v = Vec.make(n: 3);
     v[0] = 1; v[1] = 2; v[2] = 3;
     foreach (ref int32 x in v) { x = x * 10; }
-    return v[0] + v[1] + v[2];   // 60
+    return cast<uint8>(v[0] + v[1] + v[2]);   // 60
 }

@@ -12,4 +12,4 @@ fn Owned<Error> pick(bool first) {
     Probe p = Probe.of(id: 1);
     return first ? give p : Kind::Bad;
 }
-fn int32 main() { Owned<Error> e = pick(first: true); return 0; }
+fn uint8 main() { Owned<Error> e = pick(first: true); return 0; }

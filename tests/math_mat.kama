@@ -9,7 +9,7 @@ import {
     std::math::Mat4,
     std::math::radians,
 };
-fn int32 main() {
+fn uint8 main() {
     Mat4 I = Mat4.identity();
     Vec4 iv = I.transform(v: Vec4.of(x: 2.0f32, y: 3.0f32, z: 4.0f32, w: 1.0f32));
     int32 a = cast<int32>(iv.x + iv.y + iv.z + iv.w);                     // 10
@@ -49,5 +49,5 @@ fn int32 main() {
     Mat3 P3 = B3 * B3I;
     int32 j = cast<int32>(P3.get(c:0,r:0) + P3.get(c:1,r:1) + P3.get(c:2,r:2));  // 3
 
-    return a + b + c + e + f + g + h + j;   // 10+66+10+4+2+1+2+3 = 98
+    return cast<uint8>(a + b + c + e + f + g + h + j);   // 10+66+10+4+2+1+2+3 = 98
 }

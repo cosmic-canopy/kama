@@ -35,7 +35,7 @@ out="$tmp/bw.c"
 
 # The fixture's own function, not the whole unit: the prelude legitimately contains narrowing checks
 # (`string.length()` into a `usize`), so grepping the file would always match.
-body=$(awk '/^int32_t kama_main\(/,/^}/' "$out")
+body=$(awk '/^uint8_t kama_main\(/,/^}/' "$out")
 
 if [ -z "$body" ]; then
     echo "check-binding-widen: FAIL — could not find kama_main in the emitted C" >&2

@@ -30,7 +30,7 @@ type enum Color implements Formattable {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shape s = Shape::Circle(r: 7);
     if (!"${s}".equals(other: "circle:7")) { return 1; }
 

@@ -1,8 +1,8 @@
 // `case _:` parses, so the emitter says the same as the parser does for `case 1:` (KR-164): an integer subject is
 // not an enum. It used to say "`match` subject's type could not be resolved — bind it to a typed local first",
 // which the typed local `n` already is.
-fn int32 main() {
+fn uint8 main() {
     int32 n = 2;
     int32 r = match (n) { case _: 0; };   // -> REJECT
-    return r;
+    return cast<uint8>(r);
 }

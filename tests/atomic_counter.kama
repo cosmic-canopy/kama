@@ -10,7 +10,7 @@ fn void bump(ref Atomic<int32> c) {
     while (i < 25) { c.fetchAdd(delta: 1i32); i = i + 1; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Atomic<int32> counter = Atomic.make(value: 0i32);
     scope {
         spawn bump(c: ref counter);
@@ -18,5 +18,5 @@ fn int32 main() {
         spawn bump(c: ref counter);
         spawn bump(c: ref counter);
     }                               // BARRIER: all four joined before `counter` drops
-    return counter.load();          // 100
+    return cast<uint8>(counter.load());          // 100
 }

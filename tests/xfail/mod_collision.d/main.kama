@@ -1,2 +1,2 @@
 import { cola::val, colb::val };
-fn int32 main() { return val(); }
+fn uint8 main() { return cast<uint8>(val()); }

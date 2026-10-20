@@ -19,10 +19,10 @@ type resource Vec<T: Copyable<T>> implements Iterable<T> {
     public unsafe fn VecIter<T> iterator() { return VecIter.make(data: this.data, len: this.len); }
     unsafe ~Vec() { free(p: cast<UnsafePtr>(this.data)); }
 }
-fn int32 main() {
+fn uint8 main() {
     Vec<int32> v = Vec.make(n: 4);
     v[0] = 10; v[1] = 20; v[2] = 30; v[3] = 40;
     int32 sum = 0;
     foreach (int32 x in v) { sum = sum + x; }
-    return sum;   // 100
+    return cast<uint8>(sum);   // 100
 }

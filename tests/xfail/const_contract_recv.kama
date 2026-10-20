@@ -9,4 +9,4 @@ type value Sq implements Shape {
     public const fn int32 sides() { return 4; }
 }
 fn int32 bad(const Shape sh) { return sh.area(); }        // `area` is not `const fn` -> REJECT
-fn int32 main() { Sq q = Sq.make(s: 3); return bad(sh: q); }
+fn uint8 main() { Sq q = Sq.make(s: 3); return cast<uint8>(bad(sh: q)); }

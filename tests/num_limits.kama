@@ -18,7 +18,7 @@ import {
     std::num::float32Epsilon,
 };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     if (int8Max()  == 127i8)                             { r = r + 3; }
     if (int8Min()  == 0i8 - 127i8 - 1i8)                 { r = r + 3; }
@@ -35,5 +35,5 @@ fn int32 main() {
     if (float32Max() > 3.0e38f32)                        { r = r + 2; }   // finite, huge (not inf)
     if (float32MinNormal() > 0.0f32 && float32MinNormal() < 1.0e-30f32) { r = r + 2; }
     if (float32Epsilon() > 0.0f32 && float32Epsilon() < 0.001f32)       { r = r + 2; }
-    return r;   // 3*12 + 2*3 = 42
+    return cast<uint8>(r);   // 3*12 + 2*3 = 42
 }

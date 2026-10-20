@@ -12,4 +12,4 @@ type resource Bag implements Indexed {
     public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: Counter.make(n: 1)); }
     public const fn const ref Counter at(isize i) { return this.items[i]; }   // -> REJECT: `const ref` vs `ref`
 }
-fn int32 main() { Bag b = Bag.make(); return 0; }
+fn uint8 main() { Bag b = Bag.make(); return 0; }

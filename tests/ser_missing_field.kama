@@ -38,7 +38,7 @@ type resource Pair {
     public ctor make(Shared<Leaf> a) { this.a = give a; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     if (load(src: "{\"host\": \"db\"}") != "db|5432|fast|9|7") { return 1; }
     if (load(src: "{\"port\": 1}") != "missing field `host`") { return 2; }
     if (load(src: "{\"host\": \"a\", \"host\": \"b\", \"mode\": \"slow\", \"port\": 2, \"legacy\": 4}") != "b|2|slow|4|7") { return 3; }

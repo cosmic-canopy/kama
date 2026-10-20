@@ -13,7 +13,7 @@ type resource Handle {
     unsafe ~Handle() { kama_trace(code: 5); }               // one trace per REAL drop
 }
 
-fn int32 main() {
+fn uint8 main() {
     Handle h = Handle.open(v: 7);
     Optional<Handle> opt = Optional::Some(value: give h);
 
@@ -25,5 +25,5 @@ fn int32 main() {
     if (hv != 7) { return 90; }
     // exactly ONE Handle drop. fold of a single trace(5) = 5. A subject re-drop of the defused Some
     // payload would fold in a second 5 -> 160.
-    return traceGet();                         // expect 5
+    return cast<uint8>(traceGet());                         // expect 5
 }

@@ -5,7 +5,7 @@ fnptr int32 F(int32 x);
 fn int32 dbl(int32 x) { return x * 2; }
 static F g_h;
 type value Reg { public F handler; public ctor make() { this.handler = dbl; } }
-fn int32 main() {
+fn uint8 main() {
     F f = dbl;
     g_h = dbl;
     Reg r = Reg.make();

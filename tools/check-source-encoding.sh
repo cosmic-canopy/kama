@@ -50,12 +50,12 @@ frame() {   # byte length, not character length — see check-lsp.sh's frame() f
 BOM=$(printf '\357\273\277')
 frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
 frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
-frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///bomclean.kama","languageId":"kama","version":1,"text":"'"$BOM"'fn int32 main() { return 0; }\n"}}}'
-frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///bomcol.kama","languageId":"kama","version":1,"text":"'"$BOM"'fn int32 main() { return 1 $ 2; }\n"}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///bomclean.kama","languageId":"kama","version":1,"text":"'"$BOM"'fn uint8 main() { return 0; }\n"}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///bomcol.kama","languageId":"kama","version":1,"text":"'"$BOM"'fn uint8 main() { return 1 $ 2; }\n"}}}'
 FF=$(printf '\377')
-frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///rawff.kama","languageId":"kama","version":1,"text":"fn int32 main() {\n    // x'"$FF"'\n    return 0;\n}\n"}}}'
-frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///surrogate.kama","languageId":"kama","version":1,"text":"fn int32 main() {\n    string s = \"\ud800\";\n    return 0;\n}\n"}}}'
-frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///nul.kama","languageId":"kama","version":1,"text":"fn int32 main() {\n    return 0; \u0000\n}\n"}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///rawff.kama","languageId":"kama","version":1,"text":"fn uint8 main() {\n    // x'"$FF"'\n    return 0;\n}\n"}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///surrogate.kama","languageId":"kama","version":1,"text":"fn uint8 main() {\n    string s = \"\ud800\";\n    return 0;\n}\n"}}}'
+frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///nul.kama","languageId":"kama","version":1,"text":"fn uint8 main() {\n    return 0; \u0000\n}\n"}}}'
 frame '{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}'
 frame '{"jsonrpc":"2.0","method":"exit"}'
 out=$("$KAMA" lsp < "$session" 2>/dev/null | tr '\r' '\n' || true)
@@ -83,7 +83,7 @@ refused nul 14 "a NUL (a JSON \\u0000)"
 
 # ---- 3. a manifest ------------------------------------------------------------------------------------
 mkdir -p "$tmp/man/src"
-printf 'fn int32 main() { return 0; }\n' > "$tmp/man/src/main.kama"
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/man/src/main.kama"
 printf '{ "name": "man", "version": "0.1.0", "kind": "executable",\n  "license": "caf\351, in Latin-1",\n  "entry": "src/main.kama", "modules": { ".": { "visibility": "internal" } } }\n' > "$tmp/man/kama.json"
 man=$("$KAMA" build "$tmp/man/kama.json" -o "$tmp/man/out" 2>&1 || true)
 case "$man" in

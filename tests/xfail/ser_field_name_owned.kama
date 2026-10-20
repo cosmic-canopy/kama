@@ -6,4 +6,4 @@ type resource Holder {
     @field Owned<Plain> boxed;
     public ctor of(Owned<Plain> boxed) { this.boxed = give boxed; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

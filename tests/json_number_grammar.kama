@@ -46,7 +46,7 @@ fn int32 kindF(string src) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     // the edges an integer must reach exactly
     if (!okI(src: "[-9223372036854775808]", want: -9223372036854775807i64 - 1i64)) { return 1; }
     if (!okI(src: "[9223372036854775807]", want: 9223372036854775807i64)) { return 2; }

@@ -22,11 +22,11 @@ fn void worker(Payload p) {
     p.run();
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 shared = 0;
     Payload p = Payload.make(dst: ref shared, value: 7i32);
     {
         Isolate h = spawn worker(p: give p);
     }   // ~Isolate() joins here — no explicit h.join()
-    return shared;   // 7 iff the drop joined and the isolate ran
+    return cast<uint8>(shared);   // 7 iff the drop joined and the isolate ran
 }

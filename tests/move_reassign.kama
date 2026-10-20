@@ -89,9 +89,9 @@ fn int32 loopBreak() {
     return p.get() + n;   // 12
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = straightLine();
-    if (r != 0) { return r; }
+    if (r != 0) { return cast<uint8>(r); }
     if (loopRearm() != 3) { return 5; }
     if (loopContinue() != 202) { return 6; }
     if (loopBreak() != 12) { return 7; }

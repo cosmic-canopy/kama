@@ -46,4 +46,4 @@ unsafe fn int32 run() {
          + host_run();                // 23
 }
 
-fn int32 main() { return run(); }   // 48
+fn uint8 main() { return cast<uint8>(run()); }   // 48

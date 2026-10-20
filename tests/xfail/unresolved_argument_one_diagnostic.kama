@@ -3,8 +3,8 @@
 // value that does not exist — and an indexed one said "raw pointer access requires an `unsafe fn`" instead of naming
 // the name. Counted by tools/check-query.sh, since a `.msg` can only say a line is present.
 fn void take(string s) { }
-fn int32 main() {
+fn uint8 main() {
     take(s: nosuch);
     int32 x = missing[0];
-    return x;
+    return cast<uint8>(x);
 }

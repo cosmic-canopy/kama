@@ -7,7 +7,7 @@ fn Widget make(int32 n) {
     return w;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Widget w = make(n: defaultSize());
-    return w.size;
+    return cast<uint8>(w.size);
 }

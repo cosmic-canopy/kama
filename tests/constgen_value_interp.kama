@@ -10,4 +10,4 @@ fn int32 widths() comptime(int32 F) {
     if (h == "ff")   { n = n + 1; }
     return n;
 }
-fn int32 main() { return widths()#(255); }   // 2
+fn uint8 main() { return cast<uint8>(widths()#(255)); }   // 2

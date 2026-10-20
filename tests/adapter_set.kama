@@ -26,7 +26,7 @@ type adapter <int8, int16, int32> implements Near<This> {
 fn int32 total<T: Weighable>(T a, T b) { return a.weight() + b.weight(); }
 fn int32 same<T: Near>(T a, T b) { if (a.close(other: b)) { return 1; } return 0; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     r = r + total(a: 10, b: 7);              // 17  — int32, the shared body
     int8 s = 4; int8 t = 1;
@@ -39,5 +39,5 @@ fn int32 main() {
     if (same(a: 6, b: 6) == 1) { r = r + 25; }        // 175 — `ref This` = int32
     int16 u = 9; int16 v = 8;
     if (same(a: u, b: v) == 0) { r = r + 25; }        // 200 — `ref This` = int16
-    return r;
+    return cast<uint8>(r);
 }

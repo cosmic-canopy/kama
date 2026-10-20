@@ -4,4 +4,4 @@ type value Vec2 {
     public ctor make(int32 x) { this.x = x; }
     public static fn int32 bad() { return x; }   // `x` is `this.x` — unavailable in a static method
 }
-fn int32 main() { return Vec2::bad(); }
+fn uint8 main() { return cast<uint8>(Vec2::bad()); }

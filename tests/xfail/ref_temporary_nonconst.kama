@@ -10,7 +10,7 @@ type value Point {
 
 fn void bump(ref Point p) { p.x = p.x + 1; }
 
-fn int32 main() {
+fn uint8 main() {
     bump(p: Point.make(x: 1, y: 2));
     return 0;
 }

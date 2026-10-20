@@ -8,7 +8,7 @@ import { std::collections::DynamicArray };
 
 type enum Step { More, Done }
 
-fn int32 main() {
+fn uint8 main() {
     // `while`, ending in an if/else whose arms both leave.
     DynamicArray<string> sink = DynamicArray.empty();
     string s = "a";

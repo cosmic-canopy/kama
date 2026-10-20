@@ -72,7 +72,7 @@ type virtual resource B { public ctor make() { } protected virtual fn int32 t() 
 type final resource D extends B {
     public ctor make() { this.base = Base.make(); }
     protected override fn int32 t() { return 1; } }
-fn int32 main() { D d = D.make(); return 0; }
+fn uint8 main() { D d = D.make(); return 0; }
 EOF
 if "$NOINH" check "$tmp/ext.kama" >/dev/null 2>"$tmp/ext.err"; then
     echo "check-no-inheritance: FAIL — the KAMA_INHERITANCE=0 compiler accepted 'extends'" >&2; exit 1
@@ -103,10 +103,10 @@ type value Sq implements Shape { public int32 s;
     public ctor make(int32 s) { this.s = s; }
     public fn int32 area() { return this.s * this.s; } }
 fn int32 total(Shape a, Shape b) { return a.area() + b.area(); }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Sq> xs = DynamicArray.withCapacity(capacity: 2);
     xs.add(item: Sq.make(s: 3));
-    return total(a: Sq.make(s: 4), b: Sq.make(s: 5)) + 0;   // 16 + 25 = 41
+    return cast<uint8>(total(a: Sq.make(s: 4), b: Sq.make(s: 5)) + 0);   // 16 + 25 = 41
 }
 EOF
 if ! "$NOINH" build "$tmp/ok.kama" -o "$tmp/ok.bin" >/dev/null 2>"$tmp/ok.err"; then

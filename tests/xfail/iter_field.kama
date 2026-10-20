@@ -25,9 +25,9 @@ fn Keeper leak() {
     return Keeper.make(it: m.values());   // `m` dies here; the iterator keeps its pointer
 }
 
-fn int32 main() {
+fn uint8 main() {
     Keeper k = leak();
     int32 sum = 0;
     foreach (int32 v in k.it) { sum = sum + v; }
-    return sum;
+    return cast<uint8>(sum);
 }

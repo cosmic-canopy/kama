@@ -15,7 +15,7 @@ fn int32 classify(int32 n) {
     else { return 0; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 sum = 0;
     sum = sum + classify(n: 500);         // 4
     sum = sum + classify(n: 50);          // 3
@@ -31,5 +31,5 @@ fn int32 main() {
     InlineArray<int32>#(2) a = [1; 2];
     foreach (int32 e in a) { i = i + e; }
 
-    return sum + i - 19;                  // 10 + 9 - 19 == 0
+    return cast<uint8>(sum + i - 19);                  // 10 + 9 - 19 == 0
 }

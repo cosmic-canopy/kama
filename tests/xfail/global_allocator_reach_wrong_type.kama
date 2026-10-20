@@ -14,4 +14,4 @@ import { std::concurrent::Atomic };
 
 type resource Other { public fn isize liveCount() { return 3; } }
 
-fn int32 main() { return cast<int32>(globalHeap::<Other>().liveCount()); }
+fn uint8 main() { return cast<uint8>(globalHeap::<Other>().liveCount()); }

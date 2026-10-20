@@ -3,7 +3,7 @@
 // pure-kama `implements Hashable for string`, `equals` structural), so a lookup key built any way hits.
 import { std::collections::Map };
 
-fn int32 main() {
+fn uint8 main() {
     Map<string, int32> m = Map.empty();
     m.put(key: "one", value: 1);
     m.put(key: "two", value: 2);
@@ -21,5 +21,5 @@ fn int32 main() {
     if (had1)                     { r = r + 7; }         // +7
     if (!m.contains(key: "one"))  { r = r + 3; }         // +3
     r = r + cast<int32>(m.length());                   // +2
-    return cast<int32>(r);   // 3+1+22+5+4+7+3+2 = 47
+    return cast<uint8>(r);   // 3+1+22+5+4+7+3+2 = 47
 }

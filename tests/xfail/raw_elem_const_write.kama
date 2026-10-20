@@ -8,4 +8,4 @@ unsafe fn int32 run() {
     q[0].bytes[1] = 9ui8;                 // ERROR: `q` only reads its `Buf`
     return cast<int32>(b.bytes[1]);
 }
-fn int32 main() { return run(); }
+fn uint8 main() { return cast<uint8>(run()); }

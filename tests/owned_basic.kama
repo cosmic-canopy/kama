@@ -8,10 +8,10 @@ type value Counter
     public fn int32 get() { return this.value; }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Owned<Counter> c = new Counter.make(start: 40);
     c.bump();
     c.bump();
-    return c.get();   // 42
+    return cast<uint8>(c.get());   // 42
 }

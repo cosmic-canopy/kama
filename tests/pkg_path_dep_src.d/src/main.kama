@@ -3,4 +3,4 @@
 // find them by listing the package directory — it has to consult the package's declared `sources`.
 import { geo::area };
 
-fn int32 main() { return area(); }   // 42
+fn uint8 main() { return cast<uint8>(area()); }   // 42

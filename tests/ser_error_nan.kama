@@ -7,7 +7,7 @@ type value Measure {
     @field float64 v;
     public ctor make(float64 v) { this.v = v; }
 }
-fn int32 main() {
+fn uint8 main() {
     // finite -> Ok
     Measure ok = Measure.make(v: 1.5);
     Result<string, Owned<Error>> okr = serializeJsonBuffer(v: ok);
@@ -24,5 +24,5 @@ fn int32 main() {
             case None: 0 - 5;
         };
     };
-    return okv + errv;   // 40 + 100 = 140
+    return cast<uint8>(okv + errv);   // 40 + 100 = 140
 }

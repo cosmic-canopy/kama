@@ -11,7 +11,7 @@ type value Wrap<P> {
 type enum Maybe<T> { Has(T v), Nope;
     public fn int32 tag() when [T: Tag] { return 1; }
 }
-fn int32 main() {
+fn uint8 main() {
     Wrap<Plain> w = Wrap::<Plain>.of(inner: Plain.of());
     Maybe<Plain> m = Maybe::Nope;
     return w.tag()

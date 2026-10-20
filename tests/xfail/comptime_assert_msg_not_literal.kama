@@ -4,4 +4,4 @@
 // changes depending on which one the predicate happens to take.
 comptime assert(cond: sizeof(int32) == 4, msg: "a" + "b");
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

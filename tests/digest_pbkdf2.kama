@@ -4,7 +4,7 @@
 import { std::digest::pbkdf2, std::digest::sha1::Sha1, std::digest::sha256::Sha256,
          std::encoding::hex::encode as hexEncode, std::collections::FixedArray };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     string password = "password";
     string salt = "salt";
@@ -26,5 +26,5 @@ fn int32 main() {
     FixedArray<uint8> e = FixedArray.make(size: 32);          // SCRAM-SHA-256's own call shape: 4096 rounds, 32 bytes
     pbkdf2(hash: Sha256.make(), password: password.bytes(), salt: salt.bytes(), iterations: 4096, into: e.viewMut());
     if (hexEncode(bytes: e.view()).equals(other: "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a")) { r = r + 16; }
-    return r;   // 31
+    return cast<uint8>(r);   // 31
 }

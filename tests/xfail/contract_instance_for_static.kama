@@ -5,4 +5,4 @@ type value M implements Maker {
     public ctor make() { }
     public fn int32 make2(int32 n) { return n; }          // contract declares `static fn` -> REJECT
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

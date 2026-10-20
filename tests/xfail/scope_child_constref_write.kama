@@ -14,6 +14,6 @@ type value World implements Sendable {
 fn void worker(ref Counter c) { c.bump(); }
 fn void reader(const ref Counter c) { int64 v = c.value(); }
 fn void tick(ref Atomic<int64> a) { a.fetchAdd(delta: 1i64); }
-fn int32 main() { Counter c = Counter.make(); World w = World.make(); scope {
+fn uint8 main() { Counter c = Counter.make(); World w = World.make(); scope {
     spawn reader(c: ref c); c.n = 5;
 } return 0; }

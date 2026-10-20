@@ -56,7 +56,7 @@ fn RcWeak<Counter> makeExpired() {
     return a.downgrade();   // `a` drops on return -> object freed -> the returned weak is expired
 }
 
-fn int32 main() {
+fn uint8 main() {
     Rc<Counter> a = new Counter.make(start: 7);
     RcWeak<Counter> w = a.downgrade();
     Optional<Rc<Counter>> o1 = w.tryUpgrade();
@@ -66,5 +66,5 @@ fn int32 main() {
     Optional<Rc<Counter>> o2 = dead.tryUpgrade();
     int32 expired = match (o2) { case Some(value: u): u.n; case None: 90; }; // 90 (expired)
 
-    return alive + expired;   // 97
+    return cast<uint8>(alive + expired);   // 97
 }

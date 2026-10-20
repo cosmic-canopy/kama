@@ -3,4 +3,4 @@
 // could each say it, and an application owning neither could not build. Wrap the type in one of your own.
 import { outhome::db::DbParam };
 type adapter <Optional> implements DbParam { public const fn int32 code() { return 0; } }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

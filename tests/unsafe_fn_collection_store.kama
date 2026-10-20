@@ -17,4 +17,4 @@ unsafe fn int32 churn() {
     return xs.length() + raw[0] - 7;
 }
 
-fn int32 main() { return churn() - 1; }
+fn uint8 main() { return cast<uint8>(churn() - 1); }

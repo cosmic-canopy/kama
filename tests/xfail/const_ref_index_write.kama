@@ -12,7 +12,7 @@ type resource Buf implements Viewable<ConstWindow> {
     public ctor make() { this.d = DynamicArray.empty(); this.d.add(item: 1); }
     public unsafe const fn ConstWindow view() { return ConstWindow.over(at: this.d.dataPtr(), count: this.d.length()); }
 }
-fn int32 main() {
+fn uint8 main() {
     Buf b = Buf.make();
     borrow b.view() as w {
         w[0] = 7;   // -> REJECT

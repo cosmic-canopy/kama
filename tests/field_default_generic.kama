@@ -24,9 +24,9 @@ type resource Box<T: Copyable<T>> {   // `t` keeps a copy of `item`, so `T` copi
     public ctor of(T item) { this.item = item; }
     public fn int64 t() { this.items.add(item: copy this.item); return this.tag + cast<int64>(this.items.length()); }
 }
-fn int32 main() {
+fn uint8 main() {
     Cfg c = Cfg.make();
     Bag g = Bag.make();
     Box<int32> b = Box.of(item: 1);
-    return c.n + c.empty + g.fill() + cast<int32>(b.t());   // 7 + 0 + 2 + (3 + 1)
+    return cast<uint8>(c.n + c.empty + g.fill() + cast<int32>(b.t()));   // 7 + 0 + 2 + (3 + 1)
 }

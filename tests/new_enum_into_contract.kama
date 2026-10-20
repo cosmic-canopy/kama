@@ -17,12 +17,12 @@ type enum Side implements Sized { L, R;
 fn Owned<Sized> make() { return new Side::R(); }                       // a return value
 fn int32 measure(Shared<Sized> s) { return s.size(); }
 
-fn int32 main() {
+fn uint8 main() {
     Owned<Sized> a = new Geo::Circle(r: 7);                            // a declaration, payload
     Shared<Sized> b = new Side::R();                                   // a declaration, payload-less
     Owned<Sized> c = make();
     Optional<Owned<Sized>> t = try new Geo::Point();                   // the non-panic form
     int32 tv = match (t) { case Some(value: o): o.size(); case None: 0; };
     // 7 + 2 + 2 + 100 + 5 = 116
-    return a.size() + b.size() + c.size() + tv + measure(s: new Geo::Circle(r: 5));
+    return cast<uint8>(a.size() + b.size() + c.size() + tv + measure(s: new Geo::Circle(r: 5)));
 }

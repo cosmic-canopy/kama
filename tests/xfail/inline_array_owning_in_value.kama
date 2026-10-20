@@ -4,4 +4,4 @@ type value V {
     InlineArray<string>#(2) s;
     public ctor make() { this.s = ["a", "b"]; }
 }
-fn int32 main() { V v = V.make(); return 0; }
+fn uint8 main() { V v = V.make(); return 0; }

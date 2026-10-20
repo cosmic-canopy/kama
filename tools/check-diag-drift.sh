@@ -33,7 +33,7 @@ note() { echo "check-diag-drift: FAIL — $1" >&2; fail=1; }
 # placed INSIDE a match arm (the long-lowering case) and AFTER a match (the leaked-offset case).
 cat > "$tmp/drift.kama" <<'KEOF'
 type enum Color : uint8 { Red, Green, Blue }
-fn int32 main()
+fn uint8 main()
 {
     Color c = Color::Green;
     string s = match (c) {
@@ -41,7 +41,7 @@ fn int32 main()
         case Green: "g";
         case Blue:  "b";
     };
-    return cast<int32>(s);
+    return cast<uint8>(s);
 }
 KEOF
 NLINES=$(wc -l < "$tmp/drift.kama" | tr -d ' ')
@@ -63,7 +63,7 @@ done
 # The arm case, where the drift was worst: the error moves INTO the lowering rather than after it.
 cat > "$tmp/arm.kama" <<'KEOF'
 type enum Color : uint8 { Red, Green, Blue }
-fn int32 main()
+fn uint8 main()
 {
     Color c = Color::Green;
     int32 n = match (c) {
@@ -71,7 +71,7 @@ fn int32 main()
         case Green: cast<int32>("g");
         case Blue:  3;
     };
-    return n;
+    return cast<uint8>(n);
 }
 KEOF
 ANLINES=$(wc -l < "$tmp/arm.kama" | tr -d ' ')

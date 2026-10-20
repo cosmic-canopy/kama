@@ -6,10 +6,10 @@ type value V implements Equatable<This> {
     public int32 x;
     public const fn bool equals(const ref V other) { return this.x == other.x; }
 }
-fn int32 main() {
+fn uint8 main() {
     V a = V.of(x: 7);
     int32 r = 0;
     if (a == V.of(x: 7)) { r = r + 5; }     // inline ctor operand in the condition -> true
     if (a == V.of(x: 9)) { r = r + 100; }   // false
-    return r;   // 5
+    return cast<uint8>(r);   // 5
 }

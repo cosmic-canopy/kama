@@ -12,10 +12,10 @@ type resource Bag implements Walks, Iterable<int32> {
     public unsafe fn Cursor walk() { return Cursor.over(at: addr(of: this.v[0])); }
     public unsafe fn Cursor iterator() { return Cursor.over(at: addr(of: this.v[0])); }
 }
-fn int32 main()
+fn uint8 main()
 {
     Bag b = Bag.make();
     int32 s = 0;
     borrow b.walk() as it { foreach (int32 x in it) { s += x; } }
-    return s;
+    return cast<uint8>(s);
 }

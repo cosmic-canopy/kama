@@ -3,4 +3,4 @@
 type contract Tagged for value { const fn int32 tag(); }
 type value Badge { public int32 n; }
 type adapter <Badge> implements Tagged { public const fn int32 tag() { return this.n; } }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

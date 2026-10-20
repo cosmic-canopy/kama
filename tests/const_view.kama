@@ -27,7 +27,7 @@ fn int32 viaAssign(View<int32> xs) {
 }
 unsafe fn int32 firstRaw(ConstView<int32> xs) { UnsafeConstPtr<int32> p = xs.dataPtr(); return p[0]; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     DynamicArray<int32> d = DynamicArray.empty();
     d.add(item: 9); d.add(item: 1); d.add(item: 5); d.add(item: 3);
@@ -69,5 +69,5 @@ fn int32 main() {
         ConstView<Token> tc = tv;
         if (tc[0].value() == 7) { r = r + 1; }                              // 14
     }
-    return r;   // 14
+    return cast<uint8>(r);   // 14
 }

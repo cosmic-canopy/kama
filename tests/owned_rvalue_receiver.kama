@@ -15,9 +15,9 @@ type resource R {
 fn DynamicArray<int32> make(int32 n) { DynamicArray<int32> xs = DynamicArray.empty(); xs.add(item: n); xs.add(item: n + 1); return give xs; }
 fn isize sumLen(DynamicArray<int32> a, DynamicArray<int32> b) { return a.length() + b.length(); }
 
-fn int32 main() {
+fn uint8 main() {
     isize a = make(n: 1).length();                    // free-function-call owned receiver (was: leak)
     isize b = R.make().n();                                // inline-ctor owned resource receiver (was: leak)
     isize c = sumLen(a: make(n: 1), b: make(n: 5));   // owned rvalues moved into owning params (sound; guard)
-    return cast<int32>(a + b + c);   // 2 + 2 + (2 + 2) = 8
+    return cast<uint8>(a + b + c);   // 2 + 2 + (2 + 2) = 8
 }

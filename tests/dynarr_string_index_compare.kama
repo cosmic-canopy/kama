@@ -23,7 +23,7 @@ fn DynamicArray<string> heapNames() {
     return give a;
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<string> a = heapNames();
 
     // 1. direct comparison, both spellings

@@ -43,4 +43,4 @@ fn void neverCalled3<T>(ref DynamicArray<T> src) {
 fn void pingNeverCalled<T>(T x) { pongNeverCalled::<T>(x: x); }
 fn void pongNeverCalled<T>(T x) { pingNeverCalled::<T>(x: x); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

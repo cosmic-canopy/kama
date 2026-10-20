@@ -23,7 +23,7 @@ fn int32 apply(Op f, int32 x) { return f(x: x); }
 fn int32 sum3(InlineArray<int32>#(3) xs) { return xs[0] + xs[1] + xs[2]; }
 fn int32 take(Owned<Box> b) { return b.v; }
 
-fn int32 main() {
+fn uint8 main() {
     PollFn p = poll;
     ScoreFn s = score;
     Apply a = apply;
@@ -34,5 +34,5 @@ fn int32 main() {
     int32 n = s(s: p(ctx: 1));                 // 7
     n = n + a(f: twice, x: 4);                 // 15
     n = n + h.f(xs: xs);                       // 21
-    return n + t(b: give b);                   // 31
+    return cast<uint8>(n + t(b: give b));                   // 31
 }

@@ -6,7 +6,7 @@
 @generate(of)
 type value Point { public int32 x; public int32 y; }
 
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.of(x: 3, y: 4);
     string s = "point ${p} here";
     return 0;

@@ -3,4 +3,4 @@
 // sole package root, so an undeclared import finds nothing and fails to resolve.
 import { geo::area };
 
-fn int32 main() { return area(); }
+fn uint8 main() { return area(); }

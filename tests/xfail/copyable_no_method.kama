@@ -6,4 +6,4 @@ type resource R implements Copyable<This>(bare: give) {
     ~R() { }
     public fn int32 get() { return this.n; }   // no `copy()` — invalid
 }
-fn int32 main() { R a = R.make(n: 1); return a.get(); }
+fn uint8 main() { R a = R.make(n: 1); return cast<uint8>(a.get()); }

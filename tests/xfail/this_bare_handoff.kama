@@ -6,4 +6,4 @@ type resource Res {
     public fn int32 hand() { return take(r: this); }
 }
 fn int32 take(Res r) { return 1; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

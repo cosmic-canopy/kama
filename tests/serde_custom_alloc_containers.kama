@@ -8,7 +8,7 @@ import { std::collections::DynamicArray, std::collections::Deque, std::collectio
          std::collections::Arena, std::collections::BumpAllocator, std::collections::DefaultHasher,
          std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     Arena arena = Arena.make(capacity: 65536);
     DynamicArray<int32, BumpAllocator> xs = DynamicArray.withAllocator(allocator: arena.handle());

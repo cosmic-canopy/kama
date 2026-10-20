@@ -26,4 +26,4 @@ type resource Holder implements Paired<Pair> {
     }
 }
 
-fn int32 main() { Holder h = Holder.make(); int32 k = 1; return h.pair(keep: ref k).size(); }
+fn uint8 main() { Holder h = Holder.make(); int32 k = 1; return cast<uint8>(h.pair(keep: ref k).size()); }

@@ -47,7 +47,7 @@ mkstub() {
     d="$HOME/.kama/versions/$1/bin"; mkdir -p "$d"
     case "$EXE" in
         .exe)
-            printf 'import { core::println };\nfn int32 main() {\n    println(s: "TOOLCHAIN %s");\n    return 0;\n}\n' "$1" > "$tmp/stub-$1.kama"
+            printf 'import { core::println };\nfn uint8 main() {\n    println(s: "TOOLCHAIN %s");\n    return 0;\n}\n' "$1" > "$tmp/stub-$1.kama"
             "$KAMA" build "$tmp/stub-$1.kama" -o "$d/kama.exe" >"$tmp/stub-$1.log" 2>&1 \
                 || { echo "check-toolchain: could not build the $1 stub" >&2
                      sed -n '1,10p' "$tmp/stub-$1.log" | sed 's/^/    /' >&2; exit 1; }
@@ -109,7 +109,7 @@ rm -f "$tmp/pinned/kama.local.json"
 #
 #         Now it reads the named manifest. `pinned` pins vA; the default is vB. Standing OUTSIDE it and
 #         naming its manifest must give vA — the case that used to be the silent one.
-printf 'fn int32 main() { return 0; }\n' > "$tmp/pinned/real.kama"
+printf 'fn uint8 main() { return 0; }\n' > "$tmp/pinned/real.kama"
 run sh -c "cd '$tmp' && '$SEL' build pinned/kama.json"
 grep -q "TOOLCHAIN vA" "$tmp/out" \
     || fail "the pin did not follow the named manifest: building pinned/kama.json from outside used the CWD's toolchain"

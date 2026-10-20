@@ -4,11 +4,11 @@ import {
     std::serialization::binary::kbin::deserializeKbinNamedBuffer,
     std::collections::DynamicArray,
 };
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> xs = DynamicArray.empty();
     xs.add(item: 10); xs.add(item: 20); xs.add(item: 30);
     Result<DynamicArray<uint8>, Owned<Error>> e_r = serializeKbinNamedBuffer(v: xs);
     DynamicArray<uint8> bytes = match (give e_r) { case Ok(value: b): give b; case Err(error: __e): { return 250; } };
     Result<DynamicArray<int32>, Owned<Error>> res = deserializeKbinNamedBuffer::<DynamicArray<int32>>(src: give bytes);
-    return match (res) { case Ok(value: b): b[0] + b[1] + b[2]; case Err(error: e): 0 - 1; };   // 60
+    return match (res) { case Ok(value: b): cast<uint8>(b[0] + b[1] + b[2]); case Err(error: e): 255; };   // 60
 }

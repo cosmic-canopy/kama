@@ -46,12 +46,12 @@ type final resource Doubler extends Codec
     unsafe ~Doubler() { kama_trace(code: 2); }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 sum = 0;
     {
         Owned<Codec> c = new Doubler.make(seed: 5);   // upcast: leaf built, held as the abstract base
         sum = c.encode();                             // body 10 + salt (1+10) + extra 100 = 121
     }                                                 // drops through the BASE handle -> Doubler then Codec
-    return sum + traceGet();                    // 121 + 63 = 184
+    return cast<uint8>(sum + traceGet());                    // 121 + 63 = 184
 }

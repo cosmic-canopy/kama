@@ -2,4 +2,4 @@
 // see it — a named backend would write the key twice and read back whichever landed last.
 @generate(Serializable, Deserializable)
 type value R { @field(name: "k") int32 a; @field(name: "k") int32 b; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

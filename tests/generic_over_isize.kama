@@ -10,7 +10,7 @@
 // So `DynamicArray<isize>` never compiled, latent until the size type became the stdlib's own. Returns 55.
 import { std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<isize> a = DynamicArray::<isize>.empty();
     a.add(item: 40);
     a.add(item: 15);
@@ -22,5 +22,5 @@ fn int32 main() {
     u.add(item: cast<usize>(0));
     if (u.length() != 1) { return 2; }
 
-    return cast<int32>(first + rest);        // 40 + 15
+    return cast<uint8>(first + rest);        // 40 + 15
 }

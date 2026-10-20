@@ -27,4 +27,4 @@ unsafe fn int32 run() {
     return r + settings_sum(s: addr(of: s));                // 48 + 61
 }
 
-fn int32 main() { return run(); }                           // 109
+fn uint8 main() { return cast<uint8>(run()); }                           // 109

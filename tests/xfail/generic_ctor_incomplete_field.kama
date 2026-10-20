@@ -12,8 +12,8 @@ type resource Widget<A: Allocator = GlobalAllocator> {
     public fn int32 get() { return this.x; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 1 << 12);
     Widget<BumpAllocator> w = Widget.bad();   // custom `A` → `bad()` force-emitted → gate rejects it
-    return w.get();
+    return cast<uint8>(w.get());
 }

@@ -13,7 +13,7 @@
 >// here is the SUFFIX SPLIT: `i32` in `42i32` must colour like the `int32` keyword, not like the digits.
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >
->fn int32 main() {
+>fn uint8 main() {
 #^^ source.kama keyword.other.kama
 #  ^ source.kama
 #   ^^^^^ source.kama storage.type.primitive.kama

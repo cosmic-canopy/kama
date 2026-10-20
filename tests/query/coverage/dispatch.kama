@@ -28,7 +28,7 @@ fn T firstOr<T: Copyable<T>>(DynamicArray<T> xs, T fallback) {
 
 fn int32 twice(int32 n) { return n + n; }
 
-fn int32 main() {
+fn uint8 main() {
     Cat c = Cat.loud();
     Dog d = Dog.quiet();
     int32 direct = c.speak() + d.speak();       // direct calls on the concrete types
@@ -43,5 +43,5 @@ fn int32 main() {
 
     int32 t = twice(n: 3);
 
-    return direct + viaContract + got + t;
+    return cast<uint8>(direct + viaContract + got + t);
 }

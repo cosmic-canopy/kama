@@ -4,7 +4,7 @@ type value G {
     public ctor make() { this.d = [0; 4]; }
     public ref int32 operator[](usize i) { return this.d[i]; }
 }
-fn int32 main() {
+fn uint8 main() {
     const G g = G.make();
     g[0] = 9;   // ERROR
     return 0;

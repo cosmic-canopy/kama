@@ -8,4 +8,4 @@
 @compileFor(DEBUG)  fn int32 bonus() { return 251; }
 @compileFor(!DEBUG) fn int32 bonus() { return 7; }
 
-fn int32 main() { return bonus(); }
+fn uint8 main() { return cast<uint8>(bonus()); }

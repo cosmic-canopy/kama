@@ -4,4 +4,4 @@
 // tests/noheap_realtime_ok.kama, which BORROWS the object instead (`ref Node`) and is legal.
 type resource Node { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 @noheap fn int32 consume(Owned<Node> o) { return o.get(); }
-fn int32 main() { Owned<Node> o = new Node.make(v: 5); return consume(o: give o); }
+fn uint8 main() { Owned<Node> o = new Node.make(v: 5); return cast<uint8>(consume(o: give o)); }

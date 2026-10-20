@@ -20,8 +20,8 @@ type resource Rc<T> implements Deref<T>, DerefMut<T>, HeapOwner<T>, Copyable<Thi
     public unsafe ctor copy(ref Rc<T> source) { source.c[0].strong = source.c[0].strong + 1; return Rc.make(p: source.p, c: source.c); }
     unsafe ~Rc() { this.c[0].strong = this.c[0].strong - 1; if (this.c[0].strong == 0) { usize n = sizeof(ptr: this.p); usize a = alignof(ptr: this.p); drop(ptr: this.p); GlobalAllocator.make().deallocate(pointer: cast<UnsafePtr>(this.p), bytes: n, align: a); if (this.c[0].weak == 0) { free(p: cast<UnsafePtr>(this.c)); } } }
 }
-fn int32 main() {
+fn uint8 main() {
     Rc<Shape> a = new Circle.make(r: 6);
     Rc<Shape> b = copy a;      // strong = 2, one Circle
-    return a.area();           // 36 (Circle __dtor runs once at strong=0 via vtbl->__dtor)
+    return cast<uint8>(a.area());           // 36 (Circle __dtor runs once at strong=0 via vtbl->__dtor)
 }

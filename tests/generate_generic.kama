@@ -25,7 +25,7 @@ type value Pair<A, B> {
 // A field that is itself a derived generic — the nested case, which is what fixes the ORDER this all
 // depends on: the inner instance must be registered, and its own condition decided, before the outer
 // instance asks whether its field conforms.
-fn int32 main() {
+fn uint8 main() {
     int32 n = 0;
 
     Box<int32> a = Box::<int32>.of(v: 42);
@@ -61,5 +61,5 @@ fn int32 main() {
     string ns = "${outer}";
     if (ns == "Box { v: Box { v: 3 } }") { n = n + 128; }
 
-    return n;   // 1+2+4+8+16+32+64+128 = 255, and an exit code is one byte
+    return cast<uint8>(n);   // 1+2+4+8+16+32+64+128 = 255, and an exit code is one byte
 }

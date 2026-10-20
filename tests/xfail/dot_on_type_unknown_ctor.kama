@@ -3,7 +3,7 @@ type value Point {
     int32 x;
     public ctor make(int32 x) { this.x = x; return this; }
 }
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.nope(x: 1);   // ERROR: no constructor `nope` on Point
     return 0;
 }

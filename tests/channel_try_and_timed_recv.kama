@@ -33,7 +33,7 @@ fn void returnLater(Sender<Conn> tx) {
     _ = tx.send(item: give c);
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 sum = 0;
     int32 fails = 0;
     Channel<Conn> ch = Channel.bounded(capacity: 4);

@@ -16,4 +16,4 @@ type resource Handle {
 // The one function with no marker — and the extern call inside it is what the gate catches.
 fn void sneak(ref Handle h) { free(p: cast<UnsafePtr>(0)); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

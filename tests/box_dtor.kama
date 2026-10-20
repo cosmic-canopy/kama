@@ -20,7 +20,7 @@ type resource Box<T> implements Deref<T>, DerefMut<T>, HeapOwner<T> {
     unsafe ~Box() { usize n = sizeof(ptr: this.p); usize a = alignof(ptr: this.p); drop(ptr: this.p); GlobalAllocator.make().deallocate(pointer: cast<UnsafePtr>(this.p), bytes: n, align: a); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Box<Noisy> b = new Noisy.make(id: 9);
-    return b.val();   // auto-deref -> 9; at return b drops -> Noisy__dtor frees buf (ASan verifies)
+    return cast<uint8>(b.val());   // auto-deref -> 9; at return b drops -> Noisy__dtor frees buf (ASan verifies)
 }

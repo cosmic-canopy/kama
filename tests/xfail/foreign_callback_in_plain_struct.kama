@@ -17,4 +17,4 @@ unsafe fn int32 install() {
     return c_submit(h: addr(of: h)); // ERROR: ...until it crosses, carrying `Holder.f`
 }
 
-fn int32 main() { return install(); }
+fn uint8 main() { return cast<uint8>(install()); }

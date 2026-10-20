@@ -11,8 +11,8 @@ type enum Color : uint8 { Red, Green, Blue }
 
 fn uint8 opaque(uint8 n) { return n; }
 
-fn int32 main()
+fn uint8 main()
 {
     Color c = cast<Color>(opaque(n: 200));
-    return cast<int32>(c);
+    return cast<uint8>(c);
 }

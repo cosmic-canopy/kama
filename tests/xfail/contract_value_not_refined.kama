@@ -12,4 +12,4 @@ type value Box implements Drawable, Sized {
 }
 fn int32 drawValue(Drawable d) { return d.draw(); }
 fn int32 viaSized(Sized s) { return drawValue(d: s); }   // ERROR: `Sized` does not refine `Drawable`
-fn int32 main() { Box b = Box.make(); return viaSized(s: b); }
+fn uint8 main() { Box b = Box.make(); return cast<uint8>(viaSized(s: b)); }

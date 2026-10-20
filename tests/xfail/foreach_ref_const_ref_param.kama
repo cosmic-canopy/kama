@@ -8,9 +8,9 @@ fn void zap(const ref DynamicArray<int32> a) {
     foreach (ref int32 x in a) { x = 9; }   // -> REJECT
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.empty();
     a.add(item: 1);
     zap(a: a);
-    return a[0];
+    return cast<uint8>(a[0]);
 }

@@ -42,9 +42,9 @@ type final resource Leaf extends Mid
 
 fn int32 measure(ref Root r) { return r.rank(); }
 
-fn int32 main()
+fn uint8 main()
 {
     Leaf leaf = Leaf.make();
     // n 1 (Root.make) + step (Mid.m 20 + Leaf.l 100) + seal 8 (sealed at Mid) = 129
-    return measure(r: ref leaf);
+    return cast<uint8>(measure(r: ref leaf));
 }

@@ -11,7 +11,7 @@ fn int32 padSum(InlineArray<int32>#(N) a) comptime(int32 N) {
     foreach (int32 e in buf) { t = t + e; }
     return t + cast<int32>(buf.length());             // length() == N+1 — the one real conversion
 }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(3) v = [4, 5, 6];              // N = 3
-    return padSum(a: v);                              // (4+5+6+100) + 4 = 119
+    return cast<uint8>(padSum(a: v));                              // (4+5+6+100) + 4 = 119
 }

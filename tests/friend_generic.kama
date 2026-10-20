@@ -53,12 +53,12 @@ type value Lens<T> {
     public const fn int32 read(const ref Flat f) { return f.hidden(); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Node<int32, int32> n = Node::<int32,int32>.make(k: 1, v: 2);
     Tree<int32, int32> t = Tree::<int32,int32>.make();
     Cell<int64> c = Cell::<int64>.make(t: 9i64);
     Probe p = Probe.make();
     Flat f = Flat.make();
     Lens<int32> l = Lens::<int32>.make();
-    return t.reach(o: n) + p.look(c: c) + l.read(f: f);   // 7 + 11 + 23 = 41
+    return cast<uint8>(t.reach(o: n) + p.look(c: c) + l.read(f: f));   // 7 + 11 + 23 = 41
 }

@@ -42,7 +42,7 @@ type value Q<B: Widen<B>> implements Equatable<This>, Comparable<This> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Q<int32> a = Q::<int32>.of(raw: 10i32);
     Q<int32> b = Q::<int32>.of(raw: 32i32);
     Q<int32> c = a + b;
@@ -52,5 +52,5 @@ fn int32 main() {
     if (c.raw == 42i32) { n = n + 1; }           // the operator, at width
     if (s == t)         { n = n + 1; }           // Equatable<This> on a generic instance
     if (a < b)          { n = n + 1; }           // Comparable<This> on a generic instance
-    return n;                                    // 3
+    return cast<uint8>(n);                                    // 3
 }

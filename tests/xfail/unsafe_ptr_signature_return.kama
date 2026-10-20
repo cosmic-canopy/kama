@@ -5,4 +5,4 @@ unsafe fn UnsafePtr grab() { return kmalloc(n: cast<usize>(8)); }
 
 fn UnsafePtr passthrough() { return grab(); }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

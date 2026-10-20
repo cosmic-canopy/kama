@@ -1,3 +1,3 @@
 // const must NOT be launderable through a non-const ref param (M24 soundness fix).
 fn void bump(ref int32 x) { x = x + 100; }
-fn int32 main() { const int32 n = 5; bump(x: ref n); return n; }
+fn uint8 main() { const int32 n = 5; bump(x: ref n); return cast<uint8>(n); }

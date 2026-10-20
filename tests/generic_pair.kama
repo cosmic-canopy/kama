@@ -9,12 +9,12 @@ type value Pair<A, B>
     public fn A getFirst() { return this.first; }
     public fn B getSecond() { return this.second; }
 }
-fn int32 main()
+fn uint8 main()
 {
     Pair<int32, float64> p = Pair.make(a: 7, b: 2.5);   // Pair_int32_float64
     int32   x = p.getFirst();                       // 7
     float64 y = p.getSecond();                      // 2.5
     Pair<bool, int32> q = Pair.make(a: true, b: 5);      // Pair_bool_int32 (distinct instantiation)
     int32   z = q.getSecond();                      // 5
-    return x + cast<int32>(y) + z;                  // 7 + 2 + 5 = 14
+    return cast<uint8>(x + cast<int32>(y) + z);                  // 7 + 2 + 5 = 14
 }

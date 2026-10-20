@@ -9,4 +9,4 @@ extern "shapes.h";
 type extern value Sample { public int32 level; public int32 gain; }
 extern fn int32 sample_level(Sample s);
 unsafe fn int32 go() { return sample_level(s: Sample.zero()); }
-fn int32 main() { return go(); }
+fn uint8 main() { return cast<uint8>(go()); }

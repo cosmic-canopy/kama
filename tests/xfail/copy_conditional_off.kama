@@ -8,7 +8,7 @@ type resource Cell<T> implements Copyable<This>(bare: give) when [T: Copyable<T>
     ~Cell() { }   // the FIELD is auto-dropped by the owner's dtor — an explicit drop would be a SECOND one
 }
 type resource MoveOnly { int32 n; public ctor make(int32 n){this.n=n;} ~MoveOnly(){} public fn int32 val(){return this.n;} }
-fn int32 main() {
+fn uint8 main() {
     Cell<MoveOnly> m = Cell.make(v: MoveOnly.make(n: 9));
     Cell<MoveOnly> c = copy m;   // ERROR: Cell<MoveOnly> is not Copyable
     return 0;

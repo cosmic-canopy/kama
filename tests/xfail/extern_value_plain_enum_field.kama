@@ -4,4 +4,4 @@ extern "stdio.h";
 type enum Mode : int32 { Off, On }
 @generate(zero)
 type extern value Settings { public Mode mode; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

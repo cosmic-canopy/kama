@@ -3,4 +3,4 @@
 comptime fn int64 same(int64 x) { return x; }
 comptime int64 A = same(x: B) + 1;
 comptime int64 B = A;
-fn int32 main() { return cast<int32>(A); }
+fn uint8 main() { return cast<uint8>(A); }

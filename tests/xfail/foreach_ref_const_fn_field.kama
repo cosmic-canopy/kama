@@ -11,4 +11,4 @@ type resource Bag {
     }
 }
 
-fn int32 main() { Bag b = Bag.make(); return b.zap(); }
+fn uint8 main() { Bag b = Bag.make(); return cast<uint8>(b.zap()); }

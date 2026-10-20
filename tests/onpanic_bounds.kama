@@ -8,10 +8,10 @@
 fn int32 mix(InlineArray<int32>#(4) buf, isize i) {
     return buf[i];                              // i = 9 -> bounds miss -> recovered as -1
 }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(4) buf = [7; 4];
     int32 ok  = mix(buf: buf, i: 2);           // 7
     int32 bad = mix(buf: buf, i: 9);           // -1 (recovered)
     int32 again = mix(buf: buf, i: 1);         // 7 — the slot was disarmed and re-armed correctly
-    return ok + again - bad + 27;              // 7 + 7 + 1 + 27 = 42
+    return cast<uint8>(ok + again - bad + 27);              // 7 + 7 + 1 + 27 = 42
 }

@@ -2,7 +2,7 @@
 // survives at both widths (unlike the lenient reader the JSON path uses, which folds everything to 0.0).
 import { std::fmt::parse, std::fmt::ParseError };
 
-fn int32 main() {
+fn uint8 main() {
     string a = "3.5";
     string b = "-0.25";
     string c = "1e3";
@@ -25,5 +25,5 @@ fn int32 main() {
     float32 vf = match (rf) { case Ok(value: v): v; case Err(error: x): 0.0f32; };   // 2.5
 
     int32 m = cast<int32>(va * 2.0) + cast<int32>(vb * 4.0) + cast<int32>(vc / 100.0) + cast<int32>(vf * 2.0f32);
-    return m + vd + ve;   // (7 - 1 + 10 + 5) + 5 + 6 = 32
+    return cast<uint8>(m + vd + ve);   // (7 - 1 + 10 + 5) + 5 + 6 = 32
 }

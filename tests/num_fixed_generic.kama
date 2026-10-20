@@ -6,7 +6,7 @@
 // that matters most: it is a 16-bit type, so any accumulator that stayed int32-shaped would be visible
 // here and nowhere else.
 import { std::num::Fixed };
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     // Q8.8 in an int16: scale 256, range [-128, 128), resolution 1/256.
@@ -34,5 +34,5 @@ fn int32 main() {
     // Comparison still comes from the contracts, at an instance the Q16.16 fixture never builds.
     if (Fixed::<int16>#(8).fromInt(n: 2) < q88_3)         { r = r + 1; }
 
-    return r;   // 12
+    return cast<uint8>(r);   // 12
 }

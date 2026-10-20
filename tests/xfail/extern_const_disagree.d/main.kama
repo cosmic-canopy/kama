@@ -3,4 +3,4 @@
 import { lib::bufSize };
 extern "stdio.h";
 extern const int64 BUFSIZ;
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

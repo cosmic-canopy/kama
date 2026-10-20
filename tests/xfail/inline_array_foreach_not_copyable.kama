@@ -1,9 +1,9 @@
 // `foreach (T x in a)` hands each pass a copy of the element; over an `InlineArray` of a resource that does not
 // copy, the pass borrows instead (`const ref`, or `ref` to write).
 type resource H { int32 id; public ctor make(int32 id) { this.id = id; } ~H() { } public const fn int32 get() { return this.id; } }
-fn int32 main() {
+fn uint8 main() {
     InlineArray<H>#(2) a = [H.make(id: 1), H.make(id: 2)];
     int32 n = 0;
     foreach (H h in a) { n = n + h.get(); }
-    return n;
+    return cast<uint8>(n);
 }

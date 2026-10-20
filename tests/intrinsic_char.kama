@@ -42,7 +42,7 @@ fn string render<T: Formattable>(ref T x) {
     return f.finish();
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 score = 0;
 
     // The prelude conformance, through `<T: Formattable>`. `char` renders its CHARACTER; `uint32` renders the
@@ -88,5 +88,5 @@ fn int32 main() {
     assert(cond: tag == 14ui8, msg: "a char element serializes as a char, not as a uint32");
     if (tag == 14ui8) { score = score + 40; }
 
-    return score;
+    return cast<uint8>(score);
 }

@@ -9,4 +9,4 @@ type value Pt {
     @compileFor(!OS_WINDOWS)
     public fn int32 onlyWin() { return 2; }
 }
-fn int32 main() { Pt p = Pt.make(x: 0); return p.onlyWin(); }
+fn uint8 main() { Pt p = Pt.make(x: 0); return cast<uint8>(p.onlyWin()); }

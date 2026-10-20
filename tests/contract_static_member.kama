@@ -12,7 +12,7 @@ type value Big implements Stepper {
 }
 fn int32 viaBound<T: Stepper>(T t) { return T::step(n: t.size()); }    // static: on the type
 fn int32 viaValue(Stepper s) { return s.size() + s.twice(); }           // instance: through the value
-fn int32 main() {
+fn uint8 main() {
     Big b = Big.of(s: 3);
-    return viaBound(t: b) + viaValue(s: b);   // 13 + 9 = 22
+    return cast<uint8>(viaBound(t: b) + viaValue(s: b));   // 13 + 9 = 22
 }

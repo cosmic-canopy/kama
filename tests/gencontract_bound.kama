@@ -24,7 +24,7 @@ fn int32 sumIter<I: Iterator<int32>>(I it) {
     return total;
 }
 
-fn int32 main() {
+fn uint8 main() {
     IntRange r = IntRange.make(start: 1, end: 5);         // 1 + 2 + 3 + 4
-    return sumIter(it: r);                            // 10
+    return cast<uint8>(sumIter(it: r));                            // 10
 }

@@ -41,7 +41,7 @@ while [ "$i" -lt "$N" ]; do
 done
 printf 'int kb_sum(void);\n' > "$p/csrc/inc/kb.h"
 printf '#include "decls.h"\nint kb_sum(void) { return %s; }\n' "$sum" > "$p/csrc/sum.c"
-printf 'extern "kb.h";\nextern fn int32 kb_sum();\nunsafe fn int32 total() { return kb_sum(); }\nfn int32 main() { return total(); }\n' > "$p/src/main.kama"
+printf 'extern "kb.h";\nextern fn int32 kb_sum();\nunsafe fn int32 total() { return kb_sum(); }\nfn uint8 main() { return cast<uint8>(total()); }\n' > "$p/src/main.kama"
 printf '{ "name": "longcmd", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "source": "src",\n  "csources": [%s"csrc/sum.c"], "cincludes": ["csrc/inc"], "modules": { ".": { "visibility": "internal" } } }\n' "$srcs" > "$p/kama.json"
 
 exe="$out/longcmd"

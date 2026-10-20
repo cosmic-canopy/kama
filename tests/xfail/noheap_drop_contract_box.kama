@@ -11,8 +11,8 @@ type resource Circle implements Shape {
     public fn int32 area() { return 1; }
 }
 @noheap fn int32 finish(Owned<Shape, BumpAllocator> o) { return 0; }
-fn int32 main() {
+fn uint8 main() {
     Arena arena = Arena.make(capacity: 4096);
     Owned<Shape, BumpAllocator> a = new(allocator: arena.handle()) Circle.make(r: 5);
-    return finish(o: give a);
+    return cast<uint8>(finish(o: give a));
 }

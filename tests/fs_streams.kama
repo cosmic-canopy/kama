@@ -45,18 +45,18 @@ fn int32 readRec(ref string path) {
     return 0;
 }
 
-fn int32 main() {
+fn uint8 main() {
     string p = "_fs_streams.tmp";
     Rec r = Rec.make(id: 7, name: "hi", ok: true);
 
     int32 wc = writeRec(path: p, rec: r);
-    if (wc != 0) { return wc; }
+    if (wc != 0) { return cast<uint8>(wc); }
 
     int32 rc = readRec(path: p);
-    if (rc != 0) { return rc; }
+    if (rc != 0) { return cast<uint8>(rc); }
 
     int32 rmCode = match (remove(path: p)) { case Ok(value: u): 0; case Err(error: e): 70; };
-    if (rmCode != 0) { return rmCode; }
+    if (rmCode != 0) { return cast<uint8>(rmCode); }
 
     return 42;
 }

@@ -4,4 +4,4 @@ type value T {
     public default ctor empty() { this.n = 0; return this; }
     public default ctor blank() { this.n = 0; return this; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

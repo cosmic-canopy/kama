@@ -7,7 +7,7 @@
 // Returns 42.
 fn uint64 hashVia(Hashable h) { return h.hash(); }
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = 20;
     Hashable h = n;                                  // local declaration
     if (h.hash() != 20ui64) { return 1; }

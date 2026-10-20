@@ -5,4 +5,4 @@ type expose value Account {
     int32 balance;
     public ctor of(int32 id, int32 balance) { this.id = id; this.balance = balance; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

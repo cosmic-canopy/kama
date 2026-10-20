@@ -11,7 +11,7 @@
 // Returns 55.
 import { std::concurrent::Atomic };
 
-fn int32 main() {
+fn uint8 main() {
     // int8, negative prior
     Atomic<int8> b = Atomic.make(value: -1i8);
     int8 pb = b.fetchAdd(delta: 1i8);

@@ -1,7 +1,7 @@
 // `sizeof(T)` — the compile-time byte size of a type, as a usize.
 @generate(of)
 type value P { public int32 x; public int32 y; }
-fn int32 main() {
-    return cast<int32>(sizeof(int32)) + cast<int32>(sizeof(P)) + cast<int32>(sizeof(float64));
+fn uint8 main() {
+    return cast<uint8>(cast<int32>(sizeof(int32)) + cast<int32>(sizeof(P)) + cast<int32>(sizeof(float64)));
     // 4 + 8 + 8 = 20
 }

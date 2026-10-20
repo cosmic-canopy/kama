@@ -11,4 +11,4 @@ type value Plain {
         };
     }
 }
-fn int32 main() { Plain p = Plain.pick(m: Mode::A); return p.x + p.y; }
+fn uint8 main() { Plain p = Plain.pick(m: Mode::A); return cast<uint8>(p.x + p.y); }

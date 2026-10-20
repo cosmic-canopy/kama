@@ -12,8 +12,8 @@ type value BoxP implements Deref<Point> {
     public ctor make(Point p) { this.inner = p; }
     public const fn const ref Point deref() { return this.inner; }
 }
-fn int32 main() {
+fn uint8 main() {
     BoxP b = BoxP.make(p: Point.make(x: 1));
     b.bump();   // -> REJECT: through the read-only `deref()`
-    return b.get();
+    return cast<uint8>(b.get());
 }

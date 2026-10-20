@@ -10,8 +10,8 @@ type value Counter {
     public ctor of(int32 n) { this.n = n; return this; }        // a non-default named ctor
 }
 
-fn int32 main() {
+fn uint8 main() {
     Counter a = Counter.empty();
     Counter b = Counter.of(n: 42);
-    return a.n + b.n;   // 0 + 42 = 42
+    return cast<uint8>(a.n + b.n);   // 0 + 42 = 42
 }

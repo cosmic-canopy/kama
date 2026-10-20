@@ -15,4 +15,4 @@ type final resource Square extends Shape {
     protected override fn int32 compute() { return this.parts[0] * this.parts[0]; }
 }
 fn Owned<Shape> make(int32 s) { return new Square.make(s: s); }
-fn int32 main() { Owned<Shape> o = make(s: 8); return o.area(); }
+fn uint8 main() { Owned<Shape> o = make(s: 8); return cast<uint8>(o.area()); }

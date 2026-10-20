@@ -4,7 +4,7 @@
 
 import { core::print, core::println };
 
-fn int32 main() {
+fn uint8 main() {
     int32 x = 42;
     print(s: "Hello, ");
     println(s: "world");

@@ -9,10 +9,10 @@ type value Tagged<T> comptime(bool LOUD) {
 
 fn int32 codeOf() comptime(char C) { return cast<int32>(C); }
 
-fn int32 main() {
+fn uint8 main() {
     Tagged<int32>#(true)  loud  = Tagged::<int32>#(true).of(v: 0);
     Tagged<int32>#(false) quiet = Tagged::<int32>#(false).of(v: 0);
     int32 a = codeOf()#('A');          // 65
     int32 z = codeOf()#('z');          // 122 — a SECOND instantiation, so the mangle must differ
-    return loud.volume() + quiet.volume() + a + z;   // 10 + 1 + 65 + 122 = 198
+    return cast<uint8>(loud.volume() + quiet.volume() + a + z);   // 10 + 1 + 65 + 122 = 198
 }

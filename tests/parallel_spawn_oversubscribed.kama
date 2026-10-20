@@ -12,7 +12,7 @@
 import { std::concurrent::Atomic, std::concurrent::cpuCount,
          std::collections::DynamicArray, std::collections::View };
 
-fn int32 main() {
+fn uint8 main() {
     int32 n = cpuCount() * 3;                  // deliberately oversubscribed
     Atomic<int32> arrived = Atomic.make(value: 0i32);
     DynamicArray<int32> slots = DynamicArray.empty();

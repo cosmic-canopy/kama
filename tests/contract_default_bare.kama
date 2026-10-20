@@ -7,11 +7,11 @@ type value Two implements Dg<int32> { public ctor make() { } public fn int32 get
 fn int32 take(Dg d) { return d.get(); }
 fn int32 takeFull(Dg<int32> d) { return d.get(); }
 fn int32 bound<S: Dg>(S s) { return s.get(); }
-fn int32 main() {
+fn uint8 main() {
     Lit l = Lit.make(); Two t = Two.make();
     Dg d = l;
     Lit2 l2 = Lit2.make();
-    return take(d: d) + takeFull(d: t) + bound(s: l) + anySrc(s: l2);   // 7 + 9 + 7 + 1 = 24
+    return cast<uint8>(take(d: d) + takeFull(d: t) + bound(s: l) + anySrc(s: l2));   // 7 + 9 + 7 + 1 = 24
 }
 type contract Src<A> for value { fn A get(); }
 type value Lit2 implements Src<int64> { public ctor make() { } public fn int64 get() { return 2i64; } }

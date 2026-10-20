@@ -2,7 +2,7 @@
 // advice a resource gets ("add `implements Copyable`"), which no user can take for `DynamicArray`.
 import { std::collections::DynamicArray };
 type resource Box { int32 v; public ctor make() { this.v = 1; } }
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<Box> xs = DynamicArray.empty();
     DynamicArray<Box> ys = copy xs;
     return 0;

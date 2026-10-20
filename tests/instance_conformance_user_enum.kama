@@ -52,7 +52,7 @@ type resource Keys implements Tally<Key> {
     public fn Map<Key, int32> counts() { Map<Key, int32> m = Map.empty(); m.put(key: Key::B, value: 2); return m; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shapes s = Shapes.start();
     Optional<Sh> got = s.next();
     Optional<Sh> square = Optional::Some(value: Sh::Square);

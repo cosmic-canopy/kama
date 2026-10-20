@@ -5,4 +5,4 @@ import { copyInLib };
 extern "<string.h>";
 extern fn UnsafePtr memcpy(UnsafePtr src, UnsafePtr dst, usize n);
 unsafe fn void copyInMain(UnsafePtr d, UnsafePtr s) { memcpy(dst: d, src: s, n: cast<usize>(4)); }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

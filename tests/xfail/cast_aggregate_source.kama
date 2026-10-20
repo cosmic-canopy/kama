@@ -6,4 +6,4 @@ unsafe fn UnsafePtr storage() {
     return cast<UnsafePtr>(s);
 }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

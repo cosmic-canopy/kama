@@ -37,9 +37,9 @@ type value Printer {
     public fn int32 width() { Shape u = Shape.unit(); return match (u) { case Circle(r: r): 0; case Square(side: s): s; }; }   // 1
 }
 
-fn int32 main() {
+fn uint8 main() {
     Shape c = Shape::Square(side: 2);
     Canvas cv = Canvas.make();
     Printer p = Printer.make();
-    return area(s: ref c) + cv.paint() + p.width();   // 4 + 10 + 1 + 1 + 1 = 17
+    return cast<uint8>(area(s: ref c) + cv.paint() + p.width());   // 4 + 10 + 1 + 1 + 1 = 17
 }

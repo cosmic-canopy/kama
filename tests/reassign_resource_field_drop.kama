@@ -19,8 +19,8 @@ type resource Outer {
     public fn void swap(int32 t) { this.inner = Inner.make(tag: t); }   // reassign a live field via a fresh ctor
 }
 
-fn int32 main() {
+fn uint8 main() {
     Outer o = Outer.make(i: Inner.make(tag: 5));   // first-write: NO drop of the {0} slot
     o.swap(t: 9);                                  // reassign: MUST drop old inner(5)
-    return traceGet();                        // 5 (o's own final drop of inner(9) happens after this read)
+    return cast<uint8>(traceGet());                        // 5 (o's own final drop of inner(9) happens after this read)
 }

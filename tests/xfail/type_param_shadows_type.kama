@@ -9,4 +9,4 @@ type value Point { public int32 x; }
 
 fn int32 area<Point>(Point p) { return p.x; }
 
-fn int32 main() { return area(p: 5); }
+fn uint8 main() { return cast<uint8>(area(p: 5)); }

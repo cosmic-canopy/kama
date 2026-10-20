@@ -36,13 +36,13 @@ type immutable value Region {
     public ctor make(Bounds inner, isize stride) { this.inner = inner; this.stride = stride; }
 }
 
-fn int32 main()
+fn uint8 main()
 {
     Bounds b = Bounds.make(lo: 4, span: 6, tag: 7);
     Region r = Region.make(inner: b, stride: 2);
 
-    return cast<int32>(r.inner.lo)        // 4
+    return cast<uint8>(cast<int32>(r.inner.lo)        // 4
          + cast<int32>(r.inner.span)      // 6
          + r.inner.tag                    // 7
-         + cast<int32>(r.stride);         // 2   -> 19
+         + cast<int32>(r.stride));         // 2   -> 19
 }

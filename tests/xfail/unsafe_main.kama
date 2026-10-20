@@ -5,7 +5,7 @@
 // The positive counterpart is every other fixture in this suite: a kama `unsafe fn` is callable FROM
 // safe code (only an `extern fn` is gated at the call), so the raw work moves one frame down and
 // `main` stays safe. `tests/unsafe_ptr.kama` is the canonical shape.
-unsafe fn int32 main() {
+unsafe fn uint8 main() {
     int32 x = 42;
-    return x;
+    return cast<uint8>(x);
 }

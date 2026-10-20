@@ -24,7 +24,7 @@ type value Outer<T> {
 // A USER enum fails identically when its parameter is spelled `T` — nothing here is about `Optional`.
 type enum MyOpt<T> { Has(T value), Nope }
 
-fn int32 main() {
+fn uint8 main() {
     Optional<Reader<int32>> o = Optional::Some(value: Reader.make(item: 7));
     int32 a = match (o) { case Some(value: v): v.item; case None: 0; };            // 7
 
@@ -34,5 +34,5 @@ fn int32 main() {
     MyOpt<Reader<int32>> u = MyOpt::Has(value: Reader::<int32>.make(item: 20));
     int32 c = match (u) { case Has(value: v): v.item; case Nope: 0; };             // 20
 
-    return a + b + c;   // 7 + 15 + 20 = 42
+    return cast<uint8>(a + b + c);   // 7 + 15 + 20 = 42
 }

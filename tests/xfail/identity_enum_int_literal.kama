@@ -12,7 +12,7 @@
 // An enum value is written by name.
 type enum A : uint8 { A0, A1, A2 }
 
-fn int32 main()
+fn uint8 main()
 {
     A a = 0;
     A bogus = 99;

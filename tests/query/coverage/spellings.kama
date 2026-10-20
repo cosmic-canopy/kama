@@ -49,7 +49,7 @@ type value Box<T> {
 
 fn int32 doubled(int32 n) { return n * 2; }
 
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.at(px: 3, py: 4);       // named ctor + argument LABELS
     int32 a = p.area();                     // direct method call
     int32 s = p.sum();
@@ -75,7 +75,7 @@ fn int32 main() {
     InlineArray<int32>#(3) arr = [1, 2, 3];
     foreach (int32 e in arr) { total = total + e; }   // foreach BINDING
 
-    return a + s + o + f + cv + sv + g + k + dd + total;
+    return cast<uint8>(a + s + o + f + cv + sv + g + k + dd + total);
 }
 
 // A PINNED type parameter (`<T is This>`) — the self-type declared as an ordinary parameter, which is

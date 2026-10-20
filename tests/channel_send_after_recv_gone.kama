@@ -19,7 +19,7 @@ type value Box implements Sendable {
     public fn int32 get() { return this.v; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Channel<Owned<Box>> ch = Channel.bounded(capacity: 2);
     Sender<Owned<Box>>   tx = ch.sender();
 
@@ -37,5 +37,5 @@ fn int32 main() {
         case Ok(value: _):  { got = -1; }                                   // must NOT happen — the receiver is gone
         case Err(error: u): { match (give u) { case Item(item: item): { got = item.get(); } }; }   // handed back intact → 42; frees at arm-end
     };
-    return got;   // 42
+    return cast<uint8>(got);   // 42
 }

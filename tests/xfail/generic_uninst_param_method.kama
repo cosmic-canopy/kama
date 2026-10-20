@@ -10,4 +10,4 @@ import { std::collections::DynamicArray };
 fn void neverCalled<T>(ref DynamicArray<T> src) {
     T item = src.get(index: 0);          // ERROR: `DynamicArray` has no `get`
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

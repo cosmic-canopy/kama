@@ -9,7 +9,7 @@ fn isize count() { return RANGES.view().length(); }
 fn uint32 sum() { uint32 s = 0ui32; foreach (uint32 x in RANGES) { s = s + x; } return s; }
 fn int32 weight() { int32 s = 0; foreach (int32 w in WEIGHTS) { s = s + w; } return s + WEIGHTS[1] + cast<int32>(WEIGHTS.view().length()); }
 
-fn int32 main() {
+fn uint8 main() {
     if (last() != 0x200Bui32) { return 1; }
     if (count() != 4) { return 2; }
     if (sum() != 160ui32 + 160ui32 + 8192ui32 + 8203ui32) { return 3; }

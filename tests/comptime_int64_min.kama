@@ -29,7 +29,7 @@ type value Buf comptime(int64 N) {
     public fn int64 n() { return N; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     comptime int64 LOCAL = -9223372036854775807i64 - 1i64;
     Buf#(-9223372036854775807i64 - 1i64) b = Buf#(-9223372036854775807i64 - 1i64).make();
     E e = E::A;
@@ -44,5 +44,5 @@ fn int32 main() {
     if (cast<int64>(e) == LOWEST) { ok = ok + 1; }
     if (echo()#(-9223372036854775807i64 - 1i64) == LOWEST) { ok = ok + 1; }
     if (b.n() == LOWEST) { ok = ok + 1; }
-    return ok;   // 10
+    return cast<uint8>(ok);   // 10
 }

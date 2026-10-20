@@ -6,7 +6,7 @@
 //
 // A ternary is the cheapest form the renderer does not cover, and it is a stand-in: the point is the
 // degrade, not this operator. If a `?:` arm is ever added, keep the fixture and pick another.
-fn int32 main() {
+fn uint8 main() {
     comptime assert(cond: (2 > 1 ? 5 : 6) == 6, msg: "a condition the renderer cannot spell");
     return 0;
 }

@@ -18,7 +18,7 @@ fn int32 val(Optional<int32> o) { return match (o) { case Some(value: v): v; cas
 fn int32 borrowed(const ref Optional<int32> o) { return match (o) { case Some(value: v): v; case None: 0 - 1; }; }
 fn int32 side(Shape s) { return match (s) { case Dot: 0; case Square(side: n): n; }; }
 
-fn int32 main() {
+fn uint8 main() {
     bool yes = true;
     bool no = false;
     // An assignment to a local.

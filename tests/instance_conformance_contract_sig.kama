@@ -43,7 +43,7 @@ type resource Batch implements Sendable {
     public const fn bool has(int64 x) { return this.xs.contains(item: x); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Counter it = Counter.start();
     Optional<int64> first = it.next();
     Optional<int64> one = Optional::Some(value: 1i64);

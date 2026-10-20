@@ -2,4 +2,4 @@
 // tell which one a value belonged to — and a positional one emits in ascending id, which is undefined here.
 @generate(Serializable, Deserializable)
 type value R { @field(id: 3) int32 a; @field(id: 3) int32 b; }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

@@ -5,4 +5,4 @@
 
 @section(".ramfunc") fn uint32 read_build_id() { return build_id; }
 
-fn int32 main() { return cast<int32>(read_build_id()); }
+fn uint8 main() { return cast<uint8>(read_build_id()); }

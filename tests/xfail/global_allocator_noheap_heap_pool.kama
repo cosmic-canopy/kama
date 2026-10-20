@@ -22,4 +22,4 @@ extern "<vendor_pool.h>";
 }
 type value Box { public int32 v = 0; public ctor make(int32 v) { this.v = v; } }
 @noheap fn int32 tick() { Owned<Box> b = new Box.make(v: 3); return b.v; }
-fn int32 main() { return tick(); }
+fn uint8 main() { return cast<uint8>(tick()); }

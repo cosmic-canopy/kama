@@ -124,11 +124,11 @@ cmp_sets "every \`string\` intrinsic is documented, and vice versa" \
 # names. (A reserved word in a SIGNATURE and one in a BODY are the same road; the body is the one that
 # needed `recordBuiltinRef`, so it is the one probed.)
 cat > "$tmp/p.kama" <<'KAMA'
-fn int32 main() {
+fn uint8 main() {
     string s = "hi";
     isize n = s.length();
     int32 k = 1;
-    return k + cast<int32>(n);
+    return cast<uint8>(k + cast<int32>(n));
 }
 KAMA
 

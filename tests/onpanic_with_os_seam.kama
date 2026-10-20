@@ -11,7 +11,7 @@ fn int32 guarded(int32 v) {
     return cast<int32>(cast<int8>(v));          // 300 does not fit -> recovered as 1
 }
 
-fn int32 main() {
+fn uint8 main() {
     bool here = exists(path: "/definitely/not/a/path/kama");
-    return guarded(v: 300) + guarded(v: 5) + (here ? 100 : 36);   // 1 + 5 + 36 = 42
+    return cast<uint8>(guarded(v: 300) + guarded(v: 5) + (here ? 100 : 36));   // 1 + 5 + 36 = 42
 }

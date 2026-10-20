@@ -22,7 +22,7 @@ type resource Conn implements Transacts {
     public const fn int32 closes() { return this.trail; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Conn c = Conn.make();
     int32 outer = 0;
     int32 inside = 0;

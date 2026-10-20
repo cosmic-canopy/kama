@@ -4,4 +4,4 @@ type resource Bad {
     int32 x;
     public ctor make(int32 x) { this.x = x; return this; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

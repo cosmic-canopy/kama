@@ -3,8 +3,8 @@ import { std::memory::Shared };
 // RETAINS (strong++), but `give` RELOCATES the handle — the strong count is untouched (it's the same
 // handle in a new home) and the source is consumed. Use-after-give is a compile error (xfail).
 @generate(of) type value Counter { public int32 n; public fn int32 get(){return this.n;} }
-fn int32 main() {
+fn uint8 main() {
     Shared<Counter> a = new Counter.of(n: 7);
     Shared<Counter> b = give a;   // MOVE: a consumed, b holds the sole handle (strong stays 1)
-    return b.get();               // 7 (b drops -> Counter freed exactly once)
+    return cast<uint8>(b.get());               // 7 (b drops -> Counter freed exactly once)
 }

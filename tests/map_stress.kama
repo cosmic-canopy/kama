@@ -1,7 +1,7 @@
 // Map under stress: many grows (rehash), heavy tombstoning, tombstone reclamation, and churn — the
 // paths most likely to corrupt an open-addressing table. Verifies correctness throughout; ASan-clean.
 import { std::collections::Map };
-fn int32 main() {
+fn uint8 main() {
     Map<int32, int32> m = Map.empty();
     int32 i = 0;
     while (i < 1000) { m.put(key: i, value: i * 3); i = i + 1; }   // ~7 grows
@@ -49,5 +49,5 @@ fn int32 main() {
     r = r + (f == 1999 * 3 ? 3 : 0);
     m.clear();
     r = r + (m.length() == 0 ? 3 : 0);
-    return r;   // 5+5+5+5+6+5+3+3 = 37... will confirm
+    return cast<uint8>(r);   // 5+5+5+5+6+5+3+3 = 37... will confirm
 }

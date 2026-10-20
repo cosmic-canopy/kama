@@ -17,12 +17,12 @@ type resource Mixer {
 fn int32 twice(int32 x) { return x * 2; }
 fn int32 one() { return 1; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = apply(f: twice, v: 3);      // a function straight to the parameter: 6
     Op g = twice;
     int32 b = apply(f: g, v: one());      // a call after it sequences `g` into a temporary: 2
     Mixer m = Mixer.make();
     m.run(render: twice, v: 10);          // 20
     m.run(render: g, v: one());           // 2
-    return a + b + m.sum();               // 30
+    return cast<uint8>(a + b + m.sum());               // 30
 }

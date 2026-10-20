@@ -2,12 +2,12 @@
 // branch runs, the local ends up viewing a container that is still nameable and still growable.
 import { std::collections::View, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 2);
     DynamicArray<int32> e = DynamicArray.withCapacity(capacity: 2);
     d.add(item: 1); e.add(item: 2);
     bool pick = d.length() > 0;
     View<int32> v = pick ? d.viewMut() : e.viewMut();
     d.add(item: 3); d.add(item: 4); d.add(item: 5);
-    return v[0];
+    return cast<uint8>(v[0]);
 }

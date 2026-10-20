@@ -34,4 +34,4 @@ expose fn uint32 wireArg(Wire w) { return w.arg + cast<uint32>(w.op); }
 
 unsafe fn int32 viaHost() { return host_run(); }
 
-fn int32 main() { return viaHost(); }
+fn uint8 main() { return cast<uint8>(viaHost()); }

@@ -19,7 +19,7 @@ type value P {
     public const fn const ref P view() { return this; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     B b = B.make(x: 1);
     b.me().bump();                            // a write through the returned place lands on `b`
     b.me().me().bump();                       // …chained

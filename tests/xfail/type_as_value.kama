@@ -3,4 +3,4 @@ type value V {
     public int32 n;
     public ctor make() { this.n = 1; }
 }
-fn int32 main() { return V; }   // ERROR: `V` is a type, not a value
+fn uint8 main() { return V; }   // ERROR: `V` is a type, not a value

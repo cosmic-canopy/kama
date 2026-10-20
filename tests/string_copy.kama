@@ -1,10 +1,10 @@
 // M26f-3 — `copy` of a `string` is a deep, heap-owned copy; the source stays valid and both
 // free their own buffer at scope exit (no double-free).
-fn int32 main() {
+fn uint8 main() {
     string a = "ab";
     string owned = a.concat(other: a);   // "abab", heap-owned (cap>0)
     string b = copy owned;               // deep copy of a heap-owned string
     isize r = owned.length();            // 4  (source still valid)
     r = r + b.length();                  // + 4 = 8
-    return cast<int32>(r);
+    return cast<uint8>(r);
 }

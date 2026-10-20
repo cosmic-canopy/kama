@@ -2,4 +2,4 @@
 // misspelled attribute on an enum used to compile clean and do nothing.
 @genrate(Equatable)
 type enum Mode { Off, On }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

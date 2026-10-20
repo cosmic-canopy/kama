@@ -7,12 +7,12 @@ type resource Dot implements Draw {
     public ctor make(int32 x) { this.h.add(item: x); }
     public fn int32 v() { return this.h[0]; }
 }
-fn int32 main() {
+fn uint8 main() {
     Shared<Dot> a = new Dot.make(x: 3);
     Shared<Draw> s = copy a;          // explicit retain-upcast (a stays valid)
     Shared<Dot> a2 = new Dot.make(x: 4);
     s = a2;                            // reseat: release the old Dot(3), retain Dot(4)
     Owned<Dot> o = new Dot.make(x: 5);
     Owned<Draw> od = give o;          // give-move-upcast (o consumed)
-    return a.v() + s.v() + od.v();     // 3 + 4 + 5 = 12
+    return cast<uint8>(a.v() + s.v() + od.v());     // 3 + 4 + 5 = 12
 }

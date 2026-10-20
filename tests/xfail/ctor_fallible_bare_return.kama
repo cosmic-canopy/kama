@@ -10,4 +10,4 @@ type resource R {
         return Result::Ok(value: give this);
     }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

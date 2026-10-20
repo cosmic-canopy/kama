@@ -9,4 +9,4 @@ type resource H implements Copyable<This>(bare: copy) {
     public ctor copy(const ref H source) { return H.make(id: source.id); }   // -> REJECT: contract says `ref`
     public const fn int32 get() { return this.id; }
 }
-fn int32 main() { H a = H.make(id: 7); H b = copy a; return b.get(); }
+fn uint8 main() { H a = H.make(id: 7); H b = copy a; return cast<uint8>(b.get()); }

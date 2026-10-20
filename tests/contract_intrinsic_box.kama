@@ -30,7 +30,7 @@ type resource Named {
     public fn int32 nameLen() { return len(v: this.name); }  // a string FIELD
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 iv = 30;
     string sv = "abcd";
     Pt p = Pt.of(x: 12345);
@@ -60,5 +60,5 @@ fn int32 main() {
     Shared<Show> o4 = o3;
     if (o1.width() + o2.width() + o3.width() + o4.width() != 15) { return 17; }
     Owned<Show> o5 = 20;
-    return o5.width() + 5;                                    // 25
+    return cast<uint8>(o5.width() + 5);                                    // 25
 }

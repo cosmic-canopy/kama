@@ -9,8 +9,8 @@ type value Point {
     public int32 y;
 }
 
-fn int32 main() {
+fn uint8 main() {
     Point p = Point.of(x: 30, y: 12);           // synthesized memberwise ctor
     Owned<Point> o = new Point.of(x: 5, y: 5);   // `new` composes with the bag ctor
-    return p.x + p.y + o.x + o.y;                // 42 + 10 = 52
+    return cast<uint8>(p.x + p.y + o.x + o.y);                // 42 + 10 = 52
 }

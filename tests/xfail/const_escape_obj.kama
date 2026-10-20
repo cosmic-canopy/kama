@@ -1,4 +1,4 @@
 // a const OBJECT must not be mutated through a non-const ref param.
 type value B { public int32 v; public ctor make(int32 v){ this.v = v; } }
 fn void wreck(ref B b) { b.v = 999; }
-fn int32 main() { const B b = B.make(v: 1); wreck(b: ref b); return b.v; }
+fn uint8 main() { const B b = B.make(v: 1); wreck(b: ref b); return cast<uint8>(b.v); }

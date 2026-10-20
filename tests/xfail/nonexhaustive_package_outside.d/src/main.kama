@@ -2,4 +2,4 @@
 // though it names every case today, because the package may add one in a later release.
 import { codes::Code };
 fn int32 local(Code c) { return match (c) { case Low: 1; case High: 10; }; }
-fn int32 main() { return local(c: Code::High); }
+fn uint8 main() { return cast<uint8>(local(c: Code::High)); }

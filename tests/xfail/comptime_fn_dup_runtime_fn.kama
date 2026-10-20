@@ -3,4 +3,4 @@
 comptime fn int32 twice(int32 n) { return n * 2; }
 fn int32 twice(int32 n) { return n * 3; }
 comptime int32 X = twice(n: 5);
-fn int32 main() { return X; }
+fn uint8 main() { return cast<uint8>(X); }

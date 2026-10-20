@@ -3,7 +3,7 @@
 // lowering would otherwise trip over.
 import { std::collections::View, std::collections::ConstView, std::concurrent::Isolate };
 
-fn int32 main() {
+fn uint8 main() {
     InlineArray<int32>#(4) a = [1, 2, 3, 4];
     borrow a.view() as cv {
         parallel_for (ref int32 e in cv, workers: 2) { e = e * 2; }   // -> REJECT

@@ -15,9 +15,9 @@
 // pulls a non-trapping build to 44, where the harness fails it loudly. Verified by running this fixture
 // against the unfixed compiler.
 import { std::num::int32Max };
-fn int32 main() {
+fn uint8 main() {
     int8 a = cast<int8>(int32Max() - int32Max() + 100);   // 100, opaque
     int8 b = a;
     int8 r = a + b;                                        // 200 -> does not fit int8 -> trap
-    return cast<int32>(r) + 100;                           // un-trapped: -56 + 100 = 44, never >= 128
+    return cast<uint8>(cast<int32>(r) + 100);                           // un-trapped: -56 + 100 = 44, never >= 128
 }

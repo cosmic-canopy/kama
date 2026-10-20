@@ -8,4 +8,4 @@ type value Timer {
     public ctor make(int32 n) { this.n = n; }
     @interrupt public fn void tick() { }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

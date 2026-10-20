@@ -3,7 +3,7 @@
 // likewise defaults H and A. Exercises the default-fill under ASan (the plain malloc/free path).
 import { std::collections::DynamicArray, std::collections::Map };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
     DynamicArray<int32> a = DynamicArray.empty();                                         // A = GlobalAllocator (default)
     DynamicArray<int32, GlobalAllocator> b = DynamicArray.withAllocator(allocator: GlobalAllocator.make());
@@ -15,5 +15,5 @@ fn int32 main() {
     int32 v = match (o) { case Some(value: x): x; case None: 0 - 1; };
     if (v == 2) { r = r + 25; }
 
-    return r;   // 50
+    return cast<uint8>(r);   // 50
 }

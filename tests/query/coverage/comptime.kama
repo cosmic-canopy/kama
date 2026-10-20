@@ -62,7 +62,7 @@ comptime Pair TOTAL = Pair::UNIT + Pair.of(a: BASE, b: SQ);
 comptime InlineArray<int32>#(3) TABLE = [BASE, SQ, EVERY];
 comptime assert(cond: TABLE[0] == BASE && EVERY > 0, msg: "a module assertion");
 
-fn int32 main() {
+fn uint8 main() {
     comptime int32 HERE = EVERY + TABLE[1];
     comptime assert(cond: HERE > BASE, msg: "a body assertion");
     return HERE + TOTAL.sum() > 0 ? 0 : 1;

@@ -90,7 +90,7 @@ fn int32 looped(ref DynamicArray<R> kept) {
     return sum;
 }
 
-fn int32 main() {
+fn uint8 main() {
     {
         DynamicArray<R> kept = DynamicArray.empty();
         if (nested(kept: kept, which: 0) != -1 || nested(kept: kept, which: 1) != 1 || nested(kept: kept, which: 5) != 5) { return 1; }

@@ -12,8 +12,8 @@ type final resource Circle extends Shape
     public ctor make(int32 r) { this.base = Base.make(); this.r = r; }
     protected override fn int32 area() { return r * r; }
 }
-fn int32 main()
+fn uint8 main()
 {
     Circle c = Circle.make(r: 7);
-    return c.describe();
+    return cast<uint8>(c.describe());
 }

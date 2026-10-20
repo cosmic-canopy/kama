@@ -2,7 +2,7 @@
 // naming its line, column and byte offset. (The bad bytes are written by a script; an editor would repair them.)
 // Here the file ENDS inside a character: the last line has no newline and stops after two of the
 // three bytes of a euro sign.
-fn int32 main() {
+fn uint8 main() {
     return 0;
 }
 // â‚

@@ -10,8 +10,8 @@ type value Impl implements Tok {
 
 fn int32 outsider(Tok t) { return t.hidden(); }
 
-fn int32 main()
+fn uint8 main()
 {
     Impl i = Impl.make();
-    return outsider(t: i);
+    return cast<uint8>(outsider(t: i));
 }

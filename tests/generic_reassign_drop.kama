@@ -40,9 +40,9 @@ fn int32 plain()   { drops = 0; { Plain p = freshPlain(); p = freshPlain(); p = 
 fn int32 owned()   { drops = 0; { Owned<Probe> o = mk(); o = mk(); o = mk(); } return drops; }
 fn int32 dotCtor() { drops = 0; { Box<int32> b = freshBox(); b = Box.make(v: 2); b = Box.make(v: 3); } return drops; }
 
-fn int32 main()
+fn uint8 main()
 {
     int32 g = generic(); int32 p = plain(); int32 o = owned(); int32 d = dotCtor();
     if (g == 3 && p == 3 && o == 3 && d == 3) { return 42; }
-    return g * 64 + p * 16 + o * 4 + d;
+    return cast<uint8>(g * 64 + p * 16 + o * 4 + d);
 }

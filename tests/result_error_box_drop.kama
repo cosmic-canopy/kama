@@ -24,4 +24,4 @@ fn int32 use(Result<int32, Owned<Error>> r) {
     return match (r) { case Ok(value: v): v; case Err(error: e): { string m = e.message(); := cast<int32>(m.length()); } };
     // r (and its boxed error, and the Shared<Probe>, and the Probe) all drop here — leak-clean under SAN
 }
-fn int32 main() { return use(r: load(ok: true)) * 10 + use(r: load(ok: false)); }  // 5*10 + 1 = 51
+fn uint8 main() { return cast<uint8>(use(r: load(ok: true)) * 10 + use(r: load(ok: false))); }  // 5*10 + 1 = 51

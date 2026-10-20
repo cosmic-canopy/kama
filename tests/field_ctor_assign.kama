@@ -21,7 +21,7 @@ type resource Registry {
     public fn int32 score() { return cast<int32>(this.m.length()) + cast<int32>(this.log.length()) + this.origin.sum(); }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Registry r = Registry.make();
     r.put(k: 1, v: 10); r.put(k: 2, v: 20); r.put(k: 1, v: 99);   // m:{1,2}, log:[1,2,1]
     r.reset();                                                     // m:{}
@@ -34,5 +34,5 @@ fn int32 main() {
     local = Map.empty();                                                 // re-init the local
     local.put(key: 8, value: 8); local.put(key: 7, value: 7);
 
-    return r.score() + cast<int32>(local.length());   // (1 + 4 + 7) + 2 = 14
+    return cast<uint8>(r.score() + cast<int32>(local.length()));   // (1 + 4 + 7) + 2 = 14
 }

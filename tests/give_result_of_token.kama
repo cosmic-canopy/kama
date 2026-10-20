@@ -18,10 +18,10 @@ fn Result<Token, E> issue(int32 id) { return Result::Ok(value: Token.make(id: id
 fn Optional<Token> maybe(int32 id) { return Optional::Some(value: Token.make(id: id)); }
 fn int32 consume(Token t) { return t.get(); }
 
-fn int32 main() {
+fn uint8 main() {
     Result<Token, E> r = issue(id: 30);
     Token a = match (give r) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
     Optional<Token> o = maybe(id: 12);
     Token b = match (give o) { case Some(value: x): give x; case None: { return 2; } };
-    return consume(t: give a) + consume(t: give b);   // 42
+    return cast<uint8>(consume(t: give a) + consume(t: give b));   // 42
 }

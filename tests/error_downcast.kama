@@ -28,4 +28,4 @@ fn int32 handle(Result<int32, Owned<Error>> r) {
         }
     };
 }
-fn int32 main() { return handle(r: f(w: 0)) + handle(r: f(w: 1)) + handle(r: f(w: 2)); }  // 50 + 9 + 3 = 62
+fn uint8 main() { return cast<uint8>(handle(r: f(w: 0)) + handle(r: f(w: 1)) + handle(r: f(w: 2))); }  // 50 + 9 + 3 = 62

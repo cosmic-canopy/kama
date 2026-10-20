@@ -6,4 +6,4 @@ fn int32 c(int32 x) { Owned<Box> box = new Box.make(v: x); return box.get(); }
 fn int32 b(int32 x) { return c(x: x); }
 fn int32 a(int32 x) { return b(x: x); }
 @noheap fn int32 tick(int32 n) { return a(x: n); }
-fn int32 main() { return tick(n: 7); }
+fn uint8 main() { return cast<uint8>(tick(n: 7)); }

@@ -11,4 +11,4 @@ fn int32 bump(ref int32 m) {
     m = m + r;
     return m;
 }
-fn int32 main() { int32 v = 1; return bump(m: ref v); }
+fn uint8 main() { int32 v = 1; return cast<uint8>(bump(m: ref v)); }

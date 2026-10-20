@@ -4,7 +4,7 @@ type value Vec2 {
     public int32 x;
     public ctor make(int32 x) { this.x = x; }
 }
-fn int32 main() {
+fn uint8 main() {
     Vec2 a = Vec2.make(x: 3);
     Vec2 b = Vec2.make(x: 3);
     if (a == b) { return 1; }   // Vec2 does not implement Equatable

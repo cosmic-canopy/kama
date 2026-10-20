@@ -7,8 +7,8 @@ type value Counter {
     public fn int32 get() { return this.n; }
 }
 fn int32 read(ref Counter c) { return c.get(); }
-fn int32 main() {
+fn uint8 main() {
     Counter stackC = Counter.make(n: 10);
     Owned<Counter> heapC = new Counter.make(n: 32);
-    return read(c: ref stackC) + read(c: ref heapC);   // 10 + 32 = 42
+    return cast<uint8>(read(c: ref stackC) + read(c: ref heapC));   // 10 + 32 = 42
 }

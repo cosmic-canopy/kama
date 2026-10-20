@@ -3,4 +3,4 @@
 // bare form is a parse error. Write `type enum Color { Red, Green, Blue }`.
 enum Color { Red, Green, Blue }
 
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

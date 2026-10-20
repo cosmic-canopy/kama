@@ -9,4 +9,4 @@
 //
 // The legal spelling is a symbol the compiler has no C for — tests/xfail/noheap_heap_extern.
 @heap extern fn string kama_fmt_i64(int64 v);
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

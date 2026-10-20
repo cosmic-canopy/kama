@@ -80,12 +80,12 @@ type value Small {
     public fn int8 get() { return this.n; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // `300` does not fit the `int8` field: the document is rejected, which boxes an `Error` — from the pool.
     Result<Small, Owned<Error>> bad = deserializeJsonBuffer::<Small>(src: "{\"n\":300}");
     int32 rejected = match (bad) { case Ok(value: _v): 0; case Err(error: _e): 1; };
     // ...and a document that DOES fit still reads, so the fixture is not passing by rejecting everything.
     Result<Small, Owned<Error>> good = deserializeJsonBuffer::<Small>(src: "{\"n\":42}");
     int32 read = match (good) { case Ok(value: v): cast<int32>(v.get()); case Err(error: _e2): 0; };
-    return rejected + read;   // 1 + 42
+    return cast<uint8>(rejected + read);   // 1 + 42
 }

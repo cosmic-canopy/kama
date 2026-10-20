@@ -13,9 +13,9 @@ type value Vec2 implements Summable<This> {
 
 fn T sum<T: Summable<T>>(T a, T b) { return a + b; }   // `a + b` via the bound → static dispatch
 
-fn int32 main() {
+fn uint8 main() {
     Vec2 p = Vec2.of(x: 10, y: 20);
     Vec2 q = Vec2.of(x: 3, y: 9);
     Vec2 r = sum(a: p, b: q);   // (13, 29)
-    return r.x + r.y;           // 42
+    return cast<uint8>(r.x + r.y);           // 42
 }

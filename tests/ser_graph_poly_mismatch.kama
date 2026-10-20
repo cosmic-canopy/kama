@@ -24,7 +24,7 @@ type resource Scene {
     public ctor make(Shared<Shape> a, Shared<Tag> t) { this.a = give a; this.t = give t; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     // `a` (a `Shared<Shape>`) wrongly points at id 2, whose `__type` is `Tag` (not a `Shape` implementor).
     string j = "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"Scene\",\"value\":{\"a\":2,\"t\":2}},{\"id\":2,\"type\":\"Tag\",\"value\":{\"n\":9}}]}";
     Result<Shared<Scene>, Owned<Error>> res = deserializeJsonBuffer::<Shared<Scene>>(src: give j);

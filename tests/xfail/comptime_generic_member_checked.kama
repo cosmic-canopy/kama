@@ -4,4 +4,4 @@ type value Box<T> {
     public T v;
     public comptime fn int32 k() { return nosuch; }
 }
-fn int32 main() { return 0; }
+fn uint8 main() { return 0; }

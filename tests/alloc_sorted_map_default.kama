@@ -3,7 +3,7 @@
 // node box + array is libc malloc/free exactly as before M11b.
 import { std::collections::SortedMap, std::collections::SortedSet, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     int32 r = 0;
 
     SortedMap<int32, int32> sm = SortedMap.empty();
@@ -25,5 +25,5 @@ fn int32 main() {
     DynamicArray<int32> es = ss.elements();
     if (ss.length() == 15 && es.length() == 15 && ss.contains(key: 9)) { r = r + 10; }
 
-    return r;   // 4 asserts * 10 = 40
+    return cast<uint8>(r);   // 4 asserts * 10 = 40
 }

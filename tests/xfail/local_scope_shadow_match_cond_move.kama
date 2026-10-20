@@ -8,11 +8,11 @@ import { std::memory::Owned };
 type value Box { int32 v; public ctor make(int32 v) { this.v = v; } public fn int32 get() { return this.v; } }
 type resource Res { Owned<Box> a; public ctor make(int32 v) { Owned<Box> b = new Box.make(v: v); this.a = give b; } public fn int32 head() { return this.a.get(); } }
 fn int32 sink(Res r) { return r.head(); }
-fn int32 main() {
+fn uint8 main() {
     Res m = Res.make(v: 1);
     Optional<int32> o = Optional::Some(value: 3);
     int32 r = 0;
     match (o) { case Some(value: v): { r = v; } case None: { } };
     if (r == 3) { r = sink(r: give m); }   // ERROR: `m` is moved on some paths but not others
-    return r;
+    return cast<uint8>(r);
 }

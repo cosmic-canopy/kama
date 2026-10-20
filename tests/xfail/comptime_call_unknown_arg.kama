@@ -3,4 +3,4 @@
 comptime fn int32 sub(int32 a, int32 b) { return a - b; }
 comptime int32 X = sub(a: 10, c: 1);
 
-fn int32 main() { return X; }
+fn uint8 main() { return cast<uint8>(X); }

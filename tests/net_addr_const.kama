@@ -26,7 +26,7 @@ fn int32 udp(ref UdpSocket u, ref UdpSocket v) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     int32 rc = match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) {
         case Ok(value: l): match (TcpStream.connect(host: "127.0.0.1", port: portOf(l: l))) {
             case Ok(value: c): tcp(l: l, c: c);
@@ -34,7 +34,7 @@ fn int32 main() {
         };
         case Err(error: e): 10;
     };
-    if (rc != 0) { return rc; }
+    if (rc != 0) { return cast<uint8>(rc); }
     rc = match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) {
         case Ok(value: u): match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) {
             case Ok(value: v): udp(u: u, v: v);
@@ -42,6 +42,6 @@ fn int32 main() {
         };
         case Err(error: e): 13;
     };
-    if (rc != 0) { return rc; }
+    if (rc != 0) { return cast<uint8>(rc); }
     return match (UnixListener.bind(path: "addr_const.sock")) { case Ok(value: x): named(l: x) ? 42 : 6; case Err(error: e): 16; };
 }

@@ -6,8 +6,8 @@ type value Cell {
     public ctor make() { this.n = 5; }
     public const fn const ref int32 place() { return this.n; }
 }
-fn int32 main() {
+fn uint8 main() {
     Cell c = Cell.make();
     c.place() = 99;   // -> REJECT
-    return c.place();
+    return cast<uint8>(c.place());
 }

@@ -13,4 +13,4 @@ fn int32 platformValue() { return 3; }
 @compileFor(!ARCH_RISCV64)
 fn int32 platformValue() { return 41; }
 
-fn int32 main() { return platformValue(); }
+fn uint8 main() { return cast<uint8>(platformValue()); }

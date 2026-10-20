@@ -22,7 +22,7 @@ type enum WsOpcode implements Equatable<This> {
     }
 }
 
-fn int32 main() {
+fn uint8 main() {
     WsOpcode op = WsOpcode::Text;
     int32 n = 0;
 
@@ -38,5 +38,5 @@ fn int32 main() {
     WsOpcode wantText = WsOpcode::Text;
     if (op == wantText) { n = n + 32; }
 
-    return n;   // 1 + 2 + 4 + 8 + 16 + 32 = 63
+    return cast<uint8>(n);   // 1 + 2 + 4 + 8 + 16 + 32 = 63
 }

@@ -13,11 +13,11 @@ fn Optional<Owned<Box>> load(int32 v) { return try new Box.make(v: v); }
 
 fn int32 unwrap(Optional<Owned<Box>> b) { return match (b) { case Some(value: x): x.get(); case None: 0 - 1; }; }
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = unwrap(b: load(v: 7));                  // 7  — through the return position
     int32 b = unwrap(b: try new Box.make(v: 20));     // 20 — ARGUMENT position, boxed into a hoisted temp
     // PAYLOAD position — the `Some` arm of an outer Optional carries the boxed handle.
     Optional<Optional<Owned<Box>>> nested = Optional::Some(value: try new Box.make(v: 15));
     int32 c = match (give nested) { case Some(value: inner): unwrap(b: inner); case None: 0 - 1; };
-    return a + b + c;   // 42
+    return cast<uint8>(a + b + c);   // 42
 }

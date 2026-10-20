@@ -68,10 +68,10 @@ unsafe fn int32 fileProof() {
 @compileFor(OS_WINDOWS)
 unsafe fn int32 fileProof() { return 0; }   // proof 1 covers Windows: a handle is a handle, file or socket
 
-fn int32 main() {
+fn uint8 main() {
     int32 a = socketProof();
-    if (a != 0) { return a; }
+    if (a != 0) { return cast<uint8>(a); }
     int32 b = fileProof();
-    if (b != 0) { return b; }
+    if (b != 0) { return cast<uint8>(b); }
     return 42;
 }

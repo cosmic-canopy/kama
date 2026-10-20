@@ -27,7 +27,7 @@ type resource Rec {
     public fn int32 verify() { if (this.id == 7 && this.ok && this.name == "hi") { return 0; } return 99; }
 }
 
-fn int32 main() {
+fn uint8 main() {
     Rec r = Rec.make(id: 7, name: "hi", ok: true);
 
     // (a) sugar path — byte-identical to pre-streams output.
@@ -47,5 +47,5 @@ fn int32 main() {
     // (c) reader path — decode straight out of a SliceReader over the encoded bytes.
     Result<Rec, Owned<Error>> d = deserializeJsonStream::<Rec>(from: SliceReader.make(src: give j));
     Rec q = match (give d) { case Ok(value: x): give x; case Err(error: e): { return 14; } };
-    return q.verify();
+    return cast<uint8>(q.verify());
 }

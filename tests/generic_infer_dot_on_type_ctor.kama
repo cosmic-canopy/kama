@@ -29,7 +29,7 @@ type value Gauge {
 fn int32 takesSink<W>(W to) { return 1; }   // consumes `to`; its drop runs here
 fn int32 takesGauge<T>(T g) { return 2; }
 
-fn int32 main() {
+fn uint8 main() {
     // infallible ctor as an argument -> W = Sink
     int32 a = takesSink::<Sink>(to: Sink.make());     // explicit, the control
     int32 b = takesSink(to: Sink.make());             // INFERRED — this is what was refused

@@ -20,7 +20,7 @@
 // not be able to emit a second destructor call at all. See the ROADMAP row.
 import { std::collections::SortedMap, std::collections::DynamicArray };
 
-fn int32 main() {
+fn uint8 main() {
     // (a) OWNING VALUE, replaced — `overwriteVal`'s local `old`.
     SortedMap<int32, DynamicArray<int32>> a = SortedMap.empty();
     DynamicArray<int32> v1 = DynamicArray.empty(); v1.add(item: 1);

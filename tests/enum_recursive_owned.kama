@@ -27,7 +27,7 @@ fn int32 weight(const ref J j) {
     };
 }
 
-fn int32 main() {
+fn uint8 main() {
     DynamicArray<J> xs = DynamicArray.empty();
     xs.add(item: J::Box(inner: new J::Num(n: 9)));
     xs.add(item: J::Num(n: 4));

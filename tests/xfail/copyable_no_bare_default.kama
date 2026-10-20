@@ -14,7 +14,7 @@ type resource R implements Copyable<This> {
     ~R() {}
 }
 
-fn int32 main() {
+fn uint8 main() {
     R a = R.make(n: 1);   // ERROR is on the `implements` above, not here
     return 0;
 }

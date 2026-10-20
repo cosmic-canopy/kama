@@ -3,4 +3,4 @@
 // `_ = f();` to say the outcome is meant to be ignored.
 type enum PErr implements Error { Failed; public const fn string message() { return "failed"; } }
 fn Result<Unit, PErr> f() { return Result::Err(error: PErr::Failed); }
-fn int32 main() { f(); return 0; }
+fn uint8 main() { f(); return 0; }
