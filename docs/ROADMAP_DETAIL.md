@@ -459,8 +459,12 @@ allocates. A slice does the offset's work in Rust and Go; kama's `substring` cop
    has. A `from` past the end answers `None`; a negative one traps. The nine existing calls (all in tests) add
    `from: 0`.
 
-**Decisions owed:** the names; one `find` with `from:` vs a no-offset `find` kept beside it; whether `endsWith` gets
-the caseless twin too. Size S.
+**Ruled 2026-10-20 (the maintainer), amending the recommendation:** a second, explicitly named method is not a second
+way to do one thing when the two differ, so `find(substring:)` stays and `findFrom(substring:, start:)` joins it —
+`start` the byte index the search begins at, named as `substring(start:, end:)` names it; the answer still counts from
+the start of the string. Both answer `Optional<isize>` (the nine existing callers, all tests, move from `usize`).
+`find`/`findFrom` match bytes exactly, any UTF-8; only `equalsIgnoringAsciiCase(other:)` and
+`startsWithIgnoringAsciiCase(prefix:)` fold, and only A–Z. Size S.
 
 <a id="s1-sendfile"></a>
 
@@ -2283,8 +2287,14 @@ through another handle trapped, whether or not anything could dangle.
   it; (b) refuse statically any window through a may-alias handle (same payload type) whose body mutates `this` — no
   run-time cost, but it forbids the common merge of two distinct values; (c) RefCell's granularity — a non-`const` call
   through a handle holds the value mutably for its whole duration, and any borrow taken through another handle meanwhile
-  traps — which the 2026-10-19 amendment rejected as too coarse. (a) is recommended: it is the ruling's own rule (a
-  mutation while a borrow is live traps) applied at the one point the mutation is invisible.
+  traps — which the 2026-10-19 amendment rejected as too coarse. **Ruled 2026-10-20 (the maintainer): neither (a) nor
+  (b) — Swift's model.** Rust's `RefCell` panics at the second borrow whether or not anything mutates (that is (c));
+  Swift keeps a per-thread set of open accesses by address and traps at the conflicting ACCESS, in release builds
+  too; C++ leaves it undefined. So: each window through a handle records the borrowed value's address in a per-thread
+  table for its extent, and each mutation through `this` — a field write, a non-`const` call on `this` or on a field
+  of it, a `ref` argument of one — in a type some `Shared<T>` holds checks it, trapping exactly at a real conflict.
+  A read never traps. The cost is a test of an almost-always-empty per-thread count at those sites, in those types
+  only (the program's `Shared` instances name them).
 
 **Commits.** Shipped: (1) teardown, `0.9.697`; (2) the count, the write marking, the check on every mutation through
 a library `Shared` handle, and the `borrow` window's extent with its `@onPanic` refusal, `0.9.698`. Remaining, in order:
