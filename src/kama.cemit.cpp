@@ -10746,7 +10746,7 @@ void CEmitter::collectSignatures(SharedCompilationUnit unit)
         // never reaches here (it went to `_sigs` above).
         if (!isExtern(fn))
             checkSignatureRawPtr(fn->isUnsafe, fn->returnType, fn->parameters,
-                                 *fn->name->value, fn->name->line);
+                                 *fn->name->value, fn->name.get());
 
         sig.declFile = _collectingUnitPath;   // the file rung's key, and the duplicate diagnostic's
         // An extern's `declFile` is whichever file was collected LAST, so it cannot answer the rung on its
@@ -12331,7 +12331,7 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         // Only where a body exists: an `abstract` member is a guarantee, and a `contract`
                         // member (collected in collectInterfaces) is a conduit — see the rejection above.
                         if (md->body) checkSignatureRawPtr(mi.isUnsafe, md->returnType, md->params,
-                                                           *md->name->value, md->line);
+                                                           *md->name->value, md->name.get());
                         if (md->modifiers)
                             for (auto& mod : *md->modifiers) {
                                 if (!mod->value) continue;
@@ -15240,9 +15240,12 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     for (size_t i = 0; i < params.size() && i < concrete.size(); ++i) boundBind[params[i]] = concrete[i];
     bool boundsOk = true;
     if (bounds)
-        for (size_t i = 0; i < params.size() && i < bounds->size(); ++i)
+        for (size_t i = 0; i < params.size() && i < bounds->size(); ++i) {
+            // The written type arguments give a failed bound its column (KR-196); a defaulted one wrote nothing.
+            PosGuard pg(*this, args && !args->empty() ? (i < args->size() ? (*args)[i].get() : args->front().get()) : nullptr);
             if (!checkBounds(params[i], concrete[i], (*bounds)[i], line, tmpl, boundBind))   // `line` is null-args-safe (bare all-defaulted use)
                 boundsOk = false;
+        }
     // A `T = cchar` instance is POISONED like a failed bound, silently: the declared-type hooks already report
     // the user's spelling, and every nested instantiation the poisoned body forces would otherwise report
     // again from a library line (nine errors for one `DynamicArray<cchar>`). The turbofish path reports.
@@ -17141,6 +17144,9 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
                 GenericInst gi;
                 SharedIdentifierList tfArgs = inv->identifier->genericArgs;   // turbofish `f::<…>` type args
                 if (tfArgs) for (auto& ta : *tfArgs) scanTypeForCollections(ta);   // register List<…>/etc. args
+                // A refusal of the inference or of a bound is about THIS call, and its checks pass only a line:
+                // the call's span gives it a column (KR-196), on the line the call starts.
+                PosGuard pg(*this, inv);
                 bool ok = tfArgs ? explicitGenericInst(git->second, k, tfArgs, inv->identifier->nTypeArgs,
                                                        inv->args, &localTys, inv->line, gi)
                                  : inferGenericInst(git->second, k, inv->args, localTys, inv->line, gi);
@@ -23218,8 +23224,9 @@ void CEmitter::rejectViewByRef(FunctionParameterNode* p, const std::string& owne
 }
 
 void CEmitter::checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedParameterList params,
-                                    const std::string& name, int line)
+                                    const std::string& name, const ASTNode* at)
 {
+    const int line = at ? at->line : 0;   // `at` is the declaration's NAME, which is where the refusal points
     // Rides along here because this is the one hook both the free-function and the method arm already call
     // with a whole signature in hand — and unlike the raw-pointer half it has no `unsafe` escape, so it is
     // checked before the early return below.
@@ -23239,7 +23246,7 @@ void CEmitter::checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedP
     if (!where) return;
     unsupported(("`" + name + "` " + where + " a raw pointer, so it must be declared `unsafe` — the "
                  "marker belongs at the declaration, where it is greppable, not inside the body")
-                    .c_str(), line);
+                    .c_str(), at);
 }
 
 // Calling an `extern fn` requires an enclosing `unsafe fn`. The DECLARATION carries no marker — it is

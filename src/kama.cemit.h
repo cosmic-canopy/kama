@@ -3127,7 +3127,7 @@ private:
     struct PendingViewByRef { FunctionParameterNode* param; std::string owner; int line; std::string file; };
     std::vector<PendingViewByRef> _pendingViewByRef;
     void checkSignatureRawPtr(bool isUnsafe, SharedIdentifier ret, SharedParameterList params,
-                              const std::string& name, int line);
+                              const std::string& name, const ASTNode* at);
     // M6.2: greatest-fixpoint dual of computeReachesPointer — mark every deeply/transitively immutable type
     // (the `immutable` qualifier verified) and error on a qualified type with a mutable part. A `Shared`/`Weak`
     // over such a T is sendable across isolates and uses the atomic refcount flavor.

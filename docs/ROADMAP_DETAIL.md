@@ -662,7 +662,7 @@ and so does `replace(place: this.conn, with: Optional::None)` on a field. `place
 `T` is its type. Binding `with` to a typed local first, or writing `replace::<Optional<int32>>(…)`, builds.
 Close means inference takes `T` from any argument that types it, not only from `with`, so `Optional::None` (a
 variant constructor typed by its destination) is checked against the `T` that `place:` gives. The error also
-reports column 0 (KR-196). Re-probed on `0.9.690`: still so.
+reported column 0, which `0.9.692` fixed. Re-probed on `0.9.690`: still so.
 
 <a id="s2-quoted-format"></a>
 
@@ -3121,23 +3121,6 @@ interleaved): about 3 ms per seam TU. A program with any C header of its own kee
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
-
-<a id="s10-column-zero"></a>
-
-### Some semantic errors still report column 0 (KR-196)
-
-Measured on `0.9.666`. Most diagnostics carry their column. These three print `file:line:0`:
-- a generic-inference failure: `return ident(x: Optional::None);` gives *"cannot infer generic type parameter 'T'"*;
-- an unmet bound: `mx(a: p)` against `<T: Comparable<T>>` gives *"type argument `P` … does not satisfy bound
-  `Comparable`"*;
-- the refusal of a method that takes a raw pointer without `unsafe`: `public fn void start(UnsafePtr p)` gives
-  *"`start` takes a raw pointer, so it must be declared `unsafe`"*.
-
-`0.9.612` moved the diagnostic channel from a line to a node, and its commit records the two
-leftovers: a caller still passing only a line stays column 0, and a diagnostic attributed to the author's
-instantiation site keeps its line and drops the column, which belonged to the template. The first two above are
-the second kind; the third is the first kind, at a declaration that has a column of its own. Close means each
-names the column of the call, the type argument or the declaration, with the reported column checked by a guard. Re-probed on `0.9.690`: all three still print column 0.
 
 <a id="s10-module-name-clash"></a>
 

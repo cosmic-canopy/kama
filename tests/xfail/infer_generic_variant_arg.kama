@@ -1,0 +1,5 @@
+// A variant constructor is typed by its destination, so it cannot type the generic parameter it is passed to:
+// nothing else binds `T` here. The refusal names the call's column (KR-196: through 0.9.691 it printed `:3:0`).
+fn T ident<T>(T x) { return x; }
+fn Optional<int32> f() { return ident(x: Optional::None); }
+fn uint8 main() { return 0; }
