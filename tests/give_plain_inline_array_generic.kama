@@ -1,0 +1,16 @@
+// A generic body hands its `T` off with `give`, and an `InlineArray` of values is a `T` like any other: handing one
+// off is a copy of its bytes. Through 0.9.686 `this.a = give a` was refused for `T = InlineArray<int32>#(2)` — "`give`/
+// `copy` mark a value being handed off … not a bare sub-expression" — because every intrinsic collection counted as
+// owned there, so no generic type over a plain in-place array could be instantiated at all.
+type resource Q<T> {
+    T a;
+    public ctor make(T a) { this.a = give a; }
+    public fn void put(T a) { this.a = give a; }
+    public const fn const ref T get() { return this.a; }
+}
+
+fn uint8 main() {
+    Q<InlineArray<int32>#(2)> q = Q.make(a: [1, 2]);
+    q.put(a: [40, 2]);
+    return cast<uint8>(q.get()[0] + q.get()[1]);
+}

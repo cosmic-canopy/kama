@@ -5775,9 +5775,11 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string ic = exprClass(h->value);
         // A marker on an OWNED value (smart-ptr / collection / any destructible resource) in a bare
         // sub-expression is a position error. On a plain value it's harmless — `give`/`copy` of a value
-        // is just that value (a copy), so yield it.
+        // is just that value (a copy), so yield it. An `InlineArray` of values or a lane batch is one: a generic
+        // body's `this.a = give a` reaches here for `T = InlineArray<int32>#(2)`, and was refused for it.
         bool owned = isSmartPtrClass(ic)
-                   || (!ic.empty() && _classes.count(ic) && (_classes[ic].isIntrinsicColl || _classes[ic].destructible));
+                   || (!ic.empty() && _classes.count(ic)
+                       && ((_classes[ic].isIntrinsicColl && ownsByValue(ic)) || _classes[ic].destructible));
         if (owned)
             unsupported("`give`/`copy` mark a value being handed off — an initializer, assignment, argument, "
                         "or return — not a bare sub-expression", h);
