@@ -6421,8 +6421,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // while a dynamic one traps at runtime.
         //
         int64_t lo, hi, cv;
-        if (primIntRange(v->type, lo, hi) && constValue(v->unaryExpression, cv) && (cv < lo || cv > hi)) {
-            rejectConstCastOverflow(v->type, cv, lo, hi, v->line);
+        if (!v->isTruncate && primIntRange(v->type, lo, hi) && constValue(v->unaryExpression, cv) && (cv < lo || cv > hi)) {
+            rejectConstCastOverflow(v->type, cv, lo, hi, v->line);   // a `truncate` keeps the low bits by design
             return "0";
         }
         // `truncate<T>` keeps the LOW BITS, so a widening target is a contradiction: there are no bits to
@@ -12921,7 +12921,10 @@ bool CEmitter::constValue(SharedExpression e, int64_t& out)
             // accepted while the identical `int8 v = cast<int8>(300);` was rejected. Two answers for one
             // expression is the thing this campaign exists to remove. Safe to report from a query
             // function only because duplicate diagnostics are now deduped on (file, line, message).
-            rejectConstCastOverflow(c->type, out, lo, hi, c->line);
+            // `truncate<T>` keeps the low bits ON PURPOSE, so it is folded, never refused: through 0.9.679
+            // `truncate<uint8>(300)` was reported as "`cast<uint8>(300)` does not fit", which left the one
+            // spelling SPEC names for wrapping unusable on a constant.
+            if (!c->isTruncate) rejectConstCastOverflow(c->type, out, lo, hi, c->line);
             const uint64_t span = (uint64_t)(hi - lo) + 1;             // 2^width, exactly
             out = lo + (int64_t)(((uint64_t)(out - lo)) % span);       // wrap, as C does
         }

@@ -1,0 +1,11 @@
+// `truncate<T>(x)` keeps the low bits — the one spelling SPEC names for wrapping — and that holds for a constant
+// operand too. Through 0.9.679 the constant-range check, written for `cast<T>`, refused it: `truncate<uint8>(300)`
+// was reported as "`cast<uint8>(300)` does not fit `uint8`", on the emit path and in the constant folder alike, so a
+// wrap the author wrote on purpose could not be written with a literal or a `comptime` operand.
+comptime uint8 LOW = truncate<uint8>(300);            // folded: 44
+fn uint8 main() {
+    uint8 b = truncate<uint8>(2 + 0x1FE);             // 512 -> 0
+    int8 s = truncate<int8>(200);                     // -56
+    if (LOW != 44 || b != 0 || s != -56) { return 1; }
+    return truncate<uint8>(298);                      // 42
+}
