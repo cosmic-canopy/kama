@@ -1,0 +1,5 @@
+// KR-198: in a build of two modules, an `InlineArray` size refused while the program's instances are collected
+// named no file (`:4:24: error: …`), because that pass sets no module path. The second module is what makes the
+// build multi-file.
+type value Big { public InlineArray<int32>#(0) a; }
+fn uint8 main() { return 0; }

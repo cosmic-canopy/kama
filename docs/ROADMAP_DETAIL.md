@@ -3174,36 +3174,6 @@ module namespace (greppable: one name means one module) rules that out, and is t
 (`src/kama.driver.cpp`), each attempt deletes the view before relinking it, and a refusal returns with the partial
 view on disk; `kama build`/`check` compare nothing. Size S.
 
-<a id="s10-diag-no-file"></a>
-
-### Two holes in the diagnostic channel (KR-198)
-
-Found 2026-10-18 on `0.9.667`, while reproducing a reported gap.
-
-**A diagnostic with no file.** Two modules, `main.kama` and `voice/voice.kama`; `main` holds a resource in an
-`InlineArray`:
-
-```kama
-type resource GameAudio { int32 started = 0; public ctor make() { } }
-fn int32 main() { InlineArray<GameAudio>#(1) a = [GameAudio.make()]; return 0; }
-```
-
-`kama build main.kama voice/voice.kama` prints ``:10:4: error: an `InlineArray<T>#(N)` element must be a `value`…``
-with an empty file name. The next error, the array literal, names `main.kama`, and `kama check` names it for both.
-One file alone names it. The refusal is raised in `registerFixed` (`kama.cemit.cpp`), which the shared header's
-pass (`emitHeaderContent`, under `_inHeaderPass`) reaches when it registers the local's instance. That pass runs
-before the per-module loop sets `_sourcePath`, and the emitter is built with no path, so `diagFile()` has none of
-its three answers. The harness already refuses an xfail whose diagnostic has no file. A positive build has no
-such check. Close means a refusal raised in the header pass names the unit whose declaration asked for the
-instance, and a multi-file xfail holds it. ⚠️ Since `0.9.678` an `InlineArray` of resources is LEGAL, so this repro no longer refuses anything: re-probing needs another refusal raised while the shared header is emitted.
-
-**A recursion in the helper.** `CEmitter::unsupported(const char*, const ASTNode* at, const std::string&)` does
-`if (at->synthesized) { unsupported(rawWhat, at, subject); return; }`. That is the same overload with the same
-arguments. The comment above it says the intent: "a synthesized node names no source text, so it gives its line
-only", i.e. `unsupported(rawWhat, at->line, subject)`. It has not been seen to fire, so no refusal is known to be
-raised at a synthesized node through this overload today. Eight sites mark a node `synthesized`. Close means the
-line-only call, and a probe that reaches it.
-
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)

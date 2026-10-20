@@ -1,0 +1,2 @@
+export { Voice };
+type value Voice { int32 n = 0; }

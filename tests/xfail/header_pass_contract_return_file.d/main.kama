@@ -1,0 +1,7 @@
+// KR-198: in a build of two modules, a refusal raised while the shared header is written named no file
+// (`:6:0: error: a contract …`): the free functions' prototypes are emitted there, before any module's path is
+// current. One file alone, or `kama check`, named it. The second module is what makes the build multi-file.
+type contract Shape for value { fn int32 area(); }
+type value Sq implements Shape { int32 s; public ctor make(int32 s) { this.s = s; } public fn int32 area() { return this.s * this.s; } }
+fn Shape make() { Sq s = Sq.make(s: 4); return s; }
+fn uint8 main() { return 0; }

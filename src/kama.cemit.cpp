@@ -565,7 +565,7 @@ void CEmitter::unsupported(const char* rawWhat, int srcLine, const std::string& 
 void CEmitter::unsupported(const char* rawWhat, const ASTNode* at, const std::string& subject)
 {
     if (!at)              { unsupported(rawWhat, 0, subject); return; }
-    if (at->synthesized)  { unsupported(rawWhat, at, subject); return; }
+    if (at->synthesized)  { unsupported(rawWhat, at->line, subject); return; }
     unsupportedAt(rawWhat, at->line, at->column, at->endLine, at->endColumn, subject);
 }
 
@@ -14222,6 +14222,10 @@ void CEmitter::registerCollection(SharedIdentifier collType)
 // positive compile-time integer (a literal, or a bound `const N: int` param).
 void CEmitter::registerFixed(SharedIdentifier fixedType)
 {
+    // Every refusal here is about the USE SITE, and `_nsCtx` is its context. A collect pass that leaves
+    // `_collectingUnitPath` empty reaches here (collectCollections), so in a multi-file build a bad size named
+    // no file at all — the shape registerGenericTypeInst already guards. See diagFile().
+    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
     SharedIdentifierList args = fixedType->genericArgs;
     if (!args || args->size() != 2) {
         unsupported("`InlineArray<T>#(N)` takes one type argument and one compile-time size, in separate "
@@ -14368,6 +14372,8 @@ bool CEmitter::isStorageColl(const std::string& cls) const
 // owns something it moves, and never copies — but it never drops, either way.
 void CEmitter::registerStorage(SharedIdentifier storageType)
 {
+    // The use site's file, as registerFixed: see there.
+    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
     SharedIdentifierList args = storageType->genericArgs;
     if (!args || args->size() != 2) {
         unsupported("`InlineStorage<T>#(N)` takes one type argument and one compile-time size, in separate groups — "
@@ -14443,6 +14449,8 @@ void CEmitter::registerStorage(SharedIdentifier storageType)
 //     intrinsic's prelude declaration has an EMPTY body, so an assert written there would never run.
 void CEmitter::registerSimd(SharedIdentifier simdType)
 {
+    // The use site's file, as registerFixed: see there.
+    ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
     SharedIdentifierList args = simdType->genericArgs;
     if (!args || args->size() != 2) {
         unsupported("`Simd<T>#(N)` takes one numeric element type and one compile-time lane count, in "
@@ -43409,6 +43417,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (!u || !u->codeDeclarationList) continue;
         if (u == _preludeUnit) continue;   // global-prelude free fns are header-static-inline (emitted just below)
         _nsCtx = _unitCtx[u.get()];
+        ScopedStr _edf(_emitDeclFile, u->name ? *u->name : std::string());   // diagnostics land on the DECLARING file
         for (auto& decl : *u->codeDeclarationList)
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
                 if (isExtern(fn) || !fn->block || fn->isComptime) continue;   // skip extern + signature types + comptime-only fns

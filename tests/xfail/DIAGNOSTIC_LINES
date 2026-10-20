@@ -163,6 +163,7 @@ class_identity_generic_type	class_identity_generic_type.kama:8
 class_identity_operator	class_identity_operator.kama:18
 class_identity_value	class_identity_value.kama:14 class_identity_value.kama:17 class_identity_value.kama:19 class_identity_value.kama:20
 clong_serialize	clong_serialize.kama:3
+collect_inline_array_size_file	main.kama:4
 compilefor_component_typo	compilefor_component_typo.kama:12
 compilefor_component_typo_manifest	app.kama:6
 compilefor_dangling	compilefor_dangling.kama:8
@@ -615,6 +616,7 @@ graph_owned_of_shared	graph_owned_of_shared.kama:16
 graph_read_by_value	graph_read_by_value.kama:16
 handoff_fresh	handoff_fresh.kama:4
 hardware_value_param	hardware_value_param.kama:3
+header_pass_contract_return_file	main.kama:6
 heap_attr_on_body	heap_attr_on_body.kama:4
 heap_attr_on_fnptr	heap_attr_on_fnptr.kama:4
 heap_attr_on_runtime_symbol	heap_attr_on_runtime_symbol.kama:11
