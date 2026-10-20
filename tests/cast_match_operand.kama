@@ -1,0 +1,10 @@
+// A value-producing `match` that is a cast's operand takes the cast's type as its destination, as a literal operand
+// does (`cast<int8>(300)` judges 300 as an `int8`). Through 0.9.679 it took whatever destination the ENCLOSING
+// statement had set instead, so the arms below were judged against `int8` (and `uint8`) and `v`, an `int32`, was
+// refused — though each match stands in a `cast` that names its type.
+fn uint8 main() {
+    Optional<int32> o = Optional::Some(value: 300);
+    int8 small = cast<int8>(cast<int32>(match (o) { case Some(value: v): v; case None: 0; }) - 290);           // 10
+    uint8 code = cast<uint8>(cast<int64>(match (o) { case Some(value: v): cast<int64>(v); case None: 0i64; }) - 258i64);   // 42
+    return cast<uint8>(cast<int32>(small) + cast<int32>(code) - 10);                                              // 42
+}

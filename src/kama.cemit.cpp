@@ -6305,6 +6305,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // The target is a literal operand's destination, as it is for `cast<int8>(300)`: `cast<float32>(0.1)` is the
         // float32 literal, not a double rounded again.
         if (isLiteralExpr(v->unaryExpression.get())) claimFloatLiterals(v->unaryExpression, target, "a cast", false, v->line);
+        // ...and a value-producing `match`'s, by the same rule. It used to inherit whatever destination the ENCLOSING
+        // statement had set: `int8 s = cast<int8>(cast<int32>(match (o) { case Some(value: v): v; … }) - 290);` judged
+        // the arms against `int8` and refused `v`, though the match stands in a `cast<int32>`.
+        ScopedStr castMatchTarget(_matchTargetCType, needsTargetType(v->unaryExpression.get()) ? target : _matchTargetCType);
         if (rejectBareCChar(v->type, "a cast target", v->line)) return "0";
         checkBodyType(v->type, "a cast target", v->line);
         std::string nm = (v->type && v->type->value) ? *v->type->value : target;
