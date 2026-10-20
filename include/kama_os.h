@@ -625,6 +625,42 @@ static inline int32_t kama__file_kind(unsigned short m) {
     if ((m & _S_IFMT) == _S_IFIFO) return 3;
     return 7;
 }
+// A file's change time and identity, from an open handle (KR-220): `FILE_BASIC_INFO.ChangeTime` (the CRT's `st_ctime`
+// is the CREATION time here), and the 128-bit id with its volume serial (`FILE_ID_INFO`, which ReFS needs), else — a
+// filesystem without one, FAT — the 64-bit file index, which is the id there. FILE_ID_INFO and its class number are
+// declared here rather than taken from the SDK, which hides them below `_WIN32_WINNT` 0x0602.
+typedef struct kama__file_id_info { ULONGLONG kama_vol; BYTE kama_id[16]; } kama__file_id_info;
+static inline int32_t kama__file_ident(HANDLE h, int64_t* outCtimeNs, uint64_t* outVol, uint64_t* outIdLo, uint64_t* outIdHi) {
+    FILE_BASIC_INFO bi;
+    if (!GetFileInformationByHandleEx(h, FileBasicInfo, &bi, sizeof bi)) { kama__os_fail(GetLastError(), EACCES); return -1; }
+    *outCtimeNs = ((int64_t)bi.ChangeTime.QuadPart - 116444736000000000ll) * 100ll;
+    kama__file_id_info ii;
+    if (GetFileInformationByHandleEx(h, (FILE_INFO_BY_HANDLE_CLASS)18 /* FileIdInfo */, &ii, sizeof ii)) {
+        *outVol = (uint64_t)ii.kama_vol;
+        memcpy(outIdLo, ii.kama_id, 8); memcpy(outIdHi, ii.kama_id + 8, 8);
+        return 0;
+    }
+    BY_HANDLE_FILE_INFORMATION fi;
+    if (!GetFileInformationByHandle(h, &fi)) { kama__os_fail(GetLastError(), EACCES); return -1; }
+    *outVol = (uint64_t)fi.dwVolumeSerialNumber;
+    *outIdLo = ((uint64_t)fi.nFileIndexHigh << 32) | fi.nFileIndexLow; *outIdHi = 0;
+    return 0;
+}
+// ...and from a path: the file opened for its attributes alone (any sharing), the link itself when not following.
+static inline int32_t kama__path_ident(const wchar_t* w, int32_t follow, int64_t* outCtimeNs, uint64_t* outVol,
+                                       uint64_t* outIdLo, uint64_t* outIdHi) {
+    HANDLE h = CreateFileW(w, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT), NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        const DWORD e = GetLastError();
+        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES);
+        return -1;
+    }
+    const int32_t r = kama__file_ident(h, outCtimeNs, outVol, outIdLo, outIdHi);
+    CloseHandle(h);
+    return r;
+}
+
 // `struct stat` stays opaque: one call folds every fact kama's `Metadata` carries into scalar out-params.
 // mtime is NANOSECONDS from the UNIX epoch, so it is a `std::time::Timestamp` with no conversion at the
 // kama end — `_stat64` carries whole seconds, which is the resolution Windows reports here. `outMode` is the
@@ -634,7 +670,8 @@ static inline int32_t kama__file_kind(unsigned short m) {
 // names (kama__fileids), a length of 0 where it cannot be read.
 KAMA_NOINLINE static int32_t kama_path_meta(const char* path, int32_t follow, uint64_t* outSize, int32_t* outKind,
                                             int64_t* outMtimeNs, uint32_t* outMode, uint8_t* outOwner,
-                                            int32_t* outOwnerLen, uint8_t* outGroup, int32_t* outGroupLen) {
+                                            int32_t* outOwnerLen, uint8_t* outGroup, int32_t* outGroupLen,
+                                            int64_t* outCtimeNs, uint64_t* outVol, uint64_t* outIdLo, uint64_t* outIdHi) {
     const kama__fileids ids = { outOwner, outOwnerLen, outGroup, outGroupLen };
     *outOwnerLen = 0; *outGroupLen = 0;
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
@@ -658,7 +695,7 @@ KAMA_NOINLINE static int32_t kama_path_meta(const char* path, int32_t follow, ui
             HANDLE lh = CreateFileW(w, READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
                                     OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, NULL);
             if (lh != INVALID_HANDLE_VALUE) { kama__sd_read_ids(lh, &ids); CloseHandle(lh); }
-            return 0;
+            return kama__path_ident(w, 0, outCtimeNs, outVol, outIdLo, outIdHi);
         }
     }
     struct _stat64 st; int r = _wstat64(w, &st);
@@ -666,13 +703,14 @@ KAMA_NOINLINE static int32_t kama_path_meta(const char* path, int32_t follow, ui
     *outSize = (uint64_t)st.st_size; *outKind = kama__file_kind((unsigned short)st.st_mode);
     *outMtimeNs = (int64_t)st.st_mtime * 1000000000ll;
     *outMode = kama__path_mode(NULL, w, (unsigned short)st.st_mode, &ids);
-    return 0;
+    return kama__path_ident(w, 1, outCtimeNs, outVol, outIdLo, outIdHi);
 }
 // The same facts for an OPEN file, through its descriptor — so a check and the read that follows it are about
 // one file, with no time between them in which the path can be pointed elsewhere.
 static inline int32_t kama_fd_meta(int32_t fd, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
                                    uint32_t* outMode, uint8_t* outOwner, int32_t* outOwnerLen, uint8_t* outGroup,
-                                   int32_t* outGroupLen) {
+                                   int32_t* outGroupLen, int64_t* outCtimeNs, uint64_t* outVol, uint64_t* outIdLo,
+                                   uint64_t* outIdHi) {
     const kama__fileids ids = { outOwner, outOwnerLen, outGroup, outGroupLen };
     *outOwnerLen = 0; *outGroupLen = 0;
     struct _stat64 st;
@@ -683,7 +721,8 @@ static inline int32_t kama_fd_meta(int32_t fd, uint64_t* outSize, int32_t* outKi
     *outMode = (*outKind == 0 || *outKind == 1) && h != -1 ? kama__path_mode((HANDLE)h, NULL, (unsigned short)st.st_mode, &ids)
                                                            : ((st.st_mode & _S_IREAD) ? 0444u : 0u) | ((st.st_mode & _S_IWRITE) ? 0222u : 0u);
     if (*outKind != 0 && *outKind != 1 && h != -1) kama__sd_read_ids((HANDLE)h, &ids);   // a pipe's or a console's
-    return 0;
+    if (h == -1) { errno = EBADF; return -1; }
+    return kama__file_ident((HANDLE)h, outCtimeNs, outVol, outIdLo, outIdHi);
 }
 
 // The write side of the mapping above (KR-92): the bits become an access list.
@@ -1931,10 +1970,13 @@ static inline int32_t   kama_unlink(const char* path) { return (int32_t)unlink(p
 // the common case on a fast box. (The Windows branch stays at whole seconds: `_stat64` has no field.)
 #if defined(__APPLE__)
 #  define KAMA_ST_MTIME_NSEC(st) ((int64_t)(st).st_mtimespec.tv_nsec)
+#  define KAMA_ST_CTIME_NSEC(st) ((int64_t)(st).st_ctimespec.tv_nsec)
 #elif defined(st_mtime)
 #  define KAMA_ST_MTIME_NSEC(st) ((int64_t)(st).st_mtim.tv_nsec)
+#  define KAMA_ST_CTIME_NSEC(st) ((int64_t)(st).st_ctim.tv_nsec)
 #else
 #  define KAMA_ST_MTIME_NSEC(st) ((int64_t)0)
+#  define KAMA_ST_CTIME_NSEC(st) ((int64_t)0)
 #endif
 // The kind of file an `st_mode` describes, in std::fs::FileKind's order: 0 file, 1 directory, 2 symlink, 3 FIFO,
 // 4 character device, 5 block device, 6 socket, 7 anything else.
@@ -1950,28 +1992,35 @@ static inline int32_t kama__file_kind(mode_t m) {
 #endif
     return 7;
 }
+// The change time (`st_ctim`: any change to the file or to what is recorded about it, which no user tool can set back)
+// and the identity (device and inode) come from the same stat (KR-220): two calls could describe two files.
 static inline void kama__stat_facts(const struct stat* st, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
-                                    uint32_t* outMode, uint32_t* outUid, uint32_t* outGid) {
+                                    uint32_t* outMode, uint32_t* outUid, uint32_t* outGid, int64_t* outCtimeNs,
+                                    uint64_t* outDev, uint64_t* outIno) {
     *outSize = (uint64_t)st->st_size; *outKind = kama__file_kind(st->st_mode);
     *outMtimeNs = (int64_t)st->st_mtime * 1000000000ll + KAMA_ST_MTIME_NSEC(*st);
     *outMode = (uint32_t)st->st_mode & 0777u;
     *outUid = (uint32_t)st->st_uid; *outGid = (uint32_t)st->st_gid;   // the owner and group
+    *outCtimeNs = (int64_t)st->st_ctime * 1000000000ll + KAMA_ST_CTIME_NSEC(*st);
+    *outDev = (uint64_t)st->st_dev; *outIno = (uint64_t)st->st_ino;
 }
 // `outMode` is the nine PERMISSION bits the file records, not an access check for this process (root ignores
 // them, and an ACL can deny a file whose mode looks writable) — `access(W_OK)` would answer a different question.
 // `follow` 0 is `lstat`: a symbolic link's own facts, its kind Symlink; 1 is `stat`, what it points at.
 static inline int32_t kama_path_meta(const char* path, int32_t follow, uint64_t* outSize, int32_t* outKind,
-                                     int64_t* outMtimeNs, uint32_t* outMode, uint32_t* outUid, uint32_t* outGid) {
+                                     int64_t* outMtimeNs, uint32_t* outMode, uint32_t* outUid, uint32_t* outGid,
+                                     int64_t* outCtimeNs, uint64_t* outDev, uint64_t* outIno) {
     struct stat st; if ((follow ? stat(path, &st) : lstat(path, &st)) != 0) return -1;
-    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode, outUid, outGid);
+    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode, outUid, outGid, outCtimeNs, outDev, outIno);
     return 0;
 }
 // The same facts for an OPEN file (`fstat`) — so a check and the read that follows it are about one file, with no
 // time between them in which the path can be pointed elsewhere.
 static inline int32_t kama_fd_meta(int32_t fd, uint64_t* outSize, int32_t* outKind, int64_t* outMtimeNs,
-                                   uint32_t* outMode, uint32_t* outUid, uint32_t* outGid) {
+                                   uint32_t* outMode, uint32_t* outUid, uint32_t* outGid, int64_t* outCtimeNs,
+                                   uint64_t* outDev, uint64_t* outIno) {
     struct stat st; if (fstat(fd, &st) != 0) return -1;
-    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode, outUid, outGid);
+    kama__stat_facts(&st, outSize, outKind, outMtimeNs, outMode, outUid, outGid, outCtimeNs, outDev, outIno);
     return 0;
 }
 // Directory creation, rename and existence. 0777 is the POSIX default — the process umask narrows it,

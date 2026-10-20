@@ -2213,7 +2213,10 @@ does the holder's death, so a lock file needs no pid check (Rust's `File::lock`;
 `LockFileEx` on Windows, mandatory — another handle's read or write fails while it is held; none on wasm, `Other`); plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
 `createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
 `kind`, `modified` (a `std::time::Timestamp` — nanoseconds where the filesystem records them, whole seconds
-on Windows) and `permissions` (the nine bits the file records, not an access check — below). `kind` is a `FileKind`
+on Windows), `changed` (the change time — `st_ctim`, Windows' `ChangeTime` — which no user tool can set back, as `cp -p`
+and `touch -r` set `modified`), `id` (a `FileId`, equal for two reads of one file through any path, kept by a rename: a
+device and inode on Linux and macOS, a volume serial and a 128-bit file id on Windows; `Equatable` and `Hashable`, so a <!-- test: fs_metadata_identity -->
+cache keys on it — git's index keys on the same) and `permissions` (the nine bits the file records, not an access check — below). `kind` is a `FileKind`
 — `File`, `Dir`, `Symlink`, `Fifo`, `CharDevice`, `BlockDevice`, `Socket`, `Other` — with `isFile()`, `isDir()` and
 `isSymlink()` for the common questions; `stat(path:)` follows a symbolic link and `symlinkStat(path:)` describes the
 link itself, and `File.metadata()` asks an OPEN file, so a check and the read after it are about one file. <!-- test: fs_file_kind -->

@@ -16,7 +16,7 @@ import {
     std::process::UserId, std::process::GroupId,
 };
 
-export { File, OpenMode, SeekFrom, Metadata, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
+export { File, OpenMode, SeekFrom, Metadata, FileId, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
          readDir, remove, createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, exists, setPermissions,
          canonicalPath };
 
@@ -43,18 +43,23 @@ extern fn int32  kama_close_fd(int32 fd);
 @compileFor(!OS_WINDOWS)
 extern fn int32  kama_path_meta(UnsafeConstPtr<cchar> path, int32 follow, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind,
                                 UnsafePtr<int64> outMtimeNs, UnsafePtr<uint32> outMode, UnsafePtr<uint32> outUid,
-                                UnsafePtr<uint32> outGid);
+                                UnsafePtr<uint32> outGid, UnsafePtr<int64> outCtimeNs, UnsafePtr<uint64> outDev,
+                                UnsafePtr<uint64> outIno);
 @compileFor(!OS_WINDOWS)
 extern fn int32  kama_fd_meta(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind, UnsafePtr<int64> outMtimeNs,
-                              UnsafePtr<uint32> outMode, UnsafePtr<uint32> outUid, UnsafePtr<uint32> outGid);
+                              UnsafePtr<uint32> outMode, UnsafePtr<uint32> outUid, UnsafePtr<uint32> outGid,
+                              UnsafePtr<int64> outCtimeNs, UnsafePtr<uint64> outDev, UnsafePtr<uint64> outIno);
 @compileFor(OS_WINDOWS)
 extern fn int32  kama_path_meta(UnsafeConstPtr<cchar> path, int32 follow, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind,
                                 UnsafePtr<int64> outMtimeNs, UnsafePtr<uint32> outMode, UnsafePtr<uint8> outOwner,
-                                UnsafePtr<int32> outOwnerLen, UnsafePtr<uint8> outGroup, UnsafePtr<int32> outGroupLen);
+                                UnsafePtr<int32> outOwnerLen, UnsafePtr<uint8> outGroup, UnsafePtr<int32> outGroupLen,
+                                UnsafePtr<int64> outCtimeNs, UnsafePtr<uint64> outVol, UnsafePtr<uint64> outIdLo,
+                                UnsafePtr<uint64> outIdHi);
 @compileFor(OS_WINDOWS)
 extern fn int32  kama_fd_meta(int32 fd, UnsafePtr<uint64> outSize, UnsafePtr<int32> outKind, UnsafePtr<int64> outMtimeNs,
                               UnsafePtr<uint32> outMode, UnsafePtr<uint8> outOwner, UnsafePtr<int32> outOwnerLen,
-                              UnsafePtr<uint8> outGroup, UnsafePtr<int32> outGroupLen);
+                              UnsafePtr<uint8> outGroup, UnsafePtr<int32> outGroupLen, UnsafePtr<int64> outCtimeNs,
+                              UnsafePtr<uint64> outVol, UnsafePtr<uint64> outIdLo, UnsafePtr<uint64> outIdHi);
 extern fn int32  kama_unlink(UnsafeConstPtr<cchar> path);
 extern fn isize  kama_desc_dup(isize h, int32 kind);
 extern fn int32  kama_mkdir(UnsafeConstPtr<cchar> path);
@@ -166,6 +171,8 @@ type value Metadata implements Sendable {
     public usize size;
     public FileKind kind;
     public Timestamp modified;
+    public Timestamp changed;
+    public FileId id;
     public Permissions permissions;
     public UserId owner;
     public GroupId group;
@@ -181,6 +188,8 @@ type value Metadata implements Sendable {
     public usize size;
     public FileKind kind;
     public Timestamp modified;
+    public Timestamp changed;
+    public FileId id;
     public Permissions permissions;
     public Optional<UserId> owner;
     public Optional<GroupId> group;
@@ -188,6 +197,49 @@ type value Metadata implements Sendable {
     public const fn bool isDir() { return match (this.kind) { case Dir: true; case _: false; }; }
     public const fn bool isFile() { return match (this.kind) { case File: true; case _: false; }; }
     public const fn bool isSymlink() { return match (this.kind) { case Symlink: true; case _: false; }; }
+}
+
+// Which file this is (KR-220): equal for two `Metadata` of one file, whatever path each was read through — a rename
+// keeps it, a file replaced by a rename does not, and neither does a copy with its size and times put back (`cp -p`,
+// `touch -r`), which is what a cache keyed on size and `modified` takes for unchanged. `changed` beside it is the
+// time no user tool can set back. Equatable and Hashable, so a cache keys on it. Each OS keeps its own parts: a
+// device and an inode on Linux and macOS; a volume serial and a 128-bit file id on Windows (`FILE_ID_INFO`, which
+// ReFS needs — a filesystem without one, FAT, gives its 64-bit index in the low half).
+@compileFor(!OS_WINDOWS)
+@generate(Equatable, Hashable)
+type value FileId implements Formattable, Sendable {
+    uint64 dev;
+    uint64 ino;
+    ctor make(uint64 dev, uint64 ino) { this.dev = dev; this.ino = ino; }
+    friend metadataOf[make];
+    public const fn uint64 device() { return this.dev; }
+    public const fn uint64 inode() { return this.ino; }
+    public const fn void format(ref Formatter f) { f.writeU64(v: this.dev); f.writeStr(s: ":"); f.writeU64(v: this.ino); }
+}
+
+@compileFor(OS_WINDOWS)
+@generate(Equatable, Hashable)
+type value FileId implements Formattable, Sendable {
+    uint64 vol;
+    uint64 lo;
+    uint64 hi;
+    ctor make(uint64 vol, uint64 lo, uint64 hi) { this.vol = vol; this.lo = lo; this.hi = hi; }
+    friend metadataOf[make];
+    public const fn uint64 volumeSerial() { return this.vol; }
+    // The 128-bit id, little-endian as `FILE_ID_128` holds it.
+    public const fn InlineArray<uint8>#(16) fileId() {
+        InlineArray<uint8>#(16) b = [0ui8; 16];
+        isize i = 0;
+        while (i < 8) {
+            b[i] = truncate<uint8>(this.lo >> cast<uint64>(i * 8));
+            b[i + 8] = truncate<uint8>(this.hi >> cast<uint64>(i * 8));
+            i = i + 1;
+        }
+        return b;
+    }
+    public const fn void format(ref Formatter f) {
+        f.writeU64(v: this.vol); f.writeStr(s: ":"); f.writeU64(v: this.hi); f.writeStr(s: ":"); f.writeU64(v: this.lo);
+    }
 }
 
 // What a path names: a regular file, a directory, or one of the other things a filesystem holds (
@@ -211,9 +263,11 @@ fn FileKind fileKind(int32 code) {
 }
 
 @compileFor(!OS_WINDOWS)
-unsafe fn Result<Metadata, IoError> metadataOf(int32 rc, uint64 sz, int32 kind, int64 mtime, uint32 mode, uint32 uid, uint32 gid) {
+unsafe fn Result<Metadata, IoError> metadataOf(int32 rc, uint64 sz, int32 kind, int64 mtime, uint32 mode, uint32 uid, uint32 gid,
+                                               int64 ctime, uint64 dev, uint64 ino) {
     if (rc != 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: Metadata.of(size: cast<usize>(sz), kind: fileKind(code: kind), modified: Timestamp.fromUnixNanos(n: mtime),
+                                         changed: Timestamp.fromUnixNanos(n: ctime), id: FileId.make(dev: dev, ino: ino),
                                          permissions: Permissions.fromBits(bits: mode & 0o777ui32),
                                          owner: UserId.of(raw: uid), group: GroupId.of(raw: gid)));
 }
@@ -226,9 +280,13 @@ unsafe fn Result<Metadata, IoError> pathMetadata(const ref string path, int32 fo
     uint32 mode = 0ui32;
     uint32 uid = 0ui32;
     uint32 gid = 0ui32;
+    int64 ctime = 0i64;
+    uint64 dev = 0ui64;
+    uint64 ino = 0ui64;
     int32 rc = kama_path_meta(path: path.cstr(), follow: follow, outSize: addr(of: sz), outKind: addr(of: kind),
-                              outMtimeNs: addr(of: mtime), outMode: addr(of: mode), outUid: addr(of: uid), outGid: addr(of: gid));
-    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, uid: uid, gid: gid);
+                              outMtimeNs: addr(of: mtime), outMode: addr(of: mode), outUid: addr(of: uid), outGid: addr(of: gid),
+                              outCtimeNs: addr(of: ctime), outDev: addr(of: dev), outIno: addr(of: ino));
+    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, uid: uid, gid: gid, ctime: ctime, dev: dev, ino: ino);
 }
 
 @compileFor(!OS_WINDOWS)
@@ -239,9 +297,13 @@ unsafe fn Result<Metadata, IoError> fdMetadata(int32 fd) {
     uint32 mode = 0ui32;
     uint32 uid = 0ui32;
     uint32 gid = 0ui32;
+    int64 ctime = 0i64;
+    uint64 dev = 0ui64;
+    uint64 ino = 0ui64;
     int32 rc = kama_fd_meta(fd: fd, outSize: addr(of: sz), outKind: addr(of: kind), outMtimeNs: addr(of: mtime),
-                            outMode: addr(of: mode), outUid: addr(of: uid), outGid: addr(of: gid));
-    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, uid: uid, gid: gid);
+                            outMode: addr(of: mode), outUid: addr(of: uid), outGid: addr(of: gid),
+                            outCtimeNs: addr(of: ctime), outDev: addr(of: dev), outIno: addr(of: ino));
+    return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, uid: uid, gid: gid, ctime: ctime, dev: dev, ino: ino);
 }
 
 // A SID the seam copied out, as an account: `None` for a length of 0 (a descriptor this account may not read).
@@ -266,9 +328,11 @@ fn Optional<GroupId> sidGroup(const ref InlineArray<uint8>#(68) b, int32 len) {
 @compileFor(OS_WINDOWS)
 unsafe fn Result<Metadata, IoError> metadataOf(int32 rc, uint64 sz, int32 kind, int64 mtime, uint32 mode,
                                                const ref InlineArray<uint8>#(68) owner, int32 ownerLen,
-                                               const ref InlineArray<uint8>#(68) grp, int32 groupLen) {
+                                               const ref InlineArray<uint8>#(68) grp, int32 groupLen,
+                                               int64 ctime, uint64 vol, uint64 idLo, uint64 idHi) {
     if (rc != 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: Metadata.of(size: cast<usize>(sz), kind: fileKind(code: kind), modified: Timestamp.fromUnixNanos(n: mtime),
+                                         changed: Timestamp.fromUnixNanos(n: ctime), id: FileId.make(vol: vol, lo: idLo, hi: idHi),
                                          permissions: Permissions.fromBits(bits: mode & 0o777ui32),
                                          owner: sidUser(b: owner, len: ownerLen), group: sidGroup(b: grp, len: groupLen)));
 }
@@ -283,11 +347,16 @@ unsafe fn Result<Metadata, IoError> pathMetadata(const ref string path, int32 fo
     InlineArray<uint8>#(68) grp = [0; 68];
     int32 ownerLen = 0;
     int32 groupLen = 0;
+    int64 ctime = 0i64;
+    uint64 vol = 0ui64;
+    uint64 idLo = 0ui64;
+    uint64 idHi = 0ui64;
     int32 rc = kama_path_meta(path: path.cstr(), follow: follow, outSize: addr(of: sz), outKind: addr(of: kind),
                               outMtimeNs: addr(of: mtime), outMode: addr(of: mode), outOwner: addr(of: owner[0]),
-                              outOwnerLen: addr(of: ownerLen), outGroup: addr(of: grp[0]), outGroupLen: addr(of: groupLen));
+                              outOwnerLen: addr(of: ownerLen), outGroup: addr(of: grp[0]), outGroupLen: addr(of: groupLen),
+                              outCtimeNs: addr(of: ctime), outVol: addr(of: vol), outIdLo: addr(of: idLo), outIdHi: addr(of: idHi));
     return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, owner: owner, ownerLen: ownerLen,
-                      grp: grp, groupLen: groupLen);
+                      grp: grp, groupLen: groupLen, ctime: ctime, vol: vol, idLo: idLo, idHi: idHi);
 }
 
 @compileFor(OS_WINDOWS)
@@ -300,11 +369,16 @@ unsafe fn Result<Metadata, IoError> fdMetadata(int32 fd) {
     InlineArray<uint8>#(68) grp = [0; 68];
     int32 ownerLen = 0;
     int32 groupLen = 0;
+    int64 ctime = 0i64;
+    uint64 vol = 0ui64;
+    uint64 idLo = 0ui64;
+    uint64 idHi = 0ui64;
     int32 rc = kama_fd_meta(fd: fd, outSize: addr(of: sz), outKind: addr(of: kind), outMtimeNs: addr(of: mtime),
                             outMode: addr(of: mode), outOwner: addr(of: owner[0]), outOwnerLen: addr(of: ownerLen),
-                            outGroup: addr(of: grp[0]), outGroupLen: addr(of: groupLen));
+                            outGroup: addr(of: grp[0]), outGroupLen: addr(of: groupLen),
+                            outCtimeNs: addr(of: ctime), outVol: addr(of: vol), outIdLo: addr(of: idLo), outIdHi: addr(of: idHi));
     return metadataOf(rc: rc, sz: sz, kind: kind, mtime: mtime, mode: mode, owner: owner, ownerLen: ownerLen,
-                      grp: grp, groupLen: groupLen);
+                      grp: grp, groupLen: groupLen, ctime: ctime, vol: vol, idLo: idLo, idHi: idHi);
 }
 
 // An open file that closes its descriptor on drop (RAII). Move-only. Implements the streaming byte substrate

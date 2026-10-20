@@ -1,0 +1,40 @@
+// KR-220: `Metadata.id` names WHICH file — equal through two paths and two reads of one file, kept by a rename, and
+// different for another file even of the same size and content — and `changed` is the change time, which a metadata
+// change moves while `modified` stays. `FileId` keys a map, as a cache keyed on it would.
+import { std::fs::File, std::fs::OpenMode, std::fs::FileId, std::fs::Metadata, std::fs::Permissions, std::fs::stat,
+         std::fs::writeText, std::fs::rename, std::fs::remove, std::fs::setPermissions, std::io::IoError,
+         std::collections::Map };
+
+fn Metadata st(const ref string p) {
+    Result<Metadata, IoError> r = stat(path: p);
+    return match (r) { case Ok(value: m): m; case Err(error: e): { panic(msg: "stat"); } };
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+    _ = writeText(path: "kr220.a", text: "same");
+    _ = writeText(path: "kr220.c", text: "same");
+    Metadata a1 = st(p: "kr220.a");
+    Metadata a2 = st(p: "kr220.a");
+    if (a1.id != a2.id) { bad = bad | 1; }
+    Result<File, IoError> rf = File.open(path: "kr220.a", mode: OpenMode::Read);
+    File f = match (give rf) { case Ok(value: x): give x; case Err(error: e): { return 90; } };
+    Result<Metadata, IoError> rm = f.metadata();
+    Metadata af = match (rm) { case Ok(value: m): m; case Err(error: e): { return 91; } };
+    if (af.id != a1.id) { bad = bad | 2; }                                   // a path and an open file agree
+    Metadata c = st(p: "kr220.c");
+    if (c.id == a1.id) { bad = bad | 4; }                                    // same size and content, another file
+    _ = rename(from: "kr220.a", to: "kr220.b");
+    Metadata b = st(p: "kr220.b");
+    if (b.id != a1.id) { bad = bad | 8; }                                    // a rename keeps it
+    _ = setPermissions(path: "kr220.c", permissions: Permissions::OwnerRead);
+    Metadata c2 = st(p: "kr220.c");
+    if (c2.changed < c.changed || c2.modified != c.modified) { bad = bad | 16; }
+    Map<FileId, int32> seen = Map.empty();
+    seen.put(key: a1.id, value: 1);
+    if (!seen.contains(key: b.id) || seen.contains(key: c.id)) { bad = bad | 32; }
+    if ("${a1.id}" == "") { bad = bad | 64; }
+    _ = remove(path: "kr220.b");
+    _ = remove(path: "kr220.c");
+    return cast<uint8>(bad);
+}

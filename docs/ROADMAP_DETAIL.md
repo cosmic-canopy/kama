@@ -468,36 +468,6 @@ fork); Windows' creation FILETIME (absolute, set once, so unique across boots wi
 Size M: three platforms, each its own calls. Linux parses `/proc/<pid>/stat` after the LAST `)` (the command name may
 hold spaces and parentheses).
 
-<a id="s1-metadata-identity"></a>
-
-#### `Metadata` has no change time and no file identity (KR-220)
-
-Measured on `0.9.690`: `std::fs::Metadata` is `size`, `kind`, `modified`, `permissions`, `owner` and `group` (POSIX;
-on Windows `owner`/`group` are `Optional`). A cache that keys a file's digest on size and mtime — a build tool's,
-which must not hash gigabytes again — takes a file rewritten at the same size and given its old mtime back
-(`touch -r`, `cp -p`, `rsync -t`) as unchanged, and cannot tell a file replaced by a rename from the original. git's
-index keys on ctime, inode and device as well, which no user tool can set back.
-
-**What others do.** Rust: `std::os::unix::fs::MetadataExt` (`ino`, `dev`, `ctime`), and on Windows
-`MetadataExt::volume_serial_number`/`file_index` (unstable). Python: `os.stat` has `st_ino`, `st_dev`, `st_ctime` on
-every platform, filling `st_ino`/`st_dev` on Windows from the file index and volume serial. Go: `FileInfo.Sys()`,
-a platform `syscall.Stat_t`. .NET: none.
-
-**Recommendation (std, the production answer).** The platform twins of `Metadata` already carry the deltas, so:
-1. `changed: Timestamp` on both: POSIX `st_ctim`, Windows `FILE_BASIC_INFO.ChangeTime`.
-2. `id: FileId` on both, an `Equatable` value naming a file's identity: POSIX `{ device: st_dev, inode: st_ino }`,
-   Windows `{ volumeSerial, fileIndex }` (`FILE_ID_INFO`'s 128-bit id, which ReFS needs). One field, one meaning —
-   "the same file" — where Python's reuse of `st_ino` for a Windows index blurs two.
-
-Java's `BasicFileAttributes.fileKey()` is the same idea, opaque; Go answers only `os.SameFile`; C++ only
-`filesystem::equivalent`.
-
-**Ruled 2026-10-20 (the maintainer), as recommended:** one `id: FileId` field — `Equatable`, `Hashable` (a cache keys
-on it), `Formattable`, `Sendable` — whose parts each platform twin exposes in its own form, as `UserId` does:
-POSIX `device()`/`inode()` (16 B), Windows `volumeSerial()`/`fileId()` (24 B, `FILE_ID_INFO`). `changed: Timestamp`
-beside it. Both twins of `Metadata` grow, so `Metadata.of(…)` call sites move. Size S–M (the Windows half opens the
-file by handle to read both).
-
 <a id="s1-listen-options"></a>
 
 #### Listener options: the backlog, and reuse-port where the OS balances it (KR-206)
