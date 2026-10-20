@@ -580,7 +580,7 @@ is refused at the trailing `return give xs;` with *"use of `xs` after it was mov
 without the trailing `return` it builds and returns 0. `0.9.595` taught the move pass that a loop body
 which always leaves has no next pass. This body leaves on one path and loops on the other, and the code after
 the loop is still checked as if it could run. Close means nothing after a loop with no `break` is reachable to the
-move check, and the program above builds.
+move check, and the program above builds. Re-probed on `0.9.690` (with `fn uint8 main()`): still refused.
 
 <a id="s2-replace-infer"></a>
 
@@ -592,7 +592,7 @@ and so does `replace(place: this.conn, with: Optional::None)` on a field. `place
 `T` is its type. Binding `with` to a typed local first, or writing `replace::<Optional<int32>>(…)`, builds.
 Close means inference takes `T` from any argument that types it, not only from `with`, so `Optional::None` (a
 variant constructor typed by its destination) is checked against the `T` that `place:` gives. The error also
-reports column 0 (KR-196).
+reports column 0 (KR-196). Re-probed on `0.9.690`: still so.
 
 <a id="s2-fnptr-type-arg"></a>
 
@@ -2261,6 +2261,34 @@ change) and Java's in precision (only while a borrow is live). The first version
 was RefCell's granularity: it counted a non-`const` method's `this` for the whole call, so any re-entrant mutation
 through another handle trapped, whether or not anything could dangle.
 
+**Implementation map (prepared 2026-10-20 on `0.9.690`; read, not built — re-probe before planning).**
+- **The count.** Two control blocks: the library one, `type value Ctrl { usize strong; usize weak; }`
+  (lib/std/memory/shared.kama), and the intrinsic one a contract element uses, `kama_ctrl` (include/kama_runtime.h,
+  `KAMA_SHARED_IFACE_TYPE`), with its count helpers in include/kama_ctrl.h. Each gains a borrow count that only the
+  plain (mutable) flavor reads; `Shared<immutable T>` takes the atomic path, never mutates, and never touches it.
+- **The check.** Every mutating access through a handle goes through `derefMut()` — `Shared.derefMut()` in
+  shared.kama, chosen per receiver by `derefAccessor` (kama.cemit.cpp, where `derefMut` is preferred for a mutable
+  receiver) — so one test there, `borrows == 0` or trap (`@trackCaller`, naming the access), covers field writes,
+  non-`const` calls and `ref` arguments alike. `deref()` never checks: a read cannot free.
+- **The extents.** The runtime twin marks exactly the extents the static freeze already records, when their root
+  is a `Shared` handle and their body contains a call: the `borrow` window (`emitBorrow`, its `frozen.push_back`),
+  `foreach` (its operand frozen for the body), a borrowing `match` binding, and a `scope` child's borrowed places.
+  Each emits an enter before and a leave on every exit (`break`, `continue`, `return`, and an `@onPanic` region's
+  recovery — the one exit with no static shape).
+- **The summary.** A fixpoint over methods: a method "holds a `this`-rooted borrow across a call" when its body has
+  such an extent rooted at `this`, or calls a method on `this` that does; a contract slot, a `virtual` method and an
+  `fnptr` are assumed to. A call through a `Shared` handle into such a method is itself a marked extent.
+- **Teardown.** `kama_ctrl_release_strong`'s plain path keeps `strong == 1` across the pointee's destructor;
+  `kama_ctrl_try_upgrade` (include/kama_ctrl.h) and `Weak.tryUpgrade` (lib/std/memory/weak.kama) answer `None`
+  while a value is being dropped (a flag beside the count, or the count itself).
+- **Fixtures.** The two repros above under ASan (trap, not fault); `foreach (o in this.observers) { o.changed(); }`
+  re-entered by `addObserver` (trap); `set(v)` → `hook.fire()` → `other.bump()` (must NOT trap); a `Weak` upgraded
+  during teardown (`None`); the emitted C of a `Shared<immutable T>` program carries no count operations.
+- **Measure** on the `Shared`-heavy fixtures and the engine, interleaved, before and after.
+- **Open at plan time:** an `@onPanic` recovery that unwinds through a marked extent must leave the count right (or
+  the value unusable); whether a contract-element `Shared` (the intrinsic path) gets the same check in its emitted
+  dispatch rather than in library code.
+
 <a id="s5-inline-array-eq"></a>
 
 ### `==` on an `InlineArray` (KR-215)
@@ -3006,7 +3034,7 @@ Measured on `0.9.666`. Most diagnostics carry their column. These three print `f
 leftovers: a caller still passing only a line stays column 0, and a diagnostic attributed to the author's
 instantiation site keeps its line and drops the column, which belonged to the template. The first two above are
 the second kind; the third is the first kind, at a declaration that has a column of its own. Close means each
-names the column of the call, the type argument or the declaration, with the reported column checked by a guard.
+names the column of the call, the type argument or the declaration, with the reported column checked by a guard. Re-probed on `0.9.690`: all three still print column 0.
 
 <a id="s10-module-name-clash"></a>
 
@@ -3062,7 +3090,7 @@ pass (`emitHeaderContent`, under `_inHeaderPass`) reaches when it registers the 
 before the per-module loop sets `_sourcePath`, and the emitter is built with no path, so `diagFile()` has none of
 its three answers. The harness already refuses an xfail whose diagnostic has no file. A positive build has no
 such check. Close means a refusal raised in the header pass names the unit whose declaration asked for the
-instance, and a multi-file xfail holds it.
+instance, and a multi-file xfail holds it. ⚠️ Since `0.9.678` an `InlineArray` of resources is LEGAL, so this repro no longer refuses anything: re-probing needs another refusal raised while the shared header is emitted.
 
 **A recursion in the helper.** `CEmitter::unsupported(const char*, const ASTNode* at, const std::string&)` does
 `if (at->synthesized) { unsupported(rawWhat, at, subject); return; }`. That is the same overload with the same
