@@ -612,10 +612,17 @@ static const std::map<std::string, SrcRange>& builtinDocIndex()
 // lib/libwgpu_native.* under it). Fetched on demand by tools/fetch-webgpu.sh into a gitignored dir;
 // $KAMA_WGPU_DIR overrides. NOT vendored because it is multi-MB — the repo stays lean. Its license is
 // MIT OR Apache-2.0, as permissive as kama's.
+//
+// The drop is per PLATFORM, like `out/<os>-<arch>/` (the leaf is tools/platform.sh's, passed in by the Makefile): it
+// is a host library, so a macOS archive under one shared `third_party/wgpu/` was what a Linux container build of
+// the same checkout tried to link ("archive has no index").
+#ifndef KAMA_PLATFORM
+#define KAMA_PLATFORM "unknown"
+#endif
 std::string resolveWgpuDir()
 {
     if (const char* d = getenv("KAMA_WGPU_DIR")) return d;
-    return "third_party/wgpu";
+    return std::string("third_party/wgpu/") + KAMA_PLATFORM;
 }
 
 // The native C compiler. A "-bundled" install ships a static zig at

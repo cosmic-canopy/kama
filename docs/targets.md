@@ -160,7 +160,7 @@ link without `--gc-sections` fails on undefined references from bodies nothing c
 
 **`webgpu`** is the `--webgpu` flag as a project property. It is also a *linking* decision, which is the
 class `link` exists for. It is the platform API and nothing more: natively it finds the wgpu-native SDK
-(`tools/fetch-webgpu.sh`, or `$KAMA_WGPU_DIR`) and adds its include path, library and rpath; on wasm it selects
+(`tools/fetch-webgpu.sh` puts it in `third_party/wgpu/<os>-<arch>/`, one per platform as `out/` is; or `$KAMA_WGPU_DIR`) and adds its include path, library and rpath; on wasm it selects
 emscripten's WebGPU port. A window, an event loop or a safe binding is the project's — a platform layer in its own
 `csources`, linked by its manifest, as [examples/webgpu](../examples/webgpu/kama.json) does, or a package.
 

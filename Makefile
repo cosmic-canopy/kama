@@ -26,7 +26,7 @@ CXX      = clang++
 # Overridable for compiler debugging (`make OPT=-O0`). `-g` stays on unconditionally: a compiler you
 # cannot get a backtrace out of is a bad trade for a few MB of binary.
 OPT     ?= -O2
-CXXFLAGS = -std=c++14 $(OPT) -g -Wall -Wno-deprecated-register -DKAMA_VERSION='"$(VERSION)"'
+CXXFLAGS = -std=c++14 $(OPT) -g -Wall -Wno-deprecated-register -DKAMA_VERSION='"$(VERSION)"' -DKAMA_PLATFORM='"$(PLATFORM)"'
 # Appended to both compile and link (the link rule reuses CXXFLAGS). CI sets this to
 # build a macOS universal binary: EXTRA_CXXFLAGS="-arch arm64 -arch x86_64".
 CXXFLAGS += $(EXTRA_CXXFLAGS)

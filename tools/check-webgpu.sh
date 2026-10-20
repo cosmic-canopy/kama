@@ -24,7 +24,7 @@ for t in host wasm; do
 done
 said="example and smoke check for native and wasm"
 
-wgpu=${KAMA_WGPU_DIR:-$ROOT/third_party/wgpu}
+wgpu=${KAMA_WGPU_DIR:-$ROOT/third_party/wgpu/$(sh "$ROOT/tools/platform.sh")}   # per platform, as the driver reads it
 if [ ! -f "$wgpu/include/webgpu/webgpu.h" ]; then
     echo "check-webgpu: PASS ($said; no wgpu-native SDK — builds skipped, tools/fetch-webgpu.sh fetches it)"
     exit 0

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetch the native WebGPU SDK (wgpu-native prebuilt) into a gitignored third_party/wgpu/, so
+# Fetch the native WebGPU SDK (wgpu-native prebuilt) into a gitignored third_party/wgpu/<platform>/, so
 # `kama build ... --webgpu` (native) can compile + link. Nothing multi-MB lands in git — this
 # mirrors how emcc fetches its emdawnwebgpu port on demand for the wasm target.
 #
@@ -12,7 +12,8 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-DEST="${KAMA_WGPU_DIR:-$ROOT/third_party/wgpu}"
+# Per platform, as `out/` is: the SDK is a host library, and one checkout serves a host and a container build.
+DEST="${KAMA_WGPU_DIR:-$ROOT/third_party/wgpu/$(sh "$HERE/platform.sh")}"
 
 os="$(uname -s)"; arch="$(uname -m)"
 case "$os" in
