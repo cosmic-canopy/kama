@@ -1,0 +1,67 @@
+// KR-211 (teardown): a `Weak` upgraded while its value is being dropped answers `None`. Through 0.9.693 the plain
+// count was held at 1 across the destructor, so the upgrade succeeded, the `Shared` it made escaped into a sink, and
+// it dangled once the value was freed (ASan: heap-use-after-free). Both control blocks: the library `Shared<T>` and
+// the emitted `Shared<Contract>`. ASan/LSan-clean on the san leg.
+import { std::memory::Shared, std::memory::Weak };
+
+type resource Sink {
+    Optional<Shared<Node>> kept;
+    public ctor make() { this.kept = Optional::None; }
+    public fn void stash(Shared<Node> s) { this.kept = Optional::Some(value: give s); }
+    public fn bool holds() { return match (this.kept) { case Some(value: s): true; case None: false; }; }
+}
+
+type resource Node {
+    Optional<Weak<Node>> me;
+    Optional<Shared<Sink>> sink;
+    public ctor make() { this.me = Optional::None; this.sink = Optional::None; }
+    public fn void wire(Weak<Node> w, Shared<Sink> s) { this.me = Optional::Some(value: give w); this.sink = Optional::Some(value: give s); }
+    ~Node() {
+        match (this.me) {
+            case Some(value: w): {
+                match (w.tryUpgrade()) {
+                    case Some(value: up): { match (this.sink) { case Some(value: k): { k.stash(s: up); } case None: {} }; }
+                    case None: {}
+                };
+            }
+            case None: {}
+        };
+    }
+}
+
+type contract Named for resource { fn int32 id(); fn void wire(Weak<Named> w, Shared<Sink2> s); }
+type resource Leaf implements Named {
+    Optional<Weak<Named>> self;
+    Optional<Shared<Sink2>> sink;
+    public ctor make() { this.self = Optional::None; this.sink = Optional::None; }
+    public fn int32 id() { return 4; }
+    public fn void wire(Weak<Named> w, Shared<Sink2> s) { this.self = Optional::Some(value: give w); this.sink = Optional::Some(value: give s); }
+    ~Leaf() {
+        match (this.self) {
+            case Some(value: w): {
+                match (w.tryUpgrade()) {
+                    case Some(value: up): { match (this.sink) { case Some(value: k): { k.stash(s: up); } case None: {} }; }
+                    case None: {}
+                };
+            }
+            case None: {}
+        };
+    }
+}
+type resource Sink2 {
+    Optional<Shared<Named>> kept;
+    public ctor make() { this.kept = Optional::None; }
+    public fn void stash(Shared<Named> s) { this.kept = Optional::Some(value: give s); }
+    public fn bool holds() { return match (this.kept) { case Some(value: s): true; case None: false; }; }
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+    Shared<Sink> sk = new Sink.make();
+    { Shared<Node> a = new Node.make(); a.wire(w: a.downgrade(), s: sk); }
+    if (sk.holds()) { bad = bad + 1; }
+    Shared<Sink2> sk2 = new Sink2.make();
+    { Shared<Named> l = new Leaf.make(); l.wire(w: l.downgrade(), s: sk2); }
+    if (sk2.holds()) { bad = bad + 2; }
+    return cast<uint8>(bad);
+}

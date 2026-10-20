@@ -25,6 +25,18 @@
 // This header is included by kama_runtime.h right after the `kama_ctrl` typedef (it needs that type); it is
 // not self-contained and is not meant to be included on its own.
 
+// The plain path's last release marks the block DROPPING for as long as the pointee's destructor runs. The block
+// must outlive a `Weak` that destructor releases (a back-edge into this same block — a cycle), so `strong` cannot
+// fall to 0 yet; and nothing may upgrade to a value halfway through being dropped. Through 0.9.693 `strong` was held
+// at 1 instead, so a `Weak` upgraded by the destructor succeeded, escaped, and dangled once the value was freed
+// (KR-211). The atomic path needs no mark: its `strong` reaches 0 before the destructor, and an upgrade refuses 0.
+#define KAMA_CTRL_DROPPING ((size_t)-1)
+
+// Is the value alive — neither dropped nor being dropped? What a `Weak` asks before it hands out a `Shared`.
+static inline int kama_ctrl_alive(const kama_ctrl* c) {
+    return c->kama_strong != 0 && c->kama_strong != KAMA_CTRL_DROPPING;
+}
+
 // Retain one strong reference (a `Shared` clone / bare copy).
 static inline void kama_ctrl_retain_strong(kama_ctrl* c, int atomic) {
     if (atomic) __atomic_fetch_add(&c->kama_strong, (size_t)1, __ATOMIC_RELAXED);
@@ -38,9 +50,8 @@ static inline void kama_ctrl_retain_weak(kama_ctrl* c, int atomic) {
 }
 
 // Release one strong reference. Returns 1 iff this was the LAST strong ref — the caller then destroys the
-// pointee and calls kama_ctrl_finish_strong. The PLAIN path deliberately does NOT decrement on the last
-// ref: it leaves `strong == 1` while the pointee dtor runs (cycle-safe — a `Weak` back-edge may re-enter
-// this same ctrl), matching the historical prelude/macro semantics. The ATOMIC path fetch_sub(release)s
+// pointee and calls kama_ctrl_finish_strong. The PLAIN path does not decrement on the last ref: it marks the
+// block DROPPING while the pointee dtor runs (see KAMA_CTRL_DROPPING). The ATOMIC path fetch_sub(release)s
 // and, if it was last, issues an acquire fence (an immutable graph is acyclic, so no dance is needed).
 static inline int kama_ctrl_release_strong(kama_ctrl* c, int atomic) {
     if (atomic) {
@@ -50,12 +61,12 @@ static inline int kama_ctrl_release_strong(kama_ctrl* c, int atomic) {
         }
         return 0;
     }
-    if (c->kama_strong == 1) return 1;   // last: keep it at 1 across the pointee dtor
+    if (c->kama_strong == 1) { c->kama_strong = KAMA_CTRL_DROPPING; return 1; }   // last: dropping, not yet 0
     c->kama_strong -= 1;
     return 0;
 }
 
-// Called after the last-strong pointee dtor has run. Plain: zero `strong` (it was kept at 1). Atomic: the
+// Called after the last-strong pointee dtor has run. Plain: zero `strong` (it was marked DROPPING). Atomic: the
 // fetch_sub already reached 0. Returns 1 iff the ctrl block should now be freed (no weak refs remain).
 static inline int kama_ctrl_finish_strong(kama_ctrl* c, int atomic) {
     if (atomic) return __atomic_load_n(&c->kama_weak, __ATOMIC_ACQUIRE) == 0;
@@ -88,7 +99,7 @@ static inline int kama_ctrl_try_upgrade(kama_ctrl* c, int atomic) {
         }
         return 0;
     }
-    if (c->kama_strong > 0) { c->kama_strong += 1; return 1; }
+    if (kama_ctrl_alive(c)) { c->kama_strong += 1; return 1; }
     return 0;
 }
 

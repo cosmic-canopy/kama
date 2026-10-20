@@ -1464,6 +1464,10 @@ int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
 };
 ```
 
+**A value being dropped is already dead to its `Weak`s.** While the last `Shared`'s destructor runs, `tryUpgrade()`
+answers `None` — so a destructor that upgrades a weak back-edge to its own value (an observer, a parent pointer) can <!-- test: shared_teardown_upgrade -->
+never hand out a `Shared` to memory about to be freed. Rust's `Weak::upgrade` answers the same way.
+
 `.downgrade()` is the only way to get a `Weak`, for a handle over a contract and over a concrete type alike.
 A `Shared` given where a `Weak` is wanted (`Weak<Tex> w = s;`, an argument, a return, a field) is refused, naming `s.downgrade()`. <!-- xfail: weak_needs_downgrade -->
 Boxing and upcasts change what a handle owns; this would change whether it owns, which is written down. An `Owned`

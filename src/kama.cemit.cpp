@@ -18625,16 +18625,15 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
         return;
     }
     if (info.kind == CollKind::Shared) {
-        // The last strong drop keeps `strong` at 1 while the pointee dtor runs, then releases it: dropping
-        // the pointee can free a `Weak` back-edge into THIS same ctrl (a cycle), which would free the ctrl
-        // early and leave the `weak == 0` test reading freed memory. See prelude shared.kama.
+        // The count goes through kama_ctrl.h, as the library `Shared`'s does, so the two cannot disagree: the last
+        // release marks the block DROPPING while the pointee dtor runs (a `Weak` back-edge freed by that dtor must
+        // not free the block early, and must not upgrade to a value being dropped — KR-211).
         *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
         indent(1); *_out << "if (self->kama_ctrl) {\n";
-        indent(2); *_out << "if (self->kama_ctrl->kama_strong == 1) {\n";
+        indent(2); *_out << "if (kama_ctrl_release_strong(self->kama_ctrl, 0)) {\n";
         dropObj(3);
-        indent(3); *_out << "self->kama_ctrl->kama_strong = 0;\n";
-        indent(3); *_out << "if (self->kama_ctrl->kama_weak == 0) " << release("kama_ctrl", ctrlSize, ctrlAlign) << ";\n";
-        indent(2); *_out << "} else { self->kama_ctrl->kama_strong--; }\n";
+        indent(3); *_out << "if (kama_ctrl_finish_strong(self->kama_ctrl, 0)) " << release("kama_ctrl", ctrlSize, ctrlAlign) << ";\n";
+        indent(2); *_out << "}\n";
         indent(2); *_out << "self->kama_obj = NULL; self->kama_ctrl = NULL;\n";
         indent(1); *_out << "}\n}\n";
         *_out << "static inline bool " << N << "__valid(" << N << "* self) { return self->kama_obj != NULL; }\n";
@@ -18650,17 +18649,16 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
     // allocator (the `= {0}` init leaves them zeroed on the expired path).
     *_out << "static inline void " << N << "__dtor(" << N << "* self) {\n";
     indent(1); *_out << "if (self->kama_ctrl) {\n";
-    indent(2); *_out << "if (--self->kama_ctrl->kama_weak == 0 && self->kama_ctrl->kama_strong == 0) "
-                     << release("kama_ctrl", ctrlSize, ctrlAlign) << ";\n";
+    indent(2); *_out << "if (kama_ctrl_release_weak(self->kama_ctrl, 0)) " << release("kama_ctrl", ctrlSize, ctrlAlign) << ";\n";
     indent(2); *_out << "self->kama_obj = NULL; self->kama_ctrl = NULL;\n";
     indent(1); *_out << "}\n}\n";
     *_out << "static inline bool " << N << "__expired(" << N << "* self) {\n";
-    indent(1); *_out << "return self->kama_ctrl == NULL || self->kama_ctrl->kama_strong == 0;\n}\n";
+    indent(1); *_out << "return self->kama_ctrl == NULL || !kama_ctrl_alive(self->kama_ctrl);\n}\n";
     const std::string& S = info.ifacePartner;
     *_out << "static inline " << S << " " << N << "__upgrade(" << N << "* self) {\n";
     indent(1); *_out << S << " s = {0};\n";
-    indent(1); *_out << "if (self->kama_ctrl && self->kama_ctrl->kama_strong > 0) {\n";
-    indent(2); *_out << "self->kama_ctrl->kama_strong++; s.kama_obj = self->kama_obj; s.kama_vtbl = self->kama_vtbl; s.kama_ctrl = self->kama_ctrl;\n";
+    indent(1); *_out << "if (self->kama_ctrl && kama_ctrl_try_upgrade(self->kama_ctrl, 0)) {\n";
+    indent(2); *_out << "s.kama_obj = self->kama_obj; s.kama_vtbl = self->kama_vtbl; s.kama_ctrl = self->kama_ctrl;\n";
     if (alloc) { indent(2); *_out << "s.kama_alloc = self->kama_alloc;\n"; }
     indent(1); *_out << "} else { s.kama_obj = NULL; s.kama_vtbl = NULL; s.kama_ctrl = NULL; }\n";
     indent(1); *_out << "return s;\n}\n";

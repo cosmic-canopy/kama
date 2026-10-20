@@ -74,9 +74,9 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
     unsafe ~Shared() {
         if (cast<usize>(this.c) != 0) {                           // guard a zero-initialized handle
             // release one strong ref; non-zero iff this was the LAST. The seam encapsulates both flavors:
-            // the plain path keeps `strong` at 1 across the pointee dtor (cycle-safe — dropping the
-            // pointee may release a `Weak` back-edge into THIS Ctrl), then `finish_strong` zeroes it and
-            // reports whether the Ctrl should be freed; the atomic path (deeply-immutable => acyclic)
+            // the plain path marks the Ctrl DROPPING across the pointee dtor (dropping the pointee may release a
+            // `Weak` back-edge into THIS Ctrl, which must not free it, and nothing may upgrade to a value being
+            // dropped — kama_ctrl.h), then `finish_strong` zeroes `strong` and reports whether the Ctrl should be freed; the atomic path (deeply-immutable => acyclic)
             // fetch_subs with a release store + acquire fence. A non-last release already decremented.
             if (kama_ctrl_release_strong(c: cast<UnsafePtr>(this.c), atomic: __kama_ctrl_atomic()) != 0i32) {
                 usize bytes = sizeof(ptr: this.p);                // the pointee's own layout — may be a derived

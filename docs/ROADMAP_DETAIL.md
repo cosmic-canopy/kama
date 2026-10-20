@@ -2271,10 +2271,8 @@ and the paragraph after the list).
    access; measure it on the Shared-heavy corpus and the engine before and after.
 5. No source change. Rust's model (a read-only `Shared` plus an explicit cell) is sound too, but it breaks every
    mutating `Shared` user and adds a wrapper type for one rule.
-6. Folded in, the related hole the report found: the plain refcount keeps `strong == 1` while the last handle's
-   value is destroyed, so a `Weak` held by something that value owns upgrades inside its destructor and can mutate a
-   value halfway through being dropped (measured: `upgradedDuringTeardown=true`, no ASan fault). A `Weak` upgraded
-   during teardown answers `None`, as Rust's does.
+6. Folded in, the related teardown hole — a `Weak` upgraded while its value is being dropped answers `None` —
+   shipped in `0.9.697` (SPEC *`Weak<T>`*).
 
 **What the comparison actually says.** Rust's `RefCell` is the whole value for the whole borrow (a `borrow_mut`
 during any `borrow` panics: `BorrowMutError`). Swift's exclusivity is per stored property, and a `for x in
@@ -2301,16 +2299,57 @@ through another handle trapped, whether or not anything could dangle.
 - **The summary.** A fixpoint over methods: a method "holds a `this`-rooted borrow across a call" when its body has
   such an extent rooted at `this`, or calls a method on `this` that does; a contract slot, a `virtual` method and an
   `fnptr` are assumed to. A call through a `Shared` handle into such a method is itself a marked extent.
-- **Teardown.** `kama_ctrl_release_strong`'s plain path keeps `strong == 1` across the pointee's destructor;
-  `kama_ctrl_try_upgrade` (include/kama_ctrl.h) and `Weak.tryUpgrade` (lib/std/memory/weak.kama) answer `None`
-  while a value is being dropped (a flag beside the count, or the count itself).
 - **Fixtures.** The two repros above under ASan (trap, not fault); `foreach (o in this.observers) { o.changed(); }`
-  re-entered by `addObserver` (trap); `set(v)` → `hook.fire()` → `other.bump()` (must NOT trap); a `Weak` upgraded
-  during teardown (`None`); the emitted C of a `Shared<immutable T>` program carries no count operations.
+  re-entered by `addObserver` (trap); `set(v)` → `hook.fire()` → `other.bump()` (must NOT trap); the emitted C of a
+  `Shared<immutable T>` program carries no count operations.
 - **Measure** on the `Shared`-heavy fixtures and the engine, interleaved, before and after.
-- **Open at plan time:** an `@onPanic` recovery that unwinds through a marked extent must leave the count right (or
-  the value unusable); whether a contract-element `Shared` (the intrinsic path) gets the same check in its emitted
-  dispatch rather than in library code.
+**Re-probed 2026-10-20 on `0.9.690`, mapped before any code — what changes the map above.**
+- **Both repros reproduce under ASan on macOS** (`kama build … --cc "clang -fsanitize=address,…"`): heap-use-after-free,
+  WRITE of size 4. So does the teardown hole, as a real use-after-free and not only a flag: a `Weak` upgraded in the last
+  handle's destructor succeeds (`strong` is held at 1), escapes into a sink, and dangles once `finish_strong` zeroes the
+  count and frees the value.
+- **Reads go through `derefMut` too.** `derefAccessor` picks `derefMut` for any non-`const` receiver, whatever the access:
+  `a.size()` on a `const fn` and a bare `return a.x` both lower to `Shared__derefMut(&a)`. A check placed there as the
+  map says would trap reads. First the accessor learns intent: `deref` for a `const fn` call and for a read, `derefMut`
+  only for a non-`const` call, a field write, and a `ref` argument (`emitReorderedCall` already asks `!p.isConst`).
+  A call is one line (the target method's `isConst`, in the auto-deref fallback of `emitDispatch`). A FIELD is not:
+  the emitter has no write context, and a flag set at a write site would leak into the reads nested inside it
+  (`a.items[b.idx] = 3` reads `b`) — and once the check exists, a read through `derefMut` TRAPS a correct program. So
+  each write site marks exactly the member-access chain it writes through (the receiver links of its target, never an
+  index or an argument), and `emitMemberAccess` takes `derefMut` only for a marked node: assignment and compound
+  assignment, `++`/`--`, a `ref`/`out` argument, the receiver of a non-`const` call, a `borrow` host that mints a
+  writable window or calls a non-`const` place method, `foreach (ref …)`, and a `match` binding by `ref`. A missed site
+  writes through `deref()`'s `T const*`, which the C compiler refuses or warns on (and the harness fails a warning) —
+  loud, never a silent pass.
+- **Inside a method of the pointee, `this` is `self`.** The check guards ENTRY into a mutating method through a handle,
+  which is the granularity the rule wants: `b.grow()` traps at the call, `this.items.add` inside `grow` is never checked.
+- **Paths that take the pointer once and mutate through it later:** an upcast into `Shared<Contract>`/`Shared<Base>`
+  (`emitIntoHandle`, which also pokes `k_strong++` inline), a contract borrow of the handle (`contractBorrowOf`), a
+  `BindableFunctionPtr` bind, and a `match` subject held for the whole match. Each is either a marked extent of its own
+  or takes the check where the pointer is taken.
+- **`Shared<Contract>` is emitted C** (`emitIfaceHandleFuncs`: `__dtor`, `__copy`, `__upgrade` with inline count pokes),
+  never `kama_ctrl.h`; its calls are `KAMA_SLOT(…)(h.kama_obj)`. The count and the teardown flag go into those bodies and
+  into the slot call's receiver path. Its `useAtomicRefcount` flag is computed and read by nothing.
+- **Layout.** `kama_ctrl` (kama_runtime.h) and the library `Ctrl` gain the same field in the same place, and every site
+  that initializes a block sets it (shared.kama's two `adopt`s, `kama_ctrl_new`, and four emitter sites), because an
+  allocator does not zero; an iface `__dtor` frees a library-made block with `sizeof(kama_ctrl)`, which
+  `KAMA_ALLOC_CHECK` holds equal.
+- **No pre-emission call summary exists.** The only call graph is parsed from the EMITTED C after emission
+  (`buildCallGraph`), too late to decide what to emit. The summary is therefore its own AST fixpoint before emission:
+  a method holds a `this`-rooted borrow across a call when its body has a `borrow`, `foreach` or borrowing `match` rooted
+  at `this` whose body contains a call, or calls such a method on `this`; contract slots, `virtual` methods and `fnptr`s
+  are assumed to.
+- **Every exit, for free:** the enter is a statement and the leave is a synthetic scope local whose drop is the release,
+  so it rides `emitScopeCleanup` on fall-through, `return`, `break` and `continue` exactly as an owned local does.
+- **`@onPanic` (the open question): refused, not repaired.** Recovery is a `longjmp` that skips every scope cleanup, and
+  that is legal today only because `checkOnPanicRegions` refuses any frame in a region's reach that owns something to
+  drop (`_destructibleOwners`, which a window-closing view alias already joins). A marked extent is recorded there too, so a region
+  can never unwind through one and leave a count raised.
+
+**Commits, in order:** (1) teardown — shipped `0.9.697`: a `Weak` upgraded while its value is being dropped answers `None`, both control
+blocks; (2) the intent-aware accessor, with no behaviour change but the emitted C; (3) the count, the check in `derefMut`
+and the `borrow`/`foreach`/`match` extents rooted through a handle; (4) the summary and the marked calls; (5) the
+pointer-once paths and `Shared<Contract>`; (6) measurement, interleaved, on the `Shared`-heavy fixtures and the engine.
 
 <a id="s5-inline-array-eq"></a>
 
