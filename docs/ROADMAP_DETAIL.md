@@ -438,20 +438,35 @@ through `psutil` (`Process.create_time()`, `boot_time()`), which is what everyon
 `process.kill(pid, 0)`. The portable identity everyone settles on is the pair (pid, start time), with the boot time
 to rule out a reboot.
 
-**Recommendation (std, the production answer).** `std::process` holds the rest of process identity, so these join
-it, each on every platform that has the concept:
-1. `processExists(id: int32) -> Result<bool, IoError>`: `kill(pid, 0)` on POSIX (EPERM answers `true`: the process
-   exists and is someone else's), `OpenProcess` + `GetExitCodeProcess` on Windows.
-2. `processStarted(id: int32) -> Result<Optional<Timestamp>, IoError>`: Linux `/proc/<pid>/stat` field 22 over the
-   boot time, macOS `sysctl(KERN_PROC_PID)` `p_starttime`, Windows `GetProcessTimes`; `None` when it is gone.
-3. `bootTime() -> Result<Timestamp, IoError>`: Linux `/proc/stat` `btime`, macOS `sysctl(KERN_BOOTTIME)`, Windows now
-   minus `GetTickCount64`. Linux's `boot_id` is a stronger token but exists nowhere else; boot time identifies a
-   boot on every platform, so it is the primary interface.
-4. `processGroupExists(group: int32)`: `kill(-group, 0)`, POSIX only, beside `ProcessGroup` (already POSIX-typed;
-   Windows has job objects, not groups) — absent on Windows by the platform-deltas rule, never faked.
+**The first recommendation was wrong on identity (probed 2026-10-20).** It identified a process by a wall-clock start
+time and the boot time. Both move: Linux's `/proc/stat` `btime` is now minus the boot offset, recomputed when the
+clock is set (`getboottime64`), so a start time built as `btime` plus ticks shifts after an NTP step or a VM resume;
+macOS adjusts `kern.boottime` when the calendar clock is set; and Windows' now minus `GetTickCount64` differs on every
+call. A live holder whose recorded start no longer matches looks dead, and its lock is taken. Java's
+`ProcessHandle.equals` compares the pid and a start time built the same way (cached once per JVM, so only one JVM's
+handles agree), and psutil's `(pid, create_time)` moves with `btime`. polkit identifies a process by the raw start
+ticks, which do not move. Each OS records a stable value: Linux's `boot_id` and `/proc/<pid>/stat` field 22 (ticks
+since boot); macOS's `kern.bootsessionuuid` (a UUID per boot, measured present) and `kinfo_proc.p_starttime` (set at
+fork); Windows' creation FILETIME (absolute, set once, so unique across boots without a boot token).
 
-**Decisions owed:** the four names; whether (1)–(2) return a `ProcessId` value type rather than a bare `int32`
-(std uses `int32` today, in `Process.id()` and `currentProcessId()`). Size M: three platforms, each its own syscall.
+**Ruled 2026-10-20 (the maintainer).**
+1. `ProcessStamp`, an `Equatable`, `Hashable`, `Formattable`, `Sendable` value with `ProcessStamp.parse(text:)`, made
+   only of kernel-recorded values: on POSIX a boot UUID and a start value (24 B), on Windows the creation time (8 B).
+   Platform twins, as `UserId`. A lock file writes `${stamp}` and a checker compares a parsed one.
+2. `processStamp(id: int32) -> Result<Optional<ProcessStamp>, IoError>`, `None` when no such process.
+3. `processExists(id: int32) -> Result<bool, IoError>`: `kill(pid, 0)` on POSIX (EPERM answers `true`); on Windows
+   `OpenProcess` and `WaitForSingleObject(h, 0)` — not `GetExitCodeProcess == STILL_ACTIVE`, which an exit code of
+   259 fakes. A process that has exited but not been reaped still exists, on every POSIX system.
+4. `processStarted(id:)` and `bootTime()` answer `Timestamp`s for DISPLAY, documented as moving with the clock.
+5. `processGroupExists(group: int32)`: `kill(-group, 0)`, POSIX only, beside `ProcessGroup`; absent on Windows by the
+   platform-deltas rule.
+6. A pid stays `int32`, as in `Process.id()`, `currentProcessId()`, `ProcessGroup::Join` and `PeerCredentials`; Rust,
+   Go and .NET use a bare integer too, and a pid is a number on every OS (a `UserId` is not). The stamp is the identity.
+7. A lock file itself is KR-221's file lock, which the kernel releases when its holder dies; the stamp answers what a
+   lock cannot — who holds it, before a pid read from a file is signalled.
+
+Size M: three platforms, each its own calls. Linux parses `/proc/<pid>/stat` after the LAST `)` (the command name may
+hold spaces and parentheses).
 
 <a id="s1-metadata-identity"></a>
 
@@ -474,8 +489,37 @@ a platform `syscall.Stat_t`. .NET: none.
    Windows `{ volumeSerial, fileIndex }` (`FILE_ID_INFO`'s 128-bit id, which ReFS needs). One field, one meaning —
    "the same file" — where Python's reuse of `st_ino` for a Windows index blurs two.
 
-**Decisions owed:** `id`/`FileId` vs separate fields; whether `FileId` exposes its parts. Size S–M (the Windows half
-opens the file by handle to read both).
+Java's `BasicFileAttributes.fileKey()` is the same idea, opaque; Go answers only `os.SameFile`; C++ only
+`filesystem::equivalent`.
+
+**Ruled 2026-10-20 (the maintainer), as recommended:** one `id: FileId` field — `Equatable`, `Hashable` (a cache keys
+on it), `Formattable`, `Sendable` — whose parts each platform twin exposes in its own form, as `UserId` does:
+POSIX `device()`/`inode()` (16 B), Windows `volumeSerial()`/`fileId()` (24 B, `FILE_ID_INFO`). `changed: Timestamp`
+beside it. Both twins of `Metadata` grow, so `Metadata.of(…)` call sites move. Size S–M (the Windows half opens the
+file by handle to read both).
+
+<a id="s1-file-locks"></a>
+
+#### File locks (KR-221)
+
+Measured on `0.9.690`: std has no way to lock a file — no `flock`, `fcntl` lock or `LockFileEx` in `std::fs` or the
+OS seam. A lock file therefore names its holder by pid, and a second process decides whether that holder is alive
+(KR-219), then takes the lock over: a race between the check and the takeover, and a pid the OS may have reused.
+
+**What others do.** Rust stabilized `File::lock`, `lock_shared`, `try_lock`, `try_lock_shared` and `unlock` in 1.89
+(`flock` on Unix, `LockFileEx` on Windows). Java has `FileChannel.lock`/`tryLock`, .NET `FileStream.Lock`, Python
+`fcntl.flock` and `msvcrt.locking`; Go has only `syscall.Flock` (its own tool keeps a private `lockedfile`).
+
+**Ruled 2026-10-20 (the maintainer).**
+1. On `File`: `lock()`, `lockShared()`, `tryLock()`, `tryLockShared()` and `unlock()`, each `Result<Unit, IoError>`;
+   a busy `try` answers `IoErrorKind::WouldBlock`, std's existing non-blocking answer.
+2. POSIX: `flock` on the whole file (per open file, released by the last close; never `fcntl` record locks, which any
+   close of the same file by the process drops). Windows: `LockFileEx` over the whole file. The kernel releases either
+   when the holder dies, so there is no pid to check.
+3. The platform delta is documented, not hidden: Windows' lock is mandatory (another handle's read or write of the
+   locked range fails), POSIX's is advisory.
+
+Size S–M.
 
 <a id="s1-listen-options"></a>
 
@@ -582,6 +626,32 @@ which always leaves has no next pass. This body leaves on one path and loops on 
 the loop is still checked as if it could run. Close means nothing after a loop with no `break` is reachable to the
 move check, and the program above builds. Re-probed on `0.9.690` (with `fn uint8 main()`): still refused.
 
+**Wider than the loop (probed 2026-10-20 on `0.9.690`).** `return give xs; return give xs;` is refused the same way,
+and `fn int32 f() { return 1; return 2; }` builds: kama accepts dead code everywhere and checks it with every rule
+except definite assignment, whose walk (`checkDefiniteAssignment`) stops at the first statement that leaves. The move
+check does not stop, so it judges code that cannot run.
+
+**What others do.** Java refuses an unreachable statement (JLS 14.22) and Zig refuses unreachable code. Go accepts it,
+and only `go vet` reports it. Rust, Swift, C# and Kotlin warn.
+
+**Ruled 2026-10-20 (the maintainer): unreachable code is refused.**
+1. A statement after one that never completes is an error naming the statement that leaves: `return`, `break`,
+   `continue`, a call that never returns (`panic`, `quit`), a `while (true)`/`for (;;)` with no `break` out of it,
+   and an `if`/`else` or `match` whose every branch leaves. Comptime bodies follow the same rule.
+2. Reachability is read off the structure, never off a folded constant, so `if (true) { return 0; }` followed by code
+   stays a debug early-out (Java's rule).
+3. One walk: the divergence test definite assignment and the emitter already share (`alwaysExits`, `bodyDiverges`,
+   `hasLoopBreak`). With dead code refused, the move check never meets it.
+4. kama has **errors only**, and SPEC says so beside this rule. A warning is the compiler saying it does not believe
+   its own output (the harness fails any fixture whose stderr says "warning"); treating warnings as errors ties a build
+   to a compiler's lint set — Rust discourages `#![deny(warnings)]` in libraries and caps lints on dependencies, and
+   distributions patch `-Werror` out of C packages, because a new compiler's new warning breaks an old build; and
+   every language with warnings grows a second language to silence them. Advice that is not a rule lives in the
+   editor (`DiagSeverity::Warning`, LSP-only), never on stderr. Go reaches the same place with `vet`.
+
+Size S–M: the corpus scan found about five dead statements (four `tests/trap` fixtures end `panic(…); return 0;`),
+and the refusal itself gives the full count.
+
 <a id="s2-replace-infer"></a>
 
 ### `replace(place:, with: Optional::None)` does not infer `T` from `place:` (KR-195)
@@ -593,6 +663,20 @@ and so does `replace(place: this.conn, with: Optional::None)` on a field. `place
 Close means inference takes `T` from any argument that types it, not only from `with`, so `Optional::None` (a
 variant constructor typed by its destination) is checked against the `T` that `place:` gives. The error also
 reports column 0 (KR-196). Re-probed on `0.9.690`: still so.
+
+<a id="s2-quoted-format"></a>
+
+### A quoted, structural rendering — `${x:?}` (KR-222)
+
+`Formattable` is kama's one to-text contract, and its derive renders a string raw: `Stat { name: a, b }` cannot be told
+from two fields, and once KR-216 lands, `[a, b]` prints for both `["a", "b"]` and `["a, b"]`. Logs want a form that cannot
+be misread. Rust has `{:?}` (`Debug`), Python `repr`, Swift `debugDescription`, Go `%q`/`%#v`; Java and Kotlin have
+none. SPEC has called `${x:?}` "a possible additive future" since the derive shipped; today `${s:?}` is a lexical error.
+
+Scheduled 2026-10-20 (the maintainer, ruling KR-216's quoting as a follow-up). Design first: whether it is a second
+contract or a mode of the one sink (`Formatter` already carries the specifier), what a user type writes to take part,
+how a string escapes (JSON's rules are the obvious candidate), and that structs, enums and every collection take it
+together — never one at a time.
 
 <a id="s2-fnptr-type-arg"></a>
 
@@ -1005,9 +1089,9 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 - **Format/interpolation follow-ups (on the shipped `std::fmt` substrate).** Interpolation, format specifiers,
   `@generate(Formattable)`, and tagged strings all ship (SPEC), on every subject including a generic and an
   `enum` (0.9.246 — see *Derive follow-ons* above). Settled by the audit (2026-09-07). Shipped 0.9.226: combining a
-  base marker with width/flags (`${n:08x}`), a custom fill character, center-align (`^`); a `${x:?}`-routed
-  `@generate(Debug)` (spec hook already exists);
-  per-derive `@skip(Formattable)` / `@skip(Serializable)` for redaction (today `@skip` is one shared boolean —
+  base marker with width/flags (`${n:08x}`). Not offered, by SPEC: a custom fill character and center-align. A
+  quoted `${x:?}` rendering is KR-222 ([§2](#s2-quoted-format)); today `${x:?}` is a lexical error.
+  Still open here: per-derive `@skip(Formattable)` / `@skip(Serializable)` for redaction (today `@skip` is one shared boolean —
   parameterize `FieldInfo::serSkip` to a per-derive set when a concrete case appears). Tagged-string *typed
   holes* (Model B) shipped at `0.9.512` as `Template<C>` (SPEC § *Tagged strings*). `html` returning a distinct
   `SafeHtml` instead of a `string` is **genuinely optional** for std: a tag may return any type, so a web
@@ -2300,7 +2384,14 @@ an `InlineArray` lowers to a C struct and nothing gave it an `equals`. `0.9.686`
 is, C++'s `std::array` has `==`, and comparing two digests (`InlineArray<uint8>#(32)`) is the common case. The likely
 shape is an intrinsic `equals` when `T: Equatable`, so `==` lowers through it as it does for every other type, and
 `Equatable`'s conditional conformance follows; KR-203's constant-time comparison is the separate spelling for secrets.
-Size S; unprobed beyond the refusal.
+
+**Ruled 2026-10-20 (the maintainer).** Probed: a std `type adapter` cannot take `InlineArray` as a target ("unknown
+type `InlineArray` in a `type adapter`'s targets"), so the conformance is the compiler's. An `InlineArray<T>#(N)` is
+`Equatable<This>` exactly when `T` is, as `@generate(Equatable)` decides it for a generic, and `==`/`!=` lower through
+an element-by-element `equals` — never a `memcmp`, which answers wrongly for a NaN, for `-0.0 == 0.0` and for struct
+padding (clang turns the integer loop into one compare anyway). `DynamicArray` and `InlineDynamicArray` already compare
+this way; `FixedArray` has `contains`/`indexOf` but no `equals`, and gains it in the same commit, so every sequence
+answers `==` the same way. Size S.
 
 <a id="s5-collections-formattable"></a>
 
@@ -2315,6 +2406,12 @@ when [T: Formattable]`, writing `[1, 2, 3]` for a sequence and `{k: v, …}` for
 `HashMap`, Python's `repr`, C#'s collection `ToString` is the counter-example that prints a type name). Open: whether a
 `string` element is quoted (Rust's `Debug` quotes; `Display` has no collection impl at all), and whether one spelling
 serves logs and user-facing text. Size S per collection; unprobed beyond the refusal.
+
+**Ruled 2026-10-20 (the maintainer):** `Formattable when [T: Formattable]` (maps: when both `K` and `V` are) on every
+collection in one commit — `[1, 2, 3]` for a sequence or a view, `{a, b}` for a set, `{k: v, k2: v2}` for a map, in
+iteration order. Strings are NOT quoted: SPEC already rules that the derive renders a string raw ("uniform
+single-contract dispatch — no special-case"), and one contract serves logs and user text alike (Java and Kotlin print
+`[a, b]`, Go `[a b]`). A form that quotes is KR-222, for structs and collections together.
 
 <a id="s5-copy-within"></a>
 
@@ -2347,7 +2444,13 @@ Python: slice assignment (`a[0:3] = a[5:8]`).
    written, may overlap — `copyWithin` moves elements inside one buffer". A collection receiver keeps today's message
    (`buf.addAll(items: buf.view())` can grow).
 
-Size S.
+**Ruled 2026-10-20 (the maintainer), with one change: the bound is `[T: Copyable<T>]`, `copyFrom`'s, not
+`[T: value]`.** `View.copyFrom` already copies an owning element (each overwritten place dropped, a deep copy put in),
+so `copyWithin` takes the same bound and the same split: a value element is one `memmove`, an owning one is dropped
+and copied place by place in memmove's direction (ascending when `to < from`, descending otherwise), so no source is
+overwritten before it is read. Rust restricts `copy_within` to `T: Copy` because safe Rust cannot express an
+overlapping clone; C++'s `std::copy`/`std::copy_backward` take any copyable element with the direction chosen by hand
+(and lower a trivially copyable one to `memmove`). kama decides the direction once, in std's unsafe core. Size S.
 
 <a id="s6"></a>
 
@@ -3067,7 +3170,9 @@ module namespace (greppable: one name means one module) rules that out, and is t
 2. A refused install leaves `.kama/deps` as it found it (write to a staging directory, rename on success), and
    `kama build` runs the same collision check, so no tree a refused install left behind builds.
 
-Size S.
+**Ruled 2026-10-20 (the maintainer), as recommended.** Today the check lives only in `resolveProject`'s drain
+(`src/kama.driver.cpp`), each attempt deletes the view before relinking it, and a refusal returns with the partial
+view on disk; `kama build`/`check` compare nothing. Size S.
 
 <a id="s10-diag-no-file"></a>
 
