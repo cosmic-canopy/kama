@@ -1447,6 +1447,7 @@ view_owns	view_owns.kama:3:0
 view_ref_contract_member	view_ref_contract_member.kama:6:0
 view_ref_param	view_ref_param.kama:12:4 view_ref_param.kama:7:0
 view_return_over_local	view_return_over_local.kama:3:85
+view_window_overlap	view_window_overlap.kama:8:8
 viewable_grants_nothing	viewable_grants_nothing.kama:5:0
 viewable_not_a_contract	viewable_not_a_contract.kama:5:0 viewable_not_a_contract.kama:7:4
 viewable_not_marked	viewable_not_marked.kama:19:44

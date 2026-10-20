@@ -1,0 +1,37 @@
+// KR-217: `View.copyWithin(from:, to:, count:)` copies a run over another inside one buffer, the two may overlap.
+// Values and an owning element (`string`: each overwritten one dropped, a copy put in), both directions, with and
+// without overlap, a gap of 1 (one-element pieces), and the two no-ops. ASan/LSan-clean on the san leg.
+import { std::collections::View, std::collections::ConstView };
+
+fn bool same(ConstView<int32> xs, ConstView<int32> want) {
+    if (xs.length() != want.length()) { return false; }
+    isize i = 0;
+    while (i < xs.length()) { if (xs[i] != want[i]) { return false; } i = i + 1; }
+    return true;
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+    // Left, overlapping: the reader's case — slide the unread tail to the front.
+    InlineArray<int32>#(8) a = [0, 1, 2, 3, 4, 5, 6, 7];
+    borrow a.viewMut() as v { v.copyWithin(from: 3, to: 0, count: 5); }
+    InlineArray<int32>#(8) wa = [3, 4, 5, 6, 7, 5, 6, 7];
+    if (!same(xs: a.view(), want: wa.view())) { bad = bad + 1; }
+    // Right, overlapping, a gap of 1: every piece is one element.
+    InlineArray<int32>#(6) b = [0, 1, 2, 3, 4, 5];
+    borrow b.viewMut() as v { v.copyWithin(from: 0, to: 1, count: 5); }
+    InlineArray<int32>#(6) wb = [0, 0, 1, 2, 3, 4];
+    if (!same(xs: b.view(), want: wb.view())) { bad = bad + 2; }
+    // Disjoint runs, and the two no-ops.
+    InlineArray<int32>#(6) c = [0, 1, 2, 3, 4, 5];
+    borrow c.viewMut() as v { v.copyWithin(from: 0, to: 4, count: 2); v.copyWithin(from: 1, to: 1, count: 3); v.copyWithin(from: 5, to: 0, count: 0); }
+    InlineArray<int32>#(6) wc = [0, 1, 2, 3, 0, 1];
+    if (!same(xs: c.view(), want: wc.view())) { bad = bad + 4; }
+    // An owning element, both directions over an overlap: copies, never aliases — writing one leaves the other.
+    InlineArray<string>#(5) s = ["a", "b", "c", "d", "e"];
+    borrow s.viewMut() as v { v.copyWithin(from: 2, to: 0, count: 3); }      // c d e d e
+    borrow s.viewMut() as v { v.copyWithin(from: 0, to: 1, count: 4); }      // c c d e d
+    s[0] = "z";
+    if (s[0] != "z" || s[1] != "c" || s[2] != "d" || s[3] != "e" || s[4] != "d") { bad = bad + 8; }
+    return cast<uint8>(bad);
+}

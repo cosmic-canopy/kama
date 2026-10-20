@@ -1,0 +1,11 @@
+// KR-217: writing one window of a buffer from another window of the same buffer is refused — the two may overlap —
+// and the refusal says so. Through 0.9.695 it said the method "may grow the very storage", which a `View` cannot.
+import { std::collections::DynamicArray, std::collections::View, std::collections::ConstView };
+type resource Reader {
+    DynamicArray<uint8> buf;
+    public ctor make() { this.buf = DynamicArray.empty(); this.buf.add(item: 1ui8); this.buf.add(item: 2ui8); }
+    public fn void slide(isize start, isize unread) {
+        this.buf.sliceMut(from: 0, count: unread).copyFrom(source: this.buf.slice(from: start, count: unread));
+    }
+}
+fn uint8 main() { Reader r = Reader.make(); r.slide(start: 2, unread: 2); return 0; }

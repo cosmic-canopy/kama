@@ -41823,7 +41823,15 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 // which only ever compares arguments with each other.
                 if (ps && !ps->byRef && isViewCType(ps->className)) {
                     std::vector<std::string> vr = viewRootPlace(a->expression);
-                    if (!vr.empty() && overlapsReceiver(vr))
+                    // A WINDOW receiver has a fixed length and grows nothing; what is wrong there is that two
+                    // windows of one buffer, one written, may overlap (KR-217) — and std has the method for that.
+                    if (!vr.empty() && overlapsReceiver(vr) && isViewCType(mcls))
+                        unsupported(("`" + placeText(vr) + "` is borrowed by the view argument `" + ps->name
+                                     + "` while `" + recvText + "`, a window over the same storage, is the receiver "
+                                     "of non-`const fn` `" + method + "` — two windows of one buffer, one of them "
+                                     "written, may overlap. `copyWithin(from:, to:, count:)` moves elements inside "
+                                     "one buffer").c_str(), call);
+                    else if (!vr.empty() && overlapsReceiver(vr))
                         unsupported(("`" + placeText(vr) + "` is borrowed by the view argument `" + ps->name
                                      + "` while `" + recvText + "` is the receiver of non-`const "
                                      "fn` `" + method + "` — the method may grow the very storage that "

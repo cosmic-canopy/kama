@@ -171,6 +171,29 @@ type view View<T> implements IterableMut<T>, IterableConst<T>, Iterable<T> when 
         copyElements(ptr: this.data, from: source.dataPtr(), count: this.len);
     }
 
+    // Copy the `count` elements at `from` over the `count` at `to`, inside this one view: the two runs may overlap,
+    // as `memmove`'s may (KR-217). Each overwritten element is dropped and a copy put in its place, as `copyFrom`
+    // does. The runs are copied in pieces no longer than the distance between them — front to back when `to` is
+    // before `from`, back to front when it is after — so no source is overwritten before it is read, and no piece
+    // overlaps itself: each is one `copyElements`, one `memcpy` for an element that copies as its bytes, and runs
+    // that do not overlap are one piece.
+    @trackCaller
+    public unsafe fn void copyWithin(isize from, isize to, isize count) when [T: Copyable<T>] {
+        if (count < 0 || from < 0 || to < 0 || from > this.len - count || to > this.len - count) {
+            panic(msg: "View.copyWithin out of bounds");
+        }
+        if (count == 0 || from == to) { return; }
+        isize gap = from < to ? to - from : from - to;
+        isize done = 0;
+        while (done < count) {
+            isize n = count - done < gap ? count - done : gap;
+            isize at = from > to ? done : count - done - n;   // the piece's offset into both runs
+            drop(ptr: addr(of: this.data[to + at]), count: n);
+            copyElements(ptr: addr(of: this.data[to + at]), from: addr(of: this.data[from + at]), count: n);
+            done = done + n;
+        }
+    }
+
     public fn void reverse() {
         isize i = 0;
         isize j = this.len - 1;

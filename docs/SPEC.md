@@ -369,7 +369,13 @@ growth, and `View.copyFrom(source: ConstView<T>)` replaces every element of a wi
 same-position one — the source must be exactly as long, and a mismatch traps (`copy_from_slice`'s rule). Both <!-- test: view_copy_from_length -->
 exist only for a `Copyable` element, and both are ONE `memcpy` when the element's copy is its bytes, in any
 build — they lower to the floor's [`copyElements`](#writing-a-collection-in-kama--sizeof-panicassert-place-returning-methods-),
-as every collection's `copy`, `clear` and drop lower to the range form of `drop`. `capacity()` answers how
+as every collection's `copy`, `clear` and drop lower to the range form of `drop`.
+**Inside one buffer, `View.copyWithin(from:, to:, count:)`** copies the `count` elements at `from` over the `count` at <!-- test: view_copy_within -->
+`to`, and the two runs may overlap — Rust's `copy_within`, JS's `copyWithin`, C's `memmove` — with `copyFrom`'s bound
+and its drop-then-copy for an owning element, in pieces no longer than the gap between the runs and in memmove's
+direction, so no source is overwritten before it is read; runs that do not overlap are one `copyElements`. A run past <!-- test: view_copy_within_bounds -->
+either end traps. Two windows of one buffer, one written (`buf.sliceMut(…).copyFrom(source: buf.slice(…))`), are <!-- xfail: view_window_overlap -->
+refused, naming the overlap and this method. `capacity()` answers how
 many elements fit before the next append moves the buffer: `reserve(n:)` raises it to exactly `n`, and
 `add`/`addAll` raise it geometrically (double, or straight to what a large `addAll` needs).
 

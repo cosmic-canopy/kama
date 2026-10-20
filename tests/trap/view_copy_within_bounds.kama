@@ -1,0 +1,7 @@
+// KR-217: a run past either end traps before anything is written, naming the caller's line (`@trackCaller`).
+import { std::collections::View };
+fn uint8 main() {
+    InlineArray<int32>#(4) xs = [1, 2, 3, 4];
+    borrow xs.viewMut() as v { v.copyWithin(from: 2, to: 0, count: 3); }
+    return 0;
+}

@@ -2413,45 +2413,6 @@ iteration order. Strings are NOT quoted: SPEC already rules that the derive rend
 single-contract dispatch — no special-case"), and one contract serves logs and user text alike (Java and Kotlin print
 `[a, b]`, Go `[a b]`). A form that quotes is KR-222, for structs and collections together.
 
-<a id="s5-copy-within"></a>
-
-### No in-place copy within one buffer, and the two-window refusal gives the wrong reason (KR-217)
-
-Measured on `0.9.690` — a reader sliding the unread tail of its buffer to the front before it reads more:
-
-```kama fragment
-this.buf.sliceMut(from: 0, count: unread).copyFrom(source: this.buf.slice(from: start, count: unread));
-```
-
-is refused: "`this.buf` is borrowed by the view argument `source` while `this.buf.sliceMut(…)` is the receiver of
-non-`const fn` `copyFrom` — the method may grow the very storage that window views, leaving it dangling". It built
-through `0.9.673`; `0.9.675`'s receiver rule (a `ref` argument that holds the receiver) caught it. Refusing it is right
-— a writable window and a read window over one buffer may overlap, and Rust refuses `buf[..n].copy_from_slice(&buf[s..
-s + n])` the same way — but the reason is not: a `View` has a fixed length and cannot grow the array beneath it. And
-std offers nothing in its place: `DynamicArray`'s `memmove` is private to `insertAt`/`remove`, so moving bytes inside
-one buffer takes an element-by-element loop.
-
-**What others do.** Rust: `slice::copy_within(src: Range, dest)` for `T: Copy`, one `memmove`, overlap allowed. JS:
-`TypedArray.copyWithin(target, start, end)`. Go's built-in `copy(dst, src)` allows two slices of one array to overlap.
-Python: slice assignment (`a[0:3] = a[5:8]`).
-
-**Recommendation.** Both halves:
-1. `View<T>.copyWithin(from: isize, to: isize, count: isize) when [T: value]` — one `memmove`, overlap allowed,
-   bounds-checked (`@trackCaller`, a trap). On `View` only: every container hands one out (`viewMut()`), one way.
-   `when [T: value]`, Rust's `T: Copy`: an owning element would need each overwritten place dropped and each copy
-   deep, in the right direction, which is a loop the caller can write.
-2. The two-window refusal names the real reason when the receiver is a window: "two windows of `this.buf`, one
-   written, may overlap — `copyWithin` moves elements inside one buffer". A collection receiver keeps today's message
-   (`buf.addAll(items: buf.view())` can grow).
-
-**Ruled 2026-10-20 (the maintainer), with one change: the bound is `[T: Copyable<T>]`, `copyFrom`'s, not
-`[T: value]`.** `View.copyFrom` already copies an owning element (each overwritten place dropped, a deep copy put in),
-so `copyWithin` takes the same bound and the same split: a value element is one `memmove`, an owning one is dropped
-and copied place by place in memmove's direction (ascending when `to < from`, descending otherwise), so no source is
-overwritten before it is read. Rust restricts `copy_within` to `T: Copy` because safe Rust cannot express an
-overlapping clone; C++'s `std::copy`/`std::copy_backward` take any copyable element with the direction chosen by hand
-(and lower a trivially copyable one to `memmove`). kama decides the direction once, in std's unsafe core. Size S.
-
 <a id="s6"></a>
 
 ## 6. Concurrency — what is left above the primitives
