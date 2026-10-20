@@ -1,0 +1,7 @@
+// An `InlineStorage` has no operators: its bytes are places, not values. Two of them compared with `==` passed
+// `kama check` and were then refused by the C compiler, on a mangled struct name.
+fn uint8 main() {
+    InlineStorage<int32>#(2) a = InlineStorage.empty();
+    InlineStorage<int32>#(2) b = InlineStorage.empty();
+    return a == b ? 1 : 0;
+}

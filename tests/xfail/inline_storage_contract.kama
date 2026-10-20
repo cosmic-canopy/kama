@@ -1,0 +1,4 @@
+// An `InlineStorage` lays its places out in line, and a contract has no layout to lay out: hold `Owned<C>` or
+// `Shared<C>` places instead.
+type contract Shape for value, resource { const fn int32 area(); }
+fn uint8 main() { slot InlineStorage<Shape>#(2) s; return 0; }

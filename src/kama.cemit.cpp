@@ -206,7 +206,7 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
             if (depth < 4 && ic != _collections.end() && ic->second.constValue > 0) {
                 const CollKind k = ic->second.kind;
                 const char* head = k == CollKind::Fixed ? "InlineArray" : k == CollKind::Simd ? "Simd"
-                                 : k == CollKind::Mask  ? "Mask" : nullptr;
+                                 : k == CollKind::Mask  ? "Mask" : k == CollKind::Storage ? "InlineStorage" : nullptr;
                 if (head) {
                     out += std::string(head) + "<" + demangleForDisplay(ic->second.elemMangle, depth + 1) + ">#("
                          + std::to_string(ic->second.constValue) + ")";
@@ -4442,7 +4442,8 @@ std::string CEmitter::cType(SharedIdentifier type)
     // `InlineArray<T,N>` spells `InlineArray_<mangleT>_<N>`, and `Simd<T,N>` spells `Simd_<mangleT>_<N>` —
     // the same two-argument shape (the comptime size mangles to its value), so one arm serves both.
     if (type->genericArg && type->value && type->genericArgs
-        && (*type->value == "InlineArray" || *type->value == "Simd" || *type->value == "Mask")) {
+        && (*type->value == "InlineArray" || *type->value == "Simd" || *type->value == "Mask"
+            || *type->value == "InlineStorage")) {
         std::string m = *type->value;
         for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
         return m;
@@ -5059,6 +5060,21 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     };
     if (lc.empty()) lc = enumOperandClass(lhs, rc);
     if (rc.empty()) rc = enumOperandClass(rhs, lc);
+    // An in-place aggregate — an `InlineArray`, an `InlineStorage` — lowers to a C struct, which has no operators:
+    // `a == b` on two of them passed `kama check` and was then refused by clang ("invalid operands to binary
+    // expression"), naming a mangled struct. Refused here, in kama's words.
+    auto aggregate = [&](const std::string& c) {
+        auto it = _classes.find(c);
+        return it != _classes.end() && it->second.isIntrinsicColl
+            && (it->second.collKind == CollKind::Fixed || it->second.collKind == CollKind::Storage);
+    };
+    if (aggregate(lc) || aggregate(rc)) {
+        const std::string which = aggregate(lc) ? lc : rc;
+        unsupported(("`" + binaryOperator(token) + "` does not apply to `" + demangleForDisplay(which) + "` — "
+                     + (isStorageColl(which) ? std::string("an `InlineStorage` holds places, not values, so it has no operators")
+                                             : std::string("an `InlineArray` has no operators; compare its elements"))).c_str(), line);
+        return "0";
+    }
     bool lUser = userOperandType(lc, _classes);
     bool rUser = userOperandType(rc, _classes);
     // `string` is a primitive (kama_string), not a user-operator type, so `+`/`==`/`!=` are compiler
@@ -8924,9 +8940,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                             // resource element WITHOUT the contract is rejected.
                             auto ci = _collections.find(ty);
                             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
-                                unsupported(("`copy` of a `" + ty + "` needs copyable elements — its elements own "
+                                unsupported((isStorageColl(ty) ? storageCopyRefusal(ty) : std::string("`copy` of a `" + ty + "` needs copyable elements — its elements own "
                                              "resources but aren't `Copyable` (add a `copy` method to the element, "
-                                             "or use `give` to move)").c_str(), n);
+                                             "or use `give` to move)")).c_str(), n);
                             // (else: the initializer above already copied — see `dupCls`)
                         }
                         // give: the plain `=` already transferred the struct; null the source's buffer —
@@ -9306,6 +9322,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         }
         if (itCls.empty() || !_classes.count(itCls) || !_classes[itCls].isIntrinsicColl) {
             unsupported("foreach over a non-collection (a user type needs `iterator()`/`next()` or `iterMut()`)", n); *_out << "\n"; return;
+        }
+        if (_classes[itCls].collKind == CollKind::Storage) {   // no element of its own to walk
+            unsupported("an `InlineStorage` holds places, not live elements, so `foreach` has nothing to walk — iterate "
+                        "the type that holds it, which knows which places are live", n);
+            *_out << "\n"; return;
         }
         const std::string& coll = _classes[itCls].name;
         std::string elemTy   = cType(fe->type);
@@ -9895,8 +9916,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     if (handoff == 2) {                                   // copy = deep copy via __copy
                         auto ci = _collections.find(lty);
                         if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
-                            unsupported(("`copy` of a `" + lty + "` needs copyable elements — its elements own "
-                                         "resources but aren't `Copyable`; use `give` to move").c_str(), n);
+                            unsupported((isStorageColl(lty) ? storageCopyRefusal(lty) : std::string("`copy` of a `" + lty + "` needs copyable elements — its elements own "
+                                         "resources but aren't `Copyable`; use `give` to move")).c_str(), n);
                         if (!lname.empty() && rname == lname) return;     // self-copy: no-op
                         std::string b = emitExpression(as->unaryExpression);
                         bool ph = _hoistOK; _hoistOK = true;            // the source's own temporaries (KR-152)
@@ -13381,11 +13402,18 @@ bool CEmitter::isFixedColl(const std::string& cls) const
 bool CEmitter::isOwningFixed(const std::string& cls) const
 {
     auto it = _classes.find(cls);
-    return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Fixed
-        && (it->second.destructible || it->second.moveOnly);
+    if (it == _classes.end() || !it->second.isIntrinsicColl) return false;
+    if (it->second.collKind == CollKind::Storage) return it->second.moveOnly;   // moves, never drops
+    return it->second.collKind == CollKind::Fixed && (it->second.destructible || it->second.moveOnly);
 }
 
-bool CEmitter::isPlainFixed(const std::string& cls) const { return isFixedColl(cls) && !isOwningFixed(cls); }
+// "Plain" means a laid-out aggregate that owns nothing and copies bitwise: an `InlineArray` or an `InlineStorage`
+// over a value. Every hand-off rule asks it, so a plain storage copies like a plain array and an owning one moves.
+bool CEmitter::isPlainFixed(const std::string& cls) const
+{
+    if (isStorageColl(cls)) { auto it = _classes.find(cls); return !it->second.moveOnly; }
+    return isFixedColl(cls) && !isOwningFixed(cls);
+}
 
 // A deep copy of an owning `InlineArray` allocates exactly when its element's does in a RUNTIME function (a
 // `string`'s `kama_string__copy`), whose body is not kama the call graph can read. A class element's copy is an
@@ -13937,7 +13965,8 @@ bool CEmitter::isCollectionType(SharedIdentifier t) const
     // std::memory), not intrinsic collections; they route through registerGenericTypeInst. `InlineArray<T,N>`
     // (the const-generic value array) stays intrinsic.
     return t->genericArg && t->value &&
-           (*t->value == "BindableFunctionPtr" || *t->value == "InlineArray" || *t->value == "Simd" || *t->value == "Mask");
+           (*t->value == "BindableFunctionPtr" || *t->value == "InlineArray" || *t->value == "Simd" || *t->value == "Mask"
+            || *t->value == "InlineStorage");
 }
 
 // Discover a used Coll<T> instantiation: register a CollectionInfo (drives the
@@ -13966,6 +13995,11 @@ void CEmitter::registerCollection(SharedIdentifier collType)
     // InlineArray<T, N> — the const-generic value array (a distinct shape: two args, value semantics).
     if (!isStr && collType->value && *collType->value == "InlineArray") {
         registerFixed(collType);
+        return;
+    }
+    // InlineStorage<T, N> — the same shape, never constructed: see registerStorage.
+    if (!isStr && collType->value && *collType->value == "InlineStorage") {
+        registerStorage(collType);
         return;
     }
 
@@ -14247,6 +14281,88 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // file's private `Point` resolves to nothing: the view it minted was over a bare, unregistered `Point`,
     // so `a.viewMut()` did not return a view at all, and an element that is itself a generic instance
     // (`Frame<int32>`) walked `View.swap` with a `T` no inference could bind. KR-11.
+    _collections[cName].elem = absolutizeType(elem);
+}
+
+// `copy` of an `InlineStorage` whose element owns something: its bytes are places, and only its holder knows which hold
+// a live `T`, so there is no copy to make — the holder's own `copy` copies the live prefix, element by element.
+std::string CEmitter::storageCopyRefusal(const std::string& cls)
+{
+    return "`copy` does not apply to `" + demangleForDisplay(cls) + "` — it holds places, not values, and only the type "
+           "holding it knows which places are live; copy that type, or `give` this one to move it";
+}
+
+bool CEmitter::isStorageColl(const std::string& cls) const
+{
+    auto it = _classes.find(cls);
+    return it != _classes.end() && it->second.isIntrinsicColl && it->second.collKind == CollKind::Storage;
+}
+
+// Register an `InlineStorage<T>#(N)` instance: N places for a `T`, laid out and aligned as `T[N]`, that the
+// compiler never constructs, copies as elements or drops. It is what a container written in kama keeps a live prefix
+// in — the in-place half of GOALS #1's "unsafe core, safe API", as an allocator's block is the heap half. So it has no
+// element operations at all (no index, no `foreach`, no `==`, no format, no serde, no byte view): which places hold a
+// `T` is its holder's knowledge, and the only way in is `dataPtr()`/`dataPtrMut()`, whose `UnsafePtr` only an `unsafe
+// fn` may hold. Zero-filled: a value holding one is copied, sent and viewed as bytes, so no stack bytes leak through it.
+// Its kind follows `T`'s (computeDestructible): over a value it is a value and copies bitwise; over an element that
+// owns something it moves, and never copies — but it never drops, either way.
+void CEmitter::registerStorage(SharedIdentifier storageType)
+{
+    SharedIdentifierList args = storageType->genericArgs;
+    if (!args || args->size() != 2) {
+        unsupported("`InlineStorage<T>#(N)` takes one type argument and one compile-time size, in separate groups — "
+                    "`InlineStorage<Conn>#(8)`", storageType);
+        return;
+    }
+    SharedIdentifier elem = (*args)[0];
+    SharedIdentifier nArg = (*args)[1];
+    int64_t n;
+    if (!constArgN(nArg, n)) return;   // an unbound `N` inside a template: the instance registers at its use site
+    const bool probeSize = _probingTemplate && readsProbeConst(nArg->constArgValue ? nArg->constArgValue : nArg);
+    if (probeSize && n <= 0) n = 1;
+    if (n <= 0) {
+        unsupported("the size of an `InlineStorage<T>#(N)` must be a positive integer", storageType);
+        return;
+    }
+    const std::string elemCType  = cType(elem);
+    const std::string elemMangle = mangleElem(elem);
+    const std::string elemClass  = isClass(elemCType) ? elemCType : "";
+    if (isInterface(elemCType)) {
+        std::string nm = (elem && elem->value) ? *elem->value : elemCType;
+        unsupported(("an `InlineStorage<T>#(N)` holds its places in line, and `" + nm + "` is a contract, which has no "
+                     "layout — hold `Owned<" + nm + ">` or `Shared<" + nm + ">` places instead").c_str(), storageType);
+        return;
+    }
+    const std::string cName = "InlineStorage_" + elemMangle + "_" + std::to_string(n);
+    if (_collections.count(cName)) return;
+    CollectionInfo info;
+    info.kind = CollKind::Storage; info.cName = cName;
+    info.elemCType = elemCType; info.elemMangle = elemMangle; info.elemClass = elemClass;
+    info.constValue = n;
+    _collections[cName] = info;
+    _collectionOrder.push_back(cName);
+
+    ClassInfo ci;
+    ci.name = cName;
+    ci.isIntrinsicColl = true;
+    ci.collKind = CollKind::Storage;
+    ci.collElemClass = elemClass;
+    ci.destructible = false;                   // never: it holds no live element of its own
+    auto addMethod = [&](const std::string& mname, SharedIdentifier ret, bool isConst) {
+        MethodInfo mi; mi.cName = cName + "__" + mname;
+        mi.returnType = ret; mi.isIntrinsic = true; mi.isConst = isConst;
+        ci.methods[mname] = mi;
+    };
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
+    // The way in, and the only one: the raw-pointer containment check reads the `*`-suffixed return type at the call,
+    // so a caller outside an `unsafe fn` is refused exactly as for `DynamicArray.dataPtrMut()`.
+    auto ptrRet = synthId("UnsafeConstPtr");
+    ptrRet->genericArg = elem; ptrRet->genericArgs = std::make_shared<IdentifierList>(); ptrRet->genericArgs->push_back(elem);
+    addMethod("dataPtr", ptrRet, true);
+    auto ptrMutRet = synthId("UnsafePtr");
+    ptrMutRet->genericArg = elem; ptrMutRet->genericArgs = std::make_shared<IdentifierList>(); ptrMutRet->genericArgs->push_back(elem);
+    addMethod("dataPtrMut", ptrMutRet, false);
+    _classes[cName] = ci;
     _collections[cName].elem = absolutizeType(elem);
 }
 
@@ -16592,7 +16708,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         // the two intrinsics share it because they share the shape: two arguments, the second a value.
         // Without this a generic function over either one cannot be called at all — the size parameter has
         // nowhere else to come from, since it appears only inside the argument's type.
-        if ((pty == "InlineArray" || pty == "Simd") && p->type->genericArgs && p->type->genericArgs->size() == 2) {
+        if ((pty == "InlineArray" || pty == "Simd" || pty == "InlineStorage") && p->type->genericArgs && p->type->genericArgs->size() == 2) {
             std::string pname = (p->identifier && p->identifier->value) ? *p->identifier->value : "";
             auto ai = byName.find(pname);
             if (ai == byName.end()) continue;   // missing arg — emitReorderedCall reports it precisely
@@ -18457,6 +18573,10 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                 *_out << "}\n";
             }
         }
+        else if (info.kind == CollKind::Storage) {   // its `_TYPE` goes out in by-value struct order, as a Fixed's
+            if (!typesOnly)
+                *_out << "KAMA_STORAGE_FUNCS(" << info.elemCType << ", " << info.constValue << ", " << info.cName << ")\n";
+        }
         else if (info.kind == CollKind::Fixed) {
             // Value array: `struct { T v[N]; }` + bounds-checked get/set/at/length/fill. It embeds T
             // by value, so its `_TYPE` is emitted in the by-value struct-body order (emitHeaderContent),
@@ -18538,6 +18658,14 @@ bool CEmitter::collectionElemAccess(ElementAccessNode* ea, std::string& coll,
     std::string cls = receiverClass(recv);
     if (cls.empty() || !_classes.count(cls) || !_classes[cls].isIntrinsicColl) return false;
     coll     = _classes[cls].name;
+    // An `InlineStorage` holds places, not live elements: which of them hold a `T` is its holder's knowledge,
+    // so there is no element to index. Refused here, the one door every read, write and place goes through.
+    if (_classes[cls].collKind == CollKind::Storage) {
+        unsupported("an `InlineStorage` holds places, not live elements, so it is not indexed — its holder reaches "
+                    "them through `dataPtr()`/`dataPtrMut()` in an `unsafe fn`, knowing which are live", ea);
+        recvExpr = "0"; idx = "0";
+        return true;
+    }
     // A `Fixed<T,N>` knows its size at compile time, so a CONSTANT out-of-range index is a
     // compile-time error, not just a runtime trap (the safe-array payoff).
     SharedExpression idxExpr = (ea->expressionlist && !ea->expressionlist->empty())
@@ -19340,8 +19468,8 @@ std::string CEmitter::ternaryArmHandoff(const SharedExpression& arm, const std::
         }
         auto ci = _collections.find(cls);
         if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
-            unsupported(("`copy` of a `" + shown + "` needs copyable elements — its elements own resources but "
-                         "aren't `Copyable`").c_str(), line);
+            unsupported((isStorageColl(shown) ? storageCopyRefusal(shown) : std::string("`copy` of a `" + shown + "` needs copyable elements — its elements own resources but "
+                         "aren't `Copyable`")).c_str(), line);
         return copyCall(cls, emitPlace(v));
     }
     if (isMoveOnlyValue(cls)) {
@@ -19801,7 +19929,7 @@ std::string CEmitter::moveNullStmt(const std::string& cls, const std::string& ex
 {
     // An `InlineArray` has no buffer of its own to empty: a move relocates its bytes, and the move state stops the
     // source's drop.
-    if (isFixedColl(cls)) return "";
+    if (isFixedColl(cls) || isStorageColl(cls)) return "";
     if (isBindableClass(cls))
         return "(" + expr + ").kama_obj = NULL; (" + expr + ").kama_ctrl = NULL; (" + expr + ").kama_fn = NULL; ("
              + expr + ").kama_release = NULL;";
@@ -19968,6 +20096,7 @@ bool CEmitter::payloadCopyable(const std::string& t)
     if (ci.isVariant) return variantCopyable(ci);
     if (ci.kind == TypeKind::Value || ci.isExternStruct) return true;   // owns nothing: bitwise
     if (ci.isIntrinsicColl && isValueVectorKind(ci.collKind)) return true;
+    if (ci.isIntrinsicColl && ci.collKind == CollKind::Storage) return !ci.moveOnly;   // its bytes, when they own nothing
     if (ci.isIntrinsicColl && ci.collKind == CollKind::Fixed) {   // an `InlineArray` copies as its element does
         auto co = _collections.find(t);
         return co == _collections.end() || payloadCopyable(co->second.elemCType);
@@ -20155,6 +20284,7 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
         if (it->second.isVariant)                              // an enum → when every payload copies
             return const_cast<CEmitter*>(this)->variantCopyable(it->second);
+        if (it->second.isIntrinsicColl && it->second.collKind == CollKind::Storage) return !it->second.moveOnly;
         if (it->second.isIntrinsicColl && (it->second.collKind == CollKind::Fixed || isValueVectorKind(it->second.collKind)))
             return const_cast<CEmitter*>(this)->payloadCopyable(it->first);   // an `InlineArray` as its element; a lane batch
         return it->second.copyable;                            // a resource → only if `implements Copyable`
@@ -21253,7 +21383,7 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
             if (it == _classes.end() || it->second.isExternStruct) return nullptr;
             // Pointer-storing collections aren't a by-value dep — EXCEPT `Fixed<T,N>` (inline array) and an
             // allocator-aware iface smart ptr (M11d), whose fat handle embeds `A alloc` by value.
-            if (it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed
+            if (it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed && it->second.collKind != CollKind::Storage
                 && !(_collections.count(it->second.name) && isIfaceAllocColl(_collections[it->second.name])))
                 return nullptr;
             return &it->second;
@@ -21263,10 +21393,11 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
         for (auto& f : ci->fields) if (ClassInfo* d = dep(f.type)) deps.push_back(d);
         for (auto& v : ci->variants) for (auto& f : v.payload) if (ClassInfo* d = dep(f.type)) deps.push_back(d);
         // a `Fixed<T,N>` struct (`{ T v[N]; }`) embeds T by value -> its layout needs T's.
-        if (ci->isIntrinsicColl && ci->collKind == CollKind::Fixed && !ci->collElemClass.empty()) {
+        if (ci->isIntrinsicColl && (ci->collKind == CollKind::Fixed || ci->collKind == CollKind::Storage)
+            && !ci->collElemClass.empty()) {   // ...and an `InlineStorage` needs `sizeof(T)` and `_Alignas(T)`
             auto it = _classes.find(ci->collElemClass);
             if (it != _classes.end() && !it->second.isExternStruct &&
-                !(it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed))
+                !(it->second.isIntrinsicColl && it->second.collKind != CollKind::Fixed && it->second.collKind != CollKind::Storage))
                 deps.push_back(&it->second);
         }
         // an allocator-aware iface smart ptr (M11d) embeds `A alloc` by value -> its layout needs A's struct.
@@ -21286,7 +21417,8 @@ std::vector<ClassInfo*> CEmitter::unifiedStructOrder()
 
     for (auto& kv : _classes)
         if ((!kv.second.isIntrinsicColl && !kv.second.isExternStruct) ||
-            (kv.second.isIntrinsicColl && kv.second.collKind == CollKind::Fixed) ||   // Fixed lays out by value
+            (kv.second.isIntrinsicColl && (kv.second.collKind == CollKind::Fixed
+                                           || kv.second.collKind == CollKind::Storage)) ||   // both lay out by value
             (kv.second.isIntrinsicColl && _collections.count(kv.second.name)          // iface-ALLOC embeds `A`
                  && isIfaceAllocColl(_collections[kv.second.name])))
             visit(&kv.second);
@@ -21576,6 +21708,7 @@ void CEmitter::computeDestructible()
     for (auto& kv : _classes)
         kv.second.destructible = kv.second.hasDtor ||
             (kv.second.isIntrinsicColl && kv.second.collKind != CollKind::Fixed
+                                       && kv.second.collKind != CollKind::Storage   // never drops
                                        && !isValueVectorKind(kv.second.collKind));
     bool changed = true;
     while (changed) {
@@ -21585,6 +21718,16 @@ void CEmitter::computeDestructible()
             if (ci.destructible || ci.isExternStruct) continue;   // kama doesn't own external structs
             // An `InlineArray` owns what its element owns: it drops when the element does, and moves when the
             // element must be handed off rather than blitted (a string, a resource, an owning enum or array).
+            // An `InlineStorage` never drops, but it moves when its element would: copying the bytes of places
+            // that may hold a `string` would make two owners of whatever its holder put there.
+            if (ci.isIntrinsicColl && ci.collKind == CollKind::Storage) {
+                auto co = _collections.find(kv.first);
+                auto ec = co == _collections.end() ? _classes.end() : _classes.find(co->second.elemCType);
+                if (ec == _classes.end()) continue;
+                const bool fm = ec->second.destructible || ec->second.moveOnly || isSmartPtrClass(ec->first) || ownsByValue(ec->first);
+                if (fm && !ci.moveOnly) { ci.moveOnly = true; changed = true; }
+                continue;
+            }
             if (ci.isIntrinsicColl && ci.collKind == CollKind::Fixed) {
                 auto co = _collections.find(kv.first);
                 auto ec = co == _collections.end() ? _classes.end() : _classes.find(co->second.elemCType);
@@ -21637,6 +21780,12 @@ void CEmitter::computeDestructible()
             if (!m && !ci.isIntrinsicColl)
                 for (auto& f : ci.fields) {
                     if (isMoveOnlyValue(cType(f.type))) { m = true; break; }
+                    // ...and an in-place aggregate that moves without owning anything to drop (an `InlineStorage` of
+                    // a `string`, an `InlineArray` of a dtor-less resource): its holder copying it bitwise would make
+                    // two of each element, so a `type value` holding one is refused below like any move-only field.
+                    auto fc = _classes.find(cType(f.type));
+                    if (fc != _classes.end() && fc->second.isIntrinsicColl && fc->second.moveOnly
+                        && (fc->second.collKind == CollKind::Fixed || fc->second.collKind == CollKind::Storage)) { m = true; break; }
                 }
             if (!m && !ci.isIntrinsicColl)
                 for (auto& v : ci.variants) {
@@ -21663,6 +21812,14 @@ void CEmitter::computeDestructible()
         // An `InlineArray`'s copy gates read these too. Its element "owns" when it must be handed off rather than
         // blitted — a dtor-less resource included — and copies as payloadCopyable says, which also answers whether
         // the array itself is `Copyable`.
+        if (info.kind == CollKind::Storage) {   // no element is its own: an owning one is never copied through it
+            auto ec = _classes.find(info.elemCType);
+            info.elemDestructible = ec != _classes.end()
+                && (ec->second.destructible || ec->second.moveOnly || isSmartPtrClass(ec->first) || ownsByValue(ec->first));
+            info.elemCopyable = !info.elemDestructible;
+            auto self = _classes.find(info.cName);
+            if (self != _classes.end()) self->second.copyable = info.elemCopyable;
+        }
         if (info.kind == CollKind::Fixed) {
             auto ec = _classes.find(info.elemCType);
             info.elemDestructible = ec != _classes.end()
@@ -22087,9 +22244,18 @@ std::string CEmitter::typeLayout(SharedIdentifier type, const LayoutModel& m, La
     // The compiler's own value vectors and arrays, read off the type itself: `InlineArray<T>#(N)` is
     // `struct { T v[N]; }`, laid out as its element; `Simd<T>#(N)` and its `Mask` are `vector_size` typedefs.
     const std::string head = t->value ? *t->value : std::string();
-    if (t->genericArgs && t->genericArgs->size() == 2 && (head == "InlineArray" || head == "Simd" || head == "Mask")) {
+    if (t->genericArgs && t->genericArgs->size() == 2
+        && (head == "InlineArray" || head == "Simd" || head == "Mask" || head == "InlineStorage")) {
         int64_t n = 0, es = 0, ea = 1;
         if (!constArgN((*t->genericArgs)[1], n) || n <= 0) return "its length is not a compile-time number";
+        if (head == "InlineStorage") {   // `T[N]`'s size and alignment, by construction (KAMA_STORAGE_TYPE)
+            // ...but never viewed as bytes: it holds places, not values, and which are live is its holder's to say.
+            if (view) return "it holds places, not values — which of them are live is its holder's knowledge, so the holder views them";
+            const std::string r = typeLayout((*t->genericArgs)[0], m, use, es, ea);
+            if (!r.empty()) return r;
+            size = es * n; align = ea;
+            return "";
+        }
         if (head == "InlineArray") {
             const std::string r = typeLayout((*t->genericArgs)[0], m, use, es, ea);
             if (!r.empty()) return view ? "its element is not plain bytes: " + r : r;
@@ -26387,8 +26553,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 } else if (handoff == 2) {                            // copy = deep
                     auto ci = _collections.find(p.className);
                     if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
-                        unsupported(("`copy` of a `" + p.className + "` needs copyable elements — its elements "
-                                     "own resources but aren't `Copyable`; use `give` to move").c_str(), srcLine);
+                        unsupported((isStorageColl(p.className) ? storageCopyRefusal(p.className) : std::string("`copy` of a `" + p.className + "` needs copyable elements — its elements "
+                                     "own resources but aren't `Copyable`; use `give` to move")).c_str(), srcLine);
                     s += copyCall(p.className, val);
                 } else {                                             // give = move: relocate + null source
                     std::string t = "kama_kama_carg" + std::to_string(_tempCounter++);
@@ -27551,6 +27717,7 @@ bool CEmitter::isDefaultFillable(const std::string& c)
     ClassInfo& fc = it->second;
     if (fc.isIntrinsicColl) switch (fc.collKind) {
         case CollKind::String: case CollKind::Simd: case CollKind::Mask: return true;
+        case CollKind::Storage: return true;               // its zero: no element is live
         case CollKind::Fixed: {                            // element by element
             auto co = _collections.find(c);
             if (co == _collections.end() || !isDefaultFillable(co->second.elemCType)) return false;
@@ -29963,7 +30130,7 @@ void CEmitter::emitOwnedValueInto(const std::string& dst, const std::string& dst
         if (handoff == 2) {
             auto ci = _collections.find(dstCType);
             if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
-                unsupported(("`copy` of a `" + dstCType + "` needs copyable elements — use `give` to move it").c_str(), line);
+                unsupported((isStorageColl(dstCType) ? storageCopyRefusal(dstCType) : std::string("`copy` of a `" + dstCType + "` needs copyable elements — use `give` to move it")).c_str(), line);
             // (else: the value line above already copied — see `dupCls`)
         } else if (armBare) armNeedsMarker(dstCType, true);   // refused, so not a move: no later error blames a `give` nobody wrote
         else { std::string mv = moveOnlySource(v, line); if (!mv.empty()) markMoved(mv); }
@@ -31171,8 +31338,8 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 if (handoff == 2) {                                  // copy = deep copy into the payload
                     auto ci = _collections.find(argCls);
                     if (ci != _collections.end() && ci->second.elemDestructible && !ci->second.elemCopyable)
-                        unsupported(("`copy` of a `" + argCls + "` needs copyable elements — use `give` to "
-                                     "move it").c_str(), srcLine);
+                        unsupported((isStorageColl(argCls) ? storageCopyRefusal(argCls) : std::string("`copy` of a `" + argCls + "` needs copyable elements — use `give` to "
+                                     "move it")).c_str(), srcLine);
                     else field = copyCall(argCls, val);
                 }
                 else if (!_hoistOK)
@@ -31321,6 +31488,24 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                     std::string nd = emitNaturalDefault(call, ma);
                     if (!nd.empty()) return nd;
                 }
+                // `InlineStorage.empty()` — the built-in storage's one constructor: N zero-filled places,
+                // none of them live. The instance comes from where the value goes, as `DynamicArray.empty()`'s does.
+                if (auto* srid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+                    if (srid->value && *srid->value == "InlineStorage" && (!srid->qualifier || srid->qualifier->empty())
+                        && !_localTypes.count("InlineStorage") && ma->identifier && ma->identifier->value) {
+                        const std::string m = *ma->identifier->value;
+                        const std::string target = isStorageColl(_variantTargetType) ? _variantTargetType
+                                                 : isStorageColl(_matchTargetCType) ? _matchTargetCType : std::string();
+                        if (m != "empty")
+                            unsupported(("`InlineStorage` has one constructor, `empty()` — `" + m + "` is not one").c_str(), call);
+                        else if (call->args && !call->args->empty())
+                            unsupported("`InlineStorage.empty()` takes no arguments — its places are zero, and none is live", call);
+                        else if (target.empty())
+                            unsupported("`InlineStorage.empty()` takes its type from where it goes — declare it: "
+                                        "`InlineStorage<T>#(N) s = InlineStorage.empty();`", call);
+                        else return "((" + target + "){0})";
+                        return "0";
+                    }
                 std::string dotType;
                 if (isTypeReceiver(ma, dotType)) {
                     // The file rung, for the CONSTRUCTION position. It does not arrive through the
@@ -42725,7 +42910,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             // declare it HERE so a pointer-storing collection (`List<Fixed<...>>`, emitted in the early
             // types pass) can name it. The later full typedef is a legal C11 redeclaration. Other
             // collections already emit a full `_TYPE` typedef in that early pass.
-            if (ci->collKind == CollKind::Fixed)
+            if (ci->collKind == CollKind::Fixed || ci->collKind == CollKind::Storage)
                 *_out << "typedef struct " << ci->name << " " << ci->name << ";\n";
             continue;
         }
@@ -42801,6 +42986,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
             if (ci->collKind == CollKind::Fixed) {
                 CollectionInfo& info = _collections[ci->name];
                 *_out << "KAMA_FIXED_TYPE(" << info.elemCType << ", " << info.constValue
+                     << ", " << info.cName << ")\n";
+            } else if (ci->collKind == CollKind::Storage) {
+                CollectionInfo& info = _collections[ci->name];
+                *_out << "KAMA_STORAGE_TYPE(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName << ")\n";
             } else if (_collections.count(ci->name) && isIfaceAllocColl(_collections[ci->name])) {
                 emitIfaceAllocType(_collections[ci->name]);   // fat handle embeds `A` by value (after A's struct)

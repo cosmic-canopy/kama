@@ -1,0 +1,2 @@
+// `InlineStorage` has one constructor, `empty()`: zero-filled places, none of them live.
+fn uint8 main() { InlineStorage<int32>#(2) s = InlineStorage.make(); return 0; }

@@ -1,0 +1,4 @@
+// `InlineStorage.empty()` takes its instance from where the value goes, as `DynamicArray.empty()` does; with
+// nowhere to read it from, it says how to give it one.
+fn int32 f(InlineStorage<int32>#(2) s) { return 0; }
+fn uint8 main() { return cast<uint8>(f(s: InlineStorage.empty())); }

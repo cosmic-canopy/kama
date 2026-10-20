@@ -3732,6 +3732,19 @@ Such an array owns memory, so it is refused in a `type value` and as a module `s
 A contract element is refused: it has no layout to store in place. <!-- xfail: inline_array_contract_elem -->
 Copies are independent: writing one never reaches the other. <!-- test: inline_array_owning_copy -->
 
+**`InlineStorage<T>#(N)` is N places for a `T` in line that the compiler never constructs, copies as elements or drops.**
+It is the in-place half of "unsafe core, safe API": what a container written in kama keeps a live prefix in, as an
+allocator's block is the heap half. It is laid out and aligned as `T[N]`, so its `sizeof`/`alignof` are compile-time
+facts; it is zero-filled at construction, `InlineStorage<T>#(N) s = InlineStorage.empty();` or as a field; and its kind
+follows `T`'s — a value over a value, copied bitwise, and move-only over an element that owns something, though it
+never drops anything either way: which places hold a `T` is the holder's knowledge. <!-- test: inline_storage_layout, inline_storage_holder -->
+Its only way in is `dataPtr()`/`dataPtrMut()`, whose pointer only an `unsafe fn` may hold. <!-- xfail: inline_storage_ptr_outside_unsafe -->
+It has no element operations: no index, no `foreach`, no operators. <!-- xfail: inline_storage_index, inline_storage_foreach, inline_storage_eq -->
+Over an owning element it is refused in a `type value`, and `copy` does not apply to it. <!-- xfail: inline_storage_owning_in_value, inline_storage_owning_copy -->
+It has at least one place, and a contract, with no layout, is refused as its element. <!-- xfail: inline_storage_zero, inline_storage_contract -->
+`InlineStorage.empty()` is its one constructor, and takes its instance from where the value goes. <!-- xfail: inline_storage_empty_untyped, inline_storage_bad_ctor -->
+An `InlineArray` has no operators either: `==` on two of them is refused (compare the elements). <!-- xfail: inline_array_eq -->
+
 **Every contiguous container hands out the same two bridges, `InlineArray` included.** `dataPtr()` <!-- test: inline_array_view, const_dataptr -->
 (a `const fn`) returns an `UnsafeConstPtr<T>` for C and `dataPtrMut()` the writable `UnsafePtr<T>` —
 both safe to obtain, `unsafe` to dereference; `string.cstr()` is the same read-only bridge — and `view()` returns

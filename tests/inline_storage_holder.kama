@@ -1,0 +1,55 @@
+// `InlineStorage<T>#(N)` is N places for a `T` in line that the compiler never constructs, copies as
+// elements or drops: the type holding it keeps the books. This is that holder by hand — the shape std's bounded
+// vector takes — over a resource that counts its drops: places are written through `dataPtrMut()` with a raw store,
+// moved out with `relocate`, and the live prefix is dropped by the holder's destructor. Each `H` must drop exactly
+// once (ASan sees a double drop or a leak of the string inside it), and the storage itself never drops anything.
+import { std::ptr::relocate };
+
+static int32 dropped = 0;
+
+type resource H {
+    int32 id;
+    string tag;
+    public ctor make(int32 id) { this.id = id; string s = "a heap-backed tag, long enough to leave any inline buffer"; this.tag = give s; }
+    public const fn int32 get() { return this.id; }
+    ~H() { dropped = dropped + 1; }
+}
+
+type resource Three {
+    InlineStorage<H>#(3) places;
+    isize len = 0;
+    public ctor make() { }
+    public unsafe fn void push(H item) {
+        UnsafePtr<H> p = this.places.dataPtrMut();
+        p[this.len] = give item;                 // a raw store: the place held nothing
+        this.len = this.len + 1;
+    }
+    public unsafe fn H pop() {
+        this.len = this.len - 1;
+        slot H x;
+        relocate(from: this.places.dataPtrMut(), at: this.len, into: out x);
+        return give x;
+    }
+    public unsafe const fn int32 sum() {
+        UnsafeConstPtr<H> p = this.places.dataPtr();
+        int32 s = 0; isize i = 0;
+        while (i < this.len) { s = s + p[i].get(); i = i + 1; }
+        return s;
+    }
+    unsafe ~Three() { drop(ptr: this.places.dataPtrMut(), count: this.len); }   // the live prefix, and no more
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+    {
+        Three t = Three.make();
+        t.push(item: H.make(id: 10)); t.push(item: H.make(id: 20)); t.push(item: H.make(id: 12));
+        if (t.sum() != 42) { bad = bad + 1; }
+        H last = t.pop();                        // moved out: the holder no longer drops it
+        if (last.get() != 12 || dropped != 0) { bad = bad + 2; }
+        Three moved = give t;                    // an owning storage moves with its holder; nothing is copied
+        if (moved.sum() != 30) { bad = bad + 4; }
+    }                                            // `last`, then the holder's two live places: three drops
+    if (dropped != 3) { bad = bad + 8; }
+    return bad == 0 ? 42 : cast<uint8>(bad);
+}

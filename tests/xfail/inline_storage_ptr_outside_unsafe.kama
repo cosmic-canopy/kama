@@ -1,0 +1,7 @@
+// The only way into an `InlineStorage` is its pointer, and a raw pointer is held only in an `unsafe fn` — the
+// greppable seam GOALS 3a asks for. Safe code declares and moves one; it never reaches a place.
+fn uint8 main() {
+    InlineStorage<int32>#(2) s = InlineStorage.empty();
+    UnsafePtr<int32> p = s.dataPtrMut();
+    return 0;
+}

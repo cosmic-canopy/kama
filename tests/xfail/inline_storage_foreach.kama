@@ -1,0 +1,8 @@
+// `foreach` over an `InlineStorage` has nothing to walk: it holds places, not live elements. The type holding
+// it knows which places are live, and that type is what a loop iterates.
+fn uint8 main() {
+    InlineStorage<int32>#(2) s = InlineStorage.empty();
+    int32 n = 0;
+    foreach (int32 x in s) { n = n + x; }
+    return cast<uint8>(n);
+}

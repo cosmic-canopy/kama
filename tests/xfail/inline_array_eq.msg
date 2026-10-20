@@ -1,0 +1,1 @@
+an `InlineArray` has no operators

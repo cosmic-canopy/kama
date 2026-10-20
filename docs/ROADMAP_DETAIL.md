@@ -2203,6 +2203,19 @@ change) and Java's in precision (only while a borrow is live). The first version
 was RefCell's granularity: it counted a non-`const` method's `this` for the whole call, so any re-entrant mutation
 through another handle trapped, whether or not anything could dangle.
 
+<a id="s5-inline-array-eq"></a>
+
+### `==` on an `InlineArray` (KR-215)
+
+Measured 2026-10-19: `InlineArray<int32>#(2) a = [1, 2]; … a == b` passed `kama check` on every version through
+`0.9.684` and was refused by the C compiler ("invalid operands to binary expression" on `InlineArray_int32_2`), because
+an `InlineArray` lowers to a C struct and nothing gave it an `equals`. `0.9.686` refuses it in kama's words (an
+`InlineArray` has no operators), which closes the divergence but not the gap: Rust's `[T; N]` is `PartialEq` when `T`
+is, C++'s `std::array` has `==`, and comparing two digests (`InlineArray<uint8>#(32)`) is the common case. The likely
+shape is an intrinsic `equals` when `T: Equatable`, so `==` lowers through it as it does for every other type, and
+`Equatable`'s conditional conformance follows; KR-203's constant-time comparison is the separate spelling for secrets.
+Size S; unprobed beyond the refusal.
+
 <a id="s5-bounded-vector"></a>
 
 ### A bounded inline vector — capacity in place, length 0..N, no heap (KR-187)
@@ -2228,13 +2241,13 @@ only half answers it: growth abandons the old block, and the list is still a poi
    parameter, proven by flow analysis, and a field whose live prefix is runtime data is not that. Nothing in the
    language holds in-place storage for `T` without constructing it.
 
-**Mechanism — ruled 2026-10-17: a kama library type, after two language capabilities (KR-190, KR-191).** GOALS #1
+**Mechanism — ruled 2026-10-17: a kama library type, after two language capabilities (`InlineStorage`, shipped `0.9.686`; KR-191).** GOALS #1
 is explicit that std's containers are "kama generic library types… in the Rust-`Vec` 'unsafe core, safe API' model
 over `unsafe fn`/`UnsafePtr`, not compiler intrinsics with C bodies"; an intrinsic `InlineDynamicArray` (proposed as
 InlineArray's sibling) would be the thing that rules out, and was set aside as a workaround. Writing it in kama needs
 two things the language lacks, measured on `0.9.662`:
 
-- **In-place uninitialized storage (KR-190).** The heap containers get uninitialized memory from an allocator through
+- **In-place uninitialized storage (`InlineStorage`, `0.9.686`).** The heap containers get uninitialized memory from an allocator through
   `UnsafePtr<T>`; nothing gives it in place. An `InlineArray<T>#(N)` field is constructed whole, and dropped whole.
 - **A generic type's kind following its parameters (KR-191).** A declaration is `type value` or `type resource`, fixed:
   `type value Box<T>` instantiated as `Box<string>` is refused ("a `value` owns nothing, but `Box<string>`
@@ -2249,13 +2262,13 @@ two things the language lacks, measured on `0.9.662`:
 **Ruled 2026-10-18 (the design session; each re-audited against GOALS.md at the next session's plan, before
 any code).** Each with what other languages do, and the production answer:
 
-1. **`slot` stays exactly as it is; KR-190 is a separate type.** The two answer different questions: `slot` asks
-   whether a local is filled before it is read (proven per path, safe), KR-190 which of N places hold a value (a
+1. **`slot` stays exactly as it is; `InlineStorage` is a separate type.** The two answer different questions: `slot` asks
+   whether a local is filled before it is read (proven per path, safe), `InlineStorage` which of N places hold a value (a
    runtime `len`, unprovable). Every language with the proof keeps two mechanisms — Rust (`let x;` + definite
    initialization, and `MaybeUninit<T>`), C# (`out` + definite assignment, and `Unsafe.SkipInit`/`stackalloc`),
    Swift (deferred `let`, and unsafe pointers); only Zig has one word (`undefined`), by giving the proof up. SPEC's
    "raw slot" (the raw-store paragraph) and its "`Slot<T>`/`MaybeUninit` spike" line are reworded to point at
-   KR-190, so `slot` means only the proven hole.
+   `InlineStorage`, so `slot` means only the proven hole.
 2. **Safe to declare, unsafe to reach.** An `InlineStorage<T>#(N)` field or local holds no `T`, so declaring and
    constructing one is safe; its one way in is `unsafe fn UnsafePtr<T> ptr()` (and a `const` twin), the reach every
    heap container uses. Rust's `MaybeUninit::write` is safe because a leak is safe in Rust; in kama, overwriting a
@@ -2322,7 +2335,7 @@ by goal and probed on `0.9.675`; these are the corrections, and they override th
   And the hand-back is only as good as the caller's attention: on `0.9.675` a discarded `Result` built silently, so
   `xs.add(item: s);` on a full list would have dropped `s` without a word. Refused since `0.9.680` (SPEC *Error model*).
 
-**Order:** KR-190 (the built-in storage) → KR-191 (the clause and the bound) → KR-187 (kama library code). Each
+**Order:** `InlineStorage` (the built-in storage, shipped `0.9.686`) → KR-191 (the clause and the bound) → KR-187 (kama library code). Each
 lands with fixtures on native, ASan and wasm.
 
 #### The evidence the rulings rest on — measured 2026-10-18 on `0.9.667`/`0.9.671`

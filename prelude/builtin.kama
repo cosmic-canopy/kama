@@ -131,6 +131,11 @@ type value UnsafeConstPtr<T> { }
 // so (KR-191). A plain `[v; N]` writes its copies where the array lives (tools/check-fill-frame.sh).
 type value InlineArray<T> comptime(int32 N) { }
 
+// N places for a `T` in place, laid out as `T[N]`, that the compiler never constructs, copies as elements or drops
+//: the storage a bounded vector keeps its live prefix in. Zero-filled; built with `InlineStorage.empty()` or
+// as a field; reached only through `unsafe fn dataPtr()`/`dataPtrMut()`. Its kind follows `T`'s: a value over a value.
+type value InlineStorage<T> comptime(int32 N) { }
+
 // A callable with its receiver bound in. The type argument is a function SIGNATURE rather than a type,
 // which is why it is not an ordinary generic.
 type value BindableFunctionPtr<Sig> { }

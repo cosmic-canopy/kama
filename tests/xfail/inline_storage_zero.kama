@@ -1,0 +1,2 @@
+// An `InlineStorage` has at least one place, as an `InlineArray` has at least one element.
+fn uint8 main() { InlineStorage<int32>#(0) s = InlineStorage.empty(); return 0; }

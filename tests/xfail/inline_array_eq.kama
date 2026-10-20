@@ -1,0 +1,7 @@
+// An `InlineArray` has no operators: `a == b` on two of them passed `kama check` through 0.9.684 and was then refused
+// by the C compiler ("invalid operands to binary expression"), naming a mangled struct. Compare the elements.
+fn uint8 main() {
+    InlineArray<int32>#(2) a = [1, 2];
+    InlineArray<int32>#(2) b = [1, 2];
+    return a == b ? 1 : 0;
+}

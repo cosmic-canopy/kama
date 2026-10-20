@@ -1,0 +1,7 @@
+// `copy` of an `InlineStorage` of an owning element has nothing to copy by: only the type holding it knows which
+// places are live. That type's own `copy` copies the live prefix; the storage itself moves (`give`).
+fn uint8 main() {
+    InlineStorage<string>#(2) a = InlineStorage.empty();
+    InlineStorage<string>#(2) b = copy a;
+    return 0;
+}

@@ -1,0 +1,4 @@
+// An `InlineStorage` holds places, not live elements: which of them hold a `T` is its holder's knowledge, so
+// it is never indexed — the holder reaches its places through `dataPtr()`/`dataPtrMut()` in an `unsafe fn`.
+unsafe fn int32 first(ref InlineStorage<int32>#(2) s) { return s[0]; }
+fn uint8 main() { InlineStorage<int32>#(2) s = InlineStorage.empty(); return cast<uint8>(first(s: ref s)); }

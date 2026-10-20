@@ -1,0 +1,1 @@
+has one constructor, `empty()`

@@ -315,7 +315,7 @@ struct MethodInfo {
 // test these kinds must NOT accidentally join — and every `!= Fixed` test is one they must not join
 // EITHER, which is what `isValueVectorKind` below is for. A `Mask` is a `Simd` in every structural
 // respect; it is a separate kind so that `select` cannot be handed a data vector.
-enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed, Simd, Mask };
+enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed, Simd, Mask, Storage };
 // A `Simd` and a `Mask` are both bare `vector_size` typedefs over a primitive: no struct, no forward
 // declaration, no by-value dependency, no heap, nothing to drop. Every rule that asks "is this an
 // intrinsic collection that owns something" must answer NO for both, and asking it as `!= Fixed` — which
@@ -2547,6 +2547,9 @@ private:
     std::string mangleElem(SharedIdentifier elem);
     void registerCollection(SharedIdentifier collType);
     void registerFixed(SharedIdentifier fixedType);   // InlineArray<T,N> — the comptime-sized value array
+    void registerStorage(SharedIdentifier storageType);   // InlineStorage<T,N> — places for T, never constructed
+    bool isStorageColl(const std::string& cls) const;
+    std::string storageCopyRefusal(const std::string& cls);
     void registerSimd(SharedIdentifier simdType);     // Simd<T,N> — the lane batch (a `vector_size` typedef)
     // `v.shuffle(pattern: […])` / `a.blend(rhs:, pattern: […])` — folds the pattern to literal lane
     // indices and emits `__builtin_shufflevector`. Not an ordinary call: the indices must be integer

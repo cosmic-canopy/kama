@@ -1061,6 +1061,15 @@ static inline NAME   NAME##__fill(T x) {                                        
 }
 #define KAMA_FIXED_DEFINE(T, N, NAME) KAMA_FIXED_TYPE(T, N, NAME) KAMA_FIXED_FUNCS(T, N, NAME)
 
+// InlineStorage<T,N> — N places for a T, laid out and aligned as `T[N]`, that the compiler never constructs, copies
+// as elements or drops: the in-place half of "unsafe core, safe API", which the type holding it (a bounded vector)
+// keeps the books for. Zero-filled at construction, like every kama value; no element is live until its holder
+// writes one through the pointer. Its only operations are the two pointers below, reached from an `unsafe fn`.
+#define KAMA_STORAGE_TYPE(T, N, NAME) typedef struct NAME { _Alignas(T) unsigned char kama_b[sizeof(T) * (N)]; } NAME;
+#define KAMA_STORAGE_FUNCS(T, N, NAME)                                         \
+static inline T const* NAME##__dataPtr(NAME* self)    { return (T const*)(void*)self->kama_b; } \
+static inline T*       NAME##__dataPtrMut(NAME* self) { return (T*)(void*)self->kama_b; }
+
 
 // ---- Simd<T, comptime N> — a LANE BATCH, which is not an array ---------------------------------------
 //

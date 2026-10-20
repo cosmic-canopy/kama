@@ -1,0 +1,1 @@
+`copy` does not apply to `InlineStorage<string>#(2)`

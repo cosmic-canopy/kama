@@ -1,0 +1,24 @@
+// `InlineStorage<T>#(N)` is laid out and aligned as `T[N]`, so its `sizeof`/`alignof` are compile-time facts
+// like any value's (the layout model bakes them, and `_Static_assert`s them in the C). Its places start zero-filled —
+// kama never leaves stack bytes in a value that is copied and viewed — and over a plain `T` it is itself a value: a
+// `type value` holding one copies bitwise, and the copy's places are its own.
+type value P { public int64 a = 0; public int8 b = 0; }
+type value Snap { public InlineStorage<int32>#(4) xs; public int32 n = 0; public ctor make() { } }
+
+comptime usize S1 = sizeof(InlineStorage<int64>#(3));   // 24
+comptime usize A1 = alignof(InlineStorage<int64>#(3));  // 8
+comptime usize S2 = sizeof(InlineStorage<P>#(3));       // 48: three padded `P`s
+comptime usize S3 = sizeof(InlineStorage<uint8>#(5));   // 5
+comptime usize A3 = alignof(InlineStorage<uint8>#(5));  // 1
+
+unsafe fn int32 put(ref Snap s, int32 v) { UnsafePtr<int32> p = s.xs.dataPtrMut(); p[0] = v; return 0; }
+unsafe fn int32 first(const ref Snap s) { UnsafeConstPtr<int32> p = s.xs.dataPtr(); return p[0] + p[3]; }   // p[3]: zero
+
+fn uint8 main() {
+    if (S1 != 24 || A1 != 8 || S2 != 48 || S3 != 5 || A3 != 1) { return 1; }
+    Snap a = Snap.make();
+    put(s: ref a, v: 40);
+    Snap b = a;                                  // a value: the bytes are copied
+    put(s: ref b, v: 2);                         // ...and the copy's places are its own
+    return cast<uint8>(first(s: a) + first(s: b));   // 40 + 2
+}

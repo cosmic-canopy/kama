@@ -1,0 +1,4 @@
+// A `type value` is copied bitwise, so it cannot hold an `InlineStorage` of an element that owns something:
+// the copy would make two owners of whatever its holder put in the places. Over a value it may (inline_storage_layout).
+type value V { InlineStorage<string>#(2) s; public ctor make() { } }
+fn uint8 main() { V v = V.make(); return 0; }
