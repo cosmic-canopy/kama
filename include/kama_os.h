@@ -342,6 +342,23 @@ static inline int32_t kama_set_length(int32_t fd, uint64_t len) {
     if (e != 0) { errno = e; return -1; }
     return 0;
 }
+// A lock on the whole file (KR-221): `op` is 1 exclusive, 2 shared, 3 unlock, plus 4 for "do not wait". LockFileEx over
+// every byte — MANDATORY here, so another handle's read or write of the file fails while it is held, where POSIX's
+// flock is advisory. Busy is EAGAIN, which std reads as `WouldBlock`.
+static inline int32_t kama_flock(int32_t fd, int32_t op) {
+    HANDLE h = (HANDLE)_get_osfhandle((int)fd);
+    if (h == INVALID_HANDLE_VALUE) { errno = EBADF; return -1; }
+    OVERLAPPED ov; memset(&ov, 0, sizeof ov);
+    if ((op & 3) == 3) {
+        if (UnlockFileEx(h, 0, MAXDWORD, MAXDWORD, &ov)) return 0;
+        kama__os_fail(GetLastError(), EINVAL); return -1;
+    }
+    const DWORD flags = ((op & 3) == 1 ? LOCKFILE_EXCLUSIVE_LOCK : 0) | ((op & 4) ? LOCKFILE_FAIL_IMMEDIATELY : 0);
+    if (LockFileEx(h, flags, 0, MAXDWORD, MAXDWORD, &ov)) return 0;
+    const DWORD e = GetLastError();
+    kama__os_fail(e, (e == ERROR_LOCK_VIOLATION || e == ERROR_IO_PENDING) ? EAGAIN : EIO);
+    return -1;
+}
 // `_read`/`_write` take an `unsigned int` count and return an `int`, so a `size_t` cast straight down wrapped:
 // 4 GiB + k asked for k bytes. One call moves at most INT_MAX; the callers loop for the rest, as for any
 // short transfer.
@@ -1672,6 +1689,7 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <stdlib.h>       // malloc, realloc, free (poller cursor)
 #include <fcntl.h>        // open, O_*
 #include <sys/stat.h>     // fstat, stat, S_ISDIR
+#include <sys/file.h>     // flock (File.lock, KR-221)
 #include <dirent.h>       // opendir, readdir, closedir
 #include <sys/socket.h>   // socket, bind, listen, accept, connect, setsockopt, send, recv
 #include <netinet/in.h>   // sockaddr_in, htons, htonl, INADDR_ANY
@@ -1874,6 +1892,19 @@ static inline int64_t kama_seek(int32_t fd, int64_t off, int32_t whence) {
 static inline ptrdiff_t kama_pread(int32_t fd, uint8_t* buf, size_t n, uint64_t off)        { return (ptrdiff_t)pread((int)fd, buf, n, (off_t)off); }
 static inline ptrdiff_t kama_pwrite(int32_t fd, const uint8_t* buf, size_t n, uint64_t off) { return (ptrdiff_t)pwrite((int)fd, buf, n, (off_t)off); }
 static inline int32_t   kama_set_length(int32_t fd, uint64_t len) { return (int32_t)ftruncate((int)fd, (off_t)len); }
+// A lock on the whole file (KR-221): `op` is 1 exclusive, 2 shared, 3 unlock, plus 4 for "do not wait". flock, not an
+// fcntl record lock: flock belongs to the open file and is released by its last close, where any close of the same
+// file by the process drops an fcntl lock. Advisory. A busy try is EWOULDBLOCK, which is EAGAIN on every POSIX
+// system kama targets. The browser and Node's emscripten file system have no locks to take: ENOSYS, never a fake.
+static inline int32_t kama_flock(int32_t fd, int32_t op) {
+#if defined(__EMSCRIPTEN__)
+    (void)fd; (void)op; errno = ENOSYS; return -1;
+#else
+    int how = (op & 3) == 1 ? LOCK_EX : (op & 3) == 2 ? LOCK_SH : LOCK_UN;
+    if (op & 4) how |= LOCK_NB;
+    for (;;) { if (flock((int)fd, how) == 0) return 0; if (errno != EINTR) return -1; }
+#endif
+}
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)read((int)fd, buf, n); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) {
     ptrdiff_t r = (ptrdiff_t)write((int)fd, buf, n);

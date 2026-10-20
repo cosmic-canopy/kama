@@ -62,6 +62,7 @@ extern fn int32  kama_rmdir(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_is_symlink(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_rename(UnsafeConstPtr<cchar> from, UnsafeConstPtr<cchar> to);
 extern fn int32  kama_exists(UnsafeConstPtr<cchar> path);
+extern fn int32  kama_flock(int32 fd, int32 op);
 extern fn UnsafePtr    kama_diropen(UnsafeConstPtr<cchar> path);
 extern fn string kama_dirnext(UnsafePtr dirp);
 extern fn int32  kama_dirclose(UnsafePtr dirp);
@@ -444,6 +445,23 @@ type resource File implements Reader, Writer, Sendable {
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }
+    // A lock on the whole file (KR-221) — what a lock file wants: the kernel releases it when the holder closes the file
+    // or dies, so there is no pid to check and no gap between checking a holder and taking over. `lock` waits for an
+    // exclusive lock and `lockShared` for a shared one; the `try` forms do not wait, and a lock held elsewhere answers
+    // `IoErrorKind::WouldBlock`. Closing the file releases it, as `unlock` does. Advisory on Linux and macOS (`flock`:
+    // only another lock is kept out) and mandatory on Windows (`LockFileEx`: another handle's read or write of the
+    // file fails meanwhile). Taking a second lock through a handle that already holds one is platform-defined, as
+    // Rust's `File::lock` says: unlock first to change its mode. A wasm target has no file locks: `Other`, ENOSYS.
+    public unsafe fn Result<Unit, IoError> lock() { return this.flock(op: 1); }
+    public unsafe fn Result<Unit, IoError> lockShared() { return this.flock(op: 2); }
+    public unsafe fn Result<Unit, IoError> tryLock() { return this.flock(op: 5); }
+    public unsafe fn Result<Unit, IoError> tryLockShared() { return this.flock(op: 6); }
+    public unsafe fn Result<Unit, IoError> unlock() { return this.flock(op: 3); }
+    unsafe fn Result<Unit, IoError> flock(int32 op) {
+        if (kama_flock(fd: this.fd, op: op) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
+
     // Truncate or extend the file to exactly `length` bytes (an extension reads as zeros). The cursor does not move.
     public unsafe fn Result<Unit, IoError> setLength(uint64 length) {
         if (kama_set_length(fd: this.fd, len: length) != 0) { return Result::Err(error: lastError()); }

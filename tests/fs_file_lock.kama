@@ -1,0 +1,38 @@
+// KR-221: a lock on the whole file. Two opens of one file are two holders (flock belongs to the open file; Windows'
+// LockFileEx to the handle), so the second is kept out while the first holds an exclusive lock, may share a shared
+// one, and gets in once the first unlocks — or closes the file, which releases it. A wasm target has no file locks
+// to take, and says so (`Other`, ENOSYS) rather than pretending.
+import { std::fs::File, std::fs::OpenMode, std::fs::remove, std::io::IoError, std::io::IoErrorKind };
+
+@compileFor(!ARCH_WASM32) comptime bool HAS_LOCKS = true;
+@compileFor(ARCH_WASM32)  comptime bool HAS_LOCKS = false;
+
+fn int32 code(Result<Unit, IoError> r) {
+    return match (r) {
+        case Ok(value: _): 0;
+        case Err(error: e): match (e.kind()) { case WouldBlock: 1; case _: 2; };
+    };
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+    Result<File, IoError> ra = File.open(path: "kr221.lock", mode: OpenMode::Write);
+    File a = match (give ra) { case Ok(value: f): give f; case Err(error: e): { return 90; } };
+    Result<File, IoError> rb = File.open(path: "kr221.lock", mode: OpenMode::Write);
+    File b = match (give rb) { case Ok(value: f): give f; case Err(error: e): { return 91; } };
+    if (!HAS_LOCKS) { _ = remove(path: "kr221.lock"); return code(r: a.tryLock()) == 2 ? 0 : 1; }
+    if (code(r: a.tryLock()) != 0) { bad = bad | 1; }
+    if (code(r: b.tryLock()) != 1) { bad = bad | 2; }          // held elsewhere: WouldBlock
+    if (code(r: b.tryLockShared()) != 1) { bad = bad | 4; }
+    if (code(r: a.unlock()) != 0) { bad = bad | 8; }
+    if (code(r: a.tryLockShared()) != 0) { bad = bad | 16; }
+    if (code(r: b.tryLockShared()) != 0) { bad = bad | 32; }   // two shared locks
+    if (code(r: b.unlock()) != 0) { bad = bad | 64; }
+    {
+        File c = give a;                                           // a's shared lock rides the handle...
+    }                                                              // ...and closing the file releases it
+    if (code(r: b.tryLock()) != 0) { bad = bad | 128; }
+    _ = b.unlock();
+    _ = remove(path: "kr221.lock");
+    return cast<uint8>(bad);
+}

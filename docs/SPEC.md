@@ -2207,7 +2207,10 @@ gives `IoError` + error classification; `std::fs` gives a RAII `File` (fd closed
 `AlreadyExists` if anything is at the path, in the same step as the create <!-- test: fs_create_new -->), with random access: `seek`
 (a `SeekFrom` — `Start`, `Current` or `End`), `readAt`/`writeAt` at an offset, which leave the cursor where it was on
 every OS (Windows moves it for a positioned call, so kama puts it back, as Go does), and `setLength`; a pipe has no
-position and answers `InvalidInput` <!-- test: fs_random_access --> <!-- test: proc_pipe_seek -->; plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
+position and answers `InvalidInput` <!-- test: fs_random_access --> <!-- test: proc_pipe_seek -->; a lock on the whole file — `lock`/`lockShared` <!-- test: fs_file_lock -->
+wait, `tryLock`/`tryLockShared` answer `WouldBlock` when it is held elsewhere, `unlock` and closing release it, and so
+does the holder's death, so a lock file needs no pid check (Rust's `File::lock`; `flock` on Linux and macOS, advisory;
+`LockFileEx` on Windows, mandatory — another handle's read or write fails while it is held; none on wasm, `Other`); plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
 `createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
 `kind`, `modified` (a `std::time::Timestamp` — nanoseconds where the filesystem records them, whole seconds
 on Windows) and `permissions` (the nine bits the file records, not an access check — below). `kind` is a `FileKind`

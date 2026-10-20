@@ -462,8 +462,8 @@ fork); Windows' creation FILETIME (absolute, set once, so unique across boots wi
    platform-deltas rule.
 6. A pid stays `int32`, as in `Process.id()`, `currentProcessId()`, `ProcessGroup::Join` and `PeerCredentials`; Rust,
    Go and .NET use a bare integer too, and a pid is a number on every OS (a `UserId` is not). The stamp is the identity.
-7. A lock file itself is KR-221's file lock, which the kernel releases when its holder dies; the stamp answers what a
-   lock cannot — who holds it, before a pid read from a file is signalled.
+7. A lock file itself takes `File.lock` (`0.9.701`), which the kernel releases when its holder dies; the stamp answers
+   what a lock cannot — who holds it, before a pid read from a file is signalled.
 
 Size M: three platforms, each its own calls. Linux parses `/proc/<pid>/stat` after the LAST `)` (the command name may
 hold spaces and parentheses).
@@ -497,29 +497,6 @@ on it), `Formattable`, `Sendable` — whose parts each platform twin exposes in 
 POSIX `device()`/`inode()` (16 B), Windows `volumeSerial()`/`fileId()` (24 B, `FILE_ID_INFO`). `changed: Timestamp`
 beside it. Both twins of `Metadata` grow, so `Metadata.of(…)` call sites move. Size S–M (the Windows half opens the
 file by handle to read both).
-
-<a id="s1-file-locks"></a>
-
-#### File locks (KR-221)
-
-Measured on `0.9.690`: std has no way to lock a file — no `flock`, `fcntl` lock or `LockFileEx` in `std::fs` or the
-OS seam. A lock file therefore names its holder by pid, and a second process decides whether that holder is alive
-(KR-219), then takes the lock over: a race between the check and the takeover, and a pid the OS may have reused.
-
-**What others do.** Rust stabilized `File::lock`, `lock_shared`, `try_lock`, `try_lock_shared` and `unlock` in 1.89
-(`flock` on Unix, `LockFileEx` on Windows). Java has `FileChannel.lock`/`tryLock`, .NET `FileStream.Lock`, Python
-`fcntl.flock` and `msvcrt.locking`; Go has only `syscall.Flock` (its own tool keeps a private `lockedfile`).
-
-**Ruled 2026-10-20 (the maintainer).**
-1. On `File`: `lock()`, `lockShared()`, `tryLock()`, `tryLockShared()` and `unlock()`, each `Result<Unit, IoError>`;
-   a busy `try` answers `IoErrorKind::WouldBlock`, std's existing non-blocking answer.
-2. POSIX: `flock` on the whole file (per open file, released by the last close; never `fcntl` record locks, which any
-   close of the same file by the process drops). Windows: `LockFileEx` over the whole file. The kernel releases either
-   when the holder dies, so there is no pid to check.
-3. The platform delta is documented, not hidden: Windows' lock is mandatory (another handle's read or write of the
-   locked range fails), POSIX's is advisory.
-
-Size S–M.
 
 <a id="s1-listen-options"></a>
 
