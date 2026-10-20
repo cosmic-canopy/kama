@@ -7,7 +7,7 @@ export { OrderedSet };
 type resource OrderedSet<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
         implements Iterable<K> when [K: Copyable<K>],
         Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>, A: default],
-        Sendable when [K: Sendable, H: Sendable, A: Sendable] {
+        Sendable when [K: Sendable, H: Sendable, A: Sendable], Formattable when [K: Formattable, K: Copyable<K>] {
     OrderedMap<K, Unit, H, A> m;
 
     public default ctor empty() when [A: default] { }
@@ -34,6 +34,19 @@ type resource OrderedSet<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, 
     public fn bool moveToEnd(const ref K key) { return this.m.moveToEnd(key: key); }
     public const fn Optional<K> first() when [K: Copyable<K>] { return this.m.first(); }
     public const fn Optional<K> last() when [K: Copyable<K>] { return this.m.last(); }
+    // `${s}` writes `{a, b}` in its map's order (KR-216). Like `serialize`, it needs a `Copyable` key: the key iterator
+    // yields copies, and a yielded `k` is a nameable local, so `k.format` resolves for a primitive key directly.
+    public const fn void format(ref Formatter f) when [K: Formattable, K: Copyable<K>] {
+        f.writeStr(s: "{");
+        bool first = true;
+        foreach (K k in this.m) {
+            if (!first) { f.writeStr(s: ", "); }
+            first = false;
+            k.format(f: ref f);
+        }
+        f.writeStr(s: "}");
+    }
+
     public const fn isize length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
     public fn void reserve(isize n) { this.m.reserve(n: n); }

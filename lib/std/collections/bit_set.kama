@@ -34,7 +34,8 @@ type view BitSetIter implements Iterator<isize> {
 // clear. `set`/`toggle` past the current capacity auto-grow (doubling the word count); `test`/`clear` on an
 // out-of-range bit are a no-op / `false` (never grow). `capacity()` reports the addressable bit range (word
 // count × 64, ≥ the highest set bit). A move-only value that owns its buffer, but Copyable via a deep word copy.
-type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give), Iterable<isize>, Sendable when [A: Sendable] {
+type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give), Iterable<isize>, Sendable when [A: Sendable],
+                                                          Formattable {
     UnsafePtr<uint64> words = null; isize wordCount = 0; uint32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c) — `withCapacity` is sized in BITS. `empty()` is the `default` zero-arg build.
@@ -65,6 +66,18 @@ type resource BitSet<A: Allocator = GlobalAllocator> implements Copyable<This>(b
 
     // Count of set bits (population count) — a Kernighan `x & (x - 1)` fold per word (no `__builtin_popcountll`).
     const fn isize popcount(uint64 x) { isize c = 0; while (x != 0ui64) { x = x & (x - 1ui64); c = c + 1; } return c; }
+    // `${b}` writes its members `{1, 5, 9}` in ascending order (KR-216).
+    public const fn void format(ref Formatter f) {
+        f.writeStr(s: "{");
+        bool first = true;
+        foreach (isize i in this) {
+            if (!first) { f.writeStr(s: ", "); }
+            first = false;
+            f.writeI64(v: cast<int64>(i));
+        }
+        f.writeStr(s: "}");
+    }
+
     public unsafe const fn isize count() {
         isize total = 0; isize i = 0;
         while (i < this.wordCount) { total = total + this.popcount(x: this.words[i]); i = i + 1; }

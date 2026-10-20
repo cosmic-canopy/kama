@@ -37,7 +37,7 @@ type view FixedArrayIterConst<T> implements IteratorConst<T> {
 // Move-only by default (it owns a buffer); Copyable EXACTLY when its element is.
 type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>, ViewableMut<View<T>>,
                                   Serializable when [T: Serializable], Sendable when [T: Sendable, A: Sendable],
-                                  Equatable<This> when [T: Equatable<T>] {
+                                  Equatable<This> when [T: Equatable<T>], Formattable when [T: Formattable] {
     UnsafePtr<T> data = null; isize size = 0; A alloc;
 
     // Allocation is EAGER (a FixedArray has all `size` elements live from construction), so unlike the
@@ -86,6 +86,20 @@ type resource FixedArray<T, A: Allocator = GlobalAllocator> implements Copyable<
         isize i = 0;
         while (i < this.size) { T v = copy value; this.data[i] = give v; i = i + 1; }
     }
+
+    // `${xs}` writes `[a, b, c]`: each element through its own `format`, into the one sink (KR-216).
+    public const fn void format(ref Formatter f) when [T: Formattable] {
+        f.writeStr(s: "[");
+        isize i = 0;
+        while (i < this.size) {
+            if (i > 0) { f.writeStr(s: ", "); }
+            FixedArray::<T, A>::formatElement(x: this[i], f: ref f);
+            i = i + 1;
+        }
+        f.writeStr(s: "]");
+    }
+    // A primitive's adapter method resolves on a named `const ref T`, not on `this[i]`.
+    static fn void formatElement(const ref T x, ref Formatter f) when [T: Formattable] { x.format(f: ref f); }
 
     public const fn isize length() { return this.size; }
 

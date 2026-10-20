@@ -1,0 +1,47 @@
+// KR-216: every std collection renders through `${…}` when its elements do — `[a, b]` for a sequence or a view,
+// `{a, b}` for a set, `{k: v}` for a map — and a string element is written raw, as the derive writes a string field.
+import { std::collections::DynamicArray, std::collections::FixedArray, std::collections::InlineDynamicArray,
+         std::collections::Deque, std::collections::Set, std::collections::OrderedSet, std::collections::SortedSet,
+         std::collections::Map, std::collections::OrderedMap, std::collections::SortedMap,
+         std::collections::PriorityQueue, std::collections::SlotMap, std::collections::BitSet,
+         std::collections::View, std::collections::ConstView };
+
+fn int32 check(const ref string got, const ref string want, int32 bit) { return got == want ? 0 : bit; }
+
+fn uint8 main() {
+    int32 bad = 0;
+    DynamicArray<int32> d = DynamicArray.empty(); d.add(item: 1); d.add(item: 2); d.add(item: 3);
+    bad = bad | check(got: "${d}", want: "[1, 2, 3]", bit: 1);
+    DynamicArray<string> ds = DynamicArray.empty(); ds.add(item: "a, b"); ds.add(item: "c");
+    bad = bad | check(got: "${ds}", want: "[a, b, c]", bit: 2);
+    DynamicArray<int32> empty = DynamicArray.empty();
+    bad = bad | check(got: "${empty}", want: "[]", bit: 4);
+    FixedArray<int32> fx = FixedArray.make(size: 2); fx[0] = 7;
+    bad = bad | check(got: "${fx}", want: "[7, 0]", bit: 8);
+    InlineDynamicArray<int32>#(4) idx = InlineDynamicArray.empty(); _ = idx.add(item: 4);
+    bad = bad | check(got: "${idx}", want: "[4]", bit: 16);
+    Deque<int32> dq = Deque.empty(); dq.pushBack(item: 2); dq.pushFront(item: 1);
+    bad = bad | check(got: "${dq}", want: "[1, 2]", bit: 32);
+    OrderedSet<int32> os = OrderedSet.empty(); os.add(key: 3); os.add(key: 1);
+    bad = bad | check(got: "${os}", want: "{3, 1}", bit: 64);
+    SortedSet<int32> ss = SortedSet.empty(); ss.add(key: 3); ss.add(key: 1);
+    bad = bad | check(got: "${ss}", want: "{1, 3}", bit: 128);
+    OrderedMap<string, int32> om = OrderedMap.empty(); om.put(key: "b", value: 2); om.put(key: "a", value: 1);
+    bad = bad | check(got: "${om}", want: "{b: 2, a: 1}", bit: 256);
+    SortedMap<int32, string> sm = SortedMap.empty(); sm.put(key: 2, value: "two"); sm.put(key: 1, value: "one");
+    bad = bad | check(got: "${sm}", want: "{1: one, 2: two}", bit: 512);
+    Map<int32, int32> m = Map.empty(); m.put(key: 5, value: 25);
+    bad = bad | check(got: "${m}", want: "{5: 25}", bit: 1024);
+    Set<int32> st = Set.empty(); st.add(key: 9);
+    bad = bad | check(got: "${st}", want: "{9}", bit: 2048);
+    BitSet bs = BitSet.empty(); bs.set(index: 1); bs.set(index: 9);
+    bad = bad | check(got: "${bs}", want: "{1, 9}", bit: 4096);
+    SlotMap<string> sl = SlotMap.empty(); sl.insert(value: "x");
+    bad = bad | check(got: "${sl}", want: "[x]", bit: 8192);
+    PriorityQueue<int32> pq = PriorityQueue.minHeap(); pq.push(item: 4);
+    bad = bad | check(got: "${pq}", want: "[4]", bit: 16384);
+    borrow d.view() as v { bad = bad | check(got: "${v}", want: "[1, 2, 3]", bit: 32768); }
+    InlineArray<int32>#(2) ia = [8, 9];
+    bad = bad | check(got: "${ia}", want: "[8, 9]", bit: 65536);
+    return cast<uint8>(bad != 0 ? 1 : 0);
+}

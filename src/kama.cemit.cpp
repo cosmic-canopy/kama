@@ -13581,6 +13581,38 @@ void CEmitter::emitFixedEquals(const CollectionInfo& info, bool protosOnly)
           << eqFieldTest(info.elem, "self->kama_v[i]", "other->kama_v[i]", 0) << ")) return false;\n    return true;\n}\n";
 }
 
+// KR-216: an `InlineArray<T>#(N)` renders through `${…}` exactly when `T` does, as `[a, b, c]` — the form every std
+// collection writes. Registered as `equals` is (ensureFixedEquals).
+bool CEmitter::ensureFixedFormat(const std::string& cName)
+{
+    auto it = _classes.find(cName);
+    if (it == _classes.end() || !it->second.isIntrinsicColl || it->second.collKind != CollKind::Fixed) return false;
+    if (it->second.methods.count("format")) return true;
+    if (!satisfiesBound(cName, "Formattable")) return false;
+    MethodInfo mi; mi.cName = cName + "__format"; mi.visibility = Visibility::Public; mi.isConst = true;
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    mi.returnType = synthId("void");
+    ParamSig f; f.name = "f"; f.byRef = true; f.className = preludeName("Formatter"); mi.params.push_back(f);
+    _classes[cName].methods["format"] = mi;
+    return true;
+}
+
+// Its body: each element through its own rendering (emitFmtFieldWrite — the derive's per-field writer), separated by
+// `, ` and bracketed, into the one Formatter.
+void CEmitter::emitFixedFormat(const CollectionInfo& info, bool protosOnly)
+{
+    if (!ensureFixedFormat(info.cName)) return;
+    *_out << "static inline void " << info.cName << "__format(" << info.cName << "* self, kama__Formatter* f)";
+    if (protosOnly) { *_out << ";\n"; return; }
+    *_out << " {\n    kama_string kama_open = kama_string_lit(\"[\", 1), kama_sep = kama_string_lit(\", \", 2), "
+             "kama_close = kama_string_lit(\"]\", 1);\n";
+    *_out << "    kama__Formatter__writeStr(f, &kama_open);\n";
+    *_out << "    for (ptrdiff_t i = 0; i < " << info.constValue << "; ++i) {\n";
+    *_out << "        if (i > 0) kama__Formatter__writeStr(f, &kama_sep);\n    ";
+    emitFmtFieldWrite(info.elem, "self->kama_v[i]", 0);
+    *_out << "    }\n    kama__Formatter__writeStr(f, &kama_close);\n}\n";
+}
+
 void CEmitter::emitOwningFixedFuncs(const CollectionInfo& info, bool protosOnly)
 {
     const std::string& N = info.cName;
@@ -18791,6 +18823,7 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                 emitFixedView(info);   // ...and the `View<T>` mint the macro cannot name
                 emitOwningFixedFuncs(info, /*protosOnly=*/true);   // an owning array's drop/copy, defined below
                 emitFixedEquals(info, /*protosOnly=*/true);        // `equals`, when its element is Equatable (KR-215)
+                emitFixedFormat(info, /*protosOnly=*/true);        // `format`, when its element is Formattable (KR-216)
             }
         }
         else if (info.kind == CollKind::Simd) {
@@ -20576,6 +20609,23 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
     // An `InlineArray<T>#(N)` is `Equatable` exactly when `T` is (KR-215), compared element by element — the rule a
     // `@generate(Equatable)` generic follows, and what `DynamicArray` declares. Derived, like `Copyable` below: an
     // intrinsic has no declaration to carry a `when` clause, and a `type adapter` cannot target it.
+    // …and `Formattable` exactly when `T` is (KR-216), written `[a, b, c]` like every other collection.
+    if (preludeLeaf(bound_) == "Formattable" && it != _classes.end() && it->second.isIntrinsicColl
+        && it->second.collKind == CollKind::Fixed) {
+        auto c = _collections.find(t);
+        if (c == _collections.end()) return false;
+        if (!_classes.count(c->second.elemCType)) {   // a number, a `bool`, a `char` render; a raw pointer does not
+            const SharedIdentifier e = c->second.elem;
+            const int bv = e ? e->builtInVal : 0;
+            return bv == IDENTIFIER_CHAR_VAL || bv == IDENTIFIER_BOOL_VAL || bv == IDENTIFIER_STRING_VAL
+                || bv == IDENTIFIER_FLOAT32_VAL || bv == IDENTIFIER_FLOAT64_VAL
+                || bv == IDENTIFIER_INT8_VAL || bv == IDENTIFIER_INT16_VAL || bv == IDENTIFIER_INT32_VAL
+                || bv == IDENTIFIER_INT64_VAL || bv == IDENTIFIER_ISIZE_VAL || bv == IDENTIFIER_CLONG_VAL
+                || bv == IDENTIFIER_UINT8_VAL || bv == IDENTIFIER_UINT16_VAL || bv == IDENTIFIER_UINT32_VAL
+                || bv == IDENTIFIER_UINT64_VAL || bv == IDENTIFIER_USIZE_VAL || bv == IDENTIFIER_CULONG_VAL;
+        }
+        return satisfiesBound(c->second.elemCType, bound_);
+    }
     if (preludeLeaf(bound_) == "Equatable" && it != _classes.end() && it->second.isIntrinsicColl
         && it->second.collKind == CollKind::Fixed) {
         auto c = _collections.find(t);
@@ -25651,7 +25701,8 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // enum when its payloads do, neither through a declared `copy` ctor, which is all the method-set
         // test below can see. So it, too, is asked structurally — the gate and the bound give one answer.
         // …as is `Equatable` on an `InlineArray`, which holds exactly when its element's does (KR-215).
-        const bool fixedEq = ci && ci->isIntrinsicColl && ci->collKind == CollKind::Fixed && preludeLeaf(tmplName) == "Equatable";
+        const bool fixedEq = ci && ci->isIntrinsicColl && ci->collKind == CollKind::Fixed
+                          && (preludeLeaf(tmplName) == "Equatable" || preludeLeaf(tmplName) == "Formattable");
         bool structural = (!ci || preludeLeaf(tmplName) == "Copyable" || fixedEq) && satisfiesBound(rkey, contract);
         if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract))) {
             // A failed `Sendable` bound says WHY (the field, the mutable pointee, the undeclared type):
@@ -43150,7 +43201,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                               // _typeSubst bound — before registerInstColls, which reads _genericInsts.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
                            // now that every instantiation is known — before the collection typedefs emit.
-    for (auto& kv : _collections) if (kv.second.kind == CollKind::Fixed) ensureFixedEquals(kv.first);   // KR-215
+    for (auto& kv : _collections) if (kv.second.kind == CollKind::Fixed) { ensureFixedEquals(kv.first); ensureFixedFormat(kv.first); }   // KR-215/216
     registerIntrinsicViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
                            // one that already has `view`), so this only does work for a const-param-derived
                            // size whose ELEMENT type no other InlineArray in the program already used.
@@ -43667,6 +43718,7 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
         if (_collections.count(cName) && _collections[cName].kind == CollKind::Fixed) {
             emitOwningFixedFuncs(_collections[cName], /*protosOnly=*/false);
             emitFixedEquals(_collections[cName], /*protosOnly=*/false);
+            emitFixedFormat(_collections[cName], /*protosOnly=*/false);
         }
     // Prototypes for kama's OWN free functions. kama never emits prototypes for
     // `extern` C functions: an `extern` decl is purely kama's call signature

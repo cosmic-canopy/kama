@@ -44,13 +44,27 @@ type view ViewIterConst<T> implements IteratorConst<T> {
 // implicitly at every sink (an argument, an initializer, an assignment, a `return`) — the direction kama
 // already takes for `const ref` parameters and `UnsafePtr<T>` → `UnsafeConstPtr<T>`; the reverse is
 // refused, naming `viewMut()`.
-type view ConstView<T> implements Iterable<T> when [T: Copyable<T>], IterableConst<T> {
+type view ConstView<T> implements Iterable<T> when [T: Copyable<T>], IterableConst<T>, Formattable when [T: Formattable] {
     UnsafeConstPtr<T> data; isize len;
 
     // Private, like every `view` constructor (the mint rule): born in a container's `view()` — the member
     // `Viewable<ConstView<T>>` grants — or here, in `slice`, the view narrowing itself. `at`/`count`
     // because the escape check matches a borrow by argument NAME.
     unsafe ctor over(UnsafeConstPtr<T> at, isize count) { this.data = at; this.len = count; }
+
+    // `${xs}` writes `[a, b, c]`: each element through its own `format`, into the one sink (KR-216).
+    public const fn void format(ref Formatter f) when [T: Formattable] {
+        f.writeStr(s: "[");
+        isize i = 0;
+        while (i < this.len) {
+            if (i > 0) { f.writeStr(s: ", "); }
+            ConstView::<T>::formatElement(x: this[i], f: ref f);
+            i = i + 1;
+        }
+        f.writeStr(s: "]");
+    }
+    // A primitive's adapter method resolves on a named `const ref T`, not on `this[i]`.
+    static fn void formatElement(const ref T x, ref Formatter f) when [T: Formattable] { x.format(f: ref f); }
 
     public const fn isize length() { return this.len; }
     public const fn bool  isEmpty() { return this.len == 0; }
@@ -92,7 +106,8 @@ type view ConstView<T> implements Iterable<T> when [T: Copyable<T>], IterableCon
 // a callee that only reads takes a `ConstView<T>` instead, and a `View<T>` narrows to one implicitly.
 // Mutating through `operator[]` / `iterMut()` writes back to the borrowed buffer (the view IS the buffer,
 // windowed).
-type view View<T> implements IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>> {
+type view View<T> implements IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>], Viewable<ConstView<T>>,
+                            Formattable when [T: Formattable] {
     UnsafePtr<T> data; isize len;
 
     // Private, like every `view` constructor: a `View<T>` is what a CONTAINER hands out, so it is born
@@ -100,6 +115,20 @@ type view View<T> implements IterableMut<T>, IterableConst<T>, Iterable<T> when 
     // the view narrowing itself. `at`/`count` rather than `data`/`len` because the escape check matches a
     // borrow by argument NAME, so the names are part of the contract, not decoration.
     unsafe ctor over(UnsafePtr<T> at, isize count) { this.data = at; this.len = count; }
+
+    // `${xs}` writes `[a, b, c]`: each element through its own `format`, into the one sink (KR-216).
+    public const fn void format(ref Formatter f) when [T: Formattable] {
+        f.writeStr(s: "[");
+        isize i = 0;
+        while (i < this.len) {
+            if (i > 0) { f.writeStr(s: ", "); }
+            View::<T>::formatElement(x: this[i], f: ref f);
+            i = i + 1;
+        }
+        f.writeStr(s: "]");
+    }
+    // A primitive's adapter method resolves on a named `const ref T`, not on `this[i]`.
+    static fn void formatElement(const ref T x, ref Formatter f) when [T: Formattable] { x.format(f: ref f); }
 
     public const fn isize length() { return this.len; }
     public const fn bool  isEmpty() { return this.len == 0; }

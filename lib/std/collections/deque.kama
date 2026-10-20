@@ -65,7 +65,7 @@ type view DequeIterConst<T> implements IteratorConst<T> {
 // window wraps around the end of the buffer. `mods` is a modification counter iterators snapshot.
 type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>],
                             Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>, A: default],
-                            Sendable when [T: Sendable, A: Sendable] {
+                            Sendable when [T: Sendable, A: Sendable], Formattable when [T: Formattable] {
     UnsafePtr<T> data = null; isize head = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
     // The four-ctor matrix (M8c) — see DynamicArray. `empty()` is the `default` zero-arg build; `empty`/
@@ -164,6 +164,20 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
         this.mods = this.mods + 1;
         return Optional::Some(value: give x);
     }
+
+    // `${xs}` writes `[a, b, c]`: each element through its own `format`, into the one sink (KR-216).
+    public const fn void format(ref Formatter f) when [T: Formattable] {
+        f.writeStr(s: "[");
+        isize i = 0;
+        while (i < this.len) {
+            if (i > 0) { f.writeStr(s: ", "); }
+            Deque::<T, A>::formatElement(x: this[i], f: ref f);
+            i = i + 1;
+        }
+        f.writeStr(s: "]");
+    }
+    // A primitive's adapter method resolves on a named `const ref T`, not on `this[i]`.
+    static fn void formatElement(const ref T x, ref Formatter f) when [T: Formattable] { x.format(f: ref f); }
 
     public const fn isize length() { return this.len; }
 

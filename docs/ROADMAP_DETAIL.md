@@ -608,11 +608,11 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 ### A quoted, structural rendering — `${x:?}` (KR-222)
 
 `Formattable` is kama's one to-text contract, and its derive renders a string raw: `Stat { name: a, b }` cannot be told
-from two fields, and once KR-216 lands, `[a, b]` prints for both `["a", "b"]` and `["a, b"]`. Logs want a form that cannot
+from two fields, and since collections render (`0.9.700`), `[a, b]` prints for both `["a", "b"]` and `["a, b"]`. Logs want a form that cannot
 be misread. Rust has `{:?}` (`Debug`), Python `repr`, Swift `debugDescription`, Go `%q`/`%#v`; Java and Kotlin have
 none. SPEC has called `${x:?}` "a possible additive future" since the derive shipped; today `${s:?}` is a lexical error.
 
-Scheduled 2026-10-20 (the maintainer, ruling KR-216's quoting as a follow-up). Design first: whether it is a second
+Scheduled 2026-10-20 (the maintainer, ruling the collections' quoting a follow-up). Design first: whether it is a second
 contract or a mode of the one sink (`Formatter` already carries the specifier), what a user type writes to take part,
 how a string escapes (JSON's rules are the obvious candidate), and that structs, enums and every collection take it
 together — never one at a time.
@@ -2367,26 +2367,6 @@ a library `Shared` handle, and the `borrow` window's extent with its `@onPanic` 
 resource's fields are private); (4) the method summary and the marked calls through a handle (the `peekAfter` repro);
 (5) the pointer-once paths and `Shared<Contract>`; (6) the `this`-alias ruling above; (7) measurement, interleaved, on
 the `Shared`-heavy fixtures and the engine.
-
-<a id="s5-collections-formattable"></a>
-
-### `Formattable` for std's collections (KR-216)
-
-`Formattable` is the one to-text contract (`${x}` lowers through it), and no std collection implements it:
-`${xs}` of a `DynamicArray<int32>` is refused, and a list is printed by a loop. `InlineDynamicArray`'s surface ruling (2026-10-18)
-listed `Formattable` for `InlineDynamicArray`; building it (`0.9.689`) found that `DynamicArray`, `FixedArray`, `Map`
-and every other collection lack it, so giving it to the bounded list alone would have made one collection unlike the
-rest (GOALS #4). It was held for all of them at once. The likely shape is a conditional conformance, `Formattable
-when [T: Formattable]`, writing `[1, 2, 3]` for a sequence and `{k: v, …}` for a map (Rust's `Debug` for `Vec` and
-`HashMap`, Python's `repr`, C#'s collection `ToString` is the counter-example that prints a type name). Open: whether a
-`string` element is quoted (Rust's `Debug` quotes; `Display` has no collection impl at all), and whether one spelling
-serves logs and user-facing text. Size S per collection; unprobed beyond the refusal.
-
-**Ruled 2026-10-20 (the maintainer):** `Formattable when [T: Formattable]` (maps: when both `K` and `V` are) on every
-collection in one commit — `[1, 2, 3]` for a sequence or a view, `{a, b}` for a set, `{k: v, k2: v2}` for a map, in
-iteration order. Strings are NOT quoted: SPEC already rules that the derive renders a string raw ("uniform
-single-contract dispatch — no special-case"), and one contract serves logs and user text alike (Java and Kotlin print
-`[a, b]`, Go `[a b]`). A form that quotes is KR-222, for structs and collections together.
 
 <a id="s6"></a>
 

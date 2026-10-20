@@ -181,6 +181,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     // what a grant between two generic types means — `SortedMap<K,V,A>` reaches `BTreeNode<K,V,A>` and no
     // sibling instance does.
     friend SortedMap[serializeInto];
+    friend SortedMap[formatInto];
     DynamicArray<K, A> keys;
     DynamicArray<V, A> vals;                            // parallel to keys (vals[i] belongs to keys[i])
     DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> kids;   // empty for a leaf; length == keys.length()+1 internal
@@ -636,6 +637,23 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     // visibility is per TYPE, so a sibling type needs naming even inside one file, and the grant is what
     // its `@serializedGraphEdges` mark already implied.
     @serializedGraphEdges
+    // The in-order walk `SortedMap.format` writes with (KR-216); `first` threads the `, ` separator through the recursion.
+    private const fn void formatInto(ref Formatter f, ref bool first) when [K: Formattable, V: Formattable] {
+        isize i = 0; isize n = this.keys.length();
+        while (i < n) {
+            if (!this.leaf) { this.kids[i].formatInto(f: ref f, first: ref first); }
+            if (!first) { f.writeStr(s: ", "); }
+            first = false;
+            BTreeNode::<K, V, A>::formatKey(x: this.keys[i], f: ref f);
+            f.writeStr(s: ": ");
+            BTreeNode::<K, V, A>::formatValue(x: this.vals[i], f: ref f);
+            i = i + 1;
+        }
+        if (!this.leaf) { this.kids[n].formatInto(f: ref f, first: ref first); }
+    }
+    static fn void formatKey(const ref K x, ref Formatter f) when [K: Formattable] { x.format(f: ref f); }
+    static fn void formatValue(const ref V x, ref Formatter f) when [V: Formattable] { x.format(f: ref f); }
+
     private const fn Result<Unit, Owned<Error>> serializeInto(ref Serializer w, bool keyed) when [K: Serializable, V: Serializable] {
         isize i = 0; isize n = this.keys.length();
         while (i < n) {
@@ -682,7 +700,8 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
                    Serializable when [K: Serializable, V: Serializable],
                    Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
-                   Sendable when [K: Sendable, V: Sendable, A: Sendable] {
+                   Sendable when [K: Sendable, V: Sendable, A: Sendable],
+                   Formattable when [K: Formattable, V: Formattable] {
     // Every node box, the root included, is drawn from `A` through a placement `new(allocator:)`, so the whole tree
     // lives in the allocator it names. Each ctor assigns `alloc` before it builds the root from it.
     Owned<BTreeNode<K,V,A>, A> root;
@@ -704,6 +723,14 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         this.alloc = allocator;
         Owned<BTreeNode<K,V,A>, A> r = new(allocator: allocator) BTreeNode<K,V,A>.make(leaf: true, allocator: allocator);
         this.root = give r;
+    }
+
+    // `${m}` writes `{k: v, k2: v2}` in key order (KR-216).
+    public const fn void format(ref Formatter f) when [K: Formattable, V: Formattable] {
+        f.writeStr(s: "{");
+        bool first = true;
+        this.root.formatInto(f: ref f, first: ref first);
+        f.writeStr(s: "}");
     }
 
     public const fn isize length() { return this.len; }

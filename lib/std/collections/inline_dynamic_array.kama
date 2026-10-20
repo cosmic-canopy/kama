@@ -58,11 +58,25 @@ type resource InlineDynamicArray<T> comptime(int32 N) value when [T: value]
         implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>],
                    Viewable<ConstView<T>>, ViewableMut<View<T>>, Equatable<This> when [T: Equatable<T>],
                    Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>],
-                   Sendable when [T: Sendable] {
+                   Sendable when [T: Sendable], Formattable when [T: Formattable] {
     InlineStorage<T>#(N) items;   // zero-filled at construction; places `len..N` stay zero
     isize len = 0;
 
     public default ctor empty() { }
+
+    // `${xs}` writes `[a, b, c]`: each element through its own `format`, into the one sink (KR-216).
+    public const fn void format(ref Formatter f) when [T: Formattable] {
+        f.writeStr(s: "[");
+        isize i = 0;
+        while (i < this.len) {
+            if (i > 0) { f.writeStr(s: ", "); }
+            InlineDynamicArray::<T>#(N)::formatElement(x: this[i], f: ref f);
+            i = i + 1;
+        }
+        f.writeStr(s: "]");
+    }
+    // A primitive's adapter method resolves on a named `const ref T`, not on `this[i]`.
+    static fn void formatElement(const ref T x, ref Formatter f) when [T: Formattable] { x.format(f: ref f); }
 
     public const fn isize length() { return this.len; }
     public const fn isize capacity() { return cast<isize>(N); }

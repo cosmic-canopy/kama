@@ -7,7 +7,7 @@ export { Set };
 // `foreach (K k in set)` iterates the members (the map's key iterator), for a `Copyable` key.
 type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator> implements Iterable<K> when [K: Copyable<K>],
         Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>, A: default],
-        Sendable when [K: Sendable, H: Sendable, A: Sendable] {
+        Sendable when [K: Sendable, H: Sendable, A: Sendable], Formattable when [K: Formattable, K: Copyable<K>] {
     Map<K, Unit, H, A> m;
 
     // The four-ctor matrix (M8c). `Set` carries no `alloc` field (it wraps `Map<K,Unit,H,A> m`); the
@@ -45,6 +45,19 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
         Optional<Unit> hit = this.m.remove(key: key);   // bind first — a method call isn't a valid match subject
         return match (hit) { case Some(value: u): true; case None: false; };
     }
+    // `${s}` writes `{a, b}` in its map's order (KR-216). Like `serialize`, it needs a `Copyable` key: the key iterator
+    // yields copies, and a yielded `k` is a nameable local, so `k.format` resolves for a primitive key directly.
+    public const fn void format(ref Formatter f) when [K: Formattable, K: Copyable<K>] {
+        f.writeStr(s: "{");
+        bool first = true;
+        foreach (K k in this.m) {
+            if (!first) { f.writeStr(s: ", "); }
+            first = false;
+            k.format(f: ref f);
+        }
+        f.writeStr(s: "}");
+    }
+
     public const fn isize length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
     public const fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }

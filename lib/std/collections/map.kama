@@ -151,7 +151,8 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
                    EntriesIterable<MapEntryIter<K,V>> when [K: Copyable<K>, V: Copyable<V>],
                    Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
-                   Sendable when [K: Sendable, V: Sendable, H: Sendable, A: Sendable] {
+                   Sendable when [K: Sendable, V: Sendable, H: Sendable, A: Sendable],
+                   Formattable when [K: Formattable, V: Formattable] {
     UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> state = null;
     isize len = 0; isize cap = 0; isize tombs = 0; uint32 mods = 0; A alloc;
 
@@ -180,6 +181,26 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         this.alloc = allocator;
         this.reserve(n: capacity);
     }
+
+    // `${m}` writes `{k: v, k2: v2}` in slot order (KR-216).
+    public unsafe const fn void format(ref Formatter f) when [K: Formattable, V: Formattable] {
+        f.writeStr(s: "{");
+        bool first = true;
+        isize i = 0;
+        while (i < this.cap) {
+            if (this.state[i] == 1ui8) {
+                if (!first) { f.writeStr(s: ", "); }
+                first = false;
+                Map::<K, V, H, A>::formatKey(x: this.keys[i], f: ref f);
+                f.writeStr(s: ": ");
+                Map::<K, V, H, A>::formatValue(x: this.vals[i], f: ref f);
+            }
+            i = i + 1;
+        }
+        f.writeStr(s: "}");
+    }
+    static fn void formatKey(const ref K x, ref Formatter f) when [K: Formattable] { x.format(f: ref f); }
+    static fn void formatValue(const ref V x, ref Formatter f) when [V: Formattable] { x.format(f: ref f); }
 
     public const fn isize length() { return this.len; }
 

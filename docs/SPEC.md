@@ -168,8 +168,16 @@ Rendering a value as text goes through **one** contract, `Formattable` (prelude,
 survives `--no-std`) — the display twin of `Serializable`:
 
 ```kama fragment
-type contract Formattable for value, resource, enum, intrinsic { const fn void format(ref Formatter f); }
+type contract Formattable for value, resource, enum, view, intrinsic { const fn void format(ref Formatter f); }
 ```
+
+**Every std collection renders when its elements do** (`Formattable when [T: Formattable]`; a map when both its keys <!-- test: collections_formattable -->
+and values do): a sequence or a view as `[1, 2, 3]`, a set as `{a, b}`, a map as `{k: v, k2: v2}`, each in iteration
+order (a hash map's is its slot order, a `PriorityQueue`'s its heap order), an `InlineArray` included. A `SlotMap`
+writes its values as a sequence, since a `Handle` has no text. A hash set's elements must also be `Copyable`, as its
+`serialize` requires: its keys are read through its map's copying key iterator. A string element is written raw, as
+the derive writes a string field, so `["a, b"]` and `["a", "b"]` print alike; the quoted rendering that tells them
+apart is KR-222.
 
 A type writes its pieces into a caller-owned **`Formatter`** sink (a growable UTF-8 buffer), so a whole nested
 value materializes in **one** allocation — no O(n²) concat. `Formatter` has `writeStr` / `writeI64` /
@@ -246,10 +254,11 @@ string s = "point ${p} at n=${n}, first=${who[0]}";   // p.format, n.format, who
   `format` wins over the derive; `@skip` omits a field. Every non-skipped field must itself be a
   primitive/string or a type that `implements Formattable`; one that is neither is refused, naming it. <!-- xfail: gen_format_unconformed_field -->
   A generic, a tagged `enum` and a payload-less `enum` may all carry the attribute (see *Derives*); an
-  `Optional`-typed field renders because the prelude derives `Formattable` for it, and a collection-typed
-  one does not.
+  `Optional`-typed field renders because the prelude derives `Formattable` for it, and a collection-typed one
+  renders as its collection does.
   It is named after the **contract** (`Formattable`), not `display`/`debug` — Kama has one to-string contract, no
-  Display/Debug split; a `${x:?}`-routed structural `Debug` derive stays a possible additive future.
+  Display/Debug split; a quoted, structural rendering (`${x:?}`) is scheduled as KR-222, for structs and collections
+  together.
 - **Tagged strings** ✅ — an identifier placed **immediately** before a string (`html"…"`, `sql"…"`,
   `stripIndent"…"`; no space) makes it *tagged*: it calls the ordinary function of that name, the TAG, with a
   `Template` view over the string's trusted literal **parts** and its **holes**, kept separate — so a tag is

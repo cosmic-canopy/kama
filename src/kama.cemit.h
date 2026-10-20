@@ -2654,6 +2654,8 @@ private:
     void emitOwningFixedFuncs(const CollectionInfo& info, bool protosOnly);   // its __dtor/__copy/__fillCopy(Into)
     bool ensureFixedEquals(const std::string& cName);                        // KR-215: `equals` when the element is Equatable
     void emitFixedEquals(const CollectionInfo& info, bool protosOnly);
+    bool ensureFixedFormat(const std::string& cName);                        // KR-216: `format` when the element is Formattable
+    void emitFixedFormat(const CollectionInfo& info, bool protosOnly);
     // One element copied as a statement: a handle retains, an owning value deep-copies, a plain value blits. At a use
     // site `atUseSite` routes through copyCall (which records the no-heap fact); in an emitted body it spells the call.
     std::string elemCopyStmt(const std::string& elemCls, const std::string& dst, const std::string& src, bool atUseSite);

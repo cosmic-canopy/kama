@@ -122,7 +122,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
                    ValuesIterableMut<SlotMapValueIterMut<V>>, ValuesIterableConst<SlotMapValueIterConst<V>>,
                    Sendable when [V: Sendable, A: Sendable],
                    Serializable when [V: Serializable],
-                   Deserializable<This> when [V: Deserializable<V>, A: default] {
+                   Deserializable<This> when [V: Deserializable<V>, A: default], Formattable when [V: Formattable] {
     UnsafePtr<V> slotValues = null; UnsafePtr<uint32> gens = null; UnsafePtr<isize> freeList = null;
     isize slotCount = 0; isize freeLen = 0; isize len = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
@@ -143,6 +143,24 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
         this.alloc = allocator;
         this.reserve(n: capacity);
     }
+
+    // `${s}` writes its values `[a, b]` in slot order (KR-216): a `Handle` has no text, so the map is written as the
+    // sequence of what it holds.
+    public unsafe const fn void format(ref Formatter f) when [V: Formattable] {
+        f.writeStr(s: "[");
+        bool first = true;
+        isize i = 0;
+        while (i < this.slotCount) {
+            if ((this.gens[i] & 1ui32) == 1ui32) {
+                if (!first) { f.writeStr(s: ", "); }
+                first = false;
+                SlotMap::<V, A>::formatValue(x: this.slotValues[i], f: ref f);
+            }
+            i = i + 1;
+        }
+        f.writeStr(s: "]");
+    }
+    static fn void formatValue(const ref V x, ref Formatter f) when [V: Formattable] { x.format(f: ref f); }
 
     public const fn isize length() { return this.len; }
     public const fn bool isEmpty() { return this.len == 0; }

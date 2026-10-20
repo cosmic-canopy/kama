@@ -17,7 +17,8 @@ export { PriorityQueue };
 // flag flips every comparison. Iteration order isn't meaningful for a heap, so it isn't `Iterable`; drain
 // it with repeated `pop`.
 type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>],
-                                                                                  Sendable when [T: Sendable, A: Sendable] {
+                                                                                  Sendable when [T: Sendable, A: Sendable],
+                                                                                  Formattable when [T: Formattable] {
     DynamicArray<T, A> data;   // the heap-ordered backing store (data[0] = root)
     bool maxOrder = false;     // min-heap by default; `maxHeap()`/`maxHeapWith*` flip it to true
 
@@ -54,6 +55,10 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
         this.data = DynamicArray.withCapacityAndAllocator(allocator: allocator, capacity: capacity);
         this.maxOrder = maxOrder;
     }
+
+    // `${q}` writes its elements `[a, b]` in heap order — the order it holds them in, not the order it hands them
+    // out (Rust's `BinaryHeap` and Python's `heapq` print the same) (KR-216).
+    public const fn void format(ref Formatter f) when [T: Formattable] { this.data.format(f: ref f); }
 
     public const fn isize length() { return this.data.length(); }
     public const fn bool isEmpty() { return this.data.length() == 0; }
