@@ -12,14 +12,20 @@
 import {
     std::io::IoError, std::io::IoErrorKind, std::io::lastError,
     std::collections::FixedArray, std::collections::DynamicArray, std::collections::ConstView,
-    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error, core::env,
+    std::encoding::utf8::decode, std::encoding::utf8::Utf8Error, core::env, std::time::Timestamp,
 };
 
 export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId, homeDirectory,
-         currentDirectory, setCurrentDirectory };
+         currentDirectory, setCurrentDirectory, ProcessStamp, processStamp, processExists, processStarted, bootTime,
+         processGroupExists };
 
 extern "kama_os.h";
 extern fn int32 kama_getpid();
+extern fn int32 kama_proc_exists(int32 pid);
+extern fn int32 kama_proc_stamp(int32 pid, UnsafePtr<uint8> boot16, UnsafePtr<uint64> start);
+extern fn int32 kama_proc_started_ns(int32 pid, UnsafePtr<int64> into);
+extern fn int32 kama_boot_time_ns(UnsafePtr<int64> into);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_pgrp_exists(int32 group);
 extern fn isize kama_getcwd(UnsafePtr<uint8> into, usize cap);
 extern fn int32 kama_chdir(UnsafeConstPtr<cchar> path);
 @compileFor(!OS_WINDOWS) extern fn uint32 kama_getuid();
@@ -35,6 +41,147 @@ extern fn int32 kama_chdir(UnsafeConstPtr<cchar> path);
 // This process's id — what `Process.id()` reports for a child, and `PeerCredentials.processId()` for the
 // process on the other end of a Unix socket.
 unsafe fn int32 currentProcessId() { return kama_getpid(); }
+
+// ---- another process: alive, and the same one? (KR-219) -------------------------------------------------------------
+//
+// A pid alone is not a process: the OS reuses it. `ProcessStamp` is the identity a lock file or a pid file records
+// beside it — `"${processStamp(id: pid)}"` written out, `ProcessStamp.parse(text:)` read back and compared — and it is
+// made only of values the kernel recorded once: on Linux and macOS this boot's UUID (`boot_id`,
+// `kern.bootsessionuuid`) and the process's start (`/proc/<pid>/stat`'s ticks since boot; `p_starttime`), on Windows
+// the creation time, which is absolute. A wall-clock start or boot time is NOT an identity: each is "now, less the
+// time since boot", recomputed when the clock is set, so after an NTP step or a VM resume a live holder's would no
+// longer match (psutil's `(pid, create_time)` and Java's `ProcessHandle` equality move with Linux's `btime`).
+// `processStarted` and `bootTime` answer those times for display only. A lock file itself is `File.lock`, which the
+// kernel releases when its holder dies; the stamp answers what a lock cannot — WHO holds it, before a pid read from
+// a file is signalled.
+//
+// A process that has exited but not been reaped by its parent still exists on Linux and macOS; on Windows an exited
+// process is gone. A wasm target has no other processes: each call answers `Other` (ENOSYS).
+@compileFor(!OS_WINDOWS)
+@generate(Equatable, Hashable)
+type value ProcessStamp implements Formattable, Sendable {
+    uint64 bootHi;   // this boot's UUID, its first 8 bytes big-endian here...
+    uint64 bootLo;   // ...and its last 8
+    uint64 start;
+    ctor make(uint64 bootHi, uint64 bootLo, uint64 start) { this.bootHi = bootHi; this.bootLo = bootLo; this.start = start; }
+    friend processStamp[make];
+    // `<boot UUID as 32 hex digits>-<start>`, the text `format` writes; anything else is `InvalidInput`.
+    public ctor Result<ProcessStamp, IoError> parse(const ref string text) {
+        uint64 hi = 0ui64;
+        uint64 lo = 0ui64;
+        uint64 st = 0ui64;
+        isize n = text.length();
+        if (n < 34) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        isize i = 0;
+        while (i < 32) {
+            int32 h = hexDigit(c: text[i]);
+            if (h < 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            if (i < 16) { hi = (hi << 4ui64) | cast<uint64>(h); } else { lo = (lo << 4ui64) | cast<uint64>(h); }
+            i = i + 1;
+        }
+        if (text[32] != 45ui8) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // '-'
+        i = 33;
+        while (i < n) {
+            uint8 c = text[i];
+            if (c < 48ui8 || c > 57ui8 || st > 1844674407370955160ui64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            st = st * 10ui64 + cast<uint64>(c - 48ui8);
+            i = i + 1;
+        }
+        return Result::Ok(value: ProcessStamp.make(bootHi: hi, bootLo: lo, start: st));
+    }
+    public const fn void format(ref Formatter f) {
+        f.writeStr(s: hex16(v: this.bootHi)); f.writeStr(s: hex16(v: this.bootLo));
+        f.writeStr(s: "-");
+        f.writeU64(v: this.start);
+    }
+}
+
+@compileFor(OS_WINDOWS)
+@generate(Equatable, Hashable)
+type value ProcessStamp implements Formattable, Sendable {
+    uint64 created;
+    ctor make(uint64 created) { this.created = created; }
+    friend processStamp[make];
+    // The creation time as decimal 100 ns ticks, the text `format` writes; anything else is `InvalidInput`.
+    public ctor Result<ProcessStamp, IoError> parse(const ref string text) {
+        uint64 v = 0ui64;
+        isize n = text.length();
+        if (n == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        isize i = 0;
+        while (i < n) {
+            uint8 c = text[i];
+            if (c < 48ui8 || c > 57ui8 || v > 1844674407370955160ui64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+            v = v * 10ui64 + cast<uint64>(c - 48ui8);
+            i = i + 1;
+        }
+        return Result::Ok(value: ProcessStamp.make(created: v));
+    }
+    public const fn void format(ref Formatter f) { f.writeU64(v: this.created); }
+}
+
+fn int32 hexDigit(uint8 c) {
+    if (c >= 48ui8 && c <= 57ui8) { return cast<int32>(c - 48ui8); }
+    if (c >= 97ui8 && c <= 102ui8) { return cast<int32>(c - 87ui8); }
+    if (c >= 65ui8 && c <= 70ui8) { return cast<int32>(c - 55ui8); }
+    return 0 - 1;
+}
+// 16 lowercase hex digits, leading zeros kept.
+fn string hex16(uint64 v) { return "${v:016x}"; }
+
+// The identity of the live process `id`, or `None` when no process has it.
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<Optional<ProcessStamp>, IoError> processStamp(int32 id) {
+    InlineArray<uint8>#(16) boot = [0ui8; 16];
+    uint64 start = 0ui64;
+    int32 r = kama_proc_stamp(pid: id, boot16: addr(of: boot[0]), start: addr(of: start));
+    if (r < 0) { return Result::Err(error: lastError()); }
+    if (r == 0) { return Result::Ok(value: Optional::None); }
+    uint64 hi = 0ui64;
+    uint64 lo = 0ui64;
+    isize i = 0;
+    while (i < 8) { hi = (hi << 8ui64) | cast<uint64>(boot[i]); lo = (lo << 8ui64) | cast<uint64>(boot[i + 8]); i = i + 1; }
+    return Result::Ok(value: Optional::Some(value: ProcessStamp.make(bootHi: hi, bootLo: lo, start: start)));
+}
+@compileFor(OS_WINDOWS)
+unsafe fn Result<Optional<ProcessStamp>, IoError> processStamp(int32 id) {
+    InlineArray<uint8>#(16) boot = [0ui8; 16];
+    uint64 start = 0ui64;
+    int32 r = kama_proc_stamp(pid: id, boot16: addr(of: boot[0]), start: addr(of: start));
+    if (r < 0) { return Result::Err(error: lastError()); }
+    if (r == 0) { return Result::Ok(value: Optional::None); }
+    return Result::Ok(value: Optional::Some(value: ProcessStamp.make(created: start)));
+}
+
+// Does a process with this id exist? A cheap check — identity is `processStamp`.
+unsafe fn Result<bool, IoError> processExists(int32 id) {
+    int32 r = kama_proc_exists(pid: id);
+    if (r < 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: r == 1);
+}
+
+// When the process `id` started, on the wall clock — for display: it moves when the clock is set (see above).
+unsafe fn Result<Optional<Timestamp>, IoError> processStarted(int32 id) {
+    int64 ns = 0i64;
+    int32 r = kama_proc_started_ns(pid: id, into: addr(of: ns));
+    if (r < 0) { return Result::Err(error: lastError()); }
+    if (r == 0) { return Result::Ok(value: Optional::None); }
+    return Result::Ok(value: Optional::Some(value: Timestamp.fromUnixNanos(n: ns)));
+}
+
+// When the machine booted, on the wall clock — for display, as `processStarted` is.
+unsafe fn Result<Timestamp, IoError> bootTime() {
+    int64 ns = 0i64;
+    if (kama_boot_time_ns(into: addr(of: ns)) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Timestamp.fromUnixNanos(n: ns));
+}
+
+// Does the process group exist (`kill(-group, 0)`)? POSIX only, beside `ProcessGroup`: Windows has job objects.
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<bool, IoError> processGroupExists(int32 group) {
+    int32 r = kama_pgrp_exists(group: group);
+    if (r < 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: r == 1);
+}
 
 // The current directory (KR-167): what a relative path is relative to, so a path given on a command line can be
 // made absolute without running `pwd`. It belongs to the PROCESS: `setCurrentDirectory` changes it for every isolate

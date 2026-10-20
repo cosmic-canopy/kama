@@ -1094,6 +1094,58 @@ static inline ptrdiff_t kama_token_open(int32_t pid) {
 static inline void kama_token_close(ptrdiff_t tok) { CloseHandle((HANDLE)tok); }
 static inline int32_t kama_getpid(void) { return (int32_t)GetCurrentProcessId(); }
 
+// ---- other processes: liveness and identity (std::process, KR-219) ----------------------------------------------
+// 1 when a live process has this id, 0 when none does, -1 on error. A process that has exited is gone here, even while
+// a handle to it is held — `WaitForSingleObject`, not `GetExitCodeProcess == STILL_ACTIVE`, which an exit code of 259
+// fakes. ACCESS_DENIED is a process that exists and is another account's.
+static inline int32_t kama_proc_exists(int32_t pid) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, (DWORD)pid);
+    if (!h) {
+        const DWORD e = GetLastError();
+        if (e == ERROR_ACCESS_DENIED) return 1;
+        if (e == ERROR_INVALID_PARAMETER) return 0;
+        kama__os_fail(e, EINVAL); return -1;
+    }
+    const DWORD w = WaitForSingleObject(h, 0);
+    CloseHandle(h);
+    return w == WAIT_TIMEOUT ? 1 : 0;
+}
+// A live process's creation time, as the kernel recorded it at creation (100 ns ticks since 1601). 1, 0 gone, -1.
+static inline int32_t kama__proc_created(int32_t pid, uint64_t* ft) {
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, (DWORD)pid);
+    if (!h) {
+        const DWORD e = GetLastError();
+        if (e == ERROR_INVALID_PARAMETER) return 0;
+        kama__os_fail(e, e == ERROR_ACCESS_DENIED ? EACCES : EINVAL); return -1;
+    }
+    if (WaitForSingleObject(h, 0) != WAIT_TIMEOUT) { CloseHandle(h); return 0; }
+    FILETIME c, x, k, u;
+    const BOOL ok = GetProcessTimes(h, &c, &x, &k, &u);
+    const DWORD e = GetLastError();
+    CloseHandle(h);
+    if (!ok) { kama__os_fail(e, EACCES); return -1; }
+    *ft = ((uint64_t)c.dwHighDateTime << 32) | c.dwLowDateTime;
+    return 1;
+}
+// The stamp: the creation time alone — absolute and set once, so it tells two processes with one id apart across
+// reboots too. 1 found, 0 gone, -1 on error.
+static inline int32_t kama_proc_stamp(int32_t pid, uint8_t* boot16, uint64_t* start) {
+    memset(boot16, 0, 16);
+    return kama__proc_created(pid, start);
+}
+static inline int32_t kama_proc_started_ns(int32_t pid, int64_t* out) {
+    uint64_t ft = 0; const int32_t r = kama__proc_created(pid, &ft);
+    if (r == 1) *out = ((int64_t)ft - 116444736000000000ll) * 100ll;
+    return r;
+}
+// The boot time, as now less the time since boot — moves with the clock; for display.
+static inline int32_t kama_boot_time_ns(int64_t* out) {
+    FILETIME now; GetSystemTimeAsFileTime(&now);
+    const int64_t n = (int64_t)(((uint64_t)now.dwHighDateTime << 32) | now.dwLowDateTime);
+    *out = (n - 116444736000000000ll) * 100ll - (int64_t)GetTickCount64() * 1000000ll;
+    return 0;
+}
+
 // ---- descriptors (std::io::Descriptor) and passing them to another process ------------------------------------
 // A `Descriptor` here is either a C-runtime descriptor (kind 0 — what a `File` holds) or a SOCKET (kind 1), and
 // the two are closed, duplicated and passed by different calls.
@@ -1748,6 +1800,11 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <poll.h>         // poll, struct pollfd, POLLIN/POLLOUT
 #include <sys/wait.h>     // waitpid, WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG, WNOHANG  (std::process)
 #include <signal.h>       // kill, SIGKILL, SIGTERM  (std::process)
+#if defined(__APPLE__)
+#include <sys/sysctl.h>   // sysctl KERN_PROC_PID / KERN_BOOTTIME, kern.bootsessionuuid (std::process, KR-219)
+#elif defined(__linux__)
+#include <sys/auxv.h>     // getauxval(AT_CLKTCK): /proc's clock ticks per second (std::process, KR-219)
+#endif
 
 // NOT <unistd.h>: declaring the handful we need directly keeps libc decls out of user code, matching
 // kama_runtime.h's block-scoped-extern style. On macOS, <unistd.h> gives `read`, `write` and `close` a
@@ -2547,6 +2604,137 @@ static inline ptrdiff_t kama_unix_peer_groups(ptrdiff_t fd, uint32_t* out, size_
 }
 static inline uint32_t kama_getuid(void) { return (uint32_t)getuid(); }
 static inline int32_t  kama_getpid(void) { return (int32_t)getpid(); }
+
+// ---- other processes: liveness and identity (std::process, KR-219) ----------------------------------------------
+// 1 when a process has this id (or group), 0 when none does, -1 on error. `kill(…, 0)` sends nothing; EPERM is a
+// process that exists and is another user's. An exited child its parent has not reaped still exists. The browser
+// and Node's emscripten runtime have no other processes to ask about: ENOSYS.
+static inline int32_t kama__kill0(pid_t target) {
+#if defined(__EMSCRIPTEN__)
+    (void)target; errno = ENOSYS; return -1;
+#else
+    if (kill(target, 0) == 0) return 1;
+    if (errno == EPERM) return 1;
+    if (errno == ESRCH) return 0;
+    return -1;
+#endif
+}
+static inline int32_t kama_proc_exists(int32_t pid) {
+    if (pid <= 0) { errno = EINVAL; return -1; }
+    return kama__kill0((pid_t)pid);
+}
+static inline int32_t kama_pgrp_exists(int32_t group) {
+    if (group <= 0) { errno = EINVAL; return -1; }
+    return kama__kill0(-(pid_t)group);
+}
+// This boot's UUID — Linux's `boot_id`, macOS's `kern.bootsessionuuid` — which no clock change moves.
+static inline int32_t kama__boot_uuid(uint8_t out[16]) {
+    char text[64]; size_t n = 0;
+#if defined(__linux__)
+    const int fd = open("/proc/sys/kernel/random/boot_id", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    const long r = read(fd, text, sizeof text - 1); close(fd);
+    if (r <= 0) { errno = EIO; return -1; }
+    n = (size_t)r;
+#elif defined(__APPLE__)
+    size_t len = sizeof text;
+    if (sysctlbyname("kern.bootsessionuuid", text, &len, NULL, 0) != 0) return -1;
+    n = len;
+#else
+    (void)text; errno = ENOSYS; return -1;
+#endif
+    int k = 0, hi = -1;
+    for (size_t i = 0; i < n && k < 16; ++i) {
+        const char c = text[i];
+        const int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+        if (v < 0) continue;   // the dashes, and the trailing newline
+        if (hi < 0) hi = v; else { out[k++] = (uint8_t)((hi << 4) | v); hi = -1; }
+    }
+    if (k != 16) { errno = EIO; return -1; }
+    return 0;
+}
+// A process's start as its kernel recorded it: Linux's `/proc/<pid>/stat` field 22 (clock ticks since boot, read
+// after the LAST `)` — the command name may hold spaces and parentheses), macOS's `p_starttime` (microseconds since
+// the epoch, set at fork). 1 found, 0 no such process, -1 on error.
+static inline int32_t kama__proc_start_raw(int32_t pid, uint64_t* out) {
+    if (pid <= 0) { errno = EINVAL; return -1; }
+#if defined(__linux__)
+    char path[32] = "/proc/"; size_t at = 6; char digits[12]; int nd = 0;
+    for (uint32_t v = (uint32_t)pid; v; v /= 10) digits[nd++] = (char)('0' + v % 10);
+    while (nd) path[at++] = digits[--nd];
+    memcpy(path + at, "/stat", 6);
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return errno == ENOENT ? 0 : -1;
+    char buf[1024]; const long r = read(fd, buf, sizeof buf - 1); close(fd);
+    if (r <= 0) { errno = EIO; return -1; }
+    buf[r] = 0;
+    const char* q = strrchr(buf, ')');
+    if (!q) { errno = EIO; return -1; }
+    ++q; int f = 3;
+    while (*q == ' ') ++q;
+    while (*q && f < 22) { while (*q && *q != ' ') ++q; while (*q == ' ') ++q; ++f; }
+    if (f != 22 || *q < '0' || *q > '9') { errno = EIO; return -1; }
+    uint64_t v = 0;
+    while (*q >= '0' && *q <= '9') v = v * 10 + (uint64_t)(*q++ - '0');
+    *out = v;
+    return 1;
+#elif defined(__APPLE__)
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
+    struct kinfo_proc kp; size_t len = sizeof kp;
+    memset(&kp, 0, sizeof kp);
+    if (sysctl(mib, 4, &kp, &len, NULL, 0) != 0) return -1;
+    if (len == 0) return 0;
+    *out = (uint64_t)kp.kp_proc.p_starttime.tv_sec * 1000000ull + (uint64_t)kp.kp_proc.p_starttime.tv_usec;
+    return 1;
+#else
+    (void)out; errno = ENOSYS; return -1;
+#endif
+}
+// The stamp: this boot's UUID and the start as recorded. 1 found, 0 gone, -1 on error.
+static inline int32_t kama_proc_stamp(int32_t pid, uint8_t* boot16, uint64_t* start) {
+    const int32_t r = kama__proc_start_raw(pid, start);
+    if (r != 1) return r;
+    return kama__boot_uuid(boot16) == 0 ? 1 : -1;
+}
+// The boot time from the wall clock — Linux's `/proc/stat` `btime`, macOS's `kern.boottime` — each now less the time
+// since boot, recomputed when the clock is set; for display, never for identity.
+static inline int32_t kama_boot_time_ns(int64_t* out) {
+#if defined(__linux__)
+    const int fd = open("/proc/stat", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return -1;
+    char buf[8192]; long total = 0, r;
+    while (total < (long)sizeof buf - 1 && (r = read(fd, buf + total, sizeof buf - 1 - (size_t)total)) > 0) total += r;
+    close(fd);
+    buf[total > 0 ? total : 0] = 0;
+    const char* p = strstr(buf, "\nbtime ");
+    if (!p) { errno = EIO; return -1; }
+    p += 7;
+    int64_t s = 0;
+    while (*p >= '0' && *p <= '9') s = s * 10 + (*p++ - '0');
+    *out = s * 1000000000ll;
+    return 0;
+#elif defined(__APPLE__)
+    int mib[2] = { CTL_KERN, KERN_BOOTTIME };
+    struct timeval tv; size_t len = sizeof tv;
+    if (sysctl(mib, 2, &tv, &len, NULL, 0) != 0) return -1;
+    *out = (int64_t)tv.tv_sec * 1000000000ll + (int64_t)tv.tv_usec * 1000ll;
+    return 0;
+#else
+    (void)out; errno = ENOSYS; return -1;
+#endif
+}
+static inline int32_t kama_proc_started_ns(int32_t pid, int64_t* out) {
+    uint64_t raw = 0; const int32_t r = kama__proc_start_raw(pid, &raw);
+    if (r != 1) return r;
+#if defined(__linux__)
+    int64_t boot = 0; if (kama_boot_time_ns(&boot) != 0) return -1;
+    unsigned long hz = getauxval(AT_CLKTCK); if (hz == 0) hz = 100;
+    *out = boot + (int64_t)(raw / hz) * 1000000000ll + (int64_t)(raw % hz) * (1000000000ll / (int64_t)hz);
+#else
+    *out = (int64_t)raw * 1000ll;
+#endif
+    return 1;
+}
 
 // ---- descriptors (std::io::Descriptor) and passing them to another process (SCM_RIGHTS) -----------------------
 // A POSIX descriptor is one small integer whatever it names, so `kind` only matters on Windows.

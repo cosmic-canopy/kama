@@ -1,0 +1,46 @@
+// KR-219: another process's liveness and identity. This process exists; its `ProcessStamp` survives a round trip
+// through text — what a lock file writes and a checker reads back — and compares equal to a fresh one; the wall-clock
+// start and boot times are ordered; a malformed stamp is `InvalidInput`. A wasm target has no processes to ask about
+// and says so (`Other`, ENOSYS).
+import { std::process::currentProcessId, std::process::ProcessStamp, std::process::processStamp,
+         std::process::processExists, std::process::processStarted, std::process::bootTime,
+         std::io::IoError, std::io::IoErrorKind, std::time::Timestamp, std::time::unixNow };
+
+@compileFor(!ARCH_WASM32) comptime bool HAS_PROCESSES = true;
+@compileFor(ARCH_WASM32)  comptime bool HAS_PROCESSES = false;
+
+fn uint8 main() {
+    int32 me = currentProcessId();
+    Result<bool, IoError> ex = processExists(id: me);
+    if (!HAS_PROCESSES) { return match (ex) { case Ok(value: _): 1; case Err(error: e): 0; }; }
+    int32 bad = 0;
+    if (match (ex) { case Ok(value: b): !b; case Err(error: e): true; }) { bad = bad | 1; }
+    Result<Optional<ProcessStamp>, IoError> r1 = processStamp(id: me);
+    Optional<ProcessStamp> o1 = match (r1) { case Ok(value: o): o; case Err(error: e): { return 90; } };
+    ProcessStamp s1 = match (o1) { case Some(value: s): s; case None: { return 91; } };
+    Result<Optional<ProcessStamp>, IoError> r2 = processStamp(id: me);
+    Optional<ProcessStamp> o2 = match (r2) { case Ok(value: o): o; case Err(error: e): { return 92; } };
+    ProcessStamp s2 = match (o2) { case Some(value: s): s; case None: { return 93; } };
+    if (s1 != s2) { bad = bad | 2; }
+    string text = "${s1}";
+    Result<ProcessStamp, IoError> back = ProcessStamp.parse(text: text);
+    if (match (back) { case Ok(value: s): s != s1; case Err(error: e): true; }) { bad = bad | 4; }
+    Result<ProcessStamp, IoError> junk = ProcessStamp.parse(text: "not a stamp");
+    if (match (junk) { case Ok(value: _): true; case Err(error: e): match (e.kind()) { case InvalidInput: false; case _: true; }; }) { bad = bad | 8; }
+    Result<Optional<Timestamp>, IoError> st = processStarted(id: me);
+    Result<Timestamp, IoError> bt = bootTime();
+    Timestamp now = unixNow();
+    match (st) {
+        case Ok(value: o): {
+            match (o) {
+                case Some(value: t): {
+                    if (t > now) { bad = bad | 16; }
+                    match (bt) { case Ok(value: b): { if (b > t) { bad = bad | 32; } } case Err(error: e): { bad = bad | 64; } };
+                }
+                case None: { bad = bad | 128; }
+            };
+        }
+        case Err(error: e): { bad = bad | 128; }
+    };
+    return cast<uint8>(bad);
+}

@@ -419,55 +419,6 @@ Node raise it automatically too. Python: no kind; an explicit `resource.setrlimi
 3. POSIX only, by the platform-deltas rule: Windows has no per-process descriptor limit for sockets (they are
    bounded by memory), so the type is absent there rather than faked.
 
-<a id="s1-process-liveness"></a>
-
-#### Process identity beyond one's own children (KR-219)
-
-Measured on `0.9.690`: `std::process` reaches only the children a program started — `Process.signal`, `kill`,
-`terminate`, their group through `signalGroup` — and `currentProcessId()`. A program cannot ask whether any OTHER
-pid, or a process group, is alive, when a process started, or when the machine booted. A lock file that names its
-holder by pid (the GPU lock of a build orchestrator, a single-instance check, a pid file) needs all three, because a
-bare pid is reused: the holder is alive only if the pid exists AND started when the lock says, AND the machine has not
-rebooted since. Today that takes an `extern fn kill` from `<signal.h>`, a parse of `/proc/<pid>/stat`, and a read of
-`/proc/sys/kernel/random/boot_id` — Linux only, and in each program that needs it.
-
-**What others do.** Python: `os.kill(pid, 0)` for existence (EPERM means it exists); start time and boot time only
-through `psutil` (`Process.create_time()`, `boot_time()`), which is what everyone uses. .NET:
-`Process.GetProcessById(pid)` throws if it is gone, and `Process.StartTime` is portable. Go: `os.FindProcess` +
-`Signal(syscall.Signal(0))` on Unix; no start time. Rust std: nothing (the `sysinfo` crate). Node:
-`process.kill(pid, 0)`. The portable identity everyone settles on is the pair (pid, start time), with the boot time
-to rule out a reboot.
-
-**The first recommendation was wrong on identity (probed 2026-10-20).** It identified a process by a wall-clock start
-time and the boot time. Both move: Linux's `/proc/stat` `btime` is now minus the boot offset, recomputed when the
-clock is set (`getboottime64`), so a start time built as `btime` plus ticks shifts after an NTP step or a VM resume;
-macOS adjusts `kern.boottime` when the calendar clock is set; and Windows' now minus `GetTickCount64` differs on every
-call. A live holder whose recorded start no longer matches looks dead, and its lock is taken. Java's
-`ProcessHandle.equals` compares the pid and a start time built the same way (cached once per JVM, so only one JVM's
-handles agree), and psutil's `(pid, create_time)` moves with `btime`. polkit identifies a process by the raw start
-ticks, which do not move. Each OS records a stable value: Linux's `boot_id` and `/proc/<pid>/stat` field 22 (ticks
-since boot); macOS's `kern.bootsessionuuid` (a UUID per boot, measured present) and `kinfo_proc.p_starttime` (set at
-fork); Windows' creation FILETIME (absolute, set once, so unique across boots without a boot token).
-
-**Ruled 2026-10-20 (the maintainer).**
-1. `ProcessStamp`, an `Equatable`, `Hashable`, `Formattable`, `Sendable` value with `ProcessStamp.parse(text:)`, made
-   only of kernel-recorded values: on POSIX a boot UUID and a start value (24 B), on Windows the creation time (8 B).
-   Platform twins, as `UserId`. A lock file writes `${stamp}` and a checker compares a parsed one.
-2. `processStamp(id: int32) -> Result<Optional<ProcessStamp>, IoError>`, `None` when no such process.
-3. `processExists(id: int32) -> Result<bool, IoError>`: `kill(pid, 0)` on POSIX (EPERM answers `true`); on Windows
-   `OpenProcess` and `WaitForSingleObject(h, 0)` — not `GetExitCodeProcess == STILL_ACTIVE`, which an exit code of
-   259 fakes. A process that has exited but not been reaped still exists, on every POSIX system.
-4. `processStarted(id:)` and `bootTime()` answer `Timestamp`s for DISPLAY, documented as moving with the clock.
-5. `processGroupExists(group: int32)`: `kill(-group, 0)`, POSIX only, beside `ProcessGroup`; absent on Windows by the
-   platform-deltas rule.
-6. A pid stays `int32`, as in `Process.id()`, `currentProcessId()`, `ProcessGroup::Join` and `PeerCredentials`; Rust,
-   Go and .NET use a bare integer too, and a pid is a number on every OS (a `UserId` is not). The stamp is the identity.
-7. A lock file itself takes `File.lock` (`0.9.701`), which the kernel releases when its holder dies; the stamp answers
-   what a lock cannot — who holds it, before a pid read from a file is signalled.
-
-Size M: three platforms, each its own calls. Linux parses `/proc/<pid>/stat` after the LAST `)` (the command name may
-hold spaces and parentheses).
-
 <a id="s1-listen-options"></a>
 
 #### Listener options: the backlog, and reuse-port where the OS balances it (KR-206)

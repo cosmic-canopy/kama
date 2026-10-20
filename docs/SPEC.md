@@ -2522,6 +2522,18 @@ a whole type gated by `@compileFor`, since a member cannot be (*Conditional comp
 profile Windows records for the SID — and `homeDirectory()` is the current user's: `$HOME` (`%USERPROFILE%` on <!-- test: process_home -->
 Windows) when it is set and not empty, else the account's, as Rust's `home_dir` and libpq read it.
 
+**Another process: alive, and the same one? (`std::process`).** A pid alone is not a process — the OS reuses it — so <!-- test: process_identity -->
+`processStamp(id:)` answers a `ProcessStamp`: an `Equatable`, `Hashable` value made only of what the kernel recorded
+once — on Linux and macOS this boot's UUID (`boot_id`, `kern.bootsessionuuid`) and the process's start (the ticks
+since boot in `/proc/<pid>/stat`; `p_starttime`), on Windows its creation time — with a text form a lock file or pid
+file writes (`"${stamp}"`) and `ProcessStamp.parse(text:)` reads back. A wall-clock start is not an identity: Linux's
+`btime` and macOS's `kern.boottime` are now less the time since boot, recomputed when the clock is set, so after an NTP
+step a live holder's would no longer match (psutil's `(pid, create_time)` moves that way). `processExists(id:)` is the
+cheap check (`kill(pid, 0)`; on Windows `WaitForSingleObject`), `processStarted(id:)` and `bootTime()` answer the wall
+clock for display, and `processGroupExists(group:)` is POSIX's, beside `ProcessGroup`. An exited child not yet reaped
+still exists on Linux and macOS; on Windows an exited process is gone. A pid stays an `int32`, as everywhere in
+`std::process`. A lock file itself is `File.lock`, which dies with its holder; the stamp says who holds it.
+
 **The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
 `type contract Writer` (the partial-write primitive `write(ConstView<uint8>) -> Result<isize, IoError>` +
 `flush`) and `type contract Reader` (`read(View<uint8>) -> Result<isize, IoError>`, `Ok(0)` = EOF). Buffers
