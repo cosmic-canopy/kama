@@ -1,0 +1,37 @@
+// KR-215: an `InlineArray<T>#(N)` is `Equatable` exactly when `T` is — element by element, never a `memcmp` (so
+// `-0.0 == 0.0`, and a `string` compares its text) — through `==`/`!=`, `a.equals(other:)`, a generic bound, a derived
+// field and a collection's `contains`. `FixedArray` has `equals` too, as `DynamicArray` always had.
+import { std::collections::DynamicArray, std::collections::FixedArray };
+
+@generate(Equatable)
+type value Pt { public int32 x; public int32 y; public ctor make(int32 x, int32 y) { this.x = x; this.y = y; } }
+@generate(Equatable)
+type value Rec { public InlineArray<int32>#(2) v; public ctor make(int32 a, int32 b) { this.v = [a, b]; } }
+
+fn bool same<T: Equatable<T>>(const ref T a, const ref T b) { return a.equals(other: b); }
+
+fn uint8 main() {
+    int32 bad = 0;
+    InlineArray<int32>#(3) a = [1, 2, 3];
+    InlineArray<int32>#(3) b = [1, 2, 3];
+    InlineArray<int32>#(3) c = [1, 2, 4];
+    if (!(a == b) || a != b || a == c || !(a != c)) { bad = bad + 1; }
+    InlineArray<float64>#(1) z = [0.0];
+    InlineArray<float64>#(1) nz = [-0.0];
+    if (z != nz) { bad = bad + 2; }                                        // by value, not by bytes
+    InlineArray<string>#(2) s = ["a", "b"];
+    InlineArray<string>#(2) t = ["a", "b"];
+    if (s != t) { bad = bad + 4; }
+    InlineArray<Pt>#(2) p = [Pt.make(x: 1, y: 2), Pt.make(x: 3, y: 4)];
+    InlineArray<Pt>#(2) q = [Pt.make(x: 1, y: 2), Pt.make(x: 3, y: 4)];
+    if (!p.equals(other: q) || !same(a: p, b: q)) { bad = bad + 8; }
+    if (Rec.make(a: 1, b: 2) != Rec.make(a: 1, b: 2)) { bad = bad + 16; }
+    DynamicArray<InlineArray<int32>#(3)> xs = DynamicArray.empty();
+    xs.add(item: a);
+    if (!xs.contains(item: b) || xs.contains(item: c)) { bad = bad + 32; }
+    FixedArray<int32> f = FixedArray.make(size: 2);
+    FixedArray<int32> g = FixedArray.make(size: 2);
+    f[1] = 5; g[1] = 5;
+    if (!f.equals(other: g)) { bad = bad + 64; }
+    return cast<uint8>(bad);
+}

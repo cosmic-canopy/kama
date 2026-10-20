@@ -685,10 +685,11 @@ init_kind_string_from_sizeof	init_kind_string_from_sizeof.kama:3:4
 init_kind_string_from_ternary	init_kind_string_from_ternary.kama:5:4
 init_result_into_string	init_result_into_string.kama:8:4
 inline_array_contract_elem	inline_array_contract_elem.kama:5:0 inline_array_contract_elem.kama:5:9
-inline_array_eq	inline_array_eq.kama:6:11
+inline_array_eq	inline_array_eq.kama:8:11
 inline_array_fill_not_copyable	inline_array_fill_not_copyable.kama:5:27
 inline_array_foreach_not_copyable	inline_array_foreach_not_copyable.kama:7:4
 inline_array_literal_bare_string	inline_array_literal_bare_string.kama:5:32
+inline_array_order	inline_array_order.kama:5:11
 inline_array_owning_bare_copy	inline_array_owning_bare_copy.kama:7:4
 inline_array_owning_in_value	inline_array_owning_in_value.kama:3:0
 inline_array_owning_static	inline_array_owning_static.kama:4:0

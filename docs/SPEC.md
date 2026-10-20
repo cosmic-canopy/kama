@@ -3800,7 +3800,13 @@ It has no element operations: no index, no `foreach`, no operators. <!-- xfail: 
 Over an owning element it is refused in a `type value`, and `copy` does not apply to it. <!-- xfail: inline_storage_owning_in_value, inline_storage_owning_copy -->
 It has at least one place, and a contract, with no layout, is refused as its element. <!-- xfail: inline_storage_zero, inline_storage_contract -->
 `InlineStorage.empty()` is its one constructor, and takes its instance from where the value goes. <!-- xfail: inline_storage_empty_untyped, inline_storage_bad_ctor -->
-An `InlineArray` has no operators either: `==` on two of them is refused (compare the elements). <!-- xfail: inline_array_eq -->
+**An `InlineArray` is `Equatable` exactly when its element is**, and compares element by element: `==`, `!=` and <!-- test: inline_array_equatable -->
+`a.equals(other: b)`, a `T: Equatable<T>` bound, a field of a `@generate(Equatable)` type, a collection's `contains`.
+Each element goes through its own equality — `==` for a number, so `-0.0 == 0.0` and a NaN is unequal to itself; the
+element's `equals` for anything else — never a `memcmp`, which would compare padding. Rust's `[T; N]`, C++'s
+`std::array` and Go's arrays compare the same way; a digest compared to a secret wants KR-203's constant-time form.
+An element with no equality is refused, naming it, and an `InlineArray` has no other operator. <!-- xfail: inline_array_eq, inline_array_order -->
+`FixedArray` has `equals` too, as `DynamicArray` always had.
 
 **Every contiguous container hands out the same two bridges, `InlineArray` included.** `dataPtr()` <!-- test: inline_array_view, const_dataptr -->
 (a `const fn`) returns an `UnsafeConstPtr<T>` for C and `dataPtrMut()` the writable `UnsafePtr<T>` —

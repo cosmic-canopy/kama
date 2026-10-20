@@ -1,7 +1,9 @@
-// An `InlineArray` has no operators: `a == b` on two of them passed `kama check` through 0.9.684 and was then refused
-// by the C compiler ("invalid operands to binary expression"), naming a mangled struct. Compare the elements.
+// An `InlineArray` compares with `==` and `!=` element by element, and only when its element is `Equatable` (KR-215).
+// `Token` declares no equality, so there is nothing to compare its elements with. (Through 0.9.684 any `a == b` passed
+// `kama check` and was refused by the C compiler; through 0.9.698 every one was refused.)
+type value Token { public int32 id; public ctor make(int32 id) { this.id = id; } }
 fn uint8 main() {
-    InlineArray<int32>#(2) a = [1, 2];
-    InlineArray<int32>#(2) b = [1, 2];
+    InlineArray<Token>#(2) a = [Token.make(id: 1), Token.make(id: 2)];
+    InlineArray<Token>#(2) b = [Token.make(id: 1), Token.make(id: 2)];
     return a == b ? 1 : 0;
 }

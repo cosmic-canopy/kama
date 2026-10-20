@@ -1,0 +1,6 @@
+// An `InlineArray` has `==` and `!=` (KR-215) and no other operator: no ordering, no arithmetic.
+fn uint8 main() {
+    InlineArray<int32>#(2) a = [1, 2];
+    InlineArray<int32>#(2) b = [1, 3];
+    return a < b ? 1 : 0;
+}

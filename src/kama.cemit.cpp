@@ -5082,9 +5082,20 @@ std::string CEmitter::emitBinaryOperator(int token, SharedExpression lhs, Shared
     };
     if (aggregate(lc) || aggregate(rc)) {
         const std::string which = aggregate(lc) ? lc : rc;
-        unsupported(("`" + binaryOperator(token) + "` does not apply to `" + demangleForDisplay(which) + "` — "
-                     + (isStorageColl(which) ? std::string("an `InlineStorage` holds places, not values, so it has no operators")
-                                             : std::string("an `InlineArray` has no operators; compare its elements"))).c_str(), line);
+        // `==`/`!=` on two of one `InlineArray` compare element by element, when the element is `Equatable` (KR-215).
+        const bool eqOp = token == EQEQ || token == NOTEQ;
+        if (eqOp && lc == rc && !isStorageColl(which) && ensureFixedEquals(which)) {
+            const std::string call = which + "__equals(" + addrOfOperand(lhs, which, line) + ", " + addrOfOperand(rhs, which, line) + ")";
+            return token == EQEQ ? "(" + call + ")" : "(!" + call + ")";
+        }
+        std::string why;
+        if (isStorageColl(which)) why = "an `InlineStorage` holds places, not values, so it has no operators";
+        else if (eqOp && lc == rc && _collections.count(which))
+            why = "an `InlineArray` compares element by element, and its element `" + demangleForDisplay(_collections[which].elemCType)
+                + "` is not `Equatable`";
+        else if (eqOp) why = "both sides must be the same `InlineArray` type";
+        else why = "an `InlineArray` has no arithmetic or ordering operators; `==` and `!=` compare its elements";
+        unsupported(("`" + binaryOperator(token) + "` does not apply to `" + demangleForDisplay(which) + "` — " + why).c_str(), line);
         return "0";
     }
     bool lUser = userOperandType(lc, _classes);
@@ -13541,6 +13552,35 @@ std::string CEmitter::elemCopyStmt(const std::string& e, const std::string& dst,
 // elements in place: drop each, copy each, or fill each from one value. The prototypes go out beside
 // KAMA_FIXED_FUNCS; the bodies after every class's prototypes, because an element's `__dtor`/`__copy` may belong
 // to a type the header declares later. A plain `InlineArray` has none: it is its bytes.
+// KR-215: an `InlineArray<T>#(N)` is `Equatable` exactly when `T` is — `==`, `!=`, `a.equals(other: b)`, a bound, a
+// derived field — so its `equals` is a method of the instance, registered once the element's conformance can be asked
+// (every pass that registers instances, and any dispatch that meets one later). False when it does not qualify.
+bool CEmitter::ensureFixedEquals(const std::string& cName)
+{
+    auto it = _classes.find(cName);
+    if (it == _classes.end() || !it->second.isIntrinsicColl || it->second.collKind != CollKind::Fixed) return false;
+    if (it->second.methods.count("equals")) return true;
+    if (!satisfiesBound(cName, "Equatable")) return false;
+    MethodInfo mi; mi.cName = cName + "__equals"; mi.visibility = Visibility::Public; mi.isConst = true;
+    if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<synth>"));
+    mi.returnType = synthId("bool", IDENTIFIER_BOOL_VAL);
+    ParamSig o; o.name = "other"; o.byRef = true; o.isConst = true; o.className = cName; mi.params.push_back(o);
+    _classes[cName].methods["equals"] = mi;
+    return true;
+}
+
+// Its body: element by element, each through the element's own equality (eqFieldTest — `==` for a number, so a NaN is
+// unequal to itself, and `-0.0 == 0.0`; the element's `equals` for anything else), never a `memcmp`, which would also
+// compare padding. Defined after every class prototype, since it may call an element's.
+void CEmitter::emitFixedEquals(const CollectionInfo& info, bool protosOnly)
+{
+    if (!ensureFixedEquals(info.cName)) return;
+    *_out << "static inline bool " << info.cName << "__equals(" << info.cName << "* self, " << info.cName << "* other)";
+    if (protosOnly) { *_out << ";\n"; return; }
+    *_out << " {\n    for (ptrdiff_t i = 0; i < " << info.constValue << "; ++i)\n        if (!("
+          << eqFieldTest(info.elem, "self->kama_v[i]", "other->kama_v[i]", 0) << ")) return false;\n    return true;\n}\n";
+}
+
 void CEmitter::emitOwningFixedFuncs(const CollectionInfo& info, bool protosOnly)
 {
     const std::string& N = info.cName;
@@ -18750,6 +18790,7 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
                      << ", " << info.cName << ")\n";
                 emitFixedView(info);   // ...and the `View<T>` mint the macro cannot name
                 emitOwningFixedFuncs(info, /*protosOnly=*/true);   // an owning array's drop/copy, defined below
+                emitFixedEquals(info, /*protosOnly=*/true);        // `equals`, when its element is Equatable (KR-215)
             }
         }
         else if (info.kind == CollKind::Simd) {
@@ -20532,6 +20573,16 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
     // context it touches, which is why asking it from a const method is honest.
     if (!_sendableContract.empty() && bound_ == _sendableContract)
         return const_cast<CEmitter*>(this)->unsendableReason(t).empty();
+    // An `InlineArray<T>#(N)` is `Equatable` exactly when `T` is (KR-215), compared element by element — the rule a
+    // `@generate(Equatable)` generic follows, and what `DynamicArray` declares. Derived, like `Copyable` below: an
+    // intrinsic has no declaration to carry a `when` clause, and a `type adapter` cannot target it.
+    if (preludeLeaf(bound_) == "Equatable" && it != _classes.end() && it->second.isIntrinsicColl
+        && it->second.collKind == CollKind::Fixed) {
+        auto c = _collections.find(t);
+        if (c == _collections.end()) return false;
+        if (!_classes.count(c->second.elemCType)) return true;   // a number, a `bool`, a `char`, a raw pointer: `==`
+        return satisfiesBound(c->second.elemCType, bound_);
+    }
     if (preludeLeaf(bound_) == "Copyable") {
         if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
@@ -25599,7 +25650,9 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
         // …and `Copyable` is a CAPABILITY for every kind, not only a primitive: a value copies bitwise and an
         // enum when its payloads do, neither through a declared `copy` ctor, which is all the method-set
         // test below can see. So it, too, is asked structurally — the gate and the bound give one answer.
-        bool structural = (!ci || preludeLeaf(tmplName) == "Copyable") && satisfiesBound(rkey, contract);
+        // …as is `Equatable` on an `InlineArray`, which holds exactly when its element's does (KR-215).
+        const bool fixedEq = ci && ci->isIntrinsicColl && ci->collKind == CollKind::Fixed && preludeLeaf(tmplName) == "Equatable";
+        bool structural = (!ci || preludeLeaf(tmplName) == "Copyable" || fixedEq) && satisfiesBound(rkey, contract);
         if (!declared && !boxed && !structural && (!ci || !classSatisfiesBound(ci, contract))) {
             // A failed `Sendable` bound says WHY (the field, the mutable pointee, the undeclared type):
             // it is the channel crossing's gate, and "does not satisfy" alone sent the author hunting.
@@ -43097,6 +43150,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                               // _typeSubst bound — before registerInstColls, which reads _genericInsts.
     registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
                            // now that every instantiation is known — before the collection typedefs emit.
+    for (auto& kv : _collections) if (kv.second.kind == CollKind::Fixed) ensureFixedEquals(kv.first);   // KR-215
     registerIntrinsicViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
                            // one that already has `view`), so this only does work for a const-param-derived
                            // size whose ELEMENT type no other InlineArray in the program already used.
@@ -43610,8 +43664,10 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     // An owning `InlineArray`'s bodies, after every prototype its element's `__dtor`/`__copy` may be: a class's
     // (above), and a generic instance's such as `Optional<string>`'s (just now).
     for (const std::string& cName : _collectionOrder)
-        if (_collections.count(cName) && _collections[cName].kind == CollKind::Fixed)
+        if (_collections.count(cName) && _collections[cName].kind == CollKind::Fixed) {
             emitOwningFixedFuncs(_collections[cName], /*protosOnly=*/false);
+            emitFixedEquals(_collections[cName], /*protosOnly=*/false);
+        }
     // Prototypes for kama's OWN free functions. kama never emits prototypes for
     // `extern` C functions: an `extern` decl is purely kama's call signature
     // (name + named params, for lowering) — the C prototype comes from the header

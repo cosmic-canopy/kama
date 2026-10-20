@@ -2368,26 +2368,6 @@ resource's fields are private); (4) the method summary and the marked calls thro
 (5) the pointer-once paths and `Shared<Contract>`; (6) the `this`-alias ruling above; (7) measurement, interleaved, on
 the `Shared`-heavy fixtures and the engine.
 
-<a id="s5-inline-array-eq"></a>
-
-### `==` on an `InlineArray` (KR-215)
-
-Measured 2026-10-19: `InlineArray<int32>#(2) a = [1, 2]; … a == b` passed `kama check` on every version through
-`0.9.684` and was refused by the C compiler ("invalid operands to binary expression" on `InlineArray_int32_2`), because
-an `InlineArray` lowers to a C struct and nothing gave it an `equals`. `0.9.686` refuses it in kama's words (an
-`InlineArray` has no operators), which closes the divergence but not the gap: Rust's `[T; N]` is `PartialEq` when `T`
-is, C++'s `std::array` has `==`, and comparing two digests (`InlineArray<uint8>#(32)`) is the common case. The likely
-shape is an intrinsic `equals` when `T: Equatable`, so `==` lowers through it as it does for every other type, and
-`Equatable`'s conditional conformance follows; KR-203's constant-time comparison is the separate spelling for secrets.
-
-**Ruled 2026-10-20 (the maintainer).** Probed: a std `type adapter` cannot take `InlineArray` as a target ("unknown
-type `InlineArray` in a `type adapter`'s targets"), so the conformance is the compiler's. An `InlineArray<T>#(N)` is
-`Equatable<This>` exactly when `T` is, as `@generate(Equatable)` decides it for a generic, and `==`/`!=` lower through
-an element-by-element `equals` — never a `memcmp`, which answers wrongly for a NaN, for `-0.0 == 0.0` and for struct
-padding (clang turns the integer loop into one compare anyway). `DynamicArray` and `InlineDynamicArray` already compare
-this way; `FixedArray` has `contains`/`indexOf` but no `equals`, and gains it in the same commit, so every sequence
-answers `==` the same way. Size S.
-
 <a id="s5-collections-formattable"></a>
 
 ### `Formattable` for std's collections (KR-216)
