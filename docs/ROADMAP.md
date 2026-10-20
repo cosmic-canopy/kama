@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-223**
+**Next id: KR-224**
 
 ## The shape
 
@@ -84,6 +84,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-210 | **Running out of descriptors has no kind, and the limit cannot be read or raised** — `accept` under EMFILE is `Other` (OS code 24), and std has nothing for `RLIMIT_NOFILE`. **Ruled 2026-10-19:** `IoErrorKind::TooManyOpenFiles` (EMFILE/ENFILE; Windows `WSAEMFILE`/`ERROR_TOO_MANY_OPEN_FILES`), and an explicit POSIX `std::process` `openFileLimit()`/`raiseOpenFileLimit()` — never raised implicitly | S–M | [§1](ROADMAP_DETAIL.md#s1-fd-limit) |
 | KR-207 | **`sendfile`** — a file response copies through user space; Linux and macOS have `sendfile`, Windows `TransmitFile` | S–M | [§1](ROADMAP_DETAIL.md#s1-sendfile) |
 | KR-208 | **An in-memory connected `ReliableStream` pair** — every package that speaks a protocol writes its own test pipe (Go's `net.Pipe`) | S | [§1](ROADMAP_DETAIL.md#s1-memory-stream) |
+| KR-223 | **`string` has no ASCII case-insensitive comparison and no search from an offset** — a protocol compares names and tokens case-insensitively all the time (every HTTP field lookup, `chunked`, `close`), which costs two `toLower` allocations per comparison today; finding the next `,` past a position costs a `substring` copy or a byte loop. And `find` answers `Optional<usize>` where every other index is an `isize`. Ruling owed | S | [§1](ROADMAP_DETAIL.md#s1-string-caseless) |
 | KR-205 | **Coverage-guided fuzzing** — no `kama fuzz` and no documented libFuzzer harness, though every parser that reads a stranger's bytes wants one. Design first | M? | [§1](ROADMAP_DETAIL.md#s1-fuzz) |
 | KR-5 | **`std::io` transform adapters: compression and archives** — **Ruled 2026-10-19: std.** deflate (RFC 1951), zlib (1950) and gzip (1952) in both directions, plus tar, as streaming `std::io` adapters whose decoders take a REQUIRED output limit (a decompression bomb is refused by construction). Consumers: HTTP `Content-Encoding`, WebSocket permessage-deflate, PNG, the package format | M–L | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-212 | **zstd (RFC 8878) in std — decode first** — after KR-5, on its adapter shape; the encoder by its own verdict. Python 3.14 and Node ship it, Zig decodes it | M? | [§1](ROADMAP_DETAIL.md#s1) |
