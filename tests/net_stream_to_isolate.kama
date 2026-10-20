@@ -51,7 +51,7 @@ fn int32 main() {
                 TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
                 Result<TcpStream, IoError> ra = l.accept();
                 TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
-                tx.send(item: give s);                    // the accepted socket moves to the worker
+                _ = tx.send(item: give s);                    // the accepted socket moves to the worker
                 total = total * 10 + readOne(c: ref c);   // 1, then 12, then 123
                 i = i + 1;
             }

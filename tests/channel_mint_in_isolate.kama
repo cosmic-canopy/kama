@@ -15,7 +15,7 @@ import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Rec
 fn void producer(Channel<int32> ch) {
     Sender<int32> tx = ch.sender();   // minted on the CHILD's thread, after main may already be blocked
     int32 i = 0;
-    while (i < 10) { tx.send(item: i); i = i + 1; }
+    while (i < 10) { _ = tx.send(item: i); i = i + 1; }
 }
 
 fn int32 main() {

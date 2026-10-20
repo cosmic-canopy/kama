@@ -24,7 +24,7 @@ fn int32 main() {
     {
         Sender<Token> tx = ch.sender();
         int32 i = 1;
-        while (i <= 5) { Token t = Token.make(id: i); tx.send(item: give t); i = i + 1; }
+        while (i <= 5) { Token t = Token.make(id: i); _ = tx.send(item: give t); i = i + 1; }
     }   // the sender is gone: two receives below, and three elements left buffered
     int32 received = 0;
     {

@@ -6,8 +6,8 @@
 // its own. A peer never waits longer than its timeout, so a wrong mode is a wrong answer here, never a hang.
 // TCP and Unix streams alike. Returns 42.
 import { std::net::TcpListener, std::net::TcpStream, std::net::UnixListener, std::net::UnixStream, std::io::IoError,
-         std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::RecvResult,
-         std::concurrent::SendResult, std::collections::FixedArray, std::time::Duration, std::time::sleep };
+         std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+         std::collections::FixedArray, std::time::Duration, std::time::sleep };
 
 fn bool isWouldBlock(const ref IoError e) { return match (e.kind()) { case WouldBlock: true; case _: false; }; }
 
@@ -26,7 +26,7 @@ type resource Peer implements Sendable {
     public ctor of(uint16 port, string path, Receiver<int32> done, int64 ms) {
         this.port = port; this.path = give path; this.done = give done; this.ms = ms;
     }
-    public fn void waitForDone() { RecvResult<int32> r = this.done.recvTimeout(timeout: Duration.fromMillis(ms: this.ms)); }
+    public fn void waitForDone() { _ = this.done.recvTimeout(timeout: Duration.fromMillis(ms: this.ms)); }
     public const fn uint16 tcpPort() { return this.port; }
     public const fn const ref string unixPath() { return this.path; }
 }
@@ -93,7 +93,7 @@ fn int32 tcpCase(bool nonBlocking) {
             Sender<int32> tx = ch.sender();
             Optional<TcpStream> a = acceptTcp(l: ref l);
             kind = match (give a) { case Some(value: s): readTcp(s: give s); case None: 7; };
-            SendResult<int32> sr = tx.send(item: 1);
+            _ = tx.send(item: 1);
         }
     }
     return kind;
@@ -113,7 +113,7 @@ fn int32 unixCase(bool nonBlocking, string path) {
             Sender<int32> tx = ch.sender();
             Optional<UnixStream> a = acceptUnix(l: ref l);
             kind = match (give a) { case Some(value: s): readUnix(s: give s); case None: 7; };
-            SendResult<int32> sr = tx.send(item: 1);
+            _ = tx.send(item: 1);
         }
     }
     return kind;

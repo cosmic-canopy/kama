@@ -1,0 +1,35 @@
+// `_ = expr;` is the one explicit discard: it evaluates `expr` and drops what it produced, owning or not, at the
+// end of the statement — a `Result` in either variant, any other value too. A bare `f();` of a `Result` is refused
+// (tests/xfail/discarded_result), so this is how code says the outcome is meant to be ignored. Every call below runs
+// exactly once, and every resource it hands back is dropped exactly once.
+static int32 dropped = 0;
+static int32 calls = 0;
+
+type resource H {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    ~H() { dropped = dropped + 1; }
+}
+type enum Oops implements Error {
+    Failed(H h), Plain;
+    public const fn string message() { return "oops"; }
+}
+
+fn Result<H, Oops> attempt(bool ok) {
+    calls = calls + 1;
+    if (ok) { return Result::Ok(value: H.make(id: 1)); }
+    return Result::Err(error: Oops::Failed(h: H.make(id: 2)));
+}
+fn Result<Unit, Oops> plain() { calls = calls + 1; return Result::Err(error: Oops::Plain); }
+fn H fresh() { calls = calls + 1; return H.make(id: 3); }
+
+fn int32 main() {
+    _ = attempt(ok: true);    // an `Ok` holding a resource: it drops           1
+    _ = attempt(ok: false);   // an `Err` holding one: it drops                 2
+    _ = plain();              // an `Err` holding nothing: evaluated, no drop
+    _ = fresh();              // not a `Result` at all: dropped the same way    3
+    _ = 5 + 2;                // a plain value: evaluated
+    if (calls != 4) { return 1; }
+    if (dropped != 3) { return 2; }
+    return 42;
+}

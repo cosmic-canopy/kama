@@ -52,7 +52,7 @@ fn int32 main() {
             // BOTH parked receivers — a signal would wake one and strand the other.
             Sender<int32> tx = ch.sender();
             int32 i = 0;
-            while (i < 20) { tx.send(item: i); i = i + 1; }
+            while (i < 20) { _ = tx.send(item: i); i = i + 1; }
         }
     }                                        // BARRIER: both workers joined before the tallies are read
     return t0 + t1;                          // 20 iff every item reached exactly one worker

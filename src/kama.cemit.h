@@ -3855,7 +3855,11 @@ private:
     // A statement that discards a FRESH owning value (a call's result, not a place) drops it on the spot, as
     // the end of a statement drops any temporary. Emits the statement and answers true, or answers false
     // and emits nothing (no value, a place, or a value that owns nothing).
-    bool        emitDiscardedValue(SharedExpression e, int depth);
+    bool        emitDiscardedValue(SharedExpression e, int depth, bool explicitDiscard = false);
+    // Is `e` a call whose `Result` a statement throws away, and the `_ = expr;` statement that may.
+    bool        isDiscardedResult(SharedExpression e);
+    bool        isDiscardTarget(SharedExpression lhs) const;
+    void        emitExplicitDiscard(SharedExpression rhs, int lineNo, int depth);
     std::string discardedOwningType(SharedExpression e);   // the C type such a statement must drop, or ""
     void        emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int depth);
     // A `match` over a plain (payload-less) enum lowers to a C `switch` on the integer value,

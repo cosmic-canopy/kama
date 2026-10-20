@@ -2,14 +2,14 @@
 // destroy it. Historically `send` unconditionally zeroed the moved-in item, so a failed delivery
 // corrupted the caller's value (and skipped its destructor on garbage). Here we drop the receiver up
 // front, then send an `Owned<Box>` (a unique heap pointer — a genuine resource): the send fails, the
-// box is returned intact via `SendResult::Undelivered(item)`, we read 42 through it, and it frees
+// box is returned intact in the `Err` (`Undelivered::Item(item)`), we read 42 through it, and it frees
 // exactly once at the match arm's end. ASan-clean under KAMA_SAN=1 (no leak, no double-free, no
 // use-of-zeroed-garbage).
 import {
     std::concurrent::Channel,
     std::concurrent::Sender,
     std::concurrent::Receiver,
-    std::concurrent::SendResult,
+    std::concurrent::Undelivered,
     std::memory::Owned,
 };
 
@@ -30,12 +30,12 @@ fn int32 main() {
     { Receiver<Owned<Box>> rx = ch.receiver(); }   // receiver gone → any send now fails
 
     Owned<Box> b = new Box.make(v: 42);
-    SendResult<Owned<Box>> res = tx.send(item: give b);
+    Result<Unit, Undelivered<Owned<Box>>> res = tx.send(item: give b);
 
     int32 got = 0;
-    match (res) {
-        case Sent:              { got = -1; }             // must NOT happen — the receiver is gone
-        case Undelivered(item: item): { got = item.get(); }     // value handed back intact → 42; box frees at arm-end
+    match (give res) {
+        case Ok(value: _):  { got = -1; }                                   // must NOT happen — the receiver is gone
+        case Err(error: u): { match (give u) { case Item(item: item): { got = item.get(); } }; }   // handed back intact → 42; frees at arm-end
     };
     return got;   // 42
 }

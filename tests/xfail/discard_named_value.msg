@@ -1,0 +1,1 @@
+is a named value, which the end of its scope drops

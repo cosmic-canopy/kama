@@ -13,10 +13,10 @@ type enum Msg<T> implements Sendable when [T: Sendable] {
 fn void producer(Sender<Msg<int32>> tx) {
     int32 i = 1;
     while (i <= 9) {
-        tx.send(item: Msg::Data(v: i));
+        _ = tx.send(item: Msg::Data(v: i));
         i = i + 1;
     }
-    tx.send(item: Msg::Stop);
+    _ = tx.send(item: Msg::Stop);
 }
 
 fn int32 main() {

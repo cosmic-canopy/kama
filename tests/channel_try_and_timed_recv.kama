@@ -1,9 +1,9 @@
 // A receive that does not block forever: `tryRecv()` takes a value only if one is
-// buffered, `recvTimeout(timeout:)` waits at most that long. Each answers `Received(item)`, `Empty` (none yet, a
-// sender is live) or `Closed` (every sender gone, drained). A pool shared by worker isolates needs exactly this: an
+// buffered, `recvTimeout(timeout:)` waits at most that long. Each answers `Ok(item)`, `Err(Empty)` (none yet, a
+// sender is live) or `Err(Closed)` (every sender gone, drained). A pool shared by worker isolates needs exactly this: an
 // `acquire` that waits for a returned connection until a deadline, then fails — with only the blocking `recv()`, an
 // exhausted pool blocked forever. Element drops are counted, so an `Empty`/`Closed` answer is seen to drop nothing.
-import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::RecvResult,
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::RecvError,
          std::time::Duration, std::time::Instant, std::time::monotonicNow, std::time::sleep };
 
 static int32 g_real;
@@ -19,19 +19,18 @@ type resource Conn implements Sendable {
     }
 }
 
-// 1 = Received (the id added to *sum), 2 = Empty, 3 = Closed.
-fn int32 kind(RecvResult<Conn> r, ref int32 sum) {
+// 1 = an item (the id added to *sum), 2 = Empty, 3 = Closed.
+fn int32 kind(Result<Conn, RecvError> r, ref int32 sum) {
     return match (give r) {
-        case Received(item: c): { sum = sum + c.get(); := 1; }
-        case Empty: 2;
-        case Closed: 3;
+        case Ok(value: c): { sum = sum + c.get(); := 1; }
+        case Err(error: e): e == RecvError::Empty ? 2 : 3;
     };
 }
 
 fn void returnLater(Sender<Conn> tx) {
     sleep(d: Duration.fromMillis(ms: 20i64));
     Conn c = Conn.make(id: 7);
-    tx.send(item: give c);
+    _ = tx.send(item: give c);
 }
 
 fn int32 main() {
@@ -43,7 +42,7 @@ fn int32 main() {
         Sender<Conn> tx = ch.sender();
         if (kind(r: rx.tryRecv(), sum: ref sum) != 2) { fails = fails + 1; }                        // nothing yet
         Conn a = Conn.make(id: 1);
-        tx.send(item: give a);
+        _ = tx.send(item: give a);
         if (kind(r: rx.tryRecv(), sum: ref sum) != 1) { fails = fails + 10; }                       // there now
         Instant t0 = monotonicNow();
         if (kind(r: rx.recvTimeout(timeout: Duration.fromMillis(ms: 15i64)), sum: ref sum) != 2) { fails = fails + 100; }

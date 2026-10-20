@@ -1,0 +1,6 @@
+// A call whose `Result` a statement throws away is refused: `f();` dropped an `Err` without a word through
+// 0.9.679, though a `Result` is the value that says an operation can fail. The fix the message names is `match`, or
+// `_ = f();` to say the outcome is meant to be ignored.
+type enum PErr implements Error { Failed; public const fn string message() { return "failed"; } }
+fn Result<Unit, PErr> f() { return Result::Err(error: PErr::Failed); }
+fn int32 main() { f(); return 0; }

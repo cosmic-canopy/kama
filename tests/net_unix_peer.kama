@@ -62,7 +62,7 @@ fn int32 main() {
         spawn answer(rx: give rx);
         {
             Sender<UnixStream> tx = ch.sender();
-            tx.send(item: give s);
+            _ = tx.send(item: give s);
             FixedArray<uint8> buf = FixedArray.make(size: 1);
             got = match (c.read(into: buf.viewMut())) { case Ok(value: n): n == 1 ? cast<int32>(buf[0]) : 90; case Err(error: e): 91; };
         }   // the sender closes, the worker's recv() ends, and the scope joins it

@@ -611,7 +611,7 @@ import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Rec
 fn void producer(Sender<int32> tx)
 {
     int32 i = 1;
-    while (i <= 9) { tx.send(item: i); i = i + 1; }
+    while (i <= 9) { _ = tx.send(item: i); i = i + 1; }
 }   // the sender closes as it drops, so the receiver sees the end of the stream
 
 fn int32 main()

@@ -1,0 +1,9 @@
+// A `for` clause discards the value of its step, so a step that returns a `Result` would throw it away, and is refused:
+// the call belongs in the loop body, where `match` or `_ =` can say what happens to its outcome.
+type enum PErr implements Error { Failed; public const fn string message() { return "failed"; } }
+fn Result<Unit, PErr> step() { return Result::Err(error: PErr::Failed); }
+fn int32 main() {
+    int32 n = 0;
+    for (int32 i = 0; i < 3; step()) { n = n + 1; i = i + 1; }
+    return n;
+}

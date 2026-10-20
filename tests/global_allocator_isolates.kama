@@ -94,7 +94,7 @@ type resource Ends implements Sendable {   // `spawn` moves ONE bundle
             };
         }
         int32 i = 0;
-        while (i < 5) { this.tx.send(item: new Point.at(x: i)); i = i + 1; }
+        while (i < 5) { _ = this.tx.send(item: new Point.at(x: i)); i = i + 1; }
     }
 }
 
@@ -102,7 +102,7 @@ fn void child(Ends ends) { ends.run(); }      // ~Ends: main's `recv` ends
 
 fn void sendAll(Sender<Owned<Point>> tx) {
     int32 i = 0;
-    while (i < 5) { tx.send(item: new Point.at(x: i)); i = i + 1; }
+    while (i < 5) { _ = tx.send(item: new Point.at(x: i)); i = i + 1; }
 }                                             // ~Sender: the child's `recv` ends
 
 fn int32 exchange() {

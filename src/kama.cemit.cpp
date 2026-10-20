@@ -9458,6 +9458,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // The re-arming write-target state for an assignment statement (see the first handler below). It must outlive BOTH
     // assignment handlers — the first falls through to the second (value-producing / variant targets) — so it
     // lives here, at the statement: leaving the first handler's block must not mark the target live early.
+    // `_ = expr;` — the one explicit discard, ahead of every assignment handler: `_` is no binding, so there
+    // is nothing to assign to, only a value to drop.
+    if (auto* as = dynamic_cast<AssignmentNode*>(n))
+        if (as->token == EQ && isDiscardTarget(as->unaryExpression)) { emitExplicitDiscard(as->expression, n->line, depth); return; }
+
     struct WriteTargetGuard {
         CEmitter& e; const ASTNode* saved; std::string key;
         ~WriteTargetGuard() { e._writeTarget = saved; if (!key.empty()) e._moveState[key] = MoveState::NotMoved; }
@@ -10067,11 +10072,53 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     *_out << "\n";
 }
 
+bool CEmitter::isDiscardTarget(SharedExpression lhs) const
+{
+    auto* id = dynamic_cast<IdentifierNode*>(lhs.get());
+    return id && id->value && *id->value == "_" && (!id->qualifier || id->qualifier->empty());
+}
+
+// `_ = expr;` evaluates `expr` and drops what it produced, owning or not, at the end of the statement — what `f();`
+// does for any value but a `Result`, and the spelling that says a `Result` is meant to be ignored. It takes what an
+// expression PRODUCES: a named local is dropped by the end of its scope, and a `{ … }` block ends one sooner, so
+// `_ = x;` and `_ = give x;` would be a second way to say either and are refused (GOALS #4).
+void CEmitter::emitExplicitDiscard(SharedExpression rhs, int lineNo, int depth)
+{
+    line(lineNo);
+    auto* h = dynamic_cast<HandoffNode*>(rhs.get());
+    SharedExpression v = h ? h->value : rhs;
+    if (h || isNamedValue(v.get())) {
+        const std::string what = unparseExpr(v);
+        unsupported(("`_ =` discards what an expression produces, and `" + what + "` is a named value, which the end "
+                     "of its scope drops — to drop it sooner, end its scope with a `{ … }` block").c_str(), lineNo);
+        return;
+    }
+    if (emitDiscardedValue(v, depth, /*explicitDiscard=*/true)) return;
+    bool ph = _hoistOK; _hoistOK = true;
+    const std::string s = emitExpression(v);
+    _hoistOK = ph;
+    flushHoisted(depth);
+    indent(depth); *_out << "(void)(" << s << ");\n";
+}
+
 // The C type a statement that discards `e` must drop, or "" when there is nothing to drop: `e` is not a call, or
 // returns a place (`ref`/`const ref` — the value belongs to someone else), or its type owns nothing. A call is the
 // only expression statement that can produce a fresh owning value: an assignment and `++`/`--` produce none, a
 // statement-position `match` brings its arms back through here one by one, and `new` is refused outside an
 // initializer.
+// A call whose value is a `Result`, in a position that throws the value away: a statement, a statement `match`'s arm
+// or a `for` clause. `Result` is fallibility as a value (GOALS 3d), and a value nobody looks at is a failure nobody
+// handles — `f();` dropped an `Err` without a word, and a full bounded list's `add` would drop the item its `Err`
+// hands back. So the one way to ignore one is to say so: `_ = f();`. An `Optional` stays discardable:
+// absence is not failure, and `xs.remove(index: i);` dropping what it removed is the one removal shape.
+bool CEmitter::isDiscardedResult(SharedExpression e)
+{
+    auto* iv = dynamic_cast<InvocationNode*>(e.get());
+    if (!iv || invocationReturnsPlace(iv)) return false;
+    auto gi = _genericTypeInsts.find(typeOfExpr(e));
+    return gi != _genericTypeInsts.end() && preludeLeaf(gi->second.templateKey) == "Result";
+}
+
 std::string CEmitter::discardedOwningType(SharedExpression e)
 {
     auto* iv = dynamic_cast<InvocationNode*>(e.get());
@@ -10087,8 +10134,16 @@ std::string CEmitter::discardedOwningType(SharedExpression e)
 // removal shape, "discard to drop" — leaked what it removed. The value lands in a temporary (built in place when it
 // is a constructor call, as a `match` subject is, so a large value is not built twice) and is dropped on the next
 // line; it is registered as an owner so the `@onPanic` walk and the drop-site lines see it like any other.
-bool CEmitter::emitDiscardedValue(SharedExpression e, int depth)
+bool CEmitter::emitDiscardedValue(SharedExpression e, int depth, bool explicitDiscard)
 {
+    if (!explicitDiscard && isDiscardedResult(e)) {
+        const std::string what = unparseExpr(e);   // "" for a call it cannot spell (a `give` argument)
+        unsupported((what.empty()
+                         ? std::string("the `Result` this call returns is discarded — handle it with `match`, or write "
+                                       "`_ = ` in front of the call to drop it")
+                         : "the `Result` of `" + what + "` is discarded — handle it with `match`, or write `_ = " + what
+                               + ";` to drop it").c_str(), e.get());
+    }
     const std::string ct = discardedOwningType(e);
     if (ct.empty()) return false;
     const std::string tmp = "kama_disc" + std::to_string(_tempCounter++);
@@ -10177,7 +10232,10 @@ std::string CEmitter::inlineStatement(SharedStatement stmt)
         auto e = std::dynamic_pointer_cast<ExpressionNode>(stmt);
         // A `for` clause is one C expression with no statement after it to drop in, so a value it would discard
         // cannot be dropped there — refused rather than leaked, as every discarded owning value is dropped.
-        if (!discardedOwningType(e).empty())
+        if (isDiscardedResult(e))
+            unsupported("a `for` clause would discard the `Result` this call returns — call it in the loop body and "
+                        "handle it with `match`, or drop it with `_ = …;`", n);
+        else if (!discardedOwningType(e).empty())
             unsupported("a `for` clause cannot drop the value this call returns, because it owns memory — call it in "
                         "the loop body, where the end of the statement drops it", n);
         return emitExpression(e);
@@ -26966,6 +27024,13 @@ bool CEmitter::isLanguageName(const std::string& nm)
 void CEmitter::checkBindingName(const std::string& nm, const char* kind, int srcLine)
 {
     if (nm.empty() || _probingTemplate) return;
+    // `_` is the discard: in a pattern (`case Rect(w: _, …)`) and as the target of `_ = expr;`. A binding of
+    // that name would make `_ = f();` an assignment to it, so nothing may be named `_`.
+    if (nm == "_") {
+        unsupported((std::string("no ") + kind + " may be named `_` — `_` is the discard (`_ = f();`, `case V(x: _)`); "
+                     "give it a name").c_str(), srcLine, nm);
+        return;
+    }
     if (isLanguageName(nm)) {
         unsupported((std::string(kind) + " `" + nm + "` takes a language name — `" + nm + "` is in every scope, "
                      "like `string`, so nothing may be named it; rename it").c_str(), srcLine, nm);

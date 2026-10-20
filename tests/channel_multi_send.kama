@@ -9,7 +9,7 @@ import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Rec
 
 fn void producer(Sender<int32> tx) {
     int32 i = 0;
-    while (i < 50) { tx.send(item: i); i = i + 1; }
+    while (i < 50) { _ = tx.send(item: i); i = i + 1; }
 }                                    // ~Sender drops ONE share here — the side stays open for the peer
 
 fn int32 main() {

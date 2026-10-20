@@ -3,12 +3,12 @@
 // ended the `#include`, so the next trampoline joined that line (`#include "p.gen.h"static void* …`) and clang
 // refused the file (0.9.668 to 0.9.672). A pruned function's text now starts one past the newline that ends a
 // directive or a line comment. The used isolate answers over a channel. Returns 42.
-import { std::concurrent::Isolate, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::SendResult };
+import { std::concurrent::Isolate, std::concurrent::Channel, std::concurrent::Sender };
 
 type resource Job implements Sendable {
     Sender<int32> reply;
     public ctor of(Sender<int32> reply) { this.reply = give reply; }
-    public fn void answer(int32 v) { SendResult<int32> r = this.reply.send(item: v); }
+    public fn void answer(int32 v) { _ = this.reply.send(item: v); }
 }
 
 fn void neverSpawned(Job j) { j.answer(v: 1); }

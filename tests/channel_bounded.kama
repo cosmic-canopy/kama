@@ -13,7 +13,7 @@ import {
 fn void producer(Sender<int32> tx) {
     int32 i = 1;
     while (i <= 9) {
-        tx.send(item: i);
+        _ = tx.send(item: i);
         i = i + 1;
     }
 }   // ~Sender() closes the sender side → a blocked/next recv returns None once drained

@@ -1,0 +1,1 @@
+a `for` clause would discard the `Result`

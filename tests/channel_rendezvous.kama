@@ -11,7 +11,7 @@ import {
 fn void producer(Sender<int32> tx) {
     int32 i = 1;
     while (i <= 5) {
-        tx.send(item: i);   // blocks until main's recv takes this value
+        _ = tx.send(item: i);   // blocks until main's recv takes this value
         i = i + 1;
     }
 }

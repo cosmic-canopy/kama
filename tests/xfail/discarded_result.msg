@@ -1,0 +1,1 @@
+is discarded — handle it with `match`, or write `_ = f();` to drop it

@@ -644,55 +644,6 @@ A source break in every program and package, pre-1.0. Size M; built once the nex
 the ruling against GOALS.md. (Re-audited 2026-10-19: confirmed. Probed on `0.9.675`: a release build traps on
 `cast<uint8>(300)` too, so the narrowing the verdict relies on is checked in every build.)
 
-<a id="s2-discarded-result"></a>
-
-### A discarded `Result` is refused, and `_ = expr;` is the one explicit discard (KR-214)
-
-**What happens today** (measured 2026-10-19, `0.9.675`):
-
-```kama
-fn Result<Unit, PErr> f() { return Result::Err(error: PErr::Failed); }
-fn int32 main() { f(); return 0; }       // builds; the Err is dropped without a word
-```
-
-GOALS 3d says a fallible operation's outcome is a value "which `match` forces the caller to handle", and SPEC says
-`readLine`'s `Result` "is the spelling that cannot be ignored". Neither is true of a call in statement position.
-It matters most where the `Err` carries something back: KR-187's `add` on a full list hands the item back in its
-`Err`, and `xs.add(item: s);` would drop `s` silently. std's channels have the same shape outside `Result`:
-`send` returns `SendResult<T> { Sent, Undelivered(T item) }`, which SPEC says means "nothing is silently lost", and
-`tx.send(item: x);` loses `x` silently. (Separately, and fixed before this row: a discarded owning value was not
-dropped at all — the C was a bare call, so `mkh();` never ran `~H()`.)
-
-**What other languages do.**
-
-| | an ignored error result | the explicit discard |
-|---|---|---|
-| Zig | a compile error (any ignored non-`void` value) | `_ = f();` |
-| Rust | `#[must_use]` on `Result`: a warning | `let _ = f();` |
-| Swift | an unused result: a warning; `@discardableResult` opts out | `_ = f()` |
-| C# | silent | `_ = F();` (C# 7 discards) |
-| Go | silent (left to `errcheck`) | `_ = f()` |
-| C++17 | `[[nodiscard]]`: a warning | `(void)f();` |
-
-kama has no warning channel (a standing ruling), so the answer is an error or nothing.
-
-**Ruled 2026-10-19 (the maintainer):**
-1. **A `Result` in statement position is refused**, naming the fix: "handle it with `match`, or write `_ = f();` to
-   drop it". `Optional` and plain returns stay discardable: `xs.remove(index: i);` dropping what it removed is the
-   one removal shape (SPEC *Collections*), and absence is not failure.
-2. **`_ = expr;` is the one explicit discard**: it drops the value, owning or not, the way the end of a statement
-   drops a temporary. `_` is already the discard in a pattern (`case Rect(w: _, h: _)`), and C#, Swift, Zig and Go
-   spell the statement this way.
-3. **`_` can no longer name a binding** (`int32 _ = 3;` built on `0.9.675`), so `_ =` never assigns.
-4. **std's channels return `Result`**, as every other fallible std operation does (the prelude's `Unit` exists to
-   keep "ONE error convention (always Result)"): `send` returns `Result<Unit, Undelivered<T>>`, and
-   `tryRecv`/`recvTimeout` return `Result<T, RecvError>` with `RecvError { Empty, Closed }` — Rust's shape
-   (`SendError<T>`, `TryRecvError::{Empty, Disconnected}`). `Undelivered<T>` is the one-variant enum `{ Item(T item) }`,
-   as KR-187's `CapacityFull<T>` is (§5).
-
-Measured corpus cost: one discarded `Result` in tests (`tests/fs_owner.kama`), none in `lib/`, about 14 discarded
-channel sends. Size S–M; built 2026-10-19 before KR-187.
-
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:
@@ -2461,9 +2412,9 @@ by goal and probed on `0.9.675`; these are the corrections, and they override th
   for the clause, the `value` bound, `InlineArray` and `InlineStorage`.
 - **(6) `CapacityFull<T>` is the one-variant enum `type enum CapacityFull<T> implements Error { Item(T item) }`.** A
   record cannot hand its field back: kama refuses `give this.field` and has no consuming method, so `match (give e)
-  { case Item(item: x): … }` is the one way out, and std's channels take the same shape (`Undelivered<T>`, KR-214).
+  { case Item(item: x): … }` is the one way out, and std's channels take the same shape (`Undelivered<T>`, `0.9.680`).
   And the hand-back is only as good as the caller's attention: on `0.9.675` a discarded `Result` built silently, so
-  `xs.add(item: s);` on a full list would have dropped `s` without a word. KR-214 refuses that, and lands first.
+  `xs.add(item: s);` on a full list would have dropped `s` without a word. Refused since `0.9.680` (SPEC *Error model*).
 
 **Order:** KR-190 (the built-in storage) → KR-191 (the clause and the bound) → KR-187 (kama library code). Each
 lands with fixtures on native, ASan and wasm.

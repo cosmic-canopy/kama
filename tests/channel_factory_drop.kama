@@ -4,7 +4,7 @@
 // sides leaked its queue in safe code (LeakSanitizer, on the `Channel<SocketAddr>` in tests/net_stream_to_isolate),
 // and a receiver whose sender could no longer be minted blocked forever in `recv`. Every case below is one of those.
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
-         std::concurrent::SendResult, std::concurrent::RecvResult };
+         std::concurrent::Undelivered, std::concurrent::RecvError };
 
 static int32 g_dropped;
 
@@ -35,13 +35,13 @@ fn int32 main() {
     Optional<int32> got = rx.recv();                         // used to block forever
     bool none = match (got) { case Some(value: v): false; case None: true; };
     if (!none) { return 1; }
-    RecvResult<int32> tried = rx.tryRecv();
-    bool closed = match (tried) { case Closed: true; case Received(item: v): false; case Empty: false; };
+    Result<int32, RecvError> tried = rx.tryRecv();
+    bool closed = match (tried) { case Err(error: e): e == RecvError::Closed; case Ok(value: v): false; };
     if (!closed) { return 2; }
 
     Sender<int32> tx = orphanSender();
-    SendResult<int32> sent = tx.send(item: 7);                // nobody can ever receive it: handed back
-    bool refused = match (sent) { case Undelivered(item: v): v == 7; case Sent: false; };
+    Result<Unit, Undelivered<int32>> sent = tx.send(item: 7);   // nobody can ever receive it: handed back
+    bool refused = match (sent) { case Err(error: u): match (u) { case Item(item: v): v == 7; }; case Ok(value: _): false; };
     if (!refused) { return 3; }
 
     {
@@ -51,8 +51,8 @@ fn int32 main() {
         Sender<Token> only = ch.sender();
         Token a = Token.make(id: 1);
         Token b = Token.make(id: 2);
-        only.send(item: give a);
-        only.send(item: give b);
+        _ = only.send(item: give a);
+        _ = only.send(item: give b);
     }
     if (g_dropped != 2) { return 10 + g_dropped; }
 
@@ -71,6 +71,6 @@ fn Receiver<Token> orphanTokens() {
     Receiver<Token> rx = ch.receiver();
     Sender<Token> tx = ch.sender();
     Token t = Token.make(id: 3);
-    tx.send(item: give t);
+    _ = tx.send(item: give t);
     return rx;
 }

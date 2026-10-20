@@ -53,7 +53,7 @@ fn int32 main() {
         spawn doubler(rx: give rx);
         {
             Sender<UnixStream> tx = ch.sender();
-            tx.send(item: give away);
+            _ = tx.send(item: give away);
             if (send(s: ref p.first(), v: 21ui8) != 1) { return 6; }
             doubled = recv(s: ref p.first());
         }

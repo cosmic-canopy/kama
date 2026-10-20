@@ -23,7 +23,7 @@ import {
     std::concurrent::Sender,
     std::concurrent::Receiver,
     std::concurrent::Isolate,
-    std::concurrent::SendResult,
+    std::concurrent::Undelivered,
     std::collections::DynamicArray,
 };
 
@@ -35,10 +35,10 @@ fn void producer(Sender<DynamicArray<int32>> tx) {
     while (going && i < 40) {
         DynamicArray<int32> a = DynamicArray.empty();
         a.add(item: 20);
-        SendResult<DynamicArray<int32>> r = tx.send(item: give a);
-        match (r) {
-            case Sent:                    { }                  // the queue owns it now
-            case Undelivered(item: back): { going = false; }   // `back` owns it; freed at arm-end
+        Result<Unit, Undelivered<DynamicArray<int32>>> r = tx.send(item: give a);
+        match (give r) {
+            case Ok(value: _):  { }                                                      // the queue owns it now
+            case Err(error: u): { match (give u) { case Item(item: back): { going = false; } }; }   // `back` owns it; freed at arm-end
         };
         i = i + 1;
     }

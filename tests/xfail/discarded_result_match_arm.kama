@@ -1,0 +1,10 @@
+// A statement `match` discards the value of the arm it takes, so an arm that is a call returning a `Result` throws
+// that `Result` away exactly as a statement does — refused the same way.
+type enum PErr implements Error { Failed; public const fn string message() { return "failed"; } }
+type enum Pick { A, B }
+fn Result<Unit, PErr> f() { return Result::Err(error: PErr::Failed); }
+fn int32 main() {
+    Pick p = Pick::A;
+    match (p) { case A: f(); case B: 0; };
+    return 0;
+}

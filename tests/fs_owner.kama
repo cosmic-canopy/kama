@@ -54,7 +54,7 @@ unsafe fn int32 run() {
     Metadata fm = match (f.metadata()) { case Ok(value: md): md; case Err(error: e): { return 5; } };
     if (!sameOwner(a: m, b: fm)) { return 6; }
 
-    remove(path: "owner.txt");
+    _ = remove(path: "owner.txt");
     return 0;
 }
 

@@ -6131,6 +6131,15 @@ A yes/no question needs no `match`: `isSome()`/`isNone()` on an `Optional`, `isO
 each a `const fn` (`if (cache.lookup(key: k).isNone()) { … }`). They take nothing apart — the value, or a default
 in its place, is still `match`'s, the one way; there is no `unwrap`, `unwrapOr` or `map`. <!-- test: optional_result_queries -->
 
+**A `Result` is never discarded silently.** A call whose `Result` a statement would throw away is refused — `f();` names the fix: handle it with `match`, or write `_ = f();`. <!-- xfail: discarded_result -->
+The same holds for the arm of a statement `match` and for a `for` clause, which discard their values too. <!-- xfail: discarded_result_match_arm, discarded_result_for_clause -->
+`_ = expr;` is the one explicit discard: it evaluates `expr` and drops what it produced, owning or not, at the end of the statement. <!-- test: discard_underscore -->
+It takes what an expression produces: a named local is dropped by the end of its scope, and a `{ … }` block ends one sooner, so `_ = x;` is refused. <!-- xfail: discard_named_value -->
+`_` is the discard in a pattern and as that target, so nothing may be named `_`. <!-- xfail: underscore_binding -->
+An `Optional` stays discardable — absence is not failure — and so does any other value: a statement drops what it discards, so `xs.remove(index: i);` drops what it removed. <!-- test: discard_drops -->
+Zig refuses every ignored value, and Rust and Swift warn on an unused `Result`; kama has no warning channel, so the
+choice was an error or nothing, and a `Result` nobody looks at is a failure nobody handles.
+
 `Weak<T>.tryUpgrade()` returns `Optional<Shared<T>>`; a fallible `static fn` factory returns `Result<T, E>`
 (see Fallible construction above).
 
@@ -6470,7 +6479,7 @@ needs them.
 
 ```kama
 import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::concurrent::Isolate };
-fn void producer(Sender<int32> tx) { tx.send(item: 1); }
+fn void producer(Sender<int32> tx) { _ = tx.send(item: 1); }
 
 fn int32 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
@@ -6484,15 +6493,16 @@ fn int32 main() {
 }
 ```
 
-`send(item:)` returns `SendResult<T> { Sent, Undelivered(T item) }` — a channel whose receivers are
-all gone hands the item **back** rather than dropping it on the floor, so nothing is silently lost
-and the sender decides what to do. `recv()` returns `Optional<T>`: `None` means the channel is
+`send(item:)` returns `Result<Unit, Undelivered<T>>` — a channel whose receivers are all gone hands the item
+**back** in the `Err` (`Undelivered<T> { Item(T item) }`, taken apart with `match (give e) { case Item(item: x): … }`)
+rather than dropping it on the floor, so nothing is lost, and since a discarded `Result` is refused, nothing is lost
+silently: the sender decides what to do, or says `_ = tx.send(…);`. `recv()` returns `Optional<T>`: `None` means the channel is
 closed and empty, which is why dropping the last `Sender` is how a producer signals end-of-stream.
 
 **A receive can decline to wait.** `tryRecv()` takes a value only if one is buffered, and <!-- test: channel_try_and_timed_recv -->
-`recvTimeout(timeout:)` waits at most a `Duration` for one; both answer `RecvResult<T> { Received(T item), Empty,
-Closed }` — `Empty` when none was there, or none arrived before the deadline, while a sender is live; `Closed` is
-`recv`'s `None`. "Not yet" and "never" are two answers because they want two responses: a connection pool shared
+`recvTimeout(timeout:)` waits at most a `Duration` for one; both answer `Result<T, RecvError>`, with `RecvError
+{ Empty, Closed }` — `Empty` when none was there, or none arrived before the deadline, while a sender is live;
+`Closed` is `recv`'s `None`. "Not yet" and "never" are two answers because they want two responses: a connection pool shared
 by worker isolates retries `acquire` on one and gives up on the other, which a blocking `recv` could not express
 (an exhausted pool waited forever). The deadline runs on the monotonic clock, so moving the wall clock neither
 stretches nor cuts it, and a zero timeout is a `tryRecv`. A lock (`Mutex`/`Condvar`) is still not in `std` — the
@@ -6512,7 +6522,7 @@ A side is also open **before it is ever claimed**, which is what lets that last 
 receiver may call `recv()` before the isolate holding the `Channel` has minted its `Sender`, and it
 blocks rather than reading "no senders yet" as end-of-stream. That lasts exactly as long as the
 `Channel`: dropping it closes every side nobody claimed, so a receiver whose sender can no longer be
-minted sees `None`, a send nobody can receive comes back `Undelivered`, and a channel dropped before
+minted sees `None`, a send nobody can receive comes back as an `Undelivered` error, and a channel dropped before
 minting both sides frees its queue (until `0.9.477` it blocked, and leaked, forever). <!-- test: channel_factory_drop -->
 
 **Sendability is declared, and verified — the `immutable` model at the isolate seam.** A type says
@@ -6662,7 +6672,7 @@ scope {
     {
         Sender<int32> tx = ch.sender();                     // …and this runs WHILE they run
         int32 n = 0;
-        while (n < 100) { tx.send(item: n); n = n + 1; }
+        while (n < 100) { _ = tx.send(item: n); n = n + 1; }
     }                                                       // sender drops: every worker wakes and finishes
 }                                                           // BARRIER: all K joined here
 ```

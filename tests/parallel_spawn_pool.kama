@@ -47,7 +47,7 @@ fn int32 main() {
             // every parked receiver — a signal would wake one and strand the rest.
             Sender<int32> tx = ch.sender();
             int32 n = 0;
-            while (n < 100) { tx.send(item: n); n = n + 1; }
+            while (n < 100) { _ = tx.send(item: n); n = n + 1; }
         }
     }                                          // BARRIER: all k workers joined before the tallies are read
 
