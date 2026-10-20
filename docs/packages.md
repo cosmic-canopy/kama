@@ -795,7 +795,10 @@ name. Bind scopes (and the default) with a top-level `registries` object:
 - `"default": false` **drops** the default entirely — the built-in one too — a fully-private / air-gapped
   setup where an unscoped name with no other source is simply unresolvable.
 - Two scopes cannot expose the **same** bare name in one project (both would import as `name`) — that's a
-  hard error; alias one by renaming.
+  hard error; alias one by renaming. **The project's own name counts too**: it is the root module, so a
+  dependency anywhere in the graph that imports as that name (an application called `tls` over a library that
+  uses `@kama/tls`) would be shadowed by the application in every module that imports it. `kama pkg install`
+  refuses it, and `kama build`/`kama check` refuse a view already on disk that holds one — rename the project.
 
 Because the lock pins **content identity (the integrity), not the URL**, a scope can be **re-pointed** to a
 mirror by editing `registries`: a mirror serving the same bytes re-resolves identically. A mirror serving
@@ -877,6 +880,9 @@ depend on never drags *its* dev-dependencies into your build.
   deps verify the tarball's sha256 (trust-on-first-use when no `integrity` is given, hard-fail on
   mismatch thereafter). A registry dep records the base it resolved from, but the lock pins the
   **integrity**, not the URL — so a scope can be re-pointed to a mirror without invalidating it.
+- **A refused install changes nothing.** `kama pkg install` links into `.kama/deps.staging` and moves it over
+  `.kama/deps` only once the whole resolution has succeeded, so a collision, a `kama` range or an unreachable
+  registry leaves the view it found — never a half-linked one a build would then compile.
 - **Builds never fetch.** They read the already-materialized `.kama/deps` view. A build that
   finds declared dependencies but no resolved view tells you to run `kama pkg install` — it
   never silently reaches the network. Once a project is installed, everything works offline.

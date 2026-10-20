@@ -3122,41 +3122,6 @@ interleaved): about 3 ms per seam TU. A program with any C header of its own kee
 
 ## 10. Tooling / distribution (deferred)
 
-<a id="s10-module-name-clash"></a>
-
-### An application named like a dependency's module silently replaces it (KR-218)
-
-Measured on `0.9.690`, in one `kama_workspace.json`: a library `@repro/middle` that does `import { tls::version }`
-from its dependency `@repro/tls`, and two applications that depend on it and differ only in their `name`. Named
-`other`, the application builds and prints the version. Named `tls`, it fails inside the library:
-"`.kama/deps/middle/src/middle.kama:1:9: error: module `tls` is not visible from `middle` — its `visibility` in
-`kama.json` does not name this module`", then "`module `tls` does not export `version`" — a project's name is its root
-module, and the library's import resolved to the application. Any application named like a module anywhere in its
-dependency graph (`tls` over `@kama/redis` or `@kama/postgres`, which use `@kama/tls`) breaks the same way, with
-errors that point at code its author did not write.
-
-kama's module namespace is one per program, by design: `kama pkg install` already refuses two dependencies that
-import under one name ("import-name collision on 'tls': both '@other/tls' and '@repro/tls' import as 'tls' — two
-scopes cannot expose the same name"), and a module's name is part of its C names (SPEC *C names*). The check simply does not
-count the application's own root module. A second hole beside it: that refused install still writes
-`.kama/deps/tls` (pointing at one of the two), exits 1, and leaves a tree `kama build` then builds without a word —
-measured, it printed the second package's version.
-
-**What others do.** Cargo, npm and Go resolve each package's imports in its own dependency scope, so a binary may
-share a name with a transitive dependency; Cargo also renames a dependency in `Cargo.toml`. kama's single program-wide
-module namespace (greppable: one name means one module) rules that out, and is the ruling this repo already applies.
-
-**Recommendation (the production answer, consistent with the existing collision rule):**
-1. The import-name collision check counts the application's own root module, at manifest read and at install,
-   naming both: "this project's name `tls` is its root module, and `@repro/middle` depends on `@repro/tls`, which
-   imports as `tls` — rename the project". Direct or transitive alike.
-2. A refused install leaves `.kama/deps` as it found it (write to a staging directory, rename on success), and
-   `kama build` runs the same collision check, so no tree a refused install left behind builds.
-
-**Ruled 2026-10-20 (the maintainer), as recommended.** Today the check lives only in `resolveProject`'s drain
-(`src/kama.driver.cpp`), each attempt deletes the view before relinking it, and a refusal returns with the partial
-view on disk; `kama build`/`check` compare nothing. Size S.
-
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)

@@ -6087,10 +6087,25 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     }
             }
         }
+        // A dependency that imports under this project's own name would be shadowed by the project's root module
+        // in every module that imports it (KR-218). `kama pkg install` refuses that tree; this refuses one already
+        // on disk — an install from before that check, or a project renamed since — rather than build it wrong.
+        std::string rootName, rootVersion, rootErr;
+        loadManifestNameVersion(req.manifest, rootName, rootVersion, rootErr);
+        const std::string rootModule = rootName.empty() ? std::string() : importNameOf(rootName);
         for (const std::string& view : views) {
             std::vector<std::string> names = listDir(view);
             std::sort(names.begin(), names.end());   // deterministic: the view is a set, not a sequence
             for (const std::string& n : names) {
+                if (!rootModule.empty() && n == rootModule) {
+                    if (req.strictDeps) {
+                        err = view + "/" + n + " is a dependency that imports as '" + n + "', which is this project's "
+                              "own name — a project's name is its root module, so `" + n + "::…` would name both; "
+                              "rename the project and run `kama pkg install` again";
+                        return false;
+                    }
+                    continue;
+                }
                 // ⚠️ LEXICAL, never absolutePath — that is realpath(), and a dependency reaches its
                 // package THROUGH this symlink. Resolving it away would respell the dep's files as
                 // first-party paths and print a store path the user cannot see.
@@ -7843,8 +7858,22 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         regCfg.applyLocal(localReg);
     }
 
-    std::string viewDir    = base + "/.kama/deps";
-    std::string devViewDir = base + "/.kama/dev-deps";
+    // A refused install leaves the views it found (KR-218): each attempt links into staging directories BESIDE
+    // them — the same depth, so a relative link stays right when moved — and only an install that succeeds moves
+    // them into place. Through 0.9.692 a refusal returned with a half-linked `.kama/deps`, which `kama build` then
+    // built without a word.
+    const std::string liveView    = base + "/.kama/deps";
+    const std::string liveDevView = base + "/.kama/dev-deps";
+    std::string viewDir    = liveView + ".staging";
+    std::string devViewDir = liveDevView + ".staging";
+    struct StagingGuard {
+        const std::string& a; const std::string& b; bool armed = true;
+        ~StagingGuard() { if (armed) { runCmd(rmRfCmd(a)); runCmd(rmRfCmd(b)); } }
+    } staging{ viewDir, devViewDir };
+    // This project's own name is its root module, so a dependency that imports under it would be shadowed by the
+    // project in every module that imports it (KR-218) — counted below as the first claim on its import name.
+    std::string rootName, rootVersion, rootErr;
+    loadManifestNameVersion(manifest, rootName, rootVersion, rootErr);
 
     // The workspace this project belongs to, if any. Computed ONCE here rather than inside the attempt
     // loop below: it depends only on the manifests on disk, so it is immutable across restarts.
@@ -7892,6 +7921,7 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         std::map<std::string, std::string> reqStr;    // range deps: name -> first requestor's range text
         std::map<std::string, std::string> regBaseOf; // registry deps: name -> resolved registry base URI
         std::map<std::string, std::string> importUsedBy; // import (bare) name -> the scoped name that claimed it
+        if (!rootName.empty()) importUsedBy[importNameOf(rootName)] = rootName;
         std::map<std::string, LockEntry> lock;        // output
         std::set<std::string> overriddenInstall;      // root deps a `kama.local.json` override stood in for (KR-160)
         bool madeDevDir = false;
@@ -8187,6 +8217,12 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 // resolving to the same bare name would collide on one view link — a hard error (alias one).
                 std::string importName = importNameOf(r.name);
                 auto iu = importUsedBy.find(importName);
+                if (iu != importUsedBy.end() && iu->second == rootName && !rootName.empty()) {
+                    fprintf(stderr, "kama pkg install: '%s' (required by %s) imports as '%s', which is this project's own "
+                            "name — a project's name is its root module, so `%s::…` would name both; rename the project\n",
+                            r.name.c_str(), r.requestor.c_str(), importName.c_str(), importName.c_str());
+                    return 1;
+                }
                 if (iu != importUsedBy.end() && iu->second != r.name) {
                     fprintf(stderr, "kama pkg install: import-name collision on '%s': both '%s' and '%s' import as "
                             "'%s' — two scopes cannot expose the same name\n",
@@ -8284,6 +8320,14 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
             fprintf(stderr, "kama: override '%s' -> %s (local, not locked)\n", name.c_str(), target.c_str());
         }
 
+        // The whole resolution succeeded: the staged views replace the live ones. A dev view that this install
+        // did not need is not staged, so the old one goes, as the per-attempt rebuild always did.
+        runCmd(rmRfCmd(liveView)); runCmd(rmRfCmd(liveDevView));
+        if (rename(osp(viewDir).c_str(), osp(liveView).c_str()) != 0
+            || (dirExists(devViewDir) && rename(osp(devViewDir).c_str(), osp(liveDevView).c_str()) != 0)) {
+            fprintf(stderr, "kama pkg install: cannot move the staged view into %s\n", liveView.c_str()); return 1;
+        }
+        staging.armed = false;
         fprintf(stderr, "kama: installed %zu package(s) into %s\n", lock.size(), base.c_str());
         return 0;
     }
