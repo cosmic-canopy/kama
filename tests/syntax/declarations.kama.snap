@@ -446,12 +446,17 @@
 #^^^^ source.kama
 #    ^^^ source.kama entity.name.function.kama
 #       ^^^^ source.kama
->    return a + b;
+>    return cast<uint8>(a + b);
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.control.kama
-#          ^^^ source.kama
-#             ^ source.kama keyword.operator.arithmetic.kama
-#              ^^^^ source.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.kama
+#               ^ source.kama keyword.operator.relational.kama
+#                ^^^^^ source.kama storage.type.primitive.kama
+#                     ^ source.kama keyword.operator.relational.kama
+#                      ^^^ source.kama
+#                         ^ source.kama keyword.operator.arithmetic.kama
+#                          ^^^^^ source.kama
 >}
 #^^ source.kama
 >

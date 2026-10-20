@@ -250,10 +250,15 @@
 #                                                            ^ source.kama
 #                                                             ^ source.kama constant.numeric.integer.kama
 #                                                              ^^^^ source.kama
->    return n;
+>    return cast<uint8>(n);
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.control.kama
-#          ^^^^ source.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.kama
+#               ^ source.kama keyword.operator.relational.kama
+#                ^^^^^ source.kama storage.type.primitive.kama
+#                     ^ source.kama keyword.operator.relational.kama
+#                      ^^^^^ source.kama
 >}
 #^^ source.kama
 >
