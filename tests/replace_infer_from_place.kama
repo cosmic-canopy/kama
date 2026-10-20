@@ -1,0 +1,21 @@
+// KR-195: `replace(place:, with: Optional::None)` takes `T` from `place:` — a typed local, and a field. Through
+// 0.9.692 the untyped variant constructor in `with:` was refused ("cannot infer generic type parameter") before
+// `place:` was asked; it is now typed by its destination, as a literal is.
+import { std::memory::replace };
+type resource Conn {
+    Optional<int32> fd;
+    public ctor make(int32 fd) { this.fd = Optional::Some(value: fd); }
+    public fn Optional<int32> close() { return replace(place: this.fd, with: Optional::None); }
+}
+fn uint8 main() {
+    Optional<int32> o = Optional::Some(value: 4);
+    Optional<int32> old = replace(place: o, with: Optional::None);
+    Conn c = Conn.make(fd: 9);
+    Optional<int32> f = c.close();
+    Optional<int32> again = c.close();
+    int32 a = match (old) { case Some(value: v): v; case None: 100; };
+    int32 b = match (o) { case Some(value: v): v; case None: 0; };
+    int32 d = match (f) { case Some(value: v): v; case None: 100; };
+    int32 e = match (again) { case Some(value: v): v; case None: 0; };
+    return cast<uint8>(a - 4 + b + d - 9 + e);
+}

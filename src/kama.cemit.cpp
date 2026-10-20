@@ -16627,7 +16627,10 @@ SharedIdentifier CEmitter::inferDotCtorInstance(InvocationNode* inv, std::map<st
         auto ai = byName.find(*p->identifier->value);
         if (ai == byName.end()) return nullptr;
         SharedIdentifier at = exprTypeNode(ai->second, localTys);
-        if (!isConcreteTypeArg(at)) return nullptr;
+        if (!isConcreteTypeArg(at)) {
+            if (isVariantCtorExpr(ai->second.get())) continue;   // typed by its destination: another argument may bind it (KR-195)
+            return nullptr;
+        }
         auto prev = bind.find(*p->type->value);
         if (prev != bind.end() && cType(prev->second) != cType(at)) return nullptr;   // two arguments disagree
         bind[*p->type->value] = at;
@@ -16878,10 +16881,19 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
         // then retyped to what they chose (the "literal is typed by its destination" rule the isize
         // campaign taught ternary arms, mixed binaries and `match` arms), and range-checked against it.
         if (isDeferrableLiteral(ai->second.get())) { deferred.push_back({ pty, pname, ai->second }); continue; }
+        // So is a variant constructor (`Optional::None`), typed by its destination as a literal is: in
+        // `replace(place: o, with: Optional::None)` it is `place:` that names `T`, and through 0.9.692 the
+        // untyped `with:` was refused before `place:` was asked (KR-195).
+        if (isVariantCtorExpr(ai->second.get()) && !isConcreteTypeArg(deepSubstType(exprTypeNode(ai->second, localTys)))) {
+            deferred.push_back({ pty, pname, ai->second }); continue;
+        }
         if (!bindGenericArg(pty, pname, ai->second, localTys, bind, line)) return false;
     }
     for (const DeferredLit& d : deferred) {
         auto b = bind.find(d.pty);
+        // A deferred variant constructor whose `T` a typed sibling bound is typed at emission, as any
+        // destination-typed argument is (emitReorderedCall); one that nothing bound is refused below as before.
+        if (b != bind.end() && !isDeferrableLiteral(d.expr.get())) continue;
         if (b != bind.end()) {
             // `T` is bound by a typed sibling: retype the literal to it when that is a numeric widening
             // the hand-off rule admits (an integer literal into any numeric type, a float literal into a

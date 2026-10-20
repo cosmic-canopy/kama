@@ -652,18 +652,6 @@ and only `go vet` reports it. Rust, Swift, C# and Kotlin warn.
 Size S–M: the corpus scan found about five dead statements (four `tests/trap` fixtures end `panic(…); return 0;`),
 and the refusal itself gives the full count.
 
-<a id="s2-replace-infer"></a>
-
-### `replace(place:, with: Optional::None)` does not infer `T` from `place:` (KR-195)
-
-Measured on `0.9.666`: `Optional<int32> o = …; Optional<int32> old = replace(place: o, with: Optional::None);`
-reports *"cannot infer generic type parameter 'T' — argument 'with' is not a literal or a locally-typed value"*,
-and so does `replace(place: this.conn, with: Optional::None)` on a field. `place:` is a typed local or field, and
-`T` is its type. Binding `with` to a typed local first, or writing `replace::<Optional<int32>>(…)`, builds.
-Close means inference takes `T` from any argument that types it, not only from `with`, so `Optional::None` (a
-variant constructor typed by its destination) is checked against the `T` that `place:` gives. The error also
-reported column 0, which `0.9.692` fixed. Re-probed on `0.9.690`: still so.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)

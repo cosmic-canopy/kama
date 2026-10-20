@@ -1,0 +1,9 @@
+// KR-195: a generic dot-constructor binds `T` from any argument that types it, so an untyped variant constructor
+// beside a typed one is typed by the parameter they share. Through 0.9.692 the first untyped argument ended the
+// inference, and the instance went unnamed ("`match` subject's type could not be determined").
+type value Pair<T> { public T a; public T b; public ctor make(T a, T b) { this.a = a; this.b = b; } public fn T second() { return this.b; } }
+fn uint8 main() {
+    Optional<int32> o = Optional::Some(value: 7);
+    int32 x = match (Pair.make(a: Optional::None, b: o).second()) { case Some(value: v): v; case None: 0; };
+    return cast<uint8>(x - 7);
+}
