@@ -419,6 +419,64 @@ Node raise it automatically too. Python: no kind; an explicit `resource.setrlimi
 3. POSIX only, by the platform-deltas rule: Windows has no per-process descriptor limit for sockets (they are
    bounded by memory), so the type is absent there rather than faked.
 
+<a id="s1-process-liveness"></a>
+
+#### Process identity beyond one's own children (KR-219)
+
+Measured on `0.9.690`: `std::process` reaches only the children a program started — `Process.signal`, `kill`,
+`terminate`, their group through `signalGroup` — and `currentProcessId()`. A program cannot ask whether any OTHER
+pid, or a process group, is alive, when a process started, or when the machine booted. A lock file that names its
+holder by pid (the GPU lock of a build orchestrator, a single-instance check, a pid file) needs all three, because a
+bare pid is reused: the holder is alive only if the pid exists AND started when the lock says, AND the machine has not
+rebooted since. Today that takes an `extern fn kill` from `<signal.h>`, a parse of `/proc/<pid>/stat`, and a read of
+`/proc/sys/kernel/random/boot_id` — Linux only, and in each program that needs it.
+
+**What others do.** Python: `os.kill(pid, 0)` for existence (EPERM means it exists); start time and boot time only
+through `psutil` (`Process.create_time()`, `boot_time()`), which is what everyone uses. .NET:
+`Process.GetProcessById(pid)` throws if it is gone, and `Process.StartTime` is portable. Go: `os.FindProcess` +
+`Signal(syscall.Signal(0))` on Unix; no start time. Rust std: nothing (the `sysinfo` crate). Node:
+`process.kill(pid, 0)`. The portable identity everyone settles on is the pair (pid, start time), with the boot time
+to rule out a reboot.
+
+**Recommendation (std, the production answer).** `std::process` holds the rest of process identity, so these join
+it, each on every platform that has the concept:
+1. `processExists(id: int32) -> Result<bool, IoError>`: `kill(pid, 0)` on POSIX (EPERM answers `true`: the process
+   exists and is someone else's), `OpenProcess` + `GetExitCodeProcess` on Windows.
+2. `processStarted(id: int32) -> Result<Optional<Timestamp>, IoError>`: Linux `/proc/<pid>/stat` field 22 over the
+   boot time, macOS `sysctl(KERN_PROC_PID)` `p_starttime`, Windows `GetProcessTimes`; `None` when it is gone.
+3. `bootTime() -> Result<Timestamp, IoError>`: Linux `/proc/stat` `btime`, macOS `sysctl(KERN_BOOTTIME)`, Windows now
+   minus `GetTickCount64`. Linux's `boot_id` is a stronger token but exists nowhere else; boot time identifies a
+   boot on every platform, so it is the primary interface.
+4. `processGroupExists(group: int32)`: `kill(-group, 0)`, POSIX only, beside `ProcessGroup` (already POSIX-typed;
+   Windows has job objects, not groups) — absent on Windows by the platform-deltas rule, never faked.
+
+**Decisions owed:** the four names; whether (1)–(2) return a `ProcessId` value type rather than a bare `int32`
+(std uses `int32` today, in `Process.id()` and `currentProcessId()`). Size M: three platforms, each its own syscall.
+
+<a id="s1-metadata-identity"></a>
+
+#### `Metadata` has no change time and no file identity (KR-220)
+
+Measured on `0.9.690`: `std::fs::Metadata` is `size`, `kind`, `modified`, `permissions`, `owner` and `group` (POSIX;
+on Windows `owner`/`group` are `Optional`). A cache that keys a file's digest on size and mtime — a build tool's,
+which must not hash gigabytes again — takes a file rewritten at the same size and given its old mtime back
+(`touch -r`, `cp -p`, `rsync -t`) as unchanged, and cannot tell a file replaced by a rename from the original. git's
+index keys on ctime, inode and device as well, which no user tool can set back.
+
+**What others do.** Rust: `std::os::unix::fs::MetadataExt` (`ino`, `dev`, `ctime`), and on Windows
+`MetadataExt::volume_serial_number`/`file_index` (unstable). Python: `os.stat` has `st_ino`, `st_dev`, `st_ctime` on
+every platform, filling `st_ino`/`st_dev` on Windows from the file index and volume serial. Go: `FileInfo.Sys()`,
+a platform `syscall.Stat_t`. .NET: none.
+
+**Recommendation (std, the production answer).** The platform twins of `Metadata` already carry the deltas, so:
+1. `changed: Timestamp` on both: POSIX `st_ctim`, Windows `FILE_BASIC_INFO.ChangeTime`.
+2. `id: FileId` on both, an `Equatable` value naming a file's identity: POSIX `{ device: st_dev, inode: st_ino }`,
+   Windows `{ volumeSerial, fileIndex }` (`FILE_ID_INFO`'s 128-bit id, which ReFS needs). One field, one meaning —
+   "the same file" — where Python's reuse of `st_ino` for a Windows index blurs two.
+
+**Decisions owed:** `id`/`FileId` vs separate fields; whether `FileId` exposes its parts. Size S–M (the Windows half
+opens the file by handle to read both).
+
 <a id="s1-listen-options"></a>
 
 #### Listener options: the backlog, and reuse-port where the OS balances it (KR-206)
@@ -2230,6 +2288,39 @@ when [T: Formattable]`, writing `[1, 2, 3]` for a sequence and `{k: v, …}` for
 `string` element is quoted (Rust's `Debug` quotes; `Display` has no collection impl at all), and whether one spelling
 serves logs and user-facing text. Size S per collection; unprobed beyond the refusal.
 
+<a id="s5-copy-within"></a>
+
+### No in-place copy within one buffer, and the two-window refusal gives the wrong reason (KR-217)
+
+Measured on `0.9.690` — a reader sliding the unread tail of its buffer to the front before it reads more:
+
+```kama fragment
+this.buf.sliceMut(from: 0, count: unread).copyFrom(source: this.buf.slice(from: start, count: unread));
+```
+
+is refused: "`this.buf` is borrowed by the view argument `source` while `this.buf.sliceMut(…)` is the receiver of
+non-`const fn` `copyFrom` — the method may grow the very storage that window views, leaving it dangling". It built
+through `0.9.673`; `0.9.675`'s receiver rule (a `ref` argument that holds the receiver) caught it. Refusing it is right
+— a writable window and a read window over one buffer may overlap, and Rust refuses `buf[..n].copy_from_slice(&buf[s..
+s + n])` the same way — but the reason is not: a `View` has a fixed length and cannot grow the array beneath it. And
+std offers nothing in its place: `DynamicArray`'s `memmove` is private to `insertAt`/`remove`, so moving bytes inside
+one buffer takes an element-by-element loop.
+
+**What others do.** Rust: `slice::copy_within(src: Range, dest)` for `T: Copy`, one `memmove`, overlap allowed. JS:
+`TypedArray.copyWithin(target, start, end)`. Go's built-in `copy(dst, src)` allows two slices of one array to overlap.
+Python: slice assignment (`a[0:3] = a[5:8]`).
+
+**Recommendation.** Both halves:
+1. `View<T>.copyWithin(from: isize, to: isize, count: isize) when [T: value]` — one `memmove`, overlap allowed,
+   bounds-checked (`@trackCaller`, a trap). On `View` only: every container hands one out (`viewMut()`), one way.
+   `when [T: value]`, Rust's `T: Copy`: an owning element would need each overwritten place dropped and each copy
+   deep, in the right direction, which is a loop the caller can write.
+2. The two-window refusal names the real reason when the receiver is a window: "two windows of `this.buf`, one
+   written, may overlap — `copyWithin` moves elements inside one buffer". A collection receiver keeps today's message
+   (`buf.addAll(items: buf.view())` can grow).
+
+Size S.
+
 <a id="s6"></a>
 
 ## 6. Concurrency — what is left above the primitives
@@ -2917,18 +3008,38 @@ instantiation site keeps its line and drops the column, which belonged to the te
 the second kind; the third is the first kind, at a declaration that has a column of its own. Close means each
 names the column of the call, the type argument or the declaration, with the reported column checked by a guard.
 
-<a id="s10-wgpu-sdk-platform"></a>
+<a id="s10-module-name-clash"></a>
 
-### The wgpu-native SDK directory is not platform-scoped (KR-209)
+### An application named like a dependency's module silently replaces it (KR-218)
 
-Found 2026-10-18 on `0.9.671`, running `./dev test linux` on a macOS box. `tools/check-webgpu.sh` failed in the
-container: `third_party/wgpu/lib/libwgpu_native.a: error adding symbols: archive has no index`. The Linux leg linked
-the macOS SDK. `tools/fetch-webgpu.sh` fetches the SDK for `uname -s`/`uname -m` but unpacks it into one
-`third_party/wgpu/`, the compiler's `--webgpu` default (`src/kama.driver.cpp`) and the guard both read that one
-path, and the container bind-mounts the host's checkout. Every other build artifact is scoped by platform
-(`out/<os>-<arch>/`, AGENTS.md) for exactly this reason. CI never sees it: its legs fetch no SDK, so the guard
-skips the build there. Close means the SDK lands in, and is read from, `third_party/wgpu/<os>-<arch>/` (the fetch,
-the driver's default, the guard, `examples/webgpu`), and the guard passes on both legs of one box.
+Measured on `0.9.690`, in one `kama_workspace.json`: a library `@repro/middle` that does `import { tls::version }`
+from its dependency `@repro/tls`, and two applications that depend on it and differ only in their `name`. Named
+`other`, the application builds and prints the version. Named `tls`, it fails inside the library:
+"`.kama/deps/middle/src/middle.kama:1:9: error: module `tls` is not visible from `middle` — its `visibility` in
+`kama.json` does not name this module`", then "`module `tls` does not export `version`" — a project's name is its root
+module, and the library's import resolved to the application. Any application named like a module anywhere in its
+dependency graph (`tls` over `@kama/redis` or `@kama/postgres`, which use `@kama/tls`) breaks the same way, with
+errors that point at code its author did not write.
+
+kama's module namespace is one per program, by design: `kama pkg install` already refuses two dependencies that
+import under one name ("import-name collision on 'tls': both '@other/tls' and '@repro/tls' import as 'tls' — two
+scopes cannot expose the same name"), and a module's name is part of its C names (SPEC *C names*). The check simply does not
+count the application's own root module. A second hole beside it: that refused install still writes
+`.kama/deps/tls` (pointing at one of the two), exits 1, and leaves a tree `kama build` then builds without a word —
+measured, it printed the second package's version.
+
+**What others do.** Cargo, npm and Go resolve each package's imports in its own dependency scope, so a binary may
+share a name with a transitive dependency; Cargo also renames a dependency in `Cargo.toml`. kama's single program-wide
+module namespace (greppable: one name means one module) rules that out, and is the ruling this repo already applies.
+
+**Recommendation (the production answer, consistent with the existing collision rule):**
+1. The import-name collision check counts the application's own root module, at manifest read and at install,
+   naming both: "this project's name `tls` is its root module, and `@repro/middle` depends on `@repro/tls`, which
+   imports as `tls` — rename the project". Direct or transitive alike.
+2. A refused install leaves `.kama/deps` as it found it (write to a staging directory, rename on success), and
+   `kama build` runs the same collision check, so no tree a refused install left behind builds.
+
+Size S.
 
 <a id="s10-diag-no-file"></a>
 
