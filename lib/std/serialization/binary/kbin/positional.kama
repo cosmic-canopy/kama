@@ -206,7 +206,6 @@ type resource KbinPositionalDeserializer implements Deserializer {
             shift = shift + 7ui64;
             if (shift > 63ui64) { this.err = true; return 0ui64; }   // malformed: longer than a uint64
         }
-        return v;
     }
     unsafe fn string readStr() {
         if (this.err) { return ""; }

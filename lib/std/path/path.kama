@@ -139,7 +139,6 @@ fn Optional<string> stem(const ref string path) {
             return Optional::Some(value: name.substring(start: 0, end: dot));
         }
     };
-    return Optional::None;
 }
 
 // The extension WITHOUT its dot: `extension(path: "/a/b.tar.gz")` is `"gz"`. `None` when there is none —
@@ -153,7 +152,6 @@ fn Optional<string> extension(const ref string path) {
             return Optional::Some(value: name.substring(start: dot + 1, end: name.length()));
         }
     };
-    return Optional::None;
 }
 
 // Concatenate two path pieces with exactly one separator between them.

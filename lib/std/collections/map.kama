@@ -217,7 +217,6 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             if (s == 1ui8) { if (this.eqKeys(a: this.keys[i], b: key)) { return i; } }
             i = i + 1; if (i >= this.cap) { i = 0; }
         }
-        return 0 - 1;
     }
 
     public const fn bool contains(const ref K key) { return this.slotOf(key: key) >= 0; }

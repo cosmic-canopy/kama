@@ -191,7 +191,6 @@ fn int32 serve(ref TcpListener listener, ref string root) {
             case Err(error: e):     0;
         };
     }
-    return 0;                                                     // unreachable; satisfies the return type
 }
 
 fn int32 run(ref TcpListener listener, ref string host, ref string root, uint16 port) {

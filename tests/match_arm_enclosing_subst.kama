@@ -24,7 +24,6 @@ type value Box<T: Valued> {
             case Some(value: x): { T local = this.item; return local.val(); }
             case None: { return 0; }
         };
-        return 0;
     }
 }
 
@@ -36,7 +35,6 @@ fn T pick<T>(T a, Optional<int8> o) {
         case Some(value: x): { T local = a; return local; }
         case None: { return a; }
     };
-    return a;
 }
 
 // A generic method whose `T` differs from the subject's, reading `this.item` toward a numeric

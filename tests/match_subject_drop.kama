@@ -20,7 +20,6 @@ fn int32 viaReturn(int32 v) {
         case Err(error: e): { return -1; }
         case Ok(value: list): { return copy list[0]; }
     };
-    return -2;
 }
 
 // Fall-through: the shape that always worked, kept as the control.
@@ -86,7 +85,6 @@ fn int32 viaGiveOut() {
         case Err(error: e): { string m = e.message(); return cast<int32>(m.length()); }   // 4
         case Ok(value: v): { return -1; }
     };
-    return -2;
 }
 
 fn uint8 main() {

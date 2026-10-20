@@ -603,55 +603,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-unreachable-move"></a>
-
-### A use-after-move is reported in code no path reaches (KR-194)
-
-Measured on `0.9.666`:
-
-```kama
-import { std::collections::DynamicArray };
-fn DynamicArray<int32> f() {
-    DynamicArray<int32> xs = DynamicArray.empty(); int32 n = 0;
-    while (true) { n = n + 1; xs.add(item: n); if (xs.length() < 3) { continue; } return give xs; }
-    return give xs;
-}
-fn int32 main() { DynamicArray<int32> a = f(); return cast<int32>(a.length()) - 3; }
-```
-
-is refused at the trailing `return give xs;` with *"use of `xs` after it was moved (a `give` consumed it)"*. A
-`while (true)` with no `break` has no exit, so nothing after it runs. Without the `continue` it builds, and
-without the trailing `return` it builds and returns 0. `0.9.595` taught the move pass that a loop body
-which always leaves has no next pass. This body leaves on one path and loops on the other, and the code after
-the loop is still checked as if it could run. Close means nothing after a loop with no `break` is reachable to the
-move check, and the program above builds. Re-probed on `0.9.690` (with `fn uint8 main()`): still refused.
-
-**Wider than the loop (probed 2026-10-20 on `0.9.690`).** `return give xs; return give xs;` is refused the same way,
-and `fn int32 f() { return 1; return 2; }` builds: kama accepts dead code everywhere and checks it with every rule
-except definite assignment, whose walk (`checkDefiniteAssignment`) stops at the first statement that leaves. The move
-check does not stop, so it judges code that cannot run.
-
-**What others do.** Java refuses an unreachable statement (JLS 14.22) and Zig refuses unreachable code. Go accepts it,
-and only `go vet` reports it. Rust, Swift, C# and Kotlin warn.
-
-**Ruled 2026-10-20 (the maintainer): unreachable code is refused.**
-1. A statement after one that never completes is an error naming the statement that leaves: `return`, `break`,
-   `continue`, a call that never returns (`panic`, `quit`), a `while (true)`/`for (;;)` with no `break` out of it,
-   and an `if`/`else` or `match` whose every branch leaves. Comptime bodies follow the same rule.
-2. Reachability is read off the structure, never off a folded constant, so `if (true) { return 0; }` followed by code
-   stays a debug early-out (Java's rule).
-3. One walk: the divergence test definite assignment and the emitter already share (`alwaysExits`, `bodyDiverges`,
-   `hasLoopBreak`). With dead code refused, the move check never meets it.
-4. kama has **errors only**, and SPEC says so beside this rule. A warning is the compiler saying it does not believe
-   its own output (the harness fails any fixture whose stderr says "warning"); treating warnings as errors ties a build
-   to a compiler's lint set — Rust discourages `#![deny(warnings)]` in libraries and caps lints on dependencies, and
-   distributions patch `-Werror` out of C packages, because a new compiler's new warning breaks an old build; and
-   every language with warnings grows a second language to silence them. Advice that is not a rule lives in the
-   editor (`DiagSeverity::Warning`, LSP-only), never on stderr. Go reaches the same place with `vet`.
-
-Size S–M: the corpus scan found about five dead statements (four `tests/trap` fixtures end `panic(…); return 0;`),
-and the refusal itself gives the full count.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)

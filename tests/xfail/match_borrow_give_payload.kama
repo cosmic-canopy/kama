@@ -7,7 +7,6 @@ fn Optional<DynamicArray<int32>> passthrough(Optional<DynamicArray<int32>> o) {
         case Some(value: xs): { return Optional::Some(value: give xs); }  // give the aliased buffer out
         case None:     { return Optional::None; }
     };
-    return Optional::None;
 }
 fn uint8 main() {
     DynamicArray<int32> a = DynamicArray.empty(); a.add(item: 1);

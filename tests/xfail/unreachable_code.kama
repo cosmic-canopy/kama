@@ -1,0 +1,20 @@
+// KR-194: a statement after one that never completes is refused, naming what leaves — one function per form, so
+// DIAGNOSTIC_LINES pins each. Through 0.9.693 dead code built and was judged by the move check as if it could run:
+// `return give xs; return give xs;` reported a use-after-move, and so did KR-194's loop below.
+import { std::collections::DynamicArray };
+fn DynamicArray<int32> twice() { DynamicArray<int32> xs = DynamicArray.empty(); return give xs; return give xs; }
+fn DynamicArray<int32> spin() {
+    DynamicArray<int32> xs = DynamicArray.empty(); int32 n = 0;
+    while (true) { n = n + 1; xs.add(item: n); if (xs.length() < 3) { continue; } return give xs; }
+    return give xs;
+}
+fn int32 forever() { for (;;) { } return 0; }
+fn int32 both(bool c) { if (c) { return 1; } else { return 2; } return 3; }
+fn int32 arms(Optional<int32> o) { match (o) { case Some(value: v): { return v; } case None: { return 0; } }; return 9; }
+fn int32 boom() { panic(msg: "x"); return 0; }
+fn int32 jumps() {
+    int32 n = 0;
+    while (n < 3) { n = n + 1; if (n == 2) { break; n = 7; } else { continue; n = 8; } }
+    return n;
+}
+fn uint8 main() { return 0; }

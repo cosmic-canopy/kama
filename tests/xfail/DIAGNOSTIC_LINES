@@ -1375,6 +1375,7 @@ unknown_type_method_param	unknown_type_method_param.kama:4:0
 unknown_type_param	unknown_type_param.kama:4:0
 unknown_type_return	unknown_type_return.kama:2:0
 unknown_type_variant_payload	unknown_type_variant_payload.kama:5:0
+unreachable_code	unreachable_code.kama:11:34 unreachable_code.kama:12:64 unreachable_code.kama:13:110 unreachable_code.kama:14:35 unreachable_code.kama:17:52 unreachable_code.kama:17:78 unreachable_code.kama:5:96 unreachable_code.kama:9:4
 unresolved_argument_one_diagnostic	unresolved_argument_one_diagnostic.kama:7:12 unresolved_argument_one_diagnostic.kama:8:14
 unresolved_handoff_not_a_compiler_bug	unresolved_handoff_not_a_compiler_bug.kama:26:32 unresolved_handoff_not_a_compiler_bug.kama:26:4
 unresolved_name	unresolved_name.kama:5:11

@@ -3402,9 +3402,9 @@ bool CEmitter::alwaysExits(const SharedStatement& s) const
     // scheduler or an embedded main is written. A `break` targeting it would escape, so only a
     // break-free body counts.
     if (auto* w = dynamic_cast<WhileNode*>(n))
-        return isLiteralTrue(w->booleanExpression) && !hasLoopBreak(w->whileStatement);
+        return isLiteralTrue(w->booleanExpression) && !loopBroken(w, w->whileStatement);
     if (auto* fo = dynamic_cast<ForNode*>(n))
-        return !fo->booleanExpression && !hasLoopBreak(fo->body);
+        return !fo->booleanExpression && !loopBroken(fo, fo->body);
     // A bare `panic(…)` never returns. An invocation IS an ExpressionStatementNode, so a call in statement
     // position arrives here directly.
     return exprDiverges(n);
@@ -6556,9 +6556,35 @@ bool CEmitter::bodyDiverges(SharedStatement s) const
         }
         return true;
     }
-    if (auto* w = dynamic_cast<WhileNode*>(n)) return isLiteralTrue(w->booleanExpression) && !hasLoopBreak(w->whileStatement);
-    if (auto* fo = dynamic_cast<ForNode*>(n)) return !fo->booleanExpression && !hasLoopBreak(fo->body);
+    if (auto* w = dynamic_cast<WhileNode*>(n)) return isLiteralTrue(w->booleanExpression) && !loopBroken(w, w->whileStatement);
+    if (auto* fo = dynamic_cast<ForNode*>(n)) return !fo->booleanExpression && !loopBroken(fo, fo->body);
     return exprDiverges(n);   // a bare `panic(…)`
+}
+
+// Unreachable code is refused (KR-194): a statement after one that never completes — a `return`, `break` or
+// `continue`, a `panic`, a `while (true)`/`for (;;)` with no `break`, an `if`/`else` or `match` whose every branch
+// leaves, or a block ending in one — is an error, and the block emits nothing more. Reachability is read off the
+// STRUCTURE, by the test a join already uses (bodyDiverges), never off a folded constant, so `if (true) { return; }`
+// stays an early-out. Through 0.9.693 such code was accepted and checked by every rule but definite assignment, so a
+// `return give xs;` after another reported a use-after-move in code no path reaches. kama has no warnings to say it
+// more softly (SPEC *Unreachable code*). Every statement loop in the emitter asks before it emits the next statement.
+bool CEmitter::refuseUnreachable(const SharedStatement& prev, const SharedStatement& next)
+{
+    if (!prev || !next || next->synthesized || !bodyDiverges(prev)) return false;
+    ASTNode* p = prev.get();
+    const std::string on = " on line " + std::to_string(p->line);
+    std::string why;
+    if (dynamic_cast<ReturnNode*>(p))        why = "the `return`" + on + " leaves the function";
+    else if (dynamic_cast<BreakNode*>(p))    why = "the `break`" + on + " leaves the loop";
+    else if (dynamic_cast<ContinueNode*>(p)) why = "the `continue`" + on + " starts the next pass";
+    else if (dynamic_cast<WhileNode*>(p))    why = "the `while (true)`" + on + " has no `break`";
+    else if (dynamic_cast<ForNode*>(p))      why = "the `for (;;)`" + on + " has no `break`";
+    else if (dynamic_cast<IfNode*>(p))       why = "both branches of the `if`" + on + " leave";
+    else if (dynamic_cast<MatchNode*>(p))    why = "every arm of the `match`" + on + " leaves";
+    else if (exprDiverges(p))                why = "the `panic`" + on + " never returns";
+    else                                     why = "the block" + on + " always leaves";
+    unsupported(("unreachable code — " + why + ", so nothing after it runs; delete this statement").c_str(), next.get());
+    return true;
 }
 
 void CEmitter::emitScopeCleanup(const Scope& s, int depth)
@@ -6749,6 +6775,7 @@ void CEmitter::emitLoopJump(int srcLine, bool isBreak, int depth)
                     "is no rest of the loop to skip — `continue` ends this element's pass", srcLine);
         return;
     }
+    if (isBreak && _scopes[li].loopNode) _loopsBroken.insert(_scopes[li].loopNode);
     // Re-arming: a `continue` is a back edge; a `break` carries its move states out of the loop.
     if (!isBreak) checkRearmed(_scopes[li], srcLine, "this `continue`");
     else if (!_scopes[li].rearm.empty()) {
@@ -6805,7 +6832,7 @@ void CEmitter::emitBlock(BlockNode* block, int depth)
 void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot)
 {
     Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot; sc.switchDepth = _switchDepth;
-    if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; }
+    if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; sc.loopNode = _nextLoopNode; _nextLoopNode = nullptr; }
     _scopes.push_back(sc);
     // by-value smart-ptr params the callee owns drop at fn-end. Recorded FIRST in
     // the root scope, so they're destroyed LAST (after every local), at function exit.
@@ -6821,7 +6848,7 @@ void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, b
     if (functionRoot) emitOnPanicPrologue(depth + 1);   // a `@onPanic` region arms itself before anything else
     SharedStatement last;
     if (block && block->statements) {
-        for (auto& stmt : *block->statements) { emitStatement(stmt, depth + 1); last = stmt; }
+        for (auto& stmt : *block->statements) { if (refuseUnreachable(last, stmt)) break; emitStatement(stmt, depth + 1); last = stmt; }
     }
     // Fall-through cleanup, unless the block already exited via a jump (which
     // ran its own cleanup) — the double-destruction guard.
@@ -7288,7 +7315,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     SharedStatement last;
     auto* block = dynamic_cast<BlockNode*>(bn->body.get());
     if (block && block->statements)
-        for (auto& stmt : *block->statements) { emitStatement(stmt, depth + 1); last = stmt; }
+        for (auto& stmt : *block->statements) { if (refuseUnreachable(last, stmt)) break; emitStatement(stmt, depth + 1); last = stmt; }
     // Same double-destruction guard as `scope`: a jump exit already ran the full cleanup on its way out.
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), depth + 1);
@@ -9224,6 +9251,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
         std::string cond = emitCondition(w->booleanExpression, "a `while` condition");
         _nextLoopExitsNormally = !alwaysTrue(w->booleanExpression);   // for settleLoopExit
+        _nextLoopNode = w;
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
             *_out << "while (" << cond << ") ";
@@ -9256,6 +9284,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // while(1) rewrite breaks — so a hoisting construct here stays a clean error (bind to a local).
         *_out << "do ";
         _nextLoopExitsNormally = !alwaysTrue(d->booleanExpression);   // for settleLoopExit
+        _nextLoopNode = d;
         emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
         requireBoolCondition(d->booleanExpression, "a `do … while` condition", d->line);
         *_out << " while (" << emitExpression(d->booleanExpression) << ");\n";
@@ -9278,6 +9307,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         std::string cond = emitCondition(f->booleanExpression, "a `for` condition");
         std::string iter = emitForClause(f->iteratorStatements);
         _nextLoopExitsNormally = f->booleanExpression && !alwaysTrue(f->booleanExpression);   // for settleLoopExit
+        _nextLoopNode = f;
         if (_hoisted.empty()) {                                   // fast path — unchanged
             indent(depth);
             *_out << "for (" << init << "; " << cond << "; " << iter << ") ";
@@ -9475,7 +9505,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
 
         SharedStatement last;
         if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
-            if (b->statements) for (auto& st : *b->statements) { emitStatement(st, depth + 2); last = st; }
+            if (b->statements) for (auto& st : *b->statements) { if (refuseUnreachable(last, st)) break; emitStatement(st, depth + 2); last = st; }
         } else if (fe->body) {
             emitStatement(fe->body, depth + 2); last = fe->body;
         }
@@ -10212,7 +10242,7 @@ void CEmitter::emitBody(SharedStatement stmt, int depth, bool loopBoundary)
         emitBlockScoped(b, depth, loopBoundary, /*functionRoot=*/false);
     } else {
         Scope sc; sc.isLoopBoundary = loopBoundary; sc.switchDepth = _switchDepth;
-        if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; }
+        if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; sc.loopNode = _nextLoopNode; _nextLoopNode = nullptr; }
         _scopes.push_back(sc);
         *_out << "{\n";
         emitStatement(stmt, depth + 1);
@@ -19337,7 +19367,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     }
     SharedStatement last;
     if (auto* b = dynamic_cast<BlockNode*>(fe->body.get())) {
-        if (b->statements) for (auto& st : *b->statements) { emitStatement(st, depth + 2); last = st; }
+        if (b->statements) for (auto& st : *b->statements) { if (refuseUnreachable(last, st)) break; emitStatement(st, depth + 2); last = st; }
     } else if (fe->body) {
         emitStatement(fe->body, depth + 2); last = fe->body;
     }
@@ -30877,9 +30907,10 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             // legal there and stays legal.
             if (resultTemp && nstmt == 0)
                 unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge "
-                            "(return/break/continue)", a);
+                            "(return/break/continue/panic)", a);
             for (size_t i = 0; i < nstmt; ++i) {
                 SharedStatement st = (*stmts)[i];
+                if (i > 0 && refuseUnreachable((*stmts)[i - 1], st)) break;
                 auto armv = std::dynamic_pointer_cast<ArmValueNode>(st);   // `:= expr;` — the arm's value
                 if (armv && i + 1 != nstmt) {
                     unsupported("`:=` must be the final statement of a match arm", armv);
@@ -30891,8 +30922,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     // A DIVERGING arm (`return`/`break`/`continue`) yields nothing — it's allowed (the value
                     // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
                     if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, kMatchArm);
-                    else if (stmtIsJump(st)) emitStatement(st, depth + 2);
-                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a);
+                    else if (bodyDiverges(st)) emitStatement(st, depth + 2);   // never completes: a jump, a `panic`, a loop with no way out (KR-194)
+                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue/panic)", a);
                 } else {
                     // A NON-FINAL statement of an arm runs in its own typed context, not the match's.
                     // Leaving the target set here let a nested value-producing `match` inside the arm
@@ -31182,9 +31213,10 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
             size_t nstmt = stmts ? stmts->size() : 0;
             if (resultTemp && nstmt == 0)   // the same empty-block hole as the tagged-union path above
                 unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge "
-                            "(return/break/continue)", a);
+                            "(return/break/continue/panic)", a);
             for (size_t i = 0; i < nstmt; ++i) {
                 SharedStatement st = (*stmts)[i];
+                if (i > 0 && refuseUnreachable((*stmts)[i - 1], st)) break;
                 auto armv = std::dynamic_pointer_cast<ArmValueNode>(st);   // `:= expr;` — the arm's value
                 if (armv && i + 1 != nstmt) {
                     unsupported("`:=` must be the final statement of a match arm", armv);
@@ -31196,8 +31228,8 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                     // A DIVERGING arm (`return`/`break`/`continue`) yields nothing — it's allowed (the value
                     // comes from the other arms); e.g. `T v = match (r) { case Ok(x): := give x; case Err(e): return … }`.
                     if (armv) emitOwnedValueInto(*resultTemp, _matchTargetCType, armv->value, armv->line, depth + 2, kMatchArm);
-                    else if (stmtIsJump(st)) emitStatement(st, depth + 2);
-                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue)", a);
+                    else if (bodyDiverges(st)) emitStatement(st, depth + 2);   // never completes: a jump, a `panic`, a loop with no way out (KR-194)
+                    else unsupported("a value-producing `match` arm block must end in `:= <expr>;` or diverge (return/break/continue/panic)", a);
                 } else {
                     // A NON-FINAL statement of an arm runs in its own typed context, not the match's.
                     // Leaving the target set here let a nested value-producing `match` inside the arm
@@ -35202,7 +35234,7 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     _dtorReturned = false;
     if (ci.dtorNode && ci.dtorNode->body && ci.dtorNode->body->statements) {
         ScopedFlag _db(_inDtorBody);
-        for (auto& st : *ci.dtorNode->body->statements) { emitStatement(st, 1); last = st; }
+        for (auto& st : *ci.dtorNode->body->statements) { if (refuseUnreachable(last, st)) break; emitStatement(st, 1); last = st; }
     }
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), 1);
@@ -35456,9 +35488,12 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
 
     if (body && body->statements) {
         bool skipFirst = (baseInit != nullptr);   // already emitted, as part of the fill
+        SharedStatement prev;
         for (auto& st : *body->statements) {
-            if (skipFirst) { skipFirst = false; continue; }
+            if (skipFirst) { skipFirst = false; prev = st; continue; }
+            if (refuseUnreachable(prev, st)) break;
             emitStatement(st, 1);
+            prev = st;
         }
     }
     // A body that can reach its closing brace falls off the end — `alwaysExits`, the test a non-`void`

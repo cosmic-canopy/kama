@@ -2,5 +2,4 @@
 // named under the build's loose root: the fixture's own name, never the build machine's absolute path.
 fn uint8 main() {
     panic(msg: "here");
-    return 0;
 }

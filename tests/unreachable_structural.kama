@@ -1,0 +1,26 @@
+// KR-194: reachability is read off the structure, never off a folded constant. `if (true) { return …; }` is an
+// early-out that leaves the rest legal; a `break` from a `match` arm inside an EXPRESSION leaves its loop, so the
+// code after that loop is reachable; and a value-producing `match` arm may end in `panic`, which yields nothing.
+import { std::collections::DynamicArray };
+fn int32 early() { if (true) { return 1; } return 2; }
+fn DynamicArray<int32> spin() {   // KR-194's program, without the trailing `return` no path reaches
+    DynamicArray<int32> xs = DynamicArray.empty(); int32 n = 0;
+    while (true) { n = n + 1; xs.add(item: n); if (xs.length() < 3) { continue; } return give xs; }
+}
+fn Optional<int32> upTo(int32 n) { if (n < 4) { return Optional::Some(value: n); } return Optional::None; }
+fn int32 summed() {
+    int32 total = 0;
+    int32 n = 0;
+    while (true) {
+        n = n + 1;
+        int32 v = match (upTo(n: n)) { case Some(value: x): x; case None: { break; } };
+        total = total + v;
+    }
+    return total;   // reachable: the `break` above leaves the loop
+}
+fn int32 orTrap(Optional<int32> o) { return match (o) { case Some(value: v): v; case None: { panic(msg: "none"); } }; }
+fn uint8 main() {
+    DynamicArray<int32> a = spin();
+    int32 r = early() - 1 + cast<int32>(a.length()) - 3 + summed() - 6 + orTrap(o: Optional::Some(value: 5)) - 5;
+    return cast<uint8>(r);
+}

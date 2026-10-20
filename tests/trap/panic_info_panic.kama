@@ -14,5 +14,4 @@ unsafe fn void install() { setPanicHandler(handler: onPanic); }
 fn uint8 main() {
     install();
     panic(msg: "boom");
-    return 0;   // unreachable
 }

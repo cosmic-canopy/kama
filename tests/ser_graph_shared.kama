@@ -32,5 +32,4 @@ fn uint8 main() {
         case Ok(value: sh): { Result<string, Owned<Error>> j2_r = serializeJsonBuffer(v: sh); string j2 = match (give j2_r) { case Ok(value: __ok): give __ok; case Err(error: __e): { return 1; } }; if (j2 == j) { return 0; } return 1; }
         case Err(error: e): { return 2; }
     };
-    return 3;
 }

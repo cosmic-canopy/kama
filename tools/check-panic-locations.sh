@@ -71,7 +71,6 @@ expect() {
 
 expect project "fn uint8 main() {
     panic(msg: \"here\");
-    return 0;
 }" "game/main.kama:2"
 expect assert "fn uint8 main() {
     int32 n = 0;

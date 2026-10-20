@@ -780,10 +780,9 @@ type value GlobalAllocator implements Allocator, Sendable {   // stateless: a co
 // `--no-heap`/`@noheap` reject the whole allocation path at the emission site. NON-generic on purpose:
 // it takes the already-produced `Optional<UnsafePtr>` (a concrete type — `UnsafePtr` is `void*`), so it monomorphizes
 // trivially and is callable from inside the generic collections (where inferring a generic `<A>` helper
-// from a type-param-typed `this.alloc` is not supported). The dead `:= cast<UnsafePtr>(0)` after `panic`
-// satisfies the value-arm checker (`panic` traps first, so it never runs).
+// from a type-param-typed `this.alloc` is not supported). The `None` arm ends in `panic`, which yields no value.
 unsafe fn UnsafePtr unwrapPtr(Optional<UnsafePtr> o) {
-    return match (o) { case Some(value: p): p; case None: { panic(msg: "out of memory"); := cast<UnsafePtr>(0); } };
+    return match (o) { case Some(value: p): p; case None: { panic(msg: "out of memory"); } };
 }
 
 // The NON-panicking sibling, and the reason it has to exist: `try new(allocator: a) T(...)` promises `None`

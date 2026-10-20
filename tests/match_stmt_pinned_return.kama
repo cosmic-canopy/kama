@@ -50,7 +50,6 @@ fn int32 trailing(Tri t)
         case B: { return 32; }
         case C: { return 32; }
     };
-    return 0;
 }
 
 fn uint8 main()

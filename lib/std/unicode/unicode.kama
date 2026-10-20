@@ -41,7 +41,6 @@ unsafe fn string normalize(const ref string s, NormalizationForm form) {
             cap = len;
         }
     }
-    return "";
 }
 
 // Is `s` already in form `form` — would normalizing it change nothing?

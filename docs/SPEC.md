@@ -4227,6 +4227,32 @@ That `if` **is** the branch — it cannot grow a sibling statement the way a bar
 `match` are unaffected: they already require a block (a `match` arm's `case P: expr;` is an expression, not
 a statement body).
 
+**Unreachable code is an error.** A statement after one that never completes is refused, naming what leaves: <!-- xfail: unreachable_code -->
+a `return`, `break` or `continue`; a `panic`; a `while (true)` or `for (;;)` with no `break` out of it; or an
+`if`/`else` or `match` whose every branch does one of those. Reachability is read off the structure, never off a
+folded constant, so `if (true) { return 0; }` followed by code stays a debug early-out, as in Java; a `break` from a <!-- test: unreachable_structural -->
+`match` arm inside an expression leaves its loop as any `break` does; and a value-producing `match` arm may end in
+any of them, since it yields nothing.
+
+```kama fragment
+while (true) { if (done()) { return give xs; } step(); }
+return give xs;     // ERROR: the `while (true)` above has no `break`, so nothing after it runs
+```
+
+Dead code is bug-shaped — Apple's `goto fail` (CVE-2014-1266) was a duplicated jump that left a certificate check
+unreachable — and a checker that judged it would report mistakes in code that cannot run. Java and Zig refuse it
+too; Go accepts it and leaves it to `vet`; Rust, Swift, C# and Kotlin warn.
+
+**kama has errors only, never warnings.** A diagnostic refuses the program, or it is not printed. A warning is the
+compiler saying it does not believe its own output: the code is wrong, and should not build, or it is fine, and
+saying otherwise is noise. Treating warnings as errors does not repair that; it ties a build to one compiler's lint
+set, so a newer compiler's new warning breaks code that was correct yesterday — which is why Rust discourages
+`#![deny(warnings)]` in a library and caps the lints of dependencies, and why distributions patch `-Werror` out of C
+packages. Every language with warnings also grows a second language to silence them (`#[allow]`, `#pragma`,
+`@SuppressWarnings`). An error in kama is a rule of the language, stated here with a fixture, so it changes only when
+the language does. Advice that is not a rule — an import the package does not declare — is an editor hint from the
+language server, never a line on stderr.
+
 ## Type declarations — `value` / `resource` / `view` / `contract` / `enum` / `intrinsic` ✅
 
 Every type declaration is introduced by the **`type` marker** followed by a *kind* — parallel to `fn` on
@@ -6188,7 +6214,8 @@ arm names the value it produces with a **`:= <expr>;`** statement, which must be
 statement (single-exit) — it accepts any expression, and reads as "bind this value out" (a `match` in a
 typed position *is* an assignment from the outside, `x = match … { … := v; }`). `:=` is distinct from
 `return`, which leaves the enclosing function. An arm of a value-producing `match` must therefore either
-end in `:=` or **diverge** (`return`, or a `break` / `continue` of the loop around the `match`); in particular a block arm cannot be *empty*, <!-- xfail: match_empty_arm -->
+end in `:=` or **diverge** (`return`, a `break` / `continue` of the loop around the `match`, a `panic`, or anything
+else that never completes — see *Unreachable code*); in particular a block arm cannot be *empty*, <!-- xfail: match_empty_arm -->
 since it would leave the match's value unset:
 
 ```kama

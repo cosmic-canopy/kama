@@ -330,7 +330,6 @@ type resource BufReader<R: Reader> implements Reader {
                 line.add(item: c);
             }
         }
-        return Result::Err(error: IoError.of(kind: IoErrorKind::Other));   // unreachable: the loop only exits by return
     }
 }
 

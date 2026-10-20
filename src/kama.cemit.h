@@ -2248,6 +2248,7 @@ private:
                    std::map<std::string, int> rearm;
                    std::vector<std::map<std::string, MoveState>> breakStates;
                    bool exitsNormally = true, bodyDiverges = false;
+                   const ASTNode* loopNode = nullptr;   // the `while`/`do`/`for` this body belongs to (see _loopsBroken)
                    // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
                    // names of the `kama_isolate_t` handles `spawn`ed inside it; emitScopeCleanup joins them
                    // ALL before dropping any local (join-before-drop), on every exit path. `borrowedPlaces`
@@ -3809,6 +3810,12 @@ private:
     void settleLoopExit(Scope& loop);                          // a given local's state after its loop
     const ASTNode* _writeTarget = nullptr;                     // the bare local an `=` is storing to — a write, not a read
     bool _nextLoopExitsNormally = true;                        // the loop site says whether its condition can end it
+    const ASTNode* _nextLoopNode = nullptr;                     // ...and which loop it is
+    // Every loop a `break` was emitted for. `hasLoopBreak` reads statements only, so a `break` in a `match` arm
+    // inside an EXPRESSION (`int32 v = match (o) { …; case None: { break; } };`) is invisible to it; emission
+    // resolves every `break` to its loop, so once a loop is emitted this answers exactly (KR-194).
+    std::set<const ASTNode*> _loopsBroken;
+    bool loopBroken(const ASTNode* loop, const SharedStatement& body) const { return _loopsBroken.count(loop) || hasLoopBreak(body); }
     bool isParallelForLoop(int loopIndex) const;               // that loop is the one a `parallel_for` body was outlined into
     bool inParallelForBody() const;                            // the current function is an outlined `parallel_for` body
     void emitLoopJump(int srcLine, bool isBreak, int depth);   // `break` / `continue`, judged and emitted
@@ -3820,6 +3827,7 @@ private:
     void recordDestructibleLocal(const std::string& cVar, const std::string& className, bool userName = false);
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
     bool bodyDiverges(SharedStatement s) const;                // control never falls out of its bottom
+    bool refuseUnreachable(const SharedStatement& prev, const SharedStatement& next);   // KR-194: a statement no path reaches
     void emitDtorDefinition(ClassInfo& ci);
 
     // Expressions -> C expression text

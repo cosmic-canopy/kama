@@ -65,7 +65,6 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
             if (p >= 0) { if (this.eqKeys(a: this.keys[p], b: key)) { return i; } }
             i = (i + 1) & mask;
         }
-        return 0 - 1;
     }
 
     // The first slot along `h`'s probe that may take a new key: EMPTY or REMOVED. The key is known to be absent.

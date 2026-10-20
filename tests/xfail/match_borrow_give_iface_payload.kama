@@ -7,7 +7,6 @@ fn Result<int32, Owned<Error>> rewrap(Result<int32, Owned<Error>> r) {
         case Ok(value: v):  { return Result::Ok(value: v); }
         case Err(error: e): { return Result::Err(error: give e); } // give the aliased fat handle out -> double free
     };
-    return Result::Ok(value: 0);
 }
 fn uint8 main() {
     Result<int32, Owned<Error>> r = Result::Err(error: DeError.of(kind: DeErrorKind::Malformed));

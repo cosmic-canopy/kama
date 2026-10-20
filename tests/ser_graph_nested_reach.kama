@@ -38,5 +38,4 @@ fn uint8 main() {
         }
         case Err(error: e): { return 3; }
     };
-    return 4;
 }

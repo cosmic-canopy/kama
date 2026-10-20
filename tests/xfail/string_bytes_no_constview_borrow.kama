@@ -3,5 +3,4 @@
 fn uint8 main() {
     string s = "abc";
     borrow s.bytes() as v { return cast<uint8>(v[0]); }
-    return 0;
 }
