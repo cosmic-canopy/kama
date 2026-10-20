@@ -314,7 +314,9 @@ static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v,
 // The control block behind every shared handle (`Shared<I>`, and the library `Shared<T>`'s layout-compatible
 // `Ctrl`): a SEPARATE allocation, so a `Weak` can outlive the object. (The concrete `Owned<T>`/`Shared<T>`/
 // `Weak<T>` are library types in lib/std/memory; only the CONTRACT handles below are the runtime's.)
-typedef struct kama_ctrl { size_t kama_strong; size_t kama_weak; } kama_ctrl;   // weak: reserved for Weak<T>
+// `kama_borrows` counts the borrows into the value that are live (KR-211: a mutation through any handle while one is
+// live traps), and `kama_borrow_at` names where the outermost was made, for that trap's message.
+typedef struct kama_ctrl { size_t kama_strong; size_t kama_weak; size_t kama_borrows; const char* kama_borrow_at; } kama_ctrl;
 #include "kama_ctrl.h"   // M6.2: the strong/weak count ops (plain + atomic flavor) — needs kama_ctrl above
 // kama_ctrl_new is defined further down, next to kama_panic: it has to CHECK its allocation, and the
 // panic path (and `kama_string`) is declared below this point. Its only in-header caller is well past it.
@@ -1952,7 +1954,7 @@ static inline void kama__alloc_check_fail(size_t n, size_t align, size_t wantN, 
 static inline kama_ctrl* kama_ctrl_new(void) {
     kama_ctrl* c = (kama_ctrl*)kama_alloc(sizeof(kama_ctrl), _Alignof(kama_ctrl));
     if (!c) kama_panic(kama_string_lit("out of memory", 13));
-    c->kama_strong = 1; c->kama_weak = 0;
+    kama_ctrl_init(c);
     return c;
 }
 
@@ -2204,6 +2206,26 @@ static inline void kama_merge_end(kama_merge_log* l, int commit) {
 
 // --- Fatal diagnostics with source location (panic / assert) -----------------
 // `panic(msg:)` → "kama: panic: <msg> (file:line)", through the one failure path (kama__fail).
+static inline KAMA_NORETURN void kama_panic_at(kama_string msg, const char* file, int line);
+
+// A mutation through a `Shared` handle while a borrow into its value is live (KR-211): the borrow points into storage
+// the mutation may free, so it traps — in every build, as a bounds miss does — naming both sites. `h` is the handle;
+// every library `Shared<T>` is laid out `{ T* p; Ctrl* c; … }`, so its block is the second word (the emitter asserts
+// it per instance). Returns `h`, so the call wraps the handle where `derefMut` takes it: evaluated once.
+static inline void* kama_shared_check_mut(void* h, const char* file, int line) {
+    kama_ctrl* c = ((kama_ctrl**)h)[1];
+    if (c && c->kama_borrows != 0) {
+        char m[384]; size_t n = 0;
+        const char* parts[3] = { "a `Shared` value is mutated while a borrow into it is live (made at ",
+                                 c->kama_borrow_at ? c->kama_borrow_at : "?",
+                                 ") — the mutation may free what the borrow points into" };
+        for (int i = 0; i < 3; ++i) for (const char* s = parts[i]; *s && n + 1 < sizeof m; ++s) m[n++] = *s;
+        m[n] = 0;
+        kama_panic_at(kama_string_lit(m, n), file, line);
+    }
+    return h;
+}
+
 static inline KAMA_NORETURN void kama_panic_at(kama_string msg, const char* file, int line) {
 #if defined(KAMA_TARGET_EMBEDDED)
     (void)msg; (void)file; (void)line;

@@ -2016,7 +2016,8 @@ private:
     // the root plus everything it reaches over `_callEdges` — may own no destructible local (facts recorded
     // at recordDestructibleLocal and the two parameter sites, walked after emission like the no-heap proof).
     struct OnPanicFn        { std::string display; int line = 0; std::string file; };
-    struct DestructibleSite { std::string name; std::string className; int line = 0; std::string file; };
+    // `borrow`: not a destructor but a borrow into a `Shared` value whose end a recovered panic would skip (KR-211).
+    struct DestructibleSite { std::string name; std::string className; int line = 0; std::string file; bool borrow = false; };
     std::map<std::string, OnPanicFn>        _onPanicFns;          // C name -> root of the walk
     std::map<std::string, DestructibleSite> _destructibleOwners;  // fn -> the first destructible local it owns
     std::map<std::string, std::map<std::string, int>> _dropSiteLines;  // fn -> `T__dtor` -> the owner's declaration line
@@ -2262,6 +2263,9 @@ private:
                    // `length()`). `count` empty means the single-handle form.
                    struct TaskChild { std::string handle; std::string count; };
                    bool isTaskScope = false; std::vector<TaskChild> taskChildren;
+                   // KR-211: the borrows into `Shared` values this scope holds — each a `kama_ctrl_borrow_leave(…)`,
+                   // run by emitScopeCleanup on every exit, after the locals.
+                   std::vector<std::string> borrowLeaves;
                    std::vector<std::vector<std::string>> borrowedPlaces;
                    // `borrow h.mint() as v { … }` — the host PLACE, frozen for the extent of the block.
                    // A view is live over that storage, so growing or reseating it would leave the alias
@@ -3828,6 +3832,14 @@ private:
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
     bool bodyDiverges(SharedStatement s) const;                // control never falls out of its bottom
     bool refuseUnreachable(const SharedStatement& prev, const SharedStatement& next);   // KR-194: a statement no path reaches
+    // The member-access links a write goes through (KR-211): an auto-deref field on one of these is judged as a
+    // mutation of the handle's value (checkedSharedMut); a read never is.
+    std::set<const ASTNode*> _writeChain;
+    void markWriteChain(const SharedExpression& e);
+    std::string checkedSharedMut(const std::string& handleCls, const std::string& handlePtr, int line);   // KR-211
+    bool isMutableLibraryShared(const std::string& cls);
+    void sharedHandlesIn(SharedExpression host, std::vector<SharedExpression>& out);
+    void enterSharedBorrows(SharedExpression host, int depth, int line);
     void emitDtorDefinition(ClassInfo& ci);
 
     // Expressions -> C expression text

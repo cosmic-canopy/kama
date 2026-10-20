@@ -6627,6 +6627,8 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
         if (!it->guard.empty()) *_out << "if (" << it->guard << ") ";   // built only on some paths (guardHoisted)
         *_out << it->className << "__dtor(&" << (it->userName ? kName(it->cVar) : it->cVar) << ");\n";
     }
+    // The borrows into `Shared` values this scope holds end here, on the same exits (KR-211).
+    for (auto it = s.borrowLeaves.rbegin(); it != s.borrowLeaves.rend(); ++it) { indent(depth); *_out << *it << "\n"; }
     // A `@onPanic` region DISARMS on every exit path: this helper is on all of them (fall-through, and
     // the return/break/continue unwinds), and the root scope is the region's frame.
     if (s.isFunctionRoot && _onPanicArmed) {
@@ -7311,6 +7313,11 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
         // red against a message that is not wrong, merely worse.
         for (auto& f : frozenNow) if (!f.place.empty()) _scopes.back().frozen.push_back(f);
     }
+
+    // A window reached through a `Shared` handle counts as a live borrow in that value's block for its whole extent,
+    // so a mutation through ANY handle to the value traps while it is open (KR-211). Entered once the bindings are
+    // made: making them may itself go through the handle mutably (`borrow a.first() as x`, a non-`const` place call).
+    if (bn->bindings) for (auto& b : *bn->bindings) if (b && b->host) enterSharedBorrows(b->host, depth + 1, bn->line);
 
     SharedStatement last;
     auto* block = dynamic_cast<BlockNode*>(bn->body.get());
@@ -8790,7 +8797,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                     if (useAlloc)   // ctrl drawn from the SAME allocator (validated == the box's A)
                                         *_out << kName(nm) << ".kama_ctrl = (kama_ctrl*)kama__unwrapPtr(" << _collections[ty].allocType
                                               << "__allocate(&" << ap << ", " << layoutOf("kama_ctrl") << ")); "
-                                              << kName(nm) << ".kama_ctrl->kama_strong = 1; " << kName(nm) << ".kama_ctrl->kama_weak = 0;\n";
+                                              << "kama_ctrl_init(" << kName(nm) << ".kama_ctrl);\n";
                                     else
                                         *_out << kName(nm) << ".kama_ctrl = kama_ctrl_new();\n";
                                 }
@@ -9531,6 +9538,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     // is nothing to assign to, only a value to drop.
     if (auto* as = dynamic_cast<AssignmentNode*>(n))
         if (as->token == EQ && isDiscardTarget(as->unaryExpression)) { emitExplicitDiscard(as->expression, n->line, depth); return; }
+    // The target is written through: its links take `derefMut()` (KR-211). Marked before any handler below emits
+    // it — an owning store drops the old value through the target before checkConstWrite is reached.
+    if (auto* as = dynamic_cast<AssignmentNode*>(n)) markWriteChain(as->unaryExpression);
 
     struct WriteTargetGuard {
         CEmitter& e; const ASTNode* saved; std::string key;
@@ -26353,6 +26363,9 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         }
         int handoff = 0;   // 0 none, 1 give, 2 copy
         if (auto* h = dynamic_cast<HandoffNode*>(argExpr.get())) { handoff = h->isGive ? 1 : 2; argExpr = h->value; }
+        // A writable `ref`/`out` argument is written through, so its links take `derefMut()` — marked before the
+        // argument is emitted, which is below (KR-211; checkConstWrite marks it again, too late for the C).
+        if ((p.byRef || p.isOut) && !p.isConst) markWriteChain(argExpr);
         // A by-value OWNING parameter consumes its argument; a `ref`, an `out`, a contract (a borrowed fat
         // pointer) and the untyped read-only intrinsics borrow it, and there a ternary stays a place.
         if (!p.byRef && !p.isOut && !p.className.empty() && !isInterface(p.className) && ternaryOwns(p.className))
@@ -26735,8 +26748,9 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 // uniformly with `ref stackValue`; no `.ptr` field is assumed.
                 // `deref()` answers a READ-ONLY place, `T const*`, and a `const ref T` parameter lowers to a plain
                 // `T*` (`const fn` is ABI-neutral): the cast states the ABI, as at every other read-only place.
+                const std::string hp = "&(" + val + ")";
                 s += (p.isConst ? "(" + p.className + "*)" : std::string()) + derefFnName(argCls, !p.isConst)
-                     + "(&(" + val + "))";
+                     + "(" + (p.isConst ? hp : "(" + argCls + "*)" + checkedSharedMut(argCls, hp, srcLine)) + ")";
             } else if (dynamic_cast<ThisAccessNode*>(argExpr.get())) {
                 // `this` lowers to `self`, which is ALREADY a `T*` (the receiver pointer). Pass it straight
                 // to a `ref T` param — `&(self)` would hand over the address of the param slot (a `T**`), so
@@ -27709,9 +27723,111 @@ bool CEmitter::chainThroughConstPlace(SharedExpression e)
     return false;
 }
 
+// The member-access links a write reaches its target through: `a.pos.x = 3` writes through `a.pos` and `a`, never
+// through an index or an argument nested in them (`a.items[b.n] = 3` reads `b`). An auto-deref field on one of these
+// links takes the writable half, `derefMut()`; every other one takes `deref()` (KR-211).
+void CEmitter::markWriteChain(const SharedExpression& e)
+{
+    ASTNode* n = e.get();
+    while (n) {
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) { _writeChain.insert(ma); n = ma->expression.get(); continue; }
+        if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+            n = ea->expression ? ea->expression.get() : static_cast<ASTNode*>(ea->identifier.get()); continue;
+        }
+        if (auto* h = dynamic_cast<HandoffNode*>(n)) { n = h->value.get(); continue; }
+        break;
+    }
+}
+
+// A pointer to a library `Shared<T>` handle about to go through `derefMut()`, judged first (KR-211): while a borrow
+// into the value is live, a mutation through any handle traps, naming both sites. Every place the emitter chooses the
+// writable half for a mutation calls this; an atomic `Shared<immutable T>` never mutates and is passed straight on.
+std::string CEmitter::checkedSharedMut(const std::string& handleCls, const std::string& handlePtr, int line)
+{
+    auto g = _genericTypeInstOf.find(handleCls);
+    if (g == _genericTypeInstOf.end() || g->second != _sharedTmpl || !_classes.count(handleCls)
+        || _classes[handleCls].useAtomicRefcount)
+        return handlePtr;
+    return "kama_shared_check_mut(" + handlePtr + ", " + trapLoc(line) + ")";
+}
+
+bool CEmitter::isMutableLibraryShared(const std::string& cls)
+{
+    auto g = _genericTypeInstOf.find(cls);
+    return g != _genericTypeInstOf.end() && g->second == _sharedTmpl && _classes.count(cls)
+        && !_classes[cls].useAtomicRefcount;
+}
+
+// The `Shared` handles a place is reached THROUGH (KR-211): each link that auto-derefs a library `Shared` — a field
+// or a method the handle itself does not have — names a handle whose value the place points into. `a.first()` is
+// reached through `a`; `a.child.items` through `a` and `a.child`.
+void CEmitter::sharedHandlesIn(SharedExpression host, std::vector<SharedExpression>& out)
+{
+    ASTNode* n = host.get();
+    if (auto* h = dynamic_cast<HandoffNode*>(n)) { sharedHandlesIn(h->value, out); return; }
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
+        if (!ma || !ma->expression || !ma->identifier || !ma->identifier->value) return;
+        const std::string cls = exprClass(ma->expression);
+        ClassInfo* o = nullptr;
+        if (isMutableLibraryShared(cls) && !findMethod(&_classes[cls], *ma->identifier->value, &o)) out.push_back(ma->expression);
+        sharedHandlesIn(ma->expression, out);
+        return;
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+        if (!ma->expression || !ma->identifier || !ma->identifier->value) return;
+        const std::string cls = exprClass(ma->expression);
+        if (isMutableLibraryShared(cls) && !findFieldOwner(&_classes[cls], *ma->identifier->value)) out.push_back(ma->expression);
+        sharedHandlesIn(ma->expression, out);
+        return;
+    }
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n))
+        sharedHandlesIn(ea->expression ? ea->expression : std::static_pointer_cast<ExpressionNode>(ea->identifier), out);
+}
+
+// Can this handle be named twice — once to reach its block, once by the window's own place — and read the same handle
+// both times, running nothing? Names, `this`, fields, and elements indexed by those or by literals.
+static bool handleReadIsPure(const ASTNode* n)
+{
+    if (!n) return false;
+    if (dynamic_cast<const IdentifierNode*>(n) || dynamic_cast<const ThisAccessNode*>(n)) return true;
+    if (dynamic_cast<const CharNode*>(n) || dynamic_cast<const BooleanNode*>(n) || isDeferrableLiteral(n)) return true;
+    if (auto* ma = dynamic_cast<const MemberAccessNode*>(n)) return handleReadIsPure(ma->expression.get());
+    if (auto* ea = dynamic_cast<const ElementAccessNode*>(n)) {
+        if (!handleReadIsPure(ea->expression ? ea->expression.get() : static_cast<const ASTNode*>(ea->identifier.get()))) return false;
+        if (ea->expressionlist) for (auto& ix : *ea->expressionlist) if (!handleReadIsPure(ix.get())) return false;
+        return true;
+    }
+    return false;
+}
+
+// Open the borrows a window over `host` holds into `Shared` values (KR-211): each handle's block counts one more live
+// borrow until the innermost scope ends, on every exit. A handle must read without running anything (handleReadIsPure),
+// so naming it again reads the same handle. The frame is recorded as an owner, so no `@onPanic` region can longjmp through it.
+void CEmitter::enterSharedBorrows(SharedExpression host, int depth, int line)
+{
+    std::vector<SharedExpression> handles;
+    sharedHandlesIn(host, handles);
+    for (auto& h : handles) {
+        if (!handleReadIsPure(h.get())) {
+            unsupported(("this borrow reaches into a `Shared` value through `" + unparseExpr(h) + "`, whose reading runs "
+                         "code — bind the handle to a local first, so the window knows which handle it holds").c_str(), line);
+            continue;
+        }
+        const std::string kb = "kama_kb" + std::to_string(_tempCounter++);
+        const std::string at = cEscapeStringBody(programLocation()) + ":" + std::to_string(line);
+        indent(depth); *_out << "kama_ctrl* " << kb << " = ((kama_ctrl**)&(" << emitExpression(h) << "))[1];\n";
+        indent(depth); *_out << "kama_ctrl_borrow_enter(" << kb << ", \"" << at << "\");\n";
+        _scopes.back().borrowLeaves.push_back("kama_ctrl_borrow_leave(" + kb + ");");
+        if (!_probingTemplate && !_currentFunc.empty() && !_destructibleOwners.count(_currentFunc))
+            _destructibleOwners[_currentFunc] = DestructibleSite{ unparseExpr(h), "", line, diagFile(), true };
+    }
+}
+
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
 {
     if (!target) return;
+    markWriteChain(target);   // first: every arm below asks whether the chain is read-only
     // The window's freeze rides this helper for the same reason the const rules do: it is on every write
     // path there is. Independent of the const arms below, so a write that is both gets both sentences.
     rejectFrozenWrite(target, srcLine);
@@ -31456,7 +31572,7 @@ std::string CEmitter::tryHoistInlineValue(SharedExpression e, const std::string&
         if (smartKind(targetCType) == CollKind::Shared)
             box += useAlloc
                  ? " " + t + ".kama_ctrl = (kama_ctrl*)kama__unwrapPtr(" + aTy + "__allocate(&" + ap + ", " + layoutOf("kama_ctrl") + ")); "
-                   + t + ".kama_ctrl->kama_strong = 1; " + t + ".kama_ctrl->kama_weak = 0;"
+                   + "kama_ctrl_init(" + t + ".kama_ctrl);"
                  : " " + t + ".kama_ctrl = kama_ctrl_new();";
         _hoisted.push_back(box);
         return t;
@@ -33996,6 +34112,12 @@ void CEmitter::checkOnPanicRegions()
             for (auto it = chain.rbegin(); it != chain.rend(); ++it)
                 path += (path.empty() ? "`" : " -> `") + displayBody(*it) + "`";
             ScopedStr _f(_emitDeclFile, d->second.file);
+            if (d->second.borrow)
+                unsupported(("`" + kv.second.display + "` is `@onPanic`, but " + (chain.size() > 1 ? path + " holds" : "it holds")
+                             + " a borrow into the `Shared` value `" + d->second.name + "` — a recovered panic is a longjmp "
+                             "out of the fault, which would skip the borrow's end and leave every later mutation of that "
+                             "value trapping. Open the window outside the region").c_str(), d->second.line);
+            else
             unsupported(("`" + kv.second.display + "` is `@onPanic`, but " + (chain.size() > 1 ? path + " owns" : "it owns")
                          + " `" + d->second.name + "` (a `" + d->second.className + "`), which has a destructor — "
                          "a recovered panic is a longjmp out of the fault, which would skip it. Keep the region's "
@@ -40081,7 +40203,15 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
                 std::string bp = basePathTo(&_classes[dtgt], fo);
                 checkFieldAccess(fo, field, ma->line);
                 recordFieldRef(fo, field, ma->identifier.get());
-                if (dref) return dref->cName + "(&(" + emitExpression(ma->expression) + "))->" + bp + kMember(*fo, field);
+                if (dref) {
+                    const std::string hp = "&(" + emitExpression(ma->expression) + ")";
+                    // Only a link a write goes through (markWriteChain) is judged as a mutation (KR-211): a read keeps
+                    // the accessor it always had, unchecked, so the C it lowers to is unchanged and a read never traps.
+                    const bool mutAccess = _writeChain.count(ma) && dref->cName.size() >= 8
+                                        && dref->cName.compare(dref->cName.size() - 8, 8, "derefMut") == 0;
+                    return dref->cName + "(" + (mutAccess ? "(" + cls + "*)" + checkedSharedMut(cls, hp, ma->line) : hp)
+                         + ")->" + bp + kMember(*fo, field);
+                }
             }
         }
     }
@@ -40204,7 +40334,11 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                     unsupported(("cannot call non-const method `" + method + "` through `deref()` — a "
                                  "read-only place. Implement `DerefMut<T>` on `" + clsName + "` (the writable "
                                  "half, `derefMut()`), or hold the handle mutably").c_str(), srcLine);
-                std::string derefed = dref->cName + "((" + clsName + "*)" + recvPtr + ")";
+                // Only a call that may mutate is judged as a mutation of the value (KR-211); a `const fn` reads.
+                const bool mutAccess = !tmi->isConst && !tmi->isStatic && dref->cName.size() >= 8
+                                    && dref->cName.compare(dref->cName.size() - 8, 8, "derefMut") == 0;
+                std::string derefed = dref->cName + "((" + clsName + "*)"
+                                    + (mutAccess ? checkedSharedMut(clsName, recvPtr, srcLine) : recvPtr) + ")";
                 return emitDispatch(tgt, derefed, method, args, srcLine, site, nullptr);
             }
         }
@@ -40691,7 +40825,7 @@ std::string CEmitter::emitFallibleNewBox(const std::string& target, const std::s
         if (smartKind(S) == CollKind::Shared) {
             if (useAlloc)
                 s += box + ".kama_ctrl = (kama_ctrl*)kama__unwrapPtr(" + _collections[S].allocType + "__allocate(&" + ap
-                   + ", " + layoutOf("kama_ctrl") + ")); " + box + ".kama_ctrl->kama_strong = 1; " + box + ".kama_ctrl->kama_weak = 0; ";
+                   + ", " + layoutOf("kama_ctrl") + ")); " + "kama_ctrl_init(" + box + ".kama_ctrl); ";
             else
                 s += box + ".kama_ctrl = kama_ctrl_new(); ";
         }
@@ -40866,7 +41000,7 @@ std::string CEmitter::emitTryNewBox(const std::string& target, const std::string
             s += useAlloc ? aTy + "__deallocate(&" + ap + ", " + obj + ", " + layoutOf(cls) + "); "
                           : "kama_free(" + obj + ", " + layoutOf(cls) + "); ";
             s += none + "} else { ";
-            s += ctl + "->kama_strong = 1; " + ctl + "->kama_weak = 0; ";
+            s += "kama_ctrl_init(" + ctl + "); ";
         }
         s += ctorStmt;
         s += S + " " + box + "; " + box + ".kama_obj = " + obj + "; ";
@@ -41799,6 +41933,18 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // none of those has an `add` — every growable collection is an ordinary library type. It is
     // replaced by the view model's place rule, which makes the container unnameable for the extent of
     // the `foreach` and so needs no method-name list to stay honest.)
+    // A receiver a non-`const fn` is called on is WRITTEN through (KR-211), so its member-access links take the
+    // writable half of an auto-deref — marked before anything below asks whether the receiver is const.
+    {
+        std::string mcls = isSmartPtrClass(cls) ? _classes[cls].collElemClass : cls;
+        ClassInfo* owner = nullptr;
+        MethodInfo* mi = _classes.count(mcls) ? findMethod(&_classes[mcls], method, &owner) : nullptr;
+        bool writes = mi && !mi->isConst && !mi->isStatic;
+        if (!mi && isInterface(mcls))
+            if (const std::vector<InterfaceMethod>* need = contractMethods(mcls))
+                for (auto& nm : *need) if (nm.name == method && !nm.isConst) writes = true;
+        if (writes) markWriteChain(receiver);
+    }
     // a non-const method may not be called on a const receiver (deep const).
     // The method lives on the pointee for a smart-pointer receiver (auto-deref).
     if (isConstReceiver(receiver)) {

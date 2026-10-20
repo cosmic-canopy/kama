@@ -2309,18 +2309,15 @@ through another handle trapped, whether or not anything could dangle.
   handle's destructor succeeds (`strong` is held at 1), escapes into a sink, and dangles once `finish_strong` zeroes the
   count and frees the value.
 - **Reads go through `derefMut` too.** `derefAccessor` picks `derefMut` for any non-`const` receiver, whatever the access:
-  `a.size()` on a `const fn` and a bare `return a.x` both lower to `Shared__derefMut(&a)`. A check placed there as the
-  map says would trap reads. First the accessor learns intent: `deref` for a `const fn` call and for a read, `derefMut`
-  only for a non-`const` call, a field write, and a `ref` argument (`emitReorderedCall` already asks `!p.isConst`).
-  A call is one line (the target method's `isConst`, in the auto-deref fallback of `emitDispatch`). A FIELD is not:
-  the emitter has no write context, and a flag set at a write site would leak into the reads nested inside it
-  (`a.items[b.idx] = 3` reads `b`) — and once the check exists, a read through `derefMut` TRAPS a correct program. So
-  each write site marks exactly the member-access chain it writes through (the receiver links of its target, never an
-  index or an argument), and `emitMemberAccess` takes `derefMut` only for a marked node: assignment and compound
-  assignment, `++`/`--`, a `ref`/`out` argument, the receiver of a non-`const` call, a `borrow` host that mints a
-  writable window or calls a non-`const` place method, `foreach (ref …)`, and a `match` binding by `ref`. A missed site
-  writes through `deref()`'s `T const*`, which the C compiler refuses or warns on (and the harness fails a warning) —
-  loud, never a silent pass.
+  `a.size()` on a `const fn` and a bare `return a.x` both lower to `Shared__derefMut(&a)`. So the check is NOT inside
+  `derefMut`: the accessors and the C types stay exactly as they were, and only an access that may mutate is wrapped,
+  `derefMut((Shared*)kama_shared_check_mut(&a, "file", line))` — a non-`const` call (the target's `isConst`), a field on a
+  link a write goes through, and a `ref` argument. A field's write is known by MARKING: each write site — assignment
+  (at the statement, before an owning store emits its drop), compound assignment, `++`/`--`, a `ref`/`out` argument,
+  the receiver of a non-`const` call — marks exactly the member-access chain it writes through, never an index or an
+  argument nested in it (`a.items[b.n] = 3` reads `b`), and only a marked link is checked. A first version switched
+  reads to `deref()` instead; its `T const*` broke every path that hands a read place to a `T*` parameter (a `const fn`
+  receiver, a `foreach` operand), as clang errors on valid code.
 - **Inside a method of the pointee, `this` is `self`.** The check guards ENTRY into a mutating method through a handle,
   which is the granularity the rule wants: `b.grow()` traps at the call, `this.items.add` inside `grow` is never checked.
 - **Paths that take the pointer once and mutate through it later:** an upcast into `Shared<Contract>`/`Shared<Base>`
@@ -2346,10 +2343,30 @@ through another handle trapped, whether or not anything could dangle.
   drop (`_destructibleOwners`, which a window-closing view alias already joins). A marked extent is recorded there too, so a region
   can never unwind through one and leave a count raised.
 
-**Commits, in order:** (1) teardown — shipped `0.9.697`: a `Weak` upgraded while its value is being dropped answers `None`, both control
-blocks; (2) the intent-aware accessor, with no behaviour change but the emitted C; (3) the count, the check in `derefMut`
-and the `borrow`/`foreach`/`match` extents rooted through a handle; (4) the summary and the marked calls; (5) the
-pointer-once paths and `Shared<Contract>`; (6) measurement, interleaved, on the `Shared`-heavy fixtures and the engine.
+- **A hole the ruling's model does not cover (probed 2026-10-20, ASan: heap-use-after-free).** Inside the pointee's
+  own method `this` is `self`, a raw pointer that knows no control block, so a mutation through `this` is never
+  checked. A window through a handle that aliases `this` is then unprotected:
+  ```kama
+  public fn void absorb(Shared<Bag> other) {            // called as a.absorb(other: b), b == a
+      borrow other.first() as x { this.items.add(item: 9); x = 7; }   // grows the buffer x points into
+  }
+  ```
+  (`foreach (x in other.items) { this.items.add(item: x); }` is caught already, by `DynamicArray`'s modification
+  counter.) **Ruling owed.** The options: (a) at a window's entry through a handle whose payload type is the method's
+  own, compare the payload with `self` at run time and, when they are one value inside a non-`const` method, trap at
+  the window — precise in the aliased case, a false trap only where the method would not in fact mutate `this` inside
+  it; (b) refuse statically any window through a may-alias handle (same payload type) whose body mutates `this` — no
+  run-time cost, but it forbids the common merge of two distinct values; (c) RefCell's granularity — a non-`const` call
+  through a handle holds the value mutably for its whole duration, and any borrow taken through another handle meanwhile
+  traps — which the 2026-10-19 amendment rejected as too coarse. (a) is recommended: it is the ruling's own rule (a
+  mutation while a borrow is live traps) applied at the one point the mutation is invisible.
+
+**Commits.** Shipped: (1) teardown, `0.9.697`; (2) the count, the write marking, the check on every mutation through
+a library `Shared` handle, and the `borrow` window's extent with its `@onPanic` refusal, `0.9.698`. Remaining, in order:
+(3) the `foreach` and borrowing-`match` extents rooted through a handle (rare outside the pointee's own methods: a
+resource's fields are private); (4) the method summary and the marked calls through a handle (the `peekAfter` repro);
+(5) the pointer-once paths and `Shared<Contract>`; (6) the `this`-alias ruling above; (7) measurement, interleaved, on
+the `Shared`-heavy fixtures and the engine.
 
 <a id="s5-inline-array-eq"></a>
 

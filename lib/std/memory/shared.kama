@@ -8,11 +8,13 @@ extern fn void  kama_ctrl_retain_strong(UnsafePtr c, int32 atomic);
 extern fn int32 kama_ctrl_release_strong(UnsafePtr c, int32 atomic);
 extern fn int32 kama_ctrl_finish_strong(UnsafePtr c, int32 atomic);
 extern fn void  kama_ctrl_retain_weak(UnsafePtr c, int32 atomic);
+extern fn void  kama_ctrl_init(UnsafePtr c);
 
-// The strong/weak reference counts shared by a `Shared`/`Weak` family. Heap-allocated once at
-// `adopt`, freed when BOTH counts reach zero. Module-internal (not exported). `usize` counts match
-// the runtime `kama_ctrl` layout, so a `BindableFunctionPtr` can retain a Shared it binds.
-type value Ctrl { public usize strong; public usize weak; }
+// The strong/weak reference counts shared by a `Shared`/`Weak` family, and the count of live borrows into the value
+// with the outermost one's site (KR-211). Heap-allocated once at `adopt`, freed when BOTH counts reach zero.
+// Module-internal (not exported). Laid out as the runtime `kama_ctrl`, so a `BindableFunctionPtr` can retain a Shared
+// it binds and an iface handle can free a block made here; kama_ctrl_init sets every field.
+type value Ctrl { public usize strong; public usize weak; public usize borrows; public usize borrowAt; }
 
 // A reference-counted shared-ownership pointer (Rust's `Rc<T>`). `Copyable(bare: copy)`: a bare hand-off
 // (`Shared b = a;`) RETAINS (strong++) via `copy()`; `give b = a` MOVES the handle (transfers the ref, no
@@ -51,14 +53,14 @@ type resource Shared<T, A: Allocator = GlobalAllocator> implements Deref<T>, Der
         // `allocate`'s `Optional` is the honest reading of an OOM, so it is the same `unwrapPtr` panic `adoptIn`
         // gets — not a write through a null block.
         UnsafePtr<Ctrl> ctrl = null;
-        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: this.alloc.allocate(bytes: sizeof(Ctrl), align: alignof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0;
+        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: this.alloc.allocate(bytes: sizeof(Ctrl), align: alignof(Ctrl)))); kama_ctrl_init(c: cast<UnsafePtr>(ctrl));
         this.p = raw; this.c = ctrl;
     }
     // Placement adopt: a pointee that came FROM `allocator`; draw the ctrl block from the SAME `allocator`
     // and store the handle so the dtor releases both through it (the `new(allocator: a) T(...)` path).
     public unsafe ctor adoptIn(UnsafePtr<T> raw, A allocator) {
         UnsafePtr<Ctrl> ctrl = null;
-        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: allocator.allocate(bytes: sizeof(Ctrl), align: alignof(Ctrl)))); ctrl[0].strong = 1; ctrl[0].weak = 0;
+        ctrl = cast<UnsafePtr<Ctrl>>(unwrapPtr(o: allocator.allocate(bytes: sizeof(Ctrl), align: alignof(Ctrl)))); kama_ctrl_init(c: cast<UnsafePtr>(ctrl));
         return Shared.make(p: raw, c: ctrl, alloc: allocator);
     }
     public unsafe const fn const ref T deref() { return this.p[0]; }   // the read-only half (prelude `Deref`)

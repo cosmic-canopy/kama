@@ -1,0 +1,36 @@
+// KR-211: a window reached through a `Shared` handle holds a borrow only while it is open. It closes on every exit —
+// the end of the block, `break`, `continue` and `return` — after which mutating through any handle is legal again;
+// and while it is open, READING through another handle never traps (a `const fn`, a field read, a `const ref` pass).
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Core {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: 1); }
+    public fn ref int32 first() { return this.items[0]; }
+    public const fn isize size() { return this.items.length(); }
+    public fn void grow() { this.items.add(item: 2); }
+}
+fn int32 look(const ref Core c) { return cast<int32>(c.size()); }
+fn int32 early(Shared<Core> a) {
+    borrow a.first() as x { if (x == 1) { return x; } }
+    return 0;
+}
+fn uint8 main() {
+    Shared<Core> a = new Core.make();
+    Shared<Core> b = a;
+    int32 bad = 0;
+    borrow a.first() as x {
+        if (b.size() != 1 || look(c: b) != 1) { bad = bad + 1; }   // reads through the other handle
+        x = 5;
+    }
+    b.grow();                                                       // closed: legal again
+    int32 n = 0;
+    while (n < 3) {
+        n = n + 1;
+        borrow a.first() as x { if (n == 1) { continue; } if (n == 2) { x = 6; break; } }
+    }
+    b.grow();                                                       // after `continue` and `break`
+    if (early(a: a) != 0) { bad = bad + 2; }                        // x is 6 by now, so it falls through
+    b.grow();                                                       // after a `return` out of a window, elsewhere
+    if (b.size() != 4) { bad = bad + 4; }
+    return cast<uint8>(bad);
+}

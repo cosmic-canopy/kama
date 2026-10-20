@@ -1468,6 +1468,23 @@ int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
 answers `None` — so a destructor that upgrades a weak back-edge to its own value (an observer, a parent pointer) can <!-- test: shared_teardown_upgrade -->
 never hand out a `Shared` to memory about to be freed. Rust's `Weak::upgrade` answers the same way.
 
+**A borrow through one handle and a mutation through another trap.** Two `Shared` handles to one value are two
+names the place rules cannot tell apart, so the value's control block counts the `borrow` windows open into it, and a
+mutation through any handle while one is open — a non-`const` call, a field write, a `ref` argument — traps, in every
+build, naming both sites: <!-- test: shared_borrow_mutation, shared_borrow_field_write -->
+
+```kama fragment
+Shared<Core> b = a;
+borrow a.first() as x {   // the window counts one borrow into the value
+    b.grow();             // TRAP: grows the buffer `x` points into — "made at …:2 … (…:3)"
+}
+```
+
+Reading through another handle never traps, and the window's end releases it on every exit (`break`, `continue`,
+`return`). A `@onPanic` region may not hold such a window, since a recovered panic would skip its end. Swift traps <!-- test: shared_borrow_extent --> <!-- xfail: onpanic_shared_borrow -->
+an overlapping access the same way, at run time; Rust's `Rc` instead forbids mutation without a `RefCell`, whose
+borrow flag panics on a conflicting `borrow_mut`.
+
 `.downgrade()` is the only way to get a `Weak`, for a handle over a contract and over a concrete type alike.
 A `Shared` given where a `Weak` is wanted (`Weak<Tex> w = s;`, an argument, a return, a field) is refused, naming `s.downgrade()`. <!-- xfail: weak_needs_downgrade -->
 Boxing and upcasts change what a handle owns; this would change whether it owns, which is written down. An `Owned`

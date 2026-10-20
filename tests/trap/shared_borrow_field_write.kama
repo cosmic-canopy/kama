@@ -1,0 +1,19 @@
+// KR-211: a field WRITE through another handle is a mutation too — assigning `items` drops the buffer the window
+// points into. Traps at the write. (A resource's fields are private, so the two handles meet in its own method.)
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Holder {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: 1); }
+    public fn int32 clobber(Shared<Holder> a, Shared<Holder> b) {
+        borrow a.items.view() as v {
+            b.items = DynamicArray.empty();
+            return v[0];
+        }
+    }
+}
+fn uint8 main() {
+    Shared<Holder> a = new Holder.make();
+    Shared<Holder> b = a;
+    Holder h = Holder.make();
+    return cast<uint8>(h.clobber(a: a, b: b));
+}
