@@ -14241,7 +14241,7 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         mi.params = std::move(params);
         mi.returnType = ret;
         mi.isIntrinsic = true;
-        mi.takesLoc = mname == "get" || mname == "substring";   // the two that trap
+        mi.takesLoc = mname == "get" || mname == "substring" || mname == "findFrom";   // the three that trap
         mi.isConst = true;                    // `string` is immutable: every one of its intrinsics reads.
                                               // The ones that "change" a string (`concat`/`trim`/`substring`
                                               // /case) return a NEW owned string and leave the receiver alone.
@@ -14296,6 +14296,8 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("truncate", { SZ("maxBytes") }, collType);   // owned result, like trim
         addMethod("contains",   { ST("substring") }, SharedIdentifier());
         addMethod("startsWith", { ST("prefix") },    SharedIdentifier());
+        addMethod("equalsIgnoringAsciiCase",     { ST("other") },  SharedIdentifier());   // KR-223
+        addMethod("startsWithIgnoringAsciiCase", { ST("prefix") }, SharedIdentifier());
         addMethod("endsWith",   { ST("suffix") },    SharedIdentifier());
         addMethod("isEmpty",    {}, SharedIdentifier());
         addMethod("trim",       {}, collType);
@@ -14304,19 +14306,21 @@ void CEmitter::registerCollection(SharedIdentifier collType)
         addMethod("replace",    { ST("old"), ST("with") }, collType);  // `with:` (`new` is reserved)
         addMethod("toLower",    {}, collType);
         addMethod("toUpper",    {}, collType);
-        // `find` -> Optional<usize> (null-safe byte offset). Register the Optional<usize> instance so its C
-        // struct + Some/None variants exist, and give `find` that return type; the emitter emits a wrapper
-        // (emitStringFind) that builds the Optional. Mirrors Weak.tryUpgrade / registerOptionalOfShared.
+        // `find`/`findFrom` -> Optional<isize>: a byte offset, `isize` as every index is (KR-223; `usize` through
+        // 0.9.705). Register the Optional<isize> instance so its C struct + Some/None variants exist, and give both
+        // that return type; the emitter emits wrappers (emitStringFind) that build the Optional. Mirrors
+        // Weak.tryUpgrade / registerOptionalOfShared.
         if (_genericTypeParams.count(preludeName("Optional"))) {
-            auto usizeArg = synthId("usize", IDENTIFIER_USIZE_VAL);
+            auto isizeArg = synthId("isize", IDENTIFIER_ISIZE_VAL);
             auto optArgs = std::make_shared<IdentifierList>();
-            optArgs->push_back(usizeArg);
+            optArgs->push_back(isizeArg);
             registerGenericTypeInst("Optional", optArgs);
             auto optRet = synthId("Optional");
-            optRet->genericArg  = usizeArg;
+            optRet->genericArg  = isizeArg;
             optRet->genericArgs = std::make_shared<IdentifierList>();
-            optRet->genericArgs->push_back(usizeArg);
+            optRet->genericArgs->push_back(isizeArg);
             addMethod("find", { ST("substring") }, optRet);
+            addMethod("findFrom", { ST("substring"), SZ("start") }, optRet);
         }
         // `split(separator:)` -> a lazy `Split` iterator (prelude value type; see the `.split()`
         // special-case in emitMethodCall). No collections import: pieces come out one at a time.
@@ -18600,13 +18604,20 @@ void CEmitter::emitWeakTryUpgrade(const CollectionInfo& info)
 // emitted in the collection FUNCS phase where the Optional<usize> instance struct is already complete.
 void CEmitter::emitStringFind(const CollectionInfo& info)
 {
-    const std::string opt = preludeName("Optional") + "_usize";   // prelude-scoped (KR-67 stage 4a)
-    if (!_genericTypeInsts.count(opt)) return;   // Optional<usize> unavailable -> skip (find unregistered)
+    const std::string opt = preludeName("Optional") + "_isize";   // prelude-scoped (KR-67 stage 4a)
+    if (!_genericTypeInsts.count(opt)) return;   // Optional<isize> unavailable -> skip (find unregistered)
     *_out << "static inline " << opt << " " << info.cName << "__find(" << info.cName
           << "* self, kama_string needle) {\n"
           << "    size_t off;\n"
           << "    if (kama_string__find_raw(self, needle, &off))\n"
-          << "        return (" << opt << "){ .kama_tag = " << opt << "_Some, .kama_u.k_Some = { .k_value = off } };\n"
+          << "        return (" << opt << "){ .kama_tag = " << opt << "_Some, .kama_u.k_Some = { .k_value = (ptrdiff_t)off } };\n"
+          << "    return (" << opt << "){ .kama_tag = " << opt << "_None };\n"
+          << "}\n";
+    *_out << "static inline " << opt << " " << info.cName << "__findFrom(" << info.cName
+          << "* self, kama_string needle, ptrdiff_t start, const char* kama_f, int32_t kama_l) {\n"
+          << "    size_t off;\n"
+          << "    if (kama_string__findFrom_raw(self, needle, start, &off, kama_f, kama_l))\n"
+          << "        return (" << opt << "){ .kama_tag = " << opt << "_Some, .kama_u.k_Some = { .k_value = (ptrdiff_t)off } };\n"
           << "    return (" << opt << "){ .kama_tag = " << opt << "_None };\n"
           << "}\n";
 }

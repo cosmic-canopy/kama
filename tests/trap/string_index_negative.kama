@@ -1,0 +1,8 @@
+// A negative byte index traps and the message names it as written: `-1`, not the unsigned wrap
+// 18446744073709551615 it printed through 0.9.705. Opaque index.
+import { std::num::int32Max };
+fn uint8 main() {
+    string s = "abc";
+    isize i = cast<isize>(int32Max() - int32Max() - 1);    // -1, opaque
+    return s[i];
+}

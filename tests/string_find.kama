@@ -1,4 +1,4 @@
-// `find(substring:)` -> Optional<usize> (null-safe byte offset; None when absent, 0 for empty needle).
+// `find(substring:)` -> Optional<isize> (null-safe byte offset; None when absent, 0 for empty needle; KR-223).
 fn uint8 main() {
     string s = "hello";
     int32 r = 0;

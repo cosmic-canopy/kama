@@ -134,7 +134,8 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
   ill-formed `string`. Offsets that come from a search (`find`, `split`) are boundary-aligned by
   construction and cannot trap; an offset computed by *arithmetic* is the case to guard.
 - **boundary + budget** — `floorCharBoundary(at:)` returns the greatest character boundary `<= at`
-  (unchanged when `at` already is one, clamped to `length()` past the end). **Total** — never traps, O(1).
+  (unchanged when `at` already is one, clamped to `0` before the start and to `length()` past the end). **Total** —
+  never traps, O(1).
   It is what makes an arithmetic offset safe at either end of a range:
   `s.substring(start: 0, end: s.floorCharBoundary(at: 80))`. `truncate(maxBytes:)` names the common case
   on top of it — at most `maxBytes` bytes, never splitting — for a wire field, a column limit or a log cap.
@@ -142,9 +143,15 @@ ships — all compiler intrinsics on the primitive (no import), byte-oriented li
   grapheme cluster (an `e` + combining accent, an emoji ZWJ sequence, a flag). Segmentation is defined by
   UAX #29 and needs Unicode tables; it is not shipped, and its home is `std::unicode` — see
   [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §2.
-- **search** — `find(substring:)` returns `Optional<usize>` (the first byte offset, `None` when absent —
-  null-safe, no `-1` sentinel); `contains(substring:)`, `startsWith(prefix:)`, `endsWith(suffix:)` return
-  `bool`; `isEmpty()`.
+- **search** — `find(substring:)` returns `Optional<isize>` (the first byte offset, `None` when absent —
+  null-safe, no `-1` sentinel; `isize`, as every index is); `findFrom(substring:, start:)` searches from byte
+  `start` on and answers an offset still counted from the start of the string (a `start` past the end answers
+  `None`, a negative one traps as a negative index does); `contains(substring:)`, `startsWith(prefix:)`,
+  `endsWith(suffix:)` return `bool`; `isEmpty()`. Search matches bytes exactly, so it is right for any UTF-8.
+- **ASCII case-insensitive comparison** — `equalsIgnoringAsciiCase(other:)` and `startsWithIgnoringAsciiCase(prefix:)`
+  fold `A`–`Z` to `a`–`z` and compare every other byte exactly, with no allocation: the comparison a protocol makes on
+  field names and tokens (`Transfer-Encoding`, `chunked`). The name says ASCII because that is all it folds; Unicode
+  case folding is a different, table-driven operation, and its home is `std::unicode`.
 - **transform** (each returns a fresh owned string) — `trim()` / `trimStart()` / `trimEnd()` strip **ASCII**
   whitespace; `replace(old:, with:)` swaps all non-overlapping occurrences; `toLower()` / `toUpper()` map
   **ASCII** case (bytes ≥ 0x80 untouched — UTF-8-safe). Unicode whitespace/casing are deferred to a later
@@ -160,6 +167,8 @@ foreach (string part in path.split(separator: "/")) { … }   // "", "usr", "loc
 string greet = "Hello, " + name + "!";
 if (greet.toLower().contains(substring: "hello")) { … }
 match (greet.find(substring: ",")) { case Some(value: i): …; case None: …; };
+match (greet.findFrom(substring: "l", start: 3)) { case Some(value: i): …; case None: …; };   // i == 3
+if (field.equalsIgnoringAsciiCase(other: "content-length")) { … }
 ```
 
 ### Formatting & string interpolation ✅

@@ -1,0 +1,9 @@
+// A negative `start` is the offset at fault, and the trap names it. Through 0.9.705 it wrapped to a huge unsigned
+// value, failed `start > end`, and the message blamed the in-range `end` ("index 2 is out of bounds for length 3").
+import { std::num::int32Max };
+fn uint8 main() {
+    string s = "abc";
+    isize start = cast<isize>(int32Max() - int32Max() - 1);    // -1, opaque
+    string sub = s.substring(start: start, end: 2);
+    return cast<uint8>(sub.length());
+}

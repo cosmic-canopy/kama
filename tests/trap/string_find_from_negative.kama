@@ -1,0 +1,8 @@
+// KR-223: `findFrom` with a negative `start` traps as a negative index does; a start past the end answers None.
+// The start comes from an opaque source so it is not folded.
+import { std::num::int32Max };
+fn uint8 main() {
+    string s = "abc";
+    isize start = cast<isize>(int32Max() - int32Max() - 1);    // -1, opaque
+    return match (s.findFrom(substring: "b", start: start)) { case Some(value: i): cast<uint8>(i); case None: 9; };
+}

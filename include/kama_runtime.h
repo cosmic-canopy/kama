@@ -461,7 +461,7 @@ static inline void kama_fail_puti(char* buf, size_t* p, size_t cap, long long v)
 // here / the MCU resets); a firmware author provides a strong `kama_panic_handler` to blink an SOS,
 // reset, or log over a peripheral. Weak symbols are supported by clang/gcc = the embedded toolchains.
 __attribute__((weak)) KAMA_NORETURN void kama_panic_handler(void) { for (;;) __builtin_trap(); }
-static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len, const char* kama_f, int32_t kama_l) {
+static inline KAMA_NORETURN void kama_bounds_fail(ptrdiff_t i, size_t len, const char* kama_f, int32_t kama_l) {
     (void)kama_f; (void)kama_l;
     (void)i; (void)len;
     kama_try_recover();
@@ -597,9 +597,9 @@ static inline KAMA_NORETURN void kama__fail(char* buf, size_t cap, size_t msg, s
 }
 #define KAMA__FAIL_BUF char buf[1024]; size_t p = 0; const size_t cap = sizeof buf - 1; \
                        kama_fail_puts(buf, &p, cap, "kama: ")
-static inline KAMA_NORETURN void kama_bounds_fail(size_t i, size_t len, const char* kama_f, int32_t kama_l) {
+static inline KAMA_NORETURN void kama_bounds_fail(ptrdiff_t i, size_t len, const char* kama_f, int32_t kama_l) {
     KAMA__FAIL_BUF;
-    kama_fail_puts(buf, &p, cap, "index ");                     kama_fail_putu(buf, &p, cap, i);
+    kama_fail_puts(buf, &p, cap, "index ");                     kama_fail_puti(buf, &p, cap, (long long)i);
     kama_fail_puts(buf, &p, cap, " is out of bounds for length "); kama_fail_putu(buf, &p, cap, len);
     kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
@@ -1034,15 +1034,15 @@ KAMA_PLACE_TYPES(volatile, v)
 // explicitly — the same `i < 0 || i >= len` shape the kama-side collections use.
 #define KAMA_FIXED_FUNCS(T, N, NAME)                                           \
 static inline T      NAME##__get(const NAME* self, ptrdiff_t i, const char* kama_f, int32_t kama_l) { \
-    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N), kama_f, kama_l); \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail(i, (size_t)(N), kama_f, kama_l); \
     return self->kama_v[i];                                                          \
 }                                                                               \
 static inline void   NAME##__set(NAME* self, ptrdiff_t i, T x, const char* kama_f, int32_t kama_l) { \
-    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N), kama_f, kama_l); \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail(i, (size_t)(N), kama_f, kama_l); \
     self->kama_v[i] = x;                                                             \
 }                                                                               \
 static inline T*     NAME##__at(NAME* self, ptrdiff_t i, const char* kama_f, int32_t kama_l) { \
-    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N), kama_f, kama_l); \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail(i, (size_t)(N), kama_f, kama_l); \
     return &self->kama_v[i];                                                         \
 }                                                                               \
 static inline ptrdiff_t NAME##__length(const NAME* self) { (void)self; return (ptrdiff_t)(N); } \
@@ -1117,7 +1117,7 @@ static inline NAME NAME##__splat(T x) {                                         
     NAME r; for (int i = 0; i < (N); ++i) r[i] = x; return r;                    \
 }                                                                               \
 static inline T NAME##__lane(const NAME* self, ptrdiff_t i, const char* kama_f, int32_t kama_l) { \
-    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail((size_t)i, (size_t)(N), kama_f, kama_l); \
+    if (i < 0 || i >= (ptrdiff_t)(N)) kama_bounds_fail(i, (size_t)(N), kama_f, kama_l); \
     return (*self)[i];                                                          \
 }                                                                               \
 static inline ARR NAME##__toArray(const NAME* self) {                           \
@@ -1350,8 +1350,8 @@ static inline kama_string kama_string__concat(kama_string* self, kama_string oth
 }
 // Bounds-checked byte access: `s[i]` returns the i-th UTF-8 byte (a uint8). Traps on out-of-range.
 // (Codepoints come from `.chars()`; this is the raw byte, honest to the UTF-8-bytes model.)
-static inline uint8_t kama_string__get(const kama_string* self, size_t i, const char* kama_f, int32_t kama_l) {
-    if (i >= self->kama_len) kama_bounds_fail(i, self->kama_len, kama_f, kama_l);
+static inline uint8_t kama_string__get(const kama_string* self, ptrdiff_t i, const char* kama_f, int32_t kama_l) {
+    if (i < 0 || (size_t)i >= self->kama_len) kama_bounds_fail(i, self->kama_len, kama_f, kama_l);
     return (uint8_t)self->kama_data[i];
 }
 
@@ -1361,11 +1361,14 @@ static inline uint8_t kama_string__get(const kama_string* self, size_t i, const 
 static inline bool kama_utf8_is_boundary(const kama_string* self, size_t off) {
     return off >= self->kama_len || ((unsigned char)self->kama_data[off] & 0xC0) != 0x80;
 }
-// The greatest character boundary <= `off` (Rust's `floor_char_boundary`). Total: never traps, clamps
-// past-the-end to `len`. At most 3 bytes back, since a UTF-8 sequence is at most 4 bytes long. This is
+// The greatest character boundary <= `at` (Rust's `floor_char_boundary`). Total: never traps, clamps a
+// negative offset to 0 and past-the-end to `len`. At most 3 bytes back, since a UTF-8 sequence is at most 4
+// bytes long. This is
 // THE primitive that makes an arithmetic offset safe — at either end of a range and at any position — so
 // `substring` stays the one slicing operation instead of growing a safe twin.
-static inline size_t kama_string__floorCharBoundary(kama_string* self, size_t off) {
+static inline size_t kama_string__floorCharBoundary(kama_string* self, ptrdiff_t at) {
+    if (at <= 0) return 0;                                   // before the start snaps to it, as past the end does
+    size_t off = (size_t)at;
     if (off >= self->kama_len) return self->kama_len;
     while (off > 0 && ((unsigned char)self->kama_data[off] & 0xC0) == 0x80) --off;
     return off;
@@ -1381,12 +1384,13 @@ static inline size_t kama_string__floorCharBoundary(kama_string* self, size_t of
 // no error. Trapping matches how indexing already behaves (a bad index aborts rather than invoking UB)
 // and how Rust's `&s[0..2]` panics on a non-char-boundary. For an offset from arithmetic rather than from
 // a search, snap it with `floorCharBoundary` (or use `truncate`) — both are total.
-static inline kama_string kama_string__substring(kama_string* self, size_t start, size_t end,
+static inline kama_string kama_string__substring(kama_string* self, ptrdiff_t start, ptrdiff_t end,
                                                  const char* kama_f, int32_t kama_l) {
-    if (start > end || end > self->kama_len) kama_bounds_fail(end, self->kama_len, kama_f, kama_l);
-    if (!kama_utf8_is_boundary(self, start)) kama_utf8_split_fail(start, kama_f, kama_l);
-    if (!kama_utf8_is_boundary(self, end))   kama_utf8_split_fail(end, kama_f, kama_l);
-    size_t n = end - start;
+    if (start < 0) kama_bounds_fail(start, self->kama_len, kama_f, kama_l);   // the offset at fault, as written
+    if (start > end || (size_t)end > self->kama_len) kama_bounds_fail(end, self->kama_len, kama_f, kama_l);
+    if (!kama_utf8_is_boundary(self, (size_t)start)) kama_utf8_split_fail((size_t)start, kama_f, kama_l);
+    if (!kama_utf8_is_boundary(self, (size_t)end))   kama_utf8_split_fail((size_t)end, kama_f, kama_l);
+    size_t n = (size_t)(end - start);
     kama_string r; r.kama_len = n;
     if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
     char* buf = kama__str_alloc(n + 1);
@@ -1399,8 +1403,8 @@ static inline kama_string kama_string__substring(kama_string* self, size_t start
 // case where an offset comes from a BUDGET (a wire field, a column limit, a log cap) rather than from a
 // search. Total: never traps. One line over the primitive, kept because a caller who never discovers
 // `floorCharBoundary` still writes correct code by reaching for the obvious name.
-static inline kama_string kama_string__truncate(kama_string* self, size_t maxBytes) {
-    return kama_string__substring(self, 0, kama_string__floorCharBoundary(self, maxBytes), 0, 0);
+static inline kama_string kama_string__truncate(kama_string* self, ptrdiff_t maxBytes) {
+    return kama_string__substring(self, 0, (ptrdiff_t)kama_string__floorCharBoundary(self, maxBytes), 0, 0);
 }
 // Byte offset of the first occurrence of `needle`; an empty needle matches at 0. Internal helper
 // (raw found-flag + offset); the emitter wraps it as `Optional<usize>` for `.find()`. A plain
@@ -1411,6 +1415,35 @@ static inline bool kama_string__find_raw(kama_string* self, kama_string needle, 
     for (size_t i = 0; i + needle.kama_len <= self->kama_len; ++i)
         if (kama_cmp(self->kama_data + i, needle.kama_data, needle.kama_len) == 0) { *out = i; return true; }
     return false;
+}
+// ...from byte `start` on (KR-223): the offset answered still counts from the start of the string. A start past the
+// end finds nothing; a negative one is a bounds miss, as a negative index is. Bytes match exactly, any UTF-8.
+static inline bool kama_string__findFrom_raw(kama_string* self, kama_string needle, ptrdiff_t start, size_t* out,
+                                             const char* kama_f, int32_t kama_l) {
+    if (start < 0) kama_bounds_fail(start, self->kama_len, kama_f, kama_l);
+    const size_t s0 = (size_t)start;
+    if (s0 > self->kama_len || needle.kama_len > self->kama_len - s0) return false;
+    if (needle.kama_len == 0) { *out = s0; return true; }
+    for (size_t i = s0; i + needle.kama_len <= self->kama_len; ++i)
+        if (kama_cmp(self->kama_data + i, needle.kama_data, needle.kama_len) == 0) { *out = i; return true; }
+    return false;
+}
+// ASCII case-insensitive comparison (KR-223): A–Z fold to a–z and every other byte must match exactly, so no
+// allocation and no locale. Unicode case folding is a different, table-driven operation (std::unicode).
+static inline int kama__ascii_fold_eq(const char* a, const char* b, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char x = (unsigned char)a[i], y = (unsigned char)b[i];
+        if (x >= 'A' && x <= 'Z') x = (unsigned char)(x + 32);
+        if (y >= 'A' && y <= 'Z') y = (unsigned char)(y + 32);
+        if (x != y) return 0;
+    }
+    return 1;
+}
+static inline bool kama_string__equalsIgnoringAsciiCase(kama_string* self, kama_string other) {
+    return self->kama_len == other.kama_len && kama__ascii_fold_eq(self->kama_data, other.kama_data, other.kama_len);
+}
+static inline bool kama_string__startsWithIgnoringAsciiCase(kama_string* self, kama_string prefix) {
+    return prefix.kama_len <= self->kama_len && kama__ascii_fold_eq(self->kama_data, prefix.kama_data, prefix.kama_len);
 }
 static inline bool kama_string__contains(kama_string* self, kama_string needle) {
     size_t o; return kama_string__find_raw(self, needle, &o);

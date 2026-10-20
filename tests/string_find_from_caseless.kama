@@ -1,0 +1,30 @@
+// KR-223: `findFrom(substring:, start:)` searches from byte `start` on and answers an offset counted from the start of
+// the string (`Optional<isize>`, as `find` does); a start past the end finds nothing. `equalsIgnoringAsciiCase` and
+// `startsWithIgnoringAsciiCase` fold A-Z only, with no allocation: every other byte, UTF-8 included, must match exactly.
+fn isize at(Optional<isize> o) { return match (o) { case Some(value: i): i; case None: -1; }; }
+
+fn uint8 main() {
+    string list = "gzip, br,chunked";
+    if (at(o: list.find(substring: ",")) != 4) { return 1; }
+    if (at(o: list.findFrom(substring: ",", start: 5)) != 8) { return 2; }       // the next one, counted from 0
+    if (at(o: list.findFrom(substring: ",", start: 4)) != 4) { return 3; }       // `start` itself is searched
+    if (at(o: list.findFrom(substring: ",", start: 9)) != -1) { return 4; }      // no comma after the second
+    if (at(o: list.findFrom(substring: "", start: 16)) != 16) { return 5; }      // empty needle at the very end
+    if (at(o: list.findFrom(substring: "", start: 17)) != -1) { return 6; }      // past the end: nothing
+    if (at(o: list.findFrom(substring: "chunked", start: 9)) != 9) { return 7; }
+    if (at(o: list.findFrom(substring: "chunked!", start: 9)) != -1) { return 8; }
+
+    if (!"Transfer-Encoding".equalsIgnoringAsciiCase(other: "transfer-encoding")) { return 10; }
+    if (!"CHUNKED".equalsIgnoringAsciiCase(other: "chunked")) { return 11; }
+    if ("chunked".equalsIgnoringAsciiCase(other: "chunke")) { return 12; }       // a length differs
+    if ("chunked".equalsIgnoringAsciiCase(other: "chunkee")) { return 13; }
+    if ("[".equalsIgnoringAsciiCase(other: "{")) { return 14; }                  // 0x5B is not 0x7B folded
+    if ("\u{C9}".equalsIgnoringAsciiCase(other: "\u{E9}")) { return 15; }        // É and é: not ASCII, not folded
+    if (!"".equalsIgnoringAsciiCase(other: "")) { return 16; }
+
+    if (!"Keep-Alive, Upgrade".startsWithIgnoringAsciiCase(prefix: "keep-alive")) { return 20; }
+    if (!"close".startsWithIgnoringAsciiCase(prefix: "")) { return 21; }
+    if ("clo".startsWithIgnoringAsciiCase(prefix: "close")) { return 22; }      // a prefix longer than the string
+    if ("Bytes=0-".startsWithIgnoringAsciiCase(prefix: "byte=")) { return 23; }
+    return 0;
+}

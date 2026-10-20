@@ -96,7 +96,10 @@ type value string {
     public fn bool startsWith(string prefix);
     public fn bool endsWith(string suffix);
     public fn bool isEmpty();
-    public fn Optional<usize> find(string substring);           // None when it is not there
+    public fn Optional<isize> find(string substring);           // a byte offset; None when it is not there
+    public fn Optional<isize> findFrom(string substring, isize start);   // ...searching from byte `start` on
+    public fn bool equalsIgnoringAsciiCase(string other);       // A-Z folded to a-z, every other byte exact
+    public fn bool startsWithIgnoringAsciiCase(string prefix);
 
     public fn string trim();
     public fn string trimStart();

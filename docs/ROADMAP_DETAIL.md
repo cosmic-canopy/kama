@@ -435,37 +435,6 @@ each accept on one port; the workaround is one accepting isolate handing each `T
 Per the platform rule, a platform's delta lives in its own type: the backlog everywhere, and reuse-port where the OS
 balances. The spelling is to be decided.
 
-<a id="s1-string-caseless"></a>
-
-#### `string`: ASCII case-insensitive comparison, and `find` from an offset (KR-223)
-
-Measured on `0.9.704`: `string` (prelude/builtin.kama) has `toLower`/`toUpper`, which allocate, `startsWith`/`endsWith`,
-and `find(substring:) -> Optional<usize>` with no start; nothing in std compares case-insensitively. A protocol does so
-constantly — HTTP field names, tokens (`chunked`, `close`, `bytes`), schemes, media-type parameters — so lowering both
-sides costs two allocations per comparison, and searching from a position (the next `,` or `;` in a field) costs a
-`substring` copy or a loop over `s[i]`. `find` is also the one index in std answering `usize`; every other is an `isize`.
-
-**What others do.** Rust: `eq_ignore_ascii_case`, and `find` on a slice (`s[i..].find(p)`). Go: `strings.EqualFold`
-(Unicode simple folding) and `strings.Index(s[i:], sep)`. C#: `string.Equals(a, b, OrdinalIgnoreCase)` and
-`IndexOf(value, startIndex)`. Java: `equalsIgnoreCase` and `indexOf(str, fromIndex)`. Python: `casefold()`, which
-allocates. A slice does the offset's work in Rust and Go; kama's `substring` copies, so here it is a parameter.
-
-**Recommendation (std, beside `toLower`).**
-1. `equalsIgnoringAsciiCase(other:)` and `startsWithIgnoringAsciiCase(prefix:)`: ASCII only and named so, no
-   allocation. Unicode case folding is a different, table-driven operation; it belongs with `std::unicode`, never
-   behind a short name that reads as if it handled every script.
-2. `find(substring:, from:)` as THE `find`, answering `Optional<isize>`: one method (GOALS #4 — kama has no default
-   arguments, so a second `find` without `from` would be a second spelling), and the index type every other index
-   has. A `from` past the end answers `None`; a negative one traps. The nine existing calls (all in tests) add
-   `from: 0`.
-
-**Ruled 2026-10-20 (the maintainer), amending the recommendation:** a second, explicitly named method is not a second
-way to do one thing when the two differ, so `find(substring:)` stays and `findFrom(substring:, start:)` joins it —
-`start` the byte index the search begins at, named as `substring(start:, end:)` names it; the answer still counts from
-the start of the string. Both answer `Optional<isize>` (the nine existing callers, all tests, move from `usize`).
-`find`/`findFrom` match bytes exactly, any UTF-8; only `equalsIgnoringAsciiCase(other:)` and
-`startsWithIgnoringAsciiCase(prefix:)` fold, and only A–Z. Size S.
-
 <a id="s1-sendfile"></a>
 
 #### `sendfile` (KR-207)

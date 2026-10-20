@@ -27,6 +27,7 @@ fn uint8 main()
 
     // --- floorCharBoundary is TOTAL: past the end clamps rather than trapping --------------------
     if (s.floorCharBoundary(at: 99) == 11)      { r = r + 1; }
+    if (s.floorCharBoundary(at: -1) == 0)       { r = r + 1; }   // ...and before the start clamps to it
 
     // --- truncate: a byte BUDGET, never splitting --------------------------------------------
     if (s.truncate(maxBytes: 0).length()  == 0)  { r = r + 1; }   // empty
@@ -34,6 +35,7 @@ fn uint8 main()
     if (s.truncate(maxBytes: 3).length()  == 3)  { r = r + 1; }   // exactly "Aé"
     if (s.truncate(maxBytes: 6).length()  == 4)  { r = r + 1; }   // cut inside € -> "AéZ"
     if (s.truncate(maxBytes: 99).length() == 11) { r = r + 1; }   // whole string
+    if (s.truncate(maxBytes: -1).length() == 0)  { r = r + 1; }   // a negative budget holds nothing
     if (s.truncate(maxBytes: 3).equals(other: "Aé"))          { r = r + 1; }
 
     // --- an offset from a SEARCH is boundary-aligned by construction, so substring cannot fail ---
@@ -54,5 +56,5 @@ fn uint8 main()
     if (chunks == 3) { r = r + 1; }        // "AéZ" | "€" | "😀"
     if (total == 11) { r = r + 1; }        // every byte accounted for, none duplicated
 
-    return cast<uint8>(r);                              // 20 checks
+    return cast<uint8>(r);                              // 22 checks
 }
