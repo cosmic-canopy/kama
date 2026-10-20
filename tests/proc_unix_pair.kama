@@ -10,6 +10,10 @@ import { core::envOr, std::process::Command, std::process::Process, std::process
          std::net::UnixStreamPair, std::net::UnixStream, std::net::Shutdown, std::io::IoError, std::io::Descriptor,
          std::collections::FixedArray, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
 
+// The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
+// POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.
+fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<int64>(c); case _: -1; }; }
+
 fn string util() { return envOr(name: "KAMA_PROCUTIL", dflt: "procutil"); }
 
 unsafe fn Result<UnixStreamPair, IoError> pair() { return UnixStreamPair.open(); }
@@ -41,7 +45,7 @@ unsafe fn int32 echoChild() {
     bool echoed = match (give text) { case Ok(value: s): s == "ping"; case Err(error: e): false; };
     if (!echoed) { return 7; }
     Result<ExitStatus, IoError> w = child.wait();
-    return match (w) { case Ok(value: st): st.code == 0 ? 0 : 8; case Err(error: e): 9; };
+    return match (w) { case Ok(value: st): codeOf(s: st) == 0 ? 0 : 8; case Err(error: e): 9; };
 }
 
 @compileFor(!OS_WINDOWS)

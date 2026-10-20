@@ -29,10 +29,11 @@ extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<c
 extern fn int32 kama_group_signal(isize job, int32 pgid, int32 sig);
 extern fn void  kama_job_close(isize job);
 extern fn int32 kama_proc_wait(isize handle, UnsafePtr<int32> outStatus, int32 flags);
-extern fn int32 kama_proc_exited(int32 st);
-extern fn int32 kama_proc_exit_code(int32 st);
-extern fn int32 kama_proc_signaled(int32 st);
-extern fn int32 kama_proc_term_signal(int32 st);
+// The POSIX wait-status accessors (WIFEXITED & co.). Windows has no such encoding: its status IS the exit code.
+@compileFor(!OS_WINDOWS) extern fn int32 kama_proc_exited(int32 st);
+@compileFor(!OS_WINDOWS) extern fn uint8 kama_proc_exit_code(int32 st);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_proc_signaled(int32 st);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_proc_term_signal(int32 st);
 extern fn int32 kama_kill(isize handle, int32 sig);
 // Non-blocking release on drop: POSIX reaps-if-exited-else-detaches (waitpid WNOHANG); Windows checks then
 // CloseHandle. One platform-neutral verb so the dtor stays identical (POSIX has no handle to close).
@@ -93,13 +94,20 @@ fn int32 groupJoin(const ref ProcessGroup g) { return 0; }
 @nonExhaustive
 type enum Stdio implements Sendable { Inherit, Piped, Null, Handle(Descriptor descriptor), Stdout }
 
-// A finished child's status. On POSIX a process either EXITS with a code OR is killed by a SIGNAL (exactly
-// one): `code` is -1 when signalled, `signal` is 0 when it exited normally.
-@generate(of)
-type value ExitStatus implements Sendable {
-    public int32 code;
-    public int32 signal;
-    public const fn bool success() { return this.signal == 0 && this.code == 0; }
+// A finished child's status, in each platform's own type — the parent's side of `main`'s typed status. On POSIX a
+// process either EXITS with a status the platform keeps one byte of, or is killed by a SIGNAL: exactly one, so each is
+// a variant and neither needs a sentinel (this used to be `int32 code` with -1 for "signalled"). On Windows a process
+// only exits, with all 32 bits of its code (an installer's 1603 or 3010). Both are `@nonExhaustive`, so portable code
+// reads a code with `case Exited(code: c): …` beside a `case _:`, and `success()` is the same question on both.
+@compileFor(!OS_WINDOWS) @nonExhaustive
+type enum ExitStatus implements Sendable {
+    Exited(uint8 code), Signaled(int32 signal);
+    public const fn bool success() { return match (this) { case Exited(code: c): c == 0; case _: false; }; }
+}
+@compileFor(OS_WINDOWS) @nonExhaustive
+type enum ExitStatus implements Sendable {
+    Exited(uint32 code);
+    public const fn bool success() { return match (this) { case Exited(code: c): c == 0; case _: false; }; }
 }
 
 // The captured result of `run()`: the finished status plus the fully-drained stdout/stderr bytes. Move-only
@@ -119,12 +127,18 @@ type resource Output implements Sendable {
     public const fn const ref DynamicArray<uint8> stderr() { return this.errBytes; }
 }
 
-// Fold a raw wait-status into an ExitStatus (WIF* accessors stay in C; kama sees only the int status).
+// Fold a raw wait-status into an ExitStatus (WIF* accessors stay in C; kama sees only the int status). A status that
+// is neither an exit nor a signal is a stopped or continued child, which `kama_proc_wait` never asks to hear about
+// (no WUNTRACED, no WCONTINUED) — so it cannot arrive, and if it does the seam is broken, which is a panic.
+@compileFor(!OS_WINDOWS)
 unsafe fn ExitStatus statusOf(int32 st) {
-    if (kama_proc_exited(st: st) != 0)   { return ExitStatus.of(code: kama_proc_exit_code(st: st), signal: 0); }
-    if (kama_proc_signaled(st: st) != 0) { return ExitStatus.of(code: -1, signal: kama_proc_term_signal(st: st)); }
-    return ExitStatus.of(code: -1, signal: 0);
+    if (kama_proc_exited(st: st) != 0)   { return ExitStatus::Exited(code: kama_proc_exit_code(st: st)); }
+    if (kama_proc_signaled(st: st) != 0) { return ExitStatus::Signaled(signal: kama_proc_term_signal(st: st)); }
+    panic(msg: "std::process: a wait status that is neither an exit nor a signal: ${st}");
 }
+// Windows: the status IS the 32-bit exit code `GetExitCodeProcess` answered, carried through the seam's `int32`.
+@compileFor(OS_WINDOWS)
+unsafe fn ExitStatus statusOf(int32 st) { return ExitStatus::Exited(code: bitcast<uint32>(st)); }
 
 // Build a NULL-terminated argv: [program, args...]. Freed by the caller with kama_argv_free. `None` when
 // the C side could not allocate the vector (a bare `calloc`; `errno` says ENOMEM).

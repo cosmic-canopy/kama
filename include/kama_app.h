@@ -31,7 +31,7 @@ static inline void kama_run_loop(int (*tick)(void*), void* state) {
 }
 // A plain exit() is ignored while the main loop keeps the runtime alive (keepRuntimeAlive); force a true
 // shutdown so the process exits with `code`.
-static inline void kama_app_exit(int32_t code) { emscripten_force_exit((int)code); }
+static inline void kama_app_exit(uint32_t code) { emscripten_force_exit((int)code); }
 
 #else
 
@@ -39,7 +39,7 @@ static inline void kama_app_exit(int32_t code) { emscripten_force_exit((int)code
 static inline void kama_run_loop(int (*tick)(void*), void* state) {
     while (tick(state)) { }
 }
-static inline void kama_app_exit(int32_t code) { exit((int)code); }
+static inline void kama_app_exit(uint32_t code) { exit((int)code); }
 
 #endif
 #endif  // KAMA_APP_H

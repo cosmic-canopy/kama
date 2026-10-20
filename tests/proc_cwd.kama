@@ -3,21 +3,25 @@
 // basename, once WITH cwd set to the helper's directory (KAMA_PROCUTIL_DIR) — it finds the file, exit 0 —
 // and once WITHOUT the override (inheriting the harness cwd = repo root, where that basename is absent) —
 // exit 1. The two differing outcomes prove cwd() took effect. Env vars are set by run_tests.sh.
-import { core::envOr, std::process::Command, std::process::Output, std::io::IoError };
+import { core::envOr, std::process::Command, std::process::Output, std::io::IoError, std::process::ExitStatus };
+
+// The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
+// POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.
+fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<int64>(c); case _: -1; }; }
 
 fn int32 main() {
     Command c1 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c1.arg(a: "hasfile"); c1.arg(a: envOr(name: "KAMA_PROCUTIL_BASE", dflt: "procutil"));
     c1.cwd(dir: envOr(name: "KAMA_PROCUTIL_DIR", dflt: "."));
     Result<Output, IoError> r1 = c1.run();
-    int32 a = match (give r1) { case Ok(value: o): (o.status().code == 0 ? 0 : 96); case Err(error: e): 97; };
+    int32 a = match (give r1) { case Ok(value: o): (codeOf(s: o.status()) == 0 ? 0 : 96); case Err(error: e): 97; };
     if (a != 0) { return a; }
 
     Command c2 = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c2.arg(a: "hasfile"); c2.arg(a: envOr(name: "KAMA_PROCUTIL_BASE", dflt: "procutil"));
     // no cwd override -> inherits the harness cwd (repo root), where the basename does not exist
     Result<Output, IoError> r2 = c2.run();
-    int32 b = match (give r2) { case Ok(value: o): (o.status().code == 1 ? 0 : 98); case Err(error: e): 99; };
+    int32 b = match (give r2) { case Ok(value: o): (codeOf(s: o.status()) == 1 ? 0 : 98); case Err(error: e): 99; };
     if (b != 0) { return b; }
 
     return 42;

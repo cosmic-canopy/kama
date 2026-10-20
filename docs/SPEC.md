@@ -2403,7 +2403,7 @@ one-shot `run() -> Output { status, stdout, stderr }`, which drains stdout and s
 that fills both pipes can't deadlock the parent). A `Handle` goes to the child: the parent's copy is closed once
 the child holds it, so a reader of the other end sees end-of-file, and it serves one `start()` (a second is
 `InvalidInput`). `run()` captures only what was left unset — stdout and stderr; an unset stdin is the null
-device — honours every stream that was set, and leaves the `Command` as it found it. <!-- test: proc_stdio_redirect --> `Process` gives `wait()` (blocking reap → `ExitStatus { code, signal, success() }`),
+device — honours every stream that was set, and leaves the `Command` as it found it. <!-- test: proc_stdio_redirect --> `Process` gives `wait()` (blocking reap → an `ExitStatus`, below),
 `tryWait() -> Optional<ExitStatus>` (non-blocking), `kill`/`terminate`/`signal`, and — with `processGroup(group:)`
 — a child in a group of its own, signalled whole by `killGroup`/`terminateGroup`/`signalGroup` so a supervisor
 stops it with everything it started. `ProcessGroup` keeps each OS's own: POSIX has `Inherit`, `New` (setpgid),
@@ -2421,6 +2421,12 @@ may take — so no child keeps a parent's listening port, file or pipe end open 
 across platforms, with the whole difference behind `kama_os.h` (fork/execvp/pipe/waitpid vs `CreateProcess`),
 and `run()`'s two-pipe drain sits behind one `kama_capture2` seam (`poll` on POSIX, a reader thread per pipe on
 Windows) so both platforms take the same code path. wasm has no process model.
+
+**An `ExitStatus` is each platform's own type, as `main`'s status is.** On POSIX a child either exits, with the one byte
+the platform keeps, or is killed by a signal: `@nonExhaustive type enum ExitStatus { Exited(uint8 code),
+Signaled(int32 signal) }`. On Windows it only exits, with all 32 bits: `Exited(uint32 code)`. Portable code reads a
+code with `case Exited(code: c): …` beside a `case _:`, and `success()` asks the same question on both. Neither
+needs a sentinel: a signalled child used to report `code = -1`. <!-- test: proc_exit_code, proc_run_status -->
 
 **Where a process works (`std::process`, `std::fs`).** `currentDirectory()` reads what a relative path is relative
 to and `setCurrentDirectory(path:)` changes it — process-wide, so it races every isolate resolving a relative path

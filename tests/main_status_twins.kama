@@ -1,0 +1,7 @@
+// `main` returns the process's exit status in the platform's own type (KR-192): `uint8` everywhere — the one byte
+// POSIX keeps, so a status it would truncate is refused where it is written rather than lost at exit — and `uint32` on
+// Windows too, the 32 bits `ExitProcess` takes. A program that wants the Windows range says so with a twin; one that
+// does not writes `fn uint8 main()` alone and builds on every target. (tools/check-compilefor-cover.sh builds the
+// Windows twin on every host.)
+@compileFor(!OS_WINDOWS) fn uint8 main()  { return 42; }
+@compileFor(OS_WINDOWS)  fn uint32 main() { return 42; }

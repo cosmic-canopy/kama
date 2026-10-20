@@ -1600,11 +1600,8 @@ static inline int32_t kama_proc_wait(ptrdiff_t handle, int32_t* outStatus, int32
     *outStatus = (int32_t)code;
     return 1;
 }
-// No wait-status bit-packing on Windows: the status int IS the exit code (a child is never "signalled").
-static inline int32_t kama_proc_exited(int32_t st)      { (void)st; return 1; }
-static inline int32_t kama_proc_exit_code(int32_t st)   { return st; }
-static inline int32_t kama_proc_signaled(int32_t st)    { (void)st; return 0; }
-static inline int32_t kama_proc_term_signal(int32_t st) { (void)st; return 0; }
+// No wait-status bit-packing on Windows: the status int IS the 32-bit exit code (a child is never "signalled"), which
+// std::process's Windows `ExitStatus` reads with a `bitcast<uint32>` — so there are no WIF* accessors to stub.
 // No POSIX signals: any signal maps to TerminateProcess (documented in process.kama). Exit code 1.
 static inline int32_t kama_kill(ptrdiff_t handle, int32_t sig) {
     (void)sig;
@@ -2237,7 +2234,7 @@ static inline int32_t kama_proc_wait(ptrdiff_t handle, int32_t* outStatus, int32
     return (int32_t)r;
 }
 static inline int32_t kama_proc_exited(int32_t st)      { return WIFEXITED(st)   ? 1 : 0; }
-static inline int32_t kama_proc_exit_code(int32_t st)   { return (int32_t)WEXITSTATUS(st); }
+static inline uint8_t kama_proc_exit_code(int32_t st)   { return (uint8_t)WEXITSTATUS(st); }   // POSIX keeps one byte
 static inline int32_t kama_proc_signaled(int32_t st)    { return WIFSIGNALED(st) ? 1 : 0; }
 static inline int32_t kama_proc_term_signal(int32_t st) { return (int32_t)WTERMSIG(st); }
 static inline int32_t kama_kill(ptrdiff_t handle, int32_t sig) { return (int32_t)kill((int)handle, (int)sig); }

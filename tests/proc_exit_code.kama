@@ -1,6 +1,10 @@
 // std::process — start() + blocking wait() reads a non-zero exit code. The helper's `exit 7` -> code 7, !success.
 import { core::envOr, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError };
 
+// The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
+// POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.
+fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<int64>(c); case _: -1; }; }
+
 fn int32 main() {
     Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
     c.arg(a: "exit"); c.arg(a: "7");
@@ -8,7 +12,7 @@ fn int32 main() {
     Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 80; } };
     Result<ExitStatus, IoError> wr = p.wait();
     return match (wr) {
-        case Ok(value: s): { int32 cc = 42; if (s.success()) { cc = 81; } else if (s.code != 7) { cc = 82; } := cc; }
+        case Ok(value: s): { int32 cc = 42; if (s.success()) { cc = 81; } else if (codeOf(s: s) != 7) { cc = 82; } := cc; }
         case Err(error: e): 83;
     };
 }

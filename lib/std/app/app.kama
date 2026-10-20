@@ -17,10 +17,13 @@ extern "kama_app.h";
 // takes `state` at all is that it should not need one: own the frame state and pass it through.)
 @callerThread fnptr int32 TickFn(UnsafePtr state);
 extern fn void kama_run_loop(TickFn tick, UnsafePtr state);
-extern fn void kama_app_exit(int32 code);
+extern fn void kama_app_exit(uint32 code);
 
 unsafe fn void run(TickFn tick, UnsafePtr state) { kama_run_loop(tick: tick, state: state); }
 
 // Terminate the program with `code`, correctly on both targets. On the web a plain libc exit() is ignored
 // while the run loop keeps the runtime alive, so this forces a true shutdown; on native it is exit().
-unsafe fn void quit(int32 code) { kama_app_exit(code: code); }
+// `code` is typed as `main`'s status is (KR-192): the one byte POSIX keeps, and on Windows the 32 bits it has — so a
+// status the platform would truncate is refused where it is written, not lost at exit.
+@compileFor(!OS_WINDOWS) unsafe fn void quit(uint8 code)  { kama_app_exit(code: cast<uint32>(code)); }
+@compileFor(OS_WINDOWS)  unsafe fn void quit(uint32 code) { kama_app_exit(code: code); }

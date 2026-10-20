@@ -2327,8 +2327,8 @@ void CEmitter::rejectConstOutOfRange(const std::string& dstCType, SharedExpressi
     std::string head, tail;
     if (primIntRangeC(dstCType, lo, hi)) {
         head = "` (" + std::to_string(lo) + " to " + std::to_string(hi) + ")";
-        tail = " — that is not a conversion but a different number. Write a value in range, or mask first "
-               "if the truncation is what you mean (`cast<" + name + ">(x & 0xFF)`)";
+        tail = " — that is not a conversion but a different number. Write a value in range, or `truncate<" + name
+               + ">(x)` if keeping the low bits is what you mean";
     } else {
         head = "`";
         tail = " — `" + name + "` holds no negative value, and its width belongs to the target rather than "
@@ -12783,7 +12783,7 @@ void CEmitter::rejectConstCastOverflow(SharedIdentifier target, int64_t v, int64
     unsupported(("`cast<" + nm + ">(" + std::to_string(v) + ")` — " + std::to_string(v)
                  + " does not fit `" + nm + "` (" + std::to_string(lo) + " to " + std::to_string(hi)
                  + "), so this is not a conversion but a different number. Write a value in range, "
-                   "or mask first if the truncation is what you mean (`cast<" + nm + ">(x & 0xFF)`)")
+                   "or `truncate<" + nm + ">(x)` if keeping the low bits is what you mean")
                 .c_str(), line);
 }
 
@@ -33736,12 +33736,18 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
                     "every line in the trusted region. Move the raw work into a helper `unsafe fn` and "
                     "call it from `main` (calling an `unsafe fn` from safe code is allowed)", fn);
 
-    // `main` has ONE signature, `fn int32 main()`: its result is the exit status, and arguments come from
-    // `args()`. A `fn void main()` used to pass `kama check` and then fail in clang on the synthesized
-    // `return (int)kama_main();` — a program kama accepted that the C compiler refused.
-    if (isEntry && (cType(fn->returnType) != "int32_t" || (fn->parameters && !fn->parameters->empty())))
-        unsupported("`main` is declared `fn int32 main()` — it returns the exit status (0 for success) and "
-                    "takes no parameters; command-line arguments come from `args()`", fn);
+    // `main`'s result is the process's exit status, typed as the platform's status is (KR-192): `uint8` everywhere —
+    // the one byte Linux, macOS and the BSDs keep, so `return 256;` is refused rather than exiting 0 — and on Windows
+    // also `uint32`, the 32 bits `ExitProcess` takes. Arguments come from `args()`. A `fn void main()` used to pass
+    // `kama check` and then fail in clang on the synthesized `return (int)kama_main();`. `int32` is accepted while the
+    // corpus moves to `uint8`.
+    if (isEntry) {
+        const std::string ret = cType(fn->returnType);
+        const bool typed = ret == "uint8_t" || (ret == "uint32_t" && _activeFlags.count("OS_WINDOWS")) || ret == "int32_t";
+        if (!typed || (fn->parameters && !fn->parameters->empty()))
+            unsupported("`main` is declared `fn int32 main()` — it returns the exit status (0 for success) and "
+                        "takes no parameters; command-line arguments come from `args()`", fn);
+    }
 
     // `expose fn` crosses to a host over a raw C ABI — an owned-by-value type (kama `string`,
     // a collection, or an `Owned`/`Shared`/`Weak` smart pointer) carries RAII/refcount state that

@@ -23,7 +23,7 @@ extern fn int32 kama_rtc_send(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn int32 kama_rtc_recv(int32 h, UnsafePtr<uint8> buf, usize n);
 extern fn void  kama_rtc_close(int32 h);
 
-unsafe fn void finishAll(UnsafePtr<int32> hdr, int32 code) {
+unsafe fn void finishAll(UnsafePtr<int32> hdr, uint8 code) {
     kama_rtc_close(h: hdr[2]); kama_rtc_close(h: hdr[3]);
     kama_ws_close(h: hdr[0]);  kama_ws_close(h: hdr[1]);
     quit(code: code);

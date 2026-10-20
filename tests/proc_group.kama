@@ -8,6 +8,10 @@ import { core::envOr, std::process::Command, std::process::Process, std::process
          std::process::ExitStatus, std::io::IoError, std::collections::FixedArray, std::encoding::utf8::decode,
          std::encoding::utf8::Utf8Error };
 
+// The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
+// POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.
+fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<int64>(c); case _: -1; }; }
+
 fn string util() { return envOr(name: "KAMA_PROCUTIL", dflt: "procutil"); }
 unsafe fn Result<Process, IoError> sleeper(ProcessGroup g) {
     Command c = Command.make(program: util()); c.arg(a: "sleep"); c.arg(a: "30000");
@@ -36,7 +40,7 @@ unsafe fn int32 posixOnly() {
     if (!died(p: p)) { return 14; }
     // Gone means gone: a SIGKILLed grandchild is a zombie for a moment, until init reaps it.
     Command gone = Command.shell(line: "i=0; while kill -0 ${pid} 2>/dev/null; do i=$((i+1)); [ $i -gt 200 ] && exit 1; sleep 0.05; done");
-    int32 g = match (gone.run()) { case Ok(value: o): o.status().code; case Err(error: e): 99; };
+    int32 g = match (gone.run()) { case Ok(value: o): cast<int32>(codeOf(s: o.status())); case Err(error: e): 99; };
     if (g != 0) { return 15; }
     // ...and a group with nobody left in it is `ProcessNotFound`.
     int32 nf = match (p.killGroup()) { case Ok(value: u): 16; case Err(error: e): match (e.kind()) { case ProcessNotFound: 0; case _: 17; }; };

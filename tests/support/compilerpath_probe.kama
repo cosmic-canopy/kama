@@ -42,6 +42,10 @@ import { core::args, core::print, std::fs::exists, std::fs::createDirAll, std::f
          std::io::IoError, std::collections::DynamicArray, std::path::join,
          std::process::Command, std::process::Process, std::process::ExitStatus };
 
+// The exit code, or -1 when the child did not exit (a signal): `ExitStatus` is a per-platform enum (`uint8` code on
+// POSIX, `uint32` on Windows), read with `match` — widened here so one comparison serves both.
+fn int64 codeOf(ExitStatus s) { return match (s) { case Exited(code: c): cast<int64>(c); case _: -1; }; }
+
 // 日本語 — CJK, 3 bytes per character. No precomposed Latin (HFS+ NFD normalization — see unicodepath_probe).
 fn string cjk()      { return "\u{65E5}\u{672C}\u{8A9E}"; }
 // Привет — Cyrillic, 2 bytes per character.
@@ -106,7 +110,7 @@ fn int32 runWait(ref Command c) {
     return match (give sp) {
         case Ok(value: p): {
             int32 code = match (p.wait()) {
-                case Ok(value: st): st.code;
+                case Ok(value: st): cast<int32>(codeOf(s: st));
                 case Err(error: e): -1;
             };
             := code;
