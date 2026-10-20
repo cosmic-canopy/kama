@@ -111,7 +111,7 @@ class StringSynth:
 def _variant(v):
     """-> (variant name as kama spells it, payload SBValue or None).
 
-    The lowering is `{ <Inst>_Tag kama_tag; union { struct {...} k_<Variant>; ... } kama_u; }`. The tag
+    The lowering is `{ <Inst>_kama_tag kama_tag; union { struct {...} k_<Variant>; ... } kama_u; }`. The tag
     CONSTANT is spelled `<Inst>_<Variant>`, so the variant name is the constant with the type's own name
     cut off the front. A payloadless variant contributes NO union member at all, so the arm lookup must
     be allowed to miss."""

@@ -1,0 +1,14 @@
+// A sequenced argument's temporary takes its parameter's C type as the parameter list spells it. For a `const` on an
+// `UnsafeConstPtr` — already `T const*` — the temporary added a second `const`, and clang warned
+// `-Wduplicate-decl-specifier` in every build of the call (up to 0.9.704); the harness fails a C warning.
+import { std::collections::FixedArray, std::collections::ConstView };
+
+unsafe fn uint8 both(const hardware UnsafeConstPtr<uint8> a, const hardware UnsafeConstPtr<uint8> b) { return a[0] | b[0]; }
+unsafe fn uint8 viaArgs(ConstView<uint8> x, ConstView<uint8> y) { return both(a: x.dataPtr(), b: y.dataPtr()); }
+
+fn uint8 main() {
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    FixedArray<uint8> two = FixedArray.make(size: 1);
+    one[0] = 1ui8; two[0] = 2ui8;
+    return viaArgs(x: one.view(), y: two.view()) == 3ui8 ? 0 : 1;
+}

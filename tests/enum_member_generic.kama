@@ -1,0 +1,25 @@
+// An enum's methods and ctors are code like any other: a generic function called from one, inferred or by turbofish,
+// and a generic instance only one of them names (`Optional<int64>`), are built. Through 0.9.704 nothing walked an
+// enum's members while discovering generics, so the inferred call was refused as unresolved, the turbofish as "only
+// valid on a generic function", and a `match` on the instance as an unresolved subject — while the same bodies built
+// in a free function or a value type.
+fn T same<T>(T x) { return x; }
+
+type enum Mode {
+    Fast, Slow;
+    public const fn int64 inferred() { int64 n = 5i64; return same(x: n); }
+    public const fn int64 explicit() { int64 n = 6i64; return same::<int64>(x: n); }
+    public const fn bool positive(Optional<int64> limit) {
+        Optional<int64> bound = limit;
+        bool held = match (bound) { case Some(value: v): v > 0i64; case None: false; };
+        return held;
+    }
+}
+
+fn uint8 main() {
+    Mode m = Mode::Fast;
+    if (m.inferred() != 5i64 || m.explicit() != 6i64) { return 1; }
+    if (!m.positive(limit: Optional::Some(value: 5i64))) { return 2; }
+    if (m.positive(limit: Optional::None)) { return 3; }
+    return 0;
+}

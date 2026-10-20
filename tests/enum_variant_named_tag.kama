@@ -1,0 +1,12 @@
+// A variant may be named `Tag`. Its tag constant is `<Enum>_Tag` in C, and through 0.9.704 so was the enum's tag TYPE:
+// `kama check` passed and clang refused the redefinition. The type is `<Enum>_kama_tag` now — a name no variant can
+// take, `kama_` being reserved.
+type enum Validator { Tag(int32 id), Date(int64 secs) }
+
+fn uint8 main() {
+    Validator v = Validator::Tag(id: 7);
+    int32 got = match (v) { case Tag(id: i): i; case Date(secs: s): 0; };
+    Validator d = Validator::Date(secs: 9i64);
+    int32 other = match (d) { case Tag(id: i): 100; case Date(secs: s): cast<int32>(s); };
+    return cast<uint8>(got - 7 + other - 9);
+}

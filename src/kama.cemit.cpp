@@ -16338,6 +16338,25 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             if (ed->body) for (auto& m : *ed->body)
                 if (m && m->payload)
                     for (auto& p : *m->payload) if (p) scanTypeForCollections(p->type);
+            // ...and its members' signatures and bodies, as a class's are: an instance only an enum's method named
+            // (`Optional<int64> bound = limit;`) was never built, and the method was refused ("`match` subject's
+            // type could not be resolved") until some other part of the program happened to name it (up to 0.9.704).
+            if (ed->members) for (auto& m : *ed->members) {
+                ASTNode* mn = m.get();
+                if (dynamic_cast<ClassConstDeclarationNode*>(mn) || dynamic_cast<ComptimeAssertNode*>(mn)) {
+                    scanStmtForCollections(m);
+                } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                    scanTypeForCollections(md->returnType);
+                    if (md->params) for (auto& p : *md->params) if (p) scanTypeForCollections(p->type);
+                    seedParams(md->params);
+                    scanStmtForCollections(md->body);
+                } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
+                    if (cc->declarator && cc->declarator->params)
+                        for (auto& p : *cc->declarator->params) if (p) scanTypeForCollections(p->type);
+                    seedParams(cc->declarator ? cc->declarator->params : SharedParameterList());
+                    scanStmtForCollections(cc->body);
+                }
+            }
         }
     }
 }
@@ -17520,6 +17539,24 @@ void CEmitter::collectGenericInsts(SharedCompilationUnit unit)
                 } else if (auto* dd = dynamic_cast<ClassDestructorDeclarationNode*>(mn)) {
                     std::map<std::string, SharedIdentifier> lt;
                     scanStmtForGenerics(dd->body, lt);
+                }
+            }
+        } else if (auto* ed = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+            // An enum's methods and ctors are code too. Nothing walked them, so a generic call in one — `same(x: n)`,
+            // or the turbofish `same::<int64>(…)` — reached the emitter with no instance registered and was refused
+            // as unresolved, though the same body built in a free function or a value type (up to 0.9.704). Generic
+            // enums are skipped for the reason generic classes are: their instances are walked per instantiation.
+            if (ed->typeParams && !ed->typeParams->empty()) continue;
+            ScopedStr _stc(_scanThisCls, enumKey(ed));
+            if (ed->members) for (auto& m : *ed->members) {
+                ASTNode* mn = m.get();
+                if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(mn)) {
+                    std::map<std::string, SharedIdentifier> lt; seed(md->params, lt);
+                    scanStmtForGenerics(md->body, lt);
+                } else if (auto* cc = dynamic_cast<ClassConstructorDeclarationNode*>(mn)) {
+                    std::map<std::string, SharedIdentifier> lt;
+                    if (cc->declarator) seed(cc->declarator->params, lt);
+                    scanStmtForGenerics(cc->body, lt);
                 }
             }
         }
@@ -26271,15 +26308,19 @@ static bool argIsPlainRead(const SharedExpression& e)
     if (auto* m = dynamic_cast<MemberAccessNode*>(n)) return m->expression && argIsPlainRead(m->expression);
     return false;
 }
-// The C type a sequenced argument's temporary takes: the parameter's own, as `paramListC` spells it.
-static std::string seqArgCType(const ParamSig& p)
+// The C type a sequenced argument's temporary takes: the parameter's own, as `paramListC` spells it. `constRaw`: the
+// type is already a read-only raw pointer (CEmitter::isConstRawCType), which the caller asks.
+static std::string seqArgCType(const ParamSig& p, bool constRaw)
 {
     std::string t = p.className.empty() ? p.kindCType : p.className;
     if (t.empty()) return t;                                   // an untyped intrinsic slot: left inline
     if (p.byRef) return t + "*";
     if (t.back() == '*') {                                     // a raw pointer keeps its qualifiers
         if (p.isHardware) t = "volatile " + t;
-        if (p.isConst) t = "const " + t;
+        // ...as paramListC adds them: `const` only for a mutable `UnsafePtr<T>`. An `UnsafeConstPtr<T>` is already
+        // `T const*`, and a second `const` on the pointee was a clang `-Wduplicate-decl-specifier` warning in every
+        // build of a call that sequenced one (`const hardware UnsafeConstPtr<uint8>`, up to 0.9.704).
+        if (p.isConst && !constRaw) t = "const " + t;
     }
     return t;
 }
@@ -26417,7 +26458,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         auto needsTemp = [&](size_t w) {
             SharedExpression e = argOf(w);
             return e && !argIsConstant(e) && !(params[order[w]].byRef && argIsPlainRead(e))
-                && !seqArgCType(params[order[w]]).empty();
+                && !seqArgCType(params[order[w]], false).empty();
         };
         long last = -1;                                    // the last argument that may act
         for (size_t w = 0; w < order.size(); ++w) if (argOf(w) && !argIsPlainRead(argOf(w))) last = (long)w;
@@ -26984,7 +27025,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         }
         if (sequence[pi]) {   // evaluated HERE, before any argument written after it — see argIsConstant
             std::string t = "kama_seqarg" + std::to_string(_tempCounter++);
-            std::string decl = seqArgCType(p) + " " + t + " = " + s + ";";
+            std::string decl = seqArgCType(p, isConstRawCType(p.className.empty() ? p.kindCType : p.className)) + " " + t + " = " + s + ";";
             if (_hoistOK) _hoisted.push_back(decl); else unhoisted.push_back(decl);
             s = t;
         }
@@ -31105,7 +31146,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         // close(0)). Point the subject tag one past the last variant so the dtor's `switch(tag)` hits
         // `default: break` and drops nothing. Only on consumed arms; borrowing-match subjects are untouched.
         if (defusedSubject) {
-            std::string tagTy = ci.tagCType.empty() ? (subjCls + "_Tag") : ci.tagCType;
+            std::string tagTy = ci.tagCType.empty() ? (subjCls + "_kama_tag") : ci.tagCType;
             indent(depth + 2);
             *_out << sp << "->kama_tag = (" << tagTy << ")" << ci.variants.size() << ";\n";
         }
@@ -34733,13 +34774,16 @@ std::string CEmitter::layoutAttrSuffix(const ClassInfo& ci) const
 // contribute a union member. `: IntType` pins the tag field to a fixed-width integer.
 void CEmitter::emitVariantStruct(ClassInfo& ci)
 {
-    std::string tagTy = ci.tagCType.empty() ? (ci.name + "_Tag") : ci.tagCType;
-    // Tag constants: a named `Name_Tag` enum by default, else an anonymous enum (the struct tag
+    // The tag type is `Name_kama_tag`, beside the constants `Name_<Variant>`: a variant may be named anything but a
+    // reserved word, and `kama_…` is one, so the two can never collide. Through 0.9.704 the type was `Name_Tag`, and a
+    // variant named `Tag` (an HTTP validator: an entity tag or a date) passed `kama check` and failed in clang.
+    std::string tagTy = ci.tagCType.empty() ? (ci.name + "_kama_tag") : ci.tagCType;
+    // Tag constants: a named `Name_kama_tag` enum by default, else an anonymous enum (the struct tag
     // field is the pinned integer type, but the constants are still needed for `switch` labels).
-    if (ci.tagCType.empty()) *_out << "typedef enum " << ci.name << "_Tag {\n";
+    if (ci.tagCType.empty()) *_out << "typedef enum " << ci.name << "_kama_tag {\n";
     else                     *_out << "enum {\n";
     for (auto& v : ci.variants) { indent(1); *_out << ci.name << "_" << v.name << ",\n"; }
-    if (ci.tagCType.empty()) *_out << "} " << ci.name << "_Tag;\n";
+    if (ci.tagCType.empty()) *_out << "} " << ci.name << "_kama_tag;\n";
     else                     *_out << "};\n";
 
     *_out << "struct " << ci.name << " {\n";

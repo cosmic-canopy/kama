@@ -597,10 +597,10 @@ struct ClassInfo {
 
     // Tagged unions: a payload/generic `enum` is backed by a ClassInfo whose layout is a
     // discriminant tag + a union of per-variant payloads (not the flat `fields`). `variants` drives
-    // struct + per-variant dtor emission; `tagCType` pins the tag width (`: IntType`), "" = Name_Tag.
+    // struct + per-variant dtor emission; `tagCType` pins the tag width (`: IntType`), "" = Name_kama_tag.
     bool                              isVariant = false;
     std::vector<VariantCase>          variants;
-    std::string                       tagCType;              // "" -> the synthesized `Name_Tag` enum
+    std::string                       tagCType;              // "" -> the synthesized `Name_kama_tag` enum
 
     // Namespaces: the declaring file's scope/usings/symbol-aliases, for resolving this
     // type's field/base/method references during header emission (a field typed with an
