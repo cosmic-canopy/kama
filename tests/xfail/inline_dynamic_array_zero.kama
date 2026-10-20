@@ -1,0 +1,8 @@
+// An `InlineDynamicArray` has at least one place. The size is refused once, at the line that chose it, with the
+// library line as a note — through 0.9.688 a size refused while a std instance registered named the LIBRARY's line in
+// the user's file (`:62` of a five-line program), and the instance's bodies went on to report its consequences.
+import { std::collections::InlineDynamicArray };
+fn uint8 main() {
+    InlineDynamicArray<int32>#(0) xs = InlineDynamicArray.empty();
+    return 0;
+}

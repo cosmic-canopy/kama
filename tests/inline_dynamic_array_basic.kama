@@ -1,0 +1,36 @@
+// `InlineDynamicArray<T>#(N)` over a value is a value (the kind clause): capacity `N` in place, length `0..N`, no
+// heap, copied as its bytes, iterated where it lies, and held by a `type value` — the growable list a value could not
+// hold before. Growing past `N` is an expected state: `add` hands the item back in `Err(CapacityFull::Item(…))`.
+import { std::collections::InlineDynamicArray, std::collections::CapacityFull, core::eprintln };
+
+type value Msg {
+    public InlineDynamicArray<uint8>#(8) body;
+    public uint16 port;
+    public ctor make() { this.port = 7; }
+}
+
+fn int32 run() {
+    int32 bad = 0;
+    InlineDynamicArray<int32>#(3) xs = InlineDynamicArray.empty();
+    _ = xs.add(item: 1);
+    _ = xs.add(item: 2);
+    _ = xs.add(item: 3);
+    match (xs.add(item: 4)) {
+        case Ok(value: _): { bad = bad + 1; }
+        case Err(error: e): { match (e) { case Item(item: x): { bad = bad + (x == 4 ? 0 : 2); } }; }
+    };
+    bad = bad + (xs.length() == 3 ? 0 : 4) + (xs[2] == 3 ? 0 : 8);
+    InlineDynamicArray<int32>#(3) ys = xs;          // a value: copied
+    Optional<int32> p = ys.pop();
+    bad = bad + (xs.length() == 3 ? 0 : 16) + (ys.length() == 2 ? 0 : 32);
+    int32 s = 0;
+    foreach (int32 v in xs) { s = s + v; }
+    bad = bad + (s == 6 ? 0 : 64);
+    Msg m = Msg.make();
+    _ = m.body.add(item: 42ui8);
+    Msg n = m;
+    bad = bad + (n.body[0] == 42ui8 ? 0 : 128);
+    if (bad != 0) { eprintln(s: "inline_dynamic_array_basic: bad ${bad}"); }
+    return bad;
+}
+fn uint8 main() { return run() == 0 ? 42 : 1; }

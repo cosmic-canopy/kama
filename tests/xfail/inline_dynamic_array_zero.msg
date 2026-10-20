@@ -1,0 +1,1 @@
+must be a positive integer (in `InlineDynamicArray<int32>#(0)`, instantiated here

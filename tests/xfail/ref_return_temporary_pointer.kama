@@ -1,0 +1,10 @@
+// A place reached through a pointer that a TEMPORARY's method returns is the temporary's, which is gone when the
+// statement ends: `this.list()` builds a `DynamicArray` that nothing holds, so returning a place in it would dangle.
+import { std::collections::DynamicArray };
+type resource Grid {
+    InlineArray<int32>#(4) cells;
+    public ctor make() { this.cells = [0; 4]; }
+    public fn DynamicArray<int32> list() { DynamicArray<int32> d = DynamicArray.empty(); d.add(item: 1); return give d; }
+    public unsafe fn ref int32 first() { return this.list().dataPtrMut()[0]; }
+}
+fn uint8 main() { return 0; }

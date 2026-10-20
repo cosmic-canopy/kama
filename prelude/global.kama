@@ -314,11 +314,13 @@ type contract IteratorConst<T> for value, view { fn bool hasNext(); fn const ref
 // view's ctor is private, so `iterator()`/`iterMut()` could not build one without this mark. `Iterable`
 // is the container SAYING it is the thing being viewed — which is exactly the relationship the mint rule
 // wants declared. (`Iterator`/`IteratorMut` are NOT marked: an iterator hands out elements, not views.)
-@viewable type contract Iterable<T> for resource, view { fn Iterator<T> iterator(); }
-@viewable type contract IterableMut<T> for resource, view { fn IteratorMut<T> iterMut(); }
+// A `value` may be iterable too: one that holds its elements in place (`InlineDynamicArray<uint8>#(64)`, a kind
+// clause's value instance) is viewed where it lies, as a value's `bytes()` is.
+@viewable type contract Iterable<T> for value, resource, view { fn Iterator<T> iterator(); }
+@viewable type contract IterableMut<T> for value, resource, view { fn IteratorMut<T> iterMut(); }
 // `IterableConst<T>` hands out a read-only iterator via `iterConst()`, which a container declares `const fn`
 // so a READ-ONLY collection (a `const ref` parameter, a `const` local) can be looped by place.
-@viewable type contract IterableConst<T> for resource, view { const fn IteratorConst<T> iterConst(); }
+@viewable type contract IterableConst<T> for value, resource, view { const fn IteratorConst<T> iterConst(); }
 // The container-side mint grant for a plain window: a type that `implements Viewable<View<T>>` declares
 // that its storage is what a `View<T>` views, and `view()` is the one place that view is born.
 //

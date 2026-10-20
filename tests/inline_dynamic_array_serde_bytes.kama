@@ -1,0 +1,54 @@
+// An `InlineDynamicArray` writes and reads back as a JSON array of its live elements, and more than `N` on the wire is
+// an `Err` at the first element with no place — never a truncation. A value instance whose layout has no padding is
+// viewed as its bytes (`@generate(BytesViewable)`): every place past the live prefix is zero, so a popped element
+// leaves nothing behind and the sum below is 5 + its length 1. And a value instance crosses an isolate as a value.
+import {
+    std::collections::InlineDynamicArray, std::collections::ConstView, std::memory::Owned, core::eprintln,
+    std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
+    std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+};
+
+fn string json(Serializable v) {
+    Result<string, Owned<Error>> w = serializeJsonBuffer(v: v);
+    return match (give w) { case Ok(value: s): give s; case Err(error: _): "write failed"; };
+}
+fn uint32 sum<T: BytesViewable<ConstView<uint8>>>(const ref T v) {
+    uint32 s = 0;
+    borrow v.bytes() as b { for (isize i = 0; i < b.length(); i++) { s = s + cast<uint32>(b[i]); } };
+    return s;
+}
+
+fn int32 run() {
+    int32 bad = 0;
+    InlineDynamicArray<string>#(3) xs = InlineDynamicArray.empty();
+    _ = xs.add(item: "a"); _ = xs.add(item: "b");
+    string text = json(v: xs);
+    bad = bad + (text == "[\"a\",\"b\"]" ? 0 : 1);
+    Result<InlineDynamicArray<string>#(3), Owned<Error>> back = deserializeJsonBuffer::<InlineDynamicArray<string>#(3)>(src: give text);
+    match (give back) {
+        case Ok(value: ys): { bad = bad + (ys.length() == 2 && ys[1] == "b" ? 0 : 2); }
+        case Err(error: e): { eprintln(s: e.message()); bad = bad + 4; }
+    };
+    Result<InlineDynamicArray<string>#(3), Owned<Error>> over = deserializeJsonBuffer::<InlineDynamicArray<string>#(3)>(src: "[\"a\",\"b\",\"c\",\"d\"]");
+    match (give over) {
+        case Ok(value: _): { bad = bad + 8; }
+        case Err(error: e): { if (e.message() != "type mismatch at `[3]`") { eprintln(s: e.message()); bad = bad + 16; } }
+    };
+    // A value instance's bytes: 8 places of uint8, then the length — no padding at N = 8.
+    InlineDynamicArray<uint8>#(8) bs = InlineDynamicArray.empty();
+    _ = bs.add(item: 5ui8); _ = bs.add(item: 7ui8);
+    Optional<uint8> gone = bs.pop();                       // re-zeroed: the bytes are 5, then zeros, then len 1
+    bad = bad + (sum(v: bs) == 6 ? 0 : 32);
+    // ...and crosses an isolate as a value.
+    Channel<InlineDynamicArray<int32>#(2)> ch = Channel.bounded(capacity: 1);
+    Sender<InlineDynamicArray<int32>#(2)> tx = ch.sender();
+    Receiver<InlineDynamicArray<int32>#(2)> rx = ch.receiver();
+    InlineDynamicArray<int32>#(2) v = InlineDynamicArray.empty();
+    _ = v.add(item: 40); _ = v.add(item: 2);
+    _ = tx.send(item: v);
+    Optional<InlineDynamicArray<int32>#(2)> got = rx.recv();
+    match (got) { case Some(value: w): { bad = bad + (w[0] + w[1] == 42 ? 0 : 64); } case None: { bad = bad + 128; } };
+    if (bad != 0) { eprintln(s: "inline_dynamic_array_serde_bytes: bad ${bad}"); }
+    return bad;
+}
+fn uint8 main() { return run() == 0 ? 42 : 1; }

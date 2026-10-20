@@ -1,0 +1,1 @@
+the `Result` of `xs.add(item: "a")` is discarded

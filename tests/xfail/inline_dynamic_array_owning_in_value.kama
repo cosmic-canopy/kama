@@ -1,0 +1,5 @@
+// Over an element that owns something, an `InlineDynamicArray` is a resource — it drops its strings — so a
+// `type value`, which is copied as its bytes, may not hold it.
+import { std::collections::InlineDynamicArray };
+type value Bag { InlineDynamicArray<string>#(2) names; }
+fn uint8 main() { return 0; }

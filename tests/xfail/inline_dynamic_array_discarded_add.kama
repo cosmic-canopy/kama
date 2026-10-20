@@ -1,0 +1,8 @@
+// A full `InlineDynamicArray` hands the item back in the `Err`, so a discarded `add` would drop it without a word.
+// A discarded `Result` is refused; `_ = xs.add(item: x);` says the outcome is meant to be ignored.
+import { std::collections::InlineDynamicArray };
+fn uint8 main() {
+    InlineDynamicArray<string>#(1) xs = InlineDynamicArray.empty();
+    xs.add(item: "a");
+    return 0;
+}

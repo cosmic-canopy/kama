@@ -1,0 +1,1 @@
+a `value` owns nothing, but `Bag` transitively owns a resource

@@ -11795,6 +11795,10 @@ void CEmitter::registerDerives(ClassInfo& ci, SharedIdentifier selfNode, int lin
                          "payload is passed by value, so there is no storage for a view to borrow. Hold it in a "
                          "`value` whose enum declares its integer type (`type enum E : uint8`)").c_str(), line);
             ci.genBytesViewable = ci.genBlittable = false;
+        } else if (ci.kind != TypeKind::Value && !ci.valueWhenParams.empty()) {
+            // A kind clause's RESOURCE instance (`InlineDynamicArray<string>#(4)`): the view is for the value instances,
+            // and this one simply has none — each instance of a generic gets what its fields allow.
+            ci.genBytesViewable = ci.genBlittable = false;
         } else if (ci.kind != TypeKind::Value) {
             unsupported((std::string("`@generate(") + which + ")` applies to a plain `value`: a `resource` owns "
                          "what its fields point at, and a `view` borrows it, so neither one's bytes are its value").c_str(), line);
@@ -14237,6 +14241,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     if (probeSize && n <= 0) n = 1;
     if (n <= 0) {
         unsupported("the size of an `InlineArray<T>#(N)` must be a positive integer", fixedType);
+        if (!_registeringInst.empty()) _boundFailedInsts.insert(_registeringInst);   // its bodies would only cascade
         return;
     }
 
@@ -14377,6 +14382,7 @@ void CEmitter::registerStorage(SharedIdentifier storageType)
     if (probeSize && n <= 0) n = 1;
     if (n <= 0) {
         unsupported("the size of an `InlineStorage<T>#(N)` must be a positive integer", storageType);
+        if (!_registeringInst.empty()) _boundFailedInsts.insert(_registeringInst);
         return;
     }
     const std::string elemCType  = cType(elem);
@@ -14455,6 +14461,7 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     if (probeLanes && n <= 0) n = 1;
     if (n <= 0) {
         unsupported("the lane count of a `Simd<T>#(N)` must be a positive integer", simdType);
+        if (!_registeringInst.empty()) _boundFailedInsts.insert(_registeringInst);
         return;
     }
 
@@ -15346,6 +15353,21 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     if (ci.enumNode) checkEnumInstanceConformances(_classes[mangled], tmpl);
     applyTemplateAdapters(mangled);     // a `type adapter` over this generic — under its own module's context
 
+    // The scans below walk the TEMPLATE's members, so what they refuse is at one of its lines and is reported in its
+    // file — and, for a foreign template (std, a package), at this instance's use site with that line as a note, as a
+    // refusal raised while its bodies are emitted is (KR-38). Under the use site's file, as before, a size refused
+    // in `InlineDynamicArray<int32>#(0)` named line 62 of the user's 7-line program. `_registeringInst` lets such a
+    // refusal poison the instance, as a failed bound does, so its bodies do not go on to report its consequences.
+    struct AttrSiteScope {
+        InstSite& r; InstSite saved;
+        AttrSiteScope(InstSite& a, const InstSite* v) : r(a), saved(a) { if (v && a.file.empty()) a = *v; }
+        ~AttrSiteScope() { r = saved; }
+    };
+    auto siteIt = _instSites.find(mangled);
+    AttrSiteScope _as(_attrSite, siteIt != _instSites.end() ? &siteIt->second : nullptr);
+    ScopedStr _tf(_collectingUnitPath, _genericTypeCtx[tmpl].unitPath.empty() ? _collectingUnitPath : _genericTypeCtx[tmpl].unitPath);
+    ScopedStr _ri(_registeringInst, mangled);
+    {
     // Transitive close: register any collection / generic type the substituted members use.
     for (auto& f : ci.fields) scanTypeForCollections(f.type);
     for (auto& kv : ci.methods) {
@@ -15385,6 +15407,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         _scanLocalTys = savedLocals;
         _constLocalVals = savedConsts;
         _comptimeLocalVals = savedCtLocals;
+    }
     }
     // A view in a tagged-union PAYLOAD (`Optional<View>`) would let the borrow be stored or returned via
     // the wrapper — the plain-field reject (emitClassStruct) doesn't see a union payload, so catch it here
@@ -22259,7 +22282,7 @@ std::string CEmitter::unsendableReason(const std::string& cls)
         switch (ci.collKind) {
             case CollKind::String:   // keyed by its C name in the pre-scan (`primKey` of a `string` target falls through to cType)
                 return (declaredOn(cls) || declaredOn("string")) ? "" : "`string` does not declare `implements Sendable`";
-            case CollKind::Fixed: case CollKind::Simd: case CollKind::Mask: {   // `InlineArray<T>`/`Simd<T>`: iff T
+            case CollKind::Fixed: case CollKind::Storage: case CollKind::Simd: case CollKind::Mask: {   // `InlineArray<T>`/`InlineStorage<T>`/`Simd<T>`: iff T
                 auto co = _collections.find(cls);
                 const std::string elem = co != _collections.end() ? co->second.elemCType : "";
                 const std::string r = elem.empty() ? "" : unsendableReason(elem);
@@ -22425,10 +22448,13 @@ std::string CEmitter::typeLayout(SharedIdentifier type, const LayoutModel& m, La
         int64_t n = 0, es = 0, ea = 1;
         if (!constArgN((*t->genericArgs)[1], n) || n <= 0) return "its length is not a compile-time number";
         if (head == "InlineStorage") {   // `T[N]`'s size and alignment, by construction (KAMA_STORAGE_TYPE)
-            // ...but never viewed as bytes: it holds places, not values, and which are live is its holder's to say.
-            if (view) return "it holds places, not values — which of them are live is its holder's knowledge, so the holder views them";
+            // READ as bytes, it is all N places, live or not: every byte is initialized (zero-filled at construction,
+            // written only through its holder's pointer), so the read is defined, and a holder that keeps its dead
+            // places zero (std's `InlineDynamicArray`) is the same bytes for the same contents. Never WRITTEN as bytes:
+            // which places hold a `T` is the holder's knowledge, and what it knows (a length) its own methods keep.
+            if (writable) return "it holds places, not values — which of them are live is its holder's knowledge, so only the holder writes them";
             const std::string r = typeLayout((*t->genericArgs)[0], m, use, es, ea);
-            if (!r.empty()) return r;
+            if (!r.empty()) return view ? "its element is not plain bytes: " + r : r;
             size = es * n; align = ea;
             return "";
         }
@@ -26907,6 +26933,18 @@ std::string CEmitter::refReturnRoot(SharedExpression e, bool& isStatic)
             if (inv->expression)
                 if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
                     if (ma->expression) root = rootBinding(ma->expression);
+        // ...and a place reached through the RAW POINTER a method returns (`this.items.dataPtrMut()[i]`) borrows
+        // that receiver too, as `this.data[i]` through a pointer field does: the pointer is the receiver's own
+        // reach into its storage. Only a pointer — an element of a collection a call returns BY VALUE is a
+        // temporary's, and stays rooted nowhere.
+        if (root.empty())
+            if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get()))
+                if (auto* inv = dynamic_cast<InvocationNode*>(ea->expression.get()))
+                    if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
+                        if (ma->expression) {
+                            const std::string pt = typeOfExpr(ea->expression);   // `T*` / `T const*` for a raw pointer
+                            if (!pt.empty() && pt.back() == '*') root = rootBinding(ma->expression);
+                        }
         if (root.empty()) root = rootBinding(e);
         auto b = _refBindingOperand.find(root);
         if (b == _refBindingOperand.end() || !b->second || !seen.insert(root).second) return root;

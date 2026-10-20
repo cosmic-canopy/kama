@@ -1,0 +1,8 @@
+// `insertAt` takes an index in `0..length()` — `length()` appends — and anything else traps rather than leaving a
+// gap of places that hold no element before the new one.
+import { std::collections::InlineDynamicArray };
+fn uint8 main() {
+    InlineDynamicArray<int32>#(4) xs = InlineDynamicArray.empty();
+    _ = xs.insertAt(index: 2, item: 5);
+    return 1;
+}

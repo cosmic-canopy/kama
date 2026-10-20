@@ -1,0 +1,14 @@
+// A `ref T` result may borrow a place reached through the raw pointer a method of `this`'s storage returns —
+// `this.cells.dataPtrMut()[i]` — as it may one reached through a pointer FIELD (`this.data[i]`): the pointer is the
+// receiver's own reach into its storage. Through 0.9.688 it was refused as "a place into a local". A pointer a
+// TEMPORARY's method returns stays refused (tests/xfail/ref_return_temporary_pointer).
+type resource Grid {
+    InlineArray<int32>#(4) cells;
+    public ctor make() { this.cells = [0; 4]; }
+    public unsafe fn ref int32 at(isize i) { return this.cells.dataPtrMut()[i]; }
+}
+fn uint8 main() {
+    Grid g = Grid.make();
+    g.at(i: 2) = 40;
+    return cast<uint8>(g.at(i: 2) + 2);
+}

@@ -1,0 +1,9 @@
+// A value instance is viewed as its bytes only when its layout has no padding: three `int32` places and an `isize`
+// length leave four bytes between them that a view would expose. `#(4)` has none.
+import { std::collections::InlineDynamicArray, std::collections::ConstView };
+fn uint32 sum<T: BytesViewable<ConstView<uint8>>>(const ref T v) { return 1; }
+fn uint8 main() {
+    InlineDynamicArray<int32>#(3) xs = InlineDynamicArray.empty();
+    uint32 s = sum(v: xs);
+    return 0;
+}

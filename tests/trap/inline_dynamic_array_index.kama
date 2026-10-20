@@ -1,0 +1,8 @@
+// Indexing an `InlineDynamicArray` past its LENGTH traps, though the place exists: places `length()..N` hold no
+// element, and reading one would hand out zero bytes as a `T`. The miss names the caller's line (`@trackCaller`).
+import { std::collections::InlineDynamicArray };
+fn uint8 main() {
+    InlineDynamicArray<int32>#(4) xs = InlineDynamicArray.empty();
+    _ = xs.add(item: 1);
+    return cast<uint8>(xs[1] + 1);
+}

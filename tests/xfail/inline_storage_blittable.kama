@@ -1,0 +1,5 @@
+// A holder of an `InlineStorage` may be READ as bytes — every place is initialized — but never written as bytes:
+// which places hold a `T` is its holder's knowledge, and what it knows (a length) only its own methods keep.
+@generate(Blittable)
+type value W { InlineStorage<uint8>#(8) b; isize len = 0; }
+fn uint8 main() { return 0; }

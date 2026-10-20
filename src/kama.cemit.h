@@ -2513,6 +2513,7 @@ private:
     struct InstSite { std::string file; int line = 0; std::string label; };
     std::map<std::string, InstSite> _instSites;   // instance mangled name -> the user site that instantiated it
     InstSite _attrSite;                           // active while a foreign template's instance is emitted
+    std::string _registeringInst;                 // the generic type instance whose members are being scanned
     // A generic type instance is judged ONCE, when it is built: its conditional members and conformances, its
     // derives and its bound checks. So none is built before every fact those read is filed — the adapter table,
     // class `implements` (linkBases) and enum `implements` plus the generic-enum templates

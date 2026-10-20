@@ -1,0 +1,71 @@
+// `InlineDynamicArray<T>#(N)` over an element that owns something is a resource: it moves, drops exactly its live
+// elements, hands a full `add`'s item back to the caller (who drops or keeps it), deep-copies through `copy` when the
+// element is `Copyable`, and keeps `DynamicArray`'s surface — insert, remove, swap, clear, contains/indexOf/equals —
+// with `addAll` adding all of a run or none of it. `dropped` counts each `H` exactly once.
+import { std::collections::InlineDynamicArray, std::collections::CapacityFull, std::collections::ConstView, core::eprintln };
+
+static int32 dropped = 0;
+type resource H {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+    ~H() { dropped = dropped + 1; }
+}
+type resource Holder { InlineDynamicArray<H>#(3) hs; public ctor make() { } public fn void put(int32 id) { _ = this.hs.add(item: H.make(id: id)); } }
+
+fn int32 run() {
+    int32 bad = 0;
+    {
+        InlineDynamicArray<H>#(2) a = InlineDynamicArray.empty();
+        _ = a.add(item: H.make(id: 1));
+        _ = a.add(item: H.make(id: 2));
+        Result<Unit, CapacityFull<H>> full = a.add(item: H.make(id: 3));
+        match (give full) {                                // full: handed back, then dropped by the arm's scope
+            case Ok(value: _): { bad = bad + 1; }
+            case Err(error: e): { match (give e) { case Item(item: h): { bad = bad + (h.get() == 3 ? 0 : 2); } }; }
+        };
+        bad = bad + (dropped == 1 ? 0 : 4);
+        Optional<H> p = a.pop();                           // moved out
+        bad = bad + (dropped == 1 ? 0 : 8);
+        InlineDynamicArray<H>#(2) b = give a;              // a resource: moved
+        _ = b.insertAt(index: 0, item: H.make(id: 9));
+        bad = bad + (b[0].get() == 9 ? 0 : 16) + (b[1].get() == 1 ? 0 : 32);
+        H r = b.remove(index: 0);
+        bad = bad + (r.get() == 9 ? 0 : 64);
+    }                                                      // p (1), r (1), b's one (1) → 4
+    bad = bad + (dropped == 4 ? 0 : 128);
+    {
+        InlineDynamicArray<string>#(4) s = InlineDynamicArray.empty();
+        _ = s.add(item: "a");
+        _ = s.add(item: "b");
+        _ = s.add(item: "c");
+        InlineDynamicArray<string>#(4) t = copy s;        // deep
+        t[0] = "x";
+        s.swap(i: 0, j: 2);
+        bad = bad + (s[0] == "c" ? 0 : 256) + (t[0] == "x" ? 0 : 512) + (s[2] == "a" ? 0 : 1024);
+        bad = bad + (s.contains(item: "b") ? 0 : 2048) + (s.indexOf(item: "q") == -1 ? 0 : 4096);
+        bad = bad + (s.equals(other: s) ? 0 : 8192);
+        s.clear();
+        bad = bad + (s.length() == 0 ? 0 : 16384);
+        string joined = "";
+        foreach (const ref string x in t) { joined = joined + x; }
+        bad = bad + (joined == "xbc" ? 0 : 32768);
+    }
+    {
+        Holder h = Holder.make();
+        h.put(id: 5);
+        h.put(id: 6);
+    }
+    bad = bad + (dropped == 6 ? 0 : 65536);
+    {
+        InlineDynamicArray<int32>#(4) q = InlineDynamicArray.empty();
+        InlineArray<int32>#(3) src = [1, 2, 3];
+        _ = q.addAll(items: src.view());
+        Result<Unit, CapacityFull<Unit>> r2 = q.addAll(items: src.view());   // 3 more do not fit: nothing added
+        bad = bad + (q.length() == 3 ? 0 : 131072);
+        match (r2) { case Ok(value: _): { bad = bad + 262144; } case Err(error: _): { } };
+    }
+    if (bad != 0) { eprintln(s: "inline_dynamic_array_owning: bad ${bad} dropped ${dropped}"); }
+    return bad;
+}
+fn uint8 main() { return run() == 0 ? 42 : 1; }

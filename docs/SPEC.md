@@ -319,6 +319,36 @@ and exists only for a copyable element. A move-only element with no default is b
 Until `0.9.481` `make` zeroed the buffer for every `T`: a `FixedArray<File>` of 3 closed descriptor 0 three times
 when it dropped, a declared field default read `0`, and a type with no constructor at all was built.
 
+**A bounded list in place — `InlineDynamicArray<T>#(N)`.** Capacity `N` in line, length `0..N`, no heap (C++26
+`inplace_vector`, Rust's `heapless::Vec`): the growable list a `type value` can hold, written in kama over
+`InlineStorage`. Its kind follows its element's by a kind clause — over a value it is a value, copied as its bytes,
+sent as one and held by a `type value`; over an element that owns something it is a resource that moves, drops
+exactly its live elements, and deep-copies with `copy` when the element is `Copyable`. <!-- test: inline_dynamic_array_basic, inline_dynamic_array_owning -->
+
+```kama
+import { std::collections::InlineDynamicArray, std::collections::CapacityFull };
+type value Packet { public InlineDynamicArray<uint8>#(64) body; public uint16 port; }
+
+fn void fill(ref Packet p, uint8 b) {
+    Result<Unit, CapacityFull<uint8>> r = p.body.add(item: b);
+    match (r) { case Ok(value: _): { } case Err(error: _): { /* full: the byte is handed back */ } };
+}
+```
+
+Its surface is `DynamicArray`'s, bounded. Being full is an expected state, not a trap: `add` and `insertAt` return
+`Result<Unit, CapacityFull<T>>` and hand the item back (`match (give e) { case Item(item: x): … }`), and `addAll`
+adds a whole run or none of it (`CapacityFull<Unit>`, as arrayvec's `CapacityError<()>`). A discarded growth is <!-- xfail: inline_dynamic_array_discarded_add -->
+refused like any `Result`. `capacity()` is `N`, with nothing to reserve; `N` is at least 1. Indexing, `remove`, <!-- xfail: inline_dynamic_array_zero -->
+`pop`, `swap`, `clear`, the views, the three `foreach` forms, `contains`/`indexOf`/`equals`, serde and `Sendable`
+are `DynamicArray`'s, over the live prefix; an index past the length traps though the place exists. Reading more <!-- test: inline_dynamic_array_serde_bytes, inline_dynamic_array_index, inline_dynamic_array_insert_at -->
+than `N` elements is an `Err` at the first with no place — never a truncation. Every place past the live prefix is
+kept **zero**: a `pop` or `remove` clears what it vacates, so a copy, a send or a byte view never carries a popped
+element's bytes, and two arrays holding the same elements are the same bytes. A value instance whose layout has no
+padding is `BytesViewable` (`InlineDynamicArray<uint8>#(64)` is; three `int32` places beside an `isize` length are <!-- xfail: inline_dynamic_array_padded_bytes -->
+not), and never `Blittable`: written as bytes, its length could claim places that hold nothing. It has no <!-- xfail: inline_storage_blittable -->
+modification counter, since its places never move: an iterator reads the live length at every step. Over an
+owning element it may not sit in a `type value`, as no resource may. <!-- xfail: inline_dynamic_array_owning_in_value -->
+
 All collections own their storage and free it via RAII (with element-destructor chaining). Only the
 `(collection, element-type)` pairs the program actually uses are emitted (pay-for-what-you-use). A **method
 call on an element** works directly — `list[i].method()` borrows the element *in place*, so a mutating method

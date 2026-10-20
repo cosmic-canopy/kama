@@ -1,0 +1,263 @@
+import { std::ptr::relocate, View, ConstView };
+export { InlineDynamicArray, CapacityFull, InlineDynamicArrayIter, InlineDynamicArrayIterMut, InlineDynamicArrayIterConst };
+
+// The places past the live prefix are kept ZERO: a vacated place is cleared the moment it is vacated, so a copy, a
+// send or a byte view of the array never carries a popped element's bytes, and two arrays holding the same elements
+// are the same bytes.
+extern "<string.h>";
+extern fn UnsafePtr memmove(UnsafePtr d, UnsafeConstPtr s, usize n);
+extern fn UnsafePtr memset(UnsafePtr p, int32 value, usize n);
+
+// The three iterators read the array's LIVE length through a pointer at every step. Its places never move, so a
+// pointer to one never dangles; what changes is which of them hold an element, and a `pop` or `remove` made through
+// an alias the static window cannot see (two `Shared` handles to one holder) only shortens the walk. The array
+// itself has no modification counter: its bytes are its contents, nothing else.
+type view InlineDynamicArrayIter<T: Copyable<T>> implements Iterator<T> {
+    UnsafeConstPtr<T> data; isize pos; UnsafeConstPtr<isize> lenp;
+    unsafe ctor make(UnsafeConstPtr<T> data, UnsafeConstPtr<isize> lenp) { this.data = data; this.pos = 0; this.lenp = lenp; }
+    public unsafe fn Optional<T> next() {
+        if (this.pos >= this.lenp[0]) { return Optional::None; }
+        isize p = this.pos; this.pos = this.pos + 1;
+        return Optional::Some(value: copy this.data[p]);   // yield a COPY (the array keeps its element)
+    }
+}
+
+type view InlineDynamicArrayIterMut<T> implements IteratorMut<T> {
+    UnsafePtr<T> data; isize pos; UnsafeConstPtr<isize> lenp;
+    unsafe ctor make(UnsafePtr<T> data, UnsafeConstPtr<isize> lenp) { this.data = data; this.pos = 0; this.lenp = lenp; }
+    public unsafe const fn bool hasNext() { return this.pos < this.lenp[0]; }
+    public unsafe fn ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
+}
+
+type view InlineDynamicArrayIterConst<T> implements IteratorConst<T> {
+    UnsafeConstPtr<T> data; isize pos; UnsafeConstPtr<isize> lenp;
+    unsafe ctor make(UnsafeConstPtr<T> data, UnsafeConstPtr<isize> lenp) { this.data = data; this.pos = 0; this.lenp = lenp; }
+    public unsafe const fn bool hasNext() { return this.pos < this.lenp[0]; }
+    public unsafe fn const ref T next() { isize p = this.pos; this.pos = this.pos + 1; return this.data[p]; }
+}
+
+// A growth that did not fit: the item is handed back, so nothing is lost — `match (give e) { case Item(item: x): … }`.
+// One variant, because a record cannot hand its field back (kama refuses `give this.field`); std's channels return
+// `Undelivered<T>` in the same shape. `addAll` copies from a view and has no item to return: it reports
+// `CapacityFull<Unit>`, as arrayvec's `try_extend_from_slice` reports `CapacityError<()>`.
+type enum CapacityFull<T> implements Error {
+    Item(T item);
+    public const fn string message() { return "the InlineDynamicArray is full, so the item was not added"; }
+}
+
+// A growable list with its capacity `N` in place and no heap (C++26 `inplace_vector`, Rust's `heapless::Vec`): what a
+// `type value` can hold where a `DynamicArray` cannot. `DynamicArray`'s surface, bounded — growing past `N` is an
+// expected state, not a trap, so `add` and `insertAt` return `Result<Unit, CapacityFull<T>>` and hand the item back,
+// and `addAll` adds all or nothing. There is no capacity to reserve: `capacity()` is `N`.
+//
+// Its kind follows its element's (the kind clause): over a value (`InlineDynamicArray<uint8>#(64)`) it is a value,
+// copied as its bytes and sendable as one, with no destructor; over an element that owns something it is a resource
+// that moves, drops its live elements, and deep-copies when the element is `Copyable`.
+@generate(BytesViewable)
+type resource InlineDynamicArray<T> comptime(int32 N) value when [T: value]
+        implements Copyable<This>(bare: give) when [T: Copyable<T>], IterableMut<T>, IterableConst<T>, Iterable<T> when [T: Copyable<T>],
+                   Viewable<ConstView<T>>, ViewableMut<View<T>>, Equatable<This> when [T: Equatable<T>],
+                   Serializable when [T: Serializable], Deserializable<This> when [T: Deserializable<T>],
+                   Sendable when [T: Sendable] {
+    InlineStorage<T>#(N) items;   // zero-filled at construction; places `len..N` stay zero
+    isize len = 0;
+
+    public default ctor empty() { }
+
+    public const fn isize length() { return this.len; }
+    public const fn isize capacity() { return cast<isize>(N); }
+
+    // The array->pointer bridge, as `DynamicArray`'s: obtaining either is safe, dereferencing is `unsafe`. The places
+    // never move, so the pointer stays valid for the array's life — but only `0..length()` hold an element.
+    public unsafe const fn UnsafeConstPtr<T> dataPtr() { return this.items.dataPtr(); }
+    public unsafe fn UnsafePtr<T> dataPtrMut() { return this.items.dataPtrMut(); }
+
+    public unsafe const fn ConstView<T> view() { return ConstView::<T>.over(at: this.items.dataPtr(), count: this.len); }
+    public unsafe fn View<T> viewMut() { return View::<T>.over(at: this.items.dataPtrMut(), count: this.len); }
+
+    @trackCaller
+    public unsafe const fn ConstView<T> slice(isize from, isize count) {
+        if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "InlineDynamicArray.slice out of bounds"); }
+        return this.view().slice(from: from, count: count);
+    }
+    @trackCaller
+    public unsafe fn View<T> sliceMut(isize from, isize count) {
+        if (from < 0 || count < 0 || from + count > this.len) { panic(msg: "InlineDynamicArray.sliceMut out of bounds"); }
+        return this.viewMut().slice(from: from, count: count);
+    }
+
+    // Append `item`, or hand it back when all `N` places hold one.
+    public unsafe fn Result<Unit, CapacityFull<T>> add(T item) {
+        if (this.len == cast<isize>(N)) { return Result::Err(error: CapacityFull::Item(item: give item)); }
+        UnsafePtr<T> d = this.items.dataPtrMut();
+        d[this.len] = give item;   // into a dead place: zero bytes, nothing to drop
+        this.len = this.len + 1;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Append a copy of every element of `items`, in order — all of them, or none when they do not all fit.
+    public unsafe fn Result<Unit, CapacityFull<Unit>> addAll(ConstView<T> items) when [T: Copyable<T>] {
+        isize n = items.length();
+        if (n > cast<isize>(N) - this.len) { return Result::Err(error: CapacityFull::Item(item: Unit::Unit)); }
+        if (n == 0) { return Result::Ok(value: Unit::Unit); }
+        UnsafePtr<T> d = this.items.dataPtrMut();
+        copyElements(ptr: addr(of: d[this.len]), from: items.dataPtr(), count: n);
+        this.len = this.len + n;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Insert `item` at `index` (0..len), shifting `index..len` up one place, or hand it back when full. `index == len`
+    // is an append.
+    @trackCaller
+    public unsafe fn Result<Unit, CapacityFull<T>> insertAt(isize index, T item) {
+        if (index < 0 || index > this.len) { panic(msg: "InlineDynamicArray.insertAt index out of bounds"); }
+        if (this.len == cast<isize>(N)) { return Result::Err(error: CapacityFull::Item(item: give item)); }
+        UnsafePtr<T> d = this.items.dataPtrMut();
+        if (index < this.len) {   // open place `index`: a raw tail shift, one memmove for any `T`
+            UnsafePtr moved = memmove(d: cast<UnsafePtr>(addr(of: d[index + 1])), s: cast<UnsafeConstPtr>(addr(of: d[index])),
+                                      n: cast<usize>(this.len - index) * sizeof(T));
+        }
+        d[index] = give item;   // the opened place's old bytes moved up; nothing to drop
+        this.len = this.len + 1;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    @trackCaller
+    public unsafe ref T operator[](isize i) {
+        if (i < 0 || i >= this.len) { panic(msg: "InlineDynamicArray index out of bounds"); }
+        return this.items.dataPtrMut()[i];   // a place in `this`'s own storage
+    }
+
+    public unsafe const fn InlineDynamicArrayIter<T> iterator() when [T: Copyable<T>] {
+        return InlineDynamicArrayIter::<T>.make(data: this.items.dataPtr(), lenp: addr(of: this.len));
+    }
+    @serializedGraphEdges
+    public unsafe fn InlineDynamicArrayIterMut<T> iterMut() {
+        return InlineDynamicArrayIterMut::<T>.make(data: this.items.dataPtrMut(), lenp: addr(of: this.len));
+    }
+    public unsafe const fn InlineDynamicArrayIterConst<T> iterConst() {
+        return InlineDynamicArrayIterConst::<T>.make(data: this.items.dataPtr(), lenp: addr(of: this.len));
+    }
+
+    // A deep copy, element by element — a resource instance's only; a value instance is copied as its bytes. The
+    // source's dead places are zero, and so are this one's from construction.
+    public ctor copy(ref InlineDynamicArray<T>#(N) source) {
+        this.copyAllFrom(source: source);
+        return this;
+    }
+    unsafe fn void copyAllFrom(ref InlineDynamicArray<T>#(N) source) when [T: Copyable<T>] {
+        if (source.len == 0) { return; }
+        copyElements(ptr: this.items.dataPtrMut(), from: source.items.dataPtr(), count: source.len);
+        this.len = source.len;
+    }
+
+    // Remove the element at `index`, returning it moved out, and shift the tail down one place.
+    @trackCaller
+    public unsafe fn T remove(isize index) {
+        if (index < 0 || index >= this.len) { panic(msg: "InlineDynamicArray.remove index out of bounds"); }
+        T x = this.takeAt(idx: index);
+        UnsafePtr<T> d = this.items.dataPtrMut();
+        if (index + 1 < this.len) {
+            UnsafePtr moved = memmove(d: cast<UnsafePtr>(addr(of: d[index])), s: cast<UnsafeConstPtr>(addr(of: d[index + 1])),
+                                      n: cast<usize>(this.len - index - 1) * sizeof(T));
+        }
+        this.len = this.len - 1;
+        this.zeroFrom(at: this.len, count: 1);   // the place the tail vacated
+        return give x;
+    }
+
+    // Remove and return the last element, or `None` when empty.
+    public fn Optional<T> pop() {
+        if (this.len == 0) { return Optional::None; }
+        T x = this.takeAt(idx: this.len - 1);
+        this.len = this.len - 1;
+        this.zeroFrom(at: this.len, count: 1);
+        return Optional::Some(value: give x);
+    }
+
+    // Exchange the elements at `i` and `j` in place.
+    @trackCaller
+    public unsafe fn void swap(isize i, isize j) {
+        if (i < 0 || i >= this.len || j < 0 || j >= this.len) { panic(msg: "InlineDynamicArray.swap index out of bounds"); }
+        if (i == j) { return; }
+        T tmp = this.takeAt(idx: i);
+        UnsafePtr<T> d = this.items.dataPtrMut();
+        d[i] = d[j];          // a raw relocation through the local alias
+        d[j] = give tmp;
+    }
+
+    // Drop every element and leave the array empty — every place zero again.
+    public unsafe fn void clear() {
+        drop(ptr: this.items.dataPtrMut(), count: this.len);
+        this.zeroFrom(at: 0, count: this.len);
+        this.len = 0;
+    }
+
+    // Move the element at `idx` out into a fresh owned local; the place is left stale for the caller to overwrite
+    // or clear.
+    unsafe fn T takeAt(isize idx) {
+        slot T x;
+        relocate(from: this.items.dataPtrMut(), at: idx, into: out x);
+        return give x;
+    }
+
+    // Clear `count` places from `at` back to zero bytes: the invariant every byte past the live prefix keeps.
+    unsafe fn void zeroFrom(isize at, isize count) {
+        if (count == 0) { return; }
+        UnsafePtr<T> d = this.items.dataPtrMut();
+        UnsafePtr z = memset(p: cast<UnsafePtr>(addr(of: d[at])), value: 0, n: cast<usize>(count) * sizeof(T));
+    }
+
+    public const fn bool contains(const ref T item) when [T: Equatable<T>] { return this.indexOf(item: item) >= 0; }
+    public const fn isize indexOf(const ref T item) when [T: Equatable<T>] {
+        isize i = 0;
+        while (i < this.len) { if (item.equals(other: this[i])) { return i; } i = i + 1; }
+        return 0 - 1;
+    }
+
+    // Equal when they hold equal elements in the same order.
+    public const fn bool equals(const ref InlineDynamicArray<T>#(N) other) when [T: Equatable<T>] {
+        if (this.len != other.len) { return false; }
+        isize i = 0;
+        while (i < this.len) {
+            if (!InlineDynamicArray::<T>#(N)::sameElement(a: this[i], b: other[i])) { return false; }
+            i = i + 1;
+        }
+        return true;
+    }
+    static fn bool sameElement(const ref T a, const ref T b) when [T: Equatable<T>] { return a.equals(other: b); }
+
+    // A JSON array of the live elements, as `DynamicArray` writes one.
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
+        w.beginArray(count: cast<usize>(this.len));
+        isize i = 0;
+        while (i < this.len) {
+            Result<Unit, Owned<Error>> __sr = this[i].serialize(w: w);
+            match (give __sr) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+            i = i + 1;
+        }
+        w.endArray();
+        return Result::Ok(value: Unit::Unit);
+    }
+    // ...and read back. More than `N` elements is an `Err` at the first that has no place — never a truncation.
+    public ctor Result<InlineDynamicArray<T>#(N), Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>] {
+        r.beginArray();
+        isize index = 0;
+        while (r.moreElems()) {
+            if (index == cast<isize>(N)) {
+                return Result::Err(error: DeError::inElement(error: DeError.of(kind: DeErrorKind::TypeMismatch), index: index));
+            }
+            Result<T, Owned<Error>> __er = T.deserialize(r: r);
+            match (give __er) {
+                case Err(error: e): { return Result::Err(error: DeError::inElement(error: give e, index: index)); }
+                case Ok(value: v):  { _ = this.add(item: give v); }
+            };
+            index = index + 1;
+        }
+        return Result::Ok(value: give this);
+    }
+
+    unsafe ~InlineDynamicArray() {   // a resource instance's: drop the live elements; the places are part of `this`
+        drop(ptr: this.items.dataPtrMut(), count: this.len);
+    }
+}
