@@ -1,0 +1,12 @@
+// A member gated `when [T: value]` exists only on the instances whose argument owns nothing; `Box<string>` has
+// no `width`, and the refusal says which condition failed.
+type resource Box<T> {
+    T v;
+    public ctor make(T v) { this.v = give v; }
+    public const fn int32 width() when [T: value] { return 1; }
+}
+fn uint8 main() {
+    Box<string> b = Box.make(v: "x");
+    int32 z = b.width();
+    return 0;
+}

@@ -1,0 +1,1 @@
+it is declared `when [T: value]`, and `string` (for `T`) does not satisfy `value`

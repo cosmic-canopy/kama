@@ -1,0 +1,3 @@
+// A kind clause says which instances are a `value`: its word is `value`, and nothing else.
+type resource Pair<T> resource when [T: value] { T a; }
+fn uint8 main() { return 0; }

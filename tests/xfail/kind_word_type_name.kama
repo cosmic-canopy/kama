@@ -1,0 +1,5 @@
+// A kind word says what a type IS — `type value P`, `when [T: value]` — so it names no type: `type value value`
+// built through 0.9.687, and would make the bound `[T: value]` mean two things. As a field, binding or parameter
+// name a kind word stays legal (`Result::Ok(value: …)`).
+type value value { int32 a; }
+fn uint8 main() { return 0; }

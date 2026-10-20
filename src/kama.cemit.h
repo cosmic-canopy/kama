@@ -543,6 +543,10 @@ struct ClassInfo {
     std::vector<std::string>          copyableWhenParams;
     std::vector<std::string>          copyableWhenBounds;
     std::vector<SharedIdentifier>     copyableWhenBoundNodes;
+    // `type resource Pair<T> value when [T: value]` — the KIND CLAUSE's gated type-params (KR-191). An instance whose
+    // every gated argument is a value (isPlainType) is itself a `value`: registerGenericTypeInst flips its kind and
+    // takes away the destructor and the copy ctor a value cannot have. Empty = the declared kind, for every instance.
+    std::vector<std::string>          valueWhenParams;
 
     // Inheritance + virtual dispatch
     int                               maxDepth = 0;    // `virtual(maxDepth: N)`: levels that may still be added BELOW this type (0 = sealed, i.e. `final`)
@@ -1959,6 +1963,12 @@ private:
     std::string copyFirst(const std::string& cls, const std::string& src, int depth);
     bool isVariantCtorExpr(ASTNode* e);
     bool declaredCopyable(const SharedIdentifier& ty);
+    // Is this type a VALUE — owns nothing, copied as its bytes? The one answer for the `value` bound (`when [T: value]`,
+    // `<T: value>`), a kind clause (KR-191) and the kind an `InlineArray`/`InlineStorage` takes from its element.
+    // From declared facts only: a type node not registered yet is judged by its template.
+    bool isPlainType(const SharedIdentifier& ty);
+    bool isPlainCType(const std::string& ct);          // …a registered C type
+    std::set<std::string> _plainVisiting;              // enums being judged (coinductive: a mention mid-answer holds)
     void noteUntypedByInference(ASTNode* e);
     bool reportUntypedVariant(ASTNode* at, const std::string& tmpl, const std::string& shown,
                               const std::string& variant, int line);

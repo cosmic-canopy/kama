@@ -148,6 +148,49 @@
 >}
 #^^ source.kama
 >
+>// A kind clause: `value` after the head is a kind word too (KR-191), coloured like the one after `type`, while the
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>// bound in `[T: value]` is a type position.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>type resource Pair<T> value when [T: value] {
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^^^^ source.kama storage.modifier.kind.kama
+#             ^ source.kama
+#              ^^^^ source.kama entity.name.type.kama
+#                  ^ source.kama keyword.operator.relational.kama
+#                   ^ source.kama entity.name.type.kama
+#                    ^ source.kama keyword.operator.relational.kama
+#                     ^ source.kama
+#                      ^^^^^ source.kama storage.modifier.kind.kama
+#                           ^ source.kama
+#                            ^^^^ source.kama keyword.other.kama
+#                                ^^ source.kama
+#                                  ^ source.kama entity.name.type.kama
+#                                   ^^^^^^^^^^^ source.kama
+>    T a;
+#^^^^ source.kama
+#    ^ source.kama entity.name.type.kama
+#     ^^^^ source.kama
+>    public ctor make(T a) { this.a = give a; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.kama
+#               ^ source.kama
+#                ^^^^ source.kama entity.name.function.kama
+#                    ^ source.kama
+#                     ^ source.kama entity.name.type.kama
+#                      ^^^^^^ source.kama
+#                            ^^^^ source.kama variable.language.kama
+#                                ^^^ source.kama
+#                                   ^ source.kama keyword.operator.assignment.kama
+#                                    ^ source.kama
+#                                     ^^^^ source.kama keyword.other.kama
+#                                         ^^^^^^ source.kama
+>}
+#^^ source.kama
+>
 >type enum Color {
 #^^^^ source.kama keyword.other.kama
 #    ^ source.kama

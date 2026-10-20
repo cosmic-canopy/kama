@@ -53,8 +53,8 @@ static const char* friendOperatorSpelling(int tok);
 SharedExpression createIntegerLiteralNode(CodeGenContext& context, int base, const std::string& str,
                                           const std::string& spelling, YYLTYPE* loc, yyscan_t scanner);
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
-    SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedStringList forKinds,
-    SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body);
+    SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedIdentifier kindClause,
+    SharedStringList forKinds, SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body);
 SharedStatement makeEnumDeclaration(CodeGenContext& context, SharedAttributeList attributes,
     SharedModifierList modifiers, SharedIdentifier head, SharedIdentifier underlying,
     SharedClassBaseDeclaration base, SharedEnumBody body);
@@ -512,7 +512,7 @@ struct kamayystype {
 %type <strings> import_path export_manifest_opt export_name_list for_kinds_opt kind_name_list
 %type <identifier> basic_identifier qualified_identifier type_name type non_array_type simple_type function_return_type type_arg generic_turbofish_name
 %type <identifier> primitive_type numeric_type integral_type floating_point_type class_type qualified_identifier_no_generic
-%type <identifier> type_param type_param_default_opt type_decl_head enum_underlying_opt implements_entry method_when_opt when_clause when_cond_list
+%type <identifier> type_param type_param_default_opt type_decl_head kind_clause_opt enum_underlying_opt implements_entry method_when_opt when_clause when_cond_list
 %type <identifier> comptime_param comptime_param_type comptime_param_default_opt comptime_arg turbofish_type_name
 %type <identifierlist> friend_member_list interface_type_list type_arg_list type_param_list bound_list type_params_opt
 %type <identifierlist> comptime_params_opt comptime_param_list comptime_args_opt comptime_arg_list
@@ -919,20 +919,20 @@ type_declaration
    is never reserved. `type` marks every type declaration (greppable, like `fn`). All three
    kinds share the class body; the emitter routes `contract` to the fat-pointer vtable path. */
 marked_type_declaration
-  : TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
-    {      $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $3, $4, $5, $6, $7); }
-  | attribute_list TYPE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
-    {      $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $4, $5, $6, $7, $8); }   /* `@generate(...) type …` */
+  : TYPE modifiers_opt IDENTIFIER type_decl_head kind_clause_opt for_kinds_opt class_base_opt class_body semicolon_opt
+    {      $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $2, $3, $4, $5, $6, $7, $8); }
+  | attribute_list TYPE modifiers_opt IDENTIFIER type_decl_head kind_clause_opt for_kinds_opt class_base_opt class_body semicolon_opt
+    {      $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $3, $4, $5, $6, $7, $8, $9); }   /* `@generate(...) type …` */
   /* `type expose value V` — a C layout kama OWNS and the generated host header publishes (KR-52), the
      pair of `type extern value`. `expose` is spelled only HERE, directly after `type`, rather than joining the
      member `modifier` set: that set is shared with fields and methods, where `expose` is a parse error
      (tests/xfail/expose_on_method), and one position keeps a type's spelling to one. */
-  | TYPE EXPOSE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+  | TYPE EXPOSE modifiers_opt IDENTIFIER type_decl_head kind_clause_opt for_kinds_opt class_base_opt class_body semicolon_opt
     {      $3->insert($3->begin(), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $2));
-           $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $3, $4, $5, $6, $7, $8); }
-  | attribute_list TYPE EXPOSE modifiers_opt IDENTIFIER type_decl_head for_kinds_opt class_base_opt class_body semicolon_opt
+           $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, SharedAttributeList(), $3, $4, $5, $6, $7, $8, $9); }
+  | attribute_list TYPE EXPOSE modifiers_opt IDENTIFIER type_decl_head kind_clause_opt for_kinds_opt class_base_opt class_body semicolon_opt
     {      $4->insert($4->begin(), std::make_shared<ModifierNode>(SCANNER_CODEGENCONTEXT, $3));
-           $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $4, $5, $6, $7, $8, $9); }
+           $$ = makeTypeDeclaration(SCANNER_CODEGENCONTEXT, $1, $4, $5, $6, $7, $8, $9, $10); }
   ;
 
 /* `type adapter <int8, Uuid, …> implements C { …methods… <int8> { …methods… } }` — a type's conformance to C,
@@ -995,6 +995,18 @@ adapter_members
 for_kinds_opt
   : /* Nothing */   { $$ = std::make_shared<StringList>(); }
   | FOR kind_name_list   { $$ = $2; }
+  ;
+/* `type resource Pair<T> value when [T: value]` — a KIND CLAUSE: the declaration is a `resource`, and each instance
+   whose condition holds is a `value` instead (KR-191). The kind word is an IDENTIFIER like the one after `type`, so
+   nothing is reserved; which word and which bounds are legal is the emitter's call. No conflict: after the head
+   only this clause begins with an IDENTIFIER (`for`, `extends`, `implements` and the body's opening brace are
+   keywords or punctuation). */
+kind_clause_opt
+  : /* Nothing */   { $$ = SharedIdentifier(); }
+  | IDENTIFIER when_clause
+      { auto k = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1);
+        STAMP_LOC(k, @1);
+        k->whenParams = $2->whenParams; k->whenBounds = $2->whenBounds; $$ = k; }
   ;
 kind_name_list
   : kind_name   { $$ = std::make_shared<StringList>(); $$->push_back($1); }
@@ -2520,11 +2532,12 @@ enum_member_declaration
 // `@…` attribute list). Captures generic params/bounds off the head and strips them so the class NAME stays
 // bare (`Pair`/`Map`). Factored out so the attributed and un-attributed alternatives share one action.
 SharedStatement makeTypeDeclaration(CodeGenContext& context, SharedAttributeList attributes,
-    SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedStringList forKinds,
-    SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body)
+    SharedModifierList modifiers, SharedString typeKind, SharedIdentifier head, SharedIdentifier kindClause,
+    SharedStringList forKinds, SharedClassBaseDeclaration base, SharedClassMemberDeclarationList body)
 {
     auto n = std::make_shared<ClassDeclarationNode>(context, modifiers, head, base, body);
     n->typeKind   = typeKind;
+    n->kindClause = kindClause; // `value when [T: value]` — null when the declaration has none (KR-191)
     n->forKinds   = forKinds;   // `for value, resource` — mandatory on a `type contract`, else empty
     n->attributes = attributes; // `@generate(...)` etc. (null when the un-attributed alternative was used)
     if (head->genericArgs && !head->genericArgs->empty()) {

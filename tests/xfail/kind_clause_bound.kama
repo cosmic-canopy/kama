@@ -1,0 +1,4 @@
+// A kind clause's condition is `P: value`: an instance is a value when what it holds is one. A contract bound says
+// what an argument can DO, not whether it owns anything, so it cannot decide a kind.
+type resource P<T> value when [T: Copyable<T>] { T a; }
+fn uint8 main() { return 0; }

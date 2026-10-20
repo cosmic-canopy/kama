@@ -1,0 +1,53 @@
+// A kind clause, `type resource Pair<T> value when [T: value]`, makes each instance whose argument is a value a
+// `value` itself: `Pair<int32>` is copied as its bytes, sits inside a `type value`, and has no destructor, while
+// `Pair<H>` is a resource that moves and drops what it holds. Before 0.9.688 a generic type had one kind for every
+// instance, so the pair over `int32` was a move-only resource that no `type value` could hold.
+import { core::eprintln };
+
+static int32 dropped = 0;
+
+type resource H {
+    int32 id;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+    ~H() { dropped = dropped + 1; }
+}
+
+type resource Pair<T> value when [T: value] {
+    T a;
+    T b;
+    public ctor make(T a, T b) { this.a = give a; this.b = give b; }
+    public const fn const ref T first() { return this.a; }
+    public fn void setFirst(T a) { this.a = give a; }
+    ~Pair() { dropped = dropped + 100; }   // a resource instance's; a value instance has none
+}
+
+type value Holder {
+    public Pair<int32> p;
+    int32 n;
+    public ctor make(Pair<int32> p, int32 n) { this.p = p; this.n = n; }
+}
+
+fn int32 run() {
+    int32 bad = 0;
+    {
+        Pair<int32> a = Pair.make(a: 1, b: 2);
+        Pair<int32> b = a;                         // a value: copied, no `give`, `a` still usable
+        b.setFirst(a: 9);
+        bad = bad + (a.first() == 1 ? 0 : 1) + (b.first() == 9 ? 0 : 2);
+        Holder h = Holder.make(p: a, n: 3);
+        Holder k = h;
+        bad = bad + (k.p.first() == 1 ? 0 : 4);
+    }
+    bad = bad + (dropped == 0 ? 0 : 8);            // no destructor ran for a value instance
+    {
+        Pair<H> p = Pair.make(a: H.make(id: 1), b: H.make(id: 2));
+        Pair<H> q = give p;                         // a resource: moved
+        bad = bad + (q.first().get() == 1 ? 0 : 16);
+    }
+    bad = bad + (dropped == 102 ? 0 : 32);         // its destructor, and both elements, exactly once
+    if (bad != 0) { eprintln(s: "kind_clause_value_instance: bad ${bad}, dropped ${dropped}"); }
+    return bad;
+}
+
+fn uint8 main() { return run() == 0 ? 42 : 1; }

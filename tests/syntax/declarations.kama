@@ -35,6 +35,13 @@ type final resource Handle {
     public fn int32 raw() { return this.fd; }
 }
 
+// A kind clause: `value` after the head is a kind word too (KR-191), coloured like the one after `type`, while the
+// bound in `[T: value]` is a type position.
+type resource Pair<T> value when [T: value] {
+    T a;
+    public ctor make(T a) { this.a = give a; }
+}
+
 type enum Color {
     Red,
     Green

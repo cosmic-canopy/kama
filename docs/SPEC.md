@@ -4398,6 +4398,48 @@ type resource Buffer {
 A `value` that transitively owns a resource is a **compile error** ("declare `type resource`"), and a `~dtor` <!-- xfail: value_owns_resource -->
 is allowed only on a `resource` (`~dtor` ⟺ `resource` — a `value` owns nothing to free).
 
+**A kind that follows the type's parameters — the kind clause.** A generic type that owns nothing of its own
+holds whatever its argument holds, so its right kind depends on the argument: `Pair<int32>` should copy as its
+bytes and sit inside a `type value`, and `Pair<string>` should move and drop its strings. A **kind clause** after
+the name says so:
+
+```kama
+type resource Pair<T> value when [T: value] {
+    T a;
+    T b;
+    public ctor make(T a, T b) { this.a = give a; this.b = give b; }
+    public const fn const ref T first() { return this.a; }
+}
+```
+
+The declaration is a `resource`, and it is checked as one for every instance (its fields stay private). Each
+instance whose condition holds is a **`value`** instead: copied as its bytes, with no destructor and no copy
+constructor, and not `Copyable` by declaration (that contract is a resource's; a value satisfies the bound by its
+kind). So a `~Pair()` and a `ctor copy` belong to the resource instances alone, and a conditional
+`implements Copyable<This>(bare: give) when [T: Copyable<T>]` beside the clause serves them. <!-- test: kind_clause_value_instance, kind_clause_bounds -->
+The clause narrows a `type resource` and nothing else; its word is `value`; the type is generic; and each condition
+is `P: value` over one of its own type parameters. A value is sealed, so the clause takes no `extends`, `virtual`,
+`abstract` or `final`. <!-- xfail: kind_clause_on_value, kind_clause_word, kind_clause_not_generic, kind_clause_bound, kind_clause_param, kind_clause_sealed -->
+A value instance must own nothing: a field the clause's parameters do not decide (a `string name`) is refused at the <!-- xfail: kind_clause_owning_field -->
+first instance the clause makes a value. A resource instance (`Pair<string>`) is a resource everywhere, so a `type value` may not hold it. <!-- xfail: kind_clause_resource_instance_in_value -->
+An `enum` needs no clause: its kind follows its payloads by nature (`Optional<int32>` is a value,
+`Optional<string>` a resource), and an `InlineArray` and an `InlineStorage` follow their element the same way. C++
+makes the same property conditional (`inplace_vector<T>` is trivially copyable exactly when `T` is), as do Rust
+(`#[derive(Copy)]` emits `impl<T: Copy> Copy`) and Swift (`extension Box: Copyable where T: Copyable`); each makes
+the cheap property the conditional one over an owning base, which is the clause's shape.
+
+**`value` is a structural bound.** Beside `default`, `value` asks of an argument what a kind clause asks: does it
+own nothing? It holds for a primitive, a raw pointer, a `type value`, a value instance of a kind clause, an enum
+whose every payload is a value, and an `InlineArray`/`InlineStorage` of values; not for a `string`, a heap
+collection, a smart pointer, a `resource`, a `view` or a contract (both borrow). It gates a member or a
+conformance (`fn int32 width() when [T: value]`) and bounds a type parameter (`fn void f<T: value>(T x)`), where
+the body may then copy a `T` as its bytes. <!-- test: kind_clause_bounds --> <!-- xfail: value_bound_owning, when_value_method_owning -->
+
+**A kind word names no type.** `value`, `resource`, `view`, `contract`, `adapter` and `intrinsic` say what a type
+is, so none of them names a type or a type parameter: `type value value { … }` and `type contract resource for
+value { }` built through `0.9.687`, and would make `[T: value]` mean two things. As a field, binding or parameter
+name each stays legal — `Result::Ok(value: x)`. <!-- xfail: kind_word_type_name, kind_word_contract_name, kind_word_type_param -->
+
 ## RAII / destructors ✅
 
 A `~Type()` destructor runs deterministically at scope exit, in reverse construction order, on every path
@@ -4521,7 +4563,8 @@ from `T`'s default, `filled(size:, value:)` from a copy) each with an allocator 
 is marked **`default`**, which is what makes such a field default-fillable elsewhere.
 
 The default-allocator conveniences are gated **`when [A: default]`** — a *structural* bound (the argument
-bound to `A` must itself have a `default` ctor; there is no nominal `Default` contract). So
+bound to `A` must itself have a `default` ctor; there is no nominal `Default` contract; `value` is the other
+structural bound, under *A kind that follows the type's parameters* above). So
 `DynamicArray<T, BumpAllocator>.empty()` **does not exist**: you get a clean "not available for this
 instantiation" error rather than a collection with a zero allocator. Use `withAllocator` for a custom `A`.
 

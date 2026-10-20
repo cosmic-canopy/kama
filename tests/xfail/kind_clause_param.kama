@@ -1,0 +1,4 @@
+// A kind clause's condition names one of the type's own TYPE parameters. A comptime value parameter is a number,
+// and owns nothing whatever it is.
+type resource P<T> comptime(int32 N) value when [N: value] { T a; }
+fn uint8 main() { return 0; }

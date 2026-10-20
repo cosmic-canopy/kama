@@ -1,0 +1,7 @@
+// `<T: value>` requires an argument that owns nothing — the function may copy it as its bytes. A `string` owns
+// its bytes, so it does not satisfy the bound.
+fn int32 plain<T: value>(T x) { return 7; }
+fn uint8 main() {
+    int32 z = plain(x: "s");
+    return 0;
+}

@@ -1007,6 +1007,9 @@ public:
     // The kind word from a `type <kind> Name { … }` declaration ("value"/"resource"/"contract").
     // Drives the ownership/access model.
     SharedString typeKind;
+    // `type resource Pair<T> value when [T: value]` — the KIND CLAUSE (KR-191): the word after the head (`value`) on a
+    // holder carrying the condition as whenParams/whenBounds. Null when the declaration has none.
+    SharedIdentifier kindClause;
     // Type parameters from `type value Box<T> { … }` — monomorphized per concrete arg;
     // empty for a non-generic type. Set by the grammar action (like typeKind).
     SharedStringList typeParams;

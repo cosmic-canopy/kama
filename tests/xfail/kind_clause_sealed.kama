@@ -1,0 +1,7 @@
+// A kind clause makes an instance a `value`, and a value is sealed: no instance may extend or be extended.
+type virtual resource Pair<T> value when [T: value] {
+    T a;
+    public ctor make(T a) { this.a = give a; }
+    protected virtual fn int32 get() { return 1; }
+}
+fn uint8 main() { return 0; }

@@ -206,6 +206,7 @@ module.exports = grammar({
         repeat($.modifier),
         field('kind', $.type_kind),
         field('name', $.type_declaration_head),
+        optional($.kind_clause),
         optional($.for_kinds),
         optional($.class_base),
         field('body', $.class_body),
@@ -214,6 +215,11 @@ module.exports = grammar({
 
     // `value` / `resource` / `view` / `contract` / `adapter` — contextual, never reserved.
     type_kind: ($) => $.identifier,
+
+    // kama.y kind_clause_opt (KR-191) — `type resource Pair<T> value when [T: value]`: the instances whose condition
+    // holds are values. The word is a kind word like the one after `type`, so it is a `type_kind` node over an
+    // identifier, never a terminal.
+    kind_clause: ($) => seq(field('kind', $.type_kind), $.when_clause),
 
     // `type adapter <int8, Uuid, Optional> implements C { … <int8> { … } }` — a type's conformance to C,
     // written outside its declaration (kama.y `marked_adapter_declaration`). It diverges from

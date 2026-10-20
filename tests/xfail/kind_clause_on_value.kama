@@ -1,0 +1,5 @@
+// A kind clause narrows a `type resource` to a `value` for the instances whose condition holds. A `type value` is
+// already a value for every instance, so a clause on one says nothing — and any other word than `value` names no
+// kind an instance could take.
+type value Pair<T> value when [T: value] { T a; }
+fn uint8 main() { return 0; }

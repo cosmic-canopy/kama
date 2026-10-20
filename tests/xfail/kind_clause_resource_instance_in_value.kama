@@ -1,0 +1,8 @@
+// A kind clause decides each instance: `Pair<string>` holds a string, so it is a resource, which moves and has
+// identity — and a `type value`, which is copied, may not hold it, exactly as it may not hold any resource.
+type resource Pair<T> value when [T: value] {
+    T a;
+    public ctor make(T a) { this.a = give a; }
+}
+type value Bag { Pair<string> p; }
+fn uint8 main() { return 0; }

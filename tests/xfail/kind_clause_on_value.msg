@@ -1,0 +1,1 @@
+narrows a `type resource` to a `value` for some instances — a `type value` has one kind

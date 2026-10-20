@@ -1,0 +1,1 @@
+type parameter `value` takes a kind word

@@ -157,6 +157,18 @@ void CEmitter::line(int srcLine)
 // `Map<int32, int32, DefaultHasher, GlobalAllocator>`. `depth` bounds the recursion through nested args:
 // a diagnostic must never be the thing that hangs the compiler.
 static std::string spellTypeNode(const SharedIdentifier& t);   // below, beside exactBoundName
+// `T: value` — the KIND bound (KR-191), in a `when [...]` or a `<T: …>` list: the bare word, never a contract, since a
+// kind word names no type (checkDeclaredNames).
+static bool isValueBound(const SharedIdentifier& b)
+{
+    return b && b->value && *b->value == "value" && !b->genericArg && (!b->genericArgs || b->genericArgs->empty())
+        && (!b->qualifier || b->qualifier->empty());
+}
+// The words that say what a type IS (`type value P`, `when [T: value]`). None may name a type or a type parameter.
+static bool isKindWord(const std::string& n)
+{
+    return n == "value" || n == "resource" || n == "view" || n == "contract" || n == "adapter" || n == "intrinsic";
+}
 
 std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool cRegister) const
 {
@@ -3986,7 +3998,7 @@ void CEmitter::checkDeclaredTypes(const std::vector<SharedCompilationUnit>& unit
         if (bases && bases->interfaces)
             for (auto& itf : *bases->interfaces) checkTypeNode(itf, "an `implements` clause", "contract");
         if (bounds) for (auto& list : *bounds) if (list)
-            for (auto& b : *list) checkTypeNode(b, "a bound", "contract");
+            for (auto& b : *list) if (!isValueBound(b)) checkTypeNode(b, "a bound", "contract");
     };
     // Every LOCAL declared type in a body, checked for module privacy ONLY. `collectBindings` is the
     // statement walker (kama.query.cpp) the position index already uses; `stmtOnly` drops its `match`-arm
@@ -11808,6 +11820,40 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                                      ("a `type " + (cd->typeKind ? *cd->typeKind : std::string("?")) + "`").c_str(),
                                      cd->line);
 
+        // `type resource Pair<T> value when [T: value]` — a KIND CLAUSE (KR-191). It says which instances are values, and
+        // nothing else: the declaration is a `resource` (so it obeys the stricter rules — private fields — for every
+        // instance), the word is `value`, and each condition is `P: value` over one of its own type parameters. Checked
+        // before the kind is mapped, because a `type contract` leaves this loop there.
+        if (cd->kindClause) {
+            const std::string w = cd->kindClause->value ? *cd->kindClause->value : std::string();
+            const std::string declared = cd->typeKind ? *cd->typeKind : std::string("?");
+            if (declared != "resource")
+                unsupported(("a kind clause (`" + w + " when […]`) narrows a `type resource` to a `value` for some instances "
+                             "— a `type " + declared + "` has one kind for every instance").c_str(), cd->kindClause);
+            else if (w != "value")
+                unsupported(("a kind clause says which instances are a `value` — write `value when [T: value]`, not `"
+                             + w + " when […]`").c_str(), cd->kindClause);
+            else if (!cd->typeParams || cd->typeParams->empty())
+                unsupported("a kind clause (`value when […]`) belongs to a generic type, whose instances differ in what they "
+                            "hold — a type with no parameters is `type value` or `type resource`", cd->kindClause);
+            else if (cd->kindClause->whenParams)
+                for (size_t c = 0; c < cd->kindClause->whenParams->size(); ++c) {
+                    const SharedIdentifier& p = (*cd->kindClause->whenParams)[c];
+                    const SharedIdentifier b = cd->kindClause->whenBounds && c < cd->kindClause->whenBounds->size()
+                                             ? (*cd->kindClause->whenBounds)[c] : SharedIdentifier();
+                    const std::string pn = p && p->value ? *p->value : std::string();
+                    auto names = [&](const SharedStringList& l) {
+                        return l && std::any_of(l->begin(), l->end(), [&](const SharedString& x) { return x && *x == pn; });
+                    };
+                    const bool isTypeParam = names(cd->typeParams) && !names(cd->comptimeParams);
+                    if (!isTypeParam)
+                        unsupported(("a kind clause's condition names a type parameter of `" + *cd->name->value + "` — `" + pn
+                                     + "` is not one").c_str(), p ? p : cd->kindClause);
+                    else if (!b || !b->value || *b->value != "value" || b->genericArgs || (b->qualifier && !b->qualifier->empty()))
+                        unsupported(("a kind clause's condition is `" + pn + ": value` — an instance is a `value` when what it "
+                                     "holds is one; `" + (b ? kamaTypeText(b) : std::string("?")) + "` is not a kind").c_str(), b ? b : cd->kindClause);
+                }
+        }
         // `type <kind> Name` — map the kind word. `contract` is registered as an interface
         // (collectInterfaces), so skip it here; a bad kind word is a clear error.
         TypeKind kind = TypeKind::Neutral;
@@ -11997,6 +12043,13 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
         if (ci.kind == TypeKind::Value && (ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass))
             unsupported("a `value` is sealed — `virtual`/`abstract`/`final` apply to a `resource`; "
                         "for polymorphism declare a `contract`", cd);
+        // ...and a kind clause makes some instances values, so its type is sealed the same way: a subclass of a value
+        // instance would be a value with a base.
+        if (cd->kindClause && (ci.isVirtualClass || ci.isAbstractClass || ci.isFinalClass || !ci.baseName.empty()))
+            unsupported("a kind clause makes an instance a `value`, and a `value` is sealed — `extends` and "
+                        "`virtual`/`abstract`/`final` do not combine with `value when […]`", cd->kindClause);
+        if (cd->kindClause && cd->kindClause->whenParams)
+            for (auto& p : *cd->kindClause->whenParams) if (p && p->value) ci.valueWhenParams.push_back(*p->value);
 
         // A `type extern value` may declare ctors, methods, operators and statics (KR-53): the STRUCT is the
         // header's and is never emitted, but a member is an ordinary kama function, emitted like any other —
@@ -15241,6 +15294,21 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         copyableActive = whenConditionsHold(ci.copyableWhenParams, ci.copyableWhenBounds, ci.copyableWhenBoundNodes, params, concrete);
         if (!copyableActive) { ci.copyable = false; ci.methods.erase("copy"); ci.ctors.erase("copy"); }
     }
+    // A KIND CLAUSE (`type resource Pair<T> value when [T: value]`, KR-191): this instance is a `value` when every gated
+    // argument is one. A value owns nothing and is copied as its bytes, so it has no destructor and no copy ctor —
+    // and no `Copyable` conformance either, which is a resource's: a value satisfies that bound by its kind.
+    bool valueInst = !ci.valueWhenParams.empty();
+    for (const std::string& wp : ci.valueWhenParams)
+        for (size_t i = 0; i < params.size() && i < concrete.size(); ++i)
+            if (params[i] == wp && !isPlainType(concrete[i])) valueInst = false;
+    if (valueInst) {
+        ci.kind = TypeKind::Value;
+        ci.hasDtor = false;
+        ci.dtorNode = nullptr;
+        ci.copyable = false;
+        ci.copyableWhenParams.clear(); ci.copyableWhenBounds.clear(); ci.copyableWhenBoundNodes.clear();
+        ci.methods.erase("copy"); ci.ctors.erase("copy");
+    }
     // Conditional METHODS (`fn … when T: Bound`): drop any whose bound fails for this instance, so it's
     // never emitted (the value `iterator()` needs a Copyable element — a `List<Owned>` simply lacks it).
     for (auto it = ci.methods.begin(); it != ci.methods.end(); ) {
@@ -15269,6 +15337,11 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         ci.interfaces = instanceInterfaces(ci, mangled, params, concrete);
         closeUnderRefinement(ci.interfaces);   // and what each refines (KR-133)
     }
+    if (valueInst)   // `Copyable` is `for resource`; a value instance copies by its kind (see above)
+        ci.interfaces.erase(std::remove_if(ci.interfaces.begin(), ci.interfaces.end(), [&](const std::string& itf) {
+            auto it = _interfaces.find(itf);
+            return preludeLeaf(itf) == "Copyable" || (it != _interfaces.end() && preludeLeaf(it->second.templateKey) == "Copyable");
+        }), ci.interfaces.end());
     _classes[mangled] = ci;
     if (ci.enumNode) checkEnumInstanceConformances(_classes[mangled], tmpl);
     applyTemplateAdapters(mangled);     // a `type adapter` over this generic — under its own module's context
@@ -17717,6 +17790,8 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
         bool sawKinds = false;
         for (auto& b : *bl) {
             if (!b || !b->value) continue;
+            // `T: value` (KR-191) promises no methods, only a kind: the body may copy a `T` as its bytes.
+            if (isValueBound(b)) { _classes[names[i]].kind = TypeKind::Value; _classes[names[i]].copyable = true; continue; }
             // A bound names a contract in the scope where the TEMPLATE was written, not where it is
             // probed — the same rule checkBounds follows, and for the same reason.
             std::string contract;
@@ -17843,7 +17918,7 @@ void CEmitter::markValueParams(const std::string& key, const SharedIdentifier& t
 {
     if (!t || !t->value) return;
     if (t->genericArgs) {
-        if (*t->value == "InlineArray" || *t->value == "Simd") {
+        if (*t->value == "Simd") {   // a lane batch's element is a numeric primitive; an `InlineArray`'s may own (0.9.678)
             if (ClassInfo* oc = opaqueParamOf((*t->genericArgs)[0])) { oc->kind = TypeKind::Value; oc->copyable = true; }
         } else {
             std::string g;
@@ -20089,6 +20164,95 @@ bool CEmitter::declaredCopyable(const SharedIdentifier& ty)
     return true;
 }
 
+// Is `ty` a VALUE — does it own nothing, so that a copy is its bytes? A primitive, a raw pointer, a `type value` (or
+// `type extern value`), a kind clause's value instance, an enum whose every payload is a value (a payload-less one
+// included), and an `InlineArray`/`InlineStorage`/lane batch of values. Not a `string`, a heap collection, a smart
+// pointer, a `resource`, a `view` (it borrows) or a contract (it borrows its object). The `value` bound asks it, a kind
+// clause asks it of each gated argument, and an in-place array's kind follows it (KR-191).
+//
+// From DECLARED facts only, like declaredCopyable and for its reason: a bound is judged while instances register,
+// before computeDestructible settles `destructible`/`moveOnly`. A generic type is judged by its template over its
+// arguments — so asking never registers anything — and a non-generic one by its ClassInfo, whose kind is declared.
+bool CEmitter::isPlainType(const SharedIdentifier& ty)
+{
+    if (!ty || !ty->value) return true;
+    if (ty->builtInVal == IDENTIFIER_STRING_VAL) return false;                         // owns its bytes
+    if (ty->builtInVal != IDENTIFIER_NONE_VAL || isRawPtrName(ty)) return true;       // a scalar; a pointer owns nothing
+    const std::string& w = *ty->value;
+    const SharedIdentifier elem = ty->genericArgs && !ty->genericArgs->empty() ? (*ty->genericArgs)[0] : ty->genericArg;
+    if (w == "InlineArray" || w == "InlineStorage") return isPlainType(elem);         // in place: as its element
+    if (w == "Simd" || w == "Mask") return true;                                      // lanes of a numeric primitive
+    if (w == "Bindable") return false;                                                // a type-erased owner
+    const std::string n = resolveUserName(w, ty->qualifier);
+    if (n == _ownedTmpl || n == _sharedTmpl || n == _weakTmpl) return false;
+    if (isInterface(n) || _genericContracts.count(n)) return false;                   // borrows its object
+    auto g = _genericTypes.find(n);
+    if (g == _genericTypes.end() || !ty->genericArgs || ty->genericArgs->empty())
+        return isPlainCType(_classes.count(n) ? n : cType(ty));
+    const ClassInfo& t = g->second;
+    if (t.isBorrow) return false;
+    if (t.kind == TypeKind::Value || t.isExternStruct) return true;
+    const std::vector<std::string>& ps = _genericTypeParams[n];
+    auto argOf = [&](const std::string& p) -> SharedIdentifier {
+        for (size_t i = 0; i < ps.size() && i < ty->genericArgs->size(); ++i) if (ps[i] == p) return (*ty->genericArgs)[i];
+        return SharedIdentifier();
+    };
+    if (!t.valueWhenParams.empty()) {                       // a kind clause: a value exactly when each gated argument is
+        for (const std::string& wp : t.valueWhenParams) if (!isPlainType(argOf(wp))) return false;
+        return true;
+    }
+    if (!t.isVariant) return false;                         // a resource
+    // A generic enum: as its payloads, substituted over these arguments, in the template's own scope.
+    const std::string key = spellTypeNode(ty);
+    if (_plainVisiting.count(key)) return true;
+    _plainVisiting.insert(key);
+    NsCtx savedCtx = _nsCtx;
+    std::map<std::string, SharedIdentifier> savedSubst = _typeSubst;
+    _nsCtx = _genericTypeCtx[n];
+    _typeSubst.clear();
+    for (size_t i = 0; i < ps.size() && i < ty->genericArgs->size(); ++i) _typeSubst[ps[i]] = (*ty->genericArgs)[i];
+    bool plain = true;
+    for (const auto& v : t.variants)
+        for (const auto& f : v.payload)
+            if (plain && !isPlainType(deepSubstType(f.type))) plain = false;
+    _nsCtx = savedCtx; _typeSubst = savedSubst;
+    _plainVisiting.erase(key);
+    return plain;
+}
+
+bool CEmitter::isPlainCType(const std::string& ct)
+{
+    if (ct.empty()) return true;
+    if (isInterface(ct)) return false;
+    auto it = _classes.find(ct);
+    if (it == _classes.end()) return true;                  // a primitive, a raw pointer, a scalar enum
+    if (isSmartPtrClass(ct)) return false;
+    const ClassInfo& ci = it->second;
+    if (ci.isIntrinsicColl) {
+        if (isValueVectorKind(ci.collKind)) return true;
+        if (ci.collKind == CollKind::Fixed || ci.collKind == CollKind::Storage) {
+            auto co = _collections.find(ct);
+            return co == _collections.end() || isPlainCType(co->second.elemCType);
+        }
+        return false;                                       // a string, a heap collection, a bindable
+    }
+    if (ci.isBorrow) return false;                          // a view is registered as a value, and borrows
+    if (ci.kind == TypeKind::Value || ci.isExternStruct) return true;
+    if (!ci.isVariant) return false;                        // a resource, a kind clause's resource instance
+    if (_plainVisiting.count(ct)) return true;
+    _plainVisiting.insert(ct);
+    bool plain = true;
+    for (const auto& v : ci.variants)
+        for (const auto& f : v.payload) {
+            if (!plain) break;
+            if (!f.cTypeBaked.empty()) { plain = isPlainCType(f.cTypeBaked); continue; }
+            ScopedClassHome home(*this, ct);
+            plain = isPlainType(deepSubstType(f.type));
+        }
+    _plainVisiting.erase(ct);
+    return plain;
+}
+
 bool CEmitter::payloadCopyable(const std::string& t)
 {
     auto it = _classes.find(t);
@@ -21726,7 +21890,7 @@ void CEmitter::computeDestructible()
                 auto co = _collections.find(kv.first);
                 auto ec = co == _collections.end() ? _classes.end() : _classes.find(co->second.elemCType);
                 if (ec == _classes.end()) continue;
-                const bool fm = ec->second.destructible || ec->second.moveOnly || isSmartPtrClass(ec->first) || ownsByValue(ec->first);
+                const bool fm = ec->second.destructible || ec->second.moveOnly || !isPlainCType(ec->first);
                 if (fm && !ci.moveOnly) { ci.moveOnly = true; changed = true; }
                 continue;
             }
@@ -21735,7 +21899,7 @@ void CEmitter::computeDestructible()
                 auto ec = co == _collections.end() ? _classes.end() : _classes.find(co->second.elemCType);
                 if (ec == _classes.end()) continue;
                 const bool fd = ec->second.destructible;
-                const bool fm = fd || ec->second.moveOnly || isSmartPtrClass(ec->first) || ownsByValue(ec->first);
+                const bool fm = fd || ec->second.moveOnly || !isPlainCType(ec->first);
                 if (fd) { ci.destructible = true; changed = true; }
                 if (fm && !ci.moveOnly) { ci.moveOnly = true; changed = true; }
                 continue;
@@ -21838,7 +22002,17 @@ void CEmitter::computeDestructible()
     // compiler-built `Intrinsic` types (collections/smart-ptrs/variants) own by their own machinery.
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
-        if (ci.kind == TypeKind::Value && ci.destructible && !ci.isExternStruct) {
+        if (ci.kind == TypeKind::Value && !ci.valueWhenParams.empty() && (ci.destructible || ci.moveOnly)) {
+            // A kind clause's value instance holds something that owns or moves whatever the arguments are — a field
+            // the clause does not reach. The declaration is what is wrong, so the diagnostic is its line.
+            ScopedStr _cu(_collectingUnitPath, ci.declFile);
+            unsupported(("`" + demangleForDisplay(ci.name) + "` is a `value` by its kind clause, since what it holds is one, "
+                         "but it still " + (ci.destructible ? "owns a resource" : "holds a move-only resource")
+                         + " — a field whose type the clause's parameters do not decide keeps every instance a "
+                           "`resource`; drop the clause, or hold that field as a `value`").c_str(),
+                        ci.node && ci.node->kindClause ? ci.node->kindClause->line : ci.declLine());
+        }
+        else if (ci.kind == TypeKind::Value && ci.destructible && !ci.isExternStruct) {
             ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
             unsupported(("a `value` owns nothing, but `" + ci.name + "` transitively owns a resource "
                          "— declare it `type resource`").c_str(), ci.declLine());
@@ -24671,6 +24845,7 @@ std::string CEmitter::resolveWhenBound(const SharedIdentifier& b)
 {
     if (!b || !b->value) return "Copyable";
     if (*b->value == "default") return "default";
+    if (isValueBound(b)) return "value";   // a KIND, not a contract (KR-191)
     return resolveUserName(*b->value, b->qualifier);
 }
 
@@ -24733,7 +24908,9 @@ bool CEmitter::whenConditionsHold(const std::vector<std::string>& whenParams,
                 // must itself be default-constructible. Reuse isDefaultFillable (the completeness predicate),
                 // so a custom-allocator collection's `empty()`/`withCapacity()` simply don't exist for an `A`
                 // without a `default` ctor (closes the M8c zero-allocator hole; killing the force-emit too).
-                held = (whenBounds[c] == "default")
+                // `when [A: value]` — the other structural gate (KR-191): the arg owns nothing (isPlainType).
+                held = whenBounds[c] == "value" ? isPlainType(concrete[i])
+                     : (whenBounds[c] == "default")
                      ? isDefaultFillable(cType(concrete[i]))
                      : satisfiesBound(primKey(concrete[i]),
                                       c < whenBoundNodes.size() ? exactBoundName(whenBounds[c], whenBoundNodes[c], bind)
@@ -25278,6 +25455,18 @@ bool CEmitter::checkBounds(const std::string& paramName, SharedIdentifier concre
     ClassInfo* ci = _classes.count(cls) ? &_classes[cls] : nullptr;
     for (auto& b : *bounds) {
         if (!b || !b->value) continue;
+        // `T: value` — a KIND, not a contract (KR-191): the argument owns nothing, so the template may copy it as bytes.
+        if (isValueBound(b)) {
+            if (!isPlainType(concreteArg)) {
+                if (_silentBounds == 0)
+                    unsupported(("type argument `" + (_genericTypeInsts.count(cls) ? demangleForDisplay(cls) : clsName)
+                                 + "` for type parameter `" + paramName + "` does not satisfy bound `value` — a `value` "
+                                   "owns nothing and is copied as its bytes, and this one owns something to drop, has "
+                                   "identity, or borrows").c_str(), line);
+                ok = false;
+            }
+            continue;
+        }
         std::string contract;
         { BoundCtxScope bc(this, templateKey); contract = resolveUserName(*b->value, b->qualifier); }
         if (!contractMethods(contract)) {   // a plain contract OR a generic-contract template (`Iterator<T>`)
@@ -27259,6 +27448,20 @@ void CEmitter::checkDeclaredNames(const std::vector<SharedCompilationUnit>& unit
         auto uc = _unitCtx.find(u.get());
         if (uc == _unitCtx.end()) continue;
         _nsCtx = uc->second;
+        // A kind word (`value`, `resource`, …) says what a type IS: as a type's name it would make `[T: value]` ambiguous
+        // and `grep 'type value'` find a name (KR-191). As a field, binding or parameter name it stays legal
+        // (`Result::Ok(value: …)`).
+        auto kindWordName = [&](const SharedIdentifier& id, const char* what) {
+            if (id && id->value && isKindWord(*id->value))
+                unsupported((std::string(what) + " `" + *id->value + "` takes a kind word — `value`, `resource`, `view`, "
+                             "`contract`, `adapter` and `intrinsic` say what a type is (`type value P`, `when [T: value]`), "
+                             "so no type may be named one; rename it").c_str(), id, *id->value);
+        };
+        auto kindWordParams = [&](const SharedIdentifierList& ids, const SharedIdentifierList& constTypes) {
+            if (ids) for (size_t i = 0; i < ids->size(); ++i)
+                if (!(constTypes && i < constTypes->size() && (*constTypes)[i]))   // a comptime parameter names a value
+                    kindWordName((*ids)[i], "type parameter");
+        };
         auto topLevel = [&](const SharedIdentifier& id, const char* what) {
             if (id && id->value && isLanguageName(*id->value))
                 unsupported((std::string(what) + " `" + *id->value + "` takes a language name — `" + *id->value
@@ -27266,11 +27469,21 @@ void CEmitter::checkDeclaredNames(const std::vector<SharedCompilationUnit>& unit
                             id, *id->value);
         };
         for (auto& decl : *u->codeDeclarationList) {
-            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) { if (!isExtern(fn)) topLevel(fn->name, "function"); continue; }
-            if (auto* en = dynamic_cast<EnumDeclarationNode*>(decl.get())) { topLevel(en->identifier, "type"); continue; }
+            if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
+                if (!isExtern(fn)) topLevel(fn->name, "function");
+                kindWordParams(fn->typeParamIds, fn->constTypes);
+                continue;
+            }
+            if (auto* en = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
+                topLevel(en->identifier, "type"); kindWordName(en->identifier, "type");
+                kindWordParams(en->typeParamIds, en->constTypes);
+                continue;
+            }
             auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
             if (!cd) continue;
             topLevel(cd->name, "type");
+            kindWordName(cd->name, "type");
+            kindWordParams(cd->typeParamIds, cd->constTypes);
             if (!cd->members) continue;
             std::set<std::string> methods;
             for (auto& m : *cd->members)

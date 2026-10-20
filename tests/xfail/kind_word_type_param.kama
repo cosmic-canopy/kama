@@ -1,0 +1,4 @@
+// A type PARAMETER is a type name, so a kind word names none either: inside `Box<value>`, `[value: value]` would
+// read as a parameter bounded by itself.
+type resource Box<value> { int32 a; }
+fn uint8 main() { return 0; }

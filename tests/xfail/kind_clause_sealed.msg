@@ -1,0 +1,1 @@
+a `value` is sealed — `extends` and `virtual`/`abstract`/`final` do not combine with `value when […]`

@@ -2241,7 +2241,7 @@ only half answers it: growth abandons the old block, and the list is still a poi
    parameter, proven by flow analysis, and a field whose live prefix is runtime data is not that. Nothing in the
    language holds in-place storage for `T` without constructing it.
 
-**Mechanism — ruled 2026-10-17: a kama library type, after two language capabilities (`InlineStorage`, shipped `0.9.686`; KR-191).** GOALS #1
+**Mechanism — ruled 2026-10-17: a kama library type, after two language capabilities (`InlineStorage`, shipped `0.9.686`; the kind clause, shipped `0.9.688`).** GOALS #1
 is explicit that std's containers are "kama generic library types… in the Rust-`Vec` 'unsafe core, safe API' model
 over `unsafe fn`/`UnsafePtr`, not compiler intrinsics with C bodies"; an intrinsic `InlineDynamicArray` (proposed as
 InlineArray's sibling) would be the thing that rules out, and was set aside as a workaround. Writing it in kama needs
@@ -2249,7 +2249,7 @@ two things the language lacks, measured on `0.9.662`:
 
 - **In-place uninitialized storage (`InlineStorage`, `0.9.686`).** The heap containers get uninitialized memory from an allocator through
   `UnsafePtr<T>`; nothing gives it in place. An `InlineArray<T>#(N)` field is constructed whole, and dropped whole.
-- **A generic type's kind following its parameters (KR-191).** A declaration is `type value` or `type resource`, fixed:
+- **A generic type's kind following its parameters (the kind clause, `0.9.688`).** A declaration is `type value` or `type resource`, fixed:
   `type value Box<T>` instantiated as `Box<string>` is refused ("a `value` owns nothing, but `Box<string>`
   transitively owns a resource"). (`InlineArray<string>#(2)` also sat in a `type value`, which this paragraph used to
   read as the compiler deriving an intrinsic's kind from its element. It was a defect: the element check missed every
@@ -2289,7 +2289,7 @@ any code).** Each with what other languages do, and the production answer:
    (by default since 2019) zero stack variables because uninitialized-memory leaks kept shipping. The invariant
    also means a popped secret never reaches a copy, a send or a byte view, and a holder of plain bytes can be
    `BytesViewable` deterministically; `==`, `copy` and serde still read the live prefix element by element.
-5. **KR-191: a conditional kind clause.** `type resource InlineDynamicArray<T> value when [T: value]` — a
+5. **A conditional kind clause (shipped `0.9.688`; SPEC *A kind that follows the type's parameters*).** `type resource InlineDynamicArray<T> value when [T: value]` — a
    resource, and a value when `T` is one; `value` joins `default` as a structural bound (a primitive, a `value`, a
    value-kind enum or intrinsic instance). A value instance has no destructor and no copy constructor, by the
    existing rule that a value owns nothing, so neither needs its own `when`. The base kind is `resource`, so the
@@ -2335,7 +2335,7 @@ by goal and probed on `0.9.675`; these are the corrections, and they override th
   And the hand-back is only as good as the caller's attention: on `0.9.675` a discarded `Result` built silently, so
   `xs.add(item: s);` on a full list would have dropped `s` without a word. Refused since `0.9.680` (SPEC *Error model*).
 
-**Order:** `InlineStorage` (the built-in storage, shipped `0.9.686`) → KR-191 (the clause and the bound) → KR-187 (kama library code). Each
+**Order:** `InlineStorage` (the built-in storage, shipped `0.9.686`) → the kind clause and the `value` bound (shipped `0.9.688`) → KR-187 (kama library code). Each
 lands with fixtures on native, ASan and wasm.
 
 #### The evidence the rulings rest on — measured 2026-10-18 on `0.9.667`/`0.9.671`
@@ -2367,7 +2367,7 @@ k_Fp1_slot__Conn__dtor(&k_c);                     // dropped normally once fille
   There is nothing to hold four `Conn`s in place.
 - One generic over both: `type value Box<T> { public T v; … }` with `Box<string>` is refused ("a `value` owns
   nothing, but `Box<string>` transitively owns a resource"). A single generic cannot be a `value` for `int32` and a
-  `resource` for `string`. That is KR-191.
+  `resource` for `string`. That is the kind clause (`0.9.688`).
 
 **Grammar facts.** A destructor takes no `when [...]` (`unsafe ~Holder() when [T: default] { }` is a parse error).
 A type declaration does take a conditional conformance: `type value Pair<T> implements Sendable when [T: Sendable]`

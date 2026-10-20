@@ -1,6 +1,6 @@
 // KR-179: `@trackCaller` on a method and on an `operator[]` — a call by method syntax, by index syntax and through a
 // generic instance all hand the callee the caller's location.
-type resource Grid<T> {
+type resource Grid<T: value> {   // `cell` copies an element out
     InlineArray<T>#(4) cells;
     public ctor make(T fill) { this.cells = [fill; 4]; }
     @trackCaller public ref T operator[](isize i) { return this.cells[i]; }

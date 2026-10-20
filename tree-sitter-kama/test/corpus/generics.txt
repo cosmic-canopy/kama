@@ -290,3 +290,55 @@ fn void main()
                 (integer_literal))
               (identifier))
             (argument_list)))))))
+
+================================================================================
+A kind clause makes an instance a value, and its word stays an identifier
+================================================================================
+
+type resource Pair<T> value when [T: value] implements Copyable<This>(bare: give) when [T: Copyable<T>] {
+    T a;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier)
+      (type_parameters
+        (type_parameter
+          (identifier))))
+    (kind_clause
+      (type_kind
+        (identifier))
+      (when_clause
+        (when_condition
+          (identifier)
+          (type_name
+            (identifier)))))
+    (class_base
+      (implements_entry
+        (type_name
+          (identifier)
+          (type_arguments
+            (type_name
+              (identifier))))
+        (identifier)
+        (handoff_default
+          (identifier))
+        (when_clause
+          (when_condition
+            (identifier)
+            (type_name
+              (identifier)
+              (type_arguments
+                (type_name
+                  (identifier))))))))
+    (class_body
+      (field_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier))))))

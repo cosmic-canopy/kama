@@ -151,6 +151,13 @@
           }
         },
         {
+          "comment": "A kind clause, `type resource Pair<T> value when [T: value]` (kama.y kind_clause_opt): the word after the head is a kind word like the one after `type`. A kind word directly followed by `when [` occurs nowhere else — in a condition the bound is followed by `,` or `]`.",
+          "match": "\\b(value)(?=\\s+when\\s*\\[)",
+          "captures": {
+            "1": { "name": "storage.modifier.kind.kama" }
+          }
+        },
+        {
           "match": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "storage.type.kama" },

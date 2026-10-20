@@ -1,0 +1,3 @@
+// A contract is a type too, and a kind word names none: `type contract resource for value { }` built through 0.9.687.
+type contract resource for value { }
+fn uint8 main() { return 0; }

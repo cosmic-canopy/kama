@@ -1,0 +1,1 @@
+write `value when [T: value]`, not `resource when […]`

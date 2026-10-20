@@ -738,9 +738,20 @@ iter_reserve_map	iter_reserve_map.kama:16
 iter_reserve_slotmap	iter_reserve_slotmap.kama:16
 iter_return_over_local	iter_return_over_local.kama:12
 kind_argument	kind_argument.kama:6
+kind_clause_bound	kind_clause_bound.kama:3
+kind_clause_not_generic	kind_clause_not_generic.kama:3
+kind_clause_on_value	kind_clause_on_value.kama:4
+kind_clause_owning_field	kind_clause_owning_field.kama:4
+kind_clause_param	kind_clause_param.kama:3
+kind_clause_resource_instance_in_value	kind_clause_resource_instance_in_value.kama:7
+kind_clause_sealed	kind_clause_sealed.kama:2
+kind_clause_word	kind_clause_word.kama:2
 kind_match_arm	kind_match_arm.kama:7
 kind_return	kind_return.kama:4
 kind_variant_payload	kind_variant_payload.kama:6
+kind_word_contract_name	kind_word_contract_name.kama:2
+kind_word_type_name	kind_word_type_name.kama:4
+kind_word_type_param	kind_word_type_param.kama:3
 layout_attr_on_enum	layout_attr_on_enum.kama:8
 layout_attr_on_static	layout_attr_on_static.kama:4
 leading_zero	leading_zero.kama:2
@@ -1387,6 +1398,7 @@ use_after_move_string_elem_slot	use_after_move_string_elem_slot.kama:10
 use_after_move_string_init	use_after_move_string_init.kama:12
 use_after_move_string_variant	use_after_move_string_variant.kama:9
 usize_from_int32	usize_from_int32.kama:1
+value_bound_owning	value_bound_owning.kama:5
 value_holds_move_only	value_holds_move_only.kama:5
 value_holds_move_only_enum	value_holds_move_only_enum.kama:4
 value_holds_move_only_generic	value_holds_move_only_generic.kama:3
@@ -1442,5 +1454,6 @@ when_on_adapter	when_on_adapter.kama:3
 when_on_concrete_type	when_on_concrete_type.kama:10 when_on_concrete_type.kama:7
 when_on_contract_member	when_on_contract_member.kama:3
 when_unknown_param	when_unknown_param.kama:7 when_unknown_param.kama:9
+when_value_method_owning	when_value_method_owning.kama:10
 widen_local	widen_local.kama:1
 withcapacity_custom_alloc	withcapacity_custom_alloc.kama:12

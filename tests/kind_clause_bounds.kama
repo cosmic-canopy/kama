@@ -1,0 +1,48 @@
+// `value` is a structural bound beside `default`: `when [T: value]` gates a member or a conformance on the argument
+// owning nothing, and `<T: value>` requires it. A kind clause composes with a conditional `Copyable`: the value
+// instance copies as its bytes and never calls the copy ctor (a value is not `Copyable` by declaration — that
+// contract is a resource's — but satisfies the bound by its kind), while the resource instance copies through it.
+// Whether an argument is a value follows it through an enum's payloads, an in-place array, a raw pointer and another
+// kind clause. Before 0.9.688 `value` named no bound: `when [T: value]` never held and `<T: value>` was an unknown
+// contract.
+import { core::eprintln };
+
+static int32 copies = 0;
+
+type resource Box<T> value when [T: value] implements Copyable<This>(bare: give) when [T: Copyable<T>] {
+    T v;
+    public ctor make(T v) { this.v = give v; }
+    public ctor copy(ref Box<T> source) { this.v = copy source.v; copies = copies + 1; }
+    public const fn const ref T get() { return this.v; }
+    public const fn int32 width() when [T: value] { return 1; }
+}
+
+fn int32 plain<T: value>(T x) { return 7; }
+
+type resource Pair<T> value when [T: value] {
+    T a;
+    public ctor make(T a) { this.a = give a; }
+}
+// Every field a value instance: a `type value` may hold each.
+type value Bag {
+    Pair<Optional<int32>> a;
+    Pair<InlineArray<int32>#(2)> b;
+    Pair<Pair<int32>> c;
+    Pair<UnsafePtr<int32>> d;
+    Pair<Box<uint8>> e;
+}
+
+fn int32 run() {
+    int32 bad = 0;
+    Box<int32> a = Box.make(v: 5);
+    Box<int32> b = a;                     // a value instance: its bytes, no copy ctor
+    bad = bad + (copies == 0 ? 0 : 1) + (b.get() == 5 ? 0 : 2) + (a.width() == 1 ? 0 : 4);
+    Box<string> s = Box.make(v: "hi");
+    Box<string> t = copy s;               // a `Copyable` resource instance: through its copy ctor
+    bad = bad + (copies == 1 ? 0 : 8) + (t.get() == "hi" ? 0 : 16);
+    bad = bad + (plain(x: 3) == 7 ? 0 : 32) + (plain(x: a) == 7 ? 0 : 64);
+    if (bad != 0) { eprintln(s: "kind_clause_bounds: bad ${bad}, copies ${copies}"); }
+    return bad;
+}
+
+fn uint8 main() { return run() == 0 ? 42 : 1; }

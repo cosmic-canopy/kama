@@ -6,7 +6,7 @@ import { std::collections::DynamicArray, std::collections::Map, std::collections
 @trackCaller fn int32 at(InlineArray<int32>#(3) xs, isize i) { return xs[i]; }
 @trackCaller fn int32 viaAt(InlineArray<int32>#(3) xs, isize i) { return at(xs: xs, i: i); }
 
-type resource Box<T> {
+type resource Box<T: value> {   // `get` copies an element out
     InlineArray<T>#(2) v;
     public ctor make(T a, T b) { this.v = [a, b]; }
     @trackCaller public ref T operator[](isize i) { return this.v[i]; }

@@ -1,0 +1,1 @@
+is a `value` by its kind clause, since what it holds is one, but it still owns a resource

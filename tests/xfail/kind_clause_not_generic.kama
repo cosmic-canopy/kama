@@ -1,0 +1,4 @@
+// A kind clause belongs to a generic type — its instances differ in what they hold. A type with no parameters has
+// one kind, written after `type`.
+type resource P value when [T: value] { int32 a; }
+fn uint8 main() { return 0; }
