@@ -24900,6 +24900,10 @@ std::string CEmitter::rawPointeeCType(SharedExpression e)
             return pc;                                    // the caller decides whether it is destructible
         }
     std::string ct = lvalueCType(e);
+    // A pointer a CALL returns (`a.dataPtrMut()`, `s.dataPtrMut()`) has no place type, only a value type: through
+    // 0.9.684 `drop(ptr: a.dataPtrMut(), count: 1)` was refused as "a bare `UnsafePtr`", though the same pointer
+    // bound to a local first was accepted.
+    if (ct.empty() && dynamic_cast<InvocationNode*>(e.get())) ct = typeOfExpr(e);
     if (ct.size() < 2 || ct.back() != '*' || ct == "void*") return "";
     ct = ct.substr(0, ct.size() - 1);
     while (!ct.empty() && ct.back() == ' ') ct.pop_back();

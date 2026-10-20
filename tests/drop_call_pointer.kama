@@ -1,0 +1,14 @@
+// `drop(ptr: p, count: n)` and `copyElements(ptr: d, from: s, count: n)` take the pointer a call returns, as they take
+// one a local holds. Through 0.9.684 both were refused as "a bare `UnsafePtr` names no element type" when `p` was a
+// call (`a.dataPtrMut()`): the check asked for the argument's PLACE type, and a call has none — though binding the
+// same pointer to a local first was accepted. (tests/inline_storage_holder drops resources this way.)
+unsafe fn int32 fill(ref InlineArray<int32>#(4) a, const ref InlineArray<int32>#(4) b) {
+    copyElements(ptr: a.dataPtrMut(), from: b.dataPtr(), count: 4);
+    drop(ptr: a.dataPtrMut(), count: 4);          // an `int32` has nothing to drop: the values stay
+    return a[0] + a[3];
+}
+fn uint8 main() {
+    InlineArray<int32>#(4) a = [0; 4];
+    InlineArray<int32>#(4) b = [20, 0, 0, 22];
+    return cast<uint8>(fill(a: ref a, b: b));
+}
