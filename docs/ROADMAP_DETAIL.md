@@ -322,7 +322,7 @@ accepted stream sent to a worker) learns it is done only at its timeout. The wor
 end in the `Poller`, the other moved to the isolate as a `Descriptor`, a byte written to wake (50 ms observed against
 a 5000 ms timeout). It costs two descriptors and a drained byte per wake, and every program rediscovers it. Mio,
 libuv and tokio each ship a waker for this (eventfd on Linux, a pipe or kqueue's `EVFILT_USER` elsewhere).
-Recommended: a `Sendable` waker made by and registered with a `Poller`, built on KR-230's backends so it is built
+Recommended: a `Sendable` waker made by and registered with a `Poller`, built on its backends (SPEC *Readiness*) so it is built
 once: an eventfd under epoll, `EVFILT_USER` under kqueue (no descriptor at all), a posted completion under IOCP. A
 wake is **coalesced**: an atomic flag says whether the loop may be asleep, so a busy loop pays no system call per
 message (Go's `netpollBreak` and libuv's `uv_async` do the same).
@@ -2157,76 +2157,6 @@ blocking is the job system's problem to solve.**
   shared-memory container the bullet above defers; isolates share through channels and immutable `Shared`. Whether
   the job system (KR-3) wants a channel-fronted or sharded map as a library is decided with that row.
 
-<a id="s6-poller-backends"></a>
-
-### `Poller` backends that scale: epoll, kqueue, IOCP (KR-230)
-
-**What is there.** `std::net::Poller` (`lib/std/net/poll.kama`) wraps `poll(2)` on Linux and macOS and `select()` on
-Windows, where `FD_SETSIZE` is raised to 1,024 and stops there. Its surface is `add`, `remove`, `wait` and
-`readyFor(fd)`. Both system calls scan every registered descriptor on every wait, so a wait costs what the loop
-HOLDS, not what is ready. And `readyFor` makes the loop ask about each descriptor it holds, so even an O(ready) kernel
-would leave the user side O(n).
-
-**Measured 2026-10-21** (Linux, the container; one ready connection among N idle loopback pairs; 20,000 waits each):
-
-| N connections | `poll(2)` per wait | `epoll_wait` per wait |
-|---|---|---|
-| 100 | 8.2 µs | 0.24 µs |
-| 1,000 | 106 µs | 0.20 µs |
-| 10,000 | 5,009 µs | 0.16 µs |
-
-At 10,000 connections, the wait alone holds a loop near 200 iterations a second. The numbers are a VM's; the scaling
-is the finding.
-
-**What others do.**
-
-| | Readiness backend | Windows |
-|---|---|---|
-| Go | epoll, kqueue | IOCP |
-| tokio (mio) | epoll, kqueue | AFD polling over IOCP, readiness without a thread per socket |
-| libuv | epoll, kqueue | IOCP, completion |
-| Seastar, glommio | epoll, io_uring | — |
-| Erlang/BEAM | epoll, kqueue | IOCP |
-
-**Recommendation.**
-- **Three backends behind the one `Poller` interface:**
-  - epoll on Linux;
-  - kqueue on macOS and the BSDs;
-  - AFD polling over IOCP on Windows, which is mio's technique: readiness, as the other two give, with no 1,024 cap.
-
-  The platform rule holds: one interface, and each OS's best mechanism under it. Level-triggered, as `poll` is today,
-  so a caller's code means what it meant.
-- **A ready-event list.** `add` takes a token the caller chooses, and `wait` answers the ready `(token, Ready)` pairs.
-  So a loop, and later a fiber scheduler, goes from an event to its connection or its parked fiber with no lookup.
-  `readyFor` stays, for a loop of a few descriptors.
-- **wasm** keeps no `Poller`, since the browser owns the loop there (KR-3's brief).
-- **io_uring later, opt-in, and only by measurement.** It is completion-based and the fastest on Linux, but often
-  turned off: Google disabled it on ChromeOS, for Android apps and on its production servers (2023) after a run of
-  kernel exploits, and a container's sandbox profile may refuse it. epoll is the baseline.
-
-Size M–L.
-
-**Ruled 2026-10-21 (the maintainer).** Java's NIO is the fifth data point: since JDK 17 its Windows selector is
-wepoll (AFD), and the old `select()` one stays behind a property.
-1. **Windows is AFD polling over IOCP**, written as original code. wepoll (BSD-2) and mio (MIT) are references for
-   the technique only: `RUNTIME-EXCEPTION` promises that embedded runtime code needs no notices, so neither can be
-   vendored. The same IOCP port later carries completion packets (`TransmitFile` for KR-229, KR-3's overlapped I/O),
-   so this is one port with two packet kinds, not two mechanisms.
-2. **The caller owns the ready list and chooses the token**, as mio does:
-   - `Events.withCapacity(capacity:)` holds the list, and `wait(events:, timeoutMs:)` fills it with no allocation.
-   - Each `Event` carries the `uint64` the caller passed to `add`.
-   - `readyFor` and `Ready` are removed, since every system above answers a ready list and none has a per-fd query.
-   - The list cannot live inside the `Poller`: `foreach` freezes its host, so `p.add(…)` for an accepted connection
-     would be refused inside the loop.
-   - One event per descriptor per wait on every OS. kqueue's separate read and write reports are merged, as Python's
-     `selectors` does.
-   - `add` (re-adding updates it) and `remove` become `Result<Unit, IoError>`, because each backend can refuse.
-3. **Level-triggered only.** Edge-triggered against one-shot is KR-3's call: its design measures both on each backend
-   and adopts the winner, because AFD is natively one-shot and edge-triggered emulation there needs the I/O call to
-   report WouldBlock.
-4. **Windows' `select()` path is removed outright** once AFD lands. A fallback would be a second, untested path. LSPs
-   are the one case AFD skips; they have been deprecated since Windows 8, and `SIO_BASE_HANDLE` bypasses them.
-
 <a id="s6-fibers"></a>
 
 ### Fibers and thread-per-core: blocking-shaped I/O for many connections (KR-3)
@@ -2274,7 +2204,7 @@ offers it in its standard surface. Size: XL, so a design document comes before a
 - **Timers need nothing new.** `Poller.wait(timeoutMs)` is the sleep of a poll loop.
 - **The job system is the other half of this row.** That is CPU fan-out on the sized pool, where head-of-line
   blocking is the problem. Go merges the two schedulers; Java keeps them apart. The design says which.
-- **Prerequisites, in order:** KR-230 (`Poller` backends that scale, with a ready list), then KR-201 (a coalesced
+- **Prerequisites, in order:** a `Poller` that scales, with a ready list (shipped `0.9.718`, SPEC *Readiness*), then KR-201 (a coalesced
   waker, and a `Channel` a `Poller` waits on), then this row. Beside them: KR-202 (a DNS lookup a loop can poll) and
   KR-7 (a non-blocking `File`; a regular file's read blocks on every OS, so the production answer is a small offload
   pool, as libuv and tokio have).
@@ -2294,13 +2224,13 @@ offers it in its standard surface. Size: XL, so a design document comes before a
 4. **wasm:** blocking-shaped fibers there (JSPI or stack switching, once verified), or the app loop's callbacks as
    today.
 5. One scheduler for jobs and I/O, or two.
-6. **Edge-triggered or one-shot registration.** KR-230 ships level-triggered only (ruled 2026-10-21). That is wrong
+6. **Edge-triggered or one-shot registration.** The `Poller` is level-triggered only (ruled 2026-10-21). That is wrong
    for a scheduler, because a socket with no fiber parked on it would be reported on every wait.
    - Go and tokio register edge-triggered once and pay no system call per park.
    - One-shot costs one system call per park, but is native on all three backends. AFD on Windows is one-shot, and
      edge-triggered emulation there needs the I/O call to report WouldBlock.
    - Measure both on each backend (system calls per park, throughput) and adopt the winner. The scheduler's
-     completion I/O on Windows shares KR-230's IOCP port.
+     completion I/O on Windows shares the `Poller`'s IOCP port, which AFD polling already runs on (`0.9.718`).
 
 <a id="s6-lock-window"></a>
 

@@ -25,11 +25,10 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
   through a buffer elsewhere; partial and `WouldBlock` like `write`, for a poll loop.
 - **Listener options.** `TcpListener.bindWith(address:, options:)`: the backlog everywhere, and on Linux `balance`,
   several isolates each accepting on their own listener for one port while the kernel spreads connections across them.
-- **Readiness (`std::net::Poller`).** epoll on Linux and kqueue on macOS, so a wait costs what is ready (0.18 µs with
-  10,000 idle connections, against 7.3 ms for `poll(2)`). `add(fd:, interest:, token:)` registers a socket under a
+- **Readiness (`std::net::Poller`).** epoll on Linux, kqueue on macOS and AFD polling over an I/O completion port on
+  Windows. A wait costs what is ready: 0.18 µs with 10,000 idle connections, against 7.3 ms for `poll(2)`. `add(fd:, interest:, token:)` registers a socket under a
   caller-chosen token. `wait(events:, timeoutMs:)` fills a caller-owned `Events` with `{token, readable, writable}`,
-  one event per descriptor and no allocation. It is the substrate a loop is built on. Windows is still `select()`,
-  capped at 1,024 sockets, until AFD polling lands with KR-230.
+  one event per descriptor and no allocation. It is the substrate a loop is built on.
 - **DNS.** `resolve`/`resolveOne` over `getaddrinfo`, IPv4 and IPv6. It blocks; a lookup a loop can poll is
   KR-202.
 - **Concurrency.** Isolates (`spawn`), ownership-moving channels, `scope`, `Atomic<T>` and `parallel_for`, native

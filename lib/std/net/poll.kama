@@ -7,9 +7,9 @@ import {
 export { Poller, Interest, Event, Events };
 
 // Readiness over many sockets: a server waits here once and services whoever is ready. Each OS's own mechanism
-// stands behind one interface: epoll on Linux, kqueue on macOS and FreeBSD, and `poll(2)` on any other POSIX
-// target, where a wait costs what is READY, not what is registered. Windows is `select()` for now, capped at 1,024
-// sockets (KR-230). Native only: in the browser, the event loop is the selector.
+// stands behind one interface: epoll on Linux, kqueue on macOS and FreeBSD, AFD polling over an I/O completion port
+// on Windows, and `poll(2)` on any other POSIX target. A wait costs what is READY, not what is registered. Native
+// only: in the browser, the event loop is the selector.
 //
 //     Events events = Events.withCapacity(capacity: 256);      // the ready list, sized once
 //     _ = p.add(fd: l.rawHandle(), interest: Interest::Read, token: LISTENER);

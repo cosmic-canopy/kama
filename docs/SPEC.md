@@ -2442,9 +2442,15 @@ set it (Go and Rust set it on Unix only). `@compileFor` gates a declaration, nev
 `balance` is a function gated to Linux.
 
 **Readiness (`std::net::Poller`).** A server waits once for whichever of its sockets is ready, and the wait costs what <!-- test: net_poller_tokens -->
-is ready, not what is watched. Each OS's own mechanism stands behind the one interface: epoll on Linux, kqueue on
-macOS and FreeBSD, and `poll(2)` on any other POSIX target. On Windows it is `select()` for now, capped at 1,024
-sockets. Native only: in a browser the event loop is the selector.
+is ready, not what is watched. Each OS's own mechanism stands behind the one interface:
+- **Linux:** epoll.
+- **macOS and FreeBSD:** kqueue.
+- **Windows:** AFD polling over an I/O completion port, the technique mio (tokio's), wepoll and Java's selector since
+  JDK 17 use. It gives readiness, with no `FD_SETSIZE` ceiling. kama's code is its own: a runtime that embeds into
+  every program carries no third-party notice. The same port will carry overlapped I/O's completions.
+- **Any other POSIX target:** `poll(2)`.
+
+It is native only: in a browser the event loop is the selector.
 - `add(fd:, interest:, token:)` watches a socket's `rawHandle()` for `Interest::Read`, `Write` or `ReadWrite`. It is
   reported under a `uint64` token the caller chooses, typically an index into its own table of connections. Adding a
   watched descriptor again replaces its interest and its token.
@@ -2464,7 +2470,7 @@ reported again by every wait, so a reader may stop part way.
 
 The ready list is its own value, not the `Poller`'s, because `foreach` freezes what it walks. A loop over `Events` can
 therefore `add` the connection it just accepted. Raising the descriptor limit first (`raiseOpenFileLimit`) lets a <!-- test: net_poller_scale -->
-loop hold thousands. Measured on `0.9.717`: one ready descriptor among N idle Unix-domain pairs, the best of seven
+loop hold thousands, and Windows, which bounds sockets by memory, past the 1,024 its `select()` held. Measured on `0.9.717`: one ready descriptor among N idle Unix-domain pairs, the best of seven
 interleaved rounds of 2,000 waits. Linux ran in the arm64 container.
 
 | N | `poll(2)`, Linux | epoll | `poll(2)`, macOS | kqueue |

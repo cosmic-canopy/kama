@@ -2,5 +2,5 @@ file @compileFor(OS_WINDOWS);
 // Windows has no per-process descriptor limit: sockets are bounded by memory.
 export { prepare, pairs };
 
-fn int32 pairs() { return 1000; }      // select() holds 1,024 until AFD replaces it
+fn int32 pairs() { return 1100; }      // past the 1,024 sockets select() held
 fn int32 prepare() { return 0; }

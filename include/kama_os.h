@@ -91,12 +91,6 @@ static inline char* kama__sized_strdup(const char* s) {
 #    define NOMINMAX
 #  endif
 #endif
-// The readiness poller uses select() (see kama_poller_wait below — WSAPoll mis-handles a connecting socket).
-// FD_SETSIZE caps how many sockets fit one fd_set; raise it from the default 64 for the server selector.
-// MUST be defined before <winsock2.h>.
-#ifndef FD_SETSIZE
-#  define FD_SETSIZE 1024
-#endif
 #include <winsock2.h>     // socket, bind, listen, accept, connect, send, recv, WSAStartup, SOCKET
 #include <ws2tcpip.h>     // numeric-host helpers; getaddrinfo/freeaddrinfo (kama_resolve_host)
 #include <afunix.h>       // sockaddr_un, SIO_AF_UNIX_GETPEERPID (Windows 10 1803+). Adds five macros, none lowercase.
@@ -2947,9 +2941,10 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 #endif  // !_WIN32
 
 // ---- readiness poller (std::net::Poller, KR-230) ----------------------------------------------------------------
-// One interface over each OS's own mechanism, chosen here at compile time: epoll on Linux, kqueue on macOS and
-// FreeBSD, select() on Windows, and poll(2) on any other POSIX target (emscripten included, where no fixture runs
-// it). Level-triggered on every backend: a descriptor still ready is reported again by the next wait.
+// One interface over each OS's own mechanism, chosen here at compile time: AFD polling over an I/O completion port
+// on Windows, epoll on Linux, kqueue on macOS and FreeBSD, and poll(2) on any other POSIX target (emscripten
+// included, where no fixture runs it). Level-triggered on every backend: a descriptor still ready is reported again
+// by the next wait.
 //   interest bits  1 = read, 2 = write
 //   ready bits     1 = readable — hangup and error included, so the read that follows sees EOF or the error
 //                  2 = writable — on a connecting socket, the connect resolved (a failed one included)
@@ -2962,80 +2957,352 @@ typedef struct kama__poll_ev { uint64_t token; int32_t bits; } kama__poll_ev;
 typedef struct kama__poll_events { int kama_cap; void* os; kama__poll_ev* out; } kama__poll_events;
 
 #if defined(_WIN32)
-// select(), NOT WSAPoll: WSAPoll mis-handles a *connecting* socket — it can return a socket as ready with
-// revents==0 (or never signal a refused connect), so a caller resolving a non-blocking connect (poll for
-// writable, then read SO_ERROR) reads SO_ERROR while the handshake is still in flight and mis-reports it as
-// connected. select() reports a connecting socket only on genuine resolution — writefds on success, exceptfds on
-// failure. Bounded by FD_SETSIZE (raised above). WSAPOLLFD is only a convenient {SOCKET, events, revents} record.
-typedef char kama__poll_os_ev;   // select() reports through the fd_sets: the list needs no array of the OS's own
-typedef struct kama__poller { WSAPOLLFD* fds; uint64_t* tokens; int kama_len; int kama_cap; } kama__poller;
-static inline void* kama_poller_create(void) {
-    kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
-    if (!p) { kama__os_fail(0, ENOMEM); return NULL; }
-    p->fds = NULL; p->tokens = NULL; p->kama_len = 0; p->kama_cap = 0; return p;
+// AFD polling over an I/O completion port (KR-230): readiness, as epoll and kqueue give it, with no FD_SETSIZE ceiling
+// and a wait that costs what is ready. mio (tokio's), wepoll and Java's Windows selector since JDK 17 use the same
+// technique; this is kama's own code over the interface, and none of theirs. afd.sys, the driver under Winsock, takes
+// IOCTL_AFD_POLL on a handle to \Device\Afd naming one socket's base handle and the events wanted, and completes it on
+// the port once one holds. A poll is one-shot, so level-triggered means arming each socket again after its event is
+// reported (at the next wait, which is when a still-ready socket completes at once).
+//
+// While a poll is in flight the kernel owns its IO_STATUS_BLOCK and poll record, so a socket's state is freed only
+// once its completion has arrived: `remove` cancels and marks it, and the wait frees it. One completion port per
+// Poller; the same port will carry overlapped I/O's completions too (KR-229's TransmitFile, KR-3's scheduler). An AFD
+// handle serves at most 32 sockets, wepoll's and mio's figure. ntdll's four entry points are looked up at `create`
+// (ntdll is mapped into every process), so no import library is needed and no declaration here can collide with a
+// program's own <winternl.h>.
+typedef LONG kama__ntstatus;
+#define KAMA__STATUS_PENDING   ((kama__ntstatus)0x00000103L)
+#define KAMA__STATUS_CANCELLED ((kama__ntstatus)0xC0000120L)
+#define KAMA__IOCTL_AFD_POLL   0x00012024UL
+// AFD's event bits, the same in its requests and its answers.
+#define KAMA__AFD_RECEIVE      0x0001UL
+#define KAMA__AFD_SEND         0x0004UL
+#define KAMA__AFD_DISCONNECT   0x0008UL
+#define KAMA__AFD_ABORT        0x0010UL
+#define KAMA__AFD_LOCAL_CLOSE  0x0020UL
+#define KAMA__AFD_ACCEPT       0x0080UL
+#define KAMA__AFD_CONNECT_FAIL 0x0100UL
+// WSAIoctl codes for a socket's base handle: SIO_BASE_HANDLE, then the three an LSP that intercepts it leaves
+// answering (mswsock.h spells them; kama's names keep this header from redefining the SDK's).
+#define KAMA__SIO_BASE_HANDLE        0x48000022UL
+#define KAMA__SIO_BSP_HANDLE_SELECT  0x4800001CUL
+#define KAMA__SIO_BSP_HANDLE_POLL    0x4800001DUL
+#define KAMA__SIO_BSP_HANDLE         0x4800001BUL
+
+typedef struct kama__iosb { union { kama__ntstatus kama_status; PVOID kama_ptr; } kama_u; ULONG_PTR kama_info; } kama__iosb;
+typedef struct kama__ustr { USHORT kama_len; USHORT kama_max; PWSTR kama_buf; } kama__ustr;
+typedef struct kama__objattr {
+    ULONG kama_len; HANDLE kama_root; kama__ustr* kama_name; ULONG kama_attrs; PVOID kama_sd; PVOID kama_qos;
+} kama__objattr;
+typedef struct kama__afd_handle { HANDLE kama_handle; ULONG kama_events; kama__ntstatus kama_status; } kama__afd_handle;
+typedef struct kama__afd_poll {
+    LARGE_INTEGER kama_timeout; ULONG kama_count; ULONG kama_exclusive; kama__afd_handle kama_handles[1];
+} kama__afd_poll;
+typedef OVERLAPPED_ENTRY kama__poll_os_ev;   // what a wait fills: std::net::Events' array
+
+typedef kama__ntstatus (NTAPI *kama__NtCreateFile)(PHANDLE, ACCESS_MASK, kama__objattr*, kama__iosb*, PLARGE_INTEGER,
+                                                   ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+typedef kama__ntstatus (NTAPI *kama__NtDeviceIoControlFile)(HANDLE, HANDLE, PVOID, PVOID, kama__iosb*, ULONG, PVOID,
+                                                            ULONG, PVOID, ULONG);
+typedef kama__ntstatus (NTAPI *kama__NtCancelIoFileEx)(HANDLE, kama__iosb*, kama__iosb*);
+typedef ULONG (NTAPI *kama__RtlNtStatusToDosError)(kama__ntstatus);
+
+struct kama__afd_group;
+// One watched socket. `iosb` comes first: a completion's lpOverlapped is its address, and so the state's.
+typedef struct kama__afd_sock {
+    kama__iosb iosb;
+    kama__afd_poll poll;
+    SOCKET sock;                    // the handle the program added: the table's key
+    SOCKET base;                    // the base provider's handle, which AFD polls
+    uint64_t token;
+    int32_t interest;               // 1 = read, 2 = write
+    uint8_t pending;                // a poll is in flight: the kernel owns iosb and poll
+    uint8_t cancelling;             // ...and has been asked to stop, to be armed again with what `interest` says now
+    uint8_t deleted;                // removed or closed: freed when the poll in flight completes
+    uint8_t queued;                 // on the list of sockets to arm at the next wait
+    struct kama__afd_sock* next;    // that list, doubly linked: a remove takes one out in O(1)
+    struct kama__afd_sock* prev;
+    struct kama__afd_group* group;
+} kama__afd_sock;
+typedef struct kama__afd_group { HANDLE afd; int kama_used; struct kama__afd_group* next; } kama__afd_group;
+
+typedef struct kama__poller {
+    HANDLE port;
+    kama__afd_group* groups;
+    kama__afd_sock** table;         // open addressing on the SOCKET value; NULL is empty
+    size_t kama_cap, kama_len;
+    kama__afd_sock* queue;          // sockets to arm at the next wait
+    size_t inflight;                // polls the kernel still owns (drop waits for each)
+    kama__NtCreateFile NtCreateFile;
+    kama__NtDeviceIoControlFile NtDeviceIoControlFile;
+    kama__NtCancelIoFileEx NtCancelIoFileEx;
+    kama__RtlNtStatusToDosError RtlNtStatusToDosError;
+} kama__poller;
+
+static inline void kama__afd_ntfail(kama__poller* p, kama__ntstatus st) {
+    const DWORD e = p->RtlNtStatusToDosError(st);
+    kama__os_fail(e, e == ERROR_INVALID_HANDLE ? EBADF : e == ERROR_NOT_ENOUGH_MEMORY ? ENOMEM : kama__win_path_errno(e));
 }
-static inline int32_t kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest, uint64_t token) {
-    kama__poller* p = (kama__poller*)ph;
-    SHORT ev = 0;
-    if (interest & 1) ev = (SHORT)(ev | POLLRDNORM);
-    if (interest & 2) ev = (SHORT)(ev | POLLWRNORM);
-    for (int i = 0; i < p->kama_len; i++) if (p->fds[i].fd == (SOCKET)fd) { p->fds[i].events = ev; p->tokens[i] = token; return 0; }
-    if (p->kama_len == FD_SETSIZE) { kama__os_fail(WSAEINVAL, EINVAL); return -1; }   // select()'s ceiling
-    if (p->kama_len == p->kama_cap) {
-        int nc = p->kama_cap ? p->kama_cap * 2 : 8;
-        WSAPOLLFD* nf = (WSAPOLLFD*)kama_alloc((size_t)nc * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
-        uint64_t* nt = (uint64_t*)kama_alloc((size_t)nc * sizeof(uint64_t), _Alignof(uint64_t));
-        if (!nf || !nt) {
-            if (nf) kama_free(nf, (size_t)nc * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD));
-            if (nt) kama_free(nt, (size_t)nc * sizeof(uint64_t), _Alignof(uint64_t));
-            kama__os_fail(0, ENOMEM); return -1;
+
+// ---- the table: SOCKET -> state, linear probing, deletion by backward shift (no tombstones) ----
+static inline size_t kama__afd_hash(SOCKET s, size_t cap) { uint64_t h = (uint64_t)s * 0x9E3779B97F4A7C15ull; return (size_t)(h >> 32) & (cap - 1); }
+static inline kama__afd_sock* kama__afd_find(kama__poller* p, SOCKET s) {
+    if (!p->kama_cap) return NULL;
+    for (size_t i = kama__afd_hash(s, p->kama_cap); p->table[i]; i = (i + 1) & (p->kama_cap - 1))
+        if (p->table[i]->sock == s) return p->table[i];
+    return NULL;
+}
+static inline int kama__afd_insert(kama__poller* p, kama__afd_sock* st) {
+    if ((p->kama_len + 1) * 2 > p->kama_cap) {           // at most half full
+        size_t nc = p->kama_cap ? p->kama_cap * 2 : 64;
+        kama__afd_sock** nt = (kama__afd_sock**)kama_alloc(nc * sizeof *nt, _Alignof(kama__afd_sock*));
+        if (!nt) { kama__os_fail(ERROR_NOT_ENOUGH_MEMORY, ENOMEM); return -1; }
+        memset(nt, 0, nc * sizeof *nt);
+        for (size_t i = 0; i < p->kama_cap; i++) if (p->table[i]) {
+            size_t j = kama__afd_hash(p->table[i]->sock, nc);
+            while (nt[j]) j = (j + 1) & (nc - 1);
+            nt[j] = p->table[i];
         }
-        if (p->kama_len) { kama_copy(nf, p->fds, (size_t)p->kama_len * sizeof(WSAPOLLFD)); kama_copy(nt, p->tokens, (size_t)p->kama_len * sizeof(uint64_t)); }
-        if (p->fds) { kama_free(p->fds, (size_t)p->kama_cap * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD)); kama_free(p->tokens, (size_t)p->kama_cap * sizeof(uint64_t), _Alignof(uint64_t)); }
-        p->fds = nf; p->tokens = nt; p->kama_cap = nc;
+        if (p->table) kama_free(p->table, p->kama_cap * sizeof *p->table, _Alignof(kama__afd_sock*));
+        p->table = nt; p->kama_cap = nc;
     }
-    p->fds[p->kama_len].fd = (SOCKET)fd; p->fds[p->kama_len].events = ev; p->fds[p->kama_len].revents = 0;
-    p->tokens[p->kama_len] = token; p->kama_len++;
+    size_t i = kama__afd_hash(st->sock, p->kama_cap);
+    while (p->table[i]) i = (i + 1) & (p->kama_cap - 1);
+    p->table[i] = st; p->kama_len++;
     return 0;
 }
+static inline void kama__afd_unlink(kama__poller* p, kama__afd_sock* st) {
+    size_t m = p->kama_cap - 1, i = kama__afd_hash(st->sock, p->kama_cap);
+    while (p->table[i] != st) i = (i + 1) & m;
+    p->table[i] = NULL; p->kama_len--;
+    for (size_t j = (i + 1) & m; p->table[j]; j = (j + 1) & m) {   // pull later members of the run back over the gap
+        size_t home = kama__afd_hash(p->table[j]->sock, p->kama_cap);
+        if (((j - home) & m) >= ((j - i) & m)) { p->table[i] = p->table[j]; p->table[j] = NULL; i = j; }
+    }
+}
+
+// ---- groups: an AFD handle, opened on demand, associated with the port ----
+static inline kama__afd_group* kama__afd_group_for(kama__poller* p) {
+    for (kama__afd_group* g = p->groups; g; g = g->next) if (g->kama_used < 32) return g;
+    static const WCHAR name[] = L"\\Device\\Afd\\Kama";
+    kama__ustr us = { (USHORT)(sizeof name - sizeof(WCHAR)), (USHORT)sizeof name, (PWSTR)name };
+    kama__objattr oa = { sizeof oa, NULL, &us, 0, NULL, NULL };
+    kama__iosb io;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    const kama__ntstatus st = p->NtCreateFile(&h, SYNCHRONIZE, &oa, &io, NULL, 0, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                              1 /* FILE_OPEN */, 0, NULL, 0);
+    if (st != 0) { kama__afd_ntfail(p, st); return NULL; }
+    if (CreateIoCompletionPort(h, p->port, 0, 0) == NULL
+        || !SetFileCompletionNotificationModes(h, FILE_SKIP_SET_EVENT_ON_HANDLE)) {
+        kama__os_fail(GetLastError(), EINVAL); CloseHandle(h); return NULL;
+    }
+    kama__afd_group* g = (kama__afd_group*)kama_alloc(sizeof *g, _Alignof(kama__afd_group));
+    if (!g) { CloseHandle(h); kama__os_fail(ERROR_NOT_ENOUGH_MEMORY, ENOMEM); return NULL; }
+    g->afd = h; g->kama_used = 0; g->next = p->groups; p->groups = g;
+    return g;
+}
+
+static inline void kama__afd_free_sock(kama__poller* p, kama__afd_sock* st) {
+    (void)p;
+    st->group->kama_used--;
+    kama_free(st, sizeof *st, _Alignof(kama__afd_sock));
+}
+static inline void kama__afd_enqueue(kama__poller* p, kama__afd_sock* st) {
+    if (st->queued) return;
+    st->queued = 1; st->prev = NULL; st->next = p->queue;
+    if (p->queue) p->queue->prev = st;
+    p->queue = st;
+}
+static inline void kama__afd_dequeue(kama__poller* p, kama__afd_sock* st) {
+    if (!st->queued) return;
+    if (st->prev) st->prev->next = st->next; else p->queue = st->next;
+    if (st->next) st->next->prev = st->prev;
+    st->queued = 0; st->next = st->prev = NULL;
+}
+// Ask the kernel to stop a poll in flight. Its completion still arrives (STATUS_CANCELLED, or what it found first).
+static inline void kama__afd_cancel(kama__poller* p, kama__afd_sock* st) {
+    if (!st->pending || st->cancelling) return;
+    kama__iosb ci;
+    (void)p->NtCancelIoFileEx(st->group->afd, &st->iosb, &ci);   // NOT_FOUND: it completed already; same answer
+    st->cancelling = 1;
+}
+
+static inline void* kama_poller_create(void) {
+    HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+    if (!nt) { kama__os_fail(GetLastError(), ENOSYS); return NULL; }
+    kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
+    if (!p) { kama__os_fail(ERROR_NOT_ENOUGH_MEMORY, ENOMEM); return NULL; }
+    memset(p, 0, sizeof *p);
+    p->NtCreateFile = (kama__NtCreateFile)(void*)GetProcAddress(nt, "NtCreateFile");
+    p->NtDeviceIoControlFile = (kama__NtDeviceIoControlFile)(void*)GetProcAddress(nt, "NtDeviceIoControlFile");
+    p->NtCancelIoFileEx = (kama__NtCancelIoFileEx)(void*)GetProcAddress(nt, "NtCancelIoFileEx");
+    p->RtlNtStatusToDosError = (kama__RtlNtStatusToDosError)(void*)GetProcAddress(nt, "RtlNtStatusToDosError");
+    if (!p->NtCreateFile || !p->NtDeviceIoControlFile || !p->NtCancelIoFileEx || !p->RtlNtStatusToDosError) {
+        kama__os_fail(ERROR_PROC_NOT_FOUND, ENOSYS); kama_free(p, sizeof *p, _Alignof(kama__poller)); return NULL;
+    }
+    p->port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+    if (!p->port) { kama__os_fail(GetLastError(), ENOMEM); kama_free(p, sizeof *p, _Alignof(kama__poller)); return NULL; }
+    return p;
+}
+
+// The socket AFD polls is the base provider's: a layered provider (an LSP) may stand between it and the handle the
+// program holds. SIO_BASE_HANDLE names it; an LSP that intercepts that still answers one of the other three.
+static inline SOCKET kama__afd_base(SOCKET s) {
+    static const DWORD codes[4] = { KAMA__SIO_BASE_HANDLE, KAMA__SIO_BSP_HANDLE_POLL, KAMA__SIO_BSP_HANDLE_SELECT, KAMA__SIO_BSP_HANDLE };
+    for (int i = 0; i < 4; i++) {
+        SOCKET b = INVALID_SOCKET; DWORD n = 0;
+        if (WSAIoctl(s, codes[i], NULL, 0, &b, sizeof b, &n, NULL, NULL) != SOCKET_ERROR && b != INVALID_SOCKET) return b;
+        if (i == 0 && WSAGetLastError() == WSAENOTSOCK) break;
+    }
+    return INVALID_SOCKET;
+}
+
+static inline int32_t kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest, uint64_t token) {
+    kama__poller* p = (kama__poller*)ph;
+    const SOCKET s = (SOCKET)fd;
+    const SOCKET base = kama__afd_base(s);
+    if (base == INVALID_SOCKET) { kama__capture_wsa(); return -1; }   // not a socket: WSAENOTSOCK
+    kama__afd_sock* st = kama__afd_find(p, s);
+    if (st && st->base != base) {
+        // The handle value came back for another socket: the one added under it closed without `remove`, and its
+        // poll's LOCAL_CLOSE is not in yet. Retire the old state (its completion frees it) and start afresh.
+        kama__afd_unlink(p, st); kama__afd_dequeue(p, st);
+        if (st->pending) { st->deleted = 1; kama__afd_cancel(p, st); } else kama__afd_free_sock(p, st);
+        st = NULL;
+    }
+    if (st) {
+        // Re-adding: a new interest and token, armed afresh. The poll in flight is ALWAYS cancelled, not only when
+        // the interest changed: with no layered provider a socket's base handle IS its handle, so a socket that
+        // closed without `remove` and whose handle value came straight back looks the same here, and its old
+        // poll's LOCAL_CLOSE would otherwise retire the new socket's state. A cancelled poll's completion re-arms.
+        st->token = token; st->interest = interest;
+        if (st->pending) kama__afd_cancel(p, st); else kama__afd_enqueue(p, st);
+        return 0;
+    }
+    kama__afd_group* g = kama__afd_group_for(p);
+    if (!g) return -1;
+    st = (kama__afd_sock*)kama_alloc(sizeof *st, _Alignof(kama__afd_sock));
+    if (!st) { kama__os_fail(ERROR_NOT_ENOUGH_MEMORY, ENOMEM); return -1; }
+    memset(st, 0, sizeof *st);
+    st->sock = s; st->base = base; st->token = token; st->interest = interest; st->group = g;
+    if (kama__afd_insert(p, st) != 0) { kama_free(st, sizeof *st, _Alignof(kama__afd_sock)); return -1; }
+    g->kama_used++;
+    kama__afd_enqueue(p, st);
+    return 0;
+}
+
 static inline int32_t kama_poller_remove(void* ph, ptrdiff_t fd) {
     kama__poller* p = (kama__poller*)ph;
-    for (int i = 0; i < p->kama_len; i++) if (p->fds[i].fd == (SOCKET)fd) {
-        p->fds[i] = p->fds[p->kama_len - 1]; p->tokens[i] = p->tokens[p->kama_len - 1]; p->kama_len--; return 0;
-    }
-    kama__os_fail(0, ENOENT); return -1;
+    kama__afd_sock* st = kama__afd_find(p, (SOCKET)fd);
+    if (!st) { kama__os_fail(ERROR_NOT_FOUND, ENOENT); return -1; }
+    kama__afd_unlink(p, st); kama__afd_dequeue(p, st);
+    if (st->pending) { st->deleted = 1; kama__afd_cancel(p, st); } else kama__afd_free_sock(p, st);
+    return 0;
 }
+
+// Arm one socket: a poll for what it wants, plus what AFD always reports. 0, or -1 when the socket is gone (then
+// the state is retired) or the request failed some other way (errno set).
+static inline int kama__afd_arm(kama__poller* p, kama__afd_sock* st) {
+    ULONG ev = KAMA__AFD_ABORT | KAMA__AFD_CONNECT_FAIL | KAMA__AFD_LOCAL_CLOSE;
+    if (st->interest & 1) ev |= KAMA__AFD_RECEIVE | KAMA__AFD_ACCEPT | KAMA__AFD_DISCONNECT;
+    if (st->interest & 2) ev |= KAMA__AFD_SEND;
+    st->poll.kama_timeout.QuadPart = INT64_MAX;
+    st->poll.kama_count = 1;
+    st->poll.kama_exclusive = FALSE;
+    st->poll.kama_handles[0].kama_handle = (HANDLE)st->base;
+    st->poll.kama_handles[0].kama_events = ev;
+    st->poll.kama_handles[0].kama_status = 0;
+    st->iosb.kama_u.kama_status = KAMA__STATUS_PENDING;
+    const kama__ntstatus r = p->NtDeviceIoControlFile(st->group->afd, NULL, NULL, &st->iosb, &st->iosb,
+                                                      KAMA__IOCTL_AFD_POLL, &st->poll, sizeof st->poll,
+                                                      &st->poll, sizeof st->poll);
+    if (r == 0 || r == KAMA__STATUS_PENDING) { st->pending = 1; st->cancelling = 0; p->inflight++; return 0; }
+    kama__afd_ntfail(p, r);
+    return -1;
+}
+
 static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
     kama__poller* p = (kama__poller*)ph; kama__poll_events* e = (kama__poll_events*)eh;
-    fd_set rd, wr, ex;
-    FD_ZERO(&rd); FD_ZERO(&wr); FD_ZERO(&ex);
-    for (int i = 0; i < p->kama_len; i++) {
-        SOCKET s = p->fds[i].fd;
-        if (p->fds[i].events & POLLRDNORM) FD_SET(s, &rd);
-        if (p->fds[i].events & POLLWRNORM) FD_SET(s, &wr);
-        FD_SET(s, &ex);                       // always watch for connect failure / OOB
+    OVERLAPPED_ENTRY* os = (OVERLAPPED_ENTRY*)e->os;
+    const ULONGLONG start = GetTickCount64();
+    for (;;) {
+        int n = 0;
+        // Arm what is queued. A socket that cannot be polled any more (closed under us) leaves; any other refusal is
+        // reported as an event, both bits, so the read or write that follows meets the error itself, and is queued
+        // again for the next wait (the list is taken whole first, so that cannot loop here).
+        kama__afd_sock* q = p->queue; p->queue = NULL;
+        while (q) {
+            kama__afd_sock* st = q; q = st->next; st->queued = 0; st->next = st->prev = NULL;
+            if (st->pending) continue;                 // armed already (a cancel is in flight; its completion re-queues)
+            if (kama__afd_arm(p, st) != 0) {
+                if (errno == EBADF) { kama__afd_unlink(p, st); kama__afd_free_sock(p, st); continue; }
+                if (n < e->kama_cap) { e->out[n].token = st->token; e->out[n].bits = 3; n++; }
+                kama__afd_enqueue(p, st);
+            }
+        }
+        if (n > 0) return (int32_t)n;
+        DWORD wait = INFINITE;
+        if (timeoutMs >= 0) {
+            const ULONGLONG spent = GetTickCount64() - start;
+            wait = spent >= (ULONGLONG)timeoutMs ? 0 : (DWORD)((ULONGLONG)timeoutMs - spent);
+        }
+        ULONG got = 0;
+        if (!GetQueuedCompletionStatusEx(p->port, os, (ULONG)e->kama_cap, &got, wait, FALSE)) {
+            const DWORD err = GetLastError();
+            if (err == WAIT_TIMEOUT) return 0;
+            kama__os_fail(err, EINVAL); return -1;
+        }
+        for (ULONG i = 0; i < got; i++) {
+            if (!os[i].lpOverlapped) continue;             // a packet posted to the port, not a poll's completion
+            kama__afd_sock* st = (kama__afd_sock*)(void*)os[i].lpOverlapped;
+            st->pending = 0; p->inflight--;
+            const int cancelled = st->cancelling; st->cancelling = 0;
+            if (st->deleted) { kama__afd_free_sock(p, st); continue; }
+            const kama__ntstatus status = st->iosb.kama_u.kama_status;
+            if (status == KAMA__STATUS_CANCELLED || cancelled) { kama__afd_enqueue(p, st); continue; }   // arm with the new interest
+            if (status < 0) {                          // the poll itself failed: the socket's own I/O will say how
+                e->out[n].token = st->token; e->out[n].bits = 3; n++;
+                kama__afd_enqueue(p, st); continue;
+            }
+            const ULONG ev = st->poll.kama_count ? st->poll.kama_handles[0].kama_events : 0;
+            if (ev & KAMA__AFD_LOCAL_CLOSE) { kama__afd_unlink(p, st); kama__afd_free_sock(p, st); continue; }
+            int32_t bits = 0;
+            if (ev & (KAMA__AFD_RECEIVE | KAMA__AFD_ACCEPT | KAMA__AFD_DISCONNECT | KAMA__AFD_ABORT | KAMA__AFD_CONNECT_FAIL)) bits |= 1;
+            if (ev & (KAMA__AFD_SEND | KAMA__AFD_CONNECT_FAIL)) bits |= 2;
+            if (bits) { e->out[n].token = st->token; e->out[n].bits = bits; n++; }
+            kama__afd_enqueue(p, st);                  // level-triggered: armed again at the next wait
+        }
+        if (n > 0) return (int32_t)n;
+        if (timeoutMs >= 0 && GetTickCount64() - start >= (ULONGLONG)timeoutMs) return 0;
+        // Only cancellations and re-arms came in: wait out the time that is left.
     }
-    struct timeval tv; struct timeval* ptv = NULL;
-    if (timeoutMs >= 0) { tv.tv_sec = timeoutMs / 1000; tv.tv_usec = (timeoutMs % 1000) * 1000; ptv = &tv; }
-    // select() with no socket at all is WSAEINVAL; an empty set waits out the timeout, as poll(2) does.
-    if (p->kama_len == 0) { Sleep(timeoutMs < 0 ? INFINITE : (DWORD)timeoutMs); return 0; }
-    int r = select(0, &rd, &wr, &ex, ptv);    // Winsock ignores nfds; blocks until ready / timeout
-    if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
-    int n = 0;
-    for (int i = 0; i < p->kama_len && n < e->kama_cap; i++) {
-        SOCKET s = p->fds[i].fd;
-        int32_t bits = 0;
-        if (FD_ISSET(s, &rd)) bits |= 1;
-        if (FD_ISSET(s, &ex)) bits |= 3;      // failed connect: resolved (writable), and the read sees the error
-        if (FD_ISSET(s, &wr)) bits |= 2;
-        if (bits) { e->out[n].token = p->tokens[i]; e->out[n].bits = bits; n++; }
-    }
-    return (int32_t)n;
 }
+
 static inline void kama_poller_free(void* ph) {
     kama__poller* p = (kama__poller*)ph;
     if (!p) return;
-    if (p->fds) { kama_free(p->fds, (size_t)p->kama_cap * sizeof(WSAPOLLFD), _Alignof(WSAPOLLFD)); kama_free(p->tokens, (size_t)p->kama_cap * sizeof(uint64_t), _Alignof(uint64_t)); }
+    // A state the kernel still owns is cancelled and freed when its completion is drained; any other goes now. A
+    // state retired earlier (removed, or its handle reused) is no longer in the table but is counted in `inflight`.
+    for (size_t i = 0; i < p->kama_cap; i++) {
+        kama__afd_sock* st = p->table[i];
+        if (!st) continue;
+        p->table[i] = NULL;
+        if (st->pending) { st->deleted = 1; kama__afd_cancel(p, st); } else kama__afd_free_sock(p, st);
+    }
+    OVERLAPPED_ENTRY buf[64];
+    while (p->inflight > 0) {
+        ULONG got = 0;
+        if (!GetQueuedCompletionStatusEx(p->port, buf, 64, &got, INFINITE, FALSE)) break;
+        for (ULONG i = 0; i < got; i++) {
+            if (!buf[i].lpOverlapped) continue;
+            kama__afd_sock* st = (kama__afd_sock*)(void*)buf[i].lpOverlapped;
+            st->pending = 0; p->inflight--;
+            kama__afd_free_sock(p, st);            // every state still in flight here is deleted
+        }
+    }
+    if (p->table) kama_free(p->table, p->kama_cap * sizeof *p->table, _Alignof(kama__afd_sock*));
+    for (kama__afd_group* g = p->groups; g;) { kama__afd_group* nx = g->next; CloseHandle(g->afd); kama_free(g, sizeof *g, _Alignof(kama__afd_group)); g = nx; }
+    CloseHandle(p->port);
     kama_free(p, sizeof *p, _Alignof(kama__poller));
 }
 
