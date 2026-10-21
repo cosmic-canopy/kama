@@ -675,9 +675,10 @@ entries here. One has shipped:
     which is the claim the whole design rests on.
   * ⚠️ **The `_w*` CRT family *does* honour `\\?\` here** (`_wopen`, `_wstat64`, `_wmkdir` probed;
     `_wunlink`, `_wrmdir` and `MoveFileExW` proven by the long-path guard's rename and teardown steps).
-    The shipped seam keeps the CRT for the file calls for exactly that reason: the CRT sets `errno`
-    itself, so `kama_last_error()` stays the one error channel with no `GetLastError` mapping. Only what
-    has no CRT spelling (`Find*W`, `GetFileAttributesW`, `MoveFileExW`, `CreateProcessW`) is raw Win32.
+    The seam once kept the CRT for every file call because it sets `errno` itself. The opens no longer
+    use it: `_wopen` cannot share delete, so a `File` held open blocked a `rename` or `remove` of its
+    path (KR-224). Every open is now `CreateFileW` with read, write and delete sharing, handed to the CRT
+    by `_open_osfhandle`, and its failure is mapped by `kama__win_path_errno`.
   * ⚠️ **`\\?\NUL` resolves.** The common claim that verbatim prefixing kills reserved device names is
     **false** here — it reaches the NT object-manager entry. Do not use it as an argument.
   * ⚠️ **`CreateProcessW`'s `lpCurrentDirectory` fails past 260 either way** (`GLE=267`,

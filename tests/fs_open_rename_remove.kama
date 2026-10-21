@@ -1,0 +1,57 @@
+// An open `File` does not hold its path (KR-224): while it is open the path can be renamed, removed, created again and
+// replaced, and the open file reads on through all of it — what POSIX has always allowed. Windows refused every step
+// while kama opened files through the CRT's `_wopen`, whose share mode leaves out deletion. Each step is its own bit,
+// and a step that fails names its error on stderr. Returns 0.
+import { core::eprintln, std::fs::File, std::fs::OpenMode, std::fs::rename, std::fs::remove, std::fs::exists,
+         std::fs::writeText, std::fs::readText, std::io::IoError, std::collections::FixedArray,
+         std::collections::ConstView, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
+
+fn string text(ConstView<uint8> b) { Result<string, Utf8Error> t = decode(bytes: b); return match (give t) { case Ok(value: s): { := give s; } case Err(error: e): { := "?"; } }; }
+
+unsafe fn string at(const ref File f, isize n) {      // the first n bytes, through the open file
+    FixedArray<uint8> b = FixedArray.make(size: n);
+    Result<isize, IoError> r = f.readAt(into: b.viewMut(), offset: 0ui64);
+    return match (r) { case Ok(value: k): text(b: b.slice(from: 0, count: k)); case Err(error: e): "?"; };
+}
+fn int32 said(const ref IoError e, const ref string what, int32 bit) { string m = e.message(); eprintln(s: "${what}: ${m}"); return bit; }
+fn int32 done(Result<Unit, IoError> r, const ref string what, int32 bit) {   // 0, or `bit` once the error is named
+    return match (r) { case Ok(value: u): 0; case Err(error: e): said(e: e, what: what, bit: bit); };
+}
+fn int32 wrote(Result<isize, IoError> r, const ref string what, int32 bit) {
+    return match (r) { case Ok(value: n): 0; case Err(error: e): said(e: e, what: what, bit: bit); };
+}
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    Result<File, IoError> fr = File.open(path: "kr224.a", mode: OpenMode::Write);
+    File f = match (give fr) { case Ok(value: v): { := give v; } case Err(error: e): { return 128; } };
+    string held = "held";
+    Result<isize, IoError> w = f.write(bytes: held.bytes());
+    bad = bad | done(r: rename(from: "kr224.a", to: "kr224.b"), what: "rename an open file", bit: 1);
+    Result<File, IoError> rr = File.open(path: "kr224.b", mode: OpenMode::Read);
+    File r = match (give rr) { case Ok(value: v): { := give v; } case Err(error: e): { return 129; } };
+    if (at(f: r, n: 4) != "held") { bad = bad | 2; }                   // the new name reaches the same file
+    bad = bad | done(r: remove(path: "kr224.b"), what: "remove an open file", bit: 4);
+    if (exists(path: "kr224.b")) { bad = bad | 8; }                    // the name is gone at once
+    if (at(f: r, n: 4) != "held") { bad = bad | 2; }                   // ...and the open file lives on
+    bad = bad | wrote(r: writeText(path: "kr224.b", text: "new"), what: "create at a removed name", bit: 16);
+    f.close();
+    r.close();
+    // Replace a path a reader holds open: the reader keeps the old file, the path names the new one.
+    _ = writeText(path: "kr224.c", text: "old");
+    _ = writeText(path: "kr224.d", text: "fresh");
+    Result<File, IoError> gr = File.open(path: "kr224.c", mode: OpenMode::Read);
+    File g = match (give gr) { case Ok(value: v): { := give v; } case Err(error: e): { return 130; } };
+    bad = bad | done(r: rename(from: "kr224.d", to: "kr224.c"), what: "rename over an open file", bit: 32);
+    if (at(f: g, n: 3) != "old") { bad = bad | 64; }
+    g.close();
+    Result<string, IoError> now = readText(path: "kr224.c");
+    bool replaced = match (give now) { case Ok(value: s): s == "fresh"; case Err(error: e): false; };
+    if (!replaced) { bad = bad | 32; }                                 // the path names the new file
+    _ = remove(path: "kr224.b");
+    _ = remove(path: "kr224.c");
+    _ = remove(path: "kr224.d");
+    return bad;
+}
+
+fn uint8 main() { return cast<uint8>(run()); }

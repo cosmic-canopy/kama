@@ -23,8 +23,8 @@
 // result (`< 0` / a set errno = error); the kama layer maps `kama_last_error()` -> `IoError`.
 //
 // Windows branch: implemented — Winsock (`WSAStartup`/`SOCKET`/`WSAGetLastError`), the WIDE CRT + Win32
-// (`_wopen`/`_wstat64`/`FindFirstFileW`/`_pipe`), and std::process (`CreateProcessW`/`WaitForSingleObject`/
-// `TerminateProcess`). Every path and every string handed to the OS is converted UTF-8 -> UTF-16 at the call
+// (`CreateFileW` + `_open_osfhandle`/`_wstat64`/`FindFirstFileW`/`_pipe`), and std::process (`CreateProcessW`/
+// `WaitForSingleObject`/`TerminateProcess`). Every path and every string handed to the OS is converted UTF-8 -> UTF-16 at the call
 // (kama__wide / kama__wpath below) and never through an `A` function. The POSIX branch below also serves
 // iOS/Android/BSD and (via emscripten's POSIX shims) the wasm target's VFS.
 
@@ -278,25 +278,54 @@ static inline wchar_t* kama__wpath(const char* utf8, kama__wpathbuf* b) {
     return kama__wpath_long(b);
 }
 
-// ---- files (wide CRT low-level I/O) -----------------------------------------
-// _O_BINARY is essential: Windows text mode would translate CRLF/^Z and corrupt binary data. The `_w*` CRT
-// family is preferred over raw Win32 for the file calls because it sets `errno` itself, so kama_last_error()
-// stays the single error channel with no GetLastError mapping.
+// A Win32 failure on a path, as the uniform errno set. The rows are the file-related part of the CRT's own table
+// (`__acrt_errno_map_os_error`, which `_wopen` applied), so an open answers what it did through the CRT, with two
+// rulings of kama's: a name Windows cannot hold is ENOENT (no such file can exist), where the CRT says EINVAL, and
+// ERROR_DIRECTORY is ENOTDIR. Anything else is EINVAL, as the CRT's default is.
+static inline int kama__win_path_errno(DWORD e) {
+    switch (e) {
+        case ERROR_FILE_NOT_FOUND: case ERROR_PATH_NOT_FOUND: case ERROR_INVALID_NAME: case ERROR_INVALID_DRIVE:
+        case ERROR_BAD_NETPATH: case ERROR_BAD_NET_NAME: case ERROR_BAD_PATHNAME: case ERROR_FILENAME_EXCED_RANGE:
+            return ENOENT;
+        case ERROR_ACCESS_DENIED: case ERROR_SHARING_VIOLATION: case ERROR_LOCK_VIOLATION:
+        case ERROR_NETWORK_ACCESS_DENIED: case ERROR_WRITE_PROTECT: case ERROR_CANNOT_MAKE:
+            return EACCES;
+        case ERROR_FILE_EXISTS: case ERROR_ALREADY_EXISTS: return EEXIST;
+        case ERROR_TOO_MANY_OPEN_FILES:                    return EMFILE;
+        case ERROR_DISK_FULL:                              return ENOSPC;
+        case ERROR_DIRECTORY:                              return ENOTDIR;
+        default:                                           return EINVAL;
+    }
+}
+
+// ---- files (a Win32 handle, read and written through the CRT) --------------------
+// _O_BINARY is essential: Windows text mode would translate CRLF/^Z and corrupt binary data.
+//
+// Every open shares read, write AND delete (KR-224), as Rust's std opens every File: a path some File holds open
+// can still be renamed, removed or replaced, which POSIX has always allowed. The CRT's `_wopen` shares read and
+// write only, so it is not used: the file is opened by CreateFileW and handed to the CRT by _open_osfhandle, with
+// the disposition `_wopen` derived from the `_O_*` flags each wrapper used to pass — the share mode is the one
+// thing that changed. A NULL SECURITY_ATTRIBUTES makes the handle non-inheritable: no child inherits a file kama
+// opened (KR-174, the POSIX `O_CLOEXEC` twin). A failure keeps its Win32 code for `rawOsError()`.
 //
 // ⚠️ Every wrapper that holds a kama__wpathbuf is KAMA_NOINLINE — see the macro's note in kama_runtime.h.
 // It is a stack-overflow guard, not a tuning knob: `removeDirAll` recurses per directory level, and a
 // 64 KB buffer folded into that frame would blow a 2 MB stack at depth ~32, inside `rm -rf`, at runtime.
-// `_O_NOINHERIT` on every open: no child inherits a file kama opened (KR-174, the POSIX `O_CLOEXEC` twin).
-KAMA_NOINLINE static int32_t kama__wopen(const char* path, int flags) {
+KAMA_NOINLINE static int32_t kama__open(const char* path, DWORD access, DWORD disposition, int append) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
-    return (int32_t)_wopen(w, flags | _O_NOINHERIT, _S_IREAD | _S_IWRITE);
+    HANDLE h = CreateFileW(w, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) { const DWORD e = GetLastError(); kama__os_fail(e, kama__win_path_errno(e)); return -1; }
+    const int fd = _open_osfhandle((intptr_t)h, _O_BINARY | _O_NOINHERIT | append);   // _O_APPEND: the CRT seeks to the end before each write
+    if (fd < 0) { const int e = errno; CloseHandle(h); errno = e; return -1; }
+    return (int32_t)fd;
 }
-static inline int32_t   kama_open_read(const char* path)   { return kama__wopen(path, _O_RDONLY | _O_BINARY); }
-static inline int32_t   kama_open_create(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY); }
-static inline int32_t   kama_open_append(const char* path) { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY); }
-static inline int32_t   kama_open_rw(const char* path)     { return kama__wopen(path, _O_RDWR | _O_CREAT | _O_BINARY); }
+static inline int32_t   kama_open_read(const char* path)   { return kama__open(path, GENERIC_READ, OPEN_EXISTING, 0); }
+static inline int32_t   kama_open_create(const char* path) { return kama__open(path, GENERIC_WRITE, CREATE_ALWAYS, 0); }
+static inline int32_t   kama_open_append(const char* path) { return kama__open(path, GENERIC_WRITE, OPEN_ALWAYS, _O_APPEND); }
+static inline int32_t   kama_open_rw(const char* path)     { return kama__open(path, GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS, 0); }
 // Create, and fail with EEXIST if anything is there already — a dangling link included (KR-177).
-static inline int32_t   kama_open_new(const char* path)    { return kama__wopen(path, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY); }
+static inline int32_t   kama_open_new(const char* path)    { return kama__open(path, GENERIC_WRITE, CREATE_NEW, 0); }
 // ---- random access (KR-168) -----------------------------------------------------------------------------------
 // Only a disk file seeks: a pipe or a console answers ESPIPE, as POSIX's lseek does, rather than whatever the
 // file pointer of a pipe means to Win32. `whence` 0/1/2 = from the start / the cursor / the end.
@@ -406,10 +435,6 @@ static inline size_t kama__strip_verbatim(char* s, size_t n) {
     if (unc) { s[0] = '\\'; s[1] = '\\'; }
     s[lead + n - skip] = 0;
     return lead + n - skip;
-}
-static inline int kama__win_path_errno(DWORD e) {
-    return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND || e == ERROR_INVALID_NAME) ? ENOENT
-         : e == ERROR_ACCESS_DENIED ? EACCES : e == ERROR_DIRECTORY ? ENOTDIR : EINVAL;
 }
 // A UTF-16 answer, stripped and copied out with the grow-and-retry protocol: the full length, min(len, cap) bytes.
 static inline ptrdiff_t kama__wide_out(const wchar_t* w, uint8_t* out, size_t cap) {
@@ -851,10 +876,8 @@ KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mo
         }
     }
     if (h == INVALID_HANDLE_VALUE) {
-        DWORD e = GetLastError();
-        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
-              : (e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION) ? EACCES
-              : (e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS) ? EEXIST : EINVAL);
+        const DWORD e = GetLastError();
+        kama__os_fail(e, kama__win_path_errno(e));
         return -1;
     }
     int bad = 0;

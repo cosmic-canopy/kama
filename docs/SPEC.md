@@ -2263,6 +2263,9 @@ cache keys on it — git's index keys on the same) and `permissions` (the nine b
 — `File`, `Dir`, `Symlink`, `Fifo`, `CharDevice`, `BlockDevice`, `Socket`, `Other` — with `isFile()`, `isDir()` and
 `isSymlink()` for the common questions; `stat(path:)` follows a symbolic link and `symlinkStat(path:)` describes the
 link itself, and `File.metadata()` asks an OPEN file, so a check and the read after it are about one file. <!-- test: fs_file_kind -->
+An open `File` does not hold its path: while it is open, the path can be renamed, removed, created again or replaced
+by a `rename`, and the file reads on through all of it — POSIX's rule, kept on Windows by opening every file with delete
+sharing, as Rust's std does. <!-- test: fs_open_rename_remove -->
 `owner` and `group` come from the same stat, so they describe the same file as `permissions` (libpq accepts a <!-- test: fs_owner -->
 group-readable key only when root owns it). On Linux and macOS they are a `std::process::UserId` and `GroupId`, the
 stat's `st_uid`/`st_gid`. On Windows they are an `Optional` of each: the SIDs the file's security descriptor names,

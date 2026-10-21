@@ -17,7 +17,7 @@ fn uint8 main() {
     Metadata a1 = st(p: "kr220.a");
     Metadata a2 = st(p: "kr220.a");
     if (a1.id != a2.id) { bad = bad | 1; }
-    {   // closed before the rename below: Windows refuses to rename a file kama holds open (KR-224)
+    {
         Result<File, IoError> rf = File.open(path: "kr220.a", mode: OpenMode::Read);
         File f = match (give rf) { case Ok(value: x): give x; case Err(error: e): { return 90; } };
         Result<Metadata, IoError> rm = f.metadata();
