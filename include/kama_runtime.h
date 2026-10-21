@@ -1603,6 +1603,20 @@ static inline ptrdiff_t kama_utf8_bad_offset(const uint8_t* src, ptrdiff_t start
     return -1;
 }
 
+// Whether two n-byte runs are equal, in a time that does not depend on where they first differ
+// (`std::digest::constantTimeEquals`, KR-203). Every byte is read and folded in before the answer exists. The
+// inputs are read through `volatile`, as OpenSSL's CRYPTO_memcmp reads them, so the compiler may neither skip a
+// load nor decide early. A plain OR-folding loop has no early exit at clang -O2 today (measured: it vectorizes),
+// but no compiler promises that, and a verifier's whole point is the promise. The barrier is in C because kama
+// has no `volatile` local: `hardware` marks a module static, which every isolate would share.
+static inline bool kama_ct_equal(const uint8_t* a, const uint8_t* b, ptrdiff_t n) {
+    const volatile uint8_t* va = a;
+    const volatile uint8_t* vb = b;
+    uint8_t d = 0;
+    for (ptrdiff_t i = 0; i < n; ++i) d |= (uint8_t)(va[i] ^ vb[i]);
+    return d == 0;
+}
+
 // Owned (heap) string from a raw byte range `base[start .. start+len)`. This lets the `.split()`
 // iterator hold a borrowed `UnsafePtr<uint8>` (so it stays a POD `value` type, like Chars) yet yield OWNED
 // pieces, without exposing raw allocation to kama source. Declared in the prelude as

@@ -2963,7 +2963,12 @@ streaming HMAC (RFC 2104) — `Hmac.make(hash: Sha256.make(), key: k)`, `update`
 so a copy MACs another message under the same key; and **`pbkdf2(hash:, password:, salt:, iterations:, into:)`** <!-- test: digest_pbkdf2 -->
 (RFC 8018), which fills `into` with the derived key. Together they are SCRAM-SHA-256, PostgreSQL's default
 authentication — `tests/digest_scram_rfc7677.kama` reproduces RFC 7677's client proof and server signature from <!-- test: digest_scram_rfc7677 -->
-them. MD5 is not here: it serves only deprecated protocols, and a package that needs one carries it.
+them. **`constantTimeEquals(a:, b:)`** checks a received tag (or a bearer token, a signed cookie) against the <!-- test: digest_constant_time -->
+expected one in a time that does not depend on where they first differ. `==` stops at the first byte that differs, so
+its time says how many leading bytes matched. Unequal lengths are false at once, since a length is not the secret, and
+the comparison reads both inputs through `volatile` in C, so the compiler cannot turn it back into an early exit (Go's
+`subtle.ConstantTimeCompare`, Python's `hmac.compare_digest`). MD5 is not here: it serves only deprecated protocols,
+and a package that needs one carries it.
 
 ```kama
 import { std::digest::sha256::sha256, std::digest::sha1::Sha1, std::encoding::base64::encode as b64Encode,
@@ -3877,7 +3882,7 @@ It has at least one place, and a contract, with no layout, is refused as its ele
 `a.equals(other: b)`, a `T: Equatable<T>` bound, a field of a `@generate(Equatable)` type, a collection's `contains`.
 Each element goes through its own equality — `==` for a number, so `-0.0 == 0.0` and a NaN is unequal to itself; the
 element's `equals` for anything else — never a `memcmp`, which would compare padding. Rust's `[T; N]`, C++'s
-`std::array` and Go's arrays compare the same way; a digest compared to a secret wants KR-203's constant-time form.
+`std::array` and Go's arrays compare the same way; a digest compared to a secret wants `std::digest::constantTimeEquals`.
 An element with no equality is refused, naming it, and an `InlineArray` has no other operator. <!-- xfail: inline_array_eq, inline_array_order -->
 `FixedArray` has `equals` too, as `DynamicArray` always had.
 

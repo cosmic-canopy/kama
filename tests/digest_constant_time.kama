@@ -1,0 +1,30 @@
+// `constantTimeEquals` (KR-203): equal bytes are equal; a difference anywhere, the first byte or the last, is not;
+// unequal lengths are not; two empty runs are. Then the check a verifier makes: a received HMAC tag against the one
+// computed over the message, for the right key and for a wrong one. Each case is its own bit. Returns 0.
+import { std::digest::constantTimeEquals, std::digest::sha256::hmacSha256 };
+
+fn uint8 main() {
+    int32 bad = 0;
+    string token = "secret-token";
+    string same = "secret-token";
+    string first = "Secret-token";
+    string last = "secret-tokeN";
+    string shorter = "secret-toke";
+    string empty = "";
+    if (!constantTimeEquals(a: token.bytes(), b: same.bytes())) { bad = bad | 1; }
+    if (constantTimeEquals(a: token.bytes(), b: first.bytes())) { bad = bad | 2; }
+    if (constantTimeEquals(a: token.bytes(), b: last.bytes())) { bad = bad | 4; }
+    if (constantTimeEquals(a: token.bytes(), b: shorter.bytes())) { bad = bad | 8; }
+    if (!constantTimeEquals(a: empty.bytes(), b: empty.bytes())) { bad = bad | 16; }
+    if (constantTimeEquals(a: empty.bytes(), b: token.bytes())) { bad = bad | 32; }
+
+    string key = "webhook-key";
+    string wrongKey = "webhook-kez";
+    string body = "{\"event\":\"push\"}";
+    InlineArray<uint8>#(32) received = hmacSha256(key: key.bytes(), message: body.bytes());
+    InlineArray<uint8>#(32) expected = hmacSha256(key: key.bytes(), message: body.bytes());
+    InlineArray<uint8>#(32) forged = hmacSha256(key: wrongKey.bytes(), message: body.bytes());
+    if (!constantTimeEquals(a: received.view(), b: expected.view())) { bad = bad | 64; }
+    if (constantTimeEquals(a: forged.view(), b: expected.view())) { bad = bad | 64; }
+    return cast<uint8>(bad);
+}

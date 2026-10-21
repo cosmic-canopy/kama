@@ -1,5 +1,7 @@
 import { std::collections::View, std::collections::ConstView };
-export { BlockDigest, Hmac, pbkdf2 };
+export { BlockDigest, Hmac, pbkdf2, constantTimeEquals };
+
+extern fn bool kama_ct_equal(UnsafeConstPtr<uint8> a, UnsafeConstPtr<uint8> b, isize n);
 
 // What every hash in `std::digest` is — `Sha1`, `Sha256` and `Sha512` implement it — so that HMAC and PBKDF2 are
 // written once, over any of them. A fresh hasher is its own prototype: a hasher is a `value`, so copying one starts
@@ -22,7 +24,7 @@ type contract BlockDigest for value {
 // `hmacSha1`, `hmacSha256` and `hmacSha512`, in each hash's own module, are the one-shots. Keyed once: the key is
 // folded into the inner and outer states at construction, and a copy of an `Hmac` MACs another message under the same
 // key without re-keying (which is how `pbkdf2` below runs thousands of rounds). ⚠️ Comparing a received tag with
-// `==` leaks, through timing, how many leading bytes matched; a verifier compares every byte before deciding.
+// `==` leaks, through timing, how many leading bytes matched: check it with `constantTimeEquals`, below.
 type value Hmac<H: BlockDigest> {
     H inner;
     H outer;
@@ -104,4 +106,15 @@ fn void pbkdf2<H: BlockDigest>(H hash, ConstView<uint8> password, ConstView<uint
         done = done + take;
         block = block + 1ui32;
     }
+}
+
+// Whether `a` and `b` hold the same bytes, in a time that does not depend on where they first differ: how a
+// received MAC, a bearer token or a signed cookie is checked against the expected one. `==` stops at the first
+// byte that differs, so how long it took says how many leading bytes matched, and an attacker who can time it
+// learns a secret a byte at a time. Go's `subtle.ConstantTimeCompare`, Python's `hmac.compare_digest` and .NET's
+// `FixedTimeEquals`. Unequal lengths are false at once, since a length is not the secret.
+unsafe fn bool constantTimeEquals(ConstView<uint8> a, ConstView<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    if (a.isEmpty()) { return true; }   // and `dataPtr` on an empty view is not read
+    return kama_ct_equal(a: a.dataPtr(), b: b.dataPtr(), n: a.length());
 }

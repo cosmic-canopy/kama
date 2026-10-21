@@ -31,7 +31,8 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
   UTF-8); `std::fmt` formatting and `${…}` interpolation; tagged strings (`html"…"` escapes its holes, `sql"…"` sends
   its values out of band).
 - **Hashing.** `std::digest`: SHA-1, SHA-256, SHA-512, HMAC and PBKDF2 (enough for `Sec-WebSocket-Accept` and signed
-  cookies).
+  cookies), and `constantTimeEquals` to check a tag, a token or a cookie against the expected one without leaking
+  through timing where they first differ.
 - **Serialization.** `@generate(Serializable, Deserializable)` with a JSON back end, and `JsonValue` for a document
   with no schema.
 - **Files, processes, errors.** `std::fs` (with `seek`, `readAt`, `writeAt`), `std::process`, `std::io` streams,
@@ -48,7 +49,6 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 |---|---|---|
 | A `Poller` wakeup another isolate can trigger | ❌ workaround: a stream pair as a wake channel | KR-201 |
 | A DNS lookup a loop can poll, with a deadline | ❌ `resolve` blocks | KR-202 |
-| Constant-time comparison of secrets | ❌ std warns against `==` and offers nothing else | KR-203 |
 | Percent-encoding and a URL type | ❌ ruled for std (strict RFC 3986, plus form encoding); not yet built | KR-204 |
 | Listener backlog and reuse-port | ❌ backlog fixed at 128, no reuse-port | KR-206 |
 | Running out of descriptors: a kind, and the limit read and raised | ❌ ruled: `IoErrorKind::TooManyOpenFiles` and an explicit POSIX `raiseOpenFileLimit()`; not yet built | KR-210 |

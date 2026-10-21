@@ -336,18 +336,6 @@ libuv and tokio run `getaddrinfo` on a worker thread; Go has its own resolver; R
 worker form, completing through KR-201's waker, with a deadline after which the caller stops waiting (the worker
 finishes and its answer is dropped). No DNS exists in a browser, so the request is native-only.
 
-<a id="s1-constant-time"></a>
-
-#### Constant-time equality in `std::digest` (KR-203)
-
-`lib/std/digest/digest.kama` warns: "`==` leaks, through timing, how many leading bytes matched; a verifier compares
-every byte before deciding". std has no such verifier. Go has `crypto/subtle.ConstantTimeCompare`, Python
-`hmac.compare_digest` and Node `crypto.timingSafeEqual`, all in their std; Rust has the `subtle` crate. HTTP compares
-secrets constantly: credentials, bearer tokens, signed cookies, webhook signatures. Recommended: an equality over two
-`ConstView<uint8>` in `std::digest`, which the warning then names. Unequal lengths answer false at once, since a
-length is not the secret. The loop accumulates differences behind an optimization barrier the C compiler cannot turn
-into an early exit, and a hand-written loop has no such guarantee.
-
 <a id="s1-url"></a>
 
 #### Percent-encoding and a URL type (KR-204)
