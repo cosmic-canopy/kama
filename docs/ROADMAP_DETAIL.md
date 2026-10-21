@@ -2232,13 +2232,26 @@ is the finding.
 
 Size M–L.
 
-**Decisions owed.**
-1. The three backends, with Windows on AFD-over-IOCP readiness (mio) rather than IOCP's completion model (libuv). The
-   completion model is what zero-copy `sendFile` (KR-229) needs, so the choice decides whether that is one mechanism
-   or two.
-2. The token: a `uint64` the caller chooses (mio's `Token`), or one the `Poller` assigns.
-3. Level-triggered only, or edge-triggered offered as well.
-4. Windows' `select()` path removed outright once AFD lands, or kept as a fallback.
+**Ruled 2026-10-21 (the maintainer).** Java's NIO is the fifth data point: since JDK 17 its Windows selector is
+wepoll (AFD), and the old `select()` one stays behind a property.
+1. **Windows is AFD polling over IOCP**, written as original code. wepoll (BSD-2) and mio (MIT) are references for
+   the technique only: `RUNTIME-EXCEPTION` promises that embedded runtime code needs no notices, so neither can be
+   vendored. The same IOCP port later carries completion packets (`TransmitFile` for KR-229, KR-3's overlapped I/O),
+   so this is one port with two packet kinds, not two mechanisms.
+2. **The caller owns the ready list and chooses the token**, as mio does:
+   - `Events.withCapacity(capacity:)` holds the list, and `wait(events:, timeoutMs:)` fills it with no allocation.
+   - Each `Event` carries the `uint64` the caller passed to `add`.
+   - `readyFor` and `Ready` are removed, since every system above answers a ready list and none has a per-fd query.
+   - The list cannot live inside the `Poller`: `foreach` freezes its host, so `p.add(…)` for an accepted connection
+     would be refused inside the loop.
+   - One event per descriptor per wait on every OS. kqueue's separate read and write reports are merged, as Python's
+     `selectors` does.
+   - `add` (re-adding updates it) and `remove` become `Result<Unit, IoError>`, because each backend can refuse.
+3. **Level-triggered only.** Edge-triggered against one-shot is KR-3's call: its design measures both on each backend
+   and adopts the winner, because AFD is natively one-shot and edge-triggered emulation there needs the I/O call to
+   report WouldBlock.
+4. **Windows' `select()` path is removed outright** once AFD lands. A fallback would be a second, untested path. LSPs
+   are the one case AFD skips; they have been deprecated since Windows 8, and `SIO_BASE_HANDLE` bypasses them.
 
 <a id="s6-fibers"></a>
 
@@ -2307,6 +2320,13 @@ offers it in its standard surface. Size: XL, so a design document comes before a
 4. **wasm:** blocking-shaped fibers there (JSPI or stack switching, once verified), or the app loop's callbacks as
    today.
 5. One scheduler for jobs and I/O, or two.
+6. **Edge-triggered or one-shot registration.** KR-230 ships level-triggered only (ruled 2026-10-21). That is wrong
+   for a scheduler, because a socket with no fiber parked on it would be reported on every wait.
+   - Go and tokio register edge-triggered once and pay no system call per park.
+   - One-shot costs one system call per park, but is native on all three backends. AFD on Windows is one-shot, and
+     edge-triggered emulation there needs the I/O call to report WouldBlock.
+   - Measure both on each backend (system calls per park, throughput) and adopt the winner. The scheduler's
+     completion I/O on Windows shares KR-230's IOCP port.
 
 <a id="s6-lock-window"></a>
 
