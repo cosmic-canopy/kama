@@ -455,6 +455,38 @@ FILE_SHARE_DELETE` handed to the CRT through `_open_osfhandle`, as `kama_open_cr
 platform rule's same interface, with Windows behaving as POSIX does rather than refusing. A lock taken with
 `File.lock` (SPEC's `std::fs` paragraph) is unaffected: it is a byte-range lock, not a share mode. Size S.
 
+**Implementation map (2026-10-21, read on `0.9.708`; re-probe before code).**
+- **The five opens** are `include/kama_os.h`'s Windows `kama__wopen` and its wrappers (`kama_open_read`, `_create`,
+  `_append`, `_rw`, `_new`), reached from `lib/std/fs/fs.kama` `File.open` (`OpenMode` → one wrapper each). Each
+  becomes `CreateFileW` + `_open_osfhandle`, as `kama_open_create_mode` (same file) already does:
+  - `Read`: `GENERIC_READ`, `OPEN_EXISTING`.
+  - `Write`: `GENERIC_WRITE`, `CREATE_ALWAYS`.
+  - `Append`: `GENERIC_WRITE`, `OPEN_ALWAYS`, with `_O_APPEND` handed to `_open_osfhandle` so the CRT seeks to the
+    end before each write, as `create_mode`'s append does.
+  - `ReadWrite`: `GENERIC_READ | GENERIC_WRITE`, `OPEN_ALWAYS`.
+  - `CreateNew`: `GENERIC_WRITE`, `CREATE_NEW`, where `ERROR_FILE_EXISTS` is `EEXIST`, as `CreateNew` promises (SPEC `std::fs`).
+- **Inheritance.** A null `SECURITY_ATTRIBUTES` makes the handle non-inheritable, which keeps `_O_NOINHERIT`'s
+  guarantee that no child inherits a file kama opened.
+- **Errors.** The file's header note says the `_w*` calls were chosen because they set `errno` themselves. A
+  `CreateFileW` open maps the Win32 error through `kama__os_fail` instead, keeping `_doserrno` for `rawOsError()`.
+  Take the CRT's own table rather than `create_mode`'s four entries:
+  - `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND` and `ERROR_INVALID_NAME` are `ENOENT`;
+  - `ERROR_ACCESS_DENIED` and `ERROR_SHARING_VIOLATION` are `EACCES`;
+  - `ERROR_FILE_EXISTS` and `ERROR_ALREADY_EXISTS` are `EEXIST`;
+  - `ERROR_TOO_MANY_OPEN_FILES` is `EMFILE`, which KR-210's kind will read.
+
+  One helper, and `create_mode` uses it too.
+- **A directory** opened as a file is `ERROR_ACCESS_DENIED` without `FILE_FLAG_BACKUP_SEMANTICS`, which is `EACCES`, as
+  `_wopen` answered. Probe that the existing `fs_*` fixtures agree.
+- **Remove while open.** With delete sharing, `DeleteFileW` of an open file succeeds. On NTFS under Windows 10 1809 and
+  later the name goes at once (POSIX delete semantics); before that the name is delete-pending until the last handle
+  closes. Probe on CI, and write which one SPEC promises: "the name goes; the open file lives on" is POSIX's.
+- **Fixture.** `tests/fs_open_rename_remove.kama`: open a file, rename it while open, read through the handle, remove
+  it while open, then close. It passes on POSIX today; only Windows CI shows the before and after. Keep
+  `fs_metadata_identity` as it is.
+- **SPEC** (`std::fs`): say that a `File` does not stop the path being renamed or removed, on every platform.
+- No change in `kama_os.h`'s POSIX half. A Windows-only fix: CI is the only test that runs it.
+
 <a id="s1-sendfile"></a>
 
 #### `sendfile` (KR-207)
