@@ -346,7 +346,10 @@ over. KR-3 then removes the hop too: one multiplexed connection per core, its ca
 | Go | `netpollBreak` (runtime-internal) | the scheduler rechecks its run queue | yes (an atomic flag) | channels are the runtime's own (`select`) |
 | tokio | a task's `Waker` | the task is polled again | per task | `mpsc` wakes the receiving task |
 
-**Recommendation (decisions owed, each numbered).**
+**Ruled 2026-10-21 (the maintainer): decisions 1–4 below, as recommended.** On #2: it is what every mature runtime
+does (mio's `Waker` is shared across threads, and Java's `wakeup` and libuv's `uv_async_send` are callable from any
+thread), and a `Copyable(bare: give)` resource over reference-counted state is kama's own spelling for a shared
+handle.
 
 ```kama
 Result<Waker, IoError> rw = p.waker(token: WORK);     // one wake source, registered with this Poller
