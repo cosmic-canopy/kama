@@ -2412,6 +2412,16 @@ socket fixture binds that way, so no two can collide (`tools/check-fixture-ports
 `UdpSocket` has both too, its peer being the one `connect` fixed. Asking a socket where it is changes nothing, so
 every socket's `localAddr()`/`peerAddr()` is a `const fn`: a `const ref` to the socket is enough to ask. <!-- test: net_addr_const -->
 
+**Sending a file (`std::net`).** `TcpStream.sendFile(file:, offset:, count:)` sends up to `count` bytes of a `File` <!-- test: net_send_file -->
+from `offset`, and answers the count sent. It is a partial transfer, like `write`, so a caller loops and advances
+`offset`. On a non-blocking stream nothing sent is `WouldBlock`, and 0 means `offset` is at or past the end. The file's
+own cursor never moves, as for `readAt`. On Linux and macOS the bytes go from the page cache to the socket with no copy
+through the program (`sendfile`; on macOS, about 40% fewer cycles than a read and write loop). Where the OS cannot do
+that, it copies through a small buffer with the same result: on Windows, wasm, or a file the kernel has no such path
+for. Windows' `TransmitFile` would block a non-blocking socket for the whole count. A peer that has gone is an error, <!-- test: net_send_file -->
+never a signal, even in a `--shared` library. Python's `socket.sendfile`, .NET's `Socket.SendFile` and Java's
+`transferTo` spell it the same way; Go and Rust hide it inside their generic copy.
+
 **Listener options (`std::net`).** `TcpListener.bindWith(address:, options:)` takes a `ListenOptions`, one type on <!-- test: net_listen_options -->
 every OS and each its own OS's. Every one carries `backlog`, the accept queue's length (128 by default, what `bind` uses;
 the OS caps a larger one at its own maximum, and a negative one is `InvalidInput`). Where a kernel lets several

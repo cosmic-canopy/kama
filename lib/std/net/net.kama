@@ -10,6 +10,7 @@ import {
     std::io::Descriptor,
     resolve,
     std::collections::DynamicArray,
+    std::fs::File,
 };
 
 export { TcpListener, TcpStream, ListenOptions };
@@ -44,6 +45,8 @@ extern fn int32 kama_getsockname_addr(isize fd, UnsafePtr<int32> outFamily, Unsa
 extern fn int32 kama_getpeername_addr(isize fd, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIp, UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
 extern fn int32 kama_last_error();
 extern fn int32 kama_EINTR();
+extern fn int32 kama_ENOSYS();
+extern fn isize kama_send_file(isize sock, int32 fd, uint64 offset, uint64 count);
 extern fn int32 kama_EINPROGRESS();
 
 // A duration as a socket option takes it: a POSITIVE whole count of `unit` nanoseconds, rounded UP so a
@@ -222,6 +225,35 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
             if (n >= 0) { return Result::Ok(value: n); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
+    }
+
+    // Send up to `count` bytes of `file`, from `offset`, and answer the count sent: how a server answers a request with a
+    // file (KR-207). Like `write`, it may send less than asked, so loop, advancing `offset`; on a non-blocking stream,
+    // nothing sent is `Err(WouldBlock)`. 0 means `offset` is at or past the end of the file. The file's own cursor never
+    // moves, as for `readAt`. Linux and macOS send straight from the page cache (`sendfile`; measured on macOS, about 40%
+    // fewer cycles than a read and write loop). Where the OS cannot, it copies through a small buffer, with the same
+    // result: Windows, whose `TransmitFile` would block a non-blocking socket for the whole count (KR-229); wasm; and a
+    // file the kernel has no such path for. A peer that has gone is an error here, never a signal.
+    public unsafe fn Result<uint64, IoError> sendFile(const ref File file, uint64 offset, uint64 count) {
+        if (count == 0ui64) { return Result::Ok(value: 0ui64); }
+        while (true) {
+            isize n = kama_send_file(sock: this.fd, fd: file.rawFd(), offset: offset, count: count);
+            if (n >= 0) { return Result::Ok(value: cast<uint64>(n)); }
+            int32 e = kama_last_error();
+            if (e == kama_ENOSYS()) { return this.sendFileCopy(file: file, offset: offset, count: count); }
+            if (e != kama_EINTR()) { return Result::Err(error: lastError()); }
+        }
+    }
+    // The buffered way, where the zero-copy one is not: one read at `offset` and one write, so a buffer's worth at most
+    // per call, never more than the stream took, and nothing allocated.
+    unsafe fn Result<uint64, IoError> sendFileCopy(const ref File file, uint64 offset, uint64 count) {
+        InlineArray<uint8>#(8192) buf = [0ui8; 8192];
+        isize want = count < 8192ui64 ? cast<isize>(count) : 8192;
+        Result<isize, IoError> r = file.readAt(into: buf.viewMut().slice(from: 0, count: want), offset: offset);
+        isize got = match (r) { case Ok(value: k): k; case Err(error: e): { return Result::Err(error: e); } };
+        if (got == 0) { return Result::Ok(value: 0ui64); }
+        Result<isize, IoError> w = this.write(bytes: buf.view().slice(from: 0, count: got));
+        return match (w) { case Ok(value: k): Result::Ok(value: cast<uint64>(k)); case Err(error: e): Result::Err(error: e); };
     }
 
     // `Writer`: our layer is unbuffered (the OS holds the send buffer), so flush is a no-op.

@@ -444,16 +444,6 @@ the port shared, since several processes may listen to one group.
 receiver asks for sharing at bind time, through options like `ListenOptions` (the platform rule; on BSD it is
 `SO_REUSEPORT`). The spelling, and whether the multicast fixtures (`net_udp_multicast`) need it, are what the ruling decides.
 
-<a id="s1-sendfile"></a>
-
-#### `sendfile` (KR-207)
-
-std has no `sendfile`, `splice`, `copy_file_range` or `TransmitFile`. A file response copies through user space, a
-`readAt` and a write per chunk. Linux and macOS both have `sendfile(2)` with different signatures, and Windows has
-`TransmitFile`. Rust's std reaches `sendfile`/`splice` only inside `io::copy`; kama has no generic copy to hide it
-in, so this is a stream method, file to socket. Scheduled rather than optional: it is the standard way a server
-serves a file, and the package's benchmarks say how much it is worth.
-
 <a id="s1-fuzz"></a>
 
 #### Coverage-guided fuzzing (KR-205)
@@ -2232,6 +2222,9 @@ offers it in its standard surface. Size: XL, so a design document comes before a
   blocking is the problem. Go merges the two schedulers; Java keeps them apart. The design says which.
 - **Prerequisites already filed:** KR-201 (a waker), KR-202 (a DNS lookup a loop can poll) and KR-7 (a non-blocking
   `File`).
+- **Windows wants overlapped I/O anyway.** Zero-copy `sendFile` there (KR-229) is `TransmitFile`, which keeps a
+  non-blocking contract only with an OVERLAPPED and a completion wait, so it arrives with this loop. Go's netpoller is
+  built on IOCP for the same reason.
 
 **Decisions owed.**
 1. Thread-per-core with fibers as the server model, in std.

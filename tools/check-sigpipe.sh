@@ -113,5 +113,63 @@ else
     bad "the C host did not link against the --shared library"; cat "$tmp/b4.log" >&2
 fi
 
+# 4. `TcpStream.sendFile` to a peer that has gone, inside a --shared library: an error, and no signal. Linux's
+#    sendfile takes no MSG_NOSIGNAL, so kama_send_file blocks SIGPIPE for the call and consumes one it raised; in a
+#    library nothing else stands between that signal and a host at the default (KR-207). The send loops past the first
+#    error: Linux answers the first send after the reset ECONNRESET, with no signal, and only later ones EPIPE.
+cat > "$tmp/sf.kama" <<'KAMA'
+import { std::net::TcpListener, std::net::TcpStream, std::fs::File, std::fs::OpenMode, std::fs::writeText, std::io::IoError };
+fn void hangUp(TcpStream peer) { }
+expose fn int32 sendGone() {
+    string body = "a file bigger than nothing at all, sent to a peer that has gone";
+    Result<isize, IoError> w = writeText(path: "sf_body.txt", text: body);
+    Result<File, IoError> fr = File.open(path: "sf_body.txt", mode: OpenMode::Read);
+    File f = match (give fr) { case Ok(value: v): give v; case Err(error: e): { return -1; } };
+    Result<TcpListener, IoError> lr = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give lr) { case Ok(value: v): give v; case Err(error: e): { return -2; } };
+    uint16 port = match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+    Result<TcpStream, IoError> cr = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream c = match (give cr) { case Ok(value: v): give v; case Err(error: e): { return -3; } };
+    Result<TcpStream, IoError> sr = l.accept();
+    TcpStream s = match (give sr) { case Ok(value: v): give v; case Err(error: e): { return -4; } };
+    hangUp(peer: give c);
+    int32 errors = 0;
+    int32 i = 0;
+    while (i < 50) {
+        Result<uint64, IoError> r = s.sendFile(file: f, offset: 0ui64, count: 64ui64);
+        if (!r.isOk()) { errors = errors + 1; }
+        i = i + 1;
+    }
+    return errors;
+}
+KAMA
+case "$(uname -s)" in Darwin) sfso="$tmp/libsf.dylib";; *) sfso="$tmp/libsf.so";; esac
+"$KAMA" build "$tmp/sf.kama" --shared -o "$sfso" > "$tmp/b5.log" 2>&1 || { bad "sf.kama --shared did not build"; cat "$tmp/b5.log" >&2; }
+cat > "$tmp/sfhost.c" <<'C'
+#include <signal.h>
+#include <stddef.h>
+#include <stdint.h>
+int32_t sf_sendGone(void);
+int main(void) {
+    struct sigaction before, after;
+    sigset_t pending;
+    if (sigaction(SIGPIPE, NULL, &before) != 0) return 4;
+    if (sf_sendGone() < 2) return 3;                  /* the gone peer must be an error, more than once */
+    if (sigaction(SIGPIPE, NULL, &after) != 0) return 4;
+    sigpending(&pending);
+    if (sigismember(&pending, SIGPIPE)) return 6;     /* nothing left pending for the host either */
+    return after.sa_handler == before.sa_handler ? 0 : 5;
+}
+C
+if cc -o "$tmp/sfhost" "$tmp/sfhost.c" "$sfso" > "$tmp/b6.log" 2>&1; then
+    for d in dfl ign; do
+        set +e; ( cd "$tmp" && LD_LIBRARY_PATH="$tmp" DYLD_LIBRARY_PATH="$tmp" "$tmp/disp" $d "$tmp/sfhost" ); st=$?; set -e
+        if [ "$st" = 0 ]; then ok "[$d] sendFile to a gone peer, in a --shared library, is an error and raises nothing"
+        else bad "[$d] sendFile to a gone peer in a --shared library: exit $st (141 = killed by SIGPIPE)"; fi
+    done
+else
+    bad "the C host did not link against the sendFile library"; cat "$tmp/b6.log" >&2
+fi
+
 if [ "$fail" != 0 ]; then echo "check-sigpipe: FAILED" >&2; exit 1; fi
-echo "check-sigpipe: PASS (stdout keeps SIGPIPE, a child starts at the default, a --shared library touches nothing — each inheriting SIGPIPE at default and ignored)"
+echo "check-sigpipe: PASS (stdout keeps SIGPIPE, a child starts at the default, a --shared library touches nothing and its sendFile raises nothing — each inheriting SIGPIPE at default and ignored)"

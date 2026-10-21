@@ -1,0 +1,98 @@
+// `TcpStream.sendFile` (KR-207): a 300,000-byte file sent over loopback, both ends non-blocking, arrives whole and in
+// order, sent in partial counts and `WouldBlock`s; an offset and count send exactly that slice; the file's own cursor
+// never moves; an offset past the end is 0; and a peer that has gone is an error. (Whether it raises SIGPIPE cannot be
+// seen here, since a kama `main` ignores the signal; a `--shared` library has no `main`, and tools/check-sigpipe.sh
+// tests that case.) Linux and macOS take the zero-copy path, Windows the buffered one, so the CI legs cover both. Each
+// case is its own bit. Returns 0.
+import { std::net::TcpListener, std::net::TcpStream, std::fs::File, std::fs::OpenMode, std::fs::SeekFrom,
+         std::fs::writeFile, std::fs::remove, std::io::IoError, std::collections::DynamicArray, std::collections::FixedArray };
+
+fn uint8 pattern(isize i) { return cast<uint8>((i * 7) % 251); }
+fn void hangUp(TcpStream peer) { }   // the peer goes: dropped, so closed
+
+// Read what has arrived on `c`, checking each byte against the pattern from `*at`; false on a wrong byte.
+unsafe fn bool take(ref TcpStream c, ref isize at) {
+    FixedArray<uint8> buf = FixedArray.make(size: 65536);
+    bool more = true;
+    while (more) {
+        Result<isize, IoError> r = c.read(into: buf.viewMut());
+        isize n = match (r) { case Ok(value: k): k; case Err(error: e): 0; };
+        isize i = 0;
+        while (i < n) { if (buf[i] != pattern(i: at + i)) { return false; } i = i + 1; }
+        at = at + n;
+        more = n > 0;
+    }
+    return true;
+}
+
+// Send file[from, from + count) from `s`, draining `c` whenever `s` would block; the bytes `c` saw, or -1.
+unsafe fn isize relay(ref TcpStream s, ref TcpStream c, const ref File f, isize from, isize count) {
+    isize sent = 0;
+    isize seen = from;
+    int32 rounds = 0;
+    while (sent < count && rounds < 100000) {
+        Result<uint64, IoError> r = s.sendFile(file: f, offset: cast<uint64>(from + sent), count: cast<uint64>(count - sent));
+        match (r) {
+            case Ok(value: n): { if (n == 0ui64) { return -1; } sent = sent + cast<isize>(n); }
+            case Err(error: e): { match (e.kind()) { case WouldBlock: { } case _: { return -1; } }; }
+        };
+        if (!take(c: c, at: ref seen)) { return -1; }
+        rounds = rounds + 1;
+    }
+    while (seen < from + count && rounds < 200000) { if (!take(c: c, at: ref seen)) { return -1; } rounds = rounds + 1; }
+    return seen - from;
+}
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    isize size = 300000;
+    DynamicArray<uint8> bytes = DynamicArray.empty();
+    isize i = 0;
+    while (i < size) { bytes.add(item: pattern(i: i)); i = i + 1; }
+    _ = writeFile(path: "kr207.bin", bytes: bytes);
+    Result<File, IoError> fr = File.open(path: "kr207.bin", mode: OpenMode::Read);
+    File f = match (give fr) { case Ok(value: v): give v; case Err(error: e): { return 128; } };
+
+    Result<TcpListener, IoError> lr = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give lr) { case Ok(value: v): give v; case Err(error: e): { return 129; } };
+    uint16 port = match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+    {
+        Result<TcpStream, IoError> cr = TcpStream.connect(host: "127.0.0.1", port: port);
+        TcpStream c = match (give cr) { case Ok(value: v): give v; case Err(error: e): { return 130; } };
+        Result<TcpStream, IoError> sr = l.accept();
+        TcpStream s = match (give sr) { case Ok(value: v): give v; case Err(error: e): { return 131; } };
+        _ = s.setNonBlocking(on: true);
+        _ = c.setNonBlocking(on: true);
+        if (relay(s: ref s, c: ref c, f: f, from: 0, count: size) != size) { bad = bad | 1; }      // whole and in order
+        if (relay(s: ref s, c: ref c, f: f, from: 1000, count: 5000) != 5000) { bad = bad | 2; }   // exactly that slice
+        Result<uint64, IoError> past = s.sendFile(file: f, offset: cast<uint64>(size + 10), count: 100ui64);
+        if (match (past) { case Ok(value: n): n != 0ui64; case Err(error: e): true; }) { bad = bad | 4; }
+    }
+    Result<uint64, IoError> cursor = f.seek(to: SeekFrom::Current(offset: 0i64));
+    if (match (cursor) { case Ok(value: p): p != 0ui64; case Err(error: e): true; }) { bad = bad | 8; }   // never moved
+    {
+        Result<TcpStream, IoError> cr = TcpStream.connect(host: "127.0.0.1", port: port);
+        TcpStream c = match (give cr) { case Ok(value: v): give v; case Err(error: e): { return 132; } };
+        Result<TcpStream, IoError> sr = l.accept();
+        TcpStream s = match (give sr) { case Ok(value: v): give v; case Err(error: e): { return 133; } };
+        hangUp(peer: give c);
+        // Past the first error too: Linux answers the first send after the reset ECONNRESET, with no signal, and only the
+        // sends after it EPIPE, which is the one that would raise SIGPIPE.
+        // Later sends may say other things: macOS answers ENOTCONN once it has said EPIPE. One that names the peer's
+        // going is the promise.
+        bool told = false;
+        int32 tries = 0;
+        while (tries < 50) {
+            Result<uint64, IoError> r = s.sendFile(file: f, offset: 0ui64, count: cast<uint64>(size));
+            bool gone = match (r) { case Ok(value: n): false; case Err(error: e): match (e.kind()) { case BrokenPipe: true; case ConnectionReset: true; case _: false; }; };
+            told = told || gone;
+            tries = tries + 1;
+        }
+        if (!told) { bad = bad | 16; }
+    }
+    f.close();
+    _ = remove(path: "kr207.bin");
+    return bad;
+}
+
+fn uint8 main() { return cast<uint8>(run()); }

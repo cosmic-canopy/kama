@@ -1111,6 +1111,15 @@ static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n) {
     if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
     return (ptrdiff_t)r;
 }
+// `TcpStream.sendFile` (KR-207) copies through a buffer here, so this answers ENOSYS and the kama side does. Zero-copy
+// is `TransmitFile`, which keeps nothing of a non-blocking socket's contract: with no OVERLAPPED it "will not complete
+// until the file has been sent" (its documentation), so on a non-blocking socket it blocks for the whole count, and a
+// loop serving many sockets on one thread stalls behind it. Kept non-blocking, it is overlapped I/O plus a completion
+// wait, which is the Windows event loop's job (KR-229). Client editions also run two TransmitFiles at a time.
+static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count) {
+    (void)sock; (void)fd; (void)offset; (void)count; kama__os_fail(0, ENOSYS); return -1;
+}
+static inline int32_t kama_ENOSYS(void) { return (int32_t)ENOSYS; }
 static inline int32_t kama_close_socket(ptrdiff_t fd) { return (int32_t)closesocket((SOCKET)fd); }
 
 // ---- UDP datagrams (Winsock2) ----------------------------------------------
@@ -2618,6 +2627,57 @@ static inline ptrdiff_t kama_accept(ptrdiff_t fd) {
 }
 static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)recv((int)fd, buf, n, 0); }
 static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n)  { return (ptrdiff_t)send((int)fd, buf, n, KAMA__SEND_FLAGS); }
+// `TcpStream.sendFile` (KR-207): up to `count` bytes of the file `fd` from `offset`, straight from the page cache to the
+// socket, and the file's own cursor never moves. The count sent, 0 when `offset` is at or past the end, or -1 with
+// errno. ENOSYS means "not this way": this OS has no such call, or the kernel cannot send THIS file so (Linux's EINVAL
+// for a file with no page-cache path, a pipe or /proc; macOS's ENOTSUP and EOPNOTSUPP), each folded into ENOSYS here.
+// The kama side answers ENOSYS with a buffered copy, so the result is the same everywhere and only the cost differs.
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include <sys/sendfile.h>
+// Linux's sendfile takes no MSG_NOSIGNAL, so a peer that has gone raises SIGPIPE. A kama executable ignores it from
+// `main` on, but a `--shared` library has no `main`, and there each socket must cover itself, as MSG_NOSIGNAL does for
+// every other send: a host at the default would be killed. So it is blocked for the call, and one this call raised is
+// consumed (one already pending is left alone), and the caller sees EPIPE, as from any send. tools/check-sigpipe.sh's
+// fourth check holds it down (measured: without the block, a C host at the default dies, 141). `sigprocmask`, not
+// `pthread_sigmask`: on Linux it acts on the calling thread alone, and it is in libc on every glibc, where
+// `pthread_sigmask` needs libpthread before 2.34, which kama links only for a program with isolates.
+static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count) {
+    sigset_t pipe, old, pending;
+    sigemptyset(&pipe); sigaddset(&pipe, SIGPIPE);
+    sigprocmask(SIG_BLOCK, &pipe, &old);
+    sigpending(&pending);
+    const int already = sigismember(&pending, SIGPIPE);
+    off_t off = (off_t)offset;
+    const size_t n = count > 0x7ffff000u ? (size_t)0x7ffff000u : (size_t)count;   // the most Linux moves in one call
+    const ssize_t r = sendfile((int)sock, (int)fd, &off, n);
+    const int e = errno;
+    // Consumed whatever the call returned: a send cut short by the peer going answers the PARTIAL count and still
+    // raises SIGPIPE (measured: a check on EPIPE alone let it through, and the process died, 141).
+    if (!already) {
+        sigset_t now;
+        sigpending(&now);
+        if (sigismember(&now, SIGPIPE)) { const struct timespec zero = { 0, 0 }; (void)sigtimedwait(&pipe, NULL, &zero); }
+    }
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    errno = e == EINVAL ? ENOSYS : e;
+    return (ptrdiff_t)r;
+}
+#elif defined(__APPLE__)
+// SO_NOSIGPIPE, set on every kama socket at creation, covers sendfile too. A non-blocking socket that took part of the
+// count says so in `len` alongside EAGAIN, and what went counts.
+static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count) {
+    off_t len = (off_t)(count > (uint64_t)0x7fffffffffffffffull ? 0x7fffffffffffffffull : count);
+    if (sendfile((int)fd, (int)sock, (off_t)offset, &len, NULL, 0) == 0) return (ptrdiff_t)len;
+    if ((errno == EAGAIN || errno == EINTR) && len > 0) return (ptrdiff_t)len;
+    if (errno == ENOTSUP || errno == EOPNOTSUPP) errno = ENOSYS;
+    return -1;
+}
+#else
+static inline ptrdiff_t kama_send_file(ptrdiff_t sock, int32_t fd, uint64_t offset, uint64_t count) {
+    (void)sock; (void)fd; (void)offset; (void)count; errno = ENOSYS; return -1;
+}
+#endif
+static inline int32_t kama_ENOSYS(void) { return (int32_t)ENOSYS; }
 static inline int32_t   kama_close_socket(ptrdiff_t fd) { return (int32_t)close((int)fd); }
 
 // ---- Unix-domain sockets and who is on the other end ---------------------------------------------------------

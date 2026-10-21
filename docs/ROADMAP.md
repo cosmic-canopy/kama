@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-229**
+**Next id: KR-230**
 
 ## The shape
 
@@ -83,7 +83,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-227 | **FreeBSD's `balance`** — the listener-options ruling (2026-10-21) gives FreeBSD a `ListenOptions.balance` over `SO_REUSEPORT_LB`, its balanced form; unbuilt because no leg builds or runs FreeBSD (kama detects it as a host but has no built-in target and no CI for it), so it would be code nothing here compiles. Today FreeBSD gets the backlog-only twin | — | [§1](ROADMAP_DETAIL.md#s1-freebsd-balance) |
 | KR-228 | **A second `UdpSocket.bind` on a live port succeeds on Linux** — measured `0.9.713`: `UdpSocket.bindTo` sets `SO_REUSEADDR` on every OS, which Linux honours for UDP, so another socket (same user) takes a bound port's datagrams; macOS refuses; Windows unmeasured. Rust's `UdpSocket::bind` sets no reuse option. Multicast receivers do want a shared port, so the fix wants a ruling | S? | [§1](ROADMAP_DETAIL.md#s1-udp-reuseaddr) |
 | KR-210 | **Running out of descriptors has no kind, and the limit cannot be read or raised** — `accept` under EMFILE is `Other` (OS code 24), and std has nothing for `RLIMIT_NOFILE`. **Ruled 2026-10-19:** `IoErrorKind::TooManyOpenFiles` (EMFILE/ENFILE; Windows `WSAEMFILE`/`ERROR_TOO_MANY_OPEN_FILES`), and an explicit POSIX `std::process` `openFileLimit()`/`raiseOpenFileLimit()` — never raised implicitly | S–M | [§1](ROADMAP_DETAIL.md#s1-fd-limit) |
-| KR-207 | **`sendfile`** — a file response copies through user space; Linux and macOS have `sendfile`, Windows `TransmitFile` | S–M | [§1](ROADMAP_DETAIL.md#s1-sendfile) |
+| KR-229 | **Zero-copy `sendFile` on Windows** — `TcpStream.sendFile` copies through a buffer there, because `TransmitFile` with no OVERLAPPED "will not complete until the file has been sent", which would block a non-blocking socket for the whole count; kept non-blocking it is overlapped I/O plus a completion wait, the Windows event loop's job. Client editions also run two at a time. With KR-3 | — | [§6](ROADMAP_DETAIL.md#s6-fibers) |
 | KR-205 | **Coverage-guided fuzzing** — no `kama fuzz` and no documented libFuzzer harness, though every parser that reads a stranger's bytes wants one. Design first | M? | [§1](ROADMAP_DETAIL.md#s1-fuzz) |
 | KR-5 | **`std::io` transform adapters: compression and archives** — **Ruled 2026-10-19: std.** deflate (RFC 1951), zlib (1950) and gzip (1952) in both directions, plus tar, as streaming `std::io` adapters whose decoders take a REQUIRED output limit (a decompression bomb is refused by construction). Consumers: HTTP `Content-Encoding`, WebSocket permessage-deflate, PNG, the package format | M–L | [§1](ROADMAP_DETAIL.md#s1) |
 | KR-212 | **zstd (RFC 8878) in std — decode first** — after KR-5, on its adapter shape; the encoder by its own verdict. Python 3.14 and Node ship it, Zig decodes it | M? | [§1](ROADMAP_DETAIL.md#s1) |
