@@ -116,9 +116,12 @@ fi
 # 4. `TcpStream.sendFile` to a peer that has gone, inside a --shared library: an error, and no signal. Linux's
 #    sendfile takes no MSG_NOSIGNAL, so kama_send_file blocks SIGPIPE for the call and consumes one it raised; in a
 #    library nothing else stands between that signal and a host at the default (KR-207). The send loops past the first
-#    error: Linux answers the first send after the reset ECONNRESET, with no signal, and only later ones EPIPE.
+#    error: Linux answers the first send after the reset ECONNRESET, with no signal, and only later ones EPIPE. It
+#    sends until two errors, 10 ms apart, for up to ~4 s: under the matrix's parallel load the peer's reset can come
+#    in after 50 back-to-back sends have all been buffered (measured: exit 3 once in the 0.9.716 matrix, never alone).
 cat > "$tmp/sf.kama" <<'KAMA'
-import { std::net::TcpListener, std::net::TcpStream, std::fs::File, std::fs::OpenMode, std::fs::writeText, std::io::IoError };
+import { std::net::TcpListener, std::net::TcpStream, std::fs::File, std::fs::OpenMode, std::fs::writeText, std::io::IoError,
+         std::time::sleep, std::time::Duration };
 fn void hangUp(TcpStream peer) { }
 expose fn int32 sendGone() {
     string body = "a file bigger than nothing at all, sent to a peer that has gone";
@@ -135,9 +138,9 @@ expose fn int32 sendGone() {
     hangUp(peer: give c);
     int32 errors = 0;
     int32 i = 0;
-    while (i < 50) {
+    while (i < 400 && errors < 2) {
         Result<uint64, IoError> r = s.sendFile(file: f, offset: 0ui64, count: 64ui64);
-        if (!r.isOk()) { errors = errors + 1; }
+        if (!r.isOk()) { errors = errors + 1; } else { sleep(d: Duration.fromMillis(ms: 10i64)); }
         i = i + 1;
     }
     return errors;
