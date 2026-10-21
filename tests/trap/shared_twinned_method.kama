@@ -1,0 +1,19 @@
+// KR-211: a method with no loop runs a fast body that checks none of its writes when its object is clean on entry,
+// and a checked twin when it is not. `reset` is entered through `b` while a window through `a` is open, so it takes
+// the twin, whose write to `items` traps — the write would free the buffer `x` points into.
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Core {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: 1); }
+    public fn ref int32 first() { return this.items[0]; }
+    public fn void reset() { this.items = DynamicArray.empty(); }
+}
+fn uint8 main() {
+    Shared<Core> a = new Core.make();
+    Shared<Core> b = a;
+    borrow a.first() as x {
+        b.reset();
+        x = 7;
+    }
+    return 0;
+}

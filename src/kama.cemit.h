@@ -923,6 +923,9 @@ public:
     void setPruneUnreached(bool on) { _pruneUnreached = on; }
     std::string pruneUnreached(const std::string& text);   // the C `text` without the unreached functions'
                                                            // definitions; unchanged when nothing was computed
+    // KR-211: the C `text` with each call access whose callee cannot reach the value another way reduced to the
+    // check its beginning makes — Swift's access-enforcement optimization, over the finished call graph.
+    std::string elideCallAccesses(const std::string& text);
 
     // `@compileFor(FLAG)` conditional compilation: the active build-flag set (built-ins from
     // `--target`/`--release` + `--define`), the declared-flag universe (from `kama.json`), every triple
@@ -2120,6 +2123,12 @@ private:
     bool _pruneUnreached = false;                                    // KR-130 — see setPruneUnreached
     std::set<std::string> _unreached;                                // emitted functions no root reaches
     void computeUnreached();
+    // KR-211: the functions that may reach a `Shared` value by a path they were not handed — a mutable handle's
+    // dereference, an indirect call, a foreign function — directly or through a call. Read by elideCallAccesses.
+    std::set<std::string> _mayReenter;
+    std::set<std::string> _indirectCallers;   // bodies calling through a `fnptr` or a bound function (rejectNoHeapIndirect)
+    bool _reentryKnown = false;
+    void computeReentry();
     // Emitting a destructor's own body: a `return` there leaves the BODY, not the drop of the fields that
     // follows it, so it unwinds and jumps to `kama_dtor_fields` (emitDtorDefinition), which places the label
     // only when a `return` used it.
@@ -2978,7 +2987,7 @@ private:
     // (lock/expired/valid) on the pointer itself, else auto-deref to the pointee.
     std::string emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
                                  const std::string& method, SharedArgumentList args, int srcLine,
-                                 const IdentifierNode* site = nullptr);
+                                 const IdentifierNode* site = nullptr, SharedExpression recvAst = nullptr);
 
     void linkBases();
     // Merge each contract's refined-parent methods (`type contract A implements B`) into its own `methods`
@@ -3431,7 +3440,7 @@ private:
     std::string emitInterfaceDispatch(const std::string& fatExpr, const std::string& iface,
                                       const std::string& method, SharedArgumentList args, int srcLine,
                                       const std::string& recvCType = "",
-                                      const IdentifierNode* site = nullptr);
+                                      const IdentifierNode* site = nullptr, SharedExpression recvAst = nullptr);
 
     // Declarations / top level
     bool paramByRef(FunctionParameterNode* p);
@@ -3836,15 +3845,47 @@ private:
     static bool stmtIsJump(SharedStatement s);                 // direct return/break/continue
     bool bodyDiverges(SharedStatement s) const;                // control never falls out of its bottom
     bool refuseUnreachable(const SharedStatement& prev, const SharedStatement& next);   // KR-194: a statement no path reaches
-    // The member-access links a write goes through (KR-211): an auto-deref field on one of these is judged as a
-    // mutation of the handle's value (checkedSharedMut); a read never is.
-    std::set<const ASTNode*> _writeChain;
-    void markWriteChain(const SharedExpression& e);
-    std::string checkedSharedMut(const std::string& handleCls, const std::string& handlePtr, int line);   // KR-211
-    bool isMutableLibraryShared(const std::string& cls);
-    void sharedHandlesIn(SharedExpression host, std::vector<SharedExpression>& out);
-    void enterSharedBorrows(SharedExpression host, int depth, int line);
-    void enterSharedBorrow(const std::string& handleC, const std::string& shown, int depth, int line);
+    // KR-211, Swift's exclusivity model. An ACCESS is to the storage of an object a `Shared` may hold (a "shared
+    // class"): `obj` is that object, `lo`/`len` the part touched — one field, or the whole object when the place is
+    // reached through one of its methods. All four are C. `shown` is the object as written, for a refusal.
+    struct AccessTarget { std::string obj, objLen, lo, len, shown, objCls, partCls; bool whole = false; };
+    bool isSharedClass(const std::string& cls);
+    std::set<std::string> _sharedClasses;
+    bool _sharedClassesKnown = false;
+    int sharedHandleKind(const std::string& cls);   // 1: a library `Shared<T>`, 2: a `Shared<Contract>`, 0: neither
+    bool accessTargetOf(SharedExpression place, AccessTarget& t, bool* impure, bool bareWhole = false);
+    bool handleAccessTarget(const std::string& handleCls, const std::string& handleC, const std::string& shown,
+                            AccessTarget& t);
+    std::string accessCheckC(const AccessTarget& t, bool modify, int line);
+    bool enterAccess(SharedExpression place, bool modify, const std::string& handedC, const std::string& handedLenC,
+                     int depth, int line, const std::string& handedCls = "");
+    void beginAccess(const AccessTarget& t, bool modify, const std::string& handedC, const std::string& handedLenC,
+                     int depth, int line, const std::string& handedCls = "");
+    static std::string classLit(const std::string& cls) { return cls.empty() ? "0" : "\"" + cls + "\""; }
+    // The access a method call's receiver makes, armed by emitDispatch for the emitReorderedCall it is about to make,
+    // which takes it first thing (so no call among the arguments can).
+    struct PendingAccess { AccessTarget t; bool modify = false; bool armed = false; std::string recvCls; bool handsNothing = false; };
+    PendingAccess _recvAccess;
+    void armReceiverAccess(SharedExpression recvExpr, const MethodInfo* mi);
+    const ASTNode* _writeChecked = nullptr;    // the write whose access is checked already, in this emission of it
+    std::string writeAccessC(SharedExpression target, int line);
+    // A mutating method of a payload class asks once, at entry, whether its object is clean (`kama_tclean`, KR-211):
+    // a callee's accesses close before it returns, so the answer holds for its writes through `this` outside its own
+    // windows, which then branch on that local to a cold check (`_thisClean`).
+    // A method with no loop is instead a wrapper over a fast body, which stays a leaf for the C compiler to inline, and
+    // a checked twin (`__kama_checked`); a receiver in the caller's own frame takes the fast body directly. One with a
+    // loop keeps one body, so the helpers its loop calls keep their single call site and are inlined.
+    bool _thisClean = false;
+    enum class CleanForm { None, OneBody, Twinned };
+    std::map<std::string, CleanForm> _cleanForms;
+    CleanForm cleanForm(const std::string& cName, ClassInfo& owner, bool isStatic, bool isConst, bool isCtor,
+                        const SharedBlock& body, const char* memberName);
+    bool _emittingCheckedTwin = false;
+    bool _fastBody = false;   // emitting a twinned method's fast body, entered only when its object is clean
+    bool recvIsFrameStorage(SharedExpression recvExpr, bool* throughThis = nullptr);
+    std::string _localAlt;    // emitDispatch -> emitReorderedCall: the fast body to select when `kama_tclean` holds
+    bool insideOwnWindow() const;
+    bool ownsNothing(const AccessTarget& t);   // a field that holds nothing a mutation could free
     bool matchAliasesPayload(MatchNode* m, ClassInfo& ci, const std::string& subjCls);
     void emitDtorDefinition(ClassInfo& ci);
 

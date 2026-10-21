@@ -1,0 +1,16 @@
+// KR-211: a call on a field hands the field to the method for the call. `go` runs `leaf.run`, which re-enters the
+// value through `back` and replaces `leaf` — freeing the box `run` is executing in. The replacement is an access to a
+// field a live call holds, and traps. Through 0.9.707 `run` then read its freed `xs` (ASan: heap-use-after-free).
+import { std::memory::Shared, std::memory::Owned, std::collections::DynamicArray };
+type resource Leaf {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); this.xs.add(item: 1); }
+    public fn int32 run(Shared<Core> back) { back.reset(); return this.xs[0]; }
+}
+type resource Core {
+    Owned<Leaf> leaf;
+    public ctor make() { Owned<Leaf> l = new Leaf.make(); this.leaf = give l; }
+    public fn void reset() { Owned<Leaf> l = new Leaf.make(); this.leaf = give l; }
+    public fn int32 go(Shared<Core> back) { return this.leaf.run(back: back); }
+}
+fn uint8 main() { Shared<Core> a = new Core.make(); Shared<Core> b = a; return cast<uint8>(a.go(back: b)); }

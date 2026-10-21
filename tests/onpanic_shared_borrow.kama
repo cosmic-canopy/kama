@@ -1,0 +1,26 @@
+// KR-211: a `@onPanic` region may hold a borrow into a `Shared` value. Recovery abandons every frame the region
+// entered, and with them every access they began: the region puts this thread's record of open accesses back as it
+// found it, so the abandoned window is gone. Through 0.9.707 such a region was refused, because the borrow was a count
+// in the value's block that the longjmp would have left raised; were the record not put back, `bump` below would trap
+// on the dead window (or read a dead frame).
+import { std::memory::Shared };
+type resource Core {
+    InlineArray<int32>#(4) xs;
+    public ctor make() { this.xs = [7; 4]; }
+    public fn ref InlineArray<int32>#(4) all() { return this.xs; }
+    public fn void bump() { this.xs[0] = this.xs[0] + 1; }
+}
+type resource Host {
+    Shared<Core> s;
+    public ctor make() { Shared<Core> c = new Core.make(); this.s = give c; }
+    @noheap @onPanic(recover: -1)
+    public fn int32 region(isize i) { borrow this.s.all() as x { return x[i]; } }   // i = 9: a bounds miss
+    public fn void bump() { this.s.bump(); }
+}
+fn uint8 main() {
+    Host h = Host.make();
+    int32 ok = h.region(i: 1);          // 7
+    int32 bad = h.region(i: 9);         // -1, recovered inside the window
+    h.bump();                           // the window's access is gone: no trap
+    return cast<uint8>(ok - bad + h.region(i: 0) + 26);   // 7 + 1 + 8 + 26 = 42
+}

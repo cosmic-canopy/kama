@@ -1,0 +1,17 @@
+// KR-211: two writable windows on one value through two handles — two writable names for one place, as two `borrow`s
+// of one local are refused statically. Opening the second is checked as a mutation and traps.
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Core {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: 1); }
+    public fn ref int32 first() { return this.items[0]; }
+}
+fn uint8 main() {
+    Shared<Core> a = new Core.make();
+    Shared<Core> b = a;
+    borrow a.first() as x {
+        borrow b.first() as y { y = 2; }
+        x = 1;
+    }
+    return 0;
+}

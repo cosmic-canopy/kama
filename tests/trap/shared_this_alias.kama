@@ -1,0 +1,17 @@
+// KR-211: inside the value's own method `this` is a raw pointer, and `other` may be a handle to the same value. A
+// mutation of `this.items` while a window through `other` is open is an access to storage a live borrow points into:
+// it traps. Through 0.9.707 it wrote into freed memory (ASan: heap-use-after-free) — the count in the control block
+// saw only mutations through a handle.
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Bag {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: 1); }
+    public fn ref int32 first() { return this.items[0]; }
+    public fn void absorb(Shared<Bag> other) {
+        borrow other.first() as x {
+            for (int32 i = 0; i < 64; i++) { this.items.add(item: 9); }
+            x = 7;
+        }
+    }
+}
+fn uint8 main() { Shared<Bag> a = new Bag.make(); Shared<Bag> b = a; a.absorb(other: b); return 0; }

@@ -32,18 +32,9 @@
 // (KR-211). The atomic path needs no mark: its `strong` reaches 0 before the destructor, and an upgrade refuses 0.
 #define KAMA_CTRL_DROPPING ((size_t)-1)
 
-// A new block: one strong reference, no weak one, no live borrow. Every site that makes a block calls this (an
-// allocator does not zero), so a field added to `kama_ctrl` is set in one place.
-static inline void kama_ctrl_init(kama_ctrl* c) {
-    c->kama_strong = 1; c->kama_weak = 0; c->kama_borrows = 0; c->kama_borrow_at = 0;
-}
-
-// A borrow into the value begins and ends (KR-211). The emitter brackets every window rooted through a handle with
-// these, the leave riding the window's scope cleanup so it runs on every exit. `at` is the outermost borrow's site.
-static inline void kama_ctrl_borrow_enter(kama_ctrl* c, const char* at) {
-    if (c->kama_borrows++ == 0) c->kama_borrow_at = at;
-}
-static inline void kama_ctrl_borrow_leave(kama_ctrl* c) { c->kama_borrows -= 1; }
+// A new block: one strong reference, no weak one. Every site that makes a block calls this (an allocator does not
+// zero), so a field added to `kama_ctrl` is set in one place.
+static inline void kama_ctrl_init(kama_ctrl* c) { c->kama_strong = 1; c->kama_weak = 0; }
 
 // Is the value alive — neither dropped nor being dropped? What a `Weak` asks before it hands out a `Shared`.
 static inline int kama_ctrl_alive(const kama_ctrl* c) {

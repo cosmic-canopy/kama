@@ -1,0 +1,64 @@
+// KR-211: what Swift's model lets run. Two accesses conflict only when they overlap, one may change the storage, and
+// the new one is not the live one's own work — so each of these runs to the end without trapping:
+// - a write to a DISJOINT field through another handle while a method iterates `observers`;
+// - an argument that reads the field its own call is handed (`this.items.add(item: this.items.length())`): arguments
+//   are evaluated before the call's access begins;
+// - a one-field resource (its field and the whole object are the same bytes) working on its field;
+// - a class that is both a `Shared` payload and embedded in another, mutated through a window's alias: an object
+//   inside what a window handed out is the window's own work;
+// - a read of a place inside its own writable window, and reads through another handle inside any window;
+// - a payload class's method called on a frame's own local, which takes its fast body directly.
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Inner {
+    int32 n;
+    public ctor make() { this.n = 1; }
+    public fn void bump() { this.n = this.n + 1; }
+    public const fn int32 get() { return this.n; }
+}
+type resource One {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); }
+    public fn void fill() { this.xs.add(item: cast<int32>(this.xs.length())); this.xs.add(item: cast<int32>(this.xs.length())); }
+    public const fn isize size() { return this.xs.length(); }
+    public fn void push(int32 v) { this.xs.add(item: v); }
+}
+type resource Core {
+    DynamicArray<int32> observers;
+    string title;
+    Inner inner;
+    public ctor make() {
+        this.observers = DynamicArray.empty(); this.observers.add(item: 1); this.observers.add(item: 2);
+        this.title = ""; this.inner = Inner.make();
+    }
+    public fn void setTitle(string t) { this.title = copy t; }
+    public const fn isize titleLength() { return this.title.length(); }
+    public fn ref Inner innerRef() { return this.inner; }
+    public fn int32 notify(Shared<Core> other) {
+        int32 s = 0;
+        foreach (int32 o in this.observers) { other.setTitle(t: "changed"); s = s + o; }
+        return s;
+    }
+    public fn isize own() {
+        borrow this.observers.viewMut() as v { v[0] = 5; return this.observers.length() + this.other_(); }
+    }
+    const fn isize other_() { return 0; }
+}
+fn uint8 main() {
+    Shared<Core> a = new Core.make();
+    Shared<Core> b = a;
+    int32 bad = 0;
+    if (a.notify(other: b) != 3 || a.titleLength() != 7) { bad = bad + 1; }
+    Shared<One> o = new One.make();
+    o.fill();
+    if (o.size() != 2) { bad = bad + 2; }
+    Shared<Inner> lone = new Inner.make();                 // makes `Inner` a payload class as well
+    lone.bump();
+    borrow a.innerRef() as c { c.bump(); c.bump(); if (b.titleLength() != 7) { bad = bad + 4; } }
+    if (a.innerRef().get() != 3 || lone.get() != 2) { bad = bad + 8; }
+    if (a.own() != 2) { bad = bad + 16; }
+    One local = One.make();                                  // a payload class, held by this frame
+    local.push(v: 4); local.push(v: 5);
+    o.push(v: 6);                                            // ...and through a handle
+    if (local.size() != 2 || o.size() != 3) { bad = bad + 32; }
+    return cast<uint8>(bad);
+}

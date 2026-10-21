@@ -1,0 +1,17 @@
+// KR-211: a window a method holds over its own field, across a call that re-enters the value through a handle.
+// `peekAfter` views `items` and calls the hook; the hook grows `items` through `target`, an access to what the view
+// points into, and traps there. Through 0.9.707 it freed the buffer the view read next (ASan: heap-use-after-free):
+// the window was rooted at `this`, which no handle's count could see.
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Hook { Shared<Core> target; public ctor make(Shared<Core> t) { this.target = t; } public fn void poke() { this.target.grow(); } }
+type resource Core {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: 1); }
+    public fn void grow() { for (int32 i = 0; i < 64; i++) { this.items.add(item: i); } }
+    public const fn int32 peekAfter(ref Hook h) { borrow this.items.view() as v { h.poke(); return v[0]; } }
+}
+fn uint8 main() {
+    Shared<Core> a = new Core.make();
+    Hook h = Hook.make(t: a);
+    return cast<uint8>(a.peekAfter(h: ref h));
+}

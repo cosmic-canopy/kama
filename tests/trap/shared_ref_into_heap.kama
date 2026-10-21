@@ -1,0 +1,24 @@
+// KR-211: a `ref` into a payload's heap buffer is an access for the call it is handed to (Swift's `inout`). `poke`
+// holds `r`, into `items`' buffer, and reaches the same value through `b`; `first`'s access to `items` meets the live
+// one and traps. Through 0.9.707 `r.touch()` grew the buffer `x` points into (ASan: heap-use-after-free), unseen: `r`
+// lies outside the payload's own bytes, and the window through `b` counted nothing `r` was part of.
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Elem {
+    DynamicArray<int32> inner;
+    public ctor make() { this.inner = DynamicArray.empty(); this.inner.add(item: 1); }
+    public fn void touch() { for (int32 i = 0; i < 64; i++) { this.inner.add(item: i); } }
+    public fn ref int32 at0() { return this.inner[0]; }
+}
+type resource Core {
+    DynamicArray<Elem> items;
+    public ctor make() { this.items = DynamicArray.empty(); Elem e = Elem.make(); this.items.add(item: give e); }
+    public fn ref int32 first() { return this.items[0].at0(); }
+    public fn void run(Shared<Core> b) { poke(r: ref this.items[0], b: b); }
+}
+fn void poke(ref Elem r, Shared<Core> b) { borrow b.first() as x { r.touch(); x = 7; } }
+fn uint8 main() {
+    Shared<Core> a = new Core.make();
+    Shared<Core> b = a;
+    a.run(b: b);
+    return 0;
+}

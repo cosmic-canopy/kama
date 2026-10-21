@@ -6842,7 +6842,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     CEmitter emitter(text, srcPath, emitLines);
     configureEmitter(emitter);
     int unsupported = emitter.emit(unit);
-    out << emitter.pruneUnreached(text.str());
+    out << emitter.elideCallAccesses(emitter.pruneUnreached(text.str()));
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1
@@ -6891,7 +6891,8 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     configureEmitter(emitter);
     emitter.setOneTranslationUnit(oneTranslationUnit);
     int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
-    for (size_t i = 0; i < moduleFiles.size(); ++i) *moduleFiles[i] << emitter.pruneUnreached(moduleTexts[i]->str());
+    for (size_t i = 0; i < moduleFiles.size(); ++i)
+        *moduleFiles[i] << emitter.elideCallAccesses(emitter.pruneUnreached(moduleTexts[i]->str()));
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm
     if (externsNetWeb) *externsNetWeb = emitter.externsHeader("kama_net_web.h");   // -> wasm --js-library
     if (externsApp) *externsApp = emitter.externsHeader("kama_app.h");   // std::app -> wasm -sEXIT_RUNTIME=1

@@ -314,9 +314,7 @@ static inline double   kama_f64_from_bits(uint64_t b){ double v;   kama_copy(&v,
 // The control block behind every shared handle (`Shared<I>`, and the library `Shared<T>`'s layout-compatible
 // `Ctrl`): a SEPARATE allocation, so a `Weak` can outlive the object. (The concrete `Owned<T>`/`Shared<T>`/
 // `Weak<T>` are library types in lib/std/memory; only the CONTRACT handles below are the runtime's.)
-// `kama_borrows` counts the borrows into the value that are live (KR-211: a mutation through any handle while one is
-// live traps), and `kama_borrow_at` names where the outermost was made, for that trap's message.
-typedef struct kama_ctrl { size_t kama_strong; size_t kama_weak; size_t kama_borrows; const char* kama_borrow_at; } kama_ctrl;
+typedef struct kama_ctrl { size_t kama_strong; size_t kama_weak; } kama_ctrl;
 #include "kama_ctrl.h"   // M6.2: the strong/weak count ops (plain + atomic flavor) — needs kama_ctrl above
 // kama_ctrl_new is defined further down, next to kama_panic: it has to CHECK its allocation, and the
 // panic path (and `kama_string`) is declared below this point. Its only in-header caller is well past it.
@@ -423,9 +421,30 @@ static inline void kama_i64_to_buf(char* buf, size_t* p, long long v) {
 // region; every other program keeps this header dependency-light and the recovery path empty. ⚠️ Included
 // HERE, after the feature-test block at the top of this file, never by the emitted C above it: read first, it
 // latched glibc's strict set and hid kama_os.h's POSIX declarations.
+// KR-211, Swift's exclusivity model. An access to the storage of an object a `Shared` may hold that lasts — a window
+// for its extent, a call handed a field's interior for the call — links a node from its own frame into this thread's
+// list, and every access checks the list first. A mutable `Shared` never crosses an isolate, so one thread's list sees
+// every access to its value. A node holds the storage it protects, the part it HANDED OUT (the receiver, the argument,
+// the alias's referent: an object inside it, working there, is this access's own work), and where it began.
+typedef struct kama_access {
+    const char* lo; size_t len;      // the storage held
+    const char* hlo; size_t hlen;    // the part handed out
+    const char* hcls;                // ...its class, when it is an object (see kama_access_scan), else NULL
+    const char* at;                  // "file:line" of the access, for a conflict's message
+    int modify;
+    struct kama_access* next;
+    const char* plo; const char* phi;   // the envelope before this access began, put back when it ends
+} kama_access;
+// The open accesses, and the bytes they span between them: a check outside that envelope — the common case inside a
+// window, a write to some other object — is two compares, and only one inside it walks the list. Empty: lo = hi = 0.
+typedef struct kama_access_state { kama_access* head; const char* lo; const char* hi; } kama_access_state;
+extern KAMA_ISOLATE_LOCAL kama_access_state kama_accesses;   /* defined in the entry TU */
+
 #if defined(KAMA_ONPANIC)
 #include <setjmp.h>
-typedef struct kama_recover { jmp_buf jb; struct kama_recover* prev; } kama_recover_t;
+// A recovery abandons every frame the region entered, and with them every access those frames began: `accesses` is
+// the list as the region found it, put back on the way out.
+typedef struct kama_recover { jmp_buf jb; struct kama_recover* prev; kama_access_state accesses; } kama_recover_t;
 extern KAMA_ISOLATE_LOCAL kama_recover_t* kama_recover_top;   /* defined in the entry TU */
 static inline void kama_try_recover(void) {
     kama_recover_t* r = kama_recover_top;
@@ -2241,23 +2260,134 @@ static inline void kama_merge_end(kama_merge_log* l, int commit) {
 // `panic(msg:)` → "kama: panic: <msg> (file:line)", through the one failure path (kama__fail).
 static inline KAMA_NORETURN void kama_panic_at(kama_string msg, const char* file, int line);
 
-// A mutation through a `Shared` handle while a borrow into its value is live (KR-211): the borrow points into storage
-// the mutation may free, so it traps — in every build, as a bounds miss does — naming both sites. `h` is the handle;
-// every library `Shared<T>` is laid out `{ T* p; Ctrl* c; … }`, so its block is the second word (the emitter asserts
-// it per instance). Returns `h`, so the call wraps the handle where `derefMut` takes it: evaluated once.
-static inline void* kama_shared_check_mut(void* h, const char* file, int line) {
-    kama_ctrl* c = ((kama_ctrl**)h)[1];
-    if (c && c->kama_borrows != 0) {
-        char m[384]; size_t n = 0;
-        const char* parts[3] = { "a `Shared` value is mutated while a borrow into it is live (made at ",
-                                 c->kama_borrow_at ? c->kama_borrow_at : "?",
-                                 ") — the mutation may free what the borrow points into" };
-        for (int i = 0; i < 3; ++i) for (const char* s = parts[i]; *s && n + 1 < sizeof m; ++s) m[n++] = *s;
-        m[n] = 0;
-        kama_panic_at(kama_string_lit(m, n), file, line);
-    }
-    return h;
+// Two accesses to one `Shared` value's storage conflict (KR-211) when they overlap, either may change it, and the new
+// one is not made from inside the part the live one handed out. `obj` is the object whose field the new access
+// touches: a callee working on what it was handed has its own `this` inside that part, while another path to the
+// same storage comes through the container's field, whose object is the container and does not fit inside the part
+// — unless the container is nothing but that part (a one-field resource at offset 0, the same bytes), which the
+// classes tell apart: the part's own object has the part's class.
+// A window holds its storage against mutation only — reading a place a window is open over is legal, as it is
+// statically — while a call handed a field holds it as the call does: a `ref` exclusively, a `const ref` against
+// mutation. Traps in every build, as a bounds miss does, naming both sites.
+static inline KAMA_NORETURN void kama_access_conflict(const kama_access* live, const char* file, int line) {
+    char m[384]; size_t n = 0;
+    const char* parts[3] = { live->modify ? "a `Shared` value is accessed while a mutation of it is in progress (begun at "
+                                          : "a `Shared` value is mutated while a borrow into it is live (made at ",
+                             live->at ? live->at : "?",
+                             live->modify ? ") — the mutation may free what the access points into"
+                                          : ") — the mutation may free what the borrow points into" };
+    for (int i = 0; i < 3; ++i) for (const char* s = parts[i]; *s && n + 1 < sizeof m; ++s) m[n++] = *s;
+    m[n] = 0;
+    kama_panic_at(kama_string_lit(m, n), file, line);
 }
+// Out of line: the check every field write of a payload class makes must stay a load and a branch, or a small method
+// stops being a leaf and stops being inlined (measured: a two-write `step` called 80M times went 2.4x slower with this
+// scan inlined into it).
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((cold))
+#endif
+static KAMA_NOINLINE void kama_access_scan(const void* obj, size_t objLen, const char* ocls, const void* lo, size_t len,
+                                           int modify, const char* file, int line) {
+    const char* o = (const char*)obj; const char* l = (const char*)lo;
+    for (const kama_access* a = kama_accesses.head; a; a = a->next) {
+        if (!modify && !a->modify) continue;
+        if (!(l < a->lo + a->len && a->lo < l + len)) continue;
+        if (o >= a->hlo && o + objLen <= a->hlo + a->hlen
+            && (objLen < a->hlen || o != a->hlo || (ocls && a->hcls && kama_type_name_eq(ocls, a->hcls)))) continue;
+        kama_access_conflict(a, file, line);
+    }
+}
+// Does every open access that touches the object at `obj` hand that object out — its own work, as the conflict rule
+// counts it? What a mutating method of a payload class asks once, at entry (KR-211): then none of its writes through
+// `this` can conflict, and it runs its fast body. Outside the envelope, two compares.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((cold))
+#endif
+static KAMA_NOINLINE int kama_access_clean_scan(const void* obj, size_t len, const char* cls) {
+    const char* o = (const char*)obj;
+    for (const kama_access* a = kama_accesses.head; a; a = a->next) {
+        if (!(o < a->lo + a->len && a->lo < o + len)) continue;
+        if (o >= a->hlo && o + len <= a->hlo + a->hlen
+            && (len < a->hlen || o != a->hlo || (cls && a->hcls && kama_type_name_eq(cls, a->hcls)))) continue;
+        return 0;
+    }
+    return 1;
+}
+static inline int kama_access_clean(const void* obj, size_t len, const char* cls) {
+    const char* o = (const char*)obj;
+    if (__builtin_expect(!(o < kama_accesses.hi && kama_accesses.lo < o + len), 1)) return 1;
+    return kama_access_clean_scan(obj, len, cls);
+}
+// An instant access: a field write.
+static inline void kama_access_check(const void* obj, size_t objLen, const char* ocls, const void* lo, size_t len,
+                                     int modify, const char* file, int line) {
+    const char* l = (const char*)lo;
+    if (__builtin_expect(l < kama_accesses.hi && kama_accesses.lo < l + len, 0))
+        kama_access_scan(obj, objLen, ocls, lo, len, modify, file, line);
+}
+// A write through `this` in a method whose object was not clean on entry: the cold path, out of line and handed only
+// the object and its site, so a small method stays small enough for the C compiler to inline (KR-211).
+typedef struct kama_write_site { size_t objLen; const char* cls; size_t at; size_t len; const char* file; int line; } kama_write_site;
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((cold))
+#endif
+static KAMA_NOINLINE void kama_access_write(const void* obj, const kama_write_site* s) {
+    kama_access_check(obj, s->objLen, s->cls, (const char*)obj + s->at, s->len, 1, s->file, s->line);
+}
+// A lasting access begins: checked as `modify` says (a writable window is opened as a mutation would be), then linked
+// from the caller's frame holding as `holds` says. `kama_access_end` unlinks it: accesses end in the order they
+// began, so the node is the head.
+static inline void kama_access_begin(kama_access* a, const void* obj, size_t objLen, const char* ocls, const void* lo,
+                                     size_t len, const void* hlo, size_t hlen, const char* hcls, int modify, int holds,
+                                     const char* at, const char* file, int line) {
+    kama_access_check(obj, objLen, ocls, lo, len, modify, file, line);
+    const char* l = (const char*)lo;
+    a->lo = l; a->len = len; a->hlo = (const char*)hlo; a->hlen = hlen; a->hcls = hcls;
+    a->at = at; a->modify = holds; a->next = kama_accesses.head;
+    a->plo = kama_accesses.lo; a->phi = kama_accesses.hi;
+    if (!a->next) { kama_accesses.lo = l; kama_accesses.hi = l + len; }
+    else {
+        if (l < kama_accesses.lo) kama_accesses.lo = l;
+        if (l + len > kama_accesses.hi) kama_accesses.hi = l + len;
+    }
+    kama_accesses.head = a;
+}
+// kama_access_begin, checking only when `check` says so — its object found clean on entry needs none.
+static inline void kama_access_begin_if(kama_access* a, int check, const void* obj, size_t objLen, const char* ocls,
+                                        const void* lo, size_t len, const void* hlo, size_t hlen, const char* hcls,
+                                        int modify, int holds, const char* at, const char* file, int line) {
+    if (check) kama_access_check(obj, objLen, ocls, lo, len, modify, file, line);
+    const char* l = (const char*)lo;
+    a->lo = l; a->len = len; a->hlo = (const char*)hlo; a->hlen = hlen; a->hcls = hcls;
+    a->at = at; a->modify = holds; a->next = kama_accesses.head;
+    a->plo = kama_accesses.lo; a->phi = kama_accesses.hi;
+    if (!a->next) { kama_accesses.lo = l; kama_accesses.hi = l + len; }
+    else {
+        if (l < kama_accesses.lo) kama_accesses.lo = l;
+        if (l + len > kama_accesses.hi) kama_accesses.hi = l + len;
+    }
+    kama_accesses.head = a;
+}
+static inline void kama_access_end(kama_access* a) {
+    kama_accesses.head = a->next; kama_accesses.lo = a->plo; kama_accesses.hi = a->phi;
+}
+// A call handed a field's interior: `KAMA_CALL_ACCESS` holds it for the call, a node from the caller's frame ended by
+// `cleanup` once the call's value is taken. A callee that cannot reach the value by another path gets
+// `KAMA_CALL_CHECK` instead (CEmitter::elideCallAccesses): nothing can meet the access while it runs, so only the
+// check its beginning makes is left — against the accesses already open.
+#define KAMA_CALL_ACCESS(ka, obj, olen, ocls, lo, len, hlo, hlen, hcls, mod, holds, at, file, line) \
+    kama_access ka __attribute__((cleanup(kama_access_end))); \
+    kama_access_begin(&ka, obj, olen, ocls, lo, len, hlo, hlen, hcls, mod, holds, at, file, line)
+#define KAMA_CALL_CHECK(ka, obj, olen, ocls, lo, len, hlo, hlen, hcls, mod, holds, at, file, line) \
+    kama_access_check(obj, olen, ocls, lo, len, mod, file, line)
+// ...and a call on a field of `this` in a method whose object was found clean on entry (`kama_tclean`) checks only when
+// it was not: `KAMA_CALL_HOLD` holds the field for a callee that may reach the value another way, and `KAMA_CALL_NONE`
+// is all that is left for one that cannot.
+#define KAMA_CALL_HOLD(ka, obj, olen, ocls, lo, len, hlo, hlen, hcls, mod, holds, at, file, line) \
+    kama_access ka __attribute__((cleanup(kama_access_end))); \
+    kama_access_begin_if(&ka, !kama_tclean, obj, olen, ocls, lo, len, hlo, hlen, hcls, mod, holds, at, file, line)
+#define KAMA_CALL_NONE(ka, obj, olen, ocls, lo, len, hlo, hlen, hcls, mod, holds, at, file, line) \
+    (__builtin_expect(kama_tclean, 1) ? (void)0 : kama_access_check(obj, olen, ocls, lo, len, mod, file, line))
 
 static inline KAMA_NORETURN void kama_panic_at(kama_string msg, const char* file, int line) {
 #if defined(KAMA_TARGET_EMBEDDED)

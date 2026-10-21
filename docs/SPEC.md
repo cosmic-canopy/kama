@@ -1486,25 +1486,56 @@ int32 id = match (w.tryUpgrade()) {           // -> Optional<Shared<Tex>>
 answers `None` — so a destructor that upgrades a weak back-edge to its own value (an observer, a parent pointer) can <!-- test: shared_teardown_upgrade -->
 never hand out a `Shared` to memory about to be freed. Rust's `Weak::upgrade` answers the same way.
 
-**A borrow through one handle and a mutation through another trap.** Two `Shared` handles to one value are two
-names the place rules cannot tell apart, so the value's control block counts the `borrow` windows open into it, and a
-mutation through any handle while one is open — a non-`const` call, a field write, a `ref` argument — traps, in every
-build, naming both sites: <!-- test: shared_borrow_mutation, shared_borrow_field_write -->
+**Two handles to one value cannot pull its storage out from under each other.** Two `Shared` handles to one value are
+two names the place rules cannot tell apart, so kama checks at run time what they check statically, with Swift's model.
+A conflict traps, in every build, naming both sites:
 
 ```kama fragment
 Shared<Core> b = a;
-borrow a.first() as x {   // the window counts one borrow into the value
-    b.grow();             // TRAP: grows the buffer `x` points into — "made at …:2 … (…:3)"
+borrow a.first() as x {   // a window: an access to the value for its extent
+    b.grow();             // TRAP at grow's `this.items.add` — "made at …:2 … (core.kama:9)"
 }
 ```
 
-A borrowing `match` through a handle counts one too, while it runs, when an arm binds an owning payload — that binding <!-- test: shared_borrow_match -->
-is an alias of the value's own slot; a plain payload is copied out and holds nothing. A `foreach` never needs one: a
-value that owns heap storage is a `resource`, whose fields only its own methods reach.
-Reading through another handle never traps, and the window's end releases it on every exit (`break`, `continue`,
-`return`). A `@onPanic` region may not hold such a window, since a recovered panic would skip its end. Swift traps <!-- test: shared_borrow_extent --> <!-- xfail: onpanic_shared_borrow -->
-an overlapping access the same way, at run time; Rust's `Rc` instead forbids mutation without a `RefCell`, whose
-borrow flag panics on a conflicting `borrow_mut`.
+What the model counts:
+- **What an access is to.** An access is to a stored field of an object a `Shared` may hold: the `T` of a
+  `Shared<T>`, a class boxed into a `Shared<Contract>`, and their bases and subclasses. The object may be reached
+  through `this`, a `ref`, or a handle. A field's own internals, such as `items`' buffer, are covered by the access on
+  the field. <!-- test: shared_exclusivity_precise -->
+- **Instant accesses.** A field write is an instant access.
+- **Accesses that last a call.** A call handed a field's interior is an access for the call's length: a non-`const`
+  call on a field, a `ref` or `const ref` argument, and a view minted for the call. Arguments are evaluated before it
+  begins, so `this.items.add(item: this.items.length())` is legal. <!-- test: shared_ref_into_heap, shared_field_box_replaced, shared_view_argument -->
+- **Accesses that last a window.** A window (`borrow`, `foreach`, a borrowing `match`) is an access for its extent.
+  Through a handle, it is to the whole value, because a place a method returns is opaque at the call. <!-- test: shared_borrow_mutation, shared_borrow_field_write, shared_borrow_match, shared_method_window, shared_this_alias -->
+- **The conflict rule.** Two accesses conflict when three things hold:
+  - they overlap;
+  - one of them may change the storage;
+  - the new one is not the live one's own work, which means an object inside the part the live one handed out (its
+    receiver, its argument, its alias).
+- **Mutations versus reads.** A window holds its storage against mutation only, so reading inside one stays legal, as
+  it is statically. Opening a writable window is checked as a mutation, so two writable windows through two handles
+  trap. <!-- test: shared_two_windows -->
+- **Calls.** A call on a value through a handle is no access of its own; its field accesses are. So
+  `b.setTitle(t: …)` during `foreach (o in this.observers)` runs. A contract handle's value is checked the same way.
+  <!-- test: shared_contract_reentry -->
+- **Cost.** Every lasting access is recorded per thread, in a node in its own frame, with the span of every open one
+  kept beside the list. A mutable `Shared` never crosses an isolate, so one thread's record sees every access to its
+  value. What is paid where:
+  - Outside the span, a check is two compares.
+  - A mutating method of a payload class asks once, on entry, whether its object is clean, and then checks none of
+    its own writes. A callee's accesses close before it returns, so the answer holds.
+  - A call on a field holds the field only when the callee can reach the value by a path it was not handed: a
+    mutable handle, an indirect call, or a foreign function. The compiler reads that off the program's call graph,
+    as Swift's optimizer does.
+  - A frame's own local is never a payload, so it is never checked.
+  - `Shared<immutable T>` has nothing to check.
+  - A program with no `Shared` is unchanged.
+- **`@onPanic`.** A region's recovery restores the record as the region found it, so a region may hold a borrow.
+  <!-- test: shared_borrow_extent, onpanic_shared_borrow -->
+
+Rust's `Rc` forbids mutation without a `RefCell`, whose borrow flag panics on a conflicting `borrow_mut` for the whole
+value. Swift traps an overlapping access to a class property at run time, as kama does here.
 
 `.downgrade()` is the only way to get a `Weak`, for a handle over a contract and over a concrete type alike.
 A `Shared` given where a `Weak` is wanted (`Weak<Tex> w = s;`, an argument, a return, a field) is refused, naming `s.downgrade()`. <!-- xfail: weak_needs_downgrade -->

@@ -10,11 +10,10 @@ extern fn int32 kama_ctrl_finish_strong(UnsafePtr c, int32 atomic);
 extern fn void  kama_ctrl_retain_weak(UnsafePtr c, int32 atomic);
 extern fn void  kama_ctrl_init(UnsafePtr c);
 
-// The strong/weak reference counts shared by a `Shared`/`Weak` family, and the count of live borrows into the value
-// with the outermost one's site (KR-211). Heap-allocated once at `adopt`, freed when BOTH counts reach zero.
-// Module-internal (not exported). Laid out as the runtime `kama_ctrl`, so a `BindableFunctionPtr` can retain a Shared
-// it binds and an iface handle can free a block made here; kama_ctrl_init sets every field.
-type value Ctrl { public usize strong; public usize weak; public usize borrows; public usize borrowAt; }
+// The strong/weak reference counts shared by a `Shared`/`Weak` family. Heap-allocated once at `adopt`, freed when BOTH
+// reach zero. Module-internal (not exported). Laid out as the runtime `kama_ctrl`, so a `BindableFunctionPtr` can
+// retain a Shared it binds and an iface handle can free a block made here; kama_ctrl_init sets every field.
+type value Ctrl { public usize strong; public usize weak; }
 
 // A reference-counted shared-ownership pointer (Rust's `Rc<T>`). `Copyable(bare: copy)`: a bare hand-off
 // (`Shared b = a;`) RETAINS (strong++) via `copy()`; `give b = a` MOVES the handle (transfers the ref, no

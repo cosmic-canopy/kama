@@ -1,0 +1,16 @@
+// KR-211: a class boxed into a `Shared<Contract>` is a payload too. `peek` views its own `items` and calls through
+// another contract handle to the same value, which grows them: the access traps. Through 0.9.707 nothing was checked
+// for a contract handle's value, and `v[0]` read the freed buffer (ASan: heap-use-after-free).
+import { std::memory::Shared, std::collections::DynamicArray };
+type contract Adder for resource { fn void addOne(); }
+type resource Core implements Adder {
+    DynamicArray<int32> items;
+    public ctor make() { this.items = DynamicArray.empty(); this.items.add(item: 1); }
+    public fn void addOne() { for (int32 i = 0; i < 64; i++) { this.items.add(item: i); } }
+    public fn int32 peek(Shared<Adder> other) { borrow this.items.view() as v { other.addOne(); return v[0]; } }
+}
+fn uint8 main() {
+    Shared<Core> c = new Core.make();
+    Shared<Adder> h = c;
+    return cast<uint8>(c.peek(other: h));
+}
