@@ -1,7 +1,8 @@
 // An open `File` does not hold its path (KR-224): while it is open the path can be renamed, removed, created again and
 // replaced, and the open file reads on through all of it — what POSIX has always allowed. Windows refused every step
-// while kama opened files through the CRT's `_wopen`, whose share mode leaves out deletion. Each step is its own bit,
-// and a step that fails names its error on stderr. Returns 0.
+// while kama opened files through the CRT's `_wopen`, whose share mode leaves out deletion; and with delete shared,
+// `MoveFileExW` still refused to replace an open file (bit 32, os error 5), so `rename` retries that with POSIX
+// semantics. Each step is its own bit, and a step that fails names its error on stderr. Returns 0.
 import { core::eprintln, std::fs::File, std::fs::OpenMode, std::fs::rename, std::fs::remove, std::fs::exists,
          std::fs::writeText, std::fs::readText, std::io::IoError, std::collections::FixedArray,
          std::collections::ConstView, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };

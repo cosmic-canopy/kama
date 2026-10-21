@@ -980,18 +980,42 @@ static inline int32_t kama_is_symlink(const char* path) {
     if (a == INVALID_FILE_ATTRIBUTES) return 0;
     return (a & FILE_ATTRIBUTE_REPARSE_POINT) ? 1 : 0;
 }
-// The one wrapper holding TWO buffers (128 KB — 6% of the 2 MB every thread gets, measured). The unwind
-// that freed the first conversion when the second failed is gone with the allocations.
+// `rename` replaces its target, as POSIX's does, even while some handle holds the target open (KR-224).
+// MoveFileExW refuses that with ERROR_ACCESS_DENIED even when every handle shares delete (measured on CI by
+// tests/fs_open_rename_remove), so on that error the rename is retried with POSIX semantics, `FileRenameInfoEx`
+// (NTFS, Windows 10 1607+): the name moves to the new file at once and the open handles keep the old one. This is
+// what Rust's std::fs::rename does. A volume without POSIX semantics refuses the retry, and the first error
+// stands. FILE_RENAME_INFO and its class number are declared here, as FILE_ID_INFO is above.
+//
+// The one wrapper holding TWO buffers (128 KB — 6% of the 2 MB every thread gets, measured). The target converts
+// straight into the rename record's name, a whole kama__wpathbuf at FILE_RENAME_INFO's `FileName` offset (20 on a
+// 64-bit target, 12 on a 32-bit one), so the retry costs no third buffer. The unwind that freed the first
+// conversion when the second failed is gone with the allocations.
+typedef struct kama__rename_info { DWORD kama_flags; HANDLE kama_root; DWORD kama_len; kama__wpathbuf kama_name; } kama__rename_info;
 KAMA_NOINLINE static int32_t kama_rename(const char* from, const char* to) {
-    kama__wpathbuf bf, bt;
+    kama__wpathbuf bf; kama__rename_info ri;
     wchar_t* wf = kama__wpath(from, &bf); if (!wf) return -1;
-    wchar_t* wt = kama__wpath(to,   &bt); if (!wt) return -1;
-    if (!MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) {
-        DWORD e = GetLastError();
-        kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT : EACCES);
-        return -1;
+    wchar_t* wt = kama__wpath(to, &ri.kama_name); if (!wt) return -1;
+    if (MoveFileExW(wf, wt, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) return 0;
+    DWORD e = GetLastError();
+    if (e == ERROR_ACCESS_DENIED) {
+        HANDLE h = CreateFileW(wf, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);   // a link renames itself
+        if (h != INVALID_HANDLE_VALUE) {
+            ri.kama_flags = 0x1u | 0x2u;   // FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS
+            ri.kama_root = NULL;
+            ri.kama_len = (DWORD)(wcslen(wt) * sizeof(wchar_t));   // bytes, without the NUL
+            const BOOL ok = SetFileInformationByHandle(h, (FILE_INFO_BY_HANDLE_CLASS)22 /* FileRenameInfoEx */, &ri,
+                (DWORD)(offsetof(kama__rename_info, kama_name) + ri.kama_len + sizeof(wchar_t)));
+            const DWORD retry = ok ? 0 : GetLastError();
+            CloseHandle(h);
+            if (ok) return 0;
+            if (retry == ERROR_DIR_NOT_EMPTY) e = retry;   // a directory over a non-empty one: POSIX's ENOTEMPTY, as Rust reports
+        }
     }
-    return 0;
+    kama__os_fail(e, (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? ENOENT
+                     : e == ERROR_DIR_NOT_EMPTY ? ENOTEMPTY : EACCES);
+    return -1;
 }
 static inline int32_t kama_exists(const char* path) {
     return kama__attrs(path) == INVALID_FILE_ATTRIBUTES ? 0 : 1;

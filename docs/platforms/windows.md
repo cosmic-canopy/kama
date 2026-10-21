@@ -679,6 +679,12 @@ entries here. One has shipped:
     use it: `_wopen` cannot share delete, so a `File` held open blocked a `rename` or `remove` of its
     path (KR-224). Every open is now `CreateFileW` with read, write and delete sharing, handed to the CRT
     by `_open_osfhandle`, and its failure is mapped by `kama__win_path_errno`.
+  * ⚠️ **Delete sharing is not enough to replace an open file.** Measured on the CI runner (0.9.709,
+    `fs_open_rename_remove`): with every handle sharing delete, renaming an open file and removing it
+    both work, and the name is gone at once (a new file can be created there while the old handle
+    lives). But `MoveFileExW(REPLACE_EXISTING)` onto a path another handle holds open fails with
+    `ERROR_ACCESS_DENIED`. `kama_rename` retries that case with `FileRenameInfoEx` and POSIX semantics,
+    as Rust's `fs::rename` does.
   * ⚠️ **`\\?\NUL` resolves.** The common claim that verbatim prefixing kills reserved device names is
     **false** here — it reaches the NT object-manager entry. Do not use it as an argument.
   * ⚠️ **`CreateProcessW`'s `lpCurrentDirectory` fails past 260 either way** (`GLE=267`,
