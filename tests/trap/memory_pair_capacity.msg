@@ -1,0 +1,1 @@
+MemoryStreamPair.open: `capacity` must be at least 1

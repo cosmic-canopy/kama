@@ -475,53 +475,6 @@ std has no `sendfile`, `splice`, `copy_file_range` or `TransmitFile`. A file res
 in, so this is a stream method, file to socket. Scheduled rather than optional: it is the standard way a server
 serves a file, and the package's benchmarks say how much it is worth.
 
-<a id="s1-memory-stream"></a>
-
-#### An in-memory connected `ReliableStream` pair (KR-208)
-
-std has `StringWriter` and `SliceReader`, one direction each. Each protocol package writes its own two-way test pipe
-with the same behaviour: non-blocking, `WouldBlock` when empty, 0 after the far end shuts.
-
-**Measured on `0.9.711` (2026-10-21): the row's premise is half wrong.** `UnixStreamPair` (`0.9.653`, SPEC *A connected pair with no
-path*, shipped a day before this row was filed) is a connected pair of `UnixStream`s, and `UnixStream implements ReliableStream`. It works on
-Linux, macOS and Windows. Set non-blocking, a read with nothing queued is `WouldBlock`, and after the far end's
-`shutdown(how: Write)` or drop it reads 0. So on native targets std already has a test pipe. Three things it cannot do:
-- **wasm.** There are no sockets, so a package that runs its tests on both targets has no pair there.
-- **A chosen capacity.** The kernel sizes the buffers, and the size differs by OS, so a test that a protocol survives a
-  partial write at N bytes is not the same test everywhere.
-- **No descriptors.** Each pair costs two, which matters only in a large suite.
-
-**What others do.**
-
-| | Two-way in-memory pair | Bound | Where |
-|---|---|---|---|
-| Go | `net.Pipe()` | none: synchronous, each write waits for its read | std |
-| Node | `stream.duplexPair()` (22.6) | `highWaterMark` | std |
-| Rust | `tokio::io::duplex(max_buf_size)` | required | tokio |
-| Python | `socket.socketpair()` only: real sockets | the kernel's | std |
-| Java | `PipedInputStream` + `PipedOutputStream`, one way | 1024 bytes by default | std |
-| .NET | `System.IO.Pipelines.Pipe`, one way | pause thresholds | std |
-
-**Recommendation.** Ship it beside `UnixStreamPair`, because it covers wasm and gives a deterministic capacity. Use
-tokio's shape, with a required capacity:
-- `MemoryStreamPair.open(capacity: 4096)`, whose ends are `MemoryStream implements ReliableStream`, lent in place by
-  `first()` and `second()`, as `UnixStreamPair` lends its ends.
-- Each direction holds at most `capacity` bytes:
-  - a read of an empty direction is `WouldBlock`;
-  - a write takes what fits (a partial count), or is `WouldBlock` when nothing fits;
-  - after the far end's `shutdown(how: Write)` or drop, a read gets 0;
-  - a write to a dropped end, or after this end's own `shutdown(how: Write)`, is `BrokenPipe`.
-- It is always non-blocking: `setNonBlocking` does nothing, as on the web.
-- It is not `Sendable`: one isolate's test pipe. Between isolates, `UnixStreamPair` already serves natively.
-
-A test that stalls writes wraps an end, and that wrapper stays in the test. Size S.
-
-**Ruled 2026-10-21:** the recommendation, in full:
-1. Ship it beside `UnixStreamPair`.
-2. A required capacity per direction (tokio).
-3. One isolate (not `Sendable`).
-4. `MemoryStreamPair.open(capacity:)` with `MemoryStream` ends, lent by `first()` and `second()`.
-
 <a id="s1-fuzz"></a>
 
 #### Coverage-guided fuzzing (KR-205)

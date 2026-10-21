@@ -1,0 +1,7 @@
+// `MemoryStreamPair.open` refuses a capacity below 1 (KR-208): a pipe that can hold nothing would answer every write
+// `WouldBlock` forever, which is a test that hangs rather than one that fails.
+import { std::net::MemoryStreamPair };
+fn uint8 main() {
+    MemoryStreamPair p = MemoryStreamPair.open(capacity: 0);
+    return 0ui8;
+}

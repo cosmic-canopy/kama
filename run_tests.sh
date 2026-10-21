@@ -599,9 +599,16 @@ sweep() {
     done
     printf '%s' "$out"
 }
-# `std::net` deliberately also matches `std::net::web` — as the per-fixture greps it replaces did.
+# `std::net` deliberately also matches `std::net::web` — as the per-fixture greps it replaces did. A fixture whose
+# every `std::net` name is transport-free — the in-memory pair, the stream contract, `Shutdown` — opens no socket, so
+# it is not native-net and runs on wasm too (KR-208: wasm is the in-memory pair's reason to exist). Four processes for
+# the corpus, as `sweep` is. `sed`, not `cut -d:`, takes the path: a Windows one may carry a drive colon.
 SET_NET_WEB=$(sweep 'std::net::web|kama_net_web\.h')
-SET_NET=$(sweep 'std::net')
+SET_NET="|"
+for f in $(grep -oHE 'std::net(::[A-Za-z_]+)?' $(grep -lE 'std::net' "$TESTS_DIR"/*.kama 2>/dev/null) /dev/null 2>/dev/null \
+           | grep -vE ':std::net::(MemoryStreamPair|MemoryStream|ReliableStream|Shutdown)$' | sed 's/:std::net.*$//' | sort -u); do
+    f="${f##*/}"; SET_NET="$SET_NET${f%.kama}|"
+done
 SET_PROC=$(sweep 'std::process')
 SET_ASM=$(sweep 'asm\(')
 SET_BROWSER=$(sweep 'kama_wt_|kama_rtc_')

@@ -1,0 +1,66 @@
+// `MemoryStreamPair` (KR-208): two connected in-memory streams with a capacity the test chooses, on every target.
+// A write takes what fits and is `WouldBlock` when nothing does; a read of an empty direction is `WouldBlock`; the
+// ring wraps; both directions are independent; `shutdown(Write)` ends the far end's stream (0 once drained) and makes a
+// later write `BrokenPipe`; `shutdown(Read)` makes the far end's writes `BrokenPipe`; and protocol code written over
+// `ReliableStream` runs on an end unchanged. Each case is its own bit. Returns 0.
+import { std::net::MemoryStreamPair, std::net::MemoryStream, std::net::ReliableStream, std::net::Shutdown,
+         std::io::IoError, std::io::writeAll, std::collections::FixedArray, std::collections::ConstView,
+         std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
+
+fn isize got(Result<isize, IoError> r) {   // the count, or -1 WouldBlock, -2 BrokenPipe, -3 anything else
+    return match (r) {
+        case Ok(value: n): n;
+        case Err(error: e): match (e.kind()) { case WouldBlock: -1; case BrokenPipe: -2; case _: -3; };
+    };
+}
+fn string text(ConstView<uint8> b) { Result<string, Utf8Error> t = decode(bytes: b); return match (give t) { case Ok(value: s): { := give s; } case Err(error: e): { := "?"; } }; }
+
+// Protocol code over the contract, as a package writes it: send a greeting, read the reply.
+unsafe fn string exchange<S: ReliableStream>(ref S s, const ref string greeting) {
+    Result<Unit, IoError> w = writeAll(w: s, bytes: greeting.bytes());
+    if (!w.isOk()) { return "write failed"; }
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    Result<isize, IoError> r = s.read(into: buf.viewMut());
+    return match (r) { case Ok(value: n): text(b: buf.view().slice(from: 0, count: n)); case Err(error: e): "?"; };
+}
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    {
+        MemoryStreamPair p = MemoryStreamPair.open(capacity: 8);
+        string hi = "hello, world";                                                    // 12 bytes
+        if (got(r: p.first().write(bytes: hi.bytes())) != 8) { bad = bad | 1; }       // only 8 fit
+        if (got(r: p.first().write(bytes: hi.bytes())) != -1) { bad = bad | 1; }      // full
+        if (got(r: p.second().read(into: buf.viewMut().slice(from: 0, count: 5))) != 5) { bad = bad | 2; }
+        if (text(b: buf.view().slice(from: 0, count: 5)) != "hello") { bad = bad | 2; }
+        string more = ", world";
+        if (got(r: p.first().write(bytes: more.bytes())) != 5) { bad = bad | 4; }     // wraps the ring
+        if (got(r: p.second().read(into: buf.viewMut())) != 8) { bad = bad | 4; }
+        if (text(b: buf.view().slice(from: 0, count: 8)) != ", w, wor") { bad = bad | 4; }
+        if (got(r: p.second().read(into: buf.viewMut())) != -1) { bad = bad | 8; }    // empty
+        if (got(r: p.first().read(into: buf.viewMut())) != -1) { bad = bad | 8; }     // the other direction is empty too
+        Result<Unit, IoError> sd = p.first().shutdown(how: Shutdown::Write);
+        if (got(r: p.second().read(into: buf.viewMut())) != 0) { bad = bad | 16; }    // shut and drained: the end
+        if (got(r: p.first().write(bytes: hi.bytes())) != -2) { bad = bad | 16; }     // after its own shutdown
+        if (got(r: p.second().write(bytes: hi.bytes())) != 8) { bad = bad | 16; }     // the other way still runs
+    }
+    {
+        MemoryStreamPair p = MemoryStreamPair.open(capacity: 64);
+        Result<Unit, IoError> sd = p.second().shutdown(how: Shutdown::Read);
+        string hi = "hi";
+        if (got(r: p.first().write(bytes: hi.bytes())) != -2) { bad = bad | 32; }     // nobody will read it
+        if (got(r: p.second().read(into: buf.viewMut())) != 0) { bad = bad | 32; }
+    }
+    {
+        MemoryStreamPair p = MemoryStreamPair.open(capacity: 64);
+        string reply = "pong";
+        Result<isize, IoError> w = p.second().write(bytes: reply.bytes());            // the peer answers first
+        string ping = "ping";
+        if (exchange(s: p.first(), greeting: ping) != "pong") { bad = bad | 64; }
+        if (got(r: p.second().read(into: buf.viewMut())) != 4) { bad = bad | 64; }     // and received the greeting
+    }
+    return bad;
+}
+
+fn uint8 main() { return cast<uint8>(run()); }

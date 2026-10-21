@@ -1,0 +1,107 @@
+// A connected pair of in-memory streams (KR-208): the test pipe a protocol package needs on every target, wasm
+// included, with a capacity the test chooses. `UnixStreamPair` is the same shape over real sockets, natively; this one
+// holds no descriptor and its buffers are exactly as large as asked, so a test that a protocol survives a partial
+// write at N bytes is the same test on every OS (the kernel's buffer sizes are not). tokio's `io::duplex(max_buf_size)`
+// is the model; Go's `net.Pipe` is unbuffered and blocking, which a one-isolate test cannot use.
+//
+//   MemoryStreamPair p = MemoryStreamPair.open(capacity: 8);
+//   p.first().write(bytes: hello.bytes());   // Ok(8) of 12: the rest does not fit
+//   p.second().read(into: buf.viewMut());    // Ok(8)
+//   p.second().read(into: buf.viewMut());    // Err(WouldBlock): nothing queued
+//   p.first().shutdown(how: Shutdown::Write);
+//   p.second().read(into: buf.viewMut());    // Ok(0): the far end shut, and everything was read
+//
+// Always non-blocking, as a stream on the web is: `setNonBlocking` changes nothing. Not `Sendable`: the two ends share
+// their buffers through `Shared`, which never crosses an isolate, so this is one isolate's pipe. Between isolates,
+// natively, `UnixStreamPair` serves.
+import { std::io::IoError, std::io::IoErrorKind, std::collections::View, std::collections::ConstView,
+         std::collections::FixedArray, std::memory::Shared, ReliableStream, Shutdown };
+
+export { MemoryStreamPair, MemoryStream };
+
+// One direction: a ring of `capacity` bytes; whether its writer has shut it (once drained, a read is 0); and whether
+// its reader has gone (a write is `BrokenPipe`). Not exported, so its members are this file's alone.
+type resource Lane {
+    FixedArray<uint8> buf;
+    isize head = 0;   // where the next byte is read
+    isize len = 0;
+    bool writerShut = false;
+    bool readerGone = false;
+    public ctor make(isize capacity) { this.buf = FixedArray.make(size: capacity); }
+
+    // What fits; `WouldBlock` when nothing does; `BrokenPipe` once either side has shut this direction.
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        if (this.writerShut || this.readerGone) { return Result::Err(error: IoError.of(kind: IoErrorKind::BrokenPipe)); }
+        if (bytes.length() == 0) { return Result::Ok(value: 0); }
+        isize cap = this.buf.length();
+        isize n = bytes.length() < cap - this.len ? bytes.length() : cap - this.len;
+        if (n == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        isize at = (this.head + this.len) % cap;
+        isize span = n < cap - at ? n : cap - at;                    // up to the end of the ring, then from 0
+        this.buf.viewMut().slice(from: at, count: span).copyFrom(source: bytes.slice(from: 0, count: span));
+        if (n > span) { this.buf.viewMut().slice(from: 0, count: n - span).copyFrom(source: bytes.slice(from: span, count: n - span)); }
+        this.len = this.len + n;
+        return Result::Ok(value: n);
+    }
+    // What is queued, up to `into.length()`; `WouldBlock` when nothing is; 0 once it is empty and shut.
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) {
+        if (into.length() == 0) { return Result::Ok(value: 0); }
+        if (this.len == 0) {
+            if (this.writerShut || this.readerGone) { return Result::Ok(value: 0); }
+            return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock));
+        }
+        isize cap = this.buf.length();
+        isize n = into.length() < this.len ? into.length() : this.len;
+        isize span = n < cap - this.head ? n : cap - this.head;
+        into.slice(from: 0, count: span).copyFrom(source: this.buf.view().slice(from: this.head, count: span));
+        if (n > span) { into.slice(from: span, count: n - span).copyFrom(source: this.buf.view().slice(from: 0, count: n - span)); }
+        this.head = (this.head + n) % cap;
+        this.len = this.len - n;
+        return Result::Ok(value: n);
+    }
+    public fn void shutWrite() { this.writerShut = true; }
+    public fn void shutRead() { this.readerGone = true; }
+}
+
+// One end. What it writes is the other end's inbox; dropping it shuts both its directions, as closing a socket does,
+// so the far end reads 0 and its writes are `BrokenPipe`.
+type resource MemoryStream implements ReliableStream {
+    Shared<Lane> inbox;    // what the other end writes
+    Shared<Lane> outbox;   // what this end writes
+    ctor make(Shared<Lane> inbox, Shared<Lane> outbox) { this.inbox = give inbox; this.outbox = give outbox; }
+    friend MemoryStreamPair::open[make];
+
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) { return this.inbox.read(into: into); }
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) { return this.outbox.write(bytes: bytes); }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public fn Result<Unit, IoError> setNonBlocking(bool on) { return Result::Ok(value: Unit::Unit); }
+    // `Write` ends the stream the far end reads (it reads 0 once drained) and makes a later write here `BrokenPipe`;
+    // `Read` makes a read here 0 and the far end's writes `BrokenPipe`; `Both` is the two. As `UnixStream.shutdown`.
+    public fn Result<Unit, IoError> shutdown(Shutdown how) {
+        match (how) {
+            case Read:  { this.inbox.shutRead(); }
+            case Write: { this.outbox.shutWrite(); }
+            case Both:  { this.inbox.shutRead(); this.outbox.shutWrite(); }
+        };
+        return Result::Ok(value: Unit::Unit);
+    }
+    ~MemoryStream() { this.inbox.shutRead(); this.outbox.shutWrite(); }
+}
+
+// The two ends, each lent in place (`first()`, `second()`), as `UnixStreamPair` lends its ends. `capacity` bytes each
+// way, at least 1.
+type resource MemoryStreamPair {
+    MemoryStream a;
+    MemoryStream b;
+    public ctor open(isize capacity) {
+        if (capacity < 1) { panic(msg: "MemoryStreamPair.open: `capacity` must be at least 1"); }
+        Shared<Lane> ab = new Lane.make(capacity: capacity);
+        Shared<Lane> ba = new Lane.make(capacity: capacity);
+        Shared<Lane> abRead = copy ab;
+        Shared<Lane> baRead = copy ba;
+        this.a = MemoryStream.make(inbox: give baRead, outbox: give ab);
+        this.b = MemoryStream.make(inbox: give abRead, outbox: give ba);
+    }
+    public fn ref MemoryStream first() { return this.a; }
+    public fn ref MemoryStream second() { return this.b; }
+}

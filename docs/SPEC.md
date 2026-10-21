@@ -2445,6 +2445,16 @@ socket is no child's stream on Windows (`Stdio` says why), so there a pair serve
 gone gets `EPIPE` there where Linux raises `SIGPIPE`. `UnixDatagramPair` is the same over datagrams (Linux and
 macOS): each send arrives whole at the other end, and neither needs an address.
 
+**A connected pair in memory.** `MemoryStreamPair.open(capacity:)` makes two connected `MemoryStream`s that hold no <!-- test: net_memory_pair -->
+descriptor and run on every target, wasm included: the test pipe for protocol code written over `ReliableStream`. Each
+direction holds at most `capacity` bytes (at least 1), so a partial write happens at the size the test chose on every <!-- test: trap/memory_pair_capacity -->
+OS, where the kernel sizes a `UnixStreamPair`'s buffers. A write takes what fits and is `WouldBlock` when nothing does,
+and a read of an empty direction is `WouldBlock`. After the far end's `shutdown(how: Write)` or drop, a read is 0 once
+drained, and a write after this end's own `shutdown(how: Write)` is `BrokenPipe`, as is a write the far end shut its
+`Read` against. Always non-blocking, as a stream on the web is: `setNonBlocking` changes nothing. The ends are lent in
+place, `first()` and `second()`, as `UnixStreamPair`'s are, and are not `Sendable`: they share their buffers through a
+`Shared`, so the pair is one isolate's. tokio's `io::duplex(max_buf_size)` is the model; Go's `net.Pipe` is unbuffered.
+
 **Passing open descriptors.** `UnixStream.sendDescriptors(bytes:, descriptors:)` sends open files, sockets
 and streams to the process on the other end, with at least one byte to carry them, and
 `recvDescriptors(into:, descriptors:)` receives them (`UnixDatagram` has the pair too). What travels is a <!-- test: net_unix_fds -->
@@ -6799,7 +6809,8 @@ rather than bound to a thread, and each owning type is move-only: `File`, `TcpSt
 `StringWriter`, `SliceReader`, `PeerCredentials`, `Descriptor`, and the values `SocketAddr`, `UnixAddr`,
 `IpAddr`, `RecvFrom<A>` (for a `Sendable` address), `Ready`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
-of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread. A channel element is
+of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread, and a `MemoryStream` shares its
+buffers with its peer through a `Shared`. A channel element is
 dropped exactly once — received, or buffered when the queue's last holder goes — and never as a zeroed copy: a type's <!-- test: channel_resource_drop_once -->
 empty value is the one it states (`fd = -1`), not zero, and until `0.9.474` every send closed descriptor 0.
 
