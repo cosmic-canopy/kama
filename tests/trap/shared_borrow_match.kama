@@ -1,0 +1,22 @@
+// KR-211: a borrowing `match` through one `Shared` handle binds the owning payload `v` as an alias of the value's own
+// slot. Growing the value through another handle would free the buffer `v` points into, so it traps at the mutation,
+// naming the match. Through 0.9.706 it wrote into freed memory (ASan: heap-use-after-free at `v[0] = 9`).
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Core {
+    DynamicArray<Optional<DynamicArray<int32>>> slots;
+    public ctor make() {
+        this.slots = DynamicArray.empty();
+        DynamicArray<int32> r = DynamicArray.empty(); r.add(item: 1); this.slots.add(item: Optional::Some(value: give r));
+    }
+    public fn ref Optional<DynamicArray<int32>> first() { return this.slots[0]; }
+    public fn void grow() { for (int32 i = 0; i < 64; i++) { this.slots.add(item: Optional::None); } }
+}
+fn uint8 main() {
+    Shared<Core> a = new Core.make();
+    Shared<Core> b = a;
+    match (a.first()) {
+        case Some(value: v): { b.grow(); v[0] = 9; }
+        case None: { }
+    };
+    return 0;
+}

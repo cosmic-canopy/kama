@@ -1,0 +1,46 @@
+// KR-211: a borrowing `match` reached through a `Shared` handle holds a borrow only when an arm binds an OWNING payload
+// (bound as an alias of the subject's slot), and only while the match runs. It closes on every exit — the end of the
+// match, `break`, `continue` and a `return` out of an arm — after which mutating through any handle is legal again. A
+// plain payload is copied out and holds nothing, so mutating meanwhile is legal; reading through another handle always is.
+import { std::memory::Shared, std::collections::DynamicArray };
+type resource Core {
+    DynamicArray<Optional<DynamicArray<int32>>> slots;
+    Optional<int32> n;
+    public ctor make() {
+        this.slots = DynamicArray.empty();
+        DynamicArray<int32> r = DynamicArray.empty(); r.add(item: 1); this.slots.add(item: Optional::Some(value: give r));
+        this.n = Optional::Some(value: 3);
+    }
+    public fn ref Optional<DynamicArray<int32>> first() { return this.slots[0]; }
+    public fn ref Optional<int32> num() { return this.n; }
+    public const fn isize size() { return this.slots.length(); }
+    public fn void grow() { this.slots.add(item: Optional::None); }
+}
+fn int32 early(Shared<Core> a) {
+    match (a.first()) { case Some(value: v): { return v[0]; } case None: { } };
+    return 0;
+}
+fn uint8 main() {
+    Shared<Core> a = new Core.make();
+    Shared<Core> b = a;
+    int32 bad = 0;
+    match (a.first()) {
+        case Some(value: v): { if (b.size() != 1) { bad = bad + 1; } v[0] = 5; }   // a read through the other handle
+        case None: { bad = bad + 1; }
+    };
+    b.grow();                                                                     // closed: legal again
+    int32 k = 0;
+    while (k < 3) {
+        k = k + 1;
+        match (a.first()) {
+            case Some(value: v): { if (k == 1) { continue; } if (k == 2) { v[0] = 6; break; } }
+            case None: { }
+        };
+    }
+    b.grow();                                                                     // after `continue` and `break`
+    if (early(a: a) != 6) { bad = bad + 2; }
+    b.grow();                                                                     // after a `return` out of an arm
+    match (a.num()) { case Some(value: c): { b.grow(); if (c != 3) { bad = bad + 4; } } case None: { } };   // a copy
+    if (b.size() != 5) { bad = bad + 8; }
+    return cast<uint8>(bad);
+}

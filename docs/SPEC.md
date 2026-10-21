@@ -1498,6 +1498,9 @@ borrow a.first() as x {   // the window counts one borrow into the value
 }
 ```
 
+A borrowing `match` through a handle counts one too, while it runs, when an arm binds an owning payload — that binding <!-- test: shared_borrow_match -->
+is an alias of the value's own slot; a plain payload is copied out and holds nothing. A `foreach` never needs one: a
+value that owns heap storage is a `resource`, whose fields only its own methods reach.
 Reading through another handle never traps, and the window's end releases it on every exit (`break`, `continue`,
 `return`). A `@onPanic` region may not hold such a window, since a recovered panic would skip its end. Swift traps <!-- test: shared_borrow_extent --> <!-- xfail: onpanic_shared_borrow -->
 an overlapping access the same way, at run time; Rust's `Rc` instead forbids mutation without a `RefCell`, whose

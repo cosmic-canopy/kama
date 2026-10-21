@@ -3844,6 +3844,8 @@ private:
     bool isMutableLibraryShared(const std::string& cls);
     void sharedHandlesIn(SharedExpression host, std::vector<SharedExpression>& out);
     void enterSharedBorrows(SharedExpression host, int depth, int line);
+    void enterSharedBorrow(const std::string& handleC, const std::string& shown, int depth, int line);
+    bool matchAliasesPayload(MatchNode* m, ClassInfo& ci, const std::string& subjCls);
     void emitDtorDefinition(ClassInfo& ci);
 
     // Expressions -> C expression text

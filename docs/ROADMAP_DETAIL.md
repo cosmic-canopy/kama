@@ -2266,11 +2266,15 @@ through another handle trapped, whether or not anything could dangle.
   only (the program's `Shared` instances name them).
 
 **Commits.** Shipped: (1) teardown, `0.9.697`; (2) the count, the write marking, the check on every mutation through
-a library `Shared` handle, and the `borrow` window's extent with its `@onPanic` refusal, `0.9.698`. Remaining, in order:
-(3) the `foreach` and borrowing-`match` extents rooted through a handle (rare outside the pointee's own methods: a
-resource's fields are private); (4) the method summary and the marked calls through a handle (the `peekAfter` repro);
-(5) the pointer-once paths and `Shared<Contract>`; (6) the `this`-alias ruling above; (7) measurement, interleaved, on
-the `Shared`-heavy fixtures and the engine.
+a library `Shared` handle, and the `borrow` window's extent with its `@onPanic` refusal, `0.9.698`; (3) the borrowing
+`match` extent, `0.9.707` — counted only when an arm binds an owning payload, the one binding that aliases the value's
+slot (ASan-measured: `match (a.first()) { case Some(value: v): { b.grow(); v[0] = 9; } … }` wrote into freed memory).
+`foreach` needs no extent of its own, probed: a value owning heap storage must be a `resource` (a `value` that owns one
+is refused), a resource's fields are private, a view minted into a loop header and a `ref` call as an operand are both
+refused, so the only `foreach` over a handle's payload is in the pointee's own methods — (4) and (6). Remaining, in
+order: (4) the method summary and the marked calls through a handle (the `peekAfter` repro); (5) the pointer-once paths
+and `Shared<Contract>`; (6) the `this`-alias ruling above; (7) measurement, interleaved, on the `Shared`-heavy fixtures
+and the engine.
 
 <a id="s6"></a>
 

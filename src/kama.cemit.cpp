@@ -27970,14 +27970,21 @@ void CEmitter::enterSharedBorrows(SharedExpression host, int depth, int line)
                          "code — bind the handle to a local first, so the window knows which handle it holds").c_str(), line);
             continue;
         }
-        const std::string kb = "kama_kb" + std::to_string(_tempCounter++);
-        const std::string at = cEscapeStringBody(programLocation()) + ":" + std::to_string(line);
-        indent(depth); *_out << "kama_ctrl* " << kb << " = ((kama_ctrl**)&(" << emitExpression(h) << "))[1];\n";
-        indent(depth); *_out << "kama_ctrl_borrow_enter(" << kb << ", \"" << at << "\");\n";
-        _scopes.back().borrowLeaves.push_back("kama_ctrl_borrow_leave(" + kb + ");");
-        if (!_probingTemplate && !_currentFunc.empty() && !_destructibleOwners.count(_currentFunc))
-            _destructibleOwners[_currentFunc] = DestructibleSite{ unparseExpr(h), "", line, diagFile(), true };
+        enterSharedBorrow(emitExpression(h), unparseExpr(h), depth, line);
     }
+}
+
+// One borrow into the value the handle `handleC` (C, read without running anything) points at, held by the innermost
+// scope: entered here, left by emitScopeCleanup on every exit.
+void CEmitter::enterSharedBorrow(const std::string& handleC, const std::string& shown, int depth, int line)
+{
+    const std::string kb = "kama_kb" + std::to_string(_tempCounter++);
+    const std::string at = cEscapeStringBody(programLocation()) + ":" + std::to_string(line);
+    indent(depth); *_out << "kama_ctrl* " << kb << " = ((kama_ctrl**)&(" << handleC << "))[1];\n";
+    indent(depth); *_out << "kama_ctrl_borrow_enter(" << kb << ", \"" << at << "\");\n";
+    _scopes.back().borrowLeaves.push_back("kama_ctrl_borrow_leave(" + kb + ");");
+    if (!_probingTemplate && !_currentFunc.empty() && !_destructibleOwners.count(_currentFunc))
+        _destructibleOwners[_currentFunc] = DestructibleSite{ shown, "", line, diagFile(), true };
 }
 
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
@@ -30828,6 +30835,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                    || (dynamic_cast<TernaryExpressionNode*>(m->subject.get()) && isNamedValue(m->subject.get()));
     std::string subjOwner;
     size_t subjLocMark = 0;      // where the subject temp sits in the enclosing scope; see the drop below
+    std::string handlePlaceC;    // a handle subject's own C place, read again without running anything (KR-211)
     // Evaluate the subject FIRST, then flush any temps it hoisted (e.g. a `string` literal materialized for
     // a `ref string` param — `match (map.get("k"))`), so their decls land BEFORE the subject line, not
     // inside the first arm body (which would leave them undeclared at the point of use).
@@ -30854,7 +30862,13 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             recordDestructibleLocal(subjOwner, handleCls);   // see the drop below
             place = subjOwner;
         }
-        const std::string handlePtr = subjPlaceCall ? "(" + handleCls + "*)&(" + place + ")" : "&(" + place + ")";
+        std::string handlePtr = subjPlaceCall ? "(" + handleCls + "*)&(" + place + ")" : "&(" + place + ")";
+        if (subjPlaceCall) {   // the call runs once: its place is held, so the borrow below names the same handle
+            const std::string hp = "kama_mhp" + std::to_string(_tempCounter++);
+            indent(depth); *_out << handleCls << "* " << hp << " = " << handlePtr << ";\n";
+            handlePtr = hp;
+            handlePlaceC = "(*" + hp + ")";
+        } else if (!subjLvalue || handleReadIsPure(m->subject.get())) handlePlaceC = place;
         indent(depth); *_out << subjCls << "* " << sp << " = (" << subjCls << "*)"
                              << (lib ? derefFnName(handleCls, true) + "(" + handlePtr + ")"
                                      : "(" + place + ").ptr") << ";\n";
@@ -30944,6 +30958,32 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 for (auto& sc : _scopes) for (auto& d : sc.declaredNames) if (d == *sid->value) frameLocal = true;
                 if (frameLocal) { inPlaceOk = true; inPlaceSubject = placePath(m->subject); }
             }
+    // KR-211: an owning payload is bound as an ALIAS of the subject's slot (below), so a match with such an arm holds a
+    // borrow into the subject for its whole extent. Reached through a mutable `Shared` handle, that value's block counts
+    // the borrow, in a scope of the match's own that every exit from an arm unwinds, so a mutation through any other
+    // handle meanwhile traps rather than freeing what the alias points into. A plain payload is a copy and holds nothing.
+    bool sharedExtent = false;
+    if (!subjConsumed && matchAliasesPayload(m, ci, subjCls)) {
+        if (!handleCls.empty()) {
+            if (isMutableLibraryShared(handleCls)) {
+                if (handlePlaceC.empty())
+                    unsupported(("this `match` borrows into a `Shared` value through `" + unparseExpr(m->subject)
+                                 + "`, whose reading runs code — bind the handle to a local first, so the match knows "
+                                 "which handle it holds").c_str(), m);
+                else {
+                    _scopes.push_back(Scope()); sharedExtent = true;
+                    enterSharedBorrow(handlePlaceC, unparseExpr(m->subject), depth, m->line);
+                }
+            }
+        } else {
+            std::vector<SharedExpression> handles;
+            sharedHandlesIn(m->subject, handles);
+            if (!handles.empty()) {
+                _scopes.push_back(Scope()); sharedExtent = true;
+                enterSharedBorrows(m->subject, depth, m->line);
+            }
+        }
+    }
     indent(depth); *_out << "switch (" << sp << "->kama_tag) {\n";
     ++_switchDepth;                                          // an arm's `break` must jump past it (emitLoopJump)
     auto beforeMove = _moveState;                            // each arm branches from the same pre-match state
@@ -31240,6 +31280,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     emitMatchDefaultArm(hasWildcard, subjCls, depth);
     indent(depth); *_out << "}\n";
     --_switchDepth;
+    if (sharedExtent) { emitScopeCleanup(_scopes.back(), depth); popScope(); }   // before the subject temp drops
     // A materialized owning subject (a call/construction result) is dropped once after the switch —
     // bindings only borrowed it, so this releases its owned resource (no leak, no double-free).
     //
@@ -31251,6 +31292,25 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
     // owning local, and `dropCondTemps` performs the fall-through drop and unregisters it so scope exit
     // does not drop it twice. It is the condition-temp pattern, which exists for exactly this reason.
     if (!subjOwner.empty()) dropCondTemps(subjLocMark, depth);
+}
+
+// Does an arm of this borrowing `match` bind an OWNING payload — one emitMatchSwitch binds as an alias of the subject's
+// slot, and so a borrow into the subject for the arm (KR-211)? A plain payload is copied out and borrows nothing.
+bool CEmitter::matchAliasesPayload(MatchNode* m, ClassInfo& ci, const std::string& subjCls)
+{
+    for (auto& a : *m->arms) {
+        if (a->isWildcard() || !a->variantName || !a->labels || !a->bindings) continue;
+        const VariantCase* vc = nullptr;
+        for (auto& v : ci.variants) if (v.name == *a->variantName) { vc = &v; break; }
+        if (!vc) continue;
+        for (size_t i = 0; i < a->labels->size() && i < a->bindings->size(); ++i)
+            if (*(*a->bindings)[i] != "_") for (auto& pf : vc->payload)
+                if (pf.name == *(*a->labels)[i]) {
+                    const std::string bcty = fieldCType(subjCls, pf);
+                    if (ownsByValue(bcty) || isSmartPtrClass(bcty)) return true;
+                }
+    }
+    return false;
 }
 
 // The `default:` arm that closes an exhaustive match's switch, keeping the C switch total.
