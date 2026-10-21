@@ -2271,10 +2271,79 @@ a library `Shared` handle, and the `borrow` window's extent with its `@onPanic` 
 slot (ASan-measured: `match (a.first()) { case Some(value: v): { b.grow(); v[0] = 9; } … }` wrote into freed memory).
 `foreach` needs no extent of its own, probed: a value owning heap storage must be a `resource` (a `value` that owns one
 is refused), a resource's fields are private, a view minted into a loop header and a `ref` call as an operand are both
-refused, so the only `foreach` over a handle's payload is in the pointee's own methods — (4) and (6). Remaining, in
-order: (4) the method summary and the marked calls through a handle (the `peekAfter` repro); (5) the pointer-once paths
-and `Shared<Contract>`; (6) the `this`-alias ruling above; (7) measurement, interleaved, on the `Shared`-heavy fixtures
-and the engine.
+refused, so the only `foreach` over a handle's payload is in the pointee's own methods — (4) and (6).
+
+**Ruled 2026-10-20 (the maintainer), before step (4): Swift's model in full, replacing the summary and the count.**
+
+How we got here:
+1. Mapping (4) showed that the `this`-alias answer (6) needed a per-thread record of open windows anyway. That record
+   answers (4) and (5) with less machinery than the summary, and with fewer false traps. The maintainer took it.
+2. Probing before code then found a heap-use-after-free that neither the record nor the summary sees (ASan, safe code):
+   ```kama
+   // in Core: poke(r: ref this.items[0], b: b);
+   fn void poke(ref Elem r, Shared<Core> b) { borrow b.first() as x { r.touch(); x = 7; } }
+   ```
+   `r` points into `items`' heap buffer, outside the payload's bytes, so no address check sees that it aliases `x`.
+   Swift's answer is that an `inout` argument is an access for the call's length, so the window opened during it
+   conflicts and traps.
+3. The maintainer took that model in full.
+
+**The model.**
+- **An access is to a stored field of an object whose class may be a `Shared` payload** (a "shared class"). A shared
+  class is:
+  - the `T` of a `Shared<T>`/`Weak<T>` instance;
+  - a class boxed into a `Shared<Contract>`;
+  - a subclass of either.
+
+  Accesses follow a class's stored properties in Swift. The object may be reached through `this`, a raw `ref`, or a
+  handle. A field's own internals (`items`' buffer, a `DynamicArray`'s `len`) are covered by the access on the field,
+  as a struct's are by the access on the class property holding it. So std's containers carry no checks of their own,
+  unless one is itself a payload (`Shared<DynamicArray<int32>>`).
+- **What is an access.**
+  - Instant: a field write (an assignment, a compound assignment, `++`/`--`) is an instant modify.
+  - Lasting a call: a call handed a field's interior is an access for the call's length — modify when it is a
+    non-`const` receiver or a `ref` argument, read when it is a `const` receiver or a `const ref` argument. Swift's
+    `inout` works this way. The access begins after every other argument has been evaluated, as Swift's does, so
+    `this.items.add(item: this.items.length())` stays legal.
+  - Lasting a window: a window (`borrow`, `foreach`, a borrowing `match` with an aliasing arm) is an access for its
+    extent. It is modify when its binding is writable and read when it is not.
+  - Through a handle: a window through a handle is an access to the whole payload, because a place a method returns is
+    opaque at the call. An instant read is never an access.
+- **The record.** A lasting access links a node from its own frame into a per-thread list, and unlinks it on every
+  exit; this is Swift's `AccessSet`. The node holds the protected range, the range it handed out (the receiver, the
+  argument, or the alias's referent) and the site.
+- **The conflict.** A new access conflicts with a live one when all three hold:
+  - their ranges overlap;
+  - either of them modifies;
+  - the new access is not made from inside the range the live one handed out.
+
+  "From inside" is tested on the object: the accessing object's bytes, `[obj, obj + size)`, lie within the handed-out
+  range. That is how a callee working on what it was handed, or an element's own method reached through a window's
+  alias, is told apart from an aliasing path. An aliasing path reaches the same storage through the container's field
+  access, whose object is the container. The container is larger than the part, so the test fails, at offset 0 too.
+- **The trap** names both sites, as Swift's does: "a `Shared` value is mutated while a borrow into it is live (made at
+  …)", or, for a window opened during a live modification, "…borrowed while a mutation of it is in progress (begun at
+  …)". A non-`const` call through a handle is not itself an access: `b.grow()` traps at the access inside `grow`, and
+  `b.setTitle()` during `foreach (o in this.observers)` runs.
+- **Deleted:**
+  - the `0.9.698` count and site in `kama_ctrl`/`Ctrl`;
+  - the `kama_shared_check_mut` wrap on non-`const` calls through a handle;
+  - the summary;
+  - step (5) as work of its own. A contract slot, an upcast, a contract borrow and a bound `fnptr` all reach the value
+    through a method of a shared class, whose accesses are checked.
+- **Cost, measured on arm64 macOS, ns per call:**
+  - nothing checked: 1.02;
+  - a checked field write: 1.78;
+  - a call handed a field: 2.30;
+  - in a loop, the per-thread address is hoisted.
+
+  Linux x86-64 reads per-thread storage with one `%fs` load. Step (7) measures the corpus and the engine.
+
+**Commits, from here:**
+- (4) the per-thread record and the conflict test in the runtime; windows (handle-rooted and field-rooted) enter
+  accesses, with the `0.9.698`/`0.9.707` extents moving onto it; instant field writes check; the count is deleted.
+- (5) calls handed a field's interior and `ref` arguments become accesses for the call, arguments first.
+- (6) measurement, interleaved.
 
 <a id="s6"></a>
 
