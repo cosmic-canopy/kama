@@ -1,0 +1,96 @@
+// Listener options (KR-206). On every OS: a port another listener holds is `AddrInUse` (Windows' SO_REUSEADDR used to
+// let a second listener take a LIVE port, so kama no longer sets it there); `bindWith` takes a backlog; a negative one
+// is `InvalidInput`. Then each OS's own port sharing, with every listener asking for it: on Linux `balance` spreads
+// new connections across the listeners, and on macOS `handOff` sends every one to the listener bound last. Ephemeral
+// ports throughout, so no twin fixture can race this one. Each case is its own bit. Returns 0.
+import { std::net::TcpListener, std::net::TcpStream, std::net::ListenOptions, std::net::SocketAddr, std::net::IpAddr,
+         std::io::IoError };
+
+fn uint16 portOf(const ref TcpListener l) {
+    return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+}
+fn bool inUse(Result<TcpListener, IoError> r) {
+    return match (r) { case Err(error: e): match (e.kind()) { case AddrInUse: true; case _: false; }; case Ok(value: l): false; };
+}
+fn SocketAddr loopback(uint16 port) { return SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: port); }
+// How many queued connections `l` accepts now, without waiting.
+unsafe fn int32 drain(ref TcpListener l) {
+    int32 n = 0;
+    bool more = true;
+    while (more) {
+        Result<TcpStream, IoError> s = l.accept();
+        match (give s) { case Ok(value: c): { n = n + 1; } case Err(error: e): { more = false; } };
+    }
+    return n;
+}
+// Connect `count` times to `port`, and count what `first` and `second` accept.
+unsafe fn int32 spread(ref TcpListener first, ref TcpListener second, uint16 port, int32 count, out int32 toSecond) {
+    _ = first.setNonBlocking(on: true);
+    _ = second.setNonBlocking(on: true);
+    int32 a = 0;
+    int32 b = 0;
+    int32 i = 0;
+    while (i < count) {
+        Result<TcpStream, IoError> c = TcpStream.connect(host: "127.0.0.1", port: port);
+        a = a + drain(l: first);
+        b = b + drain(l: second);
+        i = i + 1;
+    }
+    toSecond = b;
+    return a;
+}
+
+@compileFor(OS_LINUX)
+unsafe fn int32 shared() {   // `balance`: both listeners get some of 64 (all to one has odds of 2^-63)
+    ListenOptions o = ListenOptions.make();
+    o.balance = true;
+    Result<TcpListener, IoError> r1 = TcpListener.bindWith(address: loopback(port: 0ui16), options: o);
+    TcpListener first = match (give r1) { case Ok(value: l): give l; case Err(error: e): { return 64; } };
+    uint16 port = portOf(l: first);
+    Result<TcpListener, IoError> r2 = TcpListener.bindWith(address: loopback(port: port), options: o);
+    TcpListener second = match (give r2) { case Ok(value: l): give l; case Err(error: e): { return 64; } };
+    slot int32 b;
+    int32 a = spread(first: ref first, second: ref second, port: port, count: 64, toSecond: out b);
+    return (a > 0 && b > 0 && a + b == 64) ? 0 : 64;
+}
+@compileFor(OS_MACOS)
+unsafe fn int32 shared() {   // `handOff`: the listener bound last takes every new connection
+    ListenOptions o = ListenOptions.make();
+    o.handOff = true;
+    Result<TcpListener, IoError> r1 = TcpListener.bindWith(address: loopback(port: 0ui16), options: o);
+    TcpListener first = match (give r1) { case Ok(value: l): give l; case Err(error: e): { return 64; } };
+    uint16 port = portOf(l: first);
+    Result<TcpListener, IoError> r2 = TcpListener.bindWith(address: loopback(port: port), options: o);
+    TcpListener second = match (give r2) { case Ok(value: l): give l; case Err(error: e): { return 64; } };
+    slot int32 b;
+    int32 a = spread(first: ref first, second: ref second, port: port, count: 32, toSecond: out b);
+    return (a == 0 && b == 32) ? 0 : 64;
+}
+@compileFor(!OS_LINUX, !OS_MACOS)
+unsafe fn int32 shared() { return 0; }   // the backlog alone: nothing to share
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    Result<TcpListener, IoError> r = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give r) { case Ok(value: x): give x; case Err(error: e): { return 128; } };
+    uint16 port = portOf(l: l);
+    if (!inUse(r: TcpListener.bind(host: "127.0.0.1", port: port))) { bad = bad | 1; }   // a live port, on every OS
+
+    ListenOptions o = ListenOptions.make();
+    if (o.backlog != 128) { bad = bad | 2; }
+    o.backlog = 16;
+    Result<TcpListener, IoError> rb = TcpListener.bindWith(address: loopback(port: 0ui16), options: o);
+    TcpListener small = match (give rb) { case Ok(value: x): give x; case Err(error: e): { return 129; } };
+    Result<TcpStream, IoError> c = TcpStream.connect(host: "127.0.0.1", port: portOf(l: small));
+    if (!c.isOk() || !small.accept().isOk()) { bad = bad | 2; }        // the backlog is the only change
+    o.backlog = -1;
+    bool refused = match (TcpListener.bindWith(address: loopback(port: 0ui16), options: o)) {
+        case Err(error: e): match (e.kind()) { case InvalidInput: true; case _: false; };
+        case Ok(value: x): false;
+    };
+    if (!refused) { bad = bad | 4; }
+    bad = bad | shared();
+    return bad;
+}
+
+fn uint8 main() { return cast<uint8>(run()); }

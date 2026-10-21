@@ -2412,6 +2412,22 @@ socket fixture binds that way, so no two can collide (`tools/check-fixture-ports
 `UdpSocket` has both too, its peer being the one `connect` fixed. Asking a socket where it is changes nothing, so
 every socket's `localAddr()`/`peerAddr()` is a `const fn`: a `const ref` to the socket is enough to ask. <!-- test: net_addr_const -->
 
+**Listener options (`std::net`).** `TcpListener.bindWith(address:, options:)` takes a `ListenOptions`, one type on <!-- test: net_listen_options -->
+every OS and each its own OS's. Every one carries `backlog`, the accept queue's length (128 by default, what `bind` uses;
+the OS caps a larger one at its own maximum, and a negative one is `InvalidInput`). Where a kernel lets several
+listeners share a port, the type names what that kernel then does, because the OSes differ:
+- **Linux:** `balance`. The kernel spreads new connections across every listener on the port (`SO_REUSEPORT`), so
+  each of several isolates accepts on its own listener.
+- **macOS:** `handOff`. Every new connection goes to the listener bound last, which is a graceful restart rather than a
+  balancer.
+- **Windows and every other target:** the backlog alone.
+
+Every listener on a shared port must ask for it. A port another listener holds is otherwise `AddrInUse` on every OS.
+Linux and macOS set `SO_REUSEADDR` so a restarted server rebinds a port whose old connections linger in TIME_WAIT.
+Windows rebinds one by default, and there the option would let a second listener take a live port, so kama does not
+set it (Go and Rust set it on Unix only). `@compileFor` gates a declaration, never a statement, so code that sets
+`balance` is a function gated to Linux.
+
 **Unix-domain sockets (`std::net`).** A byte stream between two processes on one machine, named by a path:
 `UnixStream.connect(path:)` and `UnixListener.bind(path:)` + `accept()`, on Linux, macOS and Windows 10 1803+.
 `UnixStream` is a `ReliableStream` like `TcpStream`, with `shutdown(how:)`, `localAddr()`/`peerAddr()` (a

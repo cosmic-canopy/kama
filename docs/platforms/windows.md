@@ -685,6 +685,11 @@ entries here. One has shipped:
     lives). But `MoveFileExW(REPLACE_EXISTING)` onto a path another handle holds open fails with
     `ERROR_ACCESS_DENIED`. `kama_rename` retries that case with `FileRenameInfoEx` and POSIX semantics,
     as Rust's `fs::rename` does.
+  * ⚠️ **A listener sets no `SO_REUSEADDR` here.** On POSIX the option only lets a new listener reuse a port
+    whose old connections linger in TIME_WAIT. Windows documents it as something else: a socket that sets it may
+    bind a port another socket is actively listening on. So every kama listener setting it could be doubled on one
+    port. Windows already rebinds a TIME_WAIT port by default, so leaving it off loses nothing; Go and Rust set it
+    on Unix only. `tests/net_listen_options` holds a second bind of a live port to `AddrInUse` on every OS.
   * ⚠️ **`\\?\NUL` resolves.** The common claim that verbatim prefixing kills reserved device names is
     **false** here — it reaches the NT object-manager entry. Do not use it as an argument.
   * ⚠️ **`CreateProcessW`'s `lpCurrentDirectory` fails past 260 either way** (`GLE=267`,

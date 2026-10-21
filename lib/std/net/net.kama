@@ -12,7 +12,7 @@ import {
     std::collections::DynamicArray,
 };
 
-export { TcpListener, TcpStream };
+export { TcpListener, TcpStream, ListenOptions };
 
 // POSIX/Winsock TCP bindings — see kama_os.h. Socket handles are `isize`: a Windows SOCKET is wider than
 // int, and INVALID_SOCKET reinterpreted as isize is -1, so a uniform `< 0 == error` convention holds on
@@ -21,7 +21,8 @@ export { TcpListener, TcpStream };
 extern "kama_os.h";
 extern fn int32 kama_net_init();
 extern fn isize kama_socket_tcp(int32 family);
-extern fn int32 kama_set_reuseaddr(isize fd);
+extern fn int32 kama_set_listen_reuseaddr(isize fd);
+extern fn int32 kama_set_reuseport(isize fd);
 extern fn int32 kama_bind_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
 extern fn int32 kama_connect_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
 extern fn int32 kama_listen(isize fd, int32 backlog);
@@ -300,6 +301,41 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     unsafe ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
 }
 
+// The options `TcpListener.bindWith` takes (KR-206): one type on every OS, each its own OS's (the platform rule). Each
+// carries `backlog`, the length of the accept queue, 128 by default (what `bind` uses); the OS caps a larger one at its
+// own maximum. Where a kernel lets several listeners share one port, the type says what that kernel then does, under
+// its own name, because the OSes do different things:
+// - Linux: `balance`. The kernel spreads new connections across every listener on the port (`SO_REUSEPORT`): an
+//   isolate per core, each accepting on its own listener. Measured: 102 and 98 of 200.
+// - macOS: `handOff`. Every new connection goes to the listener bound LAST (`SO_REUSEPORT` there): a graceful restart,
+//   the new process binding beside the old one. Measured: 200 of 200. It is not a balancer, so it is not called one.
+// - Windows and every other target: the backlog alone.
+// Every listener on a shared port must ask for it. `@compileFor` gates a declaration and never a statement, so code
+// that sets `balance` lives in a function or type gated to Linux.
+@compileFor(OS_LINUX)
+type value ListenOptions implements Sendable {
+    public int32 backlog = 128;
+    public bool balance = false;
+    public ctor make() { }
+    const fn bool sharesPort() { return this.balance; }
+    friend TcpListener::bindWith[sharesPort];
+}
+@compileFor(OS_MACOS)
+type value ListenOptions implements Sendable {
+    public int32 backlog = 128;
+    public bool handOff = false;
+    public ctor make() { }
+    const fn bool sharesPort() { return this.handOff; }
+    friend TcpListener::bindWith[sharesPort];
+}
+@compileFor(!OS_LINUX, !OS_MACOS)
+type value ListenOptions implements Sendable {
+    public int32 backlog = 128;
+    public ctor make() { }
+    const fn bool sharesPort() { return false; }
+    friend TcpListener::bindWith[sharesPort];
+}
+
 // A listening TCP socket. Closes on drop (RAII). Move-only.
 type resource TcpListener implements Sendable {
     isize fd = -1;   // the -1 empty niche — see ~TcpStream
@@ -307,7 +343,9 @@ type resource TcpListener implements Sendable {
 
     // Bind + listen on a numeric host:port. "" or "0.0.0.0" = every IPv4 interface; "::" = every interface of
     // BOTH families (IPV6_V6ONLY is turned off on every OS, so a v4 client arrives as `::ffff:a.b.c.d`).
-    // Text that is not a numeric address is `Err(InvalidInput)`. SO_REUSEADDR is set.
+    // Text that is not a numeric address is `Err(InvalidInput)`. A port another listener holds is `AddrInUse` on every OS.
+    // On Linux and macOS SO_REUSEADDR is set, so a restarted server rebinds a port whose old connections linger in
+    // TIME_WAIT; Windows rebinds one by default, and there the option would let a second listener take a live port.
     public unsafe ctor Result<TcpListener, IoError> bind(const ref string host, uint16 port) {
         return match (SocketAddr.host(text: host, port: port, forBind: true)) {
             case Err(error: e): Result::Err(error: e);
@@ -318,19 +356,35 @@ type resource TcpListener implements Sendable {
     // `bind` to an address value — the one spelling that reaches a link-local V6 address, whose interface is
     // its `scopeId` and has no place in host text.
     public unsafe ctor Result<TcpListener, IoError> bindTo(const ref SocketAddr address) {
+        return TcpListener.listenOn(address: address, backlog: 128, sharePort: false);
+    }
+
+    // `bindTo` with `ListenOptions`: the backlog, and where the OS has it, a port several listeners share. A negative
+    // backlog is `InvalidInput`.
+    public unsafe ctor Result<TcpListener, IoError> bindWith(const ref SocketAddr address, const ref ListenOptions options) {
+        if (options.backlog < 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        return TcpListener.listenOn(address: address, backlog: options.backlog, sharePort: options.sharesPort());
+    }
+
+    unsafe ctor Result<TcpListener, IoError> listenOn(const ref SocketAddr address, int32 backlog, bool sharePort) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         int32 family = address.ip.family();
         InlineArray<uint8>#(16) bytes = address.ip.bytes();
         isize fd = kama_socket_tcp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        int32 ro = kama_set_reuseaddr(fd: fd);              // best-effort; ignore failure
+        int32 ro = kama_set_listen_reuseaddr(fd: fd);       // best-effort; ignore failure
+        if (sharePort && kama_set_reuseport(fd: fd) != 0) {  // asked for, so a refusal is the answer
+            IoError e = lastError();
+            int32 rc = kama_close_socket(fd: fd);
+            return Result::Err(error: e);
+        }
         if (kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
             IoError e = lastError();
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        if (kama_listen(fd: fd, backlog: 128) != 0) {
+        if (kama_listen(fd: fd, backlog: backlog) != 0) {
             IoError e = lastError();
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);

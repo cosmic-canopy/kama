@@ -407,63 +407,42 @@ Node raise it automatically too. Python: no kind; an explicit `resource.setrlimi
 3. POSIX only, by the platform-deltas rule: Windows has no per-process descriptor limit for sockets (they are
    bounded by memory), so the type is absent there rather than faked.
 
-<a id="s1-listen-options"></a>
+<a id="s1-freebsd-balance"></a>
 
-#### Listener options: the backlog, and reuse-port where the OS balances it (KR-206)
+#### FreeBSD's `balance` (KR-227)
 
-`TcpListener.bindTo` (`lib/std/net/net.kama`) always sets `SO_REUSEADDR`, and listens with a backlog of 128 that
-cannot be changed. Several isolates cannot each accept on one port; the workaround is one accepting isolate handing
-each `TcpStream` to a worker over a `Channel`, a hop per connection.
+Listener options were ruled 2026-10-21 with `balance` on Linux and FreeBSD, and shipped in `0.9.713` (SPEC *Listener
+options*) for Linux alone. FreeBSD's
+balanced port sharing is `SO_REUSEPORT_LB` (FreeBSD 12+; its manual, unmeasured), not `SO_REUSEPORT`, which there
+behaves as macOS's does. kama detects a FreeBSD host (`src/kama.driver.cpp`) but has no built-in FreeBSD target and no
+FreeBSD leg, so a `@compileFor(OS_FREEBSD)` twin would compile nowhere this repo runs. It falls into the
+`!OS_LINUX, !OS_MACOS` twin today: the backlog alone, which is correct, only narrower than FreeBSD can do. To build:
+a FreeBSD leg (a CI runner or the container), then the twin, its `kama_set_reuseport_lb` helper, and the fixture's
+`shared()` branch.
 
-**Measured 2026-10-21** with a C probe: two listeners on one loopback port, then 200 connects.
+<a id="s1-udp-reuseaddr"></a>
 
-| | `SO_REUSEADDR` only: a second bind | `SO_REUSEPORT` on both: who accepts the 200 |
-|---|---|---|
-| macOS (Darwin 25.4) | `EADDRINUSE` | **all 200 go to the most recently bound listener**: a hand-off, not a balancer |
-| Linux (the container) | `EADDRINUSE` | 102 and 98: balanced |
-| FreeBSD | — | `SO_REUSEPORT_LB` is the balanced form (from its manual, unmeasured) |
-| Windows | **⚠️ see below** | no equivalent |
+#### A second `UdpSocket.bind` on a live port succeeds on Linux (KR-228)
 
-⚠️ **A Windows defect to fix in the same row.** On POSIX, `SO_REUSEADDR` only lets a new listener reuse a port whose
-old connections linger in TIME_WAIT. On Windows it means something else: a socket that sets it may bind a port
-**another socket is actively listening on**. Since kama sets it on every listener, a second `TcpListener.bind` on a
-live port very likely succeeds on Windows, and which listener gets a connection is then undefined. No fixture holds
-this down. Go and Rust set `SO_REUSEADDR` on Unix only. Windows already lets a port with TIME_WAIT connections be
-bound again by default, so leaving the option off loses nothing. Go's comment on that line: "SO_REUSEADDR should not
-be used here, as it allows a socket to forcibly bind to a port in use by another socket". To be probed on CI by a
-fixture that says a second bind on a live port is `AddrInUse` on every OS.
+Measured on `0.9.713`, two `UdpSocket.bind(host: "127.0.0.1", …)` calls on one port:
 
-**What others do.**
+| | Second bind |
+|---|---|
+| Linux (the container) | **succeeds** |
+| macOS | refused |
+| Windows | unmeasured; its `SO_REUSEADDR` lets a socket take a port in use, so likely succeeds |
 
-| | Backlog | Reuse-port |
-|---|---|---|
-| Rust std | 128, fixed | none (the `socket2` crate: `set_reuse_port`) |
-| Go | the system maximum (`somaxconn`) | only through `ListenConfig.Control`, a raw hook |
-| Python | `create_server(backlog=)` | `reuse_port=True`, `ValueError` where unsupported |
-| Node | `listen({backlog})`, 511 | `reusePort: true` (23.1), throws where unsupported |
-| Zig | `listen(.{ .kernel_backlog = 128 })` | `.reuse_port = true` |
-| Java | `ServerSocket(port, backlog)` | `SO_REUSEPORT`, `UnsupportedOperationException` on Windows |
+`UdpSocket.bindTo` (`lib/std/net/udp.kama`) sets `SO_REUSEADDR` before every bind. Linux honours it for UDP on two
+sockets of the same user, and then a unicast datagram reaches one of them, so a second program can take a bound port's
+traffic. BSD semantics allow a duplicate UDP bind only for a multicast address, so macOS refuses.
 
-**Recommendation.** One primary interface, `TcpListener.bindWith(address:, options:)`, taking a `ListenOptions`. By the
-platform rule this is a per-platform type: the twins share a core and each adds its platform's own extra.
-- **Every OS:** `backlog`, defaulting to 128, which is what `bind` keeps using.
-- **Linux and FreeBSD:** plus `balance`, several listeners sharing the port while the kernel spreads connections
-  across them (`SO_REUSEPORT`; FreeBSD's `SO_REUSEPORT_LB`). This is the isolate-per-core server.
-- **macOS:** plus `handOff`, a later listener taking the port's new connections (`SO_REUSEPORT`, as measured). This is
-  a graceful restart. It is offered under its own name because it is not a balancer, and calling it `balance` would
-  promise what macOS does not do.
-- **Windows:** the backlog only. Every listener stops setting `SO_REUSEADDR`.
+**What others do.** Rust's `UdpSocket::bind` sets no reuse option. Go sets `SO_REUSEADDR` (and on the BSDs
+`SO_REUSEPORT`) only in `ListenMulticastUDP`, the call for a multicast receiver. A receiver of multicast genuinely wants
+the port shared, since several processes may listen to one group.
 
-Size S–M.
-
-**Ruled 2026-10-21:** the recommendation, in full:
-1. Windows drops `SO_REUSEADDR`, with a fixture that a second bind on a live port is `AddrInUse` on every OS.
-2. The backlog defaults to 128, as today.
-3. The spelling is `bindWith(address:, options: ListenOptions)`, with per-platform `ListenOptions` twins.
-4. macOS gets `handOff`.
-
-`@compileFor` gates declarations, never a statement, so a program that sets `balance` does it in a function or type
-gated to Linux and FreeBSD, the platform rule's usual shape.
+**Recommendation.** A plain bind sets nothing, as Rust and Go do, so a live port is `AddrInUse` everywhere. A multicast
+receiver asks for sharing at bind time, through options like `ListenOptions` (the platform rule; on BSD it is
+`SO_REUSEPORT`). The spelling, and whether the multicast fixtures (`net_udp_multicast`) need it, are what the ruling decides.
 
 <a id="s1-sendfile"></a>
 
@@ -2229,7 +2208,8 @@ language, and "a native scheduler can back the very same blocking-shaped surface
 
 **Recommendation: thread-per-core, shared-nothing.** One isolate per core, each running a fiber scheduler over its own
 `Poller`:
-- **Each isolate accepts on its own listener.** KR-206's `balance` (Linux, FreeBSD) shares one port across them.
+- **Each isolate accepts on its own listener.** `ListenOptions.balance` (Linux, `0.9.713`; FreeBSD is KR-227) shares one
+  port across them.
 - **Isolates talk through channels.** KR-201's waker ends a `wait` when something arrives.
 - **A fiber runs on one isolate's thread only.** So a task needs no `Send` bound, there is no colouring and no `Pin`,
   and freedom from data races keeps holding by construction, as it does today. Fibers interleave only where one

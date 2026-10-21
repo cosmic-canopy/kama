@@ -1083,6 +1083,14 @@ static inline ptrdiff_t kama_socket_tcp(int32_t family) {
 static inline int32_t kama_set_reuseaddr(ptrdiff_t fd) {
     BOOL one = 1; return (int32_t)setsockopt((SOCKET)fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (int)sizeof one);
 }
+// A LISTENER sets nothing here (KR-206). POSIX's SO_REUSEADDR lets a new listener take a port whose old connections
+// linger in TIME_WAIT, which is what `kama_set_listen_reuseaddr` is for there. Windows' option means something else: a
+// socket that sets it may bind a port ANOTHER socket is actively listening on, so with it every kama listener could
+// be doubled on one port. Windows already lets a port with TIME_WAIT connections be bound again, so leaving the
+// option off loses nothing; Go and Rust set it on Unix only, for exactly this reason.
+static inline int32_t kama_set_listen_reuseaddr(ptrdiff_t fd) { (void)fd; return 0; }
+// Windows has no port sharing to ask for: its `ListenOptions` carries the backlog only, so nothing calls this.
+static inline int32_t kama_set_reuseport(ptrdiff_t fd) { (void)fd; kama__os_fail(0, EINVAL); return -1; }
 static inline int32_t kama_listen(ptrdiff_t fd, int32_t backlog) {
     if (listen((SOCKET)fd, (int)backlog) != 0) { kama__capture_wsa(); return -1; }
     return 0;
@@ -2574,6 +2582,19 @@ static inline ptrdiff_t kama_socket_tcp(int32_t family) {
 }
 static inline int32_t   kama_set_reuseaddr(ptrdiff_t fd) {
     int one = 1; return (int32_t)setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &one, (socklen_t)sizeof one);
+}
+// A listener's: TIME_WAIT reuse, so a restarted server binds its port at once (see the Windows twin for why that
+// one sets nothing).
+static inline int32_t   kama_set_listen_reuseaddr(ptrdiff_t fd) { return kama_set_reuseaddr(fd); }
+// Several listeners on one port (KR-206), set before `bind`. What the kernel then does differs, and each OS's
+// `ListenOptions` names its own: Linux spreads new connections across the listeners (`balance`); macOS hands every
+// new connection to the listener bound last (`handOff`, measured: 200 of 200).
+static inline int32_t   kama_set_reuseport(ptrdiff_t fd) {
+#ifdef SO_REUSEPORT
+    int one = 1; return (int32_t)setsockopt((int)fd, SOL_SOCKET, SO_REUSEPORT, &one, (socklen_t)sizeof one);
+#else
+    (void)fd; errno = EINVAL; return -1;
+#endif
 }
 static inline int32_t   kama_listen(ptrdiff_t fd, int32_t backlog) { return (int32_t)listen((int)fd, (int)backlog); }
 // The accepted socket starts in the listener's blocking mode on every OS. The BSDs' accept() inherits O_NONBLOCK;
