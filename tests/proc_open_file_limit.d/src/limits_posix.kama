@@ -1,0 +1,31 @@
+file @compileFor(!OS_WINDOWS);
+// The limit reads soft <= hard, and a raise ends at soft == hard: never lowered, the hard limit untouched, and what
+// can actually be opened (macOS bounds both by `kern.maxfilesperproc`). Then this program runs again under
+// `ulimit -n 24`, where sockets run out and the refusal is `TooManyOpenFiles`.
+import {
+    core::programPath, std::process::Command, std::process::Process, std::process::ExitStatus, std::io::IoError,
+    std::process::OpenFileLimit, std::process::openFileLimit, std::process::raiseOpenFileLimit,
+};
+export { limits };
+
+unsafe fn int32 limits() {
+    OpenFileLimit before = match (openFileLimit()) { case Ok(value: l): l; case Err(error: e): { return 10; } };
+    if (before.soft > before.hard) { return 11; }
+    OpenFileLimit after = match (raiseOpenFileLimit()) { case Ok(value: l): l; case Err(error: e): { return 12; } };
+    if (after.soft != after.hard) { return 13; }
+    if (after.hard != before.hard) { return 14; }
+    if (after.soft < before.soft) { return 15; }
+    OpenFileLimit again = match (openFileLimit()) { case Ok(value: l): l; case Err(error: e): { return 16; } };
+    if (again.soft != after.soft) { return 17; }
+
+    Optional<string> path = programPath();
+    string self = match (give path) { case Some(value: p): give p; case None: { return 20; } };
+    Command c = Command.make(program: "/bin/sh");
+    c.arg(a: "-c"); c.arg(a: "ulimit -n 24 && exec \"$0\" child"); c.arg(a: give self);
+    Result<Process, IoError> sr = c.start();
+    Process p = match (give sr) { case Ok(value: pr): { := give pr; } case Err(error: e): { return 21; } };
+    return match (p.wait()) {
+        case Ok(value: s): match (s) { case Exited(code: k): cast<int32>(k); case _: 22; };
+        case Err(error: e): 23;
+    };
+}

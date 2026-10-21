@@ -391,32 +391,6 @@ read it differently. curl's answer was one parser for every decision in a progra
 Size M. What remains to decide at build time is the surface (`Url`'s accessors, reference resolution per RFC 3986 §5
 for redirects, normalization per §6), which follows from the above.
 
-<a id="s1-fd-limit"></a>
-
-#### Running out of descriptors: a kind, and the limit (KR-210)
-
-Measured on `0.9.673` under `ulimit -n 32`: `accept` fails with `IoErrorKind::Other`, OS code 24 (`kindOf`,
-lib/std/io/io.kama, maps neither EMFILE nor ENFILE), and std has nothing to read or raise `RLIMIT_NOFILE`. The OSes
-then differ: macOS drops the connection `accept` could not take, while Linux keeps it queued, so a level-triggered
-loop polling the listener spins until a descriptor frees. The limit varies widely: a launchd job starts at 256, a
-shell here at 1048576, the Linux container at 524288.
-
-**What others do.** Rust: `ErrorKind::TooManyOpenFiles` (EMFILE + ENFILE, "the process or the whole system has
-reached its limit on the number of open files or sockets"), unstable; no limit API in std. Go: no kind
-(`errors.Is(err, syscall.EMFILE)`), and since 1.19 a program importing `os` raises its soft limit to the hard one
-at startup (restored for children). The JVM (`-XX:+MaxFDLimit`, on by default; capped at `OPEN_MAX` on macOS) and
-Node raise it automatically too. Python: no kind; an explicit `resource.setrlimit`.
-
-**Ruled 2026-10-19 (the maintainer):**
-1. `IoErrorKind::TooManyOpenFiles`, Rust's name and scope: EMFILE and ENFILE on POSIX, `WSAEMFILE` and
-   `ERROR_TOO_MANY_OPEN_FILES` on Windows.
-2. An explicit API in `std::process`: `openFileLimit()` answering the soft and hard limits, and
-   `raiseOpenFileLimit()` setting soft to hard (capped at `OPEN_MAX` on macOS, where a higher value is refused).
-   Never raised implicitly: the low default protects C code using `select()`, which breaks above descriptor 1023,
-   and a `csources` library may be such code — the program decides, never a runtime or a library.
-3. POSIX only, by the platform-deltas rule: Windows has no per-process descriptor limit for sockets (they are
-   bounded by memory), so the type is absent there rather than faked.
-
 <a id="s1-freebsd-balance"></a>
 
 #### FreeBSD's `balance` (KR-227)

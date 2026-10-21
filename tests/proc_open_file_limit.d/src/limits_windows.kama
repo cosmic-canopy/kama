@@ -1,0 +1,11 @@
+file @compileFor(OS_WINDOWS);
+// Windows has no per-process descriptor limit, so `OpenFileLimit` does not exist here. What is left to check is the
+// kind itself: WSAEMFILE and ERROR_TOO_MANY_OPEN_FILES both arrive as `TooManyOpenFiles`.
+import { std::io::IoErrorKind };
+export { limits };
+
+fn int32 limits() {
+    IoErrorKind k = IoErrorKind::TooManyOpenFiles;
+    if (k.message() != "too many open files") { return 30; }
+    return 0;
+}

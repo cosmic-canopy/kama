@@ -42,7 +42,8 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 - **Serialization.** `@generate(Serializable, Deserializable)` with a JSON back end, and `JsonValue` for a document
   with no schema.
 - **Files, processes, errors.** `std::fs` (with `seek`, `readAt`, `writeAt`), `std::process`, `std::io` streams,
-  `Result`/`Optional`.
+  `Result`/`Optional`. Running out of descriptors is `IoErrorKind::TooManyOpenFiles`. On POSIX a server reads its
+  limit with `openFileLimit()` and raises it with `raiseOpenFileLimit()`, explicitly, at startup.
 - **Dispatch.** Contracts and virtual methods, so a handler contract with many implementations (middleware, routes)
   works; `fnptr` and `BindableFunctionPtr` register them.
 - **Shared state.** `Shared<T>` handles to one value cannot free its storage under each other's borrows: a conflicting
@@ -56,7 +57,6 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 | A `Poller` wakeup another isolate can trigger | ❌ workaround: a stream pair as a wake channel | KR-201 |
 | A DNS lookup a loop can poll, with a deadline | ❌ `resolve` blocks | KR-202 |
 | Percent-encoding and a URL type | ❌ ruled for std (strict RFC 3986, plus form encoding); not yet built | KR-204 |
-| Running out of descriptors: a kind, and the limit read and raised | ❌ ruled: `IoErrorKind::TooManyOpenFiles` and an explicit POSIX `raiseOpenFileLimit()`; not yet built | KR-210 |
 | Compression for `Content-Encoding` and permessage-deflate | ❌ ruled for std: deflate/zlib/gzip both ways, decoders with a required limit; zstd and brotli later | KR-5, KR-212, KR-213 |
 | Coverage-guided fuzzing | ❌ design first | KR-205 |
 | A non-blocking `File`; a pipe in the `Poller` on Windows | ❌ | KR-7 |

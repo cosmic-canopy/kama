@@ -158,6 +158,8 @@ static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 static inline int32_t kama_ESPIPE(void)       { return (int32_t)ESPIPE; }   // a seek on a pipe (KR-168)
 static inline int32_t kama_EEXIST(void)       { return (int32_t)EEXIST; }   // something is already there (KR-177)
 static inline int32_t kama_ESRCH(void)        { return (int32_t)ESRCH; }    // no such process — a group long gone (KR-170)
+static inline int32_t kama_EMFILE(void)       { return (int32_t)EMFILE; }   // this process is out of descriptors (KR-210)
+static inline int32_t kama_ENFILE(void)       { return (int32_t)ENFILE; }   // the whole system is (KR-210)
 
 // Winsock's code as the uniform errno set — one table, for the call that failed and for a connect's SO_ERROR.
 static inline int kama__wsa_errno(int e) {
@@ -182,6 +184,7 @@ static inline int kama__wsa_errno(int e) {
         case WSAENETUNREACH:  return ENETUNREACH;
         case WSAEMSGSIZE:     return EMSGSIZE;
         case WSAEINVAL:       return EINVAL;
+        case WSAEMFILE:       return EMFILE;         // out of sockets: accept() and socket() at the limit (KR-210)
         default:              return e;              // carried through as IoErrorKind::Other, with its code
     }
 }
@@ -1864,6 +1867,7 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <poll.h>         // poll, struct pollfd, POLLIN/POLLOUT
 #include <sys/wait.h>     // waitpid, WIFEXITED/WEXITSTATUS/WIFSIGNALED/WTERMSIG, WNOHANG  (std::process)
 #include <signal.h>       // kill, SIGKILL, SIGTERM  (std::process)
+#include <sys/resource.h> // getrlimit/setrlimit RLIMIT_NOFILE (std::process openFileLimit, KR-210)
 #if defined(__APPLE__)
 #include <sys/sysctl.h>   // sysctl KERN_PROC_PID / KERN_BOOTTIME, kern.bootsessionuuid (std::process, KR-219)
 #elif defined(__linux__)
@@ -1964,6 +1968,8 @@ static inline int32_t kama_EINVAL(void)       { return (int32_t)EINVAL; }
 static inline int32_t kama_ESPIPE(void)       { return (int32_t)ESPIPE; }   // a seek on a pipe (KR-168)
 static inline int32_t kama_EEXIST(void)       { return (int32_t)EEXIST; }   // something is already there (KR-177)
 static inline int32_t kama_ESRCH(void)        { return (int32_t)ESRCH; }    // no such process — a group long gone (KR-170)
+static inline int32_t kama_EMFILE(void)       { return (int32_t)EMFILE; }   // this process is out of descriptors (KR-210)
+static inline int32_t kama_ENFILE(void)       { return (int32_t)ENFILE; }   // the whole system is (KR-210)
 
 // ---- close-on-exec (KR-174) -------------------------------------------------
 // Every descriptor kama makes is close-on-exec, so a child std::process starts holds the three streams it was
@@ -2754,6 +2760,36 @@ static inline int32_t kama_proc_exists(int32_t pid) {
 static inline int32_t kama_pgrp_exists(int32_t group) {
     if (group <= 0) { errno = EINVAL; return -1; }
     return kama__kill0(-(pid_t)group);
+}
+// The limit on open descriptors, RLIMIT_NOFILE (std::process, KR-210), as what can actually be opened. No limit at all
+// reads as UINT64_MAX, whatever the OS spells RLIM_INFINITY (macOS: 2^63-1). macOS also enforces
+// `kern.maxfilesperproc` whatever setrlimit accepted: measured on Darwin 25, setrlimit takes any soft value up to
+// RLIM_INFINITY and reads it back, so a shell's 1048576 is a number nothing can reach (61440 here). Both values are
+// bounded by it there, which is also Go's cap (os/rlimit_darwin.go). Older macOS refused a soft limit above it.
+static inline uint64_t kama__nofile_u64(rlim_t v) { return v == RLIM_INFINITY ? UINT64_MAX : (uint64_t)v; }
+static inline int32_t kama_nofile_limit(uint64_t* soft, uint64_t* hard) {
+    struct rlimit r;
+    if (getrlimit(RLIMIT_NOFILE, &r) != 0) return -1;
+    uint64_t s = kama__nofile_u64(r.rlim_cur), h = kama__nofile_u64(r.rlim_max);
+#if defined(__APPLE__)
+    int per = 0; size_t n = sizeof per;
+    if (sysctlbyname("kern.maxfilesperproc", &per, &n, NULL, 0) == 0 && per > 0) {
+        if (s > (uint64_t)per) s = (uint64_t)per;
+        if (h > (uint64_t)per) h = (uint64_t)per;
+    }
+#endif
+    *soft = s; *hard = h;
+    return 0;
+}
+// Soft to hard, never lowering it. 0, or -1 with errno.
+static inline int32_t kama_nofile_raise(void) {
+    uint64_t s, h;
+    if (kama_nofile_limit(&s, &h) != 0) return -1;
+    if (s >= h) return 0;
+    struct rlimit r;
+    if (getrlimit(RLIMIT_NOFILE, &r) != 0) return -1;
+    r.rlim_cur = h == UINT64_MAX ? RLIM_INFINITY : (rlim_t)h;
+    return setrlimit(RLIMIT_NOFILE, &r) == 0 ? 0 : -1;
 }
 // This boot's UUID — Linux's `boot_id`, macOS's `kern.bootsessionuuid` — which no clock change moves.
 static inline int32_t kama__boot_uuid(uint8_t out[16]) {

@@ -26,6 +26,8 @@ extern fn int32 kama_EINVAL();
 extern fn int32 kama_ESPIPE();
 extern fn int32 kama_EEXIST();
 extern fn int32 kama_ESRCH();
+extern fn int32 kama_EMFILE();
+extern fn int32 kama_ENFILE();
 
 // What KIND of failure an I/O error is: the part a caller branches on, `match (e.kind())`. The named kinds cover
 // the cases callers handle; `Other` is everything else, and the error still carries the OS's code for it.
@@ -35,7 +37,8 @@ extern fn int32 kama_ESRCH();
 // `InvalidInput` is an argument the call cannot use at all — host text that is not a numeric address, a multicast
 // group of the wrong family — whether kama or the OS (EINVAL) is the one that refuses it. `Interrupted` is a
 // signal arriving during a blocking call (EINTR): the call did nothing, and trying it again is the answer —
-// `Poller.wait` does that itself, with the time that is left.
+// `Poller.wait` does that itself, with the time that is left. `TooManyOpenFiles` is the process or the system at
+// its limit on open files and sockets: an `accept` that cannot take the connection, an `open`, a `socket`.
 @nonExhaustive
 type enum IoErrorKind implements Sendable {
     NotFound,
@@ -54,6 +57,7 @@ type enum IoErrorKind implements Sendable {
     BrokenPipe,
     InvalidInput,
     Interrupted,
+    TooManyOpenFiles,
     Other;
 
     public const fn string message() {
@@ -74,6 +78,7 @@ type enum IoErrorKind implements Sendable {
             case BrokenPipe:        "broken pipe";
             case InvalidInput:      "invalid input";
             case Interrupted:       "interrupted";
+            case TooManyOpenFiles:  "too many open files";
             case Other:             "i/o error";
         };
     }
@@ -162,5 +167,8 @@ unsafe fn IoErrorKind kindOf(int32 e) {
     if (e == kama_EINVAL())       { return IoErrorKind::InvalidInput; }
     // A seek, or a positioned read or write, on something with no position — a pipe, a socket, a terminal (KR-168).
     if (e == kama_ESPIPE())       { return IoErrorKind::InvalidInput; }
+    // The process (EMFILE) or the whole system (ENFILE) is at its limit on open files and sockets — Rust's
+    // `TooManyOpenFiles` and its scope (KR-210). `std::process::raiseOpenFileLimit` is the POSIX answer.
+    if (e == kama_EMFILE() || e == kama_ENFILE()) { return IoErrorKind::TooManyOpenFiles; }
     return IoErrorKind::Other;
 }

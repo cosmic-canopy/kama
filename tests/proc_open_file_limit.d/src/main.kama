@@ -1,0 +1,38 @@
+// std::process `openFileLimit` / `raiseOpenFileLimit`, and `IoErrorKind::TooManyOpenFiles` (KR-210). Returns 42.
+// The limit is POSIX-only (Windows bounds sockets by memory and has no per-process descriptor limit), so the checks
+// live in a file gated to POSIX with a Windows twin: an import of a name a build excludes is refused even when every
+// use is gated. The child mode is this program re-run by the POSIX file under `ulimit -n 24`.
+import {
+    core::args, std::io::IoError, std::io::IoErrorKind, std::net::TcpListener, std::collections::DynamicArray,
+    nofile::limits,
+};
+
+// The child: open listeners until the limit stops them; 0 when the refusal is `TooManyOpenFiles`, not `Other`.
+fn uint8 exhaust() {
+    DynamicArray<TcpListener> held = DynamicArray.empty();
+    int32 i = 0;
+    while (i < 64) {
+        Result<TcpListener, IoError> r = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+        match (give r) {
+            case Ok(value: l): { held.add(item: give l); }
+            case Err(error: e): {
+                return match (e.kind()) { case TooManyOpenFiles: 0ui8; case _: 50ui8; };
+            }
+        };
+        i = i + 1;
+    }
+    return 51;
+}
+
+fn bool isChild() {
+    bool child = false;
+    foreach (string a in args()) { if (a == "child") { child = true; } }
+    return child;
+}
+
+fn uint8 main() {
+    if (isChild()) { return exhaust(); }
+    int32 r = limits();
+    if (r != 0) { return cast<uint8>(r); }
+    return 42;
+}

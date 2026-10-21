@@ -2284,6 +2284,9 @@ reads the log — `EPERM` and `EACCES` are both `PermissionDenied`, and say "Ope
 denied" — and an unclassified one is `Other` with its code and text rather than a bare "i/o error". An error kama
 raises itself, `IoError.of(kind: IoErrorKind::InvalidInput)`, has a kind and no code. `Interrupted` is a signal
 arriving during a blocking call; `Poller.wait(timeoutMs:)` absorbs it and waits out the time that is left.
+`TooManyOpenFiles` is Rust's name with its scope: the process (EMFILE, Winsock's `WSAEMFILE`, Win32's <!-- test: proc_open_file_limit -->
+`ERROR_TOO_MANY_OPEN_FILES`) or the whole system (ENFILE) at its limit on open files and sockets. That is an
+`accept` that cannot take the connection, an `open` or a `socket`.
 
 **A write to a peer that has gone is an error, not the end of the program.** Writing to a socket whose peer <!-- test: net_write_closed_peer -->
 closed, or to the stdin of a child that exited, returns an error of kind `BrokenPipe` (or `ConnectionReset`, as the <!-- test: proc_write_exited_child -->
@@ -2615,6 +2618,22 @@ cheap check (`kill(pid, 0)`; on Windows `WaitForSingleObject`), `processStarted(
 clock for display, and `processGroupExists(group:)` is POSIX's, beside `ProcessGroup`. An exited child not yet reaped
 still exists on Linux and macOS; on Windows an exited process is gone. A pid stays an `int32`, as everywhere in
 `std::process`. A lock file itself is `File.lock`, which dies with its holder; the stamp says who holds it.
+
+**The limit on open descriptors (`std::process`, POSIX).** `openFileLimit()` answers an `OpenFileLimit`, the <!-- test: proc_open_file_limit -->
+`RLIMIT_NOFILE` pair:
+- `soft` is what the process can have open now; past it, a call fails with `TooManyOpenFiles`.
+- `hard` is as far as `raiseOpenFileLimit()` can take `soft`. That call raises soft to hard, never lowers it, and
+  answers the limit then in force.
+
+Both are what can actually be opened. macOS enforces `kern.maxfilesperproc` whatever `setrlimit` accepted: measured on
+Darwin 25, it takes any soft value up to `RLIM_INFINITY` and reads it back. A shell's 1,048,576 there is a number no
+program reaches (61,440 on the measuring machine), so both values are bounded by it, which is Go's cap too. No limit at
+all reads as the largest `uint64`, which compares as one.
+
+kama never raises the limit implicitly; Go does at startup, as the JVM and Node do. The low default protects C code
+that uses `select()`, which breaks above descriptor 1023, and a `csources` library may be such code, so raising it is
+the program's decision. Windows bounds sockets by memory and has no such limit, so the type is absent there rather
+than faked. A portable program reaches it from a file gated to POSIX, with a twin.
 
 **The streaming byte substrate.** `std::io` also defines two contracts that unify every byte source/sink:
 `type contract Writer` (the partial-write primitive `write(ConstView<uint8>) -> Result<isize, IoError>` +

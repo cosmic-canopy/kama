@@ -17,7 +17,7 @@ import {
 
 export { UserId, GroupId, AccessToken, currentUser, currentGroup, currentProcessId, homeDirectory,
          currentDirectory, setCurrentDirectory, ProcessStamp, processStamp, processExists, processStarted, bootTime,
-         processGroupExists };
+         processGroupExists, OpenFileLimit, openFileLimit, raiseOpenFileLimit };
 
 extern "kama_os.h";
 extern fn int32 kama_getpid();
@@ -26,6 +26,8 @@ extern fn int32 kama_proc_stamp(int32 pid, UnsafePtr<uint8> boot16, UnsafePtr<ui
 extern fn int32 kama_proc_started_ns(int32 pid, UnsafePtr<int64> into);
 extern fn int32 kama_boot_time_ns(UnsafePtr<int64> into);
 @compileFor(!OS_WINDOWS) extern fn int32 kama_pgrp_exists(int32 group);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_nofile_limit(UnsafePtr<uint64> soft, UnsafePtr<uint64> hard);
+@compileFor(!OS_WINDOWS) extern fn int32 kama_nofile_raise();
 extern fn isize kama_getcwd(UnsafePtr<uint8> into, usize cap);
 extern fn int32 kama_chdir(UnsafeConstPtr<cchar> path);
 @compileFor(!OS_WINDOWS) extern fn uint32 kama_getuid();
@@ -181,6 +183,40 @@ unsafe fn Result<bool, IoError> processGroupExists(int32 group) {
     int32 r = kama_pgrp_exists(group: group);
     if (r < 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: r == 1);
+}
+
+// ---- the limit on open descriptors (KR-210) ----------------------------------------------------------------------
+//
+// Files, sockets and pipes all count against it, and past `soft` an `accept`, an `open` or a `socket` fails with
+// `IoErrorKind::TooManyOpenFiles`. `hard` is as far as `raiseOpenFileLimit` can take `soft`. Both are what can
+// actually be opened: macOS also enforces `kern.maxfilesperproc` whatever `setrlimit` accepted, so both are bounded
+// by it there. No limit at all reads as the largest `uint64`, which compares as one.
+//
+// Raising it is the PROGRAM's decision, and never implicit. Go raises it at startup, as the JVM and Node do. kama
+// does not, because the low default protects C code that uses `select()`, which breaks above descriptor 1023, and a
+// `csources` library may be such code. POSIX only: Windows bounds sockets by memory and has no such limit, so the
+// type is absent there rather than faked.
+@compileFor(!OS_WINDOWS)
+@generate(of)
+type value OpenFileLimit implements Sendable {
+    public uint64 soft;
+    public uint64 hard;
+}
+
+// The limit now in force.
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<OpenFileLimit, IoError> openFileLimit() {
+    uint64 soft = 0ui64;
+    uint64 hard = 0ui64;
+    if (kama_nofile_limit(soft: addr(of: soft), hard: addr(of: hard)) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: OpenFileLimit.of(soft: soft, hard: hard));
+}
+
+// Take the soft limit to the hard one, and answer the limit then in force. It never lowers the soft limit.
+@compileFor(!OS_WINDOWS)
+unsafe fn Result<OpenFileLimit, IoError> raiseOpenFileLimit() {
+    if (kama_nofile_raise() != 0) { return Result::Err(error: lastError()); }
+    return openFileLimit();
 }
 
 // The current directory (KR-167): what a relative path is relative to, so a path given on a command line can be
