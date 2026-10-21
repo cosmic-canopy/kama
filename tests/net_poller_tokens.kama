@@ -1,0 +1,164 @@
+// std::net::Poller's ready list (KR-230): each `Event` carries the token its descriptor was added under, a
+// descriptor is reported ONCE per wait however its readiness is split (kqueue reports reading and writing as two
+// events; the backend merges them), and the loop over `Events` may `add` (it freezes the list, not the poller).
+// Re-adding replaces the interest and the token; `remove` stops the reports and is `NotFound` the second time.
+// Level-triggered: unread data is reported by every wait. A Unix-domain stream is watched as a TCP one is (on
+// Windows too, where it is AF_UNIX). On Linux a regular file cannot be watched (epoll refuses it,
+// PermissionDenied). `Event` and `Events` are Sendable: a `Channel` of each compiles only if they are. Returns 42, or
+// the number of the failed check.
+import {
+    std::net::TcpListener, std::net::TcpStream, std::net::UnixStreamPair, std::net::UnixStream, std::net::Poller, std::net::Interest, std::net::Event, std::net::Events,
+    std::io::IoError, std::io::IoErrorKind, std::collections::DynamicArray, std::collections::ConstView,
+    std::fs::File, std::fs::OpenMode, std::fs::remove, std::concurrent::Channel,
+};
+
+fn bool ok(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
+fn int32 waited(Result<int32, IoError> r) { return match (r) { case Ok(value: n): n; case Err(error: e): -1; }; }
+
+comptime uint64 LISTENER = 100ui64;
+comptime uint64 SERVER = 7ui64;
+comptime uint64 MOVED = 8ui64;
+comptime uint64 UNIX = 50ui64;
+
+// How many events in the last wait carry `token`, and the readiness of the last of them.
+fn int32 count(const ref Events ev, uint64 token) {
+    int32 n = 0;
+    foreach (Event e in ev) { if (e.token == token) { n = n + 1; } }
+    return n;
+}
+fn bool readable(const ref Events ev, uint64 token) {
+    bool r = false;
+    foreach (Event e in ev) { if (e.token == token) { r = e.readable; } }
+    return r;
+}
+fn bool writable(const ref Events ev, uint64 token) {
+    bool w = false;
+    foreach (Event e in ev) { if (e.token == token) { w = e.writable; } }
+    return w;
+}
+
+fn bool send(ref TcpStream s, uint8 b) {
+    DynamicArray<uint8> m = DynamicArray.empty();
+    m.add(item: b);
+    return match (s.write(bytes: m.view())) { case Ok(value: n): n == 1; case Err(error: e): false; };
+}
+
+@compileFor(OS_LINUX)
+unsafe fn int32 regularFile(ref Poller p) {
+    Result<File, IoError> rf = File.open(path: "poller_tokens.txt", mode: OpenMode::CreateNew);
+    int32 rc = match (give rf) {
+        case Ok(value: f): match (p.add(fd: cast<isize>(f.rawFd()), interest: Interest::Read, token: 1ui64)) {
+            case Ok(value: u): 60;
+            case Err(error: e): match (e.kind()) { case PermissionDenied: 0; case _: 61; };
+        };
+        case Err(error: e): 62;
+    };
+    _ = remove(path: "poller_tokens.txt");
+    return rc;
+}
+@compileFor(!OS_LINUX)
+unsafe fn int32 regularFile(ref Poller p) { return 0; }
+
+unsafe fn int32 run(ref TcpListener l, ref Poller p, uint16 port) {
+    Channel<Event> events = Channel.bounded(capacity: 1ui64);
+    Channel<Events> lists = Channel.bounded(capacity: 1ui64);
+    Events ev = Events.withCapacity(capacity: 8);
+    if (!ok(r: l.setNonBlocking(on: true))) { return 1; }
+    if (!ok(r: p.add(fd: l.rawHandle(), interest: Interest::Read, token: LISTENER))) { return 2; }
+
+    // Nothing pending: a short wait reports nothing.
+    if (waited(r: p.wait(events: ev, timeoutMs: 50)) != 0 || ev.length() != 0) { return 3; }
+
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream client = match (give rc) { case Ok(value: c): { := give c; } case Err(error: e): { return 4; } };
+
+    // The listener is ready under its token; the accepted stream is added from INSIDE the loop over the list.
+    if (waited(r: p.wait(events: ev, timeoutMs: 2000)) != 1) { return 5; }
+    DynamicArray<TcpStream> accepted = DynamicArray.empty();
+    foreach (Event e in ev) {
+        if (e.token != LISTENER || !e.readable || e.writable) { return 6; }
+        Result<TcpStream, IoError> ra = l.accept();
+        match (give ra) {
+            case Ok(value: s): {
+                if (!ok(r: p.add(fd: s.rawHandle(), interest: Interest::ReadWrite, token: SERVER))) { return 7; }
+                accepted.add(item: give s);
+            }
+            case Err(error: e2): { return 8; }
+        };
+    }
+    if (accepted.length() != 1) { return 9; }
+
+    // A fresh connection is writable and has nothing to read.
+    if (waited(r: p.wait(events: ev, timeoutMs: 2000)) != 1) { return 10; }
+    if (count(ev: ev, token: SERVER) != 1 || !writable(ev: ev, token: SERVER) || readable(ev: ev, token: SERVER)) { return 11; }
+
+    // Readable AND writable: ONE event (two kevents on macOS, merged). The stream is writable throughout, so a wait
+    // may return before the byte lands; wait until it shows readable.
+    if (!send(s: client, b: 9ui8)) { return 12; }
+    int32 tries = 0;
+    bool landed = false;
+    while (!landed && tries < 200) {
+        int32 n = waited(r: p.wait(events: ev, timeoutMs: 2000));
+        if (n != 1 || ev.length() != 1 || count(ev: ev, token: SERVER) != 1) { return 13; }
+        landed = readable(ev: ev, token: SERVER);
+        tries = tries + 1;
+    }
+    if (!landed || !writable(ev: ev, token: SERVER)) { return 14; }
+
+    // Re-adding replaces both the interest and the token. Level-triggered: the unread byte is reported twice.
+    if (!ok(r: p.add(fd: accepted[0].rawHandle(), interest: Interest::Read, token: MOVED))) { return 15; }
+    int32 round = 0;
+    while (round < 2) {
+        if (waited(r: p.wait(events: ev, timeoutMs: 2000)) != 1) { return 16; }
+        if (count(ev: ev, token: MOVED) != 1 || count(ev: ev, token: SERVER) != 0) { return 17; }
+        if (!readable(ev: ev, token: MOVED) || writable(ev: ev, token: MOVED)) { return 18; }
+        round = round + 1;
+    }
+
+    // Removed: nothing more, and a second remove is NotFound.
+    if (!ok(r: p.remove(fd: accepted[0].rawHandle()))) { return 19; }
+    if (waited(r: p.wait(events: ev, timeoutMs: 50)) != 0) { return 20; }
+    int32 again = match (p.remove(fd: accepted[0].rawHandle())) {
+        case Ok(value: u): 21;
+        case Err(error: e): match (e.kind()) { case NotFound: 0; case _: 22; };
+    };
+    if (again != 0) { return again; }
+
+    // A list of one holds one: the rest of a larger ready set comes back at the next wait.
+    if (!ok(r: p.add(fd: accepted[0].rawHandle(), interest: Interest::Write, token: SERVER))) { return 23; }
+    if (!ok(r: p.add(fd: client.rawHandle(), interest: Interest::Write, token: MOVED))) { return 24; }
+    Events one = Events.withCapacity(capacity: 1);
+    if (waited(r: p.wait(events: one, timeoutMs: 2000)) != 1 || one.length() != 1) { return 25; }
+    if (waited(r: p.wait(events: ev, timeoutMs: 2000)) != 2) { return 26; }
+
+    // A Unix-domain stream, alone in its own poller.
+    Result<UnixStreamPair, IoError> rpair = UnixStreamPair.open();
+    UnixStreamPair pair = match (give rpair) { case Ok(value: q): { := give q; } case Err(error: e): { return 30; } };
+    Result<Poller, IoError> rq = Poller.create();
+    Poller q = match (give rq) { case Ok(value: x): { := give x; } case Err(error: e): { return 31; } };
+    if (!ok(r: q.add(fd: pair.first().rawHandle(), interest: Interest::Read, token: UNIX))) { return 32; }
+    if (waited(r: q.wait(events: ev, timeoutMs: 50)) != 0) { return 33; }
+    DynamicArray<uint8> m = DynamicArray.empty();
+    m.add(item: 3ui8);
+    match (pair.second().write(bytes: m.view())) { case Ok(value: k): { } case Err(error: e): { return 34; } };
+    if (waited(r: q.wait(events: ev, timeoutMs: 2000)) != 1 || count(ev: ev, token: UNIX) != 1 || !readable(ev: ev, token: UNIX)) { return 35; }
+
+    return regularFile(p: p);
+}
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+fn uint8 main() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    return match (give rl) {
+        case Ok(value: l): {
+            uint16 port = portOf(l: l);
+            Result<Poller, IoError> rp = Poller.create();
+            := match (give rp) {
+                case Ok(value: p): { int32 r = run(l: l, p: p, port: port); := r == 0 ? 42ui8 : cast<uint8>(r); }
+                case Err(error: e): 81ui8;
+            };
+        }
+        case Err(error: e): 82;
+    };
+}

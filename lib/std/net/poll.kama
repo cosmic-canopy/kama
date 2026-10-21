@@ -1,33 +1,73 @@
 
-import { std::io::IoError, std::io::lastError, std::ptr::nonNull, std::time::monotonicNow, std::time::Instant };
+import {
+    std::io::IoError, std::io::lastError, std::ptr::nonNull, std::time::monotonicNow, std::time::Instant,
+    std::collections::DynamicArray, std::collections::DynamicArrayIter,
+};
 
-export { Poller, Interest, Ready };
+export { Poller, Interest, Event, Events };
 
-// Readiness notification over many sockets (poll(2) / WSAPoll) — the game-SERVER selector. A client with one
-// or a few connections just drains each non-blocking socket; a server multiplexing hundreds waits here once
-// and services whoever is ready. Native only (the browser event loop IS the selector on the web). The
-// underlying pollfd[] stays opaque in C behind an UnsafePtr.
+// Readiness over many sockets: a server waits here once and services whoever is ready. Each OS's own mechanism
+// stands behind one interface: epoll on Linux, kqueue on macOS and FreeBSD, and `poll(2)` on any other POSIX
+// target, where a wait costs what is READY, not what is registered. Windows is `select()` for now, capped at 1,024
+// sockets (KR-230). Native only: in the browser, the event loop is the selector.
+//
+//     Events events = Events.withCapacity(capacity: 256);      // the ready list, sized once
+//     _ = p.add(fd: l.rawHandle(), interest: Interest::Read, token: LISTENER);
+//     Result<int32, IoError> w = p.wait(events: events, timeoutMs: 1000);   // fills `events`, allocates nothing
+//     foreach (Event e in events) {                            // freezes `events`, not `p`
+//         if (e.token == LISTENER) { /* accept, then p.add(…) the new stream */ }
+//     }
+//
+// Level-triggered: a socket still readable is reported again at the next wait, so a reader may stop part way.
+// The opaque C state stays behind an `UnsafePtr`.
 extern "kama_os.h";
-extern fn UnsafePtr   kama_poller_create();
-extern fn void  kama_poller_add(UnsafePtr p, isize fd, int32 interest);
-extern fn void  kama_poller_remove(UnsafePtr p, isize fd);
-extern fn int32 kama_poller_wait(UnsafePtr p, int32 timeoutMs);
-extern fn int32 kama_poller_ready(UnsafePtr p, isize fd);
+extern fn UnsafePtr kama_poller_create();
+extern fn int32 kama_poller_add(UnsafePtr p, isize fd, int32 interest, uint64 token);
+extern fn int32 kama_poller_remove(UnsafePtr p, isize fd);
+extern fn int32 kama_poller_wait(UnsafePtr p, UnsafePtr events, int32 timeoutMs);
 extern fn void  kama_poller_free(UnsafePtr p);
+extern fn UnsafePtr kama_poll_events_new(isize capacity);
+extern fn uint64 kama_poll_events_token(UnsafePtr events, int32 i);
+extern fn int32 kama_poll_events_bits(UnsafePtr events, int32 i);
+extern fn void  kama_poll_events_free(UnsafePtr events);
 
 // What to watch a socket for. Feed a socket's rawHandle() to add().
 @nonExhaustive
 type enum Interest { Read, Write, ReadWrite }
 
-// A socket's readiness after wait(). `readable` also covers hangup/error (so a follow-up read sees EOF/err);
+// One descriptor's readiness after a wait, with the token it was added under. Every OS reports a descriptor at
+// most once per wait. `readable` also covers hangup and error, so the read that follows sees EOF or the error.
 // `writable` on a connecting socket means the non-blocking connect resolved (then call checkConnected()).
 @generate(of)
-type value Ready implements Sendable {
+type value Event implements Sendable {
+    public uint64 token;
     public bool readable;
     public bool writable;
 }
 
-// A readiness set. Move-only; frees its C cursor on drop (RAII).
+// The ready list one wait fills: up to `capacity` events, the OS's own array beside them, both allocated once.
+// When more are ready than fit, the rest are reported by the next wait. Held apart from the `Poller` so a loop
+// over it can still `add` and `remove`: `foreach` freezes what it walks, and this is what it walks.
+type resource Events implements Iterable<Event>, Sendable {
+    UnsafePtr native;
+    DynamicArray<Event> list;
+    friend Poller::wait[native, list];
+
+    public unsafe ctor withCapacity(isize capacity) {
+        this.native = kama_poll_events_new(capacity: capacity);
+        DynamicArray<Event> l = DynamicArray.withCapacity(capacity: capacity);
+        this.list = give l;
+    }
+
+    // How many events the last wait reported.
+    public const fn isize length() { return this.list.length(); }
+
+    public unsafe const fn DynamicArrayIter<Event> iterator() { return this.list.iterator(); }
+
+    unsafe ~Events() { kama_poll_events_free(events: this.native); }
+}
+
+// A readiness set. Move-only; frees its C state on drop (RAII).
 type resource Poller implements Sendable {
     UnsafePtr state;
     private unsafe ctor make(UnsafePtr state) { this.state = state; }
@@ -39,26 +79,43 @@ type resource Poller implements Sendable {
         };
     }
 
-    // Watch `fd` (a socket's rawHandle()) for `interest`. Re-adding an fd updates its interest.
-    public unsafe fn void add(isize fd, Interest interest) {
+    // Watch `fd` (a socket's rawHandle()) for `interest`, reporting it under `token`, a number the caller chooses
+    // (an index into its own table of connections, say). Adding an `fd` that is already watched replaces its
+    // interest and token. Refused as the OS refuses: on Linux a regular file cannot be watched (PermissionDenied).
+    // Remove a descriptor before it closes: on Linux a descriptor shared with another process (or `dup`ed) stays
+    // watched under its old token after this one closes.
+    public unsafe fn Result<Unit, IoError> add(isize fd, Interest interest, uint64 token) {
         int32 bits = match (interest) { case Read: 1; case Write: 2; case ReadWrite: 3; };
-        kama_poller_add(p: this.state, fd: fd, interest: bits);
+        if (kama_poller_add(p: this.state, fd: fd, interest: bits, token: token) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
     }
 
-    // Stop watching `fd`.
-    public unsafe fn void remove(isize fd) { kama_poller_remove(p: this.state, fd: fd); }
+    // Stop watching `fd`. `NotFound` when it was not watched.
+    public unsafe fn Result<Unit, IoError> remove(isize fd) {
+        if (kama_poller_remove(p: this.state, fd: fd) != 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: Unit::Unit);
+    }
 
-    // Block up to `timeoutMs` (< 0 = forever) until at least one watched socket is ready. Returns the count
-    // ready (0 = timed out). A signal that interrupts the wait (EINTR — SIGCHLD from a child, a profiler's
-    // SIGPROF, whatever `SA_RESTART` says) is not an I/O event, so the wait resumes with the time that is LEFT,
-    // measured on the monotonic clock: the caller's deadline holds either way. It used to surface as
-    // `Other(4)`, which a caller could tell from a real failure only by a platform's magic number.
-    public unsafe fn Result<int32, IoError> wait(int32 timeoutMs) {
+    // Block up to `timeoutMs` (< 0 = forever) until at least one watched socket is ready, fill `events` with what
+    // is, and return how many (0 = timed out). A signal that interrupts the wait (EINTR — SIGCHLD from a child, a
+    // profiler's SIGPROF) is not an I/O event, so the wait resumes with the time that is LEFT, measured on the
+    // monotonic clock: the caller's deadline holds either way.
+    public unsafe fn Result<int32, IoError> wait(ref Events events, int32 timeoutMs) {
         Instant start = monotonicNow();
         int32 left = timeoutMs;
+        events.list.clear();
         while (true) {
-            int32 n = kama_poller_wait(p: this.state, timeoutMs: left);
-            if (n >= 0) { return Result::Ok(value: n); }
+            int32 n = kama_poller_wait(p: this.state, events: events.native, timeoutMs: left);
+            if (n >= 0) {
+                int32 i = 0;
+                while (i < n) {
+                    int32 bits = kama_poll_events_bits(events: events.native, i: i);
+                    events.list.add(item: Event.of(token: kama_poll_events_token(events: events.native, i: i),
+                                                   readable: (bits & 1) != 0, writable: (bits & 2) != 0));
+                    i = i + 1;
+                }
+                return Result::Ok(value: n);
+            }
             IoError e = lastError();
             bool interrupted = match (e.kind()) { case Interrupted: true; case _: false; };
             if (!interrupted) { return Result::Err(error: e); }
@@ -68,12 +125,6 @@ type resource Poller implements Sendable {
                 left = timeoutMs - cast<int32>(spent);
             }
         }
-    }
-
-    // The readiness of `fd` as reported by the last wait().
-    public unsafe fn Ready readyFor(isize fd) {
-        int32 bits = kama_poller_ready(p: this.state, fd: fd);
-        return Ready.of(readable: (bits & 1) != 0, writable: (bits & 2) != 0);
     }
 
     unsafe ~Poller() { kama_poller_free(p: this.state); }

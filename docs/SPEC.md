@@ -2441,6 +2441,38 @@ Windows rebinds one by default, and there the option would let a second listener
 set it (Go and Rust set it on Unix only). `@compileFor` gates a declaration, never a statement, so code that sets
 `balance` is a function gated to Linux.
 
+**Readiness (`std::net::Poller`).** A server waits once for whichever of its sockets is ready, and the wait costs what <!-- test: net_poller_tokens -->
+is ready, not what is watched. Each OS's own mechanism stands behind the one interface: epoll on Linux, kqueue on
+macOS and FreeBSD, and `poll(2)` on any other POSIX target. On Windows it is `select()` for now, capped at 1,024
+sockets. Native only: in a browser the event loop is the selector.
+- `add(fd:, interest:, token:)` watches a socket's `rawHandle()` for `Interest::Read`, `Write` or `ReadWrite`. It is
+  reported under a `uint64` token the caller chooses, typically an index into its own table of connections. Adding a
+  watched descriptor again replaces its interest and its token.
+- `remove(fd:)` stops watching it, and is `NotFound` when it was not watched. Remove a descriptor before it closes:
+  epoll keeps watching one that another process (or a `dup`) still holds, under its old token.
+- `add` and `remove` are `Result`s, because the OS can refuse. On Linux, epoll cannot watch a regular file
+  (`PermissionDenied`). <!-- test: net_poller_tokens -->
+- `wait(events:, timeoutMs:)` fills a caller-owned `Events`. `Events.withCapacity(capacity:)` allocates it once, with
+  the OS's own array beside it, so a wait allocates nothing. Each `Event` is `{token, readable, writable}`: `readable`
+  covers hangup and error, so the read that follows meets EOF or the error, and `writable` on a connecting socket
+  means the connect resolved. A signal during the wait (`Interrupted`) resumes it with the time that is left.
+
+**One event per descriptor per wait, on every OS.** kqueue reports reading and writing as two events, and its backend <!-- test: net_poller_tokens -->
+merges them, so code tested on Linux never meets a second event for a connection it has just closed. More ready
+descriptors than the list holds are reported by the next wait. It is level-triggered: a socket with unread data is
+reported again by every wait, so a reader may stop part way.
+
+The ready list is its own value, not the `Poller`'s, because `foreach` freezes what it walks. A loop over `Events` can
+therefore `add` the connection it just accepted. Raising the descriptor limit first (`raiseOpenFileLimit`) lets a <!-- test: net_poller_scale -->
+loop hold thousands. Measured on `0.9.717`: one ready descriptor among N idle Unix-domain pairs, the best of seven
+interleaved rounds of 2,000 waits. Linux ran in the arm64 container.
+
+| N | `poll(2)`, Linux | epoll | `poll(2)`, macOS | kqueue |
+|---|---|---|---|---|
+| 100 | 4.0 µs | 0.16 µs | 14.4 µs | 0.18 µs |
+| 1,000 | 36.7 µs | 0.14 µs | 177 µs | 0.18 µs |
+| 10,000 | 1,288 µs | 0.14 µs | 7,267 µs | 0.18 µs |
+
 **Unix-domain sockets (`std::net`).** A byte stream between two processes on one machine, named by a path:
 `UnixStream.connect(path:)` and `UnixListener.bind(path:)` + `accept()`, on Linux, macOS and Windows 10 1803+.
 `UnixStream` is a `ReliableStream` like `TcpStream`, with `shutdown(how:)`, `localAddr()`/`peerAddr()` (a
@@ -6852,7 +6884,7 @@ reaches a bundle. <!-- xfail: view_field, iface_field -->
 rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
 `UnixStream`, `UnixStreamPair`, `UnixListener`, `UnixDatagram`, `UnixDatagramPair`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`,
 `StringWriter`, `SliceReader`, `PeerCredentials`, `Descriptor`, and the values `SocketAddr`, `UnixAddr`,
-`IpAddr`, `RecvFrom<A>` (for a `Sendable` address), `Ready`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
+`IpAddr`, `RecvFrom<A>` (for a `Sendable` address), `Event`, `Events`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
 of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread, and a `MemoryStream` shares its
 buffers with its peer through a `Shared`. A channel element is

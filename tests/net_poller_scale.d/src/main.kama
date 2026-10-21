@@ -1,0 +1,65 @@
+// std::net::Poller at scale (KR-230): more loopback pairs than Windows' old select() could hold (FD_SETSIZE 1,024),
+// every server end watched under its own token, ONE of them sent a byte, and the wait reports exactly that one. The
+// cost of a wait follows what is ready, not what is watched: epoll, kqueue, AFD. On POSIX the descriptor limit is
+// raised first (2,201 sockets; a macOS shell may start at 256), from a file gated to POSIX with a twin. Returns 42.
+import {
+    std::net::TcpListener, std::net::TcpStream, std::net::Poller, std::net::Interest, std::net::Event, std::net::Events,
+    std::io::IoError, std::collections::DynamicArray, pollscale::prepare, pollscale::pairs,
+};
+
+fn bool ok(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
+fn int32 waited(Result<int32, IoError> r) { return match (r) { case Ok(value: n): n; case Err(error: e): -1; }; }
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn int32 run(ref TcpListener l, ref Poller p) {
+    uint16 port = portOf(l: l);
+    int32 n = pairs();
+    DynamicArray<TcpStream> clients = DynamicArray.empty();
+    DynamicArray<TcpStream> servers = DynamicArray.empty();
+    int32 i = 0;
+    while (i < n) {
+        Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
+        match (give rc) {
+            case Ok(value: c): { clients.add(item: give c); }
+            case Err(error: e): { return 10; }
+        };
+        Result<TcpStream, IoError> ra = l.accept();
+        match (give ra) {
+            case Ok(value: s): {
+                if (!ok(r: p.add(fd: s.rawHandle(), interest: Interest::Read, token: cast<uint64>(i)))) { return 11; }
+                servers.add(item: give s);
+            }
+            case Err(error: e): { return 12; }
+        };
+        i = i + 1;
+    }
+
+    Events ev = Events.withCapacity(capacity: 64);
+    if (waited(r: p.wait(events: ev, timeoutMs: 50)) != 0) { return 13; }
+
+    int32 chosen = n - 63;                    // past 1,024 when n is 1,100
+    DynamicArray<uint8> m = DynamicArray.empty();
+    m.add(item: 1ui8);
+    match (clients[chosen].write(bytes: m.view())) { case Ok(value: k): { } case Err(error: e): { return 14; } };
+    if (waited(r: p.wait(events: ev, timeoutMs: 2000)) != 1) { return 15; }
+    foreach (Event e in ev) {
+        if (e.token != cast<uint64>(chosen) || !e.readable) { return 16; }
+    }
+    return 0;
+}
+
+fn uint8 main() {
+    int32 pre = prepare();
+    if (pre != 0) { return cast<uint8>(pre); }
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    return match (give rl) {
+        case Ok(value: l): {
+            Result<Poller, IoError> rp = Poller.create();
+            := match (give rp) {
+                case Ok(value: p): { int32 r = run(l: l, p: p); := r == 0 ? 42ui8 : cast<uint8>(r); }
+                case Err(error: e): 81ui8;
+            };
+        }
+        case Err(error: e): 82;
+    };
+}

@@ -1,0 +1,14 @@
+file @compileFor(!OS_WINDOWS);
+// 1,100 pairs and a listener: 2,201 descriptors, past the 256 a macOS launchd job starts with and the 1,024 some
+// Linux hosts do. The program raises its own limit, as KR-210 rules it must: never implicitly.
+import { std::process::OpenFileLimit, std::process::raiseOpenFileLimit };
+export { prepare, pairs };
+
+fn int32 pairs() { return 1100; }
+
+unsafe fn int32 prepare() {
+    return match (raiseOpenFileLimit()) {
+        case Ok(value: l): l.soft >= 2300ui64 ? 0 : 1;
+        case Err(error: e): 2;
+    };
+}

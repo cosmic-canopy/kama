@@ -11,6 +11,7 @@ import { core::print,
     std::net::SocketAddr,
     std::net::RecvFrom,
     std::net::Poller,
+    std::net::Events,
     std::net::Interest,
     std::net::parseIp,
     std::net::interfaceIndexOf,
@@ -54,8 +55,9 @@ fn string relay(ref UdpSocket tx, ref UdpSocket rx, ref SocketAddr to) {
     match (give rp) {
         case Err(error: e): { return ""; }
         case Ok(value: p): {
-            p.add(fd: rx.rawHandle(), interest: Interest::Read);
-            Result<int32, IoError> ready = p.wait(timeoutMs: 2000);
+            Events events = Events.withCapacity(capacity: 1);
+            match (p.add(fd: rx.rawHandle(), interest: Interest::Read, token: 0ui64)) { case Err(error: e): { return ""; } case Ok(value: u): { } };
+            Result<int32, IoError> ready = p.wait(events: events, timeoutMs: 2000);
             match (ready) { case Err(error: e): { return ""; } case Ok(value: n): { if (n < 1) { print(s: "no datagram\n"); return ""; } } };
         }
     };

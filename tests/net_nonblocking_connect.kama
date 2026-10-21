@@ -14,7 +14,7 @@ import {
     std::net::TcpStream,
     std::net::Poller,
     std::net::Interest,
-    std::net::Ready,
+    std::net::Events,
     std::io::IoError,
 };
 
@@ -28,11 +28,12 @@ fn bool isRefused(IoError e) { return match (e.kind()) { case ConnectionRefused:
 fn Result<Unit, IoError> resolve(ref TcpStream s) {
     match (Poller.create()) {
         case Ok(value: p): {
-            p.add(fd: s.rawHandle(), interest: Interest::Write);
+            Events events = Events.withCapacity(capacity: 1);
+            _ = p.add(fd: s.rawHandle(), interest: Interest::Write, token: 0ui64);   // a refusal shows as the timeout
             int32 tries = 0;
             bool ready = false;
             while ((tries < 24) && !ready) {                       // up to ~12s (24 * 500ms)
-                Result<int32, IoError> w = p.wait(timeoutMs: 500);
+                Result<int32, IoError> w = p.wait(events: events, timeoutMs: 500);
                 int32 n = match (w) { case Ok(value: k): k; case Err(error: e): 0 - 1; };
                 if (n != 0) { ready = true; }                      // >0 resolved / <0 error — stop; 0 = keep waiting
                 tries += 1;
