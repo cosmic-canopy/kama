@@ -1,6 +1,6 @@
 
 import { std::time::Duration };
-export { Channel, Sender, Receiver, Undelivered, RecvError };
+export { Channel, Sender, Receiver, Undelivered, RecvError, Waker };
 
 // A typed, blocking channel for moving values BETWEEN isolates — the first sanctioned cross-isolate
 // shared object in the concurrency model (M3). `Channel<T>::bounded(capacity:)` creates the queue and
@@ -73,6 +73,45 @@ extern fn void  kama_channel_add_receiver(UnsafePtr ch);
 extern fn int32 kama_channel_close_sender(UnsafePtr ch);             // returns 1 if this endpoint is the last
 extern fn int32 kama_channel_close_receiver(UnsafePtr ch);           // returns 1 if this endpoint is the last
 extern fn void  kama_channel_free(UnsafePtr ch);                     // called by the queue's last holder after draining
+extern fn void  kama_channel_set_waker(UnsafePtr ch, UnsafePtr waker);  // takes a reference (KR-201)
+// A waker, through the operations its state begins with (kama_runtime.h, which kama_channel.h includes).
+extern fn void  kama_waker_wake(UnsafePtr w);
+extern fn void  kama_waker_retain(UnsafePtr w);
+extern fn void  kama_waker_release(UnsafePtr w);
+
+// A wake source for one `std::net::Poller`: another isolate calls `wake()` and the Poller's `wait` ends, reporting an
+// `Event` that carries the token the waker was made with (KR-201). Made by `Poller.waker(token:)`:
+//
+//     Waker w = …p.waker(token: WORK)…;
+//     Waker forWorker = copy w;
+//     scope { spawn worker(done: give forWorker); … }   // any isolate may hold one
+//     jobs.wakeOnSend(waker: give w);                   // or a channel: a send to an empty queue wakes the loop
+//
+// It is Sendable and `Copyable(bare: give)`: `copy w` is another handle to the SAME wake source, and the state lives
+// until the last handle and the Poller have both let go, so a handle that outlives its Poller wakes nothing and is
+// safe to drop. A wake is COALESCED: only the first of several before the wait reports them makes a system call, and
+// the wait reports one event for them all. The OS object is each Poller backend's own (an eventfd under epoll,
+// EVFILT_USER under kqueue, a packet posted to the completion port on Windows, a pipe elsewhere). It lives beside
+// the channel because the channel is what wakes it most: a program that only uses channels compiles nothing more.
+type resource Waker implements Sendable, Copyable<This>(bare: give) {
+    UnsafePtr state;
+    friend std::net::Poller::waker[adopt];
+    friend Receiver::wakeOnSend[state];
+
+    unsafe ctor adopt(UnsafePtr state) { this.state = state; }
+
+    public unsafe ctor copy(ref Waker source) {
+        kama_waker_retain(w: source.state);
+        this.state = source.state;
+    }
+
+    // End the Poller's wait, now or at its next one. It cannot fail short of the OS running out of the resources to
+    // take the signal, which panics as running out of memory does. A wake already on its way, or a Poller that is
+    // gone, makes no system call and is no error.
+    public unsafe fn void wake() { kama_waker_wake(w: this.state); }
+
+    unsafe ~Waker() { kama_waker_release(w: this.state); }
+}
 
 // A `send` the channel could not take: every receiver is gone, so nothing was enqueued, and the item comes BACK
 // intact in the `Err` — `match (give e) { case Item(item: x): … }` — rather than being destroyed: an ownership
@@ -185,6 +224,12 @@ type resource Receiver<T: Sendable> implements Sendable {
         if (r > 0) { return Result::Err(error: RecvError::Empty); }
         return Result::Err(error: RecvError::Closed);
     }
+
+    // Wake a `Poller` loop when there is something to receive (KR-201): a send that takes the queue from empty to
+    // non-empty triggers `waker`, and so does the last sender's close. The loop then drains with `tryRecv` until
+    // `Empty` (or `Closed`); a send that lands mid-drain wakes it again. Items already queued wake it at once. The
+    // channel keeps its own reference to the waker, and a second call replaces the first.
+    public unsafe fn void wakeOnSend(Waker waker) { kama_channel_set_waker(ch: this.handle, waker: waker.state); }
 
     unsafe fn int32 tryRecvInto(out T dst) {
         return kama_channel_try_recv(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst)));

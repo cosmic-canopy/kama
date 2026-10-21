@@ -74,6 +74,7 @@ typedef struct {
     unsigned long   takenSeq;        /* rendezvous only: bumped each time a receiver takes the slot */
     int             monotonic;       /* `notEmpty`'s timed wait runs on CLOCK_MONOTONIC (see kama__channel_cond_init) */
     int             factoryLive;     /* the `Channel` factory still exists, so an unclaimed side may yet be claimed */
+    void*           waker;           /* `Receiver.wakeOnSend`'s waker (a reference held), or NULL (KR-201) */
 } kama_channel_t;
 
 // "The sender side can still deliver" — a live sender exists, or none has been claimed yet while the factory that
@@ -163,6 +164,7 @@ static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     ch->senderClaimed = ch->receiverClaimed = 0;   /* unclaimed == open; see the struct's note */
     ch->takenSeq = 0;
     ch->factoryLive = 1;
+    ch->waker = NULL;
     return ch;
 }
 
@@ -189,6 +191,7 @@ static inline void kama_channel_add_receiver(void* h) {
 // buffered must already have been drained by the caller (kama-side, where element type T is known) —
 // this frees the raw buffer without touching element contents.
 static inline void kama_channel_free(kama_channel_t* ch) {
+    if (ch->waker) kama_waker_call_release(ch->waker);
     pthread_mutex_destroy(&ch->mu);
     pthread_cond_destroy(&ch->notEmpty);
     pthread_cond_destroy(&ch->notFull);
@@ -213,6 +216,8 @@ static inline int kama_channel_send(void* h, const void* elem) {
         if (!kama_channel_recv_open(ch)) { pthread_mutex_unlock(&ch->mu); return -1; }
         memcpy(ch->buf, elem, ch->elemSize);
         ch->count = 1;
+        /* The sender blocks below until the item is taken, so the loop must hear of it NOW, under the lock. */
+        if (ch->waker) (void)kama_waker_call_wake(ch->waker);
         /* ⚠️ Wait for MY item to be taken, not merely for the slot to be free again. `count == 0` was the
            test, and with a second sender it is ambiguous: the receiver takes my item and signals, a peer
            wins the lock and places ITS item, and I wake to `count == 1` and conclude mine was NOT taken —
@@ -236,7 +241,12 @@ static inline int kama_channel_send(void* h, const void* elem) {
     ch->tail = (ch->tail + 1) % ch->kama_cap;
     ch->count++;
     pthread_cond_signal(&ch->notEmpty);
+    /* Empty to non-empty wakes a loop waiting on this channel (KR-201); a queue that already held items has woken it.
+       The reference is taken under the lock and the wake made after it, so no sender waits behind a system call. */
+    void* w = (ch->count == 1 && ch->waker) ? ch->waker : NULL;
+    if (w) kama_waker_call_retain(w);
     pthread_mutex_unlock(&ch->mu);
+    if (w) { (void)kama_waker_call_wake(w); kama_waker_call_release(w); }
     return 0;
 }
 
@@ -329,6 +339,8 @@ static inline int kama_channel_close_sender(void* h) {
     /* Broadcast — not signal: EVERY blocked receiver must observe the closure, or the ones not woken
        park forever on a channel that will never deliver again. That is the whole point of a worker pool. */
     if (ch->senders == 0) pthread_cond_broadcast(&ch->notEmpty);
+    /* The last sender's close is news to a waiting loop too: its next tryRecv answers Closed. */
+    if (ch->senders == 0 && ch->waker) (void)kama_waker_call_wake(ch->waker);
     int last = kama__channel_unheld(ch);
     pthread_mutex_unlock(&ch->mu);
     return last;
@@ -350,6 +362,20 @@ static inline int kama_channel_close_factory(void* h) {
 
 // Drop one receiver endpoint. Symmetric: the receiver SIDE closes when the last one goes, waking any
 // sender parked in send (so it re-checks and returns -1). Same drain+free contract.
+// Hand the channel a waker (`Receiver.wakeOnSend`, KR-201): it takes a reference, gives up any earlier one, and
+// wakes at once when items are already queued, so a loop that registers late still hears of them.
+static inline void kama_channel_set_waker(void* h, void* w) {
+    kama_channel_t* ch = (kama_channel_t*)h;
+    kama_waker_call_retain(w);
+    pthread_mutex_lock(&ch->mu);
+    void* old = ch->waker;
+    ch->waker = w;
+    int queued = ch->count > 0;
+    pthread_mutex_unlock(&ch->mu);
+    if (old) kama_waker_call_release(old);
+    if (queued) (void)kama_waker_call_wake(w);
+}
+
 static inline int kama_channel_close_receiver(void* h) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);

@@ -2035,6 +2035,26 @@ static inline void* kama_box_value(const void* v, size_t n, size_t align) {
     return p;
 }
 
+// ---- a wake source, by its operations (std::concurrent::Waker, KR-201) ---------------------------------------
+// A waker's state (kama_os.h, one per `Poller.waker`) BEGINS with a pointer to these, so a header that must trigger
+// one — the channel, on a send that makes its queue non-empty — calls through them and never includes the socket
+// and OS headers that know what the waker is. `wake` answers 0, or -1 with errno set.
+typedef struct kama_waker_ops {
+    int32_t (*wake)(void* w);
+    void (*retain)(void* w);
+    void (*release)(void* w);
+} kama_waker_ops;
+static inline int32_t kama_waker_call_wake(void* w) { return (*(const kama_waker_ops* const*)w)->wake(w); }
+static inline void kama_waker_call_retain(void* w) { (*(const kama_waker_ops* const*)w)->retain(w); }
+static inline void kama_waker_call_release(void* w) { (*(const kama_waker_ops* const*)w)->release(w); }
+// What std::concurrent::Waker calls. A wake fails only when the OS is out of the resources to take it (an eventfd or
+// a pipe that is full is already set), which kama answers as it answers being out of memory: a panic.
+static inline void kama_waker_wake(void* w) {
+    if (kama_waker_call_wake(w) != 0) kama_panic(kama_string_lit("Waker.wake: the OS could not take the signal", 44));
+}
+static inline void kama_waker_retain(void* w) { kama_waker_call_retain(w); }
+static inline void kama_waker_release(void* w) { kama_waker_call_release(w); }
+
 // ---- Serialization graph substrate ------------------------------------------
 // The id table / worklist behind the compiler's object-graph walker (a `@generate` type that transitively
 // reaches a `Shared`/`Weak` — see `reachesPointer`). Pure C on purpose: the compiler's own graph machinery

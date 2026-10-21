@@ -307,83 +307,10 @@ in pieces, with the body limit set per route. A server that reads a whole body b
 every upload at one limit and holds it all in memory. A program can chunk uploads at the application level to get
 around that, but the package should not require it.
 
-### Reported by an HTTP package, 2026-10-18 (KR-201..208)
+### Reported by an HTTP package, 2026-10-18 (KR-202..208)
 
 Each was run on `0.9.668` on macOS and, where the OS matters, on Linux (the `localhost/kama-dev` container), or shown
 absent from std's source.
-
-<a id="s1-poller-waker"></a>
-
-#### A `Poller` wakeup another isolate can trigger (KR-201)
-
-`Poller` has `add`, `remove` and `wait`, and nothing ends a `wait` early. A `Channel` is a mutex and a
-condition variable, so a `Poller` cannot watch one. A loop that hands work to an isolate (a lookup, a file read, an
-accepted stream sent to a worker) learns it is done only at its timeout. The workaround runs: a `UnixStreamPair`, one
-end in the `Poller`, the other moved to the isolate as a `Descriptor`, a byte written to wake (50 ms observed against
-a 5000 ms timeout). It costs two descriptors and a drained byte per wake, and every program rediscovers it. Mio,
-libuv and tokio each ship a waker for this (eventfd on Linux, a pipe or kqueue's `EVFILT_USER` elsewhere).
-Recommended: a `Sendable` waker made by and registered with a `Poller`, built on its backends (SPEC *Readiness*) so it is built
-once: an eventfd under epoll, `EVFILT_USER` under kqueue (no descriptor at all), a posted completion under IOCP. A
-wake is **coalesced**: an atomic flag says whether the loop may be asleep, so a busy loop pays no system call per
-message (Go's `netpollBreak` and libuv's `uv_async` do the same).
-
-**A `Channel` a `Poller` can wait on.** The case that makes this more than a timer fix is a database client sharing
-one connection among the isolates that call it, and pipelining what they send. The isolate that owns the socket must
-wait for two things together: its callers' requests on a `Channel`, and the server's replies on the socket. Today it
-can only alternate a channel wait and a socket wait, each with a timeout, which adds latency to every call, or spin. A
-receiver that registers its channel with a `Poller`, so a send wakes the loop (through the waker, on the empty to
-non-empty transition only), closes it. Measured 2026-10-21 (macOS, release): a channel round trip between two isolates
-is about 3 µs, against a server round trip of tens to hundreds of microseconds, so the hop pays for itself many times
-over. KR-3 then removes the hop too: one multiplexed connection per core, its callers fibers on the same scheduler.
-
-**What others do.**
-
-| | Wake primitive | How the loop learns of it | Coalesced | A channel the loop waits on |
-|---|---|---|---|---|
-| mio (tokio's) | `Waker::new(registry, token)` | an event carrying that token | yes (eventfd counter; `EVFILT_USER`; a posted completion) | none; the program pairs a queue with a `Waker` |
-| libuv (Node) | `uv_async_send` on a `uv_async_t` | that handle's callback | yes, documented as such | none; the same pairing |
-| Java NIO | `selector.wakeup()` | `select` returns early, with no key | yes | none |
-| Go | `netpollBreak` (runtime-internal) | the scheduler rechecks its run queue | yes (an atomic flag) | channels are the runtime's own (`select`) |
-| tokio | a task's `Waker` | the task is polled again | per task | `mpsc` wakes the receiving task |
-
-**Ruled 2026-10-21 (the maintainer): decisions 1–4 below, as recommended.** On #2: it is what every mature runtime
-does (mio's `Waker` is shared across threads, and Java's `wakeup` and libuv's `uv_async_send` are callable from any
-thread), and a `Copyable(bare: give)` resource over reference-counted state is kama's own spelling for a shared
-handle.
-
-```kama
-Result<Waker, IoError> rw = p.waker(token: WORK);     // one wake source, registered with this Poller
-Waker w = match (give rw) { … };
-Channel<Job> ch = Channel.bounded(capacity: 1024ui64);
-Receiver<Job> jobs = ch.receiver();
-jobs.wakeOnSend(waker: copy w);       // a send that makes the queue non-empty wakes the loop
-spawn worker(tx: ch.sender(), done: give w);   // a worker wakes it directly when it finishes something
-…
-foreach (Event e in events) {
-    if (e.token == WORK) { /* drain: jobs.tryRecv() until Empty */ }
-}
-```
-
-1. **A wake is an `Event` with the caller's token**, as mio's is: the loop handles it in the one place it handles
-   every event, and learns WHAT woke it. Java's "the wait returns early, with no key" is a second path.
-2. **`Waker` is a `Sendable`, `Copyable(bare: give)` resource over shared, reference-counted C state**, so it moves to
-   any isolate. `copy w` makes another handle to the same wake source, and a waker that outlives its `Poller` is
-   harmless: a wake then reaches nothing.
-   - Linux: an eventfd in the epoll set.
-   - macOS/FreeBSD: `EVFILT_USER` with `NOTE_TRIGGER`, which needs no descriptor at all.
-   - Windows: `PostQueuedCompletionStatus` on the `Poller`'s IOCP port, which AFD polling already runs on.
-   - Any other POSIX target: a pipe.
-3. **Coalesced.** An atomic flag says whether a wake is already on its way. `wake()` makes the system call only on
-   the transition from clear to set, and the `wait` that reports the event clears it. So a busy loop pays no system
-   call per message, and N wakes before a wait cost one (Go and libuv do the same).
-   - Clearing comes before the event reaches the program, so a wake that lands while the loop drains is never lost.
-4. **`Receiver.wakeOnSend(waker:)`** hands the channel a waker. A send that takes the queue from empty to non-empty
-   wakes it, and that covers the last sender's close too, since a closed channel is something to observe. The
-   alternative, `p.addChannel(rx, token)`, makes the `Poller` hold a channel, and the `Poller` is a descriptor set.
-   Composing the two pieces keeps one wake mechanism.
-5. The loop then drains with `tryRecv` until `Empty`. A wake that arrives mid-drain reports again at the next wait.
-
-Size S–M once ruled. KR-202 (a DNS lookup a loop can poll) and KR-3's scheduler both build on it.
 
 <a id="s1-async-dns"></a>
 
@@ -392,7 +319,7 @@ Size S–M once ruled. KR-202 (a DNS lookup a loop can poll) and KR-3's schedule
 `resolve` is `getaddrinfo`, and its own comment says it "BLOCKS, possibly for seconds, and cannot be given a
 timeout … Resolve on another isolate". A client inside a server's loop needs a lookup it polls like any socket.
 libuv and tokio run `getaddrinfo` on a worker thread; Go has its own resolver; Rust's std blocks. Recommended: the
-worker form, completing through KR-201's waker, with a deadline after which the caller stops waiting (the worker
+worker form, completing through the `Poller`'s waker (`0.9.719`, SPEC *Readiness*), with a deadline after which the caller stops waiting (the worker
 finishes and its answer is dropped). No DNS exists in a browser, so the request is native-only.
 
 <a id="s1-url"></a>
@@ -2233,7 +2160,7 @@ language, and "a native scheduler can back the very same blocking-shaped surface
 `Poller`:
 - **Each isolate accepts on its own listener.** `ListenOptions.balance` (Linux, `0.9.713`; FreeBSD is KR-227) shares one
   port across them.
-- **Isolates talk through channels.** KR-201's waker ends a `wait` when something arrives.
+- **Isolates talk through channels.** The `Poller`'s waker (`0.9.719`) ends a `wait` when something arrives.
 - **A fiber runs on one isolate's thread only.** So a task needs no `Send` bound, there is no colouring and no `Pin`,
   and freedom from data races keeps holding by construction, as it does today. Fibers interleave only where one
   blocks, as JavaScript tasks and Erlang processes do.
@@ -2253,8 +2180,8 @@ offers it in its standard surface. Size: XL, so a design document comes before a
 - **Timers need nothing new.** `Poller.wait(timeoutMs)` is the sleep of a poll loop.
 - **The job system is the other half of this row.** That is CPU fan-out on the sized pool, where head-of-line
   blocking is the problem. Go merges the two schedulers; Java keeps them apart. The design says which.
-- **Prerequisites, in order:** a `Poller` that scales, with a ready list (shipped `0.9.718`, SPEC *Readiness*), then KR-201 (a coalesced
-  waker, and a `Channel` a `Poller` waits on), then this row. Beside them: KR-202 (a DNS lookup a loop can poll) and
+- **Prerequisites, shipped:** a `Poller` that scales, with a ready list (`0.9.718`), then a coalesced waker and a
+  `Channel` a `Poller` waits on (`0.9.719`), both in SPEC *Readiness*. Beside this row: KR-202 (a DNS lookup a loop can poll) and
   KR-7 (a non-blocking `File`; a regular file's read blocks on every OS, so the production answer is a small offload
   pool, as libuv and tokio have).
 - **A client of a database or a cache is a named case.** One connection per core, multiplexed, its callers fibers on

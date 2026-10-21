@@ -28,7 +28,8 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 - **Readiness (`std::net::Poller`).** epoll on Linux, kqueue on macOS and AFD polling over an I/O completion port on
   Windows. A wait costs what is ready: 0.18 µs with 10,000 idle connections, against 7.3 ms for `poll(2)`. `add(fd:, interest:, token:)` registers a socket under a
   caller-chosen token. `wait(events:, timeoutMs:)` fills a caller-owned `Events` with `{token, readable, writable}`,
-  one event per descriptor and no allocation. It is the substrate a loop is built on.
+  one event per descriptor and no allocation. Another isolate ends a wait through a `Waker` (`p.waker(token:)`), and
+  `Receiver.wakeOnSend` makes a channel one more thing the loop waits on. It is the substrate a loop is built on.
 - **DNS.** `resolve`/`resolveOne` over `getaddrinfo`, IPv4 and IPv6. It blocks; a lookup a loop can poll is
   KR-202.
 - **Concurrency.** Isolates (`spawn`), ownership-moving channels, `scope`, `Atomic<T>` and `parallel_for`, native
@@ -55,7 +56,6 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 
 | Need | Status | Row |
 |---|---|---|
-| A `Poller` wakeup another isolate can trigger | ❌ workaround: a stream pair as a wake channel | KR-201 |
 | A DNS lookup a loop can poll, with a deadline | ❌ `resolve` blocks | KR-202 |
 | Percent-encoding and a URL type | ❌ ruled for std (strict RFC 3986, plus form encoding); not yet built | KR-204 |
 | Compression for `Content-Encoding` and permessage-deflate | ❌ ruled for std: deflate/zlib/gzip both ways, decoders with a required limit; zstd and brotli later | KR-5, KR-212, KR-213 |

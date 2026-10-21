@@ -1781,6 +1781,7 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
 #include <poll.h>         // poll, struct pollfd, POLLIN/POLLOUT (the Poller's fallback; kama_capture2; kama_sleep_ms)
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #include <sys/epoll.h>    // epoll_create1, epoll_ctl, epoll_wait (std::net::Poller, KR-230)
+#include <sys/eventfd.h>  // eventfd: a Poller's waker (std::concurrent::Waker, KR-201)
 #elif defined(__APPLE__) || defined(__FreeBSD__)
 #include <sys/event.h>    // kqueue, kevent, EV_SET (std::net::Poller, KR-230)
 #endif
@@ -2956,6 +2957,64 @@ static inline int32_t kama_socket_error(ptrdiff_t fd) {
 typedef struct kama__poll_ev { uint64_t token; int32_t bits; } kama__poll_ev;
 typedef struct kama__poll_events { int kama_cap; void* os; kama__poll_ev* out; } kama__poll_events;
 
+// A waker (std::concurrent::Waker, KR-201): a wake source registered with one Poller, which another isolate triggers
+// to end that Poller's wait. The wait reports it as an event carrying the token it was made with. It is shared and
+// reference-counted: the Poller holds one reference and every Waker handle another, so a handle that outlives its
+// Poller wakes nothing and frees nothing early. Each backend owns its own OS object, duplicated where the Poller's
+// could close under it:
+//   epoll    an eventfd in the epoll set
+//   kqueue   EVFILT_USER on a duplicate of the kqueue descriptor (no descriptor of its own)
+//   AFD      a packet posted to a duplicate of the completion port's handle
+//   poll(2)  a pipe
+// A wake is COALESCED: `pending` says one is on its way, so only the clear-to-set transition makes a system call,
+// and the wait that reports it clears the flag BEFORE draining, so a wake landing mid-drain is reported again rather
+// than lost.
+typedef struct kama__waker {
+    const kama_waker_ops* ops;      // first, so kama_channel.h can trigger it (kama_runtime.h)
+    int32_t refs;
+    int32_t pending;
+    uint64_t token;
+#if defined(_WIN32)
+    HANDLE port;
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
+    int efd;
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    int kq;
+#else
+    int rd, wr;
+#endif
+} kama__waker;
+// The Poller's own references, one per waker it made (usually one).
+typedef struct kama__wakers { kama__waker** v; int n, cap; } kama__wakers;
+static inline int kama__wakers_push(kama__wakers* ws, kama__waker* w) {
+    if (ws->n == ws->cap) {
+        int nc = ws->cap ? ws->cap * 2 : 4;
+        kama__waker** nv = (kama__waker**)kama_alloc((size_t)nc * sizeof *nv, _Alignof(kama__waker*));
+        if (!nv) { errno = ENOMEM; return -1; }
+        if (ws->n) kama_copy(nv, ws->v, (size_t)ws->n * sizeof *nv);
+        if (ws->v) kama_free(ws->v, (size_t)ws->cap * sizeof *nv, _Alignof(kama__waker*));
+        ws->v = nv; ws->cap = nc;
+    }
+    ws->v[ws->n++] = w;
+    return 0;
+}
+static inline void kama__waker_release(void* wp);
+static inline void kama__wakers_drop(kama__wakers* ws) {
+    for (int i = 0; i < ws->n; i++) kama__waker_release(ws->v[i]);
+    if (ws->v) kama_free(ws->v, (size_t)ws->cap * sizeof *ws->v, _Alignof(kama__waker*));
+    ws->v = NULL; ws->n = ws->cap = 0;
+}
+static inline const kama_waker_ops* kama__waker_ops(void);
+static inline kama__waker* kama__waker_new(uint64_t token) {
+    kama__waker* w = (kama__waker*)kama_alloc(sizeof *w, _Alignof(kama__waker));
+    if (!w) { errno = ENOMEM; return NULL; }
+    memset(w, 0, sizeof *w);
+    w->ops = kama__waker_ops(); w->refs = 2; w->pending = 0; w->token = token;   // the Poller's and the handle's
+    return w;
+}
+// The wait saw this waker's event: clear first, then the backend drains (see above).
+static inline void kama__waker_seen(kama__waker* w) { __atomic_store_n(&w->pending, 0, __ATOMIC_SEQ_CST); }
+
 #if defined(_WIN32)
 // AFD polling over an I/O completion port (KR-230): readiness, as epoll and kqueue give it, with no FD_SETSIZE ceiling
 // and a wait that costs what is ready. mio (tokio's), wepoll and Java's Windows selector since JDK 17 use the same
@@ -3037,7 +3096,28 @@ typedef struct kama__poller {
     kama__NtDeviceIoControlFile NtDeviceIoControlFile;
     kama__NtCancelIoFileEx NtCancelIoFileEx;
     kama__RtlNtStatusToDosError RtlNtStatusToDosError;
+    kama__wakers wk;
 } kama__poller;
+// A waker's packet carries this key; AFD's completions carry 0.
+#define KAMA__WAKE_KEY ((ULONG_PTR)1)
+static inline int kama__waker_signal(kama__waker* w) {
+    if (PostQueuedCompletionStatus(w->port, 0, KAMA__WAKE_KEY, (LPOVERLAPPED)(void*)w)) return 0;
+    kama__os_fail(GetLastError(), ENOMEM); return -1;
+}
+static inline void kama__waker_close(kama__waker* w) { CloseHandle(w->port); }
+static inline void* kama_poller_waker(void* ph, uint64_t token) {
+    kama__poller* p = (kama__poller*)ph;
+    kama__waker* w = kama__waker_new(token);
+    if (!w) { kama__os_fail(ERROR_NOT_ENOUGH_MEMORY, ENOMEM); return NULL; }
+    if (!DuplicateHandle(GetCurrentProcess(), p->port, GetCurrentProcess(), &w->port, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+        kama__os_fail(GetLastError(), ENOMEM); kama_free(w, sizeof *w, _Alignof(kama__waker)); return NULL;
+    }
+    if (kama__wakers_push(&p->wk, w) != 0) {
+        CloseHandle(w->port); kama_free(w, sizeof *w, _Alignof(kama__waker));
+        kama__os_fail(ERROR_NOT_ENOUGH_MEMORY, ENOMEM); return NULL;
+    }
+    return w;
+}
 
 static inline void kama__afd_ntfail(kama__poller* p, kama__ntstatus st) {
     const DWORD e = p->RtlNtStatusToDosError(st);
@@ -3253,6 +3333,12 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
             kama__os_fail(err, EINVAL); return -1;
         }
         for (ULONG i = 0; i < got; i++) {
+            if (os[i].lpCompletionKey == KAMA__WAKE_KEY) {   // a waker's packet: its event, once however many wakes
+                kama__waker* w = (kama__waker*)(void*)os[i].lpOverlapped;
+                kama__waker_seen(w);
+                e->out[n].token = w->token; e->out[n].bits = 1; n++;
+                continue;
+            }
             if (!os[i].lpOverlapped) continue;             // a packet posted to the port, not a poll's completion
             kama__afd_sock* st = (kama__afd_sock*)(void*)os[i].lpOverlapped;
             st->pending = 0; p->inflight--;
@@ -3294,12 +3380,13 @@ static inline void kama_poller_free(void* ph) {
         ULONG got = 0;
         if (!GetQueuedCompletionStatusEx(p->port, buf, 64, &got, INFINITE, FALSE)) break;
         for (ULONG i = 0; i < got; i++) {
-            if (!buf[i].lpOverlapped) continue;
+            if (buf[i].lpCompletionKey == KAMA__WAKE_KEY || !buf[i].lpOverlapped) continue;   // not a poll's completion
             kama__afd_sock* st = (kama__afd_sock*)(void*)buf[i].lpOverlapped;
             st->pending = 0; p->inflight--;
             kama__afd_free_sock(p, st);            // every state still in flight here is deleted
         }
     }
+    kama__wakers_drop(&p->wk);                     // a waker's packet still queued is never read: the port goes too
     if (p->table) kama_free(p->table, p->kama_cap * sizeof *p->table, _Alignof(kama__afd_sock*));
     for (kama__afd_group* g = p->groups; g;) { kama__afd_group* nx = g->next; CloseHandle(g->afd); kama_free(g, sizeof *g, _Alignof(kama__afd_group)); g = nx; }
     CloseHandle(p->port);
@@ -3310,13 +3397,32 @@ static inline void kama_poller_free(void* ph) {
 // epoll: the kernel keeps the registrations, and a wait returns only what is ready. The token rides in the
 // event's own data, so nothing here keeps a table.
 typedef struct epoll_event kama__poll_os_ev;
-typedef struct kama__poller { int epfd; } kama__poller;
+typedef struct kama__poller { int epfd; kama__wakers wk; } kama__poller;
 static inline void* kama_poller_create(void) {
     int fd = epoll_create1(EPOLL_CLOEXEC);
     if (fd < 0) return NULL;
     kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
     if (!p) { close(fd); errno = ENOMEM; return NULL; }
+    memset(p, 0, sizeof *p);
     p->epfd = fd; return p;
+}
+static inline int kama__waker_signal(kama__waker* w) {
+    uint64_t one = 1;
+    return write(w->efd, &one, sizeof one) == (long)sizeof one || errno == EAGAIN ? 0 : -1;   // EAGAIN: already set
+}
+static inline void kama__waker_close(kama__waker* w) { close(w->efd); }
+static inline void* kama_poller_waker(void* ph, uint64_t token) {
+    kama__poller* p = (kama__poller*)ph;
+    kama__waker* w = kama__waker_new(token);
+    if (!w) return NULL;
+    w->efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    if (w->efd < 0) { kama_free(w, sizeof *w, _Alignof(kama__waker)); return NULL; }
+    struct epoll_event ev; memset(&ev, 0, sizeof ev);
+    ev.events = EPOLLIN; ev.data.u64 = token;
+    if (epoll_ctl(p->epfd, EPOLL_CTL_ADD, w->efd, &ev) != 0 || kama__wakers_push(&p->wk, w) != 0) {
+        const int e = errno; close(w->efd); kama_free(w, sizeof *w, _Alignof(kama__waker)); errno = e; return NULL;
+    }
+    return w;
 }
 static inline int32_t kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest, uint64_t token) {
     kama__poller* p = (kama__poller*)ph;
@@ -3339,6 +3445,12 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
     if (n < 0) return -1;
     for (int i = 0; i < n; i++) {
         uint32_t ev = os[i].events;
+        // A waker's eventfd carries its token. A socket the caller added under the same token is indistinguishable
+        // to the caller anyway; draining an eventfd that was not set reads EAGAIN, which costs nothing.
+        for (int k = 0; k < p->wk.n; k++) if (p->wk.v[k]->token == os[i].data.u64) {
+            uint64_t v; kama__waker_seen(p->wk.v[k]);
+            while (read(p->wk.v[k]->efd, &v, sizeof v) == (long)sizeof v) { }
+        }
         int32_t bits = 0;
         if (ev & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) bits |= 1;
         if (ev & (EPOLLOUT | EPOLLERR)) bits |= 2;
@@ -3350,6 +3462,7 @@ static inline void kama_poller_free(void* ph) {
     kama__poller* p = (kama__poller*)ph;
     if (!p) return;
     close(p->epfd);
+    kama__wakers_drop(&p->wk);
     kama_free(p, sizeof *p, _Alignof(kama__poller));
 }
 
@@ -3359,14 +3472,35 @@ static inline void kama_poller_free(void* ph) {
 // pointer) and which slot of the current wait's list it took, which merges the two events in O(1).
 typedef struct kevent kama__poll_os_ev;
 typedef struct kama__kq_fd { uint64_t token; uint32_t gen; uint32_t slot; } kama__kq_fd;
-typedef struct kama__poller { int kq; uint32_t gen; kama__kq_fd* fds; size_t nfds; } kama__poller;
+typedef struct kama__poller { int kq; uint32_t gen; kama__kq_fd* fds; size_t nfds; kama__wakers wk; } kama__poller;
 static inline void* kama_poller_create(void) {
     int kq = kqueue();
     if (kq < 0) return NULL;
     (void)fcntl(kq, F_SETFD, FD_CLOEXEC);
     kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
     if (!p) { close(kq); errno = ENOMEM; return NULL; }
-    p->kq = kq; p->gen = 0; p->fds = NULL; p->nfds = 0; return p;
+    memset(p, 0, sizeof *p);
+    p->kq = kq; return p;
+}
+// EVFILT_USER names a waker by its own address: a user event's identifier is its own namespace, apart from descriptors.
+static inline int kama__waker_signal(kama__waker* w) {
+    struct kevent k;
+    EV_SET(&k, (uintptr_t)w, EVFILT_USER, 0, NOTE_TRIGGER, 0, NULL);
+    return kevent(w->kq, &k, 1, NULL, 0, NULL) < 0 ? -1 : 0;
+}
+static inline void kama__waker_close(kama__waker* w) { close(w->kq); }
+static inline void* kama_poller_waker(void* ph, uint64_t token) {
+    kama__poller* p = (kama__poller*)ph;
+    kama__waker* w = kama__waker_new(token);
+    if (!w) return NULL;
+    w->kq = fcntl(p->kq, F_DUPFD_CLOEXEC, 0);        // the waker's own reference to the queue, which outlives p->kq
+    if (w->kq < 0) { kama_free(w, sizeof *w, _Alignof(kama__waker)); return NULL; }
+    struct kevent k;
+    EV_SET(&k, (uintptr_t)w, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, NULL);
+    if (kevent(p->kq, &k, 1, NULL, 0, NULL) < 0 || kama__wakers_push(&p->wk, w) != 0) {
+        const int e = errno; close(w->kq); kama_free(w, sizeof *w, _Alignof(kama__waker)); errno = e; return NULL;
+    }
+    return w;
 }
 // The per-descriptor table covers `fd`: grown at add, so a wait never allocates. Descriptors are dense (the
 // kernel hands out the lowest free one), so its size follows how many the process has open.
@@ -3428,6 +3562,13 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
     }
     int len = 0;
     for (int i = 0; i < n; i++) {
+        if (os[i].filter == EVFILT_USER) {            // a waker: EV_CLEAR has reset it, so one event per trigger
+            for (int k = 0; k < p->wk.n; k++) if ((uintptr_t)p->wk.v[k] == os[i].ident) {
+                kama__waker_seen(p->wk.v[k]);
+                e->out[len].token = p->wk.v[k]->token; e->out[len].bits = 1; len++;
+            }
+            continue;
+        }
         size_t fd = (size_t)os[i].ident;
         if ((os[i].flags & EV_ERROR) || fd >= p->nfds) continue;
         int32_t bits = os[i].filter == EVFILT_READ ? 1 : os[i].filter == EVFILT_WRITE ? 2 : 0;
@@ -3444,6 +3585,7 @@ static inline void kama_poller_free(void* ph) {
     kama__poller* p = (kama__poller*)ph;
     if (!p) return;
     close(p->kq);
+    kama__wakers_drop(&p->wk);
     if (p->fds) kama_free(p->fds, p->nfds * sizeof(kama__kq_fd), _Alignof(kama__kq_fd));
     kama_free(p, sizeof *p, _Alignof(kama__poller));
 }
@@ -3451,11 +3593,11 @@ static inline void kama_poller_free(void* ph) {
 #else
 // poll(2), for a POSIX target with neither: correct, and a wait scans every registration.
 typedef char kama__poll_os_ev;   // poll(2) reports in place: the list needs no array of the OS's own
-typedef struct kama__poller { struct pollfd* fds; uint64_t* tokens; int kama_len; int kama_cap; } kama__poller;
+typedef struct kama__poller { struct pollfd* fds; uint64_t* tokens; int kama_len; int kama_cap; kama__wakers wk; } kama__poller;
 static inline void* kama_poller_create(void) {
     kama__poller* p = (kama__poller*)kama_alloc(sizeof *p, _Alignof(kama__poller));
     if (!p) { errno = ENOMEM; return NULL; }
-    p->fds = NULL; p->tokens = NULL; p->kama_len = 0; p->kama_cap = 0; return p;
+    memset(p, 0, sizeof *p); return p;
 }
 static inline int32_t kama_poller_add(void* ph, ptrdiff_t fd, int32_t interest, uint64_t token) {
     kama__poller* p = (kama__poller*)ph;
@@ -3494,6 +3636,10 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
     int n = 0;
     for (int i = 0; i < p->kama_len && n < e->kama_cap; i++) {
         short rev = p->fds[i].revents;
+        for (int k = 0; k < p->wk.n; k++) if (rev && p->fds[i].fd == p->wk.v[k]->rd) {
+            char buf[64]; kama__waker_seen(p->wk.v[k]);
+            while (read(p->wk.v[k]->rd, buf, sizeof buf) > 0) { }
+        }
         int32_t bits = 0;
         if (rev & (POLLIN | POLLHUP | POLLERR | POLLNVAL)) bits |= 1;   // NVAL: closed while watched; the read says so
         if (rev & (POLLOUT | POLLERR)) bits |= 2;
@@ -3505,10 +3651,47 @@ static inline void kama_poller_free(void* ph) {
     kama__poller* p = (kama__poller*)ph;
     if (!p) return;
     if (p->fds) { kama_free(p->fds, (size_t)p->kama_cap * sizeof(struct pollfd), _Alignof(struct pollfd)); kama_free(p->tokens, (size_t)p->kama_cap * sizeof(uint64_t), _Alignof(uint64_t)); }
+    kama__wakers_drop(&p->wk);
     kama_free(p, sizeof *p, _Alignof(kama__poller));
+}
+static inline int kama__waker_signal(kama__waker* w) {
+    const char b = 1;
+    return write(w->wr, &b, 1) == 1 || errno == EAGAIN ? 0 : -1;   // EAGAIN: the pipe is full, so it is set
+}
+static inline void kama__waker_close(kama__waker* w) { close(w->rd); close(w->wr); }
+static inline void* kama_poller_waker(void* ph, uint64_t token) {
+    kama__poller* p = (kama__poller*)ph;
+    kama__waker* w = kama__waker_new(token);
+    if (!w) return NULL;
+    int fds[2];
+    if (pipe(fds) != 0) { kama_free(w, sizeof *w, _Alignof(kama__waker)); return NULL; }
+    for (int i = 0; i < 2; i++) { (void)fcntl(fds[i], F_SETFL, fcntl(fds[i], F_GETFL, 0) | O_NONBLOCK); (void)fcntl(fds[i], F_SETFD, FD_CLOEXEC); }
+    w->rd = fds[0]; w->wr = fds[1];
+    if (kama_poller_add(p, w->rd, 1, token) != 0 || kama__wakers_push(&p->wk, w) != 0) {
+        const int e = errno; kama__waker_close(w); kama_free(w, sizeof *w, _Alignof(kama__waker)); errno = e; return NULL;
+    }
+    return w;
 }
 #endif
 
+static inline void kama__waker_retain(void* wp) { __atomic_add_fetch(&((kama__waker*)wp)->refs, 1, __ATOMIC_RELAXED); }
+static inline void kama__waker_release(void* wp) {
+    kama__waker* w = (kama__waker*)wp;
+    if (__atomic_sub_fetch(&w->refs, 1, __ATOMIC_ACQ_REL) != 0) return;
+    kama__waker_close(w);
+    kama_free(w, sizeof *w, _Alignof(kama__waker));
+}
+static inline int32_t kama__waker_wake(void* wp) {
+    kama__waker* w = (kama__waker*)wp;
+    if (__atomic_exchange_n(&w->pending, 1, __ATOMIC_ACQ_REL)) return 0;   // a wake is on its way already
+    if (kama__waker_signal(w) == 0) return 0;
+    __atomic_store_n(&w->pending, 0, __ATOMIC_RELEASE);                   // nothing was sent: let the next one try
+    return -1;
+}
+static inline const kama_waker_ops* kama__waker_ops(void) {
+    static const kama_waker_ops ops = { kama__waker_wake, kama__waker_retain, kama__waker_release };
+    return &ops;
+}
 // The ready list. A capacity under 1 is a program's mistake (nothing could ever be reported), and one over what a
 // single wait call takes is that many: the rest of a large ready set comes back at the next wait.
 static inline void* kama_poll_events_new(ptrdiff_t capacity) {

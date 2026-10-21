@@ -2468,6 +2468,30 @@ merges them, so code tested on Linux never meets a second event for a connection
 descriptors than the list holds are reported by the next wait. It is level-triggered: a socket with unread data is
 reported again by every wait, so a reader may stop part way.
 
+**Waking a loop from another isolate.** `p.waker(token:)` answers a `Waker` (`std::concurrent`). Its `wake()`, from <!-- test: net_poller_waker -->
+any isolate, ends the `Poller`'s wait, which reports an `Event` carrying that token, `readable`. It is the one place a
+loop handles events, so the loop learns what woke it there.
+- **Copyable, and shared.** A `Waker` is `Sendable` and `Copyable(bare: give)`: `copy w` is another handle to the same
+  wake source. The state lives until the last handle and the `Poller` have both let go, so a waker that outlives its
+  `Poller` wakes nothing, safely.
+- **Coalesced.** Only the first of several wakes before a wait makes a system call, and the wait reports one event for
+  them all. The wait clears the flag before it reports, so a wake that lands while the loop drains is reported again
+  at the next wait, never lost. A busy producer pays no system call per message (Go, libuv and Java do the same).
+- **Each OS's own mechanism:** an eventfd under epoll; `EVFILT_USER` under kqueue, with no descriptor of its own; a
+  packet posted to the completion port under AFD; a pipe under `poll(2)`.
+- **Infallible.** It fails only when the OS has run out of the resources to take the signal, which panics, as running
+  out of memory does. A full eventfd or pipe is already set.
+
+**A channel the loop waits on.** `rx.wakeOnSend(waker:)` gives a `Receiver`'s channel a waker. A send that takes the <!-- test: net_poller_waker -->
+queue from empty to non-empty wakes the loop, and so does the last sender's close. Items already queued wake it at
+once, so a late registration misses nothing.
+- The loop drains with `tryRecv` until `Empty` (or `Closed`).
+- A send to a queue that already holds items costs nothing more, and the wake is made after the channel's lock is
+  released.
+- So an isolate that owns a socket and serves other isolates' requests waits for both in one `wait`. Before, it had to
+  alternate a channel wait and a socket wait, each with a timeout.
+- `Waker` lives beside the channel, so a program that only uses channels compiles nothing more for it.
+
 The ready list is its own value, not the `Poller`'s, because `foreach` freezes what it walks. A loop over `Events` can
 therefore `add` the connection it just accepted. Raising the descriptor limit first (`raiseOpenFileLimit`) lets a <!-- test: net_poller_scale -->
 loop hold thousands, and Windows, which bounds sockets by memory, past the 1,024 its `select()` held. Measured on `0.9.717`: one ready descriptor among N idle Unix-domain pairs, the best of seven
@@ -6890,7 +6914,7 @@ reaches a bundle. <!-- xfail: view_field, iface_field -->
 rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
 `UnixStream`, `UnixStreamPair`, `UnixListener`, `UnixDatagram`, `UnixDatagramPair`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`,
 `StringWriter`, `SliceReader`, `PeerCredentials`, `Descriptor`, and the values `SocketAddr`, `UnixAddr`,
-`IpAddr`, `RecvFrom<A>` (for a `Sendable` address), `Event`, `Events`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
+`IpAddr`, `RecvFrom<A>` (for a `Sendable` address), `Event`, `Events`, `Waker`, `Metadata`, `Permissions`, `ExitStatus`, `UserId`, `GroupId`. So a connection accepted on one isolate is
 served on another, and a connection pool is shared by workers. The `ReliableStream` contract does not require it
 of an implementor: the browser's `WebSocket` is a JavaScript object bound to one thread, and a `MemoryStream` shares its
 buffers with its peer through a `Shared`. A channel element is

@@ -1,0 +1,127 @@
+// A `Poller` loop woken by another isolate (KR-201). Returns 42, or the number of the failed check.
+//   - `p.waker(token:)`: a wake from another isolate ends a 5 s wait at once, as an `Event` with the waker's token.
+//   - Coalesced: three wakes before a wait report ONE event, and the next wait reports none.
+//   - A channel the loop waits on: `Receiver.wakeOnSend` wakes the loop on a send to an empty queue and on the last
+//     sender's close, so a loop that drains with `tryRecv` receives all 200 items and then sees `Closed`, with no
+//     timeout ever reached. Items queued before `wakeOnSend` wake it at once.
+//   - A waker that outlives its Poller: `wake()` still returns, and nothing is freed early (the san leg checks).
+import {
+    std::net::Poller, std::net::Interest, std::net::Event, std::net::Events,
+    std::concurrent::Waker, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+    std::concurrent::RecvError, std::io::IoError, std::time::sleep, std::time::Duration, std::time::monotonicNow,
+    std::time::Instant,
+};
+
+comptime uint64 WAKE = 9ui64;
+comptime uint64 WORK = 10ui64;
+
+fn int32 waited(Result<int32, IoError> r) { return match (r) { case Ok(value: n): n; case Err(error: e): -1; }; }
+
+fn void later(Waker w) {
+    sleep(d: Duration.fromMillis(ms: 50i64));
+    w.wake();
+}
+
+fn void produce(Sender<int32> tx) {
+    int32 i = 0;
+    while (i < 200) {
+        _ = tx.send(item: i);
+        if (i % 50 == 0) { sleep(d: Duration.fromMillis(ms: 5i64)); }   // bursts, so the queue empties between some
+        i = i + 1;
+    }
+}   // the sender closes here: the loop hears of it too
+
+unsafe fn int32 run(ref Poller p) {
+    Events ev = Events.withCapacity(capacity: 8);
+    Result<Waker, IoError> rw = p.waker(token: WAKE);
+    Waker w = match (give rw) { case Ok(value: x): { := give x; } case Err(error: e): { return 1; } };
+
+    // Another isolate wakes a long wait.
+    Instant t0 = monotonicNow();
+    Waker other = copy w;
+    scope {
+        spawn later(w: give other);
+        if (waited(r: p.wait(events: ev, timeoutMs: 5000)) != 1) { return 2; }
+    }
+    if (t0.elapsed().asMillis() > 2500i64) { return 3; }
+    foreach (Event e in ev) { if (e.token != WAKE || !e.readable) { return 4; } }
+
+    // Coalesced: three wakes, one event, then quiet.
+    w.wake(); w.wake(); w.wake();
+    if (waited(r: p.wait(events: ev, timeoutMs: 1000)) != 1) { return 6; }
+    if (waited(r: p.wait(events: ev, timeoutMs: 50)) != 0) { return 7; }
+
+    // A channel the loop waits on.
+    Result<Waker, IoError> rj = p.waker(token: WORK);
+    Waker jw = match (give rj) { case Ok(value: x): { := give x; } case Err(error: e): { return 8; } };
+    Channel<int32> ch = Channel.bounded(capacity: 16ui64);
+    Receiver<int32> rx = ch.receiver();
+    rx.wakeOnSend(waker: give jw);
+    int32 got = 0;
+    int32 sum = 0;
+    bool closed = false;
+    Sender<int32> tx = ch.sender();
+    scope {
+        spawn produce(tx: give tx);
+        int32 rounds = 0;
+        while (!closed && rounds < 1000) {
+            int32 n = waited(r: p.wait(events: ev, timeoutMs: 5000));
+            if (n <= 0) { return 9; }                        // a timeout: a send or the close did not wake the loop
+            foreach (Event e in ev) { if (e.token != WORK) { return 10; } }
+            bool draining = true;
+            while (draining) {
+                match (rx.tryRecv()) {
+                    case Ok(value: v): { got = got + 1; sum = sum + v; }
+                    case Err(error: re): {
+                        draining = false;
+                        match (re) { case Closed: { closed = true; } case Empty: { } };
+                    }
+                };
+            }
+            rounds = rounds + 1;
+        }
+    }
+    if (got != 200 || sum != 19900) { return 11; }
+    if (!closed) { return 12; }
+
+    // Items queued before `wakeOnSend` wake the loop at once.
+    Result<Waker, IoError> rk = p.waker(token: 11ui64);
+    Waker kw = match (give rk) { case Ok(value: x): { := give x; } case Err(error: e): { return 13; } };
+    Channel<int32> pre = Channel.bounded(capacity: 4ui64);
+    Receiver<int32> prx = pre.receiver();
+    Sender<int32> ptx = pre.sender();
+    _ = ptx.send(item: 7);
+    prx.wakeOnSend(waker: give kw);
+    if (waited(r: p.wait(events: ev, timeoutMs: 1000)) != 1) { return 14; }
+    foreach (Event e in ev) { if (e.token != 11ui64) { return 15; } }
+    return 0;
+}
+
+fn void outlive(Waker w) {
+    w.wake();
+}
+
+unsafe fn int32 outlived() {
+    Result<Poller, IoError> rp = Poller.create();
+    Poller p = match (give rp) { case Ok(value: x): { := give x; } case Err(error: e): { return 20; } };
+    Result<Waker, IoError> rw = p.waker(token: 1ui64);
+    Waker w = match (give rw) { case Ok(value: x): { := give x; } case Err(error: e): { return 21; } };
+    hangUp(p: give p);                                   // the Poller is gone
+    w.wake();
+    scope { spawn outlive(w: give w); }                  // and the last handle drops on another isolate
+    return 0;
+}
+
+fn void hangUp(Poller p) { }
+
+fn uint8 main() {
+    Result<Poller, IoError> rp = Poller.create();
+    return match (give rp) {
+        case Ok(value: p): {
+            int32 r = run(p: p);
+            if (r == 0) { r = outlived(); }
+            := r == 0 ? 42ui8 : cast<uint8>(r);
+        }
+        case Err(error: e): 81ui8;
+    };
+}
