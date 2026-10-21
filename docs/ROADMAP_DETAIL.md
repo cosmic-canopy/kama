@@ -411,17 +411,59 @@ Node raise it automatically too. Python: no kind; an explicit `resource.setrlimi
 
 #### Listener options: the backlog, and reuse-port where the OS balances it (KR-206)
 
-A second `TcpListener.bind` on a bound port is `AddrInUse` on macOS and Linux. `SO_REUSEADDR` is always set and
-cannot be configured (`lib/std/net/net.kama:327`), and the backlog is fixed at 128 (`:333`). Several isolates cannot
-each accept on one port; the workaround is one accepting isolate handing each `TcpStream` to a worker over a
-`Channel`, a hop per connection. Reuse-port differs by OS:
-- Linux's `SO_REUSEPORT` balances connections across the sockets.
-- FreeBSD's balanced form is `SO_REUSEPORT_LB`.
-- macOS takes the option without balancing (to be measured).
-- Windows has no equivalent.
+`TcpListener.bindTo` (`lib/std/net/net.kama`) always sets `SO_REUSEADDR`, and listens with a backlog of 128 that
+cannot be changed. Several isolates cannot each accept on one port; the workaround is one accepting isolate handing
+each `TcpStream` to a worker over a `Channel`, a hop per connection.
 
-Per the platform rule, a platform's delta lives in its own type: the backlog everywhere, and reuse-port where the OS
-balances. The spelling is to be decided.
+**Measured 2026-10-21** with a C probe: two listeners on one loopback port, then 200 connects.
+
+| | `SO_REUSEADDR` only: a second bind | `SO_REUSEPORT` on both: who accepts the 200 |
+|---|---|---|
+| macOS (Darwin 25.4) | `EADDRINUSE` | **all 200 go to the most recently bound listener**: a hand-off, not a balancer |
+| Linux (the container) | `EADDRINUSE` | 102 and 98: balanced |
+| FreeBSD | — | `SO_REUSEPORT_LB` is the balanced form (from its manual, unmeasured) |
+| Windows | **⚠️ see below** | no equivalent |
+
+⚠️ **A Windows defect to fix in the same row.** On POSIX, `SO_REUSEADDR` only lets a new listener reuse a port whose
+old connections linger in TIME_WAIT. On Windows it means something else: a socket that sets it may bind a port
+**another socket is actively listening on**. Since kama sets it on every listener, a second `TcpListener.bind` on a
+live port very likely succeeds on Windows, and which listener gets a connection is then undefined. No fixture holds
+this down. Go and Rust set `SO_REUSEADDR` on Unix only. Windows already lets a port with TIME_WAIT connections be
+bound again by default, so leaving the option off loses nothing. Go's comment on that line: "SO_REUSEADDR should not
+be used here, as it allows a socket to forcibly bind to a port in use by another socket". To be probed on CI by a
+fixture that says a second bind on a live port is `AddrInUse` on every OS.
+
+**What others do.**
+
+| | Backlog | Reuse-port |
+|---|---|---|
+| Rust std | 128, fixed | none (the `socket2` crate: `set_reuse_port`) |
+| Go | the system maximum (`somaxconn`) | only through `ListenConfig.Control`, a raw hook |
+| Python | `create_server(backlog=)` | `reuse_port=True`, `ValueError` where unsupported |
+| Node | `listen({backlog})`, 511 | `reusePort: true` (23.1), throws where unsupported |
+| Zig | `listen(.{ .kernel_backlog = 128 })` | `.reuse_port = true` |
+| Java | `ServerSocket(port, backlog)` | `SO_REUSEPORT`, `UnsupportedOperationException` on Windows |
+
+**Recommendation.** One primary interface, `TcpListener.bindWith(address:, options:)`, taking a `ListenOptions`. By the
+platform rule this is a per-platform type: the twins share a core and each adds its platform's own extra.
+- **Every OS:** `backlog`, defaulting to 128, which is what `bind` keeps using.
+- **Linux and FreeBSD:** plus `balance`, several listeners sharing the port while the kernel spreads connections
+  across them (`SO_REUSEPORT`; FreeBSD's `SO_REUSEPORT_LB`). This is the isolate-per-core server.
+- **macOS:** plus `handOff`, a later listener taking the port's new connections (`SO_REUSEPORT`, as measured). This is
+  a graceful restart. It is offered under its own name because it is not a balancer, and calling it `balance` would
+  promise what macOS does not do.
+- **Windows:** the backlog only. Every listener stops setting `SO_REUSEADDR`.
+
+Size S–M.
+
+**Ruled 2026-10-21:** the recommendation, in full:
+1. Windows drops `SO_REUSEADDR`, with a fixture that a second bind on a live port is `AddrInUse` on every OS.
+2. The backlog defaults to 128, as today.
+3. The spelling is `bindWith(address:, options: ListenOptions)`, with per-platform `ListenOptions` twins.
+4. macOS gets `handOff`.
+
+`@compileFor` gates declarations, never a statement, so a program that sets `balance` does it in a function or type
+gated to Linux and FreeBSD, the platform rule's usual shape.
 
 <a id="s1-windows-share-delete"></a>
 
@@ -489,10 +531,48 @@ serves a file, and the package's benchmarks say how much it is worth.
 
 #### An in-memory connected `ReliableStream` pair (KR-208)
 
-std has `StringWriter` and `SliceReader`, one direction each, and no connected pair implementing `ReliableStream`.
-Each protocol package writes its own for tests with the same behaviour: non-blocking, `WouldBlock` when empty, 0 after
-the far end shuts. Go ships `net.Pipe`. Recommended: a pair in std with exactly that behaviour. The hooks a test uses
-to stall writes stay in the test, as a wrapper over it.
+std has `StringWriter` and `SliceReader`, one direction each. Each protocol package writes its own two-way test pipe
+with the same behaviour: non-blocking, `WouldBlock` when empty, 0 after the far end shuts.
+
+**Measured on `0.9.711` (2026-10-21): the row's premise is half wrong.** `UnixStreamPair` (`0.9.653`, SPEC *A connected pair with no
+path*, shipped a day before this row was filed) is a connected pair of `UnixStream`s, and `UnixStream implements ReliableStream`. It works on
+Linux, macOS and Windows. Set non-blocking, a read with nothing queued is `WouldBlock`, and after the far end's
+`shutdown(how: Write)` or drop it reads 0. So on native targets std already has a test pipe. Three things it cannot do:
+- **wasm.** There are no sockets, so a package that runs its tests on both targets has no pair there.
+- **A chosen capacity.** The kernel sizes the buffers, and the size differs by OS, so a test that a protocol survives a
+  partial write at N bytes is not the same test everywhere.
+- **No descriptors.** Each pair costs two, which matters only in a large suite.
+
+**What others do.**
+
+| | Two-way in-memory pair | Bound | Where |
+|---|---|---|---|
+| Go | `net.Pipe()` | none: synchronous, each write waits for its read | std |
+| Node | `stream.duplexPair()` (22.6) | `highWaterMark` | std |
+| Rust | `tokio::io::duplex(max_buf_size)` | required | tokio |
+| Python | `socket.socketpair()` only: real sockets | the kernel's | std |
+| Java | `PipedInputStream` + `PipedOutputStream`, one way | 1024 bytes by default | std |
+| .NET | `System.IO.Pipelines.Pipe`, one way | pause thresholds | std |
+
+**Recommendation.** Ship it beside `UnixStreamPair`, because it covers wasm and gives a deterministic capacity. Use
+tokio's shape, with a required capacity:
+- `MemoryStreamPair.open(capacity: 4096)`, whose ends are `MemoryStream implements ReliableStream`, lent in place by
+  `first()` and `second()`, as `UnixStreamPair` lends its ends.
+- Each direction holds at most `capacity` bytes:
+  - a read of an empty direction is `WouldBlock`;
+  - a write takes what fits (a partial count), or is `WouldBlock` when nothing fits;
+  - after the far end's `shutdown(how: Write)` or drop, a read gets 0;
+  - a write to a dropped end, or after this end's own `shutdown(how: Write)`, is `BrokenPipe`.
+- It is always non-blocking: `setNonBlocking` does nothing, as on the web.
+- It is not `Sendable`: one isolate's test pipe. Between isolates, `UnixStreamPair` already serves natively.
+
+A test that stalls writes wraps an end, and that wrapper stays in the test. Size S.
+
+**Ruled 2026-10-21:** the recommendation, in full:
+1. Ship it beside `UnixStreamPair`.
+2. A required capacity per direction (tokio).
+3. One isolate (not `Sendable`).
+4. `MemoryStreamPair.open(capacity:)` with `MemoryStream` ends, lent by `first()` and `second()`.
 
 <a id="s1-fuzz"></a>
 
@@ -540,6 +620,53 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   (docs/packages.md): a fetched package cannot carry a local path. A `kama_workspace.json` holding both packages
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
+
+<a id="s2-views-compose"></a>
+
+### Views compose: a view may hold views (KR-225)
+
+**The gap, probed on `0.9.711` (2026-10-21).** A zero-copy tokenizer over its input cannot be written:
+
+```kama fragment
+type view Tokens {
+    ConstView<uint8> rest;   // error: a view (`ConstView`) borrows its buffer, so it can't be stored in a field
+    …
+}
+```
+
+The refusal is right for a `value` or a `resource` field, where the view would outlive its window. But the holder
+here is itself a `type view`, which is stack-only and rooted in the same `borrow` window. Nothing it holds can outlive
+what it views. Today the only way to write a parser, a tokenizer or a zero-copy deserializer is to copy the input
+into an owning buffer, or to pass the `ConstView` and a cursor by hand to every function.
+
+**This is Rust's strongest remaining advantage.** Rust stores a borrow anywhere and proves it with lifetimes
+(`struct Tokens<'a> { rest: &'a [u8] }`). kama refuses lifetimes (GOALS 3e). The two languages that took kama's road,
+a second-class borrow with no annotations, both let it compose:
+
+| | A borrow inside a borrowing type | Annotation |
+|---|---|---|
+| Rust | anywhere, with lifetimes | `'a` on the struct and every use |
+| C# 11 | a `ref struct` holds `Span<T>` and `ref` fields; the holder is stack-only | none |
+| Swift 6 | a `~Escapable` type holds a `Span`; the holder cannot escape (SE-0446, SE-0447) | `@lifetime` only where it is returned |
+| kama today | refused | — |
+
+**Recommendation.** A `type view` may hold views as fields, and the composite is a view under every existing rule:
+stack-only, no field of a non-view, no collection element, no escaping return, and its local rooted in a `borrow`
+window. With no lifetime annotations, this covers:
+- tokenizers and parsers over a `ConstView`;
+- iterators over slices;
+- a zero-copy deserializer into a view struct (serde's `#[serde(borrow)]`).
+
+A structure that must outlive the parse, such as an AST kept in a collection, keeps offsets into an owned buffer.
+That is what rustc itself does, and it is the honest limit of a language without lifetimes. Size M?
+
+**Decisions owed.**
+1. Views may hold views (C# and Swift), or the refusal stands.
+2. **Minting.** A view's constructor is private today, because a view may be minted only by the type that owns the
+   memory (`@viewable`). A composite view owns nothing and creates no borrow: it only re-holds views it was handed.
+   Recommended: a view whose fields are all views (or plain values) may have a public constructor taking views.
+3. A view-holding view as a `borrow` host, so `borrow tokens.rest as r { … }` works.
+4. Whether `@generate(Deserializable)` targets a view struct, for zero-copy JSON: here, or as its own row.
 
 <a id="s2-quoted-format"></a>
 
@@ -2175,6 +2302,118 @@ blocking is the job system's problem to solve.**
 - **A concurrent map (Java's `ConcurrentHashMap`, Go's `sync.Map`) — noted 2026-10-16, not ruled.** It is the
   shared-memory container the bullet above defers; isolates share through channels and immutable `Shared`. Whether
   the job system (KR-3) wants a channel-fronted or sharded map as a library is decided with that row.
+
+<a id="s6-fibers"></a>
+
+### Fibers and thread-per-core: blocking-shaped I/O for many connections (KR-3)
+
+**What is missing is cheap suspension, not threads.** kama has real threads (isolates), typed channels, `scope`,
+`Atomic<T>` and `parallel_for`. But an isolate is an OS thread with a stated stack, so a server holding 10,000
+connections today needs either 10,000 isolates or a state machine written by hand over `Poller`. A state machine is what
+Rust's `async` makes the compiler write, and what every Rust user then pays for in `Pin`, `Send + 'static` bounds and
+coloured functions. SPEC (*Why not green threads or `async`/`await`*) already rules the shape: no colouring in the
+language, and "a native scheduler can back the very same blocking-shaped surface with fibers".
+
+**What others do.**
+
+| | Model | Colouring | Cost a user pays |
+|---|---|---|---|
+| Rust | `async`/`await`, executor is a crate (tokio, smol) | yes | `Pin`; tokio's work-stealing forces `Send + 'static` on every task; ecosystem split per executor |
+| Rust, thread-per-core | glommio, monoio | yes | niche crates with their own APIs |
+| Go | goroutines, M:N, work-stealing | no | a GC; shared memory, so data races are possible |
+| Java 21 | virtual threads (Loom), M:N | no | shared memory, so races are possible |
+| Erlang | processes, shared-nothing | no | a VM |
+| C++ | Seastar: thread-per-core, shared-nothing | futures | callback-shaped code |
+| Swift, C# | `async`/`await` (+ actors in Swift) | yes | colouring |
+
+**Recommendation: thread-per-core, shared-nothing.** One isolate per core, each running a fiber scheduler over its own
+`Poller`:
+- **Each isolate accepts on its own listener.** KR-206's `balance` (Linux, FreeBSD) shares one port across them.
+- **Isolates talk through channels.** KR-201's waker ends a `wait` when something arrives.
+- **A fiber runs on one isolate's thread only.** So a task needs no `Send` bound, there is no colouring and no `Pin`,
+  and freedom from data races keeps holding by construction, as it does today. Fibers interleave only where one
+  blocks, as JavaScript tasks and Erlang processes do.
+- **`scope` extends to fibers**, as structured concurrency. A fiber cannot outlive the scope that started it, and its
+  failure is a value the scope receives.
+
+This is Erlang's isolation with Seastar's throughput, without Seastar's futures or Go's GC, and no mainstream language
+offers it in its standard surface. Size: XL, so a design document comes before any code.
+
+**Constraints already probed (2026-08-30), for the design to start from.**
+- **`Poller` is native-only.** On wasm you do not own the loop: `lib/std/app/app.kama` says emscripten drives the
+  tick, and a busy loop never sees an event. SPEC rejects fibers on wasm because they would need Asyncify. **Re-check
+  that** against JavaScript Promise Integration and wasm's stack-switching proposal, which postdate the reasoning.
+  Their current status is unverified.
+- **kama has no capturing closures, by design.** A spawned fiber is a `Job` contract or a bound function pointer
+  (`BindableFunctionPtr`), never `spawn(|| …)`.
+- **Timers need nothing new.** `Poller.wait(timeoutMs)` is the sleep of a poll loop.
+- **The job system is the other half of this row.** That is CPU fan-out on the sized pool, where head-of-line
+  blocking is the problem. Go merges the two schedulers; Java keeps them apart. The design says which.
+- **Prerequisites already filed:** KR-201 (a waker), KR-202 (a DNS lookup a loop can poll) and KR-7 (a non-blocking
+  `File`).
+
+**Decisions owed.**
+1. Thread-per-core with fibers as the server model, in std.
+2. **The context switch.** Native fibers need a small per-architecture stack switch in the runtime (x86-64, arm64,
+   then the MCU targets), as Go and Boost.Context have. `ucontext` is deprecated on macOS.
+3. **Exclusivity per fiber.** `Shared`'s exclusivity checks (`0.9.708`, SPEC *Two handles to one value…*) record
+   every lasting access per thread. With fibers it must be per
+   fiber, or a `borrow` window held across a blocking call could see another fiber's write.
+4. **wasm:** blocking-shaped fibers there (JSPI or stack switching, once verified), or the app loop's callbacks as
+   today.
+5. One scheduler for jobs and I/O, or two.
+
+<a id="s6-lock-window"></a>
+
+### Shared mutable state, safe at compile time: a lock window (KR-226)
+
+**The gap.** Isolates share nothing mutable; they share through channels, immutable `Shared`, `Atomic<T>`, and the
+disjoint writes of `parallel_for`. That makes data races impossible by construction. But a shared cache, a
+connection table or a metrics registry written by several isolates has no safe spelling: it must live behind one
+isolate and a channel round trip per access. The bullet at the top of this section defers it, "reopen only on a
+concrete case". That is the "no consumer yet" verdict AGENTS.md disallows for language surface, so it is reopened
+here and decided on its merits.
+
+**Rust's answer.** `Arc<Mutex<T>>`. The data is reachable only through the guard `lock()` returns, and the borrow
+checker stops a reference outliving the guard. So a shared mutable value cannot be touched without the lock, and that
+is checked at compile time.
+
+| | Shared mutable state | Can the data be reached without the lock? |
+|---|---|---|
+| Rust | `Mutex<T>`, the data inside, reached through a guard | no: compile time, by lifetimes |
+| Swift 6 | `Mutex<T>.withLock { }` (Synchronization), actors | no: a closure scopes the access |
+| Go | `sync.Mutex` beside the data | yes: a convention, plus the race detector |
+| Java, C# | `synchronized` / `lock` beside the data | yes |
+| C++ | `std::mutex` beside the data | yes |
+| kama today | none: one owner isolate, plus channels | — |
+
+**Recommendation.** A `Sendable` lock that owns its payload, with the payload reachable only inside a window, the
+`borrow` window kama already has:
+
+```kama fragment
+Locked<Map<string, int64>> hits = Locked.make(value: Map.empty());   // a Sendable handle; its copies share one value
+…
+borrow hits.lock() as m {      // acquires; `m` is the payload, `ref`, for the block
+    m.put(key: path, value: 1);
+}                              // releases, on every exit from the block
+```
+
+The window's existing rules give Rust's guard guarantee with no lifetimes: the alias cannot be stored, returned or
+put in a collection, so nothing reaches the payload once the lock is released. Swift needs a closure for this, and
+kama needs none. A reader/writer form (`lockShared()`, a `const ref` alias) follows from the same rule. Size M?
+
+**Decisions owed.**
+1. Reopen §6's deferral and ship a lock in std.
+2. **The release hook.** A `borrow` window has no exit action today. A lock needs one, on every exit, including
+   `return` and `break` out of the block. The choices: a contract the host's type implements (enter and exit, which
+   the window calls), or a dedicated `lock` window, which costs a reserved word.
+3. **The handle.** The lock shared across isolates needs an atomically counted handle; a `Shared` never crosses an
+   isolate. This could be `Locked<T>` itself (a `Sendable` resource whose copies share one value), or a general
+   atomically counted `Shared` for `Sendable` payloads.
+4. **Deadlock.** Two locks taken in opposite orders can deadlock; neither Rust nor Swift prevents it. Detection in
+   debug builds, a declared order, or a declared non-goal.
+5. **A concurrent map** (the open note above) as a library on this lock, sharded, or not at all.
+
 
 <a id="s7"></a>
 
