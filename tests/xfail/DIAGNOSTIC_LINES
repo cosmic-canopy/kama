@@ -1007,6 +1007,7 @@ operator_eq_missing	operator_eq_missing.kama:10:8
 operator_missing	operator_missing.kama:10:13
 opindex_const_write	opindex_const_write.kama:9:4
 optional_given_element	optional_given_element.kama:12:27 optional_given_element.kama:17:4 optional_given_element.kama:18:4 optional_given_element.kama:19:4 optional_given_element.kama:21:4 optional_given_element.kama:22:4 optional_given_element.kama:23:4 optional_given_element.kama:24:4 optional_given_element.kama:25:4
+optional_resource_unwrap	optional_resource_unwrap.kama:11:4
 out_local	out_local.kama:4:4
 out_marker_on_ref_param	out_marker_on_ref_param.kama:6:4
 out_missing_marker	out_missing_marker.kama:7:4

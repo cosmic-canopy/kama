@@ -1151,6 +1151,11 @@ std::string CEmitter::unwrapHint(TKind want, SharedExpression e)
     const std::string leaf = preludeLeaf(gi->second.templateKey);
     const auto& args = gi->second.typeArgs;
     if (args.empty() || !args[0] || kindOfCType(cType(args[0])) != want) return "";
+    return unwrapHow(leaf);
+}
+// The text of that way out, for a wrapper's leaf name; "" for anything that is not `Optional` or `Result`.
+std::string CEmitter::unwrapHow(const std::string& leaf)
+{
     if (leaf == "Optional") return " — take its value out with `match` (`case Some(value: v): …` / `case None: …`)";
     if (leaf == "Result")   return " — take its value out with `match` (`case Ok(value: v): …` / `case Err(error: e): …`)";
     return "";
@@ -2800,14 +2805,22 @@ void CEmitter::rejectClassIdentityMismatch(const std::string& dstCType, SharedEx
     }
     // The library heap owners are ordinary generic types, not the intrinsic smart pointers, so
     // `isSmartPtrClass` does not see them: an `Owned<Counter>` handed to a `Counter` parameter borrows its
-    // pointee through `Deref`, which is a widening and not a mismatch. Read off the ARGUMENT list so it
-    // covers `Owned<Square>` into a `Shape` too, rather than naming the three owner types.
-    if (si != _genericTypeInsts.end())
-        for (const auto& a : si->second.typeArgs) {
-            if (!a) continue;
-            const std::string ac = cType(a);
-            if (ac == dstCType || isBaseOf(dstCType, ac)) return;
+    // pointee through `Deref`, which is a widening and not a mismatch, and `Owned<Square>` into a `Shape` too.
+    // Only a type that DEREFERENCES gets that. This used to pass any generic type whose type argument was the
+    // destination, so an `Optional<Box>` where a `Box` was wanted was clean to `kama check` and refused only by clang
+    // (`assigning to … from incompatible type 'kama__Optional_…'`), and the registry vets a publish with the check.
+    const std::string pointee = derefTarget(src);
+    if (!pointee.empty() && (pointee == dstCType || isBaseOf(dstCType, pointee))) return;
+    // A wrapper that holds the very value wanted says how to take it out, as the number case does.
+    if (si != _genericTypeInsts.end() && !si->second.typeArgs.empty() && si->second.typeArgs[0]
+        && cType(si->second.typeArgs[0]) == dstCType) {
+        const std::string how = unwrapHow(preludeLeaf(si->second.templateKey));
+        if (!how.empty()) {
+            unsupported((std::string(what) + " expects " + aOrAn(demangleForDisplay(dstCType)) + ", so it cannot be given "
+                         + aOrAn(demangleForDisplay(src)) + how).c_str(), line);
+            return;
         }
+    }
     unsupported((std::string(what) + " expects a `" + demangleForDisplay(dstCType) + "`, so it cannot be "
                  "given a `" + demangleForDisplay(src) + "` — these are unrelated types. Convert it "
                  "explicitly, or take a contract both implement").c_str(), line);

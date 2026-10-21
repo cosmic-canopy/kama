@@ -1,0 +1,13 @@
+// An `Optional<R>` where a resource `R` is wanted is refused by `kama check`, as an `Optional<int32>` where an `int32` is
+// wanted always was, and with the same way out: take the value out with `match`. It used to pass the check, because a
+// generic type whose type argument was the destination was let through as though it dereferenced (as `Owned<R>`
+// does), and only clang refused it, in the generated C's names. The registry vets a publish with `kama check`.
+import { std::collections::DynamicArray };
+type resource Box { int32 n; public ctor make(int32 n) { this.n = n; } }
+fn void keep(Box b) { }
+fn uint8 main() {
+    DynamicArray<Box> from = DynamicArray.empty();
+    from.add(item: Box.make(n: 1));
+    keep(b: from.pop());
+    return 0;
+}

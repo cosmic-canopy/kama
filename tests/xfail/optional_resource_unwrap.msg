@@ -1,0 +1,1 @@
+so it cannot be given an `Optional<Box>` — take its value out with `match`
