@@ -316,7 +316,7 @@ absent from std's source.
 
 #### A `Poller` wakeup another isolate can trigger (KR-201)
 
-`Poller` has `add`, `remove`, `wait` and `readyFor`, and nothing ends a `wait` early. A `Channel` is a mutex and a
+`Poller` has `add`, `remove` and `wait`, and nothing ends a `wait` early. A `Channel` is a mutex and a
 condition variable, so a `Poller` cannot watch one. A loop that hands work to an isolate (a lookup, a file read, an
 accepted stream sent to a worker) learns it is done only at its timeout. The workaround runs: a `UnixStreamPair`, one
 end in the `Poller`, the other moved to the isolate as a `Descriptor`, a byte written to wake (50 ms observed against
@@ -335,6 +335,52 @@ receiver that registers its channel with a `Poller`, so a send wakes the loop (t
 non-empty transition only), closes it. Measured 2026-10-21 (macOS, release): a channel round trip between two isolates
 is about 3 µs, against a server round trip of tens to hundreds of microseconds, so the hop pays for itself many times
 over. KR-3 then removes the hop too: one multiplexed connection per core, its callers fibers on the same scheduler.
+
+**What others do.**
+
+| | Wake primitive | How the loop learns of it | Coalesced | A channel the loop waits on |
+|---|---|---|---|---|
+| mio (tokio's) | `Waker::new(registry, token)` | an event carrying that token | yes (eventfd counter; `EVFILT_USER`; a posted completion) | none; the program pairs a queue with a `Waker` |
+| libuv (Node) | `uv_async_send` on a `uv_async_t` | that handle's callback | yes, documented as such | none; the same pairing |
+| Java NIO | `selector.wakeup()` | `select` returns early, with no key | yes | none |
+| Go | `netpollBreak` (runtime-internal) | the scheduler rechecks its run queue | yes (an atomic flag) | channels are the runtime's own (`select`) |
+| tokio | a task's `Waker` | the task is polled again | per task | `mpsc` wakes the receiving task |
+
+**Recommendation (decisions owed, each numbered).**
+
+```kama
+Result<Waker, IoError> rw = p.waker(token: WORK);     // one wake source, registered with this Poller
+Waker w = match (give rw) { … };
+Channel<Job> ch = Channel.bounded(capacity: 1024ui64);
+Receiver<Job> jobs = ch.receiver();
+jobs.wakeOnSend(waker: copy w);       // a send that makes the queue non-empty wakes the loop
+spawn worker(tx: ch.sender(), done: give w);   // a worker wakes it directly when it finishes something
+…
+foreach (Event e in events) {
+    if (e.token == WORK) { /* drain: jobs.tryRecv() until Empty */ }
+}
+```
+
+1. **A wake is an `Event` with the caller's token**, as mio's is: the loop handles it in the one place it handles
+   every event, and learns WHAT woke it. Java's "the wait returns early, with no key" is a second path.
+2. **`Waker` is a `Sendable`, `Copyable(bare: give)` resource over shared, reference-counted C state**, so it moves to
+   any isolate. `copy w` makes another handle to the same wake source, and a waker that outlives its `Poller` is
+   harmless: a wake then reaches nothing.
+   - Linux: an eventfd in the epoll set.
+   - macOS/FreeBSD: `EVFILT_USER` with `NOTE_TRIGGER`, which needs no descriptor at all.
+   - Windows: `PostQueuedCompletionStatus` on the `Poller`'s IOCP port, which AFD polling already runs on.
+   - Any other POSIX target: a pipe.
+3. **Coalesced.** An atomic flag says whether a wake is already on its way. `wake()` makes the system call only on
+   the transition from clear to set, and the `wait` that reports the event clears it. So a busy loop pays no system
+   call per message, and N wakes before a wait cost one (Go and libuv do the same).
+   - Clearing comes before the event reaches the program, so a wake that lands while the loop drains is never lost.
+4. **`Receiver.wakeOnSend(waker:)`** hands the channel a waker. A send that takes the queue from empty to non-empty
+   wakes it, and that covers the last sender's close too, since a closed channel is something to observe. The
+   alternative, `p.addChannel(rx, token)`, makes the `Poller` hold a channel, and the `Poller` is a descriptor set.
+   Composing the two pieces keeps one wake mechanism.
+5. The loop then drains with `tryRecv` until `Empty`. A wake that arrives mid-drain reports again at the next wait.
+
+Size S–M once ruled. KR-202 (a DNS lookup a loop can poll) and KR-3's scheduler both build on it.
 
 <a id="s1-async-dns"></a>
 
