@@ -435,6 +435,26 @@ each accept on one port; the workaround is one accepting isolate handing each `T
 Per the platform rule, a platform's delta lives in its own type: the backlog everywhere, and reuse-port where the OS
 balances. The spelling is to be decided.
 
+<a id="s1-windows-share-delete"></a>
+
+#### An open `File` cannot be renamed or removed on Windows (KR-224)
+
+Found by CI on `0.9.707` (`fs_metadata_identity`, which renamed a file it still held open): on Windows, kama's plain
+opens (`kama_open_read`, `_create`, `_append`, `_rw`, `_new` in include/kama_os.h) go through the CRT's `_wopen`, whose
+share mode allows other readers and writers but not deletion, so `rename` and `remove` of a path some `File` holds
+open fail with a sharing violation. POSIX allows both — the name goes, the open file lives on. `kama_open_create_mode`
+already opens with `FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE`, so whether a file can be renamed while
+open depends today on which call opened it.
+
+**What others do.** Rust's std opens every `File` on Windows with read, write and delete sharing (its `OpenOptions`
+default), so a program renames and removes open files there as it does on POSIX. Go's `os.Open` shares read and write
+only, and the gap is a long-open Go issue. The CRT's `_wopen` and Python's `open` share read and write.
+
+**Recommendation.** One share mode for every open, Rust's: `CreateFileW` with `FILE_SHARE_READ | FILE_SHARE_WRITE |
+FILE_SHARE_DELETE` handed to the CRT through `_open_osfhandle`, as `kama_open_create_mode` already does — the
+platform rule's same interface, with Windows behaving as POSIX does rather than refusing. A lock taken with
+`File.lock` (SPEC's `std::fs` paragraph) is unaffected: it is a byte-range lock, not a share mode. Size S.
+
 <a id="s1-sendfile"></a>
 
 #### `sendfile` (KR-207)

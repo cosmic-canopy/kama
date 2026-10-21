@@ -17,14 +17,17 @@ fn uint8 main() {
     Metadata a1 = st(p: "kr220.a");
     Metadata a2 = st(p: "kr220.a");
     if (a1.id != a2.id) { bad = bad | 1; }
-    Result<File, IoError> rf = File.open(path: "kr220.a", mode: OpenMode::Read);
-    File f = match (give rf) { case Ok(value: x): give x; case Err(error: e): { return 90; } };
-    Result<Metadata, IoError> rm = f.metadata();
-    Metadata af = match (rm) { case Ok(value: m): m; case Err(error: e): { return 91; } };
-    if (af.id != a1.id) { bad = bad | 2; }                                   // a path and an open file agree
+    {   // closed before the rename below: Windows refuses to rename a file kama holds open (KR-224)
+        Result<File, IoError> rf = File.open(path: "kr220.a", mode: OpenMode::Read);
+        File f = match (give rf) { case Ok(value: x): give x; case Err(error: e): { return 90; } };
+        Result<Metadata, IoError> rm = f.metadata();
+        Metadata af = match (rm) { case Ok(value: m): m; case Err(error: e): { return 91; } };
+        if (af.id != a1.id) { bad = bad | 2; }                               // a path and an open file agree
+    }
     Metadata c = st(p: "kr220.c");
     if (c.id == a1.id) { bad = bad | 4; }                                    // same size and content, another file
-    _ = rename(from: "kr220.a", to: "kr220.b");
+    Result<Unit, IoError> mv = rename(from: "kr220.a", to: "kr220.b");
+    match (mv) { case Ok(value: u): { } case Err(error: e): { return 92; } };
     Metadata b = st(p: "kr220.b");
     if (b.id != a1.id) { bad = bad | 8; }                                    // a rename keeps it
     _ = setPermissions(path: "kr220.c", permissions: Permissions::OwnerRead);

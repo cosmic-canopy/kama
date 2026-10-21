@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-224**
+**Next id: KR-225**
 
 ## The shape
 
@@ -82,6 +82,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | KR-204 | **Percent-encoding and a URL type** — std has neither, while its own WebSocket and WebTransport connect take a URL as a bare string. **Ruled 2026-10-18: std, strict RFC 3986** (refuse, never repair), percent-encoding in `std::encoding` with per-component sets plus `application/x-www-form-urlencoded`, a `Url` the transports take; IDNA later | M | [§1](ROADMAP_DETAIL.md#s1-url) |
 | KR-206 | **Listener options: the backlog, and reuse-port where the OS balances it** — the backlog is fixed at 128 and `SO_REUSEPORT` cannot be set, so several isolates cannot accept on one port | S–M | [§1](ROADMAP_DETAIL.md#s1-listen-options) |
 | KR-210 | **Running out of descriptors has no kind, and the limit cannot be read or raised** — `accept` under EMFILE is `Other` (OS code 24), and std has nothing for `RLIMIT_NOFILE`. **Ruled 2026-10-19:** `IoErrorKind::TooManyOpenFiles` (EMFILE/ENFILE; Windows `WSAEMFILE`/`ERROR_TOO_MANY_OPEN_FILES`), and an explicit POSIX `std::process` `openFileLimit()`/`raiseOpenFileLimit()` — never raised implicitly | S–M | [§1](ROADMAP_DETAIL.md#s1-fd-limit) |
+| KR-224 | **An open `File` cannot be renamed or removed on Windows** — kama opens a `File` there through the CRT's `_wopen`, whose share mode omits `FILE_SHARE_DELETE`, so `rename`/`remove` of a path it holds open fails with a sharing violation, where POSIX allows both; `kama_open_create_mode` already shares delete, so the two kinds of open disagree. Fix: one share mode for every open — read, write and delete, as Rust's std opens | S | [§1](ROADMAP_DETAIL.md#s1-windows-share-delete) |
 | KR-207 | **`sendfile`** — a file response copies through user space; Linux and macOS have `sendfile`, Windows `TransmitFile` | S–M | [§1](ROADMAP_DETAIL.md#s1-sendfile) |
 | KR-208 | **An in-memory connected `ReliableStream` pair** — every package that speaks a protocol writes its own test pipe (Go's `net.Pipe`) | S | [§1](ROADMAP_DETAIL.md#s1-memory-stream) |
 | KR-205 | **Coverage-guided fuzzing** — no `kama fuzz` and no documented libFuzzer harness, though every parser that reads a stranger's bytes wants one. Design first | M? | [§1](ROADMAP_DETAIL.md#s1-fuzz) |
