@@ -15,6 +15,7 @@
 #include <algorithm>   // std::find (contract-implementor lookups in the graph-node closure)
 #include <functional>  // the package resolver the driver installs (setPackageResolver)
 #include <cstdint>     // fixed-width ints — not transitive on all libcs (e.g. Windows UCRT)
+#include <climits>     // INT_MAX — kViewUnbounded, the window rule's "nothing bounds it"
 #include "kama.forward.h"
 #include "kama.diagnostic.h"   // structured Diagnostic accumulated by unsupported() (query surface)
 #include "kama.query.h"        // LSP query surface: SrcRange / DefSite / PosEntry / SymbolInfo / Location
@@ -2312,8 +2313,10 @@ private:
                                         std::string who = "the child `spawn`ed"; };
                    std::vector<ChildBorrow> childBorrows;
                    // View locals whose root is already lifetime-bounded, so a DERIVE off one is bounded
-                   // too (`View<T> mid = whole.slice(…)` where `whole` came from a window).
-                   std::set<std::string> boundedViews;
+                   // too (`View<T> mid = whole.slice(…)` where `whole` came from a window) — each with its
+                   // DEPTH, the innermost window open where it was declared (`kViewCaller` when none was), which
+                   // is what every later store into it is judged against (viewDepthOf, checkViewStore).
+                   std::map<std::string, int> viewDepths;
                    // LSP (M3.4), analysis mode only: the bindings this scope declares, with the index key
                    // each was given. Deliberately PARALLEL to `declaredNames` rather than folded into it —
                    // that vector drives the shadowing rules, and it also (by design) excludes `foreach` and
@@ -4141,7 +4144,19 @@ private:
     const Scope::FrozenPlace* frozenConflict(const std::vector<std::string>& p) const;
     const std::vector<std::string>* frozenAliasRoot(const std::string& name) const;  // the place a `borrow` ALIAS views
     std::vector<std::string> viewRootPlace(SharedExpression e);   // the place a VIEW expression borrows
-    bool viewLocalBounded(SharedExpression init);   // the window rule: is this view's root lifetime-bounded?
+    // The window rule, as a DEPTH: the `_scopes` index of the innermost `borrow` window a view expression's root
+    // depends on, `kViewCaller` when it roots in what the caller holds (a by-value view parameter, a view built from
+    // one), or `kViewUnbounded` when nothing bounds it (a mint from a container this frame may still grow).
+    static constexpr int kViewCaller = -1;
+    static constexpr int kViewUnbounded = INT_MAX;
+    int viewDepthOf(SharedExpression e);
+    int innermostWindowDepth() const;                       // where a binding declared HERE is bounded
+    int aliasWindowDepth(const std::string& alias) const;   // the window a `borrow` alias belongs to, or -2
+    int viewBindingDepth(const std::string& name) const;    // a view local's or parameter's recorded depth
+    // A store into a view binding may not outlive what it stores (KR-225 decision 6): `x = e` needs
+    // viewDepthOf(e) <= x's depth. Called on every assignment, whatever its operator.
+    void checkViewStore(SharedExpression lhs, SharedExpression rhs, bool plainStore, int line);
+    bool viewByRefTypeArg(FunctionDeclarationNode* tmpl, const std::map<std::string, SharedIdentifier>& bind, int line);
     SharedIdentifier mintReturnTypeNode(SharedExpression host, std::map<std::string, SharedIdentifier>& localTys);
     bool rejectFrozenWrite(SharedExpression target, int line);
     // Every PLACE a statement uses — `c`, `c.f`, a method's receiver, an element's container — at its widest

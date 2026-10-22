@@ -1,0 +1,1 @@
+`outer` outlives what this stores into it

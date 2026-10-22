@@ -533,6 +533,37 @@ Size M.
    its payload as a view local rooted where the enum value roots.
 5. **`@generate(Deserializable)` into a view struct**, for zero-copy JSON (serde's `#[serde(borrow)]`): its own row
    after this, since it is the serializer's work (KR-231).
+6. **A store may not outlive what it stores** (ruled 2026-10-22, after the decisions above; shipped `0.9.721`).
+   Probing `0.9.720` found that the window rule judged a view local's initializer only. Three shapes read freed memory
+   under ASan:
+   - `s = d.view()` into a bounded local;
+   - `v = loc.view()` into a by-value view parameter, then returned;
+   - `outer = vb` from a window nested inside the one `outer` was declared in, after which `b` grew.
+
+   **The rule.** A view binding's **depth** is the innermost `borrow` window open where it was declared, or the
+   caller's when none is open. A store `x = e` needs `e`'s window to enclose `x`'s, and only a caller-depth binding is
+   returnable. It is structural and does not depend on order, so a loop that reads `x` before a later store cannot be
+   fooled, and it needs no annotation.
+
+   **Why it is safe.**
+   1. `x` is never read after its window's block ends.
+   2. A store never puts into `x` anything that dies sooner.
+   3. A returned binding holds only what the caller handed in.
+
+   **What others do.**
+   - Rust proves the same thing with lifetimes.
+   - C# fixes a `ref struct` local's scope from its initializer, and needs `scoped` for a local that should be
+     narrower.
+   - Swift infers the dependence.
+
+   **Rejected.**
+   - Making view locals not reseatable: simpler, but it forbids the cursor loop `rest = rest.slice(from: n, …)` and
+     the accumulator `found = Optional::Some(value: line)`.
+   - Fixing the scope from the initializer, as C# does: kama would have no `scoped` keyword for the inner-window
+     case.
+
+   `ref T`/`out T` with `T` bound to a view is refused at the call, as `ref View<T>` spelled out already was
+   (`std::memory::swap` over two views was the same hole).
 
 **Implementation map** (read from `src/kama.cemit.cpp` on 2026-10-22; line numbers drift, so the function names are
 what to search for):

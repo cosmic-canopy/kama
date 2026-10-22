@@ -1,0 +1,1 @@
+this store makes `s` a view of storage that nothing bounds

@@ -1,0 +1,38 @@
+// The store rule (KR-225 decision 6) keeps the shapes a parser is written in: a view binding holds only what outlives
+// it — the innermost window open where it was declared, or, outside every window, what the caller handed in — and a
+// binding declared outside every window may be returned.
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+// The cursor loop: a parameter reseated at a derive of itself, then returned through a local.
+fn ConstView<int32> afterZero(ConstView<int32> v) {
+    ConstView<int32> rest = v;
+    while (rest.length() > 0 && rest[0] != 0) { rest = rest.slice(from: 1, count: rest.length() - 1); }
+    return rest;
+}
+
+// An accumulator: a local found inside a loop, returned after it.
+fn ConstView<int32> longestRun(ConstView<int32> v) {
+    ConstView<int32> best = v.slice(from: 0, count: 0);
+    isize i = 0;
+    while (i < v.length()) {
+        isize j = i;
+        while (j < v.length() && v[j] == v[i]) { j = j + 1; }
+        if (j - i > best.length()) { best = v.slice(from: i, count: j - i); }
+        i = j;
+    }
+    return best;
+}
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 3); a.add(item: 5); a.add(item: 0); a.add(item: 7); a.add(item: 7); a.add(item: 7); a.add(item: 8);
+    int32 r = 0;
+    borrow a.view() as w {
+        ConstView<int32> tail = afterZero(v: w);          // bounded by `w`'s window
+        r = cast<int32>(tail.length()) * 4;               // 0, 7, 7, 7, 8 -> 20
+        ConstView<int32> inner = w;                        // declared inside the window...
+        inner = tail.slice(from: 1, count: 3);             // ...so a store from the same window is fine
+        r = r + cast<int32>(longestRun(v: inner).length()) * 5 + inner[0];   // + 15 + 7 = 42
+    }
+    return cast<uint8>(r);
+}

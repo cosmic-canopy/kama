@@ -6182,6 +6182,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                  "window over `" + placeText(*r) + "` and cannot be reseated, or the rest of "
                                  "the block would hold a view of storage this window never froze. Open another "
                                  "`borrow`, or derive with `.slice(…)`").c_str(), v);
+        checkViewStore(v->unaryExpression, v->expression, v->token == EQ, v->line);
         // The STORE direction of the `== null` rule, for an assignment rather than a declaration (where
         // `rejectNullInit` handles it): a safe type is never null, so writing one there is the same
         // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
@@ -8574,7 +8575,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                  + " { … }`; a helper takes it `ref`/`const ref`").c_str(), n);
                     _closingViewRefusedLine = n->line;
                 } else if (isViewCType(ty) && d->initializer) {
-                    if (viewLocalBounded(d->initializer)) _scopes.back().boundedViews.insert(nm);
+                    // Its depth is the innermost window open here — or the initializer's, when that is deeper, which
+                    // only a mint over this frame's own storage is (viewDepthOf). Every later store is held to it.
+                    const int dd = viewDepthOf(d->initializer);
+                    if (dd != kViewUnbounded) _scopes.back().viewDepths[nm] = std::max(innermostWindowDepth(), dd);
                     else
                         unsupported(("`" + nm + "` is a view of storage that nothing bounds — a view "
                                      "borrows a buffer it does not own, so it may only live where that "
@@ -8582,6 +8586,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                                      + nm + " { … }`, and derive inside it with `.slice(…)`. A view already "
                                      "rooted in a window, or in a by-value view parameter, needs no "
                                      "window of its own").c_str(), n);
+                } else if (isViewCType(ty)) {
+                    _scopes.back().viewDepths[nm] = innermostWindowDepth();   // empty until stored, and judged then
                 }
                 noteScopedBinding(nm);                        // the block owns it: popScope retires every entry below
                 _localTypes[nm] = (cls || iface) ? ty : "";   // record all names (shadow fields)
@@ -9207,7 +9213,9 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // so skip the fn-shaped check here for a ctor body.
         if (retExpr && !_inNamedCtorBody && isViewCType(_currentReturnCType)) {
             std::string root = viewReturnRoot(retExpr);
-            if (!isSafeViewRoot(root))
+            // ...or a view at the caller's DEPTH: one kept in a local declared outside every window, whose every
+            // store the store rule held to what the caller handed in (`s = v.slice(…); return s;`).
+            if (!isSafeViewRoot(root) && viewDepthOf(retExpr) != kViewCaller)
                 unsupported("a view borrows its buffer, so it can only be returned when it borrows `this` "
                             "or a `ref` parameter — returning a view over a local would dangle; return an "
                             "owning `DynamicArray` to hand back data", n);
@@ -16929,6 +16937,34 @@ bool CEmitter::bindGenericArg(const std::string& pty, const std::string& pname, 
     return true;
 }
 
+// `ref T`/`out T` with `T` bound to a view: the instance would take a view by reference, which `rejectViewByRef`
+// refuses where it is SPELLED and cannot see through a type parameter. `swap(a: ref outer, b: ref inner)` over two
+// views reseated the outer one at the inner window's storage, and it was read after that window's container grew
+// (ASan: heap-use-after-free). Reported at the user's call; a call reached while a poisoned instance's body is
+// re-walked (`relocate::<T>` inside `swap`) only poisons, as `containsBareCChar` does.
+bool CEmitter::viewByRefTypeArg(FunctionDeclarationNode* tmpl, const std::map<std::string, SharedIdentifier>& bind, int line)
+{
+    bool refused = false;
+    if (!tmpl || !tmpl->parameters) return false;
+    for (auto& p : *tmpl->parameters) {
+        if (!p || !p->type || !p->type->value || p->type->genericArgs || !paramByRef(p.get())) continue;
+        auto b = bind.find(*p->type->value);
+        if (b == bind.end() || !b->second) continue;
+        const std::string ct = cType(b->second);
+        if (!isViewCType(ct) || closesWindowCType(ct)) continue;
+        const bool first = !refused;   // one call, one mistake: said once, for the first such parameter
+        refused = true;
+        if (!first || !_typeSubst.empty()) continue;
+        const std::string nm = (p->identifier && p->identifier->value) ? *p->identifier->value : "a parameter";
+        const std::string fn = (tmpl->name && tmpl->name->value) ? *tmpl->name->value : "this function";
+        unsupported(("`" + fn + "` takes `" + nm + "` by `" + (paramIsOut(p.get()) ? "out" : "ref") + "`, and here `"
+                     + *p->type->value + "` is the view `" + demangleForDisplay(ct) + "` — a view is already a borrow, so "
+                     "it cannot be passed by `ref`/`out`; that would let the callee reseat it at storage the caller never "
+                     "named. Pass it by value, or return one").c_str(), line);
+    }
+    return refused;
+}
+
 bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string& key, SharedArgumentList args,
                                 std::map<std::string, SharedIdentifier>& localTys, int line, GenericInst& out,
                                 const std::map<std::string, SharedIdentifier>* seed)
@@ -17225,6 +17261,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
             if ((*tmpl->typeParams)[i])
                 if (!checkBounds(*(*tmpl->typeParams)[i], bind[*(*tmpl->typeParams)[i]], (*tmpl->typeBounds)[i], line, key, bind))
                     boundsOk = false;
+    if (viewByRefTypeArg(tmpl, bind, line)) boundsOk = false;
 
     out.templateKey = key;
     out.typeArgs.clear();
@@ -17322,6 +17359,7 @@ bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::str
             if ((*tmpl->typeParams)[i])
                 if (!checkBounds(*(*tmpl->typeParams)[i], concrete[i], (*tmpl->typeBounds)[i], line, key, boundBind))
                     boundsOk = false;
+    if (viewByRefTypeArg(tmpl, boundBind, line)) boundsOk = false;
     // A user-spelled turbofish (`pick::<cchar>()`) has no declared-type site, so it reports here; the same
     // call reached while a poisoned instance's body is re-walked under substitution (`relocate::<T>` with
     // `T` bound to `cchar`) only poisons — the user's spelling was reported already, and reporting again
@@ -27466,54 +27504,133 @@ std::vector<std::string> CEmitter::viewRootPlace(SharedExpression e)
 // grow is not. This is the question `viewRootPlace` cannot answer, because "roots nowhere" and "roots at
 // something bounded" are the same empty vector there and opposite answers here.
 //
-// Bounded means one of:
-//   * a `borrow` alias — the window IS the bound, and the freeze keeps the storage still
-//   * a by-value view PARAMETER — the caller's frame outlives this one, and the caller is where the
-//     aliasing was checked (probing showed a rule on the callee would be the wrong place: the caller had
-//     borrowed and it still dangled, because the SAME call passed `ref` to the container)
-//   * a derive off either — `View<T> mid = whole.slice(…)` roots where `whole` roots
-//   * a free function's result, when every view it was handed is bounded — the view-return rule already
-//     guarantees the result roots at one of those arguments
+// The answer is a DEPTH, not a yes or no, because a store has to be judged as well as a declaration: `x = e`
+// is legal only when `e` lives at least as long as `x` can be read (KR-225 decision 6). Through 0.9.720 the rule
+// was a set of bounded names, checked at the declaration only, and three shapes read freed memory under ASan:
+// `s = d.view()` into a bounded local, `v = loc.view()` into a by-value view parameter, and `outer = vb` from a
+// `borrow` nested inside the one `outer` was declared in, after which the inner container grew.
 //
-// NOT bounded: a mint from a nameable container (`d.view()`), which is the shape every one of findings
-// ④⑤⑥ rides, and which now has `borrow d.view() as v` as its spelling.
-bool CEmitter::viewLocalBounded(SharedExpression init)
+// The depth is the `_scopes` index of the innermost `borrow` window the root depends on; deeper closes first.
+//   * a `borrow` alias — its own window
+//   * a by-value view PARAMETER — `kViewCaller`: the caller's frame outlives this one, and the caller is where
+//     the aliasing was checked (probing showed a rule on the callee would be the wrong place: the caller had
+//     borrowed and it still dangled, because the SAME call passed `ref` to the container)
+//   * a view local — the depth recorded at its declaration (innermostWindowDepth there)
+//   * a derive off any of those — `View<T> mid = whole.slice(…)` roots where `whole` roots
+//   * a free function's result, when every view it was handed is bounded — the view-return rule already
+//     guarantees the result roots at one of those arguments, so it is the deepest of them
+//
+// NOT bounded (`kViewUnbounded`): a mint from a nameable container (`d.view()`), which is the shape every one of
+// findings ④⑤⑥ rides, and which has `borrow d.view() as v` as its spelling. Anything this function does not
+// recognize is unbounded too: an unknown form is refused, never trusted.
+int CEmitter::aliasWindowDepth(const std::string& name) const
+{
+    if (name.empty()) return -2;
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        for (auto& f : _scopes[i].frozen)
+            if (f.fromBorrow && !f.placeAlias && f.alias == name) return i;
+    return -2;
+}
+
+// A binding declared here can hold only what outlives the innermost window open here — or, with none open, what
+// the caller holds. A `foreach`, a `spawn`ed child, an in-place `match` and a `borrow` of a PLACE freeze storage
+// too, but none of them hands out a view, so none of them is a window a view can be bounded by.
+int CEmitter::innermostWindowDepth() const
+{
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        for (auto& f : _scopes[i].frozen)
+            if (f.fromBorrow && !f.placeAlias) return i;
+    return kViewCaller;
+}
+
+int CEmitter::viewBindingDepth(const std::string& nm) const
+{
+    const int w = aliasWindowDepth(nm);
+    if (w != -2) return w;
+    if (_viewParams.count(nm)) return kViewCaller;
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i) {
+        auto it = _scopes[i].viewDepths.find(nm);
+        if (it != _scopes[i].viewDepths.end()) return it->second;
+    }
+    return kViewUnbounded;
+}
+
+int CEmitter::viewDepthOf(SharedExpression init)
 {
     ASTNode* n = init.get();
-    if (!n) return false;
-    if (auto* h = dynamic_cast<HandoffNode*>(n)) return viewLocalBounded(h->value);
+    if (!n) return kViewUnbounded;
+    if (auto* h = dynamic_cast<HandoffNode*>(n)) return viewDepthOf(h->value);
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (!id->value || (id->qualifier && !id->qualifier->empty())) return false;
-        const std::string& nm = *id->value;
-        if (frozenAliasRoot(nm) || _viewParams.count(nm)) return true;
-        for (int i = (int)_scopes.size() - 1; i >= 0; --i)
-            if (_scopes[i].boundedViews.count(nm)) return true;
-        return false;
+        if (!id->value || (id->qualifier && !id->qualifier->empty())) return kViewUnbounded;
+        return viewBindingDepth(*id->value);
     }
-    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n))
-        return t->LHS && t->RHS && viewLocalBounded(t->LHS) && viewLocalBounded(t->RHS);
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n))   // either arm may be the one held: the deeper decides
+        return t->LHS && t->RHS ? std::max(viewDepthOf(t->LHS), viewDepthOf(t->RHS)) : kViewUnbounded;
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         if (inv->expression)
             if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
-                // `View.make(…)` — the dot-on-type view ctor. The mint rule governs it (its ctor is
-                // private and `checkViewCtorEscape` checks what it borrows), so it is not this rule's.
+                // `View.make(…)` — the dot-on-type view ctor. The mint rule governs it (its ctor is private and
+                // `checkViewCtorEscape` checks what it borrows). It is the caller's when what it borrows is already
+                // safe to hand back (`this`, a parameter), which is every mint in a view's own method; otherwise it
+                // is bounded by the scope it is made in, and goes no further.
                 if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
-                    if (rid->value && _viewTypeNames.count(*rid->value)) return true;
-                return ma->expression && viewLocalBounded(ma->expression);   // a derive roots where its receiver does
+                    if (rid->value && _viewTypeNames.count(*rid->value)) {
+                        const std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+                        return isSafeViewRoot(viewCtorBorrowRoot(rid, method, inv->args)) ? kViewCaller
+                                                                                             : (int)_scopes.size() - 1;
+                    }
+                return ma->expression ? viewDepthOf(ma->expression) : kViewUnbounded;   // a derive roots where its receiver does
             }
-        // A free function. Its return already had to root at one of ITS parameters, so the result is
-        // bounded exactly when every view handed to it was.
+        // A free function. Its return already had to root at one of ITS parameters, so the result is bounded
+        // exactly when every view handed to it was, by the deepest of them.
+        int d = kViewCaller;
         bool sawView = false;
         if (inv->args)
             for (auto& a : *inv->args) {
                 if (!a || !a->expression) continue;
                 if (!isViewCType(exprClass(a->expression))) continue;
                 sawView = true;
-                if (!viewLocalBounded(a->expression)) return false;
+                d = std::max(d, viewDepthOf(a->expression));
             }
-        return sawView;
+        return sawView ? d : kViewUnbounded;
     }
-    return false;
+    return kViewUnbounded;
+}
+
+// The store direction of the window rule (KR-225 decision 6): a view binding may hold only what outlives it. Its
+// depth was fixed where it was declared, so a store is judged against that, never against what it held before —
+// which is what keeps the rule independent of order: a loop that reads `x` before a later store cannot see a view
+// the store would have refused.
+void CEmitter::checkViewStore(SharedExpression lhs, SharedExpression rhs, bool plainStore, int line)
+{
+    auto* id = dynamic_cast<IdentifierNode*>(lhs.get());
+    if (!id || !id->value || (id->qualifier && !id->qualifier->empty()) || !rhs) return;
+    const std::string& nm = *id->value;
+    auto lt = _localCTypes.find(nm);
+    if (lt == _localCTypes.end() || !isViewCType(lt->second) || closesWindowCType(lt->second)) return;
+    if (aliasWindowDepth(nm) != -2) return;                    // a `borrow` alias is never reseated — refused beside this
+    if (!plainStore && !isViewCType(exprClass(rhs))) return;   // `v += n`: what is stored is the operator's, not `n`
+    const int target = viewBindingDepth(nm);
+    if (target == kViewUnbounded) return;                      // its declaration was refused already
+    const int got = viewDepthOf(rhs);
+    if (got == kViewUnbounded) {
+        unsupported(("this store makes `" + nm + "` a view of storage that nothing bounds — a view borrows a buffer it "
+                     "does not own, so it may only hold one where that buffer is held still. Open a window: `borrow "
+                     "<container>.<mint>() as w { … }`, and store `w`, or a derive of it, into a view declared inside "
+                     "the window").c_str(), line);
+        return;
+    }
+    if (got <= target) return;
+    std::string win = "a `borrow` window", at;
+    for (auto& f : _scopes[got].frozen)
+        if (f.fromBorrow && !f.placeAlias) { win = "the `borrow` window `" + f.alias + "`"; at = std::to_string(f.line); break; }
+    const bool param = _viewParams.count(nm) > 0;
+    unsupported(("`" + nm + "` outlives what this stores into it: the view roots in " + win
+                 + (at.empty() ? std::string() : " (opened at line " + at + ")") + ", which closes before `" + nm
+                 + "` stops being readable — " + (param ? std::string("`" + nm + "` is a parameter, so it holds what the "
+                   "caller handed in") : std::string("`" + nm + "` was declared outside that window"))
+                 + ", and it would dangle once the window closes. Store a view of something that outlives `" + nm
+                 + "`, or declare a view inside the window").c_str(), line);
 }
 
 // --- The window's freeze -------------------------------------------------------------------------------

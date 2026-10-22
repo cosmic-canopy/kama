@@ -1449,9 +1449,13 @@ view_local_unbounded	view_local_unbounded.kama:9:4
 view_optional_field	view_optional_field.kama:3:0
 view_out_param	view_out_param.kama:7:0
 view_owns	view_owns.kama:3:0
+view_param_store	view_param_store.kama:9:4
 view_ref_contract_member	view_ref_contract_member.kama:6:0
 view_ref_param	view_ref_param.kama:12:4 view_ref_param.kama:7:0
 view_return_over_local	view_return_over_local.kama:3:85
+view_store_shorter_window	view_store_shorter_window.kama:14:32
+view_store_unbounded	view_store_unbounded.kama:10:4
+view_swap_generic_ref	view_swap_generic_ref.kama:14:61
 view_window_overlap	view_window_overlap.kama:8:8
 viewable_grants_nothing	viewable_grants_nothing.kama:5:0
 viewable_not_a_contract	viewable_not_a_contract.kama:5:0 viewable_not_a_contract.kama:7:4

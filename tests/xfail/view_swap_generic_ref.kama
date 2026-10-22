@@ -1,0 +1,19 @@
+// `ref T` with `T` a view is a view by reference, which `ref View<T>` spelled out was already refused as. Through
+// 0.9.720 a type parameter hid it: `swap` reseated `outer` at the inner window's storage, `b` grew once that window
+// closed, and `outer[0]` read the freed buffer (ASan: heap-use-after-free).
+import { std::collections::DynamicArray, std::collections::ConstView, std::memory::swap };
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    DynamicArray<int32> b = DynamicArray.withCapacity(capacity: 1);
+    b.add(item: 2);
+    int32 r = 0;
+    borrow a.view() as va {
+        ConstView<int32> outer = va;
+        borrow b.view() as vb { ConstView<int32> inner = vb; swap(a: ref outer, b: ref inner); }
+        b.add(item: 3); b.add(item: 4);
+        r = outer[0];
+    }
+    return cast<uint8>(r);
+}

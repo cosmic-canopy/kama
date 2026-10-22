@@ -1,0 +1,21 @@
+// The window rule judges a STORE as well as a declaration. Through 0.9.720 only the initializer was checked, so a
+// bounded view local could be reassigned to a mint from a container this frame still grows, and read after it grew
+// (ASan: heap-use-after-free on `s[0]`).
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn int32 f(ConstView<int32> v) {
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 1);
+    d.add(item: 1);
+    ConstView<int32> s = v.slice(from: 0, count: 1);
+    s = d.view();
+    d.add(item: 2); d.add(item: 3); d.add(item: 4);
+    return s[0];
+}
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 9);
+    int32 r = 0;
+    borrow a.view() as w { r = f(v: w); }
+    return cast<uint8>(r);
+}

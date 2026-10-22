@@ -1,0 +1,19 @@
+// A view local holds only what outlives it (KR-225 decision 6). `vb` is bounded, but by a window nested inside the
+// one `outer` was declared in, so it closes first. Through 0.9.720 the store compiled, `b` grew once its window had
+// closed, and `outer[0]` read the freed buffer (ASan: heap-use-after-free).
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 1);
+    DynamicArray<int32> b = DynamicArray.withCapacity(capacity: 1);
+    b.add(item: 2);
+    int32 r = 0;
+    borrow a.view() as va {
+        ConstView<int32> outer = va;
+        borrow b.view() as vb { outer = vb; }
+        b.add(item: 3); b.add(item: 4); b.add(item: 5);
+        r = outer[0];
+    }
+    return cast<uint8>(r);
+}
