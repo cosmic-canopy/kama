@@ -1,0 +1,28 @@
+// A contract local may be rebound to anything that outlives it — an object of its own scope or an outer one, a
+// parameter, or an element a `borrow` window holds still — and through 0.9.720 rebinding it to an object at all
+// passed `kama check` and failed in the C compiler (`k_fo = k_y`).
+import { std::collections::DynamicArray };
+
+fn int32 widthOf(Formattable f) { string s = "${f}"; return cast<int32>(s.length()); }
+
+fn int32 viaParam(Formattable p, int32 alt) {
+    p = alt;                      // a parameter rebound to an object of the function's own scope
+    return widthOf(f: p);
+}
+
+fn uint8 main() {
+    int32 x = 5;
+    int32 y = 12345;
+    Formattable fo = x;
+    int32 r = widthOf(f: fo);     // "5" -> 1
+    fo = y;                       // rebound in its own scope
+    r = r + widthOf(f: fo);       // "12345" -> 6
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 10); d.add(item: 200);
+    borrow d.view() as v {
+        Formattable e = v[1];     // an element the window holds still
+        r = r + widthOf(f: e);    // "200" -> 9
+    }
+    r = r + viaParam(p: fo, alt: 1000);   // "1000" -> 13
+    return cast<uint8>(r + 29);   // 42
+}

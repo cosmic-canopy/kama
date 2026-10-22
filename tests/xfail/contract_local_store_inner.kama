@@ -1,0 +1,18 @@
+// A store into a contract local may not outlive its object (KR-225 decision 6). `f2`'s object is `inner`, declared
+// in a block nested inside the one `fo` lives in. Through 0.9.720 the store compiled, `inner` died at the block's
+// end, and formatting `fo` read its dead stack slot (ASan: stack-use-after-scope).
+import { std::collections::DynamicArray };
+
+fn uint8 main() {
+    DynamicArray<int32> keep = DynamicArray.empty();
+    keep.add(item: 1);
+    Formattable fo = keep;
+    {
+        DynamicArray<int32> inner = DynamicArray.empty();
+        inner.add(item: 7);
+        Formattable f2 = inner;
+        fo = f2;
+    }
+    string s = "${fo}";
+    return cast<uint8>(s.length());
+}

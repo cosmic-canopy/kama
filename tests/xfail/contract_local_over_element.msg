@@ -1,0 +1,1 @@
+`fo` would borrow `arr[0]`, whose storage can move or be freed

@@ -1,0 +1,16 @@
+// A contract value borrows its object, so a contract local is only as good as where that object lives. An element
+// lives in its container's storage, which moves when the container grows. Through 0.9.720 nothing checked it: `fo`
+// borrowed `arr[0]`, `arr` grew, and formatting `fo` read the freed buffer (ASan: heap-use-after-free).
+import { std::collections::DynamicArray };
+
+fn uint8 main() {
+    DynamicArray<DynamicArray<int32>> arr = DynamicArray.withCapacity(capacity: 1);
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 7);
+    arr.add(item: give one);
+    Formattable fo = arr[0];
+    DynamicArray<int32> two = DynamicArray.empty();
+    arr.add(item: give two);
+    string s = "${fo}";
+    return cast<uint8>(s.length());
+}

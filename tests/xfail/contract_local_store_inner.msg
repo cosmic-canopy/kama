@@ -1,0 +1,1 @@
+`fo` outlives the object this stores into it

@@ -6183,6 +6183,9 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                  "the block would hold a view of storage this window never froze. Open another "
                                  "`borrow`, or derive with `.slice(…)`").c_str(), v);
         checkViewStore(v->unaryExpression, v->expression, v->token == EQ, v->line);
+        if (auto* cid = dynamic_cast<IdentifierNode*>(v->unaryExpression.get()))
+            if (v->token == EQ && cid->value && (!cid->qualifier || cid->qualifier->empty()))
+                checkContractObject(*cid->value, v->expression, /*isStore=*/true, v->line);
         // The STORE direction of the `== null` rule, for an assignment rather than a declaration (where
         // `rejectNullInit` handles it): a safe type is never null, so writing one there is the same
         // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
@@ -6264,6 +6267,13 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         std::string lhs = emitExpression(v->unaryExpression);
         std::string rhs = emitExpression(v->expression);
         if (v->token == EQ) rhs = narrowViewValue(lvalueCType(v->unaryExpression), v->expression, rhs, v->line);
+        // An object stored into a contract binding is bound as its declaration binds one — a fat pointer to it. Through
+        // 0.9.720 `fo = y` passed `kama check` and reached the C compiler as `k_fo = k_y`.
+        if (v->token == EQ) {
+            const std::string lc = lvalueCType(v->unaryExpression);
+            if (isInterface(lc) && exprClass(v->expression) != lc)
+                rhs = contractBorrowOf(lc, v->expression, rhs, false, "a contract local", v->line);
+        }
         return "(" + lhs + " " + assignmentOperator(v->token) + " " + rhs + ")";
     }
 
@@ -8627,6 +8637,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Interface-typed local: `I s = concrete;` -> a fat pointer borrowing
                 // the concrete object (which must be an lvalue that outlives `s`).
                 if (iface) {
+                    if (d->initializer) checkContractObject(nm, d->initializer, /*isStore=*/false, n->line);
                     line(n->line); indent(depth);
                     *_out << ty << " " << kName(nm);
                     if (d->initializer) {
@@ -27631,6 +27642,80 @@ void CEmitter::checkViewStore(SharedExpression lhs, SharedExpression rhs, bool p
                    "caller handed in") : std::string("`" + nm + "` was declared outside that window"))
                  + ", and it would dangle once the window closes. Store a view of something that outlives `" + nm
                  + "`, or declare a view inside the window").c_str(), line);
+}
+
+// The `_scopes` index a binding was declared in: a local, or a `foreach`/`match`/`borrow` binding, any of which the
+// block retires. A parameter lives as long as the function's root block; a name in no scope (a field reached bare,
+// a module `static`) outlives the call.
+int CEmitter::bindingScope(const std::string& nm) const
+{
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i) {
+        for (auto& b : _scopes[i].bindings) if (b.name == nm) return i;
+        for (auto& d : _scopes[i].declaredNames) if (d == nm) return i;
+    }
+    return _paramNames.count(nm) ? 0 : kViewCaller;
+}
+
+// Where the object a CONTRACT value borrows lives: the `_scopes` index whose end it dies at, `kViewCaller` for what
+// outlives the call, or `kViewUnbounded` for an object whose storage can MOVE while it is borrowed. A contract value
+// is a pointer to its object, so mutating a local through its own methods is harmless — the local never moves — but
+// an element lives in its container's storage, which moves when the container grows, and a value behind a handle
+// is freed when the handle is reseated. Through 0.9.720 a contract local was checked for none of this: `Formattable
+// fo = arr[0]` read a freed buffer after `arr` grew (ASan: heap-use-after-free).
+int CEmitter::contractObjectDepth(SharedExpression e, const std::string& iface)
+{
+    ASTNode* n = e.get();
+    if (!n) return kViewUnbounded;
+    if (auto* h = dynamic_cast<HandoffNode*>(n)) return contractObjectDepth(h->value, iface);
+    if (dynamic_cast<ThisAccessNode*>(n)) return kViewCaller;
+    // A widened scalar is a compound literal of the block it is written in, whatever binding it was read from.
+    if (!primWidenKey(e, iface).empty()) return (int)_scopes.size() - 1;
+    const std::string c = exprClass(e);
+    if (isSmartPtrClass(c) || !derefTarget(c).empty()) return kViewUnbounded;   // reseating the handle frees it
+    if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
+        if (!id->value) return kViewUnbounded;
+        if (id->qualifier && !id->qualifier->empty()) return kViewCaller;      // an enum member, a module constant
+        return bindingScope(*id->value);
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(n))   // a field is stored inline in its object
+        return ma->expression ? contractObjectDepth(ma->expression, iface) : kViewUnbounded;
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+        // A view's elements stay where they are for its window; a container's move when it grows.
+        SharedExpression b = ea->expression ? ea->expression : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        return b && isViewCType(exprClass(b)) ? viewDepthOf(b) : kViewUnbounded;
+    }
+    if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
+        // A CONTRACT value read out of a place is copied — a fat pointer — so where the copy was read from does not
+        // matter, only what it points at, which outlives the receiver it came from (`Coded c = t.hole(at: 0)`).
+        if (isInterface(c))
+            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
+                return ma->expression ? contractObjectDepth(ma->expression, iface) : kViewUnbounded;
+        // A value is materialized in this block; a place may be anywhere.
+        return invocationReturnsPlace(inv) ? kViewUnbounded : (int)_scopes.size() - 1;
+    }
+    return (int)_scopes.size() - 1;
+}
+
+// The window rule and the store rule (KR-225 decision 6) for a contract local, keyed on its OBJECT: a declaration's
+// object must stay put, and a store's must outlive the binding it is stored into.
+void CEmitter::checkContractObject(const std::string& nm, SharedExpression rhs, bool isStore, int line)
+{
+    auto lt = _localCTypes.find(nm);
+    if (lt == _localCTypes.end() || !isInterface(lt->second) || !rhs) return;
+    const int got = contractObjectDepth(rhs, lt->second);
+    if (got == kViewUnbounded) {
+        unsupported(("`" + nm + "` would borrow `" + unparseExpr(rhs) + "`, whose storage can move or be freed while `" + nm
+                     + "` lives — an element of a container that grows, or the value behind a handle that can be "
+                       "reseated. A contract value borrows its object, so the object must stay where it is. Hold it "
+                       "still in a window (`borrow d.view() as v { … v[i] … }`), or pass it straight to a function "
+                       "that takes the contract").c_str(), line);
+        return;
+    }
+    if (!isStore || got <= bindingScope(nm)) return;
+    unsupported(("`" + nm + "` outlives the object this stores into it: `" + unparseExpr(rhs) + "` lives in a block "
+                 "nested inside the one `" + nm + "` was declared in, so `" + nm + "` would point at a dead object once "
+                 "that block ends. Store an object that outlives `" + nm + "`, or declare a contract local inside the "
+                 "block").c_str(), line);
 }
 
 // --- The window's freeze -------------------------------------------------------------------------------

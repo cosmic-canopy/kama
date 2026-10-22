@@ -4157,6 +4157,9 @@ private:
     // viewDepthOf(e) <= x's depth. Called on every assignment, whatever its operator.
     void checkViewStore(SharedExpression lhs, SharedExpression rhs, bool plainStore, int line);
     bool viewByRefTypeArg(FunctionDeclarationNode* tmpl, const std::map<std::string, SharedIdentifier>& bind, int line);
+    int bindingScope(const std::string& name) const;                         // the `_scopes` index a binding lives in
+    int contractObjectDepth(SharedExpression e, const std::string& iface);   // where a contract value's object lives
+    void checkContractObject(const std::string& name, SharedExpression rhs, bool isStore, int line);
     SharedIdentifier mintReturnTypeNode(SharedExpression host, std::map<std::string, SharedIdentifier>& localTys);
     bool rejectFrozenWrite(SharedExpression target, int line);
     // Every PLACE a statement uses — `c`, `c.f`, a method's receiver, an element's container — at its widest
