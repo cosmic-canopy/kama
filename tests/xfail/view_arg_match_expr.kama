@@ -1,0 +1,13 @@
+// A value-producing `match` yields one of its arms, so as a view argument it roots wherever any arm's view does.
+// Through 0.9.720 it rooted nowhere, `g` grew `a` through its `ref` parameter, and read the freed buffer
+// (ASan: heap-use-after-free).
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn int32 g(ConstView<int32> v, ref DynamicArray<int32> d) { d.add(item: 9); d.add(item: 9); return v[0]; }
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 1);
+    a.add(item: 1);
+    Optional<int32> o = Optional::Some(value: 1);
+    return cast<uint8>(g(v: match (o) { case Some(value: x): a.view(); case None: a.view(); }, d: ref a));
+}

@@ -19590,8 +19590,9 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     // The operand's PLACE, so a disjoint sibling stays mutable — `foreach (x in this.buf) { this.hits = … }`
     // is legal for the same reason it is legal inside a `borrow`.
     {
-        std::vector<std::string> op = viewRootPlace(fe->expression);   // roots `m.values()` at `m`, not at nothing
-        if (!op.empty()) sc.frozen.push_back({ op, nm, fe->line, /*fromBorrow=*/false });
+        std::vector<std::vector<std::string>> ops;
+        viewRootPlaces(fe->expression, ops);   // roots `m.values()` at `m`, not at nothing
+        for (auto& op : ops) sc.frozen.push_back({ op, nm, fe->line, /*fromBorrow=*/false });
     }
     _scopes.push_back(sc);
     registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
@@ -26703,7 +26704,9 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 constArgPlaces.push_back({ cp, p.name });
             }
         } else if (!p.byRef && isViewCType(p.className)) {
-            checkViewArgOverlap(viewRootPlace(argExpr), p.name);
+            std::vector<std::vector<std::string>> roots;
+            viewRootPlaces(argExpr, roots);
+            for (auto& r : roots) checkViewArgOverlap(r, p.name);
         }
         // inline constructor in argument position — `f(x: Counter(start: 5))`. A ctor lowers to
         // `Cls__ctor(&dest, …)`, which needs an lvalue destination, so materialize a HOISTED temp
@@ -27463,51 +27466,95 @@ std::string CEmitter::placeText(const std::vector<std::string>& p)
     return s;
 }
 
-// The place a VIEW expression ultimately borrows. `placePath` answers "what storage does this designate",
-// which is empty for an invocation — correct for a value, and useless for a view, because `d.view()`
-// designates no place while borrowing all of `d`. So the two forms that produce a view without being a
-// place are unwrapped here:
+// The arguments of a call that its callee takes by reference (`ref`, `const ref`, `out`), by argument name — read off
+// the resolved signature, since the `ref` marker is optional at a call site; the marker is the fallback for a callee
+// kama cannot see. A view result may root at any of them: `h(w: w, d: arr)` returned `d.view()`.
+std::set<std::string> CEmitter::byRefArgNames(InvocationNode* inv)
+{
+    std::set<std::string> out;
+    if (!inv || !inv->args) return out;
+    std::vector<ParamSig> ps;
+    bool known = false;
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
+        std::string rcls = ma->expression ? receiverClass(ma->expression) : std::string();
+        if (isSmartPtrClass(rcls)) rcls = _classes[rcls].collElemClass;
+        if (!rcls.empty() && _classes.count(rcls) && ma->identifier && ma->identifier->value)
+            if (MethodInfo* mi = findMethod(&_classes[rcls], *ma->identifier->value, nullptr)) { ps = mi->params; known = true; }
+    } else if (inv->identifier && inv->identifier->value) {
+        const std::string k = resolveFunc(*inv->identifier->value, inv->identifier->qualifier);
+        auto fit = _funcs.find(k);
+        if (fit != _funcs.end()) { ps = fit->second.params; known = true; }
+        else {
+            auto git = _generics.find(k);
+            if (git != _generics.end() && git->second) { ps = paramSigsOf(git->second->parameters); known = true; }
+        }
+    }
+    for (auto& a : *inv->args) {
+        if (!a || !a->name || !a->name->value) continue;
+        bool byRef = false;
+        if (known) { for (auto& p : ps) if (p.name == *a->name->value) { byRef = p.byRef; break; } }
+        else byRef = a->modifier && a->modifier->value && (*a->modifier->value == "ref" || *a->modifier->value == "out");
+        if (byRef) out.insert(*a->name->value);
+    }
+    return out;
+}
+
+// Every place a VIEW expression may borrow. `placePath` answers "what storage does this designate", which is
+// empty for an invocation — correct for a value, and useless for a view, because `d.view()` designates no
+// place while borrowing all of `d`. So the forms that produce a view without being a place are unwrapped here:
 //
 //   `d.view()`, `d.view().slice(…)`   -> {d}   — recurse through the RECEIVER (a chained derive roots
 //                                               where its receiver roots)
+//   a call's result                   -> what its receiver roots at, what each view argument roots at, and
+//                                        every argument it takes by reference: its view-return rule let the
+//                                        result root at any of them
+//   a ternary, a `match` expression   -> every arm, since any may be the one yielded
 //   a `borrow` alias `v`              -> the place that window froze
-//   a by-value view PARAMETER         -> {}    — the caller's frame already bounds it, and the caller is
-//                                               where its aliasing was checked
-//   `View.make(…)` (dot-on-type ctor) -> {}    — the mint rule governs it, not aliasing
+//   a by-value view PARAMETER         -> nothing — the caller's frame already bounds it, and the caller is
+//                                        where its aliasing was checked
 //
-// EMPTY means "nothing here can conflict", the same load-bearing signal `placePath` uses. Forgetting the
-// receiver unwrap would make every check downstream silently vacuous — an empty path conflicts with
-// nothing — so `xfail/view_arg_aliases_ref` is the guard that this function did anything at all.
-std::vector<std::string> CEmitter::viewRootPlace(SharedExpression e)
+// Plural, because one place cannot say "one of these" or "all of these". Through 0.9.720 this returned one
+// path and gave a free function's result none, so `g(v: firstHalf(xs: a.viewMut()), d: ref a)` was not refused
+// where the same call without `firstHalf` was, and `g` read the buffer it had grown (ASan: heap-use-after-free).
+// Nothing found means "nothing here can conflict", the same load-bearing signal `placePath` uses, so
+// `xfail/view_arg_aliases_ref` is the guard that this function did anything at all.
+void CEmitter::viewRootPlaces(SharedExpression e, std::vector<std::vector<std::string>>& out)
 {
     ASTNode* n = e.get();
-    if (!n) return {};
-    if (auto* h = dynamic_cast<HandoffNode*>(n)) return viewRootPlace(h->value);
+    if (!n) return;
+    auto push = [&](const std::vector<std::string>& p) { if (!p.empty()) out.push_back(p); };
+    if (auto* h = dynamic_cast<HandoffNode*>(n)) { viewRootPlaces(h->value, out); return; }
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
         if (id->value && (!id->qualifier || id->qualifier->empty())) {
-            if (const std::vector<std::string>* r = frozenAliasRoot(*id->value)) return *r;
-            if (_viewParams.count(*id->value)) return {};
+            if (const std::vector<std::string>* r = frozenAliasRoot(*id->value)) { push(*r); return; }
+            if (_viewParams.count(*id->value)) return;
         }
-        return placePath(e);
+        push(placePath(e));
+        return;
     }
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
-        if (inv->expression)
-            if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
-                if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
-                    if (rid->value && _viewTypeNames.count(*rid->value)) return {};   // `View.make(…)`
-                if (ma->expression) return viewRootPlace(ma->expression);
+        auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
+        if (ma && ma->expression) {
+            auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get());
+            if (!(rid && rid->value && _viewTypeNames.count(*rid->value)))   // `View.make(…)` has no receiver to root at
+                viewRootPlaces(ma->expression, out);
+        }
+        const std::set<std::string> byRef = byRefArgNames(inv);
+        if (inv->args)
+            for (auto& a : *inv->args) {
+                if (!a || !a->expression) continue;
+                if (a->name && a->name->value && byRef.count(*a->name->value)) push(placePath(a->expression));
+                else if (isViewCType(exprClass(a->expression))) viewRootPlaces(a->expression, out);
             }
-        return {};
+        return;
     }
-    // A ternary yields one of two views. Either arm may alias, so BOTH are offered to the caller; a
-    // single place cannot say "one of these", so the first that roots anywhere is returned and the other
-    // is caught on its own if it is the one that conflicts.
-    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) {
-        std::vector<std::string> a = t->LHS ? viewRootPlace(t->LHS) : std::vector<std::string>();
-        if (!a.empty()) return a;
-        return t->RHS ? viewRootPlace(t->RHS) : std::vector<std::string>();
+    if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) { viewRootPlaces(t->LHS, out); viewRootPlaces(t->RHS, out); return; }
+    if (auto* m = dynamic_cast<MatchNode*>(n)) {
+        push(placePath(m->subject));   // a payload binding an arm yields from aliases the subject
+        if (m->arms) for (auto& a : *m->arms) if (a && a->body) viewRootPlaces(a->body, out);
+        return;
     }
-    return placePath(e);
+    push(placePath(e));
 }
 
 // The window rule. A view borrows storage it does not own, so a view LOCAL is only as good as its root:
@@ -27590,15 +27637,20 @@ int CEmitter::viewDepthOf(SharedExpression init)
                         return isSafeViewRoot(viewCtorBorrowRoot(rid, method, inv->args)) ? kViewCaller
                                                                                              : (int)_scopes.size() - 1;
                     }
-                return ma->expression ? viewDepthOf(ma->expression) : kViewUnbounded;   // a derive roots where its receiver does
             }
-        // A free function. Its return already had to root at one of ITS parameters, so the result is bounded
-        // exactly when every view handed to it was, by the deepest of them.
-        int d = kViewCaller;
-        bool sawView = false;
+        // A call's view result may root at its receiver, at any view it was handed, and at anything it took by
+        // reference — so it is as deep as the deepest of them, and unbounded beside a `ref` argument, which names
+        // storage this frame can still grow (`h(w: w, d: arr)` returning `d.view()`). A FREE function's result
+        // with no view argument roots in its `ref` parameters or nowhere, so it is no bounded view either.
+        auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
+        if (ma && !ma->expression) return kViewUnbounded;
+        int d = ma ? viewDepthOf(ma->expression) : kViewCaller;   // a derive roots where its receiver does
+        bool sawView = ma != nullptr;
+        const std::set<std::string> byRef = byRefArgNames(inv);
         if (inv->args)
             for (auto& a : *inv->args) {
                 if (!a || !a->expression) continue;
+                if (a->name && a->name->value && byRef.count(*a->name->value)) return kViewUnbounded;
                 if (!isViewCType(exprClass(a->expression))) continue;
                 sawView = true;
                 d = std::max(d, viewDepthOf(a->expression));
@@ -27884,7 +27936,24 @@ std::string CEmitter::viewReturnRoot(SharedExpression e) const
                 // a call (`this.view().slice(...)`), and `rootBinding` has no InvocationNode arm, so it
                 // answered "" and the derive was rejected as if it borrowed a local. A strict
                 // generalization: for any non-invocation receiver `viewReturnRoot` IS `rootBinding`.
-                if (ma->expression) return viewReturnRoot(ma->expression);
+                if (ma->expression) {
+                    const std::string r = viewReturnRoot(ma->expression);
+                    if (!isSafeViewRoot(r)) return r;
+                    // ...and every view the method was handed, and whatever it took by reference: its own return
+                    // rule let the result root at any of them, so each must be safe to hand back too.
+                    auto* self = const_cast<CEmitter*>(this);
+                    const std::set<std::string> byRef = self->byRefArgNames(inv);
+                    if (inv->args)
+                        for (auto& a : *inv->args) {
+                            if (!a || !a->expression) continue;
+                            std::string ar;
+                            if (a->name && a->name->value && byRef.count(*a->name->value)) ar = rootBinding(a->expression);
+                            else if (isViewCType(self->exprClass(a->expression))) ar = viewReturnRoot(a->expression);
+                            else continue;
+                            if (!isSafeViewRoot(ar)) return ar;
+                        }
+                    return r;
+                }
             }
         return "";                                                      // unknown call form -> reject
     }
@@ -43005,7 +43074,10 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 // rule with the receiver as the mutable side — and the receiver never reaches that rule,
                 // which only ever compares arguments with each other.
                 if (ps && !ps->byRef && isViewCType(ps->className)) {
-                    std::vector<std::string> vr = viewRootPlace(a->expression);
+                    std::vector<std::vector<std::string>> vrs;
+                    viewRootPlaces(a->expression, vrs);
+                    std::vector<std::string> vr;   // the first that overlaps the receiver, which is what is said
+                    for (auto& r : vrs) if (overlapsReceiver(r)) { vr = r; break; }
                     // A WINDOW receiver has a fixed length and grows nothing; what is wrong there is that two
                     // windows of one buffer, one written, may overlap (KR-217) — and std has the method for that.
                     if (!vr.empty() && overlapsReceiver(vr) && isViewCType(mcls))

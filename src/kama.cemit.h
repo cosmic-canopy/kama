@@ -4143,7 +4143,8 @@ private:
     // front, exactly as `markMoved` does for its own scope-shaped question.
     const Scope::FrozenPlace* frozenConflict(const std::vector<std::string>& p) const;
     const std::vector<std::string>* frozenAliasRoot(const std::string& name) const;  // the place a `borrow` ALIAS views
-    std::vector<std::string> viewRootPlace(SharedExpression e);   // the place a VIEW expression borrows
+    void viewRootPlaces(SharedExpression e, std::vector<std::vector<std::string>>& out);   // every place a VIEW may borrow
+    std::set<std::string> byRefArgNames(InvocationNode* inv);   // a call's `ref`/`const ref`/`out` arguments, by name
     // The window rule, as a DEPTH: the `_scopes` index of the innermost `borrow` window a view expression's root
     // depends on, `kViewCaller` when it roots in what the caller holds (a by-value view parameter, a view built from
     // one), or `kViewUnbounded` when nothing bounds it (a mint from a container this frame may still grow).

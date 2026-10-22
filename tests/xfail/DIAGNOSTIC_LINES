@@ -1422,6 +1422,8 @@ value_owns_resource	value_owns_resource.kama:3:0
 variant_untyped	variant_untyped.kama:4:23 variant_untyped.kama:4:41
 view_arg_aliases_receiver	view_arg_aliases_receiver.kama:16:23
 view_arg_aliases_ref	view_arg_aliases_ref.kama:15:23
+view_arg_match_expr	view_arg_match_expr.kama:12:23
+view_arg_overlap_through_fn	view_arg_overlap_through_fn.kama:15:23
 view_chain_over_local	view_chain_over_local.kama:11:4
 view_closes_by_value	view_closes_by_value.kama:14:0
 view_closes_copy	view_closes_copy.kama:17:29
@@ -1452,6 +1454,7 @@ view_optional_field	view_optional_field.kama:3:0
 view_out_param	view_out_param.kama:7:0
 view_owns	view_owns.kama:3:0
 view_param_store	view_param_store.kama:9:4
+view_ref_arg_launders	view_ref_arg_launders.kama:15:8
 view_ref_contract_member	view_ref_contract_member.kama:6:0
 view_ref_param	view_ref_param.kama:12:4 view_ref_param.kama:7:0
 view_return_over_local	view_return_over_local.kama:3:85

@@ -1,0 +1,16 @@
+// A view argument roots where the view does, and a free function's view result roots at the views handed to it.
+// Through 0.9.720 the argument-overlap check gave such a result no root at all, so `g(v: a.viewMut(), d: ref a)` was
+// refused and the same call through `firstHalf` was not: `g` grew `a` and read the freed buffer
+// (ASan: heap-use-after-free).
+import { std::collections::DynamicArray, std::collections::View };
+
+fn View<int32> firstHalf(View<int32> xs) { return xs.slice(from: 0, count: 1); }
+
+fn int32 g(View<int32> v, ref DynamicArray<int32> d) { d.add(item: 9); d.add(item: 9); d.add(item: 9); return v[0]; }
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 2);
+    a.add(item: 1);
+    a.add(item: 2);
+    return cast<uint8>(g(v: firstHalf(xs: a.viewMut()), d: ref a));
+}

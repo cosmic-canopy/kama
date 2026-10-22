@@ -1,0 +1,20 @@
+// A call's view result may root at any argument passed by reference: `h` returns a view of `d`, its `const ref`
+// argument. Through 0.9.720 only the call's VIEW arguments were looked at, so `v` was taken as bounded by `w`'s
+// window, `arr` grew, and `v[0]` read the freed buffer (ASan: heap-use-after-free).
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn ConstView<int32> h(ConstView<int32> w, const ref DynamicArray<int32> d) { return d.view(); }
+
+fn uint8 main() {
+    DynamicArray<int32> arr = DynamicArray.withCapacity(capacity: 1);
+    arr.add(item: 1);
+    DynamicArray<int32> other = DynamicArray.empty();
+    other.add(item: 2);
+    int32 r = 0;
+    borrow other.view() as w {
+        ConstView<int32> v = h(w: w, d: arr);
+        arr.add(item: 3); arr.add(item: 4);
+        r = v[0];
+    }
+    return cast<uint8>(r);
+}
