@@ -1,0 +1,16 @@
+// A box outlives every window, so a view may not be boxed into a contract handle. Through 0.9.720 `v.iterator()` —
+// a view of `a` — was boxed into an `Owned<Iterator<int32>>`, `a` grew, and `next()` read the freed buffer
+// (ASan: heap-use-after-free).
+import { std::collections::DynamicArray, std::collections::ConstView, std::memory::Owned };
+
+fn Owned<Iterator<int32>> leak(ConstView<int32> v) { Owned<Iterator<int32>> it = v.iterator(); return give it; }
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.withCapacity(capacity: 1);
+    a.add(item: 1);
+    Owned<Iterator<int32>> held = leak(v: a.view());
+    a.add(item: 2); a.add(item: 3);
+    int32 r = 0;
+    match (held.next()) { case Some(value: x): { r = x; } case None: { r = 0; } };
+    return cast<uint8>(r);
+}

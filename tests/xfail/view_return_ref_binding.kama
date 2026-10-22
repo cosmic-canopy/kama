@@ -1,0 +1,21 @@
+// A `foreach (ref …)` binding is no parameter: it aliases an element of its operand, so a view of it is only as
+// returnable as the operand is. Through 0.9.720 the return rule took any `ref` binding for a `ref` parameter, and
+// returning a view of an element of a local handed the caller freed memory (ASan: heap-use-after-free).
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn ConstView<int32> f(ConstView<int32> fallback) {
+    DynamicArray<DynamicArray<int32>> outer = DynamicArray.empty();
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 5);
+    outer.add(item: give one);
+    foreach (ref DynamicArray<int32> e in outer) { return e.view(); }
+    return fallback;
+}
+
+fn uint8 main() {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: 9);
+    int32 r = 0;
+    borrow a.view() as w { ConstView<int32> x = f(fallback: w); r = x[0]; }
+    return cast<uint8>(r);
+}

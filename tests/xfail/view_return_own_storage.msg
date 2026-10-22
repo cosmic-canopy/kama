@@ -1,0 +1,1 @@
+`this.buf` is this view's own storage, not what it borrows

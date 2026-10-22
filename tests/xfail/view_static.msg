@@ -1,0 +1,1 @@
+a module `static` outlives every window and every object, so it can't hold a borrow

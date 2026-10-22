@@ -1,0 +1,26 @@
+// A view's own by-value storage is not what it borrows: it lives in whatever frame holds the view. `peek` returned a
+// view of `this.buf`, which `f` took for a view of what its parameter `b` borrows — but `b` is `f`'s own copy, so the
+// result pointed into `f`'s dead frame. Through 0.9.720 it compiled (ASan: stack-use-after-return).
+import { std::collections::ConstView };
+
+@viewable type contract HasProbe for resource { fn Probe probe(); }
+type view Probe {
+    UnsafePtr<int32> p;
+    InlineArray<int32>#(4) buf;
+    unsafe ctor over(UnsafePtr<int32> p) { this.p = p; this.buf = [7; 4]; }
+    public const fn ConstView<int32> peek() { return this.buf.view(); }
+}
+type resource Host implements HasProbe {
+    InlineArray<int32>#(1) x;
+    public ctor make() { this.x = [1; 1]; }
+    public unsafe fn Probe probe() { return Probe.over(p: addr(of: this.x[0])); }
+}
+
+fn ConstView<int32> f(Probe b) { return b.peek(); }
+
+fn uint8 main() {
+    Host h = Host.make();
+    int32 r = 0;
+    borrow h.probe() as b { ConstView<int32> v = f(b: b); r = v[0]; }
+    return cast<uint8>(r);
+}

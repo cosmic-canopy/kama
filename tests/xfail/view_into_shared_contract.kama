@@ -1,0 +1,6 @@
+// The `Shared` twin of `view_into_owned_contract`: a counted box outlives every window too.
+import { std::collections::ConstView, std::memory::Shared };
+
+fn Shared<Formattable> keep(ConstView<int32> v) { Shared<Formattable> o = v; return o; }
+
+fn uint8 main() { return 0; }

@@ -305,6 +305,7 @@ contract_refine_missing	contract_refine_missing.kama:4:0
 contract_return_mismatch	contract_return_mismatch.kama:9:0
 contract_return_mismatch_adapter	contract_return_mismatch_adapter.kama:5:0
 contract_return_mismatch_enum	contract_return_mismatch_enum.kama:5:0
+contract_static	contract_static.kama:3:0
 contract_static_mismatch	contract_static_mismatch.kama:12:0
 contract_static_through_value	contract_static_through_value.kama:7:35
 contract_type_arg	contract_type_arg.kama:9:0 contract_type_arg.kama:9:22
@@ -1446,6 +1447,8 @@ view_ctor_public	view_ctor_public.kama:10:4
 view_escape_inline_array	view_escape_inline_array.kama:9:4
 view_field	view_field.kama:3:0
 view_from_const_receiver	view_from_const_receiver.kama:7:4
+view_into_owned_contract	view_into_owned_contract.kama:6:53
+view_into_shared_contract	view_into_shared_contract.kama:4:50
 view_local_from_method	view_local_from_method.kama:16:4
 view_local_inline_array	view_local_inline_array.kama:7:4
 view_local_ternary_root	view_local_ternary_root.kama:10:4
@@ -1458,6 +1461,9 @@ view_ref_arg_launders	view_ref_arg_launders.kama:15:8
 view_ref_contract_member	view_ref_contract_member.kama:6:0
 view_ref_param	view_ref_param.kama:12:4 view_ref_param.kama:7:0
 view_return_over_local	view_return_over_local.kama:3:85
+view_return_own_storage	view_return_own_storage.kama:11:46
+view_return_ref_binding	view_return_ref_binding.kama:11:51
+view_static	view_static.kama:5:0
 view_store_shorter_window	view_store_shorter_window.kama:14:32
 view_store_unbounded	view_store_unbounded.kama:10:4
 view_swap_generic_ref	view_swap_generic_ref.kama:14:61

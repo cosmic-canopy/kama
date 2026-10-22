@@ -1,0 +1,1 @@
+borrows its buffer, so it can't be boxed into

@@ -4176,6 +4176,7 @@ private:
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a
     // view-ctor's borrowed-pointer argument through `addr(of: …)` and a `recv.dataPtr()` call.
     std::string viewReturnRoot(SharedExpression e) const;
+    bool viewOwnStorage(SharedExpression e) const;   // a view method's own by-value field, not its borrow
     std::string borrowArgRoot(SharedExpression e) const;
     // The root a view CONSTRUCTOR call borrows, matched BY ARGUMENT NAME against the ctor's declared
     // parameters — every one of them that can carry a borrow, not just the first one written.

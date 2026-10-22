@@ -9224,9 +9224,21 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // so skip the fn-shaped check here for a ctor body.
         if (retExpr && !_inNamedCtorBody && isViewCType(_currentReturnCType)) {
             std::string root = viewReturnRoot(retExpr);
+            SharedExpression own;   // the view's own by-value storage this derives from, if that is what it is
+            for (SharedExpression r = retExpr; r && !own; ) {
+                auto* rinv = dynamic_cast<InvocationNode*>(r.get());
+                auto* rma = rinv ? dynamic_cast<MemberAccessNode*>(rinv->expression.get()) : nullptr;
+                if (!rma || !rma->expression) break;
+                if (viewOwnStorage(rma->expression)) own = rma->expression;
+                r = rma->expression;
+            }
+            if (own)
+                unsupported(("`" + unparseExpr(own) + "` is this view's own storage, not what it borrows — it lives "
+                             "wherever the view is held, which for a by-value view parameter is the callee's own frame, "
+                             "so a view of it cannot be returned. Return a view of what this view borrows").c_str(), n);
             // ...or a view at the caller's DEPTH: one kept in a local declared outside every window, whose every
             // store the store rule held to what the caller handed in (`s = v.slice(…); return s;`).
-            if (!isSafeViewRoot(root) && viewDepthOf(retExpr) != kViewCaller)
+            else if (!isSafeViewRoot(root) && viewDepthOf(retExpr) != kViewCaller)
                 unsupported("a view borrows its buffer, so it can only be returned when it borrows `this` "
                             "or a `ref` parameter — returning a view over a local would dangle; return an "
                             "owning `DynamicArray` to hand back data", n);
@@ -20121,6 +20133,13 @@ std::string CEmitter::boxValueExpr(const std::string& dstC, const std::string& c
                                    const std::string& val, int line)
 {
     rejectIfNoHeap(("boxing a value into an `" + demangleForDisplay(dstC) + "` handle").c_str(), line);
+    // A box outlives every window, so what it holds may borrow nothing. Through 0.9.720 a view's iterator was boxed
+    // into an `Owned<Iterator<int32>>`, its array grew, and `next()` read the freed buffer (ASan: heap-use-after-free).
+    if (isViewCType(cty))
+        unsupported(("a view (`" + demangleForDisplay(cty) + "`) borrows its buffer, so it can't be boxed into `"
+                     + demangleForDisplay(dstC) + "` — the box outlives the window that holds the buffer still. Pass "
+                     "the view to a function that takes the contract by value, or copy the elements into an owning "
+                     "collection").c_str(), line);
     // The handle frees what it holds through its allocator, and this block comes from the global heap — so only a
     // handle that frees there may hold it.
     const std::string a = _collections.count(dstC) ? _collections[dstC].allocType : std::string();
@@ -27853,7 +27872,15 @@ std::string CEmitter::borrowArgRoot(SharedExpression e) const
 
 bool CEmitter::isSafeViewRoot(const std::string& root) const
 {
-    return root == "this" || _refParams.count(root) > 0 || _viewParams.count(root) > 0;
+    if (root == "this" || _viewParams.count(root) > 0) return true;
+    if (!_refParams.count(root)) return false;
+    // A `foreach (ref …)`, borrowing-`match` or `borrow`-place binding is in `_refParams` too, and it is no parameter:
+    // it aliases its OPERAND, so a view of it is exactly as returnable as that operand is. Through 0.9.720 every such
+    // binding passed as a `ref` parameter, and `foreach (ref DynamicArray<int32> e in outer) { return e.view(); }`
+    // over a local handed the caller freed memory (ASan: heap-use-after-free).
+    auto op = _refBindingOperand.find(root);
+    if (op == _refBindingOperand.end()) return true;           // a real `ref` parameter: the caller's storage
+    return op->second && isSafeViewRoot(viewReturnRoot(op->second));
 }
 
 // The root a view CONSTRUCTOR call borrows, matched BY ARGUMENT NAME against the declared parameters.
@@ -27914,6 +27941,33 @@ std::string CEmitter::viewCtorBorrowRoot(IdentifierNode* typeId, const std::stri
     return firstBorrowed;   // "" when no parameter carries a borrow — rejected, exactly as before
 }
 
+// Inside a view's own method, is `e` the view's own BY-VALUE storage — a field of `this` that is neither a view nor a
+// raw pointer, or something reached through one (`this.buf`, `this.buf[0]`)? That storage is not what the view
+// borrows: it lives in whatever frame holds the view, which for a by-value view parameter is the callee's own. A view
+// of it is no derive off `this`. Through 0.9.720 `peek()` returned `this.buf.view()` as rooted at `this`, and a
+// caller handed the result back from `f(Probe b)` — a view into `f`'s dead frame (ASan: stack-use-after-scope).
+bool CEmitter::viewOwnStorage(SharedExpression e) const
+{
+    if (!_currentClass || !_currentClass->isBorrow) return false;
+    ASTNode* n = e.get();
+    while (n) {
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) {
+            if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
+                const std::string f = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
+                for (auto& fi : _currentClass->fields)
+                    if (fi.name == f)
+                        return !(isRawPtrName(fi.type) || namesViewType(fi.type)
+                                 || isViewCType(const_cast<CEmitter*>(this)->cType(fi.type)));
+                return false;
+            }
+            n = ma->expression.get();
+        } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+            n = ea->expression ? ea->expression.get() : ea->identifier.get();
+        } else return false;
+    }
+    return false;
+}
+
 // The root a RETURNED view ultimately borrows, dispatched on the return form:
 //  - a view constructor `View.make(data: <p>, len: <n>)` -> viewCtorBorrowRoot, by argument NAME;
 //  - a chained call `recv.slice(...)` returning a view -> wherever the RECEIVER roots, recursively, so a
@@ -27937,6 +27991,7 @@ std::string CEmitter::viewReturnRoot(SharedExpression e) const
                 // answered "" and the derive was rejected as if it borrowed a local. A strict
                 // generalization: for any non-invocation receiver `viewReturnRoot` IS `rootBinding`.
                 if (ma->expression) {
+                    if (viewOwnStorage(ma->expression)) return "";   // what holds the view, not what it borrows
                     const std::string r = viewReturnRoot(ma->expression);
                     if (!isSafeViewRoot(r)) return r;
                     // ...and every view the method was handed, and whatever it took by reference: its own return
@@ -44993,6 +45048,17 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
         return;
     }
     std::string hw = mv->isHardware ? "volatile " : "";
+    // A `static` outlives every window and every object, so it may hold no borrow. Through 0.9.720 a view passed the
+    // gate below — it owns nothing — and `G = v` kept a view of a container that then grew (ASan: heap-use-after-free);
+    // a contract value, a borrow of its object, passed the same way.
+    if (isViewCType(ty) || isInterface(ty)) {
+        if (!declOnly)
+            unsupported(("a module `static` outlives every window and every object, so it can't hold a borrow — `"
+                         + demangleForDisplay(ty) + "` is " + (isViewCType(ty) ? "a view of a buffer it does not own"
+                                                                               : "a contract value, a borrow of its object")
+                         + ". Hand it to the code that needs it as a parameter").c_str(), mv);
+        return;
+    }
     // Type gate: value / UnsafePtr / InlineArray / Simd only. Reject anything that owns memory or needs
     // teardown (v1 has no static-dtor seam). `InlineArray`/`FixedArray` are `isIntrinsicColl` but own no
     // heap (collKind Fixed, a value array), and a `Simd<T,N>` owns even less — it is a `vector_size`

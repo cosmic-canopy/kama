@@ -1,0 +1,5 @@
+// A contract value borrows its object, so a `static` may not hold one: it would outlive the object. Through 0.9.720
+// `static Formattable G;` compiled, and any store into it kept a borrow past its object.
+static Formattable G;
+
+fn uint8 main() { return 0; }

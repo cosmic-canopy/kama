@@ -1,0 +1,15 @@
+// A `static` outlives every window, so it may not hold a view. Through 0.9.720 `stash` kept a view of `d` in `G`,
+// `d` grew, and `G[0]` read the freed buffer (ASan: heap-use-after-free).
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+static ConstView<int32> G;
+
+fn void stash(ConstView<int32> v) { G = v; }
+
+fn uint8 main() {
+    DynamicArray<int32> d = DynamicArray.withCapacity(capacity: 1);
+    d.add(item: 1);
+    borrow d.view() as v { stash(v: v); }
+    d.add(item: 2); d.add(item: 3);
+    return cast<uint8>(G[0]);
+}
