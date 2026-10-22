@@ -61,6 +61,10 @@ bench/
   scripts/            build.sh, measure.sh, report.py
   src/<lang>/         identical workloads per language
   build/              compiled artifacts (gitignored)
+  poller/             not a language comparison: what a fiber scheduler's park costs under each way of
+                      registering a socket, on this host's epoll or kqueue (KR-3 decision 6,
+                      docs/design/fibers.md). `bench/poller/run.sh <out.tsv>`, then `summarize.py`. Runs on the
+                      host, or in the dev container for epoll, with no image of its own.
 ```
 
 Honesty note: kama→C is built by the same clang as the C baseline, so native compute matches C/C++ by
