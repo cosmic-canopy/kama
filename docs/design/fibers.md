@@ -1,6 +1,6 @@
 # Fibers and thread-per-core — design (KR-3)
 
-**Status: design, decisions owed.** Nothing here is built. This is the in-flight campaign document the
+**Status: ruled 2026-10-22, all fifteen decisions as recommended, each to be verified as it lands.** Nothing here is built yet; KR-225 and KR-226 come first. This is the in-flight campaign document the
 [ROADMAP_DETAIL](../ROADMAP_DETAIL.md#s6-fibers) table names: it is deleted when the work ships, once
 [SPEC.md](../SPEC.md) carries the record. The numbered decisions are listed again, one line each, in
 ROADMAP_DETAIL §6, where their rulings are recorded. Facts were read from the tree at `0.9.719` and from primary

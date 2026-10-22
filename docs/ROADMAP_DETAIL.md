@@ -519,8 +519,8 @@ borrow text.bytes() as b {
 
 Size M.
 
-**Decisions owed.**
-1. **A `type view` may hold views**, as in C# and Swift, or the refusal stands.
+**Ruled 2026-10-22: all five as recommended.** Decision 5 is KR-231.
+1. **A `type view` may hold views**, as in C# and Swift.
 2. **Minting.** A view's constructor is private today: a view may be minted only by itself or by the type whose
    memory it views (`@viewable`), because a view made from raw memory creates a borrow. A view **with no raw-pointer
    field** creates none; it only re-holds views it was handed. Recommended: such a view may declare a public
@@ -532,7 +532,41 @@ Size M.
    a view case, as in Swift's SE-0465. It is stack-only and returnable under the view return rule, and a `match` binds
    its payload as a view local rooted where the enum value roots.
 5. **`@generate(Deserializable)` into a view struct**, for zero-copy JSON (serde's `#[serde(borrow)]`): its own row
-   after this, since it is the serializer's work.
+   after this, since it is the serializer's work (KR-231).
+
+**Implementation map** (read from `src/kama.cemit.cpp` on 2026-10-22; line numbers drift, so the function names are
+what to search for):
+- **The field.** `emitStruct` (:35326) calls `rejectStoredInterface` with `alsoView=true` for every holder; a view
+  holder passes `!ci.isBorrow`. Still refuse a contract field, and a `closesWindow` view as a field: a composite
+  would never run that view's `~dtor`.
+- **The constructor.** The "always private" refusal is in `collectClasses` (:12428), inside the member loop, which
+  misses a field declared after the constructor. Move it after the loop and allow `public` when no field is a raw
+  pointer (`isRawPtrName`). The mint site (:42413) already lets a public constructor through.
+- ⚠️ **`viewLocalBounded` (:27480) treats any view constructor call as bounded (:27500).** That is sound only while
+  every view constructor is private. A public one must take the free-function rule (bounded only when every view
+  argument is), or `Tokens.over(input: d.view())` would pass.
+- **Derivation.**
+  - `viewLocalBounded` gains a `MemberAccessNode` arm (bounded when its base is) and a `this` arm inside a view
+    method. Today `this.slice()` as a local in a view method is refused because no arm exists.
+  - `viewReturnRoot` already roots `this.f.slice()` at `this`.
+- **Enums.**
+  - `registerGenericTypeInst` refuses a view payload (:15619). Mark the instance `isBorrow` instead, after the
+    kind-clause precedent (:15510).
+  - Do not add `Optional` to `_viewTypeNames`, which is keyed by bare name. Its readers (`paramCanCarryBorrow`
+    :23556, `namesViewType` :23459) need a cType fallback.
+  - The 0.9.720 refusal of a view payload in `emitVariantStruct` becomes "the enum is a view"; a bare contract
+    payload stays refused.
+  - ⚠️ **Open, to verify while building:** `Result<View, E>` with an owning `E` is destructible, and the "a view owns
+    nothing" check (:43904) refuses that. Decide between exempting a variant instance and refusing that combination,
+    with a fixture either way.
+- **`match`.** `emitMatchSwitch`'s binding loop (:31473) never records a view payload as bounded, and its in-place
+  path puts the binding in `_refParams`, which would let `return v` pass the return rule. Record the binding as
+  bounded exactly when the subject is, and resolve its root through the subject.
+- **Roots.** `boundedViews` is a set of names, and `viewRootPlace` (:27432) returns one path. A composite's roots are
+  the union of its fields' roots, so it needs a plural form, and its consumers loop over it: `checkViewArgOverlap`
+  (:26529), the receiver check (:42800) and the `foreach` freeze (:19544).
+- **Fixtures to mirror:** `view_derive_bounded`, `view_derive_chain`, `view_contract_pinned_ok`,
+  `viewable_attribute`. Xfails that stay red: `view_field`, `view_optional_field`, `view_ctor_public` (a raw pointer).
 
 <a id="s2-quoted-format"></a>
 
@@ -1713,6 +1747,17 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
+<a id="s4-view-deserialize"></a>
+
+### Zero-copy deserialization into a view struct (KR-231)
+
+**Ruled 2026-10-22, as KR-225's decision 5.** Once a type that holds a view is a view (KR-225),
+`@generate(Deserializable)` can target a `type view` record whose `ConstView<uint8>` fields point into the input.
+Parsing JSON then copies no string, as serde's `#[serde(borrow)]` does in Rust. The record is bounded by the window
+over the input, under every existing view rule. A field that needs unescaping (`\n`, `\u00e9`) cannot point into the
+input. The design must say what happens there: Rust uses `Cow<str>`, and the alternatives are refusing the record or
+choosing a per-field owned fallback. Unscoped until KR-225 ships.
+
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 
 The 2026-09-09 review judged the shipped serde layering over-engineered and blocked the container work on
@@ -2124,6 +2169,18 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
   `OrderedMap` plus its move-to-end is the whole of it, Java's `LinkedHashMap` precedent). A concurrent map is §6's
   question, not this list's.
 
+<a id="s5-mcu-fibers"></a>
+
+### Fibers on bare metal (KR-233)
+
+**Ruled 2026-10-22, as KR-3's decision 15.** A microcontroller has no `Poller`. A fiber there needs:
+- a Cortex-M switch, about ten instructions;
+- stacks drawn from a static pool, sized at build time, so `--no-heap` holds;
+- wakes from an interrupt handler through an ISR-safe ready queue.
+
+Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
+native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
+
 <a id="s5-debug-frame-copies"></a>
 
 ### Two debug-tier frames still hold a large value twice (KR-197)
@@ -2162,12 +2219,13 @@ at the right width instead of hardcoding one. What remains for that row is sched
 fixed pool where one job blocks ties up 1/K of capacity no matter how K was chosen, and **head-of-line
 blocking is the job system's problem to solve.**
 
-- **Deferred (reopen only on a concrete case) — general shared-memory ("hybrid").** Co-equal shared-memory
-  threading is *not* planned; it reintroduces the hazard the model removes. Capability is retained (via the
-  `Atomic<T>` seam + immutable-`Shared` + disjoint `parallel_for`); only some ergonomics move behind the seam.
-- **A concurrent map (Java's `ConcurrentHashMap`, Go's `sync.Map`) — noted 2026-10-16, not ruled.** It is the
-  shared-memory container the bullet above defers; isolates share through channels and immutable `Shared`. Whether
-  the job system (KR-3) wants a channel-fronted or sharded map as a library is decided with that row.
+- **General shared memory ("hybrid") stays out; one shape of it is reopened (ruled 2026-10-22, KR-226).**
+  Co-equal shared-memory threading is still not planned, because it reintroduces the hazard the model removes. What
+  is reopened is a lock that owns its payload, reachable only inside a `borrow` window, so the data cannot be touched
+  without the lock. The other seams stay as they are: `Atomic<T>`, immutable `Shared` and disjoint `parallel_for`.
+- **A concurrent map: ruled 2026-10-22 (KR-226 decision 6), KR-232.** A sharded map built on `Locked` (N shards,
+  each a `Locked<Map<K, V>>`, the key's hash picking the shard), as Java's `ConcurrentHashMap` and Go's `sync.Map`
+  answer the same need. It is scheduled after `Locked` ships, not a non-goal.
 
 <a id="s6-fibers"></a>
 
@@ -2179,7 +2237,7 @@ eleven-commit implementation map. In short: one isolate per core, each a coopera
 `Poller`; a fiber never leaves its isolate, so it needs no `Sendable` bound, no colouring and no `Pin`, and freedom
 from data races keeps holding by construction.
 
-**Decisions owed** (each argued in the design, by number):
+**Ruled 2026-10-22: all fifteen as recommended**, each to be verified as it lands. By number, each argued in the design:
 1. Thread-per-core with fibers, in std, as part of the isolate: the first `spawn fiber` makes an isolate a scheduler,
    and its `scope` runs it.
 2. The switch: own asm per architecture on POSIX (measured on arm64 at about 21 ns a round trip, 25–35 times cheaper
@@ -2202,7 +2260,7 @@ from data races keeps holding by construction.
 12. Cooperative. I/O is polled every N runs (Go uses 61), and there is a `yield()`.
 13. Descriptor lifetime: DEL before close, deferred record frees, and deregistration on `give`.
 14. Sanitizer fiber annotations and an lldb OS plugin, in the first commits.
-15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`.
+15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`. Fibers on bare metal are KR-233.
 
 <a id="s6-lock-window"></a>
 
@@ -2270,7 +2328,8 @@ behind an owner isolate at a channel round trip, about 3 µs, per access):
 - **A failover hint a pool's connections share,** so a failover is asked about once, not once per connection.
 - **One token cache across a credentials provider's copies,** so a token is fetched once per pool.
 
-**Decisions owed.**
+**Ruled 2026-10-22: all six as recommended.** Decision 6 is KR-232. The `@parks` walk of decision 4 is built here
+first, and KR-3 reuses it.
 1. Reopen §6's deferral and ship `Locked<T>` in `std::concurrent`.
 2. **The spelling.** The guard is a closing view, so there is no new hook, contract or reserved word. Recommended:
    extend the host rule so `borrow hits.lock().value() as m` is one window. The alternative is to ship with
