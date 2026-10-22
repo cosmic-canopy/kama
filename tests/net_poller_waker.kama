@@ -92,8 +92,19 @@ unsafe fn int32 run(ref Poller p) {
     Sender<int32> ptx = pre.sender();
     _ = ptx.send(item: 7);
     prx.wakeOnSend(waker: give kw);
-    if (waited(r: p.wait(events: ev, timeoutMs: 1000)) != 1) { return 14; }
-    foreach (Event e in ev) { if (e.token != 11ui64) { return 15; } }
+    // The channel phase may leave one WORK wake behind: the producer's close can land while the loop drains, after the
+    // wake it answered was cleared, and is then reported at the next wait, as documented (never lost). Measured on
+    // linux-x64 CI. So WORK may appear once more here; the queued item's wake must arrive, and nothing else.
+    bool queuedSeen = false;
+    int32 tries = 0;
+    while (!queuedSeen && tries < 3) {
+        if (waited(r: p.wait(events: ev, timeoutMs: 1000)) < 1) { return 14; }
+        foreach (Event e in ev) {
+            if (e.token == 11ui64) { queuedSeen = true; } else if (e.token != WORK) { return 15; }
+        }
+        tries = tries + 1;
+    }
+    if (!queuedSeen) { return 16; }
     return 0;
 }
 
