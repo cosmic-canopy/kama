@@ -417,6 +417,8 @@ enum_member_receiver_generic	enum_member_receiver_generic.kama:10:11
 enum_method_private	enum_method_private.kama:8:34 enum_method_private.kama:8:47
 enum_missing_contract_method	enum_missing_contract_method.kama:2:0
 enum_operator	enum_operator.kama:5:4
+enum_payload_contract	enum_payload_contract.kama:9:0
+enum_payload_view	enum_payload_view.kama:5:0
 enum_recursive	enum_recursive.kama:1:0
 enum_recursive_owned_copy	enum_recursive_owned_copy.kama:11:4
 enum_type_as_value	enum_type_as_value.kama:4:10

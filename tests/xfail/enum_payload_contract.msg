@@ -1,0 +1,1 @@
+a contract (`Shape`) borrows its object, so it can't be an `enum` payload

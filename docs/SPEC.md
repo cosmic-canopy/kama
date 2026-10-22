@@ -537,7 +537,7 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   argument through the same pair. The reverse is refused, naming `viewMut()`, and a write through a <!-- xfail: const_view_to_mut -->
   `ConstView<T>` — `cv[0] = x`, a `foreach (ref …)`, a `parallel_for` — is refused as a write through a <!-- xfail: const_view_write, foreach_ref_const_view, parfor_const_view -->
   `const ref` place; `viewMut()` on a `const ref` container is refused like any non-`const fn` call. <!-- xfail: view_from_const_receiver -->
-  A view may **not** be stored in a field/collection/`enum`, and may be **returned only** when it <!-- xfail: view_field, view_collection_elem, view_optional_field -->
+  A view may **not** be stored in a field/collection/`enum`, and may be **returned only** when it <!-- xfail: view_field, view_collection_elem, view_optional_field, enum_payload_view -->
   borrows `this` or a `ref`/view parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view
   over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`. <!-- xfail: view_return_over_local, view_ctor_over_local -->
 - **A view may not be passed by `ref`/`out`** — it is already a borrow, and the only thing the extra <!-- xfail: view_ref_param, view_out_param -->
@@ -5430,8 +5430,8 @@ contract value whose contract does not refine the wanted one is refused, whateve
 
 **Borrow vs. storage — a contract value is second-class.** The fat pointer *borrows* its object, so a bare
 contract value is fine as a **parameter or local** (the zero-copy polymorphic view above) but **cannot be <!-- xfail: iface_field, iface_return, iface_collection -->
-stored beyond the call that made it** — a bare `Shape` **field**, **return type**, or **collection element**
-is a compile error, because the borrowed object could die and leave it dangling. To keep polymorphism around, <!-- xfail: iface_field, iface_return, iface_collection -->
+stored beyond the call that made it** — a bare `Shape` **field**, **return type**, **collection element** or **`enum`
+payload** is a compile error, because the borrowed object could die and leave it dangling. To keep polymorphism around, <!-- xfail: iface_field, iface_return, iface_collection, enum_payload_contract -->
 **own the object** with a smart pointer over the contract (below). Ownership is always written explicitly —
 never an implicit box. This is the language-wide rule **"a borrow lives in a parameter or a `borrow` window,
 never in storage; storage requires ownership"** — the same reason a `ref` parameter can't be returned and a

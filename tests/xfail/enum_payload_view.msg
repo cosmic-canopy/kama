@@ -1,0 +1,1 @@
+a view (`ConstView`) borrows its buffer, so it can't be an `enum` payload

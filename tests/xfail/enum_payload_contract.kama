@@ -1,0 +1,19 @@
+// A bare contract value borrows its object, so in a non-generic enum's payload it outlives the object: through 0.9.719
+// `keep()` returned a `Held` borrowing its own local `q`. `Optional<Shape>` was already refused as a type argument.
+type contract Shape for value { fn int32 area(); }
+type value Sq implements Shape {
+    int32 s;
+    public ctor make(int32 s) { this.s = s; }
+    public fn int32 area() { return this.s * this.s; }
+}
+type enum Held { One(Shape s), Empty }
+
+fn Held keep() { Sq q = Sq.make(s: 3); return Held::One(s: q); }
+
+fn uint8 main() {
+    Held h = keep();
+    match (h) {
+        case One(s: x): { return cast<uint8>(x.area()); }
+        case Empty: { return 1; }
+    };
+}

@@ -35380,6 +35380,12 @@ void CEmitter::emitVariantStruct(ClassInfo& ci)
             if (v.payload.empty()) continue;
             indent(2); *_out << "struct {\n";
             for (auto& f : v.payload) {
+                // A view or a bare contract borrows, so as a payload it leaves its window inside the enum: through
+                // 0.9.719 `type enum Tok { Word(ConstView<uint8> w) }` compiled, and returning `Tok::Word(w: v)` from
+                // a window over a local read freed memory. A generic instance was refused at registration.
+                if (!ci.isGenericInst)
+                    rejectStoredInterface(f.type, "an `enum` payload", f.type ? f.type->line : ci.declLine(),
+                                          /*alsoView=*/true);
                 // A by-value user value/resource payload is legal — the unified struct order
                 // lays out the payload type first; a self/mutual by-value cycle is caught (infinite size)
                 // by unifiedStructOrder.

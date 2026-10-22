@@ -1,0 +1,19 @@
+// A view in a non-generic enum's payload would carry the borrow out of its window. Through 0.9.719 this compiled, and
+// `leak()` returned a view of `d`'s freed buffer (ASan: heap-use-after-free on the read in `main`).
+import { std::collections::ConstView, std::collections::DynamicArray };
+
+type enum Tok { Word(ConstView<uint8> w), End }
+
+fn Tok leak() {
+    DynamicArray<uint8> d = DynamicArray.empty();
+    d.add(item: 7);
+    borrow d.view() as v { return Tok::Word(w: v); }
+}
+
+fn uint8 main() {
+    Tok t = leak();
+    match (t) {
+        case Word(w: x): { return x[0]; }
+        case End: { return 1; }
+    };
+}
