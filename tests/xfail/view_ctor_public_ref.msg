@@ -1,0 +1,1 @@
+a public `view` constructor re-holds the views it is handed

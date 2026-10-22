@@ -1,0 +1,9 @@
+// A view may declare a public constructor only when it holds no raw pointer — at any depth — because a view made from
+// raw memory creates a borrow, and only the type that owns that memory may mint one. `RawBox` hides an `UnsafePtr`
+// one value field down.
+type value RawBox { UnsafePtr<int32> p; }
+type view Hides {
+    RawBox box;
+    public ctor of(RawBox box) { this.box = box; }
+}
+fn uint8 main() { return 0; }

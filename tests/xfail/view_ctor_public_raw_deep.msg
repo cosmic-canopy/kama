@@ -1,0 +1,1 @@
+a `view` constructor is always private while the view holds a raw pointer

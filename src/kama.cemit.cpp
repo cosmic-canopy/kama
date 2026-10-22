@@ -12456,13 +12456,19 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         // fieldVisibility rejects a written visibility on a `view` field: the default is
                         // already `Private`, so a downgrade would leave 16 stdlib declarations reading
                         // `public` while meaning the opposite.
-                        if (ci.isBorrow && md->isCtor
-                            && (modHas(md->modifiers, "public") || modHas(md->modifiers, "protected")))
+                        //
+                        // ...unless the view holds no raw pointer (KR-225 decision 2): then it creates no borrow, it
+                        // only re-holds views it is handed, and `public` is the author's to write. Whether it does is
+                        // known only once every field and every class is collected, so that is decided after
+                        // (checkViewSurfaces).
+                        if (ci.isBorrow && md->isCtor && modHas(md->modifiers, "protected"))
                             unsupported(("a `view` constructor is always private — `" + ci.name + "` borrows "
                                          "memory it does not own, so it may only be minted by the type that "
                                          "owns that memory. Drop the visibility and let the viewed type "
                                          "declare the capability, by implementing a `@viewable` contract "
                                          "whose member returns this view").c_str(), md);
+                        else if (ci.isBorrow && md->isCtor && modHas(md->modifiers, "public"))
+                            _pendingPublicViewCtors.push_back({ ci.name, md, cd->typeParams, _collectingUnitPath });
                         // `protected` belongs to a `resource` in an extensibility hierarchy
                         // (`virtual`/`abstract` declares protected members for subclasses; a `final`
                         // override still uses `protected` by NVI). It's meaningless on a `value`, a
@@ -27643,6 +27649,15 @@ int CEmitter::viewDepthOf(SharedExpression init)
     }
     if (auto* t = dynamic_cast<TernaryExpressionNode*>(n))   // either arm may be the one held: the deeper decides
         return t->LHS && t->RHS ? std::max(viewDepthOf(t->LHS), viewDepthOf(t->RHS)) : kViewUnbounded;
+    // `this` inside a view's own method is the caller's view; elsewhere it is a container that may grow (KR-225).
+    if (dynamic_cast<ThisAccessNode*>(n)) return _currentClass && _currentClass->isBorrow ? kViewCaller : kViewUnbounded;
+    // A view held in a composite's field is a derive off the composite: it roots where the composite roots (KR-225
+    // decision 3). The view's own by-value storage is not what it borrows; it lives as long as this call does.
+    if (auto* fa = dynamic_cast<MemberAccessNode*>(n)) {
+        if (!fa->expression) return kViewUnbounded;
+        if (viewOwnStorage(init)) return 0;
+        return viewDepthOf(fa->expression);
+    }
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         if (inv->expression)
             if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) {
@@ -27650,11 +27665,27 @@ int CEmitter::viewDepthOf(SharedExpression init)
                 // `checkViewCtorEscape` checks what it borrows). It is the caller's when what it borrows is already
                 // safe to hand back (`this`, a parameter), which is every mint in a view's own method; otherwise it
                 // is bounded by the scope it is made in, and goes no further.
+                // Each parameter that can carry its borrow is judged by what it carries. A by-value VIEW is re-held, so
+                // the result roots where that view roots (a composite's public ctor, KR-225 decision 2); a raw pointer
+                // or a `ref` is the mint rule's, the caller's when it borrows what is already safe to hand back. One
+                // that carries no borrow at all yields a view of nothing, which any frame may hold.
                 if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
                     if (rid->value && _viewTypeNames.count(*rid->value)) {
                         const std::string method = (ma->identifier && ma->identifier->value) ? *ma->identifier->value : "";
-                        return isSafeViewRoot(viewCtorBorrowRoot(rid, method, inv->args)) ? kViewCaller
-                                                                                             : (int)_scopes.size() - 1;
+                        SharedParameterList ps = viewCtorParams(rid, method);
+                        if (!ps) return kViewUnbounded;
+                        std::map<std::string, SharedExpression> byName;
+                        if (inv->args) for (auto& a : *inv->args) if (a && a->name && a->name->value) byName[*a->name->value] = a->expression;
+                        int d = kViewCaller;
+                        for (auto& prm : *ps) {
+                            if (!prm || !paramCanCarryBorrow(prm.get(), std::string())) continue;
+                            auto it = (prm->identifier && prm->identifier->value) ? byName.find(*prm->identifier->value) : byName.end();
+                            if (it == byName.end()) return kViewUnbounded;
+                            const int pd = (!paramByRef(prm.get()) && namesViewType(prm->type)) ? viewDepthOf(it->second)
+                                         : isSafeViewRoot(borrowArgRoot(it->second)) ? kViewCaller : (int)_scopes.size() - 1;
+                            d = std::max(d, pd);
+                        }
+                        return d;
                     }
             }
         // A call's view result may root at its receiver, at any view it was handed, and at anything it took by
@@ -27685,14 +27716,30 @@ int CEmitter::viewDepthOf(SharedExpression init)
 // the store would have refused.
 void CEmitter::checkViewStore(SharedExpression lhs, SharedExpression rhs, bool plainStore, int line)
 {
-    auto* id = dynamic_cast<IdentifierNode*>(lhs.get());
-    if (!id || !id->value || (id->qualifier && !id->qualifier->empty()) || !rhs) return;
-    const std::string& nm = *id->value;
-    auto lt = _localCTypes.find(nm);
-    if (lt == _localCTypes.end() || !isViewCType(lt->second) || closesWindowCType(lt->second)) return;
-    if (aliasWindowDepth(nm) != -2) return;                    // a `borrow` alias is never reseated — refused beside this
+    if (!rhs) return;
+    std::string nm;
+    int target = kViewUnbounded;
+    bool field = false;
+    if (auto* fa = dynamic_cast<MemberAccessNode*>(lhs.get())) {
+        // A view-typed FIELD of a composite view holds only what outlives the composite (KR-225): `this.rest =
+        // this.rest.slice(…)` is a derive off the same holder; a view from a window opened inside the method is not.
+        const std::string fc = exprClass(lhs);
+        if (!fa->expression || !isViewCType(fc) || closesWindowCType(fc)) return;
+        nm = unparseExpr(lhs);
+        target = viewDepthOf(fa->expression);
+        field = true;
+    } else {
+        auto* id = dynamic_cast<IdentifierNode*>(lhs.get());
+        if (!id || !id->value || (id->qualifier && !id->qualifier->empty())) return;
+        nm = *id->value;
+        auto lt = _localCTypes.find(nm);
+        if (lt == _localCTypes.end() || !isViewCType(lt->second) || closesWindowCType(lt->second)) return;
+        if (aliasWindowDepth(nm) != -2) return;                // a `borrow` alias is never reseated — refused beside this
+        // A `borrow` of a PLACE writes through to that place, so it is judged as that place is.
+        auto op = _refBindingOperand.find(nm);
+        target = op != _refBindingOperand.end() ? viewDepthOf(op->second) : viewBindingDepth(nm);
+    }
     if (!plainStore && !isViewCType(exprClass(rhs))) return;   // `v += n`: what is stored is the operator's, not `n`
-    const int target = viewBindingDepth(nm);
     if (target == kViewUnbounded) return;                      // its declaration was refused already
     const int got = viewDepthOf(rhs);
     if (got == kViewUnbounded) {
@@ -27709,8 +27756,9 @@ void CEmitter::checkViewStore(SharedExpression lhs, SharedExpression rhs, bool p
     const bool param = _viewParams.count(nm) > 0;
     unsupported(("`" + nm + "` outlives what this stores into it: the view roots in " + win
                  + (at.empty() ? std::string() : " (opened at line " + at + ")") + ", which closes before `" + nm
-                 + "` stops being readable — " + (param ? std::string("`" + nm + "` is a parameter, so it holds what the "
-                   "caller handed in") : std::string("`" + nm + "` was declared outside that window"))
+                 + "` stops being readable — " + (field ? std::string("it is a field of a view held outside that window")
+                   : param ? std::string("`" + nm + "` is a parameter, so it holds what the caller handed in")
+                   : std::string("`" + nm + "` was declared outside that window"))
                  + ", and it would dangle once the window closes. Store a view of something that outlives `" + nm
                  + "`, or declare a view inside the window").c_str(), line);
 }
@@ -27883,6 +27931,28 @@ bool CEmitter::isSafeViewRoot(const std::string& root) const
     return op->second && isSafeViewRoot(viewReturnRoot(op->second));
 }
 
+// The declared parameters of a view constructor `Type.method`, or null when kama cannot see it. A concrete `type view`
+// resolves in `_classes`; a GENERIC one (`View<T>`) lives only as a template, and the template is the right place to
+// ask: `paramCanCarryBorrow` keys on the SOURCE spelling of the parameter's type, so it answers correctly even where
+// the monomorph cannot be pinned down.
+SharedParameterList CEmitter::viewCtorParams(IdentifierNode* typeId, const std::string& method) const
+{
+    if (!typeId || !typeId->value) return nullptr;
+    auto* self = const_cast<CEmitter*>(this);   // resolveUserName/findMethod are non-const; this query is not
+    const std::string key = self->resolveUserName(*typeId->value, typeId->qualifier);
+    if (self->_classes.count(key)) {
+        ClassInfo* owner = nullptr;
+        if (MethodInfo* mi = self->findMethod(&self->_classes[key], method, &owner))
+            if (mi->node) return mi->node->params;
+    }
+    auto gt = _genericTypes.find(key);
+    if (gt != _genericTypes.end()) {
+        auto mit = gt->second.methods.find(method);
+        if (mit != gt->second.methods.end() && mit->second.node) return mit->second.node->params;
+    }
+    return nullptr;
+}
+
 // The root a view CONSTRUCTOR call borrows, matched BY ARGUMENT NAME against the declared parameters.
 //
 // Named arguments ARE kama's calling convention — `emitReorderedCall` binds them into declared order
@@ -27901,26 +27971,7 @@ bool CEmitter::isSafeViewRoot(const std::string& root) const
 std::string CEmitter::viewCtorBorrowRoot(IdentifierNode* typeId, const std::string& method,
                                          SharedArgumentList args) const
 {
-    if (!typeId || !typeId->value) return "";
-    auto* self = const_cast<CEmitter*>(this);   // resolveUserName/findMethod are non-const; this query is
-    const std::string key = self->resolveUserName(*typeId->value, typeId->qualifier);
-
-    // A concrete `type view` resolves in `_classes`; a GENERIC one (`View<T>`) lives only as a template,
-    // and the template is the right place to ask: `paramCanCarryBorrow` keys on the SOURCE spelling of the
-    // parameter's type, so it answers correctly even where the monomorph cannot be pinned down.
-    SharedParameterList params;
-    if (self->_classes.count(key)) {
-        ClassInfo* owner = nullptr;
-        if (MethodInfo* mi = self->findMethod(&self->_classes[key], method, &owner))
-            if (mi->node) params = mi->node->params;
-    }
-    if (!params) {
-        auto gt = _genericTypes.find(key);
-        if (gt != _genericTypes.end()) {
-            auto mit = gt->second.methods.find(method);
-            if (mit != gt->second.methods.end() && mit->second.node) params = mit->second.node->params;
-        }
-    }
+    SharedParameterList params = viewCtorParams(typeId, method);
     if (!params) return "";
 
     std::map<std::string, SharedExpression> byName;
@@ -29465,6 +29516,76 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         SharedStatement last = body->statements->empty() ? SharedStatement() : body->statements->back();
         if (!bad.empty()) reportMissing(bad, last ? last->line : body->line);
     }
+}
+
+// Does a field of this type reach a raw pointer, at any depth — through a value's fields, an `Optional`, an
+// `InlineArray`? A bare type parameter of the holder could be one. A view field stops the walk: it is a borrow already
+// rooted, which is exactly what a composite view holds.
+bool CEmitter::typeReachesRawPtr(SharedIdentifier t, const std::set<std::string>& typeParams, std::set<std::string>& seen)
+{
+    if (!t || !t->value) return false;
+    const std::string& v = *t->value;
+    if (isRawPtrName(v)) return true;
+    if (!t->genericArgs && typeParams.count(v)) return true;
+    if (namesViewType(t)) return false;
+    if (t->genericArgs) for (auto& a : *t->genericArgs) if (typeReachesRawPtr(a, typeParams, seen)) return true;
+    const std::string key = resolveUserName(v, t->qualifier);
+    if (!seen.insert(key).second) return false;
+    const ClassInfo* ci = _classes.count(key) ? &_classes[key] : (_genericTypes.count(key) ? &_genericTypes[key] : nullptr);
+    if (ci) for (auto& f : ci->fields) if (typeReachesRawPtr(f.type, {}, seen)) return true;
+    return false;
+}
+
+// KR-225 decision 2. A view may declare a public constructor when it holds no raw pointer, at any depth: it creates no
+// borrow then, it only re-holds the views it is handed, so its result roots where they root (viewDepthOf). Every
+// parameter that can carry its borrow must be a by-value view — a `ref` container is storage the caller can still
+// grow, which no window could hold still for it (`Tokens.of(d: ref buf); buf.add(…)`).
+//
+// ...and no method hands out a view-typed field as a mutable PLACE: through one the field could be reseated at storage
+// the holder's window never froze, which the store rule cannot see.
+void CEmitter::checkViewSurfaces()
+{
+    for (auto& pc : _pendingPublicViewCtors) {
+        ScopedStr _cu(_collectingUnitPath, pc.unit);
+        ClassInfo* ci = _classes.count(pc.cls) ? &_classes[pc.cls] : (_genericTypes.count(pc.cls) ? &_genericTypes[pc.cls] : nullptr);
+        if (!ci || !pc.md) continue;
+        std::set<std::string> tps;
+        if (pc.typeParams) for (auto& tp : *pc.typeParams) if (tp) tps.insert(*tp);
+        std::string rawField;
+        for (auto& f : ci->fields) { std::set<std::string> seen; if (typeReachesRawPtr(f.type, tps, seen)) { rawField = f.name; break; } }
+        if (!rawField.empty()) {
+            unsupported(("a `view` constructor is always private while the view holds a raw pointer — `" + ci->name
+                         + "` reaches one through `" + rawField + "`, so it borrows memory it does not own, and only the type "
+                           "that owns that memory may mint it. Drop the visibility and let the viewed type declare the "
+                           "capability, by implementing a `@viewable` contract whose member returns this view").c_str(), pc.md);
+            continue;
+        }
+        if (pc.md->params)
+            for (auto& prm : *pc.md->params) {
+                if (!prm || !paramCanCarryBorrow(prm.get(), std::string())) continue;
+                const bool raw = isRawPtrName(prm->type);
+                if (!paramByRef(prm.get()) && !raw) continue;   // a by-value view: re-held, rooted where it roots
+                const std::string pn = (prm->identifier && prm->identifier->value) ? *prm->identifier->value : "a parameter";
+                unsupported(("a public `view` constructor re-holds the views it is handed, so it roots where they root — and `"
+                             + pn + "` is " + (raw ? std::string("a raw pointer") : std::string("taken by `ref`/`out`, storage the "
+                               "caller can still grow")) + ", which no window could hold still for it. Take a by-value view "
+                               "instead").c_str(), pc.md);
+                break;
+            }
+    }
+    _pendingPublicViewCtors.clear();
+    auto placeReturns = [&](ClassInfo& ci) {
+        for (auto& kv : ci.methods) {
+            const MethodInfo& mi = kv.second;
+            if (!mi.isPlaceReturn || mi.isConstPlace || !mi.node || !namesViewType(mi.returnType)) continue;
+            ScopedStr _cu(_collectingUnitPath, ci.declFile);
+            unsupported(("`" + kv.first + "` hands out a `ref " + *mi.returnType->value + "` — a view by reference, through which "
+                         "it could be reseated at storage the holder's window never froze. Return it by value, or a "
+                         "`const ref`").c_str(), mi.node);
+        }
+    };
+    for (auto& kv : _classes) placeReturns(kv.second);
+    for (auto& kv : _genericTypes) placeReturns(kv.second);
 }
 
 // Option-B view-ctor escape check. A `type view` ctor is a factory: it builds a local view and RETURNS it
@@ -35650,9 +35771,17 @@ void CEmitter::emitStruct(ClassInfo& ci)
         hasMember = true;
     }
     for (auto& f : ci.fields) {
+        // A view can't be a field (it would dangle) — of anything but another view, which is itself stack-only and
+        // rooted in the same window, so nothing it holds can outlive what it views (KR-225 decision 1). A contract
+        // stays refused everywhere.
         rejectStoredInterface(f.type, "stored in a field", f.type ? f.type->line : (ci.declLine()),
-                              /*alsoView=*/true);   // a view can't be a field (would dangle) — but a view's OWN
-                                                    // `UnsafePtr<T>`/`int` fields are fine; only view-TYPED fields reject
+                              /*alsoView=*/!ci.isBorrow);
+        // ...except one that closes its window (KR-124): it lives only as the alias of the `borrow` that minted it,
+        // which runs its destructor, and a holder would copy it where nothing runs the copy's.
+        if (ci.isBorrow && f.type && closesWindowCType(cType(f.type)))
+            unsupported(("`" + demangleForDisplay(cType(f.type)) + "` closes its window when it is dropped, so it lives only "
+                         "as the alias of the `borrow` that minted it and can't be a field — the holder would copy it, "
+                         "and nothing would run the copy's destructor").c_str(), f.type->line);
         indent(1);
         *_out << cType(f.type) << " " << kMember(ci, f.name) << ";\n";
         hasMember = true;
@@ -43097,6 +43226,29 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // at the freed buffer. `const fn` is what makes this precise rather than "any method call": the
         // stdlib marks 247 of them, so a read inside a window stays free.
         if (rmi && !rmi->isConst && !recvPlace.empty()) { rejectFrozenWrite(receiver, call->line); noteSubjectWrite(receiver, call->line); }
+        // A composite view's non-`const fn` may store a view it is handed into a field (KR-225), so it may be handed
+        // only views that outlive its receiver — the store rule, applied where the caller can see both depths.
+        // `t.reset(other: vb)` with `vb` from a window nested inside `t`'s left `t.rest` dangling once it closed.
+        if (rmi && !rmi->isConst && isViewCType(mcls) && call->args) {
+            bool composite = false;
+            for (auto& f : _classes[mcls].fields) if (f.type && isViewCType(cTypeInInstance(mcls, f.type))) { composite = true; break; }
+            const int rd = composite ? viewDepthOf(receiver) : kViewUnbounded;
+            if (rd != kViewUnbounded)
+                for (auto& a : *call->args) {
+                    if (!a || !a->name || !a->name->value || !a->expression) continue;
+                    const ParamSig* ps = nullptr;
+                    for (auto& p : rmi->params) if (p.name == *a->name->value) { ps = &p; break; }
+                    if (!ps || ps->byRef || !isViewCType(ps->className)) continue;
+                    const int ad = viewDepthOf(a->expression);
+                    if (ad <= rd) continue;
+                    unsupported(("`" + method + "` may store `" + ps->name + "` into `" + unparseExpr(receiver) + "`, which "
+                                 "outlives what it views — " + (ad == kViewUnbounded ? std::string("nothing bounds that storage")
+                                   : std::string("it roots in a `borrow` window nested inside the one `" + unparseExpr(receiver)
+                                     + "` was declared in, which closes first")) + ". Pass a view of something that outlives `"
+                                 + unparseExpr(receiver) + "`").c_str(), call);
+                    break;
+                }
+        }
         // ...and an argument may not overlap the receiver's ROOTS: an element receiver (`this.items[0]`) has no
         // place of its own, but it lives in its container, so `this.items[0].touch(owner: ref this)` hands the
         // method a mutable borrow of the array that holds its own `this` — growing it moved `this` out from
@@ -44101,6 +44253,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         collectInterfaces(u);
         collectClasses(u);
     }
+    checkViewSurfaces();   // a public view ctor and a view's place returns, now that every field and class is known
     // Pre-scan `type adapter` blocks into _intrinsicConformances (target primKey -> contracts) BEFORE the first
     // generic type instance is built (openInstances, below): an instance judges its conditional conformances,
     // members and derives, and its bound checks, once, against this table. Filled after collectEnumConformances,

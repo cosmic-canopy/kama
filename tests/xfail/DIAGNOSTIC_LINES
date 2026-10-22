@@ -1444,8 +1444,13 @@ view_ctor_forge	view_ctor_forge.kama:15:11
 view_ctor_over_byval_param	view_ctor_over_byval_param.kama:19:0
 view_ctor_over_local	view_ctor_over_local.kama:10:0
 view_ctor_public	view_ctor_public.kama:10:4
+view_ctor_public_raw_deep	view_ctor_public_raw_deep.kama:7:4
+view_ctor_public_ref	view_ctor_public_ref.kama:7:4
 view_escape_inline_array	view_escape_inline_array.kama:9:4
 view_field	view_field.kama:3:0
+view_field_closing	view_field_closing.kama:9:0
+view_field_place_return	view_field_place_return.kama:7:4
+view_field_store_param	view_field_store_param.kama:17:32
 view_from_const_receiver	view_from_const_receiver.kama:7:4
 view_into_owned_contract	view_into_owned_contract.kama:6:53
 view_into_shared_contract	view_into_shared_contract.kama:4:50

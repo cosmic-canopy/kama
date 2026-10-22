@@ -1,0 +1,1 @@
+closes its window when it is dropped, so it lives only as the alias of the `borrow` that minted it and can't be a field

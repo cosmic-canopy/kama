@@ -1,0 +1,10 @@
+// A view that closes its window (KR-124) lives only as the alias of the `borrow` that minted it, which is the window
+// that runs its destructor. A composite holding one would copy it, and nothing would ever run the copy's.
+@viewable type contract Transacts for resource { fn Tx begin(); }
+type view Tx {
+    UnsafePtr<int32> log;
+    unsafe ctor over(UnsafePtr<int32> log) { this.log = log; }
+    unsafe ~Tx() { this.log[0] = 2; }
+}
+type view Holds { Tx tx; }
+fn uint8 main() { return 0; }

@@ -1,0 +1,1 @@
+hands out a `ref ConstView` — a view by reference

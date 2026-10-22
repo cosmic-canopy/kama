@@ -1,0 +1,9 @@
+// A place of a view-typed field is a view by reference, which could reseat it at storage the receiver's window never
+// froze — so no method hands one out mutably.
+import { std::collections::ConstView };
+type view Cursor {
+    ConstView<uint8> rest;
+    public ctor over(ConstView<uint8> input) { this.rest = input; }
+    public fn ref ConstView<uint8> restRef() { return this.rest; }
+}
+fn uint8 main() { return 0; }

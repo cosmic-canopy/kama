@@ -1,0 +1,22 @@
+// A view method may store what it is handed into a field, so the caller may hand it only views that outlive the
+// receiver. `vb` roots in a window nested inside the one `t` was declared in: once that window closes and `b` grows,
+// `t.rest` would read freed memory.
+import { std::collections::DynamicArray, std::collections::ConstView };
+type view Cursor {
+    ConstView<uint8> rest;
+    public ctor over(ConstView<uint8> input) { this.rest = input; }
+    public fn void reset(ConstView<uint8> other) { this.rest = other; }
+    public const fn uint8 first() { return this.rest[0]; }
+}
+fn uint8 main() {
+    DynamicArray<uint8> a = DynamicArray.empty(); a.add(item: 1);
+    DynamicArray<uint8> b = DynamicArray.withCapacity(capacity: 1); b.add(item: 2);
+    uint8 r = 0;
+    borrow a.view() as va {
+        Cursor t = Cursor.over(input: va);
+        borrow b.view() as vb { t.reset(other: vb); }
+        b.add(item: 3); b.add(item: 4);
+        r = t.first();
+    }
+    return r;
+}

@@ -1,0 +1,1 @@
+`reset` may store `other` into `t`, which outlives what it views

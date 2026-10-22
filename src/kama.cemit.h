@@ -4157,6 +4157,10 @@ private:
     // A store into a view binding may not outlive what it stores (KR-225 decision 6): `x = e` needs
     // viewDepthOf(e) <= x's depth. Called on every assignment, whatever its operator.
     void checkViewStore(SharedExpression lhs, SharedExpression rhs, bool plainStore, int line);
+    struct PendingPublicViewCtor { std::string cls; ClassMethodDeclarationNode* md = nullptr; SharedStringList typeParams; std::string unit; };
+    std::vector<PendingPublicViewCtor> _pendingPublicViewCtors;   // decided by checkViewSurfaces, once every class is known
+    void checkViewSurfaces();
+    bool typeReachesRawPtr(SharedIdentifier t, const std::set<std::string>& typeParams, std::set<std::string>& seen);
     bool viewByRefTypeArg(FunctionDeclarationNode* tmpl, const std::map<std::string, SharedIdentifier>& bind, int line);
     int bindingScope(const std::string& name) const;                         // the `_scopes` index a binding lives in
     int contractObjectDepth(SharedExpression e, const std::string& iface);   // where a contract value's object lives
@@ -4176,6 +4180,7 @@ private:
     // dispatches on the return form (view ctor / chained call / bare place); `borrowArgRoot` traces a
     // view-ctor's borrowed-pointer argument through `addr(of: …)` and a `recv.dataPtr()` call.
     std::string viewReturnRoot(SharedExpression e) const;
+    SharedParameterList viewCtorParams(IdentifierNode* typeId, const std::string& method) const;
     bool viewOwnStorage(SharedExpression e) const;   // a view method's own by-value field, not its borrow
     std::string borrowArgRoot(SharedExpression e) const;
     // The root a view CONSTRUCTOR call borrows, matched BY ARGUMENT NAME against the ctor's declared

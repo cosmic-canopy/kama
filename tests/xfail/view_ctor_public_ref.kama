@@ -1,0 +1,9 @@
+// A public view constructor re-holds views it is handed, so it roots where they root. A `ref` parameter is a container
+// this frame can still grow, which no caller could hold still for it: `Tokens.of(d: ref buf); buf.add(…)` would leave
+// the view dangling. Only by-value views may carry its borrow.
+import { std::collections::DynamicArray, std::collections::ConstView };
+type view Tokens {
+    ConstView<uint8> rest;
+    public ctor of(ref DynamicArray<uint8> d) { this.rest = d.view(); }
+}
+fn uint8 main() { return 0; }
