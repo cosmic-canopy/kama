@@ -455,48 +455,84 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 ### Views compose: a view may hold views (KR-225)
 
-**The gap, probed on `0.9.711` (2026-10-21).** A zero-copy tokenizer over its input cannot be written:
+**The gap, re-probed on `0.9.719` (2026-10-22).** A zero-copy tokenizer over its input cannot be written, for two
+reasons:
 
 ```kama fragment
 type view Tokens {
     ConstView<uint8> rest;   // error: a view (`ConstView`) borrows its buffer, so it can't be stored in a field
-    …
+}
+fn Optional<ConstView<uint8>> head(ConstView<uint8> v) { … }
+                             // error: a view can't be an `enum` payload (`Optional<…ConstView<uint8>>`)
+```
+
+- **The field refusal** is `rejectStoredInterface` (`src/kama.cemit.cpp:19986`), which `emitStruct` (`:35326`)
+  calls for every field of every type, whatever the holder's kind. It is right for a `value` or a `resource`, where the
+  view would outlive its window. The holder here is itself a `type view`, stack-only and rooted in the same `borrow`
+  window, so nothing it holds can outlive what it views.
+- **The enum refusal** leaves a tokenizer's `fn Optional<Token> next()` with no spelling. Its only substitute is a
+  sentinel token, which GOALS 3b rules out ("absence is encoded in the type, never a sentinel"). A view cannot be an
+  `out` parameter either.
+
+Today the only ways to write a parser or a zero-copy deserializer are to copy the input into an owning buffer (an
+allocation and a copy of every byte), or to pass a `ConstView` and a cursor by hand to every function.
+
+**What others do.** Rust stores a borrow anywhere and proves it with lifetimes. kama refuses lifetimes (GOALS 3e).
+The two languages that took kama's road, a second-class borrow with no annotations, both let it compose:
+
+| | A borrow inside a borrowing type | `Optional` of a borrow | Annotation |
+|---|---|---|---|
+| Rust | anywhere: `struct Tokens<'a> { rest: &'a [u8] }` | `Option<&[u8]>` | `'a` on the struct and every use |
+| C# | a `ref struct` holds `Span<T>` (7.2) and `ref` fields (11); the holder is stack-only | a `ref struct` became a legal type argument in C# 13 (`allows ref struct`); `Nullable<T>` still refuses one | none; `scoped` narrows an edge case |
+| Swift 6.2 | a `~Escapable` struct holds `Span` properties (SE-0446, SE-0447) | `Optional` and `Result` accept `~Escapable` payloads (SE-0465, accepted 2025) | `@_lifetime` where a result's source is ambiguous, still experimental; inferred otherwise |
+| kama today | refused | refused | — |
+
+**Recommendation: a type that holds a view is a view**, under every existing rule: stack-only, never a field of a
+non-view, never a collection element, never an escaping return, and a local of it rooted in a `borrow` window. The
+tokenizer then reads:
+
+```kama fragment
+type view Tokens {
+    ConstView<uint8> rest;
+    public ctor over(ConstView<uint8> input) { this.rest = input; }       // decision 2: rooted where `input` is
+    public fn Optional<ConstView<uint8>> next() {                         // decision 4: an Optional of a view is a view
+        isize n = …;
+        ConstView<uint8> word = this.rest.slice(from: 0, count: n);      // decision 3: a derive off `this`
+        this.rest = this.rest.slice(from: n, count: this.rest.length() - n);
+        return Optional::Some(value: word);
+    }
+}
+
+borrow text.bytes() as b {
+    Tokens t = Tokens.over(input: b);                                     // bounded by the window `b` came from
+    while (true) { match (t.next()) { case Some(value: w): { … } case None: { break; } }; }
 }
 ```
 
-The refusal is right for a `value` or a `resource` field, where the view would outlive its window. But the holder
-here is itself a `type view`, which is stack-only and rooted in the same `borrow` window. Nothing it holds can outlive
-what it views. Today the only way to write a parser, a tokenizer or a zero-copy deserializer is to copy the input
-into an owning buffer, or to pass the `ConstView` and a cursor by hand to every function.
+**The bytes.**
+- `Tokens` is a C struct holding the view's pointer and length: 16 B on a 64-bit target, on the stack, with nothing
+  allocated and nothing copied.
+- `Optional<ConstView<uint8>>` is that plus its tag.
+- Today's workaround copies the input into a `DynamicArray`: one heap allocation of N bytes and a copy of all of them.
+- A structure that must outlive the parse, such as an AST kept in a collection, keeps offsets into an owned buffer.
+  That is what rustc itself does, and it is the honest limit of a language without lifetimes.
 
-**This is Rust's strongest remaining advantage.** Rust stores a borrow anywhere and proves it with lifetimes
-(`struct Tokens<'a> { rest: &'a [u8] }`). kama refuses lifetimes (GOALS 3e). The two languages that took kama's road,
-a second-class borrow with no annotations, both let it compose:
-
-| | A borrow inside a borrowing type | Annotation |
-|---|---|---|
-| Rust | anywhere, with lifetimes | `'a` on the struct and every use |
-| C# 11 | a `ref struct` holds `Span<T>` and `ref` fields; the holder is stack-only | none |
-| Swift 6 | a `~Escapable` type holds a `Span`; the holder cannot escape (SE-0446, SE-0447) | `@lifetime` only where it is returned |
-| kama today | refused | — |
-
-**Recommendation.** A `type view` may hold views as fields, and the composite is a view under every existing rule:
-stack-only, no field of a non-view, no collection element, no escaping return, and its local rooted in a `borrow`
-window. With no lifetime annotations, this covers:
-- tokenizers and parsers over a `ConstView`;
-- iterators over slices;
-- a zero-copy deserializer into a view struct (serde's `#[serde(borrow)]`).
-
-A structure that must outlive the parse, such as an AST kept in a collection, keeps offsets into an owned buffer.
-That is what rustc itself does, and it is the honest limit of a language without lifetimes. Size M?
+Size M.
 
 **Decisions owed.**
-1. Views may hold views (C# and Swift), or the refusal stands.
-2. **Minting.** A view's constructor is private today, because a view may be minted only by the type that owns the
-   memory (`@viewable`). A composite view owns nothing and creates no borrow: it only re-holds views it was handed.
-   Recommended: a view whose fields are all views (or plain values) may have a public constructor taking views.
-3. A view-holding view as a `borrow` host, so `borrow tokens.rest as r { … }` works.
-4. Whether `@generate(Deserializable)` targets a view struct, for zero-copy JSON: here, or as its own row.
+1. **A `type view` may hold views**, as in C# and Swift, or the refusal stands.
+2. **Minting.** A view's constructor is private today: a view may be minted only by itself or by the type whose
+   memory it views (`@viewable`), because a view made from raw memory creates a borrow. A view **with no raw-pointer
+   field** creates none; it only re-holds views it was handed. Recommended: such a view may declare a public
+   constructor, and its result roots where its view arguments root, as a free function's view result does today
+   (rule 3).
+3. **Derivation.** A view read from a composite's field is a derive off the composite: it roots where the composite
+   roots. So a method may return `this.rest.slice(…)`, and the caller's view is bounded by the same window.
+4. **An `enum` with a view payload is a view.** That covers `Optional<V>`, `Result<V, E>` and a user `type enum` with
+   a view case, as in Swift's SE-0465. It is stack-only and returnable under the view return rule, and a `match` binds
+   its payload as a view local rooted where the enum value roots.
+5. **`@generate(Deserializable)` into a view struct**, for zero-copy JSON (serde's `#[serde(borrow)]`): its own row
+   after this, since it is the serializer's work.
 
 <a id="s2-quoted-format"></a>
 
@@ -2137,79 +2173,36 @@ blocking is the job system's problem to solve.**
 
 ### Fibers and thread-per-core: blocking-shaped I/O for many connections (KR-3)
 
-**What is missing is cheap suspension, not threads.** kama has real threads (isolates), typed channels, `scope`,
-`Atomic<T>` and `parallel_for`. But an isolate is an OS thread with a stated stack, so a server holding 10,000
-connections today needs either 10,000 isolates or a state machine written by hand over `Poller`. A state machine is what
-Rust's `async` makes the compiler write, and what every Rust user then pays for in `Pin`, `Send + 'static` bounds and
-coloured functions. SPEC (*Why not green threads or `async`/`await`*) already rules the shape: no colouring in the
-language, and "a native scheduler can back the very same blocking-shaped surface with fibers".
+**The design is [docs/design/fibers.md](design/fibers.md)** (2026-10-22): what the tree has, what nine other runtimes
+do, fifteen decisions each with a recommendation, the registration measurement, what this brief had wrong, and an
+eleven-commit implementation map. In short: one isolate per core, each a cooperative fiber scheduler over its own
+`Poller`; a fiber never leaves its isolate, so it needs no `Sendable` bound, no colouring and no `Pin`, and freedom
+from data races keeps holding by construction.
 
-**What others do.**
-
-| | Model | Colouring | Cost a user pays |
-|---|---|---|---|
-| Rust | `async`/`await`, executor is a crate (tokio, smol) | yes | `Pin`; tokio's work-stealing forces `Send + 'static` on every task; ecosystem split per executor |
-| Rust, thread-per-core | glommio, monoio | yes | niche crates with their own APIs |
-| Go | goroutines, M:N, work-stealing | no | a GC; shared memory, so data races are possible |
-| Java 21 | virtual threads (Loom), M:N | no | shared memory, so races are possible |
-| Erlang | processes, shared-nothing | no | a VM |
-| C++ | Seastar: thread-per-core, shared-nothing | futures | callback-shaped code |
-| Swift, C# | `async`/`await` (+ actors in Swift) | yes | colouring |
-
-**Recommendation: thread-per-core, shared-nothing.** One isolate per core, each running a fiber scheduler over its own
-`Poller`:
-- **Each isolate accepts on its own listener.** `ListenOptions.balance` (Linux, `0.9.713`; FreeBSD is KR-227) shares one
-  port across them.
-- **Isolates talk through channels.** The `Poller`'s waker (`0.9.719`) ends a `wait` when something arrives.
-- **A fiber runs on one isolate's thread only.** So a task needs no `Send` bound, there is no colouring and no `Pin`,
-  and freedom from data races keeps holding by construction, as it does today. Fibers interleave only where one
-  blocks, as JavaScript tasks and Erlang processes do.
-- **`scope` extends to fibers**, as structured concurrency. A fiber cannot outlive the scope that started it, and its
-  failure is a value the scope receives.
-
-This is Erlang's isolation with Seastar's throughput, without Seastar's futures or Go's GC, and no mainstream language
-offers it in its standard surface. Size: XL, so a design document comes before any code.
-
-**Constraints already probed (2026-08-30), for the design to start from.**
-- **`Poller` is native-only.** On wasm you do not own the loop: `lib/std/app/app.kama` says emscripten drives the
-  tick, and a busy loop never sees an event. SPEC rejects fibers on wasm because they would need Asyncify. **Re-check
-  that** against JavaScript Promise Integration and wasm's stack-switching proposal, which postdate the reasoning.
-  Their current status is unverified.
-- **kama has no capturing closures, by design.** A spawned fiber is a `Job` contract or a bound function pointer
-  (`BindableFunctionPtr`), never `spawn(|| …)`.
-- **Timers need nothing new.** `Poller.wait(timeoutMs)` is the sleep of a poll loop.
-- **The job system is the other half of this row.** That is CPU fan-out on the sized pool, where head-of-line
-  blocking is the problem. Go merges the two schedulers; Java keeps them apart. The design says which.
-- **Prerequisites, shipped:** a `Poller` that scales, with a ready list (`0.9.718`), then a coalesced waker and a
-  `Channel` a `Poller` waits on (`0.9.719`), both in SPEC *Readiness*. Beside this row: KR-202 (a DNS lookup a loop can poll) and
-  KR-7 (a non-blocking `File`; a regular file's read blocks on every OS, so the production answer is a small offload
-  pool, as libuv and tokio have).
-- **A client of a database or a cache is a named case.** One connection per core, multiplexed, its callers fibers on
-  that core's scheduler, so no request crosses an isolate at all.
-- **Windows wants overlapped I/O anyway.** Zero-copy `sendFile` there (KR-229) is `TransmitFile`, which keeps a
-  non-blocking contract only with an OVERLAPPED and a completion wait, so it arrives with this loop. Go's netpoller is
-  built on IOCP for the same reason.
-  - Read 2026-10-21: every socket `kama__socket` makes is `WSA_FLAG_OVERLAPPED` (kama_os.h), but two paths are not, a
-    duplicated descriptor (`kama_desc_dup`) and one received from another process. Overlapped I/O on those needs the
-    flag, so those paths need it first.
-
-**Decisions owed.**
-1. Thread-per-core with fibers as the server model, in std.
-2. **The context switch.** Native fibers need a small per-architecture stack switch in the runtime (x86-64, arm64,
-   then the MCU targets), as Go and Boost.Context have. `ucontext` is deprecated on macOS.
-3. **Exclusivity per fiber.** `Shared`'s exclusivity checks (`0.9.708`, SPEC *Two handles to one value…*) record
-   every lasting access per thread. With fibers it must be per
-   fiber, or a `borrow` window held across a blocking call could see another fiber's write.
-4. **wasm:** blocking-shaped fibers there (JSPI or stack switching, once verified), or the app loop's callbacks as
-   today.
-5. One scheduler for jobs and I/O, or two.
-6. **Edge-triggered or one-shot registration.** The `Poller` is level-triggered only (ruled 2026-10-21). That is wrong
-   for a scheduler, because a socket with no fiber parked on it would be reported on every wait.
-   - Go and tokio register edge-triggered once and pay no system call per park.
-   - One-shot costs one system call per park, but is native on all three backends. AFD on Windows is one-shot, and
-     edge-triggered emulation there needs the I/O call to report WouldBlock.
-   - Measure both on each backend (system calls per park, throughput) and adopt the winner. The scheduler's
-     completion I/O on Windows shares the `Poller`'s IOCP port, which AFD polling already runs on (`0.9.718`).
+**Decisions owed** (each argued in the design, by number):
+1. Thread-per-core with fibers, in std, as part of the isolate: the first `spawn fiber` makes an isolate a scheduler,
+   and its `scope` runs it.
+2. The switch: own asm per architecture on POSIX (measured on arm64 at about 21 ns a round trip, 25–35 times cheaper
+   than `swapcontext`), the OS Fiber API on Windows, an unmodelled arch refused. Stacks are a 256 KiB reservation with
+   a guard page, stated by `spawn fiber(stack:)`, with an overflow diagnostic.
+3. **No park inside a lasting access to `Shared` storage**, a compile-time walk on `--no-heap`'s engine (`@parks`
+   is the leaf). This replaces "exclusivity per fiber", which was inverted, and it leaves the switch nothing to save.
+4. wasm: fibers over JSPI, which every engine now ships unflagged, as the second phase.
+5. Two schedulers: per-isolate fibers for I/O, and a sized job pool for CPU work whose jobs may not park.
+6. Registration, measured on epoll and kqueue (`bench/poller/`): readability edge-triggered once on both, and every other
+   change batched into the next wait, so a park costs no system call. One-shot costs 8–13% on epoll, and an unbatched
+   kqueue re-arm 6%. AFD stays one-shot. It is internal: the public `Poller` stays level-triggered.
+7. Transparent: the same `TcpStream.read` parks on a fiber (Loom, Go, Eio), not Zig's explicit `Io` parameter.
+8. Channels become fiber-aware, joins park, and regular files and DNS go to an offload pool (with KR-7, KR-202).
+9. `spawn fiber f(b: …)`, the isolate's fn-plus-one-bundle. A `Fiber<R>` handle whose `join()` yields `R`. A panic
+   still aborts the process.
+10. A fiber `spawn` may sit anywhere in its `scope`, which keeps a runtime list of live children (an accept loop).
+11. A timer heap per scheduler (high-resolution on Windows, as Go did in 2024), per-operation deadlines, and
+    cooperative cancellation as `Err(Cancelled)`.
+12. Cooperative. I/O is polled every N runs (Go uses 61), and there is a `yield()`.
+13. Descriptor lifetime: DEL before close, deferred record frees, and deregistration on `give`.
+14. Sanitizer fiber annotations and an lldb OS plugin, in the first commits.
+15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`.
 
 <a id="s6-lock-window"></a>
 
@@ -2235,20 +2228,39 @@ is checked at compile time.
 | C++ | `std::mutex` beside the data | yes |
 | kama today | none: one owner isolate, plus channels | — |
 
-**Recommendation.** A `Sendable` lock that owns its payload, with the payload reachable only inside a window, the
-`borrow` window kama already has:
+**Recommendation.** A `Sendable` lock that owns its payload, with the payload reachable only inside a `borrow`
+window. **Probed on `0.9.719` (2026-10-22): the window's exit action already exists.** This brief used to say it did
+not. A `type view` with `~dtor` closes the window that minted it, on every exit, once (SPEC *A view that closes its
+window*). So the guard is such a view, `lock()` is its mint, and the release is its destructor. This already
+compiles and runs, releasing once per window:
 
 ```kama fragment
-Locked<Map<string, int64>> hits = Locked.make(value: Map.empty());   // a Sendable handle; its copies share one value
-…
-borrow hits.lock() as m {      // acquires; `m` is the payload, `ref`, for the block
-    m.put(key: path, value: 1);
-}                              // releases, on every exit from the block
+borrow hits.lock() as g { g.value().put(key: path, value: 1); }            // `value()` is a `fn ref` on the guard
+borrow hits.lock() as g { borrow g.value() as m { m.put(key: path, value: 1); } }   // naming the payload
 ```
 
-The window's existing rules give Rust's guard guarantee with no lifetimes: the alias cannot be stored, returned or
-put in a collection, so nothing reaches the payload once the lock is released. Swift needs a closure for this, and
-kama needs none. A reader/writer form (`lockShared()`, a `const ref` alias) follows from the same rule. Size M?
+Recommended spelling, one window, after a small extension of the host rule:
+
+```kama fragment
+Locked<Map<string, int64>> hits = Locked.make(value: Map.empty());   // Sendable; its copies share one value
+borrow hits.lock().value() as m {        // acquires; `m` IS the payload, a place
+    m.put(key: path, value: 1);
+}                                        // the guard's ~dtor releases, on every exit from the block
+```
+
+Today that host is refused as "a value, or rooted in one". The extension: a closing mint inside a host chain is held
+by the window, so a place reached through it is rooted in something the window holds.
+
+The window's existing rules give Rust's guard guarantee with no lifetimes. The alias cannot be stored, returned or put
+in a collection, and the guard view cannot be copied out of its window. So nothing reaches the payload once the lock
+is released. Swift needs a closure for this (`withLock { }`), and kama needs none.
+
+**The bytes.**
+- A `Locked<T>` handle is one pointer.
+- Its heap cell is an atomic count, the lock and the `T`. The lock is 4 B for `os_unfair_lock` on macOS, 8 B for
+  `SRWLOCK` on Windows, and 40 B for glibc's `pthread_mutex_t`.
+- An uncontended acquire and release is one atomic read-modify-write each way, against the ~3 µs channel round trip
+  to an owner isolate it replaces.
 
 **The cases a client library has, each blocked today** (a pool's isolates share nothing mutable, so each would live
 behind an owner isolate at a channel round trip, about 3 µs, per access):
@@ -2259,16 +2271,41 @@ behind an owner isolate at a channel round trip, about 3 µs, per access):
 - **One token cache across a credentials provider's copies,** so a token is fetched once per pool.
 
 **Decisions owed.**
-1. Reopen §6's deferral and ship a lock in std.
-2. **The release hook.** A `borrow` window has no exit action today. A lock needs one, on every exit, including
-   `return` and `break` out of the block. The choices: a contract the host's type implements (enter and exit, which
-   the window calls), or a dedicated `lock` window, which costs a reserved word.
-3. **The handle.** The lock shared across isolates needs an atomically counted handle; a `Shared` never crosses an
-   isolate. This could be `Locked<T>` itself (a `Sendable` resource whose copies share one value), or a general
-   atomically counted `Shared` for `Sendable` payloads.
-4. **Deadlock.** Two locks taken in opposite orders can deadlock; neither Rust nor Swift prevents it. Detection in
-   debug builds, a declared order, or a declared non-goal.
-5. **A concurrent map** (the open note above) as a library on this lock, sharded, or not at all.
+1. Reopen §6's deferral and ship `Locked<T>` in `std::concurrent`.
+2. **The spelling.** The guard is a closing view, so there is no new hook, contract or reserved word. Recommended:
+   extend the host rule so `borrow hits.lock().value() as m` is one window. The alternative is to ship with
+   `g.value()` alone, which costs a second window to name the payload.
+3. **The handle and the payload.**
+   - `Locked<T>` is a `Sendable` resource, `Copyable(bare: give)` as `Waker` is (`0.9.719`); its copies count
+     atomically and share one cell. A `Shared` never crosses an isolate, so it cannot be the handle.
+   - `T` must be `Sendable`, as Rust's `Mutex<T>: Sync` needs `T: Send`: a payload holding a non-atomic `Shared`
+     would race through the window.
+   - A reader/writer form, `lockShared()` minting a guard whose `value()` is `const ref`, follows from the same rule
+     and ships beside it.
+4. **Deadlock, and blocking under a lock.**
+
+   | | Two locks in opposite orders | Blocking while holding |
+   |---|---|---|
+   | Rust | deadlocks | allowed; clippy lints only `await_holding_lock` |
+   | Swift | deadlocks | allowed |
+   | Go, Java, C++ | deadlocks; C++17 `std::scoped_lock` takes several in a deadlock-free order | allowed |
+
+   Recommended: **deadlock-free by construction**.
+   - A lock window reaches no `@parks` call (no blocking channel operation, no join, no socket or file I/O) and no
+     other lock's acquisition. That is KR-3's decision-3 walk, with lock acquisition as a second leaf. So a critical
+     section never waits, and taking a lock blocks a thread only for as long as some section's CPU work.
+   - Several locks are taken together in one `borrow` (`borrow a.lock().value() as x, b.lock().value() as y`),
+     which acquires them in address order, as `scoped_lock` does.
+   - The cost, stated: no I/O or logging inside a lock window. Take what is needed out, and do the I/O after.
+   - The walk is shared with KR-3, so whichever row ships first builds it.
+5. **The lock under each OS:** `os_unfair_lock` on macOS (pthread's mutex there is slow and fair), glibc's
+   futex-backed `pthread_mutex` on Linux, `SRWLOCK` on Windows, with the reader/writer twins. Decision 4 guarantees a
+   window releases on the thread that acquired it, which `os_unfair_lock` requires: a fiber cannot park, and so cannot
+   move, inside one.
+6. **A concurrent map**, the open note above. Recommended: schedule a sharded map built on `Locked` (N shards, each a
+   `Locked<Map>`) as its own row once this ships, rather than a non-goal. Java and Go ship one in std.
+
+Size M.
 
 
 <a id="s7"></a>
