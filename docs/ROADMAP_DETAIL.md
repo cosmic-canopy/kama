@@ -2189,6 +2189,9 @@ offers it in its standard surface. Size: XL, so a design document comes before a
 - **Windows wants overlapped I/O anyway.** Zero-copy `sendFile` there (KR-229) is `TransmitFile`, which keeps a
   non-blocking contract only with an OVERLAPPED and a completion wait, so it arrives with this loop. Go's netpoller is
   built on IOCP for the same reason.
+  - Read 2026-10-21: every socket `kama__socket` makes is `WSA_FLAG_OVERLAPPED` (kama_os.h), but two paths are not, a
+    duplicated descriptor (`kama_desc_dup`) and one received from another process. Overlapped I/O on those needs the
+    flag, so those paths need it first.
 
 **Decisions owed.**
 1. Thread-per-core with fibers as the server model, in std.
