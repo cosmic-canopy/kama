@@ -1,1 +1,1 @@
-can't be an `enum` payload
+a view (`Optional`) borrows its buffer, so it can't be stored in a field

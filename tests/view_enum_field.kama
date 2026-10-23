@@ -1,0 +1,14 @@
+// A composite view may hold an enum of a view — a peek slot — filled by its constructor with a case that borrows
+// nothing and later with a derive off its own field (KR-225 decisions 1 and 4).
+import { std::collections::ConstView };
+type view Peeker {
+    ConstView<uint8> rest;
+    Optional<ConstView<uint8>> peeked;
+    public ctor over(ConstView<uint8> input) { this.rest = input; this.peeked = Optional::None; }
+    public fn Optional<ConstView<uint8>> peek() {
+        match (this.peeked) { case Some(value: w): { return Optional::Some(value: w); } case None: { } };
+        this.peeked = Optional::Some(value: this.rest.slice(from: 0, count: 1));
+        return this.peeked;
+    }
+}
+fn uint8 main() { string s = "ab"; uint8 r = 0; borrow s.bytes() as b { Peeker p = Peeker.over(input: b); match (p.peek()) { case Some(value: w): { r = w[0]; } case None: { } }; } return r - 97 + 42; }

@@ -1,0 +1,1 @@
+`w` binds a view, and the `match` subject it comes from is a view of storage that nothing bounds

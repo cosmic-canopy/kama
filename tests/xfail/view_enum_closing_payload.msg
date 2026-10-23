@@ -1,0 +1,1 @@
+`Tx` closes its window when it is dropped, so it can't be an `enum` payload

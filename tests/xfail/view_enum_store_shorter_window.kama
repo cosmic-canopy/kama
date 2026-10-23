@@ -1,0 +1,15 @@
+// The store rule (KR-225 decision 6) holds for an enum of a view as for a view: `found` was declared in `va`'s window,
+// and `vb` roots in one nested inside it, which closes first. A statement storing a variant literal is lowered apart
+// from the expression arm, and passed by the rule until the rule was asked at the statement too.
+import { std::collections::DynamicArray, std::collections::ConstView };
+fn uint8 main() {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    a.add(item: 1);
+    DynamicArray<uint8> b = DynamicArray.empty();
+    b.add(item: 2);
+    borrow a.view() as va {
+        Optional<ConstView<uint8>> found = Optional::None;
+        borrow b.view() as vb { found = Optional::Some(value: vb); }
+    }
+    return 0;
+}

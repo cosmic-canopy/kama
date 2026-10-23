@@ -1,0 +1,1 @@
+`reseat` takes `o` by `ref` — a view is already a borrow

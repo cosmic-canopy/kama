@@ -6182,10 +6182,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                  "window over `" + placeText(*r) + "` and cannot be reseated, or the rest of "
                                  "the block would hold a view of storage this window never froze. Open another "
                                  "`borrow`, or derive with `.slice(…)`").c_str(), v);
-        checkViewStore(v->unaryExpression, v->expression, v->token == EQ, v->line);
-        if (auto* cid = dynamic_cast<IdentifierNode*>(v->unaryExpression.get()))
-            if (v->token == EQ && cid->value && (!cid->qualifier || cid->qualifier->empty()))
-                checkContractObject(*cid->value, v->expression, /*isStore=*/true, v->line);
+        checkStoredBorrow(v, v->unaryExpression, v->expression, v->token == EQ, v->line);
         // The STORE direction of the `== null` rule, for an assignment rather than a declaration (where
         // `rejectNullInit` handles it): a safe type is never null, so writing one there is the same
         // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
@@ -8588,8 +8585,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                     // Its depth is the innermost window open here — or the initializer's, when that is deeper, which
                     // only a mint over this frame's own storage is (viewDepthOf). Every later store is held to it.
                     const int dd = viewDepthOf(d->initializer);
-                    if (dd != kViewUnbounded) _scopes.back().viewDepths[nm] = std::max(innermostWindowDepth(), dd);
-                    else
+                    // A refused one is recorded too, so its reads do not each repeat it — at this scope, so it is still
+                    // no view a return may hand back (that is its own mistake, said where it is made).
+                    _scopes.back().viewDepths[nm] = dd != kViewUnbounded ? std::max(innermostWindowDepth(), dd) : (int)_scopes.size() - 1;
+                    if (dd == kViewUnbounded)
                         unsupported(("`" + nm + "` is a view of storage that nothing bounds — a view "
                                      "borrows a buffer it does not own, so it may only live where that "
                                      "buffer is held still. Open a window: `borrow <container>.<mint>() as "
@@ -9660,6 +9659,8 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
     } writeChecked{ *this, _writeChecked };
     if (dynamic_cast<AssignmentNode*>(n)) _writeChecked = n;
 
+    struct StoreCheckedGuard { CEmitter& e; const ASTNode* saved; ~StoreCheckedGuard() { e._storeChecked = saved; } }
+        storeGuard{ *this, _storeChecked };
     struct WriteTargetGuard {
         CEmitter& e; const ASTNode* saved; std::string key;
         ~WriteTargetGuard() { e._writeTarget = saved; if (!key.empty()) e._moveState[key] = MoveState::NotMoved; }
@@ -9689,6 +9690,11 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             noteHandoffValue(rhs);   // a store consumes its value
             rejectValueKindMismatch(typeOfExpr(as->unaryExpression), rhs, "an assignment", n->line);
         }
+        // The store rule (KR-225 decision 6), here as well as in the expression arm: the handlers below lower some
+        // stores (a variant literal into an enum local) without passing through it. Judged here, and the expression
+        // arm, should a handler reach it, is told so for the rest of this statement.
+        checkStoredBorrow(as, as->unaryExpression, as->expression, as->token == EQ, n->line);
+        storeGuard.saved = _storeChecked; _storeChecked = as;
         // Re-arming: a store gives a bare local a value, whatever it held — including nothing, after a `give`.
         // `one.add(item: give t); t = Tree::Node(kids: give one);` re-arms `t`, and every later use is sound. The
         // target is a WRITE, so reading it is no use-after-move (`_writeTarget`, by node: a `give t` on the right
@@ -15653,15 +15659,20 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     // the wrapper — the plain-field reject (emitClassStruct) doesn't see a union payload, so catch it here
     // where the payload type is substituted concrete (`View_int32`, now registered by the scan above). A
     // view is local/parameter-only; it can't be wrapped-and-stored.
+    // ...which makes the instance a view itself (KR-225 decision 4): stack-only, returnable under the view rule, and
+    // matched into view bindings. Only `isBorrow` moves; the kind stays, so a destructible one is still moved. A view
+    // that closes its window is no payload: copied in and out of the enum, nothing would run the copy's destructor.
+    // `line`, not `f.type->line`: the payload belongs to the TEMPLATE (`Optional`'s is in the prelude), so its line is
+    // a line of a file this diagnostic does not name. The mistake is the type argument, at the use site.
     for (auto& v : ci.variants)
         for (auto& f : v.payload)
-            if (f.type && isViewCType(cType(f.type)))
-                // `line`, not `f.type->line`: the payload field belongs to the TEMPLATE — `Optional`'s
-                // payload is declared in the prelude — so its line is a line of a file this diagnostic
-                // does not name. The mistake is the type argument, at the use site, which is what `line` is.
-                unsupported(("a view (`" + cType(f.type) + "`) can't be an `enum` payload (`" + ci.name
-                             + "`) — it borrows and would escape via the enum; a view is local/parameter-only").c_str(),
-                            line);
+            if (f.type && isViewCType(cType(f.type))) {
+                if (closesWindowCType(cType(f.type)))
+                    unsupported(("`" + demangleForDisplay(cType(f.type)) + "` closes its window when it is dropped, so it "
+                                 "can't be an `enum` payload (`" + demangleForDisplay(ci.name) + "`) — it lives only as the "
+                                 "alias of the `borrow` that minted it").c_str(), line);
+                _classes[mangled].isBorrow = true;
+            }
 
     // `@generate(...)` on the TEMPLATE, applied here — this is the only place a generic type's fields
     // have concrete types to walk, which is why the four "not a generic" refusals this replaces existed.
@@ -23268,7 +23279,7 @@ void CEmitter::emitBytesDefinition(ClassInfo& ci, const std::string& name)
     const bool mut = name == "bytesMut";
     const std::string T = ci.name, disp = demangleForDisplay(ci.name);
     *_out << (_emitStaticClass ? "static inline " : "") << vt << " " << T << "__" << name << "(" << T << "* self)\n{\n";
-    if (ci.isBorrow) {   // a window's bytes: the same buffer, `len` elements of `sizeof(T)` each
+    if (ci.isBorrow && !ci.isVariant) {   // a window's bytes: the same buffer, `len` elements of `sizeof(T)` each
         indent(1); *_out << "return (" << vt << "){ .k_data = (" << (mut ? "uint8_t*" : "const uint8_t*") << ")self->k_data,"
                          << " .k_len = self->k_len * (ptrdiff_t)sizeof(*self->k_data) };\n";
         *_out << "}\n\n";
@@ -23531,7 +23542,8 @@ void CEmitter::rejectMintProtocolValue(SharedIdentifier ty, const char* what, in
 bool CEmitter::namesViewType(SharedIdentifier t) const
 {
     if (!t || !t->value) return false;
-    return _viewTypeNames.count(*t->value) > 0 || _viewTypeNames.count(qualify(*t->value)) > 0;
+    std::set<std::string> seen;
+    return typeNodeIsView(t, seen);   // a `type view`, or an enum holding one (KR-225)
 }
 
 // KR-124 — a view that closes its window is pinned to it: it passes on only `ref`/`const ref` (a copy would run, or
@@ -23628,7 +23640,7 @@ bool CEmitter::paramCanCarryBorrow(FunctionParameterNode* p, const std::string& 
     const std::string& t = *p->type->value;
     if (isRawPtrName(t)) return true;                      // a raw non-owning pointer into caller memory
     if (t == selfParam) return true;                 // the pinned self-type — another view of this kind
-    return _viewTypeNames.count(t) > 0;              // any other `type view`
+    return namesViewType(p->type);                   // any other `type view`, or an enum holding one
 }
 
 // A `type view` may only ever point at memory it was HANDED. A contract slot that CONSTRUCTS the
@@ -27550,7 +27562,8 @@ void CEmitter::viewRootPlaces(SharedExpression e, std::vector<std::vector<std::s
     auto push = [&](const std::vector<std::string>& p) { if (!p.empty()) out.push_back(p); };
     if (auto* h = dynamic_cast<HandoffNode*>(n)) { viewRootPlaces(h->value, out); return; }
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (id->value && (!id->qualifier || id->qualifier->empty())) {
+        if (id->qualifier && !id->qualifier->empty()) return;   // `Optional::None`, an enum case: no storage
+        if (id->value) {
             if (const std::vector<std::string>* r = frozenAliasRoot(*id->value)) { push(*r); return; }
             if (_viewParams.count(*id->value)) return;
         }
@@ -27569,7 +27582,8 @@ void CEmitter::viewRootPlaces(SharedExpression e, std::vector<std::vector<std::s
             for (auto& a : *inv->args) {
                 if (!a || !a->expression) continue;
                 if (a->name && a->name->value && byRef.count(*a->name->value)) push(placePath(a->expression));
-                else if (isViewCType(exprClass(a->expression))) viewRootPlaces(a->expression, out);
+                else if (isViewCType(exprClass(a->expression)) || isVariantLiteral(a->expression))
+                    viewRootPlaces(a->expression, out);
             }
         return;
     }
@@ -27615,6 +27629,27 @@ int CEmitter::aliasWindowDepth(const std::string& name) const
     return -2;
 }
 
+// Is `e` an enum case written in place — `Optional::None`, `Result::Ok(value: v)`, `Tok::Word(text: w)`? Answered from
+// the spelling, so it holds where no destination pins a generic instance yet (`variantExprEnumCType` needs one).
+bool CEmitter::isVariantLiteral(SharedExpression e)
+{
+    SharedStringList qual;
+    std::string vname;
+    if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) { qual = id->qualifier; vname = id->value ? *id->value : ""; }
+    else if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
+        if (inv->expression || !inv->identifier) return false;
+        qual = inv->identifier->qualifier; vname = inv->identifier->value ? *inv->identifier->value : "";
+    }
+    if (!qual || qual->empty()) return false;
+    auto tq = std::make_shared<StringList>();
+    for (size_t i = 0; i + 1 < qual->size(); ++i) tq->push_back((*qual)[i]);
+    const std::string key = resolveUserName(*qual->back(), tq);
+    const ClassInfo* ci = _classes.count(key) ? &_classes[key] : (_genericTypes.count(key) ? &_genericTypes[key] : nullptr);
+    if (!ci || !ci->isVariant) return false;
+    for (auto& v : ci->variants) if (v.name == vname) return true;
+    return false;
+}
+
 // A binding declared here can hold only what outlives the innermost window open here — or, with none open, what
 // the caller holds. A `foreach`, a `spawn`ed child, an in-place `match` and a `borrow` of a PLACE freeze storage
 // too, but none of them hands out a view, so none of them is a window a view can be bounded by.
@@ -27644,11 +27679,38 @@ int CEmitter::viewDepthOf(SharedExpression init)
     if (!n) return kViewUnbounded;
     if (auto* h = dynamic_cast<HandoffNode*>(n)) return viewDepthOf(h->value);
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
-        if (!id->value || (id->qualifier && !id->qualifier->empty())) return kViewUnbounded;
+        // `Optional::None` — a case with no payload borrows nothing, so any frame may hold it (KR-225 decision 4).
+        if (id->qualifier && !id->qualifier->empty()) return isVariantLiteral(init) ? kViewCaller : kViewUnbounded;
+        if (!id->value) return kViewUnbounded;
         return viewBindingDepth(*id->value);
     }
+    // `Optional::Some(value: w)` — a variant literal roots where its view payloads root, and borrows nothing without one.
+    if (auto* vl = dynamic_cast<InvocationNode*>(n))
+        if (!vl->expression && isVariantLiteral(init)) {
+            int d = kViewCaller;
+            if (vl->args)
+                for (auto& a : *vl->args)
+                    if (a && a->expression && (isViewCType(exprClass(a->expression)) || isVariantLiteral(a->expression)))
+                        d = std::max(d, viewDepthOf(a->expression));
+            return d;
+        }
     if (auto* t = dynamic_cast<TernaryExpressionNode*>(n))   // either arm may be the one held: the deeper decides
         return t->LHS && t->RHS ? std::max(viewDepthOf(t->LHS), viewDepthOf(t->RHS)) : kViewUnbounded;
+    // A value-producing `match` yields one of its single-expression arms (a block arm diverges), each read with its
+    // payload bindings standing where the subject roots — the depth a `match` statement records for them.
+    if (auto* mt = dynamic_cast<MatchNode*>(n)) {
+        const int sd = viewDepthOf(mt->subject);
+        int d = kViewCaller;
+        if (mt->arms)
+            for (auto& a : *mt->arms) {
+                if (!a || !a->body) continue;
+                _scopes.push_back(Scope());
+                if (a->bindings) for (auto& b : *a->bindings) if (b) _scopes.back().viewDepths[*b] = sd;
+                d = std::max(d, viewDepthOf(a->body));
+                _scopes.pop_back();
+            }
+        return d;
+    }
     // `this` inside a view's own method is the caller's view; elsewhere it is a container that may grow (KR-225).
     if (dynamic_cast<ThisAccessNode*>(n)) return _currentClass && _currentClass->isBorrow ? kViewCaller : kViewUnbounded;
     // A view held in a composite's field is a derive off the composite: it roots where the composite roots (KR-225
@@ -27681,7 +27743,10 @@ int CEmitter::viewDepthOf(SharedExpression init)
                             if (!prm || !paramCanCarryBorrow(prm.get(), std::string())) continue;
                             auto it = (prm->identifier && prm->identifier->value) ? byName.find(*prm->identifier->value) : byName.end();
                             if (it == byName.end()) return kViewUnbounded;
-                            const int pd = (!paramByRef(prm.get()) && namesViewType(prm->type)) ? viewDepthOf(it->second)
+                            // A `ref` names storage this frame may still grow, as at any call: nothing bounds what
+                            // it yields.
+                            if (paramByRef(prm.get())) return kViewUnbounded;
+                            const int pd = namesViewType(prm->type) ? viewDepthOf(it->second)
                                          : isSafeViewRoot(borrowArgRoot(it->second)) ? kViewCaller : (int)_scopes.size() - 1;
                             d = std::max(d, pd);
                         }
@@ -27701,7 +27766,7 @@ int CEmitter::viewDepthOf(SharedExpression init)
             for (auto& a : *inv->args) {
                 if (!a || !a->expression) continue;
                 if (a->name && a->name->value && byRef.count(*a->name->value)) return kViewUnbounded;
-                if (!isViewCType(exprClass(a->expression))) continue;
+                if (!isViewCType(exprClass(a->expression)) && !isVariantLiteral(a->expression)) continue;
                 sawView = true;
                 d = std::max(d, viewDepthOf(a->expression));
             }
@@ -27725,6 +27790,14 @@ void CEmitter::checkViewStore(SharedExpression lhs, SharedExpression rhs, bool p
         // this.rest.slice(…)` is a derive off the same holder; a view from a window opened inside the method is not.
         const std::string fc = exprClass(lhs);
         if (!fa->expression || !isViewCType(fc) || closesWindowCType(fc)) return;
+        // A constructor's own field is handed back with the view it builds, so it is judged as a return is — and
+        // `checkViewCtorEscape` holds every borrow field to the parameters on top of that.
+        if (_inNamedCtorBody && dynamic_cast<ThisAccessNode*>(fa->expression.get())) {
+            if (!isSafeViewRoot(viewReturnRoot(rhs)) && viewDepthOf(rhs) != kViewCaller)
+                unsupported(("`" + unparseExpr(lhs) + "` is handed back with the view this constructor builds, so it may "
+                             "hold only what the caller handed in — a by-value view parameter, or a derive of one").c_str(), line);
+            return;
+        }
         nm = unparseExpr(lhs);
         target = viewDepthOf(fa->expression);
         field = true;
@@ -27761,6 +27834,17 @@ void CEmitter::checkViewStore(SharedExpression lhs, SharedExpression rhs, bool p
                    : std::string("`" + nm + "` was declared outside that window"))
                  + ", and it would dangle once the window closes. Store a view of something that outlives `" + nm
                  + "`, or declare a view inside the window").c_str(), line);
+}
+
+// Both store rules for one assignment, judged once: the statement that holds it and the expression arm that may emit
+// it both ask, and only the first says anything.
+void CEmitter::checkStoredBorrow(const ASTNode* node, SharedExpression lhs, SharedExpression rhs, bool plainStore, int line)
+{
+    if (!node || _storeChecked == node) return;
+    checkViewStore(lhs, rhs, plainStore, line);
+    if (auto* cid = dynamic_cast<IdentifierNode*>(lhs.get()))
+        if (plainStore && cid->value && (!cid->qualifier || cid->qualifier->empty()))
+            checkContractObject(*cid->value, rhs, /*isStore=*/true, line);
 }
 
 // The `_scopes` index a binding was declared in: a local, or a `foreach`/`match`/`borrow` binding, any of which the
@@ -28028,6 +28112,21 @@ bool CEmitter::viewOwnStorage(SharedExpression e) const
 std::string CEmitter::viewReturnRoot(SharedExpression e) const
 {
     if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
+        // `Result::Ok(value: this.xs.view())` roots where its view payloads root: the first that is not safe to hand
+        // back, else one that is (KR-225 decision 4). One with no view payload borrows nothing; the depth says so.
+        auto* self = const_cast<CEmitter*>(this);
+        if (!inv->expression && self->isVariantLiteral(e)) {
+            std::string safe;
+            if (inv->args)
+                for (auto& a : *inv->args) {
+                    if (!a || !a->expression) continue;
+                    if (!isViewCType(self->exprClass(a->expression)) && !self->isVariantLiteral(a->expression)) continue;
+                    const std::string r = viewReturnRoot(a->expression);
+                    if (!isSafeViewRoot(r)) return r;
+                    if (safe.empty()) safe = r;
+                }
+            return safe;
+        }
         // (No arm for a bare `View(...)`: nameless construction is rejected upstream — "nameless
         //  construction 'Span(...)' is no longer allowed — use a named constructor".)
         if (inv->expression)                                            // `recv.slice(...)` or `View.make(...)`
@@ -29536,6 +29635,58 @@ bool CEmitter::typeReachesRawPtr(SharedIdentifier t, const std::set<std::string>
     return false;
 }
 
+// Does this type NAME a view — a `type view`, or an enum that holds one, through any number of enum layers? Answered
+// from the type node, so it holds before an instance exists: `ref Optional<ConstView<uint8>>` is a view by reference
+// whether or not `Optional<ConstView<uint8>>` has been built yet (KR-225 decision 4).
+bool CEmitter::typeNodeIsView(SharedIdentifier t, std::set<std::string>& seen) const
+{
+    if (!t || !t->value) return false;
+    if (_viewTypeNames.count(*t->value) || _viewTypeNames.count(qualify(*t->value))) return true;
+    auto* self = const_cast<CEmitter*>(this);
+    const std::string key = self->resolveUserName(*t->value, t->qualifier);
+    auto ci = _classes.find(key);
+    if (ci != _classes.end() && ci->second.isBorrow) return true;
+    if (!seen.insert(key).second) return false;
+    // A generic enum's instance is a view when an argument lands in a payload; every argument of `Optional`/`Result`
+    // does, and taking any argument as reaching one errs on the side of refusing.
+    auto gt = _genericTypes.find(key);
+    if (gt != _genericTypes.end() && gt->second.isVariant && t->genericArgs)
+        for (auto& a : *t->genericArgs) if (typeNodeIsView(a, seen)) return true;
+    if (ci != _classes.end() && ci->second.isVariant)
+        for (auto& v : ci->second.variants) for (auto& f : v.payload) if (typeNodeIsView(f.type, seen)) return true;
+    return false;
+}
+
+// KR-225 decision 4: an enum with a view payload is a view — `Optional<V>`, `Result<V, E>`, a user `type enum` with a
+// view case. Marked as a fixpoint over every variant class, since an enum may hold one that holds a view; run once the
+// classes are collected and again once the instances asked for are built. An instance built later is marked as it is
+// registered (registerGenericTypeInst). Only `isBorrow` is set: a destructible one (`Result<ConstView, Owned<Error>>`)
+// keeps its kind, so it is still moved and still drops its `Err` exactly once.
+void CEmitter::markViewEnums()
+{
+    for (bool changed = true; changed; ) {
+        changed = false;
+        for (auto& kv : _classes) {
+            ClassInfo& ci = kv.second;
+            if (!ci.isVariant || ci.isBorrow) continue;
+            bool view = false;
+            for (auto& v : ci.variants) {
+                for (auto& f : v.payload) {
+                    std::set<std::string> seen;
+                    if (ci.isGenericInst ? isViewCType(cTypeInInstance(ci.name, f.type)) : typeNodeIsView(f.type, seen)) { view = true; break; }
+                }
+                if (view) break;
+            }
+            if (!view) continue;
+            ci.isBorrow = true;
+            // By its source name too, as a `type view` is (collectClasses), so a signature that spells it is read as one.
+            if (!ci.isGenericInst && ci.enumNode && ci.enumNode->identifier && ci.enumNode->identifier->value)
+                _viewTypeNames.insert(*ci.enumNode->identifier->value);
+            changed = true;
+        }
+    }
+}
+
 // KR-225 decision 2. A view may declare a public constructor when it holds no raw pointer, at any depth: it creates no
 // borrow then, it only re-holds the views it is handed, so its result roots where they root (viewDepthOf). Every
 // parameter that can carry its borrow must be a by-value view — a `ref` container is storage the caller can still
@@ -29625,7 +29776,24 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
             allParams.insert(*p->identifier->value);
             if (paramCanCarryBorrow(p.get(), std::string())) params.insert(*p->identifier->value);
         }
-    auto safeRoot = [&](const std::string& r) { return params.count(r) > 0; };
+    // A view-ENUM field is filled with a variant literal (`this.peeked = Optional::None`), which roots where its view
+    // payloads root — or nowhere, which is safe: a case with no view payload borrows nothing (KR-225 decision 4).
+    static const std::string kNoBorrow = "\x01no borrow";
+    auto safeRoot = [&](const std::string& r) { return r == kNoBorrow || params.count(r) > 0; };
+    std::function<std::string(SharedExpression)> storeRoot = [&](SharedExpression e) -> std::string {
+        if (!isVariantLiteral(e)) return borrowArgRoot(e);
+        std::string first = kNoBorrow;
+        if (auto* vl = dynamic_cast<InvocationNode*>(e.get()))
+            if (vl->args)
+                for (auto& a : *vl->args) {
+                    if (!a || !a->expression) continue;
+                    if (!isViewCType(exprClass(a->expression)) && !isVariantLiteral(a->expression)) continue;
+                    const std::string r = storeRoot(a->expression);
+                    if (!safeRoot(r)) return r;
+                    if (first == kNoBorrow) first = r;
+                }
+        return first;
+    };
 
     std::set<std::string> viewLocals;                        // locals of THIS view type (the object being built)
     std::map<std::string, std::map<std::string, std::string>> borrowRoot;   // local -> borrow-field -> root of its RHS
@@ -29676,7 +29844,7 @@ void CEmitter::checkViewCtorEscape(ClassInfo& owner, ClassMethodDeclarationNode*
             if (topLevel) {
                 std::pair<std::string, std::string> lf = localFieldRef(as->unaryExpression);
                 if (!lf.first.empty() && borrowFields.count(lf.second))
-                    borrowRoot[lf.first][lf.second] = borrowArgRoot(as->expression);
+                    borrowRoot[lf.first][lf.second] = storeRoot(as->expression);
             }
         } else if (auto* ret = dynamic_cast<ReturnNode*>(n)) {
             SharedExpression e = ret->expression;
@@ -31974,8 +32142,19 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 bool inPlace = false;
                 // A PLAIN value only: one with a destructor (a `value` that owns its text, `DeError`) is dropped at the
                 // arm's end, and the subject's own payload must not be.
+                // A VIEW payload is a view local rooted where the subject roots (KR-225 decision 4): copied out — two
+                // words — and never read in place, which would make it a `ref` binding the return rule reads as a
+                // parameter. A subject nothing bounds gives a binding nothing bounds.
+                if (!discard && isViewCType(bcty) && !closesWindowCType(bcty)) {
+                    const int sd = viewDepthOf(m->subject);
+                    if (sd == kViewUnbounded)
+                        unsupported(("`" + bn + "` binds a view, and the `match` subject it comes from is a view of storage "
+                                     "that nothing bounds — the binding would be too. Open a window first (`borrow "
+                                     "<container>.<mint>() as w { … }`) and match on what is built from it").c_str(), bnLine);
+                    else _scopes.back().viewDepths[bn] = std::max(innermostWindowDepth(), sd);
+                }
                 if (inPlaceOk && !discard && !alias && _classes.count(bcty) && !_classes[bcty].isScalarRecv
-                    && !_classes[bcty].destructible && !variantNeedsCopyFn(_classes[bcty])) {
+                    && !_classes[bcty].destructible && !variantNeedsCopyFn(_classes[bcty]) && !isViewCType(bcty)) {
                     _localTypes[bn] = bcty;
                     bool written = false;
                     forEachPlaceUse(a->block, [&](const std::vector<std::string>& wp, int) {
@@ -35838,9 +36017,16 @@ void CEmitter::emitVariantStruct(ClassInfo& ci)
                 // A view or a bare contract borrows, so as a payload it leaves its window inside the enum: through
                 // 0.9.719 `type enum Tok { Word(ConstView<uint8> w) }` compiled, and returning `Tok::Word(w: v)` from
                 // a window over a local read freed memory. A generic instance was refused at registration.
-                if (!ci.isGenericInst)
+                // Since 0.9.726 an enum with a view payload is a view itself (markViewEnums), which is what bounds it;
+                // a bare contract stays refused, and so does a view that closes its window.
+                if (!ci.isGenericInst) {
                     rejectStoredInterface(f.type, "an `enum` payload", f.type ? f.type->line : ci.declLine(),
-                                          /*alsoView=*/true);
+                                          /*alsoView=*/!ci.isBorrow);
+                    if (f.type && closesWindowCType(cType(f.type)))
+                        unsupported(("`" + demangleForDisplay(cType(f.type)) + "` closes its window when it is dropped, so "
+                                     "it can't be an `enum` payload — it lives only as the alias of the `borrow` that "
+                                     "minted it").c_str(), f.type->line);
+                }
                 // A by-value user value/resource payload is legal — the unified struct order
                 // lays out the payload type first; a self/mutual by-value cycle is caught (infinite size)
                 // by unifiedStructOrder.
@@ -44253,6 +44439,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         collectInterfaces(u);
         collectClasses(u);
     }
+    markViewEnums();       // an enum holding a view is one (KR-225) — before anything asks whether a type is a view
     checkViewSurfaces();   // a public view ctor and a view's place returns, now that every field and class is known
     // Pre-scan `type adapter` blocks into _intrinsicConformances (target primKey -> contracts) BEFORE the first
     // generic type instance is built (openInstances, below): an instance judges its conditional conformances,
@@ -44307,6 +44494,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // before buildVtables, so an enum's conformance is in place when vtables are built.
     collectEnumConformances(units);
     openInstances();   // every class, enum and adapter conformance is filed: build what the passes above asked for
+    markViewEnums();   // ...and the instances just built, before collectCollections judges an element by it
     checkDerivedPublicSurface();   // decision A: a derived type may not widen the public interface
     buildVtables();
     _layoutsReady = true;   // every class has its fields, base and vptr: a layout fold may answer (foldLayout)
@@ -44391,7 +44579,9 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // at registerGenericTypeInst, where the payload type is substituted concrete.)
     for (auto& kv : _classes) {
         ClassInfo& ci = kv.second;
-        if (ci.isBorrow && ci.destructible) {
+        // An enum is a view by what ONE of its cases holds; the others may own (`Result<ConstView, Owned<Error>>`,
+        // kama's own error convention), and the enum drops them as any enum does.
+        if (ci.isBorrow && ci.destructible && !ci.isVariant) {
             ScopedStr _cu(_collectingUnitPath, ci.declFile);   // whole-program pass: see diagFile()
             unsupported(("a `view` (`" + ci.name + "`) borrows and owns nothing — it may not have an owning "
                          "or resource field (hold a non-owning `UnsafePtr<T>` instead)").c_str(),

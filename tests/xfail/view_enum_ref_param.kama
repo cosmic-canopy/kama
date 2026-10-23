@@ -1,0 +1,5 @@
+// An enum holding a view is a view (KR-225 decision 4), so it passes by value only, as a view does: `ref` would let
+// the callee reseat it at storage the caller never named.
+import { std::collections::ConstView };
+fn void reseat(ref Optional<ConstView<uint8>> o) { o = Optional::None; }
+fn uint8 main() { return 0; }

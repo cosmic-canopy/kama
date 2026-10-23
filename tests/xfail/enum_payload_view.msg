@@ -1,1 +1,1 @@
-a view (`ConstView`) borrows its buffer, so it can't be an `enum` payload
+a view borrows its buffer, so it can only be returned when it borrows `this`

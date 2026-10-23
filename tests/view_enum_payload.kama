@@ -1,0 +1,76 @@
+// An enum with a view payload is a view (KR-225 decision 4): stack-only, returnable under the view-return rule, and a
+// `match` binds its payload as a view rooted where the enum value roots. This is the tokenizer the brief asked for —
+// `fn Optional<ConstView<uint8>> next()`, absence in the type rather than a sentinel — with a user `type enum` that
+// carries a view case, an accumulator returned through a local, and a `Result` whose `Err` owns a heap string while
+// its `Ok` borrows: the error drops exactly once (ASan), and the view is never copied.
+import { std::collections::ConstView, std::memory::Owned };
+
+type view Tokens {
+    ConstView<uint8> rest;
+    public ctor over(ConstView<uint8> input) { this.rest = input; }
+    public fn Optional<ConstView<uint8>> next() {
+        isize n = 0;
+        while (n < this.rest.length() && this.rest[n] != 32) { n = n + 1; }
+        if (n == 0 && this.rest.length() == 0) { return Optional::None; }
+        ConstView<uint8> word = this.rest.slice(from: 0, count: n);
+        isize skip = n < this.rest.length() ? n + 1 : n;
+        this.rest = this.rest.slice(from: skip, count: this.rest.length() - skip);
+        return Optional::Some(value: word);
+    }
+}
+
+// A user enum with a view case.
+type enum Tok { Word(ConstView<uint8> text), Digit(int32 value), End }
+
+fn Tok classify(Optional<ConstView<uint8>> w) {
+    return match (w) {
+        case Some(value: v): (v.length() == 1 && v[0] >= 48 && v[0] <= 57) ? Tok::Digit(value: cast<int32>(v[0]) - 48)
+                                                                            : Tok::Word(text: v);
+        case None: Tok::End;
+    };
+}
+
+// The accumulator: a view-enum local found in a loop, returned after it.
+fn Optional<ConstView<uint8>> longest(ConstView<uint8> input) {
+    Optional<ConstView<uint8>> best = Optional::None;
+    isize bestLen = 0;
+    Tokens t = Tokens.over(input: input);
+    while (true) {
+        match (t.next()) {
+            case Some(value: w): { if (w.length() > bestLen) { best = Optional::Some(value: w); bestLen = w.length(); } }
+            case None: { break; }
+        };
+    }
+    return best;
+}
+
+// `Ok` borrows the input; `Err` owns a message on the heap.
+fn Result<ConstView<uint8>, Owned<Error>> header(ConstView<uint8> input) {
+    if (input.length() < 4) {
+        isize missing = 4 - input.length();
+        return Result::Err(error: DeError.at(kind: DeErrorKind::Malformed, field: "short by ${missing}"));
+    }
+    return Result::Ok(value: input.slice(from: 0, count: 4));
+}
+
+fn uint8 main() {
+    string text = "parse 7 tokens zerocopy";
+    int32 r = 0;
+    borrow text.bytes() as b {
+        Tokens t = Tokens.over(input: b);
+        while (true) {
+            match (classify(w: t.next())) {
+                case Word(text: w): { r = r + cast<int32>(w.length()); }   // 5 + 6 + 8 = 19
+                case Digit(value: d): { r = r + d; }                        // + 7 = 26
+                case End: { break; }
+            };
+        }
+        match (longest(input: b)) { case Some(value: w): { r = r + cast<int32>(w.length()); } case None: { } };   // + 8 = 34
+        match (header(input: b)) { case Ok(value: h): { r = r + (h[0] == 112 ? 4 : 0); } case Err(error: e): { } };   // + 4 = 38
+        match (header(input: b.slice(from: 0, count: 2))) {
+            case Ok(value: h): { }
+            case Err(error: e): { r = r + (e.message().length() > 0 ? 4 : 0); }   // + 4 = 42
+        };
+    }
+    return cast<uint8>(r);
+}

@@ -1,4 +1,5 @@
-// Transitive: Optional<View> monomorphizes to a struct with a View field — same field-reject.
+// Transitive: an enum holding a view is a view (KR-225 decision 4), so `Optional<View<int32>>` is refused as a field of
+// a `value` exactly as a `View<int32>` is.
 import { std::collections::View };
-type value Holder { Optional<View<int32>> ov; public ctor make(){ } }
+type value Holder { Optional<View<int32>> ov; public ctor make(){ this.ov = Optional::None; } }
 fn uint8 main() { return 0; }

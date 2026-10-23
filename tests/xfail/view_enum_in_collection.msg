@@ -1,0 +1,1 @@
+a view (`Tok`) borrows its buffer, so it can't be a collection element

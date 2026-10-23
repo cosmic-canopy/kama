@@ -421,7 +421,7 @@ enum_method_private	enum_method_private.kama:8:34 enum_method_private.kama:8:47
 enum_missing_contract_method	enum_missing_contract_method.kama:2:0
 enum_operator	enum_operator.kama:5:4
 enum_payload_contract	enum_payload_contract.kama:9:0
-enum_payload_view	enum_payload_view.kama:5:0
+enum_payload_view	enum_payload_view.kama:12:27 enum_payload_view.kama:16:4
 enum_recursive	enum_recursive.kama:1:0
 enum_recursive_owned_copy	enum_recursive_owned_copy.kama:11:4
 enum_type_as_value	enum_type_as_value.kama:4:10
@@ -1446,6 +1446,10 @@ view_ctor_over_local	view_ctor_over_local.kama:10:0
 view_ctor_public	view_ctor_public.kama:10:4
 view_ctor_public_raw_deep	view_ctor_public_raw_deep.kama:7:4
 view_ctor_public_ref	view_ctor_public_ref.kama:7:4
+view_enum_closing_payload	view_enum_closing_payload.kama:9:0
+view_enum_in_collection	view_enum_in_collection.kama:5:0
+view_enum_ref_param	view_enum_ref_param.kama:4:0
+view_enum_store_shorter_window	view_enum_store_shorter_window.kama:12:32
 view_escape_inline_array	view_escape_inline_array.kama:9:4
 view_field	view_field.kama:3:0
 view_field_closing	view_field_closing.kama:9:0
@@ -1458,7 +1462,8 @@ view_local_from_method	view_local_from_method.kama:16:4
 view_local_inline_array	view_local_inline_array.kama:7:4
 view_local_ternary_root	view_local_ternary_root.kama:10:4
 view_local_unbounded	view_local_unbounded.kama:9:4
-view_optional_field	view_optional_field.kama:3:0
+view_match_unbounded_subject	view_match_unbounded_subject.kama:9:0
+view_optional_field	view_optional_field.kama:4:0
 view_out_param	view_out_param.kama:7:0
 view_owns	view_owns.kama:3:0
 view_param_store	view_param_store.kama:9:4

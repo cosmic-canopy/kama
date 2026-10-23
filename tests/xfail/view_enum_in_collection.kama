@@ -1,0 +1,6 @@
+// A user enum with a view case is a view (KR-225 decision 4), and a view is no collection element: the collection
+// would outlive every window.
+import { std::collections::DynamicArray, std::collections::ConstView };
+type enum Tok { Word(ConstView<uint8> text), End }
+fn int32 count(DynamicArray<Tok> toks) { return 0; }
+fn uint8 main() { return 0; }

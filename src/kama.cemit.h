@@ -4151,15 +4151,20 @@ private:
     static constexpr int kViewCaller = -1;
     static constexpr int kViewUnbounded = INT_MAX;
     int viewDepthOf(SharedExpression e);
+    bool isVariantLiteral(SharedExpression e);   // `Optional::None`, `Result::Ok(value: v)` — an enum case written in place
     int innermostWindowDepth() const;                       // where a binding declared HERE is bounded
     int aliasWindowDepth(const std::string& alias) const;   // the window a `borrow` alias belongs to, or -2
     int viewBindingDepth(const std::string& name) const;    // a view local's or parameter's recorded depth
     // A store into a view binding may not outlive what it stores (KR-225 decision 6): `x = e` needs
     // viewDepthOf(e) <= x's depth. Called on every assignment, whatever its operator.
     void checkViewStore(SharedExpression lhs, SharedExpression rhs, bool plainStore, int line);
+    const ASTNode* _storeChecked = nullptr;          // the statement's assignment, judged by the store rules already
+    void checkStoredBorrow(const ASTNode* node, SharedExpression lhs, SharedExpression rhs, bool plainStore, int line);
     struct PendingPublicViewCtor { std::string cls; ClassMethodDeclarationNode* md = nullptr; SharedStringList typeParams; std::string unit; };
     std::vector<PendingPublicViewCtor> _pendingPublicViewCtors;   // decided by checkViewSurfaces, once every class is known
     void checkViewSurfaces();
+    bool typeNodeIsView(SharedIdentifier t, std::set<std::string>& seen) const;   // a view, or an enum holding one
+    void markViewEnums();
     bool typeReachesRawPtr(SharedIdentifier t, const std::set<std::string>& typeParams, std::set<std::string>& seen);
     bool viewByRefTypeArg(FunctionDeclarationNode* tmpl, const std::map<std::string, SharedIdentifier>& bind, int line);
     int bindingScope(const std::string& name) const;                         // the `_scopes` index a binding lives in

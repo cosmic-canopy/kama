@@ -1,5 +1,7 @@
-// A view in a non-generic enum's payload would carry the borrow out of its window. Through 0.9.719 this compiled, and
-// `leak()` returned a view of `d`'s freed buffer (ASan: heap-use-after-free on the read in `main`).
+// A view in an enum's payload must not carry the borrow out of its window. Through 0.9.719 this compiled, and `leak()`
+// returned a view of `d`'s freed buffer (ASan: heap-use-after-free on the read in `main`). 0.9.720 refused the payload;
+// since 0.9.726 the enum is a view itself (KR-225 decision 4), so the return is refused by the view-return rule, and
+// `t`, a view of storage nothing bounds, by the window rule.
 import { std::collections::ConstView, std::collections::DynamicArray };
 
 type enum Tok { Word(ConstView<uint8> w), End }
