@@ -1,0 +1,14 @@
+// A window over an element's storage freezes that element: `arr[0].add` may grow the buffer `w` views. Through
+// 0.9.727 an element had no place, so the write went unchecked and `w[0]` read freed memory (ASan).
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn uint8 main()
+{
+    DynamicArray<DynamicArray<int32>> arr = DynamicArray.empty();
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 1);
+    arr.add(item: give one);
+    int32 r = 0;
+    borrow arr[0].view() as w { arr[0].add(item: 5); r = w[0]; }
+    return cast<uint8>(r);
+}

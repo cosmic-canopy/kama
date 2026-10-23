@@ -1,0 +1,43 @@
+// What an element's window leaves writable (0.9.728). A view of `arr[0]` reads storage that element owns, so
+// `arr[0]` and every other index of `arr` are frozen for it — but a write that moves no buffer stays legal: an
+// element of the viewed element written in place, an element of a container viewed as a whole (its buffer stays
+// where it is), a disjoint sibling field, and a write through a `foreach (ref …)` binding. Returns 42.
+import { std::collections::DynamicArray };
+
+type resource Rig {
+    DynamicArray<DynamicArray<int32>> rows;
+    DynamicArray<int32> log;
+    public ctor make() {
+        this.rows = DynamicArray.empty();
+        this.log = DynamicArray.empty();
+        DynamicArray<int32> r = DynamicArray.empty();
+        r.add(item: 10); r.add(item: 20);
+        this.rows.add(item: give r);
+    }
+    // A sibling field stays mutable under a window into `this.rows[…]`.
+    public fn int32 tally() {
+        int32 n = 0;
+        borrow this.rows[0].view() as w { this.log.add(item: w[1]); n = w[0] + w[1]; }
+        return n + this.log[0];   // 30 + 20
+    }
+}
+
+// An element of a read-only container, iterated where it lives (through 0.9.727 a copy of it was dropped after the loop).
+fn int32 sumFirst(const ref DynamicArray<DynamicArray<int32>> a) { int32 n = 0; foreach (int32 x in a[0]) { n = n + x; } return n; }
+
+fn uint8 main() {
+    DynamicArray<DynamicArray<int32>> arr = DynamicArray.empty();
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 1); one.add(item: 2);
+    arr.add(item: give one);
+    int32 r = 0;
+    borrow arr[0].viewMut() as w { arr[0][1] = 5; r = r + w[1]; }            // in place inside the viewed element: 5
+    borrow arr.view() as v { arr[0].add(item: 7); r = r + cast<int32>(v[0].length()); }   // arr's buffer stays put: 3
+    foreach (ref DynamicArray<int32> row in arr) { row.add(item: 1); }       // through the binding
+    foreach (int32 x in arr[0]) { arr[0][0] = x; }                           // in place inside the iterated element
+    r = r + cast<int32>(arr[0].length());                                    // 4
+    r = r + sumFirst(a: arr) - 14;                                           // 1 + 5 + 7 + 1 = 14
+    Rig g = Rig.make();
+    r = r + g.tally() - 50;                                                  // 50 - 50
+    return cast<uint8>(r + 30);                                              // 5 + 3 + 4 + 0 + 30 = 42
+}

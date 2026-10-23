@@ -1,0 +1,15 @@
+// Assigning the viewed element drops the old one, and its buffer with it — `w` would read freed memory (ASan
+// through 0.9.727). Another index is refused too: nothing proves `arr[1]` is not `arr[0]`.
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn uint8 main()
+{
+    DynamicArray<DynamicArray<int32>> arr = DynamicArray.empty();
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 1);
+    arr.add(item: give one);
+    int32 r = 0;
+    DynamicArray<int32> z = DynamicArray.empty();
+    borrow arr[0].view() as w { arr[1] = give z; r = w[0]; }
+    return cast<uint8>(r);
+}

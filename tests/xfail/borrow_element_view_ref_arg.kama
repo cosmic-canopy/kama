@@ -1,0 +1,14 @@
+// Handing the viewed element to a callee by `ref` is a write to it: `grow` may realloc the buffer `w` views
+// (ASan: heap-use-after-free through 0.9.727).
+import { std::collections::DynamicArray, std::collections::ConstView };
+fn void grow(ref DynamicArray<int32> d) { d.add(item: 9); }
+fn uint8 main()
+{
+    DynamicArray<DynamicArray<int32>> arr = DynamicArray.empty();
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 1);
+    arr.add(item: give one);
+    int32 r = 0;
+    borrow arr[0].view() as w { grow(d: ref arr[0]); r = w[0]; }
+    return cast<uint8>(r);
+}

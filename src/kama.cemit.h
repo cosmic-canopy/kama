@@ -4142,6 +4142,14 @@ private:
     // The innermost enclosing `borrow` whose frozen host overlaps `p`, or null. Walks `_scopes` back to
     // front, exactly as `markMoved` does for its own scope-shaped question.
     const Scope::FrozenPlace* frozenConflict(const std::vector<std::string>& p) const;
+    // ELEMENT-AWARE places: `placePath`'s answer when there is one, else an element as its container's path plus "[]"
+    // (some element: nothing proves two indices apart), a field of one extending that, and a call that returns a place
+    // as every root it may point into, whole. What a write through `e` may land in, and what a view of `e` reads.
+    void elemPlaces(SharedExpression e, std::vector<std::vector<std::string>>& out);
+    // Whether a write to `w` moves or frees storage a VIEW frozen at `f` reads: `w` covers `f`, or lies inside it by a
+    // path with no element in it. An element written in place (`f` = {d}, `w` = {d, []}) moves no buffer.
+    static bool writeHits(const std::vector<std::string>& f, const std::vector<std::string>& w);
+    const Scope::FrozenPlace* frozenWriteConflict(const std::vector<std::string>& w) const;
     const std::vector<std::string>* frozenAliasRoot(const std::string& name) const;  // the place a `borrow` ALIAS views
     void viewRootPlaces(SharedExpression e, std::vector<std::vector<std::string>>& out);   // every place a VIEW may borrow
     std::set<std::string> byRefArgNames(InvocationNode* inv);   // a call's `ref`/`const ref`/`out` arguments, by name

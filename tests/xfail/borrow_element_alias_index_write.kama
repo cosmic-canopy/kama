@@ -1,0 +1,14 @@
+// While an element has a name, the container may not be written through another index: `arr[0].add` beside
+// `e` (which IS `arr[0]`) would grow the buffer `w` views through `e` — one storage takes one name.
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn uint8 main()
+{
+    DynamicArray<DynamicArray<int32>> arr = DynamicArray.empty();
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 1);
+    arr.add(item: give one);
+    int32 r = 0;
+    borrow arr[0] as e { borrow e.view() as w { arr[0].add(item: 5); r = w[0]; } }
+    return cast<uint8>(r);
+}

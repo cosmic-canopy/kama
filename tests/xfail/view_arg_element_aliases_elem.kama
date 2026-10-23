@@ -1,0 +1,13 @@
+// Two indices of one container are not proven apart: `d: ref arr[1]` may be `arr[0]`, whose buffer `v` views.
+import { std::collections::DynamicArray, std::collections::ConstView };
+fn int32 g(ConstView<int32> v, ref DynamicArray<int32> d) { DynamicArray<int32> e = DynamicArray.empty(); d = give e; return v[0]; }
+fn uint8 main()
+{
+    DynamicArray<DynamicArray<int32>> arr = DynamicArray.empty();
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 1);
+    arr.add(item: give one);
+    int32 r = 0;
+    r = g(v: arr[0].view(), d: ref arr[1]);
+    return cast<uint8>(r);
+}

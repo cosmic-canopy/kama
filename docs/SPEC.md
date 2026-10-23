@@ -461,10 +461,15 @@ Four rules, and together they are what lets the paragraph above say "cannot dang
    element's container, a mint's or a place-returning call's receiver, and every `ref`/`const ref` argument of
    that call — the signature lets the result point at any of them, so freezing the receiver alone would be unsound
    for a free `fn ref`. A mint on such a call (`borrow h.items().viewMut() as v`) freezes the call's roots the same <!-- xfail: borrow_mint_call_receiver_frozen -->
-   way, so `h.items().add(…)` cannot grow the buffer `v` views. Conflict is a **prefix test over places**, so a *disjoint sibling field stays fully
+   way, so `h.items().add(…)` cannot grow the buffer `v` views. An element is a place in its container: a window <!-- xfail: borrow_element_view_grow, borrow_element_view_ref_arg, borrow_element_view_assign, borrow_element_alias_index_write --> <!-- test: borrow_element_roots -->
+   over storage `arr[0]` owns (`borrow arr[0].view() as w`, `foreach (x in arr[0])`) freezes `arr` and every index of
+   it, since `arr[0]` and `arr[1]` are disjoint only when the indices are — so `arr[0].add(…)`, `ref arr[1]` and
+   `arr[1] = give z` are refused there, and so is writing another index of `xs` while `borrow xs[i] as e` names one.
+   Conflict is a **prefix test over places**, so a *disjoint sibling field stays fully
    mutable*: `borrow this.buf.view() as b { this.hits = this.hits + 1; … }` is legal, because two distinct
    fields cannot overlap in storage. Reads are untouched — a `const fn` call, an index, a `foreach` over the
-   frozen host, and (under a view) an element write, which cannot realloc. One storage takes one name: two <!-- xfail: borrow_place_overlap, borrow_place_nested_same, borrow_two_bindings_overlap, borrow_nested_same_place -->
+   frozen host, and (under a view) an element written in place, which moves no buffer — `arr[0][1] = 5` inside a
+   window over `arr[0]`, or `arr[0].add(…)` under `borrow arr.view()`, whose buffer stays where it is. One storage takes one name: two <!-- xfail: borrow_place_overlap, borrow_place_nested_same, borrow_two_bindings_overlap, borrow_nested_same_place -->
    bindings over one container, or a window inside a window over the same storage, are refused — `xs[0]` and
    `xs[1]` are disjoint only when the indices are, which nothing proves in general. A window reached THROUGH an <!-- test: borrow_nested_through_alias -->
    enclosing window's alias is not a second name: `borrow tx.conn().transaction() as inner` freezes `tx` for its <!-- xfail: borrow_nested_alias_frozen -->
@@ -525,7 +530,8 @@ expressible because the mint is read from the grant — `Map` has no `view()`, s
 iterator over its operand for the extent of the body, so the operand is frozen there by rule 2 —
 `foreach (int32 x in d) { d.add(item: 9); }` is a **compile error**, not the runtime panic the growable <!-- xfail: iter_reserve_dynarray, iter_reserve_map -->
 containers' mods counter used to raise. The operand roots through its receiver, so `foreach (v in
-m.values())` freezes `m`. Reads stay free: a `const fn` call on the operand, an element write through a
+m.values())` freezes `m`, and an element operand is iterated where it lives and freezes its container:
+`foreach (x in arr[0]) { arr.add(…) }` is refused. <!-- xfail: foreach_element_grow_container --> Reads stay free: a `const fn` call on the operand, an element write through a
 `ref` binding (that is what `foreach (ref …)` is *for*), and any disjoint container or sibling field. The
 mods counter remains as defense in depth for the `unsafe`/FFI paths that no static rule sees.
 
@@ -562,7 +568,8 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   storage it may grow. A view roots through its *receiver*, so a chained derive roots where its receiver
   roots — and a call's view result roots at its receiver, at every view it was handed and at everything it
   takes by `ref`, so `g(v: firstHalf(xs: a.viewMut()), d: ref a)` is refused as the unwrapped call is, and a <!-- xfail: view_arg_overlap_through_fn -->
-  ternary or a `match` expression roots wherever any arm does. <!-- xfail: view_arg_match_expr -->
+  ternary or a `match` expression roots wherever any arm does. A view into an element and a mutable argument naming <!-- xfail: view_arg_match_expr -->
+  that element's container, or another index of it, are refused the same way: `g(v: arr[0].view(), d: ref arr)`. <!-- xfail: view_arg_element_aliases_ref, view_arg_element_aliases_elem -->
 - **`foreach` needs a place to iterate from.** `foreach (x in d.view())` has nowhere to put the view and
   nothing holding the buffer still — open a window and iterate the alias. An operand that *is* its own
   iterator (`"ab".chars()`, `m.valuesMut()`) is copied by value and stays legal.

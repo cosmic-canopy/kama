@@ -96,6 +96,10 @@ bitcast_nonscalar	bitcast_nonscalar.kama:6:18 bitcast_nonscalar.kama:7:23
 bitcast_width	bitcast_width.kama:5:16
 borrow_alias_reseat	borrow_alias_reseat.kama:15:8
 borrow_bare_host	borrow_bare_host.kama:12:4
+borrow_element_alias_index_write	borrow_element_alias_index_write.kama:12:48
+borrow_element_view_assign	borrow_element_view_assign.kama:13:32
+borrow_element_view_grow	borrow_element_view_grow.kama:12:32
+borrow_element_view_ref_arg	borrow_element_view_ref_arg.kama:12:32
 borrow_frozen_assign	borrow_frozen_assign.kama:14:8
 borrow_frozen_field	borrow_frozen_field.kama:12:12
 borrow_frozen_give	borrow_frozen_give.kama:13:8
@@ -517,6 +521,7 @@ for_on_type	for_on_type.kama:1:0
 foreach_char_over_string	foreach_char_over_string.kama:12:4
 foreach_const_ref_write	foreach_const_ref_write.kama:12:37
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12:4
+foreach_element_grow_container	foreach_element_grow_container.kama:12:34
 foreach_ref_comptime	foreach_ref_comptime.kama:13:4
 foreach_ref_const_fn_field	foreach_ref_const_fn_field.kama:9:8
 foreach_ref_const_local	foreach_ref_const_local.kama:5:4
@@ -1423,6 +1428,8 @@ value_owns_resource	value_owns_resource.kama:3:0
 variant_untyped	variant_untyped.kama:4:23 variant_untyped.kama:4:41
 view_arg_aliases_receiver	view_arg_aliases_receiver.kama:16:23
 view_arg_aliases_ref	view_arg_aliases_ref.kama:15:23
+view_arg_element_aliases_elem	view_arg_element_aliases_elem.kama:11:8
+view_arg_element_aliases_ref	view_arg_element_aliases_ref.kama:12:8
 view_arg_match_expr	view_arg_match_expr.kama:12:23
 view_arg_overlap_through_fn	view_arg_overlap_through_fn.kama:15:23
 view_chain_over_local	view_chain_over_local.kama:11:4

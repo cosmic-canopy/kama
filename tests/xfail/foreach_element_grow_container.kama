@@ -1,0 +1,14 @@
+// A `foreach` over an element freezes the container that holds it: `arr.add` may move `arr[0]` out from under
+// the loop's iterator. Through 0.9.727 it froze nothing, and the loop ended in a double free (ASan).
+import { std::collections::DynamicArray, std::collections::ConstView };
+
+fn uint8 main()
+{
+    DynamicArray<DynamicArray<int32>> arr = DynamicArray.empty();
+    DynamicArray<int32> one = DynamicArray.empty();
+    one.add(item: 1);
+    arr.add(item: give one);
+    int32 r = 0;
+    foreach (int32 x in arr[0]) { arr.add(item: DynamicArray.empty()); r = r + x; }
+    return cast<uint8>(r);
+}

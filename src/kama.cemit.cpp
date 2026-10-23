@@ -7141,7 +7141,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             return false;
         }
         std::vector<std::vector<std::string>> roots;
-        borrowHostRoots(host, roots);
+        elemPlaces(host, roots);   // `xs[i]` is `xs[…]`: while it has a name, no other index of `xs` may be written
         for (auto& r : roots) {
             const Scope::FrozenPlace* outer = frozenConflict(r);
             if (outer && outer->fromChild) {
@@ -7254,11 +7254,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             // them. A call receiver froze nothing, so `h.items().add(…)` inside the window could grow the buffer the
             // view pointed at — a write through it landed in freed memory, in safe code (up to 0.9.671).
             std::vector<std::vector<std::string>> hostRoots;
-            {
-                std::vector<std::string> direct = placePath(recvExpr);
-                if (!direct.empty()) hostRoots.push_back(direct);
-                else borrowHostRoots(recvExpr, hostRoots);
-            }
+            elemPlaces(recvExpr, hostRoots);   // `arr[0].view()` reads storage an element owns: `arr[…]`
             bool rootRefused = false;
             for (const std::vector<std::string>& hp : hostRoots) {
                 // An ENCLOSING window already froze this storage. Two windows over one buffer are the
@@ -19420,6 +19416,17 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         if (auto* inv = dynamic_cast<InvocationNode*>(fe->expression.get()))
             if (invocationReturnsPlace(inv))
                 return (invocationIsConstPlace(inv) ? "(" + container + "*)" : std::string()) + "&(" + emitIterable() + ")";
+        // An ELEMENT (`arr[0]`, `this.rows[i].cells`) is a place too, kept by its container: iterate it where it lives.
+        // As an owning temporary it was bit-copied and the copy dropped after the loop, freeing a buffer the element
+        // still owned — `foreach (int32 x in arr[0])` over a `DynamicArray<DynamicArray<int32>>` was a double free
+        // through 0.9.727 (ASan). An element of a temporary (`mk()[0]`) has no home and keeps the temporary's path.
+        if ((dynamic_cast<ElementAccessNode*>(fe->expression.get()) || dynamic_cast<MemberAccessNode*>(fe->expression.get()))
+            && !rootIsTemporary(fe->expression)) {
+            std::vector<std::vector<std::string>> ep;
+            elemPlaces(fe->expression, ep);
+            if (!ep.empty())
+                return (isConstReceiver(fe->expression) ? "(" + container + "*)" : std::string()) + "&(" + emitIterable() + ")";
+        }
         if (allowTemp && !isViewCType(container) && isClass(container)) {
             ownTemp = "kama_fo" + std::to_string(id);
             ownSrc = emitIterable();
@@ -26605,6 +26612,9 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     // prefix test applies — the callee must not be handed a window over a container it may also grow.
     // Compared in BOTH directions so argument order cannot hide it.
     std::vector<std::pair<std::vector<std::string>, std::string>> viewArgRoots;   // root -> param name
+    // ...and a mutable argument's ELEMENT-AWARE places, for that comparison only (`elemPlaces`): `h(v: arr[0].view(),
+    // d: ref arr[1])` hands the callee a window into an element it may free, which `placePath` cannot see.
+    std::vector<std::vector<std::string>> mutableArgElemPlaces;
     auto viewArgConflict = [&](const std::vector<std::string>& a, const std::string& viewName,
                                const std::string& mutName) {
         unsupported(("`" + placeText(a) + "` is borrowed by the view argument `" + viewName + "` and also "
@@ -26615,8 +26625,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     };
     auto checkViewArgOverlap = [&](const std::vector<std::string>& root, const std::string& pname) {
         if (root.empty()) return;
-        for (auto& seen : mutableArgPlaces)
-            if (placesConflict(seen, root)) viewArgConflict(root, pname, "an earlier argument");
+        for (auto& seen : mutableArgElemPlaces)
+            if (writeHits(root, seen)) { viewArgConflict(root, pname, "an earlier argument"); break; }
         viewArgRoots.push_back({ root, pname });
     };
 
@@ -26730,9 +26740,13 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         if (p.byRef && !p.isConst) {
             std::vector<std::string> mp = placePath(argExpr);
             checkArgOverlap(mp, p.name);
-            if (!mp.empty())
+            std::vector<std::vector<std::string>> mes;
+            elemPlaces(argExpr, mes);
+            for (auto& me : mes) {
                 for (auto& vr : viewArgRoots)     // the other direction: the view argument came first
-                    if (placesConflict(vr.first, mp)) viewArgConflict(vr.first, vr.second, p.name);
+                    if (writeHits(vr.first, me)) { viewArgConflict(vr.first, vr.second, p.name); break; }
+                mutableArgElemPlaces.push_back(me);
+            }
         } else if (p.byRef && p.isConst) {
             std::vector<std::string> cp = placePath(argExpr);
             if (!cp.empty()) {
@@ -27377,6 +27391,39 @@ void CEmitter::borrowHostRoots(SharedExpression e, std::vector<std::vector<std::
     if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) borrowHostRoots(ma->expression, out);
 }
 
+// Through 0.9.727 an element had no place at all: `placePath(arr[0])` is empty, so a write through it went unchecked,
+// and a window over an element's storage froze the whole container instead — `borrow arr[0].view() as w {
+// arr[0].add(…) }`, `grow(d: ref arr[0])`, `arr[0] = give z` in that window, `foreach (x in arr[0]) { arr.add(…) }` and
+// `g(v: arr[0].view(), d: ref arr)` all compiled and read freed memory (ASan). "[]" is SOME element: `arr[0]` and
+// `arr[1]` are disjoint only when the indices are, which nothing proves (the same reason `borrow` refuses two bindings
+// over one container). A place-returning call points somewhere inside its roots, so nothing is appended past one.
+void CEmitter::elemPlaces(SharedExpression e, std::vector<std::vector<std::string>>& out)
+{
+    if (!e) return;
+    std::vector<std::string> p = placePath(e);
+    if (!p.empty()) { out.push_back(p); return; }
+    auto extend = [&](SharedExpression base, const std::string& step) {
+        if (auto* inv = dynamic_cast<InvocationNode*>(base.get())) {   // opaque: the call's roots, whole
+            if (invocationReturnsPlace(inv)) borrowHostRoots(base, out);
+            return;
+        }
+        std::vector<std::vector<std::string>> bs;
+        elemPlaces(base, bs);
+        for (auto& b : bs) { b.push_back(step); out.push_back(b); }
+    };
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {
+        if (ea->expression) extend(ea->expression, "[]");
+        else if (ea->identifier) extend(std::static_pointer_cast<ExpressionNode>(ea->identifier), "[]");
+        return;
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) {
+        if (ma->expression && ma->identifier && ma->identifier->value) extend(ma->expression, *ma->identifier->value);
+        return;
+    }
+    if (auto* inv = dynamic_cast<InvocationNode*>(e.get()))
+        if (invocationReturnsPlace(inv)) borrowHostRoots(e, out);
+}
+
 bool CEmitter::borrowHostIsTemporary(SharedExpression e)
 {
     ASTNode* n = e.get();
@@ -27499,7 +27546,11 @@ bool CEmitter::placesConflict(const std::vector<std::string>& a, const std::vect
 std::string CEmitter::placeText(const std::vector<std::string>& p)
 {
     std::string s;
-    for (size_t i = 0; i < p.size(); ++i) { if (i) s += "."; s += p[i]; }
+    for (size_t i = 0; i < p.size(); ++i) {
+        if (p[i] == "[]") { s += "[…]"; continue; }   // some element (see elemPlaces)
+        if (i) s += ".";
+        s += p[i];
+    }
     return s;
 }
 
@@ -27581,7 +27632,7 @@ void CEmitter::viewRootPlaces(SharedExpression e, std::vector<std::vector<std::s
         if (inv->args)
             for (auto& a : *inv->args) {
                 if (!a || !a->expression) continue;
-                if (a->name && a->name->value && byRef.count(*a->name->value)) push(placePath(a->expression));
+                if (a->name && a->name->value && byRef.count(*a->name->value)) elemPlaces(a->expression, out);
                 else if (isViewCType(exprClass(a->expression)) || isVariantLiteral(a->expression))
                     viewRootPlaces(a->expression, out);
             }
@@ -27589,11 +27640,11 @@ void CEmitter::viewRootPlaces(SharedExpression e, std::vector<std::vector<std::s
     }
     if (auto* t = dynamic_cast<TernaryExpressionNode*>(n)) { viewRootPlaces(t->LHS, out); viewRootPlaces(t->RHS, out); return; }
     if (auto* m = dynamic_cast<MatchNode*>(n)) {
-        push(placePath(m->subject));   // a payload binding an arm yields from aliases the subject
+        elemPlaces(m->subject, out);   // a payload binding an arm yields from aliases the subject
         if (m->arms) for (auto& a : *m->arms) if (a && a->body) viewRootPlaces(a->body, out);
         return;
     }
-    push(placePath(e));
+    elemPlaces(e, out);   // a place, an element's (`arr[0]` reads storage `arr[…]` owns), a field of one
 }
 
 // The window rule. A view borrows storage it does not own, so a view LOCAL is only as good as its root:
@@ -27935,6 +27986,29 @@ const CEmitter::Scope::FrozenPlace* CEmitter::frozenConflict(const std::vector<s
     return nullptr;
 }
 
+bool CEmitter::writeHits(const std::vector<std::string>& f, const std::vector<std::string>& w)
+{
+    if (f.empty() || w.empty()) return false;
+    const size_t n = std::min(f.size(), w.size());
+    for (size_t i = 0; i < n; ++i)
+        if (f[i] != w[i]) return false;
+    if (w.size() <= f.size()) return true;           // the write covers the frozen storage
+    for (size_t i = f.size(); i < w.size(); ++i)
+        if (w[i] == "[]") return false;              // an element written in place: the buffer `f` views stays put
+    return true;
+}
+
+// The window a write to `w` would break. A view's freeze is judged by `writeHits`; a child's or an in-place `match`
+// payload's by plain overlap, since there any write at all races or changes what is read.
+const CEmitter::Scope::FrozenPlace* CEmitter::frozenWriteConflict(const std::vector<std::string>& w) const
+{
+    if (w.empty()) return nullptr;
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i)
+        for (auto& f : _scopes[i].frozen)
+            if ((f.fromChild || f.fromMatch) ? placesConflict(f.place, w) : writeHits(f.place, w)) return &f;
+    return nullptr;
+}
+
 const std::vector<std::string>* CEmitter::frozenAliasRoot(const std::string& name) const
 {
     if (name.empty()) return nullptr;
@@ -27946,8 +28020,11 @@ const std::vector<std::string>* CEmitter::frozenAliasRoot(const std::string& nam
 
 bool CEmitter::rejectFrozenWrite(SharedExpression target, int line)
 {
-    std::vector<std::string> p = placePath(target);
-    const Scope::FrozenPlace* f = frozenConflict(p);
+    std::vector<std::vector<std::string>> ws;
+    elemPlaces(target, ws);
+    std::vector<std::string> p;
+    const Scope::FrozenPlace* f = nullptr;
+    for (auto& w : ws) if ((f = frozenWriteConflict(w))) { p = w; break; }
     if (!f) return false;
     if (f->fromChild) {
         unsupported(("`" + placeText(p) + "` is borrowed by the child `spawn`ed at line " + std::to_string(f->line)
@@ -43411,7 +43488,8 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // finding ⑤ rides — `a.add(item: 3)` can realloc, and the window's alias would be left pointing
         // at the freed buffer. `const fn` is what makes this precise rather than "any method call": the
         // stdlib marks 247 of them, so a read inside a window stays free.
-        if (rmi && !rmi->isConst && !recvPlace.empty()) { rejectFrozenWrite(receiver, call->line); noteSubjectWrite(receiver, call->line); }
+        // An element receiver (`arr[0].add(…)`) has no place of its own, and is judged by its container's (elemPlaces).
+        if (rmi && !rmi->isConst) { rejectFrozenWrite(receiver, call->line); if (!recvPlace.empty()) noteSubjectWrite(receiver, call->line); }
         // A composite view's non-`const fn` may store a view it is handed into a field (KR-225), so it may be handed
         // only views that outlive its receiver — the store rule, applied where the caller can see both depths.
         // `t.reset(other: vb)` with `vb` from a window nested inside `t`'s left `t.rest` dangling once it closed.
