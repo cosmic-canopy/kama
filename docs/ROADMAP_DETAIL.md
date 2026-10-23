@@ -404,6 +404,29 @@ the port shared, since several processes may listen to one group.
 receiver asks for sharing at bind time, through options like `ListenOptions` (the platform rule; on BSD it is
 `SO_REUSEPORT`). The spelling, and whether the multicast fixtures (`net_udp_multicast`) need it, are what the ruling decides.
 
+<a id="s1-not-connected"></a>
+
+#### `net_send_file` bit 16 flakes on macOS, and `IoErrorKind` has no `NotConnected` (KR-236)
+
+Measured on `0.9.726`, macOS arm64 at load 2.5, the fixture's gone-peer loop alone (a probe recording each result's
+kind), 30 runs:
+
+| Runs | What the sends returned |
+|---|---|
+| 25 | `EPIPE` on the first send: told |
+| 5 | the first send **succeeds** (300,000 bytes buffered before the reset landed), then `ENOTCONN` on every send after it, which kama reports as `IoErrorKind::Other`; `EPIPE` never comes |
+
+The fixture counts only `BrokenPipe` and `ConnectionReset` as "the peer has gone", so those five runs set bit 16 after
+400 sends. Its comment ("macOS answers ENOTCONN once it has said EPIPE") describes the 25; the 5 skip the `EPIPE`. The
+promise the fixture states, that a send to a peer that has gone is an error, holds in every run. What fails is naming
+it.
+
+**What others do.** Rust has `ErrorKind::NotConnected`; Go surfaces `syscall.ENOTCONN` from `net.OpError`; .NET has
+`SocketError.NotConnected`.
+
+**Recommendation.** Add `IoErrorKind::NotConnected`, mapped from `ENOTCONN` (POSIX) and `WSAENOTCONN` (Windows), and
+let the fixture count it beside `BrokenPipe` and `ConnectionReset`. Size S, test and std.
+
 <a id="s1-fuzz"></a>
 
 #### Coverage-guided fuzzing (KR-205)
@@ -450,6 +473,59 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   (docs/packages.md): a fetched package cannot carry a local path. A `kama_workspace.json` holding both packages
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
+
+<a id="s2-match-window"></a>
+
+### A container lookup that returns an `Optional` of a view can be declared but not used (KR-234)
+
+Probed on `0.9.726`:
+
+```kama fragment
+type resource Shelf { DynamicArray<int32> xs; …
+    public const fn Optional<ConstView<int32>> find(int32 k) { … return Optional::Some(value: this.xs.view()); } }
+
+match (s.find(k: 1)) { case Some(value: v): { … } case None: { } };   // refused: the subject is unbounded
+Optional<ConstView<int32>> o = s.find(k: 1);                          // refused: the window rule
+borrow s.find(k: 1) as o { … }                                        // refused: a mint takes no arguments
+```
+
+The declaration is sound, since it roots at `this`, so passing the result straight to a function works. What has no
+spelling is taking it apart. A `borrow` mint is nullary by design (`xfail/borrow_mint_takes_args`), because narrowing
+is done by deriving off the alias. A lookup does not narrow; it selects.
+
+**What others do.**
+- Rust: `if let Some(v) = map.get(&k) { … }`. The borrow lives for the body, and the map is frozen there.
+- Swift: `if let v = dict[k]` copies the value.
+- C#: `TryGetValue(k, out var v)` copies; `CollectionsMarshal.GetValueRefOrNullRef` hands out an unchecked `ref`.
+
+**Recommendation: a `match` whose subject is a call yielding a view enum is a window over that call's roots.** It
+freezes them for the `match`, as a `foreach` freezes its operand (*The window*: "`foreach` and `parallel_for` are the
+same window under a different spelling"). Its bindings take the window's depth.
+- No new syntax, and `match` stays the one way to take an enum apart.
+- The roots are `viewRootPlaces(subject)`, already computed.
+
+The other answer, letting `borrow` take a lookup with arguments, makes two constructs for one job. Size S.
+
+<a id="s2-contract-local-handle"></a>
+
+### A contract local over a handle's pointee is refused (KR-235)
+
+Since `0.9.722`, a contract local's object must stay where it is, so `Formattable fo = sh;` with `sh` a `Shared<Box>`
+is refused. Reseating or dropping `sh` frees the pointee while `fo` still points at it, and nothing holds `sh` still
+for `fo`'s block. Passing it to a contract parameter (`width(f: sh)`) works, because the call holds `sh`. Nothing in
+the corpus declared such a local before the refusal (the native, san and wasm legs were green).
+
+**What others do.** Rust's `let fo: &dyn Display = &*sh;` borrows `sh`, and borrowck refuses moving or reassigning it
+while `fo` lives. C#'s interface local is a GC reference, so the question does not arise. Swift copies the existential.
+
+**The choice.**
+1. **Keep the refusal** (recommended). The parameter is the one way to view a handle's pointee as a contract, and a
+   block that wants a name for it calls a function. It needs no new rule.
+2. **Freeze `sh` for `fo`'s block**, refusing a store to `sh`, a `give` of it, or a `ref` argument naming it while
+   `fo` lives, as a `borrow` window freezes its host. That is Rust's answer, at the cost of a second freeze that has
+   no window to see it by.
+
+Size S either way.
 
 <a id="s2-quoted-format"></a>
 
