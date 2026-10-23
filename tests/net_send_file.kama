@@ -79,14 +79,15 @@ unsafe fn int32 run() {
         hangUp(peer: give c);
         // Past the first error too: Linux answers the first send after the reset ECONNRESET, with no signal, and only the
         // sends after it EPIPE, which is the one that would raise SIGPIPE.
-        // Later sends may say other things: macOS answers ENOTCONN once it has said EPIPE. One that names the peer's
-        // going is the promise. It sends until told, 10 ms apart, for up to ~4 s: on a loaded box the reset can land
+        // Later sends may say other things: macOS answers ENOTCONN once it has said EPIPE, and when the first send after
+        // the reset was buffered it never says EPIPE at all — ENOTCONN on every send after it (5 of 30 runs on 0.9.726,
+        // when it was `Other` and this set bit 16). One that names the peer's going is the promise. It sends until told, 10 ms apart, for up to ~4 s: on a loaded box the reset can land
         // after 50 back-to-back sends have all been buffered (bit 16 once in the 0.9.720 matrix, at load 23 on 10 cores).
         bool told = false;
         int32 tries = 0;
         while (tries < 400 && !told) {
             Result<uint64, IoError> r = s.sendFile(file: f, offset: 0ui64, count: cast<uint64>(size));
-            bool gone = match (r) { case Ok(value: n): false; case Err(error: e): match (e.kind()) { case BrokenPipe: true; case ConnectionReset: true; case _: false; }; };
+            bool gone = match (r) { case Ok(value: n): false; case Err(error: e): match (e.kind()) { case BrokenPipe: true; case ConnectionReset: true; case NotConnected: true; case _: false; }; };
             told = told || gone;
             if (!gone) { sleep(d: Duration.fromMillis(ms: 10i64)); }
             tries = tries + 1;

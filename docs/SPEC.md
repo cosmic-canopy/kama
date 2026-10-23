@@ -2365,11 +2365,12 @@ raises itself, `IoError.of(kind: IoErrorKind::InvalidInput)`, has a kind and no 
 arriving during a blocking call; `Poller.wait(timeoutMs:)` absorbs it and waits out the time that is left.
 `TooManyOpenFiles` is Rust's name with its scope: the process (EMFILE, Winsock's `WSAEMFILE`, Win32's <!-- test: proc_open_file_limit -->
 `ERROR_TOO_MANY_OPEN_FILES`) or the whole system (ENFILE) at its limit on open files and sockets. That is an
-`accept` that cannot take the connection, an `open` or a `socket`.
+`accept` that cannot take the connection, an `open` or a `socket`. `NotConnected` is Rust's name too: a socket with <!-- test: net_not_connected -->
+no connection (ENOTCONN, Winsock's `WSAENOTCONN`), such as the peer of a UDP socket that never connected.
 
 **A write to a peer that has gone is an error, not the end of the program.** Writing to a socket whose peer <!-- test: net_write_closed_peer -->
-closed, or to the stdin of a child that exited, returns an error of kind `BrokenPipe` (or `ConnectionReset`, as the <!-- test: proc_write_exited_child -->
-kernel reports it) — POSIX raises SIGPIPE there instead, whose default ends the process. A program ignores that
+closed, or to the stdin of a child that exited, returns an error of kind `BrokenPipe` (or `ConnectionReset` or `NotConnected`, as the <!-- test: proc_write_exited_child -->
+kernel reports it: macOS answers ENOTCONN to every send after the first, once that one was buffered before the reset landed) — POSIX raises SIGPIPE there instead, whose default ends the process. A program ignores that
 signal from the start of `main`, as Go, Rust, Python and Node do, and every socket is also made not to raise it
 (`MSG_NOSIGNAL`, and `SO_NOSIGPIPE` on Apple) — TCP and Unix-domain alike — so a `--shared` kama library is covered without touching its
 host's signals. Two things keep the Unix convention: **stdout and stderr** still end the program by SIGPIPE

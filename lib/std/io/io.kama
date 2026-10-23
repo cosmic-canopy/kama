@@ -28,6 +28,7 @@ extern fn int32 kama_EEXIST();
 extern fn int32 kama_ESRCH();
 extern fn int32 kama_EMFILE();
 extern fn int32 kama_ENFILE();
+extern fn int32 kama_ENOTCONN();
 
 // What KIND of failure an I/O error is: the part a caller branches on, `match (e.kind())`. The named kinds cover
 // the cases callers handle; `Other` is everything else, and the error still carries the OS's code for it.
@@ -39,6 +40,8 @@ extern fn int32 kama_ENFILE();
 // signal arriving during a blocking call (EINTR): the call did nothing, and trying it again is the answer —
 // `Poller.wait` does that itself, with the time that is left. `TooManyOpenFiles` is the process or the system at
 // its limit on open files and sockets: an `accept` that cannot take the connection, an `open`, a `socket`.
+// `NotConnected` is a socket with no connection (ENOTCONN): the peer of one never connected, or a send after a
+// reset has torn the connection down — what macOS answers once the first send after the peer left was buffered.
 @nonExhaustive
 type enum IoErrorKind implements Sendable {
     NotFound,
@@ -58,6 +61,7 @@ type enum IoErrorKind implements Sendable {
     InvalidInput,
     Interrupted,
     TooManyOpenFiles,
+    NotConnected,
     Other;
 
     public const fn string message() {
@@ -79,6 +83,7 @@ type enum IoErrorKind implements Sendable {
             case InvalidInput:      "invalid input";
             case Interrupted:       "interrupted";
             case TooManyOpenFiles:  "too many open files";
+            case NotConnected:      "not connected";
             case Other:             "i/o error";
         };
     }
@@ -170,5 +175,6 @@ unsafe fn IoErrorKind kindOf(int32 e) {
     // The process (EMFILE) or the whole system (ENFILE) is at its limit on open files and sockets — Rust's
     // `TooManyOpenFiles` and its scope (KR-210). `std::process::raiseOpenFileLimit` is the POSIX answer.
     if (e == kama_EMFILE() || e == kama_ENFILE()) { return IoErrorKind::TooManyOpenFiles; }
+    if (e == kama_ENOTCONN())     { return IoErrorKind::NotConnected; }
     return IoErrorKind::Other;
 }

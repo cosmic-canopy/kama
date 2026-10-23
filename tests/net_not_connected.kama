@@ -1,0 +1,22 @@
+// A socket with no connection is `IoErrorKind::NotConnected` (ENOTCONN, or Winsock's WSAENOTCONN) on every OS — the
+// kind a send to a peer that has gone also reports on macOS, once the first send after the reset was buffered. It
+// was `Other` through 0.9.726, so a caller counting the peer's going could not see it. The peer of a UDP socket
+// that never connected is the one failure every OS gives for certain. Returns 42.
+import { std::net::UdpSocket, std::io::IoError, std::io::IoErrorKind };
+
+fn uint8 judge(const ref IoError e) {
+    if (e.kind() != IoErrorKind::NotConnected) { return 4; }
+    if (match (e.rawOsError()) { case Some(value: c): c == 0; case None: true; }) { return 5; }   // the OS said so
+    if (!e.message().startsWith(prefix: "not connected (os error ")) { return 6; }
+    if (IoError.of(kind: IoErrorKind::NotConnected).message() != "not connected") { return 7; }
+    return 42;
+}
+
+fn uint8 main() {
+    Result<UdpSocket, IoError> ru = UdpSocket.bind(host: "127.0.0.1", port: 0ui16);
+    UdpSocket u = match (give ru) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    return match (u.peerAddr()) {
+        case Ok(value: a): 3;                                    // no connect, yet a peer
+        case Err(error: e): judge(e: e);
+    };
+}

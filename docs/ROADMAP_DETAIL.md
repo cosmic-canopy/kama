@@ -404,29 +404,6 @@ the port shared, since several processes may listen to one group.
 receiver asks for sharing at bind time, through options like `ListenOptions` (the platform rule; on BSD it is
 `SO_REUSEPORT`). The spelling, and whether the multicast fixtures (`net_udp_multicast`) need it, are what the ruling decides.
 
-<a id="s1-not-connected"></a>
-
-#### `net_send_file` bit 16 flakes on macOS, and `IoErrorKind` has no `NotConnected` (KR-236)
-
-Measured on `0.9.726`, macOS arm64 at load 2.5, the fixture's gone-peer loop alone (a probe recording each result's
-kind), 30 runs:
-
-| Runs | What the sends returned |
-|---|---|
-| 25 | `EPIPE` on the first send: told |
-| 5 | the first send **succeeds** (300,000 bytes buffered before the reset landed), then `ENOTCONN` on every send after it, which kama reports as `IoErrorKind::Other`; `EPIPE` never comes |
-
-The fixture counts only `BrokenPipe` and `ConnectionReset` as "the peer has gone", so those five runs set bit 16 after
-400 sends. Its comment ("macOS answers ENOTCONN once it has said EPIPE") describes the 25; the 5 skip the `EPIPE`. The
-promise the fixture states, that a send to a peer that has gone is an error, holds in every run. What fails is naming
-it.
-
-**What others do.** Rust has `ErrorKind::NotConnected`; Go surfaces `syscall.ENOTCONN` from `net.OpError`; .NET has
-`SocketError.NotConnected`.
-
-**Recommendation.** Add `IoErrorKind::NotConnected`, mapped from `ENOTCONN` (POSIX) and `WSAENOTCONN` (Windows), and
-let the fixture count it beside `BrokenPipe` and `ConnectionReset`. Size S, test and std.
-
 <a id="s1-fuzz"></a>
 
 #### Coverage-guided fuzzing (KR-205)

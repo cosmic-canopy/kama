@@ -154,6 +154,7 @@ static inline int32_t kama_EEXIST(void)       { return (int32_t)EEXIST; }   // s
 static inline int32_t kama_ESRCH(void)        { return (int32_t)ESRCH; }    // no such process — a group long gone (KR-170)
 static inline int32_t kama_EMFILE(void)       { return (int32_t)EMFILE; }   // this process is out of descriptors (KR-210)
 static inline int32_t kama_ENFILE(void)       { return (int32_t)ENFILE; }   // the whole system is (KR-210)
+static inline int32_t kama_ENOTCONN(void)     { return (int32_t)ENOTCONN; } // a send on a connection that is gone
 
 // Winsock's code as the uniform errno set — one table, for the call that failed and for a connect's SO_ERROR.
 static inline int kama__wsa_errno(int e) {
@@ -179,6 +180,7 @@ static inline int kama__wsa_errno(int e) {
         case WSAEMSGSIZE:     return EMSGSIZE;
         case WSAEINVAL:       return EINVAL;
         case WSAEMFILE:       return EMFILE;         // out of sockets: accept() and socket() at the limit (KR-210)
+        case WSAENOTCONN:     return ENOTCONN;       // a send on a connection the reset has already torn down
         default:              return e;              // carried through as IoErrorKind::Other, with its code
     }
 }
@@ -1890,6 +1892,7 @@ static inline int32_t kama_EEXIST(void)       { return (int32_t)EEXIST; }   // s
 static inline int32_t kama_ESRCH(void)        { return (int32_t)ESRCH; }    // no such process — a group long gone (KR-170)
 static inline int32_t kama_EMFILE(void)       { return (int32_t)EMFILE; }   // this process is out of descriptors (KR-210)
 static inline int32_t kama_ENFILE(void)       { return (int32_t)ENFILE; }   // the whole system is (KR-210)
+static inline int32_t kama_ENOTCONN(void)     { return (int32_t)ENOTCONN; } // a send on a connection that is gone
 
 // ---- close-on-exec (KR-174) -------------------------------------------------
 // Every descriptor kama makes is close-on-exec, so a child std::process starts holds the three streams it was
