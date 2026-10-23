@@ -451,154 +451,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-views-compose"></a>
-
-### Views compose: a view may hold views (KR-225)
-
-**The gap, re-probed on `0.9.719` (2026-10-22).** A zero-copy tokenizer over its input cannot be written, for two
-reasons:
-
-```kama fragment
-type view Tokens {
-    ConstView<uint8> rest;   // error: a view (`ConstView`) borrows its buffer, so it can't be stored in a field
-}
-fn Optional<ConstView<uint8>> head(ConstView<uint8> v) { … }
-                             // error: a view can't be an `enum` payload (`Optional<…ConstView<uint8>>`)
-```
-
-- **The field refusal** is `rejectStoredInterface` (`src/kama.cemit.cpp:19986`), which `emitStruct` (`:35326`)
-  calls for every field of every type, whatever the holder's kind. It is right for a `value` or a `resource`, where the
-  view would outlive its window. The holder here is itself a `type view`, stack-only and rooted in the same `borrow`
-  window, so nothing it holds can outlive what it views.
-- **The enum refusal** leaves a tokenizer's `fn Optional<Token> next()` with no spelling. Its only substitute is a
-  sentinel token, which GOALS 3b rules out ("absence is encoded in the type, never a sentinel"). A view cannot be an
-  `out` parameter either.
-
-Today the only ways to write a parser or a zero-copy deserializer are to copy the input into an owning buffer (an
-allocation and a copy of every byte), or to pass a `ConstView` and a cursor by hand to every function.
-
-**What others do.** Rust stores a borrow anywhere and proves it with lifetimes. kama refuses lifetimes (GOALS 3e).
-The two languages that took kama's road, a second-class borrow with no annotations, both let it compose:
-
-| | A borrow inside a borrowing type | `Optional` of a borrow | Annotation |
-|---|---|---|---|
-| Rust | anywhere: `struct Tokens<'a> { rest: &'a [u8] }` | `Option<&[u8]>` | `'a` on the struct and every use |
-| C# | a `ref struct` holds `Span<T>` (7.2) and `ref` fields (11); the holder is stack-only | a `ref struct` became a legal type argument in C# 13 (`allows ref struct`); `Nullable<T>` still refuses one | none; `scoped` narrows an edge case |
-| Swift 6.2 | a `~Escapable` struct holds `Span` properties (SE-0446, SE-0447) | `Optional` and `Result` accept `~Escapable` payloads (SE-0465, accepted 2025) | `@_lifetime` where a result's source is ambiguous, still experimental; inferred otherwise |
-| kama today | refused | refused | — |
-
-**Recommendation: a type that holds a view is a view**, under every existing rule: stack-only, never a field of a
-non-view, never a collection element, never an escaping return, and a local of it rooted in a `borrow` window. The
-tokenizer then reads:
-
-```kama fragment
-type view Tokens {
-    ConstView<uint8> rest;
-    public ctor over(ConstView<uint8> input) { this.rest = input; }       // decision 2: rooted where `input` is
-    public fn Optional<ConstView<uint8>> next() {                         // decision 4: an Optional of a view is a view
-        isize n = …;
-        ConstView<uint8> word = this.rest.slice(from: 0, count: n);      // decision 3: a derive off `this`
-        this.rest = this.rest.slice(from: n, count: this.rest.length() - n);
-        return Optional::Some(value: word);
-    }
-}
-
-borrow text.bytes() as b {
-    Tokens t = Tokens.over(input: b);                                     // bounded by the window `b` came from
-    while (true) { match (t.next()) { case Some(value: w): { … } case None: { break; } }; }
-}
-```
-
-**The bytes.**
-- `Tokens` is a C struct holding the view's pointer and length: 16 B on a 64-bit target, on the stack, with nothing
-  allocated and nothing copied.
-- `Optional<ConstView<uint8>>` is that plus its tag.
-- Today's workaround copies the input into a `DynamicArray`: one heap allocation of N bytes and a copy of all of them.
-- A structure that must outlive the parse, such as an AST kept in a collection, keeps offsets into an owned buffer.
-  That is what rustc itself does, and it is the honest limit of a language without lifetimes.
-
-Size M.
-
-**Ruled 2026-10-22: all five as recommended.** Decision 5 is KR-231.
-1. **A `type view` may hold views**, as in C# and Swift.
-2. **Minting.** A view's constructor is private today: a view may be minted only by itself or by the type whose
-   memory it views (`@viewable`), because a view made from raw memory creates a borrow. A view **with no raw-pointer
-   field** creates none; it only re-holds views it was handed. Recommended: such a view may declare a public
-   constructor, and its result roots where its view arguments root, as a free function's view result does today
-   (rule 3).
-3. **Derivation.** A view read from a composite's field is a derive off the composite: it roots where the composite
-   roots. So a method may return `this.rest.slice(…)`, and the caller's view is bounded by the same window.
-4. **An `enum` with a view payload is a view.** That covers `Optional<V>`, `Result<V, E>` and a user `type enum` with
-   a view case, as in Swift's SE-0465. It is stack-only and returnable under the view return rule, and a `match` binds
-   its payload as a view local rooted where the enum value roots.
-5. **`@generate(Deserializable)` into a view struct**, for zero-copy JSON (serde's `#[serde(borrow)]`): its own row
-   after this, since it is the serializer's work (KR-231).
-6. **A store may not outlive what it stores** (ruled 2026-10-22, after the decisions above; shipped `0.9.721`).
-   Probing `0.9.720` found that the window rule judged a view local's initializer only. Three shapes read freed memory
-   under ASan:
-   - `s = d.view()` into a bounded local;
-   - `v = loc.view()` into a by-value view parameter, then returned;
-   - `outer = vb` from a window nested inside the one `outer` was declared in, after which `b` grew.
-
-   **The rule.** A view binding's **depth** is the innermost `borrow` window open where it was declared, or the
-   caller's when none is open. A store `x = e` needs `e`'s window to enclose `x`'s, and only a caller-depth binding is
-   returnable. It is structural and does not depend on order, so a loop that reads `x` before a later store cannot be
-   fooled, and it needs no annotation.
-
-   **Why it is safe.**
-   1. `x` is never read after its window's block ends.
-   2. A store never puts into `x` anything that dies sooner.
-   3. A returned binding holds only what the caller handed in.
-
-   **What others do.**
-   - Rust proves the same thing with lifetimes.
-   - C# fixes a `ref struct` local's scope from its initializer, and needs `scoped` for a local that should be
-     narrower.
-   - Swift infers the dependence.
-
-   **Rejected.**
-   - Making view locals not reseatable: simpler, but it forbids the cursor loop `rest = rest.slice(from: n, …)` and
-     the accumulator `found = Optional::Some(value: line)`.
-   - Fixing the scope from the initializer, as C# does: kama would have no `scoped` keyword for the inner-window
-     case.
-
-   `ref T`/`out T` with `T` bound to a view is refused at the call, as `ref View<T>` spelled out already was
-   (`std::memory::swap` over two views was the same hole).
-
-**Implementation map** (read from `src/kama.cemit.cpp` on 2026-10-22; line numbers drift, so the function names are
-what to search for):
-- **The field.** `emitStruct` (:35326) calls `rejectStoredInterface` with `alsoView=true` for every holder; a view
-  holder passes `!ci.isBorrow`. Still refuse a contract field, and a `closesWindow` view as a field: a composite
-  would never run that view's `~dtor`.
-- **The constructor.** The "always private" refusal is in `collectClasses` (:12428), inside the member loop, which
-  misses a field declared after the constructor. Move it after the loop and allow `public` when no field is a raw
-  pointer (`isRawPtrName`). The mint site (:42413) already lets a public constructor through.
-- ⚠️ **`viewLocalBounded` (:27480) treats any view constructor call as bounded (:27500).** That is sound only while
-  every view constructor is private. A public one must take the free-function rule (bounded only when every view
-  argument is), or `Tokens.over(input: d.view())` would pass.
-- **Derivation.**
-  - `viewLocalBounded` gains a `MemberAccessNode` arm (bounded when its base is) and a `this` arm inside a view
-    method. Today `this.slice()` as a local in a view method is refused because no arm exists.
-  - `viewReturnRoot` already roots `this.f.slice()` at `this`.
-- **Enums.**
-  - `registerGenericTypeInst` refuses a view payload (:15619). Mark the instance `isBorrow` instead, after the
-    kind-clause precedent (:15510).
-  - Do not add `Optional` to `_viewTypeNames`, which is keyed by bare name. Its readers (`paramCanCarryBorrow`
-    :23556, `namesViewType` :23459) need a cType fallback.
-  - The 0.9.720 refusal of a view payload in `emitVariantStruct` becomes "the enum is a view"; a bare contract
-    payload stays refused.
-  - ⚠️ **Open, to verify while building:** `Result<View, E>` with an owning `E` is destructible, and the "a view owns
-    nothing" check (:43904) refuses that. Decide between exempting a variant instance and refusing that combination,
-    with a fixture either way.
-- **`match`.** `emitMatchSwitch`'s binding loop (:31473) never records a view payload as bounded, and its in-place
-  path puts the binding in `_refParams`, which would let `return v` pass the return rule. Record the binding as
-  bounded exactly when the subject is, and resolve its root through the subject.
-- **Roots.** `boundedViews` is a set of names, and `viewRootPlace` (:27432) returns one path. A composite's roots are
-  the union of its fields' roots, so it needs a plural form, and its consumers loop over it: `checkViewArgOverlap`
-  (:26529), the receiver check (:42800) and the `foreach` freeze (:19544).
-- **Fixtures to mirror:** `view_derive_bounded`, `view_derive_chain`, `view_contract_pinned_ok`,
-  `viewable_attribute`. Xfails that stay red: `view_field`, `view_optional_field`, `view_ctor_public` (a raw pointer).
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)
@@ -1782,12 +1634,12 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ### Zero-copy deserialization into a view struct (KR-231)
 
-**Ruled 2026-10-22, as KR-225's decision 5.** Once a type that holds a view is a view (KR-225),
+**Ruled 2026-10-22.** A type that holds a view is a view since `0.9.725` (SPEC *Views compose*), so
 `@generate(Deserializable)` can target a `type view` record whose `ConstView<uint8>` fields point into the input.
 Parsing JSON then copies no string, as serde's `#[serde(borrow)]` does in Rust. The record is bounded by the window
 over the input, under every existing view rule. A field that needs unescaping (`\n`, `\u00e9`) cannot point into the
 input. The design must say what happens there: Rust uses `Cow<str>`, and the alternatives are refusing the record or
-choosing a per-field owned fallback. Unscoped until KR-225 ships.
+choosing a per-field owned fallback. Unscoped; nothing blocks it.
 
 ### The architecture review, and what it settled — SHIPPED `0.9.270`–`0.9.274`
 

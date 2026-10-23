@@ -122,14 +122,17 @@ A `view` is a **non-owning, second-class borrow** of a contiguous run of memory 
 flagship is the stdlib pair `View<T>` (`{ UnsafePtr<T> data; isize len }`) and its read-only half
 `ConstView<T>` (`{ UnsafeConstPtr<T> data; isize len }`), but the kind is general: an engine can
 declare its own `type view StridedView<T>`, `type view Grid2D<T>`, `type view EcsQuery { UnsafePtr<World> world; … }`
-— a view borrows through raw pointers, since a field is never a `ref`.
+— a view borrows through raw pointers, since a field is never a `ref`, or through other views it holds: a type
+that holds a view is a view, so a zero-copy tokenizer is `type view Tokens { ConstView<uint8> rest; … }`, with a
+public constructor because it holds no raw pointer, and `Optional<ConstView<uint8>>` is a view too (SPEC *Views
+compose*).
 It is kama's answer to a **safe span without a borrow checker** — the same shape as C# `ref struct`
 (`Span<T>`, `ReadOnlySpan<T>`, `Utf8JsonDeserializer`).
 
 ```kama fragment
 type view View<T> {                               // a slice/span over a buffer it borrows
     UnsafePtr<T> data; isize len;                 // fields are private-only (the raw UnsafePtr must not leak)
-    unsafe ctor over(UnsafePtr<T> at, isize count) { this.data = at; this.len = count; }   // always private
+    unsafe ctor over(UnsafePtr<T> at, isize count) { this.data = at; this.len = count; }   // private: it holds a raw pointer
     public const fn isize length() { return this.len; }
     public unsafe ref T operator[](isize i) { /* bounds-checked */ return this.data[i]; }
 }

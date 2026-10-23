@@ -454,7 +454,7 @@ Refused, each with its own sentence and no cascade after it: **a bare local** (`
 its place), and **a value**: a call that returns one, or a field of one (`mk().x`), which nothing holds beyond the <!-- xfail: borrow_place_value_call, borrow_place_value_fn, borrow_place_temporary -->
 statement — bind it to a local first.
 
-Three rules, and together they are what lets the paragraph above say "cannot dangle":
+Four rules, and together they are what lets the paragraph above say "cannot dangle":
 
 1. **The host's roots are FROZEN for the extent of the block** — no assignment, no non-`const` `ref`/`out` <!-- xfail: borrow_place_frozen_container, borrow_place_frozen_receiver, borrow_place_frozen_ref_arg -->
    argument, no `give` out of them, no non-`const fn` receiver overlapping them. The roots: a field path itself, an
@@ -474,9 +474,19 @@ Three rules, and together they are what lets the paragraph above say "cannot dan
    is judged by what the alias points into — a place inside a local is refused, as returning the local's own <!-- xfail: borrow_place_fn_ref_local -->
    place would be. Reading through the alias copies the value out, which is always fine.
 3. **A view LOCAL's root must already be lifetime-bounded** — a `borrow` alias, a by-value view parameter,
-   a derive off either, or a free function's result when every view handed to it was bounded. A view
-   minted from a container you can still name is *not* bounded, because the next line may grow it, and is
-   an error with the window as its remedy.
+   a derive off either, or a call's result when every view handed to it was bounded and it takes nothing by
+   `ref`: its own return rule let the result root at any of them, so `h(w: w, d: arr)` returning `d.view()` <!-- xfail: view_ref_arg_launders -->
+   is a view of `arr`, which this frame can still grow. A view minted from a container you can still name is
+   *not* bounded, because the next line may grow it, and is an error with the window as its remedy. <!-- xfail: view_local_unbounded -->
+4. **A store may not outlive what it stores.** A view binding's **depth** is the innermost window open where <!-- xfail: view_store_unbounded, view_param_store, view_store_shorter_window -->
+   it was declared — the caller's, outside every window — and `x = e` needs `e`'s window to enclose `x`'s. Only a <!-- test: view_store_depth -->
+   binding at the caller's depth is returnable. The rule reads no statement order, so a loop that reads `x`
+   before a later store cannot get past it, and it keeps the shapes a parser is written in: the cursor loop
+   `rest = rest.slice(from: n, count: …)`, and an accumulator found in a loop and returned after it. What it
+   refuses is `outer = vb` from a window nested inside `outer`'s, which closes first, and `ref T` with `T` a
+   view, which is a view by reference however it is spelled (`std::memory::swap` over two views). Rust proves <!-- xfail: view_swap_generic_ref -->
+   the same thing with lifetimes and C# fixes a `ref struct` local's scope from its initializer; kama reads it
+   off the block.
 
 `borrow` works the same in every statement position — a function or method body, a loop body left by <!-- test: borrow_place_positions -->
 `break`/`continue`/`return`, a `match` arm, a generic body, a `spawn`ed child's body, a `parallel_for` body — and in
@@ -537,9 +547,12 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   argument through the same pair. The reverse is refused, naming `viewMut()`, and a write through a <!-- xfail: const_view_to_mut -->
   `ConstView<T>` — `cv[0] = x`, a `foreach (ref …)`, a `parallel_for` — is refused as a write through a <!-- xfail: const_view_write, foreach_ref_const_view, parfor_const_view -->
   `const ref` place; `viewMut()` on a `const ref` container is refused like any non-`const fn` call. <!-- xfail: view_from_const_receiver -->
-  A view may **not** be stored in a field/collection/`enum`, and may be **returned only** when it <!-- xfail: view_field, view_collection_elem, view_optional_field, enum_payload_view -->
-  borrows `this` or a `ref`/view parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view
-  over a *local* is rejected). To hand back data you own, copy into a `DynamicArray`. <!-- xfail: view_return_over_local, view_ctor_over_local -->
+  A view may **not** be stored in a field of anything but another view, a collection element, a `static`, or <!-- xfail: view_field, view_collection_elem, view_optional_field, view_static -->
+  a box (`Owned`/`Shared` of a contract), each of which outlives every window — a type that holds a view is a <!-- xfail: view_into_owned_contract, view_into_shared_contract -->
+  view itself (*Views compose*, below). It may be **returned only** when it borrows `this` or a `ref`/view
+  parameter (so `arr.slice(...)` on a `ref`/`this` receiver is fine; a view over a *local* is rejected); a <!-- xfail: view_return_over_local, view_ctor_over_local, enum_payload_view -->
+  `foreach (ref …)` or borrowing-`match` binding is as returnable as what it aliases, and a view's own by-value <!-- xfail: view_return_ref_binding, view_return_own_storage -->
+  storage is what holds the view, not what it borrows. To hand back data you own, copy into a `DynamicArray`.
 - **A view may not be passed by `ref`/`out`** — it is already a borrow, and the only thing the extra <!-- xfail: view_ref_param, view_out_param -->
   indirection adds is the power to reseat the caller's view at storage the caller never named. Pass it by
   value (it is two words) or return one. The ban covers contract members too, where a bodiless signature
@@ -547,14 +560,18 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
 - **A view argument may not root in another argument's mutable place**, nor in the receiver of a <!-- xfail: view_arg_aliases_ref, view_arg_aliases_receiver -->
   non-`const fn`: `bad(d: ref d, v: d.view())` and `b.eat(v: b.view())` hand the callee a window over
   storage it may grow. A view roots through its *receiver*, so a chained derive roots where its receiver
-  roots.
+  roots — and a call's view result roots at its receiver, at every view it was handed and at everything it
+  takes by `ref`, so `g(v: firstHalf(xs: a.viewMut()), d: ref a)` is refused as the unwrapped call is, and a <!-- xfail: view_arg_overlap_through_fn -->
+  ternary or a `match` expression roots wherever any arm does. <!-- xfail: view_arg_match_expr -->
 - **`foreach` needs a place to iterate from.** `foreach (x in d.view())` has nowhere to put the view and
   nothing holding the buffer still — open a window and iterate the alias. An operand that *is* its own
   iterator (`"ab".chars()`, `m.valuesMut()`) is copied by value and stays legal.
 - **A view is minted by the type it views, and by nothing else.** A view is a bidirectional
-  relationship — it does not exist without a type to view — so a `type view`'s **constructor is private**,
-  and writing `public` on it is a compile error rather than a silent downgrade (the same rule a `view` <!-- xfail: view_ctor_public -->
-  *field* already obeys). Two places may call it: the **view itself**, which is what makes `View.slice`
+  relationship — it does not exist without a type to view — so a `type view`'s **constructor is private**
+  while the view holds a raw pointer, at any depth, and writing `public` on it is then a compile error rather <!-- xfail: view_ctor_public, view_ctor_public_raw_deep -->
+  than a silent downgrade (the same rule a `view` *field* already obeys). A view that holds no raw pointer
+  creates no borrow — it only re-holds views it was handed — so it may declare a public constructor, whose
+  result roots where its view arguments root (*Views compose*). Two places may call it: the **view itself**, which is what makes `View.slice`
   work; and the **type being viewed**, which declares that relationship by implementing a member of a
   contract marked **`@viewable`**. Implementing such a member lets that member's body mint the view it
   returns — the return type self-selects, so a marked contract cannot over-grant, and a member returning
@@ -595,13 +612,75 @@ mods counter remains as defense in depth for the `unsafe`/FFI paths that no stat
   `DynamicArrayIter`, `MapValueIter`, `BitSetIter`, the `string` iterators `Chars`/`Split`, all of them — is
   declared `type view`, so it obeys the same escape rules as the `View<T>` above: a local or a by-value
   parameter, returnable from the container's own `iterator()`/`values()` (it borrows `this`), and **never** a
-  field, a collection element or an `enum` payload — **and it obeys the window rule**, so an iterator
+  field of anything but a view, a collection element, a box or a `static` — an enum carrying one is a view
+  itself — **and it obeys the window rule**, so an iterator
   local is bounded exactly as a `View<T>` local is. That closes the *laundering* path, where a `View<T>`
   could not be stored in a field but its iterator, holding the same pointer, could. It costs nothing at the
   use site: `foreach` resolves `iterator()`/`iterMut()` structurally and emits direct monomorphized calls, so
   a view-kind iterator is never widened to a contract value. The mods-counter fail-fast the growable
   containers carry is unrelated and was never a substitute — it points into the container too, so reading it
   after a free *is* the use-after-free.
+
+#### Views compose — a type that holds a view is a view ✅
+
+A zero-copy parser keeps views into its input. A **`type view` may hold views**, and an **enum with a view <!-- test: view_composite, view_enum_payload, view_enum_field -->
+payload is a view** — `Optional<V>`, `Result<V, E>`, a user `type enum` with a view case — under every rule
+above: stack-only, never a field of anything but a view, never a collection element, returnable only where it
+borrows what the caller holds, and a local of it bounded by a window. So absence is in the type, not a
+sentinel:
+
+```kama
+import { std::collections::ConstView };
+
+type view Tokens {
+    ConstView<uint8> rest;
+    public ctor over(ConstView<uint8> input) { this.rest = input; }   // no raw pointer: a public constructor
+    public fn Optional<ConstView<uint8>> next() {                      // an Optional of a view is a view
+        isize n = 0;
+        while (n < this.rest.length() && this.rest[n] != 32) { n = n + 1; }
+        if (n == 0 && this.rest.length() == 0) { return Optional::None; }
+        ConstView<uint8> word = this.rest.slice(from: 0, count: n);   // a derive off `this`
+        isize skip = n < this.rest.length() ? n + 1 : n;
+        this.rest = this.rest.slice(from: skip, count: this.rest.length() - skip);
+        return Optional::Some(value: word);
+    }
+}
+
+fn uint8 main() {
+    string text = "zero copy";
+    int32 words = 0;
+    borrow text.bytes() as b {
+        Tokens t = Tokens.over(input: b);                               // bounded by the window `b` came from
+        while (true) { match (t.next()) { case Some(value: w): { words = words + 1; } case None: { break; } }; }
+    }
+    return cast<uint8>(words);   // 2
+}
+```
+
+`Tokens` is the view's pointer and length — 16 bytes on a 64-bit target, on the stack — and
+`Optional<ConstView<uint8>>` is that plus its tag. Nothing is allocated and no byte is copied.
+
+- **A public constructor** is allowed when the view reaches no raw pointer at any depth (through a value's <!-- xfail: view_ctor_public_raw_deep, view_ctor_public_ref -->
+  fields, an `Optional`, an `InlineArray`, a bare type parameter), and every parameter that carries its borrow
+  must be a by-value view: a `ref` container is storage the caller can still grow.
+- **A view read from a composite's field** roots where the composite roots, and `this` in a view's method is the
+  caller's. Storing into such a field obeys rule 4: `this.rest = this.rest.slice(…)` is a derive off the same
+  holder. So a composite's non-`const` method may be handed only views that outlive its receiver —
+  `t.reset(other: vb)` with `vb` from a window nested inside `t`'s is refused at the call. <!-- xfail: view_field_store_param -->
+- **Not held:** a view that closes its window (it lives only as its `borrow` alias, which runs its destructor), <!-- xfail: view_field_closing, view_enum_closing_payload -->
+  as a field or a payload; and a view field handed out as a mutable place (`fn ref ConstView<uint8> …`), <!-- xfail: view_field_place_return -->
+  through which it could be reseated where rule 4 cannot see.
+- **An enum of a view** passes by value only, as a view does, and a `match` binds its payload as a view rooted <!-- xfail: view_enum_ref_param, view_match_unbounded_subject -->
+  where the subject roots — copied out, never read in place — so a subject nothing bounds gives a binding nothing
+  bounds. Its other cases may own: `Result<ConstView<uint8>, Owned<Error>>` is kama's own error convention, and
+  it is moved and drops its `Err` exactly once, as any enum does. A user enum with a view case is no collection <!-- xfail: view_enum_in_collection, view_enum_store_shorter_window -->
+  element, and its stores obey rule 4.
+
+A structure that must outlive the parse — an AST kept in a collection — keeps offsets into an owned buffer
+instead. That is what rustc itself does, and it is the honest limit of a language without lifetimes. Rust stores a
+borrow anywhere and proves it with lifetimes; C# lets a `ref struct` hold `Span<T>` and `ref` fields, and Swift a
+`~Escapable` struct hold `Span`, with `Optional` of one accepted since SE-0465 — kama takes the second road, with
+no annotation.
 
 #### The bytes of a plain value — `@generate(BytesViewable)` / `@generate(Blittable)` ✅
 
@@ -4492,7 +4571,8 @@ every function, so declarations are greppable and self-describing:
   resource`, `type final resource`.
 - **`type view Name { … }`** — a non-owning, **stack-only borrow** (a slice/span; C# `ref struct`). It
   **copies** like a value (inline, no dtor) but owns nothing and is a **second-class borrow**: the escape
-  check forbids it as a field, a collection element, or an `enum` payload, and allows it as a **return only
+  check forbids it as a field of anything but another view, a collection element, a `static` or a box — a type
+  that holds one is a view itself (*Views compose*) — and allows it as a **return only
   when it borrows `this` or a `ref`/view parameter** (the same structural rule as a `ref T` place-return — no
   lifetime tracking). A **local** of the kind must root in a `borrow` window or a by-value view parameter,
   and its host is frozen for that window's extent, so it cannot outlive the storage it views — see *Slices /
@@ -5436,6 +5516,13 @@ payload** is a compile error, because the borrowed object could die and leave it
 never an implicit box. This is the language-wide rule **"a borrow lives in a parameter or a `borrow` window,
 never in storage; storage requires ownership"** — the same reason a `ref` parameter can't be returned and a
 returnable "reference" is always an owned smart-pointer handle.
+
+A contract **local** borrows its object for as long as the local lives, so the object must stay where it is: a
+local, a parameter, `this`, a field of one, or an element a `borrow` window holds still. Mutating a local through <!-- xfail: contract_local_over_element, contract_static -->
+the contract is fine — the local never moves — but an element of a container that grows, or the value behind a
+handle that can be reseated, is refused (`Formattable fo = arr[0]`), and so is a `static` of a contract type. A <!-- test: contract_local_rebind -->
+contract local may be rebound (`fo = y`) to any object that outlives it; one declared in a block nested inside
+the local's is refused, as a view store from a nested window is (rule 4 of *The window*). <!-- xfail: contract_local_store_inner -->
 
 **Owned contracts — `Owned`/`Shared`/`Weak<Shape>`.** A smart pointer *over a contract* owns the concrete
 object behind a fat handle `{obj, vtbl}` (`Shared`/`Weak` add a `ctrl` block). `new Circle.make(...)` boxes a
