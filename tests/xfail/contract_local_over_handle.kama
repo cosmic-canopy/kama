@@ -1,0 +1,16 @@
+// A contract local may not borrow the value behind a handle (KR-235): reseating or dropping `sh` would free the object
+// `fo` points at, and nothing holds `sh` still for `fo`'s block. The contract PARAMETER is the one way to view a
+// handle's pointee as a contract — the call holds `sh` (tests/contract_param_over_handle). Rust's `&*sh` freezes `sh`
+// for the borrow's life; kama keeps every freeze a visible block instead.
+import { std::memory::Shared };
+type value Box implements Formattable {
+    public int32 w;
+    public ctor make(int32 w) { this.w = w; }
+    public const fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this.w)); }
+}
+fn int32 width(Formattable f) { string s = "${f}"; return cast<int32>(s.length()); }
+fn uint8 main() {
+    Shared<Box> sh = new Box.make(w: 123);
+    Formattable fo = sh;
+    return cast<uint8>(width(f: fo));
+}

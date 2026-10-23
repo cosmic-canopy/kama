@@ -451,27 +451,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-contract-local-handle"></a>
-
-### A contract local over a handle's pointee is refused (KR-235)
-
-Since `0.9.722`, a contract local's object must stay where it is, so `Formattable fo = sh;` with `sh` a `Shared<Box>`
-is refused. Reseating or dropping `sh` frees the pointee while `fo` still points at it, and nothing holds `sh` still
-for `fo`'s block. Passing it to a contract parameter (`width(f: sh)`) works, because the call holds `sh`. Nothing in
-the corpus declared such a local before the refusal (the native, san and wasm legs were green).
-
-**What others do.** Rust's `let fo: &dyn Display = &*sh;` borrows `sh`, and borrowck refuses moving or reassigning it
-while `fo` lives. C#'s interface local is a GC reference, so the question does not arise. Swift copies the existential.
-
-**The choice.**
-1. **Keep the refusal** (recommended). The parameter is the one way to view a handle's pointee as a contract, and a
-   block that wants a name for it calls a function. It needs no new rule.
-2. **Freeze `sh` for `fo`'s block**, refusing a store to `sh`, a `give` of it, or a `ref` argument naming it while
-   `fo` lives, as a `borrow` window freezes its host. That is Rust's answer, at the cost of a second freeze that has
-   no window to see it by.
-
-Size S either way.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)

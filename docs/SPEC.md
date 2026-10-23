@@ -5545,7 +5545,10 @@ returnable "reference" is always an owned smart-pointer handle.
 A contract **local** borrows its object for as long as the local lives, so the object must stay where it is: a
 local, a parameter, `this`, a field of one, or an element a `borrow` window holds still. Mutating a local through <!-- xfail: contract_local_over_element, contract_static -->
 the contract is fine — the local never moves — but an element of a container that grows, or the value behind a
-handle that can be reseated, is refused (`Formattable fo = arr[0]`), and so is a `static` of a contract type. A <!-- test: contract_local_rebind -->
+handle that can be reseated, is refused (`Formattable fo = arr[0]`, `Formattable fo = sh` over a `Shared<Box>`), and <!-- xfail: contract_local_over_handle -->
+so is a `static` of a contract type. The value behind a handle is a contract through a contract PARAMETER, <!-- test: contract_param_over_handle -->
+`width(f: sh)`, whose call holds `sh` still — the one way: Rust's `&*sh` freezes `sh` for the borrow's life, and
+kama keeps every freeze a visible block. A <!-- test: contract_local_rebind -->
 contract local may be rebound (`fo = y`) to any object that outlives it; one declared in a block nested inside
 the local's is refused, as a view store from a nested window is (rule 4 of *The window*). <!-- xfail: contract_local_store_inner -->
 

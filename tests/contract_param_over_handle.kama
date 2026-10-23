@@ -1,0 +1,17 @@
+// The value behind a handle passes to a contract parameter (KR-235): the call holds the handle for its extent, so the
+// callee's contract value cannot outlive what it views. This is the one way — a contract LOCAL over `sh` is refused
+// (xfail/contract_local_over_handle). Through `Shared` and `Owned` both, and from a function handed the pointee by `const ref`. Returns 42.
+import { std::memory::Shared, std::memory::Owned };
+type value Box implements Formattable {
+    public int32 w;
+    public ctor make(int32 w) { this.w = w; }
+    public const fn void format(ref Formatter f) { f.writeI64(v: cast<int64>(this.w)); }
+}
+fn int32 width(Formattable f) { string s = "${f}"; return cast<int32>(s.length()); }
+fn int32 viaConst(const ref Box b) { return width(f: b); }
+fn uint8 main() {
+    Shared<Box> sh = new Box.make(w: 123);
+    Owned<Box> ow = new Box.make(w: 45678);
+    Shared<Box> again = sh;
+    return cast<uint8>(width(f: sh) + width(f: ow) + viaConst(b: again) + 31);   // 3 + 5 + 3 + 31
+}
