@@ -1,0 +1,57 @@
+// A place reached through a view that closes its window is one window (KR-226): `borrow b.lock().value() as m`. The
+// window makes the guard once, holds it in a temporary, and its destructor closes the window on every path out —
+// fall-through, `return`, `break`, `continue` — after the body's own locals. The guard here counts its mints and its
+// closes into the cell, so a mint emitted twice, or a close skipped, changes the answer. Through 0.9.729 the host was
+// refused as "a value", and naming the payload took a second window over the guard's alias. Returns 42.
+import { std::collections::DynamicArray };
+
+@viewable type contract Guards<G> for resource { fn G lock(); }
+
+@generate(zero) type value Pair { public int32 a; public int32 b; }
+
+// The cell: [0] mints, [1] closes; the payload beside it.
+type view Guard {
+    UnsafePtr<int32> counts;
+    UnsafePtr<Pair> payload;
+    unsafe ctor over(UnsafePtr<int32> counts, UnsafePtr<Pair> payload) {
+        this.counts = counts; this.payload = payload;
+        this.counts[0] = this.counts[0] + 1;
+    }
+    public unsafe fn ref Pair value() { return this.payload[0]; }
+    unsafe ~Guard() { this.counts[1] = this.counts[1] + 1; }
+}
+
+type resource Cell implements Guards<Guard> {
+    InlineArray<int32>#(2) counts;
+    Pair p;
+    public ctor make() { this.counts = [0; 2]; this.p = Pair.zero(); }
+    public unsafe fn Guard lock() { return Guard.over(counts: addr(of: this.counts[0]), payload: addr(of: this.p)); }
+    public const fn int32 mints() { return this.counts[0]; }
+    public const fn int32 closes() { return this.counts[1]; }
+    public const fn int32 sum() { return this.p.a + this.p.b; }
+}
+
+fn void bump(ref Pair p) { p.a = p.a + 1; }
+
+fn int32 early(ref Cell c) { borrow c.lock().value() as m { m.b = m.b + 10; return m.b; } }
+
+fn uint8 main() {
+    Cell c = Cell.make();
+    borrow c.lock().value() as m { m.a = 1; bump(p: ref m); }            // a = 2; one mint, one close
+    if (c.mints() != 1 || c.closes() != 1) { return 1; }
+    if (early(c: ref c) != 10) { return 2; }                             // closed on `return`
+    if (c.mints() != 2 || c.closes() != 2) { return 3; }
+    int32 i = 0;
+    while (i < 4) {
+        borrow c.lock().value() as m {
+            i = i + 1;
+            if (i == 1) { continue; }                                     // closed on `continue`
+            m.a = m.a + 1;
+            if (i == 3) { break; }                                        // closed on `break`
+        }
+    }                                                                     // three windows: a = 4
+    if (c.mints() != 5 || c.closes() != 5) { return 4; }
+    borrow c.lock().value().b as nb { nb = nb + 28; }                    // a field path through the guard: b = 38
+    if (c.mints() != 6 || c.closes() != 6) { return 5; }
+    return cast<uint8>(c.sum());                                         // 4 + 38
+}

@@ -450,6 +450,12 @@ A host is a **place** or a **mint**, and nothing else:
   open (`DynamicArray` grants three), and a mint takes no arguments — narrow by deriving off the alias with <!-- xfail: borrow_mint_takes_args -->
   `.slice(…)` inside the window, which is free.
 
+- **A place reached through a view that closes its window** — `borrow hits.lock().value() as m` — is one window: the <!-- test: borrow_closing_chain -->
+  window makes the view once, holds it, and closes it when the window closes (*A view that closes its window*,
+  below), so the place is held exactly as long as the view that reaches it. The mint's receiver is frozen as a
+  mint's is. One window closes one view, so a host reaches through at most one, and a place reached this way may <!-- xfail: borrow_closing_chain_two_mints, borrow_closing_chain_return_place -->
+  not be returned.
+
 Refused, each with its own sentence and no cascade after it: **a bare local** (`borrow a as v` — `a` already names <!-- xfail: borrow_bare_host -->
 its place), and **a value**: a call that returns one, or a field of one (`mk().x`), which nothing holds beyond the <!-- xfail: borrow_place_value_call, borrow_place_value_fn, borrow_place_temporary -->
 statement — bind it to a local first.

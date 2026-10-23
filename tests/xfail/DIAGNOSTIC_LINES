@@ -96,6 +96,12 @@ bitcast_nonscalar	bitcast_nonscalar.kama:6:18 bitcast_nonscalar.kama:7:23
 bitcast_width	bitcast_width.kama:5:16
 borrow_alias_reseat	borrow_alias_reseat.kama:15:8
 borrow_bare_host	borrow_bare_host.kama:12:4
+borrow_closing_chain_const_receiver	borrow_closing_chain_const_receiver.kama:29:30
+borrow_closing_chain_reseat	borrow_closing_chain_reseat.kama:29:93
+borrow_closing_chain_return_place	borrow_closing_chain_return_place.kama:30:62
+borrow_closing_chain_temp_receiver	borrow_closing_chain_temp_receiver.kama:30:18
+borrow_closing_chain_twice	borrow_closing_chain_twice.kama:29:40
+borrow_closing_chain_two_mints	borrow_closing_chain_two_mints.kama:27:4
 borrow_element_alias_index_write	borrow_element_alias_index_write.kama:12:48
 borrow_element_view_assign	borrow_element_view_assign.kama:13:32
 borrow_element_view_grow	borrow_element_view_grow.kama:12:32

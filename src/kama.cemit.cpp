@@ -6133,6 +6133,8 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* v = dynamic_cast<InvocationNode*>(n)) {
         // KR-124 — a view that closes its window exists only as a `borrow` alias, which `emitBorrow` mints itself.
         // Made anywhere else (`c.begin().commit()`) nothing would ever close it, so its destructor would not run.
+        auto cmt = _closingMintTemps.find(v);   // a closing mint a `borrow` already made (KR-226): its temporary
+        if (cmt != _closingMintTemps.end()) return cmt->second;
         if (!_closingViewReturnOK && !_probingTemplate && v->line != _closingViewRefusedLine) {
             const std::string rc = callReturnTypeRaw(v);
             if (closesWindowCType(rc)) {
@@ -7177,9 +7179,56 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 unsupported(("`borrow` cannot tell what `" + unparseExpr(host) + "` is, so it cannot name it").c_str(), bn);
             return false;
         }
+        // A place reached THROUGH a closing mint (KR-226): `borrow hits.lock().value() as m` is one window. The mint runs
+        // once, here, into a temporary the window owns, so its destructor closes the window on every path out — after
+        // the body's own locals, as an alias's does — and the place is computed from that temporary. Through 0.9.729
+        // the host was refused as "a value", and naming the payload took a second window over the guard's alias.
+        int mints = 0;
+        InvocationNode* cm = closingMintIn(host, &mints);
+        if (mints > 1) {
+            unsupported(("`" + unparseExpr(host) + "` reaches through " + std::to_string(mints) + " views that close their "
+                         "windows, and one window closes one — open a `borrow` for each").c_str(), bn);
+            return false;
+        }
+        const InvocationNode* mintNode = nullptr;
+        if (cm) {
+            auto* cma = dynamic_cast<MemberAccessNode*>(cm->expression.get());
+            const std::string mint = (cma && cma->identifier && cma->identifier->value) ? *cma->identifier->value : "?";
+            SharedExpression mrecv = cma ? cma->expression : nullptr;
+            const std::string mcls = mrecv ? exprClass(mrecv) : std::string();
+            MethodInfo* mmi = (!mcls.empty() && _classes.count(mcls)) ? findMethod(&_classes[mcls], mint, nullptr) : nullptr;
+            if (cm->args && !cm->args->empty()) {
+                unsupported(("a mint takes no arguments, so `" + mint + "(…)` cannot open a window — mint it bare and "
+                             "reach the place through it").c_str(), bn);
+                return false;
+            }
+            if (!mmi || !grantedMint(_classes[mcls], mint)) {
+                unsupported(("`" + unparseExpr(mrecv) + "." + mint + "()` closes a window, so only a granted mint may make "
+                             "one — implement a `@viewable` contract carrying `" + mint + "()`").c_str(), bn);
+                return false;
+            }
+            if (!mmi->isConst && isConstReceiver(mrecv)) {
+                unsupported(("cannot call non-const method `" + mint + "` on a const receiver — `" + unparseExpr(mrecv)
+                             + "` is read-only here").c_str(), bn);
+                return false;
+            }
+            const std::string gct = cTypeInInstance(mcls, mmi->returnType);
+            const std::string tmp = "kama_win" + std::to_string(_tempCounter++);
+            bool mh = _hoistOK; _hoistOK = true;
+            const std::string recvC = emitExpression(mrecv);
+            _hoistOK = mh;
+            flushHoisted(depth + 1);
+            indent(depth + 1);
+            *_out << gct << " " << tmp << " = " << mmi->cName << "(&(" << recvC << "));\n";
+            _scopes.back().locals.push_back({ tmp, gct, /*userName=*/false });
+            recordDestructibleOwner(tmp, gct);
+            _closingMintTemps[cm] = tmp;
+            mintNode = cm;
+        }
         bool ph = _hoistOK; _hoistOK = true;   // an argument's temporary lives for the window (its scope owns it)
         const std::string placeC = emitPlace(host);
         _hoistOK = ph;
+        if (mintNode) _closingMintTemps.erase(mintNode);
         flushHoisted(depth + 1);
         indent(depth + 1);
         *_out << ct << "* " << kName(alias) << " = (" << ct << "*)&(" << placeC << ");\n";
@@ -9180,7 +9229,19 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
             // builtin privileged over user code.
             bool aliasStatic = false;
             const std::string owner = retExpr ? refReturnRoot(retExpr, aliasStatic) : root;
-            if (!rootHasStaticStorage(retExpr) && !aliasStatic && owner != "this" && !_refParams.count(owner))
+            // A place a window reached through a view that closes it (KR-226) is held only until the window closes: a
+            // lock guard's payload, a transaction's row. Said as that, not as a local.
+            SharedExpression closedHost;
+            if (auto* rid = dynamic_cast<IdentifierNode*>(retExpr ? retExpr.get() : nullptr))
+                if (rid->value) {
+                    auto op = _refBindingOperand.find(*rid->value);
+                    if (op != _refBindingOperand.end() && op->second && closingMintIn(op->second, nullptr)) closedHost = op->second;
+                }
+            if (closedHost)
+                unsupported(("`" + unparseExpr(retExpr) + "` is `" + unparseExpr(closedHost) + "`, reached through a view "
+                             "whose window closes when this returns — the place is held only inside it. Return a copy "
+                             "of what it holds, or do the work inside the window").c_str(), n);
+            else if (!rootHasStaticStorage(retExpr) && !aliasStatic && owner != "this" && !_refParams.count(owner))
                 unsupported("a `ref T` result must borrow `this`, a `ref` parameter, or static storage — "
                             "returning a place into a local would dangle", n);
             // The mirror of checkConstPlaceReturn, one step later: a WRITABLE place may not be minted from
@@ -27435,11 +27496,34 @@ bool CEmitter::borrowHostIsTemporary(SharedExpression e)
     if (auto* ma = dynamic_cast<MemberAccessNode*>(n)) return !ma->expression || borrowHostIsTemporary(ma->expression);
     if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) return ea->expression ? borrowHostIsTemporary(ea->expression) : false;
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
-        if (!invocationReturnsPlace(inv)) return true;   // a value: nothing names it
+        if (!invocationReturnsPlace(inv)) {
+            // ...except a CLOSING mint (KR-226): the window holds the view it makes, so a place reached through it —
+            // `hits.lock().value()` — is rooted in what the window holds, and the mint's receiver is what it borrows.
+            auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
+            if (ma && ma->expression && closesWindowCType(callReturnTypeRaw(inv))) return borrowHostIsTemporary(ma->expression);
+            return true;                                  // a value: nothing names it
+        }
         if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) return borrowHostIsTemporary(ma->expression);
         return false;                                     // a free `fn ref`: its place is in its arguments or static
     }
     return true;
+}
+
+InvocationNode* CEmitter::closingMintIn(SharedExpression host, int* count)
+{
+    InvocationNode* found = nullptr;
+    int n = 0;
+    for (SharedExpression e = host; e; ) {
+        if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
+            if (!invocationReturnsPlace(inv) && closesWindowCType(callReturnTypeRaw(inv))) { if (!found) found = inv; ++n; }
+            auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
+            e = ma ? ma->expression : nullptr;
+        } else if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) e = ma->expression;
+        else if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) e = ea->expression;
+        else break;
+    }
+    if (count) *count = n;
+    return found;
 }
 
 // the root identifier a write ultimately targets, for deep-const checks.
@@ -43866,11 +43950,14 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // (previously excluded → leak) and correctly excludes a `fn ref T` free fn (previously included →
         // would double-free). Pure RAII scope-drop; no lifetime analysis.
         InvocationNode* riv = dynamic_cast<InvocationNode*>(receiver.get());
+        auto cmt = riv ? _closingMintTemps.find(riv) : _closingMintTemps.end();   // KR-226: the window's own guard
         // A ternary is fresh unless an arm names a value, which makes it a place (isNamedValue).
         bool byValueRvalue = dynamic_cast<BinaryExpressionNode*>(receiver.get())
                              || (riv && !invocationReturnsPlace(riv))
                              || (dynamic_cast<TernaryExpressionNode*>(receiver.get()) && !isNamedValue(receiver.get()));
-        if (_hoistOK && byValueRvalue && _classes.count(cls) && _classes[cls].destructible) {
+        if (cmt != _closingMintTemps.end()) {
+            recvPtr = "&" + cmt->second;
+        } else if (_hoistOK && byValueRvalue && _classes.count(cls) && _classes[cls].destructible) {
             std::string t = "kama_recv" + std::to_string(_tempCounter++);
             std::string ct = hoistCtorIfInline(receiver);                 // inline ctor -> its own temp init
             if (!ct.empty()) { recordDestructibleLocal(ct, cls); recvPtr = "&" + ct; }

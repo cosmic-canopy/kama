@@ -1,0 +1,29 @@
+// One window closes one view (KR-226): a place reached through two closing mints would need two windows to close.
+@viewable type contract Guards<G> for resource { fn G lock(); }
+type view Inner {
+    UnsafePtr<int32> p;
+    unsafe ctor over(UnsafePtr<int32> p) { this.p = p; }
+    public unsafe fn ref int32 value() { return this.p[0]; }
+    unsafe ~Inner() { }
+}
+type resource Leaf implements Guards<Inner> {
+    InlineArray<int32>#(1) n;
+    public ctor make() { this.n = [0; 1]; }
+    public unsafe fn Inner lock() { return Inner.over(p: addr(of: this.n[0])); }
+}
+type view Outer {
+    UnsafePtr<Leaf> leaf;
+    unsafe ctor over(UnsafePtr<Leaf> leaf) { this.leaf = leaf; }
+    public unsafe fn ref Leaf inner() { return this.leaf[0]; }
+    unsafe ~Outer() { }
+}
+type resource Root implements Guards<Outer> {
+    Leaf l;
+    public ctor make() { this.l = Leaf.make(); }
+    public unsafe fn Outer lock() { return Outer.over(leaf: addr(of: this.l)); }
+}
+fn uint8 main() {
+    Root r = Root.make();
+    borrow r.lock().inner().lock().value() as m { m = 1; }
+    return 0;
+}

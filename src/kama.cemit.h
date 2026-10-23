@@ -4140,6 +4140,10 @@ private:
     // is rooted in no named storage at all.
     void borrowHostRoots(SharedExpression host, std::vector<std::vector<std::string>>& out);
     bool borrowHostIsTemporary(SharedExpression host);
+    // The closing mint a `borrow` place host reaches through — `hits.lock()` in `hits.lock().value()` — and how many
+    // it reaches (KR-226). The window holds the view it makes in a temporary, named here while the host is emitted.
+    InvocationNode* closingMintIn(SharedExpression host, int* count);
+    std::map<const InvocationNode*, std::string> _closingMintTemps;
     const std::vector<ParamSig>* placeCallParams(InvocationNode* inv, bool* constPlace = nullptr);        // the root identifier a write targets
     // The PLACE a expression designates: the base binding plus its chain of field names. This is the
     // whole safety core of the view model — see `placesConflict`. Not `const`: resolving a bare field

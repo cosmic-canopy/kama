@@ -1,0 +1,29 @@
+// The mint's receiver is frozen for the window (KR-226): reseating it would drop the cell the guard holds.
+import { std::collections::DynamicArray };
+
+@viewable type contract Guards<G> for resource { fn G lock(); }
+
+@generate(zero) type value Pair { public int32 a; public int32 b; }
+
+// The cell: [0] mints, [1] closes; the payload beside it.
+type view Guard {
+    UnsafePtr<int32> counts;
+    UnsafePtr<Pair> payload;
+    unsafe ctor over(UnsafePtr<int32> counts, UnsafePtr<Pair> payload) {
+        this.counts = counts; this.payload = payload;
+        this.counts[0] = this.counts[0] + 1;
+    }
+    public unsafe fn ref Pair value() { return this.payload[0]; }
+    unsafe ~Guard() { this.counts[1] = this.counts[1] + 1; }
+}
+
+type resource Cell implements Guards<Guard> {
+    InlineArray<int32>#(2) counts;
+    Pair p;
+    public ctor make() { this.counts = [0; 2]; this.p = Pair.zero(); }
+    public unsafe fn Guard lock() { return Guard.over(counts: addr(of: this.counts[0]), payload: addr(of: this.p)); }
+    public const fn int32 mints() { return this.counts[0]; }
+    public const fn int32 closes() { return this.counts[1]; }
+    public const fn int32 sum() { return this.p.a + this.p.b; }
+}
+fn uint8 main() { Cell c = Cell.make(); borrow c.lock().value() as m { Cell d = Cell.make(); c = give d; } return 0; }
