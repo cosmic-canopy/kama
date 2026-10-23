@@ -1,1 +1,1 @@
-`w` binds a view, and the `match` subject it comes from is a view of storage that nothing bounds
+`d` is held still by this `match` arm, whose binding `w`

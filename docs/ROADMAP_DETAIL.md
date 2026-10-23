@@ -451,38 +451,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-match-window"></a>
-
-### A container lookup that returns an `Optional` of a view can be declared but not used (KR-234)
-
-Probed on `0.9.726`:
-
-```kama fragment
-type resource Shelf { DynamicArray<int32> xs; …
-    public const fn Optional<ConstView<int32>> find(int32 k) { … return Optional::Some(value: this.xs.view()); } }
-
-match (s.find(k: 1)) { case Some(value: v): { … } case None: { } };   // refused: the subject is unbounded
-Optional<ConstView<int32>> o = s.find(k: 1);                          // refused: the window rule
-borrow s.find(k: 1) as o { … }                                        // refused: a mint takes no arguments
-```
-
-The declaration is sound, since it roots at `this`, so passing the result straight to a function works. What has no
-spelling is taking it apart. A `borrow` mint is nullary by design (`xfail/borrow_mint_takes_args`), because narrowing
-is done by deriving off the alias. A lookup does not narrow; it selects.
-
-**What others do.**
-- Rust: `if let Some(v) = map.get(&k) { … }`. The borrow lives for the body, and the map is frozen there.
-- Swift: `if let v = dict[k]` copies the value.
-- C#: `TryGetValue(k, out var v)` copies; `CollectionsMarshal.GetValueRefOrNullRef` hands out an unchecked `ref`.
-
-**Recommendation: a `match` whose subject is a call yielding a view enum is a window over that call's roots.** It
-freezes them for the `match`, as a `foreach` freezes its operand (*The window*: "`foreach` and `parallel_for` are the
-same window under a different spelling"). Its bindings take the window's depth.
-- No new syntax, and `match` stays the one way to take an enum apart.
-- The roots are `viewRootPlaces(subject)`, already computed.
-
-The other answer, letting `borrow` take a lookup with arguments, makes two constructs for one job. Size S.
-
 <a id="s2-contract-local-handle"></a>
 
 ### A contract local over a handle's pointee is refused (KR-235)

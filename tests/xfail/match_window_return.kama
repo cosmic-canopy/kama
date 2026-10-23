@@ -1,0 +1,18 @@
+// An arm's view binding is as returnable as its subject, and a lookup on a local roots at that local (KR-234).
+import { std::collections::ConstView, std::collections::DynamicArray };
+type resource Shelf {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); }
+    public fn void put(int32 v) { this.xs.add(item: v); }
+    public const fn Optional<ConstView<int32>> find(int32 k) {
+        if (this.xs.length() > 0) { return Optional::Some(value: this.xs.view()); }
+        return Optional::None;
+    }
+}
+fn ConstView<int32> first(ConstView<int32> d) {
+    Shelf t = Shelf.make();
+    t.put(v: 1);
+    match (t.find(k: 1)) { case Some(value: v): { return v; } case None: { } };
+    return d;
+}
+fn uint8 main() { return 0; }

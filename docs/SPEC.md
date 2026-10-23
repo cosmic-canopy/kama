@@ -535,6 +535,23 @@ m.values())` freezes `m`, and an element operand is iterated where it lives and 
 `ref` binding (that is what `foreach (ref …)` is *for*), and any disjoint container or sibling field. The
 mods counter remains as defense in depth for the `unsafe`/FFI paths that no static rule sees.
 
+**So is a `match` arm that binds a view of a lookup.** A container may return an `Optional` view (`public const fn <!-- test: match_view_window -->
+Optional<ConstView<int32>> find(int32 k)`), and `match (s.find(k: 1))` takes it apart: an arm that binds the view
+holds the subject's roots — here `s` — still for that arm, its binding takes the arm's depth (rule 4), so it is <!-- xfail: match_window_frozen_write, match_window_give_root, match_window_ref_root, match_window_reseat -->
+stored nowhere outside the arm, and it is as returnable as the subject (a lookup on a `ref` parameter, yes; on a <!-- xfail: match_window_store_out, match_window_return, match_window_value_view -->
+local, no). An arm that binds no view holds nothing, since the subject is reachable only through an arm's bindings, so
+lookup-or-insert is one `match`:
+
+```kama fragment
+match (s.find(k: key)) {
+    case Some(value: v): { use(v: v); }         // `s` is held still here
+    case None:           { s.put(v: fresh); }   // and may grow here
+};
+```
+
+Rust's NLL accepts the same shape (`match map.get_mut(&k) { Some(v) => …, None => { map.insert(…); } }`). A subject
+behind a `Shared` gets the arm the runtime access a window gets. <!-- test: match_view_window_shared_write -->
+
 - Obtain one from a container: `DynamicArray`/`FixedArray`/`InlineArray` expose **`view()`** (whole) and
   **`slice(from:, count:)`** (bounds-checked sub-range), both `const fn`, minting the read-only
   **`ConstView<T>`** — so a `const ref` container can open a window — and **`viewMut()`**/**`sliceMut()`**,
@@ -678,8 +695,8 @@ fn uint8 main() {
   as a field or a payload; and a view field handed out as a mutable place (`fn ref ConstView<uint8> …`), <!-- xfail: view_field_place_return -->
   through which it could be reseated where rule 4 cannot see.
 - **An enum of a view** passes by value only, as a view does, and a `match` binds its payload as a view rooted <!-- xfail: view_enum_ref_param, view_match_unbounded_subject -->
-  where the subject roots — copied out, never read in place — so a subject nothing bounds gives a binding nothing
-  bounds. Its other cases may own: `Result<ConstView<uint8>, Owned<Error>>` is kama's own error convention, and
+  where the subject roots — copied out, never read in place. Over a subject nothing else bounds, a lookup such as
+  `match (s.find(k: 1))`, an arm that binds the view is a window (*The window*, below). Its other cases may own: `Result<ConstView<uint8>, Owned<Error>>` is kama's own error convention, and
   it is moved and drops its `Err` exactly once, as any enum does. A user enum with a view case is no collection <!-- xfail: view_enum_in_collection, view_enum_store_shorter_window -->
   element, and its stores obey rule 4.
 

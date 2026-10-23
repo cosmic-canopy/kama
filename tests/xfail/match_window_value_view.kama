@@ -1,0 +1,20 @@
+// A `match` that yields a view of what its arm held still would outlive that hold: the arm window closes with the arm.
+import { std::collections::ConstView, std::collections::DynamicArray };
+type resource Shelf {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); }
+    public fn void put(int32 v) { this.xs.add(item: v); }
+    public const fn Optional<ConstView<int32>> find(int32 k) {
+        if (this.xs.length() > 0) { return Optional::Some(value: this.xs.view()); }
+        return Optional::None;
+    }
+}
+fn uint8 main() {
+    Shelf s = Shelf.make();
+    s.put(v: 3);
+    int32 r = 0;
+    ConstView<int32> w = match (s.find(k: 1)) { case Some(value: v): v; case None: { return 1; } };
+    s.put(v: 5);
+    r = w[0];
+    return cast<uint8>(r);
+}

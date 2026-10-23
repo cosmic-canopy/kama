@@ -1481,6 +1481,9 @@ private:
     // the `fn ref` return check judges what the alias points into (KR-180: `foreach (ref e in local) { return
     // e; }` passed as if `e` were a `ref` parameter, and handed back a place inside a dead local).
     std::map<std::string, SharedExpression> _refBindingOperand;
+    // A view binding of a `match` arm that holds its subject's roots still (KR-234) -> that subject: it is as returnable
+    // as the subject, which `return s.find(k: 1)` already is for a `ref` parameter `s` (isSafeViewRoot).
+    std::map<std::string, SharedExpression> _viewBindingOperand;
     // A binding whose declaration was refused with its own sentence (a `borrow` alias over a host that is no place):
     // a use of it in the body is not a second mistake, so "cannot resolve" says nothing about it. Window-scoped.
     std::set<std::string> _refusedBindings;
@@ -2296,6 +2299,11 @@ private:
                                         // which the arm was proven not to write, frozen so a write that proof
                                         // missed is a compile error rather than a changed binding.
                                         bool fromMatch = false;
+                                        // A `match` arm binding a view of a subject nothing else bounds (KR-234):
+                                        // the subject's roots, held still for that arm only — an arm binding none
+                                        // may change them (`case None: { s.put(…) }`). Not a `borrow` window, so a
+                                        // caller-bounded view declared in the arm stays returnable.
+                                        bool fromMatchWindow = false;
                                         // A `borrow` of a PLACE (KR-123): the alias points at that place, it is no
                                         // view, so assigning to it writes through it rather than reseating it.
                                         bool placeAlias = false; };

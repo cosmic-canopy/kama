@@ -1,12 +1,12 @@
-// A `match` binds a view payload as a view local rooted where the subject roots (KR-225 decision 4), so a subject
-// nothing bounds gives a binding nothing bounds: here `d` grows under `w`.
+// A `match` binds a view payload as a view local rooted where the subject roots (KR-225 decision 4), and an arm that
+// binds one over a subject nothing else bounds holds the subject's roots still (KR-234): here `d` would grow under `w`.
 import { std::collections::DynamicArray, std::collections::ConstView };
 fn uint8 main() {
     DynamicArray<uint8> d = DynamicArray.withCapacity(capacity: 1);
     d.add(item: 1);
     uint8 r = 0;
     match (Optional::Some(value: d.view())) {
-        case Some(value: w): { d.add(item: 2); d.add(item: 3); r = w[0]; }
+        case Some(value: w): { d.add(item: 2); r = w[0]; }
         case None: { }
     };
     return r;

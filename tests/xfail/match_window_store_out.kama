@@ -1,0 +1,18 @@
+// The arm's view binding outlives nothing past the arm: a view declared outside it may not hold it (KR-234).
+import { std::collections::ConstView, std::collections::DynamicArray };
+type resource Shelf {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); }
+    public fn void put(int32 v) { this.xs.add(item: v); }
+    public const fn Optional<ConstView<int32>> find(int32 k) {
+        if (this.xs.length() > 0) { return Optional::Some(value: this.xs.view()); }
+        return Optional::None;
+    }
+}
+fn int32 f(ConstView<int32> p, ref Shelf s) {
+    ConstView<int32> outer = p;
+    match (s.find(k: 1)) { case Some(value: v): { outer = v; } case None: { } };
+    s.put(v: 9);
+    return outer[0];
+}
+fn uint8 main() { return 0; }

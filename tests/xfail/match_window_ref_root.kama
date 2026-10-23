@@ -1,0 +1,19 @@
+// A `ref` argument naming the subject's root is a write to it: `grow` may realloc the buffer `v` views (KR-234).
+import { std::collections::ConstView, std::collections::DynamicArray };
+type resource Shelf {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); }
+    public fn void put(int32 v) { this.xs.add(item: v); }
+    public const fn Optional<ConstView<int32>> find(int32 k) {
+        if (this.xs.length() > 0) { return Optional::Some(value: this.xs.view()); }
+        return Optional::None;
+    }
+}
+fn void grow(ref Shelf s) { s.put(v: 1); }
+fn uint8 main() {
+    Shelf s = Shelf.make();
+    s.put(v: 3);
+    int32 r = 0;
+    match (s.find(k: 1)) { case Some(value: v): { grow(s: ref s); r = v[0]; } case None: { } };
+    return cast<uint8>(r);
+}

@@ -848,6 +848,13 @@ match_statement_no_semicolon	match_statement_no_semicolon.kama:5:0
 match_subject_not_enum	match_subject_not_enum.kama:11:14
 match_ternary_arg_kind	match_ternary_arg_kind.kama:6:14 match_ternary_arg_kind.kama:6:26 match_ternary_arg_kind.kama:7:26
 match_ternary_arg_narrow	match_ternary_arg_narrow.kama:10:26 match_ternary_arg_narrow.kama:9:14 match_ternary_arg_narrow.kama:9:26
+match_window_frozen_write	match_window_frozen_write.kama:17:50
+match_window_give_root	match_window_give_root.kama:17:50
+match_window_ref_root	match_window_ref_root.kama:17:50
+match_window_reseat	match_window_reseat.kama:16:74
+match_window_return	match_window_return.kama:15:50
+match_window_store_out	match_window_store_out.kama:14:50
+match_window_value_view	match_window_value_view.kama:16:4
 maxdepth_bad_arg	maxdepth_bad_arg.kama:2:0
 maxdepth_missing	maxdepth_missing.kama:3:0
 maxdepth_over_ceiling	maxdepth_over_ceiling.kama:4:0
@@ -1469,7 +1476,7 @@ view_local_from_method	view_local_from_method.kama:16:4
 view_local_inline_array	view_local_inline_array.kama:7:4
 view_local_ternary_root	view_local_ternary_root.kama:10:4
 view_local_unbounded	view_local_unbounded.kama:9:4
-view_match_unbounded_subject	view_match_unbounded_subject.kama:9:0
+view_match_unbounded_subject	view_match_unbounded_subject.kama:9:31
 view_optional_field	view_optional_field.kama:4:0
 view_out_param	view_out_param.kama:7:0
 view_owns	view_owns.kama:3:0

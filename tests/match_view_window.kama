@@ -1,0 +1,84 @@
+// A `match` over a lookup that returns a view enum is a window (KR-234): `match (s.find(k: 1))` roots at `s`, and an arm
+// that binds the view holds `s` still for that arm, as a `foreach` holds its operand; an arm that binds none may change
+// it, so lookup-or-insert is one `match` — the shape Rust's NLL accepts. Through 0.9.728 the `match` was refused, and a
+// container lookup returning an `Optional` view could be declared but not taken apart. Returns 42.
+import { std::collections::ConstView, std::collections::DynamicArray, std::memory::Shared };
+
+type resource Shelf {
+    DynamicArray<int32> xs;
+    DynamicArray<string> names;
+    public ctor make() { this.xs = DynamicArray.empty(); this.names = DynamicArray.empty(); }
+    public fn void put(int32 v) { this.xs.add(item: v); }
+    public fn void name(string n) { this.names.add(item: give n); }
+    // The window's view, or none for an empty shelf.
+    public const fn Optional<ConstView<int32>> find(int32 k) {
+        if (this.xs.length() > 0) { return Optional::Some(value: this.xs.view()); }
+        return Optional::None;
+    }
+    // A lookup by a `const ref string` key: a literal argument's temporary outlives the arm that reads the view.
+    public const fn Optional<ConstView<int32>> named(const ref string n) {
+        foreach (const ref string e in this.names) { if (e == n) { return Optional::Some(value: this.xs.view()); } }
+        return Optional::None;
+    }
+    // Inside a method: the window is over `this`.
+    public fn int32 firstOrInsert() {
+        return match (this.find(k: 1)) {
+            case Some(value: v): v[0];
+            case None: { this.put(v: 9); := 9; }
+        };
+    }
+}
+
+// Lookup-or-insert: the `None` arm binds no view, so it may grow the shelf.
+fn int32 getOrPut(ref Shelf s, int32 dflt) {
+    match (s.find(k: 1)) {
+        case Some(value: v): { return v[0]; }
+        case None: { s.put(v: dflt); }
+    };
+    return dflt;
+}
+
+// The arm's binding is as returnable as the subject: `s` is a `ref` parameter, so the caller holds it still.
+fn ConstView<int32> firstRow(ref Shelf s, ConstView<int32> fallback) {
+    return match (s.find(k: 1)) { case Some(value: v): v; case None: fallback; };
+}
+
+fn uint8 main() {
+    Shelf s = Shelf.make();
+    int32 r = getOrPut(s: ref s, dflt: 5);                     // inserted: 5
+    r = r + getOrPut(s: ref s, dflt: 99);                      // found: 5
+    s.put(v: 6);
+    // A value-producing `match`, and a derive off the binding inside the arm.
+    int32 second = match (s.find(k: 1)) {
+        case Some(value: v): { ConstView<int32> tail = v.slice(from: 1, count: 1); := tail[0]; }
+        case None: 0;
+    };
+    r = r + second;                                             // 6
+    // In a loop, the window opens and closes per iteration; the shelf grows between them.
+    int32 i = 0;
+    while (i < 3) {
+        match (s.find(k: 1)) { case Some(value: v): { r = r + cast<int32>(v.length()) - 2; } case None: { } };
+        s.put(v: i);
+        i = i + 1;
+    }                                                           // 0 + 1 + 2 = 3
+    s.name(n: "row");
+    match (s.named(n: "row")) { case Some(value: v): { r = r + v[0]; } case None: { r = 0; } };   // 5
+    Shelf e = Shelf.make();
+    r = r + e.firstOrInsert() + e.firstOrInsert() - 18;         // inserted 9, then found 9: 0
+    DynamicArray<int32> other = DynamicArray.empty();
+    other.add(item: 4);
+    borrow other.view() as fb { r = r + firstRow(s: ref s, fallback: fb)[0] + firstRow(s: ref e, fallback: fb)[0] - 14; }   // 5 + 9 - 14
+    // Through a `Shared`: a read through a second handle inside the arm is fine (the arm's access is a read).
+    Shared<Shelf> a = new Shelf.make();
+    a.put(v: 8);
+    Shared<Shelf> b = a;
+    match (a.find(k: 1)) {
+        case Some(value: v): { int32 w0 = match (b.find(k: 1)) { case Some(value: w): w[0]; case None: 0; }; r = r + v[0] + w0 - 16; }
+        case None: { }
+    };                                                          // 8 + 8 - 16
+    // An element's lookup roots at its container (`shelves[…]`).
+    DynamicArray<Shelf> shelves = DynamicArray.empty();
+    shelves.add(item: give e);
+    match (shelves[0].find(k: 1)) { case Some(value: v): { r = r + v[0] - 9; } case None: { } };   // 0
+    return cast<uint8>(r + 18);                                 // 5 + 5 + 6 + 3 + 5 + 18 = 42
+}

@@ -1,0 +1,24 @@
+// KR-211 in a `match` arm that holds its subject still (KR-234): `a.find` views the shelf `a` and `b` both hold, and the
+// arm grows it through `b`, which no static freeze over `a` can see. The arm's access over `a`'s value traps the write
+// before the buffer `v` views is freed.
+import { std::memory::Shared, std::collections::DynamicArray, std::collections::ConstView };
+type resource Shelf {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); }
+    public fn void put(int32 v) { this.xs.add(item: v); }
+    public const fn Optional<ConstView<int32>> find(int32 k) {
+        if (this.xs.length() > 0) { return Optional::Some(value: this.xs.view()); }
+        return Optional::None;
+    }
+}
+fn uint8 main() {
+    Shared<Shelf> a = new Shelf.make();
+    a.put(v: 7);
+    Shared<Shelf> b = a;
+    int32 r = 0;
+    match (a.find(k: 1)) {
+        case Some(value: v): { for (int32 i = 0; i < 64; i++) { b.put(v: i); } r = v[0]; }
+        case None: { }
+    };
+    return cast<uint8>(r);
+}

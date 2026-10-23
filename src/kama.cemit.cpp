@@ -20920,6 +20920,10 @@ void CEmitter::markMoved(const std::string& cVar)
         unsupported(("cannot `give` `" + cVar + "` — the child `spawn`ed at line " + std::to_string(f->line)
                      + " borrows it until this `scope` joins it, and moving it would take that storage out "
                        "from under the child; move it after the `scope`").c_str(), _curLine);
+    else if (f && f->fromMatchWindow)
+        unsupported(("cannot `give` `" + cVar + "` — this `match` arm holds it still while its binding `" + f->alias
+                     + "` views it, and moving it would take that storage with it; move it in an arm that binds no "
+                       "view, or after the `match`").c_str(), _curLine);
     else if (f)
         unsupported(("cannot `give` `" + cVar + "` — it is frozen by the enclosing `borrow` (opened at "
                      "line " + std::to_string(f->line) + " as `" + f->alias + "`), and moving it would "
@@ -27877,6 +27881,7 @@ void CEmitter::checkViewStore(SharedExpression lhs, SharedExpression rhs, bool p
     std::string win = "a `borrow` window", at;
     for (auto& f : _scopes[got].frozen)
         if (f.fromBorrow && !f.placeAlias) { win = "the `borrow` window `" + f.alias + "`"; at = std::to_string(f.line); break; }
+        else if (f.fromMatchWindow) { win = "the `match` arm that binds `" + f.alias + "`"; at = std::to_string(f.line); break; }
     const bool param = _viewParams.count(nm) > 0;
     unsupported(("`" + nm + "` outlives what this stores into it: the view roots in " + win
                  + (at.empty() ? std::string() : " (opened at line " + at + ")") + ", which closes before `" + nm
@@ -28041,6 +28046,13 @@ bool CEmitter::rejectFrozenWrite(SharedExpression target, int line)
                      + placeText(p) + "` after the `match`").c_str(), line);
         return true;
     }
+    if (f->fromMatchWindow) {
+        unsupported(("`" + placeText(p) + "` is held still by this `match` arm, whose binding `" + f->alias + "` (line "
+                     + std::to_string(f->line) + ") is a view into it — growing or reseating it would leave `" + f->alias
+                     + "` dangling. Change it in an arm that binds no view (`case None: { … }`), or after the `match`; "
+                       "reading it, and writing a DISJOINT sibling field, stay legal").c_str(), line);
+        return true;
+    }
     if (f->placeAlias) {
         unsupported(("`" + placeText(p) + "` is held by the enclosing `borrow` (opened at line " + std::to_string(f->line)
                      + "), which names a place in it as `" + f->alias + "` — writing it could move or free that place "
@@ -28082,6 +28094,8 @@ std::string CEmitter::borrowArgRoot(SharedExpression e) const
 bool CEmitter::isSafeViewRoot(const std::string& root) const
 {
     if (root == "this" || _viewParams.count(root) > 0) return true;
+    auto vb = _viewBindingOperand.find(root);   // an arm-window view binding (KR-234): what its subject roots at
+    if (vb != _viewBindingOperand.end()) return vb->second && isSafeViewRoot(viewReturnRoot(vb->second));
     if (!_refParams.count(root)) return false;
     // A `foreach (ref …)`, borrowing-`match` or `borrow`-place binding is in `_refParams` too, and it is no parameter:
     // it aliases its OPERAND, so a view of it is exactly as returnable as that operand is. Through 0.9.720 every such
@@ -28238,6 +28252,24 @@ std::string CEmitter::viewReturnRoot(SharedExpression e) const
                 }
             }
         return "";                                                      // unknown call form -> reject
+    }
+    // A value-producing `match` yields one of its arms: an arm yielding its own payload binding roots where the subject
+    // does (KR-234 — the arm held the subject still), any other where its expression does. The first unsafe one decides.
+    if (auto* mt = dynamic_cast<MatchNode*>(e.get())) {
+        std::string safe;
+        if (mt->arms)
+            for (auto& a : *mt->arms) {
+                if (!a || !a->body) continue;
+                std::string r;
+                auto* bid = dynamic_cast<IdentifierNode*>(a->body.get());
+                bool payload = false;
+                if (bid && bid->value && a->bindings)
+                    for (auto& b : *a->bindings) if (b && *b == *bid->value) payload = true;
+                r = payload ? viewReturnRoot(mt->subject) : viewReturnRoot(a->body);
+                if (!isSafeViewRoot(r)) return r;
+                if (safe.empty()) safe = r;
+            }
+        return safe;
     }
     return rootBinding(e);                                              // bare view local/param
 }
@@ -32131,6 +32163,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         // Fresh arm scope; bind the payload fields (borrowed copies — same as a foreach element).
         Scope sc; _scopes.push_back(sc);          // owns the arm's payload bindings — popScope retires them
         std::vector<std::string> borrowedHere;    // owning bindings marked non-giveable for this arm
+        bool armWindow = false;                   // KR-234: this arm holds the subject's roots still (below)
+        std::vector<std::string> windowedHere;    // ...and its view bindings, retired with the arm
         bool defusedSubject = false;              // this consumed arm moved an owning payload out of the subject
         if (a->bindings && !a->bindings->empty()) {
             // A pattern binds by FIELD NAME (`case Rect(w: width, h: height)`), never by position. Resolve
@@ -32221,13 +32255,53 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // arm's end, and the subject's own payload must not be.
                 // A VIEW payload is a view local rooted where the subject roots (KR-225 decision 4): copied out — two
                 // words — and never read in place, which would make it a `ref` binding the return rule reads as a
-                // parameter. A subject nothing bounds gives a binding nothing bounds.
+                // parameter.
+                //
+                // A subject nothing else bounds — a lookup, `match (s.find(k: 1))`, which roots at `s` — makes THIS ARM a
+                // window over the subject's roots (KR-234), as a `foreach` is over its operand: they are frozen for the
+                // arm, and its view bindings take the arm's depth, so none is stored outside it or returned. Only an arm
+                // that binds a view: the subject is reachable only through the arm's own bindings, so `case None: {
+                // s.put(…) }` may change `s` — Rust's NLL accepts the same lookup-or-insert. Through 0.9.728 the arm was
+                // refused, and a container lookup returning an `Optional` view could be declared but not taken apart.
                 if (!discard && isViewCType(bcty) && !closesWindowCType(bcty)) {
                     const int sd = viewDepthOf(m->subject);
-                    if (sd == kViewUnbounded)
+                    if (sd == kViewUnbounded && !armWindow) {
+                        std::vector<std::vector<std::string>> roots;
+                        viewRootPlaces(m->subject, roots);
+                        for (auto& r : roots) {
+                            Scope::FrozenPlace fz; fz.place = r; fz.alias = bn; fz.line = bnLine;
+                            fz.fromBorrow = false; fz.fromMatchWindow = true;
+                            _scopes.back().frozen.push_back(fz);
+                        }
+                        armWindow = !roots.empty();
+                        // KR-211: a root reached through a `Shared` gets the runtime access a window gets, for the arm.
+                        if (armWindow && !_probingTemplate) {
+                            bool writes = true;
+                            if (auto* sinv = dynamic_cast<InvocationNode*>(m->subject.get()))
+                                if (auto* sma = dynamic_cast<MemberAccessNode*>(sinv->expression.get()))
+                                    if (sma->expression && sma->identifier && sma->identifier->value) {
+                                        std::string rcls = receiverClass(sma->expression);
+                                        if (isSmartPtrClass(rcls)) rcls = _classes[rcls].collElemClass;
+                                        const std::string& mn = *sma->identifier->value;
+                                        MethodInfo* smi = _classes.count(rcls) ? findMethod(&_classes[rcls], mn, nullptr) : nullptr;
+                                        if (!smi) {   // through a handle's auto-deref (`Shared<Shelf>`): the pointee's method
+                                            const std::string pt = derefTarget(rcls);
+                                            if (!pt.empty() && _classes.count(pt)) smi = findMethod(&_classes[pt], mn, nullptr);
+                                        }
+                                        if (smi) writes = !smi->isConst;
+                                    }
+                            enterAccess(m->subject, writes, "", "", depth + 2, a->line);
+                        }
+                    }
+                    if (sd == kViewUnbounded && !armWindow)
                         unsupported(("`" + bn + "` binds a view, and the `match` subject it comes from is a view of storage "
                                      "that nothing bounds — the binding would be too. Open a window first (`borrow "
                                      "<container>.<mint>() as w { … }`) and match on what is built from it").c_str(), bnLine);
+                    else if (sd == kViewUnbounded) {
+                        _scopes.back().viewDepths[bn] = (int)_scopes.size() - 1;
+                        _viewBindingOperand[bn] = m->subject;
+                        windowedHere.push_back(bn);
+                    }
                     else _scopes.back().viewDepths[bn] = std::max(innermostWindowDepth(), sd);
                 }
                 if (inPlaceOk && !discard && !alias && _classes.count(bcty) && !_classes[bcty].isScalarRecv
@@ -32400,6 +32474,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth + 2); *_out << "break;\n";
 
         for (auto& bn : borrowedHere) { _borrowedMatchBindings.erase(bn); _refParams.erase(bn); _constLocals.erase(bn); }
+        for (auto& bn : windowedHere) _viewBindingOperand.erase(bn);
         popScope();   // retires the payload bindings — the state of anything they shadowed comes back with them
         // Captured AFTER the pop, on purpose. A payload binding may shadow an enclosing move-tracked local
         // of the same name; captured before the pop, the merge read the BINDING's state under the outer
