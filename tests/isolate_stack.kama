@@ -7,12 +7,14 @@ import { std::concurrent::Isolate, std::collections::DynamicArray };
 
 // The depths, per target. SHARED fits the stated default on both the main thread and an isolate — the motivating
 // 20 000 natively; less on wasm, whose 256 KiB default holds a few thousand debug frames. DEEP is past that default
-// and inside BIG, so the deep checks pass only because the clause took effect: natively ~50 bytes a debug frame
-// makes 400 000 levels ~20 MiB (more under ASan) against 8 MiB, and on wasm, whose memory is fixed, a smaller pair.
+// and inside BIG, so the deep checks pass only because the clause took effect: `fat` holds over half a KiB a frame,
+// so natively 40 000 levels are over 20 MiB (more under ASan) against 8 MiB, and on wasm, whose memory is fixed, a
+// smaller pair. DEEP is deep in BYTES, not in calls, because ThreadSanitizer keeps a shadow call stack of 65 536
+// entries a thread and corrupts its own state past it: 64 000 levels pass under it and 67 000 fault in its runtime.
 @compileFor(!ARCH_WASM32) comptime int64 SHARED = 20000;
 @compileFor(ARCH_WASM32) comptime int64 SHARED = 2000;
-@compileFor(!ARCH_WASM32) comptime int64 DEEP = 400000;
-@compileFor(ARCH_WASM32) comptime int64 DEEP = 12000;
+@compileFor(!ARCH_WASM32) comptime int64 DEEP = 40000;
+@compileFor(ARCH_WASM32) comptime int64 DEEP = 1500;
 @compileFor(!ARCH_WASM32) comptime usize BIG = 256 * 1024 * 1024;
 @compileFor(ARCH_WASM32) comptime usize BIG = 2 * 1024 * 1024;
 
@@ -21,11 +23,21 @@ fn int64 down(int64 n) {
     return down(n: n - 1) + 1;
 }
 
+// A frame of over half a KiB: the deep checks reach their bytes in few calls.
+fn int64 fat(int64 n) {
+    if (n == 0) { return 0; }
+    InlineArray<int64>#(64) pad = [0; 64];
+    pad[0] = n;
+    return fat(n: n - 1) + pad[0] - n + 1;
+}
+
 type resource Job implements Sendable {
     int64 depth = 0;
+    bool wide = false;
     int64 got = -1;
     public ctor make(int64 depth) { this.depth = depth; }
-    public fn void run() { this.got = down(n: this.depth); }
+    public ctor deep() { this.depth = DEEP; this.wide = true; }
+    public fn void run() { this.got = this.wide ? fat(n: this.depth) : down(n: this.depth); }
     public const fn int64 result() { return this.got; }
 }
 
@@ -41,19 +53,19 @@ fn uint8 main() {
     if (j.result() != depth) { return 2; }
 
     // Deeper than the default: the scope form, sized at the spawn.
-    Job deep = Job.make(depth: DEEP);
+    Job deep = Job.deep();
     scope { spawn(stack: BIG) worker(j: ref deep); }
     if (deep.result() != DEEP) { return 3; }
 
     // The handle form — a crash here is the failure; nothing comes back over a moved bundle.
-    Job handed = Job.make(depth: DEEP);
+    Job handed = Job.deep();
     Isolate h = spawn(stack: BIG) owned(j: give handed);
     h.join();
 
     // Each worker of a parallel loop.
     DynamicArray<Job> jobs = DynamicArray.empty();
-    jobs.add(item: Job.make(depth: DEEP));
-    jobs.add(item: Job.make(depth: DEEP));
+    jobs.add(item: Job.deep());
+    jobs.add(item: Job.deep());
     parallel_for (ref Job x in jobs, workers: 2, stack: BIG) { x.run(); }
     if (jobs[0].result() != DEEP || jobs[1].result() != DEEP) { return 4; }
 
