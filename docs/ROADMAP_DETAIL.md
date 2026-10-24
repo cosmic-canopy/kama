@@ -2145,6 +2145,27 @@ from data races keeps holding by construction.
 14. Sanitizer fiber annotations and an lldb OS plugin, in the first commits.
 15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`. Fibers on bare metal are KR-233.
 
+<a id="s6-fiber-cet"></a>
+
+### Fibers under CET shadow stacks (KR-238)
+
+**Found building KR-3 step 1 (`0.9.737`).** fibers.md decision 2 gave the x86-64 switch a `__CET__` arm "so a hardened
+distro's default `-fcf-protection` still links". It links, and that is not enough. `-fcf-protection=full` marks the
+object shadow-stack compatible, and a process whose every object is marked may run with shadow stacks once the kernel
+(Linux 6.6+) and glibc enable them. The hardware then checks every `ret` against a second stack the switch never
+touches. The first `ret` into a new fiber's boot stub would fault. Since `0.9.737` the switch reads the shadow-stack
+pointer with `rdsspq`, which is a no-op leaving zero where shadow stacks are off, and refuses with a message where
+they are on.
+
+**What supporting them takes.** Boost.Context's x86-64 CET arm is the reference:
+- each fiber gets a shadow stack of its own, from the `map_shadow_stack` system call, with a restore token at its top;
+- the switch does `saveprevssp` / `rstorssp` beside the `rsp` swap;
+- a fiber's shadow stack is unmapped with its stack.
+
+It is unprobed here: this box is arm64 and its container is too, so the work wants an x86-64 Linux host with a
+CET-capable CPU and a kernel and glibc that enable it. Size M?. BTI and PAC on arm64 need nothing (fibers.md
+decision 2).
+
 <a id="s7"></a>
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)

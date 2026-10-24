@@ -1,0 +1,14 @@
+// The fiber seam's switch and stacks (KR-3, docs/design/fibers.md §8 step 1), driven from C until `spawn fiber` lands:
+// switches there and back, the callee-saved and floating-point registers kept across them, a deep recursion inside a
+// fiber's stack, a hundred fibers round-robin, a finished fiber's stack reused, and a guard-page hit reported as
+// "fiber stack overflow" by a child process. Returns 42, or the number of the failed check.
+extern "kama_fiber.h";
+extern "selftest.h";
+extern fn int32 fiber_selftest();
+
+unsafe fn int32 check() { return fiber_selftest(); }
+
+fn uint8 main() {
+    int32 r = check();
+    return r == 0 ? 42 : cast<uint8>(r);
+}

@@ -6903,6 +6903,13 @@ stack and is a compile error. `parallel_for` and <!-- xfail: spawn_stack_zero --
 `parallel_spawn` take it as a clause beside `workers:`, applying to each worker, and each clause is said at
 most once. <!-- xfail: parfor_clause_twice -->
 
+**An isolate that outgrows its stack says so** and names the clause that raises it, where it was a bare segfault: <!-- test: trap/isolate_stack_overflow -->
+``kama: isolate stack overflow (256 KiB; `spawn(stack: …)` to raise it)``, then the process aborts. A guard-page hit
+runs on a signal stack of the thread's own on POSIX, and in a vectored exception handler with a stack guarantee on
+Windows (Rust's std reports a thread's overflow the same way there); a fiber's stack is covered by the same handler.
+The main thread is not: covering it would install a handler in every program, isolates or not, and its overflow is
+the platform's own crash. On wasm a stack is emscripten's, and its overflow is emscripten's to report.
+
 #### The bundle ✅
 
 An isolate entry is an ordinary top-level `fn` that returns **`void`** and takes **exactly one**

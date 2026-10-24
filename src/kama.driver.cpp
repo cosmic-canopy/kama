@@ -6871,7 +6871,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
                                        : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h")
-                                          || emitter.externsHeader("kama_locked.h"));
+                                          || emitter.externsHeader("kama_locked.h") || emitter.externsHeader("kama_fiber.h"));
     out.close();
     for (const auto& d : emitter.diagnostics()) renderDiagnostic(stderr, d);
     if (unsupported > 0) {
@@ -6922,7 +6922,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
                                        : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h")
-                                          || emitter.externsHeader("kama_locked.h"));
+                                          || emitter.externsHeader("kama_locked.h") || emitter.externsHeader("kama_fiber.h"));
     header.close();
     for (auto& f : moduleFiles) f->close();
 

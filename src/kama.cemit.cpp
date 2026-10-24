@@ -26209,6 +26209,16 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "#endif\n";
     *_out << "KAMA_ISOLATE_LOCAL kama_access_state kama_accesses = { 0, 0, 0 };\n";   // KR-211: this thread's open accesses
     *_out << "KAMA_ISOLATE_LOCAL kama_lock_state kama_locks = { 0 };\n";              // KR-226: the locks this thread holds
+    // KR-3: the fiber seam's per-thread and per-process state, defined once for a program that reaches kama_fiber.h —
+    // directly, through kama_isolate.h (the stack-overflow handler) or kama_sched.h — and shared by every unit of it.
+    // A unit includes only the headers its own module declares, so the entry unit may not have seen it: include it
+    // here when any unit of the program does. The guard below then covers the one-unit build, which sees them all.
+    if (externsHeader("kama_fiber.h") || externsHeader("kama_isolate.h") || externsHeader("kama_sched.h"))
+        *_out << "#include \"kama_fiber.h\"\n";
+    *_out << "#if defined(KAMA_FIBER_H) && !defined(__EMSCRIPTEN__)\n"
+          << "KAMA_ISOLATE_LOCAL kama_fiber_thread kama__fibers;\n"
+          << "kama_fiber_process kama__fiberProc;\n"
+          << "#endif\n";
     *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
           << "void (*kama_panic_hook)(kama_panic_info*) = 0;\n"
           << "int kama_in_panic_hook = 0;\n"

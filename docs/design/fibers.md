@@ -143,6 +143,12 @@ are isolate-local runtime state, created on first use.
   an unmodelled arch for a comptime `sizeof`.
 - **CET (Linux x86-64), BTI and PAC (arm64)** each get a `__CET__` / `__ARM_FEATURE_BTI_DEFAULT` arm in the asm, so
   a hardened distro's default `-fcf-protection` still links.
+  - *Corrected when step 1 was built:* linking is not enough for CET's shadow stacks. A unit built with
+    `-fcf-protection=full` is marked shadow-stack compatible, and where the kernel and C library turn them on, the
+    first `ret` onto a stack the switch made faults. Supporting them gives each fiber a shadow stack of its own
+    (`map_shadow_stack`) and switches it with a restore token, as Boost.Context does. Until that lands (KR-238) the
+    switch reads the shadow stack pointer and refuses with a message where they are on. BTI and PAC need nothing: a
+    `ret` into the boot stub is not BTI-checked, and the switch never signs the link register.
 
 **Stacks:**
 - Each stack is an `mmap` reservation with one PROT_NONE guard page below it, committed only as touched
@@ -622,7 +628,7 @@ read off this document.
 
 | # | Commit | Files | Size |
 |---|---|---|---|
-| 1 | The switch and stacks, with sanitizer annotations and the overflow handler, tested from C | `include/kama_fiber.h` (new), `kama_runtime.h` | M |
+| 1 | ✅ `0.9.737`. The switch and stacks, with sanitizer annotations and the overflow handler, tested from C (`tests/fiber_switch.d`); the handler also serves isolates (`trap/isolate_stack_overflow`). The per-thread and per-process state is defined once, by the emitter, not in `kama_runtime.h` | `include/kama_fiber.h` (new), `kama_isolate.h`, `src/kama.cemit.cpp` | M |
 | 2 | The scheduler: ready queue, park/unpark, the timer heap, internal registration per decision 6, a remote queue on the Waker | `kama_fiber.h`, `kama_os.h` | L |
 | 3 | `spawn fiber`, the `scope` list of live fibers, `Fiber<R>` and `join`, and `ref` bundles rooted outside the loop | `src/kama.y`, `src/kama.cemit.cpp`, `docs/grammar.bnf`, `tree-sitter-kama/` (+ the Zed and Helix pins) | L |
 | 4 | The park rule. `@parks`, std's 64 marks and the lock-window walk shipped with `Locked<T>` (`0.9.731`–`0.9.733`: `checkLockWindows`, region markers, kept `@noheap` slot edges, blind-call facts); this step adds the leaf rule for a window over a `Shared`, a call access and `@onPanic`, the job-entry rule, and the debug assert | `src/kama.cemit.cpp` | S |

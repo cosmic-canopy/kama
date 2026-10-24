@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-238**
+**Next id: KR-239**
 
 ## The shape
 
@@ -73,6 +73,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | id | item | size | detail |
 |---|---|---|---|
 | KR-3 | **Fibers and thread-per-core: blocking-shaped I/O for many connections** (and the job system) — one isolate per core, each a fiber scheduler over its own `Poller`: no colouring, no `Pin`, no `Send` bound on a task, races still impossible by construction. Beside KR-202, KR-7. **Designed and ruled 2026-10-22 ([docs/design/fibers.md](design/fibers.md))**: fifteen decisions, an eleven-commit map | XL | [§6](ROADMAP_DETAIL.md#s6-fibers) |
+| KR-238 | **Fibers under CET shadow stacks** — a unit built with `-fcf-protection=full` is marked shadow-stack compatible, and where Linux and glibc turn shadow stacks on, the fiber switch would fault on its first `ret`; since `0.9.737` it refuses with a message instead. Supporting them: a shadow stack per fiber (`map_shadow_stack`) and a restore-token switch, as Boost.Context does. Linux x86-64 only; found building KR-3 step 1 | M? | [§6](ROADMAP_DETAIL.md#s6-fiber-cet) |
 | KR-231 | **Zero-copy deserialization into a view struct** — `@generate(Deserializable)` on a `type view`, so a parsed record's strings are views into the input (serde's `#[serde(borrow)]`); the escaped-field case wants a ruling. Unblocked: a type holding a view is a view since `0.9.725` | M? | [§4](ROADMAP_DETAIL.md#s4-view-deserialize) |
 | KR-197 | **Two debug-tier frames still hold a large value twice** — a large value returned into a local (`Big b = newBig(…)` lowers to a declaration and then an assignment: 32,824 B for a 16 KB `Big` at -O0), and a `[v; N]` field initializer, filled by value in the constructor (35,400 B for 35 KB of arrays). A frame-size flag on a debug build trips on both; release is clean | M | [§5](ROADMAP_DETAIL.md#s5-debug-frame-copies) |
 | KR-101 | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |

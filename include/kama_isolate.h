@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <limits.h>        /* PTHREAD_STACK_MIN */
 #include "kama_runtime.h"   /* kama_panic, kama_string_lit */
+#include "kama_fiber.h"     /* the stack-overflow handler an isolate's thread arms as it starts */
 
 typedef pthread_t kama_isolate_t;
 
@@ -33,6 +34,20 @@ typedef pthread_t kama_isolate_t;
 #endif
 #endif
 
+// What a new isolate's thread is handed: its entry and bundle, and the stack it was given, which an overflow names.
+// The thread arms the overflow handler (kama_fiber.h) before it runs any kama, so a recursion that outgrows the
+// stack says "isolate stack overflow (8 MiB; `spawn(stack: …)` to raise it)" rather than dying of a bare SIGSEGV.
+// wasm's stacks are emscripten's, so there the entry is started as it is.
+#if !defined(__EMSCRIPTEN__)
+typedef struct kama__isolate_boot { void* (*entry)(void*); void* arg; size_t stack; } kama__isolate_boot;
+static void* kama__isolate_run(void* p) {
+    kama__isolate_boot b = *(kama__isolate_boot*)p;
+    kama_free(p, sizeof b, _Alignof(kama__isolate_boot));
+    kama__stack_isolate(b.stack);
+    return b.entry(b.arg);
+}
+#endif
+
 // Start `entry` on a new thread with `arg` (the moved bundle pointer), with a `stack`-byte stack when `sized`. A
 // size is rounded up to a multiple of 64 KiB, the largest page any target uses (macOS refuses a size that is not
 // a page multiple), and never below the platform's own thread minimum — 128 KiB on Linux arm64, where glibc's
@@ -40,6 +55,7 @@ typedef pthread_t kama_isolate_t;
 // not a recoverable condition in the M2 surface (no channel to report back over yet).
 static inline kama_isolate_t kama__isolate_start(void* (*entry)(void*), void* arg, int sized, size_t stack) {
     static const char big[] = "isolate spawn failed: the stack size was refused";
+    size_t given = stack;
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) != 0) kama_panic(kama_string_lit("isolate spawn failed", 20));
     if (sized) {
@@ -49,13 +65,23 @@ static inline kama_isolate_t kama__isolate_start(void* (*entry)(void*), void* ar
         if ((size_t)PTHREAD_STACK_MIN > least) least = (size_t)PTHREAD_STACK_MIN;   /* a sysconf call on newer glibc */
 #endif
         size_t want = stack < least ? least : stack;
-        if (want > (size_t)-1 - (unit - 1) || pthread_attr_setstacksize(&attr, (want + unit - 1) & ~(unit - 1)) != 0) {
+        given = (want + unit - 1) & ~(unit - 1);
+        if (want > (size_t)-1 - (unit - 1) || pthread_attr_setstacksize(&attr, given) != 0) {
             pthread_attr_destroy(&attr);
             kama_panic(kama_string_lit(big, sizeof big - 1));
         }
     }
     pthread_t t;
+#if defined(__EMSCRIPTEN__)
+    (void)given;
     const int rc = pthread_create(&t, &attr, entry, arg);
+#else
+    kama__isolate_boot* b = (kama__isolate_boot*)kama_alloc(sizeof *b, _Alignof(kama__isolate_boot));
+    if (!b) { pthread_attr_destroy(&attr); kama_panic(kama_string_lit("isolate spawn failed", 20)); }
+    b->entry = entry; b->arg = arg; b->stack = given;
+    const int rc = pthread_create(&t, &attr, kama__isolate_run, b);
+    if (rc != 0) kama_free(b, sizeof *b, _Alignof(kama__isolate_boot));
+#endif
     pthread_attr_destroy(&attr);
     if (rc != 0) kama_panic(kama_string_lit("isolate spawn failed", 20));
     return t;

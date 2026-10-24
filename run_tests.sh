@@ -666,6 +666,10 @@ multi_one() {
         if grep -rqE 'std::process' --include='*.kama' "$dir"; then
             echo "SKIP $name (std::process: no fork/exec on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
+        # The fiber seam has no wasm switch yet: fibers there are JSPI, a later step of KR-3 (docs/design/fibers.md).
+        if grep -rqE 'kama_fiber\.h' --include='*.kama' "$dir"; then
+            echo "SKIP $name (fibers: no wasm switch yet)" >"$out"; echo SKIP >"$res"; return
+        fi
     fi
     # Its own build dir, for the reason test_one has one: the driver writes multi-unit intermediates to
     # dirname(-o) and names an imported module's .c after the MODULE, so two fixtures importing the same
@@ -1032,6 +1036,10 @@ ulimit -c 0
 for src in "$TESTS_DIR"/trap/*.kama; do
     [ -e "$src" ] && selected "$src" || continue
     name="${src##*/}"; name="${name%.kama}"
+    # A stack-overflow diagnostic is the native runtime's (kama_fiber.h); a wasm stack is emscripten's to report.
+    if [ "$TRAP_STYLE" = wasm ] && grep -qF 'stack overflow (' "$TESTS_DIR/trap/$name.msg" 2>/dev/null; then
+        echo "SKIP trap/$name (stack overflow: native only)"; continue
+    fi
     err="$TMP/trap_$name.err"
     tdir="$TMP/t_$name"; mkdir -p "$tdir"   # its own directory, to build into and to run in (see run_one)
     if [ "$TRAP_STYLE" = wasm ]; then

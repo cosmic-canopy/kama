@@ -1,0 +1,23 @@
+// An isolate whose recursion outgrows its stack says so, naming the size it was given and the clause that raises it,
+// where it was a bare SIGSEGV: the stack-overflow handler of the fiber seam (KR-3, docs/design/fibers.md decision 2)
+// serves isolates too. A 256 KiB stack, recursed into without end.
+import { std::concurrent::Isolate };
+
+fn int64 down(int64 n) {
+    if (n == 0) { return 0; }
+    return down(n: n - 1) + 1;
+}
+
+type resource Job implements Sendable {
+    int64 depth = 0;
+    int64 got = 0;
+    public ctor make(int64 depth) { this.depth = depth; }
+    public fn void run() { this.got = down(n: this.depth); }
+}
+fn void worker(ref Job j) { j.run(); }
+
+fn uint8 main() {
+    Job j = Job.make(depth: 1000000000);
+    scope { spawn(stack: 256 * 1024) worker(j: ref j); }
+    return 0;
+}
