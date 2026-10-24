@@ -1108,6 +1108,12 @@ const std::vector<SharedCompilationUnit>& preludeModuleUnits();                /
 // means nothing can name it. Defined below, where the derivation it calls exists.
 static std::string moduleKeyOf(const SharedCompilationUnit& u, const std::string& path);
 
+// The names a module loaded IN PART declares in the files this build left out — closure pruning compiles only the
+// files an import needs. A `friend` grant naming one is inert, as a grant into an absent module is: the code it names
+// is not being compiled (CEmitter::resolveFriends). Keyed by `ModuleId::full()`; rebuilt per program by
+// loadProgramUnits, which is what `kama check --each` running N programs in one process needs.
+static std::map<std::string, std::set<std::string>> g_namesLeftOut;
+
 // ---- closure pruning: a directory import should not compile the directory ---------------------------
 // `import std::collections::{DynamicArray};` resolves to EVERY .kama in lib/std/collections/ — the `{…}`
 // list controls visibility, not compilation. examples/httpd names four imports and compiles 32 units, 20
@@ -1625,6 +1631,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
     // each one's root is its own operands' — which is what makes `--each` mean N loose builds and not one
     // wide one. It is also why this is not read off `main`'s argv, which knows nothing of `--each`.
     setLooseRoot(cliInputs);
+    g_namesLeftOut.clear();
     std::string stdlibDir = resolveStdlibDir(argv0);
     std::vector<std::string> extraRoots = splitSearchPath(getenv("KAMA_PATH"));
     std::string depsView = projectDepsView(cliInputs);   // resolved package roots (`kama pkg install`), or ""
@@ -1953,6 +1960,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             // HERE. Left to fall through, the symptom arrives much later and much worse — an
             // unresolved name in the importer, pointing at code that is not the problem.
             size_t admitted = 0;
+            std::string loadedMk;
             for (auto& f : toLoad) {
                 std::string abs = absolutePath(f);
                 bool fresh = seen.insert(abs).second;
@@ -1971,13 +1979,18 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 if (fresh) { units.push_back(mu); paths.push_back(abs); }
                 std::string mk = moduleKeyOf(mu, abs);
                 if (mk.empty()) continue;
+                loadedMk = mk;
                 // What this module now provides. A pruned module contributes only the names it actually
                 // declares, so a later import asking for one that is absent re-resolves and the closure
                 // pulls the rest in. Recorded for every kept file, including one an earlier import
                 // already loaded — the record is about the namespace, not about who loaded the file.
-                if (pruned) for (auto& n : mu->topLevelNames) provided[mk].insert(n);
-                else        providedWhole.insert(mk);
+                if (pruned) for (auto& n : mu->topLevelNames) { provided[mk].insert(n); g_namesLeftOut[mk].erase(n); }
+                else        { providedWhole.insert(mk); g_namesLeftOut.erase(mk); }
             }
+            // What the pruned module declares in the files left out, for the inert-grant rule (above).
+            if (pruned && !loadedMk.empty() && !providedWhole.count(loadedMk))
+                for (auto& kv : moduleIndexFor(files, moduleIndex).byName)
+                    if (!provided[loadedMk].count(kv.first)) g_namesLeftOut[loadedMk].insert(kv.first);
             if (admitted == 0) {
                 fprintf(stderr, "kama: error: %s:%d: imports module '%s', but every file in it is"
                                 " excluded from a %s build by its own `file @compileFor(...)` gate.\n",
@@ -2889,6 +2902,10 @@ static void configureEmitter(CEmitter& e)
     // `ModuleId::full()` writes them; "" means a file in no module.
     e.setModuleVisible([](const std::string& importer, const std::string& imported) -> bool {
         return kamaModuleVisibleTo(importer, imported);
+    });
+    e.setLeftOutOfBuild([](const std::string& module, const std::string& name) -> bool {
+        auto it = g_namesLeftOut.find(module);
+        return it != g_namesLeftOut.end() && it->second.count(name) > 0;
     });
     e.setLocationResolver(packageLocationOf);   // a `panic`/`assert` site's file, package-relative (KR-121)
     // The package a file belongs to (KR-176): its project's import name — never the first segment of

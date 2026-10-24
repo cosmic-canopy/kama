@@ -1,0 +1,5 @@
+import { flo::key::Key };
+export { Reader };
+type value Reader {
+    public static fn int32 peek(const ref Key k) { return k.v; }
+}

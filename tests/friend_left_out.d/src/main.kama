@@ -1,0 +1,10 @@
+// A grant naming a declaration in a file this build leaves out is inert. A dependency's module compiles only the
+// files an import needs: `flo::user` has two, this program imports from one, so `Reader`'s file is never compiled —
+// and `Key`, which grants `Reader`, still builds, as a grant into an absent module would. Until 0.9.735 it was
+// "unknown `friend` accessor". A name no file of the module declares is still an error
+// (tests/xfail/friend_present_module_typo.d). Returns 42.
+import { flo::key::Key, flo::user::probe };
+fn uint8 main() {
+    Key k = Key.make();
+    return cast<uint8>(k.get() + probe());
+}

@@ -1,0 +1,2 @@
+export { probe };
+fn int32 probe() { return 2; }

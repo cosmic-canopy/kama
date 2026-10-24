@@ -967,6 +967,10 @@ public:
     // module names; "" is a file in no module. Absent (or unset) means allow, so a unit tree built without
     // a driver — a test harness, a future front end — is not silently locked down.
     void setModuleVisible(std::function<bool(const std::string&, const std::string&)> f) { _moduleVisible = std::move(f); }
+    // Does `module` (a full module name) declare `name` in a file this build left out? A module loads in part — only
+    // the files an import needs — so a `friend` grant can name a declaration that is real and simply not compiled.
+    // Absent (or unset) means no: a grant that does not resolve stays an error.
+    void setLeftOutOfBuild(std::function<bool(const std::string&, const std::string&)> f) { _leftOutOfBuild = std::move(f); }
     void setModuleResolver(std::function<std::string(const std::string&)> r) { _moduleResolver = r; }
     // The PACKAGE a file belongs to (KR-176): the boundary `@nonExhaustive` draws. Manifest work, so the driver answers.
     void setPackageResolver(std::function<std::string(const std::string&)> r) { _packageResolver = r; }
@@ -1636,6 +1640,7 @@ private:
     std::set<std::string> _trackCallerCNames;
     bool _trackCallerBody = false;
     std::function<bool(const std::string&, const std::string&)> _moduleVisible;   // (importer, imported) -> §2c
+    std::function<bool(const std::string&, const std::string&)> _leftOutOfBuild;  // (module, name) -> declared, not compiled
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during
     // collection (e.g. `Map<string, V>` needing `string: Hashable`) isn't a false negative — the methods
@@ -4267,6 +4272,7 @@ private:
     void        checkFieldAccess(ClassInfo* owner, const std::string& field, int line);
     void        resolveFriends();   // resolve each class's raw friend grants to keys
     bool        friendModulePresent(SharedStringList qual);   // does a `friend` path name a module this program loaded?
+    bool        friendLeftOut(SharedStringList qual, const std::string& val);   // ...or a declaration it left out?
     void        checkConstWrite(SharedExpression target, int srcLine);  // error if writing const
     void        checkConstPlaceReturn(bool isConst, bool isRef, bool isConstRef, const std::string& m, int line);
     // error if a body-level BINDER (a local, a `foreach` variable, a `match` payload binding) takes the

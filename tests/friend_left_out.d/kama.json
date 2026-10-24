@@ -1,0 +1,12 @@
+{
+  "name": "floapp",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "dependencies": {
+    "flo": { "path": "./vendor/flo" }
+  },
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
+}

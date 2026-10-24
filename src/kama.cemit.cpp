@@ -31144,6 +31144,20 @@ bool CEmitter::friendModulePresent(SharedStringList qual)
     return false;
 }
 
+// Does a qualified `friend` accessor name a declaration its module makes in a file this build left out? A module loads
+// in part — closure pruning compiles only the files an import needs — so `friend std::concurrent::ConcurrentMap[…]`
+// in `Map` names a real type whenever a program reaches `Map` without `ConcurrentMap`. That grant is inert for the
+// reason a grant into an absent module is: the code it names is not being compiled. A name no file of the module
+// declares is not left out, so a typo stays an error. Both qualified shapes: `mod::Type` / `mod::func` (the path is
+// the module, `val` the name) and `mod::Type::method` (the path minus its last segment is the module).
+bool CEmitter::friendLeftOut(SharedStringList qual, const std::string& val)
+{
+    if (!_leftOutOfBuild || !qual || qual->empty()) return false;
+    auto joined = [&](size_t n) { std::string p; for (size_t i = 0; i < n; ++i) p += (p.empty() ? "" : "::") + *(*qual)[i]; return p; };
+    if (_leftOutOfBuild(joined(qual->size()), val)) return true;
+    return qual->size() >= 2 && _leftOutOfBuild(joined(qual->size() - 1), *qual->back());
+}
+
 void CEmitter::resolveFriends()
 {
     // A whole-program pass, so no unit is "current": without the owner's file installed as the
@@ -31229,7 +31243,7 @@ void CEmitter::resolveFriends()
                 // this). A typo inside a module that IS present stays a hard error below. "Present" is
                 // judged on the longest namespace prefix of the path that names a loaded module, which is
                 // what an absent `sodium::box` fails and a present `sodium::aead` passes.
-                if (!resolved && !friendModulePresent(qual)) continue;
+                if (!resolved && (!friendModulePresent(qual) || friendLeftOut(qual, val))) continue;
             } else {
                 std::string clsName = resolveUserName(val, nullptr);   // a class
                 if (asType(clsName, g)) resolved = true;

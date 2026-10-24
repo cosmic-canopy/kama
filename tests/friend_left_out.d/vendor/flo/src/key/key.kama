@@ -1,0 +1,7 @@
+export { Key };
+type resource Key {
+    int32 v;
+    friend flo::user::Reader[v];
+    public ctor make() { this.v = 40; }
+    public const fn int32 get() { return this.v; }
+}

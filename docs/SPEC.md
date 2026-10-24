@@ -6358,8 +6358,10 @@ Encapsulation is compile-time only (the emitted C is unchanged) and stricter tha
   **qualified path** for every accessor kind (`friend other::mod::Holder::build[key];`), with no `import` <!-- test: friend_cross_module -->
   needed to name the friend; and a grant whose path names a module that is **not part of this program** is
   **inert** — the code it names is not being compiled, so it grants nothing — which is what lets a root
-  module grant to siblings a given consumer never imports. A grant naming an unknown symbol inside a module
-  that IS in the program stays a compile error. <!-- xfail: friend_present_module_typo -->
+  module grant to siblings a given consumer never imports. So is a grant naming a declaration in a file of a
+  present module that this build leaves out, since importing from a dependency compiles only the files the <!-- test: friend_left_out -->
+  import needs: a grant to a type in a sibling file of the module still builds for a consumer that never reaches
+  that file. A grant naming a symbol no file of a present module declares stays a compile error. <!-- xfail: friend_present_module_typo -->
   A grant names **members** — fields, methods, named `ctor`s and `static fn`s — and a type of any kind may
   write one, an `enum` included; a `contract` may not, since every member is already public. <!-- xfail: friend_on_contract -->
   A **generic free function** accessor reaches the corresponding instance, by the same rule a generic type
