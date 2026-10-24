@@ -105,7 +105,6 @@
 // Windows: the clone was fine, `2>/dev/null` was not.
 #if defined(_WIN32)
   #define KAMA_DEVNULL "NUL"
-  #define KAMA_TAR_LOCAL "--force-local "   // see the tar call in fetchToStore
   // "is this program on PATH", for the same shell. `command` is a POSIX shell BUILTIN and cmd.exe has no
   // such thing — the probe did not report "no ssh-keygen", it reported "'command' is not recognized",
   // which the caller read as absent. So `kama publish --key` refused to sign on Windows on machines that
@@ -115,7 +114,6 @@
   #define KAMA_EXE_SUFFIX ".exe"
 #else
   #define KAMA_DEVNULL "/dev/null"
-  #define KAMA_TAR_LOCAL ""
   #define KAMA_WHICH "command -v "
   #define KAMA_EXE_SUFFIX ""
 #endif
@@ -6730,7 +6728,13 @@ static bool parseLockFile(const std::string& path, std::map<std::string, LockEnt
 static bool makeDirs(const std::string& path)
 {
     for (size_t i = 0; i < path.size(); ) {
+        // Windows separates with either slash, and a store or `HOME` it names is spelled with `\`: splitting on
+        // `/` alone could not create `C:\kama\store` when `C:\kama` did not exist ("cannot create store at …").
+#ifdef _WIN32
+        size_t slash = path.find_first_of("/\\", i);
+#else
         size_t slash = path.find('/', i);
+#endif
         std::string part = (slash == std::string::npos) ? path : path.substr(0, slash);
         if (!part.empty() && !dirExists(part))
 #ifdef _WIN32
@@ -7563,12 +7567,28 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
         }
         lockIntegrity = tarballHash;   // trust-on-first-use when the manifest omits `integrity`
         if (!makeDirs(staging)) { err = "cannot stage '" + name + "'"; remove(osp(tgz).c_str()); return false; }
-        // --force-local on Windows: GNU tar reads a `:` in a file argument as a REMOTE HOST separator, so an
-        // ordinary absolute path becomes a network fetch —
-        //     tar (child): Cannot connect to C: resolve failed
-        // and every url-tarball dependency failed to unpack. The flag says "that colon is part of a path".
-        // POSIX paths have no colon to misread, and the flag is GNU-only, so it stays on this side.
-        if (runCmd("tar " KAMA_TAR_LOCAL "-xzf \"" + tgz + "\" -C \"" + staging + "\" --strip-components=1") != 0) {
+        // On Windows, the OS's own tar, named by its path: `%SystemRoot%\System32\tar.exe` (bsdtar, in every Windows
+        // since 10 1803). Whatever `tar` PATH finds first was the wrong answer three ways, all measured:
+        //  * msys2's and Git for Windows' GNU tar read a backslash in `-C <dir>` as an ESCAPE, and the store is
+        //    under `HOME`, which Windows spells `C:\Users\…`: `\t` became a TAB and `\10…` a backspace, so the
+        //    folder tar was told to fill did not exist (`Cannot open: No such file or directory`), and every
+        //    first install of a registry package failed, up to 0.9.733;
+        //  * they also read a `:` as a REMOTE HOST separator, which is what `--force-local` was here for;
+        //  * bsdtar, first on PATH in PowerShell, refused that GNU-only flag outright.
+        // bsdtar takes a Windows path as written. `toolPath` for a non-ASCII one, as the linker's arguments get.
+#if defined(_WIN32)
+        std::string tar;
+        if (const char* sr = getenv("SystemRoot")) if (*sr) tar = std::string(sr) + "\\System32\\tar.exe";
+        if (tar.empty() || !fileExists(tar)) {
+            err = "cannot unpack '" + name + "': Windows' own tar.exe is not at " + (tar.empty() ? "%SystemRoot%\\System32" : tar)
+                + " (it ships with Windows 10 1803 and later)";
+            runCmd(rmRfCmd(staging)); remove(osp(tgz).c_str()); return false;
+        }
+        const std::string untar = "\"" + tar + "\" -xzf \"" + toolPath(tgz) + "\" -C \"" + toolPath(staging) + "\"";
+#else
+        const std::string untar = "tar -xzf \"" + tgz + "\" -C \"" + staging + "\"";
+#endif
+        if (runCmd(untar + " --strip-components=1") != 0) {
             err = "cannot unpack '" + name + "'"; runCmd(rmRfCmd(staging)); remove(osp(tgz).c_str()); return false;
         }
         remove(osp(tgz).c_str());
