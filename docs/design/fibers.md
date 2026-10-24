@@ -1,6 +1,6 @@
 # Fibers and thread-per-core — design (KR-3)
 
-**Status: ruled 2026-10-22, all fifteen decisions as recommended, each to be verified as it lands.** Nothing here is built yet; KR-226 comes first (views compose shipped `0.9.721`–`0.9.726`). This is the in-flight campaign document the
+**Status: ruled 2026-10-22, all fifteen decisions as recommended, each to be verified as it lands.** Nothing here is built yet; the lock window it builds on shipped first (`Locked<T>`, `@parks` and the walk, `0.9.730`–`0.9.733`, SPEC *Shared mutable state*). This is the in-flight campaign document the
 [ROADMAP_DETAIL](../ROADMAP_DETAIL.md#s6-fibers) table names: it is deleted when the work ships, once
 [SPEC.md](../SPEC.md) carries the record. The numbered decisions are listed again, one line each, in
 ROADMAP_DETAIL §6, where their rulings are recorded. Facts were read from the tree at `0.9.719` and from primary
@@ -184,10 +184,10 @@ between fibers breaks `kama_access_end`'s LIFO pop as soon as two of them interl
 **Recommended: a compile-time rule.** Inside a lasting access to `Shared` storage, no call may reach a park. That
 covers a `borrow`/`foreach`/`match` window whose host is reached through a `Shared`, and a call whose `ref` receiver
 or argument points into one.
-- **"Reaches a park"** is the reachability walk `--no-heap` already runs (`checkNoHeapTransitive`, `src/kama.cemit.cpp:34644`; indirect calls at `rejectNoHeapIndirect`, `:33718`), with
+- **"Reaches a park"** is the reachability walk `--no-heap` already runs (`checkNoHeapTransitive`; indirect calls at `rejectNoHeapIndirect`), with
   a different leaf. The leaf is the std seam marked `@parks`: socket I/O, channel `send`/`recv`, `join`, `sleep`,
-  and offloaded file I/O and DNS. Taking a lock (KR-226) is not a park: it blocks the thread only for a critical
-  section, which KR-226's own rule keeps from waiting on anything.
+  and offloaded file I/O and DNS. Taking a lock (`Locked<T>`) is not a park: it blocks the thread only for a critical
+  section, which the lock-window rule keeps from waiting on anything.
 - **A contract call** gets an edge to every implementer, as `--no-heap` has done since `0.9.659`.
 - **A `fnptr` or bound-function call** counts as "may park" unless its signature promises otherwise, as `@noheap
   fnptr` does.
@@ -203,7 +203,7 @@ What this buys:
   backs iterator invalidation.
 - **The fd-lifetime bug of decision 13 cannot be written:** a parked fiber always owns, or exclusively borrows, the
   socket it waits on.
-- **The same walk answers KR-226's lock held across a park,** with that row's lock acquisitions as a second leaf.
+- **The same walk is the lock window's** (`checkLockWindows`), whose second leaf is another lock's acquisition.
 
 **The price:** a broadcast written as `foreach (ref Sub s in subs) { s.stream.write(…) }` over a `Shared` list is
 refused, and the diagnostic says to take the handles out first. That is the pattern Rust users reach with a lint,
@@ -625,7 +625,7 @@ read off this document.
 | 1 | The switch and stacks, with sanitizer annotations and the overflow handler, tested from C | `include/kama_fiber.h` (new), `kama_runtime.h` | M |
 | 2 | The scheduler: ready queue, park/unpark, the timer heap, internal registration per decision 6, a remote queue on the Waker | `kama_fiber.h`, `kama_os.h` | L |
 | 3 | `spawn fiber`, the `scope` list of live fibers, `Fiber<R>` and `join`, and `ref` bundles rooted outside the loop | `src/kama.y`, `src/kama.cemit.cpp`, `docs/grammar.bnf`, `tree-sitter-kama/` (+ the Zed and Helix pins) | L |
-| 4 | The park rule: `@parks`, the walk, xfails for a window over a `Shared`, a call access and `@onPanic`, and the debug assert | `src/kama.cemit.cpp`, `lib/std/` | M |
+| 4 | The park rule. `@parks`, std's 64 marks and the lock-window walk shipped with `Locked<T>` (`0.9.731`–`0.9.733`: `checkLockWindows`, region markers, kept `@noheap` slot edges, blind-call facts); this step adds the leaf rule for a window over a `Shared`, a call access and `@onPanic`, the job-entry rule, and the debug assert | `src/kama.cemit.cpp` | S |
 | 5 | Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines, deregistration on `give`, and DEL before close | `lib/std/net/`, `kama_os.h` | L |
 | 6 | Channels fiber-aware (waiter lists, send-side), and joins park | `include/kama_channel.h`, `lib/std/concurrent/` | M |
 | 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-7, KR-202) | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |

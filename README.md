@@ -89,8 +89,9 @@ in **[docs/GOALS.md](docs/GOALS.md)**; the forward plan in **[docs/ROADMAP.md](d
   cognitive cost, and hands back the **traditional OOP toolkit** (single inheritance + virtual
   dispatch, contracts for substitutability) that Rust declines to provide. The trade is
   deliberate: kama does **not** statically enforce Rust's aliasing-exclusivity. *(Concurrency is
-  shared-nothing and shipped — isolates, typed channels, structured `scope`, `Atomic<T>` and
-  `parallel_for`, on native and wasm — so data races are prevented by construction rather than by
+  shared-nothing and shipped — isolates, typed channels, structured `scope`, `Atomic<T>`, a `Locked<T>`
+  reachable only inside a lock window that cannot wait, and `parallel_for`, on native and wasm — so data races
+  and lock-order deadlocks are prevented by construction rather than by
   a borrow checker, and there is no `async` colouring; see [Concurrency](docs/SPEC.md#concurrency-).)*
   It's a different point on the safety/effort curve — aimed at the OOP-shaped,
   borrow-checker-weary middle — not a superset of Rust.

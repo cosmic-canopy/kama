@@ -1988,8 +1988,9 @@ container of the resources themselves. Searching splits what Rust folds into `Re
 kama's `Result<T, E>` constrains `E` to `Error`, so `binarySearch` returns `Optional<int32>` (the **first**
 index of an equal run) and `lowerBound` returns the total insertion point.
 
-`sync::{Mutex, RwLock, Once}` has no counterpart here and that is a **stance, not a gap** — the
-shared-nothing isolate model means `Atomic<T>` is the one shared-mutable seam (see *Concurrency*).
+Rust's `sync::{Mutex, RwLock}` are `std::concurrent`'s `Locked` and `ReadWriteLocked`, whose value is reachable only
+inside a lock window that cannot wait (see *Concurrency*). `Once` has no counterpart, and that is a **stance, not a
+gap**: a module `static` is per-isolate and takes a compile-time initializer, so there is nothing to initialize once.
 
 ### Parsing (`std::fmt`) ✅
 
@@ -6838,7 +6839,8 @@ intrinsics are keywords (`global::assert` is refused, naming `assert`), the runt
 Kama earns data-race freedom the way it earns null-safety: by making the hazard **unrepresentable**
 rather than checked. Where Rust proves exclusivity *over* shared memory (borrow checker, lifetimes,
 `Send`/`Sync`, `Pin`, `async` colouring), kama **removes the shared mutable state**, so there is
-nothing to prove. There is no `async`, no `await`, and therefore no function colouring: an ordinary
+nothing to prove — and where several isolates must change one value, a `Locked<T>` owns it, reachable only inside a
+window that holds the lock and can neither wait nor take another. There is no `async`, no `await`, and therefore no function colouring: an ordinary
 function is the only kind of function.
 
 The model has three levels, and they all reuse the ownership rules already in this document.
@@ -6846,8 +6848,8 @@ The model has three levels, and they all reuse the ownership rules already in th
 ### Isolates — `spawn` ✅
 
 An **isolate** is a unit of shared-nothing execution: a real OS thread natively, a Web Worker on
-wasm. It has its own stack, heap and module statics, and communicates only through channels and the
-`Atomic<T>` seam. Isolates are meant to be *coarse* — roughly one per core, or a handful of
+wasm. It has its own stack, heap and module statics, and communicates only through channels, the
+`Atomic<T>` seam and a `Locked<T>`. Isolates are meant to be *coarse* — roughly one per core, or a handful of
 long-lived service isolates — which is what makes it honest for one to block.
 
 **There are two spawn forms, and what separates them is who owns the join.**
@@ -6927,6 +6929,7 @@ comes back.
 | `ref T`, **disjoint** places | one child per place | the `scope` | no two children see the same bytes; the join orders the parent's read |
 | `ref Atomic<T>`, the **same** place | every child | the `scope` | atomic operations do not race |
 | `Shared<immutable T>` | every isolate | unbounded | nothing can change |
+| a copy of a `Locked<T>` handle | every isolate, one window at a time | unbounded | the value is reachable only inside a window that holds the lock |
 
 Rows 2 and 3 are what a `scope` licenses, and they are the reason it exists: its closing brace
 joins **every** child before any local declared in it drops, so a borrow provably cannot dangle,
@@ -7183,20 +7186,21 @@ right (blocked workers cost nothing but stack), which is why there is no cap; th
 reservation per thread and, on wasm, Worker exhaustion. The compiler cannot tell a worker from a job, so
 this is a rule you keep, not one it checks.
 
-### The three sharing seams ✅
+### The four sharing seams ✅
 
-Cross-isolate state is confined to three greppable seams, the same way raw memory is confined to
+Cross-isolate state is confined to four greppable seams, the same way raw memory is confined to
 `unsafe fn`:
 
 | Seam | Meaning | Native | wasm | Bare metal |
 | --- | --- | --- | --- | --- |
 | module `static` | **per-isolate** state — each isolate gets its own copy | `_Thread_local` | `_Thread_local` (emscripten pthreads share one linear memory, so TLS is what makes it per-isolate) | a plain C `static`, zero cost (one core = one isolate) |
 | `hardware` | `volatile` MMIO and the single-core ISR↔loop flag | `volatile T*` | n/a | the register/ISR seam — *not* cross-isolate |
-| `Atomic<T>` | the **only** cross-isolate mutable sharing | `_Atomic` / `<stdatomic.h>` | Atomics over a SharedArrayBuffer when the program creates a thread; otherwise the build is single-threaded and needs neither | atomics, if multicore |
+| `Atomic<T>` | cross-isolate mutable sharing of a scalar | `_Atomic` / `<stdatomic.h>` | Atomics over a SharedArrayBuffer when the program creates a thread; otherwise the build is single-threaded and needs neither | atomics, if multicore |
+| `Locked<T>` | cross-isolate mutable sharing of any `Sendable` value, inside a lock window | `os_unfair_lock`, a futex mutex, `SRWLOCK` | a pthread mutex over `Atomics.wait` when the program creates a thread; a flag otherwise | a flag (one core = one isolate) |
 
 The load-bearing rule: **a module `static` is per-isolate by construction, so it cannot be observed
 by another isolate and therefore cannot race.** To share mutable state you must reach for
-`Atomic<T>`, which is visible in a grep.
+`Atomic<T>` or `Locked<T>`, which are visible in a grep.
 
 That is the rule about *storage*. For the rule about how state **reaches** an isolate in the first
 place — the bundle, and the four ways anything crosses — see [The bundle](#the-bundle-) above; the
@@ -7216,8 +7220,67 @@ fn uint8 main() {
 ```
 
 `load` / `store` / `swap` / `compareExchange` / `fetchAdd` / `fetchSub`, all sequentially consistent
-by default. Each has an `…Explicit` form taking a `MemoryOrder` for the expert case. Atomics are the
-whole shared-mutable surface; general shared mutable memory stays outside the safe language.
+by default. Each has an `…Explicit` form taking a `MemoryOrder` for the expert case. Atomics and `Locked`
+(below) are the whole shared-mutable surface; general shared mutable memory stays outside the safe language.
+
+### Shared mutable state — `Locked<T>` ✅
+
+A cache several isolates write, a connection table, a metrics registry: state many isolates change, with no owner
+isolate worth a channel round trip per access. `std::concurrent::Locked<T>` is a lock that OWNS its value, and the value <!-- test: locked_basic -->
+is reachable only inside a `borrow` window over the guard its mint returns:
+
+```kama fragment
+fn void hit(Locked<Map<string, int64>> cache, string path) {   // each isolate is handed its own copy of the handle
+    borrow cache.lock().value() as m {                         // acquires
+        m.put(key: give path, value: 1);
+    }                                                          // the window's close releases, on every path out
+}
+```
+
+- **The window's rules give Rust's `MutexGuard` guarantee, with no lifetimes.** The alias cannot be stored, returned <!-- xfail: borrow_closing_chain_return_place -->
+  or put in a collection, and the guard is a view that closes its window (*The window*), so nothing reaches the
+  value once the lock is released. There is no poisoning: a panic aborts, so no window is left half-done for another.
+- **A handle is one pointer**, `Sendable` and `Copyable(bare: give)`: `copy cache` is a second handle to the same <!-- test: locked_isolates, locked_cache -->
+  value, which is what each isolate is handed, and the last handle to go drops it. The value must be `Sendable` too, <!-- xfail: locked_payload_not_sendable -->
+  as Rust's `Mutex<T>: Sync` needs `T: Send`: a non-atomic `Shared` inside it would race through the window.
+- **`ReadWriteLocked<T>`** adds `lockShared()`, a `const fn` whose window's `value()` is a `const ref`: any number of <!-- xfail: locked_shared_value_write -->
+  readers at once, and a `const ref ReadWriteLocked` can read but not write. Reach for it when reads are long or
+  dominate; for a short section the readers' shared count costs more than an exclusive lock does.
+
+**Deadlock-free by construction.** A lock window may reach no wait and take no other lock, so a critical section never
+waits on anything, and taking a lock blocks only for as long as some other section's CPU work:
+
+- **No wait:** the window may reach no `@parks` function — a channel's `send` or `recv`, a join (a `scope`'s close, an <!-- xfail: lock_window_sleep, lock_window_parks_chain, lock_window_scope_join, lock_window_isolate_drop -->
+  `Isolate`'s drop), `sleep`, the poller, a file, a socket, DNS, stdio, a child process, the print family or a log <!-- xfail: lock_window_println, lock_window_log -->
+  line. The walk is the one `--no-heap` runs, so a refusal names its chain (`drain` -> `Receiver.recv` ->
+  `Receiver.recvInto`), and a call through a contract is judged against every implementer. Take what you need out <!-- xfail: lock_window_contract_call -->
+  of the window, and wait after it.
+- **No other lock:** a lock window inside another is refused, since two isolates taking `a` then `b` and `b` then `a` <!-- xfail: lock_window_nested_lock -->
+  would deadlock. Several locks are taken together, in one `borrow`: <!-- test: locked_two_locks -->
+
+  ```kama fragment
+  borrow from.lock().value() as a, to.lock().value() as b { a.balance = a.balance - n; b.balance = b.balance + n; }
+  ```
+
+  Its locks are taken in the address order of their cells whatever order it names them in, so two `borrow`s naming
+  `from, to` and `to, from` cannot each hold one and wait for the other. The order is decided as the program runs:
+  copies of a handle held by different isolates have unrelated addresses. A `borrow` that takes a lock holds only <!-- xfail: lock_window_with_closing_view, lock_group_sibling_receiver -->
+  locks, so another view that closes its window (a transaction) is refused beside it; nest it outside. Two handles to <!-- test: locked_twice_in_one_borrow -->
+  one lock named in one `borrow` trap, "a lock is taken twice by one `borrow`", rather than take it twice.
+- **No call it cannot see:** a call through a `fnptr` or a bound function inside a lock window is refused, since its <!-- xfail: lock_window_fnptr -->
+  target could wait or lock.
+
+**What the walk cannot see, stated.** It reads what kama compiles. A foreign call that blocks with no `@parks` wrapper
+is invisible to it — it sits in `unsafe`, the trusted set — and so is a spin on an `Atomic` waiting for a thread that
+needs the lock. The runtime backs the first: a lock taken while the thread holds one, which only C calling back into <!-- test: locked_held_trap -->
+kama inside a window can do, traps instead of deadlocking.
+
+**The bytes.** A handle is one pointer. Its cell is a count, the lock and the value. The lock is `os_unfair_lock` (4 B)
+on macOS, glibc's futex-backed `pthread_mutex_t` on Linux (40 B on x86-64, 48 B on arm64) and `SRWLOCK` (8 B) on
+Windows; `ReadWriteLocked`'s is `pthread_rwlock_t` (200 B on macOS, 56 B on glibc, set to prefer writers, since glibc's
+default starves a writer under a steady read load) or `SRWLOCK`. Uncontended, a window is one atomic read-modify-write
+to acquire and one to release, where the channel round trip to an owner isolate it replaces is about 3 µs. On a target
+with no threads — unthreaded wasm, `--target embedded` — the lock is a flag.
 
 ### Immutable sharing — `type immutable` ✅
 

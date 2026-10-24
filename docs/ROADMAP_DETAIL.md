@@ -2102,13 +2102,15 @@ at the right width instead of hardcoding one. What remains for that row is sched
 fixed pool where one job blocks ties up 1/K of capacity no matter how K was chosen, and **head-of-line
 blocking is the job system's problem to solve.**
 
-- **General shared memory ("hybrid") stays out; one shape of it is reopened (ruled 2026-10-22, KR-226).**
-  Co-equal shared-memory threading is still not planned, because it reintroduces the hazard the model removes. What
-  is reopened is a lock that owns its payload, reachable only inside a `borrow` window, so the data cannot be touched
-  without the lock. The other seams stay as they are: `Atomic<T>`, immutable `Shared` and disjoint `parallel_for`.
-- **A concurrent map: ruled 2026-10-22 (KR-226 decision 6), KR-232.** A sharded map built on `Locked` (N shards,
+- **General shared memory ("hybrid") stays out; one shape of it shipped (`0.9.730`–`0.9.733`).** Co-equal
+  shared-memory threading is still not planned, because it reintroduces the hazard the model removes. What shipped is
+  `Locked<T>`/`ReadWriteLocked<T>`: a lock that owns its value, reachable only inside a `borrow` window that can neither
+  wait (`@parks`) nor take another lock — SPEC *Shared mutable state*. The other seams stay as they are: `Atomic<T>`,
+  immutable `Shared` and disjoint `parallel_for`.
+- **A concurrent map: ruled 2026-10-22 with the lock window, KR-232.** A sharded map built on `Locked` (N shards,
   each a `Locked<Map<K, V>>`, the key's hash picking the shard), as Java's `ConcurrentHashMap` and Go's `sync.Map`
-  answer the same need. It is scheduled after `Locked` ships, not a non-goal.
+  answer the same need. Scheduled, not a non-goal; `Locked` and the element-root freeze it needs (`shards[i].lock()`)
+  shipped in `0.9.728`–`0.9.733`.
 
 <a id="s6-fibers"></a>
 
@@ -2144,111 +2146,6 @@ from data races keeps holding by construction.
 13. Descriptor lifetime: DEL before close, deferred record frees, and deregistration on `give`.
 14. Sanitizer fiber annotations and an lldb OS plugin, in the first commits.
 15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`. Fibers on bare metal are KR-233.
-
-<a id="s6-lock-window"></a>
-
-### Shared mutable state, safe at compile time: a lock window (KR-226)
-
-**The gap.** Isolates share nothing mutable; they share through channels, immutable `Shared`, `Atomic<T>`, and the
-disjoint writes of `parallel_for`. That makes data races impossible by construction. But a shared cache, a
-connection table or a metrics registry written by several isolates has no safe spelling: it must live behind one
-isolate and a channel round trip per access. The bullet at the top of this section defers it, "reopen only on a
-concrete case". That is the "no consumer yet" verdict AGENTS.md disallows for language surface, so it is reopened
-here and decided on its merits.
-
-**Rust's answer.** `Arc<Mutex<T>>`. The data is reachable only through the guard `lock()` returns, and the borrow
-checker stops a reference outliving the guard. So a shared mutable value cannot be touched without the lock, and that
-is checked at compile time.
-
-| | Shared mutable state | Can the data be reached without the lock? |
-|---|---|---|
-| Rust | `Mutex<T>`, the data inside, reached through a guard | no: compile time, by lifetimes |
-| Swift 6 | `Mutex<T>.withLock { }` (Synchronization), actors | no: a closure scopes the access |
-| Go | `sync.Mutex` beside the data | yes: a convention, plus the race detector |
-| Java, C# | `synchronized` / `lock` beside the data | yes |
-| C++ | `std::mutex` beside the data | yes |
-| kama today | none: one owner isolate, plus channels | — |
-
-**Recommendation.** A `Sendable` lock that owns its payload, with the payload reachable only inside a `borrow`
-window. **Probed on `0.9.719` (2026-10-22): the window's exit action already exists.** This brief used to say it did
-not. A `type view` with `~dtor` closes the window that minted it, on every exit, once (SPEC *A view that closes its
-window*). So the guard is such a view, `lock()` is its mint, and the release is its destructor. This already
-compiles and runs, releasing once per window:
-
-```kama fragment
-borrow hits.lock() as g { g.value().put(key: path, value: 1); }            // `value()` is a `fn ref` on the guard
-borrow hits.lock() as g { borrow g.value() as m { m.put(key: path, value: 1); } }   // naming the payload
-```
-
-Recommended spelling, one window, after a small extension of the host rule:
-
-```kama fragment
-Locked<Map<string, int64>> hits = Locked.make(value: Map.empty());   // Sendable; its copies share one value
-borrow hits.lock().value() as m {        // acquires; `m` IS the payload, a place
-    m.put(key: path, value: 1);
-}                                        // the guard's ~dtor releases, on every exit from the block
-```
-
-Today that host is refused as "a value, or rooted in one". The extension: a closing mint inside a host chain is held
-by the window, so a place reached through it is rooted in something the window holds.
-
-The window's existing rules give Rust's guard guarantee with no lifetimes. The alias cannot be stored, returned or put
-in a collection, and the guard view cannot be copied out of its window. So nothing reaches the payload once the lock
-is released. Swift needs a closure for this (`withLock { }`), and kama needs none.
-
-**The bytes.**
-- A `Locked<T>` handle is one pointer.
-- Its heap cell is an atomic count, the lock and the `T`. The lock is 4 B for `os_unfair_lock` on macOS, 8 B for
-  `SRWLOCK` on Windows, and 40 B for glibc's `pthread_mutex_t`.
-- An uncontended acquire and release is one atomic read-modify-write each way, against the ~3 µs channel round trip
-  to an owner isolate it replaces.
-
-**The cases a client library has, each blocked today** (a pool's isolates share nothing mutable, so each would live
-behind an owner isolate at a channel round trip, about 3 µs, per access):
-- **A client-side cache per pool,** so a hit costs a hash lookup, not a hop. Without one, each connection keeps its own
-  cache, hits split across them, and memory is paid per connection.
-- **One cluster slot map and per-node pools under one cluster client,** read once, not per pooled client.
-- **A failover hint a pool's connections share,** so a failover is asked about once, not once per connection.
-- **One token cache across a credentials provider's copies,** so a token is fetched once per pool.
-
-**Ruled 2026-10-22: all six as recommended.** Decision 6 is KR-232. The `@parks` walk of decision 4 is built here
-first, and KR-3 reuses it.
-1. Reopen §6's deferral and ship `Locked<T>` in `std::concurrent`.
-2. **The spelling.** The guard is a closing view, so there is no new hook, contract or reserved word. Recommended:
-   extend the host rule so `borrow hits.lock().value() as m` is one window. The alternative is to ship with
-   `g.value()` alone, which costs a second window to name the payload.
-3. **The handle and the payload.**
-   - `Locked<T>` is a `Sendable` resource, `Copyable(bare: give)` as `Waker` is (`0.9.719`); its copies count
-     atomically and share one cell. A `Shared` never crosses an isolate, so it cannot be the handle.
-   - `T` must be `Sendable`, as Rust's `Mutex<T>: Sync` needs `T: Send`: a payload holding a non-atomic `Shared`
-     would race through the window.
-   - A reader/writer form, `lockShared()` minting a guard whose `value()` is `const ref`, follows from the same rule
-     and ships beside it.
-4. **Deadlock, and blocking under a lock.**
-
-   | | Two locks in opposite orders | Blocking while holding |
-   |---|---|---|
-   | Rust | deadlocks | allowed; clippy lints only `await_holding_lock` |
-   | Swift | deadlocks | allowed |
-   | Go, Java, C++ | deadlocks; C++17 `std::scoped_lock` takes several in a deadlock-free order | allowed |
-
-   Recommended: **deadlock-free by construction**.
-   - A lock window reaches no `@parks` call (no blocking channel operation, no join, no socket or file I/O) and no
-     other lock's acquisition. That is KR-3's decision-3 walk, with lock acquisition as a second leaf. So a critical
-     section never waits, and taking a lock blocks a thread only for as long as some section's CPU work.
-   - Several locks are taken together in one `borrow` (`borrow a.lock().value() as x, b.lock().value() as y`),
-     which acquires them in address order, as `scoped_lock` does.
-   - The cost, stated: no I/O or logging inside a lock window. Take what is needed out, and do the I/O after.
-   - The walk is shared with KR-3, so whichever row ships first builds it.
-5. **The lock under each OS:** `os_unfair_lock` on macOS (pthread's mutex there is slow and fair), glibc's
-   futex-backed `pthread_mutex` on Linux, `SRWLOCK` on Windows, with the reader/writer twins. Decision 4 guarantees a
-   window releases on the thread that acquired it, which `os_unfair_lock` requires: a fiber cannot park, and so cannot
-   move, inside one.
-6. **A concurrent map**, the open note above. Recommended: schedule a sharded map built on `Locked` (N shards, each a
-   `Locked<Map>`) as its own row once this ships, rather than a non-goal. Java and Go ship one in std.
-
-Size M.
-
 
 <a id="s7"></a>
 

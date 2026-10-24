@@ -79,7 +79,7 @@ control** (private-by-default, `public`/`protected`, member-granular `friend` gr
 + format specifiers; opt-in **serialization** (`@generate`, JSON + three binary formats, by-value +
 object graph + polymorphic);
 **shared-nothing concurrency** (isolates, typed channels, structured `scope`, `Atomic<T>`,
-immutable `Shared`, `parallel_for` — no `async` colouring); **compile-time evaluation**
+`Locked<T>` behind a lock window that cannot wait, immutable `Shared`, `parallel_for` — no `async` colouring); **compile-time evaluation**
 (`comptime` constants and `comptime fn`); **conditional compilation** (`@compileFor`); and the
 **MCU surface** (`hardware` MMIO, `@interrupt`/`@section`/`@noheap`, `@align(N)`/`@packed` layout control, inline `asm`, fallible
 allocation). Targets **native, WebAssembly and bare-metal**, debug/release, with source-level
