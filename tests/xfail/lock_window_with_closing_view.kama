@@ -1,0 +1,21 @@
+// A lock window holds only its locks (KR-226): another view that closes its window in the same `borrow` — a transaction
+// here — would run its own code under the lock, and open and close out of step with it. Nest the other window outside.
+import { std::concurrent::Locked };
+@viewable type contract Transacts for resource { fn Tx begin(); }
+type view Tx {
+    UnsafePtr<int64> log;
+    unsafe ctor over(UnsafePtr<int64> log) { this.log = log; }
+    unsafe ~Tx() { this.log[0] = this.log[0] + 1i64; }
+}
+type resource Conn implements Transacts {
+    InlineArray<int64>#(1) log;
+    public ctor make() { this.log = [0i64; 1]; }
+    public unsafe fn Tx begin() { return Tx.over(log: addr(of: this.log[0])); }
+}
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    Conn conn = Conn.make();
+    borrow c.lock().value() as m, conn.begin() as tx { m.n = 1; }
+    return 0;
+}

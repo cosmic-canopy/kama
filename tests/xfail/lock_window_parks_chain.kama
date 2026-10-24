@@ -1,0 +1,11 @@
+// The walk is transitive (KR-226): `drain` calls `Receiver.recv`, which waits — the chain is named, as `--no-heap` names one.
+import { std::concurrent::Locked, std::concurrent::Channel, std::concurrent::Receiver };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn int32 drain(ref Receiver<int32> rx) { return match (rx.recv()) { case Some(value: v): v; case None: 0; }; }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    Receiver<int32> rx = ch.receiver();
+    borrow c.lock().value() as m { m.n = drain(rx: ref rx); }
+    return 0;
+}

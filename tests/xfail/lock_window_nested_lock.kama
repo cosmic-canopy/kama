@@ -1,0 +1,10 @@
+// A lock window takes no other lock (KR-226): two isolates taking `a` then `b` and `b` then `a` would deadlock. Several
+// locks are taken together, in one `borrow`.
+import { std::concurrent::Locked };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> a = Locked.make(value: Counter.zero());
+    Locked<Counter> b = Locked.make(value: Counter.zero());
+    borrow a.lock().value() as x { borrow b.lock().value() as y { y.n = x.n; } }
+    return 0;
+}

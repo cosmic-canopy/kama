@@ -1,0 +1,51 @@
+// `Locked<T>` and `ReadWriteLocked<T>` (KR-226): a lock that owns its payload, reachable only inside the window over the
+// guard its mint returns — `borrow c.lock().value() as m { … }` acquires, and the window's close releases on every path
+// out (here a re-lock after each exit is the proof: an `os_unfair_lock` taken twice by one thread aborts, a mutex
+// deadlocks). Copies of a handle share one value, and the last to go drops it, once (ASan, `leaks`). A
+// `ReadWriteLocked` read through a `const ref` takes the shared window, whose `value()` is read-only. An early `return`
+// leaves the window before the function's own cleanups run, so an isolate joined there is no wait under the lock.
+// Returns 42.
+import { std::concurrent::Locked, std::concurrent::ReadWriteLocked, std::concurrent::Isolate, std::collections::DynamicArray };
+
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+
+fn void bump(ref Locked<Counter> c) { borrow c.lock().value() as m { m.n = m.n + 1; } }
+fn int32 peek(const ref ReadWriteLocked<Counter> r) { borrow r.lockShared().value() as v { return v.n; } }
+fn int32 early(ref Locked<Counter> c) { borrow c.lock().value() as m { if (m.n > 0) { return m.n; } m.n = 1; } return 0; }
+
+type resource Job implements Sendable { int32 n; public ctor make(int32 n) { this.n = n; } }
+fn void work(Job j) { }
+fn int32 afterRelease(ref Locked<Counter> c) {
+    Job j = Job.make(n: 1);
+    Isolate h = spawn work(j: give j);                  // joined as the function returns — after the window released
+    borrow c.lock().value() as m { if (m.n >= 0) { return m.n - m.n; } }
+    return 1;
+}
+
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    bump(c: ref c);
+    Locked<Counter> d = copy c;                         // a second handle to the same value
+    bump(c: ref d);                                     // n = 2
+    int32 r = early(c: ref c);                          // released on `return`: 2
+    int32 i = 0;
+    while (i < 5) {
+        borrow c.lock().value() as m {
+            i = i + 1;
+            if (i == 2) { continue; }                   // released on `continue`
+            if (i == 4) { break; }                      // released on `break`
+            m.n = m.n + 1;                              // i = 1, 3: n = 4
+        }
+    }
+    borrow d.lock().value() as m { r = r + m.n; }       // 2 + 4 = 6
+    // An owning payload, dropped by the last handle.
+    Locked<DynamicArray<int32>> xs = Locked.make(value: DynamicArray.empty());
+    borrow xs.lock().value() as a { a.add(item: 10); a.add(item: 20); }
+    Locked<DynamicArray<int32>> ys = copy xs;
+    borrow ys.lock().value() as a { foreach (int32 x in a) { r = r + x; } }   // 36
+    // A reader/writer lock: the writer's window, then readers through a read-only handle.
+    ReadWriteLocked<Counter> rw = ReadWriteLocked.make(value: Counter.zero());
+    borrow rw.lock().value() as w { w.n = 6; }
+    r = r + peek(r: rw) + afterRelease(c: ref c);       // 42
+    return cast<uint8>(r);
+}

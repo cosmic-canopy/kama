@@ -439,6 +439,10 @@ typedef struct kama_access {
 // window, a write to some other object — is two compares, and only one inside it walks the list. Empty: lo = hi = 0.
 typedef struct kama_access_state { kama_access* head; const char* lo; const char* hi; } kama_access_state;
 extern KAMA_ISOLATE_LOCAL kama_access_state kama_accesses;   /* defined in the entry TU */
+// The locks this thread holds (KR-226, kama_locked.h). A lock window takes no other lock — the compiler's walk proves it
+// for every call it can read — so an acquire while one is held came through C calling back into kama, and traps.
+typedef struct kama_lock_state { int32_t held; } kama_lock_state;
+extern KAMA_ISOLATE_LOCAL kama_lock_state kama_locks;   /* defined in the entry TU */
 
 #if defined(KAMA_ONPANIC)
 #include <setjmp.h>

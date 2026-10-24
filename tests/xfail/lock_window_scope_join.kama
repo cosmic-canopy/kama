@@ -1,0 +1,10 @@
+// A `scope` joins its children at its close, and a join waits on another isolate (KR-226).
+import { std::concurrent::Locked, std::concurrent::Isolate };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+type resource Job implements Sendable { int32 n; public ctor make(int32 n) { this.n = n; } }
+fn void work(Job j) { }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    borrow c.lock().value() as m { Job j = Job.make(n: m.n); scope { spawn work(j: give j); } }
+    return 0;
+}

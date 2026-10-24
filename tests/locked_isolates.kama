@@ -1,0 +1,69 @@
+// Isolates share one value through copies of a `Locked` handle (KR-226): four writers add 10,000 each under the lock, and
+// the total is exact — no update is lost, which is what the lock is for (TSan: race-free). Readers of a
+// `ReadWriteLocked` run beside its writer and only ever see a whole update: the pair moves together. Each worker is
+// handed its own copy of a handle in its bundle. Returns 42.
+import { std::concurrent::Locked, std::concurrent::ReadWriteLocked, std::concurrent::Isolate };
+
+type value Counter implements Sendable { public int64 n; public ctor zero() { this.n = 0i64; } }
+type value Pair implements Sendable { public int64 a; public int64 b; public ctor zero() { this.a = 0i64; this.b = 0i64; } }
+
+type resource Adder implements Sendable {
+    Locked<Counter> total;
+    public ctor make(Locked<Counter> t) { this.total = give t; }
+    public fn void run() {
+        int32 i = 0;
+        while (i < 10000) { borrow this.total.lock().value() as m { m.n = m.n + 1i64; } i = i + 1; }
+    }
+}
+fn void add(Adder a) { a.run(); }
+
+type resource PairJob implements Sendable {
+    ReadWriteLocked<Pair> pair;
+    Locked<Counter> torn;
+    bool writer;
+    public ctor make(ReadWriteLocked<Pair> p, Locked<Counter> t, bool writer) { this.pair = give p; this.torn = give t; this.writer = writer; }
+    public fn void run() {
+        int32 i = 0;
+        int64 seen = 0i64;
+        while (i < 5000) {
+            if (this.writer) { borrow this.pair.lock().value() as p { p.a = p.a + 1i64; p.b = p.b + 1i64; } }
+            else { borrow this.pair.lockShared().value() as p { if (p.a != p.b) { seen = seen + 1i64; } } }
+            i = i + 1;
+        }
+        borrow this.torn.lock().value() as t { t.n = t.n + seen; }
+    }
+}
+fn void pairWork(PairJob j) { j.run(); }
+
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    scope {
+        Adder b1 = Adder.make(t: copy c);
+        spawn add(a: give b1);
+        Adder b2 = Adder.make(t: copy c);
+        spawn add(a: give b2);
+        Adder b3 = Adder.make(t: copy c);
+        spawn add(a: give b3);
+        Adder b4 = Adder.make(t: copy c);
+        spawn add(a: give b4);
+    }
+    int64 total = 0i64;
+    borrow c.lock().value() as m { total = m.n; }
+    if (total != 40000i64) { return 1; }
+    ReadWriteLocked<Pair> p = ReadWriteLocked.make(value: Pair.zero());
+    Locked<Counter> torn = Locked.make(value: Counter.zero());
+    scope {
+        PairJob b5 = PairJob.make(p: copy p, t: copy torn, writer: true);
+        spawn pairWork(j: give b5);
+        PairJob b6 = PairJob.make(p: copy p, t: copy torn, writer: false);
+        spawn pairWork(j: give b6);
+        PairJob b7 = PairJob.make(p: copy p, t: copy torn, writer: false);
+        spawn pairWork(j: give b7);
+    }
+    int64 bad = 0i64;
+    borrow torn.lock().value() as t { bad = t.n; }
+    if (bad != 0i64) { return 2; }
+    int64 a = 0i64;
+    borrow p.lockShared().value() as q { a = q.a; }
+    return a == 5000i64 ? 42 : 3;
+}

@@ -6849,7 +6849,8 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
     // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
-                                       : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h"));
+                                       : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h")
+                                          || emitter.externsHeader("kama_locked.h"));
     out.close();
     for (const auto& d : emitter.diagnostics()) renderDiagnostic(stderr, d);
     if (unsupported > 0) {
@@ -6899,7 +6900,8 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     // Native: link libpthread for any use of the seams (harmless when unneeded). Wasm: a threaded runtime is a
     // hosting model, so only for a program that actually creates a thread (see noteThreadSpawn).
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
-                                       : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h"));
+                                       : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h")
+                                          || emitter.externsHeader("kama_locked.h"));
     header.close();
     for (auto& f : moduleFiles) f->close();
 

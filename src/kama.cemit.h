@@ -1965,6 +1965,21 @@ private:
     // `@parks` bodies by C name (KR-226): the waits a lock window may not reach, read off the emitted call graph as
     // `_noHeapFns` is — keyed by C name, so each generic instance is its own.
     std::map<std::string, NoHeapFn>  _parksFns;
+    // The lock-window walk (KR-226). A `borrow` that makes a closing view marks its body in the C (`openLockRegion`);
+    // `scanCBodies` reads what the marked text calls into `_lockRegionEdges`, and `checkLockWindows` judges each region
+    // whose mint reaches the runtime's acquire: it may reach no `@parks` body, no other lock, and no call whose target
+    // the compiler cannot see. Read off the same graph `--no-heap` reads, so a contract call reaches every implementer.
+    struct LockRegion { int line = 0; std::string file; std::string host; std::vector<std::string> mints; };
+    std::map<int, LockRegion> _lockRegions;
+    int _lockRegionCounter = 0;
+    std::vector<int> _openLockRegions;                                   // emission: the regions around this code
+    std::map<int, std::map<std::string, CallEdge>> _lockRegionEdges;     // region -> what its text calls
+    std::map<int, int> _lockRegionBlind;                                 // region -> a blind call's line
+    std::map<std::string, int> _parksBlind;                              // body -> a call with no seen target
+    std::map<std::string, std::map<std::string, CallEdge>> _parksSlotEdges;   // proven `@noheap` slots, which park
+    void openLockRegion(const std::string& host, const std::string& mintC, int line, int depth);
+    void noteParksBlind(int line);
+    void checkLockWindows();
     bool _spawnsThreads = false;
     void noteThreadSpawn();
     // The ONE spelling of a deep copy (`T__copy(&(x))`), so the intrinsic copy's fact is recorded in one place.
@@ -2311,6 +2326,9 @@ private:
                                         // view, so assigning to it writes through it rather than reseating it.
                                         bool placeAlias = false; };
                    std::vector<FrozenPlace> frozen;
+                   // A `borrow` whose host makes a view that closes its window (KR-226): the region its body is in the
+                   // emitted C, between `/*kama:lw+N*/` and `/*kama:lw-N*/`. 0 for any other scope.
+                   int lockRegion = 0;
                    // An owning payload of a BORROWING `match` arm, bound as an alias of the subject's slot, with
                    // the subject's place. A write to an overlapping place replaces the payload the alias points
                    // into, so it marks the alias moved for the rest of the arm (KR-181).

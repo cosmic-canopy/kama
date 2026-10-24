@@ -1,0 +1,9 @@
+// A payload holding a non-atomic `Shared` would race through the window: `Locked<T>` needs `T: Sendable`, as Rust's
+// `Mutex<T>: Sync` needs `T: Send` (KR-226).
+import { std::concurrent::Locked, std::memory::Shared };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Shared<Counter> s = new Counter.zero();
+    Locked<Shared<Counter>> c = Locked.make(value: give s);
+    return 0;
+}

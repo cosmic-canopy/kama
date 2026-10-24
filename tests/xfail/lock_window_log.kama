@@ -1,0 +1,8 @@
+// A log line waits on its sink (KR-226).
+import { std::concurrent::Locked, std::log::logInfo };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    borrow c.lock().value() as m { m.n = 1; logInfo(tag: "c", msg: "set"); }
+    return 0;
+}

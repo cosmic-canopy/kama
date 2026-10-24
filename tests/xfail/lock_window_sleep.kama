@@ -1,0 +1,8 @@
+// A lock window may not wait (KR-226): `sleep` is `@parks`, and every other isolate that wants the lock would wait too.
+import { std::concurrent::Locked, std::time::sleep, std::time::Duration };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    borrow c.lock().value() as m { m.n = 1; sleep(d: Duration.fromMillis(ms: 1i64)); }
+    return 0;
+}

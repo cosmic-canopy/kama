@@ -821,6 +821,18 @@ lit_wide_past_uint64	lit_wide_past_uint64.kama:5:15
 local_no_initializer	local_no_initializer.kama:9:4
 local_scope_shadow_match_cond_move	local_scope_shadow_match_cond_move.kama:17:4
 local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21:0
+lock_window_contract_call	lock_window_contract_call.kama:15:0
+lock_window_fnptr	lock_window_fnptr.kama:9:0
+lock_window_isolate_drop	lock_window_isolate_drop.kama:8:0
+lock_window_log	lock_window_log.kama:6:0
+lock_window_nested_lock	lock_window_nested_lock.kama:8:0
+lock_window_parks_chain	lock_window_parks_chain.kama:9:0
+lock_window_println	lock_window_println.kama:7:0
+lock_window_scope_join	lock_window_scope_join.kama:8:0
+lock_window_sleep	lock_window_sleep.kama:6:0
+lock_window_with_closing_view	lock_window_with_closing_view.kama:19:0
+locked_payload_not_sendable	locked_payload_not_sendable.kama:7:11
+locked_shared_value_write	locked_shared_value_write.kama:6:41
 main_called	main_called.kama:6:20 main_called.kama:6:27
 main_exported	main_exported.kama:6:0
 main_int32	main_int32.kama:4:0

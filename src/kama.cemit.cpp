@@ -6779,10 +6779,14 @@ void CEmitter::dropCondTemps(size_t preLoc, int depth)
 // Destroy scopes from innermost up to & including the nearest loop boundary.
 void CEmitter::emitUnwindToLoop(int depth)
 {
+    std::vector<int> left;   // the lock windows this jump leaves (KR-226): paused around the outer cleanups below
     for (size_t i = _scopes.size(); i-- > 0; ) {
         emitScopeCleanup(_scopes[i], depth);
+        if (_scopes[i].lockRegion) { indent(depth); *_out << "/*kama:lw-" << _scopes[i].lockRegion << "*/\n"; left.push_back(_scopes[i].lockRegion); }
         if (_scopes[i].isLoopBoundary) break;
     }
+    // The jump itself calls nothing; the text after it is still the window's, so the region resumes there.
+    for (auto it = left.rbegin(); it != left.rend(); ++it) { indent(depth); *_out << "/*kama:lw+" << *it << "*/\n"; }
 }
 
 // The scope of the innermost loop body around the statement being emitted, or -1. The walk stops at the
@@ -6869,8 +6873,36 @@ void CEmitter::placeLoopExit(int depth)
 // Destroy all scopes from innermost down to the function root (for return).
 void CEmitter::emitUnwindAll(int depth)
 {
-    for (size_t i = _scopes.size(); i-- > 0; )
+    std::vector<int> left;   // as emitUnwindToLoop: a `return`'s outer cleanups run after every window it leaves
+    for (size_t i = _scopes.size(); i-- > 0; ) {
         emitScopeCleanup(_scopes[i], depth);
+        if (_scopes[i].lockRegion) { indent(depth); *_out << "/*kama:lw-" << _scopes[i].lockRegion << "*/\n"; left.push_back(_scopes[i].lockRegion); }
+    }
+    for (auto it = left.rbegin(); it != left.rend(); ++it) { indent(depth); *_out << "/*kama:lw+" << *it << "*/\n"; }
+}
+
+// A `borrow` that makes a view closing its window marks its body as a REGION of the C (KR-226): `/*kama:lw+N*/` here,
+// right after the first such mint (what the header computes from the guard runs under it too), `/*kama:lw-N*/` where
+// the window ends and around an early exit's outer cleanups. Whether it is a LOCK window is decided after the call
+// graph is built (`checkLockWindows`): only the graph knows which mints reach the runtime's acquire.
+void CEmitter::openLockRegion(const std::string& host, const std::string& mintC, int line, int depth)
+{
+    if (_scopes.empty()) return;
+    int& lr = _scopes.back().lockRegion;
+    if (lr) { _lockRegions[lr].mints.push_back(mintC); return; }   // a second closing mint in one `borrow`
+    lr = ++_lockRegionCounter;
+    LockRegion r; r.line = line; r.file = diagFile(); r.host = host; r.mints.push_back(mintC);
+    _lockRegions[lr] = r;
+    _openLockRegions.push_back(lr);
+    indent(depth); *_out << "/*kama:lw+" << lr << "*/\n";
+}
+
+// A call whose target the compiler cannot see — a `fnptr`, a bound function — may wait or take a lock (KR-226).
+void CEmitter::noteParksBlind(int line)
+{
+    if (_probingTemplate) return;
+    if (!_currentFunc.empty()) _parksBlind.emplace(_currentFunc, line);
+    for (int r : _openLockRegions) _lockRegionBlind.emplace(r, line);
 }
 
 void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::string& className, bool userName)
@@ -7222,6 +7254,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             *_out << gct << " " << tmp << " = " << mmi->cName << "(&(" << recvC << "));\n";
             _scopes.back().locals.push_back({ tmp, gct, /*userName=*/false });
             recordDestructibleOwner(tmp, gct);
+            openLockRegion(unparseExpr(host), mmi->cName, bn->line, depth + 1);
             _closingMintTemps[cm] = tmp;
             mintNode = cm;
         }
@@ -7410,6 +7443,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             if (vc != _classes.end() && vc->second.closesWindow) {
                 _scopes.back().locals.push_back({ alias, viewCType, /*userName=*/true });
                 recordDestructibleOwner(alias, viewCType);
+                openLockRegion(unparseExpr(b->host), vmi->cName, bn->line, depth + 1);
             }
         }
         // Registered only AFTER every binding is resolved. Eagerly, the second binding of
@@ -7451,6 +7485,10 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     // Same double-destruction guard as `scope`: a jump exit already ran the full cleanup on its way out.
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), depth + 1);
+    if (const int lr = _scopes.back().lockRegion) {
+        indent(depth + 1); *_out << "/*kama:lw-" << lr << "*/\n";
+        if (!_openLockRegions.empty() && _openLockRegions.back() == lr) _openLockRegions.pop_back();
+    }
     indent(depth); *_out << "}\n";
     popScope();   // retires the aliases
     for (const std::string& a : placeAliases) { _refParams.erase(a); _constLocals.erase(a); _refBindingOperand.erase(a); }
@@ -26069,6 +26107,7 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "KAMA_ISOLATE_LOCAL kama_recover_t* kama_recover_top = 0;\n"
           << "#endif\n";
     *_out << "KAMA_ISOLATE_LOCAL kama_access_state kama_accesses = { 0, 0, 0 };\n";   // KR-211: this thread's open accesses
+    *_out << "KAMA_ISOLATE_LOCAL kama_lock_state kama_locks = { 0 };\n";              // KR-226: the locks this thread holds
     *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
           << "void (*kama_panic_hook)(kama_panic_info*) = 0;\n"
           << "int kama_in_panic_hook = 0;\n"
@@ -31835,6 +31874,7 @@ std::string CEmitter::emitBindableInvoke(const std::string& shown, const std::st
     // No-heap gate, and the same escape as the bare `fnptr`: a bindable's `Sig` IS an `fnptr` type, so a
     // `@noheap` signature has had every promotion and every `obj:`/`method:` bind checked against the
     // promise, and the call through it is provable.
+    noteParksBlind(line);
     if (!sig.noHeap) rejectNoHeapIndirect("through a bound function pointer", line);
     std::string plist;
     for (size_t i = 0; i < sig.params.size(); ++i)
@@ -33670,6 +33710,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         // declared it may. A `@noheap fnptr` has had every bind checked against that promise
         // (checkFnPtrBind), so the call is provable and nothing is recorded — the escape hatch this
         // gate existed to make necessary rather than decorative.
+        noteParksBlind(call->line);
         if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);
         recordRef(bindingKeyOf(name), call->identifier.get());   // a call through the local reads it
         std::string callee = _refParams.count(name) ? ("(*" + kName(name) + ")") : kName(name);
@@ -33688,6 +33729,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (mit != _moduleStatics.end() && mit->second && mit->second->value
             && isSigType(cType(mit->second))) {
             const SigInfo& sig = _sigs.at(cType(mit->second));
+            noteParksBlind(call->line);
             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
             recordRef(ms, call->identifier.get());
             if (_ctCheck) { ctRefuse(ctNotComptimeCall(name, _ctFnBody), call->line); return "0"; }   // KR-102
@@ -35362,6 +35404,12 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
         // in that marker — see kama_runtime.h for why the unmarked case is the one that must be sound.
         int pdepth = 0, provenAt = 0;
         int slotAt = 0; std::string slotType;   // inside `KAMA_SLOT(V, …)` (KR-39): the vtable type the call reads
+        // KR-226: the lock-window regions open at this point of the body (`/*kama:lw±N*/`), and what each ref is under.
+        std::set<int> regions;
+        std::vector<std::set<int>> refIn;
+        std::vector<Ref> slotOnly;               // a proven `@noheap` slot's targets: no heap edge, but they may park
+        std::vector<std::set<int>> slotOnlyIn;
+        auto inRegions = [&](int at) { for (int r : regions) _lockRegionBlind.emplace(r, at); };
         for (size_t i = b.open + 1; i < b.close; ) {
             const char c = s[i];
             if (c == '\n') { lineStart = true; ++i; continue; }
@@ -35372,7 +35420,13 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             }
             lineStart = false;
             if (header) line = countedLine(i);   // no directives here: the position IS the line
-            if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) { i = skipComment(i); continue; }
+            if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) {
+                if (!header && s.compare(i, 9, "/*kama:lw") == 0 && i + 10 < n) {   // a lock-window region edge
+                    const int r = atoi(s.c_str() + i + 10);
+                    if (s[i + 9] == '+') regions.insert(r); else regions.erase(r);
+                }
+                i = skipComment(i); continue;
+            }
             if (c == '"' || c == '\'') { i = skipLiteral(i); prevTok = "\""; continue; }
             if (!identStart(c)) {
                 // `->` is one token for the member test below.
@@ -35392,7 +35446,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             const bool afterType = prevTok == "*" || (!prevTok.empty() && identStart(prevTok[0]) && !kNotAType.count(prevTok));
             if (!member && afterType && (next == '=' || next == ';' || next == ',' || next == '['))
                 declared.insert(id);
-            if (!member && id != b.name && defined.count(id)) refs.push_back(Ref{ id, line, next == '(' });
+            if (!member && id != b.name && defined.count(id)) { refs.push_back(Ref{ id, line, next == '(' }); refIn.push_back(regions); }
             // THE FUNNEL — the first of the two derived leaves, and BOTH its arms are handled here, which is
             // the whole distinction the declared allocator bought (KR-49): with `@globalAllocator` the funnel
             // IS the pool, so a use is an EDGE into the pool's entry and the pool's own body decides; without
@@ -35400,9 +35454,11 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             // here and never descends into the funnel's own body — `kama_alloc` is not in `defined`, and the
             // funnel's block is blanked out of the header text besides.
             if (!member && next == '(' && isFunnelName(id)) {
-                if (pool)
+                if (pool) {
                     refs.push_back(Ref{ id == "kama_free" ? "kama__global_deallocate"
                                         : id == "kama_realloc" ? "kama__global_reallocate" : "kama__global_allocate", line, true });
+                    refIn.push_back(regions);
+                }
                 else if (!_allocSites.count(b.name) && !isCapacityGuardedDrop(b.name))
                     _allocSites[b.name] = AllocSite{ "calls `" + id + "`, the runtime's allocation funnel", line, file };
                 prevTok = id; i = e; continue;
@@ -35446,7 +35502,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             // KR-39: a slot of a vtable this program defines is no blind call — it is an edge to every function an
             // instance installs there (`KAMA_SLOT(V, …)` names the type; an unmarked call takes the slot across every
             // type, a superset). Only a member no vtable has — a `fnptr` field — is still a fact.
-            if (!header && member && !provenAt) {
+            if (!header && member) {   // KR-226: a proven slot is read too — no heap fact, but the parks walk follows it
                 size_t g = f;
                 if (next == ')') { ++g; while (g < b.close && isspace((unsigned char)s[g])) ++g; }
                 if ((next == '(' || (next == ')' && g < b.close && s[g] == '('))) {
@@ -35460,11 +35516,18 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
                         auto fl = _slotsByField.find(id);
                         if (fl != _slotsByField.end()) ts = &fl->second;
                     }
-                    if (ts) { for (const SlotTarget& tg : *ts) if (defined.count(tg.fn)) refs.push_back(Ref{ tg.fn, line, true, tg.via }); }
-                    else if (!knownType && !_allocSites.count(b.name))
-                        _allocSites[b.name] = AllocSite{ id == "kama_dtor"
-                            ? "the destructor of the object behind a contract or base-class handle"
-                            : ("`" + id + "` through a dispatch slot"), line, file, /*indirect=*/true };
+                    if (ts && provenAt) {
+                        for (const SlotTarget& tg : *ts) if (defined.count(tg.fn)) { slotOnly.push_back(Ref{ tg.fn, line, true, tg.via }); slotOnlyIn.push_back(regions); }
+                    } else if (ts) {
+                        for (const SlotTarget& tg : *ts) if (defined.count(tg.fn)) { refs.push_back(Ref{ tg.fn, line, true, tg.via }); refIn.push_back(regions); }
+                    } else if (!knownType) {   // a `fnptr` field: no target to follow, so it may wait or lock (KR-226)
+                        _parksBlind.emplace(b.name, line);
+                        inRegions(line);
+                        if (!provenAt && !_allocSites.count(b.name))
+                            _allocSites[b.name] = AllocSite{ id == "kama_dtor"
+                                ? "the destructor of the object behind a contract or base-class handle"
+                                : ("`" + id + "` through a dispatch slot"), line, file, /*indirect=*/true };
+                    }
                 }
             }
             prevTok = id;
@@ -35474,11 +35537,17 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
         if (pool && fc != _funnelCallers.end()) refs.push_back(Ref{ "kama__global_allocate", fc->second, true });
         auto& out = _callEdges[b.name];
         const auto drops = _dropSiteLines.find(b.name);
-        for (const Ref& r : refs) {
+        for (size_t k = 0; k < refs.size(); ++k) {
+            const Ref& r = refs[k];
             if (!r.call && declared.count(r.name)) continue;
             int at = r.line;
             if (drops != _dropSiteLines.end()) { auto d = drops->second.find(r.name); if (d != drops->second.end()) at = d->second; }
             out.emplace(r.name, CallEdge{ at, r.via });
+            if (k < refIn.size()) for (int rg : refIn[k]) _lockRegionEdges[rg].emplace(r.name, CallEdge{ at, r.via });
+        }
+        for (size_t k = 0; k < slotOnly.size(); ++k) {
+            _parksSlotEdges[b.name].emplace(slotOnly[k].name, CallEdge{ slotOnly[k].line, slotOnly[k].via });
+            for (int rg : slotOnlyIn[k]) _lockRegionEdges[rg].emplace(slotOnly[k].name, CallEdge{ slotOnly[k].line, slotOnly[k].via });
         }
         line = 0; file.clear();   // a following body with no directive of its own must not inherit this one's
     }
@@ -35704,6 +35773,89 @@ void CEmitter::recordStaticWrite(SharedExpression target)
 // chain. So no frame the region reaches may own a destructible local or an owning by-value parameter.
 // `@noheap` (required beside the attribute) already proves the region allocates nothing, transitively;
 // this is the RAII half of the same guarantee, over the same call graph, anchored at the local.
+// KR-226 — a lock window waits on nothing and takes no other lock, so a critical section never waits and taking a lock
+// blocks only for some section's CPU work: deadlock-free by construction. A region is a LOCK window when one of its
+// mints reaches the runtime's acquire; then nothing its body calls may reach a `@parks` body (std marks every wait at
+// its seam: channels, joins, sleep, the poller, files, sockets, DNS, stdio, processes, the print family), the runtime's
+// own waits (a `scope`'s join, a log line), another acquire, or a call whose target no graph can see. Over the graph
+// `--no-heap` reads, so a contract call is judged against every implementer, and a destructor the window runs is an
+// edge like any call. The residuals are stated in SPEC *Locked*: a foreign call that blocks with no `@parks` wrapper,
+// and a spin on an `Atomic` waiting for a thread that needs the lock.
+void CEmitter::checkLockWindows()
+{
+    if (_lockRegions.empty()) return;
+    static const std::set<std::string> kAcquire = { "kama_locked_acquire", "kama_locked_acquire_shared" };
+    static const std::set<std::string> kRuntimeWaits = { "kama_isolate_join", "kama_log_dispatch" };
+    auto callees = [&](const std::string& f) {
+        std::vector<std::pair<std::string, CallEdge>> out;
+        auto it = _callEdges.find(f);
+        if (it != _callEdges.end()) for (auto& e : it->second) out.push_back(e);
+        auto ps = _parksSlotEdges.find(f);
+        if (ps != _parksSlotEdges.end()) for (auto& e : ps->second) out.push_back(e);
+        return out;
+    };
+    auto reachesAcquire = [&](const std::string& root) {
+        std::set<std::string> seen{ root };
+        std::vector<std::string> q{ root };
+        for (size_t qi = 0; qi < q.size(); ++qi) {
+            const std::string f = q[qi];
+            if (kAcquire.count(f)) return true;
+            for (auto& e : callees(f)) if (seen.insert(e.first).second) q.push_back(e.first);
+        }
+        return false;
+    };
+    for (auto& kv : _lockRegions) {
+        const LockRegion& reg = kv.second;
+        int locks = 0;
+        for (const std::string& m : reg.mints) if (reachesAcquire(m)) ++locks;
+        if (!locks) continue;   // a closing view that locks nothing (a transaction): no lock window
+        ScopedStr _f(_emitDeclFile, reg.file);
+        if (reg.mints.size() > 1) {
+            unsupported(("`borrow " + reg.host + "` takes a lock, and this `borrow` makes another view that closes its "
+                         "window too — a lock window holds only its locks. Nest the other window outside this one").c_str(), reg.line);
+            continue;
+        }
+        auto bl = _lockRegionBlind.find(kv.first);
+        if (bl != _lockRegionBlind.end()) {
+            unsupported(("this lock window (`borrow " + reg.host + "`) calls through a `fnptr` or a bound function at line "
+                         + std::to_string(bl->second) + ", whose target the compiler cannot see — it could wait or take a lock "
+                         "while this one is held. Call a named function, or make the call after the window").c_str(), bl->second);
+            continue;
+        }
+        std::map<std::string, std::string> parent;
+        std::map<std::string, int> firstLine;
+        std::vector<std::string> q;
+        std::set<std::string> seen;
+        auto re = _lockRegionEdges.find(kv.first);
+        if (re != _lockRegionEdges.end())
+            for (auto& e : re->second) if (seen.insert(e.first).second) { q.push_back(e.first); firstLine[e.first] = e.second.line; }
+        std::string hit, why;
+        for (size_t qi = 0; qi < q.size() && hit.empty(); ++qi) {
+            const std::string f = q[qi];   // a copy: the pushes below may move `q`
+            if (kAcquire.count(f))       { hit = f; why = "takes another lock"; break; }
+            if (_parksFns.count(f))      { hit = f; why = "waits (it is `@parks`)"; break; }
+            if (kRuntimeWaits.count(f))  { hit = f; why = f == "kama_isolate_join" ? "waits for the isolate to finish" : "waits on the log's sink"; break; }
+            if (_parksBlind.count(f))    { hit = f; why = "calls through a `fnptr` or a slot whose target the compiler cannot see"; break; }
+            for (auto& e : callees(f)) if (seen.insert(e.first).second) { parent[e.first] = f; q.push_back(e.first); }
+        }
+        if (hit.empty()) continue;
+        std::vector<std::string> chain;
+        for (std::string x = hit; !x.empty(); x = parent.count(x) ? parent[x] : std::string()) chain.push_back(x);
+        std::string path;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            const std::string d = kAcquire.count(*it) ? std::string("the runtime's lock")
+                                : *it == "kama_isolate_join" ? std::string("an isolate's join")
+                                : *it == "kama_log_dispatch" ? std::string("a log line") : displayBody(*it);
+            path += (path.empty() ? "`" : " -> `") + d + "`";
+        }
+        const int at = firstLine.count(chain.back()) ? firstLine[chain.back()] : reg.line;
+        unsupported(("a lock window may not wait or take another lock, and this one (`borrow " + reg.host + "`) reaches "
+                     + path + ", which " + why + ". Take what you need out of the window and do that after it — a "
+                     "critical section that waits is how a lock becomes a stall, and one that locks is how it becomes "
+                     "a deadlock").c_str(), at);
+    }
+}
+
 void CEmitter::checkOnPanicRegions()
 {
     if (_onPanicFns.empty() || _destructibleOwners.empty()) return;
@@ -42063,6 +42215,7 @@ std::string CEmitter::emitDispatch(const std::string& clsName, const std::string
                             canAccess(fo, f.visibility, method, srcLine);
                             recordFieldRef(fo, method, site);   // a call through the field reads it
                             const SigInfo& sig = _sigs.at(fc);
+                            noteParksBlind(srcLine);
                             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", srcLine);   // see the local arm
                             return emitReorderedCall(method, sig.noHeap ? ("KAMA_NOHEAP_SLOT((" + recvPtr + ")->" + kMember(*fo, method) + ")")
                                                                 : ("(" + recvPtr + ")->" + kMember(*fo, method)), "", sig.params,
@@ -46157,6 +46310,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkGlobalAllocator();           // the declared pool's rules, and a pool reaching itself through the funnel
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
+    checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
     computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled
@@ -46245,6 +46399,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkGlobalAllocator();           // the declared pool's rules, and a pool reaching itself through the funnel
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
+    checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
     computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled

@@ -1,0 +1,50 @@
+// A cache several isolates share (KR-226), the case a client library has: a hit is a hash lookup under the lock, not a
+// channel round trip to an owner isolate, and a miss inserts in the same window — lookup-or-insert, with the work done
+// outside it. Each worker counts its own misses into a second lock. Returns 42.
+import { std::concurrent::Locked, std::concurrent::Isolate, std::collections::Map };
+
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+
+type resource Worker implements Sendable {
+    Locked<Map<string, int64>> cache;
+    Locked<Counter> misses;
+    int32 seed;
+    public ctor make(Locked<Map<string, int64>> c, Locked<Counter> m, int32 seed) { this.cache = give c; this.misses = give m; this.seed = seed; }
+    public fn void run() {
+        int32 i = 0;
+        int32 mine = 0;
+        while (i < 200) {
+            int32 idx = (this.seed + i) % 7;
+            string key = "k${idx}";
+            int64 cost = cast<int64>(key.length()) * 3i64;   // the "work", outside the window
+            borrow this.cache.lock().value() as m {
+                match (m.get(key: key)) {
+                    case Some(value: v): { }
+                    case None: { m.put(key: copy key, value: cost); mine = mine + 1; }
+                };
+            }
+            i = i + 1;
+        }
+        borrow this.misses.lock().value() as t { t.n = t.n + mine; }
+    }
+}
+fn void work(Worker w) { w.run(); }
+
+fn uint8 main() {
+    Locked<Map<string, int64>> cache = Locked.make(value: Map.empty());
+    Locked<Counter> misses = Locked.make(value: Counter.zero());
+    scope {
+        Worker b1 = Worker.make(c: copy cache, m: copy misses, seed: 0);
+        spawn work(w: give b1);
+        Worker b2 = Worker.make(c: copy cache, m: copy misses, seed: 3);
+        spawn work(w: give b2);
+        Worker b3 = Worker.make(c: copy cache, m: copy misses, seed: 5);
+        spawn work(w: give b3);
+    }
+    int32 size = 0;
+    borrow cache.lock().value() as m { size = cast<int32>(m.length()); }
+    int32 total = 0;
+    borrow misses.lock().value() as t { total = t.n; }
+    // Seven keys, each inserted exactly once however the workers interleaved.
+    return (size == 7 && total == 7) ? 42 : cast<uint8>(size * 10 + total);
+}

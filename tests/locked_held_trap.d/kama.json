@@ -1,0 +1,9 @@
+{
+  "name": "lockedheld",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/cb.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}

@@ -1,0 +1,17 @@
+// A call through a contract inside a lock window is judged against every implementer (KR-226), as `--no-heap` judges it:
+// `Mem.put` waits on nothing, but `Wire.put` sleeps, and the window cannot tell which `feed` is handed. Call the
+// concrete type's method, or take the value out and call through the contract after the window.
+import { std::concurrent::Locked, std::time::sleep, std::time::Duration };
+type contract Sink for resource { fn void put(int32 n); }
+type resource Wire implements Sink { public ctor make() { } public fn void put(int32 n) { sleep(d: Duration.fromMillis(ms: 1i64)); } }
+type resource Mem implements Sink { int32 last; public ctor make() { this.last = 0; } public fn void put(int32 n) { this.last = n; } }
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn void feed(Sink s, int32 n) { s.put(n: n); }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    Mem mem = Mem.make();
+    Wire wire = Wire.make();
+    feed(s: wire, n: 1);
+    borrow c.lock().value() as m { feed(s: mem, n: m.n); }
+    return 0;
+}

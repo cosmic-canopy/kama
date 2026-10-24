@@ -1,0 +1,11 @@
+// A call whose target the compiler cannot see may wait or take a lock, so a lock window may not make one (KR-226).
+import { std::concurrent::Locked };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fnptr int32 Score(int32 n);
+fn int32 twice(int32 n) { return n * 2; }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    Score f = twice;
+    borrow c.lock().value() as m { m.n = f(n: 3); }
+    return 0;
+}

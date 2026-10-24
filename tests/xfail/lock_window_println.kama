@@ -1,0 +1,9 @@
+// Printing waits on the terminal or the pipe behind stdout, so it is a wait a lock window may not make (KR-226): copy what
+// to print out of the window and print after it.
+import { std::concurrent::Locked, core::println };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    borrow c.lock().value() as m { m.n = 1; println(s: "set"); }
+    return 0;
+}

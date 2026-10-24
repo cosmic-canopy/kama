@@ -1,0 +1,30 @@
+// The held-count trap behind the lock-window walk (KR-226). A lock window takes no other lock, and the walk proves it
+// for every call the compiler can read — but a call into C is not one, and C may call back into kama. So the runtime
+// counts the locks a thread holds, and an acquire while it holds one traps: here the window calls C, C calls back into
+// `onEvent`, and `onEvent` takes a lock. The panic handler checks the message and exits 42; through the walk alone this
+// could have deadlocked on a lock taken twice.
+import { std::concurrent::Locked, std::app::quit, core::setPanicHandler, core::PanicInfo };
+extern "cb.h";
+extern fn void cb_call_back();
+
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+
+@callerThread @linkName("lockedheld_on_event")
+expose fn void onEvent() {
+    Locked<Counter> other = Locked.make(value: Counter.zero());
+    borrow other.lock().value() as m { m.n = 1; }
+}
+
+fn void report(const ref PanicInfo info) {
+    if (info.message().contains(substring: "a lock is taken inside a lock window")) { quit(code: 42); }
+    quit(code: 1);
+}
+
+unsafe fn void callOut() { cb_call_back(); }
+
+fn uint8 main() {
+    setPanicHandler(handler: report);
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    borrow c.lock().value() as m { callOut(); m.n = 2; }
+    return 3;
+}

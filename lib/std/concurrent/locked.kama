@@ -1,0 +1,116 @@
+export { Locked, ReadWriteLocked, LockGuard, SharedLockGuard, Lockable, LockableShared };
+
+// Shared mutable state, safe at compile time (KR-226). A lock that OWNS its payload, reachable only inside a `borrow`
+// window over the guard its mint returns:
+//
+//     borrow hits.lock().value() as m { m.put(key: path, value: 1); }   // acquires; the window's close releases
+//
+// The window's rules give Rust's `MutexGuard` guarantee with no lifetimes: the alias cannot be stored, returned or put
+// in a collection, and the guard cannot be copied out of its window, so nothing reaches the payload once the lock is
+// released. The window may reach no wait (`@parks`: a channel, a join, I/O, a log line) and take no other lock, so a
+// critical section never waits, and taking a lock blocks only as long as some section's CPU work; several locks are
+// taken together in one `borrow`, in a deadlock-free order. `Locked` and `ReadWriteLocked` are `Sendable` handles whose
+// copies share one cell, so isolates share one value through them; the payload must be `Sendable` too, since a
+// non-atomic `Shared` inside it would race through the window. kama_locked.h has the lock per OS and the bytes.
+extern "kama_locked.h";
+extern fn UnsafePtr kama_locked_new(UnsafeConstPtr src, usize size, usize align, int32 rw);
+extern fn UnsafePtr kama_locked_payload(UnsafePtr cell);
+extern fn void      kama_locked_retain(UnsafePtr cell);
+extern fn int32     kama_locked_release(UnsafePtr cell);
+extern fn void      kama_locked_free(UnsafePtr cell);
+extern fn void      kama_locked_acquire(UnsafePtr cell);
+extern fn void      kama_locked_acquire_shared(UnsafePtr cell);
+extern fn void      kama_locked_unlock(UnsafePtr cell);
+extern fn void      kama_locked_unlock_shared(UnsafePtr cell);
+
+// Move a value's bytes away without running its destructor: storing it onto its own address with `give` is the
+// language's "move into a raw slot" (channel.kama's twin; visibility is per file).
+unsafe fn void forget<T>(T value) {
+    UnsafePtr<T> at = addr(of: value);
+    at[0] = give value;
+}
+
+// The mints: `lock()` grants the writable window, `lockShared()` the read-only one.
+@viewable type contract Lockable<G> for resource { fn G lock(); }
+@viewable type contract LockableShared<G> for resource { fn G lockShared(); }
+
+// The writable window over a lock's payload. It closes its window (KR-124), so it lives only as what a `borrow` holds,
+// and its destructor releases the lock on every path out of the window, once.
+type view LockGuard<T> {
+    UnsafePtr cell;
+    UnsafePtr<T> payload;
+    unsafe ctor over(UnsafePtr cell, UnsafePtr<T> payload) { this.cell = cell; this.payload = payload; }
+    // The payload, a place: `borrow hits.lock().value() as m` names it.
+    public unsafe fn ref T value() { return this.payload[0]; }
+    unsafe ~LockGuard() { kama_locked_unlock(cell: this.cell); }
+}
+
+// The read-only window of a `ReadWriteLocked`: any number may be open at once, on any isolates.
+type view SharedLockGuard<T> {
+    UnsafePtr cell;
+    UnsafePtr<T> payload;
+    unsafe ctor over(UnsafePtr cell, UnsafePtr<T> payload) { this.cell = cell; this.payload = payload; }
+    public unsafe const fn const ref T value() { return this.payload[0]; }
+    unsafe ~SharedLockGuard() { kama_locked_unlock_shared(cell: this.cell); }
+}
+
+// A value one lock guards. `Copyable(bare: give)`: a bare hand-off moves the handle; `copy hits` makes a second handle to
+// the SAME value — what each isolate is handed. The last handle to go drops the payload.
+type resource Locked<T: Sendable> implements Sendable, Copyable<This>(bare: give), Lockable<LockGuard<T>> {
+    UnsafePtr cell;
+    UnsafePtr<T> payload;   // inside the cell, where `make` moved the value
+    public unsafe ctor make(T value) {
+        this.cell = kama_locked_new(src: cast<UnsafeConstPtr>(addr(of: value)), size: sizeof(T), align: alignof(T), rw: 0);
+        this.payload = cast<UnsafePtr<T>>(kama_locked_payload(cell: this.cell));
+        forget(value: give value);   // its bytes moved into the cell
+    }
+    public unsafe ctor copy(ref Locked<T> source) {
+        kama_locked_retain(cell: source.cell);
+        this.cell = source.cell;
+        this.payload = source.payload;
+    }
+    // Acquires; the window that holds the guard releases.
+    public unsafe fn LockGuard<T> lock() {
+        kama_locked_acquire(cell: this.cell);
+        return LockGuard.over(cell: this.cell, payload: this.payload);
+    }
+    unsafe ~Locked() {
+        if (this.cell != null && kama_locked_release(cell: this.cell) != 0) {
+            drop(ptr: this.payload);
+            kama_locked_free(cell: this.cell);
+        }
+    }
+}
+
+// A value a reader/writer lock guards: `lock()` is the one writer, `lockShared()` one of any number of readers, and a
+// `const ref ReadWriteLocked` can read but not write. Reach for it only when reads are long or dominate: for a short
+// critical section the readers' shared count costs more than an exclusive lock does.
+type resource ReadWriteLocked<T: Sendable> implements Sendable, Copyable<This>(bare: give), Lockable<LockGuard<T>>,
+                                                      LockableShared<SharedLockGuard<T>> {
+    UnsafePtr cell;
+    UnsafePtr<T> payload;
+    public unsafe ctor make(T value) {
+        this.cell = kama_locked_new(src: cast<UnsafeConstPtr>(addr(of: value)), size: sizeof(T), align: alignof(T), rw: 1);
+        this.payload = cast<UnsafePtr<T>>(kama_locked_payload(cell: this.cell));
+        forget(value: give value);
+    }
+    public unsafe ctor copy(ref ReadWriteLocked<T> source) {
+        kama_locked_retain(cell: source.cell);
+        this.cell = source.cell;
+        this.payload = source.payload;
+    }
+    public unsafe fn LockGuard<T> lock() {
+        kama_locked_acquire(cell: this.cell);
+        return LockGuard.over(cell: this.cell, payload: this.payload);
+    }
+    public unsafe const fn SharedLockGuard<T> lockShared() {
+        kama_locked_acquire_shared(cell: this.cell);
+        return SharedLockGuard.over(cell: this.cell, payload: this.payload);
+    }
+    unsafe ~ReadWriteLocked() {
+        if (this.cell != null && kama_locked_release(cell: this.cell) != 0) {
+            drop(ptr: this.payload);
+            kama_locked_free(cell: this.cell);
+        }
+    }
+}
