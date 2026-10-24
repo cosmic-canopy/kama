@@ -667,7 +667,7 @@ multi_one() {
             echo "SKIP $name (std::process: no fork/exec on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
         # The fiber seam has no wasm switch yet: fibers there are JSPI, a later step of KR-3 (docs/design/fibers.md).
-        if grep -rqE 'kama_fiber\.h' --include='*.kama' "$dir"; then
+        if grep -rqE 'kama_(fiber|sched)\.h' --include='*.kama' "$dir"; then
             echo "SKIP $name (fibers: no wasm switch yet)" >"$out"; echo SKIP >"$res"; return
         fi
     fi

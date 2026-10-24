@@ -1,0 +1,9 @@
+{
+  "name": "fibersched",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/schedtest.c", "csrc/schedtest_poller.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}

@@ -109,6 +109,15 @@ typedef struct kama_fiber {
     size_t size;                    // its usable bytes
     size_t stated;                  // the size asked for, which an overflow names
     int done;                       // the entry returned
+    // The scheduler's (kama_sched.h); a fiber switched by hand leaves them alone.
+    void* sched;                    // the scheduler it runs on
+    struct kama_fiber* joiner;      // parked in a join on this one, woken when it ends
+    struct kama_fiber* remoteNext;  // the scheduler's remote queue
+    uint64_t deadline;              // a timed park's, while it is in the timer heap
+    int32_t heapIx;                 // its slot in the timer heap, or -1
+    int32_t refs;                   // its owner, and each remote wake in flight
+    int32_t remoteQueued;           // a remote wake is in flight
+    int8_t parked, timedOut, detached;
 #if defined(KAMA__FIBER_ASAN)
     void* asanFake;
 #endif
@@ -136,6 +145,7 @@ typedef struct kama_fiber_thread {
     char* guardLo;                  // an isolate's own guard, [guardLo, guardHi), and the size it was given
     char* guardHi;
     size_t stated;
+    void* sched;                    // this isolate's fiber scheduler (kama_sched.h), once it has one
 } kama_fiber_thread;
 // One per process.
 typedef struct kama_fiber_process {
@@ -601,6 +611,7 @@ static inline kama_fiber* kama_fiber_new(void (*entry)(void*), void* arg, size_t
     }
 #endif
     f->entry = entry; f->arg = arg; f->stated = stated; f->done = 0; f->resumer = NULL; f->next = NULL;
+    f->sched = NULL; f->joiner = NULL; f->remoteNext = NULL; f->heapIx = -1; f->refs = 0;   // a reused one's are stale
     return f;
 }
 
