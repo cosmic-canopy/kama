@@ -9,7 +9,7 @@
 import {
     std::net::TcpListener, std::net::TcpStream, std::net::UnixStreamPair, std::net::UnixStream, std::net::Poller, std::net::Interest, std::net::Event, std::net::Events,
     std::io::IoError, std::io::IoErrorKind, std::collections::DynamicArray, std::collections::ConstView,
-    std::fs::File, std::fs::OpenMode, std::fs::remove, std::concurrent::Channel,
+    std::fs::File, std::fs::OpenMode, std::fs::remove, std::concurrent::Channel, std::time::sleep, std::time::Duration,
 };
 
 fn bool ok(Result<Unit, IoError> r) { return match (r) { case Ok(value: u): true; case Err(error: e): false; }; }
@@ -93,14 +93,16 @@ unsafe fn int32 run(ref TcpListener l, ref Poller p, uint16 port) {
     if (count(ev: ev, token: SERVER) != 1 || !writable(ev: ev, token: SERVER) || readable(ev: ev, token: SERVER)) { return 11; }
 
     // Readable AND writable: ONE event (two kevents on macOS, merged). The stream is writable throughout, so a wait
-    // may return before the byte lands; wait until it shows readable.
+    // returns at once, before the byte lands; wait for it on a clock, 5 ms a try for up to 2 s. Through 0.9.733 it was
+    // 200 tries with no pause, which a loaded CI runner spent before the loopback byte arrived (exit 14, macOS).
     if (!send(s: client, b: 9ui8)) { return 12; }
     int32 tries = 0;
     bool landed = false;
-    while (!landed && tries < 200) {
+    while (!landed && tries < 400) {
         int32 n = waited(r: p.wait(events: ev, timeoutMs: 2000));
         if (n != 1 || ev.length() != 1 || count(ev: ev, token: SERVER) != 1) { return 13; }
         landed = readable(ev: ev, token: SERVER);
+        if (!landed) { sleep(d: Duration.fromMillis(ms: 5i64)); }
         tries = tries + 1;
     }
     if (!landed || !writable(ev: ev, token: SERVER)) { return 14; }
