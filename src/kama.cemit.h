@@ -1978,6 +1978,13 @@ private:
     std::map<std::string, int> _parksBlind;                              // body -> a call with no seen target
     std::map<std::string, std::map<std::string, CallEdge>> _parksSlotEdges;   // proven `@noheap` slots, which park
     void openLockRegion(const std::string& host, const std::string& mintC, int line, int depth);
+    // Several closing mints in one `borrow` (C8): the receivers are evaluated first, the mints run between group
+    // markers, and only then are the places computed. When every mint locks, the markers become a lock GROUP
+    // (`kama_lockgroup_begin/end`): the mints only record their cells, and the group's end takes them in address order
+    // — deadlock-free whatever order two `borrow`s name them in. `_lockGroups` is decided after the graph is read.
+    std::set<int> _lockGroups;
+    std::set<std::string> _preMintedAliases;   // a mint-path alias the group pass already declared
+    bool _lockGroupPending = false;            // the region's begin marker waits for the group's end
     void noteParksBlind(int line);
     void checkLockWindows();
     bool _spawnsThreads = false;

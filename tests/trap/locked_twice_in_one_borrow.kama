@@ -1,0 +1,11 @@
+// Two handles to one lock, named together in one `borrow` (KR-226): the window would take the same lock twice, which
+// self-deadlocks a mutex and aborts an `os_unfair_lock`. The names differ, so only the run sees it — and the group's end
+// traps on the duplicate cell rather than hang.
+import { std::concurrent::Locked };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> a = Locked.make(value: Counter.zero());
+    Locked<Counter> b = copy a;
+    borrow a.lock().value() as x, b.lock().value() as y { x.n = y.n + 1; }
+    return 0;
+}

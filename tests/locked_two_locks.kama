@@ -1,0 +1,41 @@
+// Several locks in one `borrow` are taken together, in the address order of their cells (KR-226): two isolates move
+// value between two accounts 20,000 times, one naming them `from, to` and the other `to, from` — the order that
+// deadlocks when each takes its first lock and waits for its second. Here each `borrow` takes both in one order, so the
+// run finishes, and the sum is conserved (TSan: race-free). A reader/writer lock joins a group in shared mode beside an
+// exclusive one. Returns 42.
+import { std::concurrent::Locked, std::concurrent::ReadWriteLocked, std::concurrent::Isolate };
+
+type value Account implements Sendable { public int64 balance; public ctor of(int64 b) { this.balance = b; } }
+
+type resource Mover implements Sendable {
+    Locked<Account> from;
+    Locked<Account> to;
+    ReadWriteLocked<Account> fee;
+    public ctor make(Locked<Account> f, Locked<Account> t, ReadWriteLocked<Account> fee) { this.from = give f; this.to = give t; this.fee = give fee; }
+    public fn void run() {
+        int32 i = 0;
+        while (i < 20000) {
+            borrow this.from.lock().value() as a, this.to.lock().value() as b, this.fee.lockShared().value() as f {
+                a.balance = a.balance - 1i64 - f.balance;
+                b.balance = b.balance + 1i64 + f.balance;
+            }
+            i = i + 1;
+        }
+    }
+}
+fn void move(Mover m) { m.run(); }
+
+fn uint8 main() {
+    Locked<Account> x = Locked.make(value: Account.of(b: 1000i64));
+    Locked<Account> y = Locked.make(value: Account.of(b: 1000i64));
+    ReadWriteLocked<Account> fee = ReadWriteLocked.make(value: Account.of(b: 0i64));
+    Mover one = Mover.make(f: copy x, t: copy y, fee: copy fee);
+    Mover two = Mover.make(f: copy y, t: copy x, fee: copy fee);   // the opposite order
+    scope {
+        spawn move(m: give one);
+        spawn move(m: give two);
+    }
+    int64 sum = 0i64;
+    borrow x.lock().value() as a, y.lock().value() as b { sum = a.balance + b.balance; }
+    return sum == 2000i64 ? 42 : 1;
+}

@@ -821,6 +821,7 @@ lit_wide_past_uint64	lit_wide_past_uint64.kama:5:15
 local_no_initializer	local_no_initializer.kama:9:4
 local_scope_shadow_match_cond_move	local_scope_shadow_match_cond_move.kama:17:4
 local_scope_sibling_slot_cond_move	local_scope_sibling_slot_cond_move.kama:21:0
+lock_group_sibling_receiver	lock_group_sibling_receiver.kama:12:4
 lock_window_contract_call	lock_window_contract_call.kama:15:0
 lock_window_fnptr	lock_window_fnptr.kama:9:0
 lock_window_isolate_drop	lock_window_isolate_drop.kama:8:0

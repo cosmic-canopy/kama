@@ -6894,7 +6894,7 @@ void CEmitter::openLockRegion(const std::string& host, const std::string& mintC,
     LockRegion r; r.line = line; r.file = diagFile(); r.host = host; r.mints.push_back(mintC);
     _lockRegions[lr] = r;
     _openLockRegions.push_back(lr);
-    indent(depth); *_out << "/*kama:lw+" << lr << "*/\n";
+    if (!_lockGroupPending) { indent(depth); *_out << "/*kama:lw+" << lr << "*/\n"; }
 }
 
 // A call whose target the compiler cannot see — a `fnptr`, a bound function — may wait or take a lock (KR-226).
@@ -7162,6 +7162,82 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     std::vector<std::pair<std::vector<std::string>, std::string>> bound;   // place -> the alias holding it
     std::vector<Scope::FrozenPlace> frozenNow;   // staged; registered after the loop (see below)
     std::vector<std::string> placeAliases;       // KR-123: aliases of a place, retired from the ref tables at the close
+    // C8 (KR-226): a `borrow` with several views that close their windows. Its receivers are evaluated FIRST, so nothing a
+    // receiver runs falls between the group's markers; then the mints, in source order; then — in the loop below — the
+    // places. When every mint locks (read after the graph), the markers become a lock group whose end takes the cells in
+    // address order; otherwise they stay comments, and the order is the source order a window always had.
+    {
+        struct Pre { InvocationNode* inv; SharedExpression recv; MethodInfo* mi; std::string cls, alias, host; bool bare; };
+        std::vector<Pre> pres;
+        std::set<std::string> aliasesHere;
+        if (bn->bindings) for (auto& b : *bn->bindings) if (b && b->alias && b->alias->value) aliasesHere.insert(*b->alias->value);
+        if (bn->bindings)
+            for (auto& b : *bn->bindings) {
+                if (!b || !b->host || !b->alias || !b->alias->value) continue;
+                InvocationNode* inv = nullptr; bool bare = false;
+                auto* hinv = dynamic_cast<InvocationNode*>(b->host.get());
+                if (hinv && !invocationReturnsPlace(hinv) && closesWindowCType(callReturnTypeRaw(hinv))) { inv = hinv; bare = true; }
+                else if (!dynamic_cast<IdentifierNode*>(b->host.get())) inv = closingMintIn(b->host, nullptr);
+                if (!inv) continue;
+                auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
+                if (!ma || !ma->expression || !ma->identifier || !ma->identifier->value) continue;
+                const std::string cls = exprClass(ma->expression);
+                MethodInfo* mi = (!cls.empty() && _classes.count(cls)) ? findMethod(&_classes[cls], *ma->identifier->value, nullptr) : nullptr;
+                pres.push_back(Pre{ inv, ma->expression, mi, cls, *b->alias->value, unparseExpr(b->host), bare });
+            }
+        if (pres.size() >= 2) {
+            auto spineRoot = [&](SharedExpression e) {   // the name a receiver chain starts at, through calls too
+                for (;;) {
+                    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) { if (!ma->expression) return std::string(); e = ma->expression; continue; }
+                    if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) { if (!ea->expression) return rootBinding(e); e = ea->expression; continue; }
+                    if (auto* iv = dynamic_cast<InvocationNode*>(e.get())) {
+                        auto* im = dynamic_cast<MemberAccessNode*>(iv->expression.get());
+                        if (!im || !im->expression) return std::string();
+                        e = im->expression; continue;
+                    }
+                    return rootBinding(e);
+                }
+            };
+            for (const Pre& p : pres) {
+                const std::string root = spineRoot(p.recv);
+                if (aliasesHere.count(root)) {
+                    unsupported(("`" + unparseExpr(p.recv) + "` is reached through `" + root + "`, a binding of this same "
+                                 "`borrow` — its views are made before any of its places exist, so open a `borrow` inside "
+                                 "this one for it").c_str(), bn);
+                    pres.clear(); break;
+                }
+            }
+            bool all = !pres.empty();
+            for (const Pre& p : pres) if (!p.mi || (p.inv->args && !p.inv->args->empty())) all = false;
+            if (all) {   // every mint resolves; the loop below reports any other mistake, and its emission is discarded
+                std::vector<std::string> recvs;
+                for (const Pre& p : pres) {
+                    const std::string t = "kama_lr" + std::to_string(_tempCounter++);
+                    bool ph = _hoistOK; _hoistOK = true;
+                    const std::string rc = emitExpression(p.recv);
+                    _hoistOK = ph;
+                    flushHoisted(depth + 1);
+                    indent(depth + 1); *_out << p.cls << "* " << t << " = (" << p.cls << "*)&(" << rc << ");\n";
+                    recvs.push_back(t);
+                }
+                const int gid = _lockRegionCounter + 1;   // the region the first mint below opens
+                indent(depth + 1); *_out << "/*kama:lgb:" << gid << ":" << pres.size() << "*/\n";
+                _lockGroupPending = true;
+                for (size_t k = 0; k < pres.size(); ++k) {
+                    const Pre& p = pres[k];
+                    const std::string gct = cTypeInInstance(p.cls, p.mi->returnType);
+                    const std::string name = p.bare ? kName(p.alias) : "kama_win" + std::to_string(_tempCounter++);
+                    indent(depth + 1); *_out << gct << " " << name << " = " << p.mi->cName << "(" << recvs[k] << ");\n";
+                    if (p.bare) { _preMintedAliases.insert(p.alias); _scopes.back().locals.push_back({ p.alias, gct, /*userName=*/true }); recordDestructibleOwner(p.alias, gct); }
+                    else        { _closingMintTemps[p.inv] = name; _scopes.back().locals.push_back({ name, gct, /*userName=*/false }); recordDestructibleOwner(name, gct); }
+                    openLockRegion(p.host, p.mi->cName, bn->line, depth + 1);
+                }
+                _lockGroupPending = false;
+                indent(depth + 1); *_out << "/*kama:lge:" << gid << ":" << bn->line << "*/\n";
+                indent(depth + 1); *_out << "/*kama:lw+" << _scopes.back().lockRegion << "*/\n";
+            }
+        }
+    }
     // A PLACE host (KR-123): an element, a field path, or a call returning `ref`/`const ref` with any arguments. The
     // alias IS that place (`T* L = &(<place>)`, the call made once), `const ref` when the place is read-only, and the
     // place's roots are frozen for the block: a field path itself, an element's container, a call's receiver and every
@@ -7245,6 +7321,15 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 return false;
             }
             const std::string gct = cTypeInInstance(mcls, mmi->returnType);
+            // C8: every view a `borrow` makes is made together, before its places. One the group pass could not see
+            // was reached through a binding of this same `borrow`, which does not exist yet when the views are made.
+            if (!_closingMintTemps.count(cm) && _scopes.back().lockRegion) {
+                unsupported(("`" + unparseExpr(mrecv) + "` is reached through a binding of this same `borrow`, and the "
+                             "views a `borrow` makes are made together, before any of its places exist — open a `borrow` "
+                             "inside this one for it").c_str(), bn);
+                return false;
+            }
+            if (!_closingMintTemps.count(cm)) {   // C8: a mint the group pass made is reused
             const std::string tmp = "kama_win" + std::to_string(_tempCounter++);
             bool mh = _hoistOK; _hoistOK = true;
             const std::string recvC = emitExpression(mrecv);
@@ -7257,6 +7342,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             openLockRegion(unparseExpr(host), mmi->cName, bn->line, depth + 1);
             _closingMintTemps[cm] = tmp;
             mintNode = cm;
+            }
         }
         bool ph = _hoistOK; _hoistOK = true;   // an argument's temporary lives for the window (its scope owns it)
         const std::string placeC = emitPlace(host);
@@ -7422,9 +7508,18 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                             bn);
                 continue;
             }
-            indent(depth + 1);
-            *_out << viewCType << " " << kName(alias) << " = " << vmi->cName
-                  << "(&(" << emitExpression(recvExpr) << "));\n";
+            const bool preMinted = _preMintedAliases.count(alias) != 0;   // C8: the group pass declared it
+            if (!preMinted && _scopes.back().lockRegion && _classes.count(viewCType) && _classes[viewCType].closesWindow) {
+                unsupported(("`" + unparseExpr(recvExpr) + "` is reached through a binding of this same `borrow`, and the "
+                             "views a `borrow` makes are made together, before any of its places exist — open a `borrow` "
+                             "inside this one for it").c_str(), bn);
+                continue;
+            }
+            if (!preMinted) {
+                indent(depth + 1);
+                *_out << viewCType << " " << kName(alias) << " = " << vmi->cName
+                      << "(&(" << emitExpression(recvExpr) << "));\n";
+            }
             noteScopedBinding(alias);   // the window's scope owns the alias — popScope retires all three entries
             _localTypes[alias] = viewCType;
             // An alias is an ordinary local in every way a later statement can ask about, and generic
@@ -7440,7 +7535,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             // the window closes — on every path out, `return`/`break`/`continue` included, after the body's own
             // locals — exactly once, and an `@onPanic` region that reaches it is refused as for any owner.
             auto vc = _classes.find(viewCType);
-            if (vc != _classes.end() && vc->second.closesWindow) {
+            if (vc != _classes.end() && vc->second.closesWindow && !preMinted) {
                 _scopes.back().locals.push_back({ alias, viewCType, /*userName=*/true });
                 recordDestructibleOwner(alias, viewCType);
                 openLockRegion(unparseExpr(b->host), vmi->cName, bn->line, depth + 1);
@@ -7492,6 +7587,12 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     indent(depth); *_out << "}\n";
     popScope();   // retires the aliases
     for (const std::string& a : placeAliases) { _refParams.erase(a); _constLocals.erase(a); _refBindingOperand.erase(a); }
+    if (bn->bindings)   // C8: the group pass's temporaries and pre-made aliases end with the window
+        for (auto& b : *bn->bindings) {
+            if (!b || !b->host) continue;
+            if (b->alias && b->alias->value) _preMintedAliases.erase(*b->alias->value);
+            if (InvocationNode* cmx = closingMintIn(b->host, nullptr)) _closingMintTemps.erase(cmx);
+        }
     if (bn->bindings)
         for (auto& b : *bn->bindings) if (b && b->alias && b->alias->value) _refusedBindings.erase(*b->alias->value);
 }
@@ -34981,8 +35082,36 @@ void CEmitter::computeReentry()
     }
 }
 
-std::string CEmitter::elideCallAccesses(const std::string& text)
+std::string CEmitter::elideCallAccesses(const std::string& input)
 {
+    // C8 (KR-226): a lock group's markers, now that the graph has said which `borrow`s take several locks.
+    std::string text;
+    {
+        static const std::string kB = "/*kama:lgb:", kE = "/*kama:lge:";
+        size_t at = 0;
+        for (;;) {
+            const size_t pb = input.find(kB, at), pe = input.find(kE, at);
+            const size_t p = std::min(pb, pe);
+            if (p == std::string::npos) break;
+            const bool begin = p == pb;
+            const size_t end = input.find("*/", p + kB.size());
+            if (end == std::string::npos) break;
+            const std::string body = input.substr(p + kB.size(), end - p - kB.size());   // "N:K" or "N:line"
+            const int gid = atoi(body.c_str());
+            const std::string tail = body.substr(body.find(':') + 1);
+            text.append(input, at, p - at);
+            if (_lockGroups.count(gid)) {
+                const std::string g = "kama_lg" + std::to_string(gid);
+                if (begin)
+                    text += "void* " + g + "c[" + tail + "]; int8_t " + g + "s[" + tail + "]; kama_lockgroup " + g
+                          + " = { 0, " + tail + ", " + g + "c, " + g + "s }; kama_lockgroup_begin(&" + g + ");";
+                else
+                    text += "kama_lockgroup_end(&" + g + ", " + tail + ");";
+            } else text.append(input, p, end + 2 - p);   // not a lock group: it stays a comment
+            at = end + 2;
+        }
+        text.append(input, at, std::string::npos);
+    }
     static const std::string kAccess = "KAMA_CALL_ACCESS/*kca:", kHold = "KAMA_CALL_HOLD/*kca:";
     std::string out;
     size_t at = 0;
@@ -35810,11 +35939,12 @@ void CEmitter::checkLockWindows()
         for (const std::string& m : reg.mints) if (reachesAcquire(m)) ++locks;
         if (!locks) continue;   // a closing view that locks nothing (a transaction): no lock window
         ScopedStr _f(_emitDeclFile, reg.file);
-        if (reg.mints.size() > 1) {
+        if (reg.mints.size() > 1 && locks < (int)reg.mints.size()) {
             unsupported(("`borrow " + reg.host + "` takes a lock, and this `borrow` makes another view that closes its "
                          "window too — a lock window holds only its locks. Nest the other window outside this one").c_str(), reg.line);
             continue;
         }
+        if (reg.mints.size() > 1) _lockGroups.insert(kv.first);   // several locks: taken together, in address order
         auto bl = _lockRegionBlind.find(kv.first);
         if (bl != _lockRegionBlind.end()) {
             unsupported(("this lock window (`borrow " + reg.host + "`) calls through a `fnptr` or a bound function at line "

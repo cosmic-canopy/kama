@@ -172,14 +172,54 @@ static inline void kama__locked_rw(void* l, int lock, int shared) {
 #endif
 }
 
+// Several locks in one `borrow` (KR-226, the group the compiler brackets the mints with): each mint RECORDS its cell, and
+// the group's end takes them all in ADDRESS order. Two `borrow`s that name `a, b` and `b, a` then take them the same
+// way, so neither can hold one and wait for the other — the deadlock-free order C++'s `std::lock` gets by trying and
+// backing off, here without a retry. A cell named twice (two handles to one lock) traps: it would be taken twice.
+typedef struct kama_lockgroup { int32_t n; int32_t cap; void** cells; int8_t* shared; } kama_lockgroup;
+
+static inline void kama_lockgroup_begin(kama_lockgroup* g) { g->n = 0; kama_locks.group = g; }
+
+static inline int kama__lockgroup_record(void* cell, int shared) {
+    kama_lockgroup* g = kama_locks.group;
+    if (!g) return 0;
+    if (g->n < g->cap) { g->cells[g->n] = cell; g->shared[g->n] = (int8_t)shared; ++g->n; }
+    return 1;
+}
+
+static inline void kama_lockgroup_end(kama_lockgroup* g, int line) {
+    kama_locks.group = 0;
+    for (int32_t i = 1; i < g->n; ++i) {   // insertion sort: a handful of cells
+        void* c = g->cells[i]; int8_t s = g->shared[i]; int32_t j = i - 1;
+        while (j >= 0 && (uintptr_t)g->cells[j] > (uintptr_t)c) { g->cells[j + 1] = g->cells[j]; g->shared[j + 1] = g->shared[j]; --j; }
+        g->cells[j + 1] = c; g->shared[j + 1] = s;
+    }
+    for (int32_t i = 1; i < g->n; ++i)
+        if (g->cells[i] == g->cells[i - 1]) {
+            static const char msg[] = "a lock is taken twice by one `borrow`: two of its handles name the same lock (KR-226)";
+            (void)line;
+            kama_panic(kama_string_lit(msg, sizeof msg - 1));
+        }
+    kama__locked_enter();
+    for (int32_t i = 0; i < g->n; ++i) {
+        kama__locked* c = (kama__locked*)g->cells[i];
+        if (g->shared[i]) kama__locked_rw(KAMA__LOCK_AT(c), 1, 1);
+        else if (c->rw)   kama__locked_rw(KAMA__LOCK_AT(c), 1, 0);
+        else              kama__locked_x(KAMA__LOCK_AT(c), 1);
+    }
+    kama_locks.held += g->n;
+}
+
 static inline void kama_locked_acquire(void* cell) {
     kama__locked* c = (kama__locked*)cell;
+    if (kama__lockgroup_record(cell, 0)) return;
     kama__locked_enter();
     if (c->rw) kama__locked_rw(KAMA__LOCK_AT(c), 1, 0); else kama__locked_x(KAMA__LOCK_AT(c), 1);
     ++kama_locks.held;
 }
 
 static inline void kama_locked_acquire_shared(void* cell) {
+    if (kama__lockgroup_record(cell, 1)) return;
     kama__locked_enter();
     kama__locked_rw(KAMA__LOCK_AT(cell), 1, 1);
     ++kama_locks.held;
