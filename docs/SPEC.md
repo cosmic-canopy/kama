@@ -7242,9 +7242,10 @@ fn void hit(Locked<Map<string, int64>> cache, string path) {   // each isolate i
 - **The window's rules give Rust's `MutexGuard` guarantee, with no lifetimes.** The alias cannot be stored, returned <!-- xfail: borrow_closing_chain_return_place -->
   or put in a collection, and the guard is a view that closes its window (*The window*), so nothing reaches the
   value once the lock is released. There is no poisoning: a panic aborts, so no window is left half-done for another.
-- **A handle is one pointer**, `Sendable` and `Copyable(bare: give)`: `copy cache` is a second handle to the same <!-- test: locked_isolates, locked_cache -->
-  value, which is what each isolate is handed, and the last handle to go drops it. The value must be `Sendable` too, <!-- xfail: locked_payload_not_sendable -->
-  as Rust's `Mutex<T>: Sync` needs `T: Send`: a non-atomic `Shared` inside it would race through the window.
+- **A handle is two pointers**, the cell and the value inside it, `Sendable` and `Copyable(bare: give)`: `copy cache` <!-- test: locked_isolates, locked_cache -->
+  is a second handle to the same value, which is what each isolate is handed, and the last handle to go drops it.
+  The value must be `Sendable` too, as Rust's `Mutex<T>: Sync` needs `T: Send`: a non-atomic `Shared` inside it <!-- xfail: locked_payload_not_sendable -->
+  would race through the window.
 - **`ReadWriteLocked<T>`** adds `lockShared()`, a `const fn` whose window's `value()` is a `const ref`: any number of <!-- xfail: locked_shared_value_write -->
   readers at once, and a `const ref ReadWriteLocked` can read but not write. Reach for it when reads are long or
   dominate; for a short section the readers' shared count costs more than an exclusive lock does.
@@ -7277,12 +7278,71 @@ is invisible to it — it sits in `unsafe`, the trusted set — and so is a spin
 needs the lock. The runtime backs the first: a lock taken while the thread holds one, which only C calling back into <!-- test: locked_held_trap -->
 kama inside a window can do, traps instead of deadlocking.
 
-**The bytes.** A handle is one pointer. Its cell is a count, the lock and the value. The lock is `os_unfair_lock` (4 B)
+**The bytes.** A handle is two pointers, 16 B: the cell, and the value's place in it. The cell is a 32 B header (the
+count, the kind, the value's offset, its size and alignment), the lock and the value. The lock is `os_unfair_lock` (4 B)
 on macOS, glibc's futex-backed `pthread_mutex_t` on Linux (40 B on x86-64, 48 B on arm64) and `SRWLOCK` (8 B) on
 Windows; `ReadWriteLocked`'s is `pthread_rwlock_t` (200 B on macOS, 56 B on glibc, set to prefer writers, since glibc's
 default starves a writer under a steady read load) or `SRWLOCK`. Uncontended, a window is one atomic read-modify-write
 to acquire and one to release, where the channel round trip to an owner isolate it replaces is about 3 µs. On a target
 with no threads — unthreaded wasm, `--target embedded` — the lock is a flag.
+
+### A concurrent map — `ConcurrentMap<K, V>` ✅
+
+One `Locked<Map<K, V>>` makes every access from every isolate take the same lock. `std::concurrent::ConcurrentMap` holds <!-- test: concurrent_map_basic -->
+N of them — shards — and a key's hash picks one, so isolates working on different keys rarely meet. Java's
+`ConcurrentHashMap`, C#'s `ConcurrentDictionary` and Rust's `dashmap` answer the same need:
+
+```kama
+import { std::concurrent::ConcurrentMap, std::concurrent::Locked };
+
+type value Stats implements Sendable { public int64 hits; public ctor zero() { this.hits = 0; } }
+
+fn void hit(ref ConcurrentMap<string, int64> counts, ref ConcurrentMap<string, Locked<Stats>> stats, const ref string path) {
+    bool done = false;
+    while (!done) {                                                   // a counter: swap until it lands
+        int64 now = counts.getOrPut(key: path, value: 0);             // inserts if absent; returns what is there
+        done = counts.compareAndSwap(key: path, expected: now, desired: now + 1);
+    }
+    Locked<Stats> s = stats.getOrPut(key: path, value: Locked.make(value: Stats.zero()));
+    borrow s.lock().value() as st { st.hits = st.hits + 1; }          // its own lock, after the shard's
+}
+
+fn uint8 main() {
+    ConcurrentMap<string, int64> counts = ConcurrentMap.empty();     // cpuCount() × 4 shards, a power of two
+    ConcurrentMap<string, Locked<Stats>> stats = ConcurrentMap.empty();
+    hit(counts: ref counts, stats: ref stats, path: "/a");
+    Optional<int64> n = counts.get(key: "/a");                         // a copy, taken under that shard's lock
+    return match (n) { case Some(value: v): v == 1 ? 0 : 1; case None: 2; };
+}
+```
+
+- **Each method takes one shard's lock for its own extent and nothing else,** so the map adds no lock order of its
+  own, and a method called inside another lock window is refused as any lock is. Nothing hands a shard out, so no <!-- xfail: concurrent_map_in_lock_window -->
+  caller can insert a key that hashes elsewhere.
+- **A value leaves only by copy.** `get` and `getOrPut` copy out (`V: Copyable`), `remove` hands the value back, and <!-- test: concurrent_map_isolates -->
+  `compareAndSwap` replaces it only while it equals what the caller saw (`V: Equatable`). There is no `compute`:
+  kama has no closures, and a lock window refuses a `fnptr` call. An entry changed in place is a `Locked<V>` value,
+  copied out under the shard's lock (a handle copy) and locked on its own once that window has closed — two windows
+  in sequence, never nested, as `hit` does above.
+- **A handle is shared as a `Locked` handle is:** `Sendable` and `Copyable(bare: give)`, so `copy counts` is a second <!-- xfail: concurrent_map_key_not_sendable -->
+  handle to the same shards, which is what each isolate is handed. Keys and values must be `Sendable`.
+- **`length()` counts shard by shard,** under each shard's lock in turn, so it is the count at some moment, as Java's
+  `size()` is; `keys()` and `entries()` are snapshots taken the same way.
+- **The shard count is `cpuCount() × 4`, rounded up to a power of two** (dashmap's rule) and fixed for the map's life.
+  `withShards(count:)` states it; `withAllocator(allocator:, shards:)` gives each shard's `Map` its own copy of an
+  allocator; `reserve(n:)` spreads room for `n` entries over the shards. The hasher `H` and allocator `A` default as
+  `Map`'s do.
+- **The key is hashed once.** The hash's top bits pick the shard, and the same hash goes to that shard's `Map`, whose <!-- xfail: map_hashed_private -->
+  low bits pick the slot: the same bits twice would cluster every shard's table. The `Map` methods that take a
+  precomputed hash are private and granted to `ConcurrentMap` alone, since a wrong hash would lose the entry.
+
+**The bytes.** A handle is an array of shard handles, 16 B each. A shard is one `Locked` cell: a 32 B header, the lock
+and a 56 B `Map` — 96 B on macOS and Windows, 128 B on Linux x86-64 — and an empty `Map` allocates nothing, so an empty
+map on a 10-core machine is 64 shards and about 7 KiB. Copying the handle costs one array allocation and an atomic
+increment per shard, once per isolate it is handed to. An uncontended `get` hashes once, takes one lock, probes one
+`Map` and releases. Contended, the shards are the point: eight isolates making 400,000 calls each on 1,024 string keys,
+one in ten a `put`, take 61 ms through a `ConcurrentMap` and 360 ms through one `Locked<Map>` on a 10-core M4 (the
+minimum of interleaved runs, `bench/concurrent_map/run.py`).
 
 ### Immutable sharing — `type immutable` ✅
 

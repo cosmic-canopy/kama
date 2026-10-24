@@ -1,0 +1,36 @@
+// One lock for every isolate (KR-232's baseline): eight isolates, 400,000 operations each on 1,024 string keys, one in
+// ten a `put` and the rest a `get`, all through a single `Locked<Map<string, int64>>`. Paired with sharded.kama; run.py
+// times the two interleaved.
+import { std::concurrent::Locked, std::collections::Map, std::collections::DynamicArray };
+type resource W implements Sendable {
+    Locked<Map<string, int64>> m; int32 seed;
+    public ctor make(Locked<Map<string, int64>> m, int32 seed) { this.m = give m; this.seed = seed; }
+    public fn void run() {
+        DynamicArray<string> keys = DynamicArray.empty();
+        int32 k = 0;
+        while (k < 1024) { keys.add(item: "/path/to/resource/${k}"); k = k + 1; }
+        int32 i = 0;
+        int64 sum = 0;
+        while (i < 400000) {
+            int32 j = (i * 7 + this.seed * 131) % 1024;
+            if (i % 10 == 0) { borrow this.m.lock().value() as mm { mm.put(key: copy keys[j], value: cast<int64>(i)); } }
+            else { borrow this.m.lock().value() as mm { match (mm.get(key: keys[j])) { case Some(value: v): { sum = sum + v; } case None: { } }; } }
+            i = i + 1;
+        }
+    }
+}
+fn void work(W w) { w.run(); }
+fn uint8 main() {
+    Locked<Map<string, int64>> m = Locked.make(value: Map.empty());
+    scope {
+        W a = W.make(m: copy m, seed: 1); spawn work(w: give a);
+        W b = W.make(m: copy m, seed: 2); spawn work(w: give b);
+        W c = W.make(m: copy m, seed: 3); spawn work(w: give c);
+        W d = W.make(m: copy m, seed: 4); spawn work(w: give d);
+        W e = W.make(m: copy m, seed: 5); spawn work(w: give e);
+        W f = W.make(m: copy m, seed: 6); spawn work(w: give f);
+        W g = W.make(m: copy m, seed: 7); spawn work(w: give g);
+        W h = W.make(m: copy m, seed: 8); spawn work(w: give h);
+    }
+    return 0;
+}

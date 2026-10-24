@@ -2105,83 +2105,10 @@ blocking is the job system's problem to solve.**
 - **General shared memory ("hybrid") stays out; one shape of it shipped (`0.9.730`–`0.9.733`).** Co-equal
   shared-memory threading is still not planned, because it reintroduces the hazard the model removes. What shipped is
   `Locked<T>`/`ReadWriteLocked<T>`: a lock that owns its value, reachable only inside a `borrow` window that can neither
-  wait (`@parks`) nor take another lock — SPEC *Shared mutable state*. The other seams stay as they are: `Atomic<T>`,
-  immutable `Shared` and disjoint `parallel_for`.
-- **A concurrent map: ruled 2026-10-22 with the lock window, KR-232.** A sharded map built on `Locked` (N shards,
-  each a `Locked<Map<K, V>>`, the key's hash picking the shard), as Java's `ConcurrentHashMap` and Go's `sync.Map`
-  answer the same need. Scheduled, not a non-goal; `Locked` and the element-root freeze it needs (`shards[i].lock()`)
-  shipped in `0.9.728`–`0.9.733`.
+  wait (`@parks`) nor take another lock — SPEC *Shared mutable state* — and `ConcurrentMap`, a map sharded over many
+  (`0.9.736`, SPEC *A concurrent map*). The other seams stay as they are: `Atomic<T>`, immutable `Shared` and disjoint
+  `parallel_for`.
 
-<a id="s6-concurrent-map"></a>
-
-### A sharded concurrent map on `Locked` (KR-232)
-
-**The need.** A cache per pool, a cluster's slot map, a token cache: one map that many isolates read and write. Today
-that is a `Locked<Map<K, V>>`, so every access from every isolate takes the same lock. Sharding gives N independent
-locks, the key's hash picking one, so isolates working on different keys rarely meet.
-
-**Probed on `0.9.734` (2026-10-24):**
-- **The shard as an element works.** `borrow this.shards[i].lock().value() as m { m.put(key: give key, value: v); }`
-  checks, with the element-root rule (`0.9.728`) freezing `this.shards[…]` for the window.
-- **A place-returning `shard(key:)` cannot be the seam.** The window freezes a place call's `ref` arguments, so
-  `borrow this.shard(key: key).lock().value() as m { m.put(key: give key, …) }` is refused ("cannot `give` `key`").
-  The map picks the shard by index inside its own methods, and never hands a shard out: a caller holding one could
-  insert a key that hashes elsewhere.
-- **Per-entry mutation composes with no new rule.** A value that is itself a `Locked<V>` is copied out under the
-  shard's lock (a handle copy: one atomic increment) and locked on its own after that window closes: two windows in
-  sequence, never nested.
-
-**What others do** (from each library's documentation; re-verify each claim when building):
-
-| | Type | Shards | API | Changing an entry in place |
-|---|---|---|---|---|
-| Java | `ConcurrentHashMap` | a lock per bin (CAS plus the bin's lock, since Java 8) | `get`, `put`, `putIfAbsent`, `remove`, `replace`, `computeIfAbsent`/`compute`/`merge` | a lambda run under the bin's lock |
-| C# | `ConcurrentDictionary` | lock striping, processor count by default | `TryGetValue`, `TryAdd`, `TryUpdate`, `TryRemove`, `GetOrAdd`, `AddOrUpdate` | a factory, which may run more than once, outside the lock |
-| Go | `sync.Map` | none: read-mostly, copy on write | `Load`, `Store`, `LoadOrStore`, `LoadAndDelete`, `Delete`, `Swap`, `CompareAndSwap`, `CompareAndDelete`, `Range`, `Clear` | none |
-| Rust | `dashmap` (a crate) | `(available_parallelism × 4).next_power_of_two()` reader/writer shards | `get`/`get_mut` return guards that hold the shard; `entry` | through the guard, where holding one while touching the map deadlocks |
-| Swift | none in std | — | an actor owns the dictionary | — |
-
-kama has no closures, and a lock window refuses a `fnptr` call because it could wait or lock. So Java's `compute` and
-C#'s factories have no spelling, and dashmap's guard deadlock cannot be written.
-
-**Recommended:**
-
-```kama fragment
-ConcurrentMap<string, int64> hits = ConcurrentMap.make();             // cpuCount() × 4 shards, a power of two
-hits.put(key: "/a", value: 1);
-Optional<int64> n = hits.get(key: "/a");                               // a copy, taken under that shard's lock
-int64 now = hits.getOrPut(key: "/b", value: 0);                         // inserts if absent; returns what is there
-bool swapped = hits.compareAndSwap(key: "/a", expected: 1, desired: 2);
-ConcurrentMap<string, Locked<Stats>> perPath = ConcurrentMap.make();    // an entry changed in place: its own lock
-```
-
-Each method takes one shard's lock for its own extent and nothing else, so the map adds no lock order of its own.
-Called inside another lock window it is refused, as any lock is (it takes one).
-
-**The bytes.** A handle holds an array of N `Locked<Map<K, V>>` handles, and each shard is one cell: a count, the lock,
-and a `Map`. A copy of the handle, made once per isolate it is handed to, copies each shard handle (N atomic
-increments, one small array). An uncontended `get` hashes once, takes one lock, probes one `Map` and releases.
-
-**Decisions owed:**
-1. **Ship `ConcurrentMap<K, V>` in `std::concurrent`**: Java's and C#'s word, beside Go's `sync.Map` and Rust's
-   `DashMap`. Recommended.
-2. **The API: copy-in and copy-out methods, each under one shard's lock.** `get` (with `V: Copyable`), `contains`,
-   `put`, `getOrPut`, `remove` (returning `Optional<V>`), `compareAndSwap` (with `V: Equatable`), `clear`, and
-   `length()`. `length()` counts shard by shard, so it is the count at some moment, as Java's `size()` is.
-   `keys()`/`entries()` return snapshots (`Copyable`). There is no `compute`: an entry changed in place is a
-   `Locked<V>` value. Recommended.
-3. **Shards: `cpuCount() × 4`, rounded up to a power of two** (dashmap's rule), fixed at construction, with
-   `withShards(count:)` to state it. The shard is picked from the HIGH bits of the key's hash, because a shard's own
-   `Map` uses the low bits for its slots, and the same bits twice would cluster every shard's table. Recommended.
-4. **Representation: an array of `Locked<Map>` handles**, all kama and no new C; a handle copy copies each shard handle.
-   The alternative, one C cell holding all N locks and maps, makes a copy O(1) at the cost of new runtime C that
-   `Locked` already covers. Recommended: the array, since copies are once per isolate.
-5. **No in-place window over one entry** (`borrow cache.entry(key: k).value() as v { … }`). It would need a mint that
-   takes an argument, which the lookup ruling of 2026-10-23 kept out (a `match` over a lookup is the window there,
-   SPEC *The window*). The one way is a
-   `Locked<V>` value. Recommended.
-
-Size M.
 
 <a id="s6-fibers"></a>
 

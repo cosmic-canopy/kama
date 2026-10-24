@@ -657,7 +657,8 @@ parallel_for (ref int32 e in xs, workers: cpuCount()) { e = e * 2; }
 
 When a channel is the wrong shape, there are exactly four other ways to share: `Atomic<T>` for a
 counter or a flag, `Locked<T>` for a value several isolates change — a cache, a table — reachable only inside
-`borrow cache.lock().value() as m { … }`, a window that can neither wait nor take another lock, a `type immutable`
+`borrow cache.lock().value() as m { … }`, a window that can neither wait nor take another lock (a `ConcurrentMap` shards
+one map over many of them, so isolates on different keys rarely meet), a `type immutable`
 that can be read from every isolate because nothing can write it, and `parallel_spawn` for a fixed pool of workers
 over one job. The *Concurrency* section of [the specification](SPEC.md) has all four.
 

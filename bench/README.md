@@ -65,6 +65,8 @@ bench/
                       registering a socket, on this host's epoll or kqueue (KR-3 decision 6,
                       docs/design/fibers.md). `bench/poller/run.sh <out.tsv>`, then `summarize.py`. Runs on the
                       host, or in the dev container for epoll, with no image of its own.
+  concurrent_map/     not a language comparison either: eight isolates on one `Locked<Map>` against a
+                      `ConcurrentMap` (KR-232, SPEC *A concurrent map*). `bench/concurrent_map/run.py`.
 ```
 
 Honesty note: kama→C is built by the same clang as the C baseline, so native compute matches C/C++ by
