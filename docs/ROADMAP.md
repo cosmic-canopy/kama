@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-237**
+**Next id: KR-238**
 
 ## The shape
 
@@ -72,6 +72,7 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-237 | **`isolate_stack` fails under ThreadSanitizer, and has since before `0.9.727`** — the only failure of the full `./dev test tsan` on `0.9.733` (2852 passed): a 400,000-deep recursion in a `spawn(stack: 256 MiB)` isolate SEGVs on a write, and a `0.9.726` compiler built in the container does the same. Likely the stack itself, TSan's frames being larger; unprobed. The leg has no way to size a fixture to the sanitizer | S? | [§6](ROADMAP_DETAIL.md#s6-tsan-isolate-stack) |
 | KR-232 | **A sharded concurrent map on `Locked`** — N shards, each a `Locked<Map<K, V>>`, the key's hash picking the shard (Java's `ConcurrentHashMap`, C#'s `ConcurrentDictionary`, Go's `sync.Map`). Ruled with the lock window (2026-10-22); `Locked` shipped `0.9.732`. **Brief written 2026-10-24, five decisions owed** (recommended: copy-in/copy-out methods under one shard's lock, `cpuCount() × 4` shards on the hash's high bits, a `Locked<V>` value for in-place change). Before KR-3: it proves `Locked` in a library while the code is fresh | M | [§6](ROADMAP_DETAIL.md#s6-concurrent-map) |
 | KR-3 | **Fibers and thread-per-core: blocking-shaped I/O for many connections** (and the job system) — one isolate per core, each a fiber scheduler over its own `Poller`: no colouring, no `Pin`, no `Send` bound on a task, races still impossible by construction. Beside KR-202, KR-7. **Designed and ruled 2026-10-22 ([docs/design/fibers.md](design/fibers.md))**: fifteen decisions, an eleven-commit map | XL | [§6](ROADMAP_DETAIL.md#s6-fibers) |
 | KR-231 | **Zero-copy deserialization into a view struct** — `@generate(Deserializable)` on a `type view`, so a parsed record's strings are views into the input (serde's `#[serde(borrow)]`); the escaped-field case wants a ruling. Unblocked: a type holding a view is a view since `0.9.725` | M? | [§4](ROADMAP_DETAIL.md#s4-view-deserialize) |

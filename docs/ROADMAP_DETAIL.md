@@ -2112,6 +2112,28 @@ blocking is the job system's problem to solve.**
   answer the same need. Scheduled, not a non-goal; `Locked` and the element-root freeze it needs (`shards[i].lock()`)
   shipped in `0.9.728`–`0.9.733`.
 
+<a id="s6-tsan-isolate-stack"></a>
+
+### `isolate_stack` fails under ThreadSanitizer (KR-237)
+
+**Measured 2026-10-24.** `./dev test tsan` on `0.9.733` passes 2852 fixtures and fails one, `isolate_stack`:
+`ThreadSanitizer: SEGV on unknown address … caused by a WRITE memory access`, on a spawned thread. A `0.9.726`
+compiler built from `e04dd018` inside the container fails the same way (`run exit 66: ERROR: ThreadSanitizer: SEGV`),
+so nothing in `0.9.727`–`0.9.734` caused it. The fixture passes on the native, ASan/UBSan and wasm legs, and on CI.
+
+**What the fixture does.** It recurses 400,000 levels (`DEEP`) in an isolate spawned with a 256 MiB stack (`BIG`),
+sized against "~50 bytes a debug frame … more under ASan". TSan instruments every function entry and exit, so a frame
+may outgrow that margin, and a write past the stack's end would fault exactly like this. That is the likely reading,
+and it is unprobed.
+
+**To decide:**
+1. Probe first. Measure `down()`'s frame under TSan, and find the depth at which it faults, against `BIG`. If the
+   fault is TSan's own shadow-stack limit rather than the thread's stack, that is a different fix.
+2. If it is the stack, give the fixture a margin TSan fits in (a larger `BIG` costs only address space), or give
+   the sanitizer legs a way to size a fixture: kama code cannot tell at compile time that it runs under one.
+3. KR-3 decision 2 (fiber stacks with a guard page and an overflow diagnostic) is the related work: an isolate
+   stack overflow today faults with no kama diagnostic, under a sanitizer or not.
+
 <a id="s6-concurrent-map"></a>
 
 ### A sharded concurrent map on `Locked` (KR-232)
