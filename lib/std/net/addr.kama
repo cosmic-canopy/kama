@@ -314,6 +314,7 @@ comptime int32 RESOLVE_MAX = 16;
 //
 // ⚠️ It BLOCKS, possibly for seconds, and cannot be given a timeout — `getaddrinfo` takes none and the
 // asynchronous spellings are per-platform. Resolve on another isolate if the stall is not affordable.
+@parks
 unsafe fn Result<DynamicArray<SocketAddr>, IoError> resolve(const ref string host, uint16 port) {
     DynamicArray<SocketAddr> found = DynamicArray.empty();
     match (parseIp(text: ref host)) {

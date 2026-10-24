@@ -1,0 +1,3 @@
+// `@parks` states one fact and takes no arguments (KR-226).
+@parks(socket) fn void waitHere() { }
+fn uint8 main() { waitHere(); return 0; }

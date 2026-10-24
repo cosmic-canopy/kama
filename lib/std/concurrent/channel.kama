@@ -155,6 +155,7 @@ type resource Sender<T: Sendable> implements Sendable {
     // destroy the caller's resource) — instead we `give` it back in `Err(Undelivered::Item(item))` so the
     // caller owns it again and can re-route or drop it cleanly. The caller's `give` at the call site already
     // suppressed its drop, so exactly one owning copy survives either way.
+    @parks
     public unsafe fn Result<Unit, Undelivered<T>> send(T item) {
         int32 r = kama_channel_send(ch: this.handle, elem: cast<UnsafePtr>(addr(of: item)));
         if (r == 0) {
@@ -194,6 +195,7 @@ type resource Receiver<T: Sendable> implements Sendable {
     }
 
     // The `out` boundary over the type-erased C call — the blocking sibling of `tryPopInto`.
+    @parks
     unsafe fn int32 recvInto(out T dst) {
         return kama_channel_recv(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst)));
     }
@@ -234,6 +236,7 @@ type resource Receiver<T: Sendable> implements Sendable {
     unsafe fn int32 tryRecvInto(out T dst) {
         return kama_channel_try_recv(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst)));
     }
+    @parks
     unsafe fn int32 recvTimeoutInto(out T dst, int64 nanos) {
         return kama_channel_recv_timeout(ch: this.handle, dst: cast<UnsafePtr>(addr(of: dst)), nanos: nanos);
     }

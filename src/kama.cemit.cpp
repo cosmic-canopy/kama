@@ -11192,6 +11192,21 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         // read it here, so a contract could promise a real-time guarantee that no
                         // implementation was ever checked against.
                         ii.methods.back().noHeap = hasNoHeapAttr(md->attributes);
+                        // ...and every other attribute on a member with no body was dropped unread through 0.9.730
+                        // (`@bogus fn int32 f();` checked clean). `@noheap` is the one a contract states: a promise each
+                        // implementation is held to. `@parks` is a fact about a BODY, and a call through the contract is
+                        // already judged against every implementer's.
+                        if (md->attributes)
+                            for (auto& at : *md->attributes) {
+                                if (!at || !at->name || *at->name == "noheap" || *at->name == "compileFor") continue;
+                                if (*at->name == "parks")
+                                    unsupported("`@parks` marks a body that waits, and a contract member has none — mark the "
+                                                "implementation that waits; a call through the contract is judged against "
+                                                "every implementer", md);
+                                else
+                                    unsupported(("unknown attribute `@" + *at->name + "` on a contract member — a member with "
+                                                 "no body takes `@noheap`, the promise every implementation is held to").c_str(), md);
+                            }
                     }
                 } else if (auto* od = dynamic_cast<ClassOperatorDeclarationNode*>(m.get())) {
                     // an operator in a `contract` is a bound for generic math: `IArithmetic`
@@ -34349,6 +34364,15 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
             if (at->args && !at->args->empty())
                 unsupported("`@noheap` takes no arguments", line);
             // no parts.push_back — emits nothing
+        } else if (an == "parks") {
+            // `@parks` (KR-226, KR-3): this body WAITS on something outside the program's own work — another thread or
+            // isolate (a channel, a join), the network or the disk, time, the OS. A checker fact like `@noheap`, no
+            // codegen: a lock window may reach no such body, and under fibers it is where a fiber yields. Written only at
+            // the seam that waits (the walk finds every caller), so `grep @parks` lists every wait in a program.
+            if (!fn && !onMember)
+                unsupported("`@parks` applies only to a function or a member, not a `static`", line);
+            if (at->args && !at->args->empty())
+                unsupported("`@parks` takes no arguments", line);
         } else if (an == "foreignEntry" || an == "callerThread") {
             // The threading contract of a callback (ROADMAP row 1). Like `@noheap` these are CHECKER
             // flags and contribute no `__attribute__`: `@foreignEntry` makes this body a region the
@@ -34465,9 +34489,9 @@ std::string CEmitter::declAttrPrefix(const SharedAttributeList& attrs, FunctionD
                          "destructor or operator").c_str(), line);
         } else {
             unsupported(("unknown attribute `@" + an + "` here — expected "
-                         + (onMember ? "`@noheap`, `@foreignEntry`, `@trackCaller`, `@serializedGraphEdges` or "
+                         + (onMember ? "`@noheap`, `@parks`, `@foreignEntry`, `@trackCaller`, `@serializedGraphEdges` or "
                                        "`@section(\"...\")`"
-                                     : "`@interrupt`, `@section(\"...\")`, `@noheap`, `@foreignEntry`, `@trackCaller`, "
+                                     : "`@interrupt`, `@section(\"...\")`, `@noheap`, `@parks`, `@foreignEntry`, `@trackCaller`, "
                                        "or `@callerThread`")).c_str(), line);
         }
     }
@@ -36077,6 +36101,8 @@ void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* name
     _returnIsPlace = fn->isRef;
     _returnIsConstPlace = fn->isConstRef;
     bool prevNoHeap = _noHeapActive;
+    if (hasAttr(fn->attributes, "parks") && !_probingTemplate)
+        _parksFns[name] = NoHeapFn{ displayBody(name), fn->line, diagFile() };
     if (fnHasNoHeap(fn)) {
         _noHeapActive = true;   // `@noheap`: gate every allocation in this body...
         // ...and register the body, so the transitivity pass can walk out from it once every call edge
@@ -36925,6 +36951,8 @@ void CEmitter::emitDtorDefinition(ClassInfo& ci)
     // match it was written for (a dtor is never one), and a silent mis-attribution for anything keyed on
     // it — an allocation in a dtor would have been recorded against whatever body happened to precede it.
     _currentFunc = ci.name + "__dtor";
+    if (hasAttr(dtorAttrs, "parks") && !_probingTemplate)
+        _parksFns[_currentFunc] = NoHeapFn{ "~" + ci.name, ci.dtorNode ? ci.dtorNode->line : 0, diagFile() };
     if (hasNoHeapAttr(dtorAttrs) && !_probingTemplate)
         _noHeapFns[_currentFunc] = NoHeapFn{ "~" + ci.name, ci.dtorNode ? ci.dtorNode->line : 0, diagFile() };
     else if (_noHeapProgram && !_probingTemplate && isUserBody(ci.declFile, demangleForDisplay(ci.name)))
@@ -37046,6 +37074,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     if (memberName && !_probingTemplate)   // KR-124: a view that closes its window passes `ref` and comes from its mint
         checkClosingViewSignature(params, retType ? std::string(retType) : std::string(), &owner, memberName,
                                   owner.ctors.count(memberName) != 0, body ? body->line : 0);
+    if (hasAttr(attrs, "parks") && !_probingTemplate)   // a member that waits (KR-226)
+        _parksFns[cName] = NoHeapFn{ displayBody(cName), body ? body->line : 0, diagFile() };
     // Register an annotated member for the transitivity pass, exactly as emitFunction does for a free fn.
     if (hasNoHeapAttr(attrs) && !_probingTemplate)
         _noHeapFns[cName] = NoHeapFn{ displayBody(cName), body ? body->line : 0, diagFile() };
@@ -44379,10 +44409,17 @@ void CEmitter::pruneInactiveDecls(SharedCompilationUnit unit)
                         unsupported((std::string("`@") + *at->name + "` takes no arguments").c_str(), decl);
                     continue;
                 }
+                if (*at->name == "parks") {
+                    // A foreign call BLOCKS — it holds its thread — rather than parking, so the C behind an `extern fn`
+                    // is no seam a fiber yields at (KR-3 decision 3); a `fnptr`'s promise is KR-3's to spell.
+                    if (what)
+                        unsupported(("`@parks` marks a kama body that waits — a channel, a join, a socket — and " + std::string(what)
+                                     + " has none. Mark the kama function that wraps the wait").c_str(), decl);
+                    continue;
+                }
                 if (what)
                     unsupported((std::string("`@") + *at->name + "` needs a body to apply to, and "
-                                 + what + " has none — `@compileFor(FLAG)` is the only attribute a "
-                                 "declaration without a body accepts").c_str(), decl);
+                                 + what + " has none").c_str(), decl);
             }
         }
         kept.push_back(decl);

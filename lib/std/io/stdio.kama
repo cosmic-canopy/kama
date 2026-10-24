@@ -35,6 +35,7 @@ type resource StdIn implements Reader {
 
     public const fn int32 rawFd() { return this.fd; }
 
+    @parks
     public unsafe fn Result<isize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
@@ -54,6 +55,7 @@ type resource StdOut implements Writer {
 
     public const fn int32 rawFd() { return this.fd; }
 
+    @parks
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
@@ -76,6 +78,7 @@ type resource StdErr implements Writer {
 
     public const fn int32 rawFd() { return this.fd; }
 
+    @parks
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
         while (true) {

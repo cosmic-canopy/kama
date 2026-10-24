@@ -1962,6 +1962,9 @@ private:
     // as a CANDIDATE, judged only if an entry point reaches it (`isUserBody` — the prelude and the stdlib are
     // never candidates, or the flag would report a defect against code the author cannot change).
     std::map<std::string, NoHeapFn>  _noHeapFns;
+    // `@parks` bodies by C name (KR-226): the waits a lock window may not reach, read off the emitted call graph as
+    // `_noHeapFns` is — keyed by C name, so each generic instance is its own.
+    std::map<std::string, NoHeapFn>  _parksFns;
     bool _spawnsThreads = false;
     void noteThreadSpawn();
     // The ONE spelling of a deep copy (`T__copy(&(x))`), so the intrinsic copy's fact is recorded in one place.

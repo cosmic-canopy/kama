@@ -1,0 +1,4 @@
+// A contract member has no body to wait in: mark the implementation; a call through the contract is judged against every
+// implementer (KR-226).
+type contract Source for resource { @parks fn int32 next(); }
+fn uint8 main() { return 0; }

@@ -1,0 +1,3 @@
+// An attribute on a contract member is read, not dropped: through 0.9.730 `@bogus fn int32 f();` checked clean.
+type contract C for value { @bogus fn int32 f(); }
+fn uint8 main() { return 0; }

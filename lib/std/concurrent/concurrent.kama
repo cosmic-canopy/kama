@@ -48,6 +48,7 @@ type resource Isolate implements Sendable {   // a join handle may itself be han
     }
 
     // Block until the isolate finishes. Safe to call more than once (and the destructor calls it).
+    @parks
     public unsafe fn void join() {
         if (this.handle != null) {
             kama_isolate_join_boxed(h: this.handle);
@@ -55,6 +56,7 @@ type resource Isolate implements Sendable {   // a join handle may itself be han
         }
     }
 
+    @parks
     unsafe ~Isolate() {
         if (this.handle != null) { kama_isolate_join_boxed(h: this.handle); }
     }

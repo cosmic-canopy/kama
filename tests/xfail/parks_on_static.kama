@@ -1,0 +1,3 @@
+// `@parks` is about a body, and a `static` has none (KR-226).
+@parks static int32 counter = 0;
+fn uint8 main() { return 0; }

@@ -19,6 +19,7 @@ extern "kama_app.h";
 extern fn void kama_run_loop(TickFn tick, UnsafePtr state);
 extern fn void kama_app_exit(uint32 code);
 
+@parks
 unsafe fn void run(TickFn tick, UnsafePtr state) { kama_run_loop(tick: tick, state: state); }
 
 // Terminate the program with `code`, correctly on both targets. On the web a plain libc exit() is ignored

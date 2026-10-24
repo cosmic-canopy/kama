@@ -1,0 +1,25 @@
+// `@parks` marks a body that WAITS on something outside the program's own work (KR-226): a channel, a join, the network
+// or the disk, time, the OS. It is a checker fact, like `@noheap`, and emits nothing: a lock window may reach no such
+// body, and under fibers (KR-3) it is where a fiber yields. It goes on a function, a method, a constructor or a
+// destructor, written at the seam that waits — std marks its own (`grep @parks lib/`), and a package marks its
+// wrapper over blocking C. Callers are found by the walk, so they carry nothing. Returns 42.
+@parks
+fn int32 fetch(int32 n) { return n + 1; }   // stands in for a wrapper over a blocking C call
+
+type resource Conn {
+    int32 sent;
+    @parks
+    public ctor open() { this.sent = 0; }
+    @parks
+    public fn void send(int32 n) { this.sent = this.sent + n; }
+    public const fn int32 total() { return this.sent; }
+    @parks
+    ~Conn() { }
+}
+
+fn int32 relay(ref Conn c) { c.send(n: fetch(n: 20)); return c.total(); }   // a caller: nothing to write
+
+fn uint8 main() {
+    Conn c = Conn.open();
+    return cast<uint8>(relay(c: ref c) + fetch(n: 20));   // 21 + 21
+}

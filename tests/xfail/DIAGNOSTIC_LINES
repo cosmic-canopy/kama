@@ -306,6 +306,7 @@ contract_member_key_outsider	contract_member_key_outsider.kama:18:48
 contract_member_private	contract_member_private.kama:3:0
 contract_member_protected	contract_member_protected.kama:3:0
 contract_member_public	contract_member_public.kama:3:0
+contract_member_unknown_attr	contract_member_unknown_attr.kama:2:35
 contract_method_on_call_result	contract_method_on_call_result.kama:8:16
 contract_no_for	contract_no_for.kama:1:0
 contract_operator_mismatch	contract_operator_mismatch.kama:9:0
@@ -1063,6 +1064,11 @@ parfor_ref_const_ref	parfor_ref_const_ref.kama:7:4
 parfor_return	parfor_return.kama:7:21
 parfor_this	parfor_this.kama:11:8
 parfor_write_capture	parfor_write_capture.kama:11:4
+parks_on_contract_member	parks_on_contract_member.kama:3:43
+parks_on_extern	parks_on_extern.kama:3:7
+parks_on_fnptr	parks_on_fnptr.kama:2:7
+parks_on_static	parks_on_static.kama:2:0
+parks_with_args	parks_with_args.kama:2:0
 pin_conformance_concrete	pin_conformance_concrete.kama:7:29
 pin_keyword_typo	pin_keyword_typo.kama:3:26
 pin_not_first	pin_not_first.kama:3:0

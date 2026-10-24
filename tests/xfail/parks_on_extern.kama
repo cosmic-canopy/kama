@@ -1,0 +1,4 @@
+// A foreign call blocks — it holds its thread — rather than parking, so `@parks` marks the kama function that wraps it (KR-226).
+extern fn int32 getchar();
+@parks extern fn int32 puts(UnsafeConstPtr<cchar> s);
+fn uint8 main() { return 0; }

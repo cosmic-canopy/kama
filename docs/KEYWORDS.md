@@ -126,6 +126,7 @@ Each is described where its feature is; this is the index.
 | `@foreignEntry` / `@callerThread` | a `fnptr` type handed to C | says whether C calls it back on a thread kama did not create, which decides what it may touch | SPEC *Foreign entry points* |
 | `@onPanic(recover: v)` | a function | a region that recovers from a panic by returning `v` instead of terminating | SPEC *Recoverable regions* |
 | `@heap` | an `extern fn` | declares that the C function allocates, so `@noheap` and `--no-heap` see it | SPEC *No-heap* |
+| `@parks` | a function, method, constructor or destructor with a body | says it waits on something outside the program's own work (a channel, a join, the network or disk, time, the OS), at the seam that waits; a lock window may reach none (KR-226), and under fibers it is where one yields (KR-3). `grep @parks` lists every wait; not on an `extern fn` (a foreign call blocks, it does not park) | SPEC *Locked* |
 | `@globalAllocator` | one `resource` implementing `GlobalHeap` | replaces the allocator behind every heap block the program uses | SPEC *Global allocator* |
 
 ## Reserved words

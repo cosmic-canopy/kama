@@ -295,6 +295,7 @@ unsafe fn Timestamp unixNow() {
 // ⚠️ On the web target this BUSY-WAITS — wasm cannot yield to the host and resume without ASYNCIFY, which
 // is a whole-program cost kama will not pay for one function (kama_time.h says the rest). Correct, but it
 // burns a core and freezes a browser's main thread; on an event loop, schedule instead of sleeping.
+@parks
 unsafe fn void sleep(Duration d) {
     if (d.nanos <= 0i64) { return; }
     kama_sleep_ns(ns: cast<uint64>(d.nanos));

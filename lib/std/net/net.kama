@@ -101,6 +101,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // sender a datagram came from. The pair is deliberate: `connect` takes numeric text and performs no
     // lookup, so a call that reads like a syscall cannot silently make a DNS round trip, and a name is
     // resolved by a function that says so and hands back every address it found.
+    @parks
     public unsafe ctor Result<TcpStream, IoError> connectTo(const ref SocketAddr address) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
@@ -145,6 +146,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     }
 
     // `Reader`: read up to into.length() bytes into `into`; returns the count (0 = peer closed). EINTR-retried.
+    @parks
     public unsafe fn Result<isize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
@@ -218,6 +220,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
 
     // `Writer` primitive: single-syscall send — may write fewer than all bytes (or Err(WouldBlock) when the
     // socket buffer is full). EINTR-retried. Callers wanting every byte sent use the free `std::io::writeAll`.
+    @parks
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
@@ -234,6 +237,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // fewer cycles than a read and write loop). Where the OS cannot, it copies through a small buffer, with the same
     // result: Windows, whose `TransmitFile` would block a non-blocking socket for the whole count (KR-229); wasm; and a
     // file the kernel has no such path for. A peer that has gone is an error here, never a signal.
+    @parks
     public unsafe fn Result<uint64, IoError> sendFile(const ref File file, uint64 offset, uint64 count) {
         if (count == 0ui64) { return Result::Ok(value: 0ui64); }
         while (true) {
@@ -426,6 +430,7 @@ type resource TcpListener implements Sendable {
 
     // Accept the next incoming connection. EINTR-retried. The stream starts in this listener's mode on every OS:
     // from a non-blocking listener, a non-blocking stream (and `Err(WouldBlock)` here when none is queued).
+    @parks
     public unsafe fn Result<TcpStream, IoError> accept() {
         while (true) {
             isize cfd = kama_accept(fd: this.fd);

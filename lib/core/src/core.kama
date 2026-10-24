@@ -145,7 +145,11 @@ unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h:
 // string is passed with `copy`/`give` like anywhere else in the value model.
 extern fn void kama_print_write(int32 fd, UnsafeConstPtr<cchar> bytes, usize len);
 extern fn void kama_print_nl(int32 fd);
+@parks
 unsafe fn void print(string s)    { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); }
+@parks
 unsafe fn void eprint(string s)   { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); }
+@parks
 unsafe fn void println(string s)  { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 1); }
+@parks
 unsafe fn void eprintln(string s) { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 2); }

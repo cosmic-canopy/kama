@@ -60,6 +60,7 @@ extern fn isize kama_recv_fds(isize sock, UnsafePtr<uint8> buf, usize n, UnsafeP
 // Send `bytes` with `descriptors` over a connected socket: POSIX's SCM_RIGHTS, and on Windows each handle put into
 // the peer process with a frame ahead of the bytes (both ends kama there — see std::io::Descriptor). The
 // descriptors are CONSUMED: each is closed once the peer holds its own, when `descriptors` drops at return.
+@parks
 unsafe fn Result<usize, IoError> sendWith(isize fd, ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
     isize count = descriptors.length();
     if (bytes.length() == 0 || count == 0 || count > 253) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
@@ -75,6 +76,7 @@ unsafe fn Result<usize, IoError> sendWith(isize fd, ConstView<uint8> bytes, Dyna
     }
 }
 // Receive up to into.length() bytes and the descriptors sent with them, appended to `descriptors`, each owned.
+@parks
 unsafe fn Result<usize, IoError> recvWith(isize fd, View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
     if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
     FixedArray<isize> hs = FixedArray.make(size: 253);
@@ -135,10 +137,12 @@ unsafe fn int32 addrBind(isize fd, const ref UnixAddr a) {
     InlineArray<uint8>#(108) b = a.name;
     return kama_bind_unix(fd: fd, path: addr(of: b[0]), n: cast<usize>(a.len), kind: a.kind);
 }
+@parks
 unsafe fn int32 addrConnect(isize fd, const ref UnixAddr a) {
     InlineArray<uint8>#(108) b = a.name;
     return kama_connect_unix(fd: fd, path: addr(of: b[0]), n: cast<usize>(a.len), kind: a.kind);
 }
+@parks
 unsafe fn isize addrSendTo(isize fd, ConstView<uint8> bytes, const ref UnixAddr a) {
     InlineArray<uint8>#(108) b = a.name;
     return kama_sendto_unix(fd: fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), path: addr(of: b[0]),
@@ -154,6 +158,7 @@ unsafe fn Result<UnixAddr, IoError> unixNameOf(isize fd, bool peer) {
     if (n > 108) { n = 108; }
     return Result::Ok(value: UnixAddr.raw(kind: kind, name: b, len: cast<int32>(n)));
 }
+@parks
 unsafe fn Result<UnixAddr, IoError> recvFromInto(isize fd, View<uint8> into, ref isize count) {
     InlineArray<uint8>#(108) b = [0; 108];
     int32 kind = 0;
@@ -298,6 +303,7 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     }
 
     // `Reader`: up to into.length() bytes; 0 = the peer closed. EINTR-retried.
+    @parks
     public unsafe fn Result<isize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
@@ -308,6 +314,7 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     }
     // `Writer` primitive: one send, possibly short (`std::io::writeAll` loops it). A write to a peer that has
     // gone is `BrokenPipe`, never SIGPIPE. EINTR-retried.
+    @parks
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
         while (true) {
@@ -431,6 +438,7 @@ type resource UnixListener implements Sendable {
 
     // Accept the next connection (blocking; `WouldBlock` in non-blocking mode). EINTR-retried. The stream starts
     // in this listener's mode on every OS: from a non-blocking listener, a non-blocking stream.
+    @parks
     public unsafe fn Result<UnixStream, IoError> accept() {
         while (true) {
             isize cfd = kama_accept(fd: this.fd);
@@ -544,6 +552,7 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
             case Ok(value: from): Result::Ok(value: RecvFrom.of(count: cast<usize>(count), from: from));
         };
     }
+    @parks
     public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {
         while (true) {
             isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
@@ -551,6 +560,7 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
     }
+    @parks
     public unsafe fn Result<usize, IoError> recv(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         while (true) {

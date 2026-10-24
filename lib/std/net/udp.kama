@@ -113,6 +113,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
 
     // Send the whole buffer as one datagram to `to`. Returns the byte count (a datagram is atomic — a
     // short write is unusual). EINTR-retried. `Err(MessageTooLong)` if the payload exceeds the path MTU.
+    @parks
     public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref SocketAddr to) {
         InlineArray<uint8>#(16) ip = to.ip.bytes();
         int32 family = to.ip.family();
@@ -126,6 +127,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
 
     // Receive one datagram into `into` (truncated to into.length() if larger); returns count + sender.
     // Non-blocking + nothing queued => Err(WouldBlock). An empty `into` => Err(InvalidInput). EINTR-retried.
+    @parks
     public unsafe fn Result<RecvFrom<SocketAddr>, IoError> recvFrom(View<uint8> into) {
         if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         int32 family = 4;
@@ -142,6 +144,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     }
 
     // Send to the connected default peer (see connect). EINTR-retried.
+    @parks
     public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {
         while (true) {
             isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
@@ -151,6 +154,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     }
 
     // Receive from the connected default peer. Non-blocking + empty => Err(WouldBlock). EINTR-retried.
+    @parks
     public unsafe fn Result<usize, IoError> recv(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
         while (true) {

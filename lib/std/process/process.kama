@@ -396,6 +396,7 @@ type resource Command implements Sendable {
     // One-shot: force stdout+stderr Piped, spawn, DRAIN BOTH CONCURRENTLY to EOF, then wait. The concurrent
     // capture lives in the `kama_capture2` seam (POSIX poll / Windows threads) — reading one stream to EOF
     // then the other would deadlock once the child fills the second pipe. One platform-neutral path here.
+    @parks
     public unsafe fn Result<Output, IoError> run() {
         // What was SET wins (KR-171): an unset stdout and stderr are captured, an unset stdin is the null device, and
         // the `Command` is left as it was — `run()` used to force both outputs `Piped` and leave them so. A stream sent
@@ -460,6 +461,7 @@ type resource Process implements Sendable {
     public fn void closeStdin() { this.inPipe.close(); }
 
     // Blocking reap → the child's ExitStatus. EINTR-retried; sets reaped (a second wait/dtor is a no-op).
+    @parks
     public unsafe fn Result<ExitStatus, IoError> wait() {
         if (this.reaped) { return Result::Err(error: IoError.of(kind: IoErrorKind::Other)); }
         int32 st = 0;

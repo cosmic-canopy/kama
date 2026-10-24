@@ -1,0 +1,3 @@
+// A `fnptr` has no body to wait in; the promise a slot makes about parking is KR-3'\''s to spell (KR-226).
+@parks fnptr void Tick();
+fn uint8 main() { return 0; }
