@@ -1,0 +1,8 @@
+// `Map`'s hashed cores take a hash the caller computed, and a wrong one would lose the entry, so they are private and
+// granted to `ConcurrentMap` alone (KR-232), which hashes a key once for both its shard and its slot.
+import { std::collections::Map };
+fn uint8 main() {
+    Map<string, int64> m = Map.empty();
+    m.put(key: "a", value: 1);
+    return m.containsHashed(key: "a", hash: 0ui64) ? 1 : 0;
+}

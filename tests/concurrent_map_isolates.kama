@@ -1,0 +1,57 @@
+// `ConcurrentMap` (KR-232) shared by four isolates, each handed its own copy of the handle. Each bumps the same 16
+// counters 500 times, two ways: a `compareAndSwap` loop on an `int64` value, and a `Locked<Tally>` value — copied out
+// under its shard's lock, then locked on its own once that window has closed, two windows in sequence and never
+// nested. However the isolates interleaved, no bump is lost. Returns 42.
+import { std::concurrent::ConcurrentMap, std::concurrent::Locked };
+
+type value Tally implements Sendable { public int64 n; public ctor zero() { this.n = 0; } }
+
+type resource Worker implements Sendable {
+    ConcurrentMap<string, int64> hits;
+    ConcurrentMap<int64, Locked<Tally>> tallies;
+    public ctor make(ConcurrentMap<string, int64> h, ConcurrentMap<int64, Locked<Tally>> t) { this.hits = give h; this.tallies = give t; }
+    public fn void run() {
+        int32 i = 0;
+        while (i < 500) {
+            int32 slot16 = i % 16;
+            string key = "k${slot16}";
+            bool done = false;
+            while (!done) {
+                int64 now = this.hits.getOrPut(key: key, value: 0);
+                done = this.hits.compareAndSwap(key: key, expected: now, desired: now + 1);
+            }
+            Locked<Tally> t = this.tallies.getOrPut(key: cast<int64>(slot16), value: Locked.make(value: Tally.zero()));
+            borrow t.lock().value() as v { v.n = v.n + 1; }
+            i = i + 1;
+        }
+    }
+}
+fn void work(Worker w) { w.run(); }
+
+fn uint8 main() {
+    ConcurrentMap<string, int64> hits = ConcurrentMap.withShards(count: 4);
+    ConcurrentMap<int64, Locked<Tally>> tallies = ConcurrentMap.empty();
+    scope {
+        Worker a = Worker.make(h: copy hits, t: copy tallies);
+        spawn work(w: give a);
+        Worker b = Worker.make(h: copy hits, t: copy tallies);
+        spawn work(w: give b);
+        Worker c = Worker.make(h: copy hits, t: copy tallies);
+        spawn work(w: give c);
+        Worker d = Worker.make(h: copy hits, t: copy tallies);
+        spawn work(w: give d);
+    }
+    int64 total = 0;
+    int64 tallied = 0;
+    int64 k = 0;
+    while (k < 16) {
+        match (hits.get(key: "k${k}")) { case Some(value: v): { total = total + v; } case None: { return 1; } };
+        Optional<Locked<Tally>> t = tallies.get(key: k);
+        match (t) {
+            case Some(value: l): { Locked<Tally> one = copy l; borrow one.lock().value() as v { tallied = tallied + v.n; } }
+            case None: { return 2; }
+        };
+        k = k + 1;
+    }
+    return (total == 2000 && tallied == 2000 && hits.length() == 16 && tallies.length() == 16) ? 42 : 3;
+}

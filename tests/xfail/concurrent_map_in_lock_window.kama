@@ -1,0 +1,10 @@
+// A `ConcurrentMap` method takes a shard's lock, so it is refused inside another lock window, as any lock is (KR-232):
+// the map adds no lock order of its own, and a nested lock could deadlock against another isolate's.
+import { std::concurrent::Locked, std::concurrent::ConcurrentMap };
+type value Counter implements Sendable { public int64 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    ConcurrentMap<string, int64> hits = ConcurrentMap.empty();
+    borrow c.lock().value() as x { hits.put(key: "a", value: x.n); }
+    return 0;
+}

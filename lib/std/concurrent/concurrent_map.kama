@@ -1,0 +1,164 @@
+// A map many isolates read and write (KR-232). One `Locked<Map<K, V>>` makes every access from every isolate take the
+// same lock; this holds N of them — shards — and a key's hash picks one, so isolates working on different keys rarely
+// meet. Java's `ConcurrentHashMap`, C#'s `ConcurrentDictionary` and Rust's `dashmap` answer the same need.
+//
+// Every method takes ONE shard's lock for its own extent and nothing else, so the map adds no lock order of its own,
+// and a value only ever leaves by copy: kama has no closures, so there is no `compute`, and nothing hands out a shard,
+// so no caller can insert a key that hashes elsewhere. An entry changed in place is a `Locked<V>` value, copied out
+// under the shard's lock (a handle copy) and locked on its own after that window closes. Called inside another lock
+// window, a method is refused as any lock is: it takes one.
+//
+// The key is hashed ONCE. The top `bits` bits of `H::finish(raw: key.hash())` pick the shard, and the same hash goes to
+// the shard's `Map` through its granted cores, whose LOW bits pick the slot — the same bits twice would cluster every
+// shard's table.
+import { std::collections::Map, std::collections::Entry, std::collections::DynamicArray, std::collections::Hasher,
+         std::collections::DefaultHasher, Locked, cpuCount };
+
+export { ConcurrentMap };
+
+// A handle: an array of shard handles. `Copyable(bare: give)`: `copy hits` is a second handle to the SAME shards — what
+// each isolate is handed — and costs one small array and an atomic increment per shard.
+type resource ConcurrentMap<K: Hashable + Equatable<K> + Sendable, V: Sendable, H: Hasher + Sendable = DefaultHasher,
+                            A: Allocator + Sendable = GlobalAllocator>
+        implements Sendable, Copyable<This>(bare: give) {
+    DynamicArray<Locked<Map<K, V, H, A>>> shards;
+    uint64 bits = 0ui64;   // the shard count is 2^bits
+
+    // `cpuCount() × 4` shards, rounded up to a power of two (dashmap's rule), fixed for the map's life.
+    public default ctor empty() when [A: default] { this.addShards(count: cast<isize>(cpuCount()) * 4); }
+    // `count` shards, rounded up to a power of two; fewer than one is one.
+    public ctor withShards(isize count) when [A: default] { this.addShards(count: count); }
+    // Each shard's `Map` draws from its own copy of `allocator`.
+    public ctor withAllocator(A allocator, isize shards) {
+        isize n = this.sized(count: shards);
+        isize i = 0;
+        while (i < n) { this.shards.add(item: Locked.make(value: Map.withAllocator(allocator: allocator))); i = i + 1; }
+    }
+    public ctor copy(ref ConcurrentMap<K, V, H, A> source) {
+        this.bits = source.bits;
+        this.shards = copy source.shards;
+    }
+
+    fn void addShards(isize count) when [A: default] {
+        isize n = this.sized(count: count);
+        isize i = 0;
+        while (i < n) { this.shards.add(item: Locked.make(value: Map.empty())); i = i + 1; }
+    }
+    // Rounds `count` up to a power of two, at least one, and records its log2.
+    fn isize sized(isize count) {
+        isize n = 1;
+        uint64 b = 0ui64;
+        while (n < count) { n = n * 2; b = b + 1ui64; }
+        this.bits = b;
+        this.shards.reserve(n: n);
+        return n;
+    }
+    // The shard a hash picks: its top `bits` bits. One shard takes none — a shift by the width is not an operation.
+    const fn isize shardOf(uint64 hash) {
+        if (this.bits == 0ui64) { return 0; }
+        return cast<isize>(hash >> (64ui64 - this.bits));
+    }
+
+    // A copy of the value at `key`, taken under its shard's lock.
+    public fn Optional<V> get(const ref K key) when [V: Copyable<V>] {
+        uint64 h = H::finish(raw: key.hash());
+        isize s = this.shardOf(hash: h);
+        Optional<V> got = Optional::None;
+        borrow this.shards[s].lock().value() as m { got = m.getHashed(key: key, hash: h); }
+        return got;
+    }
+    public fn bool contains(const ref K key) {
+        uint64 h = H::finish(raw: key.hash());
+        isize s = this.shardOf(hash: h);
+        bool found = false;
+        borrow this.shards[s].lock().value() as m { found = m.containsHashed(key: key, hash: h); }
+        return found;
+    }
+    // Insert or overwrite.
+    public fn void put(K key, V value) {
+        uint64 h = H::finish(raw: key.hash());
+        isize s = this.shardOf(hash: h);
+        borrow this.shards[s].lock().value() as m { m.putHashed(key: give key, value: give value, hash: h); }
+    }
+    // The value at `key`, inserting `value` first when the key is absent. One window, so isolates racing to insert one
+    // key all come back with the value that won. Both are borrowed and copied only to insert, so a hit copies nothing.
+    public fn V getOrPut(const ref K key, const ref V value) when [K: Copyable<K>, V: Copyable<V>] {
+        uint64 h = H::finish(raw: key.hash());
+        isize s = this.shardOf(hash: h);
+        Optional<V> had = Optional::None;
+        borrow this.shards[s].lock().value() as m {
+            had = m.getHashed(key: key, hash: h);
+            if (had.isNone()) { m.putHashed(key: copy key, value: copy value, hash: h); }
+        }
+        return match (give had) { case Some(value: v): give v; case None: copy value; };
+    }
+    // Removes the entry, handing its value back (`None` when absent).
+    public fn Optional<V> remove(const ref K key) {
+        uint64 h = H::finish(raw: key.hash());
+        isize s = this.shardOf(hash: h);
+        Optional<V> took = Optional::None;
+        borrow this.shards[s].lock().value() as m { took = m.removeHashed(key: key, hash: h); }
+        return took;
+    }
+    // Replaces the value at `key` with `desired` only while it equals `expected`; false when it does not, or the key is
+    // absent. The loop it makes possible is a counter many isolates bump.
+    public fn bool compareAndSwap(const ref K key, const ref V expected, V desired) when [V: Equatable<V>] {
+        uint64 h = H::finish(raw: key.hash());
+        isize s = this.shardOf(hash: h);
+        bool swapped = false;
+        borrow this.shards[s].lock().value() as m {
+            if (m.containsHashed(key: key, hash: h)) {
+                borrow m.refMutHashed(key: key, hash: h) as v {
+                    if (v.equals(other: expected)) { v = give desired; swapped = true; }
+                }
+            }
+        }
+        return swapped;
+    }
+    public fn void clear() {
+        isize i = 0;
+        while (i < this.shards.length()) {
+            borrow this.shards[i].lock().value() as m { m.clear(); }
+            i = i + 1;
+        }
+    }
+    // Room for `n` entries without a rehash, spread over the shards.
+    public fn void reserve(isize n) {
+        isize each = (n + this.shards.length() - 1) / this.shards.length();
+        isize i = 0;
+        while (i < this.shards.length()) {
+            borrow this.shards[i].lock().value() as m { m.reserve(n: each); }
+            i = i + 1;
+        }
+    }
+    // Counted shard by shard, each under its own lock: the count at some moment, as Java's `size()` is.
+    public fn isize length() {
+        isize total = 0;
+        isize i = 0;
+        while (i < this.shards.length()) {
+            borrow this.shards[i].lock().value() as m { total = total + m.length(); }
+            i = i + 1;
+        }
+        return total;
+    }
+    public const fn isize shardCount() { return this.shards.length(); }
+    // Snapshots, taken shard by shard: each shard's part is consistent, the whole is not one moment.
+    public fn DynamicArray<K> keys() when [K: Copyable<K>] {
+        DynamicArray<K> all = DynamicArray.empty();
+        isize i = 0;
+        while (i < this.shards.length()) {
+            borrow this.shards[i].lock().value() as m { foreach (K k in m) { all.add(item: give k); } }
+            i = i + 1;
+        }
+        return all;
+    }
+    public fn DynamicArray<Entry<K, V>> entries() when [K: Copyable<K>, V: Copyable<V>] {
+        DynamicArray<Entry<K, V>> all = DynamicArray.empty();
+        isize i = 0;
+        while (i < this.shards.length()) {
+            borrow this.shards[i].lock().value() as m { foreach (Entry<K, V> e in m.entries()) { all.add(item: Entry.make(key: copy e.key(), value: copy e.value())); } }
+            i = i + 1;
+        }
+        return all;
+    }
+}

@@ -224,14 +224,22 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
 
     // The slot an entry lives in (or would): probe from hash(key) until the key is found (returns its
     // FULL slot) or an EMPTY slot ends the run (returns -1). Tombstones are probed past, never stop it.
-    unsafe const fn isize slotOf(const ref K key) {
+    unsafe const fn isize slotOf(const ref K key) { return this.slotAt(key: key, hash: this.hashKey(k: key)); }
+
+    // The cores below take the key's hash, `hashKey(k: key)`, already computed. Only `ConcurrentMap` calls them
+    // directly: it hashes a key once, picks a shard by the hash's HIGH bits and hands the same hash on, where the
+    // LOW bits pick the slot — so a sharded map never hashes a key twice. A wrong hash would lose the entry, which
+    // is why they are private and granted, not public.
+    friend std::concurrent::ConcurrentMap[getHashed, containsHashed, putHashed, removeHashed, refMutHashed];
+
+    unsafe const fn isize slotAt(const ref K key, uint64 hash) {
         if (this.cap == 0) { return 0 - 1; }
         // `truncate`, not `cast`: a hash is a BIT PATTERN, so taking its low bits is the operation — and a
         // `cast` would trap on any hash above PTRDIFF_MAX, which is half of them. The truncated value may
         // be negative; `& (cap - 1)` still lands in [0, cap) because the mask holds only low bits, and
         // masking in the isize domain also drops the `cast<uint64>(cap - 1)` that used to ride along.
         // This is the map's hottest line — two runtime checks per lookup, before.
-        isize i = truncate<isize>(this.hashKey(k: key)) & (this.cap - 1);   // low bits of the hash — see slotOf
+        isize i = truncate<isize>(hash) & (this.cap - 1);   // low bits of the hash — see slotOf
         while (true) {
             uint8 s = this.state[i];
             if (s == 0ui8) { return 0 - 1; }                                  // EMPTY — not present
@@ -241,6 +249,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     }
 
     public const fn bool contains(const ref K key) { return this.slotOf(key: key) >= 0; }
+    const fn bool containsHashed(const ref K key, uint64 hash) { return this.slotAt(key: key, hash: hash) >= 0; }
 
     // Deep-copy the whole map (present only when BOTH key and value are `Copyable`): a fresh map with an
     // independent clone of every live entry. `bare: give` — a plain hand-off still MOVES.
@@ -257,8 +266,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
         return this;
     }
 
-    public unsafe const fn Optional<V> get(const ref K key) when [V: Copyable<V>] {
-        isize i = this.slotOf(key: key);
+    public unsafe const fn Optional<V> get(const ref K key) when [V: Copyable<V>] { return this.getHashed(key: key, hash: this.hashKey(k: key)); }
+    unsafe const fn Optional<V> getHashed(const ref K key, uint64 hash) when [V: Copyable<V>] {
+        isize i = this.slotAt(key: key, hash: hash);
         if (i < 0) { return Optional::None; }
         return Optional::Some(value: copy this.vals[i]);   // hand back a copy; map keeps its own
     }
@@ -279,6 +289,11 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // a place the caller may mutate through — `m.getRefMut(key: k).bump()`.
     public unsafe fn ref V getRefMut(const ref K key) {
         isize i = this.slotOf(key: key);
+        if (i < 0) { panic(msg: "Map.getRefMut: absent key"); }
+        return this.vals[i];
+    }
+    unsafe fn ref V refMutHashed(const ref K key, uint64 hash) {
+        isize i = this.slotAt(key: key, hash: hash);
         if (i < 0) { panic(msg: "Map.getRefMut: absent key"); }
         return this.vals[i];
     }
@@ -317,8 +332,12 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // the slot; the moves (`give`) happen after it, since `give` inside a loop is rejected (it could
     // re-move on a later iteration — here the loop can't, but the check is conservative).
     public unsafe fn void put(K key, V value) {
+        uint64 hash = this.hashKey(k: key);
+        this.putHashed(key: give key, value: give value, hash: hash);
+    }
+    unsafe fn void putHashed(K key, V value, uint64 hash) {
         if ((this.len + this.tombs + 1) * 4 >= this.cap * 3) { this.grow(); }
-        isize i = truncate<isize>(this.hashKey(k: key)) & (this.cap - 1);   // cap is a power of two -> mask == % cap
+        isize i = truncate<isize>(hash) & (this.cap - 1);   // cap is a power of two -> mask == % cap
         isize chosen = 0 - 1;                                                   // the chosen slot (set = loop done)
         isize free = 0 - 1;                                                   // first tomb we may reuse
         bool overwrite = false;
@@ -344,8 +363,9 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     // the slot becomes a tombstone so other keys' probe runs stay intact. Discard the result to just delete —
     // the returned `Optional<V>` drops the value cleanly (a move-out-then-drop, ASan-clean). Reclaiming the
     // value (`match`) hands the caller its ownership, so a Map of move-only values is fully symmetric.
-    public unsafe fn Optional<V> remove(const ref K key) {
-        isize i = this.slotOf(key: key);
+    public unsafe fn Optional<V> remove(const ref K key) { return this.removeHashed(key: key, hash: this.hashKey(k: key)); }
+    unsafe fn Optional<V> removeHashed(const ref K key, uint64 hash) {
+        isize i = this.slotAt(key: key, hash: hash);
         if (i < 0) { return Optional::None; }
         drop(ptr: addr(of: this.keys[i]));   // key dropped (lookup `key` is a borrow, not stored)
         V v = this.takeVal(at: i);                  // value relocated OUT (the slot is now stale)

@@ -1,0 +1,14 @@
+// Every isolate holding a `ConcurrentMap` reaches its keys, so a key must be `Sendable` (KR-232), as a `Locked<T>`'s
+// payload must: a type crosses an isolate only by declaring it.
+import { std::concurrent::ConcurrentMap };
+type value Name implements Hashable, Equatable<This> {
+    public int64 id;
+    public ctor of(int64 id) { this.id = id; }
+    public const fn uint64 hash() { return cast<uint64>(this.id); }
+    public const fn bool equals(const ref Name other) { return this.id == other.id; }
+}
+fn uint8 main() {
+    ConcurrentMap<Name, int64> m = ConcurrentMap.empty();
+    m.put(key: Name.of(id: 1), value: 1);
+    return 0;
+}

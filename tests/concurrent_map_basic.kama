@@ -1,0 +1,51 @@
+// `ConcurrentMap` (KR-232) on one isolate: every method, the shard count's rounding, a one-shard map, another hasher.
+// Returns 0, or the number of the failed check.
+import { std::concurrent::ConcurrentMap, std::concurrent::cpuCount, std::collections::FastHasher, std::collections::Entry,
+         std::collections::DynamicArray };
+
+fn uint8 main() {
+    ConcurrentMap<string, int64> m = ConcurrentMap.empty();
+    if (m.shardCount() < cast<isize>(cpuCount()) * 4) { return 1; }
+    m.put(key: "a", value: 1);
+    m.put(key: "b", value: 2);
+    m.put(key: "a", value: 10);                                   // an overwrite
+    if (m.length() != 2) { return 2; }
+    match (m.get(key: "a")) { case Some(value: v): { if (v != 10) { return 3; } } case None: { return 4; } };
+    if (m.get(key: "zz").isSome() || !m.contains(key: "b") || m.contains(key: "zz")) { return 5; }
+    if (m.getOrPut(key: "b", value: 99) != 2) { return 6; }        // present: what is there
+    if (m.getOrPut(key: "c", value: 3) != 3 || m.length() != 3) { return 7; }
+    if (!m.compareAndSwap(key: "c", expected: 3, desired: 30)) { return 8; }
+    if (m.compareAndSwap(key: "c", expected: 3, desired: 300)) { return 9; }   // no longer 3
+    if (m.compareAndSwap(key: "zz", expected: 0, desired: 1)) { return 10; }    // absent
+    match (m.remove(key: "c")) { case Some(value: v): { if (v != 30) { return 11; } } case None: { return 12; } };
+    if (m.remove(key: "c").isSome() || m.length() != 2) { return 13; }
+    int64 sum = 0;
+    foreach (string k in m.keys()) { sum = sum + cast<int64>(k.length()); }
+    DynamicArray<Entry<string, int64>> all = m.entries();
+    isize j = 0;
+    while (j < all.length()) { sum = sum + all[j].value(); j = j + 1; }
+    if (sum != 2 + 12) { return 14; }
+
+    // A copy is a second handle to the same shards.
+    ConcurrentMap<string, int64> other = copy m;
+    other.put(key: "d", value: 4);
+    if (m.length() != 3) { return 15; }
+    m.clear();
+    if (other.length() != 0) { return 16; }
+
+    // The count is rounded up to a power of two; fewer than one is one.
+    ConcurrentMap<int64, int64> five = ConcurrentMap.withShards(count: 5);
+    ConcurrentMap<int64, int64, FastHasher> one = ConcurrentMap.withShards(count: 0);
+    if (five.shardCount() != 8 || one.shardCount() != 1) { return 17; }
+    five.reserve(n: 1000);
+    int64 i = 0;
+    while (i < 1000) { five.put(key: i, value: i * 2); one.put(key: i, value: i); i = i + 1; }
+    if (five.length() != 1000 || one.length() != 1000) { return 18; }
+    i = 0;
+    while (i < 1000) {
+        match (five.get(key: i)) { case Some(value: v): { if (v != i * 2) { return 19; } } case None: { return 20; } };
+        if (!one.contains(key: i)) { return 21; }
+        i = i + 1;
+    }
+    return 0;
+}

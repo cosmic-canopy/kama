@@ -229,6 +229,8 @@ comptime_value_private_ctor	comptime_value_private_ctor.kama:5:15
 comptime_value_resource	comptime_value_resource.kama:5:0 comptime_value_resource.kama:5:15
 comptime_value_type_mismatch	comptime_value_type_mismatch.kama:6:0
 comptime_value_write	comptime_value_write.kama:7:4 comptime_value_write.kama:8:4
+concurrent_map_in_lock_window	concurrent_map_in_lock_window.kama:8:0
+concurrent_map_key_not_sendable	concurrent_map_key_not_sendable.kama:11:18
 cond_function	cond_function.kama:5:4
 cond_move_live	cond_move_live.kama:10:4
 cond_not_bool_operators	cond_not_bool_operators.kama:5:13 cond_not_bool_operators.kama:6:13 cond_not_bool_operators.kama:7:13 cond_not_bool_operators.kama:8:14
@@ -840,6 +842,7 @@ main_int32	main_int32.kama:4:0
 main_status_literal_oob	main_status_literal_oob.kama:3:18
 main_uint32_off_windows	main.kama:4:0
 main_void	main_void.kama:4:0
+map_hashed_private	map_hashed_private.kama:7:11
 match_alias_after_subject_write	match_alias_after_subject_write.kama:10:86
 match_alias_subject_write_branch	match_alias_subject_write_branch.kama:7:101
 match_alias_subject_write_loop	match_alias_subject_write_loop.kama:7:4
