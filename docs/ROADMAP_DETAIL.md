@@ -2172,8 +2172,9 @@ from data races keeps holding by construction.
    kqueue re-arm 6%. AFD stays one-shot. It is internal: the public `Poller` stays level-triggered.
 7. Transparent: the same `TcpStream.read` parks on a fiber (Loom, Go, Eio), not Zig's explicit `Io` parameter.
 8. Channels become fiber-aware, joins park, and regular files and DNS go to an offload pool (with KR-7, KR-202).
-9. `spawn fiber f(b: …)`, the isolate's fn-plus-one-bundle. A `Fiber<R>` handle whose `join()` yields `R`. A panic
-   still aborts the process.
+9. `spawn fiber f(b: …)`, the isolate's fn-plus-one-bundle. A `Fiber<R>` handle whose join yields `R` — amended
+   2026-10-25: the join CONSUMES the handle, `R r = join(fiber: give f);` (Rust's `JoinHandle::join(self)`), so a
+   second join is a compile error. A panic still aborts the process.
 10. A fiber `spawn` may sit anywhere in its `scope`, which keeps a runtime list of live children (an accept loop).
 11. A timer heap per scheduler (high-resolution on Windows, as Go did in 2024), per-operation deadlines, and
     cooperative cancellation as `Err(Cancelled)`.
@@ -2181,6 +2182,50 @@ from data races keeps holding by construction.
 13. Descriptor lifetime: DEL before close, deferred record frees, and deregistration on `give`.
 14. Sanitizer fiber annotations and an lldb OS plugin, in the first commits.
 15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`. Fibers on bare metal are KR-233.
+
+Steps 1–3 shipped `0.9.737`–`0.9.741` (fibers.md §8 records each, and the as-built notes under decisions 1, 9 and 10).
+
+<a id="s6-fiber-park-roots"></a>
+
+**Step 4 — where the park rule's walk starts: a correction owed a ruling** (found building step 3, 2026-10-25).
+Decision 3 holds "only code a fiber entry reaches" to the rule. As built, fiber 0 parks too: a `scope` waiting for its
+fibers and a `join` run the loop on the thread's own context (decision 1), so those roots miss a window on the root.
+Until step 4 there is no rule at all, and a probe on `0.9.741` shows the cost is not theoretical:
+
+```kama fragment
+type resource Box {
+    DynamicArray<int32> xs;
+    public fn int32 sum() {                          // called through a `Shared`: an access for the call
+        int32 total = 0;
+        foreach (int32 x in this.xs) {
+            Fiber<int32> f = spawn fiber child(n: x);
+            total = total + join(fiber: give f);     // parks inside the access, and the other walker runs
+        }
+        return total;
+    }
+    public fn void grow() { this.xs.add(item: 3); }
+}
+fn void walk(Shared<Box> s) { _ = s.sum(); }
+// main: scope { spawn fiber walk(s: copy a); spawn fiber walk(s: copy b); }  then  a.grow();
+```
+
+It builds, and `a.grow()`, after both windows have ended, panics: `kama: panic: a `Shared` value is mutated while a
+borrow into it is live (made at lifo.kama:8)`. `kama_access_end` restores the list head its access saw when it began,
+which is right only in LIFO order; two fibers' windows interleaved across a park leave the head on a node in a frame
+that has ended. Under the rule the program is a compile error instead.
+
+| Where the walk starts | Covers | Misses, or refuses wrongly |
+|---|---|---|
+| fiber entries (decision 3 as ruled) | the probe above | a window on the root that holds a `scope` with fibers, or a `join` |
+| every function, once the program has any `spawn fiber` | everything | an isolate with no fibers, whose channel `recv` blocks only its own thread, refused |
+| **fiber entries, and every isolate entry (`main` included) whose reach includes a `spawn fiber`** | every window a park can interleave with | nothing |
+
+**Recommended: the third row.** Rust covers this with a lint over every `async fn` (`clippy::await_holding_refcell_ref`);
+kama makes it a rule, and the third row is exactly the code on an isolate that runs fibers, which is where a park lets
+another fiber run. GOALS #3a (safety by construction, no lifetimes) and #4 (one walk: `checkLockWindows`' region
+markers and BFS over the `--no-heap` graph, with a window over a `Shared` as a region and the `@parks` leaves it
+already has). Practice: the lock-window rule, with a second kind of region. Size S once ruled, plus the decision 3
+items the map lists for step 4 (a call access, `@onPanic`, the debug assert in the park primitive).
 
 <a id="s6-fiber-cet"></a>
 

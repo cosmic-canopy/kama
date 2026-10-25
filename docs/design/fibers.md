@@ -205,7 +205,8 @@ or argument points into one.
   fibers and a `join` run the loop from the thread's own context (decision 1) — so a window on the root that holds one,
   `borrow sh.items as v { scope { spawn fiber f(); } }`, is reached by no fiber entry and escapes this sentence.
   Proposed: the roots are the fiber entries and every isolate entry, `main` included, whose reach includes a
-  `spawn fiber`. Until step 4 ships, a park inside a `Shared` window can be written.
+  `spawn fiber`. Until step 4 ships, a park inside a `Shared` window can be written, and a probe shows a valid-looking
+  program then panicking falsely (ROADMAP_DETAIL §6, *Step 4*).
 
 What this buys:
 - **No conflict across a park is possible.** That is the iterator-invalidation guarantee kama already gives,
