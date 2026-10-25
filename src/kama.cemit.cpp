@@ -6184,7 +6184,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                                  "window over `" + placeText(*r) + "` and cannot be reseated, or the rest of "
                                  "the block would hold a view of storage this window never froze. Open another "
                                  "`borrow`, or derive with `.slice(…)`").c_str(), v);
-        checkStoredBorrow(v, v->unaryExpression, v->expression, v->token == EQ, v->line);
+        if (checkStoredBorrow(v, v->unaryExpression, v->expression, v->token == EQ, v->line)) {
+            indexOnly([&] { emitExpression(v->expression); });   // refused (KR-241): indexed, not lowered
+            return "0";
+        }
         // The STORE direction of the `== null` rule, for an assignment rather than a declaration (where
         // `rejectNullInit` handles it): a safe type is never null, so writing one there is the same
         // mistake. Keyed on the LHS's class exactly as the comparison arm is — empty means an
@@ -8876,7 +8879,14 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
                 // Interface-typed local: `I s = concrete;` -> a fat pointer borrowing
                 // the concrete object (which must be an lvalue that outlives `s`).
                 if (iface) {
-                    if (d->initializer) checkContractObject(nm, d->initializer, /*isStore=*/false, n->line);
+                    // A temporary, refused (KR-241): the initializer is indexed, not lowered, so nothing it would
+                    // have handed off says a second thing about the same mistake.
+                    if (d->initializer && checkContractObject(nm, d->initializer, /*isStore=*/false, n->line)) {
+                        indexOnly([&] { emitExpression(d->initializer); });
+                        line(n->line); indent(depth);
+                        *_out << ty << " " << kName(nm) << " = {0};\n";
+                        return;
+                    }
                     line(n->line); indent(depth);
                     *_out << ty << " " << kName(nm);
                     if (d->initializer) {
@@ -9945,7 +9955,10 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         // The store rule (KR-225 decision 6), here as well as in the expression arm: the handlers below lower some
         // stores (a variant literal into an enum local) without passing through it. Judged here, and the expression
         // arm, should a handler reach it, is told so for the rest of this statement.
-        checkStoredBorrow(as, as->unaryExpression, as->expression, as->token == EQ, n->line);
+        if (checkStoredBorrow(as, as->unaryExpression, as->expression, as->token == EQ, n->line)) {
+            indexOnly([&] { emitExpression(as->expression); });   // refused (KR-241): indexed, not lowered
+            return;
+        }
         storeGuard.saved = _storeChecked; _storeChecked = as;
         // Re-arming: a store gives a bare local a value, whatever it held — including nothing, after a `give`.
         // `one.add(item: give t); t = Tree::Node(kids: give one);` re-arms `t`, and every later use is sound. The
@@ -27327,9 +27340,12 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         // An inline ctor is a temporary rvalue. To an INTERFACE `ref`/`out` param it can't be a fat pointer
         // inline — reject (bind first). To a concrete-class param (by value OR `ref`) it's materialized into
         // a hoisted temp below, so `f(Point(1, 2))` / `m.get(key: Point(1, 2))` work.
-        if (!ctorCls.empty() && !_classes[ctorCls].isIntrinsicColl && p.byRef && isInterface(p.className))
-            unsupported("cannot pass an inline constructor to a contract `ref`/`out` parameter — "
-                        "bind it to a local first, then pass that", srcLine);
+        const bool ctorToRefContract = !ctorCls.empty() && !_classes[ctorCls].isIntrinsicColl && p.byRef
+                                    && isInterface(p.className);
+        if (ctorToRefContract)
+            unsupported(("cannot pass an inline constructor to a contract `ref`/`out` parameter — bind it to a local "
+                         "first, then pass that (`" + demangleForDisplay(ctorCls) + " v = " + unparseExpr(argExpr) + "; "
+                         + demangleForDisplay(p.className) + " s = v; … ref s`)").c_str(), srcLine);
         // A marker on a FRESH inline ctor (`f(x: give Box(…))`) is meaningless — a fresh rvalue is consumed
         // in place. Reject cleanly, matching the init/assignment positions (without this it skips the
         // materialization below and falls to a confusing "unknown function" reject).
@@ -27557,10 +27573,16 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 // `ref`/`out` interface: the callee may reseat the caller's handle, so the
                 // argument must be an actual interface variable (pass its address). A
                 // concrete class would need a throwaway temp — reject it; bind first.
-                if (!c.empty() && isClass(c))
-                    unsupported(("cannot pass '" + c + "' by `ref`/`out` to contract parameter '" + p.name
-                                 + "'; bind it to an `" + p.className + "` first "
-                                 "(`" + p.className + " s = …; … ref s`)").c_str(), srcLine);
+                // One sentence for one mistake: an inline constructor was refused above. A value has no place, so it
+                // is bound first; a contract local cannot take it directly (KR-241).
+                if (!c.empty() && isClass(c) && !ctorToRefContract) {
+                    const std::string ic = demangleForDisplay(p.className), arg = unparseExpr(argExpr);
+                    const std::string how = isNamedValue(argExpr.get())
+                        ? ic + " s = " + arg + "; … ref s"
+                        : demangleForDisplay(c) + " v = " + arg + "; " + ic + " s = v; … ref s";
+                    unsupported(("cannot pass '" + demangleForDisplay(c) + "' by `ref`/`out` to contract parameter '"
+                                 + p.name + "'; bind it to " + aOrAn(ic) + " first (`" + how + "`)").c_str(), srcLine);
+                }
                 if (!p.isConst) checkConstWrite(argExpr, srcLine);
                 s += "&(" + val + ")";
             } else {
@@ -28427,13 +28449,18 @@ void CEmitter::checkViewStore(SharedExpression lhs, SharedExpression rhs, bool p
 
 // Both store rules for one assignment, judged once: the statement that holds it and the expression arm that may emit
 // it both ask, and only the first says anything.
-void CEmitter::checkStoredBorrow(const ASTNode* node, SharedExpression lhs, SharedExpression rhs, bool plainStore, int line)
+bool CEmitter::checkStoredBorrow(const ASTNode* node, SharedExpression lhs, SharedExpression rhs, bool plainStore, int line)
 {
-    if (!node || _storeChecked == node) return;
+    if (!node) return false;
+    if (_storeChecked == node) return _storeRefused == node;
     checkViewStore(lhs, rhs, plainStore, line);
     if (auto* cid = dynamic_cast<IdentifierNode*>(lhs.get()))
-        if (plainStore && cid->value && (!cid->qualifier || cid->qualifier->empty()))
-            checkContractObject(*cid->value, rhs, /*isStore=*/true, line);
+        if (plainStore && cid->value && (!cid->qualifier || cid->qualifier->empty())
+            && checkContractObject(*cid->value, rhs, /*isStore=*/true, line)) {
+            _storeRefused = node;   // a temporary has no home (KR-241): the store is not lowered
+            return true;
+        }
+    return false;
 }
 
 // The `_scopes` index a binding was declared in: a local, or a `foreach`/`match`/`borrow` binding, any of which the
@@ -28458,10 +28485,11 @@ int CEmitter::contractObjectDepth(SharedExpression e, const std::string& iface)
 {
     ASTNode* n = e.get();
     if (!n) return kViewUnbounded;
-    if (auto* h = dynamic_cast<HandoffNode*>(n)) return contractObjectDepth(h->value, iface);
     if (dynamic_cast<ThisAccessNode*>(n)) return kViewCaller;
     // A widened scalar is a compound literal of the block it is written in, whatever binding it was read from.
     if (!primWidenKey(e, iface).empty()) return (int)_scopes.size() - 1;
+    // `copy w` and `give w` make a value that nothing holds once the statement ends (KR-241).
+    if (dynamic_cast<HandoffNode*>(n)) return kViewTemporary;
     const std::string c = exprClass(e);
     if (isSmartPtrClass(c) || !derefTarget(c).empty()) return kViewUnbounded;   // reseating the handle frees it
     if (auto* id = dynamic_cast<IdentifierNode*>(n)) {
@@ -28479,35 +28507,67 @@ int CEmitter::contractObjectDepth(SharedExpression e, const std::string& iface)
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         // A CONTRACT value read out of a place is copied — a fat pointer — so where the copy was read from does not
         // matter, only what it points at, which outlives the receiver it came from (`Coded c = t.hole(at: 0)`).
-        if (isInterface(c))
+        if (isInterface(c)) {
             if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get()))
                 return ma->expression ? contractObjectDepth(ma->expression, iface) : kViewUnbounded;
-        // A value is materialized in this block; a place may be anywhere.
-        return invocationReturnsPlace(inv) ? kViewUnbounded : (int)_scopes.size() - 1;
+            return (int)_scopes.size() - 1;
+        }
+        // A place may be anywhere; a value is a temporary that ends with the statement (KR-241).
+        return invocationReturnsPlace(inv) ? kViewUnbounded : kViewTemporary;
     }
-    return (int)_scopes.size() - 1;
+    // An operator's result, a ternary's, a constructor's: values, which nothing holds past the statement (KR-241).
+    return isNamedValue(n) && !dynamic_cast<TernaryExpressionNode*>(n) ? (int)_scopes.size() - 1 : kViewTemporary;
 }
 
 // The window rule and the store rule (KR-225 decision 6) for a contract local, keyed on its OBJECT: a declaration's
 // object must stay put, and a store's must outlive the binding it is stored into.
-void CEmitter::checkContractObject(const std::string& nm, SharedExpression rhs, bool isStore, int line)
+bool CEmitter::checkContractObject(const std::string& nm, SharedExpression rhs, bool isStore, int line)
 {
     auto lt = _localCTypes.find(nm);
-    if (lt == _localCTypes.end() || !isInterface(lt->second) || !rhs) return;
+    if (lt == _localCTypes.end() || !isInterface(lt->second) || !rhs) return false;
     const int got = contractObjectDepth(rhs, lt->second);
+    if (got == kViewTemporary) {
+        // A temporary has no place to borrow (KR-241) — said only of a value that resolved and implements the
+        // contract, so an unknown call or a type that does not conform keeps its own sentence. The parameter keeps
+        // its temporary: that borrow ends with the call. Rust and C++ would extend the temporary to the block, a
+        // hidden owner; kama writes the owner down.
+        auto* h = dynamic_cast<HandoffNode*>(rhs.get());
+        auto* t = dynamic_cast<TernaryExpressionNode*>(rhs.get());
+        const std::string c = exprClass(h ? h->value : rhs);
+        if (c.empty() || !valueReachesContract(h ? h->value : rhs, c, lt->second)) return false;
+        // The whole initializer, so a `?:` and a hand-off are spelled here: `unparseExpr` leaves both out, since it
+        // writes no parentheses and a `?:` inside a larger expression would read with the wrong precedence.
+        const std::string shown = h ? std::string(h->isGive ? "give " : "copy ") + unparseExpr(h->value)
+                                : t ? unparseExpr(t->condition) + " ? " + unparseExpr(t->LHS) + " : " + unparseExpr(t->RHS)
+                                    : unparseExpr(rhs);
+        const std::string bind = isStore ? nm : demangleForDisplay(lt->second) + " " + nm;   // `Counts c` or `c`
+        std::string repair;
+        if (h && h->isGive)   // nothing moves into a borrow
+            repair = "A contract local takes nothing — borrow `" + unparseExpr(h->value) + "` itself (`" + bind + " = "
+                   + unparseExpr(h->value) + ";`)";
+        else if (t && isNamedValue(t->LHS.get()) && isNamedValue(t->RHS.get()))
+            repair = "Choose the object with `if`/`else` (`" + bind + " = " + unparseExpr(t->LHS) + "; if (!("
+                   + unparseExpr(t->condition) + ")) { " + nm + " = " + unparseExpr(t->RHS) + "; }`)";
+        else
+            repair = "Bind it to a local first (`" + demangleForDisplay(c) + " v = " + shown + "; " + bind + " = v;`)";
+        unsupported(("`" + nm + "` borrows its object, and `" + shown + "` is a value, which nothing holds beyond this "
+                     "statement. " + repair).c_str(), line);
+        return true;
+    }
     if (got == kViewUnbounded) {
         unsupported(("`" + nm + "` would borrow `" + unparseExpr(rhs) + "`, whose storage can move or be freed while `" + nm
                      + "` lives — an element of a container that grows, or the value behind a handle that can be "
                        "reseated. A contract value borrows its object, so the object must stay where it is. Hold it "
                        "still in a window (`borrow d.view() as v { … v[i] … }`), or pass it straight to a function "
                        "that takes the contract").c_str(), line);
-        return;
+        return false;
     }
-    if (!isStore || got <= bindingScope(nm)) return;
+    if (!isStore || got <= bindingScope(nm)) return false;
     unsupported(("`" + nm + "` outlives the object this stores into it: `" + unparseExpr(rhs) + "` lives in a block "
                  "nested inside the one `" + nm + "` was declared in, so `" + nm + "` would point at a dead object once "
                  "that block ends. Store an object that outlives `" + nm + "`, or declare a contract local inside the "
                  "block").c_str(), line);
+    return false;
 }
 
 // --- The window's freeze -------------------------------------------------------------------------------

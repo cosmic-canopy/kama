@@ -1,0 +1,16 @@
+// A `?:` picks a value at run time, and a contract local has nowhere to keep it (KR-241): the repair is the choice
+// written as `if`/`else`. Through 0.9.741 a resource's ternary was refused as a MOVE ("cannot move `x` in one arm"),
+// although binding a contract local moves nothing.
+type contract Counts for resource { const fn int32 count(); }
+type resource W implements Counts {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 count() { return this.n; }
+}
+fn uint8 main() {
+    W x = W.make(n: 1);
+    W y = W.make(n: 2);
+    bool pick = true;
+    Counts c = pick ? x : y;
+    return cast<uint8>(c.count());
+}

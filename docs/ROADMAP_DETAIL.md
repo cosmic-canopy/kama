@@ -424,43 +424,6 @@ random bytes find. **Design first.** The questions:
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-<a id="s2-contract-local-temporary"></a>
-
-### A contract local bound to a temporary (KR-241)
-
-**Found 2026-10-25,** writing tests/discarded_place_call:
-
-```kama fragment
-type contract Counts for resource { const fn int32 count(); }
-Counts c = W.make();          // clang: "cannot take the address of an rvalue of type 'k_W'"
-Counts d = mk();              // the same, through a call returning `W`
-int32 a = via(c: W.make());   // refused: "cannot pass an inline constructor to a contract `ref`/`out` parameter …"
-```
-
-A contract value is a fat pointer that borrows its object (SPEC *Borrow vs. storage*), and the object of a
-contract local "must stay where it is: a local, a parameter, `this`, a field of one, or an element a `borrow`
-window holds still". A temporary is none of those. The emitter takes `&(rvalue)` and C refuses it, for a value
-type and a resource alike. Two of the tree's practices disagree about what the right answer is:
-- `contractObjectDepth` (kama.cemit.cpp) already says of a call: "a value is materialized in this block", as if the
-  temporary were kept for the block, the way `Formattable f = 5` keeps a widened scalar as a compound literal.
-- the parameter position refuses the same temporary with a sentence ("bind it to a local first").
-
-| | A borrow of a temporary in a declaration |
-|---|---|
-| Rust | `let c: &dyn Counts = &W::make();` extends the temporary to the enclosing block |
-| C++ | `const Counts& c = W::make();` extends it too (const reference only) |
-| Swift | `let c: any Counts = W.make()` boxes a copy in an existential: an owner, not a borrow |
-| Go, Java, C# | an interface value holds a reference the GC keeps alive |
-
-**Recommended: refuse, with the parameter's sentence.** GOALS #5 (explicit): the extension in Rust and C++ is a
-hidden local, and for a `resource` a hidden owner with a hidden drop; kama writes ownership down ("never an implicit
-box"). It is also the existing practice at the parameter, so the two positions say one thing. The fix is in the
-contract-local path (`contractBorrowOf` for `"a contract local"`): an rvalue source is refused with "a contract
-local borrows its object, and `W.make()` is a temporary that ends with this statement — bind it to a local first
-(`W w = W.make(); Counts c = w;`)", and `contractObjectDepth`'s comment is corrected. The same commit fixes the
-parameter message's article ("bind it to an `Counts` first"). Fixtures: `xfail/contract_local_temporary` (a
-ctor, a call, a value type). Size S.
-
 ### Verdicts on reported gaps (2026-10-08)
 
 - **A scoped `unsafe { }` block is a NON-GOAL.** It existed and was removed: one block disabled definite

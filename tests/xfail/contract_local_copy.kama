@@ -1,0 +1,13 @@
+// `copy w` makes a new value, and a contract local cannot own it (KR-241). Through 0.9.741 a value type's `copy`
+// silently bound `w` itself, dropping the copy, and a resource's was refused as a marker on a bare sub-expression.
+type contract Counts for value { const fn int32 count(); }
+type value V implements Counts {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 count() { return this.n; }
+}
+fn uint8 main() {
+    V w = V.make(n: 3);
+    Counts c = copy w;
+    return cast<uint8>(c.count());
+}

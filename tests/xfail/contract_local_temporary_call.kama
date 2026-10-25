@@ -1,0 +1,13 @@
+// A call returning a value is a temporary too (KR-241), for a value type as for a resource: the contract local would
+// point at storage the statement's end reclaims.
+type contract Counts for value { const fn int32 count(); }
+type value V implements Counts {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 count() { return this.n; }
+}
+fn V mk() { return V.make(n: 4); }
+fn uint8 main() {
+    Counts c = mk();
+    return cast<uint8>(c.count());
+}

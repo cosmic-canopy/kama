@@ -4230,6 +4230,7 @@ private:
     // one), or `kViewUnbounded` when nothing bounds it (a mint from a container this frame may still grow).
     static constexpr int kViewCaller = -1;
     static constexpr int kViewUnbounded = INT_MAX;
+    static constexpr int kViewTemporary = INT_MAX - 1;   // a contract value's object nothing holds past the statement
     int viewDepthOf(SharedExpression e);
     bool isVariantLiteral(SharedExpression e);   // `Optional::None`, `Result::Ok(value: v)` — an enum case written in place
     int innermostWindowDepth() const;                       // where a binding declared HERE is bounded
@@ -4239,7 +4240,8 @@ private:
     // viewDepthOf(e) <= x's depth. Called on every assignment, whatever its operator.
     void checkViewStore(SharedExpression lhs, SharedExpression rhs, bool plainStore, int line);
     const ASTNode* _storeChecked = nullptr;          // the statement's assignment, judged by the store rules already
-    void checkStoredBorrow(const ASTNode* node, SharedExpression lhs, SharedExpression rhs, bool plainStore, int line);
+    const ASTNode* _storeRefused = nullptr;          // a store whose value has no home (KR-241): nothing more is emitted for it
+    bool checkStoredBorrow(const ASTNode* node, SharedExpression lhs, SharedExpression rhs, bool plainStore, int line);
     struct PendingPublicViewCtor { std::string cls; ClassMethodDeclarationNode* md = nullptr; SharedStringList typeParams; std::string unit; };
     std::vector<PendingPublicViewCtor> _pendingPublicViewCtors;   // decided by checkViewSurfaces, once every class is known
     void checkViewSurfaces();
@@ -4249,7 +4251,7 @@ private:
     bool viewByRefTypeArg(FunctionDeclarationNode* tmpl, const std::map<std::string, SharedIdentifier>& bind, int line);
     int bindingScope(const std::string& name) const;                         // the `_scopes` index a binding lives in
     int contractObjectDepth(SharedExpression e, const std::string& iface);   // where a contract value's object lives
-    void checkContractObject(const std::string& name, SharedExpression rhs, bool isStore, int line);
+    bool checkContractObject(const std::string& name, SharedExpression rhs, bool isStore, int line);   // true: a temporary, refused
     SharedIdentifier mintReturnTypeNode(SharedExpression host, std::map<std::string, SharedIdentifier>& localTys);
     bool rejectFrozenWrite(SharedExpression target, int line);
     // Every PLACE a statement uses — `c`, `c.f`, a method's receiver, an element's container — at its widest

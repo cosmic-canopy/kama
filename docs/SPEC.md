@@ -5550,7 +5550,12 @@ never in storage; storage requires ownership"** — the same reason a `ref` para
 returnable "reference" is always an owned smart-pointer handle.
 
 A contract **local** borrows its object for as long as the local lives, so the object must stay where it is: a
-local, a parameter, `this`, a field of one, or an element a `borrow` window holds still. Mutating a local through <!-- xfail: contract_local_over_element, contract_static -->
+local, a parameter, `this`, a field of one, or an element a `borrow` window holds still. A temporary is none of these:
+`Counts c = W.make();` (a constructor, a call's value, an operator's, a `?:`, a `copy`) is refused in a declaration <!-- xfail: contract_local_temporary, contract_local_temporary_call, contract_local_ternary, contract_local_copy -->
+and in a rebind alike, since nothing holds the value beyond the statement — bind it to a local first. A contract <!-- xfail: contract_local_temporary_rebind -->
+PARAMETER takes one, since its borrow ends with the call. A widened scalar (`Formattable f = 5`) is a copy, not a <!-- test: contract_param_temporary, iface_arg_inline_ctor -->
+borrow. Rust and C++ would keep the temporary alive to the end of the block, a hidden owner; kama writes the owner
+down. Mutating a local through <!-- xfail: contract_local_over_element, contract_static -->
 the contract is fine — the local never moves — but an element of a container that grows, or the value behind a
 handle that can be reseated, is refused (`Formattable fo = arr[0]`, `Formattable fo = sh` over a `Shared<Box>`), and <!-- xfail: contract_local_over_handle -->
 so is a `static` of a contract type. The value behind a handle is a contract through a contract PARAMETER, <!-- test: contract_param_over_handle -->

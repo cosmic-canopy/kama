@@ -1,0 +1,13 @@
+// A contract local borrows its object (KR-241), and a constructor's result is a value nothing holds past the
+// statement, so there is nothing to borrow. Through 0.9.741 it reached the C compiler as `&(k_W__make())`. Rust and
+// C++ would keep the temporary alive for the block, a hidden owner; kama has the owner written down instead.
+type contract Counts for resource { const fn int32 count(); }
+type resource W implements Counts {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 count() { return this.n; }
+}
+fn uint8 main() {
+    Counts c = W.make(n: 7);
+    return cast<uint8>(c.count());
+}

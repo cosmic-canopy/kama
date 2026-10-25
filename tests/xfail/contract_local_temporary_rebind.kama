@@ -1,0 +1,14 @@
+// A rebind takes the declaration's rule (KR-241): `c = W.make(n: 2)` stores a borrow of a value nothing holds. Through
+// 0.9.741 it built, holding the temporary to the end of the block, so the two positions said different things.
+type contract Counts for resource { const fn int32 count(); }
+type resource W implements Counts {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 count() { return this.n; }
+}
+fn uint8 main() {
+    W first = W.make(n: 1);
+    Counts c = first;
+    c = W.make(n: 2);
+    return cast<uint8>(c.count());
+}

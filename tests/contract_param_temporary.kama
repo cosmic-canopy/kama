@@ -1,0 +1,32 @@
+// What KR-241 leaves legal. A contract PARAMETER keeps a temporary for the call, since the borrow ends with it: a
+// by-value call result and a `?:` over two resources both pass (an inline constructor is tests/iface_arg_inline_ctor).
+// A widened scalar is copied into the local's own storage, a call result too, so it is no borrow of a temporary; and
+// a module constant is storage that outlives every local.
+type contract Counts for value, resource { const fn int32 count(); }
+type resource W implements Counts {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 count() { return this.n; }
+}
+type value V implements Counts {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 count() { return this.n; }
+}
+comptime V SEVEN = V.make(n: 7);
+fn W mkW(int32 n) { return W.make(n: n); }
+fn int32 seven() { return 7; }
+fn int32 via(const Counts c) { return c.count(); }
+fn uint8 main() {
+    if (via(c: mkW(n: 2)) != 2) { return 1; }          // a by-value call result, kept for the call
+    W x = W.make(n: 3);
+    W y = W.make(n: 4);
+    bool pick = true;
+    if (via(c: pick ? x : y) != 3) { return 2; }       // a resource `?:` at a parameter
+    Formattable f = seven();                           // a widened scalar: a copy, not a borrow
+    string s = "${f}";
+    if (s != "7") { return 3; }
+    Counts k = SEVEN;                                  // a module constant
+    if (k.count() != 7) { return 4; }
+    return 40;
+}
