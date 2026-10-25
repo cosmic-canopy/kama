@@ -32,7 +32,7 @@ language-servers = ["kama"]
 # does; the grammar landed after v0.1.76.
 [[grammar]]
 name = "kama"
-source = { git = "https://github.com/cosmic-canopy/kama", rev = "cb77a0c19370d742c774e0e58999180881d9c397", subpath = "tree-sitter-kama" }
+source = { git = "https://github.com/cosmic-canopy/kama", rev = "577df2269946ea4233b42321f715639e8b76a43e", subpath = "tree-sitter-kama" }
 
 # Working on the grammar itself? Swap the block above for a local path — it needs no git, no commit and no
 # network, which is the fast iteration loop (Zed, by contrast, can only see committed revisions):
