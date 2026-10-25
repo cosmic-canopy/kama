@@ -424,25 +424,6 @@ random bytes find. **Design first.** The questions:
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-<a id="s2-ref-call-statement"></a>
-
-### A discarded `ref`-returning call warns in the emitted C (KR-240)
-
-**Found 2026-10-25,** writing a typed query builder whose steps return `ref` to the builder so they chain:
-
-```kama fragment
-q.metric(m: VirtualMachine::cpuUsageAverage()).every(interval: Interval::Realtime).latest(n: 1);
-```
-
-A place-returning call lowers to a dereference, `(*k_..._latest(…))`, and as a statement nothing reads it, so clang
-reports `warning: expression result unused [-Wunused-value]` on C the user never wrote. `kama build` still succeeds,
-but the suite fails a fixture that warns, and a project built with `-Werror` fails outright.
-
-**The fix:** the expression-statement path in `emitStatement` (`src/kama.cemit.cpp`, the bare-expression arm) casts
-the call to `(void)` when `invocationReturnsPlace` says it returns a place. That helper already exists, so the call
-is still made and only the unused place is dropped. A positive fixture with a discarded chain is the guard, since a
-warning fails it. Size S.
-
 <a id="s2-comptime-generic-value"></a>
 
 ### A `comptime` constant of a generic value type (KR-239)

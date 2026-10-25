@@ -10461,7 +10461,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
         _hoistOK = ph;
         flushHoisted(depth);                                       // temp decls first…
         indent(depth);
-        *_out << s << ";\n";                                       // …then the statement using them
+        *_out << discardPlace(std::dynamic_pointer_cast<ExpressionNode>(stmt), s) << ";\n";   // …then the statement
         return;
     }
 
@@ -10637,7 +10637,7 @@ std::string CEmitter::inlineStatement(SharedStatement stmt)
         else if (!discardedOwningType(e).empty())
             unsupported("a `for` clause cannot drop the value this call returns, because it owns memory — call it in "
                         "the loop body, where the end of the statement drops it", n);
-        return emitExpression(e);
+        return discardPlace(e, emitExpression(e));
     }
 
     unsupported("for-clause statement", n);
@@ -10655,6 +10655,14 @@ std::string CEmitter::emitForClause(SharedStatementList list)
         s += inlineStatement(st);
     }
     return s;
+}
+
+// A call returning `ref`/`const ref` lowers to a dereference, `(*k_f(…))`, and in a position that discards it — a
+// statement, a `for` clause, a statement `match`'s arm — clang reports the unused place (`-Wunused-value`) on C the
+// user never wrote: `q.metric(m: …).latest(n: 1);`, a builder's chain. The call is still made; only the place goes.
+std::string CEmitter::discardPlace(SharedExpression e, std::string s)
+{
+    return invocationReturnsPlace(dynamic_cast<InvocationNode*>(e.get())) ? "(void)" + s : s;
 }
 
 // ---------------------------------------------------------------------------
@@ -32732,7 +32740,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             std::string av = emitExpression(a->body);
             _hoistOK = ph;
             flushHoisted(depth + 2);
-            indent(depth + 2); *_out << av << ";\n";
+            indent(depth + 2); *_out << discardPlace(a->body, av) << ";\n";
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps of a statement-position arm
         }
         indent(depth + 2); *_out << "break;\n";
@@ -33059,7 +33067,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
             std::string av = emitExpression(a->body);
             _hoistOK = ph;
             flushHoisted(depth + 2);
-            indent(depth + 2); *_out << av << ";\n";
+            indent(depth + 2); *_out << discardPlace(a->body, av) << ";\n";
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps of a statement-position arm
         }
         indent(depth + 2); *_out << "break;\n";

@@ -1,0 +1,46 @@
+// A call that returns a PLACE (`ref`/`const ref`) lowers to a dereference, `(*k_f(…))`. Where nothing reads it — a
+// statement, a `for` clause, a statement `match`'s arm — the C compiler said "expression result unused" about C
+// nobody wrote, and the suite fails a fixture that warns: a builder chain, `q.metric(…).every(…).latest(n: 1);`,
+// could not be written without one (until 0.9.739). The call is still made; only the unused place is dropped. Each shape
+// below bumps a counter, so the exit code proves every call ran.
+import { std::memory::Owned };
+
+type resource Builder {
+    int32 n;
+    public ctor make() { this.n = 0; }
+    public fn ref Builder bump() { this.n = this.n + 1; return this; }
+    public const fn const ref Builder peek() { return this; }
+    public const fn int32 count() { return this.n; }
+}
+
+type contract Bumps for resource { fn ref Builder bump(); const fn int32 count(); }
+type resource Wrapper implements Bumps {
+    Builder b;
+    public ctor make() { this.b = Builder.make(); }
+    public fn ref Builder bump() { return this.b.bump(); }
+    public const fn int32 count() { return this.b.count(); }
+}
+
+type enum Go { Yes, No }
+type enum Step { Twice(int32 times), Never }
+
+fn ref Builder pick(ref Builder b) { return b; }
+
+fn uint8 main() {
+    Builder b = Builder.make();
+    b.bump().bump().bump();                                 // a chain as a statement: 3
+    b.peek();                                               // a `const ref` returner
+    pick(b: ref b).bump();                                  // a free `fn ref`, then a method on its place: 4
+    pick(b: ref b);
+    for (int32 i = 0; i < 2; b.bump()) { i = i + 1; }       // a `for` step: 6
+    Go g = Go::Yes;
+    match (g) { case Yes: b.bump(); case No: { } };         // an enum arm: 7
+    Step s = Step::Twice(times: 2);
+    match (s) { case Twice(times: t): b.bump(); case Never: { } };   // a payload arm: 8
+    Owned<Builder> o = new Builder.make();
+    o.bump().bump();                                        // through `Deref`: 2
+    Wrapper w = Wrapper.make();
+    Bumps c = w;
+    c.bump();                                               // a contract's `ref` slot: 1
+    return cast<uint8>(b.count() * 10 + o.count() + c.count());   // 83
+}

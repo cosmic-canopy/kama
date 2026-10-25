@@ -3854,6 +3854,7 @@ private:
     void emitBody(SharedStatement stmt, int depth, bool loopBoundary);  // brace-wrapped control-flow body
     std::string inlineStatement(SharedStatement stmt);         // for-clause form (no ; / newline)
     std::string emitForClause(SharedStatementList list);       // comma-joined inlineStatements
+    std::string discardPlace(SharedExpression e, std::string s);   // `(void)` before a place call nothing reads
 
     // RAII cleanup
     void emitScopeCleanup(const Scope& s, int depth);          // reverse-order dtors for one scope
