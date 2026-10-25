@@ -201,6 +201,11 @@ or argument points into one.
   fnptr` does.
 - **A foreign call does not park.** It blocks, which is decision 8's subject.
 - **Only code a fiber entry reaches is held to the rule**, so a program with no `spawn fiber` loses nothing.
+  *Correction owed a ruling (found building step 3, 2026-10-25):* as built, fiber 0 parks too — a `scope`'s wait for its
+  fibers and a `join` run the loop from the thread's own context (decision 1) — so a window on the root that holds one,
+  `borrow sh.items as v { scope { spawn fiber f(); } }`, is reached by no fiber entry and escapes this sentence.
+  Proposed: the roots are the fiber entries and every isolate entry, `main` included, whose reach includes a
+  `spawn fiber`. Until step 4 ships, a park inside a `Shared` window can be written.
 
 What this buys:
 - **No conflict across a park is possible.** That is the iterator-invalidation guarantee kama already gives,
