@@ -424,6 +424,55 @@ random bytes find. **Design first.** The questions:
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+<a id="s2-ref-call-statement"></a>
+
+### A discarded `ref`-returning call warns in the emitted C (KR-240)
+
+**Found 2026-10-25,** writing a typed query builder whose steps return `ref` to the builder so they chain:
+
+```kama fragment
+q.metric(m: VirtualMachine::cpuUsageAverage()).every(interval: Interval::Realtime).latest(n: 1);
+```
+
+A place-returning call lowers to a dereference, `(*k_..._latest(…))`, and as a statement nothing reads it, so clang
+reports `warning: expression result unused [-Wunused-value]` on C the user never wrote. `kama build` still succeeds,
+but the suite fails a fixture that warns, and a project built with `-Werror` fails outright.
+
+**The fix:** the expression-statement path in `emitStatement` (`src/kama.cemit.cpp`, the bare-expression arm) casts
+the call to `(void)` when `invocationReturnsPlace` says it returns a place. That helper already exists, so the call
+is still made and only the unused place is dropped. A positive fixture with a discarded chain is the guard, since a
+warning fails it. Size S.
+
+<a id="s2-comptime-generic-value"></a>
+
+### A `comptime` constant of a generic value type (KR-239)
+
+**Found 2026-10-25,** the same session:
+
+```kama fragment
+type value Metric<E> { int32 counter; public ctor of(int32 counter) { this.counter = counter; } }
+comptime Metric<VirtualMachine> CPU_USAGE_AVERAGE = Metric.of(counter: 2);      // unknown identifier `Metric`
+comptime Metric<VirtualMachine> CPU_USAGE_AVERAGE = Metric::<VirtualMachine>.of(counter: 2);   // the same
+```
+
+At run time the same initializer builds and runs. SPEC's *Compile-time constants* allows "a `type value` whose fields
+are numbers, `bool`s, `char`s, fixed arrays or value types of those" and says nothing about a generic one. No fixture
+holds a generic instance at compile time, so the hole went unnoticed. This is what a typed API's constant needs:
+`VirtualMachine::CPU_USAGE_AVERAGE` as a `comptime Metric<VirtualMachine>`, where today it has to be a static fn.
+
+**Where it fails** (read, not yet probed): `ctEvalCallExpr` in `src/kama.comptime.cpp`. A bare `Metric` resolves to
+the generic template, which is not in `_classes`. With type arguments, `cType` names the instance, and the error
+suggests the instance is not yet registered when the constant is folded.
+
+**The fix, to verify:**
+- the constant's declared type supplies the instance for a bare `Metric.of(…)`, as a destination types a literal;
+- the instance is instantiated on demand before its ctor runs;
+- `ctStructProto` already maps a generic instance's `T` fields (`ctProtoOfCType`).
+
+Fixtures: a module, a type-member and a local generic constant, plus the turbofish form. If an instance cannot be a
+compile-time value for a deeper reason, that becomes a stated refusal in SPEC with an xfail, not a misleading
+"unknown identifier". Size S?.
+
 ### Verdicts on reported gaps (2026-10-08)
 
 - **A scoped `unsafe { }` block is a NON-GOAL.** It existed and was removed: one block disabled definite

@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-239**
+**Next id: KR-241**
 
 ## The shape
 
@@ -72,6 +72,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-240 | **A discarded `ref`-returning call warns in the emitted C** — `q.metric(m: …).latest(n: 1);` lowers to `(*f(…));`, and clang says `-Wunused-value` about code the user did not write; the suite fails any fixture that warns. Found writing a typed builder (2026-10-25). The fix is the statement emitter's: a place call used as a statement discards its place | S | [§2](ROADMAP_DETAIL.md#s2-ref-call-statement) |
+| KR-239 | **A `comptime` constant of a generic value type is refused** — `comptime Metric<VirtualMachine> CPU = Metric.of(counter: 2);` fails "unknown identifier `Metric`", and the turbofish `Metric::<VirtualMachine>.of` too, though the same value builds at run time and SPEC names no such limit. It is what keeps a typed API's constants (`VirtualMachine::CPU_USAGE_AVERAGE`) from being constants. Found 2026-10-25 | S? | [§2](ROADMAP_DETAIL.md#s2-comptime-generic-value) |
 | KR-3 | **Fibers and thread-per-core: blocking-shaped I/O for many connections** (and the job system) — one isolate per core, each a fiber scheduler over its own `Poller`: no colouring, no `Pin`, no `Send` bound on a task, races still impossible by construction. Beside KR-202, KR-7. **Designed and ruled 2026-10-22 ([docs/design/fibers.md](design/fibers.md))**: fifteen decisions, an eleven-commit map. Steps 1–2 (the switch and stacks, the scheduler) shipped `0.9.737`–`0.9.738` | XL | [§6](ROADMAP_DETAIL.md#s6-fibers) |
 | KR-238 | **Fibers under CET shadow stacks** — a unit built with `-fcf-protection=full` is marked shadow-stack compatible, and where Linux and glibc turn shadow stacks on, the fiber switch would fault on its first `ret`; since `0.9.737` it refuses with a message instead. Supporting them: a shadow stack per fiber (`map_shadow_stack`) and a restore-token switch, as Boost.Context does. Linux x86-64 only; found building KR-3 step 1 | M? | [§6](ROADMAP_DETAIL.md#s6-fiber-cet) |
 | KR-231 | **Zero-copy deserialization into a view struct** — `@generate(Deserializable)` on a `type view`, so a parsed record's strings are views into the input (serde's `#[serde(borrow)]`); the escaped-field case wants a ruling. Unblocked: a type holding a view is a view since `0.9.725` | M? | [§4](ROADMAP_DETAIL.md#s4-view-deserialize) |
