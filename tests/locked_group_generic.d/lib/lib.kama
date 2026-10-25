@@ -1,0 +1,16 @@
+import { std::concurrent::Locked };
+export { Account, Pair };
+
+// Two locks in one `borrow` inside a GENERIC type's method, instantiated from another module: the instance's body is
+// emitted into the program's shared header.
+type value Account implements Sendable { public int64 balance; public ctor of(int64 b) { this.balance = b; } }
+type resource Pair<T: Sendable> implements Sendable {
+    Locked<T> a;
+    Locked<T> b;
+    public ctor make(Locked<T> a, Locked<T> b) { this.a = give a; this.b = give b; }
+    public fn int32 touch() {
+        int32 n = 0;
+        borrow this.a.lock().value() as x, this.b.lock().value() as y { n = 1; }
+        return n;
+    }
+}

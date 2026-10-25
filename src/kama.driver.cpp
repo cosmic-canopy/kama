@@ -6910,10 +6910,16 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
         moduleFiles.push_back(std::move(f));
     }
 
-    CEmitter emitter(header, "", emitLines);
+    // The shared header is held too, and takes the same last pass as every module: a generic instance's body lives
+    // there, and a lock group's markers become `kama_lockgroup_begin`/`_end` only in `elideCallAccesses`. Written
+    // straight to the file, a multi-file build left them comments, and the group's second lock trapped as one taken
+    // inside a lock window (through 0.9.743).
+    std::ostringstream headerText;
+    CEmitter emitter(headerText, "", emitLines);
     configureEmitter(emitter);
     emitter.setOneTranslationUnit(oneTranslationUnit);
-    int unsupported = emitter.emitProgram(units, headerName, header, moduleStreams, sourcePaths);
+    int unsupported = emitter.emitProgram(units, headerName, headerText, moduleStreams, sourcePaths);
+    header << emitter.elideCallAccesses(headerText.str());
     for (size_t i = 0; i < moduleFiles.size(); ++i)
         *moduleFiles[i] << emitter.elideCallAccesses(emitter.pruneUnreached(moduleTexts[i]->str()));
     if (externsMathH) *externsMathH = emitter.externsHeader("<math.h>");   // -> the driver appends -lm

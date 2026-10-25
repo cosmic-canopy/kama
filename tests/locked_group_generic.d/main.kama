@@ -1,0 +1,13 @@
+// Several locks in one `borrow` are taken together, in address order (KR-226), in a multi-file build too. A generic
+// instance's body lives in the shared header, which through 0.9.743 skipped the last pass that turns a lock group's
+// markers into `kama_lockgroup_begin`/`_end`: they stayed comments, the mints took their locks one at a time, and the
+// second trapped as "a lock is taken inside a lock window". The single-file build was right. Both orders are named
+// here, as the deadlock-prone pair would be. Returns 42.
+import { std::concurrent::Locked, lib::Account, lib::Pair };
+fn uint8 main() {
+    Locked<Account> x = Locked.make(value: Account.of(b: 1i64));
+    Locked<Account> y = Locked.make(value: Account.of(b: 2i64));
+    Pair<Account> p = Pair.make(a: copy x, b: copy y);
+    Pair<Account> q = Pair.make(a: copy y, b: copy x);   // the opposite order
+    return cast<uint8>(p.touch() + q.touch() + 40);
+}
