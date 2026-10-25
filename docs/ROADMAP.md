@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-242**
+**Next id: KR-244**
 
 ## The shape
 
@@ -73,6 +73,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 | id | item | size | detail |
 |---|---|---|---|
 | KR-3 | **Fibers and thread-per-core: blocking-shaped I/O for many connections** (and the job system) — one isolate per core, each a fiber scheduler over its own `Poller`: no colouring, no `Pin`, no `Send` bound on a task, races still impossible by construction. Beside KR-202, KR-7. **Designed and ruled 2026-10-22 ([docs/design/fibers.md](design/fibers.md))**: fifteen decisions, an eleven-commit map. Steps 1–3 (the switch and stacks, the scheduler, `spawn fiber` with `Fiber<R>`) shipped `0.9.737`–`0.9.741`; next step 4, the park rule, whose roots owe a ruling ([§6](ROADMAP_DETAIL.md#s6-fiber-park-roots)); the next release tag waits for step 4, so `spawn fiber` ships with its park rule | XL | [§6](ROADMAP_DETAIL.md#s6-fibers) |
+| KR-243 | **A server benchmark: kama fibers against Node, Go and tokio** — TCP echo, HTTP/1.1 keep-alive plaintext and idle connections, measuring requests/s, p50/p99/p99.9 latency, CPU and memory per connection, under the house's interleaved protocol, with one in-repo load client that verifies every reply. The harness and the Node, Go, tokio and C arms come first (ruled 2026-10-25); the fiber arm lands with KR-3 step 5, when sockets park | M–L | [§6](ROADMAP_DETAIL.md#s6-server-bench) |
+| KR-242 | **A statement's borrowed temporary is dropped at the end of its block, not the statement** — `viar(w: W.make());` (a `const ref` argument) and `W.make().count()` (a receiver) keep the `W` until the enclosing block ends, where SPEC (`const ref`) says "that temp dies at the end of the statement", as Rust and C++ do. A condition's temporary already drops right after the condition. Ruled 2026-10-25: statement end, fixed after the next tag | S–M? | [§2](ROADMAP_DETAIL.md#s2-temporary-drop-statement) |
 | KR-238 | **Fibers under CET shadow stacks** — a unit built with `-fcf-protection=full` is marked shadow-stack compatible, and where Linux and glibc turn shadow stacks on, the fiber switch would fault on its first `ret`; since `0.9.737` it refuses with a message instead. Supporting them: a shadow stack per fiber (`map_shadow_stack`) and a restore-token switch, as Boost.Context does. Linux x86-64 only; found building KR-3 step 1 | M? | [§6](ROADMAP_DETAIL.md#s6-fiber-cet) |
 | KR-231 | **Zero-copy deserialization into a view struct** — `@generate(Deserializable)` on a `type view`, so a parsed record's strings are views into the input (serde's `#[serde(borrow)]`); the escaped-field case wants a ruling. Unblocked: a type holding a view is a view since `0.9.725` | M? | [§4](ROADMAP_DETAIL.md#s4-view-deserialize) |
 | KR-197 | **Two debug-tier frames still hold a large value twice** — a large value returned into a local (`Big b = newBig(…)` lowers to a declaration and then an assignment: 32,824 B for a 16 KB `Big` at -O0), and a `[v; N]` field initializer, filled by value in the constructor (35,400 B for 35 KB of arrays). A frame-size flag on a debug build trips on both; release is clean | M | [§5](ROADMAP_DETAIL.md#s5-debug-frame-copies) |

@@ -424,6 +424,43 @@ random bytes find. **Design first.** The questions:
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
+<a id="s2-temporary-drop-statement"></a>
+
+### A statement's borrowed temporary drops at the end of its block (KR-242)
+
+**Found 2026-10-25,** probing how a contract local holds a temporary (refused since `0.9.742`), on `0.9.741`. SPEC (*`const ref`*) says of a temporary bound to a `const ref`
+parameter: "That temp dies at the end of the statement". As built it dies at the end of the enclosing block:
+
+```kama fragment
+type resource W { int32 n; public ctor make(int32 n) { this.n = n; } public const fn int32 count() { return this.n; }
+                  ~W() { println(s: "drop W"); } }
+fn int32 viar(const ref W w) { return w.count(); }
+// main:
+int32 r = viar(w: W.make(n: 1));
+println(s: "after the call");      // printed BEFORE "drop W"
+int32 t = W.make(n: 2).count();    // a receiver's temporary: the same
+```
+
+The hoisted temporaries (`kama_ctorarg`, `kama_recv`, `kama_ifcarg`) are registered with `recordDestructibleLocal`,
+so the scope's cleanup drops them; the comment on the by-value contract parameter's arm says so ("the CALLER owns the
+temp and drops it at scope end"). A temporary in an `if` or `while` CONDITION is already right: each evaluation drops
+its own before the body runs (`dropCondTemps`). Only a plain statement's temporaries wait for the block.
+
+| | When a temporary bound to a borrow is destroyed |
+|---|---|
+| Rust | the end of the enclosing statement (the temporary scope), unless a `let` extends it |
+| C++ | the end of the full-expression |
+| kama (SPEC) | the end of the statement |
+| kama (as built) | the end of the block |
+
+It matters wherever a destructor does something observable: a resource held longer than written, memory a long
+function keeps until it returns, and a destructor's order against the statements after it.
+
+**Ruled 2026-10-25: the end of the statement** (SPEC is right; the emitter moves to it), fixed after the next release
+tag. The fix: a statement's hoisted temporaries drop right after the statement, as a condition's already do — a
+`dropCondTemps`-shaped pass at the end of every statement that hoisted one, with the same moved/non-destructible
+guards. Fixtures: a declaration, an expression statement and a receiver chain, each printing its drop order.
+
 ### Verdicts on reported gaps (2026-10-08)
 
 - **A scoped `unsafe { }` block is a NON-GOAL.** It existed and was removed: one block disabled definite
@@ -2210,6 +2247,47 @@ they are on.
 It is unprobed here: this box is arm64 and its container is too, so the work wants an x86-64 Linux host with a
 CET-capable CPU and a kernel and glibc that enable it. Size M?. BTI and PAC on arm64 need nothing (fibers.md
 decision 2).
+
+<a id="s6-server-bench"></a>
+
+### A server benchmark: kama fibers against Node, Go and tokio (KR-243)
+
+**Asked 2026-10-25** (the maintainer: "a bench of Node, Go, and Rust's tokio compared to kama's equivalent with
+fibers"). Fibers are kama's answer to what Node's event loop, Go's goroutines and tokio's tasks give a server: many
+connections on few threads, with code that reads like blocking code. Whether kama is faster is a claim to measure,
+and this is where it is measured. `bench/` already holds the CPU suite (one source per language, `bench/Dockerfile`
+with Go, Rust and node) and `bench/poller/`'s C load driver and interleaving protocol, which this builds on.
+
+**Arms**, each idiomatic and release-built, all given the same N cores:
+- **Node** — `net` and `http`, as one process and as `cluster` with N workers (Node's own multi-core answer).
+- **Go** — the standard library's `net` and `net/http`, `GOMAXPROCS=N`.
+- **tokio** — the default work-stealing multi-thread runtime, and N `current_thread` runtimes over `SO_REUSEPORT`,
+  the thread-per-core shape closest to kama's.
+- **kama fibers** — an isolate per core, each with its own listener over `SO_REUSEPORT` (KR-3 decision 1).
+- **C** — the epoll/kqueue loop of `bench/poller/`, the ceiling.
+- **kama today** — an isolate per connection: the "before" number the fiber arm replaces.
+
+**Workloads:** a TCP echo of 64-byte ping-pongs (one park per request); HTTP/1.1 keep-alive plaintext "Hello, World!"
+(the TechEmpower plaintext shape, without pipelining); and idle connections, 10k and 100k, held open to read the
+server's memory.
+
+**Metrics:** requests/s at 100, 1k and 10k connections; p50, p99 and p99.9 latency; server CPU time; peak RSS, and RSS
+per idle connection.
+
+**The load client** is one C program for every arm, in the repo, so no arm is measured through a different tool. It
+verifies every echoed payload and every HTTP status and body, and a mismatch fails the run (the fairness gate, as the
+CPU suite's checksums are). It runs on cores the server does not use.
+
+**Protocol:** the house rule (measure interleaved, never sequentially): 15 rounds of fresh processes with the arm
+order rotated each round, a reference arm run twice for the noise floor, and a difference claimed only when it beats
+that floor in at least 12 of 15 paired rounds. On Linux (epoll, the bench container) and macOS (kqueue, the host).
+
+**Stated before any number:** a stackless task (tokio, a Node promise) keeps less memory per idle connection than a
+fiber's touched stack pages, and thread-per-core does not steal work, so a skewed load is where tokio and Go are
+strongest. Results go to `docs/benchmarks/` beside the CPU suite's, with versions, the machine and N.
+
+**Ruled 2026-10-25:** the harness, the client and the peer arms first, with kama-today as the "before"; the fiber arm
+with KR-3 step 5, since until sockets park a fiber's blocked read stalls its whole core.
 
 <a id="s7"></a>
 
