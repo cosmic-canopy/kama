@@ -1,0 +1,11 @@
+// `spawn fiber fiber(…)`: the first `fiber` is the keyword, the second the entry's name, so a function named `fiber`
+// is still a fiber's entry (it is only never an isolate's — xfail/spawn_named_fiber).
+import { std::concurrent::Fiber, std::concurrent::Atomic };
+
+fn void fiber(ref Atomic<int32> n) { n.fetchAdd(delta: 42); }
+
+fn uint8 main() {
+    Atomic<int32> n = Atomic.make(value: 0);
+    scope { spawn fiber fiber(n: ref n); }
+    return cast<uint8>(n.load());
+}

@@ -544,6 +544,7 @@ class IsolateNode : public ExpressionStatementNode {
 public:
     SharedExpression call;   // an InvocationNode
     SharedExpression stack;  // `spawn(stack: n) f(…)` — the isolate's stack in bytes; null = the stated default
+    bool fiber = false;      // `spawn fiber f(…)` — a fiber on this isolate's scheduler, not an isolate (KR-3)
     IsolateNode(CodeGenContext& context, SharedExpression call)
         : ASTNode(context),  ExpressionStatementNode(context), call(call) { }
 };

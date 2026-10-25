@@ -1,0 +1,29 @@
+// Fibers on an isolate other than the main one: each isolate has its own scheduler, made on its first `spawn fiber`
+// and freed with its poller when the isolate's entry returns (the sanitizer leg's leak check holds that down).
+import { std::concurrent::Isolate, std::concurrent::Fiber, std::concurrent::Atomic };
+
+type resource Work implements Sendable {
+    int32 done;
+    public ctor make() { this.done = 0; }
+    public fn void record(int32 n) { this.done = n; }
+    public const fn int32 value() { return this.done; }
+}
+
+fn void bump(ref Atomic<int32> n) { n.fetchAdd(delta: 1); }
+fn void core(ref Work w) {
+    Atomic<int32> n = Atomic.make(value: 0);
+    scope {
+        for (int32 i = 0; i < 50; i = i + 1) { spawn fiber bump(n: ref n); }
+    }
+    w.record(n: n.load());
+}
+
+fn uint8 main() {
+    Work a = Work.make();
+    Work b = Work.make();
+    scope {
+        spawn core(w: ref a);
+        spawn core(w: ref b);
+    }
+    return cast<uint8>(a.value() + b.value() - 58);   // 50 + 50 - 58
+}

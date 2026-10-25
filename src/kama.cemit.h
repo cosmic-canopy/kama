@@ -2292,7 +2292,7 @@ private:
                    std::map<std::string, int> rearm;
                    std::vector<std::map<std::string, MoveState>> breakStates;
                    bool exitsNormally = true, bodyDiverges = false;
-                   const ASTNode* loopNode = nullptr;   // the `while`/`do`/`for` this body belongs to (see _loopsBroken)
+                   const ASTNode* loopNode = nullptr;   // the `while`/`do`/`for`/`foreach` this body belongs to (see _loopsBroken)
                    // Structured concurrency (M4): a `scope { }` is a task scope. `taskChildren` are the C
                    // names of the `kama_isolate_t` handles `spawn`ed inside it; emitScopeCleanup joins them
                    // ALL before dropping any local (join-before-drop), on every exit path. `borrowedPlaces`
@@ -2306,6 +2306,9 @@ private:
                    // `length()`). `count` empty means the single-handle form.
                    struct TaskChild { std::string handle; std::string count; };
                    bool isTaskScope = false; std::vector<TaskChild> taskChildren;
+                   // KR-3: the C name of a task scope's `kama_fiber_scope`, its live fiber children, when its
+                   // body spawns any (`spawn fiber`, anywhere in it); its closing brace waits for the list to empty.
+                   std::string fiberScope;
                    // KR-211: the borrows into `Shared` values this scope holds — each a `kama_ctrl_borrow_leave(…)`,
                    // run by emitScopeCleanup on every exit, after the locals.
                    std::vector<std::string> borrowLeaves;
@@ -2351,7 +2354,10 @@ private:
                    // joins the child (emitScope scans the statements that follow). A `const ref` borrow is a
                    // write-freeze in `frozen` instead.
                    struct ChildBorrow { std::vector<std::string> place; int line = 0;
-                                        std::string who = "the child `spawn`ed"; };
+                                        std::string who = "the child `spawn`ed";
+                                        // a fiber spawned inside a block of the scope's statement: the rest of
+                                        // that statement, after it, runs beside the child too (emitScope)
+                                        const ASTNode* nestedSpawn = nullptr; };
                    std::vector<ChildBorrow> childBorrows;
                    // View locals whose root is already lifetime-bounded, so a DERIVE off one is bounded
                    // too (`View<T> mid = whole.slice(…)` where `whole` came from a window) — each with its
@@ -3839,11 +3845,19 @@ private:
     // scope-dtor'd temp (dropped via dropCondTemps at the guard/wrapper it was hoisted into), a literal/lvalue
     // is a borrow temp (no drop). Setup is flushed into `_hoisted` at `depth`.
     std::string logSpanOf(SharedExpression e, int depth);
-    std::string isolateStackArg(SharedExpression stack, int line);   // a `stack:` clause, or the stated default
+    std::string isolateStackArg(SharedExpression stack, int line, bool fiber = false);   // a `stack:` clause, or ""
     std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
                             bool& isBorrow, bool borrowOK);   // shared front half (borrow = M4.2 `ref`)
+    std::string bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, const ParamSig& p, const std::string& fname);
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)
     std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = spawn worker(...)` — RAII handle form
+    // KR-3: `spawn fiber` — a child on this isolate's scheduler (docs/design/fibers.md decisions 9, 10).
+    std::string fiberTargetRefusal() const;          // why this target has no fibers yet, or ""
+    const FuncSig* fiberPrep(IsolateNode* iso, bool held, std::string& val, bool& isBorrow);
+    void emitFiber(IsolateNode* iso, int depth);     // `spawn fiber work(job: give j);` — a child of its `scope`
+    std::string emitFiberExpr(IsolateNode* iso);     // `Fiber<R> f = spawn fiber work(…);` — the held form
+    bool hasFiberChild(const SharedStatement& s) const;   // a bare `spawn fiber` the scope being entered owns
+    bool spawnBorrowsConst(IsolateNode* iso);        // its bundle is a `const ref`
     void emitScope(ScopeNode* sc, int depth);        // `scope { }` — structured concurrency + join barrier (M4)
     void emitBorrow(BorrowNode* bn, int depth);      // `borrow h as v { }` — the lexical window a view is minted into
     void emitParallelFor(ParallelForNode* pf, int depth);   // `parallel_for (ref T e in coll) { }` — disjoint-slice data-parallel (M6.3)
@@ -3851,6 +3865,7 @@ private:
     Scope* innermostTaskScope();                     // nearest enclosing `scope { }`, or null
     int    innermostTaskScopeIndex();                // its _scopes index, or -1
     int    findScopeDeclaring(const std::string& name);   // _scopes index that declares `name`, or -1 (a param)
+    int    findScopeBinding(const std::string& name);     // ...counting `match` and `foreach` binders too
     void emitBlock(BlockNode* block, int depth);
     void emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot);
     void emitBody(SharedStatement stmt, int depth, bool loopBoundary);  // brace-wrapped control-flow body
@@ -4243,7 +4258,7 @@ private:
     // receiver, a `ref`/`out` argument (a `spawn`ed child's included), a `give`n place. `alsoExpr` is walked
     // after `s`, for a single-expression `match` arm, which need not be a statement node.
     void forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn,
-                         bool writesOnly = false, SharedExpression alsoExpr = nullptr);
+                         bool writesOnly = false, SharedExpression alsoExpr = nullptr, const ASTNode* after = nullptr);
     void rejectSubjectWriteInLoop(SharedStatement armBody, const std::vector<std::string>& subject,
                                   const std::string& alias);
     // View-return escape check (B4): the root a returned view ultimately BORROWS. `viewReturnRoot`

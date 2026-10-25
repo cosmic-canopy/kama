@@ -1,0 +1,46 @@
+import { std::ptr::relocate };
+export { Fiber, join };
+
+// A fiber's handle (KR-3, docs/design/fibers.md decision 9). `Fiber<R> f = spawn fiber work(job: give j);` starts
+// `work` on this isolate's scheduler now, and `R r = join(fiber: give f);` parks until it has ended and hands back
+// what it returned. The join CONSUMES the handle, as Rust's `JoinHandle::join(self)` does, so a second join of one
+// fiber is a compile error — the handle was given away — and never a run-time one. A handle dropped unjoined joins,
+// and drops what the fiber returned: a fiber is never orphaned. Not `Sendable`: a fiber runs only on the isolate that
+// made it.
+//
+// A fiber that returns nothing has no handle: `spawn fiber log(line: give l);` inside a `scope { }`, whose closing
+// brace waits for every fiber spawned in it, loops included.
+extern "kama_sched.h";
+extern fn void kama_sched_join(UnsafePtr f);
+
+type resource Fiber<R> {
+    UnsafePtr fiber;        // the control block, until the join
+    UnsafePtr<R> result;    // the cell the entry's return is written into, which the join moves out and frees
+    friend join[finish];
+
+    // `spawn fiber` lowers to this; a handle comes only from a spawn, so it is not called directly.
+    unsafe ctor fromRaw(UnsafePtr fiber, UnsafePtr<R> result) {
+        this.fiber = fiber;
+        this.result = result;
+    }
+
+    // Park until the fiber has ended, then move its result out of the cell and free the cell.
+    @parks
+    unsafe fn R finish() {
+        kama_sched_join(f: this.fiber);
+        this.fiber = cast<UnsafePtr>(null);
+        slot R r;
+        relocate(from: this.result, at: 0, into: out r);
+        GlobalAllocator.make().deallocate(pointer: cast<UnsafePtr>(this.result), bytes: sizeof(R), align: alignof(R));
+        return give r;
+    }
+
+    @parks
+    unsafe ~Fiber() {
+        if (this.fiber != null) { _ = this.finish(); }
+    }
+}
+
+// Park until `fiber` has ended, and hand back what its entry returned.
+@parks
+fn R join<R>(Fiber<R> fiber) { return fiber.finish(); }

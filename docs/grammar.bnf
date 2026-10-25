@@ -716,6 +716,8 @@ variable_initializer
        unambiguous (a keyword, never an expression start), so this adds no conflict. */
   | SPAWN invocation_expression
   | SPAWN spawn_stack invocation_expression
+  | SPAWN FIBER invocation_expression
+  | SPAWN FIBER spawn_stack invocation_expression
   ;
 local_constant_declaration
   : CONST type constant_declarators
@@ -809,6 +811,9 @@ asm_statement
 spawn_statement
   : SPAWN invocation_expression SEMICOLON
   | SPAWN spawn_stack invocation_expression SEMICOLON
+  /* `spawn fiber handle(conn: give c);` — a fiber child of the enclosing `scope` (KR-3, fibers.md decision 9). */
+  | SPAWN FIBER invocation_expression SEMICOLON
+  | SPAWN FIBER spawn_stack invocation_expression SEMICOLON
   ;
   /* `spawn(stack: n) worker(…)`: the isolate's stack in bytes, where the default (stated in
      kama_isolate.h and the SPEC) is not enough. Written at the spawn, the one place the depth that needs it

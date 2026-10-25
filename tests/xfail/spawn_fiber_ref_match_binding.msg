@@ -1,0 +1,1 @@
+it is declared inside a block nested in the `scope`

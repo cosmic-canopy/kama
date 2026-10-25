@@ -742,7 +742,9 @@ module.exports = grammar({
     // `Isolate h = spawn worker(p: give x);` — the handle form. `spawn` is an initializer only here.
     _variable_initializer: ($) => choice($._expression, $.spawn_expression),
 
-    spawn_expression: ($) => seq('spawn', optional($.spawn_stack), $.call_expression),
+    // `Fiber<R> f = spawn fiber work(…);` — `fiber` is a keyword only here and in `spawn_statement`, directly after
+    // `spawn` (kama.l's lexer marks it there and nowhere else), so it reserves no name.
+    spawn_expression: ($) => seq('spawn', optional('fiber'), optional($.spawn_stack), $.call_expression),
 
     // kama.y `spawn_stack_opt` — `spawn(stack: n) worker(…)`, the isolate's stack in bytes. The label
     // is an ordinary identifier checked by the compiler, exactly like a parallel loop's `workers:`.
@@ -906,7 +908,7 @@ module.exports = grammar({
       ),
     borrow_binding: ($) =>
       seq(field('host', $._expression), 'as', field('alias', $.identifier)),
-    spawn_statement: ($) => seq('spawn', optional($.spawn_stack), $.call_expression, ';'),
+    spawn_statement: ($) => seq('spawn', optional('fiber'), optional($.spawn_stack), $.call_expression, ';'),
 
     // Exactly ONE string-literal operand, and it is embedded assembly — never interpolated.
     asm_statement: ($) => seq('asm', '(', field('code', $.string_literal), ')', ';'),

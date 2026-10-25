@@ -121,6 +121,19 @@ static void* lateWriter(void* a) { (void)a; kama_sleep_ns(5000000); char c = 7; 
 static int many;
 static void brief(void* a) { kama_sched_sleep((uint64_t)((intptr_t)a % 7) * 100000ull); many++; }
 
+// 11–14. the root parks: a join, a `scope`'s wait (on the root and on a fiber), a timed sleep, each running the loop
+// inside the park until it is woken (decision 1).
+static int scoped, inner, nested;
+static void counted(void* a) { kama_sched_sleep((uint64_t)((intptr_t)a % 5) * 100000ull); scoped++; }
+static void leaf(void* a) { (void)a; kama_sched_yield(); inner++; }
+static void nest(void* a) {
+    (void)a;
+    kama_fiber_scope in = { 0, 0 };
+    for (int i = 0; i < 3; i++) kama_sched_scopeSpawn(&in, leaf, 0, 0);
+    kama_sched_scopeWait(&in);
+    nested = inner == 3 && !in.head;
+}
+
 int fiber_sched_selftest(void) {
     kama_sched_current();
     pingF = kama_sched_spawn(ping, 0, 0); pongF = kama_sched_spawn(pong, 0, 0);
@@ -180,6 +193,25 @@ int fiber_sched_selftest(void) {
     kama_sched_io_close(rio); kama_sched_io_close(wio);
     close(sv[0]); close(sv[1]);
 #endif
+
+    childOut = 0;
+    kama_fiber* c = kama_sched_spawn(child, (void*)(intptr_t)7, 0);
+    kama_sched_join(c);                                       // on the root: the park runs `child`
+    CHECK(11, childOut == 14);
+
+    kama_fiber_scope sc = { 0, 0 };
+    for (int i = 0; i < 100; i++) kama_sched_scopeSpawn(&sc, counted, (void*)(intptr_t)i, 64 << 10);
+    kama_sched_scopeWait(&sc);
+    CHECK(12, scoped == 100 && !sc.head && !sc.waiter);
+
+    const uint64_t t1 = kama_now_mono_ns();
+    kama_sched_sleep(2000000);                                // a timed park on the root, nothing else live
+    CHECK(13, kama_now_mono_ns() - t1 >= 2000000);
+
+    kama_fiber_scope outer = { 0, 0 };
+    kama_sched_scopeSpawn(&outer, nest, 0, 0);                // a scope inside a fiber, inside a scope on the root
+    kama_sched_scopeWait(&outer);
+    CHECK(14, nested);
 
     for (int i = 0; i < 10000; i++) kama_sched_detach(kama_sched_spawn(brief, (void*)(intptr_t)i, 64 << 10));
     kama_sched_run();

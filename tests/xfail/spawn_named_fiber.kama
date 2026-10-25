@@ -1,0 +1,6 @@
+// `spawn fiber(` always starts a fiber, so a function named `fiber` is never an isolate's entry: `fiber` is a keyword
+// only after `spawn`, and there it keeps `spawn fiber` a grep that finds fibers and only fibers.
+import { std::concurrent::Isolate };
+type resource Job implements Sendable { int32 n; public ctor make() { this.n = 1; } }
+fn void fiber(Job stack) { }
+fn uint8 main() { scope { spawn fiber(stack: Job.make()); } return 0; }

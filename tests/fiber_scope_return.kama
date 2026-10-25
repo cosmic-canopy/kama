@@ -1,0 +1,27 @@
+// A scope left early still waits for its fibers: a `return` from inside its body, and a `break` out of the loop that
+// spawns them, both run the closing brace's wait first, so no fiber outlives the place it borrows.
+import { std::concurrent::Fiber, std::concurrent::Atomic };
+
+fn void bump(ref Atomic<int32> n) { n.fetchAdd(delta: 1); }
+
+fn int32 early(ref Atomic<int32> n) {
+    scope {
+        for (int32 i = 0; i < 10; i = i + 1) {
+            if (i == 6) { return 7; }   // six fibers started; the return waits for them
+            spawn fiber bump(n: ref n);
+        }
+    }
+    return 0;
+}
+
+fn uint8 main() {
+    Atomic<int32> n = Atomic.make(value: 0);
+    if (early(n: ref n) != 7 || n.load() != 6) { return 1; }
+    scope {
+        for (int32 i = 0; i < 10; i = i + 1) {
+            if (i == 4) { break; }
+            spawn fiber bump(n: ref n);
+        }
+    }
+    return n.load() == 10 ? 42 : 2;
+}

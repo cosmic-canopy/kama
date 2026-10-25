@@ -1,0 +1,9 @@
+// A bundle moved into a fiber is the fiber's: the source is gone after the spawn, as after any `give`.
+import { std::concurrent::Fiber };
+type resource Ledger { int32 total; public ctor make() { this.total = 1; } public const fn int32 value() { return this.total; } }
+fn void consume(Ledger l) { }
+fn uint8 main() {
+    Ledger l = Ledger.make();
+    scope { spawn fiber consume(l: give l); }
+    return cast<uint8>(l.value());
+}

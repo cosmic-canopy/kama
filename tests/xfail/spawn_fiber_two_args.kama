@@ -1,0 +1,4 @@
+// A fiber's entry takes exactly one argument, the bundle (decision 9).
+import { std::concurrent::Fiber };
+fn void add(int32 a, int32 b) { }
+fn uint8 main() { scope { spawn fiber add(a: 1, b: 2); } return 0; }

@@ -1,0 +1,9 @@
+// A view borrows for a window the fiber could outlive: a fiber's bundle is a value it owns, or a `ref` to a place.
+import { std::concurrent::Fiber, std::collections::DynamicArray, std::collections::ConstView };
+fn void sum(ConstView<int32> xs) { }
+fn uint8 main() {
+    DynamicArray<int32> d = DynamicArray.empty();
+    d.add(item: 1);
+    scope { borrow d.view() as v { spawn fiber sum(xs: v); } }
+    return 0;
+}

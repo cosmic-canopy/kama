@@ -1,0 +1,14 @@
+// A fiber's `ref` bundle borrowing a local of the loop that spawns it: the local dies with its pass, before the
+// scope's closing brace waits for the fiber.
+import { std::concurrent::Fiber };
+type resource Tally { int32 n; public ctor zero() { this.n = 0; } public fn void add() { this.n = this.n + 1; } }
+fn void fill(ref Tally t) { t.add(); }
+fn uint8 main() {
+    scope {
+        for (int32 i = 0; i < 3; i = i + 1) {
+            Tally t = Tally.zero();
+            spawn fiber fill(t: ref t);
+        }
+    }
+    return 0;
+}

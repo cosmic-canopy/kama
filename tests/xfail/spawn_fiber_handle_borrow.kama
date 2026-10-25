@@ -1,0 +1,9 @@
+// A held fiber may outlive the scope it was started in, so it cannot borrow: its bundle is moved or copied in.
+import { std::concurrent::Fiber };
+type value Config { public int32 step; public ctor of(int32 step) { this.step = step; } }
+fn int32 read(const ref Config c) { return c.step; }
+fn uint8 main() {
+    Config cfg = Config.of(step: 1);
+    Fiber<int32> f = spawn fiber read(c: ref cfg);
+    return 0;
+}

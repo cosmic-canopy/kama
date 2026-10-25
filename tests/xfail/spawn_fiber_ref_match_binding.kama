@@ -1,0 +1,14 @@
+// A `match` payload binding is a binder of its arm, which ends before the scope waits: a fiber may not borrow it.
+import { std::concurrent::Fiber };
+type value Cell { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn void read(const ref Cell c) { }
+fn uint8 main() {
+    Optional<Cell> o = Optional::Some(value: Cell.of(n: 1));
+    scope {
+        match (o) {
+            case Some(value: c): { spawn fiber read(c: ref c); }
+            case None: { }
+        };
+    }
+    return 0;
+}

@@ -1,0 +1,1 @@
+`square` returns `int32`, so its fiber is a `Fiber<int32>`, not a `Fiber<int64>`

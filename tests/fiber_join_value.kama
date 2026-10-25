@@ -1,0 +1,20 @@
+// A held fiber (decision 9): `Fiber<R> f = spawn fiber work(…);` starts it now, outside any `scope`, and
+// `join(fiber: give f)` parks until it has ended and hands back what it returned — from `main`, on the thread's own
+// context, whose park runs the fibers. The join consumes the handle, Rust's `JoinHandle::join(self)`, so a second join
+// is a compile error (xfail/fiber_join_twice). A handle dropped unjoined joins and drops what the fiber returned: the
+// `string` one below is freed with it (the sanitizer leg would see a leak).
+import { std::concurrent::Fiber, std::concurrent::join };
+
+type value Job { public int32 n; public ctor of(int32 n) { this.n = n; } }
+fn int32 square(Job j) { return j.n * j.n; }
+fn string label(int32 n) { return "fiber ${n}"; }
+
+fn uint8 main() {
+    Fiber<int32> a = spawn fiber square(j: Job.of(n: 5));
+    Fiber<int32> b = spawn fiber square(j: Job.of(n: 3));
+    Fiber<string> dropped = spawn fiber label(n: 1);   // never joined: its drop joins it, and frees the string
+    Fiber<string> named = spawn fiber label(n: 2);
+    string s = join(fiber: give named);
+    if (s != "fiber 2") { return 1; }
+    return cast<uint8>(join(fiber: give b) + join(fiber: give a));   // 9 + 25
+}

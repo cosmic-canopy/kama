@@ -1,0 +1,20 @@
+// A `scope` inside a fiber: its closing brace parks THAT fiber until its own children end, while the scope it was
+// spawned from waits on the thread's own context — one lowering, on a fiber or on the root alike (decision 1).
+import { std::concurrent::Fiber, std::concurrent::Atomic };
+
+fn void leaf(ref Atomic<int32> n) { n.fetchAdd(delta: 1); }
+fn void branch(ref Atomic<int32> n) {
+    scope {
+        for (int32 i = 0; i < 4; i = i + 1) { spawn fiber leaf(n: ref n); }
+    }
+    n.fetchAdd(delta: 100);   // after its own four have ended
+}
+
+fn uint8 main() {
+    Atomic<int32> n = Atomic.make(value: 0);
+    scope {
+        spawn fiber branch(n: ref n);
+        spawn fiber branch(n: ref n);
+    }
+    return n.load() == 208 ? 42 : 1;
+}

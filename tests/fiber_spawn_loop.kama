@@ -1,0 +1,18 @@
+// A `spawn fiber` in a loop (decision 10): the scope keeps a list of its live fibers, not a handle per spawn, so a loop
+// may start any number. One hundred thousand fibers in batches of a thousand, each batch a scope that waits for its
+// own: a finished fiber's stack goes back to the isolate's idle list and the next batch reuses it, so this runs in the
+// memory of one batch. (Without reuse, Linux's `vm.max_map_count`, 65530 mappings, would stop it about a third of the
+// way through.)
+import { std::concurrent::Fiber, std::concurrent::Atomic };
+
+fn void count(ref Atomic<int64> n) { n.fetchAdd(delta: 1); }
+
+fn uint8 main() {
+    Atomic<int64> n = Atomic.make(value: 0);
+    for (int32 batch = 0; batch < 100; batch = batch + 1) {
+        scope {
+            for (int32 i = 0; i < 1000; i = i + 1) { spawn fiber count(n: ref n); }
+        }
+    }
+    return n.load() == 100000 ? 42 : 1;
+}

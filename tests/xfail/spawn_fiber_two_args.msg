@@ -1,0 +1,1 @@
+must take exactly one argument, the bundle

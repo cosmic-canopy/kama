@@ -1,0 +1,4 @@
+// A fiber's entry is a bare top-level function, not a method of a value it would capture.
+import { std::concurrent::Fiber };
+type resource Job { int32 n; public ctor make() { this.n = 1; } public fn void run() { this.n = 2; } }
+fn uint8 main() { Job j = Job.make(); scope { spawn fiber j.run(); } return 0; }

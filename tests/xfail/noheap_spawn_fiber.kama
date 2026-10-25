@@ -1,0 +1,6 @@
+// `spawn fiber` allocates its stack and control block, so the `@noheap` gate refuses it (bare metal's fibers, from a
+// static pool, are KR-233).
+import { std::concurrent::Fiber };
+fn void tick(int32 n) { }
+@noheap fn int32 run() { scope { spawn fiber tick(n: 1); } return 0; }
+fn uint8 main() { return cast<uint8>(run()); }

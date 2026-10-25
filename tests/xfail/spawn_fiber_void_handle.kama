@@ -1,0 +1,4 @@
+// A held fiber of an entry that returns nothing: there is no `Fiber<R>` to hold; a `scope` waits for it.
+import { std::concurrent::Fiber };
+fn void tick(int32 n) { }
+fn uint8 main() { Fiber<int32> f = spawn fiber tick(n: 1); return 0; }

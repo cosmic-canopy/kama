@@ -2,6 +2,7 @@
 #include <string>
 #include <memory>
 #include <cctype>
+#include <cstring>
 #include "kama.parser.hpp"
 
 /* Each macro records the token's END position (one past its last column) after advancing, alongside the
@@ -390,7 +391,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
      the parser attaches this STRING_TAG to the resulting node. `foo "x"` (with a space) is NOT a tag. Placed
      before the plain {identifier} rule so it wins the same-length tie on quote-adjacency. */
 {identifier}/\"                                 { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); return STRING_TAG; }
-{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); int t = contextualWord(getToken(yytext), yyg->yy_hold_char, yyg->yy_c_buf_p, yyextra); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } else if (t == COPY_NAME || t == GIVE_NAME || t == TRUNCATE_NAME) RECORD_IDENT(yytext, leng); return t; }
+{identifier}                                   { int leng = yyleng; SAVE_TOKEN(yytext, leng, leng); if (yyextra && yyextra->fiberAt == yytext) { yyextra->fiberAt = nullptr; yyextra->fiberLine = yyextra->codeGenContext->line; return FIBER; } int t = contextualWord(getToken(yytext), yyg->yy_hold_char, yyg->yy_c_buf_p, yyextra); if (t == IDENTIFIER) { RESERVED_CHECK(yytext); RECORD_IDENT(yytext, leng); } else if (t == COPY_NAME || t == GIVE_NAME || t == TRUNCATE_NAME) RECORD_IDENT(yytext, leng); return t; }
 
 ","     { RETURN_TOKEN(COMMA, 1); }
 "["     { RETURN_TOKEN(LEFT_BRACKET, 1); }
@@ -645,6 +646,20 @@ unsigned decodeUTF8Codepoint(const char* bytes, int len)
    and comments are skipped, as the parser skips them. */
 static int contextualWord(int t, char hold, const char* after, struct LexerInstanceData* data)
 {
+  if (t == SPAWN && data) {   /* `spawn fiber …`: mark where `fiber` starts, so the identifier rule returns FIBER there */
+    size_t k = 0;
+    auto at = [&](size_t j) -> char { return j == 0 ? hold : after[j]; };
+    for (;;) {
+      const char c = at(k);
+      if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { ++k; continue; }
+      if (c == '/' && at(k + 1) == '/') { while (at(k) && at(k) != '\n') ++k; continue; }
+      if (c == '/' && at(k + 1) == '*') { k += 2; while (at(k) && !(at(k) == '*' && at(k + 1) == '/')) ++k; if (at(k)) k += 2; continue; }
+      break;
+    }
+    if (k > 0 && std::strncmp(after + k, "fiber", 5) == 0 && !(std::isalnum((unsigned char)after[k + 5]) || after[k + 5] == '_'))
+      data->fiberAt = after + k;
+    return t;
+  }
   if (t != GIVE && t != COPY && t != TRUNCATE) return t;
   const int name = t == GIVE ? GIVE_NAME : t == COPY ? COPY_NAME : TRUNCATE_NAME;
   const char* word = t == GIVE ? "give" : t == COPY ? "copy" : "truncate";

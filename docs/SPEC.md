@@ -7079,11 +7079,13 @@ scope {
 }                                 // BARRIER: both joined here, before anything below runs
 ```
 
-A bare `spawn` must be a **direct statement of its scope**; one inside a nested block is rejected. <!-- xfail: spawn_in_nested_block -->
-So a scope's children are exactly the `spawn`s written in it, and can be counted by reading the
+A bare isolate `spawn` must be a **direct statement of its scope**; one inside a nested block is rejected. <!-- xfail: spawn_in_nested_block -->
+So a scope's isolates are exactly the `spawn`s written in it, and can be counted by reading the
 block. That matches the coarse-isolate model above: roughly one isolate per core, not one per work
 item. A conditional child puts the `if` *outside* the scope <!-- test: scope_spawn_conditional -->,
-and per-item work over a container is `parallel_for`.
+and per-item work over a container is `parallel_for`. A **fiber** child, `spawn fiber work(job: give j);`, is the
+one exception: it may sit anywhere in its scope's body, loops included, because the scope keeps a runtime list of <!-- test: fiber_scope_basic, fiber_spawn_loop -->
+its live fibers and its closing brace waits for the list to empty (KR-3, being built: `docs/design/fibers.md`).
 
 #### What a child may borrow
 
@@ -7853,7 +7855,9 @@ FFI binding emit a C field literally called `type` without inventing a name
 (`tests/contextual_file.kama`) — `File file = …` is the spelling a user reaches for first, and measured,
 the word is not an identifier anywhere in kama's own sources, so this arm exists purely for their code. The
 kind words `value` / `resource` / `view` / `contract` / `intrinsic`, and `adapter`, are not keywords at all —
-they lex as identifiers.
+they lex as identifiers. **`fiber`** is a keyword only directly after `spawn` (`spawn fiber work(…)`, KR-3), and a <!-- test: contextual_fiber_name, fiber_entry_named_fiber -->
+name of any kind anywhere else — a fiber's entry included — except an isolate's entry: `spawn fiber(` always starts <!-- xfail: spawn_named_fiber -->
+a fiber, so `spawn fiber` is a grep that finds fibers and only fibers.
 
 **Which words are reserved — the greppability rule** (maintainer, 2026-09-22). A word is reserved everywhere
 unless every KEYWORD use of it has a fixed neighbouring token that a one-line grep anchors on, so the keyword

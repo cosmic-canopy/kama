@@ -1,0 +1,4 @@
+// A bare `spawn fiber` of an entry that returns a value nobody could read.
+import { std::concurrent::Fiber };
+fn int32 square(int32 n) { return n * n; }
+fn uint8 main() { scope { spawn fiber square(n: 3); } return 0; }

@@ -1,0 +1,4 @@
+// A held `spawn fiber` names a `Fiber<R>`, not an `Isolate` or anything else.
+import { std::concurrent::Fiber, std::concurrent::Isolate };
+fn int32 square(int32 n) { return n * n; }
+fn uint8 main() { Isolate f = spawn fiber square(n: 3); return 0; }

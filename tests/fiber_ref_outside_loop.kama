@@ -1,0 +1,32 @@
+// A fiber's `ref` bundle roots outside the loop that spawns it (decision 10): every pass starts a child, and each
+// borrows the one place, so a `const ref` (read by all) and a `ref` to an `Atomic` (the sanctioned shared cell) may be
+// spawned in a loop, and a plain mutable `ref` only outside one — here inside an `if`, where the rest of the scope
+// keeps off it until the closing brace (xfail/spawn_fiber_ref_in_loop, spawn_fiber_ref_loop_local).
+import { std::concurrent::Fiber, std::concurrent::Atomic };
+
+type value Config { public int32 step; public ctor of(int32 step) { this.step = step; } }
+type resource Tally {
+    int32 n;
+    public ctor zero() { this.n = 0; }
+    public fn void add(int32 by) { this.n = this.n + by; }
+    public const fn int32 value() { return this.n; }
+}
+
+fn void addStep(const ref Config c) { if (c.step != 3) { panic(msg: "the config changed under its readers"); } }
+fn void bump(ref Atomic<int32> hits) { hits.fetchAdd(delta: 1); }
+fn void fill(ref Tally t) { t.add(by: 40); }
+
+fn uint8 main() {
+    Config cfg = Config.of(step: 3);
+    Atomic<int32> hits = Atomic.make(value: 0);
+    Tally t = Tally.zero();
+    bool go = true;
+    scope {
+        for (int32 i = 0; i < 10; i = i + 1) {
+            spawn fiber addStep(c: ref cfg);
+            spawn fiber bump(hits: ref hits);
+        }
+        if (go) { spawn fiber fill(t: ref t); }
+    }
+    return cast<uint8>(t.value() + hits.load() - 8);   // 40 + 10 - 8
+}

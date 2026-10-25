@@ -118,6 +118,9 @@ typedef struct kama_fiber {
     int32_t refs;                   // its owner, and each remote wake in flight
     int32_t remoteQueued;           // a remote wake is in flight
     int8_t parked, timedOut, detached;
+    void* scope;                    // the `scope` it was spawned into (a kama_fiber_scope), until it ends
+    struct kama_fiber* scopePrev;   // that scope's list of live children
+    struct kama_fiber* scopeNext;
 #if defined(KAMA__FIBER_ASAN)
     void* asanFake;
 #endif
@@ -146,6 +149,7 @@ typedef struct kama_fiber_thread {
     char* guardHi;
     size_t stated;
     void* sched;                    // this isolate's fiber scheduler (kama_sched.h), once it has one
+    void (*schedEnd)(void);         // lets go of it when the isolate ends (kama_sched.h sets it with the scheduler)
 } kama_fiber_thread;
 // One per process.
 typedef struct kama_fiber_process {

@@ -1,0 +1,4 @@
+// `stack: 0` asks a fiber for no stack.
+import { std::concurrent::Fiber };
+fn void tick(int32 n) { }
+fn uint8 main() { scope { spawn fiber(stack: 0) tick(n: 1); } return 0; }

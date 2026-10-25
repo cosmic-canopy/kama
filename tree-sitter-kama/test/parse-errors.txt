@@ -63,3 +63,4 @@ tests/xfail/ref_local.kama
 tests/xfail/reserved_word_as_name.kama
 tests/xfail/source_bom_column.kama
 tests/xfail/source_utf8_nul.kama
+tests/xfail/spawn_named_fiber.kama

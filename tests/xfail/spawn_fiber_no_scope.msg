@@ -1,0 +1,1 @@
+a bare `spawn fiber` must be inside a `scope { }`

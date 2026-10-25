@@ -1,0 +1,3 @@
+// `spawn fiber` runs on the scheduler `std::concurrent` brings in: without the import there is none.
+fn void tick(int32 n) { }
+fn uint8 main() { scope { spawn fiber tick(n: 1); } return 0; }

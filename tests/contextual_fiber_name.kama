@@ -1,0 +1,23 @@
+// `fiber` is a keyword only directly after `spawn` (KR-3): anywhere else it is a name — a local, a field, a method —
+// so it costs no program a name. What it cannot be is an isolate's entry, since `spawn fiber(` always starts a fiber
+// (xfail/spawn_named_fiber), which keeps `spawn fiber` a grep that finds fibers and only fibers; a fiber's entry may
+// be named `fiber` (tests/fiber_entry_named_fiber).
+import { std::concurrent::Fiber, std::concurrent::Atomic };
+
+type value Holder {
+    public int32 fiber;
+    public ctor of(int32 fiber) { this.fiber = fiber; }
+    public const fn int32 doubled() { return this.fiber * 2; }
+}
+type value Spool { public ctor make() { } public const fn int32 fiber() { return 2; } }
+
+fn void bump(ref Atomic<int32> n) { n.fetchAdd(delta: 1); }
+
+fn uint8 main() {
+    int32 fiber = 20;
+    Holder h = Holder.of(fiber: 5);
+    Spool s = Spool.make();
+    Atomic<int32> n = Atomic.make(value: 0);
+    scope { spawn fiber bump(n: ref n); }
+    return cast<uint8>(fiber + h.doubled() + s.fiber() + n.load() * 10);   // 20 + 10 + 2 + 10
+}

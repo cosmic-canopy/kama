@@ -1,0 +1,1 @@
+a bare `spawn fiber` takes a `void` entry

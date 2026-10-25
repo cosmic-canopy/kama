@@ -1,0 +1,10 @@
+// A `scope` with fibers waits at its closing brace for them to end — a wait — so it cannot sit in a lock window, which
+// may reach no wait (KR-226).
+import { std::concurrent::Locked, std::concurrent::Fiber };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn void tick(int32 n) { }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    borrow c.lock().value() as m { scope { spawn fiber tick(n: m.n); } }
+    return 0;
+}

@@ -8,9 +8,11 @@
 // Pay for what you use, as kama_fiber.h: a program that `extern "kama_sched.h";`s pulls it in, and a program that only
 // uses sockets or isolates never compiles it.
 //
-// THE LOOP runs on the thread's own context (the root fiber): take the next ready fiber, switch to it, and when it
-// switches back — it parked, yielded or ended — take the next. When nothing is ready it waits for I/O, a timer or a
-// remote wake, for no longer than the earliest timer. Cooperative (decision 12): a fiber runs until it parks or
+// THE LOOP runs on the thread's own context (the root fiber, fiber 0): take the next ready fiber, switch to it, and
+// when it switches back — it parked, yielded or ended — take the next. When nothing is ready it waits for I/O, a timer
+// or a remote wake, for no longer than the earliest timer. The root parks too (a `scope`'s closing brace, a join), and
+// a park on the root RUNS the loop, inside the park, until something wakes it: the root is never queued, so a
+// `scope` runs the same C whether it is entered on the thread's own context or on a fiber (decision 1). Cooperative (decision 12): a fiber runs until it parks or
 // yields, and I/O is polled every KAMA_SCHED_POLL_EVERY runs even while fibers are ready, so two fibers that keep
 // each other ready cannot starve a socket.
 //
@@ -57,6 +59,10 @@
 #define KAMA__SCHED_EVENTS 128
 
 typedef struct kama_sched kama_sched;
+static inline void kama_sched_destroy(void);
+// A `scope`'s fiber children (decision 10): the ones spawned into it that have not ended, a list each unlinks itself
+// from as it ends, so a scope that spawns in a loop holds only its live ones.
+typedef struct kama_fiber_scope { kama_fiber* head; kama_fiber* waiter; } kama_fiber_scope;
 // One socket's registration with this isolate's scheduler: made once, closed before the socket is.
 typedef struct kama_sched_io {
     ptrdiff_t fd;
@@ -121,6 +127,8 @@ static inline kama_sched* kama_sched_current(void) {
 #endif
     if (!s->waker) kama_panic(kama_string_lit("fiber scheduler: the OS readiness queue could not be made", 57));
     t->sched = s;
+    t->root.sched = s; t->root.heapIx = -1; t->root.refs = 1;   // the root parks here too, and is never freed
+    t->schedEnd = kama_sched_destroy;
     return s;
 }
 
@@ -189,7 +197,7 @@ static inline void kama__sched_fireTimers(kama_sched* s, uint64_t now) {
         kama_fiber* f = s->heap[0];
         kama__sched_timerDel(s, f);
         f->timedOut = 1; f->parked = 0;
-        kama__sched_push(s, f);
+        if (f != &kama__fibers.root) kama__sched_push(s, f);   // the root's park sees `parked` clear and returns
     }
 }
 
@@ -200,23 +208,27 @@ static inline void kama_sched_unpark(kama_fiber* f) {
     f->parked = 0;
     kama_sched* s = (kama_sched*)f->sched;
     if (f->heapIx >= 0) kama__sched_timerDel(s, f);
-    kama__sched_push(s, f);
+    if (f != &kama__fibers.root) kama__sched_push(s, f);
 }
 
+// The running fiber, the root included, on this isolate's scheduler (made on the root's first park).
 static inline kama_fiber* kama__sched_self(const char* where, size_t n) {
     kama_fiber* f = kama_fiber_current();
-    if (f == &kama__fibers.root || !f->sched) kama_panic(kama_string_lit(where, n));
+    if (f == &kama__fibers.root) (void)kama_sched_current();
+    if (!f->sched) kama_panic(kama_string_lit(where, n));
     return f;
 }
+static inline void kama__sched_turn(kama_sched* s);
 // Park the running fiber until something unparks it, or until `deadline` (a kama_now_mono_ns time; 0 for none).
-// 1 when it was woken, 0 when the deadline passed.
+// 1 when it was woken, 0 when the deadline passed. On the root, the park runs the loop until then.
 static inline int kama_sched_parkUntil(uint64_t deadline) {
     static const char msg[] = "fiber scheduler: a park outside a fiber";
     kama_fiber* f = kama__sched_self(msg, sizeof msg - 1);
     kama_sched* s = (kama_sched*)f->sched;
     f->parked = 1; f->timedOut = 0;
     if (deadline) { f->deadline = deadline; kama__sched_timerAdd(s, f); }
-    kama_fiber_switch(f, &kama__fibers.root);
+    if (f == &kama__fibers.root) { while (f->parked) kama__sched_turn(s); }
+    else kama_fiber_switch(f, &kama__fibers.root);
     return !f->timedOut;
 }
 static inline void kama_sched_park(void) { (void)kama_sched_parkUntil(0); }
@@ -224,6 +236,7 @@ static inline void kama_sched_park(void) { (void)kama_sched_parkUntil(0); }
 static inline void kama_sched_yield(void) {
     static const char msg[] = "fiber scheduler: a yield outside a fiber";
     kama_fiber* f = kama__sched_self(msg, sizeof msg - 1);
+    if (f == &kama__fibers.root) kama_panic(kama_string_lit(msg, sizeof msg - 1));
     kama__sched_push((kama_sched*)f->sched, f);
     kama_fiber_switch(f, &kama__fibers.root);
 }
@@ -429,12 +442,13 @@ static inline kama_fiber* kama_sched_spawn(void (*entry)(void*), void* arg, size
     kama_fiber* f = kama_fiber_new(entry, arg, stack);
     f->sched = s; f->refs = 1; f->heapIx = -1; f->parked = 0; f->timedOut = 0; f->detached = 0;
     f->remoteQueued = 0; f->joiner = NULL; f->remoteNext = NULL; f->deadline = 0;
+    f->scope = NULL; f->scopePrev = NULL; f->scopeNext = NULL;
     __atomic_add_fetch(&s->refs, 1, __ATOMIC_RELAXED);
     s->live++;
     kama__sched_push(s, f);
     return f;
 }
-// Park until `f` has ended, then free it. From a fiber of the same isolate.
+// Park until `f` has ended, then free it. From a fiber of the same isolate, or its root.
 static inline void kama_sched_join(kama_fiber* f) {
     static const char msg[] = "fiber scheduler: a join outside a fiber";
     kama_fiber* me = kama__sched_self(msg, sizeof msg - 1);
@@ -448,40 +462,68 @@ static inline void kama_sched_detach(kama_fiber* f) {
     if (f->done) kama__sched_drop(f);
 }
 
+// One turn of the loop, on the root: the next ready fiber runs until it switches back, or with none ready, a wait for
+// I/O, a timer or a remote wake. A fiber that ended leaves its scope's list, and wakes its scope's waiter when it was
+// the last, and its joiner.
+static inline void kama__sched_turn(kama_sched* s) {
+    const int8_t rootParked = kama__fibers.root.parked;
+    kama__sched_drainRemote(s);
+    kama__sched_fireTimers(s, s->heapN ? kama_now_mono_ns() : 0);
+    if (rootParked && !kama__fibers.root.parked) return;   // the root's own wake came, and is never queued: no wait
+    kama_fiber* f = kama__sched_pop(s);
+    if (f) {
+        if (++s->ticks >= KAMA_SCHED_POLL_EVERY) { s->ticks = 0; kama__sched_wait(s, 0); }
+        kama_fiber_switch(&kama__fibers.root, f);
+        if (f->done) {
+            s->live--;
+            kama_fiber_scope* sc = (kama_fiber_scope*)f->scope;
+            if (sc) {
+                if (f->scopePrev) f->scopePrev->scopeNext = f->scopeNext; else sc->head = f->scopeNext;
+                if (f->scopeNext) f->scopeNext->scopePrev = f->scopePrev;
+                f->scope = NULL;
+                if (!sc->head && sc->waiter) kama_sched_unpark(sc->waiter);
+            }
+            if (f->joiner) kama_sched_unpark(f->joiner);
+            if (f->detached) kama__sched_drop(f);
+        }
+        return;
+    }
+    int64_t timeout = -1;
+    if (s->heapN) {
+        const uint64_t now = kama_now_mono_ns(), at = s->heap[0]->deadline;
+        timeout = at > now ? (int64_t)(at - now) : 0;
+    }
+    kama__sched_wait(s, timeout);
+}
 // Run this isolate's fibers until every one has ended. On the thread's own context, not on a fiber.
 static inline void kama_sched_run(void) {
     kama_sched* s = kama_sched_current();
-    kama_fiber* root = &kama__fibers.root;
-    if (kama_fiber_current() != root) kama_panic(kama_string_lit("fiber scheduler: run from inside a fiber", 40));
-    for (;;) {
-        kama__sched_drainRemote(s);
-        kama__sched_fireTimers(s, s->heapN ? kama_now_mono_ns() : 0);
-        kama_fiber* f = kama__sched_pop(s);
-        if (f) {
-            if (++s->ticks >= KAMA_SCHED_POLL_EVERY) { s->ticks = 0; kama__sched_wait(s, 0); }
-            kama_fiber_switch(root, f);
-            if (f->done) {
-                s->live--;
-                if (f->joiner) kama_sched_unpark(f->joiner);
-                if (f->detached) kama__sched_drop(f);
-            }
-            continue;
-        }
-        if (s->live == 0) return;
-        int64_t timeout = -1;
-        if (s->heapN) {
-            const uint64_t now = kama_now_mono_ns(), at = s->heap[0]->deadline;
-            timeout = at > now ? (int64_t)(at - now) : 0;
-        }
-        kama__sched_wait(s, timeout);
-    }
+    if (kama_fiber_current() != &kama__fibers.root) kama_panic(kama_string_lit("fiber scheduler: run from inside a fiber", 40));
+    while (s->live) kama__sched_turn(s);
+}
+
+// ---- scopes -----------------------------------------------------------------------------------------------------
+// A fiber spawned into `sc`: the scope never joins its children one by one, so the scheduler frees each as it ends.
+static inline void kama_sched_scopeSpawn(kama_fiber_scope* sc, void (*entry)(void*), void* arg, size_t stack) {
+    kama_fiber* f = kama_sched_spawn(entry, arg, stack);
+    f->detached = 1;
+    f->scope = sc; f->scopeNext = sc->head;
+    if (sc->head) sc->head->scopePrev = f;
+    sc->head = f;
+}
+// A `scope`'s closing brace: park until every fiber spawned into it has ended — on a fiber, or on the root, whose park
+// runs them.
+static inline void kama_sched_scopeWait(kama_fiber_scope* sc) {
+    kama_fiber* me = kama_fiber_current();
+    while (sc->head) { sc->waiter = me; kama_sched_park(); }
+    sc->waiter = NULL;
 }
 // Let go of this isolate's scheduler once its fibers are done; it is freed when the last of them is.
 static inline void kama_sched_destroy(void) {
     kama_sched* s = (kama_sched*)kama__fibers.sched;
     if (!s) return;
     kama__sched_drainRemote(s);
-    kama__fibers.sched = NULL;
+    kama__fibers.sched = NULL; kama__fibers.root.sched = NULL; kama__fibers.schedEnd = NULL;
     kama__sched_unref(s);
 }
 

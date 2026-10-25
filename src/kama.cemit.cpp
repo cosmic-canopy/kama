@@ -6651,6 +6651,8 @@ bool CEmitter::refuseUnreachable(const SharedStatement& prev, const SharedStatem
 
 void CEmitter::emitScopeCleanup(const Scope& s, int depth)
 {
+    // KR-3: a scope's fibers end first (on the root its wait runs them), then its isolates are joined.
+    if (!s.fiberScope.empty()) { indent(depth); *_out << "kama_sched_scopeWait(&" << s.fiberScope << ");\n"; }
     // M4 barrier: JOIN every child `spawn`ed in this task scope BEFORE dropping any local. This runs
     // from every exit path — fall-through here, and the return/break/continue unwinds (emitUnwindAll /
     // emitUnwindToLoop both call this) — so a borrowed scope-local is guaranteed to outlive its child on
@@ -6984,6 +6986,41 @@ int CEmitter::findScopeDeclaring(const std::string& name)
     return -1;
 }
 
+// The same, counting every binder: `declaredNames` leaves out a `match` payload and a `foreach` element by design (it
+// drives the shadowing rules), and a borrow's lifetime is the binder's whatever declared it.
+int CEmitter::findScopeBinding(const std::string& name)
+{
+    for (int i = (int)_scopes.size() - 1; i >= 0; --i) {
+        for (auto& dn : _scopes[i].declaredNames) if (dn == name) return i;
+        for (auto& b : _scopes[i].bindings) if (b.name == name) return i;
+    }
+    return -1;
+}
+
+// Does `s` hold a bare `spawn fiber` that is a child of the scope being entered: anywhere in its body, loops and
+// branches included (decision 10), but not inside a nested `scope`, which owns its own, or an outlined `parallel_*`
+// body, which has none.
+bool CEmitter::hasFiberChild(const SharedStatement& s) const
+{
+    if (!s) return false;
+    ASTNode* n = s.get();
+    if (auto* iso = dynamic_cast<IsolateNode*>(n)) return iso->fiber;
+    if (dynamic_cast<ScopeNode*>(n) || dynamic_cast<ParallelForNode*>(n)) return false;
+    if (auto* b = dynamic_cast<BlockNode*>(n)) {
+        if (b->statements) for (auto& st : *b->statements) if (hasFiberChild(st)) return true;
+        return false;
+    }
+    if (auto* f = dynamic_cast<IfNode*>(n)) return hasFiberChild(f->ifStatement) || hasFiberChild(f->elseStatement);
+    if (auto* w = dynamic_cast<WhileNode*>(n)) return hasFiberChild(w->whileStatement);
+    if (auto* dw = dynamic_cast<DoWhileNode*>(n)) return hasFiberChild(dw->doWhileStatement);
+    if (auto* fr = dynamic_cast<ForNode*>(n)) return hasFiberChild(fr->body);
+    if (auto* fe = dynamic_cast<ForEachNode*>(n)) return hasFiberChild(fe->body);
+    if (auto* bn = dynamic_cast<BorrowNode*>(n)) return hasFiberChild(bn->body);
+    if (auto* m = dynamic_cast<MatchNode*>(n))
+        if (m->arms) for (auto& a : *m->arms) if (a && a->block && hasFiberChild(a->block)) return true;
+    return false;
+}
+
 // `scope { ... }` — structured concurrency (M4). Lowered like emitBlockScoped, but the scope is a TASK
 // scope: bare `spawn`s inside register their `kama_isolate_t` handles here, and emitScopeCleanup joins
 // them ALL before dropping any local (the join-before-drop barrier). A `scope` introduces exactly one
@@ -6993,9 +7030,13 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
     line(sc->line);
     indent(depth);
     Scope s; s.isTaskScope = true;
+    // Its fiber children are a runtime list, declared before the body: a `return` written ahead of a `spawn fiber` in a
+    // loop must still wait for the fibers an earlier pass started.
+    if (hasFiberChild(sc->body)) s.fiberScope = "kama_kama_fs" + std::to_string(_tempCounter++);
     _scopes.push_back(s);
 
     *_out << "{\n";
+    if (!s.fiberScope.empty()) { indent(depth + 1); *_out << "kama_fiber_scope " << s.fiberScope << " = { 0, 0 };\n"; }
     SharedStatement last;
     auto* block = dynamic_cast<BlockNode*>(sc->body.get());
     if (block && block->statements) {
@@ -7011,17 +7052,19 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
             // `int64 n = c.n`, `use(x: c)` — at its widest extent, so a disjoint sibling field stays usable.
             for (size_t b = before; b < _scopes[ti].childBorrows.size(); ++b) {
                 const Scope::ChildBorrow cb = _scopes[ti].childBorrows[b];
-                for (size_t j = i + 1; j < block->statements->size(); ++j)
-                    forEachPlaceUse((*block->statements)[j], [&](const std::vector<std::string>& p, int ln) {
-                        if (placesConflict(cb.place, p)) {
-                            const std::string held = placeText(cb.place), used = placeText(p);
-                            unsupported(("`" + used + "`" + (used == held ? std::string() : " overlaps `" + held + "`, which")
-                                         + " is held by `ref` by " + cb.who + " at line " + std::to_string(cb.line)
-                                         + " until this `scope` joins it — using it here, read or write, races with "
-                                           "the child. Use it before the `spawn` or after the `scope`; a DISJOINT "
-                                           "sibling field stays usable").c_str(), ln);
-                        }
-                    });
+                auto use = [&](const std::vector<std::string>& p, int ln) {
+                    if (placesConflict(cb.place, p)) {
+                        const std::string held = placeText(cb.place), used = placeText(p);
+                        unsupported(("`" + used + "`" + (used == held ? std::string() : " overlaps `" + held + "`, which")
+                                     + " is held by `ref` by " + cb.who + " at line " + std::to_string(cb.line)
+                                     + " until this `scope` joins it — using it here, read or write, races with "
+                                       "the child. Use it before the `spawn` or after the `scope`; a DISJOINT "
+                                       "sibling field stays usable").c_str(), ln);
+                    }
+                };
+                // A fiber spawned inside a block of this statement: the rest of the statement runs beside it too.
+                if (cb.nestedSpawn) forEachPlaceUse((*block->statements)[i], use, false, nullptr, cb.nestedSpawn);
+                for (size_t j = i + 1; j < block->statements->size(); ++j) forEachPlaceUse((*block->statements)[j], use);
             }
         }
     }
@@ -7033,15 +7076,27 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
     popScope();
 }
 
+// A spawn whose bundle is a `const ref`: its `ref` argument only reads the place.
+bool CEmitter::spawnBorrowsConst(IsolateNode* iso)
+{
+    auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
+    if (!inv || !inv->identifier || !inv->identifier->value) return false;
+    auto it = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
+    return it != _funcs.end() && it->second.params.size() == 1 && it->second.params[0].byRef
+        && it->second.params[0].isConst;
+}
+
 // Every PLACE a statement uses, at its widest nameable extent: `c.f.g` is ONE use of `c.f.g`, not of `c` and
 // `c.f` too, so a disjoint sibling field is told apart. A method call uses its RECEIVER whole (`c.g()` may touch
 // any field of `c`), an element uses its container, and an argument, an index or an operand is a use of its own.
 // A nested `spawn` is skipped: what a second child borrows is judged by the children's disjointness rule.
-void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn,
-                              bool writesOnly, SharedExpression alsoExpr)
+void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const std::vector<std::string>&, int)>& fn_,
+                              bool writesOnly, SharedExpression alsoExpr, const ASTNode* after)
 {
     std::function<void(SharedExpression, int)> E;
     std::function<void(SharedStatement)> S;
+    bool armed = after == nullptr;   // with `after`, only what follows that statement, in source order, is reported
+    auto fn = [&](const std::vector<std::string>& p, int ln) { if (armed) fn_(p, ln); };
     auto wrote = [&](SharedExpression t, int ln) {   // a write's target, at its widest nameable extent
         std::vector<std::string> p = placePath(t);
         if (!p.empty()) fn(p, ln);
@@ -7107,7 +7162,8 @@ void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const
         const int ln = n->line;
         // A second child: what it USES is judged by the children's disjointness rule. What it WRITES is a write
         // like any call's — `spawn f(x: ref a)` writes `a` — and a write scan that skipped it would miss it.
-        if (auto* iso = dynamic_cast<IsolateNode*>(n)) { if (writesOnly) E(iso->call, ln); return; }
+        if (n == after) { armed = true; return; }
+        if (auto* iso = dynamic_cast<IsolateNode*>(n)) { if (writesOnly && !spawnBorrowsConst(iso)) E(iso->call, ln); return; }
         if (auto* blk = dynamic_cast<BlockNode*>(n)) {
             if (blk->statements) for (auto& x : *blk->statements) S(x);
         } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
@@ -9768,7 +9824,7 @@ void CEmitter::emitStatement(SharedStatement stmt, int depth)
              << "); ++" << ix << ") {\n";
 
         // Loop-body scope (a loop boundary so break/continue unwind correctly).
-        Scope sc; sc.isLoopBoundary = true; sc.switchDepth = _switchDepth;
+        Scope sc; sc.isLoopBoundary = true; sc.switchDepth = _switchDepth; sc.loopNode = fe;
         _scopes.push_back(sc);
         registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
         recordTypeParamRef(fe->type.get());                 // ...and its declared type, when it is a `T` (KR-134)
@@ -19839,7 +19895,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     enterAccess(fe->expression, fe->isRef, "", "", depth + 1, fe->line);
     indent(depth + 1); *_out << "while (" << (fe->isRef ? hasNextCall : std::string("1")) << ") {\n";
 
-    Scope sc; sc.isLoopBoundary = true; sc.switchDepth = _switchDepth;
+    Scope sc; sc.isLoopBoundary = true; sc.switchDepth = _switchDepth; sc.loopNode = fe;
     // A `foreach` IS a window: it holds a borrowing iterator over its operand for the extent of the body,
     // which is exactly what `borrow` does — it just names the ELEMENTS instead of the view. So the operand
     // is frozen for the body, and `foreach (x in d) { d.add(…) }` becomes a compile error rather than the
@@ -21400,21 +21456,173 @@ std::string CEmitter::lvalueMoveKey(SharedExpression lhs) const
 // A byte count is a `usize`, as `allocate(bytes:)` takes one, and a constant adapts; a constant is emitted FOLDED,
 // so `64 * 1024 * 1024 * 4` is the number it says rather than C `int` arithmetic that overflows. Zero asks for no
 // stack at all, which is a mistake rather than a size.
-std::string CEmitter::isolateStackArg(SharedExpression stack, int line)
+std::string CEmitter::isolateStackArg(SharedExpression stack, int line, bool fiber)
 {
     if (!stack) return "";
+    const std::string whose = fiber ? "the fiber's stack in bytes, rounded up to a page"
+                                    : "the isolate's stack in bytes, rounded up to a multiple of 64 KiB";
     int64_t cv;
     if (constValue(stack, cv)) {
         if (cv > 0) return "((size_t)" + std::to_string(cv) + "ull)";
-        unsupported(("`stack: " + std::to_string(cv) + "` asks for no stack — it is the isolate's stack in bytes, "
-                     "rounded up to a multiple of 64 KiB; leave the clause out for the stated default").c_str(), line);
+        unsupported(("`stack: " + std::to_string(cv) + "` asks for no stack — it is " + whose
+                     + "; leave the clause out for the stated default").c_str(), line);
         return "";
     }
     if (typeOfExpr(stack) != "size_t") {
-        unsupported("`stack:` takes a `usize` — the isolate's stack in bytes, as `allocate(bytes:)` takes one", line);
+        unsupported(("`stack:` takes a `usize` — " + whose + ", as `allocate(bytes:)` takes one").c_str(), line);
         return "";
     }
     return "((size_t)(" + emitExpression(stack) + "))";
+}
+
+// A `ref` bundle — `spawn worker(b: ref w.bodies)`, `spawn fiber tally(c: ref counts)` — judged by one rule for both
+// kinds of child: a PLACE the scope outlives, inside its root's own storage, not given away or frozen, borrowed by no
+// sibling overlapping it, and kept from the scope's body until the closing brace. A fiber may also be spawned in a
+// loop (decision 10), whose every pass starts one, so there its place must outlive every pass as well. Returns the
+// `void*` the child is started with, or "" after a diagnostic.
+std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, const ParamSig& p, const std::string& fname)
+{
+    const std::string kw = iso->fiber ? "`spawn fiber`" : "`spawn`";
+    const std::string& cls = p.className;
+    // The argument must be `ref <place>`. A `give`/`copy` (HandoffNode) or a bare value would not
+    // match the `ref T` parameter.
+    //
+    // A PLACE, not just a bare local: `ref w.bodies` and `ref w.springs` hand two children two
+    // disjoint fields of one world, which is the shape the ECS/engine work wants and which the
+    // bare-local rule refused outright. It reads as a lifetime question — "how long does that field
+    // live?" — and it is not one, because a field's storage is INSIDE its root's storage. Containment
+    // answers both halves with no inference at all: `w.bodies` is created and destroyed exactly with
+    // `w`, so the escape check below is exactly as strong applied to the root; and two places neither
+    // of which is a prefix of the other cannot overlap, which is `placesConflict` — the same predicate
+    // the view model already ships on. One rule replaces two.
+    //
+    // What `placePath` refuses is refused for free, on its own "not a statically-nameable place"
+    // signal (the empty vector): an ELEMENT (`w.bodies[i]`) has a runtime index no static rule pins
+    // (splitting one buffer by index is `parallel_for`'s job), and a CALL or temporary designates no
+    // place at all.
+    bool isRef = argNode && argNode->modifier && argNode->modifier->value && *argNode->modifier->value == "ref";
+    std::vector<std::string> place = (isRef && argNode) ? placePath(argNode->expression)
+                                                       : std::vector<std::string>();
+    if (!isRef || place.empty()) {
+        unsupported((kw + " to `" + fname + "` borrows — pass a local or one of its fields by `ref` "
+                     "(e.g. `" + (iso->fiber ? "spawn fiber " : "spawn ") + fname + "(b: ref myBundle)` or "
+                     "`ref myWorld.bodies`). An element "
+                     "(`a[i]`) or a call result names no place a static disjointness rule can pin — "
+                     "split a buffer with `parallel_for` instead").c_str(), iso);
+        return "";   // the place is empty — never fall through and index it
+    }
+    const std::string root = place[0];
+
+    // ⚠️ The one thing containment does NOT give: a projection through an indirection leaves the
+    // root's own storage. If `w` is a handle another handle can copy, `a.bodies` and `b.bodies` are
+    // non-prefix places naming ONE cell, and both the lifetime and the disjointness arguments break —
+    // a silent data race in safe kama. (Probed: `ref Shared<T>` as a PARAMETER is already refused
+    // language-wide, so this hazard is created by the relaxation rather than inherited.)
+    //
+    // The ownership model draws the line, and `copyable` is the exact question — can a second handle
+    // name this object? An `Owned<T>` is unique (`copy` on one is refused), so distinct roots ARE
+    // distinct pointees and containment still holds; a `Shared`/`Weak` says outright that someone else
+    // may hold it, which is the premise disjointness has to deny. Keying on copyability rather than on
+    // a list of type names also covers the intrinsic and the library heap-owner families at once.
+    for (ASTNode* n = argNode->expression.get(); ; ) {
+        auto* ma = dynamic_cast<MemberAccessNode*>(n);
+        if (!ma || !ma->expression) break;
+        std::string bc = exprClass(ma->expression);
+        if ((isSmartPtrClass(bc) || !heapOwnerTarget(bc).empty()) && isCopyable(bc)) {
+            unsupported((kw + " borrows `" + placeText(place) + "`, a place inside `" + root
+                         + "`'s own storage — but `" + root + "` is a shared handle, and another handle "
+                         "can name the same object, so two children are not provably disjoint. Own it "
+                         "uniquely (`Owned<T>`), or move the bundle in with `give`").c_str(), iso);
+            return "";
+        }
+        n = ma->expression.get();
+    }
+
+    // Escape check: the borrowed root must OUTLIVE the scope's join — be declared in the task scope itself or an
+    // OUTER one, or be a parameter. A binding of a block NESTED inside the scope — a local, a `match` payload, a
+    // `foreach` element — dies first and would dangle. An isolate's `spawn` is a direct statement of its scope,
+    // so for it this cannot fire; a fiber's may sit in any block of it (decision 10), and there it does.
+    const int di = findScopeBinding(root);
+    const int ti = innermostTaskScopeIndex();
+    if (di >= 0 && di > ti) {
+        unsupported((kw + " may not borrow `" + root + "` — it is declared inside a block nested in the `scope`, "
+                     "so it is destroyed before the scope " + (iso->fiber ? "waits for" : "joins") + " this "
+                     "child; declare it in the `scope` itself or an outer scope").c_str(), iso);
+        return "";
+    }
+    // A fiber spawned in a LOOP starts a child on every pass, and every one borrows this one place.
+    int loopAt = -1;
+    for (int k = ti + 1; k < (int)_scopes.size() && loopAt < 0; ++k) if (_scopes[k].isLoopBoundary) loopAt = k;
+    if (loopAt >= 0 && !isAtomicClass(cls)) {
+        if (!p.isConst) {
+            unsupported((kw + " in a loop borrows `" + placeText(place) + "` by `ref`, so every fiber the loop "
+                         "starts would hold that one place at once — borrow it `const ref`, make it an "
+                         "`Atomic<T>`, or move a value in").c_str(), iso);
+            return "";
+        }
+        // `const ref`: the children only read it, but a later pass of the loop could write it while they do.
+        int wroteAt = 0;
+        if (auto* loop = dynamic_cast<StatementNode*>(const_cast<ASTNode*>(_scopes[loopAt].loopNode)))
+            forEachPlaceUse(SharedStatement(SharedStatement(), loop), [&](const std::vector<std::string>& w, int ln) {
+                if (!wroteAt && placesConflict(place, w)) wroteAt = ln; }, /*writesOnly=*/true);
+        if (wroteAt) {
+            unsupported((kw + " in a loop borrows `" + placeText(place) + "` `const ref`, and the loop writes it at "
+                         "line " + std::to_string(wroteAt) + " — a later pass would write it while the fibers "
+                         "already started read it. Write it before the loop, or after the `scope`").c_str(), iso);
+            return "";
+        }
+    }
+    // Can't borrow something already moved into (or given away by) an earlier statement. Both keys
+    // matter for a place: moving the ROOT away takes the field with it, and the field can also have
+    // been given away on its own — `_moveState` keys those as "w.bodies", the same shape
+    // `moveOnlySource` builds.
+    for (size_t k = 1; k <= place.size(); ++k) {
+        std::string key = placeText(std::vector<std::string>(place.begin(), place.begin() + k));
+        auto ms = _moveState.find(key);
+        if (ms != _moveState.end() && ms->second != MoveState::NotMoved) {
+            unsupported(("cannot borrow `" + placeText(place) + "` — `" + key
+                         + "` was moved (given) away").c_str(), iso);
+            break;
+        }
+    }
+    // ...nor something an enclosing `borrow` froze. A `ref` handed to a task is a mutable borrow like
+    // any other — the direct call `grow(d: ref a)` is rejected inside a window, and routing the same
+    // call through `spawn` must not launder it. This path never reaches `checkConstWrite`, which is
+    // where every other `ref` argument is caught.
+    rejectFrozenWrite(argNode->expression, iso->line);
+    // Disjointness: no two children of one scope may borrow OVERLAPPING places (they would race on the
+    // shared storage). Two places overlap iff one is a prefix of the other — which is the exact
+    // statement, not an approximation, so `w.bodies` and `w.springs` are admitted while `w` beside
+    // either is still caught. Overlapping index-ranges of one buffer remain M6/`parallel_for`.
+    // EXEMPTION (M6): an `Atomic<T>` is the sanctioned shared-mutable cell — its ops are race-free, so
+    // several children borrowing the SAME atomic place is exactly the intended use, not a data race.
+    if (!isAtomicClass(cls)) {
+        Scope* ts = innermostTaskScope();
+        for (auto& prev : ts->borrowedPlaces)
+            if (placesConflict(prev, place)) {
+                unsupported(("two children in this `scope` borrow overlapping places (`"
+                             + placeText(prev) + "` and `" + placeText(place) + "`) — a shared mutable "
+                             "borrow across tasks would race; borrow disjoint fields or distinct locals, "
+                             "or use an `Atomic<T>` (M6)").c_str(), iso);
+                break;
+            }
+        ts->borrowedPlaces.push_back(place);
+        // ...and against the scope BODY, which runs beside the child until the closing brace joins it. A
+        // `ref` child may write the place, so the body may not use it at all (checked by emitScope over
+        // the statements that follow); a `const ref` child only reads it, so the body may read it too and
+        // is frozen against writes only — the same freeze a `borrow` window applies to its host.
+        if (p.isConst) {
+            Scope::FrozenPlace fp;
+            fp.place = place; fp.line = iso->line; fp.fromBorrow = false; fp.fromChild = true;
+            ts->frozen.push_back(fp);
+        } else {
+            const bool nested = innermostTaskScopeIndex() != (int)_scopes.size() - 1;
+            ts->childBorrows.push_back(Scope::ChildBorrow{ place, iso->line,
+                iso->fiber ? "the fiber spawned" : "the child `spawn`ed", nested ? iso : nullptr });
+        }
+    }
+
+    return "(void*)&(" + emitExpression(argNode->expression) + ")";
 }
 
 std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
@@ -21476,123 +21684,8 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
         if (!borrowOK || !innermostTaskScope())
             unsupported("only a bare `spawn` inside a `scope { }` may `ref`-borrow (the scope joins the "
                         "child before the local drops); the handle form must take a moved `give` bundle", iso);
-        // The argument must be `ref <place>`. A `give`/`copy` (HandoffNode) or a bare value would not
-        // match the `ref T` parameter.
-        //
-        // A PLACE, not just a bare local: `ref w.bodies` and `ref w.springs` hand two children two
-        // disjoint fields of one world, which is the shape the ECS/engine work wants and which the
-        // bare-local rule refused outright. It reads as a lifetime question — "how long does that field
-        // live?" — and it is not one, because a field's storage is INSIDE its root's storage. Containment
-        // answers both halves with no inference at all: `w.bodies` is created and destroyed exactly with
-        // `w`, so the escape check below is exactly as strong applied to the root; and two places neither
-        // of which is a prefix of the other cannot overlap, which is `placesConflict` — the same predicate
-        // the view model already ships on. One rule replaces two.
-        //
-        // What `placePath` refuses is refused for free, on its own "not a statically-nameable place"
-        // signal (the empty vector): an ELEMENT (`w.bodies[i]`) has a runtime index no static rule pins
-        // (splitting one buffer by index is `parallel_for`'s job), and a CALL or temporary designates no
-        // place at all.
-        bool isRef = argNode && argNode->modifier && argNode->modifier->value && *argNode->modifier->value == "ref";
-        std::vector<std::string> place = (isRef && argNode) ? placePath(argNode->expression)
-                                                           : std::vector<std::string>();
-        if (!isRef || place.empty()) {
-            unsupported(("`spawn` to `" + fname + "` borrows — pass a local or one of its fields by `ref` "
-                         "(e.g. `spawn " + fname + "(b: ref myBundle)` or `ref myWorld.bodies`). An element "
-                         "(`a[i]`) or a call result names no place a static disjointness rule can pin — "
-                         "split a buffer with `parallel_for` instead").c_str(), iso);
-            return "";   // the place is empty — never fall through and index it
-        }
-        const std::string root = place[0];
-
-        // ⚠️ The one thing containment does NOT give: a projection through an indirection leaves the
-        // root's own storage. If `w` is a handle another handle can copy, `a.bodies` and `b.bodies` are
-        // non-prefix places naming ONE cell, and both the lifetime and the disjointness arguments break —
-        // a silent data race in safe kama. (Probed: `ref Shared<T>` as a PARAMETER is already refused
-        // language-wide, so this hazard is created by the relaxation rather than inherited.)
-        //
-        // The ownership model draws the line, and `copyable` is the exact question — can a second handle
-        // name this object? An `Owned<T>` is unique (`copy` on one is refused), so distinct roots ARE
-        // distinct pointees and containment still holds; a `Shared`/`Weak` says outright that someone else
-        // may hold it, which is the premise disjointness has to deny. Keying on copyability rather than on
-        // a list of type names also covers the intrinsic and the library heap-owner families at once.
-        for (ASTNode* n = argNode->expression.get(); ; ) {
-            auto* ma = dynamic_cast<MemberAccessNode*>(n);
-            if (!ma || !ma->expression) break;
-            std::string bc = exprClass(ma->expression);
-            if ((isSmartPtrClass(bc) || !heapOwnerTarget(bc).empty()) && isCopyable(bc)) {
-                unsupported(("`spawn` borrows `" + placeText(place) + "`, a place inside `" + root
-                             + "`'s own storage — but `" + root + "` is a shared handle, and another handle "
-                             "can name the same object, so two children are not provably disjoint. Own it "
-                             "uniquely (`Owned<T>`), or move the bundle in with `give`").c_str(), iso);
-                return "";
-            }
-            n = ma->expression.get();
-        }
-
-        // Escape check: the borrowed root must OUTLIVE the scope's join barrier — i.e. be declared in
-        // the task scope itself or an OUTER scope (or be a parameter). A local declared in a block
-        // NESTED inside the scope drops before the barrier → it would dangle. Structural, no lifetimes.
-        //
-        // ⚠️ CURRENTLY UNREACHABLE, and deliberately kept. emitIsolate now requires a bare `spawn` to be a
-        // DIRECT statement of its task scope, so `ti` is `_scopes.size() - 1` by the time we get here and
-        // `findScopeDeclaring` cannot return anything greater — a visible name is necessarily declared at
-        // scope level or outer. (The handle form never reaches this arm at all: borrowOK is false there.)
-        // It stays because that direct-statement rule is a 1.0-gate simplification, not a permanent one:
-        // the deferred handle-group work would readmit a nested `spawn` and make this check live again on
-        // the same day. Deleting it would mean reinventing it then.
-        int di = findScopeDeclaring(root);
-        int ti = innermostTaskScopeIndex();
-        if (di >= 0 && di > ti)
-            unsupported(("`spawn` may not borrow `" + root + "` — it is declared inside a block nested in "
-                         "the `scope`, so it is destroyed before the scope joins this child; declare it in "
-                         "the `scope` itself or an outer scope").c_str(), iso);
-        // Can't borrow something already moved into (or given away by) an earlier statement. Both keys
-        // matter for a place: moving the ROOT away takes the field with it, and the field can also have
-        // been given away on its own — `_moveState` keys those as "w.bodies", the same shape
-        // `moveOnlySource` builds.
-        for (size_t k = 1; k <= place.size(); ++k) {
-            std::string key = placeText(std::vector<std::string>(place.begin(), place.begin() + k));
-            auto ms = _moveState.find(key);
-            if (ms != _moveState.end() && ms->second != MoveState::NotMoved) {
-                unsupported(("cannot borrow `" + placeText(place) + "` — `" + key
-                             + "` was moved (given) away").c_str(), iso);
-                break;
-            }
-        }
-        // ...nor something an enclosing `borrow` froze. A `ref` handed to a task is a mutable borrow like
-        // any other — the direct call `grow(d: ref a)` is rejected inside a window, and routing the same
-        // call through `spawn` must not launder it. This path never reaches `checkConstWrite`, which is
-        // where every other `ref` argument is caught.
-        rejectFrozenWrite(argNode->expression, iso->line);
-        // Disjointness: no two children of one scope may borrow OVERLAPPING places (they would race on the
-        // shared storage). Two places overlap iff one is a prefix of the other — which is the exact
-        // statement, not an approximation, so `w.bodies` and `w.springs` are admitted while `w` beside
-        // either is still caught. Overlapping index-ranges of one buffer remain M6/`parallel_for`.
-        // EXEMPTION (M6): an `Atomic<T>` is the sanctioned shared-mutable cell — its ops are race-free, so
-        // several children borrowing the SAME atomic place is exactly the intended use, not a data race.
-        if (!isAtomicClass(cls)) {
-            Scope* ts = innermostTaskScope();
-            for (auto& prev : ts->borrowedPlaces)
-                if (placesConflict(prev, place)) {
-                    unsupported(("two children in this `scope` borrow overlapping places (`"
-                                 + placeText(prev) + "` and `" + placeText(place) + "`) — a shared mutable "
-                                 "borrow across tasks would race; borrow disjoint fields or distinct locals, "
-                                 "or use an `Atomic<T>` (M6)").c_str(), iso);
-                    break;
-                }
-            ts->borrowedPlaces.push_back(place);
-            // ...and against the scope BODY, which runs beside the child until the closing brace joins it. A
-            // `ref` child may write the place, so the body may not use it at all (checked by emitScope over
-            // the statements that follow); a `const ref` child only reads it, so the body may read it too and
-            // is frozen against writes only — the same freeze a `borrow` window applies to its host.
-            if (p.isConst) {
-                Scope::FrozenPlace fp;
-                fp.place = place; fp.line = iso->line; fp.fromBorrow = false; fp.fromChild = true;
-                ts->frozen.push_back(fp);
-            } else {
-                ts->childBorrows.push_back(Scope::ChildBorrow{ place, iso->line });
-            }
-        }
+        val = bundleBorrow(iso, argNode, p, fname);
+        if (val.empty()) return "";
 
         // Borrow trampoline: `__p` IS `&local` — pass it straight through as the `ref T` (`T*`) param.
         // No heap box, no free, no move (the caller keeps the local and drops it after the join).
@@ -21604,7 +21697,6 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
                << "}\n";
             _fileScopeHelpers.push_back(tr.str());
         }
-        val = "(void*)&(" + emitExpression(argNode->expression) + ")";
         return symbolOf(sig);
     }
 
@@ -21649,6 +21741,7 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
 // the scope's closing-brace barrier (emitScopeCleanup), which runs before any local dtor.
 void CEmitter::emitIsolate(IsolateNode* iso, int depth)
 {
+    if (iso->fiber) { emitFiber(iso, depth); return; }
     if (!innermostTaskScope()) {
         unsupported("a bare `spawn` must appear inside a `scope { }` (which owns the join) — outside a "
                     "scope use the handle form `Isolate h = spawn worker(...)`", iso);
@@ -21710,6 +21803,7 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
 // heap the moved bundle, spawn (boxed), and hand the box to the `Isolate::fromRaw` ctor.
 std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
 {
+    if (iso->fiber) return emitFiberExpr(iso);
     std::string cls, val;
     bool isBorrow = false;   // the handle form may outlive the scope, so borrowing is rejected in isolatePrep
     std::string cName = isolatePrep(iso, cls, val, isBorrow, /*borrowOK=*/false);
@@ -21727,6 +21821,188 @@ std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
       << iso_t << "__fromRaw(kama_isolate_spawn_boxed" << (stk.empty() ? "" : "_sized") << "(&__kama_iso_" << cName
       << ", " << arg << (stk.empty() ? "" : ", " + stk) << ")); })";
     return e.str();
+}
+
+// ── KR-3: `spawn fiber` ──────────────────────────────────────────────────────────────────────────────────────────────
+// Why this build's target has no fibers yet, or "". The switch (kama_fiber.h) is written for x86-64, arm64, x86 and
+// riscv64, and Windows has its own; wasm runs fibers over JSPI (decision 4, a later step), and bare metal is KR-233.
+std::string CEmitter::fiberTargetRefusal() const
+{
+    std::string arch;
+    bool windows = false, bare = false;
+    for (const auto& f : _activeFlags) {
+        if (f.compare(0, 5, "ARCH_") == 0) {
+            arch = f.substr(5);
+            for (char& c : arch) c = (char)tolower((unsigned char)c);
+        }
+        windows = windows || f == "OS_WINDOWS";
+        bare = bare || f == "OS_NONE";
+    }
+    if (arch.rfind("wasm", 0) == 0) return "fibers on wasm run over JSPI, which kama does not build yet (KR-3)";
+    if (bare) return "fibers on bare metal are not built yet (KR-233)";
+    if (windows || arch.empty() || arch == "x86_64" || arch == "aarch64" || arch == "arm64" || arch == "i386"
+        || arch == "i686" || arch == "x86" || arch.rfind("riscv64", 0) == 0) return "";
+    return "kama has no fiber switch for `" + arch + "` (x86-64, arm64, x86 and riscv64 have one)";
+}
+
+// What both forms of `spawn fiber` share: the seam and the target, the entry — a bare top-level fn taking exactly one
+// argument, the bundle — and the bundle itself (decision 9). Since a fiber never leaves its isolate, the bundle is any
+// value the entry's own call could be given, lowered by that call's rules (labels, `give` or `copy`, a literal typed
+// by the parameter), with neither the `Sendable` gate nor an isolate's moved-`resource` rule; or, for a bare spawn,
+// a `ref` to a place the scope outlives (bundleBorrow). `val` is the bundle's C value, or for a `ref` the `void*` the
+// fiber starts with. Null after a diagnostic.
+const FuncSig* CEmitter::fiberPrep(IsolateNode* iso, bool held, std::string& val, bool& isBorrow)
+{
+    if (!externsHeader("kama_sched.h")) {
+        unsupported("`spawn fiber` runs on the fiber scheduler, `std::concurrent` — import it: "
+                    "`import { std::concurrent::Fiber };`", iso);
+        return nullptr;
+    }
+    const std::string why = fiberTargetRefusal();
+    if (!why.empty()) { unsupported(("`spawn fiber`: " + why).c_str(), iso); return nullptr; }
+    rejectIfNoHeap("spawn fiber allocates its stack and control block", iso->line);
+    auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
+    if (!inv || !inv->identifier || !inv->identifier->value || inv->expression || callsThroughLocal(inv)) {
+        unsupported("`spawn fiber` entry must be a bare top-level function call, e.g. "
+                    "`spawn fiber handle(conn: give c)`", iso);
+        return nullptr;
+    }
+    const std::string fname = *inv->identifier->value;
+    auto it = _funcs.find(resolveFunc(fname, inv->identifier->qualifier));
+    if (it == _funcs.end()) {
+        unsupported(("`spawn fiber` entry `" + fname + "` names no known top-level function").c_str(), iso);
+        return nullptr;
+    }
+    const FuncSig& sig = it->second;
+    if (sig.params.size() != 1 || !inv->args || inv->args->size() != 1) {
+        unsupported(("`spawn fiber` entry `" + fname + "` must take exactly one argument, the bundle").c_str(), iso);
+        return nullptr;
+    }
+    if (sig.isPlaceReturn || isViewCType(sig.retCType)) {
+        unsupported(("`" + fname + "` returns a place, which the fiber's caller would outlive — a fiber hands back a "
+                     "value").c_str(), iso);
+        return nullptr;
+    }
+    if (!held && sig.retCType != "void") {
+        unsupported(("a bare `spawn fiber` takes a `void` entry, and `" + fname + "` returns a value nobody would read — "
+                     "hold the fiber to have it: `Fiber<…> f = spawn fiber " + fname + "(…);`, then "
+                     "`join(fiber: give f)`").c_str(), iso);
+        return nullptr;
+    }
+    if (held && sig.retCType == "void") {
+        unsupported(("`" + fname + "` returns nothing, so there is no `Fiber<R>` to hold — spawn it bare inside a "
+                     "`scope { }`, whose closing brace waits for it").c_str(), iso);
+        return nullptr;
+    }
+    const ParamSig& p = sig.params[0];
+    if (isViewCType(p.className) || isInterface(p.className)) {
+        unsupported(("`" + fname + "`'s bundle is a view or a contract value, which borrows for a window the fiber "
+                     "could outlive — a fiber takes a value it owns, or a `ref` to a place its `scope` outlives").c_str(),
+                    iso);
+        return nullptr;
+    }
+    isBorrow = p.byRef;
+    if (isBorrow) {
+        if (held) {
+            unsupported("a held `Fiber<R>` may outlive the `scope` it was started in, so its bundle is moved or copied "
+                        "in — a `ref` bundle is for a bare `spawn fiber` inside a `scope { }`", iso);
+            return nullptr;
+        }
+        val = bundleBorrow(iso, dynamic_cast<ArgumentNode*>((*inv->args)[0].get()), p, fname);
+        return val.empty() ? nullptr : &sig;
+    }
+    // The argument as `fname(…)` itself would be passed it: with no callee, the reordered call is that argument alone.
+    val = emitReorderedCall(fname, "", "", sig.params, inv->args, iso->line);
+    return &sig;
+}
+
+// `spawn fiber work(job: give j);` — a fiber child of the enclosing `scope` (decision 10), anywhere in its body, loops
+// included: the scope keeps a runtime list of its live fibers rather than a handle per spawn, and its closing brace
+// waits for the list to empty. The bundle is boxed, and the fiber's trampoline moves it out and frees the box.
+void CEmitter::emitFiber(IsolateNode* iso, int depth)
+{
+    Scope* ts = innermostTaskScope();
+    if (!ts || ts->fiberScope.empty()) {
+        unsupported("a bare `spawn fiber` must be inside a `scope { }`, whose closing brace waits for its fibers — "
+                    "outside one, hold the fiber: `Fiber<R> f = spawn fiber work(…);`", iso);
+        return;
+    }
+    const std::string fs = ts->fiberScope;   // fiberPrep may grow `_scopes`
+    std::string val;
+    bool isBorrow = false;
+    const FuncSig* sig = fiberPrep(iso, /*held=*/false, val, isBorrow);
+    if (!sig) return;
+    const std::string sym = symbolOf(*sig), cls = sig->params[0].className;
+    if (_moduleHelperKeys.insert("fib:" + sym).second) {
+        std::ostringstream tr;
+        tr << "static void __kama_fib_" << sym << "(void* __p) {\n";
+        if (isBorrow) tr << "    " << sym << "((" << cls << "*)__p);   /* borrow: __p IS the place */\n";
+        else tr << "    " << cls << " __v = *(" << cls << "*)__p;   /* relocate the bundle out of its box */\n"
+                << "    kama_free(__p, " << layoutOf(cls) << ");\n"
+                << "    " << sym << "(__v);                   /* the entry owns __v and drops it */\n";
+        tr << "}\n";
+        _fileScopeHelpers.push_back(tr.str());
+    }
+    const std::string stk = isolateStackArg(iso->stack, iso->line, /*fiber=*/true);
+    const std::string start = stk.empty() ? "0" : stk;
+    line(iso->line);
+    flushHoisted(depth);
+    if (isBorrow) {
+        indent(depth); *_out << "kama_sched_scopeSpawn(&" << fs << ", &__kama_fib_" << sym << ", " << val << ", " << start << ");\n";
+        return;
+    }
+    const std::string arg = "kama_kama_fib_arg" + std::to_string(_tempCounter++);
+    indent(depth);     *_out << "{\n";
+    indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)kama_alloc(" << layoutOf(cls) << ");\n";
+    indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
+    indent(depth + 1); *_out << "*" << arg << " = " << val << ";\n";
+    indent(depth + 1); *_out << "kama_sched_scopeSpawn(&" << fs << ", &__kama_fib_" << sym << ", " << arg << ", " << start << ");\n";
+    indent(depth);     *_out << "}\n";
+}
+
+// `Fiber<R> f = spawn fiber work(job: give j);` — the held form: start now, and hand the fiber and the cell its result
+// is written into to `Fiber<R>.fromRaw`, which owns the join (`join(fiber: give f)`, or the drop). The destination
+// names `R`, and must agree with what the entry returns.
+std::string CEmitter::emitFiberExpr(IsolateNode* iso)
+{
+    const std::string ty = _variantTargetType;
+    auto gi = _genericTypeInsts.find(ty);
+    if (gi == _genericTypeInsts.end() || gi->second.templateKey != "std__concurrent__Fiber" || gi->second.typeArgs.size() != 1) {
+        unsupported("a held `spawn fiber` is a `Fiber<R>`, the type of what its entry returns: "
+                    "`Fiber<int32> f = spawn fiber work(…);` (`import { std::concurrent::Fiber };`)", iso);
+        return "0";
+    }
+    std::string val;
+    bool isBorrow = false;
+    const FuncSig* sig = fiberPrep(iso, /*held=*/true, val, isBorrow);
+    if (!sig) return "0";
+    const std::string rc = sig->retCType, held = cType(gi->second.typeArgs[0]);
+    if (held != rc) {
+        auto shown = [&](const std::string& c) { const std::string k = primKeyOfCType(c); return isScalarPrimKey(k) ? k : demangleForDisplay(c); };
+        auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());   // fiberPrep proved it a bare call
+        unsupported(("`" + *inv->identifier->value + "` returns `" + shown(rc) + "`, so its fiber is a `Fiber<" + shown(rc)
+                     + ">`, not a `Fiber<" + shown(held) + ">`").c_str(), iso);
+        return "0";
+    }
+    const std::string sym = symbolOf(*sig), cls = sig->params[0].className, box = "__kama_fibbox_" + sym;
+    if (_moduleHelperKeys.insert("fibv:" + sym).second) {
+        std::ostringstream tr;
+        tr << "typedef struct { " << cls << " arg; " << rc << "* res; } " << box << ";\n"
+           << "static void __kama_fibv_" << sym << "(void* __p) {\n"
+           << "    " << box << " __b = *(" << box << "*)__p;   /* relocate the bundle out of its box */\n"
+           << "    kama_free(__p, " << layoutOf(box) << ");\n"
+           << "    *__b.res = " << sym << "(__b.arg);           /* into the cell the handle owns */\n"
+           << "}\n";
+        _fileScopeHelpers.push_back(tr.str());
+    }
+    const std::string stk = isolateStackArg(iso->stack, iso->line, /*fiber=*/true);
+    const std::string n = std::to_string(_tempCounter++), r = "kama_kama_fib_res" + n, a = "kama_kama_fib_arg" + n;
+    return "({ " + rc + "* " + r + " = (" + rc + "*)kama_alloc(" + layoutOf(rc) + "); "
+         + box + "* " + a + " = (" + box + "*)kama_alloc(" + layoutOf(box) + "); "
+         + "if (!" + r + " || !" + a + ") kama_panic(kama_string_lit(\"out of memory\", 13)); "
+         + a + "->arg = " + val + "; " + a + "->res = " + r + "; "
+         + ty + "__fromRaw((void*)kama_sched_spawn(&__kama_fibv_" + sym + ", " + a + ", " + (stk.empty() ? "0" : stk)
+         + "), " + r + "); })";
 }
 
 std::string CEmitter::emitSmartPtrCall(const std::string& cls, const std::string& recvExpr,
@@ -35948,7 +36224,7 @@ void CEmitter::checkLockWindows()
 {
     if (_lockRegions.empty()) return;
     static const std::set<std::string> kAcquire = { "kama_locked_acquire", "kama_locked_acquire_shared" };
-    static const std::set<std::string> kRuntimeWaits = { "kama_isolate_join", "kama_log_dispatch" };
+    static const std::set<std::string> kRuntimeWaits = { "kama_isolate_join", "kama_log_dispatch", "kama_sched_scopeWait" };
     auto callees = [&](const std::string& f) {
         std::vector<std::pair<std::string, CallEdge>> out;
         auto it = _callEdges.find(f);
@@ -35998,7 +36274,9 @@ void CEmitter::checkLockWindows()
             const std::string f = q[qi];   // a copy: the pushes below may move `q`
             if (kAcquire.count(f))       { hit = f; why = "takes another lock"; break; }
             if (_parksFns.count(f))      { hit = f; why = "waits (it is `@parks`)"; break; }
-            if (kRuntimeWaits.count(f))  { hit = f; why = f == "kama_isolate_join" ? "waits for the isolate to finish" : "waits on the log's sink"; break; }
+            if (kRuntimeWaits.count(f))  { hit = f; why = f == "kama_isolate_join" ? "waits for the isolate to finish"
+                                                         : f == "kama_sched_scopeWait" ? "waits for the scope's fibers"
+                                                                                        : "waits on the log's sink"; break; }
             if (_parksBlind.count(f))    { hit = f; why = "calls through a `fnptr` or a slot whose target the compiler cannot see"; break; }
             for (auto& e : callees(f)) if (seen.insert(e.first).second) { parent[e.first] = f; q.push_back(e.first); }
         }

@@ -299,6 +299,12 @@ struct LexerInstanceData {
       A reader who meant the keyword gets a parse error about the call's labels; the reporter adds the hint. */
    std::string parenWord;
    int parenWordLine = 0;
+
+   /* `fiber` directly after `spawn` is the FIBER token (KR-3), and anywhere else a name: the lexer, reading `spawn`,
+      looks past it and keeps where a following `fiber` starts in the one flex buffer, and the identifier rule returns
+      FIBER at exactly that byte. `fiberLine` is its line, for the hint when the spawn does not parse. */
+   const char* fiberAt = nullptr;
+   int fiberLine = 0;
 };
 
 struct kamayystype {
@@ -402,6 +408,7 @@ struct kamayystype {
    which names an implementation detail, and reservedWordNote — which matches yysymbol_name against the
    lexer's keyword table, case-folded — would never recognise the word and would drop its note. */
 %token <string> FILE_KW "file"
+%token <string> FIBER "fiber"
 /* `copy`, `give` and `truncate` used as a NAME: the lexer's own decision (contextualWord in kama.l), so the
    keyword tokens COPY/GIVE/TRUNCATE mean only the hand-off and the conversion and never begin a name. Admitted exactly
    where SLOT is. Aliased for FILE_KW's reason: a diagnostic names the word, and reservedWordNote recognises it. */
@@ -1406,6 +1413,8 @@ variable_initializer
        unambiguous (a keyword, never an expression start), so this adds no conflict. */
   | SPAWN invocation_expression   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
   | SPAWN spawn_stack invocation_expression   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->stack = $2; $$ = n; }
+  | SPAWN FIBER invocation_expression   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->fiber = true; $$ = n; }
+  | SPAWN FIBER spawn_stack invocation_expression   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $4); n->stack = $3; n->fiber = true; $$ = n; }
   ;
 local_constant_declaration
   : CONST type constant_declarators   { $$ = std::make_shared<ConstLocalVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); }
@@ -1499,6 +1508,9 @@ asm_statement
 spawn_statement
   : SPAWN invocation_expression SEMICOLON   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
   | SPAWN spawn_stack invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->stack = $2; $$ = n; }
+  /* `spawn fiber handle(conn: give c);` — a fiber child of the enclosing `scope` (KR-3, fibers.md decision 9). */
+  | SPAWN FIBER invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->fiber = true; $$ = n; }
+  | SPAWN FIBER spawn_stack invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $4); n->stack = $3; n->fiber = true; $$ = n; }
   ;
   /* `spawn(stack: n) worker(…)`: the isolate's stack in bytes, where the default (stated in
      kama_isolate.h and the SPEC) is not enough. Written at the spawn, the one place the depth that needs it
@@ -3061,7 +3073,10 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
            error is about its labels. Say which reading the parser took. */
         const LexerInstanceData* data = yyget_extra(scanner);
         const YYLTYPE* at = yypcontext_location(ctx);
-        if (data && !data->parenWord.empty() && at && at->first_line == data->parenWordLine)
+        if (data && data->fiberLine && at && at->first_line == data->fiberLine)
+            msg += " (after `spawn`, `fiber` starts a fiber — `spawn fiber handle(conn: give c);` — so a function "
+                   "named `fiber` is never spawned as an isolate)";
+        else if (data && !data->parenWord.empty() && at && at->first_line == data->parenWordLine)
             msg += data->parenWord == "truncate"
                 ? " (`truncate(` calls something named `truncate` — the conversion is written `truncate<uint8>(n)`)"
                 : " (`" + data->parenWord + "(` calls something named `" + data->parenWord + "` — the hand-off is "

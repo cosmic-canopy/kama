@@ -9371,6 +9371,10 @@
     "named": false
   },
   {
+    "type": "fiber",
+    "named": false
+  },
+  {
     "type": "file",
     "named": false
   },

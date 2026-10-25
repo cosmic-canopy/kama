@@ -1,0 +1,11 @@
+// A mutable `ref` bundle in a loop: every fiber the loop starts would hold the one place at once.
+import { std::concurrent::Fiber };
+type resource Tally { int32 n; public ctor zero() { this.n = 0; } public fn void add() { this.n = this.n + 1; } }
+fn void fill(ref Tally t) { t.add(); }
+fn uint8 main() {
+    Tally t = Tally.zero();
+    scope {
+        for (int32 i = 0; i < 3; i = i + 1) { spawn fiber fill(t: ref t); }
+    }
+    return 0;
+}

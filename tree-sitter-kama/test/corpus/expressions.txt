@@ -547,6 +547,69 @@ fn void main()
         (block)))))
 
 ===============================================================================
+Fiber spawns — `fiber` is a keyword only after `spawn`
+===============================================================================
+
+fn void main()
+{
+    scope { spawn fiber handle(conn: give c); }
+    scope { spawn fiber(stack: 65536) handle(conn: give c); }
+    Fiber<int32> f = spawn fiber square(n: 3);
+    int32 fiber = 1;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (scope_statement
+        (block
+          (spawn_statement
+            (call_expression
+              (identifier)
+              (argument_list
+                (argument
+                  (identifier)
+                  (handoff_expression
+                    (identifier))))))))
+      (scope_statement
+        (block
+          (spawn_statement
+            (spawn_stack
+              (identifier)
+              (integer_literal))
+            (call_expression
+              (identifier)
+              (argument_list
+                (argument
+                  (identifier)
+                  (handoff_expression
+                    (identifier))))))))
+      (local_variable_declaration
+        (type_name
+          (identifier)
+          (type_arguments
+            (primitive_type)))
+        (variable_declarator
+          (identifier)
+          (spawn_expression
+            (call_expression
+              (identifier)
+              (argument_list
+                (argument
+                  (identifier)
+                  (integer_literal)))))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (integer_literal))))))
+
+===============================================================================
 parallel_spawn — a worker pool inside a scope
 ===============================================================================
 

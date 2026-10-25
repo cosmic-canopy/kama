@@ -540,6 +540,11 @@ test_one() {
         case "$SET_ASM" in *"|$name|"*)
             echo "SKIP $name (inline asm: native/embedded only)" >"$out"; echo SKIP >"$res"; return;;
         esac
+        # Fibers on wasm are JSPI, a later step of KR-3 (docs/design/fibers.md decision 4); `spawn fiber` is refused
+        # there with a sentence (tools/check-fiber-target.sh), so the fixtures that use it run native only.
+        case "$SET_FIBER" in *"|$name|"*)
+            echo "SKIP $name (fibers: no wasm switch yet)" >"$out"; echo SKIP >"$res"; return;;
+        esac
     else
         if [ "$uses_net_web" = 1 ]; then
             echo "SKIP $name (web net: browser-only transport)" >"$out"; echo SKIP >"$res"; return
@@ -611,6 +616,7 @@ for f in $(grep -oHE 'std::net(::[A-Za-z_]+)?' $(grep -lE 'std::net' "$TESTS_DIR
 done
 SET_PROC=$(sweep 'std::process')
 SET_ASM=$(sweep 'asm\(')
+SET_FIBER=$(sweep 'spawn fiber')
 SET_BROWSER=$(sweep 'kama_wt_|kama_rtc_')
 
 phase_start "single-file fixtures"
@@ -667,7 +673,7 @@ multi_one() {
             echo "SKIP $name (std::process: no fork/exec on wasm)" >"$out"; echo SKIP >"$res"; return
         fi
         # The fiber seam has no wasm switch yet: fibers there are JSPI, a later step of KR-3 (docs/design/fibers.md).
-        if grep -rqE 'kama_(fiber|sched)\.h' --include='*.kama' "$dir"; then
+        if grep -rqE 'kama_(fiber|sched)\.h|spawn fiber' --include='*.kama' "$dir"; then
             echo "SKIP $name (fibers: no wasm switch yet)" >"$out"; echo SKIP >"$res"; return
         fi
     fi

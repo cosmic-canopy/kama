@@ -1,0 +1,31 @@
+// `spawn fiber` (KR-3, docs/design/fibers.md decisions 9 and 10): a fiber child of its `scope`, started on this
+// isolate's scheduler. The bundle is any value the entry's own call could take — a copied value, a moved `resource`,
+// a `copy` of a string — since a fiber never leaves its isolate. The scope here is entered on the thread's own context,
+// so its closing brace runs the fibers (fiber 0 parks by running the loop) and returns when the last has ended.
+import { std::concurrent::Fiber, std::concurrent::Atomic };
+
+type resource Ledger {
+    int32 total;
+    public ctor make(int32 total) { this.total = total; }
+    public const fn int32 value() { return this.total; }
+}
+
+fn void bumpBy(ref Atomic<int32> into) { into.fetchAdd(delta: 1); }
+fn void consume(Ledger l) { if (l.value() != 9) { panic(msg: "the ledger arrived changed"); } }
+fn void measure(string s) { if (s.length() != 5) { panic(msg: "the copied string arrived changed"); } }
+fn void tick(int32 n) { if (n != 7) { panic(msg: "the literal arrived changed"); } }
+
+fn uint8 main() {
+    Atomic<int32> hits = Atomic.make(value: 0);
+    Ledger l = Ledger.make(total: 9);
+    string word = "fiber";
+    scope {
+        spawn fiber bumpBy(into: ref hits);
+        spawn fiber consume(l: give l);
+        spawn fiber measure(s: copy word);
+        spawn fiber tick(n: 7);
+        spawn fiber bumpBy(into: ref hits);
+    }
+    if (word.length() != 5) { return 1; }
+    return cast<uint8>(hits.load());   // 2
+}

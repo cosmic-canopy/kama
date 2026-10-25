@@ -1,0 +1,1 @@
+heap allocation (spawn fiber allocates its stack and control block)

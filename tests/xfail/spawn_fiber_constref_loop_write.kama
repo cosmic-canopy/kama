@@ -1,0 +1,15 @@
+// A `const ref` bundle in a loop that also writes the place: a later pass would write it while the fibers already
+// started read it.
+import { std::concurrent::Fiber };
+type value Config { public int32 step; public ctor of(int32 step) { this.step = step; } }
+fn void read(const ref Config c) { }
+fn uint8 main() {
+    Config cfg = Config.of(step: 1);
+    scope {
+        for (int32 i = 0; i < 3; i = i + 1) {
+            cfg = Config.of(step: i);
+            spawn fiber read(c: ref cfg);
+        }
+    }
+    return 0;
+}

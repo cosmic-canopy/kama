@@ -1,0 +1,1 @@
+so a function named `fiber` is never spawned as an isolate

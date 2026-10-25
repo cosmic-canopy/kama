@@ -54,7 +54,7 @@
 ["if" "else" "match" "case"] @keyword.control.conditional
 ["while" "do" "for" "foreach" "parallel_for" "parallel_spawn"] @keyword.control.repeat
 ["break" "continue" "return"] @keyword.control.return
-["spawn" "scope" "borrow"] @keyword.control
+["spawn" "fiber" "scope" "borrow"] @keyword.control
 ["new" "try"] @keyword.operator
 ["cast" "bitcast" "truncate" "sizeof" "alignof"] @keyword.operator
 (intrinsic_name) @function.builtin   ; addr drop copyElements panic assert debugAssert — reserved call-site intrinsics

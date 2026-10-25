@@ -1,0 +1,1 @@
+`spawn fiber` entry must be a bare top-level function call

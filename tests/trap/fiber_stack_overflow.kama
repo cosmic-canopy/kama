@@ -1,0 +1,15 @@
+// A fiber whose recursion outgrows its stack says so, naming the size it was given and the clause that raises it,
+// where it would die of a bare SIGSEGV (decision 2): the guard page below every fiber stack, and the overflow handler
+// that reads which stack it was. A 64 KiB stack, recursed into without end.
+import { std::concurrent::Fiber, std::concurrent::join };
+
+fn int64 down(int64 n) {
+    if (n == 0) { return 0; }
+    return down(n: n - 1) + 1;
+}
+fn int64 deep(int64 depth) { return down(n: depth); }
+
+fn uint8 main() {
+    Fiber<int64> f = spawn fiber(stack: 64 * 1024) deep(depth: 1000000000);
+    return join(fiber: give f) == 0 ? 0 : 1;
+}

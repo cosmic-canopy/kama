@@ -44,7 +44,9 @@ static void* kama__isolate_run(void* p) {
     kama__isolate_boot b = *(kama__isolate_boot*)p;
     kama_free(p, sizeof b, _Alignof(kama__isolate_boot));
     kama__stack_isolate(b.stack);
-    return b.entry(b.arg);
+    void* r = b.entry(b.arg);
+    if (kama__fibers.schedEnd) kama__fibers.schedEnd();   // an isolate that ran fibers frees its scheduler and poller
+    return r;
 }
 #endif
 

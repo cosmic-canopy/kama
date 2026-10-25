@@ -1,0 +1,4 @@
+// The handle's `R` is what the entry returns: an `int32` entry's fiber is a `Fiber<int32>`.
+import { std::concurrent::Fiber };
+fn int32 square(int32 n) { return n * n; }
+fn uint8 main() { Fiber<int64> f = spawn fiber square(n: 3); return 0; }

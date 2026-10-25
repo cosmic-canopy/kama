@@ -111,7 +111,9 @@ tree's existing practice.
 
 **Recommended:** thread-per-core with fibers (§3), **in std**, as part of the isolate itself rather than a separate
 object. The first `spawn fiber` on an isolate makes it a scheduler. The `scope` that holds the spawn runs that
-scheduler on its own stack (fiber 0) until its fiber children end. The Poller, the timer heap and the ready queue
+scheduler on its own stack (fiber 0) until its fiber children end. *As built (`0.9.741`):* fiber 0 parks like any
+fiber, and its park runs the loop until it is woken, so a `scope` is the same C whether it is entered on the thread's
+own context or on a fiber, and the body never moves (outlining it would refuse `this`, which §4's `serve()` uses). The Poller, the timer heap and the ready queue
 are isolate-local runtime state, created on first use.
 
 - **Packaging.** Go, Erlang and Java put the scheduler in the runtime. Rust puts it in crates, which costs an
@@ -353,12 +355,19 @@ The public `Poller` keeps applying its own `add` at once; that is one call per s
 - **The entry and the bundle.** The entry is the isolate's: a top-level `fn` and exactly one bundle. The bundle may
   be any movable value, because it never leaves the isolate, or a `ref` the scope outlives.
 - **`fiber` is contextual,** meaningful only after `spawn`, so it reserves nothing. It is greppable as `spawn fiber`.
+  *As built (`0.9.741`):* the lexer returns `fiber` as a keyword only directly after `spawn`, so it stays a name
+  everywhere else, a fiber's entry included. The one program it costs is an isolate spawned on a function named
+  `fiber`: `spawn fiber(` always starts a fiber (`tests/xfail/spawn_named_fiber`), which is what keeps the grep exact.
 
 **Failure.**
 - An isolate entry returns `void` because "there is no channel to hand a result back over". A fiber shares the
   thread, so that reason is gone.
 - **Recommended:** a fiber entry may return a value, the handle form is `Fiber<R>`, and `join()` parks and yields
   `R`. A bare spawn in a scope takes a `void` entry; a discarded `Result` is already refused.
+  *Ruled 2026-10-25, as built:* the join **consumes** the handle, `R r = join(fiber: give f);`, as Rust's
+  `JoinHandle::join(self)` does, so a second join of one fiber is a compile error rather than a run-time one. A method
+  never moves its receiver (SPEC), so the join is a free function in `std::concurrent`. A handle dropped unjoined joins
+  and drops `R`. A `void` entry has no handle: it is spawned bare in a `scope`, and a nested `scope` is the early wait.
 - **A failed child does not cancel its siblings by default.** In an accept loop, one bad connection must not stop
   the others. Group cancellation is decision 11.
 
@@ -386,6 +395,10 @@ is the opposite of the fiber case.
 - **The closing brace parks until the list is empty.**
 - **A `ref` bundle must still root in a place the scope outlives**, so never in a loop body's local, which the
   existing place check extends to cover.
+  *As built (`0.9.741`):* the check counts every binder (a `match` payload and a `foreach` element too). A loop starts
+  one child per pass on one place, so a mutable `ref` is refused in a loop and an `Atomic` or a `const ref` is not —
+  unless the loop writes that place, which a later pass would do under its readers. The scope's live children are an
+  intrusive list on the control blocks, ready for decision 11's cancellation.
 - **Isolate `spawn` keeps its counted rule,** because the reason for it still holds for isolates.
 
 The scope stays the one structured construct, so kama needs no nursery object.
@@ -607,6 +620,7 @@ x19–x30 and d8–d15, swaps `sp`, restores, and returns.
 ## 7. What the brief got wrong
 
 Corrected here and in ROADMAP_DETAIL §6:
+- **`join()` as a method** (decision 9) could check a second join only at run time; the join consumes the handle.
 - **"Exclusivity per fiber"** was inverted (decision 3).
 - **"Timers need nothing new"** was wrong (decision 11).
 - **"Each isolate accepts on its own listener"** holds only on Linux. macOS's `handOff` is not a balancer and
@@ -630,7 +644,7 @@ read off this document.
 |---|---|---|---|
 | 1 | ✅ `0.9.737`. The switch and stacks, with sanitizer annotations and the overflow handler, tested from C (`tests/fiber_switch.d`); the handler also serves isolates (`trap/isolate_stack_overflow`). The per-thread and per-process state is defined once, by the emitter, not in `kama_runtime.h` | `include/kama_fiber.h` (new), `kama_isolate.h`, `src/kama.cemit.cpp` | M |
 | 2 | ✅ `0.9.738`. The scheduler: ready queue, park/unpark, the timer heap, internal registration per decision 6, a remote queue on the Waker, tested from C (`tests/fiber_sched.d`, on this host's arm and on the Poller arm). Its own header, as the isolate seam is, so a program with sockets and no fibers never compiles it. epoll registers once edge-triggered and waits with `epoll_pwait2`; kqueue batches every change into the next wait. Windows and `poll(2)` go through the public `Poller`, holding a socket only while a fiber waits on it: on AFD a park costs its one IOCTL plus the poll state's allocation, which step 8 may pool | `include/kama_sched.h` (new), `kama_fiber.h` | L |
-| 3 | `spawn fiber`, the `scope` list of live fibers, `Fiber<R>` and `join`, and `ref` bundles rooted outside the loop | `src/kama.y`, `src/kama.cemit.cpp`, `docs/grammar.bnf`, `tree-sitter-kama/` (+ the Zed and Helix pins) | L |
+| 3 | ✅ `0.9.741`. `spawn fiber`, the `scope` list of live fibers, `Fiber<R>` and `join`, and `ref` bundles rooted outside the loop; fiber 0 parks by running the loop, and an isolate frees its scheduler when it ends | `src/kama.y`, `src/kama.cemit.cpp`, `docs/grammar.bnf`, `tree-sitter-kama/` (+ the Zed and Helix pins) | L |
 | 4 | The park rule. `@parks`, std's 64 marks and the lock-window walk shipped with `Locked<T>` (`0.9.731`–`0.9.733`: `checkLockWindows`, region markers, kept `@noheap` slot edges, blind-call facts); this step adds the leaf rule for a window over a `Shared`, a call access and `@onPanic`, the job-entry rule, and the debug assert | `src/kama.cemit.cpp` | S |
 | 5 | Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines, deregistration on `give`, and DEL before close | `lib/std/net/`, `kama_os.h` | L |
 | 6 | Channels fiber-aware (waiter lists, send-side), and joins park | `include/kama_channel.h`, `lib/std/concurrent/` | M |
