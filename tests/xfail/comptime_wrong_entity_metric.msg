@@ -1,0 +1,1 @@
+two instances of one generic type are two types

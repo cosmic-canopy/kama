@@ -667,13 +667,9 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
         if (!inv->identifier->value)
             return ctFail("a comptime fn may call only another `comptime fn` by name", e);
         std::vector<std::string> argNames;
-        auto evalArgs = [&](std::vector<CTValue>& args) -> bool {
-            if (inv->args) for (auto& a : *inv->args) {
-                CTValue av; if (!a || !ctEvalExpr(a->expression, env, av)) return false;
-                args.push_back(av);
-                argNames.push_back(a->name && a->name->value ? *a->name->value : std::string());
-            }
-            return true;
+        auto evalArgs = [&](std::vector<CTValue>& args, SharedParameterList params, const NsCtx& ctx) -> bool {
+            return ctCallArgs(inv, env, args, argNames,
+                              [&](const std::string& nm) { return ctParamDest(params, nm, nullptr, &ctx); });
         };
         // Type-associated `Type::name()` — resolve the owner type, honor visibility (private is callable
         // only from within the same type's comptime fns).
@@ -708,7 +704,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
                                + *inv->identifier->qualifier->back()
                                + "` grant it to the calling type: `friend <ThatType>["
                                + *inv->identifier->value + "];`").c_str(), e);
-            std::vector<CTValue> args; if (!evalArgs(args)) return false;
+            std::vector<CTValue> args; if (!evalArgs(args, mit->second.node->params, mit->second.ctx)) return false;
             if (!ctBindByName(mit->second.node->params, argNames, args, disp, e->line)) return false;
             std::string saved = _ctCurrentOwner; _ctCurrentOwner = owner;
             const ComptimeMethod& cm = mit->second;
@@ -736,8 +732,8 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             return ctFail((!_ctRunning.empty() ? "it calls `" + nm + "`, which is not a `comptime fn`"
                                                : ctNotComptimeCall(nm, _ctDepth > 0)).c_str(), e);
         }
-        std::vector<CTValue> args; if (!evalArgs(args)) return false;
         const ComptimeFn& cf = _comptimeFns[key];
+        std::vector<CTValue> args; if (!evalArgs(args, cf.node->parameters, cf.ctx)) return false;
         if (!ctBindByName(cf.node->parameters, argNames, args, *inv->identifier->value, e->line)) return false;
         std::string saved = _ctCurrentOwner; _ctCurrentOwner.clear();   // a free fn has no owning type
         bool ok = ctInDeclaringFile(cf.ctx, [&] { return ctEvalCall(cf.node, args, e->line, out); });
@@ -842,7 +838,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         if (d->variables) for (auto& v : *d->variables) {
             if (!v || !v->name || !v->name->value) continue;
             CTValue val;
-            if (v->initializer) { if (!ctEvalExpr(v->initializer, env, val)) return CTFlow::Fail; }
+            if (v->initializer) { if (!ctEvalTo(v->initializer, env, ctDest(d->type), val)) return CTFlow::Fail; }
             else                { val = proto; }   // zero-init
             ctCoerceTo(proto, val);
             env.vars[*v->name->value] = val;
@@ -859,7 +855,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         if (d->variables) for (auto& v : *d->variables) {
             if (!v || !v->name || !v->name->value) continue;
             CTValue val;
-            if (!v->initializer || !ctEvalExpr(v->initializer, env, val)) return CTFlow::Fail;
+            if (!v->initializer || !ctEvalTo(v->initializer, env, ctDest(d->type), val)) return CTFlow::Fail;
             ctCoerceTo(proto, val);
             env.vars[*v->name->value] = val;
         }
@@ -924,7 +920,19 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
                 if (rid->value && (!rid->qualifier || rid->qualifier->empty())) root = *rid->value;
             auto it = root.empty() ? env.vars.end() : env.vars.find(root);
             if (it == env.vars.end()) { ctFail("a compile-time field write targets `this` or a local value", s); return CTFlow::Fail; }
-            CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
+            std::string dest;   // the field's class, read before the value runs (which may rewrite `this`)
+            {
+                const CTValue* at = &it->second;
+                for (auto& fname : path) {
+                    const CTValue* next = nullptr;
+                    if (at->isStruct)
+                        for (size_t k = 0; k < at->fieldNames.size(); ++k)
+                            if (at->fieldNames[k] == fname) { next = &at->elems[k]; break; }
+                    if (!(at = next)) break;
+                }
+                if (at && at->isStruct) dest = at->structClass;
+            }
+            CTValue val; if (!ctEvalTo(a->expression, env, dest, val)) return CTFlow::Fail;
             CTValue* slot = &it->second;
             for (auto& fname : path) {
                 if (!slot->isStruct) { ctFail(("`." + fname + "` is not a field of a value").c_str(), s); return CTFlow::Fail; }
@@ -946,7 +954,9 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
             if (self != env.vars.end() && self->second.isStruct)
                 for (size_t k = 0; k < self->second.fieldNames.size(); ++k)
                     if (self->second.fieldNames[k] == *tgt->value) {
-                        CTValue val; if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
+                        const CTValue& f = self->second.elems[k];
+                        CTValue val; if (!ctEvalTo(a->expression, env, f.isStruct ? f.structClass : std::string(), val))
+                            return CTFlow::Fail;
                         ctCoerceTo(self->second.elems[k], val);
                         self->second.elems[k] = val;
                         return CTFlow::Normal;
@@ -954,7 +964,8 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
         }
         if (it == env.vars.end()) { ctFail(("assignment to unknown local `" + *tgt->value + "` in comptime fn").c_str(), s); return CTFlow::Fail; }
         CTValue val;
-        if (!ctEvalExpr(a->expression, env, val)) return CTFlow::Fail;
+        if (!ctEvalTo(a->expression, env, it->second.isStruct ? it->second.structClass : std::string(), val))
+            return CTFlow::Fail;
         ctCoerceTo(it->second, val);   // store into the target's declared width/kind
         it->second = val;
         return CTFlow::Normal;
@@ -1030,7 +1041,7 @@ CEmitter::CTFlow CEmitter::ctEvalStmt(SharedStatement s, CTEnv& env, CTValue& re
 
     if (auto* r = dynamic_cast<ReturnNode*>(n)) {
         if (!r->expression) { ret = CTValue{}; ret.isVoid = true; return CTFlow::Return; }   // a `void` member's `return;`
-        if (!ctEvalExpr(r->expression, env, ret)) return CTFlow::Fail;
+        if (!ctEvalTo(r->expression, env, _ctReturnDest, ret)) return CTFlow::Fail;
         return CTFlow::Return;
     }
 
@@ -1144,7 +1155,9 @@ bool CEmitter::ctEvalBody(SharedParameterList params, SharedBlock body, SharedId
     }
 
     CTValue ret;
+    std::string savedRet = _ctReturnDest; _ctReturnDest = ctDest(retType);
     CTFlow f = ctEvalStmt(body, env, ret);
+    _ctReturnDest = savedRet;
     _ctDepth--;
     if (f == CTFlow::Fail) return false;
     if (f != CTFlow::Return) return ctFail("a comptime fn must return a value on every path", line);
@@ -1186,6 +1199,55 @@ bool CEmitter::ctProtoOfCType(const std::string& ct, CTValue& proto)
     return true;
 }
 
+// The C type a compile-time value stored to `type` takes — and the DESTINATION a bare generic ctor reads its instance
+// from (`comptime Metric<Vm> CPU = Metric.of(counter: 2);`), as `dotOnTypeInstance` reads it at run time: a phantom
+// `E` has no other source. A generic instance it names is registered here when nothing has named it yet, because
+// module and type constants fold before the pass that discovers instances (collectCollections), and a value is
+// built against its class (KR-239).
+std::string CEmitter::ctDest(SharedIdentifier type)
+{
+    if (!type) return "";
+    const std::string ct = cType(type);
+    if ((type->genericArgs || type->genericArg) && !_classes.count(ct)) scanTypeForCollections(type);
+    return ct;
+}
+
+// Evaluate `e` for a place of class `dest` — a constant, a local, a `return`, an argument, a field.
+bool CEmitter::ctEvalTo(SharedExpression e, CTEnv& env, const std::string& dest, CTValue& out)
+{
+    std::string saved = _variantTargetType; _variantTargetType = dest;
+    bool ok = ctEvalExpr(e, env, out);
+    _variantTargetType = saved;
+    return ok;
+}
+
+// Run as `ci`: its scope and file, and for a generic INSTANCE its type arguments bound — `T` in `Box<int32>`'s body
+// is `int32` — exactly as the emitter emits an instance's members (installOwnerScope). The caller restores both.
+void CEmitter::ctEnterOwner(const ClassInfo& ci)
+{
+    _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
+    restoreFileRung(_nsCtx, ci.declFile);
+    _typeSubst.clear();
+    installOwnerScope(ci.name);
+}
+
+// The destination parameter `name` of `params` gives its argument, read where the parameter was written: `owner`'s
+// scope (a member), or the `declared` file (a `comptime fn`).
+std::string CEmitter::ctParamDest(SharedParameterList params, const std::string& name, const ClassInfo* owner,
+                                  const NsCtx* declared)
+{
+    if (params) for (auto& p : *params) {
+        if (!p || !p->identifier || !p->identifier->value || *p->identifier->value != name) continue;
+        NsCtx ns = _nsCtx; auto subst = _typeSubst; std::string unit = _collectingUnitPath;
+        if (owner) ctEnterOwner(*owner);
+        else if (declared) { _nsCtx = *declared; if (!declared->unitPath.empty()) _collectingUnitPath = declared->unitPath; }
+        const std::string d = ctDest(p->type);
+        _nsCtx = ns; _typeSubst = subst; _collectingUnitPath = unit;
+        return d;
+    }
+    return "";
+}
+
 // What a compile-time local, parameter or return of `type` holds: a scalar, a fixed array, a payload-less
 // enum (its integer), or a `type value` whose every field is one of those. Silent — a caller says why.
 bool CEmitter::ctValueProto(SharedIdentifier type, CTValue& proto)
@@ -1199,7 +1261,7 @@ bool CEmitter::ctValueProto(SharedIdentifier type, CTValue& proto)
         proto.elems.assign((size_t)n, z);
         return true;
     }
-    const std::string ct = cType(type);
+    const std::string ct = ctDest(type);
     if (ctProtoOfCType(ct, proto)) return true;
     if (isEnum(ct)) { proto = CTValue{}; proto.width = 32; return true; }
     std::string why;
@@ -1244,8 +1306,10 @@ bool CEmitter::ctStructProto(const std::string& cls, CTValue& proto, std::string
             }
         }
         if (!ok) {
+            // An instance's field is shown as its type argument (`Shape`), never the template's `T`.
             why = "`" + shown + "`'s field `" + f.name + "` is a `"
-                + (f.type && f.type->value ? *f.type->value : std::string("?"))
+                + (_genericTypeInsts.count(ci.name) ? demangleForDisplay(fieldCType(ci.name, f))
+                                                     : f.type && f.type->value ? *f.type->value : std::string("?"))
                 + "`, which a compile-time value cannot hold (a number, `bool`, `char`, fixed array, or a `type value` "
                   "of those)";
             return false;
@@ -1281,12 +1345,19 @@ bool CEmitter::ctMemberVisible(const ClassInfo& ci, Visibility vis, const std::s
 }
 
 // A call's arguments, evaluated in the CALLER's frame, with the labels they were written with.
-bool CEmitter::ctCallArgs(InvocationNode* inv, CTEnv& env, std::vector<CTValue>& args, std::vector<std::string>& names)
+// Each argument's destination is its parameter's type when that names a generic instance, and otherwise the
+// call's own, exactly as the emitter threads an argument's (`genericCtorDest`).
+bool CEmitter::ctCallArgs(InvocationNode* inv, CTEnv& env, std::vector<CTValue>& args, std::vector<std::string>& names,
+                          const std::function<std::string(const std::string&)>& destOf)
 {
     if (inv->args) for (auto& a : *inv->args) {
-        CTValue av; if (!a || !ctEvalExpr(a->expression, env, av)) return false;
+        if (!a) return false;
+        const std::string nm = a->name && a->name->value ? *a->name->value : std::string();
+        std::string d = destOf ? destOf(nm) : std::string();
+        if (!_genericTypeInstOf.count(d)) d = _variantTargetType;
+        CTValue av; if (!ctEvalTo(a->expression, env, d, av)) return false;
         args.push_back(av);
-        names.push_back(a->name && a->name->value ? *a->name->value : std::string());
+        names.push_back(nm);
     }
     return true;
 }
@@ -1300,9 +1371,9 @@ bool CEmitter::ctRunMember(ClassInfo& ci, std::vector<CTArg> bound, SharedStatem
     if (++_ctDepth > CT_MAX_DEPTH) { _ctDepth--; return ctFail("comptime evaluation recursion too deep", line); }
     std::string savedOwner = _ctCurrentOwner; _ctCurrentOwner = ci.name;
     std::string savedRunning = _ctRunning; _ctRunning = what;
-    NsCtx savedNs = _nsCtx;
-    _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
-    restoreFileRung(_nsCtx, ci.declFile);
+    NsCtx savedNs = _nsCtx; auto savedSubst = _typeSubst; std::string savedRet = _ctReturnDest;
+    ctEnterOwner(ci);
+    _ctReturnDest = retType ? ctDest(retType) : ci.name;   // a ctor's `return` hands back its own type
     CTEnv env;
     for (auto& b : bound) {
         CTValue proto;
@@ -1313,7 +1384,7 @@ bool CEmitter::ctRunMember(ClassInfo& ci, std::vector<CTArg> bound, SharedStatem
     CTValue ret;
     CTFlow f = ctEvalStmt(body, env, ret);
     _ctDepth--;
-    _nsCtx = savedNs;
+    _nsCtx = savedNs; _typeSubst = savedSubst; _ctReturnDest = savedRet;
     _ctCurrentOwner = savedOwner;
     _ctRunning = savedRunning;
     if (f == CTFlow::Fail) return false;
@@ -1337,10 +1408,17 @@ bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& ctorName, Invocatio
     CTValue self; std::string why;
     if (!ctStructProto(ci.name, self, why))
         return ctFail((why + " — so `" + shown + "` cannot build a compile-time value").c_str(), line);
-    std::vector<CTValue> args; std::vector<std::string> names;
-    if (!ctCallArgs(inv, env, args, names)) return false;
     auto mit = ci.methods.find(ctorName);
     const bool bodiless = mit == ci.methods.end() || !mit->second.node;
+    // An argument's destination: a ctor's parameter, or for a generated `of` the field it fills.
+    auto destOf = [&](const std::string& nm) -> std::string {
+        if (!bodiless) return ctParamDest(mit->second.node->params, nm, &ci, nullptr);
+        for (size_t i = 0; i < self.fieldNames.size(); ++i)
+            if (self.fieldNames[i] == nm && self.elems[i].isStruct) return self.elems[i].structClass;
+        return "";
+    };
+    std::vector<CTValue> args; std::vector<std::string> names;
+    if (!ctCallArgs(inv, env, args, names, destOf)) return false;
     if (ctorName == "of" && ci.genOf && bodiless) {
         std::vector<bool> seen(self.elems.size(), false);
         for (size_t k = 0; k < args.size(); ++k) {
@@ -1380,12 +1458,12 @@ bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& ctorName, Invocatio
     for (size_t i = 0; i < ci.fields.size() && i < self.elems.size(); ++i)
         if (ci.fields[i].initializer) {
             std::string savedOwner = _ctCurrentOwner; _ctCurrentOwner = ci.name;
-            NsCtx savedNs = _nsCtx;
-            _nsCtx = NsCtx{}; _nsCtx.scope = ci.scope; _nsCtx.usings = ci.usings; _nsCtx.symbolAliases = ci.symbolAliases;
-            restoreFileRung(_nsCtx, ci.declFile);
+            NsCtx savedNs = _nsCtx; auto savedSubst = _typeSubst;
+            ctEnterOwner(ci);
             CTEnv fenv; CTValue fv;
-            bool ok = ctEvalExpr(ci.fields[i].initializer, fenv, fv);
-            _nsCtx = savedNs; _ctCurrentOwner = savedOwner;
+            bool ok = ctEvalTo(ci.fields[i].initializer, fenv, self.elems[i].isStruct ? self.elems[i].structClass
+                                                                                      : std::string(), fv);
+            _nsCtx = savedNs; _typeSubst = savedSubst; _ctCurrentOwner = savedOwner;
             if (!ok) return false;
             ctCoerceTo(self.elems[i], fv);
             self.elems[i] = fv;
@@ -1405,6 +1483,21 @@ bool CEmitter::ctConstruct(ClassInfo& ci, const std::string& ctorName, Invocatio
 
 // A call through `.`: `Type.ctor(…)` constructs; `value.method(…)` runs a method of the value's own type, and a
 // method that is not `const fn` writes its receiver back when the receiver is a local or `this`.
+// Which instance `Box.of(…)` on a generic builds at compile time: the run-time rule, `dotOnTypeInstance` — a
+// turbofish on the type, then the destination, then the arguments — with the instance registered when it
+// is the first to name it, since a constant folds before the pass that discovers instances (KR-239). The template
+// comes back when nothing names one, and the caller says so.
+std::string CEmitter::ctGenericInstance(MemberAccessNode* ma, const std::string& tmpl, InvocationNode* inv)
+{
+    if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
+        if (rid->genericArgs && !rid->genericArgs->empty())
+            ctDest(std::static_pointer_cast<IdentifierNode>(ma->expression));
+    std::string cls = dotOnTypeInstance(ma, tmpl, inv);
+    if (!_classes.count(cls))
+        if (SharedIdentifier inst = inferDotCtorInstance(inv, _localTypeNodes)) { ctDest(inst); cls = cType(inst); }
+    return cls;
+}
+
 bool CEmitter::ctEvalCallExpr(InvocationNode* inv, CTEnv& env, CTValue& out)
 {
     auto* ma = inv ? dynamic_cast<MemberAccessNode*>(inv->expression.get()) : nullptr;
@@ -1415,12 +1508,13 @@ bool CEmitter::ctEvalCallExpr(InvocationNode* inv, CTEnv& env, CTValue& out)
     // `Type.ctor(…)` — the receiver names a TYPE (a binding can never be named like one in reach).
     if (auto* rid = dynamic_cast<IdentifierNode*>(ma->expression.get()))
         if (rid->value && !env.vars.count(*rid->value)) {
-            std::string cls;
-            if (rid->genericArgs && !rid->genericArgs->empty()) cls = cType(std::static_pointer_cast<IdentifierNode>(ma->expression));
-            else cls = resolveUserName(*rid->value, rid->qualifier);
+            std::string cls = resolveUserName(*rid->value, rid->qualifier);
+            if (_genericTypeParams.count(cls)) cls = ctGenericInstance(ma, cls, inv);
             auto cit = _classes.find(cls);
             if (cit != _classes.end() && !_typeConsts.count(cls + "::" + member))
                 return ctConstruct(cit->second, member, inv, env, line, out);
+            if (_genericTypeParams.count(cls))   // the run-time sentence, not "unknown identifier"
+                return ctFail(unpinnedCtor(*rid->value, member).c_str(), line);
         }
     CTValue recv; if (!ctEvalExpr(ma->expression, env, recv)) return false;
     if (!recv.isStruct)
@@ -1436,7 +1530,8 @@ bool CEmitter::ctEvalCallExpr(InvocationNode* inv, CTEnv& env, CTValue& out)
                        + " in '" + ci.name + "'").c_str(), line);
     if (!mi.node || !mi.node->body) return ctFail(("`" + shown + "` has no body to run at compile time").c_str(), line);
     std::vector<CTValue> args; std::vector<std::string> names;
-    if (!ctCallArgs(inv, env, args, names)) return false;
+    if (!ctCallArgs(inv, env, args, names,
+                    [&](const std::string& nm) { return ctParamDest(mi.node->params, nm, &ci, nullptr); })) return false;
     if (!ctBindByName(mi.node->params, names, args, shown, line)) return false;
     std::vector<CTArg> bound;
     for (size_t i = 0; i < args.size(); ++i) {
@@ -1475,7 +1570,8 @@ bool CEmitter::ctStaticMember(const std::string& owner, const std::string& name,
     if (!ctMemberVisible(ci, mi.visibility, name))
         return ctFail(("'" + name + "' is private in '" + ci.name + "'").c_str(), line);
     std::vector<CTValue> args; std::vector<std::string> names;
-    if (!ctCallArgs(inv, env, args, names)) return false;
+    if (!ctCallArgs(inv, env, args, names,
+                    [&](const std::string& nm) { return ctParamDest(mi.node->params, nm, &ci, nullptr); })) return false;
     if (!ctBindByName(mi.node->params, names, args, shown, line)) return false;
     std::vector<CTArg> bound;
     for (size_t i = 0; i < args.size(); ++i) {
@@ -1495,11 +1591,10 @@ bool CEmitter::ctStructOperator(int token, const CTValue& lv, const CTValue* rv,
     // parameter takes a scalar.
     auto accepts = [&](ClassInfo& owner, SharedIdentifier pt, const CTValue& v) -> bool {
         if (!pt) return false;
-        NsCtx saved = _nsCtx;
-        _nsCtx = NsCtx{}; _nsCtx.scope = owner.scope; _nsCtx.usings = owner.usings; _nsCtx.symbolAliases = owner.symbolAliases;
-        restoreFileRung(_nsCtx, owner.declFile);
+        NsCtx saved = _nsCtx; auto savedSubst = _typeSubst;
+        ctEnterOwner(owner);
         const std::string pc = (pt->value && *pt->value == "This") ? owner.name : cType(pt);
-        _nsCtx = saved;
+        _nsCtx = saved; _typeSubst = savedSubst;
         if (v.isStruct) return pc == v.structClass;
         return !_classes.count(pc) || _classes[pc].isScalarEnum();   // a scalar operand takes a scalar parameter
     };
@@ -1618,7 +1713,7 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
             v.isArray = true;
             ok = ctBuildArrayInit(dc.init, env, elemProto, (size_t)an, v.elems);
         } else {
-            ok = ctEvalExpr(dc.init, env, v);
+            ok = ctEvalTo(dc.init, env, ctDest(dc.type), v);   // the declared type names a bare generic ctor's instance
         }
         if (!ok) {
             if (!_ctFailed)
@@ -1645,7 +1740,7 @@ bool CEmitter::evalDeferredConst(const std::string& cName)
         CTValue shape;
         const bool shaped = ctValueProto(dc.type, shape);
         if ((shaped && shape.isStruct) != v.isStruct || (shape.isStruct && v.structClass != shape.structClass)) {
-            ctFail(("`" + shown + "` is declared a `" + (dc.type && dc.type->value ? *dc.type->value : std::string("?"))
+            ctFail(("`" + shown + "` is declared a `" + (dc.type ? demangleForDisplay(cType(dc.type)) : std::string("?"))
                     + "`, and its initializer builds " + (v.isStruct ? "a `" + demangleForDisplay(v.structClass) + "`"
                                                                      : std::string("a number")).c_str()
                     ).c_str(), dc.line);
@@ -1692,7 +1787,7 @@ bool CEmitter::evalLocalComptime(SharedIdentifier type, SharedExpression init, c
         const bool isArray = ctArrayInfo(type, elemProto, an, aelem);
         bool good = (isArray && dynamic_cast<ArrayLiteralNode*>(init.get()))
                   ? (v.isArray = true, ctBuildArrayInit(init, env, elemProto, (size_t)an, v.elems))
-                  : ctEvalExpr(init, env, v);
+                  : ctEvalTo(init, env, ctDest(type), v);
         if (!good) {
             if (!_ctFailed)
                 ctFail(("a `comptime` local must have a compile-time-constant initializer (a literal, an array "
@@ -1712,7 +1807,7 @@ bool CEmitter::evalLocalComptime(SharedIdentifier type, SharedExpression init, c
         CTValue shape;
         const bool shaped = ctValueProto(type, shape);
         if ((shaped && shape.isStruct) != v.isStruct || (shape.isStruct && v.structClass != shape.structClass))
-            return ctFail(("`" + name + "` is declared a `" + (type && type->value ? *type->value : std::string("?"))
+            return ctFail(("`" + name + "` is declared a `" + (type ? demangleForDisplay(cType(type)) : std::string("?"))
                            + "`, and its initializer builds " + (v.isStruct ? "a `" + demangleForDisplay(v.structClass) + "`"
                                                                             : std::string("a number"))).c_str(), line);
         CTValue proto;

@@ -1,0 +1,89 @@
+// A typed performance query, after vSphere's PerformanceManager: a counter is a `Metric<E>` whose `E` is the entity
+// it measures, a phantom carried by the type and never stored, so a query over virtual machines takes only a virtual
+// machine's counters and a host's is a compile error (tests/xfail/comptime_wrong_entity_metric). Each entity names
+// its counters as `comptime` constants, so `VirtualMachine::` lists exactly what a VM query takes. A `comptime` of a
+// GENERIC value type used to be refused ("unknown identifier `Metric`", KR-239): the constant's declared type now
+// supplies the instance a bare `Metric.of(…)` builds, as a destination does at run time.
+import { std::collections::DynamicArray };
+
+type value Metric<E> {
+    int32 counter;
+    public ctor of(int32 counter) { this.counter = counter; }
+    public const fn int32 id() { return this.counter; }
+}
+
+type value VirtualMachine {
+    public int32 moref;
+    public ctor of(int32 moref) { this.moref = moref; }
+    public comptime Metric<VirtualMachine> CPU_USAGE_AVERAGE = Metric.of(counter: 2);
+    public comptime Metric<VirtualMachine> MEM_CONSUMED_AVERAGE = Metric.of(counter: 98);
+    public comptime Metric<VirtualMachine> DISK_USAGE_AVERAGE = Metric.of(counter: 125);
+}
+type value HostSystem {
+    public int32 moref;
+    public ctor of(int32 moref) { this.moref = moref; }
+    public comptime Metric<HostSystem> CPU_USAGE_AVERAGE = Metric.of(counter: 2);
+}
+
+type enum Interval { Realtime, FiveMinutes }
+
+type resource TypedPerfQuery<E> {
+    DynamicArray<E> entities;
+    DynamicArray<int32> metrics;
+    Interval interval;
+    int32 samples;
+    public ctor over(ref DynamicArray<E> entities) when [E: Copyable<E>] {
+        this.entities = copy entities; this.interval = Interval::Realtime; this.samples = 0;
+    }
+    public fn ref TypedPerfQuery<E> metric(Metric<E> m) { this.metrics.add(item: m.id()); return this; }
+    public fn ref TypedPerfQuery<E> every(Interval interval) { this.interval = interval; return this; }
+    public fn ref TypedPerfQuery<E> latest(int32 n) { this.samples = n; return this; }
+    public const fn int32 metricCount() { return cast<int32>(this.metrics.length()); }
+    public fn Result<PerfResult, PerfError> fetch(ref PerfClient perf) {
+        if (this.metricCount() == 0 || perf.id() == 0) { return Result::Err(error: PerfError.of(code: 1)); }
+        return Result::Ok(value: PerfResult.of(series: this.metricCount() * 2));
+    }
+}
+
+type value PerfError implements Error {
+    int32 code;
+    public ctor of(int32 code) { this.code = code; }
+    public const fn string message() { return "perf query failed (${this.code})"; }
+}
+type value PerfResult { public int32 series; public ctor of(int32 series) { this.series = series; } }
+
+type resource PerfClient {
+    int32 session;
+    public ctor connect() { this.session = 1; }
+    public const fn int32 id() { return this.session; }
+}
+type resource AppError implements Error {
+    string text;
+    public ctor msg(string message) { this.text = give message; }
+    public const fn string message() { return copy this.text; }
+}
+
+fn Result<PerfResult, AppError> sample(ref PerfClient perf, ref DynamicArray<VirtualMachine> vms) {
+    TypedPerfQuery<VirtualMachine> q = TypedPerfQuery.over(entities: ref vms);
+    q.metric(m: VirtualMachine::CPU_USAGE_AVERAGE)
+     .metric(m: VirtualMachine::MEM_CONSUMED_AVERAGE)
+     .metric(m: VirtualMachine::DISK_USAGE_AVERAGE)
+     .every(interval: Interval::Realtime)
+     .latest(n: 1);
+    PerfResult result = match (q.fetch(perf: ref perf)) {
+        case Ok(value: r): r;
+        case Err(error: e): { return Result::Err(error: AppError.msg(message: e.message())); }
+    };
+    return Result::Ok(value: PerfResult.of(series: result.series + 1));
+}
+
+fn uint8 main() {
+    DynamicArray<VirtualMachine> vms = DynamicArray.empty();
+    vms.add(item: VirtualMachine.of(moref: 7));
+    PerfClient perf = PerfClient.connect();
+    if (HostSystem::CPU_USAGE_AVERAGE.id() != 2) { return 1; }
+    return match (sample(perf: ref perf, vms: ref vms)) {
+        case Ok(value: r): cast<uint8>(r.series);       // three metrics → 6 series, + 1
+        case Err(error: e): 2;
+    };
+}

@@ -33647,7 +33647,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                         checkReach(dotType, spelled, "a construction", call->line, refFilePath(),
                                    rid && rid->qualifier && !rid->qualifier->empty());
                     if (_ctCheck) {   // a compile-time value is built by a `type value`'s ctor (KR-102)
-                        auto ci = _classes.find(dotType);
+                        auto ci = _classes.find(dotOnTypeInstance(ma, dotType, call));   // a generic's instance
                         CTValue self; std::string why;
                         if (ci != _classes.end() && !ctStructProto(ci->second.name, self, why)) {
                             const std::string m = ma->identifier && ma->identifier->value ? *ma->identifier->value : "";
@@ -33660,6 +33660,8 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 }
                 if (_ctCheck) {   // only a `type value`'s methods run at compile time (KR-102)
                     auto ci = _classes.find(exprClass(ma->expression));
+                    const std::string unpinned = ci == _classes.end() ? unpinnedCtorReceiver(ma->expression) : "";
+                    if (!unpinned.empty()) { ctRefuse(unpinned, call->line); return "0"; }
                     if (ci == _classes.end() || ci->second.kind != TypeKind::Value || ci->second.isIntrinsicColl) {
                         ctRefuse(ctNotValueMethod(ma->identifier && ma->identifier->value ? *ma->identifier->value
                                                                                           : "?"), call->line);
@@ -43421,6 +43423,27 @@ std::string CEmitter::dotOnTypeInstance(MemberAccessNode* recv, const std::strin
     return typeName;
 }
 
+// A generic's ctor with nothing to name its instance — no turbofish, no destination of that template, no argument to
+// infer it from: `Box.of(v: 1)` in `int32 n = Box.of(v: 1).get();`.
+std::string CEmitter::unpinnedCtor(const std::string& disp, const std::string& method)
+{
+    return "cannot tell which `" + disp + "` to construct — give the type arguments (`" + disp + "::<...>." + method
+         + "(...)`) or annotate the target so they can be inferred";
+}
+
+// `receiver` is such a ctor: then the receiver has no type because its instance could not be pinned, and that, not
+// the method called on it, is the mistake to report (at run time and at compile time alike). "" otherwise.
+std::string CEmitter::unpinnedCtorReceiver(SharedExpression receiver)
+{
+    auto* rinv = dynamic_cast<InvocationNode*>(receiver.get());
+    auto* rma = rinv ? dynamic_cast<MemberAccessNode*>(rinv->expression.get()) : nullptr;
+    std::string tmpl;
+    if (!rma || !rma->identifier || !rma->identifier->value || !isTypeReceiver(rma, tmpl)
+        || !_genericTypeParams.count(tmpl) || _classes.count(dotOnTypeInstance(rma, tmpl, rinv))) return "";
+    auto* rid = dynamic_cast<IdentifierNode*>(rma->expression.get());
+    return unpinnedCtor(rid && rid->value ? *rid->value : demangleForDisplay(tmpl), *rma->identifier->value);
+}
+
 // `Type.name(args)` — a dot-on-type constructor call (the receiver names a TYPE, per `isTypeReceiver`).
 // Distinct from `Type::staticFn()` (a static fn stays `::`) and `Enum::Variant` (stays `::`): dot-on-type
 // is the constructor spelling, so it resolves ONLY to a registered `ctor`. Reaches the SAME C as the M2
@@ -43456,9 +43479,7 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
         else if (_refusedTypeArgSites.count(reportPath(diagFile()) + ":" + std::to_string(call->line)))
             ;   // the target's type argument was refused on this line — that IS the mistake (registerGenericTypeInst)
         else if (!deferUnknownWhileProbing(DK_DotCtor))
-            unsupported(("cannot tell which `" + disp + "` to construct — give the type arguments (`"
-                         + disp + "::<...>." + method + "(...)`) or annotate the target so they can be "
-                         "inferred").c_str(), call);
+            unsupported(unpinnedCtor(disp, method).c_str(), call);
         return "0";
     }
     if (!stci) { unsupported(("unknown type in constructor call `" + disp + "`").c_str(), call); return "0"; }
@@ -44197,12 +44218,15 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             if (auto* rma = dynamic_cast<MemberAccessNode*>(rinv->expression.get()))
                 if (rma->expression && rma->identifier && rma->identifier->value)
                     viewWhy = missingViewCause(exprClass(rma->expression), *rma->identifier->value);
+        const std::string unpinned = unpinnedCtorReceiver(receiver);
         if (isGlobalHeapCall(receiver.get()) && _globalAllocator.empty())
             unsupported("this program declares no `@globalAllocator`, so `globalHeap::<…>()` names nothing — "
                         "declare `@globalAllocator type resource <Pool> implements GlobalHeap` "
                         "(SPEC *Global allocator*)", call);
         else if (!viewWhy.empty())
             unsupported(viewWhy.c_str(), call);
+        else if (!unpinned.empty())
+            unsupported(unpinned.c_str(), call);
         else if (!rk.empty())
             unsupported(("`" + rk + "` has no method `" + method + "` — no contract that declares it is "
                          "implemented for `" + rk + "` (an interpolation hole needs `Formattable`, a `Map` key "

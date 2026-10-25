@@ -4764,8 +4764,8 @@ a stack value uses `Counter.make(start: 40)`, not `new Counter.make(...)`. A con
 `value` copies, a `resource` moves); use a local for a `ref`/`out` parameter. On a **generic** type the argument
 position pins the instance just as a declaration does: the parameter's type is the destination
 (`take(b: Box.empty())` at a `Box<int32>`), and with no destination the constructor's own arguments bind its
-type parameters (`generic(b: Box.of(v: x))`, `Box.of(v: 8).get()`). <!-- test: generic_ctor_arg_infer -->
-<!-- xfail: generic_ctor_uninferable -->
+type parameters (`generic(b: Box.of(v: x))`, `Box.of(v: 8).get()`). With neither, the constructor is refused as <!-- test: generic_ctor_arg_infer -->
+the mistake, the receiver of a method call included ("cannot tell which `Tag` to construct"). <!-- xfail: generic_ctor_uninferable, generic_ctor_uninferable_receiver -->
 
 `new` builds an **enum** on the heap with the variant's own spelling — `Shared<Geo> g = new Geo::Circle(r: 4);`
 (and `new Geo::Point()` for a payload-less one). <!-- test: new_enum_variant --> A value is never converted into
@@ -5821,6 +5821,13 @@ fn void demo() {
   cannot hold, a fallible ctor, a ctor the reader may not call, and an initializer of another type. <!-- xfail: comptime_value_fallible_ctor, comptime_value_private_ctor, comptime_value_type_mismatch -->
   At run time the constant reads as a value: an operator or a `const fn` gets a copy, and a method that is
   not `const fn`, a `ref` argument or a field store is refused — it is read-only storage. <!-- xfail: comptime_value_mutate, comptime_value_write -->
+- **A generic value type** is a value type like any other: `public comptime Metric<VirtualMachine> CPU_USAGE_AVERAGE = <!-- test: comptime_typed_metric, comptime_generic_value -->
+  Metric.of(counter: 2);`. A bare ctor's instance is named as at run time — by a turbofish on the type
+  (`Metric::<VirtualMachine>.of(…)`), else by the type of the place it is built for: the constant itself, a local,
+  a `return`, an argument, a field, an assignment — which is the one source a phantom parameter like `E` has. Its
+  members run with the type arguments bound, so `T` in `Box<int32>` is `int32` at compile time too, and an instance
+  whose fields are not compile-time values is refused naming the field's actual type. With nothing to name the <!-- xfail: comptime_generic_value_field -->
+  instance, the ctor is refused with the run-time sentence. <!-- xfail: comptime_generic_value_unpinned -->
 - **One rule at every scope.** A module, a type and a local `comptime` are folded by the same interpreter, so
   they take the same initializers and refuse the same ones — a float, a table, a `comptime fn` call, a <!-- test: comptime_type_parity, comptime_named_args -->
   later-declared constant and a struct's `sizeof` or `alignof` work at all three. Until `0.9.444` a type's <!-- test: comptime_layout -->

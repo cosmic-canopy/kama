@@ -1,0 +1,5 @@
+// A bare generic ctor with nothing to name its instance: `Tag`'s `E` appears in no argument, and an `int32` constant is
+// no `Tag<…>`. Refused with the run-time sentence, where it used to say "unknown identifier `Tag`".
+type value Tag<E> { int32 v; public ctor of(int32 v) { this.v = v; } public const fn int32 id() { return this.v; } }
+comptime int32 N = Tag.of(v: 1).id();
+fn uint8 main() { return cast<uint8>(N); }

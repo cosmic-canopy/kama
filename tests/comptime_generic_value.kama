@@ -1,0 +1,44 @@
+// A `comptime` constant may hold an instance of a generic value type, as it holds any value type (KR-239). The
+// instance a ctor builds is named the run-time way: a turbofish on the type (`Tag::<Vm>.of`), else the
+// destination's declared type — a constant, a local, a `return`, an argument, a field, an assignment —
+// which is the only thing that can name a phantom parameter like `Tag`'s `E`. And an instance's members run with
+// its type arguments bound, so `T` inside `Box<int32>` is `int32` at compile time as at run time.
+type value Tag<E> {
+    int32 v;
+    public ctor of(int32 v) { this.v = v; }
+    public const fn int32 id() { return this.v; }
+}
+type value Vm { public int32 m; public ctor of(int32 m) { this.m = m; } public comptime Tag<Vm> CPU = Tag.of(v: 2); }
+
+type value Box<T> {
+    T v;
+    public ctor of(T v) { this.v = v; }
+    public const fn T get() { T kept = this.v; return kept; }   // a `T` local in an instance's body
+}
+
+// A value type holding an instance, built from a bare ctor in its field: the field's type is the destination.
+type value Pair {
+    Tag<Vm> a; Tag<Vm> b;
+    public ctor of(int32 x) { this.a = Tag.of(v: x); this.b = Tag.of(v: x + 1); }
+    public const fn int32 sum() { return this.a.id() + this.b.id(); }
+}
+
+comptime fn Tag<Vm> made(int32 v) { return Tag.of(v: v * 2); }          // a `return` is a destination
+comptime fn int32 take(Tag<Vm> t) { return t.id(); }
+
+comptime Tag<Vm> BARE = Tag.of(v: 3);                                     // module, bare
+comptime Tag<Vm> TURBO = Tag::<Vm>.of(v: 4);                             // receiver turbofish
+comptime fn int32 reassigned() { Tag<Vm> t = Tag.of(v: 1); t = Tag.of(v: 5); return t.id(); }   // an assignment
+comptime Box<int32> REAL = Box.of(v: 6);                                  // a real `T` field
+comptime int32 READ = Vm::CPU.id() + BARE.id();                           // a constant read by another: 5
+comptime Tag<Vm> FROM_FN = made(v: 7);                                    // 14
+comptime int32 ARG = take(t: Tag.of(v: 8));                               // an argument is a destination: 8
+comptime Pair PAIR = Pair.of(x: 10);                                      // 21
+comptime int32 RE = reassigned();                                          // 5
+
+fn uint8 main() {
+    comptime Tag<Vm> LOCAL = Tag.of(v: 9);                                // a local `comptime`
+    int32 total = BARE.id() + TURBO.id() + RE + REAL.get() + READ + FROM_FN.id() + ARG + LOCAL.id()
+                + PAIR.sum() + Vm::CPU.id();
+    return cast<uint8>(total);   // 3 + 4 + 5 + 6 + 5 + 14 + 8 + 9 + 21 + 2 = 77
+}

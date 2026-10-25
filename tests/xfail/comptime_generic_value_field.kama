@@ -1,0 +1,6 @@
+// A generic instance is a compile-time value only when its fields are: `Box<Shape>` holds an enum with payloads, so
+// its `T` field, shown as the `Shape` it is, refuses the constant.
+type value Box<T> { T v; public ctor of(T v) { this.v = v; } }
+type enum Shape { Circle(int32 r), Square }
+comptime Box<Shape> S = Box.of(v: Shape::Square);
+fn uint8 main() { return 0; }

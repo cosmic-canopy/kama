@@ -214,6 +214,8 @@ comptime_fn_uncalled_checked	comptime_fn_uncalled_checked.kama:4:35
 comptime_fn_untaken_branch	comptime_fn_untaken_branch.kama:4:26
 comptime_fn_visibility	comptime_fn_visibility.kama:8:21
 comptime_generic_member_checked	comptime_generic_member_checked.kama:5:42
+comptime_generic_value_field	comptime_generic_value_field.kama:5:24
+comptime_generic_value_unpinned	comptime_generic_value_unpinned.kama:4:19
 comptime_init_untaken_ternary	comptime_init_untaken_ternary.kama:2:30
 comptime_name_in_angles	comptime_name_in_angles.kama:5:0
 comptime_sizeof_extern_value	main.kama:8:19
@@ -229,6 +231,7 @@ comptime_value_private_ctor	comptime_value_private_ctor.kama:5:15
 comptime_value_resource	comptime_value_resource.kama:5:0 comptime_value_resource.kama:5:15
 comptime_value_type_mismatch	comptime_value_type_mismatch.kama:6:0
 comptime_value_write	comptime_value_write.kama:7:4 comptime_value_write.kama:8:4
+comptime_wrong_entity_metric	comptime_wrong_entity_metric.kama:13:4
 concurrent_map_in_lock_window	concurrent_map_in_lock_window.kama:8:0
 concurrent_map_key_not_sendable	concurrent_map_key_not_sendable.kama:11:18
 cond_function	cond_function.kama:5:4
@@ -583,6 +586,7 @@ generic_bare_use	generic_bare_use.kama:4:18 generic_bare_use.kama:4:26
 generic_bound_unsat	generic_bound_unsat.kama:11:23
 generic_ctor_incomplete_field	generic_ctor_incomplete_field.kama:11:0
 generic_ctor_uninferable	generic_ctor_uninferable.kama:9:25 generic_ctor_uninferable.kama:9:36
+generic_ctor_uninferable_receiver	generic_ctor_uninferable_receiver.kama:4:28
 generic_enum_field	generic_enum_field.kama:3:4
 generic_enum_implements_unmet	generic_enum_implements_unmet.kama:6:48
 generic_enum_missing_contract_method	generic_enum_missing_contract_method.kama:4:0

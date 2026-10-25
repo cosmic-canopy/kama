@@ -3742,6 +3742,8 @@ private:
     void             checkBaseInstall(ClassInfo& owner, SharedBlock body, int ctorLine);
     std::string emitMethodCall(InvocationNode* call, MemberAccessNode* recv);
     bool        isTypeReceiver(MemberAccessNode* ma, std::string& outType);            // X.name -> X is a type?
+    std::string unpinnedCtor(const std::string& disp, const std::string& method);   // "cannot tell which `Box` …"
+    std::string unpinnedCtorReceiver(SharedExpression receiver);   // that sentence when `receiver` is such a ctor
     std::string dotOnTypeInstance(MemberAccessNode* recv, const std::string& typeName,
                                   InvocationNode* call = nullptr); // X::<A>.name -> the instance
     std::string newVariantEnum(ObjectCreationNode* oc, const std::string& elem);
@@ -4122,7 +4124,16 @@ private:
     bool ctMemberVisible(const ClassInfo& ci, Visibility vis, const std::string& member);
     bool ctStructOperator(int token, const CTValue& lv, const CTValue* rv, int line, CTValue& out);
     bool ctStructEquals(const CTValue& a, const CTValue& b, int line, bool& eq);
-    bool ctCallArgs(InvocationNode* inv, CTEnv& env, std::vector<CTValue>& args, std::vector<std::string>& names);
+    bool ctCallArgs(InvocationNode* inv, CTEnv& env, std::vector<CTValue>& args, std::vector<std::string>& names,
+                    const std::function<std::string(const std::string&)>& destOf = nullptr);
+    // KR-239: the destination a bare generic ctor reads its instance from, at compile time as at run time.
+    std::string _ctReturnDest;   // the running member's or `comptime fn`'s return type, the destination of a `return`
+    std::string ctDest(SharedIdentifier type);   // `type`'s C type, its generic instance registered if none was yet
+    bool ctEvalTo(SharedExpression e, CTEnv& env, const std::string& dest, CTValue& out);
+    std::string ctParamDest(SharedParameterList params, const std::string& name, const ClassInfo* owner,
+                            const NsCtx* declared);
+    void ctEnterOwner(const ClassInfo& ci);      // run as `ci`: its scope, and an instance's type arguments bound
+    std::string ctGenericInstance(MemberAccessNode* ma, const std::string& tmpl, InvocationNode* inv);
     bool ctEvalCallExpr(InvocationNode* inv, CTEnv& env, CTValue& out);   // a member / ctor call through `.`
     bool ctStaticMember(const std::string& owner, const std::string& name, const std::string& shown,
                         InvocationNode* inv, CTEnv& env, int line, CTValue& out, bool& handled);

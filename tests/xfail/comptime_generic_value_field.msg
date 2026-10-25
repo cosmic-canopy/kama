@@ -1,0 +1,1 @@
+`Box<Shape>`'s field `v` is a `Shape`, which a compile-time value cannot hold

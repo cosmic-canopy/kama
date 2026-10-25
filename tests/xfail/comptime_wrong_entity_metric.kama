@@ -1,0 +1,15 @@
+// A host's counter given to a query over virtual machines: `Metric<HostSystem>` and `Metric<VirtualMachine>` are two
+// types, so the typed query refuses it at compile time (tests/comptime_typed_metric is the program that builds).
+type value Metric<E> { public int32 counter; public ctor of(int32 counter) { this.counter = counter; } }
+type value VirtualMachine { public comptime Metric<VirtualMachine> CPU_USAGE_AVERAGE = Metric.of(counter: 2); }
+type value HostSystem { public comptime Metric<HostSystem> CPU_USAGE_AVERAGE = Metric.of(counter: 2); }
+type resource TypedPerfQuery<E> {
+    int32 n;
+    public ctor make() { this.n = 0; }
+    public fn ref TypedPerfQuery<E> metric(Metric<E> m) { this.n = this.n + m.counter; return this; }
+}
+fn uint8 main() {
+    TypedPerfQuery<VirtualMachine> q = TypedPerfQuery.make();
+    q.metric(m: HostSystem::CPU_USAGE_AVERAGE);
+    return 0;
+}

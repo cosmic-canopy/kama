@@ -1,0 +1,4 @@
+// A generic's ctor as a method's receiver, with nothing to name its instance: the mistake is the ctor, not the
+// method — this used to say "cannot resolve the receiver of `id`".
+type value Tag<E> { int32 v; public ctor of(int32 v) { this.v = v; } public const fn int32 id() { return this.v; } }
+fn uint8 main() { int32 n = Tag.of(v: 1).id(); return cast<uint8>(n); }
