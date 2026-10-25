@@ -1974,12 +1974,21 @@ private:
     // `scanCBodies` reads what the marked text calls into `_lockRegionEdges`, and `checkLockWindows` judges each region
     // whose mint reaches the runtime's acquire: it may reach no `@parks` body, no other lock, and no call whose target
     // the compiler cannot see. Read off the same graph `--no-heap` reads, so a contract call reaches every implementer.
-    struct LockRegion { int line = 0; std::string file; std::string host; std::vector<std::string> mints; };
+    // One region per scope carries both facts: the closing mints of a `borrow` (a lock window when one reaches the
+    // acquire) and the lasting accesses to `Shared` storage opened in it (the park rule, KR-3 step 4). A call that
+    // holds an access is a region of its own, around the call alone.
+    struct RegionAccess { std::string shown; std::string callee; int line = 0; std::string file; };   // callee: a call's
+    struct LockRegion { int line = 0; std::string file; std::string host; std::vector<std::string> mints;
+                        std::vector<RegionAccess> accesses; };
     std::map<int, LockRegion> _lockRegions;
     int _lockRegionCounter = 0;
-    std::vector<int> _openLockRegions;                                   // emission: the regions around this code
+    int scopeRegion(int line, int depth);                                // the innermost scope's region, made on first use
     std::map<int, std::map<std::string, CallEdge>> _lockRegionEdges;     // region -> what its text calls
     std::map<int, int> _lockRegionBlind;                                 // region -> a blind call's line
+    std::map<int, std::string> _lockRegionBody;                          // region -> the C body its text is in
+    std::set<int> _lockRefused;                                          // regions `checkLockWindows` already refused
+    int _blindCallee = 0;   // the line of a call through a `fnptr` local or static: its call region is blind
+    std::string _windowShown;   // the host a window names as written (`this.xs`), for the park rule's sentence
     std::map<std::string, int> _parksBlind;                              // body -> a call with no seen target
     std::map<std::string, std::map<std::string, CallEdge>> _parksSlotEdges;   // proven `@noheap` slots, which park
     void openLockRegion(const std::string& host, const std::string& mintC, int line, int depth);
@@ -1992,6 +2001,8 @@ private:
     bool _lockGroupPending = false;            // the region's begin marker waits for the group's end
     void noteParksBlind(int line);
     void checkLockWindows();
+    // KR-3 step 4: on an isolate that runs fibers, a lasting access to `Shared` storage may reach no fiber switch.
+    void checkParkWindows();
     bool _spawnsThreads = false;
     void noteThreadSpawn();
     // The ONE spelling of a deep copy (`T__copy(&(x))`), so the intrinsic copy's fact is recorded in one place.

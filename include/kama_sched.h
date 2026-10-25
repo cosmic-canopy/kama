@@ -219,12 +219,26 @@ static inline kama_fiber* kama__sched_self(const char* where, size_t n) {
     return f;
 }
 static inline void kama__sched_turn(kama_sched* s);
+// The park rule's run-time depth (KR-3 step 4, fibers.md decision 3). The compiler refuses a park inside a lasting
+// access to `Shared` storage and inside an `@onPanic` region, so the fiber giving up the thread holds neither — which is
+// why a switch saves no state. A debug build checks it at both ways a fiber gives the thread up.
+static inline void kama__sched_parkClean(void) {
+#ifndef NDEBUG
+    static const char acc[] = "fiber scheduler: a park inside an open access to a `Shared` value (the park rule missed it)";
+    if (kama_accesses.head) kama_panic(kama_string_lit(acc, sizeof acc - 1));
+#if defined(KAMA_ONPANIC)
+    static const char rec[] = "fiber scheduler: a park inside an `@onPanic` region (the park rule missed it)";
+    if (kama_recover_top) kama_panic(kama_string_lit(rec, sizeof rec - 1));
+#endif
+#endif
+}
 // Park the running fiber until something unparks it, or until `deadline` (a kama_now_mono_ns time; 0 for none).
 // 1 when it was woken, 0 when the deadline passed. On the root, the park runs the loop until then.
 static inline int kama_sched_parkUntil(uint64_t deadline) {
     static const char msg[] = "fiber scheduler: a park outside a fiber";
     kama_fiber* f = kama__sched_self(msg, sizeof msg - 1);
     kama_sched* s = (kama_sched*)f->sched;
+    kama__sched_parkClean();
     f->parked = 1; f->timedOut = 0;
     if (deadline) { f->deadline = deadline; kama__sched_timerAdd(s, f); }
     if (f == &kama__fibers.root) { while (f->parked) kama__sched_turn(s); }
@@ -237,6 +251,7 @@ static inline void kama_sched_yield(void) {
     static const char msg[] = "fiber scheduler: a yield outside a fiber";
     kama_fiber* f = kama__sched_self(msg, sizeof msg - 1);
     if (f == &kama__fibers.root) kama_panic(kama_string_lit(msg, sizeof msg - 1));
+    kama__sched_parkClean();
     kama__sched_push((kama_sched*)f->sched, f);
     kama_fiber_switch(f, &kama__fibers.root);
 }

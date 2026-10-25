@@ -1,6 +1,6 @@
 # Fibers and thread-per-core — design (KR-3)
 
-**Status: ruled 2026-10-22, all fifteen decisions as recommended, each to be verified as it lands.** Nothing here is built yet; the lock window it builds on shipped first (`Locked<T>`, `@parks` and the walk, `0.9.730`–`0.9.733`, SPEC *Shared mutable state*). This is the in-flight campaign document the
+**Status: ruled 2026-10-22, all fifteen decisions as recommended, each to be verified as it lands.** Steps 1–4 of §8 are built (`0.9.737`–`0.9.743`), each recorded there; the lock window they build on shipped first (`Locked<T>`, `@parks` and the walk, `0.9.730`–`0.9.733`, SPEC *Shared mutable state*). This is the in-flight campaign document the
 [ROADMAP_DETAIL](../ROADMAP_DETAIL.md#s6-fibers) table names: it is deleted when the work ships, once
 [SPEC.md](../SPEC.md) carries the record. The numbered decisions are listed again, one line each, in
 ROADMAP_DETAIL §6, where their rulings are recorded. Facts were read from the tree at `0.9.719` and from primary
@@ -201,12 +201,22 @@ or argument points into one.
   fnptr` does.
 - **A foreign call does not park.** It blocks, which is decision 8's subject.
 - **Only code a fiber entry reaches is held to the rule**, so a program with no `spawn fiber` loses nothing.
-  *Correction owed a ruling (found building step 3, 2026-10-25):* as built, fiber 0 parks too — a `scope`'s wait for its
-  fibers and a `join` run the loop from the thread's own context (decision 1) — so a window on the root that holds one,
-  `borrow sh.items as v { scope { spawn fiber f(); } }`, is reached by no fiber entry and escapes this sentence.
-  Proposed: the roots are the fiber entries and every isolate entry, `main` included, whose reach includes a
-  `spawn fiber`. Until step 4 ships, a park inside a `Shared` window can be written, and a probe shows a valid-looking
-  program then panicking falsely (ROADMAP_DETAIL §6, *Step 4*).
+  *As built (`0.9.743`), ruled 2026-10-25 on two corrections found building step 3:*
+  - **The roots** are every isolate entry — `main`, a `spawn` or `parallel` trampoline, an exported body, a foreign
+    entry — whose reach includes a fiber spawn, not only the fiber entries: fiber 0 parks too (a `scope`'s wait and a
+    `join` run the loop on the thread's own context, decision 1), so a window on the root that held one escaped the
+    sentence above. A probe on `0.9.741` showed the cost: the root parked in `join` inside its window over a `Shared`
+    while a fiber that never parked grew the same value, and the program built and then panicked at run time. Two
+    windows that both parked left the access record pointing into a dead frame, and the program crashed.
+  - **The leaf** is a real fiber switch (`kama_fiber_switch`), read off the call graph, not every `@parks` seam. Since
+    `Locked<T>` (KR-226), `@parks` marks every *wait* — `println`, stdio, `sleep` — which a lock window must refuse and
+    a fiber does not: a call that only blocks the thread lets no other fiber run. Today the switch is reached by a
+    `join`, a `Fiber`'s drop and a `scope`'s close; steps 5–8 make sockets, channels and files switch, and the rule
+    follows them with no change. Rust's lint draws the same line, at `.await` and never at a blocking call.
+  - A region is what the run-time record holds: a window over storage a `Shared` may hold, to the end of its scope,
+    and a call that holds a field, around the call alone — judged before `elideCallAccesses` reduces an access, since
+    that reduction assumes nothing else runs during the call. A spawn is a cut: it queues the child and switches to
+    nothing. `checkParkWindows` (kama.cemit.cpp) shares the lock window's regions, one per scope.
 
 What this buys:
 - **No conflict across a park is possible.** That is the iterator-invalidation guarantee kama already gives,
@@ -651,12 +661,12 @@ read off this document.
 | 1 | ✅ `0.9.737`. The switch and stacks, with sanitizer annotations and the overflow handler, tested from C (`tests/fiber_switch.d`); the handler also serves isolates (`trap/isolate_stack_overflow`). The per-thread and per-process state is defined once, by the emitter, not in `kama_runtime.h` | `include/kama_fiber.h` (new), `kama_isolate.h`, `src/kama.cemit.cpp` | M |
 | 2 | ✅ `0.9.738`. The scheduler: ready queue, park/unpark, the timer heap, internal registration per decision 6, a remote queue on the Waker, tested from C (`tests/fiber_sched.d`, on this host's arm and on the Poller arm). Its own header, as the isolate seam is, so a program with sockets and no fibers never compiles it. epoll registers once edge-triggered and waits with `epoll_pwait2`; kqueue batches every change into the next wait. Windows and `poll(2)` go through the public `Poller`, holding a socket only while a fiber waits on it: on AFD a park costs its one IOCTL plus the poll state's allocation, which step 8 may pool | `include/kama_sched.h` (new), `kama_fiber.h` | L |
 | 3 | ✅ `0.9.741`. `spawn fiber`, the `scope` list of live fibers, `Fiber<R>` and `join`, and `ref` bundles rooted outside the loop; fiber 0 parks by running the loop, and an isolate frees its scheduler when it ends | `src/kama.y`, `src/kama.cemit.cpp`, `docs/grammar.bnf`, `tree-sitter-kama/` (+ the Zed and Helix pins) | L |
-| 4 | The park rule. `@parks`, std's 64 marks and the lock-window walk shipped with `Locked<T>` (`0.9.731`–`0.9.733`: `checkLockWindows`, region markers, kept `@noheap` slot edges, blind-call facts); this step adds the leaf rule for a window over a `Shared`, a call access and `@onPanic`, the job-entry rule, and the debug assert | `src/kama.cemit.cpp` | S |
-| 5 | Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines, deregistration on `give`, and DEL before close | `lib/std/net/`, `kama_os.h` | L |
+| 4 | ✅ `0.9.743`. The park rule: on an isolate that runs fibers, no window over `Shared` storage and no call holding a field reaches a fiber switch or a blind call (`checkParkWindows`, on the lock window's regions); no park inside `@onPanic`; the debug assert in the park and the yield. A `kama_vsize`/`kama_valign` slot now names its vtable type, so a drop of an `Owned<Error>` is no longer a blind call to either walk. The job-entry rule moved to row 9, where job entries come to exist | `src/kama.cemit.cpp`, `kama_sched.h` | S |
+| 5 | Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines, deregistration on `give`, and DEL before close. | `lib/std/net/`, `kama_os.h` | L |
 | 6 | Channels fiber-aware (waiter lists, send-side), and joins park | `include/kama_channel.h`, `lib/std/concurrent/` | M |
 | 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-7, KR-202) | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |
 | 8 | Windows: the high-resolution timer, and completion I/O where readiness cannot serve (`TransmitFile`, KR-229) | `kama_os.h` | M |
-| 9 | The job pool (decision 5) | `lib/std/concurrent/` | M |
+| 9 | The job pool (decision 5), and the job-entry rule over step 4's walk: a job entry that reaches a fiber switch is refused | `lib/std/concurrent/` | M |
 | 10 | wasm over JSPI (decision 4) | `src/kama.driver.cpp`, `lib/std/net/web/`, `kama_fiber.h` | L |
 | 11 | lldb OS plugin; SPEC *Concurrency* gains *Fibers*; *Why not green threads* rewritten; this file deleted | `include/kama_lldb.py`, `docs/` | M |
 

@@ -1,0 +1,20 @@
+// A call through a `fnptr` has a target no graph can see, so inside a window over `Shared` storage, on an isolate that
+// runs fibers, it may switch (KR-3 step 4, decision 3's blind-call rule). Call a named function, or call after the window.
+import { std::concurrent::Fiber, std::memory::Shared, std::collections::DynamicArray };
+fnptr int32 Op(int32 x);
+fn int32 twice(int32 x) { return x * 2; }
+fn void tick(int32 n) { }
+type resource Box {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray::<int32>.empty(); this.xs.add(item: 1); }
+    public fn int32 apply(Op op) {
+        int32 t = 0;
+        foreach (int32 x in this.xs) { t = t + op(x: x); }
+        return t;
+    }
+}
+fn uint8 main() {
+    scope { spawn fiber tick(n: 1); }
+    Shared<Box> b = new Box.make();
+    return cast<uint8>(b.apply(op: twice));
+}

@@ -1,0 +1,24 @@
+// The park rule (KR-3 step 4): a window over storage a `Shared` holds may not reach a fiber switch. `Box.sum` iterates
+// `this.xs` — reached through the `Shared` the fiber was handed — and parks in `join` inside the loop, so a second fiber
+// could grow `xs` and free the buffer the loop is reading. Fibers share one access record per thread, so the run-time
+// check alone cannot be trusted across a park: two windows interleaved there left it pointing into a dead frame.
+import { std::concurrent::Fiber, std::concurrent::join, std::memory::Shared, std::collections::DynamicArray };
+fn int32 child(int32 n) { return n; }
+type resource Box {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray::<int32>.empty(); this.xs.add(item: 1); this.xs.add(item: 2); }
+    public fn int32 sum() {
+        int32 total = 0;
+        foreach (int32 x in this.xs) {
+            Fiber<int32> f = spawn fiber child(n: x);
+            total = total + join(fiber: give f);
+        }
+        return total;
+    }
+}
+fn int32 walk(Shared<Box> s) { return s.sum(); }
+fn uint8 main() {
+    Shared<Box> b = new Box.make();
+    Fiber<int32> w = spawn fiber walk(s: copy b);
+    return cast<uint8>(join(fiber: give w));
+}

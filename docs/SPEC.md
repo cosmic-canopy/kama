@@ -1279,6 +1279,9 @@ fn int32 tick(UnsafePtr state) { … }             // any panic inside, at any d
   anything it reaches, walked transitively over the same call graph the no-heap proof uses. Recovery is a <!-- xfail: onpanic_not_noheap, onpanic_destructible_local, onpanic_destructible_callee -->
   longjmp from the fault to the prologue, which frees nothing and runs no destructor; the gate is what
   makes it sound rather than merely fast. Keep the region's state behind the pointer the callback receives.
+- **No park inside a region**: a recovered panic is a longjmp, and one across a fiber switch would land on another
+  fiber's stack, so a region that reaches a `join`, a `Fiber`'s drop or a `scope`'s close is refused with the chain <!-- xfail: onpanic_park_join -->
+  (KR-3 decision 15).
 - **Regions nest** (each saves the previous slot), and the slot is **per thread**, so a foreign audio
   thread's region never sees another isolate's. A region is a *body*: on a `fnptr` type, a constructor or
   a destructor it is refused. <!-- xfail: onpanic_on_fnptr -->
@@ -1642,6 +1645,15 @@ What the model counts:
   - A program with no `Shared` is unchanged.
 - **`@onPanic`.** A region's recovery restores the record as the region found it, so a region may hold a borrow.
   <!-- test: shared_borrow_extent, onpanic_shared_borrow -->
+- **Fibers.** On an isolate that runs fibers — any code its entry, `main` included, reaches once it reaches a
+  `spawn fiber` — a lasting access may not reach a **park**, a call that lets another fiber run: a `join`, a `Fiber`'s <!-- xfail: park_window_join, park_window_root, park_window_scope_close, park_window_fiber_drop -->
+  drop, a `scope`'s close. Fibers share the thread's record, which ends accesses in the order they began; a fiber that
+  parked inside one would let another change what it holds. It is a compile error naming the chain, for a window and <!-- xfail: park_call_access -->
+  a call that holds a field alike, and so is a call through a `fnptr` inside one, whose target could park. A call that <!-- xfail: park_window_fnptr -->
+  only blocks the thread, such as `println` or a blocking read, is no park: no other fiber runs. A spawn is none either,
+  so a window may spawn into a `scope` opened outside it, and an isolate that runs no fibers is not held to the rule. <!-- test: park_rule_allowed -->
+  Take what is needed out of the window and wait after it; a broadcast takes the handles out of the list first. Rust's
+  `RefCell` held across an `.await` panics at run time, and a lint (`await_holding_refcell_ref`) is all that warns.
 
 Rust's `Rc` forbids mutation without a `RefCell`, whose borrow flag panics on a conflicting `borrow_mut` for the whole
 value. Swift traps an overlapping access to a class property at run time, as kama does here.
@@ -7090,7 +7102,9 @@ block. That matches the coarse-isolate model above: roughly one isolate per core
 item. A conditional child puts the `if` *outside* the scope <!-- test: scope_spawn_conditional -->,
 and per-item work over a container is `parallel_for`. A **fiber** child, `spawn fiber work(job: give j);`, is the
 one exception: it may sit anywhere in its scope's body, loops included, because the scope keeps a runtime list of <!-- test: fiber_scope_basic, fiber_spawn_loop -->
-its live fibers and its closing brace waits for the list to empty (KR-3, being built: `docs/design/fibers.md`).
+its live fibers and its closing brace waits for the list to empty (KR-3, being built: `docs/design/fibers.md`). That
+wait is a park, so a scope with fibers may not close inside a window over `Shared` storage (*Smart pointers*, the
+access model's **Fibers** item).
 
 #### What a child may borrow
 

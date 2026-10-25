@@ -1047,6 +1047,7 @@ onpanic_destructible_local	onpanic_destructible_local.kama:11:0
 onpanic_missing_recover	onpanic_missing_recover.kama:4:0
 onpanic_not_noheap	onpanic_not_noheap.kama:4:0
 onpanic_on_fnptr	onpanic_on_fnptr.kama:2:21
+onpanic_park_join	onpanic_park_join.kama:12:0 onpanic_park_join.kama:8:0
 op_compare_usize	op_compare_usize.kama:1:51
 op_compound	op_compound.kama:1:47
 op_int_float	op_int_float.kama:1:52
@@ -1092,6 +1093,12 @@ parfor_ref_const_ref	parfor_ref_const_ref.kama:7:4
 parfor_return	parfor_return.kama:7:21
 parfor_this	parfor_this.kama:11:8
 parfor_write_capture	parfor_write_capture.kama:11:4
+park_call_access	park_call_access.kama:12:0
+park_window_fiber_drop	park_window_fiber_drop.kama:8:0
+park_window_fnptr	park_window_fnptr.kama:12:0
+park_window_join	park_window_join.kama:14:0
+park_window_root	park_window_root.kama:13:0
+park_window_scope_close	park_window_scope_close.kama:8:0
 parks_on_contract_member	parks_on_contract_member.kama:3:43
 parks_on_extern	parks_on_extern.kama:3:7
 parks_on_fnptr	parks_on_fnptr.kama:2:7

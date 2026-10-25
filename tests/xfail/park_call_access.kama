@@ -1,0 +1,17 @@
+// A call handed a field of a `Shared` value holds it for the call (SPEC *Accesses that last a call*), and a park inside
+// the call is a park inside that access (KR-3 step 4): `wait` joins while it holds `this.xs`.
+import { std::concurrent::Fiber, std::concurrent::join, std::memory::Shared, std::collections::DynamicArray };
+fn int32 child(int32 n) { return n; }
+fn int32 wait(ref DynamicArray<int32> xs) {
+    Fiber<int32> f = spawn fiber child(n: 1);
+    return join(fiber: give f) + cast<int32>(xs.length());
+}
+type resource Box {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray::<int32>.empty(); }
+    public fn int32 viaRef() { return wait(xs: ref this.xs); }
+}
+fn uint8 main() {
+    Shared<Box> b = new Box.make();
+    return cast<uint8>(b.viaRef());
+}

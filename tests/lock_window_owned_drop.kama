@@ -1,0 +1,16 @@
+// Dropping an `Owned` contract value inside a lock window is legal: the drop reads the object's size from its vtable's
+// `kama_vsize` slot, which calls nothing. Through 0.9.742 that slot named no vtable type, so in a program with no
+// virtual class the call graph saw a slot with no target — a blind call — and the lock window refused every such drop
+// ("calls through a `fnptr` or a slot whose target the compiler cannot see"). The park rule (KR-3 step 4) would have
+// refused the same drop in every window over `Shared` storage.
+import { std::concurrent::Locked, std::memory::Owned };
+type contract Shape for value { const fn int32 area(); }
+type value Sq implements Shape { int32 s; public ctor make(int32 s) { this.s = s; } public const fn int32 area() { return this.s * this.s; } }
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    borrow c.lock().value() as m { Owned<Shape> o = new Sq.make(s: 2); m.n = o.area(); }
+    int32 r = 0;
+    borrow c.lock().value() as m { r = m.n; }
+    return cast<uint8>(r);   // 4
+}

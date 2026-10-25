@@ -1,0 +1,14 @@
+// A `Fiber` handle dropped unjoined joins it, and the drop runs inside the window it was declared in (KR-3 step 4):
+// the switch is the destructor's, at the end of each pass. Join it, or hold it, outside the window.
+import { std::concurrent::Fiber, std::memory::Shared, std::collections::DynamicArray };
+fn int32 child(int32 n) { return n; }
+type resource Box {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray::<int32>.empty(); this.xs.add(item: 1); }
+    public fn void fire() { foreach (int32 x in this.xs) { Fiber<int32> f = spawn fiber child(n: x); } }
+}
+fn uint8 main() {
+    Shared<Box> b = new Box.make();
+    b.fire();
+    return 0;
+}

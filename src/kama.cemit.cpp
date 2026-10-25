@@ -6754,6 +6754,8 @@ void CEmitter::popScope()
     if (_scopes.back().isLoopBoundary && !_scopes.back().exitLabel.empty()) _loopExitPending = _scopes.back().exitLabel;
     for (auto& l : _scopes.back().locals) _moveState.erase(l.cVar);
     restoreLocalBindings(_scopes.back().bindings);
+    // A region ends with its scope, after the cleanup every caller emits first (KR-226, KR-3 step 4).
+    if (const int lr = _scopes.back().lockRegion) *_out << "/*kama:lw-" << lr << "*/\n";
     _scopes.pop_back();
 }
 
@@ -6893,21 +6895,33 @@ void CEmitter::emitUnwindAll(int depth)
 void CEmitter::openLockRegion(const std::string& host, const std::string& mintC, int line, int depth)
 {
     if (_scopes.empty()) return;
-    int& lr = _scopes.back().lockRegion;
-    if (lr) { _lockRegions[lr].mints.push_back(mintC); return; }   // a second closing mint in one `borrow`
-    lr = ++_lockRegionCounter;
-    LockRegion r; r.line = line; r.file = diagFile(); r.host = host; r.mints.push_back(mintC);
-    _lockRegions[lr] = r;
-    _openLockRegions.push_back(lr);
-    if (!_lockGroupPending) { indent(depth); *_out << "/*kama:lw+" << lr << "*/\n"; }
+    const int lr = scopeRegion(line, depth);
+    if (_lockRegions[lr].mints.empty()) _lockRegions[lr].host = host;
+    _lockRegions[lr].mints.push_back(mintC);   // a second closing mint in one `borrow` joins the first's region
 }
 
-// A call whose target the compiler cannot see — a `fnptr`, a bound function — may wait or take a lock (KR-226).
+// The innermost scope's region, opened on first use: a `borrow`'s closing mint, or a lasting access to `Shared`
+// storage (KR-3 step 4), whichever comes first. It ends where the scope is popped, after its cleanup has run, so what
+// the cleanup calls (a `scope`'s wait, a local's destructor) is inside it.
+int CEmitter::scopeRegion(int line, int depth)
+{
+    int& lr = _scopes.back().lockRegion;
+    if (lr) return lr;
+    lr = ++_lockRegionCounter;
+    LockRegion r; r.line = line; r.file = diagFile();
+    _lockRegions[lr] = r;
+    if (!_lockGroupPending) { indent(depth); *_out << "/*kama:lw+" << lr << "*/\n"; }
+    return lr;
+}
+
+// A call whose target the compiler cannot see — a `fnptr`, a bound function — may wait or take a lock (KR-226), or
+// switch fibers (KR-3 step 4). It is charged to every region open around it in THIS function: an outlined
+// `parallel_for` body saves `_scopes` and starts its own, so a worker never charges its spawner's window.
 void CEmitter::noteParksBlind(int line)
 {
     if (_probingTemplate) return;
     if (!_currentFunc.empty()) _parksBlind.emplace(_currentFunc, line);
-    for (int r : _openLockRegions) _lockRegionBlind.emplace(r, line);
+    for (auto& sc : _scopes) if (sc.lockRegion) _lockRegionBlind.emplace(sc.lockRegion, line);
 }
 
 void CEmitter::recordDestructibleLocal(const std::string& cVar, const std::string& className, bool userName)
@@ -7279,7 +7293,8 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                     indent(depth + 1); *_out << p.cls << "* " << t << " = (" << p.cls << "*)&(" << rc << ");\n";
                     recvs.push_back(t);
                 }
-                const int gid = _lockRegionCounter + 1;   // the region the first mint below opens
+                // The region the first mint below opens — or the scope's own, should an access have opened it first.
+                const int gid = _scopes.back().lockRegion ? _scopes.back().lockRegion : _lockRegionCounter + 1;
                 indent(depth + 1); *_out << "/*kama:lgb:" << gid << ":" << pres.size() << "*/\n";
                 _lockGroupPending = true;
                 for (size_t k = 0; k < pres.size(); ++k) {
@@ -7382,7 +7397,7 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             const std::string gct = cTypeInInstance(mcls, mmi->returnType);
             // C8: every view a `borrow` makes is made together, before its places. One the group pass could not see
             // was reached through a binding of this same `borrow`, which does not exist yet when the views are made.
-            if (!_closingMintTemps.count(cm) && _scopes.back().lockRegion) {
+            if (!_closingMintTemps.count(cm) && _scopes.back().lockRegion && !_lockRegions[_scopes.back().lockRegion].mints.empty()) {
                 unsupported(("`" + unparseExpr(mrecv) + "` is reached through a binding of this same `borrow`, and the "
                              "views a `borrow` makes are made together, before any of its places exist — open a `borrow` "
                              "inside this one for it").c_str(), bn);
@@ -7568,7 +7583,8 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                 continue;
             }
             const bool preMinted = _preMintedAliases.count(alias) != 0;   // C8: the group pass declared it
-            if (!preMinted && _scopes.back().lockRegion && _classes.count(viewCType) && _classes[viewCType].closesWindow) {
+            if (!preMinted && _scopes.back().lockRegion && !_lockRegions[_scopes.back().lockRegion].mints.empty()
+                && _classes.count(viewCType) && _classes[viewCType].closesWindow) {
                 unsupported(("`" + unparseExpr(recvExpr) + "` is reached through a binding of this same `borrow`, and the "
                              "views a `borrow` makes are made together, before any of its places exist — open a `borrow` "
                              "inside this one for it").c_str(), bn);
@@ -7639,12 +7655,8 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
     // Same double-destruction guard as `scope`: a jump exit already ran the full cleanup on its way out.
     if (!(last && stmtIsJump(last)))
         emitScopeCleanup(_scopes.back(), depth + 1);
-    if (const int lr = _scopes.back().lockRegion) {
-        indent(depth + 1); *_out << "/*kama:lw-" << lr << "*/\n";
-        if (!_openLockRegions.empty() && _openLockRegions.back() == lr) _openLockRegions.pop_back();
-    }
     indent(depth); *_out << "}\n";
-    popScope();   // retires the aliases
+    popScope();   // retires the aliases, and ends the window's region
     for (const std::string& a : placeAliases) { _refParams.erase(a); _constLocals.erase(a); _refBindingOperand.erase(a); }
     if (bn->bindings)   // C8: the group pass's temporaries and pre-made aliases end with the window
         for (auto& b : *bn->bindings) {
@@ -19175,10 +19187,14 @@ void CEmitter::emitIfaceHandleFuncs(CollectionInfo& info, bool alloc)
     };
     const bool dispatches = ifaceDropCanDispatch(info.elemClass);
     auto dropObj = [&](int d) {
-        // `__vsize`/`__valign` are PROVEN slots: every one the compiler installs is a class's own `__vsize`/`__valign`,
-        // which reads a field of the object's vtable and calls nothing — so they carry the marker the call graph reads.
-        indent(d); *_out << "size_t kama_n = self->kama_vtbl->kama_vsize ? KAMA_NOHEAP_SLOT(self->kama_vtbl->kama_vsize)(self->kama_obj) : self->kama_vtbl->kama_size;\n";
-        indent(d); *_out << "size_t kama_a = self->kama_vtbl->kama_valign ? KAMA_NOHEAP_SLOT(self->kama_vtbl->kama_valign)(self->kama_obj) : self->kama_vtbl->kama_align;\n";
+        // `__vsize`/`__valign` name their vtable type (KAMA_SLOT, KR-39), so the call graph follows each to the class's
+        // own `__vsize`/`__valign`, which reads a field and calls nothing — and where no class installs one, nothing
+        // runs. Unnamed, a program with no virtual class saw a slot with no target: a blind call in every drop of an
+        // `Owned<Error>`, which a lock window and the park rule refuse.
+        indent(d); *_out << "size_t kama_n = self->kama_vtbl->kama_vsize ? KAMA_SLOT(" << info.elemClass
+                         << "_vtbl, self->kama_vtbl->kama_vsize)(self->kama_obj) : self->kama_vtbl->kama_size;\n";
+        indent(d); *_out << "size_t kama_a = self->kama_vtbl->kama_valign ? KAMA_SLOT(" << info.elemClass
+                         << "_vtbl, self->kama_vtbl->kama_valign)(self->kama_obj) : self->kama_vtbl->kama_align;\n";
         if (dispatches) {
             // KR-39: a slot the call graph resolves to every implementer's destructor (KAMA_SLOT, kama_runtime.h).
             indent(d); *_out << "if (self->kama_vtbl->kama_dtor) KAMA_SLOT(" << info.elemClass
@@ -27067,6 +27083,9 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                                         SharedArgumentList args, int srcLine,
                                         const std::string& trailingArg)
 {
+    // A call through a `fnptr` local or static names no body, so its call region is blind (KR-3 step 4). Taken here,
+    // before any argument is emitted, so a call nested in an argument never inherits it.
+    const int blindCallee = _blindCallee; _blindCallee = 0;
     // `cName` is a plain C identifier for a STATICALLY resolved callee, and an expression for the four
     // indirect forms (`(*f)`, a bindable's `((T)x.fn)`, `(r).vtbl->m`, `vptr->m`). The direct ones become
     // call-graph edges because they are in the C (buildCallGraph); the indirect ones are gated at their own
@@ -27075,7 +27094,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     _recvAccess = PendingAccess();
     const std::string localAlt = _localAlt;   // ...and the fast body to take when `this` was clean (emitDispatch)
     _localAlt.clear();
-    struct ArgAccess { AccessTarget t; bool modify; size_t pi; bool view; };
+    struct ArgAccess { AccessTarget t; bool modify; size_t pi; bool view; std::string shown; };   // shown: as written
     std::vector<ArgAccess> argAccesses;
     std::map<std::string, ArgumentNode*> byName;
     size_t named = 0;
@@ -27769,6 +27788,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     // `cleanup` attribute ends each as the statement expression closes, once the call's value is taken.
     std::string lead = leadArg;
     std::string accessSeq;
+    std::string heldShown;   // what the first access this call holds is to — set only when one is emitted
     if (!_probingTemplate && !_inNamedCtorBody && !_inDtorBody) {
         for (size_t pi = 0; pi < params.size(); ++pi) {
             const ParamSig& p = params[pi];
@@ -27781,7 +27801,8 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
             AccessTarget t; bool impure = false;
             if (accessTargetOf(f->second->expression, t, &impure)) {
                 if (!view && ownsNothing(t)) continue;
-                argAccesses.push_back({ t, view ? !isConstViewCType(p.className) : !p.isConst, pi, view });
+                argAccesses.push_back({ t, view ? !isConstViewCType(p.className) : !p.isConst, pi, view,
+                                        unparseExpr(f->second->expression) });
             }
             else if (impure)
                 unsupported(("this argument reaches a value a `Shared` may hold through `" + t.shown + "`, whose reading "
@@ -27820,11 +27841,15 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
             auto begin = [&](const AccessTarget& t, bool modify, const std::string& handed, const std::string& hcls) {
                 emitAccess(t, handed, "sizeof(*" + handed + ")", hcls, modify, modify);
             };
+            // What the call holds, for the park rule's sentence: the receiver's place, else the first argument as written.
+            auto held = [&](const std::string& w) { if (heldShown.empty()) heldShown = w.empty() ? std::string("a `Shared` value") : "`" + w + "`"; };
             if (recvAccess.armed && !lead.empty()) {
+                held(recvAccess.t.shown);
                 if (recvAccess.handsNothing) emitAccess(recvAccess.t, "0", "0", "", recvAccess.modify, recvAccess.modify);
                 else begin(recvAccess.t, recvAccess.modify, lead, recvAccess.recvCls);
             }
             for (auto& a : argAccesses) {
+                held(!a.shown.empty() ? a.shown : a.t.shown);
                 if (a.view) {   // held like a window: against mutation, handing out the field it views
                     emitAccess(a.t, a.t.whole ? "0" : a.t.lo, a.t.whole ? "0" : a.t.len, a.t.whole ? "" : a.t.partCls,
                                a.modify, false);
@@ -27846,6 +27871,20 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     std::string call = localAlt.empty() ? cName + "(" + callArgs + ")"
                                         : "(__builtin_expect(kama_tclean, 1) ? " + localAlt + "(" + callArgs + ") : " + cName
                                           + "(" + callArgs + "))";
+    if (!heldShown.empty()) {
+        // The call is a region of the park rule (KR-3 step 4) — the call alone: its arguments were evaluated above,
+        // before the access began. Judged before `elideCallAccesses` reduces the access, since a park lets another
+        // fiber in, which is the one thing that reduction assumes cannot happen.
+        const int r = ++_lockRegionCounter;
+        LockRegion reg; reg.line = srcLine; reg.file = diagFile();
+        RegionAccess ra; ra.shown = heldShown;
+        ra.callee = shown; ra.line = srcLine; ra.file = reg.file;
+        reg.accesses.push_back(ra);
+        _lockRegions[r] = reg;
+        if (blindCallee) _lockRegionBlind.emplace(r, blindCallee);
+        const std::string n = std::to_string(r);
+        return "({ " + accessSeq + "/*kama:lw+" + n + "*/ " + call + "; /*kama:lw-" + n + "*/ })";
+    }
     if (!accessSeq.empty()) return "({ " + accessSeq + call + "; })";
     if (unhoisted.empty()) return call;
     // No statement may precede this one (a loop condition): the temporaries run in a statement expression,
@@ -29301,8 +29340,8 @@ bool CEmitter::handleAccessTarget(const std::string& handleCls, const std::strin
         t.objLen = virt ? objCls + "__vsize((" + objCls + "*)" + t.obj + ")" : "sizeof(" + objCls + ")";
     } else {
         t.obj = "(" + handleC + ").kama_obj";
-        t.objLen = "((" + handleC + ").kama_vtbl->kama_vsize ? (" + handleC + ").kama_vtbl->kama_vsize((" + handleC
-                 + ").kama_obj) : (" + handleC + ").kama_vtbl->kama_size)";
+        t.objLen = "((" + handleC + ").kama_vtbl->kama_vsize ? KAMA_SLOT(" + objCls + "_vtbl, (" + handleC
+                 + ").kama_vtbl->kama_vsize)((" + handleC + ").kama_obj) : (" + handleC + ").kama_vtbl->kama_size)";
     }
     t.lo = t.obj; t.len = t.objLen; t.whole = true; t.shown = shown; t.objCls = objCls;
     return true;
@@ -29395,8 +29434,8 @@ bool CEmitter::accessTargetOf(SharedExpression place, AccessTarget& t, bool* imp
 #else
         const bool virt = false;
 #endif
-        if (hk == 2)   t.objLen = "((" + bc + ").kama_vtbl->kama_vsize ? (" + bc + ").kama_vtbl->kama_vsize((" + bc
-                                + ").kama_obj) : (" + bc + ").kama_vtbl->kama_size)";
+        if (hk == 2)   t.objLen = "((" + bc + ").kama_vtbl->kama_vsize ? KAMA_SLOT(" + objCls + "_vtbl, (" + bc
+                                + ").kama_vtbl->kama_vsize)((" + bc + ").kama_obj) : (" + bc + ").kama_vtbl->kama_size)";
         else if (virt) t.objLen = objCls + "__vsize((" + objCls + "*)" + t.obj + ")";
         else           t.objLen = "sizeof(" + objCls + ")";
         t.objCls = objCls;
@@ -29579,6 +29618,7 @@ bool CEmitter::enterAccess(SharedExpression place, bool modify, const std::strin
                          "code — bind the handle to a local first, so the window knows which object it holds").c_str(), line);
         return false;
     }
+    ScopedStr _ws(_windowShown, unparseExpr(place));
     beginAccess(t, modify, handedC, handedLenC, depth, line, handedCls);
     return true;
 }
@@ -29597,6 +29637,11 @@ void CEmitter::beginAccess(const AccessTarget& t, bool modify, const std::string
                          << (modify ? 1 : 0) << ", 0, \"" << at
                          << "\", " << trapLoc(line) << ");\n";
     _scopes.back().borrowLeaves.push_back("kama_access_end(&" + ka + ");");
+    // The park rule's region (KR-3 step 4): the window, to the end of its scope.
+    const std::string& host = !_windowShown.empty() ? _windowShown : t.shown;
+    RegionAccess ra; ra.shown = host.empty() ? std::string("a `Shared` value") : "`" + host + "`";
+    ra.line = line; ra.file = diagFile();
+    _lockRegions[scopeRegion(line, depth)].accesses.push_back(ra);
 }
 
 void CEmitter::checkConstWrite(SharedExpression target, int srcLine)
@@ -34185,6 +34230,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
         if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);
         recordRef(bindingKeyOf(name), call->identifier.get());   // a call through the local reads it
         std::string callee = _refParams.count(name) ? ("(*" + kName(name) + ")") : kName(name);
+        _blindCallee = call->line;   // its call region, if it holds an access, is blind (KR-3 step 4)
         return emitReorderedCall(name, callee, "", sig.params, call->args, call->line);
     }
 
@@ -34204,6 +34250,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
             recordRef(ms, call->identifier.get());
             if (_ctCheck) { ctRefuse(ctNotComptimeCall(name, _ctFnBody), call->line); return "0"; }   // KR-102
+            _blindCallee = call->line;   // as the local arm
             return emitReorderedCall(name, ms, "", sig.params, call->args, call->line);
         }
     }
@@ -35922,7 +35969,7 @@ void CEmitter::scanCBodies(const std::string& s, const std::vector<CBody>& bodie
             if (c == '/' && i + 1 < n && (s[i + 1] == '/' || s[i + 1] == '*')) {
                 if (!header && s.compare(i, 9, "/*kama:lw") == 0 && i + 10 < n) {   // a lock-window region edge
                     const int r = atoi(s.c_str() + i + 10);
-                    if (s[i + 9] == '+') regions.insert(r); else regions.erase(r);
+                    if (s[i + 9] == '+') { regions.insert(r); _lockRegionBody.emplace(r, b.name); } else regions.erase(r);
                 }
                 i = skipComment(i); continue;
             }
@@ -36312,6 +36359,7 @@ void CEmitter::checkLockWindows()
         if (reg.mints.size() > 1 && locks < (int)reg.mints.size()) {
             unsupported(("`borrow " + reg.host + "` takes a lock, and this `borrow` makes another view that closes its "
                          "window too — a lock window holds only its locks. Nest the other window outside this one").c_str(), reg.line);
+            _lockRefused.insert(kv.first);
             continue;
         }
         if (reg.mints.size() > 1) _lockGroups.insert(kv.first);   // several locks: taken together, in address order
@@ -36320,6 +36368,7 @@ void CEmitter::checkLockWindows()
             unsupported(("this lock window (`borrow " + reg.host + "`) calls through a `fnptr` or a bound function at line "
                          + std::to_string(bl->second) + ", whose target the compiler cannot see — it could wait or take a lock "
                          "while this one is held. Call a named function, or make the call after the window").c_str(), bl->second);
+            _lockRefused.insert(kv.first);
             continue;
         }
         std::map<std::string, std::string> parent;
@@ -36351,6 +36400,7 @@ void CEmitter::checkLockWindows()
             path += (path.empty() ? "`" : " -> `") + d + "`";
         }
         const int at = firstLine.count(chain.back()) ? firstLine[chain.back()] : reg.line;
+        _lockRefused.insert(kv.first);
         unsupported(("a lock window may not wait or take another lock, and this one (`borrow " + reg.host + "`) reaches "
                      + path + ", which " + why + ". Take what you need out of the window and do that after it — a "
                      "critical section that waits is how a lock becomes a stall, and one that locks is how it becomes "
@@ -36358,9 +36408,190 @@ void CEmitter::checkLockWindows()
     }
 }
 
+// A scheduler seam on a chain to a fiber switch, said in words rather than as the runtime's internals; "" for any other
+// body. Ends the rendered chain of both park walks (KR-3 step 4, decision 15).
+static std::string parkSeam(const std::string& f)
+{
+    if (f == "kama_sched_join") return "a fiber's join";
+    if (f == "kama_sched_scopeWait") return "the scope's close, which waits for its fibers";
+    if (f == "kama_sched_yield") return "a yield";
+    if (f == "kama_sched_sleep") return "a fiber's sleep";
+    if (f == "kama_sched_io_wait") return "a fiber's wait on a socket";
+    if (f == "kama_fiber_switch" || f.compare(0, 11, "kama_sched_") == 0 || f.compare(0, 12, "kama__sched_") == 0)
+        return "the scheduler's switch";
+    return std::string();
+}
+
+// KR-3 step 4 (fibers.md decision 3, as ruled 2026-10-25): on an isolate that runs fibers, a lasting access to `Shared`
+// storage may reach no FIBER SWITCH. Fibers share one access record per thread, which ends accesses in the order they
+// began; a park inside an access lets another fiber run, interleave its own accesses and change what this one holds,
+// so the static rule is what keeps the record sound and the switch free of state to save.
+// - The ROOTS are the isolate entries (`main`, every `spawn` and `parallel` trampoline, every exported body and foreign
+//   entry) whose reach includes a fiber spawn; their reach is the code held to the rule. A thread trampoline is a cut:
+//   another isolate's code runs on another thread. An exported body is a root but never a cut, since kama code may also
+//   call it directly on the same thread.
+// - The LEAF is a real switch, `kama_fiber_switch`, read off the graph: a `join`, a `Fiber`'s drop, a `scope`'s close.
+//   A call that only blocks the thread (`println`, a blocking read) lets no other fiber in, so `@parks` — which since
+//   KR-226 means "waits" — is the lock window's leaf, not this one. Steps 5–8 make sockets, channels and files switch,
+//   and the rule follows them with no change here.
+// - A REGION is an access the run-time record would hold: a window (`borrow`, `foreach`, a `match`) over storage a
+//   `Shared` may hold, to the end of its scope, and a call that holds a field, around the call alone.
+// - A call whose target no graph can see may switch, as decision 3 rules for a lock window.
+void CEmitter::checkParkWindows()
+{
+    bool anyAccess = false;
+    for (auto& kv : _lockRegions) if (!kv.second.accesses.empty()) { anyAccess = true; break; }
+    if (!anyAccess) return;
+    static const std::string kSwitch = "kama_fiber_switch", kSpawn = "kama_sched_spawn";
+    auto startsWith = [](const std::string& f, const std::string& p) { return f.compare(0, p.size(), p) == 0; };
+    auto threadEntry = [&](const std::string& f) { return startsWith(f, "__kama_iso_") || startsWith(f, "kama_kama_pf_tramp"); };
+    auto fiberEntry  = [&](const std::string& f) { return startsWith(f, "__kama_fib_") || startsWith(f, "__kama_fibv_"); };
+    auto eachCallee = [&](const std::string& f, const std::function<void(const std::string&, const CallEdge&)>& visit) {
+        auto it = _callEdges.find(f);
+        if (it != _callEdges.end()) for (auto& e : it->second) visit(e.first, e.second);
+        auto ps = _parksSlotEdges.find(f);
+        if (ps != _parksSlotEdges.end()) for (auto& e : ps->second) visit(e.first, e.second);
+    };
+
+    // 1. The code an isolate that runs fibers reaches.
+    std::vector<std::string> roots{ "main" };
+    for (auto& kv : _callEdges) if (threadEntry(kv.first)) roots.push_back(kv.first);
+    for (auto& e : _entryBodies) roots.push_back(e);
+    for (auto& fe : _foreignEntryFns) roots.push_back(fe.first);
+    std::set<std::string> fibered, rooted;
+    for (const std::string& root : roots) {
+        if (!rooted.insert(root).second) continue;
+        std::set<std::string> seen{ root };
+        std::vector<std::string> q{ root };
+        bool spawns = false;
+        for (size_t qi = 0; qi < q.size(); ++qi) {
+            const std::string f = q[qi];   // a copy: the pushes below may move `q`
+            if (f == kSpawn) spawns = true;
+            eachCallee(f, [&](const std::string& c, const CallEdge&) {
+                if (threadEntry(c) && c != root) return;
+                if (seen.insert(c).second) q.push_back(c);
+            });
+        }
+        if (spawns) fibered.insert(seen.begin(), seen.end());
+    }
+    if (fibered.empty()) return;
+
+    // 2. What reaches a switch, and what reaches a blind call: one walk back from each, cutting at every entry — a
+    //    spawn does not switch to its child, and another isolate runs on another thread. `next` is the hop toward it.
+    std::map<std::string, std::vector<std::string>> callers;
+    for (auto* edges : { &_callEdges, &_parksSlotEdges })
+        for (auto& kv : *edges)
+            for (auto& e : kv.second)
+                if (!threadEntry(e.first) && !fiberEntry(e.first)) callers[e.first].push_back(kv.first);
+    auto walkBack = [&](std::map<std::string, std::string>& next) {
+        std::vector<std::string> q;
+        for (auto& kv : next) q.push_back(kv.first);
+        for (size_t qi = 0; qi < q.size(); ++qi) {
+            const std::string f = q[qi];
+            auto it = callers.find(f);
+            if (it != callers.end())
+                for (const std::string& c : it->second) if (!next.count(c)) { next[c] = f; q.push_back(c); }
+        }
+    };
+    std::map<std::string, std::string> toSwitch{ { kSwitch, std::string() } }, toBlind;
+    walkBack(toSwitch);
+    for (auto& kv : _parksBlind) toBlind.emplace(kv.first, std::string());
+    walkBack(toBlind);
+
+    auto render = [&](std::string f, const std::map<std::string, std::string>& next) {
+        std::string path;
+        for (int guard = 0; !f.empty() && guard < 64; ++guard) {
+            const std::string w = parkSeam(f);
+            path += (path.empty() ? "" : " -> ") + (w.empty() ? "`" + displayBody(f) + "`" : w);
+            if (!w.empty()) break;
+            auto it = next.find(f);
+            f = it == next.end() ? std::string() : it->second;
+        }
+        return path;
+    };
+
+    // 3. Each access region in that code.
+    std::set<std::pair<std::string, int>> said;   // one sentence per line: a window and the call inside it both hit
+    for (auto& kv : _lockRegions) {
+        const LockRegion& reg = kv.second;
+        if (reg.accesses.empty() || _lockRefused.count(kv.first)) continue;
+        auto bd = _lockRegionBody.find(kv.first);
+        if (bd == _lockRegionBody.end() || !fibered.count(bd->second)) continue;
+        const RegionAccess& ac = reg.accesses.front();
+        int at = 0;
+        std::string path, why;
+        auto bl = _lockRegionBlind.find(kv.first);
+        if (bl != _lockRegionBlind.end()) {
+            at = bl->second;
+            why = "a call through a `fnptr` or a slot whose target the compiler cannot see, which could switch fibers";
+        } else {
+            auto re = _lockRegionEdges.find(kv.first);
+            if (re == _lockRegionEdges.end()) continue;
+            std::string hitS, hitB; int lineS = 0, lineB = 0;
+            for (auto& e : re->second) {
+                if (threadEntry(e.first) || fiberEntry(e.first)) continue;
+                if (toSwitch.count(e.first)) { if (hitS.empty() || e.second.line < lineS) { hitS = e.first; lineS = e.second.line; } }
+                else if (toBlind.count(e.first) && (hitB.empty() || e.second.line < lineB)) { hitB = e.first; lineB = e.second.line; }
+            }
+            if (!hitS.empty())      { at = lineS; path = render(hitS, toSwitch); why = "which switches fibers"; }
+            else if (!hitB.empty()) { at = lineB; path = render(hitB, toBlind);
+                                      why = "which calls through a `fnptr` or a slot whose target the compiler cannot see, "
+                                            "and could switch fibers"; }
+            else continue;
+        }
+        if (!at) at = reg.line;
+        if (!said.insert({ reg.file, at }).second) continue;
+        ScopedStr _f(_emitDeclFile, reg.file);
+        const std::string what = ac.callee.empty() ? "a window over " + ac.shown
+                                                   : "the call to `" + ac.callee + "`, which holds " + ac.shown;
+        unsupported(("on an isolate that runs fibers, a lasting access to a `Shared` value may not reach a park — another "
+                     "fiber would run while it is open, and could change or free what it holds. This one (" + what + ") "
+                     + (path.empty() ? "makes " + why : "reaches " + path + ", " + why) + ". Take what you need out of "
+                     "it and wait after it: a broadcast takes the handles out of the list first").c_str(), at);
+    }
+}
+
 void CEmitter::checkOnPanicRegions()
 {
-    if (_onPanicFns.empty() || _destructibleOwners.empty()) return;
+    if (_onPanicFns.empty()) return;
+    // KR-3 decision 15: no park inside a region. A recovered panic is a longjmp to the region's prologue, and one taken
+    // across a fiber switch would land on another fiber's stack. Today a park also trips `@noheap` and the RAII walk
+    // below (a `Fiber` owns a destructor, a spawn allocates); this one names the switch, and alone holds the rule for a
+    // park that neither owns nor allocates.
+    for (auto& kv : _onPanicFns) {
+        std::map<std::string, std::string> parent;
+        std::vector<std::string> q{ kv.first };
+        std::set<std::string> seen{ kv.first };
+        std::string hit;
+        for (size_t qi = 0; qi < q.size() && hit.empty(); ++qi) {
+            const std::string f = q[qi];
+            if (f == "kama_fiber_switch") { hit = f; break; }
+            for (auto* edges : { &_callEdges, &_parksSlotEdges }) {
+                auto it = edges->find(f);
+                if (it == edges->end()) continue;
+                for (auto& e : it->second) {
+                    const std::string& c = e.first;
+                    if (c.compare(0, 11, "__kama_fib_") == 0 || c.compare(0, 12, "__kama_fibv_") == 0
+                        || c.compare(0, 11, "__kama_iso_") == 0 || c.compare(0, 18, "kama_kama_pf_tramp") == 0) continue;
+                    if (seen.insert(c).second) { parent[c] = f; q.push_back(c); }
+                }
+            }
+        }
+        if (hit.empty()) continue;
+        std::vector<std::string> chain;
+        for (std::string n = hit; !n.empty(); n = parent.count(n) ? parent[n] : std::string()) chain.push_back(n);
+        std::string path;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            const std::string w = parkSeam(*it);
+            if (!w.empty()) { path += " -> " + w; break; }
+            path += (path.empty() ? "`" : " -> `") + displayBody(*it) + "`";
+        }
+        ScopedStr _f(_emitDeclFile, kv.second.file);
+        unsupported(("`" + kv.second.display + "` is `@onPanic`, but it reaches " + path + ", which switches fibers — a "
+                     "recovered panic is a longjmp, and one across a fiber switch would land on another fiber's stack. "
+                     "Wait outside the region").c_str(), kv.second.line);
+    }
+    if (_destructibleOwners.empty()) return;
     for (auto& kv : _onPanicFns) {
         const std::string& root = kv.first;
         std::map<std::string, std::string> parent;
@@ -46835,6 +47066,7 @@ int CEmitter::emit(SharedCompilationUnit unit)
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
+    checkParkWindows();               // ...and the park rule (KR-3 step 4): after it, so a window is refused once
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
     computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled
@@ -46924,6 +47156,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     checkForeignEntryStatics();       // the foreign-entry static-read walk, over the same finished call graph
     checkOnPanicRegions();            // ...and the `@onPanic` destructor-free walk, over the same graph
     checkLockWindows();               // ...and the lock windows (KR-226), over the same graph
+    checkParkWindows();               // ...and the park rule (KR-3 step 4): after it, so a window is refused once
     checkSendableDeclarations();      // every `implements Sendable` verified over its fields (a lie is caught here)
     checkSpawnBundleSendability();    // ...and the bundle crossing requires one (an omission is caught here)
     computeUnreached();               // KR-130: what no root reaches, for the driver to leave uncompiled

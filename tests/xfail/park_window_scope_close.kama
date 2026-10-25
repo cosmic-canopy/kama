@@ -1,0 +1,14 @@
+// A `scope`'s closing brace waits for its fibers — a park — so a scope inside a window over `Shared` storage is refused
+// (KR-3 step 4). Open the scope outside the window, and spawn inside it.
+import { std::concurrent::Fiber, std::memory::Shared, std::collections::DynamicArray };
+fn void tick(int32 n) { }
+type resource Box {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray::<int32>.empty(); this.xs.add(item: 1); }
+    public fn void tickAll() { foreach (int32 x in this.xs) { scope { spawn fiber tick(n: x); } } }
+}
+fn uint8 main() {
+    Shared<Box> b = new Box.make();
+    b.tickAll();
+    return 0;
+}

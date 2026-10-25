@@ -1,0 +1,56 @@
+// What the park rule (KR-3 step 4) leaves legal, in a program that runs fibers. A park is a call that lets another
+// fiber run — a `join`, a `Fiber`'s drop, a `scope`'s close — and nothing else is one: a window over `Shared` storage
+// may print (a write blocks the thread, but no other fiber runs while it does), spawn into a scope opened outside it
+// (a spawn queues the child; it switches to nothing), drop an `Owned` contract value (its size slot is read off the
+// vtable, and calls nothing), and join after it closes. An isolate that runs no fibers is not held to the rule at all:
+// `worker`'s window calls through a `fnptr`, which would be refused on an isolate whose code a fiber spawn reaches.
+import { core::println, std::concurrent::Fiber, std::concurrent::join, std::memory::Shared, std::memory::Owned,
+         std::collections::DynamicArray };
+fnptr int32 Op(int32 x);
+type contract Shape for value { const fn int32 area(); }
+type value Sq implements Shape { int32 s; public ctor make(int32 s) { this.s = s; } public const fn int32 area() { return this.s * this.s; } }
+fn int32 child(int32 n) { return n * 10; }
+fn void tick(int32 n) { }
+fn int32 twice(int32 x) { return x * 2; }
+type resource Box {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray::<int32>.empty(); this.xs.add(item: 1); this.xs.add(item: 2); }
+    public fn int32 printed() {
+        int32 t = 0;
+        foreach (int32 x in this.xs) { println(s: "${x}"); t = t + x; }
+        return t;
+    }
+    public fn void spawnAll() { scope { foreach (int32 x in this.xs) { spawn fiber tick(n: x); } } }
+    public fn int32 boxed() {
+        int32 t = 0;
+        foreach (int32 x in this.xs) { Owned<Shape> o = new Sq.make(s: x); t = t + o.area(); }
+        return t;
+    }
+    public fn int32 joinAfter() {
+        int32 n = cast<int32>(this.xs.length());
+        Fiber<int32> f = spawn fiber child(n: n);
+        return join(fiber: give f);
+    }
+    public fn int32 apply(Op op) {
+        int32 t = 0;
+        foreach (int32 x in this.xs) { t = t + op(x: x); }
+        return t;
+    }
+}
+type resource Work implements Sendable {
+    int32 sum;
+    public ctor make() { this.sum = 0; }
+    public fn void record(int32 n) { this.sum = n; }
+    public const fn int32 value() { return this.sum; }
+}
+fn void worker(ref Work w) {
+    Shared<Box> b = new Box.make();
+    w.record(n: b.apply(op: twice));
+}
+fn uint8 main() {
+    Shared<Box> b = new Box.make();
+    b.spawnAll();
+    Work w = Work.make();
+    scope { spawn worker(w: ref w); }
+    return cast<uint8>(b.printed() + b.boxed() + b.joinAfter() + w.value());   // 3 + 5 + 20 + 6
+}
