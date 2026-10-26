@@ -2180,13 +2180,24 @@ from data races keeps holding by construction.
    second join is a compile error. A panic still aborts the process.
 10. A fiber `spawn` may sit anywhere in its `scope`, which keeps a runtime list of live children (an accept loop).
 11. A timer heap per scheduler (high-resolution on Windows, as Go did in 2024), per-operation deadlines, and
-    cooperative cancellation as `Err(Cancelled)`.
+    cooperative cancellation as `Err(Cancelled)` — amended 2026-10-26: a socket deadline is Go's, an absolute
+    `Instant` kept on the socket (`setReadDeadline`/`setWriteDeadline`/`setAcceptDeadline(at: Optional<Instant>)`, a
+    `ConnectOptions` deadline through `connectWith`), persisting until reset and failing a late call even with data
+    queued; one meaning on a thread (a one-socket poll for the time left). One `sleep`: `std::time::sleep` parks.
 12. Cooperative. I/O is polled every N runs (Go uses 61), and there is a `yield()`.
-13. Descriptor lifetime: DEL before close, deferred record frees, and deregistration on `give`.
+13. Descriptor lifetime: DEL before close, deferred record frees, and deregistration on `give` — corrected
+    2026-10-26: nothing runs at a hand-off (`Sendable` is a marker; a bundle is a byte copy), so the isolate that next
+    uses or drops a socket registered elsewhere DELs it from that queue itself and hands the record back to its home
+    scheduler, which frees it on its next turn. A duplicated descriptor shares the mode, so the POSIX fiber path passes
+    `MSG_DONTWAIT`.
 14. Sanitizer fiber annotations and an lldb OS plugin, in the first commits.
-15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`. Fibers on bare metal are KR-233.
+15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`. Fibers on bare metal are KR-233 —
+    corrected 2026-10-26: a socket's first wait registers it, which allocates, and the `@noheap` walk is program-wide,
+    so a program that runs fibers anywhere refuses `@noheap` socket I/O and `sleep` everywhere (KR-245).
 
 Steps 1–4 shipped `0.9.737`–`0.9.743` (fibers.md §8 records each, and the as-built notes under decisions 1, 3, 9 and 10).
+Step 5 was ruled 2026-10-26 (fibers.md decisions 7, 11, 13 and 15): `Poller.wait` parks too, on its own descriptor on
+epoll and kqueue and through step 7's offload pool on AFD and `poll(2)`; two fibers on one socket is KR-244.
 
 <a id="s6-fiber-cet"></a>
 
@@ -2259,6 +2270,43 @@ connections every arm sat within ~20% of the C loop, so the client on the same m
 why only the pinned container run is quoted. What remains: that run (15 rounds, Linux, written to
 `docs/benchmarks/servers.md` with versions, machine and core count), and the fiber arm, `kama/fibers.kama`, an isolate
 per core over a `SO_REUSEPORT` listener (`ListenOptions`), once sockets park (KR-3 step 5).
+
+<a id="s6-socket-split"></a>
+
+### Two fibers on one socket: a read half and a write half (KR-244)
+
+**Found 2026-10-26, planning KR-3 step 5.** A connection that reads and writes at once — a proxy copying both ways, a
+WebSocket with a heartbeat — is two loops over one socket. On fibers that is a reader fiber and a writer fiber, and
+the scheduler already holds one of each per registration (`kama_sched_io`'s `reader` and `writer`). The language
+refuses it: a bare `spawn fiber` takes a `ref` bundle only to a place no other child borrows, so two fibers cannot each
+hold the same `TcpStream`.
+
+| | How two tasks share one connection |
+|---|---|
+| Go | both goroutines hold the `net.Conn`; a concurrent `Read` and `Write` is documented safe |
+| tokio | `split(&mut s)` (borrowed halves) or `into_split()` (owned halves, `reunite` to join them) |
+| Rust std | `try_clone()`: a second handle on a duplicated descriptor |
+| Java | one `Socket`, its input and output streams used from two threads |
+
+**Verdict: scheduled.** A server language needs full duplex, and a duplicated descriptor is not the answer here: it
+shares the mode and would need a second registration for one open file. The shape wants rulings after step 5 ships —
+owned or borrowed halves, a `reunite`, which half's drop closes the socket, and how a half crosses an isolate under
+decision 13's release rule.
+
+<a id="s6-noheap-per-isolate"></a>
+
+### `@noheap` reach per isolate (KR-245)
+
+**Found 2026-10-26, planning KR-3 step 5.** The `@noheap` walk reads one call graph for the whole program. On an
+isolate that runs fibers, a socket's first wait registers it with the scheduler, which allocates the record; on an
+isolate that runs none, the same call does not. The graph cannot tell the two apart, so in a program that runs fibers
+anywhere, `@noheap` code that does socket I/O or calls `sleep` is refused on every isolate. The park rule already
+walks per isolate (its roots are the entries whose reach includes a fiber spawn, `checkParkWindows`), so the shape
+exists.
+
+**Accepted as built 2026-10-26** (fibers.md decision 15): the refusal is conservative, never unsound, and moving the
+`@noheap` boundary out of the I/O call answers it. The precise answer — judging an allocation by the isolates that
+reach it, as the park rule does — is this row, beside KR-79's generalization of the same engine.
 
 <a id="s7"></a>
 

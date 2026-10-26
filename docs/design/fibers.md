@@ -1,6 +1,6 @@
 # Fibers and thread-per-core — design (KR-3)
 
-**Status: ruled 2026-10-22, all fifteen decisions as recommended, each to be verified as it lands.** Steps 1–4 of §8 are built (`0.9.737`–`0.9.743`), each recorded there; the lock window they build on shipped first (`Locked<T>`, `@parks` and the walk, `0.9.730`–`0.9.733`, SPEC *Shared mutable state*). This is the in-flight campaign document the
+**Status: ruled 2026-10-22, all fifteen decisions as recommended, each to be verified as it lands.** Steps 1–4 of §8 are built (`0.9.737`–`0.9.743`), each recorded there; step 5's rulings (2026-10-26) are under decisions 7, 11, 13 and 15; the lock window they build on shipped first (`Locked<T>`, `@parks` and the walk, `0.9.730`–`0.9.733`, SPEC *Shared mutable state*). This is the in-flight campaign document the
 [ROADMAP_DETAIL](../ROADMAP_DETAIL.md#s6-fibers) table names: it is deleted when the work ships, once
 [SPEC.md](../SPEC.md) carries the record. The numbered decisions are listed again, one line each, in
 ROADMAP_DETAIL §6, where their rulings are recorded. Facts were read from the tree at `0.9.719` and from primary
@@ -341,6 +341,17 @@ The public `Poller` keeps applying its own `add` at once; that is one call per s
     `Poller`;
   - the park points are named in std by `@parks`, so `grep @parks` lists every one.
 
+*Ruled 2026-10-26, for step 5:*
+- **The socket remembers the mode the program asked for,** since Windows cannot read `FIONBIO` back. `takeDescriptor()`
+  hands the descriptor back in that mode with its registration released; `adopt` reads `O_NONBLOCK` on POSIX and assumes
+  blocking on Windows; `rawHandle()` lends the descriptor as it is, which on a fiber is non-blocking.
+- **A Linux Unix `connect` that meets a full backlog** (`EAGAIN`, no connection started) retries on a short timer until
+  it connects or its deadline passes, as a thread's blocking connect waits. Go and tokio return the `EAGAIN`.
+- **`Poller.wait` parks too.** On epoll and kqueue the fiber parks on the Poller's own descriptor, which both nest. AFD
+  and `poll(2)` have no descriptor to wait on, so there the wait runs on step 7's offload pool: the same interface on
+  every platform, the mechanism its own.
+- **Two fibers serving one socket,** a reader and a writer, is KR-244 (tokio's `split`).
+
 ### Decision 8 — blocking that is not a socket
 
 - **Channels become fiber-aware.**
@@ -435,6 +446,19 @@ The scope stays the one structured construct, so kama needs no nursery object.
   `Err(IoError{Cancelled})` until it ends. `IoErrorKind` is `@nonExhaustive`, so `Cancelled` is additive.
 - **A fiber in a pure CPU loop is not interrupted.** It is cooperative, as in Trio and Kotlin.
 
+*Ruled 2026-10-26, for step 5:* a socket deadline is Go's, an absolute `Instant` kept on the socket.
+- **The surface.** `setReadDeadline(at: Optional<Instant>)` and `setWriteDeadline(at:)` on `TcpStream`, `UdpSocket`,
+  `UnixStream` and `UnixDatagram`; `setAcceptDeadline(at:)` on both listeners; and a `ConnectOptions` deadline through
+  `connectWith(address:, options:)` on `TcpStream` and `UnixStream`, as `ListenOptions` goes through `bindWith`.
+- **What it means.** It persists until reset. A call made after it passed fails at once, even with data queued, with
+  `Err(TimedOut)`, and so does one still waiting when it passes.
+- **Why absolute.** A relative timeout (Rust's `set_read_timeout`, Java's `setSoTimeout`) restarts on every call, so it
+  cannot bound an exchange of several calls: a peer that sends one byte just inside it holds the connection forever.
+  A deadline argument on every call (Erlang) changes every signature, and every layer over `Reader` and `Writer`.
+- **One meaning on a thread.** A socket with a deadline waits in a one-socket poll for the time left; one with none
+  costs the single `recv` it costs today.
+- **One `sleep`.** `std::time::sleep` parks on a fiber, so no `std::concurrent::sleep` is added.
+
 ### Decision 12 — fairness and preemption
 
 **Recommended: cooperative, with three fairness rules.**
@@ -462,6 +486,26 @@ implementation, and it is listed so that it is not rediscovered:
   not: a duplicated descriptor (`kama_desc_dup`) and one received from another process. Those need the flag before
   step 8 of the map does overlapped I/O on them.
 
+*Corrected 2026-10-26, building step 5:* the third bullet is wrong. Nothing in std runs at a hand-off: `Sendable` is
+a marker with no members, a `spawn` bundle crosses as a copy of its bytes, a channel send as a `memcpy`, and a `Locked`
+or `ConcurrentMap` crossing is generic code. Nor can the receiving isolate simply close the old registration: the old
+scheduler's kqueue changelist is its own, and it may be reading a batch of events that names the record.
+- **Ruled: the next user releases it.** The isolate that next uses or drops a socket registered with another isolate's
+  scheduler takes it off that queue itself, since `EPOLL_CTL_DEL` and `EV_DELETE` are system calls any thread may make.
+  It then pushes the record onto its home scheduler's free list, which that scheduler empties at the top of its next
+  turn, after any batch in flight (the second bullet's deferred free). A home that has ended is marked, and the
+  releaser frees the record itself.
+- **What it needs.** kqueue's read registration is applied when the socket is registered, one call per socket as
+  epoll's ADD is, and no queued kqueue change names a record outside a wait.
+- **What it costs.** A socket is registered at its first wait, so an acceptor that hands out sockets it never read pays
+  nothing; one read on A and then used on B pays a DEL and an ADD.
+- **Why kama needs it.** tokio keeps one registration with a shared reactor; glommio and monoio make a socket `!Send`
+  and move the raw descriptor; Seastar keeps sockets core-local; Go has one poller per process. kama has per-core
+  pollers and sockets that move.
+- **A duplicated descriptor shares the open file's mode** with its original, as Rust's `try_clone` documents. On POSIX
+  the fiber path passes `MSG_DONTWAIT` to `recv`, `send`, `recvfrom` and `sendto`, so a duplicate set back to blocking
+  cannot stall a core on data I/O.
+
 ### Decision 14 — tooling: sanitizers and the debugger
 
 - **ASan:** `__sanitizer_start_switch_fiber` before each switch and `__sanitizer_finish_switch_fiber` after, with
@@ -483,6 +527,11 @@ implementation, and it is listed so that it is not rediscovered:
   instructions).
 - **No park inside an `@onPanic` region.** The same walk as decision 3 enforces it: a `longjmp` across a fiber
   switch would land on another stack.
+
+*Corrected 2026-10-26, building step 5:* a park allocates nothing, but a socket's first wait on a fiber registers it,
+and the registration record is allocated (kqueue's changelist may grow too). The `@noheap` walk is program-wide, so
+in a program that runs fibers anywhere, `@noheap` code that does socket I/O or sleeps is refused even on an isolate
+that runs none. That is conservative, never unsound; the precise answer, a per-isolate reach, is KR-245.
 
 ## 6. Measurements
 
@@ -662,9 +711,9 @@ read off this document.
 | 2 | ✅ `0.9.738`. The scheduler: ready queue, park/unpark, the timer heap, internal registration per decision 6, a remote queue on the Waker, tested from C (`tests/fiber_sched.d`, on this host's arm and on the Poller arm). Its own header, as the isolate seam is, so a program with sockets and no fibers never compiles it. epoll registers once edge-triggered and waits with `epoll_pwait2`; kqueue batches every change into the next wait. Windows and `poll(2)` go through the public `Poller`, holding a socket only while a fiber waits on it: on AFD a park costs its one IOCTL plus the poll state's allocation, which step 8 may pool | `include/kama_sched.h` (new), `kama_fiber.h` | L |
 | 3 | ✅ `0.9.741`. `spawn fiber`, the `scope` list of live fibers, `Fiber<R>` and `join`, and `ref` bundles rooted outside the loop; fiber 0 parks by running the loop, and an isolate frees its scheduler when it ends | `src/kama.y`, `src/kama.cemit.cpp`, `docs/grammar.bnf`, `tree-sitter-kama/` (+ the Zed and Helix pins) | L |
 | 4 | ✅ `0.9.743`. The park rule: on an isolate that runs fibers, no window over `Shared` storage and no call holding a field reaches a fiber switch or a blind call (`checkParkWindows`, on the lock window's regions); no park inside `@onPanic`; the debug assert in the park and the yield. A `kama_vsize`/`kama_valign` slot now names its vtable type, so a drop of an `Owned<Error>` is no longer a blind call to either walk. The job-entry rule moved to row 9, where job entries come to exist | `src/kama.cemit.cpp`, `kama_sched.h` | S |
-| 5 | Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines, deregistration on `give`, and DEL before close. | `lib/std/net/`, `kama_os.h` | L |
+| 5 | Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines (decision 11's ruling), the release rule (decision 13's correction) and DEL before close; `std::time::sleep` parks, and so does `Poller.wait` on epoll and kqueue | `lib/std/net/`, `lib/std/time/`, `kama_os.h`, `kama_sched.h`, `kama_time.h` | L |
 | 6 | Channels fiber-aware (waiter lists, send-side), and joins park | `include/kama_channel.h`, `lib/std/concurrent/` | M |
-| 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-7, KR-202) | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |
+| 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-7, KR-202), and `Poller.wait` on a fiber over AFD and `poll(2)` | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |
 | 8 | Windows: the high-resolution timer, and completion I/O where readiness cannot serve (`TransmitFile`, KR-229) | `kama_os.h` | M |
 | 9 | The job pool (decision 5), and the job-entry rule over step 4's walk: a job entry that reaches a fiber switch is refused | `lib/std/concurrent/` | M |
 | 10 | wasm over JSPI (decision 4) | `src/kama.driver.cpp`, `lib/std/net/web/`, `kama_fiber.h` | L |
