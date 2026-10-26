@@ -1,6 +1,6 @@
 // server.kama — the "kama today" arm of KR-243: an isolate per connection, blocking reads and writes. It is the
 // number the fiber arm replaces (KR-3 step 5): today a connection costs an OS thread, because a blocked read stalls
-// whatever runs on its thread. The fiber arm is the same code shape with `spawn fiber` and an isolate per core.
+// whatever runs on its thread. The fiber arm, fibers.kama, is the same code with `spawn fiber` and an isolate per core.
 //
 // Usage: BENCH_MODE=echo|http BENCH_PORT=<port> ./server
 import { core::envOr,

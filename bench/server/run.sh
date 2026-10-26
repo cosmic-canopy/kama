@@ -33,6 +33,7 @@ avail="c"
 ROOT=$root; . "$root/tools/kama-bin.sh"   # the compiler built for THIS platform (bench/run builds it in the image first)
 if [ -x "$KAMA" ]; then
     "$KAMA" build "$here/kama/server.kama" -o "$tmp/kama-server" --release >/dev/null && avail="$avail kama-isolates"
+    "$KAMA" build "$here/kama/fibers.kama" -o "$tmp/kama-fibers" --release >/dev/null && avail="$avail kama-fibers"
 fi
 if command -v node >/dev/null; then avail="$avail node node-cluster"; fi
 if command -v go >/dev/null; then (cd "$here/go" && go build -o "$tmp/go-server" .) && avail="$avail go"; fi
@@ -41,7 +42,7 @@ if command -v cargo >/dev/null; then
         || CARGO_TARGET_DIR="$tmp/cargo" cargo build --release -q) && cp "$tmp/cargo/release/server" "$tmp/tokio-server" \
         && avail="$avail tokio tokio-percore"
 fi
-slots=${SLOTS:-"c node node-cluster go tokio tokio-percore kama-isolates c#2"}
+slots=${SLOTS:-"c node node-cluster go tokio tokio-percore kama-isolates kama-fibers c#2"}
 run_slots=""
 for s in $slots; do case " $avail " in *" ${s%#*} "*) run_slots="$run_slots $s" ;; *) echo "run.sh: no $s here (its toolchain is missing)" >&2 ;; esac; done
 
@@ -60,6 +61,7 @@ start_server() {   # <arm> <mode> <port>
         tokio)         $pin "$tmp/tokio-server" "$mode" "$port" multi "$cores" & ;;
         tokio-percore) $pin "$tmp/tokio-server" "$mode" "$port" per-core "$cores" & ;;
         kama-isolates) BENCH_MODE=$mode BENCH_PORT=$port $pin "$tmp/kama-server" & ;;
+        kama-fibers)   BENCH_MODE=$mode BENCH_PORT=$port BENCH_CORES=$cores $pin "$tmp/kama-fibers" & ;;
     esac
     spid=$!
 }

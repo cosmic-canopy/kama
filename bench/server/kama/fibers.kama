@@ -1,0 +1,127 @@
+// fibers.kama — KR-243's fiber arm: one isolate per core, each accepting on its own listener and serving every
+// connection it accepts as a fiber (KR-3; docs/design/fibers.md §4). On Linux the listeners share the port with
+// `ListenOptions.balance` (SO_REUSEPORT), and the kernel spreads connections across them; macOS has no balancer
+// (`handOff` sends every connection to the last listener bound), so there one isolate serves. The `echo` and `http`
+// bodies are server.kama's, line for line: what differs is only what a connection costs — a fiber here, an OS thread
+// there.
+//
+// Usage: BENCH_MODE=echo|http BENCH_PORT=<port> BENCH_CORES=<n> ./fibers
+import { core::envOr,
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::net::SocketAddr,
+    std::net::IpAddr,
+    std::net::ListenOptions,
+    std::io::IoError,
+    std::io::writeAll,
+    std::concurrent::Fiber,
+    std::concurrent::Isolate,
+    std::collections::DynamicArray,
+    std::collections::FixedArray,
+};
+
+fn int32 parseInt(ref string s) {
+    int32 v = 0;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int32 c = cast<int32>(s[i]);
+        if (c < 48 || c > 57) { return 0; }
+        v = v * 10 + c - 48;
+    }
+    return v;
+}
+
+// Writes back whatever arrives, until the client closes.
+unsafe fn void echo(TcpStream conn) {
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (true) {
+        Result<isize, IoError> rr = conn.read(into: buf.viewMut());
+        isize got = match (rr) { case Ok(value: n): n; case Err(error: e): cast<isize>(0 - 1); };
+        if (got <= 0) { return; }
+        Result<Unit, IoError> w = writeAll(w: conn, bytes: buf.slice(from: 0, count: got));
+        bool failed = match (w) { case Ok(value: u): false; case Err(error: e): true; };
+        if (failed) { return; }
+    }
+}
+
+// Answers each complete request (`\r\n\r\n` ends one), however the reads split it, until the client closes.
+unsafe fn void http(TcpStream conn) {
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    DynamicArray<uint8> reply = DynamicArray.empty();
+    string r = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!";
+    for (isize i = 0; i < r.length(); i = i + 1) { reply.add(item: r[i]); }
+    int32 state = 0;   // how much of "\r\n\r\n" the bytes so far end with
+    while (true) {
+        Result<isize, IoError> rr = conn.read(into: buf.viewMut());
+        isize got = match (rr) { case Ok(value: n): n; case Err(error: e): cast<isize>(0 - 1); };
+        if (got <= 0) { return; }
+        for (isize i = 0; i < got; i = i + 1) {
+            uint8 c = buf[i];
+            bool cr = c == 13;
+            bool lf = c == 10;
+            if (cr) { state = state == 2 ? 3 : 1; }
+            else if (lf && (state == 1 || state == 3)) { state = state + 1; }
+            else { state = 0; }
+            if (state == 4) {
+                state = 0;
+                Result<Unit, IoError> w = writeAll(w: conn, bytes: reply.view());
+                bool failed = match (w) { case Ok(value: u): false; case Err(error: e): true; };
+                if (failed) { return; }
+            }
+        }
+    }
+}
+
+fn void serveEcho(TcpStream conn) { echo(conn: give conn); }
+fn void serveHttp(TcpStream conn) { http(conn: give conn); }
+
+// One core: its listener, and a fiber for each connection it accepts.
+type resource Core implements Sendable {
+    TcpListener listener;
+    bool isHttp;
+    public ctor make(TcpListener listener, bool isHttp) { this.listener = give listener; this.isHttp = isHttp; }
+    public unsafe fn void serve() {
+        scope {
+            while (true) {
+                Result<TcpStream, IoError> ra = this.listener.accept();
+                match (give ra) {
+                    case Ok(value: c): {
+                        if (this.isHttp) { spawn fiber serveHttp(conn: give c); }
+                        else             { spawn fiber serveEcho(conn: give c); }
+                    }
+                    case Err(error: e): { }
+                };
+            }
+        }
+    }
+}
+unsafe fn void runCore(Core core) { core.serve(); }
+
+// The listener options, and how many listeners may share a port: Linux balances, the others do not.
+@compileFor(OS_LINUX)
+fn ListenOptions sharing() { ListenOptions o = ListenOptions.make(); o.balance = true; o.backlog = 4096; return o; }
+@compileFor(OS_LINUX)
+fn int32 coresUsed(int32 asked) { return asked < 1 ? 1 : asked; }
+@compileFor(!OS_LINUX)
+fn ListenOptions sharing() { ListenOptions o = ListenOptions.make(); o.backlog = 4096; return o; }
+@compileFor(!OS_LINUX)
+fn int32 coresUsed(int32 asked) { return 1; }
+
+unsafe fn uint8 start() {
+    string mode = envOr(name: "BENCH_MODE", dflt: "echo");
+    string portStr = envOr(name: "BENCH_PORT", dflt: "8080");
+    string coresStr = envOr(name: "BENCH_CORES", dflt: "1");
+    int32 cores = coresUsed(asked: parseInt(s: coresStr));
+    SocketAddr at = SocketAddr.of(ip: IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8), port: cast<uint16>(parseInt(s: portStr)));
+    ListenOptions options = sharing();
+    DynamicArray<Isolate> held = DynamicArray.empty();
+    for (int32 i = 0; i < cores; i = i + 1) {
+        Result<TcpListener, IoError> rl = TcpListener.bindWith(address: at, options: options);
+        TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+        Core core = Core.make(listener: give l, isHttp: mode == "http");
+        Isolate h = spawn runCore(core: give core);
+        held.add(item: give h);
+    }
+    return 0;   // `held` joins its isolates as it drops: the server runs until it is killed
+}
+
+fn uint8 main() { return start(); }
