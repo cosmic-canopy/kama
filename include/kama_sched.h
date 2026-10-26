@@ -22,8 +22,9 @@
 // REGISTRATION follows decision 6, per backend, and it is internal: the public `Poller` stays level-triggered.
 //   epoll    edge-triggered, registered once for reading and writing when the socket meets the scheduler, so a park
 //            costs no system call. Readiness that arrives while no fiber waits is kept on the registration.
-//   kqueue   EV_CLEAR on reading, registered once; writing is asked for only while a writer waits (one-shot). Every
-//            change rides the next wait's changelist, so a park costs no system call either.
+//   kqueue   EV_CLEAR on reading, registered once, when the socket meets the scheduler; writing is asked for only
+//            while a writer waits (one-shot), and that change rides the next wait's changelist, so a park costs no
+//            system call either. No queued change outlives the wait that asked for it (see RELEASE).
 //   Poller   everything else — AFD on Windows, poll(2) on another POSIX — through the public `Poller`: a socket is
 //            in it only while a fiber waits on it, so a level-triggered backend never reports one nobody reads.
 //
@@ -33,8 +34,15 @@
 // LIFETIMES. A fiber's control block is counted: its owner (a joiner, or the scheduler for a detached one) holds one
 // reference, and a remote wake holds another until this isolate has taken it off the remote queue — so a wake that
 // arrives as its fiber ends never reaches freed memory. Those references are released only on this isolate's thread,
-// which keeps a fiber's stack on its own thread's idle list. The scheduler itself is held by its thread and by every
-// fiber it has made, so a remote wake can always reach it.
+// which keeps a fiber's stack on its own thread's idle list. The scheduler itself is held by its thread, by every
+// fiber it has made and by every socket registration, so a remote wake or a release can always reach it.
+//
+// RELEASE (decision 13, as corrected 2026-10-26). A socket can move to another isolate (it is `Sendable`), and nothing
+// runs at the hand-off. So the isolate that next uses or drops a socket registered here takes it off this queue
+// itself — an epoll or kqueue delete is a system call any thread may make — and pushes the record onto `freed`, which
+// this scheduler empties at the top of its next turn: a batch of events it is reading may still name the record.
+// Once this scheduler has ended, `freed` holds a mark, and the releaser frees the record itself. That needs no change
+// queued here to name a record outside the wait that queued it, which is why kqueue registers reading at once.
 
 #include "kama_runtime.h"
 #include "kama_os.h"
@@ -71,7 +79,9 @@ typedef struct kama_sched_io {
     kama_fiber* writer;             // ...to write
     int32_t ready;                  // edge backends: readiness reported while no fiber waited (1 read, 2 write)
     int32_t armed;                  // the Poller arm: the interest the Poller holds now (0: not in it)
+    struct kama_sched_io* freedNext; // released by another isolate: the scheduler's `freed` list
 } kama_sched_io;
+#define KAMA__SCHED_GONE ((kama_sched_io*)(uintptr_t)1)   // `freed` once the scheduler has ended
 
 struct kama_sched {
     kama_fiber* head;               // the ready queue, FIFO, through kama_fiber.next
@@ -82,6 +92,7 @@ struct kama_sched {
     uint32_t ticks;                 // runs since the last poll
     int32_t refs;                   // the thread, and each fiber control block not yet freed
     kama_fiber* remote;             // woken from another isolate: a stack, pushed with CAS, taken whole
+    kama_sched_io* freed;           // registrations another isolate released: a stack, pushed with CAS, freed here
     void* poller;                   // kama_poller_create: the OS queue, and the waker registered with it
     void* waker;                    // token 0; a socket's token is its kama_sched_io
 #if defined(KAMA__SCHED_EPOLL)
@@ -295,6 +306,12 @@ static inline void kama__sched_ioReady(kama_sched_io* io, int32_t bits) {
 }
 
 #if defined(KAMA__SCHED_KQUEUE)
+// Drop every queued change that names `io`.
+static inline void kama__sched_purge(kama_sched* s, kama_sched_io* io) {
+    int32_t k = 0;
+    for (int32_t i = 0; i < s->nChanges; i++) if (s->changes[i].udata != (void*)io) s->changes[k++] = s->changes[i];
+    s->nChanges = k;
+}
 static inline void kama__sched_change(kama_sched* s, ptrdiff_t fd, int16_t filter, uint16_t flags, void* io) {
     if (s->nChanges == s->capChanges) {
         int32_t nc = s->capChanges ? s->capChanges * 2 : 32;
@@ -335,8 +352,14 @@ static inline kama_sched_io* kama_sched_io_open(ptrdiff_t fd) {
         const int e = errno; kama_free(io, sizeof *io, _Alignof(kama_sched_io)); errno = e; return NULL;
     }
 #elif defined(KAMA__SCHED_KQUEUE)
-    kama__sched_change(s, fd, EVFILT_READ, EV_ADD | EV_CLEAR, io);
+    // At once, not on the next wait's changelist: a socket may move to another isolate before that wait, and a
+    // change still queued here would then register a record the other isolate has already released.
+    struct kevent ch; EV_SET(&ch, (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, io);
+    if (kevent(((kama__poller*)s->poller)->kq, &ch, 1, NULL, 0, NULL) != 0) {
+        const int e = errno; kama_free(io, sizeof *io, _Alignof(kama_sched_io)); errno = e; return NULL;
+    }
 #endif
+    __atomic_add_fetch(&s->refs, 1, __ATOMIC_RELAXED);
     return io;
 }
 // Take `io` off the scheduler, before its descriptor closes (decision 13: epoll watches the open file description, so
@@ -350,9 +373,7 @@ static inline void kama_sched_io_close(kama_sched_io* io) {
     struct epoll_event ev; memset(&ev, 0, sizeof ev);
     (void)epoll_ctl(((kama__poller*)s->poller)->epfd, EPOLL_CTL_DEL, (int)io->fd, &ev);
 #elif defined(KAMA__SCHED_KQUEUE)
-    int32_t k = 0;                                    // a change not yet applied would name freed memory
-    for (int32_t i = 0; i < s->nChanges; i++) if (s->changes[i].udata != (void*)io) s->changes[k++] = s->changes[i];
-    s->nChanges = k;
+    kama__sched_purge(s, io);                         // a change not yet applied would name freed memory
     struct kevent del[2];
     EV_SET(&del[0], (uintptr_t)io->fd, EVFILT_READ, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
     EV_SET(&del[1], (uintptr_t)io->fd, EVFILT_WRITE, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
@@ -364,6 +385,7 @@ static inline void kama_sched_io_close(kama_sched_io* io) {
     kama_free(io, sizeof *io, _Alignof(kama_sched_io));
     if (r) kama_sched_unpark(r);
     if (w) kama_sched_unpark(w);
+    kama__sched_unref(s);
 }
 
 // After an I/O call on `io` reported WouldBlock: park until it may be ready for `interest` (1 read, 2 write), or until
@@ -383,10 +405,52 @@ static inline int kama_sched_io_wait(kama_sched_io* io, int32_t interest, uint64
     const int woke = kama_sched_parkUntil(deadline);
     if (io->reader == f) io->reader = NULL;          // timed out, or woken by something else: not waiting now
     if (io->writer == f) io->writer = NULL;
-#if defined(KAMA__SCHED_POLLER)
+#if defined(KAMA__SCHED_KQUEUE)
+    if (interest & 2) kama__sched_purge(io->s, io);  // woken before a wait applied it: no change outlives its wait
+#elif defined(KAMA__SCHED_POLLER)
     kama__sched_arm(io);
 #endif
     return woke;
+}
+
+// Release `io` from ANY isolate (decision 13, as corrected): on its own, close it; from another, take the socket off
+// its scheduler's queue from here and hand the record back, for its scheduler to free after the batch of events it
+// may be reading (see RELEASE). The socket's descriptor must still be open: it closes after this.
+static inline void kama_sched_io_release(kama_sched_io* io) {
+    kama_sched* s = io->s;
+    if ((void*)s == kama__fibers.sched) { kama_sched_io_close(io); return; }
+#if defined(KAMA__SCHED_EPOLL)
+    struct epoll_event ev; memset(&ev, 0, sizeof ev);
+    (void)epoll_ctl(((kama__poller*)s->poller)->epfd, EPOLL_CTL_DEL, (int)io->fd, &ev);
+#elif defined(KAMA__SCHED_KQUEUE)
+    struct kevent del[2], res[2];
+    EV_SET(&del[0], (uintptr_t)io->fd, EVFILT_READ, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
+    EV_SET(&del[1], (uintptr_t)io->fd, EVFILT_WRITE, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
+    (void)kevent(((kama__poller*)s->poller)->kq, del, 2, res, 2, NULL);
+#endif
+    // The Poller arm holds a socket only while one of its own fibers waits on it, and none can: the socket is here.
+    kama_sched_io* head = __atomic_load_n(&s->freed, __ATOMIC_ACQUIRE);
+    do {
+        if (head == KAMA__SCHED_GONE) {               // it has ended: no batch of its can name the record
+            kama_free(io, sizeof *io, _Alignof(kama_sched_io));
+            kama__sched_unref(s);
+            return;
+        }
+        io->freedNext = head;
+    } while (!__atomic_compare_exchange_n(&s->freed, &head, io, 1, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE));
+}
+// Free what other isolates released; `gone` marks the list so a later release frees its own.
+static inline void kama__sched_drainFreed(kama_sched* s, int gone) {
+    if (!gone && !__atomic_load_n(&s->freed, __ATOMIC_RELAXED)) return;
+    kama_sched_io* io = __atomic_exchange_n(&s->freed, gone ? KAMA__SCHED_GONE : (kama_sched_io*)NULL, __ATOMIC_ACQ_REL);
+    int32_t n = 0;
+    while (io && io != KAMA__SCHED_GONE) {
+        kama_sched_io* next = io->freedNext;
+        kama_free(io, sizeof *io, _Alignof(kama_sched_io));
+        n++;
+        io = next;
+    }
+    if (n) __atomic_sub_fetch(&s->refs, n, __ATOMIC_ACQ_REL);   // the thread's own reference outlives this
 }
 
 // Wait for I/O, a remote wake or `timeoutNs` (-1: until something comes), and make ready what came.
@@ -482,6 +546,7 @@ static inline void kama_sched_detach(kama_fiber* f) {
 // the last, and its joiner.
 static inline void kama__sched_turn(kama_sched* s) {
     const int8_t rootParked = kama__fibers.root.parked;
+    kama__sched_drainFreed(s, 0);
     kama__sched_drainRemote(s);
     kama__sched_fireTimers(s, s->heapN ? kama_now_mono_ns() : 0);
     if (rootParked && !kama__fibers.root.parked) return;   // the root's own wake came, and is never queued: no wait
@@ -538,9 +603,34 @@ static inline void kama_sched_destroy(void) {
     kama_sched* s = (kama_sched*)kama__fibers.sched;
     if (!s) return;
     kama__sched_drainRemote(s);
+    kama__sched_drainFreed(s, 1);
     kama__fibers.sched = NULL; kama__fibers.root.sched = NULL; kama__fibers.schedEnd = NULL;
     kama__sched_unref(s);
 }
 
 #endif /* !__EMSCRIPTEN__ && !KAMA_FIBER_NONE */
+
+// The scheduler's half of a socket's wait (kama_os.h, KR-3 step 5), in a program that runs fibers. A target with no
+// fiber switch has no scheduler, so nothing registers there and every socket keeps the thread's path.
+#if defined(KAMA__OS_FIBERS)
+#if !defined(KAMA_FIBER_NONE)
+static inline int kama__net_here(void) { return kama__fibers.sched != NULL; }
+static inline int kama__net_mine(void* io) { return (void*)((kama_sched_io*)io)->s == kama__fibers.sched; }
+static inline void* kama__net_open(ptrdiff_t fd) { return kama_sched_io_open(fd); }
+static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by) {
+    return kama_sched_io_wait((kama_sched_io*)io, interest, by);
+}
+static inline void kama__net_drop(void* io) { kama_sched_io_release((kama_sched_io*)io); }
+static inline void kama__net_nap(uint64_t ns) { kama_sched_sleep(ns); }
+#else
+static inline int kama__net_here(void) { return 0; }
+static inline int kama__net_mine(void* io) { (void)io; return 1; }
+static inline void* kama__net_open(ptrdiff_t fd) { (void)fd; return NULL; }
+static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by) { (void)io; (void)interest; (void)by; return 0; }
+static inline void kama__net_drop(void* io) { (void)io; }
+static inline void kama__net_nap(uint64_t ns) { (void)ns; }
+#endif
+#elif defined(KAMA_FIBERS) && defined(KAMA_OS_H) && !defined(__EMSCRIPTEN__)
+#error "kama_os.h was read before KAMA_FIBERS was defined: its sockets would never park (define it before any kama header)"
+#endif
 #endif /* KAMA_SCHED_H */

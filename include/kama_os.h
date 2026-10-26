@@ -68,6 +68,11 @@ static inline char* kama__sized_strdup(const char* s) {
     char* d = (char*)kama__sized_alloc(n); if (d) kama_copy(d, s, n); return d;
 }
 
+// A socket's mode bits, as std keeps them beside its descriptor (the socket-wait section at the end of this file).
+#define KAMA_NET_PROGRAM_NB 1     // the program made it non-blocking
+#define KAMA_NET_KAMA_NB    2     // kama did, to park on it or to wait out a deadline
+#define KAMA_NET_DEADLINE   4     // a deadline is set
+
 #if defined(_WIN32)
 
 // ============================ Windows (Winsock + CRT) ============================
@@ -1100,6 +1105,8 @@ static inline ptrdiff_t kama_accept(ptrdiff_t fd) {
     (void)SetHandleInformation((HANDLE)c, HANDLE_FLAG_INHERIT, 0);   // whatever it took from the listener (KR-174)
     return (ptrdiff_t)c;
 }
+// Winsock has no MSG_DONTWAIT: a socket's mode is its own (FIONBIO), which a duplicate does not share.
+#define KAMA__NET_DONTWAIT(mode) ((void)(mode), 0)
 static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n) {
     int r = recv((SOCKET)fd, (char*)buf, (int)n, 0);
     if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
@@ -2499,6 +2506,13 @@ static inline void kama__nosigpipe(ptrdiff_t fd) {
 #define KAMA__SEND_FLAGS MSG_NOSIGNAL
 #else
 #define KAMA__SEND_FLAGS 0
+#endif
+// A data call on a socket kama made non-blocking also passes MSG_DONTWAIT (KR-3 decision 13): the mode belongs to the
+// open file, which a duplicate shares, so a duplicate set back to blocking could otherwise stall a fiber's core.
+#if defined(MSG_DONTWAIT)
+#define KAMA__NET_DONTWAIT(mode) (((mode) & KAMA_NET_KAMA_NB) ? MSG_DONTWAIT : 0)
+#else
+#define KAMA__NET_DONTWAIT(mode) ((void)(mode), 0)
 #endif
 // Every socket kama opens, close-on-exec (KR-174): atomically by SOCK_CLOEXEC on Linux, else marked under the gate.
 static inline ptrdiff_t kama__socket(int domain, int type) {
@@ -4183,5 +4197,216 @@ static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, ui
     if (n == 0) { errno = EHOSTUNREACH; return -1; }
     return n;
 }
+
+// ---- a socket's wait (KR-3 step 5, docs/design/fibers.md decisions 7, 11 and 13) ----------------------------------
+// Every blocking std socket call runs one protocol around its system call:
+//   kama_net_ready  before it. A deadline already passed fails the call at once, even with data queued (Go's rule).
+//                   On an isolate that runs fibers the socket is made non-blocking, as kama's own and not the
+//                   program's, and registered with the scheduler; a registration another isolate made is released
+//                   first (decision 13 as corrected: nothing runs at a hand-off, so the next user does it).
+//   kama_net_retry  after it failed: 1 to try again — EINTR, or a wait after which it may be ready (a wake is a hint)
+//                   — and 0 to return the error, which is then in errno: the call's own, WouldBlock for a socket the
+//                   program made non-blocking, or TimedOut once the deadline passed.
+// A socket's state is what std keeps beside its descriptor: the registration (`io`, NULL on a thread), the mode bits,
+// and a deadline per direction (kama_now_mono_ns times, the clock `Instant` holds; 0 for none).
+//   1  the program made it non-blocking: a would-block answers WouldBlock, as before fibers
+//   2  kama made it non-blocking, to park on it (a fiber) or to wait out a deadline (a thread's poll)
+//   4  a deadline is set, so a thread keeps it non-blocking rather than flipping it back for one call
+// A socket with no deadline on a thread is left blocking, so its call costs the one system call it always did.
+#include "kama_time.h"
+
+#if defined(KAMA_FIBERS) && !defined(__EMSCRIPTEN__)
+// A program that runs fibers: the scheduler's half, defined in kama_sched.h, which this header includes at its end.
+#define KAMA__OS_FIBERS 1
+static inline int     kama__net_here(void);                                        // this isolate runs a scheduler
+static inline int     kama__net_mine(void* io);                                    // io is this isolate's registration
+static inline void*   kama__net_open(ptrdiff_t fd);                                // register; NULL with errno set
+static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by);     // 1 may be ready, 0 the deadline
+static inline void    kama__net_drop(void* io);                                    // off the queue, from any isolate
+static inline void    kama__net_nap(uint64_t ns);                                  // park this fiber that long
+#endif
+
+static inline void kama__net_fail(int e) {
+#if defined(_WIN32)
+    kama__os_fail(0, e);
+#else
+    errno = e;
+#endif
+}
+
+// Wait on a thread until `fd` may be ready for `interest` (1 read, 2 write) or `by` passes: 1 to retry the call, 0
+// with errno set. poll(2) on POSIX; select on Windows, whose WSAPoll misses a failed connect before Windows 10 2004.
+static inline int32_t kama__net_poll(ptrdiff_t fd, int32_t interest, uint64_t by) {
+    for (;;) {
+        int64_t leftNs = -1;
+        if (by) {
+            const uint64_t now = kama_now_mono_ns();
+            if (now >= by) { kama__net_fail(ETIMEDOUT); return 0; }
+            leftNs = (int64_t)(by - now);
+        }
+#if defined(_WIN32)
+        fd_set r, w, x;
+        FD_ZERO(&r); FD_ZERO(&w); FD_ZERO(&x);
+        if (interest & 1) FD_SET((SOCKET)fd, &r); else { FD_SET((SOCKET)fd, &w); FD_SET((SOCKET)fd, &x); }
+        struct timeval tv, *ptv = NULL;
+        if (leftNs >= 0) {
+            const int64_t us = (leftNs + 999) / 1000;                       // rounded up: never early
+            tv.tv_sec = (long)(us / 1000000); tv.tv_usec = (long)(us % 1000000); ptv = &tv;
+        }
+        const int n = select(0, &r, &w, &x, ptv);
+        if (n > 0) return 1;
+        if (n == SOCKET_ERROR) { kama__capture_wsa(); return 0; }
+#else
+        struct pollfd p; p.fd = (int)fd; p.events = (short)((interest & 1) ? POLLIN : POLLOUT); p.revents = 0;
+        int ms = -1;
+        if (leftNs >= 0) { const int64_t m = (leftNs + 999999) / 1000000; ms = m > 0x7fffffff ? 0x7fffffff : (int)m; }
+        const int n = poll(&p, 1, ms);
+        if (n > 0) return 1;                                                // ready, or the error the retry meets
+        if (n < 0 && errno != EINTR) return 0;
+#endif
+    }
+}
+// Wait until `fd` may be ready: parked, on a fiber that registered it, or in the poll on a thread.
+static inline int32_t kama__net_wait(ptrdiff_t fd, void* io, int32_t interest, uint64_t by) {
+#if defined(KAMA__OS_FIBERS)
+    if (io) { if (kama__net_park(io, interest, by)) return 1; kama__net_fail(ETIMEDOUT); return 0; }
+#endif
+    (void)io;
+    return kama__net_poll(fd, interest, by);
+}
+
+// Before a blocking call on `fd`: 0 to make it, -1 with errno set (TimedOut: its deadline `by` already passed).
+static inline int32_t kama_net_ready(ptrdiff_t fd, void** io, int32_t* mode, uint64_t by) {
+    if (by && kama_now_mono_ns() >= by) { kama__net_fail(ETIMEDOUT); return -1; }
+#if defined(KAMA__OS_FIBERS)
+    if (*io && !kama__net_mine(*io)) { kama__net_drop(*io); *io = NULL; }    // it moved here from another isolate
+    if (*io) return 0;
+    if (kama__net_here() && !(*mode & KAMA_NET_PROGRAM_NB)) {
+        if (!(*mode & KAMA_NET_KAMA_NB)) {
+            if (kama_set_nonblocking(fd, 1) != 0) return -1;
+            *mode |= KAMA_NET_KAMA_NB;
+        }
+        *io = kama__net_open(fd);
+        return *io ? 0 : -1;
+    }
+#endif
+    (void)io;
+    const int32_t m = *mode;
+    if ((m & KAMA_NET_KAMA_NB) && !(m & KAMA_NET_DEADLINE)) {           // off a fiber with no deadline: blocking again
+        if (kama_set_nonblocking(fd, 0) != 0) return -1;
+        *mode = m & ~KAMA_NET_KAMA_NB;
+    } else if ((m & KAMA_NET_DEADLINE) && !(m & (KAMA_NET_PROGRAM_NB | KAMA_NET_KAMA_NB))) {
+        if (kama_set_nonblocking(fd, 1) != 0) return -1;                  // a deadline on a thread: waited out in a poll
+        *mode = m | KAMA_NET_KAMA_NB;
+    }
+    return 0;
+}
+// After a blocking call on `fd` failed: 1 to make it again, 0 to return the error now in errno. `interest` is what
+// the call needs (1 read, 2 write) and `by` its direction's deadline.
+static inline int32_t kama_net_retry(ptrdiff_t fd, void* io, int32_t mode, int32_t interest, uint64_t by) {
+    const int e = errno;
+    if (e == EINTR) return 1;
+    // WouldBlock is the answer for a socket the program made non-blocking, and for one kama never made so: then
+    // something else did (SO_RCVTIMEO through rawHandle), and waiting here would break what it asked for.
+    if (e != EAGAIN || (mode & KAMA_NET_PROGRAM_NB) || !(mode & KAMA_NET_KAMA_NB)) return 0;
+    return kama__net_wait(fd, io, interest, by);
+}
+// After `connect` failed on a socket kama made non-blocking: wait until it resolves, as a blocking connect would, or
+// `by` passes. 0 connected, -1 with errno set. A wake is a hint, and an unconnected socket can report writable before
+// its connect resolves (epoll reports EPOLLOUT|EPOLLHUP at registration), so a clean SO_ERROR is confirmed by
+// getpeername, as Go confirms it.
+static inline int32_t kama_net_connected(ptrdiff_t fd, void* io, int32_t mode, uint64_t by) {
+    if (errno != EINPROGRESS || (mode & KAMA_NET_PROGRAM_NB) || !(mode & KAMA_NET_KAMA_NB)) return -1;
+    for (;;) {
+        if (!kama__net_wait(fd, io, 2, by)) return -1;
+        if (kama_socket_error(fd) != 0) return -1;
+        struct sockaddr_storage ss; socklen_t len = (socklen_t)sizeof ss;
+        if (getpeername((kama__sock)fd, (struct sockaddr*)&ss, &len) == 0) return 0;
+        (void)kama__sock_fail();
+        if (errno != ENOTCONN) return -1;
+    }
+}
+// A Linux Unix-socket connect that met a full accept queue (EAGAIN: no connection was started, so readiness has
+// nothing to report) is made again after a pause, as a blocking connect waits: 1 to connect again, 0 once `by`
+// passed. The pause doubles from 1 ms to 64 ms and never runs past the deadline.
+static inline int32_t kama_net_backoff(void* io, int32_t mode, int32_t attempt, uint64_t by) {
+    if (errno != EAGAIN || (mode & KAMA_NET_PROGRAM_NB) || !(mode & KAMA_NET_KAMA_NB)) return 0;
+    uint64_t ns = (uint64_t)1000000 << (attempt < 6 ? attempt : 6);
+    if (by) {
+        const uint64_t now = kama_now_mono_ns();
+        if (now >= by) { kama__net_fail(ETIMEDOUT); return 0; }
+        if (by - now < ns) ns = by - now;
+    }
+#if defined(KAMA__OS_FIBERS)
+    if (io) { kama__net_nap(ns); return 1; }
+#endif
+    (void)io;
+    kama_sleep_ns(ns);
+    return 1;
+}
+// Release `io` from whichever isolate holds it now (decision 13): its own closes it, another takes it off that queue.
+static inline void kama_net_release(void* io) {
+#if defined(KAMA__OS_FIBERS)
+    if (io) kama__net_drop(io);
+#endif
+    (void)io;
+}
+// A socket's close: off the scheduler first — epoll watches the open file, so a duplicate would keep a closed
+// descriptor's registration alive (decision 13) — then the descriptor.
+static inline int32_t kama_net_close(ptrdiff_t fd, void* io) {
+    kama_net_release(io);
+    return kama_close_socket(fd);
+}
+// A descriptor leaving its socket (`takeDescriptor`): released, and back in the mode the program asked for.
+static inline void kama_net_settle(ptrdiff_t fd, void* io, int32_t mode) {
+    kama_net_release(io);
+    if ((mode & KAMA_NET_KAMA_NB) && !(mode & KAMA_NET_PROGRAM_NB)) (void)kama_set_nonblocking(fd, 0);
+}
+// `setNonBlocking(on)`: the program's choice, kept so a fiber or a deadline never overrides it; kama's own
+// non-blocking stays in force underneath while the socket is registered or has a deadline.
+static inline int32_t kama_net_set_mode(ptrdiff_t fd, void* io, int32_t* mode, int32_t on) {
+    const int32_t m = *mode;
+    if (on) {
+        if (!(m & KAMA_NET_KAMA_NB) && kama_set_nonblocking(fd, 1) != 0) return -1;
+        *mode = (m | KAMA_NET_PROGRAM_NB) & ~KAMA_NET_KAMA_NB;
+        return 0;
+    }
+    if (io || (m & KAMA_NET_DEADLINE)) {                                   // still kama's to wait on
+        if (!(m & (KAMA_NET_PROGRAM_NB | KAMA_NET_KAMA_NB)) && kama_set_nonblocking(fd, 1) != 0) return -1;
+        *mode = (m & ~KAMA_NET_PROGRAM_NB) | KAMA_NET_KAMA_NB;
+        return 0;
+    }
+    if (kama_set_nonblocking(fd, 0) != 0) return -1;
+    *mode = m & ~(KAMA_NET_PROGRAM_NB | KAMA_NET_KAMA_NB);
+    return 0;
+}
+// An adopted descriptor arrives in its maker's mode. POSIX reads it back; Windows cannot read FIONBIO, so a socket
+// adopted there is taken as blocking, and a program that made it non-blocking says so with `setNonBlocking(true)`.
+static inline int32_t kama_net_adopt_mode(ptrdiff_t fd) {
+#if defined(_WIN32)
+    (void)fd;
+    return 0;
+#else
+    const int fl = fcntl((int)fd, F_GETFL, 0);
+    return (fl >= 0 && (fl & O_NONBLOCK)) ? KAMA_NET_PROGRAM_NB : 0;
+#endif
+}
+// The descriptor a Poller waits on, where it has one a fiber can park on (Poller.wait, fibers.md decision 7): the
+// epoll set or the kqueue. -1 for AFD and poll(2), which have none — their wait goes to the offload pool (step 7).
+static inline ptrdiff_t kama_poller_fd(void* ph) {
+#if defined(_WIN32)
+    (void)ph; return -1;
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
+    return (ptrdiff_t)((kama__poller*)ph)->epfd;
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+    return (ptrdiff_t)((kama__poller*)ph)->kq;
+#else
+    (void)ph; return -1;
+#endif
+}
+
+#if defined(KAMA__OS_FIBERS)
+#include "kama_sched.h"
+#endif
 
 #endif  // KAMA_OS_H

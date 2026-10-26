@@ -46,8 +46,29 @@ for a in $HEADERS; do
         fi
     done
 done
+# A program that runs fibers defines KAMA_FIBERS before any kama header (KR-3 step 5), and then kama_os.h's socket
+# wait reaches into kama_sched.h, which it includes at its end while kama_sched.h includes it at its top. Either may
+# come first in a unit, so every pair holding a header on that seam compiles both ways under the define too —
+# including kama_sched.h's own `#error` for kama_os.h read before the define, which no order here may trip.
+SEAM="kama_os.h kama_sched.h kama_time.h kama_fiber.h kama_isolate.h"
+fibered=0
+for a in $SEAM; do
+    for b in $HEADERS; do
+        [ "$a" = "$b" ] && continue
+        for pair in "$a $b" "$b $a"; do
+            set -- $pair
+            total=$((total + 1)); fibered=$((fibered + 1))
+            { echo '#define KAMA_FIBERS 1'; echo '#include "kama_runtime.h"'; line "$1"; line "$2"; } > "$tmp/t.c"
+            if ! "$CC" -std=c11 -fsyntax-only -I"$ROOT/include" "$tmp/t.c" > "$tmp/err" 2>&1; then
+                fail=$((fail + 1))
+                echo "check-header-order: FAIL — with KAMA_FIBERS, $1 then $2 does not compile:" >&2
+                grep -m 2 'error:' "$tmp/err" >&2 || sed -n '1,3p' "$tmp/err" >&2
+            fi
+        done
+    done
+done
 if [ "$fail" -ne 0 ]; then
     echo "check-header-order: $fail of $total ordered pairs fail — a header must not depend on its neighbours' order" >&2
     exit 1
 fi
-echo "check-header-order: OK ($total ordered pairs of runtime and libc headers compile)"
+echo "check-header-order: OK ($total ordered pairs of runtime and libc headers compile, $fibered of them with KAMA_FIBERS)"
