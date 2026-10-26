@@ -1,0 +1,29 @@
+// KR-242: a statement's borrowed temporary is dropped at the end of the statement — SPEC (*`const ref`*): "that temp
+// dies at the end of the statement", as Rust's temporary scope and C++'s full-expression end it — not at the end of the
+// enclosing block, which held it past every statement after. Three shapes, each followed by a mark: a declaration whose
+// initializer passes a temporary to a `const ref` parameter, the same as an expression statement, and a temporary
+// call receiver. Each drop and each mark is a digit in `seq`, so the order is the number. A condition's temporary was
+// already right (dropped before the body); a declared name still lives to its block's end.
+static int64 seq = 0;
+fn void note(int64 d) { seq = seq * 10 + d; }
+
+type resource W {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 count() { return this.n; }
+    ~W() { int64 d = cast<int64>(this.n); note(d: d); }
+}
+fn int32 viar(const ref W w) { return w.count(); }
+
+fn uint8 main() {
+    int32 r = viar(w: W.make(n: 1));        // declaration: W 1 drops here
+    note(d: 9);
+    viar(w: W.make(n: 2));                  // expression statement: W 2 drops here
+    note(d: 9);
+    int32 t = W.make(n: 3).count();         // receiver: W 3 drops here
+    note(d: 9);
+    W kept = W.make(n: 4);                  // a declared name is the block's
+    note(d: 9);
+    if (seq != 1929399i64) { return cast<uint8>(seq % 200i64); }
+    return cast<uint8>(r + t + kept.count() + 34);   // 1 + 3 + 4 + 34
+}

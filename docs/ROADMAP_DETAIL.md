@@ -424,43 +424,6 @@ random bytes find. **Design first.** The questions:
 Policy: **no known limitation stays untracked** — each is scheduled or a declared non-goal. The
 language-completeness residual is **closed**; what remains here is genuinely later-track or opt-in.
 
-<a id="s2-temporary-drop-statement"></a>
-
-### A statement's borrowed temporary drops at the end of its block (KR-242)
-
-**Found 2026-10-25,** probing how a contract local holds a temporary (refused since `0.9.742`), on `0.9.741`. SPEC (*`const ref`*) says of a temporary bound to a `const ref`
-parameter: "That temp dies at the end of the statement". As built it dies at the end of the enclosing block:
-
-```kama fragment
-type resource W { int32 n; public ctor make(int32 n) { this.n = n; } public const fn int32 count() { return this.n; }
-                  ~W() { println(s: "drop W"); } }
-fn int32 viar(const ref W w) { return w.count(); }
-// main:
-int32 r = viar(w: W.make(n: 1));
-println(s: "after the call");      // printed BEFORE "drop W"
-int32 t = W.make(n: 2).count();    // a receiver's temporary: the same
-```
-
-The hoisted temporaries (`kama_ctorarg`, `kama_recv`, `kama_ifcarg`) are registered with `recordDestructibleLocal`,
-so the scope's cleanup drops them; the comment on the by-value contract parameter's arm says so ("the CALLER owns the
-temp and drops it at scope end"). A temporary in an `if` or `while` CONDITION is already right: each evaluation drops
-its own before the body runs (`dropCondTemps`). Only a plain statement's temporaries wait for the block.
-
-| | When a temporary bound to a borrow is destroyed |
-|---|---|
-| Rust | the end of the enclosing statement (the temporary scope), unless a `let` extends it |
-| C++ | the end of the full-expression |
-| kama (SPEC) | the end of the statement |
-| kama (as built) | the end of the block |
-
-It matters wherever a destructor does something observable: a resource held longer than written, memory a long
-function keeps until it returns, and a destructor's order against the statements after it.
-
-**Ruled 2026-10-25: the end of the statement** (SPEC is right; the emitter moves to it), fixed after the next release
-tag. The fix: a statement's hoisted temporaries drop right after the statement, as a condition's already do — a
-`dropCondTemps`-shaped pass at the end of every statement that hoisted one, with the same moved/non-destructible
-guards. Fixtures: a declaration, an expression statement and a receiver chain, each printing its drop order.
-
 ### Verdicts on reported gaps (2026-10-08)
 
 - **A scoped `unsafe { }` block is a NON-GOAL.** It existed and was removed: one block disabled definite

@@ -1742,8 +1742,8 @@ fn uint8 main() {
 has an address, so the compiler materialises one into a temp — which is what lets `m.get(key: 5)`,
 `readFile(path: "some/path")` and `useShape(a: Square(3))` be written without binding a local first. Any
 other value works the same way: `take(v: a + 1)`, `take(v: count())`, `take(v: -a)`, `take(v: mk().y)`, <!-- test: const_ref_rvalue -->
-each held in storage of the parameter's type. That
-temp dies at the end of the statement, so a **non-`const` `ref`/`out` cannot take one**: the callee's <!-- xfail: ref_literal_mutable, ref_string_literal_mutable, ref_temporary_nonconst, ref_rvalue_mutable -->
+each held in storage of the parameter's type. That <!-- test: temp_drop_statement -->
+temp dies at the end of the statement — before the next one runs, as a call receiver's does — so a **non-`const` `ref`/`out` cannot take one**: the callee's <!-- xfail: ref_literal_mutable, ref_string_literal_mutable, ref_temporary_nonconst, ref_rvalue_mutable -->
 write would land in storage nothing can read back. The repair is whichever the callee meant — bind a
 local if it really writes, or say `const ref` if it never did. Prefer `const ref` for any parameter you
 only read; it is what makes the borrow usable at a call site.

@@ -3844,6 +3844,7 @@ private:
 
     // Statements
     void emitStatement(SharedStatement stmt, int depth);
+    void emitStatementBody(SharedStatement stmt, int depth);
     void emitAsm(AsmNode* a, int depth);   // `asm("...")` -> `__asm__ __volatile__("..." : : : "memory")` (MCU 6a)
     // std::log v2 (M7): recognize a `logError/Warn/Info/Debug/Trace(tag:, msg:)` facade call statement and
     // lower it in place — compile-strip below the floor + a runtime `kama_log_enabled` guard with the message
@@ -3887,6 +3888,7 @@ private:
     // RAII cleanup
     void emitScopeCleanup(const Scope& s, int depth);          // reverse-order dtors for one scope
     void dropCondTemps(size_t preLoc, int depth);              // drop+unregister a condition's hoisted temps
+    void dropStmtTemps(size_t preLoc, int depth);              // ...a plain statement's, at its end (KR-242)
     void emitUnwindToLoop(int depth);                          // break/continue: innermost..loop boundary
     int  innermostLoopIndex() const;                           // the enclosing loop body's scope, or -1 (none in this function)
     bool assignTargetLive(const std::string& key) const;      // the assignment's target still holds a value to drop

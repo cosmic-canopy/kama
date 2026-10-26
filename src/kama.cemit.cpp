@@ -6783,6 +6783,28 @@ void CEmitter::dropCondTemps(size_t preLoc, int depth)
     if (locs.size() > preLoc) locs.erase(locs.begin() + preLoc, locs.end());
 }
 
+// A plain statement's temporaries, at its end (KR-242, see emitStatement): drop and unregister every unnamed temp it
+// registered in the current scope since `preLoc`, with dropCondTemps's guards, and keep its named locals for the block.
+void CEmitter::dropStmtTemps(size_t preLoc, int depth)
+{
+    if (_scopes.empty()) return;
+    auto& locs = _scopes.back().locals;
+    if (locs.size() <= preLoc) return;
+    for (size_t i = locs.size(); i-- > preLoc; ) {
+        if (locs[i].userName) continue;
+        auto ms = _moveState.find(locs[i].cVar);
+        if (ms != _moveState.end() && ms->second != MoveState::NotMoved) continue;   // moved / maybe-moved: no drop
+        auto ci = _classes.find(locs[i].className);
+        if (ci != _classes.end() && !ci->second.destructible) continue;              // owns nothing
+        indent(depth);
+        if (!locs[i].guard.empty()) *_out << "if (" << locs[i].guard << ") ";
+        *_out << locs[i].className << "__dtor(&" << locs[i].cVar << ");\n";
+    }
+    size_t k = preLoc;
+    for (size_t i = preLoc; i < locs.size(); ++i) if (locs[i].userName) locs[k++] = locs[i];
+    locs.erase(locs.begin() + k, locs.end());
+}
+
 // Destroy scopes from innermost up to & including the nearest loop boundary.
 void CEmitter::emitUnwindToLoop(int depth)
 {
@@ -8622,7 +8644,25 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
     }
 }
 
+// KR-242: a plain statement's hoisted temporaries — a constructor argument bound to a `const ref` parameter, a call's
+// receiver, a string built for an argument — end with the statement, as SPEC (*`const ref`*) says, Rust's temporary scope
+// and C++'s full-expression do: not with the enclosing block, which held a resource, its memory and its destructor's
+// effects past the statements that follow. A declaration's own name stays the block's. A compound statement (`if`,
+// `while`, `match`, `foreach`, `borrow`) drops its head's temporaries where its own lowering puts them, after its body
+// when the body reads them, so only the plain kinds take this. No local may keep a borrow of a temporary — a view must
+// root in a window, and a local is never a `ref` — so nothing the statement leaves behind can point into one.
 void CEmitter::emitStatement(SharedStatement stmt, int depth)
+{
+    ASTNode* n = stmt.get();
+    const bool plain = n && (dynamic_cast<LocalVariableDeclaration*>(n) || dynamic_cast<ConstLocalVariableDeclaration*>(n)
+                             || dynamic_cast<ExpressionStatementNode*>(n));
+    const size_t scopes = _scopes.size();
+    const size_t pre = plain && scopes ? _scopes.back().locals.size() : 0;
+    emitStatementBody(stmt, depth);
+    if (plain && scopes && _scopes.size() == scopes) dropStmtTemps(pre, depth);
+}
+
+void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
 {
     if (!stmt) return;
     ASTNode* n = stmt.get();
