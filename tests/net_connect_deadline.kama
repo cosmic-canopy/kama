@@ -1,0 +1,52 @@
+// A connect's deadline (KR-3 step 5): `ConnectOptions`, through `connectWith`, as `ListenOptions` goes through
+// `bindWith`. With none, or one far off, a connect to a listener is made; with one already passed it fails with
+// `TimedOut` before anything is sent. On Linux a Unix-socket connect to a full accept queue waits for room — on a
+// thread as on a fiber — and with a deadline it gives up when that passes (connect_linux below). Port 0, read back.
+import { std::net::TcpListener, std::net::TcpStream, std::net::ConnectOptions, std::net::SocketAddr,
+         std::net::UnixListener, std::net::UnixStream, std::net::UnixAddr, std::io::IoError, std::io::IoErrorKind,
+         std::time::Instant, std::time::monotonicNow, std::time::Duration, std::collections::DynamicArray };
+
+fn bool timedOut(const ref IoError e) { return match (e.kind()) { case TimedOut: true; case _: false; }; }
+fn ConnectOptions by(Optional<Instant> at) { ConnectOptions o = ConnectOptions.make(); o.deadline = at; return o; }
+
+@compileFor(OS_LINUX)
+unsafe fn int32 fullQueue() {
+    UnixAddr name = match (UnixAddr.fromAbstract(name: "kama-connect-deadline")) { case Ok(value: a): a; case Err(error: e): { return 20; } };
+    Result<UnixListener, IoError> rl = UnixListener.bindTo(address: name);
+    UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 21; } };
+    DynamicArray<UnixStream> held = DynamicArray.empty();
+    bool full = false;
+    while (!full && held.length() < 4096) {
+        Result<UnixStream, IoError> rc = UnixStream.connectToNonBlocking(address: name);
+        match (give rc) {
+            case Ok(value: s): { held.add(item: give s); }
+            case Err(error: e): { full = match (e.kind()) { case WouldBlock: true; case _: false; }; if (!full) { return 22; } }
+        };
+    }
+    if (!full) { return 23; }
+    Instant start = monotonicNow();
+    Result<UnixStream, IoError> late = UnixStream.connectWith(address: name, options: by(at: Optional::Some(value: start + Duration.fromMillis(ms: 40))));
+    bool ok = match (late) { case Ok(value: s): false; case Err(error: e): timedOut(e: e); };
+    if (!ok) { return 24; }
+    return start.elapsed().asMillis() >= 40 ? 0 : 25;
+}
+@compileFor(!OS_LINUX)
+unsafe fn int32 fullQueue() { return 0; }
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    SocketAddr at = match (l.localAddr()) { case Ok(value: a): a; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> none = TcpStream.connectWith(address: at, options: ConnectOptions.make());
+    bool a = match (none) { case Ok(value: s): true; case Err(error: e): false; };
+    if (!a) { return 10; }
+    Result<TcpStream, IoError> far = TcpStream.connectWith(address: at, options: by(at: Optional::Some(value: monotonicNow() + Duration.fromSecs(s: 10))));
+    bool b = match (far) { case Ok(value: s): true; case Err(error: e): false; };
+    if (!b) { return 11; }
+    Result<TcpStream, IoError> passed = TcpStream.connectWith(address: at, options: by(at: Optional::Some(value: monotonicNow())));
+    bool c = match (passed) { case Ok(value: s): false; case Err(error: e): timedOut(e: e); };
+    if (!c) { return 12; }
+    int32 q = fullQueue();
+    return q == 0 ? 42 : cast<uint8>(q);
+}
+fn uint8 main() { return run(); }

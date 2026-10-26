@@ -24,6 +24,7 @@ import {
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
     std::io::Descriptor, std::collections::DynamicArray, std::collections::FixedArray,
     ReliableStream, Shutdown, PeerCredentials, DatagramSocket, RecvFrom,
+ std::time::Instant, ConnectOptions,
 };
 
 export { UnixStream, UnixStreamPair, UnixListener, UnixAddr, UnixDatagram, UnixDatagramPair };
@@ -268,6 +269,12 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     public ctor Result<UnixStream, IoError> connectTo(const ref UnixAddr address) {
         return UnixStream.open(address: address, nonBlocking: false, by: 0);
     }
+    // `connectTo` with `ConnectOptions`: a deadline for the connect. A local connect is made at once or refused, but on
+    // Linux one to a full accept queue waits for room; past the deadline it is `Err(TimedOut)`.
+    public ctor Result<UnixStream, IoError> connectWith(const ref UnixAddr address, const ref ConnectOptions options) {
+        uint64 by = match (options.deadline) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        return UnixStream.open(address: address, nonBlocking: false, by: by);
+    }
 
     // A connect that never blocks, for a caller holding a deadline (libpq bounds the connect with
     // `connect_timeout`). A local connect completes at once, so the usual answer is a connected stream — left
@@ -351,6 +358,21 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
         }
     }
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    // A deadline for reads, as `TcpStream`'s (KR-3 step 5, Go's): an absolute `Instant` after which a read fails with `Err(TimedOut)`
+    // — at once if it has passed, even with bytes waiting — until it is reset; `None` clears it. It bounds every
+    // read after it, so one deadline bounds an exchange of several: set it again for each, for a per-read limit.
+    // On a fiber the read parks until then; on a thread it waits in a poll for the time left.
+    public fn void setReadDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.readBy = by;
+        this.mode = this.readBy != 0 || this.writeBy != 0 ? (this.mode | 4) : (this.mode & 3);
+    }
+    // A deadline for writes, as `setReadDeadline` is for reads (a connect's is `ConnectOptions`).
+    public fn void setWriteDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.writeBy = by;
+        this.mode = this.writeBy != 0 || this.readBy != 0 ? (this.mode | 4) : (this.mode & 3);
+    }
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
         if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
@@ -483,6 +505,12 @@ type resource UnixListener implements Sendable {
             if (cfd >= 0) { return Result::Ok(value: UnixStream.make(fd: cfd, io: null, mode: this.mode & 3)); }   // its mode, as the OS gave it
             if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.acceptBy) == 0) { return Result::Err(error: lastError()); }
         }
+    }
+    // A deadline for `accept`, as `setReadDeadline` is for a stream's reads: `Err(TimedOut)` once it has passed.
+    public fn void setAcceptDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.acceptBy = by;
+        this.mode = this.acceptBy != 0 ? (this.mode | 4) : (this.mode & 3);
     }
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
         if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
@@ -619,6 +647,21 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
             if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
         }
+    }
+    // A deadline for reads (KR-3 step 5, Go's): an absolute `Instant` after which a read fails with `Err(TimedOut)`
+    // — at once if it has passed, even with bytes waiting — until it is reset; `None` clears it. It bounds every
+    // read after it, so one deadline bounds an exchange of several: set it again for each, for a per-read limit.
+    // On a fiber the read parks until then; on a thread it waits in a poll for the time left.
+    public fn void setReadDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.readBy = by;
+        this.mode = this.readBy != 0 || this.writeBy != 0 ? (this.mode | 4) : (this.mode & 3);
+    }
+    // A deadline for writes, as `setReadDeadline` is for reads (a connect's is `ConnectOptions`).
+    public fn void setWriteDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.writeBy = by;
+        this.mode = this.writeBy != 0 || this.readBy != 0 ? (this.mode | 4) : (this.mode & 3);
     }
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
         if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }

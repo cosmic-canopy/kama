@@ -2417,6 +2417,16 @@ non-blocking and registers it with the isolate's scheduler at its first wait; ne
 - **A socket's first wait on a fiber allocates its registration**, so in a program that runs fibers `@noheap` code may
   make no socket call (KR-245).
 
+**Deadlines.** `setReadDeadline(at:)` and `setWriteDeadline(at:)` on a stream or a datagram socket, and <!-- test: net_deadline, fiber_deadline -->
+`setAcceptDeadline(at:)` on a listener, take an absolute `Instant` and keep it until it is reset; `Optional::None`
+clears one. A call made once it has passed fails with `Err(TimedOut)` at once, even with bytes waiting, and so does a
+call still waiting when it passes (Go's model, KR-3 decision 11). One deadline therefore bounds an exchange of several
+calls — a request read in pieces, a `writeAll` — where a per-call timeout (Rust's `set_read_timeout`, Java's
+`setSoTimeout`) restarts on every call, so a peer that sends a byte at a time holds it open for ever; set it before
+each call for a per-call limit. A connect's deadline is `ConnectOptions.deadline`, through `connectWith`, as <!-- test: net_connect_deadline -->
+`ListenOptions` goes through `bindWith`. On a fiber the call parks until the deadline; on a thread a socket with one
+waits in a poll for the time left, and a socket with none costs the one system call it always did.
+
 **An `IoError` is a kind and, when the OS reported it, the OS's code** — the two facts every mainstream library keeps
 apart. `e.kind()` is an `IoErrorKind` (`NotFound`, `AlreadyExists`, `PermissionDenied`, `WouldBlock`, `ConnectionRefused`, …,
 `Interrupted`, `Other`), which a caller branches on with `match (e.kind())`. `e.rawOsError()` is the POSIX errno or,

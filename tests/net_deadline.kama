@@ -1,0 +1,81 @@
+// Socket deadlines on a thread (KR-3 step 5, fibers.md decision 11 as ruled: Go's). A deadline is an absolute
+// `Instant`, kept on the socket until it is reset. Each case is its own return code:
+//   - a read with nothing to read fails with `TimedOut` once the deadline passes, and never before it;
+//   - a deadline already passed fails the read at once, even with bytes waiting (Go's rule);
+//   - cleared (`None`), the socket waits as long as it takes again, and the waiting bytes are read;
+//   - a write to a peer that reads nothing fills its buffer and then times out;
+//   - an accept with no connection coming, and a datagram receive with nothing sent, time out too.
+// No fibers here: on a thread the wait is a poll for the time left. Port 0, read back.
+import { std::net::TcpListener, std::net::TcpStream, std::net::UdpSocket, std::io::IoError, std::io::IoErrorKind,
+         std::time::Instant, std::time::monotonicNow, std::time::Duration, std::collections::FixedArray };
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+fn Optional<Instant> after(int64 ms) { return Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: ms)); }
+fn bool timedOut(const ref IoError e) { return match (e.kind()) { case TimedOut: true; case _: false; }; }
+
+unsafe fn int32 reads(ref TcpStream c, ref TcpStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 4);
+    Instant start = monotonicNow();
+    s.setReadDeadline(at: after(ms: 30));
+    Result<isize, IoError> r = s.read(into: buf.viewMut());
+    bool late = match (r) { case Ok(value: n): false; case Err(error: e): timedOut(e: e); };
+    if (!late) { return 10; }
+    if (start.elapsed().asMillis() < 30) { return 11; }                          // never early
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    one[0] = 5ui8;
+    _ = c.write(bytes: one.view());
+    s.setReadDeadline(at: Optional::Some(value: monotonicNow()));               // already passed
+    Result<isize, IoError> q = s.read(into: buf.viewMut());
+    bool atOnce = match (q) { case Ok(value: n): false; case Err(error: e): timedOut(e: e); };
+    if (!atOnce) { return 12; }
+    s.setReadDeadline(at: Optional::None);                                      // cleared: the byte waits there
+    Result<isize, IoError> b = s.read(into: buf.viewMut());
+    bool got = match (b) { case Ok(value: n): n == 1 && buf[0] == 5ui8; case Err(error: e): false; };
+    return got ? 0 : 13;
+}
+
+unsafe fn int32 writes(ref TcpStream s) {
+    FixedArray<uint8> chunk = FixedArray.make(size: 65536);
+    s.setWriteDeadline(at: after(ms: 50));
+    for (int32 i = 0; i < 4096; i = i + 1) {                                    // 256 MiB is more than any buffer holds
+        Result<isize, IoError> w = s.write(bytes: chunk.view());
+        match (w) {
+            case Ok(value: n): { }
+            case Err(error: e): { return timedOut(e: e) ? 0 : 20; }
+        };
+    }
+    return 21;
+}
+
+unsafe fn int32 accepts(ref TcpListener l) {
+    l.setAcceptDeadline(at: after(ms: 20));
+    Result<TcpStream, IoError> ra = l.accept();
+    return match (ra) { case Ok(value: x): 30; case Err(error: e): timedOut(e: e) ? 0 : 31; };
+}
+
+unsafe fn int32 datagrams() {
+    Result<UdpSocket, IoError> ru = UdpSocket.bind(host: "127.0.0.1", port: 0ui16);
+    UdpSocket u = match (give ru) { case Ok(value: x): give x; case Err(error: e): { return 40; } };
+    FixedArray<uint8> buf = FixedArray.make(size: 8);
+    u.setReadDeadline(at: after(ms: 20));
+    Result<usize, IoError> r = u.recv(into: buf.viewMut());
+    return match (r) { case Ok(value: n): 41; case Err(error: e): timedOut(e: e) ? 0 : 42; };
+}
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: portOf(l: l));
+    TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    int32 a = reads(c: ref c, s: ref s);
+    if (a != 0) { return cast<uint8>(a); }
+    int32 b = writes(s: ref s);
+    if (b != 0) { return cast<uint8>(b); }
+    int32 d = accepts(l: ref l);
+    if (d != 0) { return cast<uint8>(d); }
+    int32 g = datagrams();
+    return g == 0 ? 42 : cast<uint8>(g);
+}
+fn uint8 main() { return run(); }

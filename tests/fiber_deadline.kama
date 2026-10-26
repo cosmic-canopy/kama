@@ -1,0 +1,65 @@
+// A read deadline on a fiber (KR-3 step 5): the read parks until the deadline, `Err(TimedOut)` then and not before,
+// and while it waits the core runs the other fibers — here two that play a hundred rounds of ping-pong over a second
+// connection, all of which finish before the deadline does. Port 0, read back.
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::IoErrorKind, std::io::writeAll,
+         std::concurrent::Fiber, std::time::Instant, std::time::monotonicNow, std::time::Duration,
+         std::collections::FixedArray };
+
+static int32 rounds = 0;
+static int32 roundsAtDeadline = -1;
+static bool late = false;
+static bool early = false;
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn void waiter(ref TcpStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 1);
+    Instant start = monotonicNow();
+    s.setReadDeadline(at: Optional::Some(value: start + Duration.fromMillis(ms: 200)));
+    Result<isize, IoError> r = s.read(into: buf.viewMut());
+    bool timedOut = match (r) { case Ok(value: n): false; case Err(error: e): match (e.kind()) { case TimedOut: true; case _: false; }; };
+    late = timedOut;
+    early = start.elapsed().asMillis() < 200;
+    roundsAtDeadline = rounds;
+}
+unsafe fn void bounce(ref TcpStream s) {                     // answers each byte with the next
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    for (int32 i = 0; i < 100; i = i + 1) {
+        Result<isize, IoError> r = s.read(into: b.viewMut());
+        b[0] = cast<uint8>(cast<int32>(b[0]) + 1);
+        _ = writeAll(w: s, bytes: b.view());
+    }
+}
+unsafe fn void serve(ref TcpStream s) {                      // a hundred rounds
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    for (int32 i = 0; i < 100; i = i + 1) {
+        b[0] = 1ui8;
+        _ = writeAll(w: s, bytes: b.view());
+        Result<isize, IoError> r = s.read(into: b.viewMut());
+        if (b[0] == 2ui8) { rounds = rounds + 1; }
+    }
+}
+
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    uint16 port = portOf(l: l);
+    Result<TcpStream, IoError> r1 = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream quiet = match (give r1) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> a1 = l.accept();
+    TcpStream quietPeer = match (give a1) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    Result<TcpStream, IoError> r2 = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream ping = match (give r2) { case Ok(value: x): give x; case Err(error: e): { return 5; } };
+    Result<TcpStream, IoError> a2 = l.accept();
+    TcpStream pong = match (give a2) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
+    scope {
+        spawn fiber waiter(s: ref quiet);
+        spawn fiber bounce(s: ref pong);
+        spawn fiber serve(s: ref ping);
+    }
+    if (!late) { return 7; }
+    if (early) { return 8; }
+    return roundsAtDeadline == 100 ? 42 : cast<uint8>(10 + roundsAtDeadline % 100);
+}
+fn uint8 main() { return run(); }

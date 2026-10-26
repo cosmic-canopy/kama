@@ -7,13 +7,14 @@ import {
     Shutdown,
     SocketAddr,
     std::time::Duration,
+    std::time::Instant,
     std::io::Descriptor,
     resolve,
     std::collections::DynamicArray,
     std::fs::File,
 };
 
-export { TcpListener, TcpStream, ListenOptions };
+export { TcpListener, TcpStream, ListenOptions, ConnectOptions };
 
 // POSIX/Winsock TCP bindings — see kama_os.h. Socket handles are `isize`: a Windows SOCKET is wider than
 // int, and INVALID_SOCKET reinterpreted as isize is -1, so a uniform `< 0 == error` convention holds on
@@ -118,6 +119,16 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // resolved by a function that says so and hands back every address it found.
     @parks
     public unsafe ctor Result<TcpStream, IoError> connectTo(const ref SocketAddr address) {
+        return TcpStream.dial(address: address, by: 0);
+    }
+    // `connectTo` with `ConnectOptions`: a deadline for the connect, which otherwise waits as long as the OS does (a
+    // minute or two against a host that never answers). `Err(TimedOut)` once it passes — at once if it already has.
+    public unsafe ctor Result<TcpStream, IoError> connectWith(const ref SocketAddr address, const ref ConnectOptions options) {
+        uint64 by = match (options.deadline) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        return TcpStream.dial(address: address, by: by);
+    }
+    @parks
+    unsafe ctor Result<TcpStream, IoError> dial(const ref SocketAddr address, uint64 by) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         int32 family = address.ip.family();
@@ -125,16 +136,16 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
         isize fd = kama_socket_tcp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
         UnsafePtr io = null;
-        int32 mode = 0;
-        int32 rc = kama_net_ready(fd: fd, io: addr(of: io), mode: addr(of: mode), by: 0);   // on a fiber: parks below
+        int32 mode = by != 0 ? 4 : 0;                       // a deadline: waited out non-blocking, on a thread too
+        int32 rc = kama_net_ready(fd: fd, io: addr(of: io), mode: addr(of: mode), by: by);   // on a fiber: parks below
         if (rc == 0) { rc = kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId); }
-        if (rc != 0) { rc = kama_net_connected(fd: fd, io: io, mode: mode, by: 0); }       // waits out a connect in flight
+        if (rc != 0) { rc = kama_net_connected(fd: fd, io: io, mode: mode, by: by); }      // waits out a connect in flight
         if (rc != 0) {
             IoError e = lastError();                        // capture before close (close may clear errno)
             int32 cr = kama_net_close(fd: fd, io: io);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: TcpStream.make(fd: fd, io: io, mode: mode));
+        return Result::Ok(value: TcpStream.make(fd: fd, io: io, mode: mode & 3));   // a connect's deadline is not the stream's
     }
 
     // Connect to a host NAME: `resolve` it, then try each address in the resolver's order and keep the first
@@ -175,6 +186,22 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
             if (n >= 0) { return Result::Ok(value: n); }
             if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
         }
+    }
+
+    // A deadline for reads (KR-3 step 5, Go's): an absolute `Instant` after which a read fails with `Err(TimedOut)`
+    // — at once if it has passed, even with bytes waiting — until it is reset; `None` clears it. It bounds every
+    // read after it, so one deadline bounds an exchange of several: set it again for each, for a per-read limit.
+    // On a fiber the read parks until then; on a thread it waits in a poll for the time left.
+    public fn void setReadDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.readBy = by;
+        this.mode = this.readBy != 0 || this.writeBy != 0 ? (this.mode | 4) : (this.mode & 3);
+    }
+    // A deadline for writes, as `setReadDeadline` is for reads (a connect's is `ConnectOptions`).
+    public fn void setWriteDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.writeBy = by;
+        this.mode = this.writeBy != 0 || this.readBy != 0 ? (this.mode | 4) : (this.mode & 3);
     }
 
     // Toggle non-blocking mode. In non-blocking mode, read/write that would stall return WouldBlock — on a fiber too,
@@ -403,6 +430,14 @@ type value ListenOptions implements Sendable {
     friend TcpListener::bindWith[sharesPort];
 }
 
+// The options a connect takes (`TcpStream.connectWith`, `UnixStream.connectWith`), as `ListenOptions` are a
+// listener's: `deadline`, an absolute `Instant` by which the connect must be made, or `None` (the default) to wait as
+// long as the OS does. A connect still waiting when it passes, or made after, fails with `Err(TimedOut)`.
+type value ConnectOptions implements Sendable {
+    public Optional<Instant> deadline = Optional::None;
+    public ctor make() { }
+}
+
 // A listening TCP socket. Closes on drop (RAII). Move-only.
 type resource TcpListener implements Sendable {
     isize fd = -1;   // the -1 empty niche — see ~TcpStream
@@ -472,6 +507,13 @@ type resource TcpListener implements Sendable {
             if (cfd >= 0) { return Result::Ok(value: TcpStream.make(fd: cfd, io: null, mode: this.mode & 3)); }   // its mode, as the OS gave it
             if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.acceptBy) == 0) { return Result::Err(error: lastError()); }
         }
+    }
+
+    // A deadline for `accept`, as `setReadDeadline` is for a stream's reads: `Err(TimedOut)` once it has passed.
+    public fn void setAcceptDeadline(Optional<Instant> at) {
+        uint64 by = match (at) { case Some(value: i): i.rawNanos == 0 ? 1 : i.rawNanos; case None: 0; };
+        this.acceptBy = by;
+        this.mode = this.acceptBy != 0 ? (this.mode | 4) : (this.mode & 3);
     }
 
     // Toggle non-blocking mode. In non-blocking mode, accept() returns Err(WouldBlock) when the queue is empty — on a
