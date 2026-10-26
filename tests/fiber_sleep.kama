@@ -1,0 +1,29 @@
+// `std::time::sleep` on a fiber (KR-3 step 5; fibers.md decision 7: one `sleep`, one meaning): it parks the fiber, not
+// the thread, so ten fibers that each sleep 50 ms on one isolate all wake about 50 ms in — not 500 ms, as sleeping the
+// thread ten times would take — and each wakes no earlier than it asked. The root sleeps the same way. On an isolate
+// that runs no fibers a sleep is the thread's, as before.
+import { std::concurrent::Fiber, std::time::sleep, std::time::Duration, std::time::Instant, std::time::monotonicNow };
+
+static int32 woke = 0;
+static bool early = false;
+
+fn void nap(int64 ms) {
+    Instant t = monotonicNow();
+    sleep(d: Duration.fromMillis(ms: ms));
+    if (t.elapsed().asMillis() < ms) { early = true; }
+    woke = woke + 1;
+}
+
+fn uint8 main() {
+    Instant start = monotonicNow();
+    scope {
+        for (int32 i = 0; i < 10; i = i + 1) { spawn fiber nap(ms: 50); }
+    }
+    int64 spent = start.elapsed().asMillis();
+    if (woke != 10 || early) { return 2; }
+    if (spent >= 400) { return 3; }                       // ten 50 ms sleeps, together
+    Instant root = monotonicNow();
+    sleep(d: Duration.fromMillis(ms: 5));                 // the root's, after the scheduler exists
+    if (root.elapsed().asMillis() < 5) { return 4; }
+    return 42;
+}

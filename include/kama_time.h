@@ -15,7 +15,8 @@
 //   kama_now_wall_ns  — the WALL clock, signed nanoseconds from the UNIX epoch. It is what a timestamp
 //                       means, and it can jump in either direction (NTP, a user setting the clock), so it
 //                       must never be used to measure a span.
-//   kama_sleep_ns     — block the calling thread for at least this long.
+//   kama_sleep_ns     — wait at least this long: the calling thread, or on an isolate that runs fibers, only the
+//                       calling fiber (KR-3 step 5), so the core runs the others meanwhile.
 // Everything else (Duration arithmetic, Instant deltas, timeouts) is pure kama on top.
 //
 // Freestanding-friendly: pulls only <stdint.h> plus the one platform clock header (guarded), matching
@@ -118,7 +119,7 @@ static inline int64_t kama_now_wall_ns(void) {
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #  define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
-static inline void kama_sleep_ns(uint64_t ns) {
+static inline void kama__sleep_os(uint64_t ns) {
     if (ns == 0) return;
     HANDLE timer = CreateWaitableTimerExW(NULL, NULL,
                                           CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
@@ -199,13 +200,32 @@ extern int nanosleep(const struct timespec* req, struct timespec* rem);   // the
 // sleeps a second and happens to receive SIGCHLD (any child of a `std::process` `run()`, say) wakes early
 // and silently, which is the classic version of this bug. EINTR is the only failure reachable here: the
 // span is built from an unsigned count, so tv_nsec is in range and tv_sec is never negative.
-static inline void kama_sleep_ns(uint64_t ns) {
+static inline void kama__sleep_os(uint64_t ns) {
     struct timespec req;
     req.tv_sec  = (time_t)(ns / 1000000000ull);
     req.tv_nsec = (long)(ns % 1000000000ull);
     while (nanosleep(&req, &req) != 0 && errno == EINTR) { }
 }
 
+#endif
+
+#if !defined(__EMSCRIPTEN__)
+// On an isolate that runs fibers a sleep parks only its fiber (KR-3 step 5, fibers.md decision 7: one `sleep`, one
+// meaning). A program that runs fibers defines KAMA_FIBERS, and the scheduler's half is kama_sched.h's, included at
+// the end of this file — unless kama_os.h is part way through reading it, since kama_os.h includes kama_sched.h itself
+// at its own end, once its socket half is declared.
+#if defined(KAMA_FIBERS)
+static inline int kama__time_park(uint64_t ns);       // 1 when it parked the running fiber that long; 0 on a thread
+#endif
+static inline void kama_sleep_ns(uint64_t ns) {
+#if defined(KAMA_FIBERS)
+    if (kama__time_park(ns)) return;
+#endif
+    kama__sleep_os(ns);
+}
+#if defined(KAMA_FIBERS) && !defined(KAMA_OS_H)
+#include "kama_sched.h"
+#endif
 #endif
 
 #endif  // KAMA_TIME_H

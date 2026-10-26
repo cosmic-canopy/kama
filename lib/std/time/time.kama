@@ -287,8 +287,9 @@ unsafe fn Timestamp unixNow() {
     return Timestamp.of(nanos: kama_now_wall_ns());
 }
 
-// Block the calling thread for AT LEAST `d` — never less, possibly more (the OS schedules the wake-up, and
-// a signal that cuts the nap short is resumed rather than swallowed). A zero or negative span returns
+// Wait AT LEAST `d` — never less, possibly more (the OS schedules the wake-up, and a signal that cuts the nap
+// short is resumed rather than swallowed). It is the calling thread that waits, or on an isolate that runs fibers
+// only the calling fiber: the core runs the others meanwhile (KR-3 step 5). A zero or negative span returns
 // immediately rather than yielding, so `sleep(d: deadline - now())` past its deadline is a no-op and not a
 // surprise scheduler round-trip.
 //

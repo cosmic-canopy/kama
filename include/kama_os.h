@@ -4267,7 +4267,6 @@ static inline int     kama__net_mine(void* io);                                 
 static inline void*   kama__net_open(ptrdiff_t fd);                                // register; NULL with errno set
 static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by);     // 1 may be ready, 0 the deadline
 static inline void    kama__net_drop(void* io);                                    // off the queue, from any isolate
-static inline void    kama__net_nap(uint64_t ns);                                  // park this fiber that long
 #endif
 
 static inline void kama__net_fail(int e) {
@@ -4381,11 +4380,8 @@ static inline int32_t kama_net_backoff(void* io, int32_t mode, int32_t attempt, 
         if (now >= by) { kama__net_fail(ETIMEDOUT); return 0; }
         if (by - now < ns) ns = by - now;
     }
-#if defined(KAMA__OS_FIBERS)
-    if (io) { kama__net_nap(ns); return 1; }
-#endif
     (void)io;
-    kama_sleep_ns(ns);
+    kama_sleep_ns(ns);                                                     // on a fiber, parks it
     return 1;
 }
 // Release `io` from whichever isolate holds it now (decision 13): its own closes it, another takes it off that queue.
@@ -4447,6 +4443,27 @@ static inline ptrdiff_t kama_poller_fd(void* ph) {
 #else
     (void)ph; return -1;
 #endif
+}
+
+// `Poller.wait` (fibers.md decision 7): on a fiber, a wait that would block parks the fiber on the Poller's own
+// descriptor — an epoll set or a kqueue, which nest in the scheduler's — and looks again once it may be ready (a wake
+// is a hint). `io` is that registration, released as a socket's is. AFD and poll(2) have no descriptor to park on, so
+// there the wait blocks the thread until step 7's offload pool takes it.
+static inline int32_t kama_poller_wait_parked(void* ph, void* eh, int32_t timeoutMs, void** io) {
+#if defined(KAMA__OS_FIBERS)
+    if (*io && !kama__net_mine(*io)) { kama__net_drop(*io); *io = NULL; }   // it moved here from another isolate
+    const ptrdiff_t pfd = kama_poller_fd(ph);
+    if (timeoutMs != 0 && pfd >= 0 && kama__net_here()) {
+        if (!*io && !(*io = kama__net_open(pfd))) return -1;
+        const uint64_t by = timeoutMs > 0 ? kama_now_mono_ns() + (uint64_t)timeoutMs * 1000000ull : 0;
+        for (;;) {
+            const int32_t n = kama_poller_wait(ph, eh, 0);
+            if (n != 0 || !kama__net_park(*io, 1, by)) return n;           // events, an error, or the time ran out
+        }
+    }
+#endif
+    (void)io;
+    return kama_poller_wait(ph, eh, timeoutMs);
 }
 
 #if defined(KAMA__OS_FIBERS)

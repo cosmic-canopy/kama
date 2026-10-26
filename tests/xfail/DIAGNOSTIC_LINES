@@ -1100,6 +1100,7 @@ park_window_fnptr	park_window_fnptr.kama:12:0
 park_window_join	park_window_join.kama:14:0
 park_window_root	park_window_root.kama:13:0
 park_window_scope_close	park_window_scope_close.kama:8:0
+park_window_sleep	park_window_sleep.kama:13:0
 park_window_socket_read	park_window_socket_read.kama:16:0
 parks_on_contract_member	parks_on_contract_member.kama:3:43
 parks_on_extern	parks_on_extern.kama:3:7

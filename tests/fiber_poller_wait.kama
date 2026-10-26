@@ -1,0 +1,87 @@
+// `Poller.wait` on a fiber (KR-3 step 5; fibers.md decision 7): on epoll and kqueue it parks the fiber on the Poller's
+// own descriptor, so a fiber driving its own Poller does not stop the isolate's other fibers. Each case is a return
+// code:
+//   - a wait with a timeout and nothing coming returns 0 after it, not before;
+//   - a wake from another isolate (`Waker`) ends a fiber's wait, on every OS;
+//   - on one isolate, a fiber waits on a socket while another fiber writes to it (not Windows, whose Poller has no
+//     descriptor to park on: there the wait blocks the thread until step 7's offload pool).
+// Port 0, read back.
+import { std::net::Poller, std::net::Events, std::net::Event, std::net::Interest, std::net::TcpListener, std::net::TcpStream,
+         std::concurrent::Fiber, std::concurrent::join, std::concurrent::Waker, std::io::IoError,
+         std::time::Instant, std::time::monotonicNow, std::time::sleep, std::time::Duration,
+         std::collections::FixedArray };
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn int32 timesOut(int32 n) {
+    Result<Poller, IoError> rp = Poller.create();
+    Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 10; } };
+    Events ev = Events.withCapacity(capacity: 4);
+    Instant t = monotonicNow();
+    Result<int32, IoError> r = p.wait(events: ref ev, timeoutMs: 30);
+    int32 got = match (r) { case Ok(value: k): k; case Err(error: e): 0 - 1; };
+    if (got != 0) { return 11; }
+    return t.elapsed().asMillis() >= 30 ? 0 : 12;
+}
+
+unsafe fn void wakeLater(Waker w) { sleep(d: Duration.fromMillis(ms: 20)); w.wake(); }
+unsafe fn int32 woken(int32 n) {
+    Result<Poller, IoError> rp = Poller.create();
+    Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 20; } };
+    Result<Waker, IoError> rw = p.waker(token: 7ui64);
+    Waker w = match (give rw) { case Ok(value: x): give x; case Err(error: e): { return 21; } };
+    Events ev = Events.withCapacity(capacity: 4);
+    int32 got = 0;
+    scope {
+        spawn wakeLater(w: give w);                                   // another isolate
+        Result<int32, IoError> r = p.wait(events: ref ev, timeoutMs: 5000);
+        got = match (r) { case Ok(value: k): k; case Err(error: e): 0 - 1; };
+    }
+    return got == 1 ? 0 : 22;
+}
+
+static int32 sameIsolate = 0;
+@compileFor(!OS_WINDOWS)
+unsafe fn void watch(ref TcpStream s) {
+    Result<Poller, IoError> rp = Poller.create();
+    Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return; } };
+    _ = p.add(fd: s.rawHandle(), interest: Interest::Read, token: 3ui64);
+    Events ev = Events.withCapacity(capacity: 4);
+    Result<int32, IoError> r = p.wait(events: ref ev, timeoutMs: 5000);   // parks: `poke` writes meanwhile
+    int32 got = match (r) { case Ok(value: k): k; case Err(error: e): -1; };
+    sameIsolate = got;
+}
+@compileFor(!OS_WINDOWS)
+unsafe fn void poke(ref TcpStream c) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    b[0] = 1ui8;
+    _ = c.write(bytes: b.view());
+}
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 sameCore(int32 n) {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 30; } };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: portOf(l: l));
+    TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 32; } };
+    scope {
+        spawn fiber watch(s: ref s);
+        spawn fiber poke(c: ref c);
+    }
+    return sameIsolate == 1 ? 0 : 33;
+}
+@compileFor(OS_WINDOWS)
+unsafe fn int32 sameCore(int32 n) { return 0; }
+
+unsafe fn uint8 run() {
+    Fiber<int32> a = spawn fiber timesOut(n: 0);
+    int32 x = join(fiber: give a);
+    if (x != 0) { return cast<uint8>(x); }
+    Fiber<int32> b = spawn fiber woken(n: 0);
+    int32 y = join(fiber: give b);
+    if (y != 0) { return cast<uint8>(y); }
+    int32 z = sameCore(n: 0);
+    return z == 0 ? 42 : cast<uint8>(z);
+}
+fn uint8 main() { return run(); }

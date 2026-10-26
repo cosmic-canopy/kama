@@ -1649,7 +1649,7 @@ What the model counts:
 - **Fibers.** On an isolate that runs fibers — any code its entry, `main` included, reaches once it reaches a
   `spawn fiber` — a lasting access may not reach a **park**, a call that lets another fiber run: a `join`, a `Fiber`'s <!-- xfail: park_window_join, park_window_root, park_window_scope_close, park_window_fiber_drop -->
   drop, a `scope`'s close, and a socket call that would block — a read, a write, an accept, a connect (*Sockets on a <!-- xfail: park_window_socket_read -->
-  fiber*). Fibers share the thread's record, which ends accesses in the order they began; a fiber that
+  fiber*) — or a `sleep`. Fibers share the thread's record, which ends accesses in the order they began; a fiber that <!-- xfail: park_window_sleep -->
   parked inside one would let another change what it holds. It is a compile error naming the chain, for a window and <!-- xfail: park_call_access -->
   a call that holds a field alike, and so is a call through a `fnptr` inside one, whose target could park. A call that <!-- xfail: park_window_fnptr -->
   only blocks the thread, such as `println`, is no park: no other fiber runs. A spawn is none either,
@@ -2416,6 +2416,9 @@ non-blocking and registers it with the isolate's scheduler at its first wait; ne
   blocking connect waits; the program's own non-blocking connect answers `WouldBlock` there.
 - **A socket's first wait on a fiber allocates its registration**, so in a program that runs fibers `@noheap` code may
   make no socket call (KR-245).
+- **`std::time::sleep` parks too**, and so does `Poller.wait` on epoll and kqueue, on the Poller's own descriptor, so a <!-- test: fiber_sleep, fiber_poller_wait -->
+  fiber that drives its own `Poller` does not stop the isolate's others. A Windows `Poller` has no descriptor to park
+  on, and there a fiber's wait still blocks the thread until the offload pool (KR-3 step 7).
 
 **Deadlines.** `setReadDeadline(at:)` and `setWriteDeadline(at:)` on a stream or a datagram socket, and <!-- test: net_deadline, fiber_deadline -->
 `setAcceptDeadline(at:)` on a listener, take an absolute `Instant` and keep it until it is reset; `Optional::None`
@@ -3088,7 +3091,8 @@ microseconds from 2000-01-01 — `Timestamp.fromUnixMicros` plus a constant.
 Both types serialize as that text on every backend, as a `Uuid` does, and text that does not parse is <!-- test: time_serde -->
 `DeErrorKind::Malformed`.
 
-`sleep(d: Duration)` blocks the calling thread for **at least** `d`: POSIX resumes `nanosleep` across a
+`sleep(d: Duration)` waits **at least** `d` — the calling thread, or on an isolate that runs fibers only the calling
+fiber, while the core runs the others (KR-3; *Sockets on a fiber*). POSIX resumes `nanosleep` across a
 signal (without which any program that also uses `std::process` wakes early when a child exits), and a
 zero or negative span returns at once — so `sleep(d: deadline - now)` past its deadline is a no-op.
 ⚠️ On the web target it **busy-waits**: without ASYNCIFY (a whole-program <!-- test: time_wall_sleep -->

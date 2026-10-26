@@ -1,8 +1,10 @@
-// KR-3 step 5: in a program that runs no fibers, a socket call is no park, so an `@onPanic` region may make one. The
+// KR-3 step 5: in a program that runs no fibers, a socket call or a sleep is no park, so an `@onPanic` region may make
+// one. The
 // fiber scheduler (kama_sched.h) is no part of such a program — kama_os.h reaches it only in a program that runs
 // fibers — so neither the region's walk nor `@noheap` sees a socket's registration (an allocation) or its fiber switch
 // under `read`. Its twin, xfail/onpanic_park_socket, is the same region in a program that spawns a fiber.
-import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::collections::FixedArray };
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::collections::FixedArray,
+         std::time::sleep, std::time::Duration };
 
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
@@ -12,6 +14,7 @@ type resource Peer {
     @noheap @onPanic(recover: -1)
     public unsafe fn int32 region(isize i) {
         InlineArray<uint8>#(4) buf = [0; 4];
+        sleep(d: Duration.fromMillis(ms: 1));
         Result<isize, IoError> r = this.s.read(into: buf.viewMut().slice(from: 0, count: 1));
         isize n = match (r) { case Ok(value: k): k; case Err(error: e): 0; };
         return cast<int32>(buf[i]) + cast<int32>(n);           // i = 9: a bounds miss, recovered as -1

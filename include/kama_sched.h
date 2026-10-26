@@ -621,16 +621,26 @@ static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by) {
     return kama_sched_io_wait((kama_sched_io*)io, interest, by);
 }
 static inline void kama__net_drop(void* io) { kama_sched_io_release((kama_sched_io*)io); }
-static inline void kama__net_nap(uint64_t ns) { kama_sched_sleep(ns); }
 #else
 static inline int kama__net_here(void) { return 0; }
 static inline int kama__net_mine(void* io) { (void)io; return 1; }
 static inline void* kama__net_open(ptrdiff_t fd) { (void)fd; return NULL; }
 static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by) { (void)io; (void)interest; (void)by; return 0; }
 static inline void kama__net_drop(void* io) { (void)io; }
-static inline void kama__net_nap(uint64_t ns) { (void)ns; }
 #endif
 #elif defined(KAMA_FIBERS) && defined(KAMA_OS_H) && !defined(__EMSCRIPTEN__)
 #error "kama_os.h was read before KAMA_FIBERS was defined: its sockets would never park (define it before any kama header)"
+#endif
+// ...and of a sleep (kama_time.h): on an isolate with a scheduler it parks the running fiber, the root included.
+#if defined(KAMA_FIBERS) && !defined(__EMSCRIPTEN__)
+#if !defined(KAMA_FIBER_NONE)
+static inline int kama__time_park(uint64_t ns) {
+    if (!kama__fibers.sched) return 0;
+    kama_sched_sleep(ns);
+    return 1;
+}
+#else
+static inline int kama__time_park(uint64_t ns) { (void)ns; return 0; }
+#endif
 #endif
 #endif /* KAMA_SCHED_H */

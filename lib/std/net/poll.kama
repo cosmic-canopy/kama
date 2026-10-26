@@ -24,7 +24,8 @@ extern "kama_os.h";
 extern fn UnsafePtr kama_poller_create();
 extern fn int32 kama_poller_add(UnsafePtr p, isize fd, int32 interest, uint64 token);
 extern fn int32 kama_poller_remove(UnsafePtr p, isize fd);
-extern fn int32 kama_poller_wait(UnsafePtr p, UnsafePtr events, int32 timeoutMs);
+extern fn int32 kama_poller_wait_parked(UnsafePtr p, UnsafePtr events, int32 timeoutMs, UnsafePtr io);
+extern fn void  kama_net_release(UnsafePtr io);
 extern fn void  kama_poller_free(UnsafePtr p);
 extern fn UnsafePtr kama_poller_waker(UnsafePtr p, uint64 token);
 extern fn UnsafePtr kama_poll_events_new(isize capacity);
@@ -71,6 +72,7 @@ type resource Events implements Iterable<Event>, Sendable {
 // A readiness set. Move-only; frees its C state on drop (RAII).
 type resource Poller implements Sendable {
     UnsafePtr state;
+    UnsafePtr io = null;   // on a fiber, this Poller's own descriptor registered with the isolate's scheduler (KR-3)
     private unsafe ctor make(UnsafePtr state) { this.state = state; }
 
     public unsafe ctor Result<Poller, IoError> create() {
@@ -110,14 +112,15 @@ type resource Poller implements Sendable {
     // Block up to `timeoutMs` (< 0 = forever) until at least one watched socket is ready, fill `events` with what
     // is, and return how many (0 = timed out). A signal that interrupts the wait (EINTR — SIGCHLD from a child, a
     // profiler's SIGPROF) is not an I/O event, so the wait resumes with the time that is LEFT, measured on the
-    // monotonic clock: the caller's deadline holds either way.
+    // monotonic clock: the caller's deadline holds either way. On an isolate that runs fibers the wait parks only its
+    // fiber, on epoll and kqueue; on Windows and other targets it still blocks the thread (KR-3 step 7).
     @parks
     public unsafe fn Result<int32, IoError> wait(ref Events events, int32 timeoutMs) {
         Instant start = monotonicNow();
         int32 left = timeoutMs;
         events.list.clear();
         while (true) {
-            int32 n = kama_poller_wait(p: this.state, events: events.native, timeoutMs: left);
+            int32 n = kama_poller_wait_parked(p: this.state, events: events.native, timeoutMs: left, io: addr(of: this.io));
             if (n >= 0) {
                 int32 i = 0;
                 while (i < n) {
@@ -139,5 +142,5 @@ type resource Poller implements Sendable {
         }
     }
 
-    unsafe ~Poller() { kama_poller_free(p: this.state); }
+    unsafe ~Poller() { kama_net_release(io: this.io); kama_poller_free(p: this.state); }   // off the scheduler before it closes
 }
