@@ -1281,7 +1281,8 @@ fn int32 tick(UnsafePtr state) { … }             // any panic inside, at any d
   makes it sound rather than merely fast. Keep the region's state behind the pointer the callback receives.
 - **No park inside a region**: a recovered panic is a longjmp, and one across a fiber switch would land on another
   fiber's stack, so a region that reaches a `join`, a `Fiber`'s drop or a `scope`'s close is refused with the chain <!-- xfail: onpanic_park_join -->
-  (KR-3 decision 15).
+  (KR-3 decision 15), and so, in a program that runs fibers, is one that makes a socket call. In a program that runs <!-- xfail: onpanic_park_socket -->
+  none a socket call is no park, and a region may make one. <!-- test: onpanic_socket_no_fibers -->
 - **Regions nest** (each saves the previous slot), and the slot is **per thread**, so a foreign audio
   thread's region never sees another isolate's. A region is a *body*: on a `fnptr` type, a constructor or
   a destructor it is refused. <!-- xfail: onpanic_on_fnptr -->
@@ -1647,10 +1648,11 @@ What the model counts:
   <!-- test: shared_borrow_extent, onpanic_shared_borrow -->
 - **Fibers.** On an isolate that runs fibers — any code its entry, `main` included, reaches once it reaches a
   `spawn fiber` — a lasting access may not reach a **park**, a call that lets another fiber run: a `join`, a `Fiber`'s <!-- xfail: park_window_join, park_window_root, park_window_scope_close, park_window_fiber_drop -->
-  drop, a `scope`'s close. Fibers share the thread's record, which ends accesses in the order they began; a fiber that
+  drop, a `scope`'s close, and a socket call that would block — a read, a write, an accept, a connect (*Sockets on a <!-- xfail: park_window_socket_read -->
+  fiber*). Fibers share the thread's record, which ends accesses in the order they began; a fiber that
   parked inside one would let another change what it holds. It is a compile error naming the chain, for a window and <!-- xfail: park_call_access -->
   a call that holds a field alike, and so is a call through a `fnptr` inside one, whose target could park. A call that <!-- xfail: park_window_fnptr -->
-  only blocks the thread, such as `println` or a blocking read, is no park: no other fiber runs. A spawn is none either,
+  only blocks the thread, such as `println`, is no park: no other fiber runs. A spawn is none either,
   so a window may spawn into a `scope` opened outside it, and an isolate that runs no fibers is not held to the rule. <!-- test: park_rule_allowed -->
   Take what is needed out of the window and wait after it; a broadcast takes the handles out of the list first. Rust's
   `RefCell` held across an `.await` panics at run time, and a lint (`await_holding_refcell_ref`) is all that warns.
@@ -2395,6 +2397,25 @@ which the stat reads for `permissions` anyway, and `None` where this account may
 another account's private file. Rust and Go expose no owner on Windows, and Python and Node report `0`.
 `std::net` gives RAII `TcpListener`/`TcpStream` (blocking TCP),
 `UnixListener`/`UnixStream` (Unix-domain) and `UdpSocket`. All fallible calls return `Result<…, IoError>`, consumed by `match`.
+
+**Sockets on a fiber.** A socket call that would block — a read or a write, an accept, a connect, a datagram's send or
+receive, a `sendFile`, descriptors passed over a Unix socket — parks only its fiber on an isolate that runs fibers, and <!-- test: fiber_tcp_echo, fiber_tcp_bulk, fiber_unix -->
+the core runs the others until the socket is ready (KR-3, `docs/design/fibers.md` decision 7). The same call blocks the
+thread on an isolate that runs none, so a function is written once for both. Underneath, kama makes such a socket
+non-blocking and registers it with the isolate's scheduler at its first wait; neither is the program's to see:
+- **A socket the program made non-blocking keeps answering `WouldBlock`**, on a fiber too, for a program that drives <!-- test: fiber_net_user_nonblocking -->
+  its own `Poller`.
+- **A socket moved to another isolate** is taken off the first isolate's scheduler by whichever isolate next uses or <!-- test: fiber_net_handoff -->
+  drops it; on an isolate that runs no fibers it is a blocking socket again.
+- **`takeDescriptor()` hands the descriptor back in the mode the program asked for**, off any scheduler; `adopt` reads <!-- test: fiber_net_descriptor -->
+  the mode a descriptor arrives in on POSIX, and takes it as blocking on Windows, which cannot read it back.
+- **`rawHandle()` lends the descriptor as it is**, non-blocking on a fiber. A `duplicateDescriptor()` shares the open
+  socket's mode, so one used on a fiber is non-blocking; kama's own data calls there pass `MSG_DONTWAIT` (POSIX), so a
+  duplicate set back to blocking cannot stall the core.
+- **On Linux a Unix-socket connect to a full accept queue** is made again after a pause until there is room, as a
+  blocking connect waits; the program's own non-blocking connect answers `WouldBlock` there.
+- **A socket's first wait on a fiber allocates its registration**, so in a program that runs fibers `@noheap` code may
+  make no socket call (KR-245).
 
 **An `IoError` is a kind and, when the OS reported it, the OS's code** — the two facts every mainstream library keeps
 apart. `e.kind()` is an `IoErrorKind` (`NotFound`, `AlreadyExists`, `PermissionDenied`, `WouldBlock`, `ConnectionRefused`, …,

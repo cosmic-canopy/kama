@@ -1,0 +1,42 @@
+file @compileFor(OS_LINUX);
+// Linux answers a connect to a full accept queue with EAGAIN and starts no connection, which readiness cannot report.
+// A blocking connect waits there; so does one on a fiber, which connects again after a pause until there is room, where
+// the program's own non-blocking connect answers WouldBlock. The queue is filled by non-blocking connects until one is
+// refused that way; then a fiber's blocking connect waits while another fiber accepts one, and connects.
+import { std::net::UnixListener, std::net::UnixStream, std::net::UnixAddr, std::io::IoError, std::io::IoErrorKind,
+         std::concurrent::Fiber, std::collections::DynamicArray };
+export { fullQueue };
+
+static int32 joined = 0;
+
+unsafe fn void late(ref UnixListener l) {
+    Result<UnixStream, IoError> ra = l.accept();             // makes room, once the connect below is waiting
+    int32 v = match (ra) { case Ok(value: s): 1; case Err(error: e): 100; };
+    joined = joined + v;
+}
+unsafe fn void dial(ref UnixAddr name) {
+    Result<UnixStream, IoError> rc = UnixStream.connectTo(address: name);
+    int32 v = match (rc) { case Ok(value: s): 10; case Err(error: e): 200; };
+    joined = joined + v;
+}
+
+unsafe fn int32 fullQueue() {
+    UnixAddr name = match (UnixAddr.fromAbstract(name: "kama-fiber-full-queue")) { case Ok(value: a): a; case Err(error: e): { return 20; } };
+    Result<UnixListener, IoError> rl = UnixListener.bindTo(address: name);
+    UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 21; } };
+    DynamicArray<UnixStream> held = DynamicArray.empty();
+    bool full = false;
+    while (!full && held.length() < 4096) {
+        Result<UnixStream, IoError> rc = UnixStream.connectToNonBlocking(address: name);
+        match (give rc) {
+            case Ok(value: s): { held.add(item: give s); }
+            case Err(error: e): { full = match (e.kind()) { case WouldBlock: true; case _: false; }; if (!full) { return 22; } }
+        };
+    }
+    if (!full) { return 23; }
+    scope {
+        spawn fiber dial(name: ref name);
+        spawn fiber late(l: ref l);
+    }
+    return joined == 11 ? 0 : 24;
+}

@@ -1,0 +1,4 @@
+file @compileFor(!OS_LINUX);
+// Only Linux answers a full accept queue with EAGAIN; macOS refuses it outright, and Windows queues every connect.
+export { fullQueue };
+fn int32 fullQueue() { return 0; }

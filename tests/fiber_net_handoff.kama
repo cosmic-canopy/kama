@@ -1,0 +1,83 @@
+// KR-3 step 5, fibers.md decision 13 as corrected: nothing runs when a socket crosses to another isolate, so the
+// isolate that next uses or drops it takes it off the queue it was registered with, and hands the record back for that
+// isolate's scheduler to free. Here each accepted stream is read once on this isolate, which runs fibers, so it is
+// registered with this isolate's scheduler; then it crosses a channel:
+//   - to a worker that runs no fibers, which reads it as a blocking socket again (one recv, as before fibers);
+//   - to a worker that runs fibers, which reads it parked on its own scheduler;
+//   - to a worker that drops it unread.
+// The sanitizer legs would see a record freed twice or never; TSan, a race between the two isolates.
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber,
+         std::concurrent::join, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::collections::FixedArray };
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn int32 readByte(ref TcpStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 1);
+    Result<isize, IoError> r = s.read(into: buf.viewMut());
+    return match (r) { case Ok(value: n): n == 1 ? cast<int32>(buf[0]) : 0 - 1; case Err(error: e): 0 - 2; };
+}
+unsafe fn void ack(ref TcpStream s, uint8 v) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    b[0] = v;
+    _ = writeAll(w: s, bytes: b.view());
+}
+
+// A worker with no fibers: a plain blocking read, then an answer.
+unsafe fn void plain(Receiver<TcpStream> rx) {
+    Optional<TcpStream> next = rx.recv();
+    match (give next) {
+        case Some(value: s): { int32 v = readByte(s: ref s); ack(s: ref s, v: cast<uint8>(v + 1)); }
+        case None: { }
+    };
+}
+// A worker whose read parks on its own scheduler.
+unsafe fn void serveOne(TcpStream s) { int32 v = readByte(s: ref s); ack(s: ref s, v: cast<uint8>(v + 1)); }
+unsafe fn void fibered(Receiver<TcpStream> rx) {
+    Optional<TcpStream> next = rx.recv();
+    match (give next) {
+        case Some(value: s): { scope { spawn fiber serveOne(s: give s); } }
+        case None: { }
+    };
+}
+// A worker that drops what it is given, unread.
+fn void dropper(Receiver<TcpStream> rx) { Optional<TcpStream> next = rx.recv(); }
+
+// This isolate's own fiber: one byte read on `s`, registering it here, and the stream handed back.
+unsafe fn TcpStream firstRead(TcpStream s) { int32 v = readByte(s: ref s); return give s; }
+unsafe fn TcpStream readHere(TcpStream s) {
+    Fiber<TcpStream> f = spawn fiber firstRead(s: give s);
+    return join(fiber: give f);
+}
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    uint16 port = portOf(l: l);
+    Channel<TcpStream> toPlain = Channel.bounded(capacity: 1);
+    Channel<TcpStream> toFibered = Channel.bounded(capacity: 1);
+    Channel<TcpStream> toDropper = Channel.bounded(capacity: 1);
+    int32 total = 0;
+    scope {
+        Receiver<TcpStream> a = toPlain.receiver();
+        Receiver<TcpStream> b = toFibered.receiver();
+        Receiver<TcpStream> d = toDropper.receiver();
+        spawn plain(rx: give a);
+        spawn fibered(rx: give b);
+        spawn dropper(rx: give d);
+        for (int32 i = 0; i < 3; i = i + 1) {
+            Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
+            TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+            Result<TcpStream, IoError> ra = l.accept();
+            TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+            ack(s: ref c, v: 1ui8);
+            TcpStream back = readHere(s: give s);                    // registered with this isolate's scheduler
+            ack(s: ref c, v: cast<uint8>(10 * (i + 1)));
+            if (i == 0) { _ = toPlain.sender().send(item: give back); }
+            else if (i == 1) { _ = toFibered.sender().send(item: give back); }
+            else { _ = toDropper.sender().send(item: give back); }
+            if (i < 2) { total = total + readByte(s: ref c); }        // 11, then 21
+        }
+    }
+    return total == 32 ? 42 : cast<uint8>(total);
+}
+fn uint8 main() { return run(); }

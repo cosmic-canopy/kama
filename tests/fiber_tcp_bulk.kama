@@ -1,0 +1,74 @@
+// KR-3 step 5: a write that fills the socket's buffer parks its fiber until the reader drains it. A writer fiber sends
+// 8 MiB with `writeAll` and then a 300,000-byte file with `sendFile`, while a reader fiber on the same isolate counts
+// the bytes and checks them: the kernel holds far less than 8 MiB, so the writer must park many times, and only the
+// reader running in between lets it finish. Port 0, read back.
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber,
+         std::fs::File, std::fs::OpenMode, std::fs::writeFile, std::fs::remove, std::collections::DynamicArray,
+         std::collections::FixedArray };
+
+static isize received = 0;
+static bool wrong = false;
+static bool written = false;
+comptime isize BULK = 8388608;
+comptime isize FILE_BYTES = 300000;
+
+fn uint8 pattern(isize i) { return cast<uint8>((i * 7) % 251); }
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn void writer(TcpStream s) {
+    FixedArray<uint8> chunk = FixedArray.make(size: 65536);
+    isize at = 0;
+    while (at < BULK) {
+        for (isize i = 0; i < 65536; i = i + 1) { chunk[i] = pattern(i: at + i); }
+        Result<Unit, IoError> w = writeAll(w: s, bytes: chunk.view());
+        bool failed = match (w) { case Ok(value: u): false; case Err(error: e): true; };
+        if (failed) { return; }
+        at = at + 65536;
+    }
+    Result<File, IoError> fr = File.open(path: "fiber_bulk.bin", mode: OpenMode::Read);
+    File f = match (give fr) { case Ok(value: x): give x; case Err(error: e): { return; } };
+    uint64 sent = 0ui64;
+    while (sent < cast<uint64>(FILE_BYTES)) {
+        Result<uint64, IoError> r = s.sendFile(file: f, offset: sent, count: cast<uint64>(FILE_BYTES) - sent);
+        uint64 n = match (r) { case Ok(value: k): k; case Err(error: e): 0ui64; };
+        if (n == 0ui64) { return; }
+        sent = sent + n;
+    }
+    written = true;
+}   // `s` drops here, so the reader sees the end
+
+unsafe fn void reader(TcpStream c) {
+    FixedArray<uint8> buf = FixedArray.make(size: 65536);
+    while (true) {
+        Result<isize, IoError> r = c.read(into: buf.viewMut());
+        isize n = match (r) { case Ok(value: k): k; case Err(error: e): 0; };
+        if (n <= 0) { return; }
+        for (isize i = 0; i < n; i = i + 1) {
+            isize at = received + i;
+            uint8 want = at < BULK ? pattern(i: at) : pattern(i: at - BULK);
+            if (buf[i] != want) { wrong = true; }
+        }
+        received = received + n;
+    }
+}
+
+unsafe fn uint8 run() {
+    DynamicArray<uint8> bytes = DynamicArray.empty();
+    for (isize i = 0; i < FILE_BYTES; i = i + 1) { bytes.add(item: pattern(i: i)); }
+    _ = writeFile(path: "fiber_bulk.bin", bytes: bytes);
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: portOf(l: l));
+    TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    scope {
+        spawn fiber writer(s: give s);
+        spawn fiber reader(c: give c);
+    }
+    _ = remove(path: "fiber_bulk.bin");
+    if (wrong) { return 5; }
+    if (!written) { return 6; }
+    return received == BULK + FILE_BYTES ? 42 : 7;
+}
+fn uint8 main() { return run(); }

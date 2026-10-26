@@ -1,0 +1,34 @@
+file @compileFor(!OS_WINDOWS);
+// Datagrams on fibers: the receiver starts first and parks on the empty socket until the sender's datagram arrives.
+import { std::net::UnixDatagram, std::io::IoError, std::concurrent::Fiber,
+         std::collections::FixedArray };
+export { datagrams };
+
+static int32 heard = 0;
+
+unsafe fn void hear(UnixDatagram d) {
+    FixedArray<uint8> buf = FixedArray.make(size: 4);
+    Result<usize, IoError> r = d.recv(into: buf.viewMut());
+    usize n = match (r) { case Ok(value: k): k; case Err(error: e): cast<usize>(0); };
+    if (n == cast<usize>(2) && buf[1] == 9ui8) { heard = 1; }
+}
+unsafe fn void say(UnixDatagram d) {
+    FixedArray<uint8> msg = FixedArray.make(size: 2);
+    msg[0] = 8ui8; msg[1] = 9ui8;
+    _ = d.send(bytes: msg.view());
+}
+
+unsafe fn int32 datagrams() {
+    Result<UnixDatagram, IoError> rr = UnixDatagram.bind(path: "fiber_dgram.sock");
+    UnixDatagram rx = match (give rr) { case Ok(value: x): give x; case Err(error: e): { return 10; } };
+    Result<UnixDatagram, IoError> rt = UnixDatagram.unbound();
+    UnixDatagram tx = match (give rt) { case Ok(value: x): give x; case Err(error: e): { return 12; } };
+    Result<Unit, IoError> cr = tx.connect(path: "fiber_dgram.sock");
+    bool linked = match (cr) { case Ok(value: u): true; case Err(error: e): false; };
+    if (!linked) { return 13; }
+    scope {
+        spawn fiber hear(d: give rx);
+        spawn fiber say(d: give tx);
+    }
+    return heard == 1 ? 0 : 11;
+}

@@ -28,8 +28,8 @@ extern fn int32 kama_bind_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip,
 extern fn int32 kama_connect_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
 extern fn int32 kama_listen(isize fd, int32 backlog);
 extern fn isize kama_accept(isize fd);
-extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n);
-extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n);
+extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n, int32 mode);
+extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n, int32 mode);
 extern fn int32 kama_close_socket(isize fd);
 extern fn int32 kama_set_nonblocking(isize fd, int32 on);
 extern fn int32 kama_set_nodelay(isize fd, int32 on);
@@ -48,6 +48,15 @@ extern fn int32 kama_EINTR();
 extern fn int32 kama_ENOSYS();
 extern fn isize kama_send_file(isize sock, int32 fd, uint64 offset, uint64 count);
 extern fn int32 kama_EINPROGRESS();
+// A socket's wait (kama_os.h, KR-3 step 5): before each blocking call and after it fails, so a call on a fiber parks it
+// and a deadline holds on a thread.
+extern fn int32 kama_net_ready(isize fd, UnsafePtr io, UnsafePtr<int32> mode, uint64 by);
+extern fn int32 kama_net_retry(isize fd, UnsafePtr io, int32 mode, int32 interest, uint64 by);
+extern fn int32 kama_net_connected(isize fd, UnsafePtr io, int32 mode, uint64 by);
+extern fn int32 kama_net_close(isize fd, UnsafePtr io);
+extern fn void kama_net_settle(isize fd, UnsafePtr io, int32 mode);
+extern fn int32 kama_net_set_mode(isize fd, UnsafePtr io, UnsafePtr<int32> mode, int32 on);
+extern fn int32 kama_net_adopt_mode(isize fd);
 
 // A duration as a socket option takes it: a POSITIVE whole count of `unit` nanoseconds, rounded UP so a
 // timer never fires earlier than asked. Zero, negative, or more units than an `int32` holds is
@@ -82,10 +91,16 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable
     // for no reason other than that zero doubled as "empty". Rust's `OwnedFd` niche.
     isize fd = -1;
+    // How it waits (kama_os.h, KR-3 step 5): its registration with this isolate's fiber scheduler, the mode bits (the
+    // program's non-blocking, kama's, a deadline set) and a deadline per direction, `Instant`'s nanoseconds, 0 for none.
+    UnsafePtr io = null;
+    int32 mode = 0;
+    uint64 readBy = 0;
+    uint64 writeBy = 0;
     // Wrap a connected socket kama itself just made (`connectTo`, `TcpListener.accept`). Private: a descriptor
     // from anywhere else arrives as a `std::io::Descriptor` and enters through `adopt`.
     // prefer `connect` for client sockets.
-    ctor make(isize fd) { this.fd = fd; }
+    unsafe ctor make(isize fd, UnsafePtr io, int32 mode) { this.fd = fd; this.io = io; this.mode = mode; }
     friend TcpListener::accept[make];
 
     // Connect to a numeric host:port ("127.0.0.1", "::1"; "" is IPv4 loopback). Text that is not a numeric
@@ -109,12 +124,17 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
         InlineArray<uint8>#(16) bytes = address.ip.bytes();
         isize fd = kama_socket_tcp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        if (kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
+        UnsafePtr io = null;
+        int32 mode = 0;
+        int32 rc = kama_net_ready(fd: fd, io: addr(of: io), mode: addr(of: mode), by: 0);   // on a fiber: parks below
+        if (rc == 0) { rc = kama_connect_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId); }
+        if (rc != 0) { rc = kama_net_connected(fd: fd, io: io, mode: mode, by: 0); }       // waits out a connect in flight
+        if (rc != 0) {
             IoError e = lastError();                        // capture before close (close may clear errno)
-            int32 rc = kama_close_socket(fd: fd);
+            int32 cr = kama_net_close(fd: fd, io: io);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: TcpStream.make(fd: fd));
+        return Result::Ok(value: TcpStream.make(fd: fd, io: io, mode: mode));
     }
 
     // Connect to a host NAME: `resolve` it, then try each address in the resolver's order and keep the first
@@ -149,17 +169,18 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     @parks
     public unsafe fn Result<isize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: 0); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: n); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
 
-    // Toggle non-blocking mode. In non-blocking mode, read/write that would stall return WouldBlock.
+    // Toggle non-blocking mode. In non-blocking mode, read/write that would stall return WouldBlock — on a fiber too,
+    // where a blocking one parks instead.
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
-        int32 v = on ? 1 : 0;
-        if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
+        if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
 
@@ -223,10 +244,11 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     @parks
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: n); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
 
@@ -240,12 +262,12 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     @parks
     public unsafe fn Result<uint64, IoError> sendFile(const ref File file, uint64 offset, uint64 count) {
         if (count == 0ui64) { return Result::Ok(value: 0ui64); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
             isize n = kama_send_file(sock: this.fd, fd: file.rawFd(), offset: offset, count: count);
             if (n >= 0) { return Result::Ok(value: cast<uint64>(n)); }
-            int32 e = kama_last_error();
-            if (e == kama_ENOSYS()) { return this.sendFileCopy(file: file, offset: offset, count: count); }
-            if (e != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_last_error() == kama_ENOSYS()) { return this.sendFileCopy(file: file, offset: offset, count: count); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
     // The buffered way, where the zero-copy one is not: one read at `offset` and one write, so a buffer's worth at most
@@ -297,7 +319,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
                 return Result::Err(error: err);
             }
         }
-        return Result::Ok(value: TcpStream.make(fd: fd));   // connected instantly (loopback) or in flight
+        return Result::Ok(value: TcpStream.make(fd: fd, io: null, mode: 1));   // the program's non-blocking: connected instantly (loopback) or in flight
     }
 
     // Resolve a non-blocking connect once the socket reports writable: Ok if connected, else the cause
@@ -309,22 +331,31 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
 
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
-    public ctor Result<TcpStream, IoError> adopt(Descriptor descriptor) {
+    // The stream keeps the mode the descriptor arrived in (read back on POSIX; Windows cannot, so there it is taken as
+    // blocking, and a program that made it non-blocking says so with `setNonBlocking(true)`).
+    public unsafe ctor Result<TcpStream, IoError> adopt(Descriptor descriptor) {
         return match (descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: h): Result::Ok(value: TcpStream.make(fd: h));
+            case Ok(value: h): Result::Ok(value: TcpStream.make(fd: h, io: null, mode: kama_net_adopt_mode(fd: h)));
         };
     }
-    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing).
-    public fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; return Descriptor.adoptSocket(raw: h); }
+    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing). It leaves in the mode the
+    // program asked for, off any fiber scheduler.
+    public unsafe fn Descriptor takeDescriptor() {
+        isize h = this.fd;
+        kama_net_settle(fd: h, io: this.io, mode: this.mode);
+        this.fd = -1; this.io = null; this.mode = 0;
+        return Descriptor.adoptSocket(raw: h);
+    }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
-    // you keep this one.
+    // you keep this one. It shares the open socket's mode: one used on a fiber is non-blocking (KR-3 decision 13).
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
         isize d = kama_desc_dup(h: this.fd, kind: 1);
         if (d < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Descriptor.adoptSocket(raw: d));
     }
-    // The raw socket handle — the intended bridge for handing this stream to a std::net::Poller.
+    // The raw socket handle — the intended bridge for handing this stream to a std::net::Poller. Lent as it is: on a
+    // fiber, kama has made it non-blocking.
     public const fn isize rawHandle() { return this.fd; }
 
     // The test is `>= 0`, not `> 0` — the explicit `isize fd = -1` states the empty niche, so fd 0 is an
@@ -334,7 +365,7 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // reaching here at all. The guard is therefore REDUNDANT, and it stays deliberately — one predictable
     // compare in front of a syscall, standing between a future drop-tracking bug and a silent `close(0)`
     // on stdin. Cheap insurance against a catastrophic, near-undebuggable failure. Same for the two below.
-    unsafe ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }
+    unsafe ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); } }
 }
 
 // The options `TcpListener.bindWith` takes (KR-206): one type on every OS, each its own OS's (the platform rule). Each
@@ -375,7 +406,10 @@ type value ListenOptions implements Sendable {
 // A listening TCP socket. Closes on drop (RAII). Move-only.
 type resource TcpListener implements Sendable {
     isize fd = -1;   // the -1 empty niche — see ~TcpStream
-    private ctor make(isize fd) { this.fd = fd; }
+    UnsafePtr io = null;   // how it waits, as `TcpStream`'s; an accept's deadline is its read's
+    int32 mode = 0;
+    uint64 acceptBy = 0;
+    private ctor make(isize fd, int32 mode) { this.fd = fd; this.mode = mode; }
 
     // Bind + listen on a numeric host:port. "" or "0.0.0.0" = every IPv4 interface; "::" = every interface of
     // BOTH families (IPV6_V6ONLY is turned off on every OS, so a v4 client arrives as `::ffff:a.b.c.d`).
@@ -425,24 +459,25 @@ type resource TcpListener implements Sendable {
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: TcpListener.make(fd: fd));
+        return Result::Ok(value: TcpListener.make(fd: fd, mode: 0));
     }
 
     // Accept the next incoming connection. EINTR-retried. The stream starts in this listener's mode on every OS:
     // from a non-blocking listener, a non-blocking stream (and `Err(WouldBlock)` here when none is queued).
     @parks
     public unsafe fn Result<TcpStream, IoError> accept() {
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.acceptBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
             isize cfd = kama_accept(fd: this.fd);
-            if (cfd >= 0) { return Result::Ok(value: TcpStream.make(fd: cfd)); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (cfd >= 0) { return Result::Ok(value: TcpStream.make(fd: cfd, io: null, mode: this.mode & 3)); }   // its mode, as the OS gave it
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.acceptBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
 
-    // Toggle non-blocking mode. In non-blocking mode, accept() returns Err(WouldBlock) when the queue is empty.
+    // Toggle non-blocking mode. In non-blocking mode, accept() returns Err(WouldBlock) when the queue is empty — on a
+    // fiber too, where a blocking one parks instead.
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
-        int32 v = on ? 1 : 0;
-        if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
+        if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
 
@@ -451,14 +486,19 @@ type resource TcpListener implements Sendable {
 
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
-    public ctor Result<TcpListener, IoError> adopt(Descriptor descriptor) {
+    public unsafe ctor Result<TcpListener, IoError> adopt(Descriptor descriptor) {
         return match (descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: h): Result::Ok(value: TcpListener.make(fd: h));
+            case Ok(value: h): Result::Ok(value: TcpListener.make(fd: h, mode: kama_net_adopt_mode(fd: h)));
         };
     }
-    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing).
-    public fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; return Descriptor.adoptSocket(raw: h); }
+    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing), in the program's mode.
+    public unsafe fn Descriptor takeDescriptor() {
+        isize h = this.fd;
+        kama_net_settle(fd: h, io: this.io, mode: this.mode);
+        this.fd = -1; this.io = null; this.mode = 0;
+        return Descriptor.adoptSocket(raw: h);
+    }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
     // you keep this one.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
@@ -469,5 +509,5 @@ type resource TcpListener implements Sendable {
     // The raw socket handle — the intended bridge for handing this listener to a std::net::Poller.
     public const fn isize rawHandle() { return this.fd; }
 
-    unsafe ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see ~TcpStream
+    unsafe ~TcpListener() { if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); } }   // guard: see ~TcpStream
 }

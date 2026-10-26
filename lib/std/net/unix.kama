@@ -36,13 +36,14 @@ extern fn int32 kama_unix_path_max();
 extern fn int32 kama_bind_unix(isize fd, UnsafeConstPtr<uint8> path, usize n, int32 kind);
 extern fn int32 kama_connect_unix(isize fd, UnsafeConstPtr<uint8> path, usize n, int32 kind);
 extern fn isize kama_unix_name(isize fd, int32 peer, UnsafePtr<int32> kind, UnsafePtr<uint8> into, usize cap);
-extern fn isize kama_sendto_unix(isize fd, UnsafeConstPtr<uint8> buf, usize n, UnsafeConstPtr<uint8> path, usize pn, int32 kind);
+extern fn isize kama_sendto_unix(isize fd, UnsafeConstPtr<uint8> buf, usize n, UnsafeConstPtr<uint8> path, usize pn, int32 kind,
+                                 int32 mode);
 extern fn isize kama_recvfrom_unix(isize fd, UnsafePtr<uint8> buf, usize n, UnsafePtr<int32> kind, UnsafePtr<uint8> name,
-                                   usize cap, UnsafePtr<isize> nameLen);
+                                   usize cap, UnsafePtr<isize> nameLen, int32 mode);
 extern fn int32 kama_listen(isize fd, int32 backlog);
 extern fn isize kama_accept(isize fd);
-extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n);
-extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n);
+extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n, int32 mode);
+extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n, int32 mode);
 extern fn int32 kama_close_socket(isize fd);
 extern fn int32 kama_set_nonblocking(isize fd, int32 on);
 extern fn int32 kama_shutdown(isize fd, int32 how);
@@ -52,16 +53,27 @@ extern fn int32 kama_EINTR();
 extern fn int32 kama_EINPROGRESS();
 extern fn int32 kama_socket_error(isize fd);
 extern fn isize kama_desc_dup(isize h, int32 kind);
-extern fn isize kama_send_fds(isize sock, UnsafeConstPtr<uint8> buf, usize n, UnsafeConstPtr<isize> hs, UnsafeConstPtr<int32> kinds, usize count);
+extern fn isize kama_send_fds(isize sock, UnsafeConstPtr<uint8> buf, usize n, UnsafeConstPtr<isize> hs, UnsafeConstPtr<int32> kinds, usize count,
+                              UnsafePtr io, int32 mode, uint64 by);
 extern fn isize kama_recv_fds(isize sock, UnsafePtr<uint8> buf, usize n, UnsafePtr<isize> hs, UnsafePtr<int32> kinds, usize cap,
-                              UnsafePtr<usize> count);
+                              UnsafePtr<usize> count, UnsafePtr io, int32 mode, uint64 by);
+// A socket's wait (kama_os.h, KR-3 step 5), as net.kama binds it.
+extern fn int32 kama_net_ready(isize fd, UnsafePtr io, UnsafePtr<int32> mode, uint64 by);
+extern fn int32 kama_net_retry(isize fd, UnsafePtr io, int32 mode, int32 interest, uint64 by);
+extern fn int32 kama_net_connected(isize fd, UnsafePtr io, int32 mode, uint64 by);
+extern fn int32 kama_net_backoff(UnsafePtr io, int32 mode, int32 attempt, uint64 by);
+extern fn int32 kama_net_close(isize fd, UnsafePtr io);
+extern fn void kama_net_settle(isize fd, UnsafePtr io, int32 mode);
+extern fn int32 kama_net_set_mode(isize fd, UnsafePtr io, UnsafePtr<int32> mode, int32 on);
+extern fn int32 kama_net_adopt_mode(isize fd);
 
 // ---- passing descriptors ----------------------------------------------------------------------------------------
 // Send `bytes` with `descriptors` over a connected socket: POSIX's SCM_RIGHTS, and on Windows each handle put into
 // the peer process with a frame ahead of the bytes (both ends kama there — see std::io::Descriptor). The
 // descriptors are CONSUMED: each is closed once the peer holds its own, when `descriptors` drops at return.
+// `io`, `mode` and `by` are the socket's wait (kama_os.h), which the caller has made ready.
 @parks
-unsafe fn Result<usize, IoError> sendWith(isize fd, ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
+unsafe fn Result<usize, IoError> sendWith(isize fd, UnsafePtr io, int32 mode, uint64 by, ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
     isize count = descriptors.length();
     if (bytes.length() == 0 || count == 0 || count > 253) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
     FixedArray<isize> hs = FixedArray.make(size: count);
@@ -70,21 +82,21 @@ unsafe fn Result<usize, IoError> sendWith(isize fd, ConstView<uint8> bytes, Dyna
     while (i < count) { hs[i] = descriptors[i].rawHandle(); kinds[i] = descriptors[i].isSocket() ? 1 : 0; i = i + 1; }
     while (true) {
         isize n = kama_send_fds(sock: fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), hs: hs.dataPtr(),
-                                kinds: kinds.dataPtr(), count: cast<usize>(count));
+                                kinds: kinds.dataPtr(), count: cast<usize>(count), io: io, mode: mode, by: by);
         if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
-        if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        if (kama_net_retry(fd: fd, io: io, mode: mode, interest: 2, by: by) == 0) { return Result::Err(error: lastError()); }
     }
 }
 // Receive up to into.length() bytes and the descriptors sent with them, appended to `descriptors`, each owned.
 @parks
-unsafe fn Result<usize, IoError> recvWith(isize fd, View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
+unsafe fn Result<usize, IoError> recvWith(isize fd, UnsafePtr io, int32 mode, uint64 by, View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
     if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
     FixedArray<isize> hs = FixedArray.make(size: 253);
     FixedArray<int32> kinds = FixedArray.make(size: 253);
     usize got = cast<usize>(0);
     while (true) {
         isize n = kama_recv_fds(sock: fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), hs: hs.dataPtrMut(),
-                                kinds: kinds.dataPtrMut(), cap: cast<usize>(253), count: addr(of: got));
+                                kinds: kinds.dataPtrMut(), cap: cast<usize>(253), count: addr(of: got), io: io, mode: mode, by: by);
         if (n >= 0) {
             isize i = 0;
             while (i < cast<isize>(got)) {
@@ -94,7 +106,7 @@ unsafe fn Result<usize, IoError> recvWith(isize fd, View<uint8> into, ref Dynami
             }
             return Result::Ok(value: cast<usize>(n));
         }
-        if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        if (kama_net_retry(fd: fd, io: io, mode: mode, interest: 1, by: by) == 0) { return Result::Err(error: lastError()); }
     }
 }
 
@@ -143,10 +155,10 @@ unsafe fn int32 addrConnect(isize fd, const ref UnixAddr a) {
     return kama_connect_unix(fd: fd, path: addr(of: b[0]), n: cast<usize>(a.len), kind: a.kind);
 }
 @parks
-unsafe fn isize addrSendTo(isize fd, ConstView<uint8> bytes, const ref UnixAddr a) {
+unsafe fn isize addrSendTo(isize fd, int32 mode, ConstView<uint8> bytes, const ref UnixAddr a) {
     InlineArray<uint8>#(108) b = a.name;
     return kama_sendto_unix(fd: fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), path: addr(of: b[0]),
-                            pn: cast<usize>(a.len), kind: a.kind);
+                            pn: cast<usize>(a.len), kind: a.kind, mode: mode);
 }
 fn bool addrNamed(const ref UnixAddr a) { return a.kind != 0; }
 fn bool addrIsPath(const ref UnixAddr a) { return a.kind == 1; }
@@ -159,19 +171,19 @@ unsafe fn Result<UnixAddr, IoError> unixNameOf(isize fd, bool peer) {
     return Result::Ok(value: UnixAddr.raw(kind: kind, name: b, len: cast<int32>(n)));
 }
 @parks
-unsafe fn Result<UnixAddr, IoError> recvFromInto(isize fd, View<uint8> into, ref isize count) {
+unsafe fn Result<UnixAddr, IoError> recvFromInto(isize fd, UnsafePtr io, int32 mode, uint64 by, View<uint8> into, ref isize count) {
     InlineArray<uint8>#(108) b = [0; 108];
     int32 kind = 0;
     isize nameLen = 0;
     while (true) {
         isize n = kama_recvfrom_unix(fd: fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), kind: addr(of: kind),
-                                     name: addr(of: b[0]), cap: 108, nameLen: addr(of: nameLen));
+                                     name: addr(of: b[0]), cap: 108, nameLen: addr(of: nameLen), mode: mode);
         if (n >= 0) {
             count = n;
             if (nameLen > 108) { nameLen = 108; }
             return Result::Ok(value: UnixAddr.raw(kind: kind, name: b, len: cast<int32>(nameLen)));
         }
-        if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+        if (kama_net_retry(fd: fd, io: io, mode: mode, interest: 1, by: by) == 0) { return Result::Err(error: lastError()); }
     }
 }
 
@@ -236,9 +248,13 @@ fn string createdPath(const ref UnixAddr a) {
 // so a connection accepted on one isolate is served on another.
 type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` and a `Writer`, by refinement
     isize fd = -1;   // the -1 empty niche, as `TcpStream`'s — descriptor 0 stays ownable
+    UnsafePtr io = null;   // how it waits, as `TcpStream`'s (net.kama)
+    int32 mode = 0;
+    uint64 readBy = 0;
+    uint64 writeBy = 0;
     // Wrap a connected socket kama itself just made (`connectTo`, `UnixListener.accept`). Private: a descriptor
     // from anywhere else arrives as a `std::io::Descriptor` and enters through `adopt`.
-    ctor make(isize fd) { this.fd = fd; }
+    unsafe ctor make(isize fd, UnsafePtr io, int32 mode) { this.fd = fd; this.io = io; this.mode = mode; }
     friend UnixListener::accept[make]; friend UnixStreamPair::open[make];
 
     // Connect to the socket at `path`.
@@ -250,7 +266,7 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     }
     // Connect to an address value — on Linux, the one spelling that reaches an abstract name.
     public ctor Result<UnixStream, IoError> connectTo(const ref UnixAddr address) {
-        return UnixStream.open(address: address, nonBlocking: false);
+        return UnixStream.open(address: address, nonBlocking: false, by: 0);
     }
 
     // A connect that never blocks, for a caller holding a deadline (libpq bounds the connect with
@@ -273,7 +289,7 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
         };
     }
     public ctor Result<UnixStream, IoError> connectToNonBlocking(const ref UnixAddr address) {
-        return UnixStream.open(address: address, nonBlocking: true);
+        return UnixStream.open(address: address, nonBlocking: true, by: 0);
     }
     // Resolve a connect that was in flight, once the stream polls writable: Ok if connected, else the cause.
     // Reads SO_ERROR — meaningful only after writability, and only for a connect that reported EINPROGRESS.
@@ -282,34 +298,44 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
         return Result::Ok(value: Unit::Unit);
     }
 
-    // Both connects: a socket — non-blocking before the connect, for the second — connected to `address`.
-    unsafe ctor Result<UnixStream, IoError> open(const ref UnixAddr address, bool nonBlocking) {
+    // Every connect: a socket — non-blocking before the connect, for the non-blocking pair — connected to `address`
+    // by `by` (0 for no deadline). On a fiber, or with a deadline, a blocking connect is kama's non-blocking one and
+    // waits as a blocking connect would: out a connect in flight (Windows), and on Linux out a full accept queue,
+    // which starts no connection (EAGAIN), by connecting again after a pause until the deadline.
+    unsafe ctor Result<UnixStream, IoError> open(const ref UnixAddr address, bool nonBlocking, uint64 by) {
         if (!addrNamed(a: address)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }   // nothing to connect to
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 0);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        if (nonBlocking && kama_set_nonblocking(fd: fd, on: 1) != 0) {
-            IoError e = lastError();
-            int32 rc = kama_close_socket(fd: fd);
-            return Result::Err(error: e);
+        UnsafePtr io = null;
+        int32 mode = nonBlocking ? 1 : (by != 0 ? 4 : 0);
+        int32 rc = nonBlocking ? kama_set_nonblocking(fd: fd, on: 1) : kama_net_ready(fd: fd, io: addr(of: io), mode: addr(of: mode), by: by);
+        int32 attempt = 0;
+        while (rc == 0) {
+            if (addrConnect(fd: fd, a: address) == 0) { break; }
+            if (nonBlocking) { rc = kama_last_error() == kama_EINPROGRESS() ? 0 : -1; break; }
+            if (kama_net_backoff(io: io, mode: mode, attempt: attempt, by: by) != 0) { attempt = attempt + 1; continue; }
+            rc = kama_net_connected(fd: fd, io: io, mode: mode, by: by);
+            break;
         }
-        if (addrConnect(fd: fd, a: address) != 0 && !(nonBlocking && kama_last_error() == kama_EINPROGRESS())) {
+        if (rc != 0) {
             IoError e = lastError();                          // capture before close (close may clear errno)
-            int32 rc = kama_close_socket(fd: fd);
+            int32 cr = kama_net_close(fd: fd, io: io);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: UnixStream.make(fd: fd));
+        return Result::Ok(value: UnixStream.make(fd: fd, io: io, mode: mode & 3));   // a connect deadline is not the stream's
     }
 
     // `Reader`: up to into.length() bytes; 0 = the peer closed. EINTR-retried.
     @parks
     public unsafe fn Result<isize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: 0); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: n); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
     // `Writer` primitive: one send, possibly short (`std::io::writeAll` loops it). A write to a peer that has
@@ -317,15 +343,16 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     @parks
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: n); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
-        if (kama_set_nonblocking(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
+        if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
     // Close one half (see `Shutdown`).
@@ -342,14 +369,19 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     // The raw socket handle — the bridge to a `std::net::Poller`.
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
-    public ctor Result<UnixStream, IoError> adopt(Descriptor descriptor) {
+    public unsafe ctor Result<UnixStream, IoError> adopt(Descriptor descriptor) {
         return match (descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: h): Result::Ok(value: UnixStream.make(fd: h));
+            case Ok(value: h): Result::Ok(value: UnixStream.make(fd: h, io: null, mode: kama_net_adopt_mode(fd: h)));
         };
     }
-    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing).
-    public fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; return Descriptor.adoptSocket(raw: h); }
+    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing), in the program's mode.
+    public unsafe fn Descriptor takeDescriptor() {
+        isize h = this.fd;
+        kama_net_settle(fd: h, io: this.io, mode: this.mode);
+        this.fd = -1; this.io = null; this.mode = 0;
+        return Descriptor.adoptSocket(raw: h);
+    }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
     // you keep this one.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
@@ -360,19 +392,21 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     // Send `bytes` (at least one) with `descriptors` — open files, sockets, streams — which the peer receives with
     // `recvDescriptors`. CONSUMES them: each is closed here once the peer holds its own, so send
     // `x.duplicateDescriptor()` to keep `x`. At most 253 per message. On Windows the peer must be kama too.
-    public fn Result<usize, IoError> sendDescriptors(ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
-        return sendWith(fd: this.fd, bytes: bytes, descriptors: give descriptors);
+    public unsafe fn Result<usize, IoError> sendDescriptors(ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
+        return sendWith(fd: this.fd, io: this.io, mode: this.mode, by: this.writeBy, bytes: bytes, descriptors: give descriptors);
     }
     // Receive up to into.length() bytes and the descriptors sent with them, appended to `descriptors`: each is
     // owned — adopt it into what it is (`File.adopt`, `UnixStream.adopt`, …) or it closes when dropped. Received
     // descriptors are close-on-exec. More than 253 in one message, or more than the kernel kept, is
     // `MessageTooLong`, and every one that did arrive is closed.
-    public fn Result<usize, IoError> recvDescriptors(View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
-        return recvWith(fd: this.fd, into: into, descriptors: ref descriptors);
+    public unsafe fn Result<usize, IoError> recvDescriptors(View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
+        return recvWith(fd: this.fd, io: this.io, mode: this.mode, by: this.readBy, into: into, descriptors: ref descriptors);
     }
     public const fn isize rawHandle() { return this.fd; }
 
-    unsafe ~UnixStream() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see ~TcpStream
+    unsafe ~UnixStream() { if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); } }   // guard: see ~TcpStream
 }
 
 // A listening Unix-domain socket. Closes on drop and REMOVES the socket file it created. Move-only, `Sendable`.
@@ -395,7 +429,7 @@ type resource UnixStreamPair implements Sendable {
         slot isize a;
         slot isize b;
         if (kama_unix_pair(datagram: 0, a: out a, b: out b) != 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: UnixStreamPair.of(a: UnixStream.make(fd: a), b: UnixStream.make(fd: b)));
+        return Result::Ok(value: UnixStreamPair.of(a: UnixStream.make(fd: a, io: null, mode: 0), b: UnixStream.make(fd: b, io: null, mode: 0)));
     }
     public fn ref UnixStream first() { return this.a; }
     public fn ref UnixStream second() { return this.b; }
@@ -404,7 +438,10 @@ type resource UnixStreamPair implements Sendable {
 type resource UnixListener implements Sendable {
     isize fd = -1;
     string created;   // the path this listener made and so removes at drop; "" for nothing to remove
-    ctor own(isize fd, string created) { this.fd = fd; this.created = give created; }
+    UnsafePtr io = null;   // how it waits, as `TcpListener`'s (net.kama)
+    int32 mode = 0;
+    uint64 acceptBy = 0;
+    ctor own(isize fd, string created, int32 mode) { this.fd = fd; this.created = give created; this.mode = mode; }
 
     public ctor Result<UnixListener, IoError> bind(const ref string path) {
         return match (UnixAddr.fromPath(path: path)) {
@@ -433,34 +470,40 @@ type resource UnixListener implements Sendable {
             if (made.length() > 0) { int32 ru = kama_unlink(path: made.cstr()); }
             return Result::Err(error: e);
         }
-        return Result::Ok(value: UnixListener.own(fd: fd, created: give made));
+        return Result::Ok(value: UnixListener.own(fd: fd, created: give made, mode: 0));
     }
 
     // Accept the next connection (blocking; `WouldBlock` in non-blocking mode). EINTR-retried. The stream starts
     // in this listener's mode on every OS: from a non-blocking listener, a non-blocking stream.
     @parks
     public unsafe fn Result<UnixStream, IoError> accept() {
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.acceptBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
             isize cfd = kama_accept(fd: this.fd);
-            if (cfd >= 0) { return Result::Ok(value: UnixStream.make(fd: cfd)); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (cfd >= 0) { return Result::Ok(value: UnixStream.make(fd: cfd, io: null, mode: this.mode & 3)); }   // its mode, as the OS gave it
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.acceptBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
-        if (kama_set_nonblocking(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
+        if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
     public const fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
-    public ctor Result<UnixListener, IoError> adopt(Descriptor descriptor) {
+    public unsafe ctor Result<UnixListener, IoError> adopt(Descriptor descriptor) {
         return match (descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: h): Result::Ok(value: UnixListener.own(fd: h, created: ""));
+            case Ok(value: h): Result::Ok(value: UnixListener.own(fd: h, created: "", mode: kama_net_adopt_mode(fd: h)));
         };
     }
     // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing — and the socket FILE stays: whoever holds the descriptor now serves it).
-    public fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; this.created = ""; return Descriptor.adoptSocket(raw: h); }
+    public unsafe fn Descriptor takeDescriptor() {
+        isize h = this.fd;
+        kama_net_settle(fd: h, io: this.io, mode: this.mode);
+        this.fd = -1; this.io = null; this.mode = 0; this.created = "";
+        return Descriptor.adoptSocket(raw: h);
+    }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
     // you keep this one.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
@@ -473,7 +516,7 @@ type resource UnixListener implements Sendable {
     // Close, then remove the file this listener made — closing first, so nothing can connect to a name that
     // is about to disappear.
     unsafe ~UnixListener() {
-        if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); }
+        if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); }
         if (this.created.length() > 0) { int32 ru = kama_unlink(path: this.created.cstr()); }
     }
 }
@@ -488,7 +531,11 @@ type resource UnixListener implements Sendable {
 type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     isize fd = -1;
     string created;   // the path this socket bound and so removes at drop; "" for none
-    ctor own(isize fd, string created) { this.fd = fd; this.created = give created; }
+    UnsafePtr io = null;   // how it waits, as `TcpStream`'s (net.kama)
+    int32 mode = 0;
+    uint64 readBy = 0;
+    uint64 writeBy = 0;
+    ctor own(isize fd, string created, int32 mode) { this.fd = fd; this.created = give created; this.mode = mode; }
     friend UnixDatagramPair::open[own];
 
     // A socket with no name — enough to send (`sd_notify` sends from one), and to receive replies only on a
@@ -498,7 +545,7 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
         if (ir != 0) { return Result::Err(error: lastError()); }
         isize fd = kama_socket_unix(datagram: 1);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: UnixDatagram.own(fd: fd, created: ""));
+        return Result::Ok(value: UnixDatagram.own(fd: fd, created: "", mode: 0));
     }
     public ctor Result<UnixDatagram, IoError> bind(const ref string path) {
         return match (UnixAddr.fromPath(path: path)) {
@@ -518,7 +565,7 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: UnixDatagram.own(fd: fd, created: createdPath(a: address)));
+        return Result::Ok(value: UnixDatagram.own(fd: fd, created: createdPath(a: address), mode: 0));
     }
 
     // A default peer: `send`/`recv` then need no address, and only its datagrams are received.
@@ -536,55 +583,64 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     // Send one datagram to `to`. EINTR-retried. `MessageTooLong` past the socket's limit.
     public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref UnixAddr to) {
         if (!addrNamed(a: to)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = addrSendTo(fd: this.fd, bytes: bytes, a: to);
+            isize n = addrSendTo(fd: this.fd, mode: this.mode, bytes: bytes, a: to);
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
     // Receive one datagram (truncated to into.length()) and who sent it. Non-blocking + nothing queued is
     // `WouldBlock`; an empty `into` is `InvalidInput`. EINTR-retried.
-    public fn Result<RecvFrom<UnixAddr>, IoError> recvFrom(View<uint8> into) {
+    public unsafe fn Result<RecvFrom<UnixAddr>, IoError> recvFrom(View<uint8> into) {
         if (into.length() == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
         isize count = 0;
-        return match (recvFromInto(fd: this.fd, into: into, count: ref count)) {
+        return match (recvFromInto(fd: this.fd, io: this.io, mode: this.mode, by: this.readBy, into: into, count: ref count)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: from): Result::Ok(value: RecvFrom.of(count: cast<usize>(count), from: from));
         };
     }
     @parks
     public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
     @parks
     public unsafe fn Result<usize, IoError> recv(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
-        if (kama_set_nonblocking(fd: this.fd, on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
+        if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
     public const fn Result<UnixAddr, IoError> localAddr() { return unixNameOf(fd: this.fd, peer: false); }
     public const fn Result<UnixAddr, IoError> peerAddr() { return unixNameOf(fd: this.fd, peer: true); }
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
-    public ctor Result<UnixDatagram, IoError> adopt(Descriptor descriptor) {
+    public unsafe ctor Result<UnixDatagram, IoError> adopt(Descriptor descriptor) {
         return match (descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: h): Result::Ok(value: UnixDatagram.own(fd: h, created: ""));
+            case Ok(value: h): Result::Ok(value: UnixDatagram.own(fd: h, created: "", mode: kama_net_adopt_mode(fd: h)));
         };
     }
     // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing — and a bound FILE stays).
-    public fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; this.created = ""; return Descriptor.adoptSocket(raw: h); }
+    public unsafe fn Descriptor takeDescriptor() {
+        isize h = this.fd;
+        kama_net_settle(fd: h, io: this.io, mode: this.mode);
+        this.fd = -1; this.io = null; this.mode = 0; this.created = "";
+        return Descriptor.adoptSocket(raw: h);
+    }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
     // you keep this one.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
@@ -595,20 +651,22 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     // Send `bytes` (at least one) with `descriptors` — open files, sockets, streams — which the peer receives with
     // `recvDescriptors`. CONSUMES them: each is closed here once the peer holds its own, so send
     // `x.duplicateDescriptor()` to keep `x`. At most 253 per message. On Windows the peer must be kama too.
-    public fn Result<usize, IoError> sendDescriptors(ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
-        return sendWith(fd: this.fd, bytes: bytes, descriptors: give descriptors);
+    public unsafe fn Result<usize, IoError> sendDescriptors(ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
+        return sendWith(fd: this.fd, io: this.io, mode: this.mode, by: this.writeBy, bytes: bytes, descriptors: give descriptors);
     }
     // Receive up to into.length() bytes and the descriptors sent with them, appended to `descriptors`: each is
     // owned — adopt it into what it is (`File.adopt`, `UnixStream.adopt`, …) or it closes when dropped. Received
     // descriptors are close-on-exec. More than 253 in one message, or more than the kernel kept, is
     // `MessageTooLong`, and every one that did arrive is closed.
-    public fn Result<usize, IoError> recvDescriptors(View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
-        return recvWith(fd: this.fd, into: into, descriptors: ref descriptors);
+    public unsafe fn Result<usize, IoError> recvDescriptors(View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
+        return recvWith(fd: this.fd, io: this.io, mode: this.mode, by: this.readBy, into: into, descriptors: ref descriptors);
     }
     public const fn isize rawHandle() { return this.fd; }
 
     unsafe ~UnixDatagram() {
-        if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); }
+        if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); }
         if (this.created.length() > 0) { int32 ru = kama_unlink(path: this.created.cstr()); }
     }
 }
@@ -628,7 +686,7 @@ type resource UnixDatagramPair implements Sendable {
         slot isize a;
         slot isize b;
         if (kama_unix_pair(datagram: 1, a: out a, b: out b) != 0) { return Result::Err(error: lastError()); }
-        return Result::Ok(value: UnixDatagramPair.of(a: UnixDatagram.own(fd: a, created: ""), b: UnixDatagram.own(fd: b, created: "")));
+        return Result::Ok(value: UnixDatagramPair.of(a: UnixDatagram.own(fd: a, created: "", mode: 0), b: UnixDatagram.own(fd: b, created: "", mode: 0)));
     }
     public fn ref UnixDatagram first() { return this.a; }
     public fn ref UnixDatagram second() { return this.b; }

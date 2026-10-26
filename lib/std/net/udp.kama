@@ -14,11 +14,18 @@ extern fn int32 kama_set_reuseaddr(isize fd);
 extern fn int32 kama_bind_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
 extern fn int32 kama_connect_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
 extern fn isize kama_sendto_addr(isize fd, UnsafeConstPtr<uint8> buf, usize n, int32 family, UnsafeConstPtr<uint8> ip,
-                                 uint16 port, uint32 scopeId);
+                                 uint16 port, uint32 scopeId, int32 mode);
 extern fn isize kama_recvfrom_addr(isize fd, UnsafePtr<uint8> buf, usize n, UnsafePtr<int32> outFamily,
-                                   UnsafePtr<uint8> outIp, UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
-extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n);
-extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n);
+                                   UnsafePtr<uint8> outIp, UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope, int32 mode);
+extern fn isize kama_recv(isize fd, UnsafePtr<uint8> buf, usize n, int32 mode);
+extern fn isize kama_send(isize fd, UnsafeConstPtr<uint8> buf, usize n, int32 mode);
+// A socket's wait (kama_os.h, KR-3 step 5), as net.kama binds it.
+extern fn int32 kama_net_ready(isize fd, UnsafePtr io, UnsafePtr<int32> mode, uint64 by);
+extern fn int32 kama_net_retry(isize fd, UnsafePtr io, int32 mode, int32 interest, uint64 by);
+extern fn int32 kama_net_close(isize fd, UnsafePtr io);
+extern fn void kama_net_settle(isize fd, UnsafePtr io, int32 mode);
+extern fn int32 kama_net_set_mode(isize fd, UnsafePtr io, UnsafePtr<int32> mode, int32 on);
+extern fn int32 kama_net_adopt_mode(isize fd);
 extern fn int32 kama_getsockname_addr(isize fd, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIp,
                                       UnsafePtr<uint16> outPort, UnsafePtr<uint32> outScope);
 extern fn int32 kama_getpeername_addr(isize fd, UnsafePtr<int32> outFamily, UnsafePtr<uint8> outIp,
@@ -63,7 +70,11 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     // stays an ownable descriptor — stdin is a real handle, and `fd > 0` used to make it unownable
     // for no reason other than that zero doubled as "empty". Rust's `OwnedFd` niche.
     isize fd = -1;
-    private ctor make(isize fd) { this.fd = fd; }
+    UnsafePtr io = null;   // how it waits, as `TcpStream`'s (net.kama)
+    int32 mode = 0;
+    uint64 readBy = 0;
+    uint64 writeBy = 0;
+    private ctor make(isize fd, int32 mode) { this.fd = fd; this.mode = mode; }
 
     // Bind to a numeric host:port. host ""/"0.0.0.0" = every IPv4 interface, "::" = every interface of both
     // families (IPV6_V6ONLY off, as for `TcpListener`); port 0 = OS-assigned ephemeral (read the actual port
@@ -90,7 +101,7 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);
         }
-        return Result::Ok(value: UdpSocket.make(fd: fd));
+        return Result::Ok(value: UdpSocket.make(fd: fd, mode: 0));
     }
 
     // Set a default peer (POSIX `connect` on a datagram socket): send/recv then need no address, and recv
@@ -117,11 +128,12 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref SocketAddr to) {
         InlineArray<uint8>#(16) ip = to.ip.bytes();
         int32 family = to.ip.family();
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
             isize n = kama_sendto_addr(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()),
-                                       family: family, ip: addr(of: ip[0]), port: to.port, scopeId: to.scopeId);
+                                       family: family, ip: addr(of: ip[0]), port: to.port, scopeId: to.scopeId, mode: this.mode);
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
 
@@ -134,22 +146,24 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
         InlineArray<uint8>#(16) ip = [0; 16];
         uint16 port = 0ui16;
         uint32 zone = 0ui32;
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
             isize n = kama_recvfrom_addr(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()),
                                          outFamily: addr(of: family), outIp: addr(of: ip[0]), outPort: addr(of: port),
-                                         outScope: addr(of: zone));
+                                         outScope: addr(of: zone), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: RecvFrom.of(count: cast<usize>(n), from: SocketAddr.raw(family: family, bytes: ip, port: port, scopeId: zone))); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
 
     // Send to the connected default peer (see connect). EINTR-retried.
     @parks
     public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) {
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+            isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
 
@@ -157,17 +171,18 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     @parks
     public unsafe fn Result<usize, IoError> recv(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: cast<usize>(0)); }
+        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
-            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), mode: this.mode);
             if (n >= 0) { return Result::Ok(value: cast<usize>(n)); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
+            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
 
-    // Toggle non-blocking mode. In non-blocking mode, recv/recvFrom that would stall return WouldBlock.
+    // Toggle non-blocking mode. In non-blocking mode, recv/recvFrom that would stall return WouldBlock — on a fiber
+    // too, where a blocking one parks instead.
     public unsafe fn Result<Unit, IoError> setNonBlocking(bool on) {
-        int32 v = on ? 1 : 0;
-        if (kama_set_nonblocking(fd: this.fd, on: v) != 0) { return Result::Err(error: lastError()); }
+        if (kama_net_set_mode(fd: this.fd, io: this.io, mode: addr(of: this.mode), on: on ? 1 : 0) != 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Unit::Unit);
     }
 
@@ -269,14 +284,19 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     // The raw socket handle — the intended bridge for handing this socket to a std::net::Poller.
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
-    public ctor Result<UdpSocket, IoError> adopt(Descriptor descriptor) {
+    public unsafe ctor Result<UdpSocket, IoError> adopt(Descriptor descriptor) {
         return match (descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
-            case Ok(value: h): Result::Ok(value: UdpSocket.make(fd: h));
+            case Ok(value: h): Result::Ok(value: UdpSocket.make(fd: h, mode: kama_net_adopt_mode(fd: h)));
         };
     }
     // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing).
-    public fn Descriptor takeDescriptor() { isize h = this.fd; this.fd = -1; return Descriptor.adoptSocket(raw: h); }
+    public unsafe fn Descriptor takeDescriptor() {
+        isize h = this.fd;
+        kama_net_settle(fd: h, io: this.io, mode: this.mode);
+        this.fd = -1; this.io = null; this.mode = 0;
+        return Descriptor.adoptSocket(raw: h);
+    }
     // A second descriptor for this same socket, closed independently — what `sendDescriptors` consumes when
     // you keep this one.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {
@@ -286,5 +306,5 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     }
     public const fn isize rawHandle() { return this.fd; }
 
-    unsafe ~UdpSocket() { if (this.fd >= 0) { int32 rc = kama_close_socket(fd: this.fd); } }   // guard: see net.kama ~TcpStream
+    unsafe ~UdpSocket() { if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); } }   // guard: see net.kama ~TcpStream
 }

@@ -1,7 +1,8 @@
 // No park inside an `@onPanic` region (KR-3 decision 15): a recovered panic is a longjmp, and one across a fiber switch
-// would land on another fiber's stack, so the region is refused with the chain to the switch. Today the same program also
+// would land on another fiber's stack, so the region is refused with the chain to the switch. The same program also
 // trips `@noheap` (a spawn allocates) and the region's destructor rule (a `Fiber` owns one); the park walk is the one
-// that will still hold when a park that neither owns nor allocates arrives (KR-3 step 5's sockets).
+// that names the switch. A socket's park (xfail/onpanic_park_socket) allocates too, at its first wait, which registers
+// the socket with the scheduler (KR-3 decision 15, as corrected).
 import { std::concurrent::Fiber, std::concurrent::join };
 fn int32 child(int32 n) { return n; }
 fn int32 waitOne() {

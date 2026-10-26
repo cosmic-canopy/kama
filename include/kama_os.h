@@ -1107,12 +1107,14 @@ static inline ptrdiff_t kama_accept(ptrdiff_t fd) {
 }
 // Winsock has no MSG_DONTWAIT: a socket's mode is its own (FIONBIO), which a duplicate does not share.
 #define KAMA__NET_DONTWAIT(mode) ((void)(mode), 0)
-static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n) {
+static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n, int32_t mode) {
+    (void)mode;
     int r = recv((SOCKET)fd, (char*)buf, (int)n, 0);
     if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
     return (ptrdiff_t)r;
 }
-static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n) {
+static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n, int32_t mode) {
+    (void)mode;
     int r = send((SOCKET)fd, (const char*)buf, (int)n, 0);
     if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
     return (ptrdiff_t)r;
@@ -1244,25 +1246,49 @@ static inline ptrdiff_t kama_desc_dup(ptrdiff_t h, int32_t kind) {
 // already exists in the peer when this returns, the sender may close its own at once.
 #define KAMA__FD_MAX 253          // Linux's SCM_MAX_FD — the most one message carries on any OS here
 #define KAMA__FD_MAGIC 0x3144464Bu   // "KFD1" little-endian
-static inline int32_t kama__sock_send_all(SOCKET s, const uint8_t* p, size_t n) {
+// A frame begun is finished, whatever the socket's mode: half of one cannot be taken back, so a would-block inside it
+// waits (on a fiber, parked; on a thread, in select) until `by`. `io` is the socket's registration (KR-3 step 5).
+static inline int32_t kama__net_wait(ptrdiff_t fd, void* io, int32_t interest, uint64_t by);
+static inline int32_t kama__sock_send_all(SOCKET s, const uint8_t* p, size_t n, void* io, uint64_t by) {
     while (n > 0) {
         int r = send(s, (const char*)p, (int)n, 0);
-        if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
+        if (r == SOCKET_ERROR) {
+            kama__capture_wsa();
+            if (errno == EAGAIN && kama__net_wait((ptrdiff_t)s, io, 2, by)) continue;
+            return -1;
+        }
         p += r; n -= (size_t)r;
     }
     return 0;
 }
-static inline int32_t kama__sock_recv_all(SOCKET s, uint8_t* p, size_t n) {
+static inline int32_t kama__sock_recv_all(SOCKET s, uint8_t* p, size_t n, void* io, uint64_t by) {
     while (n > 0) {
         int r = recv(s, (char*)p, (int)n, 0);
-        if (r == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
+        if (r == SOCKET_ERROR) {
+            kama__capture_wsa();
+            if (errno == EAGAIN && kama__net_wait((ptrdiff_t)s, io, 1, by)) continue;
+            return -1;
+        }
         if (r == 0) { kama__os_fail(0, ECONNRESET); return -1; }   // the frame was cut short
         p += r; n -= (size_t)r;
     }
     return 0;
 }
-static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t n, const ptrdiff_t* hs, const int32_t* kinds, size_t count) {
+static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t n, const ptrdiff_t* hs, const int32_t* kinds, size_t count,
+                                      void* io, int32_t mode, uint64_t by) {
     if (count == 0 || count > KAMA__FD_MAX || n == 0) { kama__os_fail(0, EINVAL); return -1; }
+    // Writable first: once a handle is in the peer the frame must go, so a socket the program made non-blocking may
+    // answer WouldBlock only here, and a retry never puts a handle into the peer twice.
+    if (mode & (KAMA_NET_PROGRAM_NB | KAMA_NET_KAMA_NB)) {
+        fd_set w; FD_ZERO(&w); FD_SET((SOCKET)sock, &w);
+        struct timeval now = { 0, 0 };
+        const int ready = select(0, NULL, &w, NULL, &now);
+        if (ready == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
+        if (ready == 0) {
+            if (mode & KAMA_NET_PROGRAM_NB) { kama__os_fail(WSAEWOULDBLOCK, EAGAIN); return -1; }
+            if (!kama__net_wait(sock, io, 2, by)) return -1;
+        }
+    }
     int32_t pid = 0;
     if (kama_unix_peer_pid(sock, &pid) != 0) return -1;
     const size_t rec = 8 + sizeof(WSAPROTOCOL_INFOW), cap = 8 + count * rec;
@@ -1293,7 +1319,7 @@ static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t
         at += 8 + size;
     }
     if (target) CloseHandle(target);
-    int32_t ok = kama__sock_send_all((SOCKET)sock, f, at) == 0 && kama__sock_send_all((SOCKET)sock, buf, n) == 0;
+    int32_t ok = kama__sock_send_all((SOCKET)sock, f, at, io, by) == 0 && kama__sock_send_all((SOCKET)sock, buf, n, io, by) == 0;
     kama_free(f, cap, sizeof(void*));
     return ok ? (ptrdiff_t)n : -1;
 fail:
@@ -1301,21 +1327,23 @@ fail:
     kama_free(f, cap, sizeof(void*));
     return -1;
 }
-static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, ptrdiff_t* hs, int32_t* kinds, size_t cap, size_t* count) {
+static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, ptrdiff_t* hs, int32_t* kinds, size_t cap, size_t* count,
+                                      void* io, int32_t mode, uint64_t by) {
+    (void)mode;                                                   // the peek below answers WouldBlock before a frame begins
     *count = 0;
     uint32_t hdr[2];
     int first = recv((SOCKET)sock, (char*)hdr, 8, MSG_PEEK);
     if (first == SOCKET_ERROR) { kama__capture_wsa(); return -1; }
     if (first == 0) return 0;                                     // end of stream: nothing was sent
-    if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)hdr, 8) != 0) return -1;
+    if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)hdr, 8, io, by) != 0) return -1;
     if (hdr[0] != KAMA__FD_MAGIC || hdr[1] == 0 || hdr[1] > KAMA__FD_MAX) { kama__os_fail(0, EINVAL); return -1; }
     size_t got = 0; int bad = 0;
     for (uint32_t i = 0; i < hdr[1]; ++i) {
         uint32_t ks[2];
-        if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)ks, 8) != 0) { bad = 1; break; }
+        if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)ks, 8, io, by) != 0) { bad = 1; break; }
         if (ks[1] > sizeof(WSAPROTOCOL_INFOW)) { kama__os_fail(0, EINVAL); bad = 1; break; }
         union { WSAPROTOCOL_INFOW info; uint64_t v; } p;
-        if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)&p, ks[1]) != 0) { bad = 1; break; }
+        if (kama__sock_recv_all((SOCKET)sock, (uint8_t*)&p, ks[1], io, by) != 0) { bad = 1; break; }
         ptrdiff_t h = -1;
         if (ks[0] == 1) {
             SOCKET s = WSASocketW(FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, FROM_PROTOCOL_INFO, &p.info, 0, WSA_FLAG_NO_HANDLE_INHERIT);
@@ -1330,8 +1358,15 @@ static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, pt
         else { kama_desc_close(h, (int32_t)ks[0]); bad = 1; kama__os_fail(0, EMSGSIZE); }
     }
     if (bad) { for (size_t i = 0; i < got; ++i) kama_desc_close(hs[i], kinds[i]); return -1; }
-    int r = recv((SOCKET)sock, (char*)buf, (int)n, 0);
-    if (r == SOCKET_ERROR) { kama__capture_wsa(); for (size_t i = 0; i < got; ++i) kama_desc_close(hs[i], kinds[i]); return -1; }
+    int r;
+    for (;;) {                                                    // the bytes the frame carries: still inside it
+        r = recv((SOCKET)sock, (char*)buf, (int)n, 0);
+        if (r != SOCKET_ERROR) break;
+        kama__capture_wsa();
+        if (errno == EAGAIN && kama__net_wait(sock, io, 1, by)) continue;
+        for (size_t i = 0; i < got; ++i) kama_desc_close(hs[i], kinds[i]);
+        return -1;
+    }
     *count = got;
     return (ptrdiff_t)r;
 }
@@ -2568,8 +2603,12 @@ static inline ptrdiff_t kama_accept(ptrdiff_t fd) {
     kama__nosigpipe(c);
     return c;
 }
-static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)recv((int)fd, buf, n, 0); }
-static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n)  { return (ptrdiff_t)send((int)fd, buf, n, KAMA__SEND_FLAGS); }
+static inline ptrdiff_t kama_recv(ptrdiff_t fd, uint8_t* buf, size_t n, int32_t mode) {
+    return (ptrdiff_t)recv((int)fd, buf, n, KAMA__NET_DONTWAIT(mode));
+}
+static inline ptrdiff_t kama_send(ptrdiff_t fd, const uint8_t* buf, size_t n, int32_t mode) {
+    return (ptrdiff_t)send((int)fd, buf, n, KAMA__SEND_FLAGS | KAMA__NET_DONTWAIT(mode));
+}
 // `TcpStream.sendFile` (KR-207): up to `count` bytes of the file `fd` from `offset`, straight from the page cache to the
 // socket, and the file's own cursor never moves. The count sent, 0 when `offset` is at or past the end, or -1 with
 // errno. ENOSYS means "not this way": this OS has no such call, or the kernel cannot send THIS file so (Linux's EINVAL
@@ -2851,8 +2890,9 @@ static inline ptrdiff_t kama_desc_dup(ptrdiff_t h, int32_t kind) {   // close-on
 }
 #define KAMA__FD_MAX 253   // Linux's SCM_MAX_FD — the most one message carries
 // Descriptors ride with at least one byte of data (a stream carries ancillary data only alongside some).
-static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t n, const ptrdiff_t* hs, const int32_t* kinds, size_t count) {
-    (void)kinds;
+static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t n, const ptrdiff_t* hs, const int32_t* kinds, size_t count,
+                                      void* io, int32_t mode, uint64_t by) {
+    (void)kinds; (void)io; (void)by;                              // one sendmsg: the kama side's retry waits
     if (count == 0 || count > KAMA__FD_MAX || n == 0) { errno = EINVAL; return -1; }
     struct iovec iov; iov.iov_base = (void*)(uintptr_t)buf; iov.iov_len = n;
     union { struct cmsghdr align; char b[CMSG_SPACE(sizeof(int) * KAMA__FD_MAX)]; } cb;
@@ -2863,7 +2903,7 @@ static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t
     struct cmsghdr* c = CMSG_FIRSTHDR(&m);
     c->cmsg_level = SOL_SOCKET; c->cmsg_type = SCM_RIGHTS; c->cmsg_len = (socklen_t)CMSG_LEN(sizeof(int) * count);
     for (size_t i = 0; i < count; ++i) { int fd = (int)hs[i]; memcpy(CMSG_DATA(c) + i * sizeof(int), &fd, sizeof fd); }
-    return (ptrdiff_t)sendmsg((int)sock, &m, KAMA__SEND_FLAGS);
+    return (ptrdiff_t)sendmsg((int)sock, &m, KAMA__SEND_FLAGS | KAMA__NET_DONTWAIT(mode));
 }
 // Up to n bytes and up to `cap` descriptors. Every received descriptor is close-on-exec — atomically where
 // MSG_CMSG_CLOEXEC exists (Linux); elsewhere (macOS) they arrive unmarked and are marked at once, under the fork
@@ -2875,14 +2915,16 @@ static inline ptrdiff_t kama_send_fds(ptrdiff_t sock, const uint8_t* buf, size_t
 #else
 #define KAMA__RECV_CLOEXEC 0
 #endif
-static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, ptrdiff_t* hs, int32_t* kinds, size_t cap, size_t* count) {
+static inline ptrdiff_t kama_recv_fds(ptrdiff_t sock, uint8_t* buf, size_t n, ptrdiff_t* hs, int32_t* kinds, size_t cap, size_t* count,
+                                      void* io, int32_t mode, uint64_t by) {
+    (void)io; (void)by;                                           // one recvmsg: the kama side's retry waits
     *count = 0;
     struct iovec iov; iov.iov_base = buf; iov.iov_len = n;
     union { struct cmsghdr align; char b[CMSG_SPACE(sizeof(int) * KAMA__FD_MAX)]; } cb;
     struct msghdr m; memset(&m, 0, sizeof m);
     m.msg_iov = &iov; m.msg_iovlen = 1; m.msg_control = cb.b; m.msg_controllen = (socklen_t)sizeof cb.b;
     if (!KAMA__RECV_CLOEXEC) kama__cloexec_enter();
-    ptrdiff_t r = (ptrdiff_t)recvmsg((int)sock, &m, KAMA__RECV_CLOEXEC);
+    ptrdiff_t r = (ptrdiff_t)recvmsg((int)sock, &m, KAMA__RECV_CLOEXEC | KAMA__NET_DONTWAIT(mode));
     size_t got = 0; int over = 0;
     if (r >= 0) {
         for (struct cmsghdr* c = CMSG_FIRSTHDR(&m); c; c = CMSG_NXTHDR(&m, c)) {
@@ -3788,18 +3830,20 @@ static inline int32_t kama_connect_addr(ptrdiff_t fd, int32_t family, const uint
     if (connect((kama__sock)fd, (struct sockaddr*)&ss, len) != 0) return kama__connect_fail(NULL, 0);
     return 0;
 }
-static inline ptrdiff_t kama_sendto_addr(ptrdiff_t fd, const uint8_t* buf, size_t n, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope) {
+static inline ptrdiff_t kama_sendto_addr(ptrdiff_t fd, const uint8_t* buf, size_t n, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope,
+                                         int32_t mode) {
     struct sockaddr_storage ss;
     socklen_t len = kama__sa_fill(&ss, family, ip, port, scope);
-    ptrdiff_t r = (ptrdiff_t)sendto((kama__sock)fd, (const char*)buf, (int)n, 0, (struct sockaddr*)&ss, len);
+    ptrdiff_t r = (ptrdiff_t)sendto((kama__sock)fd, (const char*)buf, (int)n, KAMA__NET_DONTWAIT(mode), (struct sockaddr*)&ss, len);
     if (r < 0) return kama__sock_fail();
     return r;
 }
 // The sender comes back through scalar out-params (never a struct), as kama_fstat_size folds `struct stat`.
-static inline ptrdiff_t kama_recvfrom_addr(ptrdiff_t fd, uint8_t* buf, size_t n, int32_t* outFamily, uint8_t* outIp, uint16_t* outPort, uint32_t* outScope) {
+static inline ptrdiff_t kama_recvfrom_addr(ptrdiff_t fd, uint8_t* buf, size_t n, int32_t* outFamily, uint8_t* outIp, uint16_t* outPort, uint32_t* outScope,
+                                           int32_t mode) {
     struct sockaddr_storage ss; memset(&ss, 0, sizeof ss);
     socklen_t len = (socklen_t)sizeof ss;
-    ptrdiff_t r = (ptrdiff_t)recvfrom((kama__sock)fd, (char*)buf, (int)n, 0, (struct sockaddr*)&ss, &len);
+    ptrdiff_t r = (ptrdiff_t)recvfrom((kama__sock)fd, (char*)buf, (int)n, KAMA__NET_DONTWAIT(mode), (struct sockaddr*)&ss, &len);
     if (r < 0) return kama__sock_fail();
     kama__sa_read(&ss, outFamily, outIp, outPort, outScope);
     return r;
@@ -3949,17 +3993,17 @@ static inline ptrdiff_t kama_unix_name(ptrdiff_t fd, int32_t peer, int32_t* kind
 }
 
 // One datagram to a named Unix socket, and one received with its sender's name (UnixDatagram — Linux, macOS).
-static inline ptrdiff_t kama_sendto_unix(ptrdiff_t fd, const uint8_t* buf, size_t n, const uint8_t* p, size_t pn, int32_t kind) {
+static inline ptrdiff_t kama_sendto_unix(ptrdiff_t fd, const uint8_t* buf, size_t n, const uint8_t* p, size_t pn, int32_t kind, int32_t mode) {
     struct sockaddr_un a; socklen_t len = kama__sun_fill(&a, p, pn, kind);
-    ptrdiff_t r = (ptrdiff_t)sendto((kama__sock)fd, (const char*)buf, (int)n, 0, (struct sockaddr*)&a, len);
+    ptrdiff_t r = (ptrdiff_t)sendto((kama__sock)fd, (const char*)buf, (int)n, KAMA__NET_DONTWAIT(mode), (struct sockaddr*)&a, len);
     if (r < 0) return kama__sock_fail();
     return r;
 }
 static inline ptrdiff_t kama_recvfrom_unix(ptrdiff_t fd, uint8_t* buf, size_t n, int32_t* kind, uint8_t* name, size_t cap,
-                                           ptrdiff_t* nameLen) {
+                                           ptrdiff_t* nameLen, int32_t mode) {
     struct sockaddr_un a; memset(&a, 0, sizeof a);
     socklen_t len = (socklen_t)sizeof a;
-    ptrdiff_t r = (ptrdiff_t)recvfrom((kama__sock)fd, (char*)buf, (int)n, 0, (struct sockaddr*)&a, &len);
+    ptrdiff_t r = (ptrdiff_t)recvfrom((kama__sock)fd, (char*)buf, (int)n, KAMA__NET_DONTWAIT(mode), (struct sockaddr*)&a, &len);
     if (r < 0) return kama__sock_fail();
     *nameLen = kama__sun_read(&a, len, kind, name, cap);
     return r;

@@ -1,5 +1,6 @@
 // What the park rule (KR-3 step 4) leaves legal, in a program that runs fibers. A park is a call that lets another
-// fiber run — a `join`, a `Fiber`'s drop, a `scope`'s close — and nothing else is one: a window over `Shared` storage
+// fiber run — a `join`, a `Fiber`'s drop, a `scope`'s close, a socket call that would block (step 5) — and nothing
+// else is one: a window over `Shared` storage
 // may print (a write blocks the thread, but no other fiber runs while it does), spawn into a scope opened outside it
 // (a spawn queues the child; it switches to nothing), drop an `Owned` contract value (its size slot is read off the
 // vtable, and calls nothing), and join after it closes. An isolate that runs no fibers is not held to the rule at all:

@@ -1,0 +1,36 @@
+// KR-3 step 5: in a program that runs no fibers, a socket call is no park, so an `@onPanic` region may make one. The
+// fiber scheduler (kama_sched.h) is no part of such a program — kama_os.h reaches it only in a program that runs
+// fibers — so neither the region's walk nor `@noheap` sees a socket's registration (an allocation) or its fiber switch
+// under `read`. Its twin, xfail/onpanic_park_socket, is the same region in a program that spawns a fiber.
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::collections::FixedArray };
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+type resource Peer {
+    TcpStream s;
+    public ctor make(TcpStream s) { this.s = give s; }
+    @noheap @onPanic(recover: -1)
+    public unsafe fn int32 region(isize i) {
+        InlineArray<uint8>#(4) buf = [0; 4];
+        Result<isize, IoError> r = this.s.read(into: buf.viewMut().slice(from: 0, count: 1));
+        isize n = match (r) { case Ok(value: k): k; case Err(error: e): 0; };
+        return cast<int32>(buf[i]) + cast<int32>(n);           // i = 9: a bounds miss, recovered as -1
+    }
+}
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: portOf(l: l));
+    TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    Peer p = Peer.make(s: give s);
+    FixedArray<uint8> two = FixedArray.make(size: 2);
+    two[0] = 7ui8; two[1] = 9ui8;
+    _ = writeAll(w: c, bytes: two.view());
+    int32 ok = p.region(i: 0);                                 // 7 read, plus the count, 1
+    int32 bad = p.region(i: 9);                                // the 9 read, then the miss: -1
+    return cast<uint8>(ok - bad + 33);                         // 8 + 1 + 33
+}
+fn uint8 main() { return run(); }

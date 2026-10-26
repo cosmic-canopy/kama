@@ -1,0 +1,74 @@
+// KR-3 step 5: a socket leaving as a descriptor leaves in the mode the PROGRAM asked for. A stream read once on a fiber
+// is non-blocking underneath (kama's, to park on it); `takeDescriptor` takes it off the scheduler and makes it blocking
+// again, so a worker isolate that adopts it reads it as a blocking socket: its read waits for a byte sent after it
+// starts. Had the descriptor stayed non-blocking, `adopt` would read the mode back as the program's choice and the read
+// would answer WouldBlock. And a stream the program made non-blocking keeps that through the round trip on POSIX
+// (Windows cannot read a socket's mode back, so there `adopt` takes it as blocking). Port 0, read back.
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::IoErrorKind, std::io::Descriptor,
+         std::io::writeAll, std::concurrent::Fiber, std::concurrent::join, std::collections::FixedArray,
+         std::time::sleep, std::time::Duration };
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn int32 readByte(ref TcpStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 1);
+    Result<isize, IoError> r = s.read(into: buf.viewMut());
+    return match (r) {
+        case Ok(value: n): n == 1 ? cast<int32>(buf[0]) : 0 - 1;
+        case Err(error: e): match (e.kind()) { case WouldBlock: 0 - 9; case _: 0 - 2; };
+    };
+}
+unsafe fn TcpStream firstRead(TcpStream s) { int32 v = readByte(s: ref s); return give s; }
+
+// The worker: adopts the descriptor, and its read waits for the byte `main` sends after a pause.
+unsafe fn void adopter(Descriptor d) {
+    Result<TcpStream, IoError> ra = TcpStream.adopt(descriptor: give d);
+    match (give ra) {
+        case Ok(value: s): { int32 v = readByte(s: ref s); FixedArray<uint8> b = FixedArray.make(size: 1); b[0] = cast<uint8>(v + 1); _ = writeAll(w: s, bytes: b.view()); }
+        case Err(error: e): { }
+    };
+}
+
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 keepsProgramMode(ref TcpListener l, uint16 port) {
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 30; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
+    _ = s.setNonBlocking(on: true);
+    Result<TcpStream, IoError> rb = TcpStream.adopt(descriptor: s.takeDescriptor());
+    TcpStream back = match (give rb) { case Ok(value: x): give x; case Err(error: e): { return 32; } };
+    Fiber<int32> f = spawn fiber readOnFiber(s: give back);
+    return join(fiber: give f) == 0 - 9 ? 0 : 33;
+}
+@compileFor(OS_WINDOWS)
+unsafe fn int32 keepsProgramMode(ref TcpListener l, uint16 port) { return 0; }
+unsafe fn int32 readOnFiber(TcpStream s) { return readByte(s: ref s); }
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    uint16 port = portOf(l: l);
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    one[0] = 5ui8;
+    _ = writeAll(w: c, bytes: one.view());
+    Fiber<TcpStream> f = spawn fiber firstRead(s: give s);      // registered with this isolate's scheduler
+    TcpStream back = join(fiber: give f);
+    int32 answer = 0;
+    scope {
+        Descriptor d = back.takeDescriptor();
+        spawn adopter(d: give d);
+        sleep(d: Duration.fromMillis(ms: 30));                   // the worker's read is waiting by now
+        one[0] = 41ui8;
+        _ = writeAll(w: c, bytes: one.view());
+        answer = readByte(s: ref c);
+    }
+    if (answer != 42) { return cast<uint8>(answer < 0 ? 10 : answer); }
+    int32 k = keepsProgramMode(l: ref l, port: port);
+    return k == 0 ? 42 : cast<uint8>(k);
+}
+fn uint8 main() { return run(); }

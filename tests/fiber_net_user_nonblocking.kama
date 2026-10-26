@@ -1,0 +1,42 @@
+// KR-3 step 5, fibers.md decision 7: a socket the PROGRAM made non-blocking keeps answering WouldBlock on a fiber, for
+// a program that drives its own `Poller`; only a blocking one parks. On one isolate, a fiber reads an empty
+// non-blocking stream and gets `Err(WouldBlock)` at once; then, set blocking again, the same read parks until a second
+// fiber writes. Port 0, read back.
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::IoErrorKind, std::concurrent::Fiber,
+         std::collections::FixedArray };
+
+static int32 seen = 0;
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn void probe(ref TcpStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 1);
+    _ = s.setNonBlocking(on: true);
+    Result<isize, IoError> r = s.read(into: buf.viewMut());
+    bool wouldBlock = match (r) { case Ok(value: n): false; case Err(error: e): match (e.kind()) { case WouldBlock: true; case _: false; }; };
+    if (wouldBlock) { seen = seen + 1; }
+    _ = s.setNonBlocking(on: false);
+    Result<isize, IoError> b = s.read(into: buf.viewMut());       // parks until `poke` writes
+    bool one = match (b) { case Ok(value: n): n == 1 && buf[0] == 7ui8; case Err(error: e): false; };
+    if (one) { seen = seen + 10; }
+}
+unsafe fn void poke(ref TcpStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    b[0] = 7ui8;
+    _ = s.write(bytes: b.view());
+}
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: portOf(l: l));
+    TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    scope {
+        spawn fiber probe(s: ref s);
+        spawn fiber poke(s: ref c);
+    }
+    return seen == 11 ? 42 : cast<uint8>(seen);
+}
+fn uint8 main() { return run(); }

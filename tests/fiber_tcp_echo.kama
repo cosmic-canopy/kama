@@ -1,0 +1,65 @@
+// KR-3 step 5: TCP on fibers, all on one isolate. An accepting fiber takes twenty connections and spawns a fiber to echo
+// each; twenty client fibers connect, write a line and read their echo back. The isolate has one thread, so a single
+// accept, connect, read or write that blocked it would stop every other fiber, and the program would never finish (the
+// harness's watchdog): it finishes because each parks its own fiber instead. Port 0, read back (KR-105).
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber,
+         std::collections::FixedArray };
+
+static int32 echoed = 0;
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+// One connection's server side: back whatever arrives, until the client closes.
+unsafe fn void echo(TcpStream conn) {
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    while (true) {
+        Result<isize, IoError> r = conn.read(into: buf.viewMut());
+        isize got = match (r) { case Ok(value: n): n; case Err(error: e): cast<isize>(0 - 1); };
+        if (got <= 0) { return; }
+        Result<Unit, IoError> w = writeAll(w: conn, bytes: buf.slice(from: 0, count: got));
+        bool failed = match (w) { case Ok(value: u): false; case Err(error: e): true; };
+        if (failed) { return; }
+    }
+}
+
+// Twenty accepts, each connection served by a fiber of its own.
+unsafe fn void accepter(ref TcpListener l) {
+    scope {
+        for (int32 i = 0; i < 20; i = i + 1) {
+            Result<TcpStream, IoError> ra = l.accept();
+            match (give ra) {
+                case Ok(value: c): { spawn fiber echo(conn: give c); }
+                case Err(error: e): { return; }
+            };
+        }
+    }
+}
+
+// One client: connect, send "kama", read the four bytes back.
+unsafe fn void client(uint16 port) {
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream s = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return; } };
+    FixedArray<uint8> msg = FixedArray.make(size: 4);
+    msg[0] = 107ui8; msg[1] = 97ui8; msg[2] = 109ui8; msg[3] = 97ui8;
+    Result<Unit, IoError> w = writeAll(w: s, bytes: msg.view());
+    FixedArray<uint8> back = FixedArray.make(size: 4);
+    isize have = 0;
+    while (have < 4) {
+        Result<isize, IoError> r = s.read(into: back.viewMut().slice(from: have, count: 4 - have));
+        isize n = match (r) { case Ok(value: k): k; case Err(error: e): 0; };
+        if (n <= 0) { return; }
+        have = have + n;
+    }
+    if (back[0] == 107ui8 && back[3] == 97ui8) { echoed = echoed + 1; }
+}
+
+fn uint8 main() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    uint16 port = portOf(l: l);
+    scope {
+        spawn fiber accepter(l: ref l);
+        for (int32 i = 0; i < 20; i = i + 1) { spawn fiber client(port: port); }
+    }
+    return echoed == 20 ? 42 : cast<uint8>(echoed);
+}

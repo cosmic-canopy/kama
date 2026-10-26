@@ -1,0 +1,61 @@
+// KR-3 step 5: Unix-domain sockets on fibers, each case on one isolate, so a call that blocked the thread instead of
+// parking its fiber would stop the program. A stream: the reader fiber starts first and parks on the empty socket
+// until the writer fiber sends bytes with a descriptor riding along (POSIX's SCM_RIGHTS; on Windows kama's framed
+// hand-off, which waits out a full buffer mid-frame rather than answer WouldBlock with half a frame sent). Datagrams
+// where they exist (dgram_posix.kama), and on Linux a connect to a listener whose accept queue is full
+// (backlog_linux.kama). Each case is its own return code.
+import { std::net::UnixStream, std::net::UnixListener, std::io::IoError, std::io::Descriptor,
+         std::fs::File, std::fs::OpenMode, std::fs::writeFile, std::fs::remove,
+         std::concurrent::Fiber, std::collections::DynamicArray, std::collections::FixedArray,
+         datagrams, fullQueue };
+
+static int32 got = 0;
+static int32 passed = 0;
+
+unsafe fn void reader(UnixStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 8);
+    DynamicArray<Descriptor> ds = DynamicArray.empty();
+    Result<usize, IoError> r = s.recvDescriptors(into: buf.viewMut(), descriptors: ref ds);
+    usize n = match (r) { case Ok(value: k): k; case Err(error: e): cast<usize>(0); };
+    if (n == cast<usize>(3) && buf[0] == 1ui8 && buf[2] == 3ui8) { got = 1; }
+    passed = cast<int32>(ds.length());
+}
+
+unsafe fn void writer(UnixStream s) {
+    Result<File, IoError> fr = File.open(path: "fiber_unix.txt", mode: OpenMode::Read);
+    File f = match (give fr) { case Ok(value: x): give x; case Err(error: e): { return; } };
+    DynamicArray<Descriptor> ds = DynamicArray.empty();
+    ds.add(item: f.takeDescriptor());
+    FixedArray<uint8> msg = FixedArray.make(size: 3);
+    msg[0] = 1ui8; msg[1] = 2ui8; msg[2] = 3ui8;
+    _ = s.sendDescriptors(bytes: msg.view(), descriptors: give ds);
+}
+
+unsafe fn int32 streams() {
+    DynamicArray<uint8> text = DynamicArray.empty();
+    text.add(item: 107ui8); text.add(item: 97ui8);
+    _ = writeFile(path: "fiber_unix.txt", bytes: text);
+    Result<UnixListener, IoError> rl = UnixListener.bind(path: "fiber_unix.sock");
+    UnixListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<UnixStream, IoError> rc = UnixStream.connect(path: "fiber_unix.sock");
+    UnixStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 5; } };
+    Result<UnixStream, IoError> ra = l.accept();
+    UnixStream a = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
+    scope {
+        spawn fiber reader(s: give a);
+        spawn fiber writer(s: give c);
+    }
+    _ = remove(path: "fiber_unix.txt");
+    if (got != 1) { return 3; }
+    return passed == 1 ? 0 : 4;
+}
+
+fn uint8 main() {
+    int32 a = streams();
+    if (a != 0) { return cast<uint8>(a); }
+    int32 b = datagrams();
+    if (b != 0) { return cast<uint8>(b); }
+    int32 c = fullQueue();
+    if (c != 0) { return cast<uint8>(c); }
+    return 42;
+}
