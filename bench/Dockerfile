@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       lua5.4 \
       openjdk-21-jdk-headless \
       time hyperfine \
+      procps util-linux \
       curl ca-certificates xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
@@ -40,6 +41,11 @@ ENV PATH="/usr/local/go/bin:${PATH}" \
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.79.0
 ENV PATH="/opt/cargo/bin:${PATH}"
+
+# KR-243's tokio arm: its crates, fetched once here from the committed lock, so a server run needs no network.
+COPY bench/server/rust/Cargo.toml bench/server/rust/Cargo.lock /tmp/server-rust/
+RUN mkdir -p /tmp/server-rust/src && echo 'fn main() {}' > /tmp/server-rust/src/main.rs \
+ && cd /tmp/server-rust && cargo fetch --locked && rm -rf /tmp/server-rust
 
 # .NET SDK (official install script; arch-aware).
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \

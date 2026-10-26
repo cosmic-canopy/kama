@@ -7,6 +7,7 @@
 #   bench/run run [workload]  measure time/RSS/size (default: all nine workloads)
 #   bench/run report          render docs/benchmarks/RESULTS.md from results
 #   bench/run all             build + run + report (the image must already exist: build-image)
+#   bench/run server [out] [rounds]  KR-243's server benchmark (bench/server/), out under .scratch/ by default
 #   bench/run sh              interactive shell in the bench image
 #
 # Override the engine with KAMA_ENGINE=docker|podman.
@@ -30,6 +31,10 @@ case "${1:-}" in
   run)         run_ni bash bench/scripts/measure.sh "${2:-all}" ;;
   report)      run_ni python3 bench/scripts/report.py ;;
   all)         run_ni bash -c "bash bench/scripts/build.sh && bash bench/scripts/measure.sh all && python3 bench/scripts/report.py" ;;
+  # The server benchmark holds 10k connections, and today's kama arm a thread per connection: the container's own
+  # limits on descriptors and processes would be the thing measured, so they are lifted for it.
+  server)      "$ENGINE" run --rm --ulimit nofile=1048576:1048576 --pids-limit=-1 -v "$ROOT:/work" -w /work "$IMAGE" \
+                 bash -c "make -s kama >/dev/null && bash bench/server/run.sh ${2:-.scratch/bench-server.tsv} ${3:-15}" ;;
   sh|shell)    "$ENGINE" run --rm -it -v "$ROOT:/work" -w /work "$IMAGE" bash ;;
-  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|sh}" >&2; exit 2 ;;
+  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|sh}" >&2; exit 2 ;;
 esac

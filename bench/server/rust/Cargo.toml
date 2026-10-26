@@ -1,0 +1,19 @@
+# The tokio arm of KR-243: tokio's TCP for the echo, hyper (the HTTP stack tokio servers use) for HTTP.
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "io-util", "macros"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+socket2 = { version = "0.5", features = ["all"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

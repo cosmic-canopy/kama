@@ -52,6 +52,18 @@ Engine auto-detected (podman preferred); override with `KAMA_ENGINE=docker`.
 - **Metrics:** time (`hyperfine`), peak RSS (`/usr/bin/time -v`), compile time (build wall-clock),
   package size (self-contained binary, or code + external runtime).
 
+## Servers (KR-243)
+
+`bench/run server [out.tsv] [rounds]` runs the server benchmark in the bench image: kama against Node (one process
+and `cluster`), Go, tokio (work-stealing and thread-per-core) and a plain C event loop, on a 64-byte TCP echo, HTTP/1.1
+keep-alive plaintext and idle connections. Every arm is measured through one load client, `bench/server/client.c`,
+which verifies every reply and fails a run that answers wrongly. Each round runs every arm on every config as fresh
+processes in a rotated order, with the reference arm (`c`) run twice for the noise floor; read the result with
+`python3 bench/server/summarize.py <out.tsv>`, which claims a difference only past that floor in at least 12 of 15
+paired rounds. `bench/server/run.sh` also runs on a macOS host (kqueue), leaving out any arm whose toolchain is
+missing. The kama arm is today's: an isolate per connection; the fiber arm joins with KR-3 step 5 (sockets park).
+`SLOTS`, `CONFIGS`, `CORES`, `WARMUP` and `SECONDS_` narrow a run.
+
 ## Layout
 
 ```

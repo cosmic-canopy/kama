@@ -2250,6 +2250,16 @@ strongest. Results go to `docs/benchmarks/` beside the CPU suite's, with version
 **Ruled 2026-10-25:** the harness, the client and the peer arms first, with kama-today as the "before"; the fiber arm
 with KR-3 step 5, since until sockets park a fiber's blocked read stalls its whole core.
 
+**Shipped 2026-10-26:** `bench/server/` — `client.c`, the arms (`c/`, `node/`, `go/`, `rust/` with a committed
+`Cargo.lock`, `kama/`), `run.sh` and `summarize.py` — and `bench/run server`, which lifts the container's descriptor and
+process limits (a container default would otherwise be the thing measured). The bench image gains `procps` and
+`util-linux` and fetches the tokio arm's crates at build, so `bench/run build-image` must run once before the first
+server run. A two-round smoke run on the macOS host (no Go there) ran every other arm with zero errors; at 100
+connections every arm sat within ~20% of the C loop, so the client on the same machine was the limit there, which is
+why only the pinned container run is quoted. What remains: that run (15 rounds, Linux, written to
+`docs/benchmarks/servers.md` with versions, machine and core count), and the fiber arm, `kama/fibers.kama`, an isolate
+per core over a `SO_REUSEPORT` listener (`ListenOptions`), once sockets park (KR-3 step 5).
+
 <a id="s7"></a>
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
