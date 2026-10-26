@@ -488,6 +488,25 @@ guards. Fixtures: a declaration, an expression statement and a receiver chain, e
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
+<a id="s2-static-arith-init"></a>
+
+### A module `static` initialized by arithmetic emits C that does not compile (KR-246)
+
+**Found 2026-10-26** writing a KR-3 step 5 fixture, on `0.9.747`. A mutable module `static` whose initializer is
+arithmetic passes every kama check and then fails in the C compiler:
+
+```kama fragment
+static int32 a = 0 - 1;            // also `1 + 2`, `2 * 3`, `7 / 2`
+fn uint8 main() { return cast<uint8>(a + 43); }
+// clang: error: initializer element is not a compile-time constant
+```
+
+The initializer is emitted through the checked-arithmetic macros (`KAMA_SUB` and its kin, which trap on overflow in a
+debug build), and those are calls, which C forbids in a file-scope initializer. `static int32 a = -1;` builds. A
+compiler error naming kama's own C is the wrong place for any verdict: either the initializer is a constant
+expression, which kama can fold as it folds a `comptime` initializer (with the same overflow check, at compile time),
+or it is not, and kama refuses it at its line. Unprobed beyond the four operators above; no shipped code hits it.
+
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)
@@ -2195,8 +2214,8 @@ from data races keeps holding by construction.
     corrected 2026-10-26: a socket's first wait registers it, which allocates, and the `@noheap` walk is program-wide,
     so a program that runs fibers anywhere refuses `@noheap` socket I/O and `sleep` everywhere (KR-245).
 
-Steps 1–4 shipped `0.9.737`–`0.9.743` (fibers.md §8 records each, and the as-built notes under decisions 1, 3, 9 and 10).
-Step 5 was ruled 2026-10-26 (fibers.md decisions 7, 11, 13 and 15): `Poller.wait` parks too, on its own descriptor on
+Steps 1–5 shipped `0.9.737`–`0.9.748` (fibers.md §8 records each, and the as-built notes under decisions 1, 3, 7, 9, 10 and 13).
+Step 5 was ruled 2026-10-26 and built `0.9.745`–`0.9.748` (fibers.md decisions 7, 11, 13 and 15): `Poller.wait` parks too, on its own descriptor on
 epoll and kqueue and through step 7's offload pool on AFD and `poll(2)`; two fibers on one socket is KR-244.
 
 <a id="s6-fiber-cet"></a>
@@ -2269,7 +2288,7 @@ server run. A two-round smoke run on the macOS host (no Go there) ran every othe
 connections every arm sat within ~20% of the C loop, so the client on the same machine was the limit there, which is
 why only the pinned container run is quoted. What remains: that run (15 rounds, Linux, written to
 `docs/benchmarks/servers.md` with versions, machine and core count), and the fiber arm, `kama/fibers.kama`, an isolate
-per core over a `SO_REUSEPORT` listener (`ListenOptions`), once sockets park (KR-3 step 5).
+per core over a `SO_REUSEPORT` listener (`ListenOptions`) — unblocked since sockets park (KR-3 step 5, `0.9.746`).
 
 <a id="s6-socket-split"></a>
 
