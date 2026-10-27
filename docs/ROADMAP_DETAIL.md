@@ -524,6 +524,8 @@ container's sort. It is consistent with practice: the covering check already mad
 catalog's arch-pinned triples), and this makes the choice among them so too. The default analysis remains the host's,
 which is inherent in a check that runs on a host: the catalog comment overclaims and is corrected with it.
 
+**Ruled 2026-10-27: (b), all four decisions as recommended.**
+
 **Decisions for the ruling:**
 1. The built-in candidates are tried in a fixed order: `LINUX`, `MACOS`, `WINDOWS`, `WASM`, `EMBEDDED`. Declared
    targets stay first, and the catalog's arch-pinned triples last, as today.
@@ -560,6 +562,8 @@ temporary; Swift's `switch f() { case let .halves(r, w): … }` does the same.
 out, and the payloads it does not take drop at the arm's end; `give` on a call result is refused with a message that
 says a result needs no `give`. Size S: the subject's ownership is already decided for `match (give x)`, and this is the
 same for a subject that is not a place.
+
+**Ruled 2026-10-27: as recommended.** With it, KR-244's split is one statement: `match (split(stream: give conn)) { … }`.
 
 <a id="s2-quoted-format"></a>
 
@@ -2404,6 +2408,8 @@ subject must be a local today: `match (split(stream: give conn))` refuses to mov
 which is KR-249. **The bytes:** a half
 is a pointer to the shared record and its own deadline, 16 bytes on a 64-bit target; the record is one allocation at
 the split, the descriptor, the registration pointer, the mode and a count, 24 bytes.
+
+**Ruled 2026-10-27: (a), all six decisions as recommended** — the writer's drop sends a FIN (a channel's last sender closes it the same way), and the datagram sockets split in the same commit.
 
 **Decisions for the ruling:**
 1. Owned, fiber-local halves (a): `TcpReader` and `TcpWriter`, not `Sendable`.
