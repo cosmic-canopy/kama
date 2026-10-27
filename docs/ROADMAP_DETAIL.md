@@ -451,24 +451,27 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-static-arith-init"></a>
+<a id="s2-check-cover-host"></a>
 
-### A module `static` initialized by arithmetic emits C that does not compile (KR-246)
+### `kama check` covers a negated OS gate differently per host (KR-247)
 
-**Found 2026-10-26** writing a KR-3 step 5 fixture, on `0.9.747`. A mutable module `static` whose initializer is
-arithmetic passes every kama check and then fails in the C compiler:
+**Found 2026-10-26** on Windows CI, releasing `0.9.749`. `kama check` analyzes every configuration that activates a
+gate the default leaves inactive (`coverGates`, `src/kama.driver.cpp`), so a program is judged under each target its
+gates name. For `@compileFor(!OS_WINDOWS)` that depends on the host:
+- **macOS or Linux:** the gate is active by default, so no further configuration is analyzed.
+- **Windows:** the gate is inactive, and the cover takes the first candidate that activates it. Built-in names are
+  tried in a `std::map`'s order, alphabetical, so that is `EMBEDDED`, and the whole program is judged as bare metal.
 
-```kama fragment
-static int32 a = 0 - 1;            // also `1 + 2`, `2 * 3`, `7 / 2`
-fn uint8 main() { return cast<uint8>(a + 43); }
-// clang: error: initializer element is not a compile-time constant
-```
+Two fiber fixtures (`fiber_poller_wait`, `fiber_net_descriptor`) gated a function `@compileFor(!OS_WINDOWS)` and spawned
+fibers outside it; Windows CI refused them ("fibers on bare metal are not built yet (KR-233)") in the analysis-agreement
+check, while macOS and Linux passed. Their gate now says what they need, `@compileFor(!OS_WINDOWS, HOSTED)`. The cover
+is the defect: the target catalog's comment (`catalogTargets`) states that which configurations `kama check` covers must not depend on
+the machine asking, and alphabetical order chose bare metal for a gate written with desktops in mind.
 
-The initializer is emitted through the checked-arithmetic macros (`KAMA_SUB` and its kin, which trap on overflow in a
-debug build), and those are calls, which C forbids in a file-scope initializer. `static int32 a = -1;` builds. A
-compiler error naming kama's own C is the wrong place for any verdict: either the initializer is a constant
-expression, which kama can fold as it folds a `comptime` initializer (with the same overflow check, at compile time),
-or it is not, and kama refuses it at its line. Unprobed beyond the four operators above; no shipped code hits it.
+**A ruling is owed** on the cover of a negated gate: every catalog OS it admits (the honest answer, at the cost of more
+analyses), a fixed host-independent order with hosted targets first, or a refusal of a gate whose cover is ambiguous.
+Rust's `cargo check` judges only the target asked for; Go's `go vet` the same, per `GOOS`. kama's covering check is
+what makes a gated declaration's errors visible at all, so the answer should keep that and lose the host.
 
 <a id="s2-quoted-format"></a>
 

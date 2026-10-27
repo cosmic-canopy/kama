@@ -1400,6 +1400,7 @@ spawn_needs_concurrent	spawn_needs_concurrent.kama:10:12
 spawn_outside_scope	spawn_outside_scope.kama:11:38 spawn_outside_scope.kama:15:4
 spawn_stack_zero	spawn_stack_zero.kama:7:12
 static_call_nonstatic	static_call_nonstatic.kama:8:23
+static_init_div_zero	static_init_div_zero.kama:3:0
 static_on_comptime	static_on_comptime.kama:5:0
 static_on_comptime_fn	static_on_comptime_fn.kama:5:0
 static_on_ctor	static_on_ctor.kama:5:0

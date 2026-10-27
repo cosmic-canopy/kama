@@ -1,0 +1,24 @@
+// KR-246: a module `static` initialized by arithmetic is baked from the fold at compile time, as a `comptime` constant
+// is. Through 0.9.749 the initializer was emitted through the overflow-checked arithmetic macros, which are calls, and C
+// takes none in a file-scope initializer: `static int32 a = 0 - 1;` passed every kama check and then failed clang
+// ("initializer element is not a compile-time constant"). Every operator, and the edges of the widest and narrowest
+// types; a value the type cannot hold is refused by the declaration's range check, and one the fold cannot reach by
+// xfail/static_init_div_zero.
+static int32 neg = 0 - 1;
+static int32 sum = 1 + 2;
+static int32 prod = 6 * 7;
+static int32 quot = 7 / 2;
+static int32 rem = 7 % 4;
+static int32 shl = 1 << 10;
+static int8 top8 = 100 + 27;
+static uint8 top = 200 + 55;
+static uint64 wide = 18446744073709551615ui64;
+static int64 big = 4000000000i64 * 2i64;
+
+fn uint8 main() {
+    neg = neg - 1;                                   // still a mutable static
+    if (neg != -2 || sum != 3 || prod != 42 || quot != 3 || rem != 3 || shl != 1024) { return 1; }
+    if (top8 != 127i8 || top != 255ui8) { return 2; }
+    if (wide != 18446744073709551615ui64 || big != 8000000000i64) { return 3; }
+    return 42;
+}

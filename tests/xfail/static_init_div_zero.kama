@@ -1,0 +1,4 @@
+// KR-246: a module `static` initializer is baked at compile time, so one that cannot be computed there — a division by
+// zero — is refused at its line, where it used to reach the C compiler.
+static int32 bad = 1 / 0;   // ERROR: not computable at compile time
+fn uint8 main() { return cast<uint8>(bad); }

@@ -5802,8 +5802,9 @@ fn void on_timer() { tick = tick + 1; } // shared with `main` in the same isolat
   and the rejection states the stance, not a queue entry: **persistence is ownership.** A resource that
   must outlive a frame lives in an `Owned<T>`, and `release()` hands it to a foreign API's userdata slot
   (see *Smart pointers*); a `static` is not a home for one. The initializer must be a **compile-time
-  constant** (a literal, `sizeof`, or const arithmetic); a runtime initializer (a call / `new` / `spawn`)
-  is rejected — **omit it to zero-init**. <!-- xfail: module_static_runtime_init -->
+  constant** (a literal, `sizeof`, or const arithmetic, computed at compile time as a `comptime`'s is — so one <!-- test: static_arith_init -->
+  that cannot be, such as a division by zero, is an error at its line); a runtime initializer (a call / `new` / <!-- xfail: static_init_div_zero -->
+  `spawn`) is rejected — **omit it to zero-init**. <!-- xfail: module_static_runtime_init -->
   These restrictions are not stopgaps: const-init is the deterministic reset-time init a bare-metal target
   wants (no static-init-order fiasco, no startup hook), and value-only keeps global data off the heap. A
   `static` is **file-private**: it may not appear in an `export { … }` list, and no other file — not <!-- xfail: export_module_static -->

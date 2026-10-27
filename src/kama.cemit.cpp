@@ -46718,7 +46718,24 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
                              + "` has a runtime initializer; omit it to zero-init").c_str(), mv);
                 *_out << " = {0}";
             } else {
-                *_out << " = " << emitExpression(d->initializer);
+                // KR-246: an integer initializer is baked from the fold, as a `comptime` one is. Emitted as an
+                // expression it went through the overflow-checked arithmetic macros, which are calls, and C takes
+                // none in a file-scope initializer: `static int32 a = 0 - 1;` passed every kama check and then failed
+                // clang ("initializer element is not a compile-time constant"). The declaration's own range check
+                // has already refused a value the type cannot hold; one the fold cannot reach — a division by zero,
+                // a shift past its width — is refused here, at its line, rather than in the C.
+                static const std::set<std::string> kInt = { "int8_t", "int16_t", "int32_t", "int64_t", "uint8_t",
+                                                            "uint16_t", "uint32_t", "uint64_t", "ptrdiff_t", "size_t" };
+                int64_t cv;
+                if (kInt.count(ty) && constValue(d->initializer, cv))
+                    *_out << " = " << cSignedLiteral(cv);
+                else if (kInt.count(ty) && dynamic_cast<BinaryExpressionNode*>(d->initializer.get())) {
+                    unsupported(("a module `static` initializer must be computable at compile time, and `"
+                                 + *d->name->value + "`'s is not — a division by zero or a shift past its width")
+                                    .c_str(), mv);
+                    *_out << " = {0}";
+                } else
+                    *_out << " = " << emitExpression(d->initializer);
             }
         } else {
             *_out << " = {0}";   // deterministic reset-time zero init
