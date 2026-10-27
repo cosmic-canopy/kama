@@ -2184,6 +2184,26 @@ Steps 1–5 shipped `0.9.737`–`0.9.748` (fibers.md §8 records each, and the a
 Step 5 was ruled 2026-10-26 and built `0.9.745`–`0.9.748` (fibers.md decisions 7, 11, 13 and 15): `Poller.wait` parks too, on its own descriptor on
 epoll and kqueue and through step 7's offload pool on AFD and `poll(2)`; two fibers on one socket is KR-244.
 
+**Step 6, where it starts (read 2026-10-26; re-probe before building).** Decision 8, ruled: channels wait on a fiber,
+send-side waits included, and joins park.
+- **Channels** wait on pthread condvars today (`include/kama_channel.h`: `kama_channel_send` ~210, `kama_channel_recv`
+  ~278, `kama_channel_recv_timeout` ~298), with one waker slot for `Receiver.wakeOnSend` (`0.9.719`). Two fibers on one
+  isolate talking over a channel deadlock the core, and a fiber's `recv` stalls every other fiber on it. The shape
+  decision 8 names: a waiter list of fibers or condvars; a send from another isolate wakes a fiber through
+  `kama_sched_wake` (step 2's remote queue, already built and tested); a timed receive parks with a deadline.
+- **Joins** are `pthread_join` (`include/kama_isolate.h` ~108), emitted at a `scope`'s close and for a held `Isolate`
+  handle (`src/kama.cemit.cpp` ~6667, ~6671, ~8201). On a fibered isolate the joiner parks until the child signals
+  its end.
+- **Step 5's seam is the template.** The fiber half sits behind `KAMA_FIBERS`, which the emitter writes for a program
+  that reaches the scheduler; the header forward-declares the scheduler calls and includes `kama_sched.h` at its end,
+  with the `#error` that catches a header read before the define; `tools/check-header-order.sh`'s seam list gains the
+  header. With a direct C call into the scheduler, the park rule follows channels and joins with no change to its walk,
+  and `parkSeam` gains their words.
+- **Fixtures to write:** two fibers on one isolate over a channel (a deadlock today), a fiber's receive woken by
+  another isolate's send, a full bounded channel's send-side wait, a timed receive on a fiber, an isolate join on a
+  fiber while the isolate's other fibers run, and the park rule's xfails for a channel wait and a join in a window.
+  TSan for every cross-isolate wake.
+
 <a id="s6-fiber-cet"></a>
 
 ### Fibers under CET shadow stacks (KR-238)
@@ -2252,9 +2272,18 @@ process limits (a container default would otherwise be the thing measured). The 
 `util-linux` and fetches the tokio arm's crates at build, so `bench/run build-image` must run once before the first
 server run. A two-round smoke run on the macOS host (no Go there) ran every other arm with zero errors; at 100
 connections every arm sat within ~20% of the C loop, so the client on the same machine was the limit there, which is
-why only the pinned container run is quoted. What remains: that run (15 rounds, Linux, written to
-`docs/benchmarks/servers.md` with versions, machine and core count), and the fiber arm, `kama/fibers.kama`, an isolate
-per core over a `SO_REUSEPORT` listener (`ListenOptions`) — unblocked since sockets park (KR-3 step 5, `0.9.746`).
+why only the pinned container run is quoted.
+
+**The fiber arm shipped 2026-10-26** (`bench/server/kama/fibers.kama`, slot `kama-fibers`): an isolate per core, each
+accepting on its own listener over `SO_REUSEPORT` (`ListenOptions.balance`, Linux; one isolate on macOS, which has no
+balancer), and a fiber per connection, with `server.kama`'s echo and http bodies line for line. A one-round smoke on
+the macOS host answered every request correctly.
+
+**What remains: the measured run.** `bench/run build-image` once (3–4 GB, networked: the toolchains, procps and
+util-linux, and the tokio arm's crates), then `bench/run server` (15 rounds, every slot, every config) on a quiet
+machine, and `python3 bench/server/summarize.py <out.tsv>`. It goes to `docs/benchmarks/servers.md` with the kama
+version, the machine, the core split between server and client, each arm's toolchain version, and the caveats stated
+above, before any number.
 
 <a id="s6-socket-split"></a>
 
