@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-250**
+**Next id: KR-255**
 
 ## The shape
 
@@ -72,6 +72,11 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
+| KR-250 | **Measure what the server benchmark leaves out** — HTTP like for like (raw-socket Go and tokio arms with the same minimal parse as C and kama; the full stacks kept as their own comparison), a skewed load where work stealing is strongest, a client that is never the limit (it capped the four fastest arms at ~255k req/s), and x86-64 Linux. No "fastest" claim until these are in | M | [§9](ROADMAP_DETAIL.md#s9-bench-gaps) |
+| KR-251 | **kama fibers spend ~14% more CPU per request than tokio's thread-per-core arm at 10,000-connection echo** (0.008 against 0.007 s per 1,000 requests, 4.8% fewer req/s, longer tails). Profile first; the first suspect is 128 events per `epoll_wait` where mio takes 1024 | S–M? | [§9](ROADMAP_DETAIL.md#s9-echo-gap) |
+| KR-252 | **Cross-module inlining in a release build (ThinLTO)** — each module is its own C file at `-O3` with no LTO, so a hot std call never inlines into the program; measure on both suites, with the release build's time | S | [§9](ROADMAP_DETAIL.md#s9-release-lto) |
+| KR-253 | **An io_uring backend for the fiber scheduler (Linux)** — completion I/O, the lever that would put kama ahead of tokio rather than level: a fiber parks on its submission, the buffer stays on its stack. Seastar, glommio and monoio are the reference; a design doc and a measurement before code | L | [§9](ROADMAP_DETAIL.md#s9-io-uring) |
+| KR-254 | **Memory per idle fiber connection** — 8.4 KiB against tokio's 5.0 and Go's 8.2; a touched stack page is the floor of fibers without colouring, the rest (control block, registration, buffers) is measured and trimmed | M? | [§9](ROADMAP_DETAIL.md#s9-fiber-memory) |
 | KR-3 | **Fibers and thread-per-core: blocking-shaped I/O for many connections** (and the job system) — one isolate per core, each a fiber scheduler over its own `Poller`: no colouring, no `Pin`, no `Send` bound on a task, races still impossible by construction. Beside KR-202, KR-7. **Designed and ruled 2026-10-22 ([docs/design/fibers.md](design/fibers.md))**: fifteen decisions, an eleven-commit map. Steps 1–6 (the switch and stacks, the scheduler, `spawn fiber` with `Fiber<R>`, the park rule, sockets and `sleep` that park with Go's absolute deadlines, channels and joins that park) shipped `0.9.737`–`0.9.751`; next step 7, the offload pool for files, DNS and blocking foreign calls | XL | [§6](ROADMAP_DETAIL.md#s6-fibers) |
 | KR-244 | **Two fibers on one socket: a read half and a write half** — a proxy or a WebSocket reads and writes one connection at once, and the scheduler holds a reader and a writer per socket, but a `spawn fiber` `ref` bundle may not be shared, so two fibers cannot hold one `TcpStream`. tokio's `split`/`into_split`, Go's two goroutines on one `net.Conn`. **Ruled 2026-10-27:** owned, fiber-local `TcpReader`/`TcpWriter` from a consuming `split` taken apart by `match`, `reunite`, a FIN when the writer drops, and datagram sockets split the same way | M? | [§6](ROADMAP_DETAIL.md#s6-socket-split) |
 | KR-247 | **`kama check` covers a negated OS gate differently per host** — on a Windows host, `@compileFor(!OS_WINDOWS)` is covered by the first built-in target that activates it, which is `EMBEDDED` (the names are tried alphabetically), so the program is also judged as bare metal; on macOS and Linux the gate is already active and bare metal is never judged. A fiber program with such a gate passed `kama check` on two hosts and failed on Windows CI. The target catalog's own comment states the cover must not depend on the host. Found 2026-10-26. **Ruled 2026-10-27:** the built-in candidates are tried in a fixed hosted-first order, LINUX, MACOS, WINDOWS, WASM, EMBEDDED | S–M? | [§2](ROADMAP_DETAIL.md#s2-check-cover-host) |

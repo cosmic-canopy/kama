@@ -3050,6 +3050,83 @@ rather than here, so there is one number to keep current. Forward work:
   loads the whole module by design: nothing pins a file, and seeding from the importing file's tokens would
   be unsound, since a type reached only through inference is never spelled.
 
+### Toward the fastest server runtime (KR-250..254)
+
+**Where it stands (2026-10-27, [benchmarks/servers.md](benchmarks/servers.md)).** On a 64-byte TCP echo, kama's
+fibers (an isolate per core, a fiber per connection) run within 0.6% of a hand-written C epoll loop, faster than Go
+(4–20%), Node (2.3–3 times one process) and tokio's work-stealing runtime (~5%), and behind tokio's thread-per-core
+runtime by 1.1% at 1,000 connections and 4.8% at 10,000, with longer tails there. Compute is at C's speed already
+([benchmarks/RESULTS.md](benchmarks/RESULTS.md)). Asked 2026-10-27 ("what can we do to become the most performant
+overall?"), the maintainer took this order: measure what the benchmark leaves out and close the one measured gap
+first, then cross-module inlining, then an io_uring design.
+
+**The field beyond the run.** The fastest servers today are io_uring thread-per-core runtimes (Seastar in C++,
+glommio and monoio in Rust), which complete I/O with fewer system calls than the epoll kama and tokio both use, and
+hand-tuned HTTP stacks (vectorized parsing, pipelining) such as Go's fasthttp, .NET's Kestrel and the C++ and Rust
+servers at the top of TechEmpower's plaintext test. Java's virtual threads are kama's model on the JVM and were not
+measured.
+
+<a id="s9-bench-gaps"></a>
+
+#### Measure what the server benchmark leaves out (KR-250)
+
+No "fastest" claim stands until these are measured, each as its own config or arm under the same interleaved protocol:
+- **HTTP like for like.** The C and kama arms find a request's end and write a fixed reply, while hyper, `net/http` and
+  Node's `http` parse every header. Add raw-socket Go and tokio arms with the same minimal parse, and keep the
+  full-stack arms as a separate comparison, the one a kama HTTP stack would join.
+- **A skewed load:** a few connections doing most of the work. Thread-per-core does not steal work, and this is where
+  tokio's and Go's work stealing are strongest. If it shows a real loss, a mitigation is filed then (an accept that
+  hands a connection to the least-loaded isolate, or KR-3 step 9's job pool for CPU bursts).
+- **A client that is never the limit.** At 100 and 1,000 connections the four fastest arms meet at ~255,000 requests/s,
+  the client's ceiling on 3 cores. More client cores, or a second machine.
+- **x86-64 Linux.** Every number so far is aarch64 in a VM on an Apple M4.
+
+<a id="s9-echo-gap"></a>
+
+#### kama fibers spend more CPU per request than tokio's thread-per-core arm at 10,000 connections (KR-251)
+
+On echo with 10,000 connections the fiber arm uses 0.008 s of server CPU per 1,000 requests against 0.007 for tokio's
+per-core arm (about 14% more), serves 4.8% fewer requests/s, and has a longer p99 and p99.9 (80 and 117 ms against 71
+and 92). Profile it before changing anything (`perf` in the bench container, both arms on the same config):
+- **First suspect:** the scheduler takes at most 128 events per `epoll_wait` (`KAMA__SCHED_EVENTS`,
+  `include/kama_sched.h`), where mio takes 1024, so a busy core makes more system calls per round.
+- **Then:** the socket wait protocol's per-request work (`kama_net_ready` before a call, `kama_net_retry` after
+  `EAGAIN`), the I/O poll every 61 runs, and the fixture's own per-connection buffer.
+
+Each change is measured interleaved against the one before it, and kept only if it beats the noise floor.
+
+<a id="s9-release-lto"></a>
+
+#### Cross-module inlining in a release build (KR-252)
+
+kama emits one C file per module and compiles each at `-O3` with no link-time optimization, so a hot std call (a
+socket `read`, `Map.get`) never inlines into the program that makes it; only the prelude's header bodies and generic
+instances do. Measure ThinLTO (`-flto=thin` at compile and link) on the CPU suite and the server benchmark, with the
+release build's own time beside it, since fast builds are a goal (GOALS #2): it is a candidate for the `--release`
+default only if it pays where programs spend their time.
+
+<a id="s9-io-uring"></a>
+
+#### An io_uring backend for the fiber scheduler (KR-253)
+
+The largest single lever on Linux, and the one that would put kama ahead of tokio (which polls epoll) rather than level
+with it. A fiber parks on its submission and wakes on its completion: one submission is the read and the wait together,
+submissions batch across fibers, and registered files and buffers drop per-call work. Fibers suit completion I/O better
+than stackless futures: the read buffer stays put on the parked fiber's stack until the kernel is done with it, which is
+the ownership problem tokio-uring has to work around. A design doc first, in the shape of docs/design/fibers.md: what
+Seastar, glommio and monoio do, which kernels and which operations, how it sits beside the epoll arm (decision 6) and
+the deadline and cancellation rules (decision 11), and a measurement before any code.
+
+<a id="s9-fiber-memory"></a>
+
+#### Memory per idle fiber connection (KR-254)
+
+An idle connection on the fiber arm holds 8.4 KiB (process baseline included) against Go's 8.2, Node's 8.5, tokio's 5.0
+and the C loop's 4.2. Most of the difference is the fiber's touched stack, at least a page, which a stackless task
+does not have; that floor is the price of fibers without colouring (fibers.md decision 1). Measure what each connection
+touches — the stack, the fiber's control block, the socket's registration, the arm's 4 KiB buffer — and trim what is not
+the floor: pooled stacks and buffers, a smaller first frame.
+
 <a id="s9-tu-header-cost"></a>
 
 ### What a user TU parses (KR-68)
