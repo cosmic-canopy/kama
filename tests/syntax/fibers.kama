@@ -1,0 +1,19 @@
+// `fiber` is a keyword only directly after `spawn`; anywhere else it is a name, and must colour like one.
+import { std::concurrent::Fiber, std::concurrent::Atomic, std::concurrent::join };
+
+type value Holder {
+    public int32 fiber;
+    public ctor of(int32 fiber) { this.fiber = fiber; }
+}
+
+fn void bump(ref Atomic<int32> n) { n.fetchAdd(delta: 1); }
+fn int32 work(int32 n) { return n * 2; }
+
+fn uint8 main() {
+    int32 fiber = 20;
+    Holder h = Holder.of(fiber: 1);
+    Atomic<int32> n = Atomic.make(value: 0);
+    scope { spawn fiber bump(n: ref n); }
+    Fiber<int32> f = spawn  fiber work(n: fiber);
+    return cast<uint8>(join(fiber: give f) + h.fiber + n.load());
+}

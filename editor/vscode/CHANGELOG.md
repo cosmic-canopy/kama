@@ -13,6 +13,21 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
+## [0.9.6] — 2026-10-27
+
+### Fixed
+
+- **The `fiber` in `spawn fiber` is highlighted.** `spawn fiber work(…)` starts a fiber (kama 0.9.741), and its
+  `fiber` was left uncoloured; it now colours like `spawn`. Anywhere else `fiber` is an ordinary name — a local,
+  a field, a named argument — and stays coloured as one.
+
+## [0.9.5] — 2026-10-19
+
+### Added
+
+- **A kind clause is highlighted.** The `value` in `type resource Pair<T> value when [T: value]` colours like the
+  kind word after `type` (kama 0.9.688).
+
 ## [0.9.4] — 2026-10-03
 
 ### Added

@@ -155,8 +155,16 @@ want "$B" "invalid.illegal.numeric.kama" \
 deny "$EXT/syntaxes/kama.tmLanguage.json" "using|" \
     "the grammar highlights 'using', which is NOT in kama.l's keyword table — it was retired in favour of 'import' (defect 4)."
 
+# The contextual `fiber` (KR-248): a keyword only directly after `spawn`, a name everywhere else. The extension
+# coloured it as nothing from kama 0.9.741 until 0.9.6 of the extension, where tree-sitter already had it.
+FB="$FIX/fibers.kama.snap"
+awk '/^>    scope \{ spawn fiber bump/{f=1; next} f && /^>/{exit} f && /keyword\.control\.kama/{n++} END{exit !(n >= 2)}' "$FB" \
+    || note "the 'fiber' in 'spawn fiber' is not scoped keyword.control.kama (KR-248): the '\\bspawn\\s+(fiber)' rule must stay ahead of the bare keyword.control alternation."
+awk '/^>    int32 fiber = 20;/{f=1; next} f && /^>/{exit} f && /keyword\.(control|other)/{bad=1} END{exit bad}' "$FB" \
+    || note "'fiber' as a local name is scoped as a keyword: it is a keyword ONLY directly after 'spawn' (kama.l)."
+
 if [ "$fails" -ne 0 ]; then
     echo "FAIL syntax ($fails problem(s))" >&2
     exit 1
 fi
-echo "PASS syntax (TextMate scopes match the committed snapshots; fixtures agree with the compiler; 14 defect invariants hold)"
+echo "PASS syntax (TextMate scopes match the committed snapshots; fixtures agree with the compiler; 16 defect invariants hold)"

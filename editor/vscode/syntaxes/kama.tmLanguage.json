@@ -169,6 +169,7 @@
     "keywords": {
       "comment": "Every row of kama.l's `keywords[]` table must appear in a `\\b(…)\\b` alternation here or in #types/#constants/#declarations — tools/check-syntax-drift.sh fails the build otherwise. `using` was highlighted and is NOT a keyword: it was retired in favour of `import` (docs/KEYWORDS.md).",
       "patterns": [
+        { "comment": "`fiber` is a keyword only directly after `spawn` (kama.l, KR-3): `spawn fiber work(…)` starts a fiber, and `fiber` anywhere else is a name. This rule is listed before the one below so it wins the tie at `spawn`.", "match": "\\b(spawn)\\s+(fiber)\\b", "captures": { "1": { "name": "keyword.control.kama" }, "2": { "name": "keyword.control.kama" } } },
         { "name": "keyword.control.kama", "match": "\\b(if|else|match|case|while|do|for|foreach|parallel_for|parallel_spawn|break|continue|return|spawn)\\b" },
         { "name": "keyword.other.modifier.kama", "match": "\\b(abstract|override|virtual|final|static|default|private|protected|public|friend|const|comptime|hardware|immutable|unsafe|ref|out|slot|file|in|extern|export|expose)\\b" },
         { "name": "keyword.other.kama", "match": "\\b(fn|fnptr|ctor|type|import|extends|implements|operator|asm|scope|borrow|give|copy|cast|bitcast|truncate|as|when|sizeof|alignof|addr|drop|copyElements|panic|assert|debugAssert)\\b" },

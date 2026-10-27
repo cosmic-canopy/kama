@@ -1,0 +1,175 @@
+>// `fiber` is a keyword only directly after `spawn`; anywhere else it is a name, and must colour like one.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>import { std::concurrent::Fiber, std::concurrent::Atomic, std::concurrent::join };
+#^^^^^^ source.kama keyword.other.kama
+#      ^^^^^^ source.kama
+#            ^^ source.kama punctuation.accessor.kama
+#              ^^^^^^^^^^ source.kama
+#                        ^^ source.kama punctuation.accessor.kama
+#                          ^^^^^ source.kama entity.name.type.kama
+#                               ^^^^^ source.kama
+#                                    ^^ source.kama punctuation.accessor.kama
+#                                      ^^^^^^^^^^ source.kama
+#                                                ^^ source.kama punctuation.accessor.kama
+#                                                  ^^^^^^ source.kama entity.name.type.kama
+#                                                        ^^^^^ source.kama
+#                                                             ^^ source.kama punctuation.accessor.kama
+#                                                               ^^^^^^^^^^ source.kama
+#                                                                         ^^ source.kama punctuation.accessor.kama
+#                                                                           ^^^^^^^^ source.kama
+>
+>type value Holder {
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^ source.kama storage.modifier.kind.kama
+#          ^ source.kama
+#           ^^^^^^ source.kama entity.name.type.kama
+#                 ^^^ source.kama
+>    public int32 fiber;
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^^ source.kama storage.type.primitive.kama
+#                ^^^^^^^^ source.kama
+>    public ctor of(int32 fiber) { this.fiber = fiber; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.kama
+#               ^ source.kama
+#                ^^ source.kama entity.name.function.kama
+#                  ^ source.kama
+#                   ^^^^^ source.kama storage.type.primitive.kama
+#                        ^^^^^^^^^^ source.kama
+#                                  ^^^^ source.kama variable.language.kama
+#                                      ^^^^^^^ source.kama
+#                                             ^ source.kama keyword.operator.assignment.kama
+#                                              ^^^^^^^^^^ source.kama
+>}
+#^^ source.kama
+>
+>fn void bump(ref Atomic<int32> n) { n.fetchAdd(delta: 1); }
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^ source.kama storage.type.primitive.kama
+#       ^ source.kama
+#        ^^^^ source.kama entity.name.function.kama
+#            ^ source.kama
+#             ^^^ source.kama keyword.other.modifier.kama
+#                ^ source.kama
+#                 ^^^^^^ source.kama entity.name.type.kama
+#                       ^ source.kama keyword.operator.relational.kama
+#                        ^^^^^ source.kama storage.type.primitive.kama
+#                             ^ source.kama keyword.operator.relational.kama
+#                              ^^^^^^^^ source.kama
+#                                      ^^^^^^^^ source.kama entity.name.function.kama
+#                                              ^^^^^^^^ source.kama
+#                                                      ^ source.kama constant.numeric.integer.kama
+#                                                       ^^^^^ source.kama
+>fn int32 work(int32 n) { return n * 2; }
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^^ source.kama storage.type.primitive.kama
+#        ^ source.kama
+#         ^^^^ source.kama entity.name.function.kama
+#             ^ source.kama
+#              ^^^^^ source.kama storage.type.primitive.kama
+#                   ^^^^^^ source.kama
+#                         ^^^^^^ source.kama keyword.control.kama
+#                               ^^^ source.kama
+#                                  ^ source.kama keyword.operator.arithmetic.kama
+#                                   ^ source.kama
+#                                    ^ source.kama constant.numeric.integer.kama
+#                                     ^^^^ source.kama
+>
+>fn uint8 main() {
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^^ source.kama storage.type.primitive.kama
+#        ^ source.kama
+#         ^^^^ source.kama entity.name.function.kama
+#             ^^^^^ source.kama
+>    int32 fiber = 20;
+#^^^^ source.kama
+#    ^^^^^ source.kama storage.type.primitive.kama
+#         ^^^^^^^ source.kama
+#                ^ source.kama keyword.operator.assignment.kama
+#                 ^ source.kama
+#                  ^^ source.kama constant.numeric.integer.kama
+#                    ^^ source.kama
+>    Holder h = Holder.of(fiber: 1);
+#^^^^ source.kama
+#    ^^^^^^ source.kama entity.name.type.kama
+#          ^^^ source.kama
+#             ^ source.kama keyword.operator.assignment.kama
+#              ^ source.kama
+#               ^^^^^^ source.kama entity.name.type.kama
+#                     ^ source.kama
+#                      ^^ source.kama entity.name.function.kama
+#                        ^^^^^^^^ source.kama
+#                                ^ source.kama constant.numeric.integer.kama
+#                                 ^^^ source.kama
+>    Atomic<int32> n = Atomic.make(value: 0);
+#^^^^ source.kama
+#    ^^^^^^ source.kama entity.name.type.kama
+#          ^ source.kama keyword.operator.relational.kama
+#           ^^^^^ source.kama storage.type.primitive.kama
+#                ^ source.kama keyword.operator.relational.kama
+#                 ^^^ source.kama
+#                    ^ source.kama keyword.operator.assignment.kama
+#                     ^ source.kama
+#                      ^^^^^^ source.kama entity.name.type.kama
+#                            ^ source.kama
+#                             ^^^^ source.kama entity.name.function.kama
+#                                 ^^^^^^^^ source.kama
+#                                         ^ source.kama constant.numeric.integer.kama
+#                                          ^^^ source.kama
+>    scope { spawn fiber bump(n: ref n); }
+#^^^^ source.kama
+#    ^^^^^ source.kama keyword.other.kama
+#         ^^^ source.kama
+#            ^^^^^ source.kama keyword.control.kama
+#                 ^ source.kama
+#                  ^^^^^ source.kama keyword.control.kama
+#                       ^ source.kama
+#                        ^^^^ source.kama entity.name.function.kama
+#                            ^^^^ source.kama
+#                                ^^^ source.kama keyword.other.modifier.kama
+#                                   ^^^^^^^ source.kama
+>    Fiber<int32> f = spawn  fiber work(n: fiber);
+#^^^^ source.kama
+#    ^^^^^ source.kama entity.name.type.kama
+#         ^ source.kama keyword.operator.relational.kama
+#          ^^^^^ source.kama storage.type.primitive.kama
+#               ^ source.kama keyword.operator.relational.kama
+#                ^^^ source.kama
+#                   ^ source.kama keyword.operator.assignment.kama
+#                    ^ source.kama
+#                     ^^^^^ source.kama keyword.control.kama
+#                          ^^ source.kama
+#                            ^^^^^ source.kama keyword.control.kama
+#                                 ^ source.kama
+#                                  ^^^^ source.kama entity.name.function.kama
+#                                      ^^^^^^^^^^^^ source.kama
+>    return cast<uint8>(join(fiber: give f) + h.fiber + n.load());
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.control.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.kama
+#               ^ source.kama keyword.operator.relational.kama
+#                ^^^^^ source.kama storage.type.primitive.kama
+#                     ^ source.kama keyword.operator.relational.kama
+#                      ^ source.kama
+#                       ^^^^ source.kama entity.name.function.kama
+#                           ^^^^^^^^ source.kama
+#                                   ^^^^ source.kama keyword.other.kama
+#                                       ^^^^ source.kama
+#                                           ^ source.kama keyword.operator.arithmetic.kama
+#                                            ^^^^^^^^^ source.kama
+#                                                     ^ source.kama keyword.operator.arithmetic.kama
+#                                                      ^^^ source.kama
+#                                                         ^^^^ source.kama entity.name.function.kama
+#                                                             ^^^^^ source.kama
+>}
+#^^ source.kama
+>
