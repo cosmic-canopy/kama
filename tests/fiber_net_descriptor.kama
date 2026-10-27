@@ -29,7 +29,7 @@ unsafe fn void adopter(Descriptor d) {
     };
 }
 
-@compileFor(!OS_WINDOWS)
+@compileFor(!OS_WINDOWS, HOSTED)
 unsafe fn int32 keepsProgramMode(ref TcpListener l, uint16 port) {
     Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
     TcpStream c = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 30; } };

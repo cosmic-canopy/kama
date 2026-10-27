@@ -41,7 +41,7 @@ unsafe fn int32 woken(int32 n) {
 }
 
 static int32 sameIsolate = 0;
-@compileFor(!OS_WINDOWS)
+@compileFor(!OS_WINDOWS, HOSTED)
 unsafe fn void watch(ref TcpStream s) {
     Result<Poller, IoError> rp = Poller.create();
     Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return; } };
@@ -51,13 +51,13 @@ unsafe fn void watch(ref TcpStream s) {
     int32 got = match (r) { case Ok(value: k): k; case Err(error: e): -1; };
     sameIsolate = got;
 }
-@compileFor(!OS_WINDOWS)
+@compileFor(!OS_WINDOWS, HOSTED)
 unsafe fn void poke(ref TcpStream c) {
     FixedArray<uint8> b = FixedArray.make(size: 1);
     b[0] = 1ui8;
     _ = c.write(bytes: b.view());
 }
-@compileFor(!OS_WINDOWS)
+@compileFor(!OS_WINDOWS, HOSTED)
 unsafe fn int32 sameCore(int32 n) {
     Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
     TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 30; } };
