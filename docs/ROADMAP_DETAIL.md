@@ -2225,66 +2225,6 @@ It is unprobed here: this box is arm64 and its container is too, so the work wan
 CET-capable CPU and a kernel and glibc that enable it. Size M?. BTI and PAC on arm64 need nothing (fibers.md
 decision 2).
 
-<a id="s6-server-bench"></a>
-
-### A server benchmark: kama fibers against Node, Go and tokio (KR-243)
-
-**Asked 2026-10-25** (the maintainer: "a bench of Node, Go, and Rust's tokio compared to kama's equivalent with
-fibers"). Fibers are kama's answer to what Node's event loop, Go's goroutines and tokio's tasks give a server: many
-connections on few threads, with code that reads like blocking code. Whether kama is faster is a claim to measure,
-and this is where it is measured. `bench/` already holds the CPU suite (one source per language, `bench/Dockerfile`
-with Go, Rust and node) and `bench/poller/`'s C load driver and interleaving protocol, which this builds on.
-
-**Arms**, each idiomatic and release-built, all given the same N cores:
-- **Node** — `net` and `http`, as one process and as `cluster` with N workers (Node's own multi-core answer).
-- **Go** — the standard library's `net` and `net/http`, `GOMAXPROCS=N`.
-- **tokio** — the default work-stealing multi-thread runtime, and N `current_thread` runtimes over `SO_REUSEPORT`,
-  the thread-per-core shape closest to kama's.
-- **kama fibers** — an isolate per core, each with its own listener over `SO_REUSEPORT` (KR-3 decision 1).
-- **C** — the epoll/kqueue loop of `bench/poller/`, the ceiling.
-- **kama today** — an isolate per connection: the "before" number the fiber arm replaces.
-
-**Workloads:** a TCP echo of 64-byte ping-pongs (one park per request); HTTP/1.1 keep-alive plaintext "Hello, World!"
-(the TechEmpower plaintext shape, without pipelining); and idle connections, 10k and 100k, held open to read the
-server's memory.
-
-**Metrics:** requests/s at 100, 1k and 10k connections; p50, p99 and p99.9 latency; server CPU time; peak RSS, and RSS
-per idle connection.
-
-**The load client** is one C program for every arm, in the repo, so no arm is measured through a different tool. It
-verifies every echoed payload and every HTTP status and body, and a mismatch fails the run (the fairness gate, as the
-CPU suite's checksums are). It runs on cores the server does not use.
-
-**Protocol:** the house rule (measure interleaved, never sequentially): 15 rounds of fresh processes with the arm
-order rotated each round, a reference arm run twice for the noise floor, and a difference claimed only when it beats
-that floor in at least 12 of 15 paired rounds. On Linux (epoll, the bench container) and macOS (kqueue, the host).
-
-**Stated before any number:** a stackless task (tokio, a Node promise) keeps less memory per idle connection than a
-fiber's touched stack pages, and thread-per-core does not steal work, so a skewed load is where tokio and Go are
-strongest. Results go to `docs/benchmarks/` beside the CPU suite's, with versions, the machine and N.
-
-**Ruled 2026-10-25:** the harness, the client and the peer arms first, with kama-today as the "before"; the fiber arm
-with KR-3 step 5, since until sockets park a fiber's blocked read stalls its whole core.
-
-**Shipped 2026-10-26:** `bench/server/` — `client.c`, the arms (`c/`, `node/`, `go/`, `rust/` with a committed
-`Cargo.lock`, `kama/`), `run.sh` and `summarize.py` — and `bench/run server`, which lifts the container's descriptor and
-process limits (a container default would otherwise be the thing measured). The bench image gains `procps` and
-`util-linux` and fetches the tokio arm's crates at build, so `bench/run build-image` must run once before the first
-server run. A two-round smoke run on the macOS host (no Go there) ran every other arm with zero errors; at 100
-connections every arm sat within ~20% of the C loop, so the client on the same machine was the limit there, which is
-why only the pinned container run is quoted.
-
-**The fiber arm shipped 2026-10-26** (`bench/server/kama/fibers.kama`, slot `kama-fibers`): an isolate per core, each
-accepting on its own listener over `SO_REUSEPORT` (`ListenOptions.balance`, Linux; one isolate on macOS, which has no
-balancer), and a fiber per connection, with `server.kama`'s echo and http bodies line for line. A one-round smoke on
-the macOS host answered every request correctly.
-
-**What remains: the measured run.** `bench/run build-image` once (3–4 GB, networked: the toolchains, procps and
-util-linux, and the tokio arm's crates), then `bench/run server` (15 rounds, every slot, every config) on a quiet
-machine, and `python3 bench/server/summarize.py <out.tsv>`. It goes to `docs/benchmarks/servers.md` with the kama
-version, the machine, the core split between server and client, each arm's toolchain version, and the caveats stated
-above, before any number.
-
 <a id="s6-socket-split"></a>
 
 ### Two fibers on one socket: a read half and a write half (KR-244)

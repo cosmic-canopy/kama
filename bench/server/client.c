@@ -1,4 +1,4 @@
-// client.c — the one load client every server arm of KR-243 is measured through (docs/ROADMAP_DETAIL.md §6).
+// client.c — the one load client every server arm of KR-243 is measured through (docs/benchmarks/servers.md).
 //
 // Usage: client <mode> <port> <conns> <threads> <warmup_s> <seconds>      one tab-separated line on stdout
 //        client -h                                                        prints the header that line follows

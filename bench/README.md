@@ -61,8 +61,9 @@ which verifies every reply and fails a run that answers wrongly. Each round runs
 processes in a rotated order, with the reference arm (`c`) run twice for the noise floor; read the result with
 `python3 bench/server/summarize.py <out.tsv>`, which claims a difference only past that floor in at least 12 of 15
 paired rounds. `bench/server/run.sh` also runs on a macOS host (kqueue), leaving out any arm whose toolchain is
-missing. The kama arm is today's: an isolate per connection; the fiber arm joins with KR-3 step 5 (sockets park).
-`SLOTS`, `CONFIGS`, `CORES`, `WARMUP` and `SECONDS_` narrow a run.
+missing. kama has two arms: fibers, an isolate per core with a fiber per connection (KR-3), and the isolate per
+connection it had before them. `SLOTS`, `CONFIGS`, `CORES`, `WARMUP` and `SECONDS_` narrow a run. The measured run,
+with its caveats, is [docs/benchmarks/servers.md](../docs/benchmarks/servers.md).
 
 ## Layout
 
