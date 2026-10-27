@@ -1,0 +1,40 @@
+// A close wakes every fiber parked on the other side (KR-3 step 6). Three receivers wait on an empty channel; when the
+// last sender drops, each wakes to `None`. A sender parked on a full channel wakes when the last receiver drops, and its
+// send answers `Err(Undelivered)`, handing the item back.
+import { std::concurrent::Fiber, std::concurrent::join, std::concurrent::Channel, std::concurrent::Sender,
+         std::concurrent::Receiver, std::time::sleep, std::time::Duration };
+
+static int32 closed = 0;
+
+fn void listen(Receiver<int32> rx) {
+    bool none = match (rx.recv()) { case Some(value: v): false; case None: true; };
+    if (none) { closed = closed + 1; }
+}
+fn void hangUp(Sender<int32> tx) { sleep(d: Duration.fromMillis(ms: 5i64)); }      // the last sender drops here
+fn void walkAway(Receiver<int32> rx) { sleep(d: Duration.fromMillis(ms: 5i64)); }   // the last receiver drops here
+// Sends until the channel refuses: the first fills its one slot, the second parks until the receiver is gone.
+fn int32 stuff(Sender<int32> tx) {
+    int32 sent = 0;
+    for (int32 i = 0; i < 10; i = i + 1) {
+        int32 back = match (tx.send(item: i)) { case Ok(value: u): -1; case Err(error: e): match (e) { case Item(item: v): v; }; };
+        if (back >= 0) { return back == sent ? sent : -2; }   // the refused item comes back
+        sent = sent + 1;
+    }
+    return -1;
+}
+
+fn uint8 main() {
+    Channel<int32> quiet = Channel.bounded(capacity: 1);
+    scope {
+        spawn fiber listen(rx: quiet.receiver());
+        spawn fiber listen(rx: quiet.receiver());
+        spawn fiber listen(rx: quiet.receiver());
+        spawn fiber hangUp(tx: quiet.sender());
+    }
+    if (closed != 3) { return 1; }
+    Channel<int32> full = Channel.bounded(capacity: 1);
+    Fiber<int32> s = spawn fiber stuff(tx: full.sender());
+    scope { spawn fiber walkAway(rx: full.receiver()); }
+    if (join(fiber: give s) != 1) { return 2; }                  // one delivered into the slot, the second refused
+    return 42;
+}

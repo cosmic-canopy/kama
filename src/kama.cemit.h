@@ -2221,6 +2221,11 @@ private:
     // the emitter wrote itself (`kama_isolate_t` in a spawn trampoline), which no kama declaration names.
     std::map<std::string, std::string> _runtimeHeaderDefines;
     bool _featureOnPanic = false, _featureGlobalAlloc = false;   // repeated per TU ahead of its FFI headers
+    // The program runs fibers: one of its units holds a `spawn fiber` (CompilationUnit::spawnsFiber). Importing
+    // `std::concurrent` loads fiber.kama, which externs kama_sched.h, into every program that uses a channel or an
+    // isolate, so the extern alone said nothing; this is what defines KAMA_FIBERS and puts the scheduler's bodies in
+    // the call graph (KR-3 step 6).
+    bool _runsFibers = false;
     // KR-68: every header the PROGRAM names is kama's own or standard C, so its `<windows.h>` may be trimmed
     // (`KAMA_OWN_HEADERS_ONLY`, written ahead of each TU's headers). Set by emitIncludes.
     bool _ownHeadersOnly = false;

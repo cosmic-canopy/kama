@@ -1,8 +1,9 @@
 // The fiber scheduler (KR-3, docs/design/fibers.md §8 step 2), driven from C until `spawn fiber` lands: park and
 // unpark, round-robin yields, sleeps that wake in deadline order and never early, join, sockets that park a reader on
 // an empty buffer and a writer on a full one, a read deadline, a wake from another thread, I/O polled while a fiber is
-// always ready, the root parking (a join, a `scope`'s wait, a sleep) with a scope inside a fiber, and ten thousand
-// short fibers. Run twice — on this host's own arm (epoll or kqueue, registered once) and on the Poller arm that
+// always ready, the root parking (a join, a `scope`'s wait, a sleep) with a scope inside a fiber, channels whose
+// receives, sends and timed receives park a fiber and whose closes wake every parked one, woken from this isolate and
+// from another thread, a fiber's join of an isolate that parks (KR-3 step 6), and ten thousand short fibers. Run twice — on this host's own arm (epoll or kqueue, registered once) and on the Poller arm that
 // Windows and poll(2) take — so both are tested here. Returns 42; else the failed check, plus 100 on the Poller arm.
 extern "kama_sched.h";
 extern "schedtest.h";

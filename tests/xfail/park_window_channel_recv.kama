@@ -1,0 +1,26 @@
+// The park rule (KR-3 step 4) follows a channel's wait once it parks (step 6): on an isolate that runs fibers, a
+// receive with nothing queued switches fibers, so a lasting access to `Shared` storage may not make one. `Inbox.drain`
+// iterates `this.seen` — reached through the `Shared` the fiber was handed — and receives inside the loop, so another
+// fiber could grow `seen` and free the buffer the loop is reading while this one waits.
+import { std::concurrent::Fiber, std::concurrent::join, std::concurrent::Channel, std::concurrent::Receiver,
+         std::memory::Shared, std::collections::DynamicArray };
+type resource Inbox {
+    DynamicArray<int32> seen;
+    Receiver<int32> rx;
+    public ctor make(Receiver<int32> rx) { this.seen = DynamicArray::<int32>.empty(); this.seen.add(item: 1); this.rx = give rx; }
+    public fn int32 drain() {
+        int32 total = 0;
+        foreach (int32 s in this.seen) {
+            Optional<int32> v = this.rx.recv();   // ERROR: a fiber's wait on a channel, inside the window
+            total = total + s;
+        }
+        return total;
+    }
+}
+fn int32 walk(Shared<Inbox> b) { return b.drain(); }
+fn uint8 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    Shared<Inbox> b = new Inbox.make(rx: ch.receiver());
+    Fiber<int32> w = spawn fiber walk(b: copy b);
+    return cast<uint8>(join(fiber: give w));
+}

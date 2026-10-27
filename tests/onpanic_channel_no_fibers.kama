@@ -1,0 +1,27 @@
+// KR-3 step 6: in a program that runs no fibers, a channel's wait is no park, so an `@onPanic` region may make one. The
+// fiber scheduler (kama_sched.h) is no part of such a program — kama_channel.h reaches it only in a program that runs
+// fibers — so neither the region's walk nor `@noheap` sees a fiber switch under `recv`. Its twin,
+// xfail/onpanic_park_channel, is the same region in a program that spawns a fiber.
+import { std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver };
+
+type resource Box {
+    Receiver<int32> rx;
+    public ctor make(Receiver<int32> rx) { this.rx = give rx; }
+    @noheap @onPanic(recover: -1)
+    public fn int32 region(isize i) {
+        InlineArray<int32>#(4) buf = [5; 4];
+        int32 v = match (this.rx.recv()) { case Some(value: x): x; case None: 0; };
+        return buf[i] + v;                                     // i = 9: a bounds miss, recovered as -1
+    }
+}
+
+fn uint8 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 2);
+    Sender<int32> tx = ch.sender();
+    Box b = Box.make(rx: ch.receiver());
+    _ = tx.send(item: 3);
+    _ = tx.send(item: 4);
+    int32 ok = b.region(i: 0);                                 // 5 + 3
+    int32 bad = b.region(i: 9);                                // receives the 4, then the miss: -1
+    return cast<uint8>(ok - bad + 33);                         // 8 + 1 + 33
+}

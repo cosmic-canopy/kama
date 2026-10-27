@@ -1,0 +1,47 @@
+// An isolate's join on a fiber parks the fiber, not the thread (KR-3 step 6, fibers.md decision 8): a `scope`'s close
+// over an isolate child, a held `Isolate`'s join and a `parallel_for`'s barrier, each made on a fiber while a sibling
+// fiber keeps ticking. Before 0.9.751 each was a `pthread_join` that held the whole core, and the ticker stood still.
+import { std::concurrent::Fiber, std::concurrent::join, std::concurrent::Isolate, std::collections::FixedArray,
+         std::time::sleep, std::time::Duration };
+
+static int32 ticks = 0;
+static bool done = false;
+
+// How long an isolate naps: an isolate's bundle is a moved `resource`.
+type resource Nap implements Sendable {
+    int64 ms = 0;
+    public ctor of(int64 ms) { this.ms = ms; }
+    public const fn int64 length() { return this.ms; }
+}
+fn void nap(Nap n) { sleep(d: Duration.fromMillis(ms: n.length())); }   // on its own isolate: the thread's sleep
+
+// 1 + 2 + 4 when the ticker ran during each of the three joins.
+fn int32 joins(int64 ms) {
+    int32 seen = 0;
+    int32 before = ticks;
+    Nap first = Nap.of(ms: ms);
+    scope { spawn nap(n: give first); }                               // the scope's close joins the isolate
+    if (ticks - before >= 5) { seen = seen + 1; }
+    before = ticks;
+    Nap second = Nap.of(ms: ms);
+    Isolate h = spawn nap(n: give second);
+    h.join();
+    if (ticks - before >= 5) { seen = seen + 2; }
+    FixedArray<int64> naps = FixedArray.make(size: 4);
+    before = ticks;
+    parallel_for (ref int64 n in naps, workers: 4) { sleep(d: Duration.fromMillis(ms: ms)); n = 1; }
+    if (ticks - before >= 5) { seen = seen + 4; }
+    done = true;
+    return seen;
+}
+fn void ticker(int64 every) {
+    while (!done) { ticks = ticks + 1; sleep(d: Duration.fromMillis(ms: every)); }
+}
+
+fn uint8 main() {
+    Fiber<int32> j = spawn fiber joins(ms: 30);
+    scope { spawn fiber ticker(every: 1); }
+    int32 seen = join(fiber: give j);
+    if (seen != 7) { return cast<uint8>(seen + 1); }
+    return 42;
+}

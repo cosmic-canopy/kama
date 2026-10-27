@@ -288,6 +288,11 @@ struct LexerInstanceData {
       Unordered on purpose — this is one insert per identifier token on a ~14 ms parse. */
    std::unordered_set<std::string> identTokens;
 
+   /* This file holds a `spawn fiber`, moved onto the CompilationUnit at reduction: a program runs fibers only
+      when one of its files spawns one (KR-3 step 6), and that, not whether `std::concurrent` was imported, is
+      what makes the emitter define KAMA_FIBERS. */
+   bool spawnsFiber = false;
+
    /* Reserved-word spellings already reported in this file (RESERVED_CHECK in kama.l). kama reserves
       every C keyword, and the check has to sit on the identifier RULES — which fire on every occurrence,
       not just the declaration — so without this a local named `switch` used four times reports four
@@ -586,7 +591,8 @@ compilation_unit
       (SCANNER_CODEGENCONTEXT).reportPendingWideLits();
       yyget_extra(scanner)->compilationUnit->identTokens.insert(yyget_extra(scanner)->identTokens.begin(),
                                                                 yyget_extra(scanner)->identTokens.end());
-      yyget_extra(scanner)->compilationUnit->lineFlags = std::move(yyget_extra(scanner)->lineFlags); }
+      yyget_extra(scanner)->compilationUnit->lineFlags = std::move(yyget_extra(scanner)->lineFlags);
+      yyget_extra(scanner)->compilationUnit->spawnsFiber = yyget_extra(scanner)->spawnsFiber; }
   ;
 
 /* THE FILE GATE — `file @compileFor(!ARCH_WASM32);`, a unit's FIRST line, before `import { … };`.
@@ -1413,8 +1419,8 @@ variable_initializer
        unambiguous (a keyword, never an expression start), so this adds no conflict. */
   | SPAWN invocation_expression   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
   | SPAWN spawn_stack invocation_expression   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->stack = $2; $$ = n; }
-  | SPAWN FIBER invocation_expression   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->fiber = true; $$ = n; }
-  | SPAWN FIBER spawn_stack invocation_expression   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $4); n->stack = $3; n->fiber = true; $$ = n; }
+  | SPAWN FIBER invocation_expression   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->fiber = true; yyget_extra(scanner)->spawnsFiber = true; $$ = n; }
+  | SPAWN FIBER spawn_stack invocation_expression   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $4); n->stack = $3; n->fiber = true; yyget_extra(scanner)->spawnsFiber = true; $$ = n; }
   ;
 local_constant_declaration
   : CONST type constant_declarators   { $$ = std::make_shared<ConstLocalVariableDeclaration>(SCANNER_CODEGENCONTEXT, $2, $3); }
@@ -1509,8 +1515,8 @@ spawn_statement
   : SPAWN invocation_expression SEMICOLON   { $$ = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $2); }
   | SPAWN spawn_stack invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->stack = $2; $$ = n; }
   /* `spawn fiber handle(conn: give c);` — a fiber child of the enclosing `scope` (KR-3, fibers.md decision 9). */
-  | SPAWN FIBER invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->fiber = true; $$ = n; }
-  | SPAWN FIBER spawn_stack invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $4); n->stack = $3; n->fiber = true; $$ = n; }
+  | SPAWN FIBER invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $3); n->fiber = true; yyget_extra(scanner)->spawnsFiber = true; $$ = n; }
+  | SPAWN FIBER spawn_stack invocation_expression SEMICOLON   { auto n = std::make_shared<IsolateNode>(SCANNER_CODEGENCONTEXT, $4); n->stack = $3; n->fiber = true; yyget_extra(scanner)->spawnsFiber = true; $$ = n; }
   ;
   /* `spawn(stack: n) worker(…)`: the isolate's stack in bytes, where the default (stated in
      kama_isolate.h and the SPEC) is not enough. Written at the spawn, the one place the depth that needs it

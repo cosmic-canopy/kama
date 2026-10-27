@@ -129,6 +129,8 @@ public:
                                            // the lexer: a sound SUPERSET of the names it references.
                                            // Over-pulling costs pruning; under-pulling would emit calls
                                            // to undefined functions, so the superset is the safe side.
+    bool spawnsFiber = false;              // holds a `spawn fiber` (kama.y): a program runs fibers only when one of
+                                           // its units does, which is what defines KAMA_FIBERS (KR-3 step 6)
     bool unprunable = false;               // holds a declaration with a program-wide effect and NO name to
                                            // reference it by, so no closure can reach it. See
                                            // harvestUnitFacts for the two kinds and why each is one.

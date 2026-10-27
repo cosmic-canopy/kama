@@ -147,7 +147,9 @@ type resource Sender<T: Sendable> implements Sendable {
     // Wrap the shared queue handle. Called by `Channel.sender()`; not meant to be used directly.
     public unsafe ctor make(UnsafePtr handle) { this.handle = handle; }
 
-    // Move `item` into the channel. Blocks while the ring is full and the receiver is live. On success
+    // Move `item` into the channel. Waits while the ring is full and the receiver is live — on an isolate that runs
+    // fibers the wait parks only this fiber, and the core runs its others (KR-3 step 6); a rendezvous send waits the
+    // same way until its value is taken. On success
     // the bytes are relocated into a queue slot (the receiver's `recv` produces the sole owning copy)
     // and the moved-in `item` is forgotten, not dropped — leaving exactly one owning copy (in the
     // queue): returns `Ok`.
@@ -184,8 +186,9 @@ type resource Receiver<T: Sendable> implements Sendable {
 
     public unsafe ctor make(UnsafePtr handle) { this.handle = handle; }
 
-    // Block for the next value. Returns `Some(v)` (v is the sole owning copy, relocated out of the
-    // queue) or `None` once the channel is closed AND drained (all senders dropped, no buffered items).
+    // Wait for the next value: on an isolate that runs fibers only this fiber parks, elsewhere the thread blocks (KR-3
+    // step 6). Returns `Some(v)` (v is the sole owning copy, relocated out of the queue) or `None` once the channel is
+    // closed AND drained (all senders dropped, no buffered items).
     public fn Optional<T> recv() {
         slot T dst;
         int32 r = this.recvInto(dst: out dst);
@@ -211,7 +214,7 @@ type resource Receiver<T: Sendable> implements Sendable {
     // Wait at most `timeout` for a value: the receive a pool's `acquire` needs, which must give up at a
     // deadline rather than block forever. `Err(Empty)` when the deadline passes first, `Err(Closed)` as for `tryRecv`. The
     // deadline is taken on the monotonic clock, so moving the wall clock neither stretches nor cuts it; a zero or
-    // negative `timeout` is a `tryRecv`.
+    // negative `timeout` is a `tryRecv`. On a fiber the wait parks with the deadline on the scheduler's timer.
     public fn Result<T, RecvError> recvTimeout(Duration timeout) {
         slot T dst;
         int32 r = this.recvTimeoutInto(dst: out dst, nanos: timeout.asNanos());

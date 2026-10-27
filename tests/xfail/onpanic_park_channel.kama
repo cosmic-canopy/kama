@@ -1,0 +1,22 @@
+// No park inside an `@onPanic` region (KR-3 decision 15), and since step 6 a channel's wait on an isolate that runs
+// fibers is a park: `region` receives, which parks the fiber until a value comes. A recovered panic is a longjmp, and
+// one across that switch would land on another fiber's stack. The same region in a program with no fibers compiles
+// (onpanic_channel_no_fibers).
+import { std::concurrent::Channel, std::concurrent::Receiver, std::concurrent::Fiber, std::concurrent::join };
+fn int32 child(int32 n) { return n; }
+type resource Box {
+    Receiver<int32> rx;
+    public ctor make(Receiver<int32> rx) { this.rx = give rx; }
+    @noheap @onPanic(recover: -1)
+    public fn int32 region(isize i) {
+        InlineArray<int32>#(4) buf = [0; 4];
+        Optional<int32> v = this.rx.recv();   // ERROR: region -> recv -> a fiber's wait on a channel
+        return buf[i];
+    }
+}
+fn uint8 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    Box b = Box.make(rx: ch.receiver());
+    Fiber<int32> f = spawn fiber child(n: 1);                       // this isolate runs fibers
+    return cast<uint8>(b.region(i: 0) + join(fiber: give f));
+}

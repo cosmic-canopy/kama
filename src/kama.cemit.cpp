@@ -35836,12 +35836,14 @@ void CEmitter::buildCallGraph()
     // pool in every build. Nothing collides today (header helpers are `kama__*`, the emitted user surface is
     // `k_*`, SPEC § *C names*), and it is one prelude rename away from doing so — so the emitted body WINS and
     // the header's is dropped from the scan entirely, which is the direction that cannot invent an edge.
-    // A program that runs no fibers never compiles kama_sched.h — kama_os.h includes it only under KAMA_FIBERS, which
-    // the emitter writes for a program that reaches it — so its bodies are no part of that program's graph. Left in,
-    // every socket call would reach the scheduler's allocation (a registration) and its fiber switch, and `@noheap`,
-    // `--no-heap`, `@onPanic` and the park rule would all judge a call that cannot happen (KR-3 step 5).
+    // A program that runs no fibers compiles no fiber half — kama_os.h, kama_channel.h and kama_isolate.h reach
+    // kama_sched.h only under KAMA_FIBERS, which the emitter writes for a program that spawns a fiber (_runsFibers) —
+    // so the scheduler's bodies are no part of that program's graph, even where `std::concurrent` brought the header
+    // in. Left in, every socket call, channel wait and join would reach the scheduler's allocation and its fiber
+    // switch, and `@noheap`, `--no-heap`, `@onPanic` and the park rule would all judge a call that cannot happen
+    // (KR-3 steps 5–6).
     std::set<std::string> absent;
-    if (!externsHeader("kama_sched.h")) {
+    if (!_runsFibers) {
         std::set<std::string> present;
         for (size_t i = 0; i < _headerTexts.size(); ++i)
             for (const CBody& b : _headerBodyLists[i]) (_headerTexts[i].file == "kama_sched.h" ? absent : present).insert(b.name);
@@ -36470,6 +36472,8 @@ static std::string parkSeam(const std::string& f)
     if (f == "kama_sched_sleep") return "a fiber's sleep";
     if (f == "kama_sched_io_wait" || f == "kama__net_park") return "a fiber's wait on a socket";
     if (f == "kama__time_park") return "a fiber's sleep";
+    if (f == "kama__channel_park") return "a fiber's wait on a channel";
+    if (f == "kama__isolate_park") return "an isolate's join";
     if (f == "kama_fiber_switch" || f.compare(0, 11, "kama_sched_") == 0 || f.compare(0, 12, "kama__sched_") == 0)
         return "the scheduler's switch";
     return std::string();
@@ -36484,9 +36488,10 @@ static std::string parkSeam(const std::string& f)
 //   another isolate's code runs on another thread. An exported body is a root but never a cut, since kama code may also
 //   call it directly on the same thread.
 // - The LEAF is a real switch, `kama_fiber_switch`, read off the graph: a `join`, a `Fiber`'s drop, a `scope`'s close,
-//   and since step 5 a socket's wait (`kama_net_retry` reaches `kama_sched_io_wait`). A call that only blocks the thread
-//   (`println`) lets no other fiber in, so `@parks` — which since KR-226 means "waits" — is the lock window's leaf, not
-//   this one. Steps 6–8 make channels and files switch, and the rule follows them with no change here.
+//   since step 5 a socket's wait (`kama_net_retry` reaches `kama_sched_io_wait`), and since step 6 a channel's wait
+//   (`kama_channel_recv` reaches `kama__channel_park`). A call that only blocks the thread (`println`) lets no other
+//   fiber in, so `@parks` — which since KR-226 means "waits" — is the lock window's leaf, not this one. Steps 7–8 make
+//   files switch, and the rule follows them with no change here.
 // - A REGION is an access the run-time record would hold: a window (`borrow`, `foreach`, a `match`) over storage a
 //   `Shared` may hold, to the end of its scope, and a call that holds a field, around the call alone.
 // - A call whose target no graph can see may switch, as decision 3 rules for a lock window.
@@ -46919,7 +46924,7 @@ void CEmitter::emitModuleContent(SharedCompilationUnit unit)
             if (_featureOnPanic)     *_out << "#define KAMA_ONPANIC 1\n";
             if (_featureGlobalAlloc) *_out << "#define KAMA_GLOBAL_ALLOCATOR 1\n";
             if (_ownHeadersOnly)     *_out << "#define KAMA_OWN_HEADERS_ONLY 1\n";   // see emitIncludes
-            if (externsHeader("kama_sched.h")) *_out << "#define KAMA_FIBERS 1\n";   // see emitIncludes
+            if (_runsFibers)         *_out << "#define KAMA_FIBERS 1\n";   // see emitIncludes
             *_out << "#include \"kama_runtime.h\"\n";
         }
         emitUnitIncludes(text);
@@ -47051,10 +47056,11 @@ void CEmitter::emitIncludes(const std::vector<SharedCompilationUnit>& units, boo
         for (const std::string& h : all) if (!own(h)) { _ownHeadersOnly = false; break; }
         if (_ownHeadersOnly) *_out << "#define KAMA_OWN_HEADERS_ONLY 1\n";
     }
-    // KR-3 step 5 — a program that runs fibers (it reaches the scheduler, `std::concurrent`) says so ahead of every
-    // header that could pull in kama_os.h, whose socket wait then reaches into kama_sched.h and parks a fiber. A
-    // program without one never compiles the scheduler. Here and in each module's prologue (emitModuleContent).
-    if (externsHeader("kama_sched.h")) *_out << "#define KAMA_FIBERS 1\n";
+    // KR-3 steps 5–6 — a program that runs fibers (one of its units holds a `spawn fiber`, _runsFibers) says so ahead
+    // of every header that could pull in kama_os.h, kama_channel.h or kama_isolate.h, whose waits then reach into
+    // kama_sched.h and park a fiber. A program without one never compiles that half — importing `std::concurrent` for a
+    // channel is not running fibers. Here and in each module's prologue (emitModuleContent).
+    if (_runsFibers) *_out << "#define KAMA_FIBERS 1\n";
     for (const std::string& h : _sharedExternHeaders) {
         if (h[0] == '<') *_out << "#include " << h << "\n";       // <stdlib.h>
         else             *_out << "#include \"" << h << "\"\n";    // "my.h"
@@ -47101,6 +47107,7 @@ void CEmitter::emitUnitIncludes(const std::string& moduleText, bool recordAsShar
 // module definitions in one stream.
 int CEmitter::emit(SharedCompilationUnit unit)
 {
+    _runsFibers = unit && unit->spawnsFiber;
     // Everything written from here on is the TU this build keeps — see EmitCapture. Restored on every return,
     // so `_out` never outlives the capture that wraps it.
     EmitCapture capture(*_out, _emittedC, _lines);
@@ -47179,6 +47186,8 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
     // Recorded, because each module's TU must repeat them ahead of its own FFI headers — see emitModuleContent.
     _featureOnPanic     = unitsUseOnPanic(units);
     _featureGlobalAlloc = unitsDeclareGlobalAllocator(units);
+    _runsFibers         = false;
+    for (const auto& u : units) if (u && u->spawnsFiber) _runsFibers = true;
     if (_featureOnPanic)   // see emit(): program-wide, since every TU includes this header
         *_out << "#define KAMA_ONPANIC 1\n";   // a macro only — kama_runtime.h includes <setjmp.h>
     if (_featureGlobalAlloc)   // ...and the same for the funnel's implementation

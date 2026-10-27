@@ -356,7 +356,8 @@ The public `Poller` keeps applying its own `add` at once; that is one call per s
 `kama_net_ready` before it and `kama_net_retry` after it fails (kama_os.h), and each socket keeps its wait beside its
 descriptor: the registration, the mode bits (the program's non-blocking, kama's, a deadline set) and a deadline per
 direction. A program that runs no fibers never compiles the scheduler — kama_os.h reaches kama_sched.h only under
-`KAMA_FIBERS`, which the emitter writes for a program that externs it — and its call graph leaves the scheduler out,
+`KAMA_FIBERS`, which the emitter writes for a program that spawns a fiber (since `0.9.751`; it was every program
+that externed the scheduler, which `std::concurrent` does for any channel) — and its call graph leaves the scheduler out,
 so `@noheap`, `@onPanic` and the park rule never judge a switch that cannot happen there. The park rule needed no
 change: `kama_net_retry` reaches `kama_sched_io_wait`, and `kama_sleep_ns` reaches `kama_sched_sleep`.
 
@@ -376,6 +377,24 @@ change: `kama_net_retry` reaches `kama_sched_io_wait`, and `kama_sleep_ns` reach
 - **A foreign C call that blocks stalls its core.** That is stated plainly, as Java states pinning in native
   frames. The answer is an explicit `std::concurrent::offload(…)` that runs it on the pool, as tokio's
   `spawn_blocking` does. It is its own commit.
+
+*As built (`0.9.751`):* a channel keeps a list of parked fibers beside each condvar (kama_channel.h), its
+record on the parked fiber's own stack, so a wait allocates nothing. A wake takes the record off and wakes the fiber
+under the channel's lock, which is what holds the fiber alive through the wake (`kama_sched_wake`'s contract): from
+another isolate that puts a coalesced waker system call under the lock, as the `wakeOnSend` waker's own wakes already
+were. A signal wakes one waiter, a parked fiber before a blocked thread, and a close wakes them all. `wakeOnSend`'s
+slot stays: it serves a `Poller` loop that waits outside `recv`, which is another kind of waiter. A timed receive's
+deadline is the scheduler's timer, on its clock. An isolate's handle became a control block that its join frees, and
+the isolate's thread marks it ended as its last act; a joining fiber publishes itself and parks, and the two sides
+order through sequentially consistent atomics, so either the joiner sees the end or the thread sees the joiner. A
+`scope`'s close, an `Isolate`'s join and a `parallel_for`'s barrier all park that way. The park rule followed with no
+change to its walk (`kama__channel_park`, `kama__isolate_park`), and the scheduler's half of both seams sits after
+kama_sched.h's include guard, because that header includes neither kama_channel.h nor kama_isolate.h; it waits for
+the guarded body to be complete, since kama_os.h reads kama_sched.h again from inside it. Building it found that
+importing `std::concurrent` for a channel loads fiber.kama (concurrent.kama is always loaded, and its `Isolate.join`
+names fiber.kama's `join`), so every channel program had `KAMA_FIBERS` and the scheduler in its call graph, which step
+6 would have turned into a refused `@noheap` or `@onPanic` channel wait with no fiber anywhere. A program now runs
+fibers when one of its units holds a `spawn fiber` (`CompilationUnit::spawnsFiber`).
 
 ### Decision 9 — the spawn spelling, and failure
 
@@ -541,7 +560,9 @@ scheduler's kqueue changelist is its own, and it may be reading a batch of event
 *Corrected 2026-10-26, building step 5:* a park allocates nothing, but a socket's first wait on a fiber registers it,
 and the registration record is allocated (kqueue's changelist may grow too). The `@noheap` walk is program-wide, so
 in a program that runs fibers anywhere, `@noheap` code that does socket I/O or sleeps is refused even on an isolate
-that runs none. That is conservative, never unsound; the precise answer, a per-isolate reach, is KR-245.
+that runs none. That is conservative, never unsound; the precise answer, a per-isolate reach, is KR-245. Since step 6 a
+channel wait and a join are refused there too: a timed park grows the timer heap, and the root's park runs the loop,
+which frees.
 
 ## 6. Measurements
 
@@ -722,7 +743,7 @@ read off this document.
 | 3 | ✅ `0.9.741`. `spawn fiber`, the `scope` list of live fibers, `Fiber<R>` and `join`, and `ref` bundles rooted outside the loop; fiber 0 parks by running the loop, and an isolate frees its scheduler when it ends | `src/kama.y`, `src/kama.cemit.cpp`, `docs/grammar.bnf`, `tree-sitter-kama/` (+ the Zed and Helix pins) | L |
 | 4 | ✅ `0.9.743`. The park rule: on an isolate that runs fibers, no window over `Shared` storage and no call holding a field reaches a fiber switch or a blind call (`checkParkWindows`, on the lock window's regions); no park inside `@onPanic`; the debug assert in the park and the yield. A `kama_vsize`/`kama_valign` slot now names its vtable type, so a drop of an `Owned<Error>` is no longer a blind call to either walk. The job-entry rule moved to row 9, where job entries come to exist | `src/kama.cemit.cpp`, `kama_sched.h` | S |
 | 5 | ✅ `0.9.745`–`0.9.748`. Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines (decision 11's ruling), the release rule (decision 13's correction) and DEL before close; `std::time::sleep` parks, and so does `Poller.wait` on epoll and kqueue. In four commits: the runtime seam tested from C (`tests/fiber_sched.d` checks 15–22), std's sockets, the deadline surface, `sleep` and the Poller | `lib/std/net/`, `lib/std/time/`, `kama_os.h`, `kama_sched.h`, `kama_time.h` | L |
-| 6 | Channels fiber-aware (waiter lists, send-side), and joins park | `include/kama_channel.h`, `lib/std/concurrent/` | M |
+| 6 | ✅ `0.9.751`. Channels fiber-aware (waiter lists, send-side), and joins park: a `scope`'s close, an `Isolate`'s join and a `parallel_for`'s barrier, tested from C (`tests/fiber_sched.d` checks 23–29) | `include/kama_channel.h`, `kama_isolate.h`, `kama_sched.h`, `lib/std/concurrent/` | M |
 | 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-7, KR-202), and `Poller.wait` on a fiber over AFD and `poll(2)` | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |
 | 8 | Windows: the high-resolution timer, and completion I/O where readiness cannot serve (`TransmitFile`, KR-229) | `kama_os.h` | M |
 | 9 | The job pool (decision 5), and the job-entry rule over step 4's walk: a job entry that reaches a fiber switch is refused | `lib/std/concurrent/` | M |

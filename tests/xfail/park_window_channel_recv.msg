@@ -1,0 +1,1 @@
+This one (a window over `this.seen`) reaches `std::concurrent::Receiver<int32>::recv` -> `std::concurrent::Receiver<int32>::recvInto` -> `kama_channel_recv` -> `channel_wait` -> a fiber's wait on a channel, which switches fibers

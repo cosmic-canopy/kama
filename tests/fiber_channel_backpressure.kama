@@ -1,0 +1,34 @@
+// A full channel parks its sender (KR-3 step 6; fibers.md decision 8 counts send-side waits too). A producer and a
+// consumer on one isolate over a channel of one slot: every second send finds it full, parks, and the consumer runs.
+// Before 0.9.751 that send blocked the thread on a condition variable, and the consumer, on the same thread, never ran.
+import { std::concurrent::Fiber, std::concurrent::join, std::concurrent::Channel, std::concurrent::Sender,
+         std::concurrent::Receiver };
+
+fn int32 produce(Sender<int32> tx) {
+    for (int32 i = 1; i <= 1000; i = i + 1) {
+        bool sent = match (tx.send(item: i)) { case Ok(value: u): true; case Err(error: e): false; };
+        if (!sent) { return -1; }
+    }
+    return 0;
+}
+fn int32 consume(Receiver<int32> rx) {
+    int32 sum = 0;
+    int32 want = 1;
+    int32 v = match (rx.recv()) { case Some(value: x): x; case None: -1; };
+    while (v >= 0) {
+        if (v != want) { return -1; }    // in the order sent
+        want = want + 1;
+        sum = sum + v;
+        v = match (rx.recv()) { case Some(value: x): x; case None: -1; };
+    }
+    return sum;
+}
+
+fn uint8 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    Fiber<int32> c = spawn fiber consume(rx: ch.receiver());
+    Fiber<int32> p = spawn fiber produce(tx: ch.sender());
+    if (join(fiber: give p) != 0) { return 1; }
+    if (join(fiber: give c) != 500500) { return 2; }   // 1 + 2 + … + 1000, once each
+    return 42;
+}

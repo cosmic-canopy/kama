@@ -2,9 +2,13 @@
 // `spawn fiber` lands. Each check is a numbered return; 0 is all of them. Compiled twice into one program: as it is,
 // and by schedtest_poller.c with KAMA__SCHED_GENERIC, so the arm Windows and poll(2) take is tested on every host.
 // Checks 15–22 drive a socket's wait (kama_os.h, KR-3 step 5) the way std's socket calls do, in a program that runs
-// fibers — which defines KAMA_FIBERS before any kama header, as the emitter does for one.
+// fibers — which defines KAMA_FIBERS before any kama header, as the emitter does for one. Checks 23–29 drive a channel's
+// wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6; both are read AFTER the scheduler here, the
+// order no emitted program has, so linking this proves the scheduler's half of those seams is defined either way.
 #define KAMA_FIBERS 1
 #include "kama_sched.h"
+#include "kama_channel.h"
+#include "kama_isolate.h"
 #include "schedtest.h"
 #include <stdio.h>
 #if !defined(_WIN32)
@@ -263,6 +267,92 @@ static void nest(void* a) {
     nested = inner == 3 && !in.head;
 }
 
+// 23–28: a channel's wait on a fiber, through the calls std's Sender and Receiver make. A channel of ints with one sender
+// and one receiver claimed, as `Channel.sender()` and `.receiver()` leave one, and its end: the factory and whatever
+// endpoints are left let go, the last of them freeing the queue.
+static void* chanOf(size_t cap) {
+    void* ch = kama_channel_new(sizeof(int), cap);
+    kama_channel_add_sender(ch); kama_channel_add_receiver(ch);
+    return ch;
+}
+static void chanEnd(void* ch, int senders, int receivers) {
+    int last = kama_channel_close_factory(ch);
+    while (senders-- > 0) last = kama_channel_close_sender(ch);
+    while (receivers-- > 0) last = kama_channel_close_receiver(ch);
+    if (last) { int v; while (kama_channel_try_pop(ch, &v)) { } kama_channel_free((kama_channel_t*)ch); }
+}
+// 23. two fibers on one isolate over two rendezvous channels: every receive and every send parks, and the other runs.
+static void* chA; static void* chB; static int pingSum, pongN;
+static void chanPing(void* a) {
+    (void)a;
+    for (int i = 1; i <= 1000; i++) {
+        int r = 0;
+        if (kama_channel_send(chA, &i) != 0 || kama_channel_recv(chB, &r) != 0 || r != i + 1) break;
+        pingSum += r;
+    }
+    (void)kama_channel_close_sender(chA);                     // the answerer hears the close and ends
+}
+static void chanPong(void* a) {
+    (void)a;
+    int v;
+    while (kama_channel_recv(chA, &v) == 0) { v++; if (kama_channel_send(chB, &v) != 0) return; pongN++; }
+}
+// 24. a send from another thread wakes a fiber parked in a receive, and the isolate's other fiber runs meanwhile.
+static void* chR; static int remoteGot; static long chanTicks;
+static void* chanRemoteSender(void* a) { (void)a; kama_sleep_ns(10000000); int v = 24; (void)kama_channel_send(chR, &v); return NULL; }
+static void chanRemoteWaiter(void* a) { (void)a; int v = 0; if (kama_channel_recv(chR, &v) == 0) remoteGot = v; }
+static void chanTicker(void* a) { (void)a; while (!remoteGot && chanTicks < 100000000) { chanTicks++; kama_sched_yield(); } }
+// 25. a full ring parks its sender until the receiver, a fiber on the same isolate, takes one.
+static void* chF; static int fedSum, fedInOrder = 1;
+static void chanFeeder(void* a) {
+    (void)a;
+    for (int i = 1; i <= 100; i++) if (kama_channel_send(chF, &i) != 0) return;
+    (void)kama_channel_close_sender(chF);
+}
+static void chanEater(void* a) {
+    (void)a;
+    int v, want = 1;
+    while (kama_channel_recv(chF, &v) == 0) { if (v != want++) fedInOrder = 0; fedSum += v; kama_sched_yield(); }
+}
+// 26. a timed receive parks with a deadline: it times out no earlier than asked, then receives what a sibling sends late,
+// and a third fiber keeps running the whole time.
+static void* chT; static int timedOutOk, timedGot, timedTicks;
+static void chanTimed(void* a) {
+    (void)a;
+    int v = 0;
+    const uint64_t t = kama_now_mono_ns();
+    int r = kama_channel_recv_timeout(chT, &v, 20000000);
+    timedOutOk = r == 1 && kama_now_mono_ns() - t >= 20000000;
+    r = kama_channel_recv_timeout(chT, &v, 5000000000LL);
+    if (r == 0) timedGot = v;
+}
+static void chanLate(void* a) { (void)a; kama_sched_sleep(40000000); int v = 26; (void)kama_channel_send(chT, &v); }
+static void chanTimedTicker(void* a) { (void)a; while (!timedGot) { timedTicks++; kama_sched_sleep(1000000); } }
+// 27. the last sender's close wakes every fiber parked in a receive.
+static void* chC; static int closedSeen;
+static void chanClosedWaiter(void* a) { (void)a; int v; if (kama_channel_recv(chC, &v) == -1) closedSeen++; }
+static void chanCloser(void* a) { (void)a; kama_sched_sleep(5000000); (void)kama_channel_close_sender(chC); }
+// 28. a receive on another thread wakes a fiber parked in a send on a full ring, and the last receiver's close wakes it
+// for good: its send answers -1.
+static void* chS; static int stuffed, undelivered;
+static void* chanSlowEater(void* a) {
+    (void)a;
+    int v;
+    for (int i = 0; i < 3; i++) { kama_sleep_ns(5000000); (void)kama_channel_recv(chS, &v); }
+    kama_sleep_ns(5000000);
+    (void)kama_channel_close_receiver(chS);
+    return NULL;
+}
+static void chanStuffer(void* a) {
+    (void)a;
+    for (int i = 0; i < 10; i++) { if (kama_channel_send(chS, &i) != 0) { undelivered = 1; return; } stuffed++; }
+}
+// 29. a fiber's join of an isolate parks it until the isolate's thread has ended, and the core runs a sibling meanwhile.
+static int isoRan, isoJoined, isoTicks;
+static void* isoChild(void* a) { (void)a; kama_sleep_ns(20000000); isoRan = 1; return NULL; }
+static void isoJoiner(void* a) { kama_isolate_join((kama_isolate_t)a); isoJoined = isoRan; }
+static void isoTicker(void* a) { (void)a; while (!isoJoined) { isoTicks++; kama_sched_sleep(1000000); } }
+
 int fiber_sched_selftest(void) {
     kama_sched_current();
     pingF = kama_sched_spawn(ping, 0, 0); pongF = kama_sched_spawn(pong, 0, 0);
@@ -394,6 +484,60 @@ int fiber_sched_selftest(void) {
     }
     kama_net_close(np[0], NULL); kama_net_close(np[1], NULL); np[0] = np[1] = 0;
 #endif
+
+    chA = chanOf(0); chB = chanOf(0);
+    kama_sched_detach(kama_sched_spawn(chanPong, 0, 0));
+    kama_sched_detach(kama_sched_spawn(chanPing, 0, 0));
+    kama_sched_run();
+    CHECK(23, pingSum == 501500 && pongN == 1000);
+    chanEnd(chA, 0, 1); chanEnd(chB, 1, 1);
+
+    chR = chanOf(1);
+    pthread_t rs;
+    CHECK(240, pthread_create(&rs, NULL, chanRemoteSender, NULL) == 0);
+    kama_sched_detach(kama_sched_spawn(chanRemoteWaiter, 0, 0));
+    kama_sched_detach(kama_sched_spawn(chanTicker, 0, 0));
+    kama_sched_run();
+    pthread_join(rs, NULL);
+    CHECK(24, remoteGot == 24 && chanTicks > 0);
+    chanEnd(chR, 1, 1);
+
+    chF = chanOf(1);
+    kama_sched_detach(kama_sched_spawn(chanFeeder, 0, 0));
+    kama_sched_detach(kama_sched_spawn(chanEater, 0, 0));
+    kama_sched_run();
+    CHECK(25, fedSum == 5050 && fedInOrder);
+    chanEnd(chF, 0, 1);
+
+    chT = chanOf(1);
+    kama_sched_detach(kama_sched_spawn(chanTimed, 0, 0));
+    kama_sched_detach(kama_sched_spawn(chanLate, 0, 0));
+    kama_sched_detach(kama_sched_spawn(chanTimedTicker, 0, 0));
+    kama_sched_run();
+    CHECK(26, timedOutOk && timedGot == 26 && timedTicks >= 10);
+    chanEnd(chT, 1, 1);
+
+    chC = chanOf(1);
+    for (int i = 0; i < 3; i++) kama_sched_detach(kama_sched_spawn(chanClosedWaiter, 0, 0));
+    kama_sched_detach(kama_sched_spawn(chanCloser, 0, 0));
+    kama_sched_run();
+    CHECK(27, closedSeen == 3);
+    chanEnd(chC, 0, 1);
+
+    chS = chanOf(1);
+    pthread_t se;
+    CHECK(280, pthread_create(&se, NULL, chanSlowEater, NULL) == 0);
+    kama_sched_detach(kama_sched_spawn(chanStuffer, 0, 0));
+    kama_sched_run();
+    pthread_join(se, NULL);
+    CHECK(28, stuffed >= 3 && undelivered);
+    chanEnd(chS, 1, 0);
+
+    kama_isolate_t ih = kama_isolate_spawn(isoChild, NULL);
+    kama_sched_detach(kama_sched_spawn(isoJoiner, ih, 0));
+    kama_sched_detach(kama_sched_spawn(isoTicker, 0, 0));
+    kama_sched_run();
+    CHECK(29, isoJoined && isoTicks >= 5);
 
     childOut = 0;
     kama_fiber* c = kama_sched_spawn(child, (void*)(intptr_t)7, 0);

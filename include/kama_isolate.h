@@ -15,7 +15,29 @@
 #include "kama_runtime.h"   /* kama_panic, kama_string_lit */
 #include "kama_fiber.h"     /* the stack-overflow handler an isolate's thread arms as it starts */
 
-typedef pthread_t kama_isolate_t;
+// A spawned isolate: its thread, what the thread runs, and how its end reaches a fiber parked in its join (KR-3 step 6).
+// The spawn allocates it and the join frees it, so its address is the handle — a held `Isolate` keeps it as its
+// `UnsafePtr` — and the thread reads it to its last instruction, which is safe because the join frees it only once
+// `pthread_join` has seen the thread exit.
+typedef struct kama__isolate {
+    pthread_t th;
+    void*   (*entry)(void*);
+    void*     arg;
+    size_t    stack;
+    int32_t   done;      /* the entry has returned and its scheduler is gone: set by the thread, read by a parked join */
+    void*     joiner;    /* the fiber parked in the join, or NULL */
+} kama__isolate;
+typedef kama__isolate* kama_isolate_t;
+
+// The fiber half (KR-3 step 6, fibers.md decision 8): in a program that runs fibers, a join on an isolate with a
+// scheduler parks the joining fiber — the root included, whose park runs the others — until the isolate has ended,
+// instead of blocking the thread in `pthread_join`. The scheduler's half is defined in kama_sched.h, which this header
+// includes at its end.
+#if defined(KAMA_FIBERS) && !defined(__EMSCRIPTEN__)
+#define KAMA__ISOLATE_FIBERS 1
+static inline void kama__isolate_park(kama__isolate* c);    // on an isolate with a scheduler, park until `c` has ended
+static inline void kama__isolate_ended(kama__isolate* c);   // `c`'s thread is done: wake a fiber parked in its join
+#endif
 
 // An isolate's stack is STATED, not the OS's. Left to `pthread_create(&t, NULL, …)` it was 512 KiB on
 // macOS, 8 MiB with glibc and 128 KiB with musl — three answers to "how deep may this recursion go", so a
@@ -39,13 +61,14 @@ typedef pthread_t kama_isolate_t;
 // stack says "isolate stack overflow (8 MiB; `spawn(stack: …)` to raise it)" rather than dying of a bare SIGSEGV.
 // wasm's stacks are emscripten's, so there the entry is started as it is.
 #if !defined(__EMSCRIPTEN__)
-typedef struct kama__isolate_boot { void* (*entry)(void*); void* arg; size_t stack; } kama__isolate_boot;
 static void* kama__isolate_run(void* p) {
-    kama__isolate_boot b = *(kama__isolate_boot*)p;
-    kama_free(p, sizeof b, _Alignof(kama__isolate_boot));
-    kama__stack_isolate(b.stack);
-    void* r = b.entry(b.arg);
+    kama__isolate* c = (kama__isolate*)p;
+    kama__stack_isolate(c->stack);
+    void* r = c->entry(c->arg);
     if (kama__fibers.schedEnd) kama__fibers.schedEnd();   // an isolate that ran fibers frees its scheduler and poller
+#if defined(KAMA__ISOLATE_FIBERS)
+    kama__isolate_ended(c);
+#endif
     return r;
 }
 #endif
@@ -73,20 +96,17 @@ static inline kama_isolate_t kama__isolate_start(void* (*entry)(void*), void* ar
             kama_panic(kama_string_lit(big, sizeof big - 1));
         }
     }
-    pthread_t t;
+    kama__isolate* c = (kama__isolate*)kama_alloc(sizeof *c, _Alignof(kama__isolate));
+    if (!c) { pthread_attr_destroy(&attr); kama_panic(kama_string_lit("isolate spawn failed", 20)); }
+    c->entry = entry; c->arg = arg; c->stack = given; c->done = 0; c->joiner = NULL;
 #if defined(__EMSCRIPTEN__)
-    (void)given;
-    const int rc = pthread_create(&t, &attr, entry, arg);
+    const int rc = pthread_create(&c->th, &attr, entry, arg);
 #else
-    kama__isolate_boot* b = (kama__isolate_boot*)kama_alloc(sizeof *b, _Alignof(kama__isolate_boot));
-    if (!b) { pthread_attr_destroy(&attr); kama_panic(kama_string_lit("isolate spawn failed", 20)); }
-    b->entry = entry; b->arg = arg; b->stack = given;
-    const int rc = pthread_create(&t, &attr, kama__isolate_run, b);
-    if (rc != 0) kama_free(b, sizeof *b, _Alignof(kama__isolate_boot));
+    const int rc = pthread_create(&c->th, &attr, kama__isolate_run, c);
 #endif
     pthread_attr_destroy(&attr);
-    if (rc != 0) kama_panic(kama_string_lit("isolate spawn failed", 20));
-    return t;
+    if (rc != 0) { kama_free(c, sizeof *c, _Alignof(kama__isolate)); kama_panic(kama_string_lit("isolate spawn failed", 20)); }
+    return c;
 }
 
 // The stated size (above). Its own entry rather than a reserved value of `stack`, so no size a program can write —
@@ -103,31 +123,25 @@ static inline kama_isolate_t kama_isolate_spawn_sized(void* (*entry)(void*), voi
     return kama__isolate_start(entry, arg, 1, stack);
 }
 
-// Block until the isolate finishes. Its result is dropped inside the trampoline, so there is nothing
-// to hand back (M2 has no channels); the join is purely the RAII/structured-lifetime barrier.
-static inline void kama_isolate_join(kama_isolate_t h) { pthread_join(h, NULL); }
+// Wait until the isolate finishes, and free its handle. Its result is dropped inside the trampoline, so there is
+// nothing to hand back; the join is the RAII/structured-lifetime barrier. On an isolate that runs fibers the joining
+// fiber parks until the isolate has ended, and the `pthread_join` after it is then the thread's last instructions.
+static inline void kama_isolate_join(kama_isolate_t h) {
+#if defined(KAMA__ISOLATE_FIBERS)
+    kama__isolate_park(h);
+#endif
+    pthread_join(h->th, NULL);
+    kama_free(h, sizeof *h, _Alignof(kama__isolate));
+}
 
-// Heap-BOXED handle, for the RAII `Isolate` type (`Isolate h = isolate worker(...);`). kama holds the box
-// as an opaque `UnsafePtr` (void*) — portable, since a bare kama_isolate_t is not always pointer-sized. spawn_boxed
-// allocates the box and spawns; join_boxed joins the thread and frees the box. The handle owns the join, so
-// dropping it (scope exit) joins — a forgotten join can't orphan the thread.
-static inline void* kama__isolate_box(kama_isolate_t t) {
-    kama_isolate_t* box = (kama_isolate_t*)kama_alloc(sizeof(kama_isolate_t), _Alignof(kama_isolate_t));
-    if (!box) kama_panic(kama_string_lit("isolate spawn failed", 20));
-    *box = t;
-    return box;
-}
-static inline void* kama_isolate_spawn_boxed(void* (*entry)(void*), void* arg) {
-    return kama__isolate_box(kama_isolate_spawn(entry, arg));
-}
+// The handle of the RAII `Isolate` type (`Isolate h = spawn worker(...);`), which kama holds as an opaque `UnsafePtr`.
+// A handle is already a pointer to what the join frees, so it is its own box. The `Isolate` owns the join, so dropping
+// it (scope exit) joins — a forgotten join can't orphan the thread.
+static inline void* kama_isolate_spawn_boxed(void* (*entry)(void*), void* arg) { return kama_isolate_spawn(entry, arg); }
 static inline void* kama_isolate_spawn_boxed_sized(void* (*entry)(void*), void* arg, size_t stack) {
-    return kama__isolate_box(kama_isolate_spawn_sized(entry, arg, stack));
+    return kama_isolate_spawn_sized(entry, arg, stack);
 }
-static inline void kama_isolate_join_boxed(void* h) {
-    kama_isolate_t* box = (kama_isolate_t*)h;
-    kama_isolate_join(*box);
-    kama_free(box, sizeof(kama_isolate_t), _Alignof(kama_isolate_t));
-}
+static inline void kama_isolate_join_boxed(void* h) { kama_isolate_join((kama_isolate_t)h); }
 
 // The default worker count for `parallel_for` (M6.3) when no build-time override is set: the machine's
 // logical-core count. Because a parallel_for's slices are disjoint and joined at a barrier, this only
@@ -152,4 +166,7 @@ static inline int kama_parfor_workers(void) { int n = pthread_num_processors_np(
 static inline int kama_parfor_workers(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 1; }
 #endif
 
+#if defined(KAMA__ISOLATE_FIBERS)
+#include "kama_sched.h"
+#endif
 #endif

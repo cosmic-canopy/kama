@@ -39,6 +39,19 @@ extern int clock_gettime(int clk_id, struct timespec* ts);
 #  define KAMA__CHANNEL_WALL 0
 #endif
 
+// A fiber waiting on a channel (KR-3 step 6, fibers.md decision 8): the record lives on the waiting fiber's own stack,
+// so a wait allocates nothing, and is linked into its side's list under `mu`. A wake takes it off under `mu` too, which
+// is what keeps the fiber alive while it is woken: it cannot leave its wait without the lock. `linked` still set when
+// the fiber wakes means nobody took it off — its deadline passed, or a stale wake from an earlier wait — so it takes
+// itself off. A thread waits on the condvar beside it, as it always has.
+typedef struct kama__chan_waiter {
+    struct kama__chan_waiter* next;
+    struct kama__chan_waiter* prev;
+    void*                     fiber;
+    int                       linked;
+} kama__chan_waiter;
+typedef struct { kama__chan_waiter* head; kama__chan_waiter* tail; } kama__chan_waitq;
+
 // A bounded (ring-buffer) channel. `cap` is the buffer capacity in elements; `elemSize` the bitwise
 // size of the moved value T. `count`/`head`/`tail` drive the ring.
 //
@@ -75,6 +88,8 @@ typedef struct {
     int             monotonic;       /* `notEmpty`'s timed wait runs on CLOCK_MONOTONIC (see kama__channel_cond_init) */
     int             factoryLive;     /* the `Channel` factory still exists, so an unclaimed side may yet be claimed */
     void*           waker;           /* `Receiver.wakeOnSend`'s waker (a reference held), or NULL (KR-201) */
+    kama__chan_waitq recvq;          /* fibers parked where a thread waits on `notEmpty` */
+    kama__chan_waitq sendq;          /* fibers parked where a thread waits on `notFull` */
 } kama_channel_t;
 
 // "The sender side can still deliver" — a live sender exists, or none has been claimed yet while the factory that
@@ -94,6 +109,83 @@ static inline int kama_channel_recv_open(kama_channel_t* ch) {
 // queue under a live factory once the factory gets a destructor.
 static inline int kama__channel_unheld(kama_channel_t* ch) {
     return ch->senders == 0 && ch->receivers == 0 && !ch->factoryLive;
+}
+
+// ---- the fiber half (KR-3 step 6, fibers.md decision 8) -----------------------------------------------------------
+// In a program that runs fibers, a wait on an isolate with a scheduler parks the running fiber — the root included,
+// whose park runs the isolate's other fibers — instead of blocking the thread, so two fibers on one isolate can talk
+// over a channel. The scheduler's half is defined in kama_sched.h, which this header includes at its end. On an isolate
+// with no scheduler every wait is the condvar's, as before, and a program with no fibers compiles none of this.
+#if defined(KAMA_FIBERS) && !defined(__EMSCRIPTEN__)
+#define KAMA__CHANNEL_FIBERS 1
+static inline int      kama__channel_here(void);             // this isolate runs a scheduler
+static inline void*    kama__channel_self(void);             // the running fiber, the root included
+static inline uint64_t kama__channel_by(int64_t nanos);      // the deadline `nanos` from now, on the scheduler's clock
+static inline int      kama__channel_switch(uint64_t by);    // park until woken (1) or until `by` passes (0); 0 for none
+static inline void     kama__channel_wake(void* fiber);      // make a parked fiber ready, from any isolate
+
+static inline void kama__channel_link(kama__chan_waitq* q, kama__chan_waiter* w) {
+    w->next = NULL; w->prev = q->tail; w->linked = 1;
+    if (q->tail) q->tail->next = w; else q->head = w;
+    q->tail = w;
+}
+static inline void kama__channel_unlink(kama__chan_waitq* q, kama__chan_waiter* w) {
+    if (w->prev) w->prev->next = w->next; else q->head = w->next;
+    if (w->next) w->next->prev = w->prev; else q->tail = w->prev;
+    w->next = w->prev = NULL; w->linked = 0;
+}
+// Park the running fiber on `q`, called with `mu` held: `mu` is given up while it is parked and held again on return.
+// 1 when it was woken — or the wake was a stale one, and either way the caller looks again — and 0 when `by` passed
+// with nobody having taken it off.
+static inline int kama__channel_park(kama_channel_t* ch, kama__chan_waitq* q, uint64_t by) {
+    kama__chan_waiter w;
+    w.fiber = kama__channel_self();
+    kama__channel_link(q, &w);
+    pthread_mutex_unlock(&ch->mu);
+    const int woke = kama__channel_switch(by);
+    pthread_mutex_lock(&ch->mu);
+    if (!w.linked) return 1;   // a waker took it off: what it was woken for is this fiber's to look at
+    kama__channel_unlink(q, &w);
+    return woke;
+}
+// Take the first fiber off `q` and wake it; `mu` is held. 0 when none waits. The wake is made under the lock, which is
+// what holds the fiber alive through it (kama_sched_wake's contract): it cannot leave its wait without `mu`. From
+// another isolate that is a coalesced waker system call under the lock, as the waker's own wakes below already are.
+static inline int kama__channel_wakeOne(kama__chan_waitq* q) {
+    kama__chan_waiter* w = q->head;
+    if (!w) return 0;
+    kama__channel_unlink(q, w);
+    kama__channel_wake(w->fiber);
+    return 1;
+}
+#endif
+
+// A wait, a signal and a broadcast, each on a condvar and the fiber list beside it; callers hold `mu`. A signal wakes
+// one waiter, a fiber when one waits, else a thread: whichever it is looks at the channel again when it runs, so one
+// signal never needs both.
+static inline void kama__channel_wait(kama_channel_t* ch, pthread_cond_t* c, kama__chan_waitq* q) {
+#if defined(KAMA__CHANNEL_FIBERS)
+    if (kama__channel_here()) { (void)kama__channel_park(ch, q, 0); return; }
+#else
+    (void)q;
+#endif
+    pthread_cond_wait(c, &ch->mu);
+}
+static inline void kama__channel_signal(pthread_cond_t* c, kama__chan_waitq* q) {
+#if defined(KAMA__CHANNEL_FIBERS)
+    if (kama__channel_wakeOne(q)) return;
+#else
+    (void)q;
+#endif
+    pthread_cond_signal(c);
+}
+static inline void kama__channel_broadcast(pthread_cond_t* c, kama__chan_waitq* q) {
+#if defined(KAMA__CHANNEL_FIBERS)
+    while (kama__channel_wakeOne(q)) { }
+#else
+    (void)q;
+#endif
+    pthread_cond_broadcast(c);
 }
 
 // A timed receive (`Receiver.recvTimeout`) must not be stretched or cut short by the wall clock moving, so the
@@ -165,6 +257,8 @@ static inline void* kama_channel_new(size_t elemSize, size_t cap) {
     ch->takenSeq = 0;
     ch->factoryLive = 1;
     ch->waker = NULL;
+    ch->recvq.head = ch->recvq.tail = NULL;
+    ch->sendq.head = ch->sendq.tail = NULL;
     return ch;
 }
 
@@ -212,7 +306,7 @@ static inline int kama_channel_send(void* h, const void* elem) {
     pthread_mutex_lock(&ch->mu);
     if (ch->kama_cap == 0) {                                       /* rendezvous */
         while (ch->count != 0 && kama_channel_recv_open(ch)) /* wait for a free slot (prior hand-off done) */
-            pthread_cond_wait(&ch->notFull, &ch->mu);
+            kama__channel_wait(ch, &ch->notFull, &ch->sendq);
         if (!kama_channel_recv_open(ch)) { pthread_mutex_unlock(&ch->mu); return -1; }
         memcpy(ch->buf, elem, ch->elemSize);
         ch->count = 1;
@@ -224,9 +318,9 @@ static inline int kama_channel_send(void* h, const void* elem) {
            disowning a value the receiver already owns, which is a double free. The sequence is
            unambiguous because only a take bumps it. */
         unsigned long mySeq = ch->takenSeq;
-        pthread_cond_signal(&ch->notEmpty);                  /* offer it to a receiver */
+        kama__channel_signal(&ch->notEmpty, &ch->recvq);     /* offer it to a receiver */
         while (ch->takenSeq == mySeq && kama_channel_recv_open(ch))
-            pthread_cond_wait(&ch->notFull, &ch->mu);
+            kama__channel_wait(ch, &ch->notFull, &ch->sendq);
         int taken = (ch->takenSeq != mySeq);
         if (!taken) ch->count = 0;                           /* receiver died: DISOWN the stale copy in buf[0] —
                                                                 the caller keeps ownership (SendResult::Undelivered),
@@ -235,12 +329,12 @@ static inline int kama_channel_send(void* h, const void* elem) {
         return taken ? 0 : -1;                               /* receiver died before taking → not delivered */
     }
     while (ch->count == ch->kama_cap && kama_channel_recv_open(ch))
-        pthread_cond_wait(&ch->notFull, &ch->mu);
+        kama__channel_wait(ch, &ch->notFull, &ch->sendq);
     if (!kama_channel_recv_open(ch)) { pthread_mutex_unlock(&ch->mu); return -1; }
     memcpy(ch->buf + ch->tail * ch->elemSize, elem, ch->elemSize);
     ch->tail = (ch->tail + 1) % ch->kama_cap;
     ch->count++;
-    pthread_cond_signal(&ch->notEmpty);
+    kama__channel_signal(&ch->notEmpty, &ch->recvq);
     /* Empty to non-empty wakes a loop waiting on this channel (KR-201); a queue that already held items has woken it.
        The reference is taken under the lock and the wake made after it, so no sender waits behind a system call. */
     void* w = (ch->count == 1 && ch->waker) ? ch->waker : NULL;
@@ -260,14 +354,14 @@ static inline int kama__channel_take(kama_channel_t* ch, void* out) {
         /* broadcast, not signal: senders park on `notFull` under two different predicates here — "a slot
            is free" (before placing) and "my sequence moved" (after) — and a signal may wake the wrong
            one, which then re-waits while the sender that could proceed never runs. */
-        pthread_cond_broadcast(&ch->notFull);
+        kama__channel_broadcast(&ch->notFull, &ch->sendq);
         pthread_mutex_unlock(&ch->mu);
         return 0;
     }
     memcpy(out, ch->buf + ch->head * ch->elemSize, ch->elemSize);
     ch->head = (ch->head + 1) % ch->kama_cap;
     ch->count--;
-    pthread_cond_signal(&ch->notFull);
+    kama__channel_signal(&ch->notFull, &ch->sendq);
     pthread_mutex_unlock(&ch->mu);
     return 0;
 }
@@ -279,7 +373,7 @@ static inline int kama_channel_recv(void* h, void* out) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
     while (ch->count == 0 && kama_channel_send_open(ch))
-        pthread_cond_wait(&ch->notEmpty, &ch->mu);
+        kama__channel_wait(ch, &ch->notEmpty, &ch->recvq);
     if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return -1; }   /* drained + senders gone */
     return kama__channel_take(ch, out);
 }
@@ -297,6 +391,21 @@ static inline int kama_channel_try_recv(void* h, void* out) {
 // kama_channel_try_recv. A zero or negative span is a try. The deadline is monotonic; see kama__channel_cond_init.
 static inline int kama_channel_recv_timeout(void* h, void* out, int64_t nanos) {
     kama_channel_t* ch = (kama_channel_t*)h;
+#if defined(KAMA__CHANNEL_FIBERS)
+    if (kama__channel_here()) {
+        /* A fiber's deadline is the scheduler's timer, on kama_now_mono_ns's clock (QueryPerformanceCounter on
+           Windows), so it is taken there and not from the condvar's clock below. */
+        const uint64_t by = kama__channel_by(nanos);
+        int late = nanos <= 0;
+        pthread_mutex_lock(&ch->mu);
+        while (ch->count == 0 && kama_channel_send_open(ch)) {
+            if (late) { pthread_mutex_unlock(&ch->mu); return 1; }
+            late = !kama__channel_park(ch, &ch->recvq, by);
+        }
+        if (ch->count == 0) { pthread_mutex_unlock(&ch->mu); return -1; }
+        return kama__channel_take(ch, out);
+    }
+#endif
     const int64_t now = kama__channel_now_ns(KAMA__CHANNEL_MONO);
     const int64_t deadline = nanos > INT64_MAX - now ? INT64_MAX : now + (nanos > 0 ? nanos : 0);
     pthread_mutex_lock(&ch->mu);
@@ -338,7 +447,7 @@ static inline int kama_channel_close_sender(void* h) {
     ch->senders--;
     /* Broadcast — not signal: EVERY blocked receiver must observe the closure, or the ones not woken
        park forever on a channel that will never deliver again. That is the whole point of a worker pool. */
-    if (ch->senders == 0) pthread_cond_broadcast(&ch->notEmpty);
+    if (ch->senders == 0) kama__channel_broadcast(&ch->notEmpty, &ch->recvq);
     /* The last sender's close is news to a waiting loop too: its next tryRecv answers Closed. */
     if (ch->senders == 0 && ch->waker) (void)kama_waker_call_wake(ch->waker);
     int last = kama__channel_unheld(ch);
@@ -353,8 +462,8 @@ static inline int kama_channel_close_factory(void* h) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
     ch->factoryLive = 0;
-    pthread_cond_broadcast(&ch->notEmpty);
-    pthread_cond_broadcast(&ch->notFull);
+    kama__channel_broadcast(&ch->notEmpty, &ch->recvq);
+    kama__channel_broadcast(&ch->notFull, &ch->sendq);
     int last = kama__channel_unheld(ch);
     pthread_mutex_unlock(&ch->mu);
     return last;
@@ -380,10 +489,13 @@ static inline int kama_channel_close_receiver(void* h) {
     kama_channel_t* ch = (kama_channel_t*)h;
     pthread_mutex_lock(&ch->mu);
     ch->receivers--;
-    if (ch->receivers == 0) pthread_cond_broadcast(&ch->notFull);
+    if (ch->receivers == 0) kama__channel_broadcast(&ch->notFull, &ch->sendq);
     int last = kama__channel_unheld(ch);
     pthread_mutex_unlock(&ch->mu);
     return last;
 }
 
+#if defined(KAMA__CHANNEL_FIBERS)
+#include "kama_sched.h"
+#endif
 #endif

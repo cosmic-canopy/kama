@@ -2178,31 +2178,33 @@ from data races keeps holding by construction.
 14. Sanitizer fiber annotations and an lldb OS plugin, in the first commits.
 15. MCU and `@noheap`: parking allocates nothing; no park inside `@onPanic`. Fibers on bare metal are KR-233 —
     corrected 2026-10-26: a socket's first wait registers it, which allocates, and the `@noheap` walk is program-wide,
-    so a program that runs fibers anywhere refuses `@noheap` socket I/O and `sleep` everywhere (KR-245).
+    so a program that runs fibers anywhere refuses `@noheap` socket I/O and `sleep` everywhere (KR-245), and since
+    step 6 channel waits and joins, which reach the scheduler's timer heap and its loop.
 
-Steps 1–5 shipped `0.9.737`–`0.9.748` (fibers.md §8 records each, and the as-built notes under decisions 1, 3, 7, 9, 10 and 13).
-Step 5 was ruled 2026-10-26 and built `0.9.745`–`0.9.748` (fibers.md decisions 7, 11, 13 and 15): `Poller.wait` parks too, on its own descriptor on
-epoll and kqueue and through step 7's offload pool on AFD and `poll(2)`; two fibers on one socket is KR-244.
+Steps 1–6 shipped `0.9.737`–`0.9.751` (fibers.md §8 records each, and the as-built notes under decisions 1, 3, 7, 8, 9,
+10 and 13). Step 5 was ruled 2026-10-26 and built `0.9.745`–`0.9.748` (fibers.md decisions 7, 11, 13 and 15): `Poller.wait`
+parks too, on its own descriptor on epoll and kqueue and through step 7's offload pool on AFD and `poll(2)`; two fibers
+on one socket is KR-244. Step 6 (`0.9.751`) made channels and isolate joins park, with no new surface.
 
-**Step 6, where it starts (read 2026-10-26; re-probe before building).** Decision 8, ruled: channels wait on a fiber,
-send-side waits included, and joins park.
-- **Channels** wait on pthread condvars today (`include/kama_channel.h`: `kama_channel_send` ~210, `kama_channel_recv`
-  ~278, `kama_channel_recv_timeout` ~298), with one waker slot for `Receiver.wakeOnSend` (`0.9.719`). Two fibers on one
-  isolate talking over a channel deadlock the core, and a fiber's `recv` stalls every other fiber on it. The shape
-  decision 8 names: a waiter list of fibers or condvars; a send from another isolate wakes a fiber through
-  `kama_sched_wake` (step 2's remote queue, already built and tested); a timed receive parks with a deadline.
-- **Joins** are `pthread_join` (`include/kama_isolate.h` ~108), emitted at a `scope`'s close and for a held `Isolate`
-  handle (`src/kama.cemit.cpp` ~6667, ~6671, ~8201). On a fibered isolate the joiner parks until the child signals
-  its end.
-- **Step 5's seam is the template.** The fiber half sits behind `KAMA_FIBERS`, which the emitter writes for a program
-  that reaches the scheduler; the header forward-declares the scheduler calls and includes `kama_sched.h` at its end,
-  with the `#error` that catches a header read before the define; `tools/check-header-order.sh`'s seam list gains the
-  header. With a direct C call into the scheduler, the park rule follows channels and joins with no change to its walk,
-  and `parkSeam` gains their words.
-- **Fixtures to write:** two fibers on one isolate over a channel (a deadlock today), a fiber's receive woken by
-  another isolate's send, a full bounded channel's send-side wait, a timed receive on a fiber, an isolate join on a
-  fiber while the isolate's other fibers run, and the park rule's xfails for a channel wait and a join in a window.
-  TSan for every cross-isolate wake.
+**Step 7, where it starts (read 2026-10-27; re-probe before building).** Decision 8's third part: work that blocks and
+has no readiness to wait on runs on a small per-process pool of threads while the fiber parks, and the pool's completion
+wakes it through `kama_sched_wake`, the remote queue channels use since step 6. Nothing of a pool exists yet:
+`parallel_for` spawns its isolates per call.
+- **Regular files.** `File.read` and `write` are `kama_read`/`kama_write` (`lib/std/fs/fs.kama` ~475, ~487; `kama_os.h`
+  ~2039 POSIX, ~399 Windows), and `read` of a regular file never reports `WouldBlock` on any OS. Which calls go to the
+  pool is a decision: the data calls, and the metadata calls that can stall on a network filesystem (`open`, `stat`,
+  a directory read).
+- **DNS (with KR-202).** `std::net::resolve` (`lib/std/net/addr.kama` ~318) is `kama_resolve_host` (`kama_os.h` ~4209,
+  `getaddrinfo` ~4226), which blocks for seconds and takes no timeout. On a fiber it parks while the pool resolves, and
+  a deadline lets the fiber leave while the late answer is dropped, which is KR-202's shape.
+- **`Poller.wait` on AFD and `poll(2)`.** `kama_poller_wait_parked` (`kama_os.h` ~4452) parks on the Poller's own
+  descriptor where there is one (epoll, kqueue) and blocks the thread where `kama_poller_fd` is -1.
+- **`offload(…)`.** A foreign C call that blocks stalls its core; decision 8 names an explicit
+  `std::concurrent::offload(…)` that runs it on the pool, as tokio's `spawn_blocking` does. Its spelling is language
+  surface and wants a ruling: a function taking an entry and one bundle, as `spawn` does, or a statement form.
+- **Rulings owed before code:** the pool's size and growth (libuv's is 4 threads, `UV_THREADPOOL_SIZE`; tokio's grows to
+  512 blocking threads), the `offload` spelling, which file calls go to the pool, and whether a thread with no
+  scheduler keeps calling inline (the recommendation: yes, no pool hop where nothing else could run).
 
 <a id="s6-fiber-cet"></a>
 
@@ -2254,7 +2256,10 @@ decision 13's release rule.
 **Found 2026-10-26, planning KR-3 step 5.** The `@noheap` walk reads one call graph for the whole program. On an
 isolate that runs fibers, a socket's first wait registers it with the scheduler, which allocates the record; on an
 isolate that runs none, the same call does not. The graph cannot tell the two apart, so in a program that runs fibers
-anywhere, `@noheap` code that does socket I/O or calls `sleep` is refused on every isolate. The park rule already
+anywhere, `@noheap` code that does socket I/O or calls `sleep` is refused on every isolate, and since step 6
+(`0.9.751`) so is a channel wait or a join, which reach the scheduler's timer heap and its loop. A program runs fibers
+when its code holds a `spawn fiber`; a program that imports `std::concurrent` only for a channel is not refused. The
+park rule already
 walks per isolate (its roots are the entries whose reach includes a fiber spawn, `checkParkWindows`), so the shape
 exists.
 

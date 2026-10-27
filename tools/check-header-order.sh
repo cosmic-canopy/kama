@@ -49,8 +49,10 @@ done
 # A program that runs fibers defines KAMA_FIBERS before any kama header (KR-3 step 5), and then kama_os.h's socket
 # wait reaches into kama_sched.h, which it includes at its end while kama_sched.h includes it at its top. Either may
 # come first in a unit, so every pair holding a header on that seam compiles both ways under the define too —
-# including kama_sched.h's own `#error` for kama_os.h read before the define, which no order here may trip.
-SEAM="kama_os.h kama_sched.h kama_time.h kama_fiber.h kama_isolate.h"
+# including kama_sched.h's own `#error` for kama_os.h read before the define, which no order here may trip. A channel's
+# wait does the same since step 6, and kama_sched.h does not include kama_channel.h, so its half of that seam sits
+# after its include guard, so either order defines it (tests/fiber_sched.d reads kama_sched.h first, and links).
+SEAM="kama_channel.h kama_os.h kama_sched.h kama_time.h kama_fiber.h kama_isolate.h"
 fibered=0
 for a in $SEAM; do
     for b in $HEADERS; do

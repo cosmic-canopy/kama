@@ -643,4 +643,68 @@ static inline int kama__time_park(uint64_t ns) {
 static inline int kama__time_park(uint64_t ns) { (void)ns; return 0; }
 #endif
 #endif
+#define KAMA__SCHED_BODY 1   /* the body above is complete: the halves below may use it */
 #endif /* KAMA_SCHED_H */
+
+// The scheduler's half of a channel's wait (kama_channel.h, KR-3 step 6). It is outside the include guard because this
+// header does not include kama_channel.h: the channel includes this header at its end, and when this header was read
+// first — a C test, the header-order guard — that second read is the one that defines it. It waits for the body above
+// to be complete: this header includes kama_os.h, which includes this header again at its end, and that nested read
+// comes before the body. Parking allocates nothing here; the waiter is on the parked fiber's stack.
+#if defined(KAMA__SCHED_BODY)
+#if defined(KAMA__CHANNEL_FIBERS) && !defined(KAMA__SCHED_CHANNEL)
+#define KAMA__SCHED_CHANNEL 1
+#if !defined(KAMA_FIBER_NONE)
+static inline int kama__channel_here(void) { return kama__fibers.sched != NULL; }
+static inline void* kama__channel_self(void) { return kama_fiber_current(); }
+static inline uint64_t kama__channel_by(int64_t nanos) {
+    const uint64_t now = kama_now_mono_ns();
+    if (nanos <= 0) return now;
+    return (uint64_t)nanos > UINT64_MAX - now ? UINT64_MAX : now + (uint64_t)nanos;
+}
+static inline int kama__channel_switch(uint64_t by) { return kama_sched_parkUntil(by); }
+static inline void kama__channel_wake(void* fiber) { kama_sched_wake((kama_fiber*)fiber); }
+#else
+static inline int kama__channel_here(void) { return 0; }
+static inline void* kama__channel_self(void) { return NULL; }
+static inline uint64_t kama__channel_by(int64_t nanos) { (void)nanos; return 0; }
+static inline int kama__channel_switch(uint64_t by) { (void)by; return 0; }
+static inline void kama__channel_wake(void* fiber) { (void)fiber; }
+#endif
+#elif defined(KAMA_FIBERS) && defined(KAMA_CHANNEL_H) && !defined(KAMA__CHANNEL_FIBERS) && !defined(__EMSCRIPTEN__)
+#error "kama_channel.h was read before KAMA_FIBERS was defined: its channels would never park (define it before any kama header)"
+#endif
+#endif
+
+// The scheduler's half of an isolate's join (kama_isolate.h, KR-3 step 6), outside the include guard and waiting for the
+// body, for the reasons the channel's does. The joiner publishes itself and then looks at `done`; the isolate's thread sets `done` and then takes
+// the joiner. All four are sequentially consistent, so at least one side sees the other: the joiner sees the end and
+// never parks, or the thread sees the joiner and wakes it. A wake that lands after the joiner saw the end is a stale
+// one, which every park tolerates, and the joiner is alive through it because the join's `pthread_join` waits for the
+// thread to exit.
+#if defined(KAMA__SCHED_BODY)
+#if defined(KAMA__ISOLATE_FIBERS) && !defined(KAMA__SCHED_ISOLATE)
+#define KAMA__SCHED_ISOLATE 1
+#if !defined(KAMA_FIBER_NONE)
+static inline void kama__isolate_park(kama__isolate* c) {
+    if (!kama__fibers.sched) return;
+    kama_fiber* me = kama_fiber_current();
+    for (;;) {
+        __atomic_store_n(&c->joiner, (void*)me, __ATOMIC_SEQ_CST);
+        if (__atomic_load_n(&c->done, __ATOMIC_SEQ_CST)) return;
+        kama_sched_park();
+    }
+}
+static inline void kama__isolate_ended(kama__isolate* c) {
+    __atomic_store_n(&c->done, 1, __ATOMIC_SEQ_CST);
+    void* j = __atomic_exchange_n(&c->joiner, (void*)NULL, __ATOMIC_SEQ_CST);
+    if (j) kama_sched_wake((kama_fiber*)j);
+}
+#else
+static inline void kama__isolate_park(kama__isolate* c) { (void)c; }
+static inline void kama__isolate_ended(kama__isolate* c) { (void)c; }
+#endif
+#elif defined(KAMA_FIBERS) && defined(KAMA_ISOLATE_H) && !defined(KAMA__ISOLATE_FIBERS) && !defined(__EMSCRIPTEN__)
+#error "kama_isolate.h was read before KAMA_FIBERS was defined: its joins would never park (define it before any kama header)"
+#endif
+#endif

@@ -1281,8 +1281,8 @@ fn int32 tick(UnsafePtr state) { … }             // any panic inside, at any d
   makes it sound rather than merely fast. Keep the region's state behind the pointer the callback receives.
 - **No park inside a region**: a recovered panic is a longjmp, and one across a fiber switch would land on another
   fiber's stack, so a region that reaches a `join`, a `Fiber`'s drop or a `scope`'s close is refused with the chain <!-- xfail: onpanic_park_join -->
-  (KR-3 decision 15), and so, in a program that runs fibers, is one that makes a socket call. In a program that runs <!-- xfail: onpanic_park_socket -->
-  none a socket call is no park, and a region may make one. <!-- test: onpanic_socket_no_fibers -->
+  (KR-3 decision 15), and so, in a program that runs fibers, is one that makes a socket call or waits on a channel. <!-- xfail: onpanic_park_socket, onpanic_park_channel -->
+  In a program that runs none neither is a park, and a region may make one. <!-- test: onpanic_socket_no_fibers, onpanic_channel_no_fibers -->
 - **Regions nest** (each saves the previous slot), and the slot is **per thread**, so a foreign audio
   thread's region never sees another isolate's. A region is a *body*: on a `fnptr` type, a constructor or
   a destructor it is refused. <!-- xfail: onpanic_on_fnptr -->
@@ -1648,8 +1648,9 @@ What the model counts:
   <!-- test: shared_borrow_extent, onpanic_shared_borrow -->
 - **Fibers.** On an isolate that runs fibers — any code its entry, `main` included, reaches once it reaches a
   `spawn fiber` — a lasting access may not reach a **park**, a call that lets another fiber run: a `join`, a `Fiber`'s <!-- xfail: park_window_join, park_window_root, park_window_scope_close, park_window_fiber_drop -->
-  drop, a `scope`'s close, and a socket call that would block — a read, a write, an accept, a connect (*Sockets on a <!-- xfail: park_window_socket_read -->
-  fiber*) — or a `sleep`. Fibers share the thread's record, which ends accesses in the order they began; a fiber that <!-- xfail: park_window_sleep -->
+  drop, a `scope`'s close, a socket call that would block — a read, a write, an accept, a connect (*Sockets on a <!-- xfail: park_window_socket_read -->
+  fiber*) — a channel's wait — a receive with nothing queued, a send into a full channel (*Channels*) — or a <!-- xfail: park_window_channel_recv -->
+  `sleep`. Fibers share the thread's record, which ends accesses in the order they began; a fiber that <!-- xfail: park_window_sleep -->
   parked inside one would let another change what it holds. It is a compile error naming the chain, for a window and <!-- xfail: park_call_access -->
   a call that holds a field alike, and so is a call through a `fnptr` inside one, whose target could park. A call that <!-- xfail: park_window_fnptr -->
   only blocks the thread, such as `println`, is no park: no other fiber runs. A spawn is none either,
@@ -2415,7 +2416,9 @@ non-blocking and registers it with the isolate's scheduler at its first wait; ne
 - **On Linux a Unix-socket connect to a full accept queue** is made again after a pause until there is room, as a
   blocking connect waits; the program's own non-blocking connect answers `WouldBlock` there.
 - **A socket's first wait on a fiber allocates its registration**, so in a program that runs fibers `@noheap` code may
-  make no socket call (KR-245).
+  make no socket call (KR-245), and since a timed park grows the scheduler's timer heap, no channel wait or join
+  either. A program runs fibers when its code spawns one: importing `std::concurrent` for a channel or an isolate is
+  not running fibers, and such a program compiles none of this. <!-- test: onpanic_channel_no_fibers -->
 - **`std::time::sleep` parks too**, and so does `Poller.wait` on epoll and kqueue, on the Poller's own descriptor, so a <!-- test: fiber_sleep, fiber_poller_wait -->
   fiber that drives its own `Poller` does not stop the isolate's others. A Windows `Poller` has no descriptor to park
   on, and there a fiber's wait still blocks the thread until the offload pool (KR-3 step 7).
@@ -7067,6 +7070,16 @@ last holder to drop — endpoint or the `Channel` itself — is the one that fre
 is needed: a `Channel<T>` is itself a move-only `resource`, so it can be moved *into* an isolate
 whose worker then mints its own endpoint there. <!-- test: channel_mint_in_isolate -->
 
+**On a fiber, a channel's wait parks the fiber.** A `recv` with nothing queued, a `send` into a full channel — or a <!-- test: fiber_channel_pingpong, fiber_channel_backpressure -->
+rendezvous send, until its value is taken — and a `recvTimeout` park only the fiber that makes them, on an isolate
+that runs fibers, and the core runs its others meanwhile (KR-3, `docs/design/fibers.md` decision 8). So two fibers on
+one isolate can talk over a channel, which deadlocked the core until `0.9.751`. A send from another isolate wakes a
+receiver parked there, <!-- test: fiber_channel_remote --> a timed receive's deadline is the scheduler's timer, <!-- test: fiber_channel_timeout -->
+and a side's close wakes every fiber parked on the other. <!-- test: fiber_channel_close --> The same calls block the
+thread on an isolate that runs no fibers, so a function is written once for both. A wait that parks is held to the
+park rule: on an isolate that runs fibers, no channel wait inside a lasting access to `Shared` storage or inside an
+`@onPanic` region (*Smart pointers*, the access model's **Fibers** item).
+
 A side is also open **before it is ever claimed**, which is what lets that last pattern work: a
 receiver may call `recv()` before the isolate holding the `Channel` has minted its `Sender`, and it
 blocks rather than reading "no senders yet" as end-of-stream. That lasts exactly as long as the
@@ -7141,6 +7154,11 @@ one exception: it may sit anywhere in its scope's body, loops included, because 
 its live fibers and its closing brace waits for the list to empty (KR-3, being built: `docs/design/fibers.md`). That
 wait is a park, so a scope with fibers may not close inside a window over `Shared` storage (*Smart pointers*, the
 access model's **Fibers** item).
+
+**On a fiber, a join parks the fiber.** A `scope`'s close over its isolates, an `Isolate`'s `join()` or drop, and a <!-- test: fiber_isolate_join -->
+`parallel_for`'s barrier, made on an isolate that runs fibers, park only the joining fiber until the isolate has ended,
+and the core runs its other fibers meanwhile (KR-3, `docs/design/fibers.md` decision 8); on an isolate that runs none
+they block the thread as before. Each is then a park, held to the same rule as a fiber's own join. <!-- xfail: park_window_isolate_join -->
 
 #### What a child may borrow
 

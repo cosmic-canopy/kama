@@ -1,0 +1,35 @@
+// A fiber's receive woken by another isolate's send (KR-3 step 6, fibers.md decision 8). The receive parks the fiber and
+// the isolate's other fibers keep running; the send, made on another thread, puts the fiber back on its scheduler's
+// queue and wakes the scheduler's poller. Before 0.9.751 the receive blocked the thread, so the ticker never ticked
+// until the value had come.
+import { std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver,
+         std::time::sleep, std::time::Duration };
+
+static int32 got = 0;
+static int32 ticks = 0;
+
+fn void later(Sender<int32> tx) {
+    sleep(d: Duration.fromMillis(ms: 30i64));
+    _ = tx.send(item: 42);
+}
+fn void waiter(Receiver<int32> rx) {
+    int32 v = match (rx.recv()) { case Some(value: x): x; case None: -1; };
+    got = v;
+}
+fn void ticker(int64 every) {
+    while (got == 0) { ticks = ticks + 1; sleep(d: Duration.fromMillis(ms: every)); }
+}
+
+fn uint8 main() {
+    Channel<int32> ch = Channel.bounded(capacity: 1);
+    Sender<int32> tx = ch.sender();
+    Receiver<int32> rx = ch.receiver();
+    scope {
+        spawn later(tx: give tx);            // another isolate, another thread
+        spawn fiber waiter(rx: give rx);
+        spawn fiber ticker(every: 1);
+    }
+    if (got != 42) { return 1; }
+    if (ticks < 5) { return 2; }             // the core ran the ticker while the receive waited
+    return 42;
+}
