@@ -85,7 +85,10 @@ cpu_s() {    # the server's process tree: user + system seconds so far
     awk -v t="$sum" 'BEGIN { printf "%.2f", t / 100 }'   # Linux USER_HZ and the macOS centiseconds are both 1/100 s
 }
 
-port=47200
+# Every server gets a fresh port, below the ephemeral range of every OS (Linux 32768–60999, macOS and Windows 49152–
+# 65535). Inside it, a 10k-connection config's own client sockets, live or in TIME_WAIT, hold the very port the next
+# server is given, and its bind fails: 47201–48000 did exactly that in the bench container on Linux.
+port=20000
 cthreads=$(( ncpu - cores > 0 ? ncpu - cores : 1 ))
 cpin=""; $linux && [ "$ncpu" -gt "$cores" ] && cpin="taskset -c $cores-$((ncpu - 1))"
 printf 'round\tslot\t%s\trss_kb\tcpu_s\n' "$("$tmp/client" -h)" > "$out"
@@ -98,7 +101,7 @@ while [ "$r" -le "$rounds" ]; do
         set -- $run_slots
         k=$(( (r - 1) % n )); while [ "$k" -gt 0 ]; do x=$1; shift; set -- "$@" "$x"; k=$((k - 1)); done
         for slot in "$@"; do
-            port=$((port + 1)); [ "$port" -gt 48000 ] && port=47201
+            port=$((port + 1)); [ "$port" -gt 21000 ] && port=20001
             start_server "${slot%#*}" "$smode" "$port"
             sleep 0.3
             if [ "$mode" = idle ]; then

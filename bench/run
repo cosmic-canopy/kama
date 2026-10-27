@@ -32,8 +32,10 @@ case "${1:-}" in
   report)      run_ni python3 bench/scripts/report.py ;;
   all)         run_ni bash -c "bash bench/scripts/build.sh && bash bench/scripts/measure.sh all && python3 bench/scripts/report.py" ;;
   # The server benchmark holds 10k connections, and today's kama arm a thread per connection: the container's own
-  # limits on descriptors and processes would be the thing measured, so they are lifted for it.
-  server)      "$ENGINE" run --rm --ulimit nofile=1048576:1048576 --pids-limit=-1 -v "$ROOT:/work" -w /work "$IMAGE" \
+  # limits on descriptors and processes would be the thing measured, so they are lifted for it. 524288 descriptors, not
+  # more: a rootless engine cannot raise a container above its own user's hard limit, which is 524288 in the podman
+  # machine (systemd's default), and asking for more fails the start. A run needs about 10k per process.
+  server)      "$ENGINE" run --rm --ulimit nofile=524288:524288 --pids-limit=-1 -v "$ROOT:/work" -w /work "$IMAGE" \
                  bash -c "make -s kama >/dev/null && bash bench/server/run.sh ${2:-.scratch/bench-server.tsv} ${3:-15}" ;;
   sh|shell)    "$ENGINE" run --rm -it -v "$ROOT:/work" -w /work "$IMAGE" bash ;;
   *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|sh}" >&2; exit 2 ;;

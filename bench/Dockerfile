@@ -29,17 +29,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
-# Go (official tarball; arch-aware).
-ARG GO_VERSION=1.22.5
+# Go (official tarball; arch-aware). The peers are measured on their CURRENT stable release, not the one that was
+# current when this file was written: a two-year-old Go or Rust would make every comparison against them flattering.
+ARG GO_VERSION=1.27.3
 RUN set -eux; \
     case "${TARGETARCH:-arm64}" in arm64) GOARCH=arm64;; *) GOARCH=amd64;; esac; \
     curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}" \
     GOTOOLCHAIN=local GOCACHE=/tmp/gocache GOPATH=/tmp/go
 
-# Rust (rustup, minimal profile).
+# Rust (rustup, minimal profile). At least the cargo that wrote bench/server/rust/Cargo.lock: current hyper-util and
+# syn are edition 2024, which a 1.79 cargo cannot even parse.
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.79.0
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.97.1
 ENV PATH="/opt/cargo/bin:${PATH}"
 
 # KR-243's tokio arm: its crates, fetched once here from the committed lock, so a server run needs no network.
