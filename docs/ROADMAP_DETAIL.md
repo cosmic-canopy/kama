@@ -468,10 +468,98 @@ check, while macOS and Linux passed. Their gate now says what they need, `@compi
 is the defect: the target catalog's comment (`catalogTargets`) states that which configurations `kama check` covers must not depend on
 the machine asking, and alphabetical order chose bare metal for a gate written with desktops in mind.
 
-**A ruling is owed** on the cover of a negated gate: every catalog OS it admits (the honest answer, at the cost of more
-analyses), a fixed host-independent order with hosted targets first, or a refusal of a gate whose cover is ambiguous.
-Rust's `cargo check` judges only the target asked for; Go's `go vet` the same, per `GOOS`. kama's covering check is
-what makes a gated declaration's errors visible at all, so the answer should keep that and lose the host.
+**Reproduced on macOS (2026-10-27, `0.9.750`)** with the mirror gate, so no Windows host is needed to probe it:
+
+```kama
+import { std::concurrent::Fiber, std::concurrent::join };
+@compileFor(!OS_MACOS) fn int32 platform() { return 1; }
+@compileFor(OS_MACOS)  fn int32 platform() { return 1; }
+fn int32 work(int32 n) { return n; }
+fn uint8 main() {
+    Fiber<int32> f = spawn fiber work(n: 41);
+    return cast<uint8>(join(fiber: give f) + platform());
+}
+```
+
+```
+main.kama:12:21: error: `spawn fiber`: fibers on bare metal are not built yet (KR-233)  [--target EMBEDDED]
+kama: main.kama FAILED (2 configurations, 1 error)
+```
+
+The same file passes on Linux and Windows, where `!OS_MACOS` is active by default. A hosted program that only reads
+files passes under the bare-metal cover too (std's file calls analyze for `EMBEDDED`), so the defect bites where the
+analysis itself refuses bare metal: fibers today, and whatever else KR-233's row later refuses there.
+
+**What others do.** None of them has a covering check, so none has this question:
+
+| | What a check judges | Code behind an inactive condition |
+|---|---|---|
+| Rust `cargo check` | the one target asked for (`--target`) | `#[cfg(not(windows))]` items unchecked on Windows |
+| Go `go vet` | one `GOOS`/`GOARCH` | files with a `//go:build !windows` constraint skipped |
+| Swift | the one platform being built | an inactive `#if os(…)` branch is parsed only |
+| C# | the one configuration | an inactive `#if` region is not compiled |
+| Zig | the one target; analysis is lazy | an unreached `if (builtin.os.tag != .windows)` branch unanalyzed |
+| **kama `kama check`** | the default **and** one configuration per gate the default leaves inactive | judged, once, under a configuration that activates it |
+
+kama's cover exists so a gated declaration's errors are visible at all (SPEC *Conditional compilation*). The question is only which
+configuration activates a gate when several can.
+
+**The options.**
+- **(a) Every catalog OS the gate admits.** `!OS_MACOS` would be judged as Linux, Windows, wasm and bare metal, on
+  every host: four more analyses for one gate, and any fiber program with a negated OS gate refused everywhere until
+  it adds `HOSTED` and `!OS_EMSCRIPTEN`. It changes the contract from "each gate active once" to "each gate under
+  every target it admits", which is a different and much larger promise.
+- **(b) A fixed order, hosted targets first.** The built-in names are tried in one written order, `LINUX`, `MACOS`,
+  `WINDOWS`, `WASM`, `EMBEDDED`, instead of `std::map`'s alphabetical one, so a gate reaches bare metal only when
+  nothing hosted activates it (`OS_NONE`, `!HOSTED`). `!OS_WINDOWS` from Windows is then judged as Linux, and
+  `!OS_MACOS` from a Mac as Linux. Probed by reading the solver: "the configuration with the fewest differing flags"
+  is **not** a fix, because leaving macOS for bare metal changes three flags (`OS_MACOS`, `OS_NONE`, `HOSTED`) and
+  leaving it for Linux four (the ABI moves too), so a nearest-flags rule still picks `EMBEDDED`.
+- **(c) Refuse a gate whose cover is ambiguous.** Every `!OS_X` gate becomes an error that asks for more literals. It
+  is hostile to the commonest gate in portable code.
+
+**Recommendation: (b).** It keeps the contract `kama check` documents (each gate made active once), costs no
+analysis the program does not already pay, and makes the choice among candidates a written order instead of a
+container's sort. It is consistent with practice: the covering check already made its candidate list host-independent (the
+catalog's arch-pinned triples), and this makes the choice among them so too. The default analysis remains the host's,
+which is inherent in a check that runs on a host: the catalog comment overclaims and is corrected with it.
+
+**Decisions for the ruling:**
+1. The built-in candidates are tried in a fixed order: `LINUX`, `MACOS`, `WINDOWS`, `WASM`, `EMBEDDED`. Declared
+   targets stay first, and the catalog's arch-pinned triples last, as today.
+2. `fiber_poller_wait` and `fiber_net_descriptor` keep `HOSTED` in their gate: they need it, whatever the cover.
+3. An xfail-free fixture under `tests/` gates a function `!OS_MACOS`, spawns a fiber outside it, and must pass
+   `kama check` on every host. Each CI host then proves the cover.
+4. `catalogTargets`' comment says what holds: the candidates and the order are host-independent, and the default is
+   the host's.
+
+<a id="s2-match-rvalue-move"></a>
+
+### A `match` on a call's result cannot move a payload out (KR-249)
+
+**Found 2026-10-27, probing KR-244's spelling** (`0.9.751`). A `match` whose subject is a call moves nothing out of it:
+
+```kama
+match (split(id: 20)) {
+    case Halves(reader: r, writer: w): { spawn fiber pumpIn(r: give r); … }
+};
+```
+
+```
+error: cannot `give` a borrowed `match` payload out of `match (x)` — it aliases the still-owned subject; consume the
+subject with `match (give x)` instead
+```
+
+The advice does not apply: nothing else owns a call's result, so the payload aliases nothing. Following it, `match (give
+split(id: 20))`, is refused with a message about moving out of a field or an element, which the subject is not. So the
+tree's idiom binds every result to a local first (`Result<TcpListener, IoError> rl = TcpListener.bind(…);` then
+`match (give rl)`), one line per match that says nothing. Rust's `match f() { Halves(r, w) => … }` moves out of the
+temporary; Swift's `switch f() { case let .halves(r, w): … }` does the same.
+
+**Recommendation:** a `match` on a call's result owns it, as `match (give x)` owns a local, so an arm may move a payload
+out, and the payloads it does not take drop at the arm's end; `give` on a call result is refused with a message that
+says a result needs no `give`. Size S: the subject's ownership is already decided for `match (give x)`, and this is the
+same for a subject that is not a place.
 
 <a id="s2-quoted-format"></a>
 
@@ -2248,6 +2336,85 @@ hold the same `TcpStream`.
 shares the mode and would need a second registration for one open file. The shape wants rulings after step 5 ships —
 owned or borrowed halves, a `reunite`, which half's drop closes the socket, and how a half crosses an isolate under
 decision 13's release rule.
+
+**The brief (2026-10-27, after step 5 shipped).** Rust's std has a fourth answer the table leaves out: `Read` and
+`Write` are implemented for `&TcpStream`, so two scoped threads share one stream through a shared reference, and even
+`set_read_timeout` takes `&self`. The socket's state is the kernel's, so a shared reference is sound there.
+
+What kama already fixes, read from the tree:
+- **A view cannot be a `spawn fiber` bundle** (`xfail/spawn_fiber_view_bundle`), and a fiber takes one bundle
+  (`xfail/spawn_fiber_two_args`). Halves borrowed as views, tokio's `split(&mut s)`, cannot reach two fibers.
+- **A `const ref` may be shared by several children, but `read`, `write` and the deadline setters change the stream's
+  fields** (`io`, `mode`, `readBy`, `writeBy`, `lib/std/net/net.kama` ~94). Rust's `&TcpStream` model would need them
+  behind interior mutability, and a `const ref` may cross to an isolate child, where that state would race.
+- **Each socket has one home scheduler** (decision 13): the isolate that next uses a socket takes it off the previous
+  one's queue. Two isolates using one socket at once would take it from each other, and a reader parked on the first
+  would never wake.
+- **Thread-per-core never migrates a connection.** A server's isolate accepts a connection and serves it to the end, so
+  both directions of a connection live on one isolate. tokio's halves are `Send` because its work-stealing runtime
+  moves tasks between threads; kama's fibers never leave their isolate.
+- **The house shapes for "one thing, two ends":** a `Channel` mints counted `Sender`s and `Receiver`s, the last holder
+  freeing the queue; `UnixStreamPair` lends its two ends in place; `Undelivered` hands a resource back as an enum
+  payload taken apart with `match`.
+
+**The options.**
+- **(a) Owned halves, fiber-local.** A consuming `split()` turns a stream into a `TcpReader` and a `TcpWriter`, each a
+  move-only resource that is **not** `Sendable`. The two share one counted record (the descriptor, its registration,
+  the mode); each keeps its own direction's deadline. Dropping the writer sends a FIN (`shutdown(Write)`), as tokio's
+  `OwnedWriteHalf` does; the last half to drop takes the socket off the scheduler and closes it. `reunite(reader:,
+  writer:)` gives the `TcpStream` back, which is `Sendable` again, and a pair from two streams is handed back unjoined.
+- **(b) Owned halves that cross isolates.** As (a), but `Sendable`, with a registration per direction: a reader's
+  interest on its isolate's poller and a writer's on another's. epoll and kqueue allow it, and AFD polls per
+  operation, but it replaces decision 13's one home with two, for a case thread-per-core does not produce.
+- **(c) Go's model: a counted second handle.** `s.share()` returns another `TcpStream` on the same socket and
+  registration, the socket closing with the last. One type and no `reunite`, but either handle may read, so two
+  readers interleave bytes, which is a footgun with no use, and a shared handle is `Sendable` by its type, which
+  brings (b)'s problem back as a run-time one.
+
+**Recommendation: (a).** It is the GOALS answer: the disjointness is in the types (a reader cannot write), as
+`parallel_for`'s disjoint views are, so no two fibers touch one object's fields and no interior mutability is needed
+(#3a–c); one split, one way (#4); and `split` and `reunite` are visible, greppable acts (#5). It is consistent with
+practice: thread-per-core keeps a connection on its isolate (decision 1), decision 13's one home holds unchanged, and
+the shared record is counted the way a channel's queue is.
+
+**The spelling, probed 2026-10-27 (`0.9.751`):** a call cannot return two resources, and kama has no tuple. The two
+shapes the tree already uses:
+
+```kama
+// 1. An enum payload, taken apart by `match`, as `Undelivered` hands back an item:
+TcpHalves h = split(stream: give conn);
+match (give h) {
+    case Halves(reader: r, writer: w): {
+        scope {
+            spawn fiber pumpIn(from: give r);
+            spawn fiber pumpOut(to: give w);
+        }
+    }
+};
+// 2. A pair resource whose ends leave by a `take`, as `UnixStreamPair`'s leave by `takeDescriptor()`:
+TcpHalves h = split(stream: give conn);
+spawn fiber pumpIn(from: h.takeReader());
+spawn fiber pumpOut(to: h.takeWriter());
+```
+
+Shape 1 builds and runs today with two stand-in resources: both halves move into two fibers and each drops once. It
+is the one with no empty state, where a second `take` in shape 2 would hand out an empty half. The probe found two
+things on the way. `Split` cannot name the enum, since std's string iterator `Split` is in every scope. And the
+subject must be a local today: `match (split(stream: give conn))` refuses to move a payload out of the call's result,
+which is KR-249. **The bytes:** a half
+is a pointer to the shared record and its own deadline, 16 bytes on a 64-bit target; the record is one allocation at
+the split, the descriptor, the registration pointer, the mode and a count, 24 bytes.
+
+**Decisions for the ruling:**
+1. Owned, fiber-local halves (a): `TcpReader` and `TcpWriter`, not `Sendable`.
+2. `split(stream: give s)` hands both back in one enum value, `TcpHalves::Halves(reader:, writer:)`, taken apart by
+   `match (give h)` (shape 1, probed).
+3. Dropping the writer sends a FIN. The last half to drop closes the socket, after taking it off the scheduler.
+4. `reunite(reader: give r, writer: give w)` returns the stream, or both halves back, unjoined, when they came from two
+   streams.
+5. Each half keeps its own direction's deadline: `setReadDeadline` on the reader, `setWriteDeadline` on the writer.
+6. `UnixStream` splits the same way in the same commit, as the platform rule wants one interface. Datagram sockets
+   (`UdpSocket`, `UnixDatagram`) have the same need, a receiving fiber beside a sending one, and take the same shape.
 
 <a id="s6-noheap-per-isolate"></a>
 
