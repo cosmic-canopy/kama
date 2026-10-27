@@ -326,7 +326,9 @@ static void chanTimed(void* a) {
     r = kama_channel_recv_timeout(chT, &v, 5000000000LL);
     if (r == 0) timedGot = v;
 }
-static void chanLate(void* a) { (void)a; kama_sched_sleep(40000000); int v = 26; (void)kama_channel_send(chT, &v); }
+// On Windows a fiber's timer resolves to the ~16 ms system tick until step 8, so the late send waits long enough to
+// hold several of the ticker's sleeps there, and a few are all the check needs.
+static void chanLate(void* a) { (void)a; kama_sched_sleep(100000000); int v = 26; (void)kama_channel_send(chT, &v); }
 static void chanTimedTicker(void* a) { (void)a; while (!timedGot) { timedTicks++; kama_sched_sleep(1000000); } }
 // 27. the last sender's close wakes every fiber parked in a receive.
 static void* chC; static int closedSeen;
@@ -349,7 +351,7 @@ static void chanStuffer(void* a) {
 }
 // 29. a fiber's join of an isolate parks it until the isolate's thread has ended, and the core runs a sibling meanwhile.
 static int isoRan, isoJoined, isoTicks;
-static void* isoChild(void* a) { (void)a; kama_sleep_ns(20000000); isoRan = 1; return NULL; }
+static void* isoChild(void* a) { (void)a; kama_sleep_ns(100000000); isoRan = 1; return NULL; }   // long, as 26's
 static void isoJoiner(void* a) { kama_isolate_join((kama_isolate_t)a); isoJoined = isoRan; }
 static void isoTicker(void* a) { (void)a; while (!isoJoined) { isoTicks++; kama_sched_sleep(1000000); } }
 
@@ -514,7 +516,7 @@ int fiber_sched_selftest(void) {
     kama_sched_detach(kama_sched_spawn(chanLate, 0, 0));
     kama_sched_detach(kama_sched_spawn(chanTimedTicker, 0, 0));
     kama_sched_run();
-    CHECK(26, timedOutOk && timedGot == 26 && timedTicks >= 10);
+    CHECK(26, timedOutOk && timedGot == 26 && timedTicks >= 3);
     chanEnd(chT, 1, 1);
 
     chC = chanOf(1);
@@ -537,7 +539,7 @@ int fiber_sched_selftest(void) {
     kama_sched_detach(kama_sched_spawn(isoJoiner, ih, 0));
     kama_sched_detach(kama_sched_spawn(isoTicker, 0, 0));
     kama_sched_run();
-    CHECK(29, isoJoined && isoTicks >= 5);
+    CHECK(29, isoJoined && isoTicks >= 3);
 
     childOut = 0;
     kama_fiber* c = kama_sched_spawn(child, (void*)(intptr_t)7, 0);
