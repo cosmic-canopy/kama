@@ -14,6 +14,11 @@ These hold before any number below is read.
   efficiency cores). Every server is pinned to 3 of them (`taskset -c 0-2`) and the load client to the other 3. The
   VM's vCPUs are not pinned to a core type, so a run may land on either kind; the interleaved protocol below is what
   makes a comparison between arms meaningful anyway.
+- **HTTP is not like for like; echo is.** The C and kama arms find where each request ends (`\r\n\r\n`) and write
+  a fixed reply. The tokio arm runs hyper, and Go and Node run their standard HTTP servers, which parse every request
+  line and header, build a request object and stamp a `Date` header. So the HTTP rows set a minimal handler against
+  full HTTP stacks, and the margins there are partly work the C and kama arms never do. The echo rows, where every
+  arm reads 64 bytes and writes them back, are the runtime comparison.
 - **Loopback, not a network.** Requests cross the kernel's loopback inside one VM: no NIC, no wire latency. It measures
   what a server spends per request and how it schedules, not a network stack.
 - **Where several arms meet the C arm's rate, the client is the limit.** At 100 and 1,000 connections the C loop, the
@@ -167,15 +172,15 @@ within 0.5% in every config, faster in 3 to 9 of 15 rounds.
 - **Fibers against kama's isolate per connection:** 1.48 to 1.75 times the requests per second, and at 10,000
   connections a p99.9 of 117 ms for echo and 101 ms for HTTP where the thread per connection reached 1.07 s and 1.14 s.
   Memory per idle connection falls from 14.4 KiB to 8.4.
-- **Against Go:** faster in every config, 15 of 15 rounds each, by 3.6% (echo, 1,000 connections) to 41% (HTTP,
-  10,000).
-- **Against Node:** 2.3 to 3.9 times one Node process, and 7% to 39% faster than `cluster` with 3 workers, 15 of 15 in
-  each config.
+- **Against Go:** faster in every config, 15 of 15 rounds each: by 3.6% to 20% on echo, and by 34% to 41% on HTTP,
+  where Go runs a full HTTP server and kama a minimal handler (see the caveat above).
+- **Against Node:** 2.3 to 3 times one Node process on echo, and 7% to 15% faster than `cluster` with 3 workers, 15
+  of 15 in each config; the HTTP margins are larger and carry the same caveat.
 - **Against tokio's work-stealing runtime:** faster in five configs, by 5% to 11% (13 to 15 of 15 rounds); at echo
   with 1,000 connections the two are within the floor. At 10,000 connections its p50 is lower and its p99 and p99.9
   are 1.7 to 2.8 times the fiber arm's: a stolen task finishes sooner on average, and a starved one later.
 - **Against tokio's thread-per-core arm,** the closest shape: kama is 3% faster on HTTP at 100 and 1,000 connections
-  and 15% faster at 10,000 (15 of 15 each). On echo, tokio is 1.1% faster at 1,000 connections and 4.8% faster at
+  and 15% faster at 10,000 (15 of 15 each), hyper's full parse against kama's minimal one. On echo, tokio is 1.1% faster at 1,000 connections and 4.8% faster at
   10,000 (15 of 15), with a lower p99 and p99.9 (71 and 92 ms against 80 and 117) at 10,000. At 100 connections the two
   are within the floor.
 - **Memory per idle connection:** 8.4 KiB for the fiber arm, process baseline included, beside 8.2 for Go and 8.5 for
