@@ -1,10 +1,12 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
-**Status: ruled 2026-10-28.** Decisions 1–6 and 8 as recommended (8 at 5%); decision 7 as revised, after the first
-recommendation rested on a false claim (§5). Decision 8 is measured on aarch64 (§6); x86-64 is pending. A design doc and
-a measurement come before any code, as [ROADMAP_DETAIL §9](../ROADMAP_DETAIL.md#s9-io-uring) asks. The measurement is
-decision 8, and it can close the row: if no arm clears its bar, kama keeps epoll on Linux and this file records why, as
-Go's maintainers concluded for Go. This file builds on [fibers.md](fibers.md), whose decisions it cites by number, and
+**Status: building, decisions 9–11 owed.** Decisions 1, 3–6 and 8 are ruled as recommended, with 8's bar at 5%.
+Decision 7 is ruled as revised, after the first recommendation rested on a false claim (§5). Decision 8 is measured on both machines
+(§6). Both directions through the ring, (b′), clears the bar on aarch64. On x86-64 it misses in one cell, 10,000
+connections on one core with 4 KiB replies, where it saves 2%. On those numbers the maintainer ruled, on 2026-10-28, to
+build (b′) (decision 2, re-ruled), for the most performance kama can have without giving up correctness or safety. What
+the build needs ruled before its first step is decisions 9–11, and the build itself is §8. A design doc and a
+measurement came before any code, as [ROADMAP_DETAIL §9](../ROADMAP_DETAIL.md#s9-io-uring) asks. This file builds on [fibers.md](fibers.md), whose decisions it cites by number, and
 is deleted when the work ships or closes. Facts about other runtimes were read from their source or their maintainers'
 own words on 2026-10-28 (*Sources*). Kernel versions are from the liburing man pages. Every proposed spelling is a `kama
 fragment`.
@@ -126,6 +128,11 @@ A further shape, submitting every `send` to the ring without trying the system c
 of the `io_uring_enter`. That trades a system call for a park and a switch on every write, since the fiber must wait
 for the kernel to let go of its buffer. Decision 8 measures it as (b′).
 
+**Re-ruled 2026-10-28: (b′),** on both machines' measurements (§6). It is the only shape that clears the bar anywhere,
+and (b) fails it on aarch64. A stream read makes its system call first and submits a `RECV` only once that would block,
+or after a read came back short. Every stream write is a `SEND`. `POLL_FIRST` stays off: it helps at 10,000 connections
+on one core and costs at 1,000 on both machines, and a core of servers.md's 10,000-connection run holds about 3,300.
+
 ### Decision 3 — the buffer is the caller's, and a fiber leaves a wait only when the kernel has let go
 
 **Recommended:** a read or write submitted to the ring names the caller's buffer, exactly as the system call does.
@@ -219,6 +226,48 @@ only when it beats the reference's run against itself in 12 of 15 rounds).
 If (b) clears the bar, the kama build is: the arm in `kama_sched.h` (setup, probe, submission and completion), the
 cancel-and-drain path, the fallback, and the server benchmark rerun with both arms.
 
+### Decision 9 — every other wait goes through the ring too, as a poll
+
+A stream's read and write are operations (decision 2). Everything else a fiber waits on is readiness: `accept`, a
+`connect` resolving, a datagram, `sendFile`, the readiness poll std offers, and the remote waker's eventfd.
+
+**Recommended:** on the ring arm, each of those is a one-shot `POLL_ADD` that the waiting fiber submits. The waker is one
+multishot `POLL_ADD` on its eventfd. A scheduler on the ring then has one wait, `io_uring_enter`, and no epoll set beside
+it.
+- The alternative keeps epoll for readiness and polls its descriptor through the ring. That is two queues in one
+  scheduler, one nested in the other, to serve waits that are once per connection or off the request path.
+- **The cost is ring-poll's, on these waits only:** a submission per wait, where an edge registration is made once. That
+  is level at 1,000 connections and below, and 20% more CPU at 10,000 on one x86-64 core (§6). No stream read or write
+  pays it. A datagram server is the case that would, and `RECVMSG`/`SENDMSG` through the ring is its own measurement
+  (§7).
+
+### Decision 10 — every submission belongs to a parked fiber that waits for its own completion
+
+**Recommended:** the one rule that makes the ring safe, held by construction rather than by a drain pass.
+- An operation's record lives on the stack of the fiber that submits it, and its completion's `user_data` is that
+  record's address. The fiber parks until the completion has arrived. Nothing else ends the wait: any other wake while
+  the operation is in flight is absorbed, since a wake is a hint.
+- A deadline that passes submits an `ASYNC_CANCEL`. Its own completion names no record and is ignored. The fiber keeps
+  waiting for the original operation's completion, and returns the original result when the kernel finished first
+  (decision 3).
+- So a completion never names freed memory, and a buffer is never the caller's again while the kernel holds it. A
+  scheduler ends only after its fibers have, so nothing is in flight when its ring closes. This covers a `POLL_ADD` too.
+  It holds no buffer, but its completion names its waiter.
+- A socket cannot close or move while a fiber is parked on it, because the parked fiber borrows it (decision 5). A
+  debug build checks that no record is in flight when a registration is released.
+
+### Decision 11 — a write parks, and its bytes leave at the turn's `io_uring_enter`
+
+This is (b′)'s cost that decision 8 could not count. A `SEND` is submitted when its fiber parks, and the ring sees it at
+the scheduler's next `io_uring_enter`. That happens when no fiber is ready, and every `KAMA_SCHED_POLL_EVERY` (61)
+fiber runs while fibers are ready. So a reply can wait for up to 61 other fibers' runs. A handler that makes several
+writes per response pays a park for each.
+
+**Recommended:** build it as measured, and let the server benchmark judge it (§8 step 4). The kama arm runs on both arms
+in the same rounds, and the ring arm must hold p99 latency within the epoll arm's noise at every config. If it does not,
+the remedy is decided on that measurement. Options include entering the ring sooner while a turn runs long, or making
+the system call first for a write too, which is (b) for writes. Neither is built ahead of the number.
+
 ## 6. Measurements (decision 8)
 
 ### aarch64: the M4 VM, kernel 7.0.9, 15 rounds (2026-10-28)
@@ -258,8 +307,33 @@ What the harness does not count, and what decides whether (b′)'s margin surviv
   not where the cost is, but a ring arm would wait with a minimum batch (`min_wait_usec`, 6.13) only if a measurement
   shows it pays.
 
-**Pending:** the same run on x86-64 (the maintainer's KVM box). If it agrees, decision 2's choice moves from (b) to
-(b′), which parks a fiber on every write, and that is the maintainer's ruling to make on both machines' numbers.
+### x86-64: an i9-13900K in a QEMU/KVM guest, kernel 6.17, 15 rounds (2026-10-28)
+
+`bench/uring/run.sh` run natively, without the container. The raw rows are in
+[benchmarks/uring-x86-64.tsv](../benchmarks/uring-x86-64.tsv). Each cell gives the median ratio against `et`, then the
+rounds in which the arm used less CPU. `et#2` is 0.99–1.02. Rounds differ more here than on the M4: the CPU mixes
+performance and efficiency cores, and the guest cannot see which one it is on.
+
+| arm | 100, 64 B | 1,000, 64 B | 1,000, 4 KiB | 10,000, 64 B | 10,000, 4 KiB | the 5% bar |
+|---|---|---|---|---|---|---|
+| ring-poll (a) | 0.97 · 9 | 0.99 · 8 | 1.04 · 7 | 1.21 · 0 | 1.20 · 0 | no |
+| ring-op (b) | 0.93 · 12 | 0.85 · 14 | 0.86 · 15 | 0.93 · 12 | 0.97 · 13 | no: 3% at 10,000, 4 KiB |
+| ring-op-pf | 0.94 · 10 | 0.93 · 12 | 0.94 · 14 | 1.00 · 9 | 1.00 · 9 | no |
+| ring-send (b′) | **0.79 · 14** | **0.76 · 14** | **0.81 · 14** | **0.93 · 13** | 0.98 · 12 | no: 2% at 10,000, 4 KiB |
+| ring-send-pf | 0.82 · 15 | 0.87 · 13 | 0.90 · 14 | 0.91 · 12 | 0.92 · 11 | no: 11 rounds at 10,000, 4 KiB |
+| ring-multishot (c) | 0.95 · 11 | 0.98 · 10 | 1.00 · 7 | 1.16 · 1 | 1.18 · 0 | no |
+
+What it says, against the M4:
+- **(b′) saves the same 19–24% at 1,000 connections and below.** At 10,000 on one core it saves 7% with 64-byte replies
+  and 2% with 4 KiB, against 8–9% on the M4. The 4 KiB cell is the only one where it misses the bar on either machine.
+- **Readiness through the ring costs more here:** 20–21% more CPU at 10,000 connections, where the M4 measured 4–5%.
+  Kernel-chosen buffers cost 16–18% more there. Only operations through the ring pay.
+- **(b) holds at 10,000 with 64-byte replies here (0.93),** where it cost 6% more on the M4.
+- **`POLL_FIRST` has the same shape as on the M4:** it helps at 10,000 and costs at 1,000.
+- **The densities bracket the real one.** The harness runs 10,000 connections on one thread. servers.md's thread-per-core
+  run spreads 10,000 over 3 cores, about 3,300 a core, between the harness's two densities.
+
+On both machines' numbers, decision 2 is re-ruled to (b′).
 
 ## 7. What is out of scope here
 
@@ -273,6 +347,39 @@ What the harness does not count, and what decides whether (b′)'s margin surviv
   tagged with the current credentials (`IORING_REGISTER_PERSONALITY`), when they change.
 - **Windows** completion I/O (IOCP) is KR-3 step 8, for the operations readiness cannot serve.
 - **Zero-copy send** (`SEND_ZC`, 6.0) pays for large sends, not 64-byte echoes.
+- **Datagrams through the ring** (`RECVMSG`, `SENDMSG`). Decision 9 has a datagram socket wait with a poll. A datagram
+  server, such as DNS or QUIC, would pay that poll on every packet, so moving its operations onto the ring is a
+  measurement of its own.
+
+## 8. The build
+
+Each step is one commit, with fixtures on native Linux. The ring arm runs by default wherever the kernel allows it, so
+the native suite on Linux runs the ring. A container leg falls back to epoll, because Podman refuses io_uring, so the
+sanitizer leg runs epoll.
+1. **The arm, readiness only.** `kama_sched` grows a ring beside the epoll arm, chosen when the scheduler is made
+   (decisions 1, 6 and 7). The work in this step:
+   - the probe, and `KAMA_IO_URING=0`;
+   - the waker's multishot poll;
+   - `kama__sched_wait` as `io_uring_enter` with `EXT_ARG` timeouts;
+   - every `kama_sched_io_wait` as a one-shot `POLL_ADD`, under decision 10's rule.
+
+   Std is unchanged, so the whole fiber corpus runs on the ring as shape (a). A new guard checks both arms:
+   - `tools/check-io-uring.sh` runs the fiber and socket fixtures under `KAMA_IO_URING=0` as well.
+   - On a kernel that allows the ring, it checks that a fiber program holds an `anon_inode:[io_uring]` descriptor, and
+     that it holds none under `KAMA_IO_URING=0`.
+
+   [targets.md](../targets.md) lists the variable.
+2. **Stream reads as `RECV`** (decision 2). One C entry, `kama_net_read`, carries a stream read's whole protocol. Std's
+   `TcpStream.read` and `UnixStream.read` call it in place of their loop. On the ring arm, a read that would block, or
+   follows a short one, becomes a `RECV` into the caller's buffer. A passed deadline cancels it, and the fiber waits for
+   the kernel to let go (decision 3), with a fixture for each.
+   - A build with MemorySanitizer unpoisons what a `RECV` wrote, since the kernel's write is invisible to it.
+3. **Stream writes as `SEND`**, through `kama_net_write`, with `MSG_NOSIGNAL` as `kama_send` sets it.
+4. **The server benchmark on both arms, in the same rounds.** `kama-fibers` runs on the ring and `kama-fibers-epoll`
+   under `KAMA_IO_URING=0`. The harness records which arm each run used, from `/proc/<pid>/fd`. The benchmark is rerun on
+   the x86-64 box, natively, and on the M4 VM, which needs the container's seccomp and SELinux relaxed as `bench/run
+   uring` does. It is judged on CPU per request, requests per second and p99 (decision 11). Then servers.md is updated,
+   the row closes, and this file is deleted. Its record goes to SPEC.md, targets.md and servers.md.
 
 ## Sources
 

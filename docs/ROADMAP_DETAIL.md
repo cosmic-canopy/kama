@@ -3111,7 +3111,11 @@ fiber's park per write (about 25–50 ns) is counted. **Measured on x86-64, 2026
 ([benchmarks/uring-x86-64.tsv](benchmarks/uring-x86-64.tsv); the i9-13900K KVM guest, kernel 6.17, 15 rounds): no arm
 clears the bar. Both directions saves 19–24% at 1,000 connections and 7% at 10,000 with 64-byte replies, but only 2% with
 4 KiB replies. Its POLL_FIRST variant saves 8% there, but in only 11 of 15 rounds. Reads through the ring save 14–15% and 3–7%.
-**Owed:** decision 2 is ruled again on both machines' numbers.
+**Ruled 2026-10-28: build it,** reads and writes both through the ring (decision 2, re-ruled), for the most
+performance kama can have without giving up correctness or safety. io_uring.md lists what is owed:
+- decisions 9–11: the waits that are not a stream's read or write, the rule that makes every submission safe, and the
+  latency a write's park costs;
+- then four steps (§8), ending in the server benchmark run on both arms in the same rounds.
 
 <a id="s9-fiber-memory"></a>
 
