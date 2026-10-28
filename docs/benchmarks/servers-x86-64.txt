@@ -1,0 +1,4 @@
+6.17.0-22-generic
+Model name:                              13th Gen Intel(R) Core(TM) i9-13900K
+16
+kvm
