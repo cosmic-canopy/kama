@@ -1,11 +1,12 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
-**Status: proposed 2026-10-28, eight decisions owed.** A design doc and a measurement come before any code, as
-[ROADMAP_DETAIL §9](../ROADMAP_DETAIL.md#s9-io-uring) asks. The measurement is decision 8, and it can close the row: if
-no arm clears its bar, kama keeps epoll on Linux and this file records why, as Go's maintainers concluded for Go.
-This file builds on [fibers.md](fibers.md), whose decisions it cites by number, and is deleted when the work ships or
-closes. Facts about other runtimes were read from their source or their maintainers' own words on 2026-10-28
-(§ *Sources*). Kernel versions are from the liburing man pages. Every proposed spelling is a `kama fragment`.
+**Status: ruled 2026-10-28.** Decisions 1–6 and 8 as recommended (8 at 5%); decision 7 as revised, after the first
+recommendation rested on a false claim (§5). Next is decision 8's harness. A design doc and a measurement come before
+any code, as [ROADMAP_DETAIL §9](../ROADMAP_DETAIL.md#s9-io-uring) asks. The measurement is decision 8, and it can close
+the row: if no arm clears its bar, kama keeps epoll on Linux and this file records why, as Go's maintainers concluded
+for Go. This file builds on [fibers.md](fibers.md), whose decisions it cites by number, and is deleted when the work
+ships or closes. Facts about other runtimes were read from their source or their maintainers' own words on 2026-10-28
+(*Sources*). Kernel versions are from the liburing man pages. Every proposed spelling is a `kama fragment`.
 
 ## 1. The problem
 
@@ -47,9 +48,10 @@ are built on it. The question this file answers is whether that lever is real fo
 
 Three things in that table decide the shape of kama's answer:
 - **A fallback is not optional.** Seastar and monoio fall back to epoll; glommio and tokio-uring fail. io_uring is
-  blocked by default in Docker since 25.0 (`EPERM`), in Podman (`ENOSYS`), in containerd 2.0 and in gVisor. Google disables it on ChromeOS and its production servers and makes it
-  unreachable to Android apps, after 60% of the kernel exploits submitted to its kCTF program in a year went through
-  it. Since 6.6 a sysctl, `kernel.io_uring_disabled`, turns it off for a whole machine.
+  blocked by default in Docker since 25.0 (`EPERM`), in Podman (`ENOSYS`), in containerd 2.0 and in gVisor. Google
+  disables it on ChromeOS and its production servers and makes it unreachable to Android apps, after 60% of the kernel
+  exploits submitted to its kCTF program in a year went through it. Since 6.6 a sysctl, `kernel.io_uring_disabled`,
+  turns it off for a whole machine.
 - **The ones that lead try the system call first.** Seastar and glommio use the ring only once a call would block.
   That is kama's protocol already.
 - **Owned buffers are a stackless runtime's workaround, not io_uring's requirement.** A future can be dropped at any
@@ -166,13 +168,31 @@ the latency gains the kernel's own commits report rest on it. A kernel older tha
 - **No liburing.** kama ships headers, not libraries, and the ring is three system calls and two mapped regions. The arm
   is written against `<linux/io_uring.h>` and `syscall(2)`, as Zig's is.
 
-### Decision 7 — which arm ran is observable without a new API
+### Decision 7 — turning the ring off, and seeing which arm ran
 
-A runtime that falls back silently can measure epoll while its author believes it measures io_uring. **Recommended:**
-no new surface, since the arm is an implementation choice. The ring is visible to the OS: a process running it holds
-an `anon_inode:[io_uring]` descriptor in `/proc/<pid>/fd`, and the server benchmark records which arm each kama run
-used from there. An override that forces epoll is this decision's open question: monoio has an environment variable,
-and kama has no runtime environment variable for its own behaviour today.
+io_uring's record is why every runtime that falls back also lets an operator turn it off: libuv turned its SQPOLL
+ring off by default for behaviour that "wasn't providing consistent behaviour … depending on kernel versions, load
+shape", and Node turned io_uring off by default in 20.11.1 after CVE-2024-22017. In an incident, an operator needs it
+off for one process without a rebuild.
+
+| runtime | turning the ring off for one process, without a rebuild |
+|---|---|
+| libuv / Node | `UV_USE_IO_URING`; Node defaults it off since 20.11.1 |
+| monoio | `MONOIO_FORCE_LEGACY_DRIVER`, or the program picks a driver in code |
+| Seastar | the `--reactor-backend=epoll` option every Seastar application takes |
+| Netty | the program picks the transport in code |
+| glommio, tokio-uring | none, and no fallback |
+| any process | seccomp (a container's profile, a systemd filter), or the machine-wide `kernel.io_uring_disabled` (6.6) |
+
+**Ruled 2026-10-28: `KAMA_IO_URING=0`** turns the ring arm off. It is read once, when a scheduler is made, and listed
+in [targets.md](../targets.md) beside `KAMA_LOG`, std::log's filter, which is the runtime's existing environment
+variable for its own behaviour. The default is on. Neither value changes what a program does, only which kernel
+interface carries its I/O, as `KAMA_LOG` changes only what is printed. The first recommendation, no switch, said kama
+had no such variable; `KAMA_LOG` is one.
+
+**Which arm ran is visible to the OS**, with no new API: a process running the ring holds an `anon_inode:[io_uring]`
+descriptor in `/proc/<pid>/fd`, and the server benchmark records which arm each kama run used from there. A runtime
+that falls back silently could otherwise measure epoll while its author believes it measures io_uring.
 
 ### Decision 8 — the measurement that decides, before any kama code
 
@@ -189,7 +209,7 @@ only when it beats the reference's run against itself in 12 of 15 rounds).
   passes it for `WRAP` runs.
 - **The bar:** an arm is built only if it beats `epoll-et` on CPU per request by at least 5% at 1,000 and 10,000
   connections, on both machines. Below that, a second Linux arm is maintenance without a return, and this row closes
-  with the measurement. The threshold is the maintainer's to set.
+  with the measurement. Ruled 2026-10-28 at 5%.
 
 If (b) clears the bar, the kama build is: the arm in `kama_sched.h` (setup, probe, submission and completion), the
 cancel-and-drain path, the fallback, and the server benchmark rerun with both arms.
@@ -199,6 +219,11 @@ cancel-and-drain path, the fallback, and the server benchmark rerun with both ar
 - **Regular files and DNS** stay on KR-3 step 7's offload pool, which every OS needs. io_uring reads regular files
   without blocking, and could serve them on Linux later; libuv moved its file operations back to the threadpool in
   1.49 after inconsistent results, so that too would be its own measurement.
+- **No operation whose permission check reads the caller's credentials goes through the ring.** A ring keeps the
+  credentials of the thread that made it, so after a `setuid()` its operations still run with the old ones: that was
+  CVE-2024-22017, in libuv's file operations. `recv`, `send`, `accept` and `connect` on a descriptor already open run
+  no such check. A later file arm (`open`, `unlink`, `rename`) would need the ring remade, or its operations
+  tagged with the current credentials (`IORING_REGISTER_PERSONALITY`), when they change.
 - **Windows** completion I/O (IOCP) is KR-3 step 8, for the operations readiness cannot serve.
 - **Zero-copy send** (`SEND_ZC`, 6.0) pays for large sends, not 64-byte echoes.
 
