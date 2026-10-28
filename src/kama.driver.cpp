@@ -13152,7 +13152,7 @@ int main(int argc, char** argv)
             cFileUnit[cPath] = unitPaths[0];
             if (transpileUnitToFile(units[0], unitPaths[0], cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread) != 0) return 1;
             cFiles.push_back(cPath);
-        } else if (release && !wasm) {
+        } else if (release) {
             // UNITY release build: fold every unit into ONE translation unit (the same merge the
             // `transpile` command uses) instead of per-module .c files. kama has no incremental object
             // cache — a build already hands all .c to a single clang invocation — so the multi-file split
@@ -13160,8 +13160,13 @@ int main(int argc, char** argv)
             // a stdlib call (a `std::math` Vec4 op, a collection accessor) into the user's hot loop, so
             // numeric code stays out-of-line and never auto-vectorizes. One TU lets clang inline + vectorize
             // it, landing hot math at C parity (measured ~6×→1× on the `math` bench; LTO across separate TUs
-            // recovers only part of it). Debug keeps per-module .c for faithful
-            // stepping; wasm keeps its own path.
+            // recovers only part of it). Debug keeps per-module .c for faithful stepping.
+            //
+            // wasm too (KR-252, 0.9.755). It kept per-module .c until then, with no reason recorded, and paid
+            // for it: the `math` bench ran 2.46 times slower under node (116.4 against 47.4 ms, 15/15 rounds
+            // interleaved) in a .wasm 21% larger (2,487 against 1,960 bytes), since binaryen's post-link
+            // inlining does not recover what clang never saw. emcc already compiled every unit in ONE
+            // invocation (the -j clamp below), so the fold costs no parallelism there.
             std::string cPath = genDir + "/" + baseName(stripExtension(outPath)) + ".c";
             genFiles.push_back(cPath);       // before the call that writes it — see the single-unit note
             if (transpileProgramToSingleFile(units, unitPaths, cPath, emitLines, &needsLibm, &needsNetWeb, &needsApp, &needsPthread) != 0) return 1;
@@ -13873,7 +13878,7 @@ int main(int argc, char** argv)
         }
         // Clamped to 1 — i.e. today's single invocation, byte for byte — when splitting cannot pay:
         //
-        //  * nothing to split (one input: an import-free program, or a --release native unity build).
+        //  * nothing to split (one input: an import-free program, or a --release unity build).
         //  * wasm: emcc's Python startup makes per-TU spawning far costlier than clang's.
         //    ⚠️ This used to give a second reason — that emcc's link settings (`--js-library`,
         //    `-sEXPORTED_RUNTIME_METHODS`, `-sEXIT_RUNTIME`) sat in the COMPILE flags, so a per-TU

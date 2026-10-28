@@ -7861,7 +7861,7 @@ and vendor HALs are a later milestone. A module `static hardware UnsafePtr<T>` l
 and module `static`s become plain zero-cost `static`s (one core = one isolate).
 
 Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.kama`), and emit **one
-`.c` per module** (faithful stepping, readable generated code). A **`--release`** native build instead folds
+`.c` per module** (faithful stepping, readable generated code). A **`--release`** build, native or wasm, instead folds
 every module into **one unity translation unit** so the C compiler can inline across module boundaries — a
 `std::math` operator or a collection accessor inlines into the caller's hot loop and then auto-vectorizes,
 which is what lands numeric code at C parity (kama has no incremental object cache, so a build already compiles

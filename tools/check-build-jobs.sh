@@ -19,7 +19,8 @@
 #      one invocation at -j 1, and N+1 (N compiles + one link) above it. This is what catches a future
 #      refactor quietly routing -j 1 through the pool, which would cost the suite ~40% more CPU.
 #   4. `--release` NATIVE IS STILL ONE TU. Release folds every unit into a unity TU for cross-module
-#      inlining; if -j ever split that, the inlining (~6x on the math bench) would silently vanish.
+#      inlining; if -j ever split that, the inlining (~6x on the math bench) would silently vanish. So is
+#      `--release` wasm, counted by the C files its one emcc invocation is handed (2.46x on math, KR-252).
 #   5. DIAGNOSTICS ARE REPLAYED WHOLE AND IN SOURCE ORDER, and identically at every width — asserted as
 #      a byte-equality between two pool widths rather than by eyeballing, and without depending on any
 #      real compiler's message text.
@@ -192,6 +193,26 @@ else
 fi
 # --release native folds to ONE unity TU, so -j cannot split it however wide it is asked to go.
 invocations "release-j10" 1 -- --release -j 10
+
+# --release wasm folds the same way (KR-252, 0.9.755); before it, std::math ran 2.46 times slower there. wasm
+# always compiles in one emcc invocation, so the count above cannot see a fold; what can is the number of C files
+# that invocation is handed, which --keep-c leaves beside -o. The shim stands in for emcc, so no emsdk is needed.
+# The control is a debug wasm build of the same program, which keeps one C file per module: without it, a
+# --keep-c that kept nothing would count 0 and a broken count could read 1 for any build.
+wasm_c_files() {   # wasm_c_files <label> <extra kama args...> -> how many .c a --target wasm --keep-c build left
+    lab="$1"; shift
+    rm -rf "$tmp/count.$lab" "$tmp/w_$lab"; mkdir -p "$tmp/count.$lab" "$tmp/w_$lab"
+    COUNTDIR="$(kama_native_path "$tmp")/count.$lab"; export COUNTDIR
+    "$KAMA" build $MULTI -o "$tmp/w_$lab/w.js" --target wasm --keep-c --cc "$CCOUNT" "$@" >/dev/null 2>&1 || true
+    unset COUNTDIR
+    ls "$tmp/w_$lab" | grep -c '\.c$' || true
+}
+wasmDebug=$(wasm_c_files wasm-debug)
+wasmRelease=$(wasm_c_files wasm-release --release)
+if [ "$wasmDebug" -le 1 ]; then
+    bad "wasm-debug: $wasmDebug C file(s), expected one per module — the instrument cannot see a fold"
+elif [ "$wasmRelease" = 1 ]; then ok "wasm-release: one translation unit (a debug build of it has $wasmDebug)"
+else bad "wasm-release: $wasmRelease C files, expected 1 — a --release wasm build must fold like native"; fi
 
 # --- 5. diagnostics: whole, in source order, identical at every width --------------------------------
 # A --cc shim that emits a unique multi-line block naming its own -o, and fails for one chosen TU. This

@@ -3050,7 +3050,7 @@ rather than here, so there is one number to keep current. Forward work:
   loads the whole module by design: nothing pins a file, and seeding from the importing file's tokens would
   be unsound, since a type reached only through inference is never spelled.
 
-### Toward the fastest server runtime (KR-250, KR-252..255)
+### Toward the fastest server runtime (KR-250, KR-253..255)
 
 **Where it stands (2026-10-28, kama 0.9.753, [benchmarks/servers.md](benchmarks/servers.md)).** With the server
 saturated on 3 cores, kama's fibers (an isolate per core, a fiber per connection) are level with tokio's thread-per-core
@@ -3066,8 +3066,9 @@ thread-per-core arm were really 7.4% and 5.6%. kama 0.9.752 closed most of that 
 answer `EAGAIN` after a short read (tokio's rule; [design/fibers.md](design/fibers.md) decision 7), and 0.9.753 by
 prefetching the next fiber's saved frame. Asked on 2026-10-27 "what can we do to become the most performant overall?",
 the maintainer chose this order: measure what the benchmark leaves out and close the one measured gap first, then
-cross-module inlining, then an io_uring design. Cross-module inlining turned out to be in place for native already
-(KR-252, below), which narrowed that row to wasm.
+cross-module inlining, then an io_uring design. Cross-module inlining was in place for native already (a `--release`
+build folds the program into one translation unit, which beat ThinLTO 3.5 times on `math`); wasm gained the same fold
+in `0.9.755`, where `math` ran 2.46 times faster for it ([SPEC.md](SPEC.md) *Building & debugging*).
 
 **The field beyond the run.** The fastest servers today are io_uring thread-per-core runtimes (Seastar in C++,
 glommio and monoio in Rust), which complete I/O with fewer system calls than the epoll kama and tokio both use, and
@@ -3120,47 +3121,6 @@ and the same harness runs there unchanged.
 
 If the container will not start because of its descriptor limit (`--ulimit nofile=524288`), the user's hard limit is
 lower: `ulimit -Hn` shows it. Raise it in `/etc/security/limits.conf`, or use rootful docker.
-
-<a id="s9-wasm-unity"></a>
-
-#### A wasm release build compiles one C file per module (KR-252)
-
-**Filed as "ThinLTO for a release build" on 2026-10-27, on a premise that was false for native.** A native `--release`
-build has folded every module into ONE translation unit since `9e3b465a` (2026-07-22; [SPEC.md](SPEC.md) *Building &
-debugging*, `kama.driver.cpp`'s unity branch), so a std call already inlines into the program that makes it, and the
-server benchmark builds that way. That commit measured LTO against the fold on the `math` bench: one translation unit 3.13 ms,
-ThinLTO 11 ms, full LTO 8 ms, C 3.09 ms. LTO's cross-module inliner is more conservative than a real single unit, and
-all three link in about the same time. Native needs nothing here.
-
-**What other compilers do in a release build:**
-
-| compiler | the optimization unit of a release build |
-|---|---|
-| Swift | the whole module (`-wmo`, the release default) |
-| Zig | the whole program, always one unit |
-| Go | each package, inlining across packages through export data |
-| Rust | 16 codegen units per crate, thin local LTO; cross-crate inlining only for `#[inline]` and generics; fat LTO opt-in |
-| kama native | the whole program, one translation unit |
-
-**What is open: wasm.** `--release --target wasm` takes the per-module path (the unity commit says only "wasm keeps its
-path", with no reason recorded), at `-Oz`, the size tier, so a std call never inlines into the program in the C
-compiler. Binaryen's `wasm-opt` inlines small functions after the link, so the gap may be smaller than native's was;
-that is why this is a measurement. The CPU bench's wasm arm never saw it: `bench/scripts/build.sh` builds through `kama
-transpile`, which already folds the program into one file, at `-O3`.
-
-**Ruled 2026-10-28** (re-pointed from ThinLTO): measure the fold on wasm, and adopt it if it pays. It costs no build
-time, since wasm already compiles in one emcc invocation, and it gives every target one build model (GOALS #4).
-1. Probe first: does a `--release --target wasm` build of `bench/src/kama/math.kama` emit one C file per module, and is
-   a hot std call still a `call` in the `.wasm`?
-2. Build each `bench/src/kama/` program with `--release --target wasm` under the current compiler and under one that
-   folds, run each under `node --no-liftoff` interleaved over 15 rounds or more, and record the `.wasm` bytes and the
-   build time.
-3. Adopt if the std-heavy programs get faster and nothing regresses beyond the noise floor. A size increase of more
-   than a couple of percent goes back to the maintainer with the numbers. If nothing pays, the measurement is the
-   recorded reason wasm keeps its path, and this row closes.
-
-Not scheduled: LTO from kama into a package's vendored C (`csources`). Rust needs opt-in cross-language LTO for the
-same, and a C library's entry points are rarely inline candidates.
 
 <a id="s9-io-uring"></a>
 
