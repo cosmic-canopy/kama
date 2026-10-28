@@ -107,8 +107,9 @@ Three shapes. Decision 8 measures all three before one is chosen.
   measured this shape slower than epoll.
 - **(b) The operation through the ring, after the system call would block:** a parked read is a `RECV` into the
   fiber's own buffer, and a write that would block is a `SEND`. One `io_uring_enter` per turn submits every fiber's
-  operations and harvests their completions. A request whose reply fits the socket buffer still costs its two system
-  calls; the saving is in the turns where many fibers park.
+  operations and harvests their completions. A parked read's completion carries its data, so the `recv` that follows
+  every wake today disappears: an echo request costs its `send` and a share of one `io_uring_enter`, against a `recv`,
+  a `send` and a share of one `epoll_wait` today.
 - **(c) Kernel-chosen buffers:** a multishot `RECV` per socket (6.0) over a provided buffer ring (5.19). One submission
   serves every read for the socket's life, and data lands in a buffer the kernel picks. `read(into:)` then copies it
   into the caller's buffer, or the surface grows a borrowed-buffer read, which is a second way to read (GOALS #4). Netty
@@ -118,8 +119,9 @@ Three shapes. Decision 8 measures all three before one is chosen.
 the protocol, and is what Seastar does for `recvmsg` and `sendmsg`. (c) is the most system-call-thrifty shape and costs
 either a copy or a surface change, so it goes to the user as a measurement, not as a default.
 
-A further shape, submitting every `send` to the ring without trying the system call, would save the call when it
-succeeds immediately. That trades a system call for a fiber switch on every write. Decision 8 measures it as (b′).
+A further shape, submitting every `send` to the ring without trying the system call, leaves a request only its share
+of the `io_uring_enter`. That trades a system call for a park and a switch on every write, since the fiber must wait
+for the kernel to let go of its buffer. Decision 8 measures it as (b′).
 
 ### Decision 3 — the buffer is the caller's, and a fiber leaves a wait only when the kernel has let go
 
