@@ -573,6 +573,14 @@ static inline void kama__sched_turn(kama_sched* s) {
     kama_fiber* f = kama__sched_pop(s);
     if (f) {
         if (++s->ticks >= KAMA_SCHED_POLL_EVERY) { s->ticks = 0; kama__sched_wait(s, 0); }
+        // The next fiber's saved registers (kama__fiber_swap's 160 bytes) sit on its own stack, gone cold while every
+        // other ready fiber ran: fetch them now, so they arrive while this one runs rather than when that one starts.
+        // Measured (KR-251): 1.7% less CPU per request at 10,000 echo connections, none at 1,000, where they stay cached.
+        const kama_fiber* n = s->head;
+        if (n) {
+            const char* sp = (const char*)n->sp;
+            __builtin_prefetch(sp); __builtin_prefetch(sp + 64); __builtin_prefetch(sp + 128);
+        }
         kama_fiber_switch(&kama__fibers.root, f);
         if (f->done) {
             s->live--;
