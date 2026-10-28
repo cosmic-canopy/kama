@@ -11,6 +11,9 @@
 #                             run.sh's knobs (SLOTS, CONFIGS, CORES, WARMUP, SECONDS_, WRAP, SKEW_*, ALLOW_SLOW_CLOCK)
 #                             pass through when set; KAMA_B_TREE=<a worktree> builds that tree's compiler for the
 #                             `kama-fibers-b` arm; WRAP (perf, strace) gets the container what they need
+#   bench/run uring [out] [rounds]   KR-253's io_uring measurement (bench/uring/), out under .scratch/ by default; the
+#                             container gets seccomp unconfined and its SELinux label off, which io_uring needs; SLOTS
+#                             and CONFIGS pass through when set
 #   bench/run sh              interactive shell in the bench image
 #
 # Override the engine with KAMA_ENGINE=docker|podman.
@@ -33,6 +36,8 @@ server_args=()
 for v in SLOTS CONFIGS CORES WARMUP SECONDS_ WRAP SKEW_HOT SKEW_ROUNDS ALLOW_SLOW_CLOCK; do
   [ -n "${!v:-}" ] && server_args+=(-e "$v=${!v}")
 done
+uring_args=()   # KR-253 decision 8: io_uring needs seccomp unconfined and the SELinux label off (bench/uring/run.sh)
+for v in SLOTS CONFIGS; do [ -n "${!v:-}" ] && uring_args+=(-e "$v=${!v}"); done
 server_pre=""
 if [ -n "${KAMA_B_TREE:-}" ]; then   # the variant compiler, built inside the container from its own tree
   server_args+=(-v "$(cd "$KAMA_B_TREE" && pwd):/variant")
@@ -56,6 +61,9 @@ case "${1:-}" in
   server)      "$ENGINE" run --rm --ulimit nofile=524288:524288 --pids-limit=-1 ${server_args[@]+"${server_args[@]}"} \
                  -v "$ROOT:/work" -w /work "$IMAGE" \
                  bash -c "${server_pre}make -s kama >/dev/null && bash bench/server/run.sh ${2:-.scratch/bench-server.tsv} ${3:-15}" ;;
+  uring)       "$ENGINE" run --rm --ulimit nofile=524288:524288 --security-opt seccomp=unconfined --security-opt label=disable \
+                 ${uring_args[@]+"${uring_args[@]}"} -v "$ROOT:/work" -w /work "$IMAGE" \
+                 sh bench/uring/run.sh "${2:-.scratch/uring.tsv}" "${3:-15}" ;;
   sh|shell)    "$ENGINE" run --rm -it -v "$ROOT:/work" -w /work "$IMAGE" bash ;;
-  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|sh}" >&2; exit 2 ;;
+  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|uring [out] [rounds]|sh}" >&2; exit 2 ;;
 esac

@@ -164,7 +164,9 @@ socket moves only by value, and a socket with a parked fiber is borrowed by it.
 the latency gains the kernel's own commits report rest on it. A kernel older than 6.1 runs the epoll arm.
 - **The probe** is one `io_uring_setup` with those flags, then `IORING_REGISTER_PROBE` for each operation the arm
   uses. Any failure is "unavailable": `ENOSYS` (Podman's seccomp, or no io_uring), `EPERM` (Docker's seccomp, or the
-  sysctl), `EINVAL` (a kernel without the flags), or an operation missing from the probe.
+  sysctl), `EACCES` (an SELinux policy), `EINVAL` (a kernel without the flags), or an operation missing from the probe.
+  The `EACCES` was found by running it: on Podman's Fedora CoreOS machine (kernel 7.0.9), a container with seccomp
+  unconfined still gets `EACCES` from `io_uring_setup` until its SELinux label is disabled too.
 - **No liburing.** kama ships headers, not libraries, and the ring is three system calls and two mapped regions. The arm
   is written against `<linux/io_uring.h>` and `syscall(2)`, as Zig's is.
 
@@ -201,12 +203,14 @@ server per arm, no fibers, the same client, the same 15-round interleaved protoc
 only when it beats the reference's run against itself in 12 of 15 rounds).
 - **Arms:** `epoll-et` (today's protocol, including the short-read rule, the reference, run twice); `ring-poll` (a);
   `ring-op` (b); `ring-send` (b′); `ring-multishot` (c).
-- **Loads:** 64-byte echo at 100, 1,000 and 10,000 connections, and the 4 KiB raw-HTTP reply, on 3 server cores, as
-  servers.md.
-- **Measured:** requests a second, server CPU per request, system calls per request, p99.
+- **Loads:** 64-byte echo at 100, 1,000 and 10,000 connections, and the 4 KiB raw-HTTP reply at 1,000 and 10,000, on
+  one server thread: what one core of servers.md's thread-per-core server does.
+- **Measured:** server CPU per request (the thread, plus any io-wq worker the ring ran for it), system calls and ring
+  submissions per request. Latency waits for a kama arm in the server benchmark, where the request path is real.
+- **How:** `bench/run uring <out.tsv>`, then `python3 bench/uring/summarize.py <out.tsv>`, which applies the bar.
 - **Where:** the maintainer's x86-64 KVM box (KR-250's) and the M4 VM. The bench container needs
-  `--security-opt seccomp=unconfined` for any ring arm, since Podman refuses io_uring otherwise; `bench/run` already
-  passes it for `WRAP` runs.
+  `--security-opt seccomp=unconfined` and `--security-opt label=disable` for any ring arm, since Podman's seccomp
+  answers `ENOSYS` and Fedora's SELinux container type `EACCES`; `bench/run` already passes both for `WRAP` runs.
 - **The bar:** an arm is built only if it beats `epoll-et` on CPU per request by at least 5% at 1,000 and 10,000
   connections, on both machines. Below that, a second Linux arm is maintenance without a return, and this row closes
   with the measurement. Ruled 2026-10-28 at 5%.
