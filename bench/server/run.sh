@@ -11,6 +11,7 @@
 #   WARMUP, SECONDS_  the client's warm-up and measured window per run
 #   KAMA_B   a second compiler (a worktree holding one change): adds the arm `kama-fibers-b`, the fiber arm built with
 #            it, so a change is measured interleaved against the compiler this tree builds, in the same rounds
+#   ALLOW_SLOW_CLOCK=1  measure even where a kernel clock read is slow (see clockcost.c); otherwise run.sh refuses
 #   WRAP     a command the server runs under (`perf record -g -o /out/x.data --`, `strace -c -f -o /out/x.txt`): a
 #            profile of one arm on one config, through the same build and launch as a measurement
 #
@@ -35,6 +36,17 @@ ulimit -n "$(ulimit -Hn)" 2>/dev/null || ulimit -n 1048576 2>/dev/null || true
 # ---- build ---------------------------------------------------------------------------------------------------------
 cc -O2 -std=c11 -Wall -Wextra -Werror -pthread -o "$tmp/client" "$here/client.c"
 cc -O2 -std=c11 -Wall -Wextra -Werror -pthread -o "$tmp/c-server" "$here/c/server.c"
+if $linux; then   # a VM that traps the kernel's clock reads would be what this measures (clockcost.c)
+    cc -O2 -Wall -Wextra -Werror -o "$tmp/clockcost" "$here/clockcost.c"
+    over=$("$tmp/clockcost")
+    echo "run.sh: a kernel clock read costs ${over} ns over a plain system call here" >&2
+    if [ "$over" -gt 200 ] && [ -z "${ALLOW_SLOW_CLOCK:-}" ]; then
+        echo "run.sh: refusing to measure: the kernel's clock reads are trapped (more than 200 ns), so every server" >&2
+        echo "  would spend its time in the trap. A nested VM does this (docs/benchmarks/servers.md); ALLOW_SLOW_CLOCK=1" >&2
+        echo "  measures anyway." >&2
+        exit 3
+    fi
+fi
 avail="c"
 ROOT=$root; . "$root/tools/kama-bin.sh"   # the compiler built for THIS platform (bench/run builds it in the image first)
 if [ -x "$KAMA" ]; then

@@ -250,6 +250,31 @@ itself is wide (`c#2`), because each run's numbers depend on where the kernel pu
 | tokio-percore | 601,051 | 1442 | 3277 | 5243 | 3.81 | 100% | 3.2 | 0.963 | 5/15 | 1.011 | 5/15 |
 
 
+A third run, plain echo at 12 and 24 connections with no bursts (2026-10-28, the same arms, 15 rounds), separates the
+kernel's uneven placement from the bursts:
+
+### echo, 12 connections (no bursts)
+
+| arm | req/s | p50 µs | p99 µs | p99.9 µs | CPU µs / req | busy | RSS MiB | vs ref: req/s ratio | faster in | vs ref: CPU ratio | cheaper in |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| c | 240,576 | 47 | 119 | 164 | 3.00 | 73% | 1.3 | — | — | — | — |
+| c#2 | 240,721 | 47 | 119 | 172 | 2.98 | 72% | 1.3 | 0.998 | 6/15 | 1.004 | 7/15 |
+| go | 235,791 | 47 | 123 | 172 | 3.70 | 66% | 6.1 | 0.984 | 3/15 | 1.225 | 0/15 |
+| kama-fibers | 238,646 | 47 | 115 | 156 | 2.66 | 70% | 1.4 | 0.996 | 6/15 | 0.901 | 14/15 |
+| tokio | 230,886 | 49 | 111 | 148 | 3.60 | 69% | 2.4 | 0.961 | 1/15 | 1.196 | 0/15 |
+| tokio-percore | 236,219 | 47 | 115 | 148 | 2.83 | 70% | 2.4 | 0.981 | 3/15 | 0.958 | 14/15 |
+
+### echo, 24 connections (no bursts)
+
+| arm | req/s | p50 µs | p99 µs | p99.9 µs | CPU µs / req | busy | RSS MiB | vs ref: req/s ratio | faster in | vs ref: CPU ratio | cheaper in |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| c | 525,245 | 39 | 131 | 188 | 2.57 | 88% | 1.4 | — | — | — | — |
+| c#2 | 525,459 | 39 | 131 | 188 | 2.58 | 89% | 1.4 | 1.013 | 8/15 | 1.000 | 8/15 |
+| go | 434,132 | 47 | 148 | 328 | 2.61 | 68% | 6.3 | 0.826 | 0/15 | 1.018 | 0/15 |
+| kama-fibers | 551,071 | 37 | 123 | 164 | 2.30 | 88% | 1.5 | 1.043 | 11/15 | 0.893 | 15/15 |
+| tokio | 394,320 | 57 | 139 | 180 | 2.96 | 79% | 2.5 | 0.755 | 0/15 | 1.155 | 0/15 |
+| tokio-percore | 537,026 | 37 | 123 | 172 | 2.37 | 88% | 2.4 | 1.022 | 9/15 | 0.923 | 15/15 |
+
 ## What it says
 
 Only differences that hold in at least 12 of 15 paired rounds are stated. In every saturated config `c#2` sits within
@@ -276,7 +301,9 @@ Only differences that hold in at least 12 of 15 paired rounds are stated. In eve
   where the kernel's `SO_REUSEPORT` hash put the hot connections. A core holding one serves its other connections only
   between bursts, while another core waits. The stealing runtimes stay steady (tokio 182,000 to 189,000). From 100
   connections up, every core's queue is full and kama is ahead of work-stealing tokio: 12% at 100 connections, 9% with
-  1 ms bursts at 1,000, at a third of its p99 (3.4 ms against 11.0). KR-255 holds what to do about the low-load case.
+  1 ms bursts at 1,000, at a third of its p99 (3.4 ms against 11.0). Uneven placement alone costs nothing: with no
+  bursts, kama is level with Go and 3.3% ahead of work-stealing tokio at 12 connections, and 1.26 and 1.40 times them at
+  24 (15/15). It is the burst that holds a core, and KR-255 holds the answer (a job pool the burst is handed to).
 - **Against Go:** 1.21 to 1.30 times on echo, 1.21 to 1.28 times `go-raw` on HTTP, and 2.7 to 3.1 times `net/http`.
 - **Against Node:** 3.6 to 5.2 times one Node process on echo and 1.42 to 1.51 times `cluster` with 3 workers; on HTTP,
   7.9 to 8.5 times and 2.3 to 3.0 times, against Node's full `http`.
@@ -311,4 +338,6 @@ exec /opt/podman/bin/krunkit "$@"
 `SLOTS`, `CONFIGS`, `CORES`, `WARMUP`, `SECONDS_`, `SKEW_HOT` and `SKEW_ROUNDS` narrow a run, and the low-load skew runs
 used `SLOTS="c go tokio tokio-percore kama-fibers c#2"`. `KAMA_B_TREE=<worktree>` adds a `kama-fibers-b` arm built by
 that tree's compiler, for an A/B in the same rounds, and `WRAP` runs each server under `perf record` or `strace`. The
-raw rows are beside this file: `servers.tsv` (the main run), `servers-skew-100us.tsv` and `servers-skew-1ms.tsv`.
+raw rows are beside this file: `servers.tsv` (the main run), `servers-skew-100us.tsv`, `servers-skew-1ms.tsv` and
+`servers-echo-low.tsv`. On Linux, `run.sh` first measures what a kernel clock read costs (`clockcost.c`) and refuses to
+run where it is more than 200 ns, which a trapping VM is.

@@ -3081,11 +3081,44 @@ measured.
 The rest of what this row asked for is measured (servers.md, kama 0.9.753): raw-socket Go and tokio arms with the C and
 kama arms' minimal HTTP parse, beside the full stacks; a skewed load, saturated and at low load; and a client that is
 never the limit (5 client cores, and a `busy` column that shows the server's cores 99–100% busy). What is left: every
-number is aarch64 in a VM on an Apple M4. The maintainer's Linux box is a KVM guest, so it runs on the host's own CPU.
-If its host passes the hardware counters through, it can also count cache misses per request for KR-254. The run, with
-the box idle: `bench/run build-image` once (about 25 minutes), then `CORES=3 bench/run server .scratch/x86.tsv 15`
-(about 4 hours, or about 1 hour with `CONFIGS="echo:10000 http:10000 skew:12 skew:1000"`). Its tables join servers.md
-as their own section.
+number is aarch64 in a VM on an Apple M4. The maintainer's Linux box is a KVM guest, so it runs on the host's own CPU,
+and the same harness runs there unchanged.
+
+**The run, on the Linux box** (any x86-64 Linux with podman or docker will do):
+1. `git pull` on `dev`. It needs the harness from 2026-10-28 on: it prints what a kernel clock read costs and refuses
+   to measure where the reads are trapped (`bench/server/clockcost.c`), the failure that spoiled the first M4 run.
+2. Check the box. `uname -m` should say `x86_64` and `systemd-detect-virt` `kvm` or `none`. `nproc` should be at least
+   8: the server gets 3 cores and the client the rest, and the `busy` column shows if the client became the limit.
+   Note `lscpu | grep 'Model name'` for the write-up.
+3. Quiet it: no content work, no other containers (`podman ps` or `docker ps`), no builds.
+4. Build the image, once: `bench/run build-image` (about 25 minutes, about 4.5 GB).
+5. Run it where a closed terminal cannot end it (`tmux`, or `nohup … &`). The full run takes about 4 hours; the
+   second form takes about 1 hour and keeps the configs that decide something:
+   ```sh
+   CORES=3 bench/run server .scratch/x86.tsv 15
+   CORES=3 CONFIGS="echo:10000 http:10000 skew:12 skew:1000" bench/run server .scratch/x86.tsv 15
+   ```
+6. Look: `python3 bench/server/summarize.py .scratch/x86.tsv` should report no error runs, and `busy` should be 99–100%
+   for every arm but single-process Node.
+7. Hand it back through the repo: copy `.scratch/x86.tsv` to `docs/benchmarks/servers-x86-64.tsv`, write
+   `docs/benchmarks/servers-x86-64.txt` with the outputs of `uname -r`, `lscpu | grep 'Model name'`, `nproc` and
+   `systemd-detect-virt`, then commit both as `bench: x86-64 server run (raw rows)` and push. The next session writes
+   servers.md's x86-64 section from them and closes this row.
+8. Optional, for KR-254, if `ls /sys/bus/event_source/devices/` lists `cpu` (the host passes its hardware counters
+   through), count them for the fiber arm and for tokio's thread-per-core arm:
+   ```sh
+   sudo sysctl -w kernel.perf_event_paranoid=-1
+   for arm in kama-fibers tokio-percore; do
+     CORES=3 SLOTS=$arm CONFIGS=echo:10000 \
+       WRAP="perf stat -e cycles,instructions,cache-misses,dTLB-load-misses -o /work/.scratch/x86-perf-$arm.txt --" \
+       bench/run server .scratch/x86-perf-$arm.tsv 1
+   done
+   ```
+   Commit the two `.txt` files beside the TSV. A count covers the server's whole life; divided by the run's req/s
+   times 6 s, it is per request.
+
+If the container will not start because of its descriptor limit (`--ulimit nofile=524288`), the user's hard limit is
+lower: `ulimit -Hn` shows it. Raise it in `/etc/security/limits.conf`, or use rootful docker.
 
 <a id="s9-release-lto"></a>
 
@@ -3143,19 +3176,58 @@ A core holding a hot connection serves its others only between bursts, while ano
 80–88%). A work-stealing runtime moves the waiting tasks to the idle core. With 100 connections or more every core's
 queue is full, so stealing has nothing to do and its unfairness costs it.
 
-**What the thread-per-core runtimes do.** Seastar and glommio do not steal either. They tell a program to move
-CPU-heavy work off the reactor (Seastar's scheduling groups, glommio's executors with shares), and tokio has
-`spawn_blocking` for the same reason even though it steals. kama's isolates share nothing, so a parked fiber cannot
-move to another core, though its socket can (`TcpStream` is `Sendable`).
+**Placement alone costs nothing; the burst is the case.** Plain echo with no bursts, at 12 and 24 connections (15
+rounds, 2026-10-28; servers.md): kama is level with Go and 3.3% ahead of work-stealing tokio at 12 (15/15), and 1.26
+times Go and 1.40 times tokio at 24 (15/15). The kernel's uneven spread varies kama's runs (465,000 to 601,000 requests
+a second at 24 connections), but its slowest run there still beats tokio's fastest. Thread-per-core loses only when a
+burst holds a core.
 
-**Recommendation (a ruling is owed).**
-1. The job pool, KR-3 step 9: a fiber hands its burst to a pool of worker threads and parks until the job finishes,
-   and its core keeps serving the other connections. This answers the measured case directly, it is already planned,
-   and it costs the program one spelled-out call, as `spawn_blocking` does. Once step 9 lands, measure `skew:12` with
-   the burst offloaded.
-2. Load-aware placement (an eBPF `SO_REUSEPORT` program, or an acceptor that hands each new connection to the
-   least-loaded core) only if a measured case with even per-request cost shows connection-count imbalance hurting. It
-   cannot help here: the hash cannot know which connection will be hot.
+**What other runtimes do**, about a burst inside a request and about where a connection runs:
+
+| runtime | a CPU burst in a request | where a connection runs |
+|---|---|---|
+| Go | preempted after 10 ms; other Ps steal the goroutines waiting behind it | any P, stolen |
+| tokio (multi-thread) | `spawn_blocking` or rayon by convention; otherwise other workers steal the queued tasks | any worker, stolen |
+| Java virtual threads | runs on its carrier; the ForkJoinPool steals the others | any carrier, stolen |
+| Seastar | stays on its shard; a task quota makes long work yield, and heavy work is split or sent elsewhere explicitly | its shard for good (Scylla's drivers are shard-aware) |
+| glommio, monoio | stays on its executor; glommio weighs executors by shares | its core for good |
+| OCaml 5 Eio | `Executor_pool` | its domain |
+| Envoy | stays on its worker | `SO_REUSEPORT`, or "exact balance": each new connection to the worker holding fewest |
+
+**The production answer is decision 5's job pool (KR-3 step 9), already ruled on 2026-10-22.** Fibers never migrate:
+they hold state that is not `Sendable`, so moving one between isolates would break kama's sharing rules. A fiber with a
+burst submits it as a `Sendable` job and parks on its result. Its core serves its other connections meanwhile, and the
+pool's workers steal among themselves, so the burst lands on whichever core is free. That is what Seastar, glommio and
+tokio programs do (`spawn_blocking`, rayon), and the program names its burst where it occurs. In the shape decision 9
+gives a fiber (step 9 rules the job pool's own spelling):
+
+```kama fragment
+// today: the burst runs on this fiber's core, and every other connection there waits for it
+uint32 h = mix(b: buf, rounds: rounds);
+
+// with step 9: the burst runs on the pool, this fiber parks, and its core keeps serving
+Job<uint32> j = spawn job mixJob(work: give MixWork.of(bytes: buf.slice(from: 0, count: 64), rounds: rounds));
+uint32 h = join(job: give j);
+```
+
+What it costs, per burst: the job's bundle copied to a pool thread (64 bytes and a count here), one submission, one
+park and one completion, a few microseconds against a burst of 100 µs to 1 ms. A process can run up to twice as many
+threads as cores, which is decision 5's stated cost.
+
+**Checked against GOALS.md:** the pool is a `std::concurrent` library in kama (#1); a job's bundle is a visible,
+`Sendable` allocation (#3); no state that is not `Sendable` crosses an isolate, because fibers stay put (#3a); it is the
+one way to move task-parallel CPU work, beside `parallel_for` for data-parallel work (#4); and the burst is named at its
+call (#5). It is consistent with practice: it is decision 5 as ruled, and decision 5 named this case as its accepted
+cost ("uneven long-lived connections stay where they were accepted"). This row measures that cost and confirms the
+remedy.
+
+**Recommendation (the ruling owed):**
+1. The job pool, as decision 5 rules. When step 9 lands, rerun `skew:12` with the burst offloaded, and close this row
+   on that result.
+2. Load-aware placement (an eBPF `SO_REUSEPORT` program, or Envoy's exact balance) is not scheduled: it is measured
+   unnecessary above, and it could not have helped the burst case, since a connection's cost is unknown when it
+   connects. It reopens only on a measurement where connections of even cost, unevenly placed, cost thread-per-core
+   against stealing.
 
 <a id="s9-tu-header-cost"></a>
 

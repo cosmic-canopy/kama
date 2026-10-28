@@ -8,7 +8,7 @@
 #   bench/run report          render docs/benchmarks/RESULTS.md from results
 #   bench/run all             build + run + report (the image must already exist: build-image)
 #   bench/run server [out] [rounds]  KR-243's server benchmark (bench/server/), out under .scratch/ by default.
-#                             run.sh's knobs (SLOTS, CONFIGS, CORES, WARMUP, SECONDS_, WRAP, SKEW_HOT, SKEW_ROUNDS)
+#                             run.sh's knobs (SLOTS, CONFIGS, CORES, WARMUP, SECONDS_, WRAP, SKEW_*, ALLOW_SLOW_CLOCK)
 #                             pass through when set; KAMA_B_TREE=<a worktree> builds that tree's compiler for the
 #                             `kama-fibers-b` arm; WRAP (perf, strace) gets the container what they need
 #   bench/run sh              interactive shell in the bench image
@@ -30,7 +30,7 @@ run_ni() { "$ENGINE" run --rm -v "$ROOT:/work" -w /work "$IMAGE" "$@"; }
 
 # The server benchmark's knobs, set on this side, reach run.sh inside the container.
 server_args=()
-for v in SLOTS CONFIGS CORES WARMUP SECONDS_ WRAP SKEW_HOT SKEW_ROUNDS; do
+for v in SLOTS CONFIGS CORES WARMUP SECONDS_ WRAP SKEW_HOT SKEW_ROUNDS ALLOW_SLOW_CLOCK; do
   [ -n "${!v:-}" ] && server_args+=(-e "$v=${!v}")
 done
 server_pre=""
