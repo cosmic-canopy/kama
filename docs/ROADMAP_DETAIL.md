@@ -3083,17 +3083,34 @@ No "fastest" claim stands until these are measured, each as its own config or ar
 
 <a id="s9-echo-gap"></a>
 
-#### kama fibers spend more CPU per request than tokio's thread-per-core arm at 10,000 connections (KR-251)
+#### The last of the gap between kama fibers and tokio's thread-per-core arm (KR-251)
 
-On echo with 10,000 connections the fiber arm uses 0.008 s of server CPU per 1,000 requests against 0.007 for tokio's
-per-core arm (about 14% more), serves 4.8% fewer requests/s, and has a longer p99 and p99.9 (80 and 117 ms against 71
-and 92). Profile it before changing anything (`perf` in the bench container, both arms on the same config):
-- **First suspect:** the scheduler takes at most 128 events per `epoll_wait` (`KAMA__SCHED_EVENTS`,
-  `include/kama_sched.h`), where mio takes 1024, so a busy core makes more system calls per round.
-- **Then:** the socket wait protocol's per-request work (`kama_net_ready` before a call, `kama_net_retry` after
-  `EAGAIN`), the I/O poll every 61 runs, and the fixture's own per-connection buffer.
+**What the first run said, and why it was wrong.** The 2026-10-27 run put kama's fibers at 14% more server CPU per
+request than tokio-percore at echo:10000. The 14% was rounding (0.008 against 0.007 ms; the TSV says 11.0%, 15/15
+rounds). The run itself was distorted too: podman started its VM with nested virtualization, so the guest kernel ran at
+EL2 and read the physical counter, which the hypervisor traps at about 1 µs a read. Loopback TCP reads the clock several
+times a packet, so about half of every server's time was the trap, and every fast arm met at about 255,000 requests a
+second. At 10,000 connections the queueing (about 42 ms) also sat at Linux's 40 ms delayed-ACK timer, so the extra ACKs
+an arm caused, which depend on the order it serves in, decided its rank. The VM now starts without nesting (a krunkit
+wrapper: the kernel at EL1, a clock read about 30 ns), and throughput rose about 3.3 times.
 
-Each change is measured interleaved against the one before it, and kept only if it beats the noise floor.
+**Measured on the fixed VM** (8 vCPUs: 3 for the server, which was 100% busy; 5 for the client; 15 interleaved rounds):
+kama `0.9.751` served 919,000 requests a second against tokio-percore's 992,000 at echo:1000 (2.18 against 1.95 µs of
+CPU per request) and 683,000 against 724,000 at echo:10000 (2.90 against 2.68), with the C loop between them.
+
+**The cause, fixed in `0.9.752`.** kama made three system calls per echoed request: the `recv` that brings the request,
+the `send` of the reply, and a second `recv` that can only answer `EAGAIN` before the fiber parks. tokio makes two: a
+read that fills less than the buffer proves the socket drained, and on an edge-triggered queue the next arrival is
+reported anyway, so it parks without asking (tokio#5866). kama now does the same for a stream's reads and writes
+(`kama_net_short`, `kama_net_drained`; [design/fibers.md](design/fibers.md) decision 7). Against `0.9.751` in the same
+rounds: 6.5% more requests a second at echo:1000 and 4.5% at echo:10000, with 9.6% and 6.6% less CPU per request,
+15/15 rounds each. kama now beats the C loop at 1,000 connections and uses the same CPU per request as tokio.
+
+**What is left:** tokio-percore still serves 1.9% more at echo:1000 (14/15 rounds) and 1.5% more at echo:10000 (13/15),
+and spends 1.2% less CPU per request there (14/15). Profile it with symbols (release builds strip them; build the arm
+with a compiler wrapper that drops `-s`): the 128-event batch per wait (mio takes 1024), the fiber switch, and the
+per-call checks of the wait protocol. Each change is measured interleaved against the one before it, and kept only if
+it beats the noise floor.
 
 <a id="s9-release-lto"></a>
 

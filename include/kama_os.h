@@ -4243,7 +4243,7 @@ static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, ui
 }
 
 // ---- a socket's wait (KR-3 step 5, docs/design/fibers.md decisions 7, 11 and 13) ----------------------------------
-// Every blocking std socket call runs one protocol around its system call:
+// Every blocking std socket call runs one protocol around its system call (a stream's read and write two steps more):
 //   kama_net_ready  before it. A deadline already passed fails the call at once, even with data queued (Go's rule).
 //                   On an isolate that runs fibers the socket is made non-blocking, as kama's own and not the
 //                   program's, and registered with the scheduler; a registration another isolate made is released
@@ -4251,6 +4251,9 @@ static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, ui
 //   kama_net_retry  after it failed: 1 to try again — EINTR, or a wait after which it may be ready (a wake is a hint)
 //                   — and 0 to return the error, which is then in errno: the call's own, WouldBlock for a socket the
 //                   program made non-blocking, or TimedOut once the deadline passed.
+//   kama_net_drained  a stream's read or write, after kama_net_ready: parks first when the last call in its direction
+//                   came back short, so the socket is known drained (or full) until the scheduler reports otherwise.
+//   kama_net_short  a stream's read or write, after it succeeded: records a short one (KR-251).
 // A socket's state is what std keeps beside its descriptor: the registration (`io`, NULL on a thread), the mode bits,
 // and a deadline per direction (kama_now_mono_ns times, the clock `Instant` holds; 0 for none).
 //   1  the program made it non-blocking: a would-block answers WouldBlock, as before fibers
@@ -4267,6 +4270,8 @@ static inline int     kama__net_mine(void* io);                                 
 static inline void*   kama__net_open(ptrdiff_t fd);                                // register; NULL with errno set
 static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by);     // 1 may be ready, 0 the deadline
 static inline void    kama__net_drop(void* io);                                    // off the queue, from any isolate
+static inline void    kama__net_short(void* io, int32_t interest);                 // a call came back short
+static inline int     kama__net_drained(void* io, int32_t interest);               // ...so park first: 1 once
 #endif
 
 static inline void kama__net_fail(int e) {
@@ -4353,6 +4358,29 @@ static inline int32_t kama_net_retry(ptrdiff_t fd, void* io, int32_t mode, int32
     // something else did (SO_RCVTIMEO through rawHandle), and waiting here would break what it asked for.
     if (e != EAGAIN || (mode & KAMA_NET_PROGRAM_NB) || !(mode & KAMA_NET_KAMA_NB)) return 0;
     return kama__net_wait(fd, io, interest, by);
+}
+// After a stream read or write moved `got` of the `asked` bytes. Fewer than asked, and more than none, means the socket's
+// buffer was drained (a read) or filled (a write) just now. An edge-triggered queue reports again when that changes, so
+// the next call in that direction parks first (kama_net_drained) instead of making a system call that could only fail
+// with EAGAIN: tokio's rule (tokio#5866), and on a request and its reply one system call in three (KR-251).
+static inline void kama_net_short(void* io, int32_t interest, ptrdiff_t got, ptrdiff_t asked) {
+#if defined(KAMA__OS_FIBERS)
+    if (io && got > 0 && got < asked) kama__net_short(io, interest);
+#endif
+    (void)io; (void)interest; (void)got; (void)asked;
+}
+// Before a stream read or write, after kama_net_ready: when the last call in this direction came back short, park until
+// the socket may be ready again, or `by` passes. 0 to make the call, -1 with errno set (TimedOut). A socket the program
+// made non-blocking never parks here: its call answers WouldBlock, as before.
+static inline int32_t kama_net_drained(void* io, int32_t mode, int32_t interest, uint64_t by) {
+#if defined(KAMA__OS_FIBERS)
+    if (io && !(mode & KAMA_NET_PROGRAM_NB) && kama__net_drained(io, interest) && !kama__net_park(io, interest, by)) {
+        kama__net_fail(ETIMEDOUT);
+        return -1;
+    }
+#endif
+    (void)io; (void)mode; (void)interest; (void)by;
+    return 0;
 }
 // After `connect` failed on a socket kama made non-blocking: wait until it resolves, as a blocking connect would, or
 // `by` passes. 0 connected, -1 with errno set. A wake is a hint, and an unconnected socket can report writable before

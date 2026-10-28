@@ -54,6 +54,8 @@ extern fn int32 kama_EINPROGRESS();
 extern fn int32 kama_net_ready(isize fd, UnsafePtr io, UnsafePtr<int32> mode, uint64 by);
 extern fn int32 kama_net_retry(isize fd, UnsafePtr io, int32 mode, int32 interest, uint64 by);
 extern fn int32 kama_net_connected(isize fd, UnsafePtr io, int32 mode, uint64 by);
+extern fn int32 kama_net_drained(UnsafePtr io, int32 mode, int32 interest, uint64 by);
+extern fn void kama_net_short(UnsafePtr io, int32 interest, isize got, isize asked);
 extern fn int32 kama_net_close(isize fd, UnsafePtr io);
 extern fn void kama_net_settle(isize fd, UnsafePtr io, int32 mode);
 extern fn int32 kama_net_set_mode(isize fd, UnsafePtr io, UnsafePtr<int32> mode, int32 on);
@@ -181,9 +183,10 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     public unsafe fn Result<isize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: 0); }
         if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
+        if (kama_net_drained(io: this.io, mode: this.mode, interest: 1, by: this.readBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
             isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), mode: this.mode);
-            if (n >= 0) { return Result::Ok(value: n); }
+            if (n >= 0) { kama_net_short(io: this.io, interest: 1, got: n, asked: into.length()); return Result::Ok(value: n); }
             if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
         }
     }
@@ -272,9 +275,10 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
         if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
+        if (kama_net_drained(io: this.io, mode: this.mode, interest: 2, by: this.writeBy) != 0) { return Result::Err(error: lastError()); }
         while (true) {
             isize n = kama_send(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()), mode: this.mode);
-            if (n >= 0) { return Result::Ok(value: n); }
+            if (n >= 0) { kama_net_short(io: this.io, interest: 2, got: n, asked: bytes.length()); return Result::Ok(value: n); }
             if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 2, by: this.writeBy) == 0) { return Result::Err(error: lastError()); }
         }
     }

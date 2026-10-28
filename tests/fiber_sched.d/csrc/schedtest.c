@@ -2,9 +2,10 @@
 // `spawn fiber` lands. Each check is a numbered return; 0 is all of them. Compiled twice into one program: as it is,
 // and by schedtest_poller.c with KAMA__SCHED_GENERIC, so the arm Windows and poll(2) take is tested on every host.
 // Checks 15–22 drive a socket's wait (kama_os.h, KR-3 step 5) the way std's socket calls do, in a program that runs
-// fibers — which defines KAMA_FIBERS before any kama header, as the emitter does for one. Checks 23–29 drive a channel's
-// wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6; both are read AFTER the scheduler here, the
-// order no emitted program has, so linking this proves the scheduler's half of those seams is defined either way.
+// fibers — which defines KAMA_FIBERS before any kama header, as the emitter does for one; check 30, a stream's short
+// read. Checks 23–29 drive a channel's wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6; both
+// are read AFTER the scheduler here, the order no emitted program has, so linking this proves the scheduler's half of
+// those seams is defined either way.
 #define KAMA_FIBERS 1
 #include "kama_sched.h"
 #include "kama_channel.h"
@@ -248,6 +249,43 @@ static void netConnect(void* a) {
         kama_net_close(fd, io);
     }
 }
+// 30. a stream read that came back short (KR-251): on an edge backend the next read parks first, so it never meets
+// EAGAIN (the Poller arm learns nothing from a short read, and meets it once); a byte that arrives after the short read
+// and before that park still wakes it; the park keeps the read's deadline; and a socket the program made non-blocking
+// answers WouldBlock instead of parking.
+#if defined(KAMA__SCHED_POLLER)
+enum { EDGE = 0 };
+#else
+enum { EDGE = 1 };
+#endif
+static int shortFirst, shortAgain, shortEagains, shortLate, shortTimedOut, shortNb;
+static ssize_t shortRead(char* buf) {   // one read of up to 8 bytes, recorded as std's stream read records it
+    ssize_t n = recv(np[0], buf, 8, KAMA__NET_DONTWAIT(nmode));
+    if (n > 0) kama_net_short(nio, 1, n, 8);
+    return n;
+}
+static void netShortReader(void* a) {
+    (void)a; char buf[8];
+    if (kama_net_ready(np[0], &nio, &nmode, 0) != 0) return;
+    shortFirst = shortRead(buf) == 1;                          // the driver's one byte, of eight asked
+    if (kama_net_drained(nio, nmode, 1, 0) != 0) return;       // parks: the writer's byte wakes it
+    for (;;) {
+        if (shortRead(buf) > 0) { shortAgain = buf[0] == 'b'; break; }
+        shortEagains++;
+        if (!kama_net_retry(np[0], nio, nmode, 1, 0)) return;
+    }
+    (void)send(np[1], "c", 1, 0);                              // arrives while this fiber runs: no poll has seen it
+    if (kama_net_drained(nio, nmode, 1, kama_now_mono_ns() + 2000000000ull) != 0) return;
+    shortLate = shortRead(buf) == 1 && buf[0] == 'c';
+    const uint64_t by = kama_now_mono_ns() + 20000000ull;      // nothing more comes
+    const int32_t rc = kama_net_drained(nio, nmode, 1, by);
+    shortTimedOut = EDGE ? rc == -1 && errno == ETIMEDOUT && kama_now_mono_ns() >= by : rc == 0;
+    kama_net_short(nio, 1, 1, 8);
+    if (kama_net_set_mode(np[0], nio, &nmode, 1) != 0) return;
+    shortNb = kama_net_drained(nio, nmode, 1, 0) == 0 && recv(np[0], buf, 8, KAMA__NET_DONTWAIT(nmode)) < 0
+           && !kama_net_retry(np[0], nio, nmode, 1, 0) && errno == EAGAIN;
+}
+static void netShortWriter(void* a) { (void)a; (void)send(np[1], "b", 1, 0); }
 #endif
 
 // 9. ten thousand fibers, each sleeping a moment, all end and are freed.
@@ -484,6 +522,13 @@ int fiber_sched_selftest(void) {
         CHECK(22, conOk && conRefused);
         close(ls);
     }
+
+    CHECK(31, pairUp() && send(np[1], "a", 1, 0) == 1);
+    kama_sched_detach(kama_sched_spawn(netShortReader, 0, 0));
+    kama_sched_detach(kama_sched_spawn(netShortWriter, 0, 0));
+    kama_sched_run();
+    CHECK(30, shortFirst && shortAgain && shortEagains == !EDGE && shortLate && shortTimedOut && shortNb);
+    kama_net_release(nio); nio = NULL;
     kama_net_close(np[0], NULL); kama_net_close(np[1], NULL); np[0] = np[1] = 0;
 #endif
 

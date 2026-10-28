@@ -361,6 +361,13 @@ that externed the scheduler, which `std::concurrent` does for any channel) — a
 so `@noheap`, `@onPanic` and the park rule never judge a switch that cannot happen there. The park rule needed no
 change: `kama_net_retry` reaches `kama_sched_io_wait`, and `kama_sleep_ns` reaches `kama_sched_sleep`.
 
+*Since `0.9.752` (KR-251):* a stream read or write that moves fewer bytes than asked, and more than none, proves the
+socket's buffer drained (or filled) just then, and an edge-triggered queue reports the next change. So `kama_net_short`
+records it, and the next call in that direction parks first (`kama_net_drained`) instead of making a system call that
+could only answer `EAGAIN`. This is tokio's rule (tokio#5866); on a request and its reply it saves one system call in
+three. The Poller arm watches a socket only while a fiber waits on it, so it learns nothing from a short call and keeps
+the old path. A socket the program made non-blocking never parks there.
+
 ### Decision 8 — blocking that is not a socket
 
 - **Channels become fiber-aware.**

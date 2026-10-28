@@ -78,6 +78,7 @@ typedef struct kama_sched_io {
     kama_fiber* reader;             // the fiber waiting to read, or NULL
     kama_fiber* writer;             // ...to write
     int32_t ready;                  // edge backends: readiness reported while no fiber waited (1 read, 2 write)
+    int32_t drained;                // edge backends: the last call in a direction came back short (1 read, 2 write)
     int32_t armed;                  // the Poller arm: the interest the Poller holds now (0: not in it)
     struct kama_sched_io* freedNext; // released by another isolate: the scheduler's `freed` list
 } kama_sched_io;
@@ -390,6 +391,25 @@ static inline void kama_sched_io_close(kama_sched_io* io) {
 
 // After an I/O call on `io` reported WouldBlock: park until it may be ready for `interest` (1 read, 2 write), or until
 // `deadline` (0 for none). 1 when it may be ready — a hint: retry the call — and 0 when the deadline passed.
+// A stream call in direction `interest` came back short: the socket's buffer was drained (a read) or filled (a write)
+// just now, so every readiness reported for that direction is spent (no poll can have run since the call: this fiber
+// has not switched), and an edge-triggered queue reports the next change. The next call in that direction parks first
+// (kama_sched_io_drained) instead of making a system call that could only fail with EAGAIN: tokio's rule, tokio#5866.
+// The Poller arm watches a socket only while a fiber waits on it, so a short call tells it nothing.
+static inline void kama_sched_io_short(kama_sched_io* io, int32_t interest) {
+#if !defined(KAMA__SCHED_POLLER)
+    io->drained |= interest;
+    io->ready &= ~interest;
+#else
+    (void)io; (void)interest;
+#endif
+}
+// Whether the next call in direction `interest` parks first, because the last one came back short. Once: it clears.
+static inline int kama_sched_io_drained(kama_sched_io* io, int32_t interest) {
+    if (!(io->drained & interest)) return 0;
+    io->drained &= ~interest;
+    return 1;
+}
 static inline int kama_sched_io_wait(kama_sched_io* io, int32_t interest, uint64_t deadline) {
     static const char msg[] = "fiber scheduler: an I/O wait outside a fiber";
     kama_fiber* f = kama__sched_self(msg, sizeof msg - 1);
@@ -621,12 +641,16 @@ static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by) {
     return kama_sched_io_wait((kama_sched_io*)io, interest, by);
 }
 static inline void kama__net_drop(void* io) { kama_sched_io_release((kama_sched_io*)io); }
+static inline void kama__net_short(void* io, int32_t interest) { kama_sched_io_short((kama_sched_io*)io, interest); }
+static inline int kama__net_drained(void* io, int32_t interest) { return kama_sched_io_drained((kama_sched_io*)io, interest); }
 #else
 static inline int kama__net_here(void) { return 0; }
 static inline int kama__net_mine(void* io) { (void)io; return 1; }
 static inline void* kama__net_open(ptrdiff_t fd) { (void)fd; return NULL; }
 static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by) { (void)io; (void)interest; (void)by; return 0; }
 static inline void kama__net_drop(void* io) { (void)io; }
+static inline void kama__net_short(void* io, int32_t interest) { (void)io; (void)interest; }
+static inline int kama__net_drained(void* io, int32_t interest) { (void)io; (void)interest; return 0; }
 #endif
 #elif defined(KAMA_FIBERS) && defined(KAMA_OS_H) && !defined(__EMSCRIPTEN__)
 #error "kama_os.h was read before KAMA_FIBERS was defined: its sockets would never park (define it before any kama header)"
