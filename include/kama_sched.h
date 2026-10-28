@@ -79,6 +79,7 @@ typedef struct kama_sched_io {
     kama_fiber* writer;             // ...to write
     int32_t ready;                  // edge backends: readiness reported while no fiber waited (1 read, 2 write)
     int32_t drained;                // edge backends: the last call in a direction came back short (1 read, 2 write)
+    int32_t closed;                 // edge backends: a close or an error was reported for a direction, once and for good
     int32_t armed;                  // the Poller arm: the interest the Poller holds now (0: not in it)
     struct kama_sched_io* freedNext; // released by another isolate: the scheduler's `freed` list
 } kama_sched_io;
@@ -395,9 +396,13 @@ static inline void kama_sched_io_close(kama_sched_io* io) {
 // just now, so every readiness reported for that direction is spent (no poll can have run since the call: this fiber
 // has not switched), and an edge-triggered queue reports the next change. The next call in that direction parks first
 // (kama_sched_io_drained) instead of making a system call that could only fail with EAGAIN: tokio's rule, tokio#5866.
-// The Poller arm watches a socket only while a fiber waits on it, so a short call tells it nothing.
+// Not once a close or an error was reported: the queue reports that only once, often with the last data, so the next
+// call must make its system call to meet it, or it would park for an edge that never comes (tokio keeps its closed
+// bits for the same reason). The Poller arm watches a socket only while a fiber waits on it: a short call tells it
+// nothing.
 static inline void kama_sched_io_short(kama_sched_io* io, int32_t interest) {
 #if !defined(KAMA__SCHED_POLLER)
+    if (io->closed & interest) return;
     io->drained |= interest;
     io->ready &= ~interest;
 #else
@@ -503,6 +508,8 @@ static inline void kama__sched_wait(kama_sched* s, int64_t timeoutNs) {
         int32_t bits = 0;
         if (ev & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) bits |= 1;
         if (ev & (EPOLLOUT | EPOLLHUP | EPOLLERR)) bits |= 2;
+        if (ev & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) io->closed |= 1;   // reported once: kama_sched_io_short
+        if (ev & (EPOLLHUP | EPOLLERR)) io->closed |= 2;
         kama__sched_ioReady(io, bits);
     }
 #elif defined(KAMA__SCHED_KQUEUE)
@@ -519,6 +526,7 @@ static inline void kama__sched_wait(kama_sched* s, int64_t timeoutNs) {
         int32_t bits = k->filter == EVFILT_READ ? 1 : k->filter == EVFILT_WRITE ? 2 : 0;
         if (k->flags & EV_ERROR) bits = 3;            // a change was refused: the retry meets the reason
         if (k->flags & EV_EOF) bits |= 1;
+        if (k->flags & (EV_EOF | EV_ERROR)) io->closed |= bits;   // reported once: kama_sched_io_short
         kama__sched_ioReady(io, bits);
     }
 #else

@@ -2,10 +2,10 @@
 // `spawn fiber` lands. Each check is a numbered return; 0 is all of them. Compiled twice into one program: as it is,
 // and by schedtest_poller.c with KAMA__SCHED_GENERIC, so the arm Windows and poll(2) take is tested on every host.
 // Checks 15–22 drive a socket's wait (kama_os.h, KR-3 step 5) the way std's socket calls do, in a program that runs
-// fibers — which defines KAMA_FIBERS before any kama header, as the emitter does for one; check 30, a stream's short
-// read. Checks 23–29 drive a channel's wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6; both
-// are read AFTER the scheduler here, the order no emitted program has, so linking this proves the scheduler's half of
-// those seams is defined either way.
+// fibers — which defines KAMA_FIBERS before any kama header, as the emitter does for one; checks 30 and 32, a stream's
+// short read. Checks 23–29 drive a channel's wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6;
+// both are read AFTER the scheduler here, the order no emitted program has, so linking this proves the scheduler's half
+// of those seams is defined either way.
 #define KAMA_FIBERS 1
 #include "kama_sched.h"
 #include "kama_channel.h"
@@ -286,6 +286,18 @@ static void netShortReader(void* a) {
            && !kama_net_retry(np[0], nio, nmode, 1, 0) && errno == EAGAIN;
 }
 static void netShortWriter(void* a) { (void)a; (void)send(np[1], "b", 1, 0); }
+// 32. a short read from a peer that had already closed: an edge-triggered queue reports the close once, with the last
+// data, so the read after it must meet the end rather than park for an edge that will never come (the hang TSan's
+// timing found in fiber_tcp_bulk; tokio keeps its closed bits for the same reason).
+static int eofShort, eofSeen;
+static void netShortEof(void* a) {
+    (void)a; char buf[8];
+    if (kama_net_ready(np[0], &nio, &nmode, 0) != 0) return;
+    kama_sched_sleep(1000000);                                 // a poll runs: it reports the byte and the close at once
+    eofShort = shortRead(buf) == 1;
+    if (kama_net_drained(nio, nmode, 1, kama_now_mono_ns() + 2000000000ull) != 0) return;   // the hang: 2 s, then fails
+    eofSeen = recv(np[0], buf, 8, KAMA__NET_DONTWAIT(nmode)) == 0;
+}
 #endif
 
 // 9. ten thousand fibers, each sleeping a moment, all end and are freed.
@@ -528,6 +540,12 @@ int fiber_sched_selftest(void) {
     kama_sched_detach(kama_sched_spawn(netShortWriter, 0, 0));
     kama_sched_run();
     CHECK(30, shortFirst && shortAgain && shortEagains == !EDGE && shortLate && shortTimedOut && shortNb);
+    kama_net_release(nio); nio = NULL;
+
+    CHECK(33, pairUp() && send(np[1], "z", 1, 0) == 1 && shutdown(np[1], SHUT_WR) == 0);
+    kama_sched_detach(kama_sched_spawn(netShortEof, 0, 0));
+    kama_sched_run();
+    CHECK(32, eofShort && eofSeen);
     kama_net_release(nio); nio = NULL;
     kama_net_close(np[0], NULL); kama_net_close(np[1], NULL); np[0] = np[1] = 0;
 #endif

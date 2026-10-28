@@ -366,7 +366,10 @@ socket's buffer drained (or filled) just then, and an edge-triggered queue repor
 records it, and the next call in that direction parks first (`kama_net_drained`) instead of making a system call that
 could only answer `EAGAIN`. This is tokio's rule (tokio#5866); on a request and its reply it saves one system call in
 three. The Poller arm watches a socket only while a fiber waits on it, so it learns nothing from a short call and keeps
-the old path. A socket the program made non-blocking never parks there.
+the old path. A socket the program made non-blocking never parks there. A direction whose close or error has been
+reported is never treated as drained: the queue reports that once, often with the last data, so the next call must
+make its system call to meet it. tokio keeps its closed bits for the same reason; `0.9.752` did not, and a read after
+a short last one could wait forever (`0.9.754` fixed it, found by the ThreadSanitizer leg's timing).
 
 ### Decision 8 — blocking that is not a socket
 
