@@ -3847,9 +3847,14 @@ with no `||`, so a covering set is computable and is what "this code is checked 
   `--define`, `--undefine`, `--release`/`--debug`, `--no-heap`, `--shared`. That is both the fast inner
   loop and the way a tag is reproduced: the tag *is* the command.
 - **The cover does not follow the host.** `kama check` reaches every target in kama's catalog on every <!-- test: compilefor_declared_target -->
-  machine — both architectures, not just the one that asked — so the same program gets the same verdict
-  on a Mac and on a Windows box. *Building* still follows the host and its toolchain; only the cover is
-  host-independent. Until 2026-09-18 a built-in target name resolved its arch to the host's, so a type
+  machine — both architectures, not just the one that asked — and tries them in one written order:
+  declared targets, then `LINUX`, `MACOS`, `WINDOWS`, `WASM`, `EMBEDDED`, then the catalog's arch-pinned <!-- test: compilefor_negated_os_cover -->
+  triples. So a gate is judged under a hosted target whenever one activates it, and as bare metal only when
+  none does (`OS_NONE`, `!HOSTED`): `!OS_MACOS` checked on a Mac is judged as Linux. The default analysis
+  is still the host's own, so *which* gates need a cover differs per host (`!OS_WINDOWS` is active by
+  default on a Mac). *Building* follows the host and its toolchain. Until `0.9.757` the built-in names were
+  tried alphabetically, `EMBEDDED` first, so `!OS_WINDOWS` checked on Windows was judged as bare metal and
+  refused a `spawn fiber` that macOS and Linux passed. Until 2026-09-18 a built-in target name resolved its arch to the host's, so a type
   error behind `@compileFor(ARCH_AARCH64)` was found on an arm Mac and reported OK on an x86_64 box, and
   `ARCH_X86_64` the other way round: half of the commonest arch pair in systems code went unchecked on
   every machine, and a different half per machine.

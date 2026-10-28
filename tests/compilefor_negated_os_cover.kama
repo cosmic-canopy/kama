@@ -1,0 +1,21 @@
+// `kama check` covers a negated OS gate with a HOSTED target, on every host (KR-247). Each gate below is inactive
+// on exactly one desktop host, so whichever machine runs the suite, one of them needs a covering configuration,
+// and the harness's analysis-agreement leg runs `kama check` over this file. The cover tries the built-in targets
+// in one written order, LINUX, MACOS, WINDOWS, WASM, EMBEDDED; it used to take the map's alphabetical order, so
+// `!OS_MACOS` checked on a Mac was judged as bare metal, where `spawn fiber` is refused (KR-233), while the same
+// file passed on Linux and Windows.
+//
+// No gate here has a positive twin (`OS_LINUX`, …): a twin is a second uncovered gate, and the solver prefers the
+// configuration activating the most of them, which picks a hosted target whatever the order and hides the defect.
+import { std::concurrent::Fiber, std::concurrent::join };
+
+@compileFor(!OS_MACOS)   fn int32 offMac()     { return 1; }
+@compileFor(!OS_LINUX)   fn int32 offLinux()   { return 1; }
+@compileFor(!OS_WINDOWS) fn int32 offWindows() { return 1; }
+
+fn int32 work(int32 n) { return n; }
+
+fn uint8 main() {
+    Fiber<int32> f = spawn fiber work(n: 42);
+    return cast<uint8>(join(fiber: give f));
+}

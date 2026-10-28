@@ -2761,7 +2761,8 @@ static bool resolveTarget(const std::string& selRaw,
 
 // The built-in catalog: sane defaults for the standard targets. A named shortcut does NOT pin an arch —
 // it resolves arch to the host's — so `--target LINUX` on an arm Mac means aarch64. A build that needs
-// precision spells the triple. Names are conveniences; triples are exact.
+// precision spells the triple. Names are conveniences; triples are exact. A new name must also join the
+// written order `coverGates` tries them in, or `kama check` never covers a gate with it.
 static const std::map<std::string, TargetSpec>& builtinTargets()
 {
     static const std::map<std::string, TargetSpec> cat = [] {
@@ -2796,6 +2797,10 @@ static const std::map<std::string, TargetSpec>& builtinTargets()
 //     different half per machine;
 //   * which configurations `kama check` covers — the same gate reported OK on one box and an error on
 //     the other, from the same source.
+//
+// What is host-independent is the cover's CANDIDATES and the ORDER it tries them in (`coverGates`). The
+// default analysis is still the host's, so which gates need a cover at all differs per host: `!OS_WINDOWS`
+// is active by default on a Mac and needs one on Windows, where it is then judged as LINUX (KR-247).
 //
 // Each built-in OS on each arch kama supports, plus wasm. It is a handful of TARGETS, not a vocabulary
 // of spellings: a component it does not carry is reached by DECLARING the target (`select.TARGET`),
@@ -6468,11 +6473,16 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
                 TargetSpec t; std::string terr;
                 if (resolveTarget(kv.first, declaredTargets, t, terr)) seen.insert(t.arch + "-" + t.os + "-" + t.abi);
             }
-            for (const auto& kv : builtinTargets())
-                if (!declaredTargets.count(kv.first)) {
-                    targets.push_back(kv.first);
-                    seen.insert(kv.second.arch + "-" + kv.second.os + "-" + kv.second.abi);
-                }
+            // The built-in names in ONE written order, hosted first (KR-247). The map's own order is
+            // alphabetical, which put EMBEDDED first: `!OS_WINDOWS` checked on Windows was judged as bare
+            // metal, and the same gate checked on a Mac or Linux never was. HOST goes last because it is the
+            // asking machine's triple, and any earlier place would let the choice follow the host again.
+            for (const char* n : { "LINUX", "MACOS", "WINDOWS", "WASM", "EMBEDDED", "HOST" }) {
+                const TargetSpec& t = builtinTargets().at(n);
+                if (declaredTargets.count(n)) continue;
+                targets.push_back(n);
+                seen.insert(t.arch + "-" + t.os + "-" + t.abi);
+            }
             // ...and the catalog's ARCH-PINNED triples, which is what makes the cover host-independent
             // (KR-69 D2): a built-in NAME resolves its arch to the host's, so before this a type error
             // behind `@compileFor(ARCH_AARCH64)` was found on an arm Mac and reported OK on an x86_64
