@@ -13,6 +13,7 @@
 //        ring-op         (b) the read system call first; a read that would block, or follows a short one, is a RECV into
 //                        the task's own buffer, and its completion carries the data; the reply is a write system call
 //        ring-send       (b') as ring-op, and the reply is a SEND too: the task parks until it completes
+//        ring-op-pf, ring-send-pf   the same, each RECV marked POLL_FIRST (see submitRecv)
 //        ring-multishot  (c) one multishot RECV per socket over a provided buffer ring; each completion is copied into the
 //                        task's buffer, as `read(into:)` would have to; the reply is a write system call
 // Every request is 64 bytes; the reply is <reply-bytes> (64 for echo, 4096 for the raw-HTTP shape). The ring is set up
@@ -153,8 +154,13 @@ static void submitPoll(task* t) {
     struct io_uring_sqe* e = sqe(); e->opcode = IORING_OP_POLL_ADD; e->fd = t->fd;
     e->poll32_events = POLLIN | POLLRDHUP; e->len = IORING_POLL_ADD_MULTI; e->user_data = tag(t, TAG_POLL); t->armed = true;
 }
+// Every RECV is submitted for a socket known to be empty (a read just failed with EAGAIN, or came back short). The -pf
+// arms say so to the kernel (POLL_FIRST, 5.19), which then arms its poll at once instead of trying the receive first:
+// the kernel's side of the short-read rule. Whether that pays is measured, not assumed.
+static bool pollFirst;
 static void submitRecv(task* t) {
     struct io_uring_sqe* e = sqe(); e->opcode = IORING_OP_RECV; e->fd = t->fd;
+    if (pollFirst) e->ioprio = IORING_RECVSEND_POLL_FIRST;
     e->addr = (uint64_t)(uintptr_t)(t->buf + t->have); e->len = (unsigned)(BUF - t->have); e->user_data = tag(t, TAG_RECV);
 }
 static void submitMultishot(task* t) {
@@ -329,9 +335,14 @@ int main(int argc, char** argv) {
     if (argc == 2 && strcmp(argv[1], "-h") == 0) { puts(header); return 0; }
     if (argc != 5) { fprintf(stderr, "usage: uring <arm> <conns> <requests> <reply-bytes>\n%s\n", header); return 2; }
     const char* arms[] = { "et", "ring-poll", "ring-op", "ring-send", "ring-multishot" };
+    char base[32]; snprintf(base, sizeof base, "%s", argv[1]);
+    size_t bl = strlen(base);
+    if (bl > 3 && strcmp(base + bl - 3, "-pf") == 0) { pollFirst = true; base[bl - 3] = 0; }
     arm = -1;
-    for (int i = 0; i < 5; i++) if (strcmp(argv[1], arms[i]) == 0) arm = i;
-    if (arm < 0) { fprintf(stderr, "arms: et ring-poll ring-op ring-send ring-multishot\n"); return 2; }
+    for (int i = 0; i < 5; i++) if (strcmp(base, arms[i]) == 0) arm = i;
+    if (arm < 0 || (pollFirst && arm != RING_OP && arm != RING_SEND)) {
+        fprintf(stderr, "arms: et ring-poll ring-op ring-op-pf ring-send ring-send-pf ring-multishot\n"); return 2;
+    }
     NT = atoi(argv[2]);
     const uint64_t asked = strtoull(argv[3], NULL, 10);
     reply = atoi(argv[4]);

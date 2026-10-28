@@ -18,7 +18,7 @@ rounds=${2:-15}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cc -O2 -std=c11 -Wall -Wextra -Werror -pthread -o "$tmp/uring" "$here/uring.c"
 "$tmp/uring" ring-op 3 3 64 >/dev/null || { echo "run.sh: io_uring is unavailable here (see the error above)" >&2; exit 2; }
-slots=${SLOTS:-"et ring-poll ring-op ring-send ring-multishot et#2"}
+slots=${SLOTS:-"et ring-poll ring-op ring-op-pf ring-send ring-send-pf ring-multishot et#2"}
 configs=${CONFIGS:-"100:200000:64 1000:300000:64 10000:400000:64 1000:300000:4096 10000:400000:4096"}
 printf 'round\tslot\tkernel\t%s\n' "$("$tmp/uring" -h)" > "$out"
 kernel=$(uname -r)
