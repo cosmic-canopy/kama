@@ -3134,6 +3134,17 @@ the ownership problem tokio-uring has to work around. A design doc first, in the
 Seastar, glommio and monoio do, which kernels and which operations, how it sits beside the epoll arm (decision 6) and
 the deadline and cancellation rules (decision 11), and a measurement before any code.
 
+**Designed 2026-10-28: [docs/design/io_uring.md](design/io_uring.md), eight decisions owed.** What it found: a Linux
+arm needs epoll beside it, because Docker (since 25.0), Podman, containerd 2.0 and gVisor refuse io_uring by default and
+Google disables it on its servers (Seastar and monoio fall back; glommio and tokio-uring fail there); the runtimes that lead (Seastar, glommio) try the system call first and
+use the ring only once a call would block, which is kama's protocol already; and no published number compares against an
+edge-triggered epoll that already skips the `EAGAIN` call. Recommended: a run-time arm of the scheduler on Linux 6.1+
+(`SINGLE_ISSUER`, `DEFER_TASKRUN`), epoll kept as the fallback, the caller's buffer kept (a deadline cancels and the
+fiber waits for the kernel to let go, so no byte is lost, where monoio documents a timed-out read losing data), no
+liburing, and first a C harness (`bench/uring/`) measuring three ring shapes against today's epoll. Decision 8 sets
+the bar: a ring arm is built only if it beats epoll by 5% in CPU per request at 1,000 and 10,000 connections on both
+machines; below that, this row closes with the measurement.
+
 <a id="s9-fiber-memory"></a>
 
 #### Memory per idle fiber connection (KR-254)
