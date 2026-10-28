@@ -1,11 +1,12 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
-**Status: building, decisions 9–11 owed.** Decisions 1, 3–6 and 8 are ruled as recommended, with 8's bar at 5%.
+**Status: building (§8).** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
+2026-10-28.
 Decision 7 is ruled as revised, after the first recommendation rested on a false claim (§5). Decision 8 is measured on both machines
 (§6). Both directions through the ring, (b′), clears the bar on aarch64. On x86-64 it misses in one cell, 10,000
 connections on one core with 4 KiB replies, where it saves 2%. On those numbers the maintainer ruled, on 2026-10-28, to
-build (b′) (decision 2, re-ruled), for the most performance kama can have without giving up correctness or safety. What
-the build needs ruled before its first step is decisions 9–11, and the build itself is §8. A design doc and a
+build (b′) (decision 2, re-ruled), for the most performance kama can have without giving up correctness or safety. The
+build is §8. A design doc and a
 measurement came before any code, as [ROADMAP_DETAIL §9](../ROADMAP_DETAIL.md#s9-io-uring) asks. This file builds on [fibers.md](fibers.md), whose decisions it cites by number, and
 is deleted when the work ships or closes. Facts about other runtimes were read from their source or their maintainers'
 own words on 2026-10-28 (*Sources*). Kernel versions are from the liburing man pages. Every proposed spelling is a `kama
@@ -231,7 +232,8 @@ cancel-and-drain path, the fallback, and the server benchmark rerun with both ar
 A stream's read and write are operations (decision 2). Everything else a fiber waits on is readiness: `accept`, a
 `connect` resolving, a datagram, `sendFile`, the readiness poll std offers, and the remote waker's eventfd.
 
-**Recommended:** on the ring arm, each of those is a one-shot `POLL_ADD` that the waiting fiber submits. The waker is one
+**Ruled 2026-10-28 as recommended:** on the ring arm, each of those is a one-shot `POLL_ADD` that the waiting fiber
+submits. The waker is one
 multishot `POLL_ADD` on its eventfd. A scheduler on the ring then has one wait, `io_uring_enter`, and no epoll set beside
 it.
 - The alternative keeps epoll for readiness and polls its descriptor through the ring. That is two queues in one
@@ -243,7 +245,8 @@ it.
 
 ### Decision 10 — every submission belongs to a parked fiber that waits for its own completion
 
-**Recommended:** the one rule that makes the ring safe, held by construction rather than by a drain pass.
+**Ruled 2026-10-28 as recommended:** the one rule that makes the ring safe, held by construction rather than by a
+drain pass.
 - An operation's record lives on the stack of the fiber that submits it, and its completion's `user_data` is that
   record's address. The fiber parks until the completion has arrived. Nothing else ends the wait: any other wake while
   the operation is in flight is absorbed, since a wake is a hint.
@@ -263,7 +266,7 @@ the scheduler's next `io_uring_enter`. That happens when no fiber is ready, and 
 fiber runs while fibers are ready. So a reply can wait for up to 61 other fibers' runs. A handler that makes several
 writes per response pays a park for each.
 
-**Recommended:** build it as measured, and let the server benchmark judge it (§8 step 4). The kama arm runs on both arms
+**Ruled 2026-10-28 as recommended:** build it as measured, and let the server benchmark judge it (§8 step 4). The kama arm runs on both arms
 in the same rounds, and the ring arm must hold p99 latency within the epoll arm's noise at every config. If it does not,
 the remedy is decided on that measurement. Options include entering the ring sooner while a turn runs long, or making
 the system call first for a write too, which is (b) for writes. Neither is built ahead of the number.

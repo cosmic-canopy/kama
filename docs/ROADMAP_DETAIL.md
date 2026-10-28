@@ -3112,10 +3112,10 @@ fiber's park per write (about 25–50 ns) is counted. **Measured on x86-64, 2026
 clears the bar. Both directions saves 19–24% at 1,000 connections and 7% at 10,000 with 64-byte replies, but only 2% with
 4 KiB replies. Its POLL_FIRST variant saves 8% there, but in only 11 of 15 rounds. Reads through the ring save 14–15% and 3–7%.
 **Ruled 2026-10-28: build it,** reads and writes both through the ring (decision 2, re-ruled), for the most
-performance kama can have without giving up correctness or safety. io_uring.md lists what is owed:
-- decisions 9–11: the waits that are not a stream's read or write, the rule that makes every submission safe, and the
-  latency a write's park costs;
-- then four steps (§8), ending in the server benchmark run on both arms in the same rounds.
+performance kama can have without giving up correctness or safety. Decisions 9–11 were ruled the same day: every other
+wait is a poll through the ring; every submission belongs to a parked fiber that waits for its own completion; and a
+write's latency is judged against epoll in the server benchmark. The build is four steps (io_uring.md §8), ending in that
+benchmark.
 
 <a id="s9-fiber-memory"></a>
 
