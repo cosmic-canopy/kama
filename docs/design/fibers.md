@@ -756,7 +756,7 @@ read off this document.
 | 6 | ✅ `0.9.751`. Channels fiber-aware (waiter lists, send-side), and joins park: a `scope`'s close, an `Isolate`'s join and a `parallel_for`'s barrier, tested from C (`tests/fiber_sched.d` checks 23–29) | `include/kama_channel.h`, `kama_isolate.h`, `kama_sched.h`, `lib/std/concurrent/` | M |
 | 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-7, KR-202), and `Poller.wait` on a fiber over AFD and `poll(2)` | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |
 | 8 | Windows: the high-resolution timer, and completion I/O where readiness cannot serve (`TransmitFile`, KR-229) | `kama_os.h` | M |
-| 9 | The job pool (decision 5), and the job-entry rule over step 4's walk: a job entry that reaches a fiber switch is refused | `lib/std/concurrent/` | M |
+| 9 | The job pool (decision 5), and the job-entry rule over step 4's walk: a job entry that reaches a fiber switch is refused. Then rerun the server bench's `skew:12` with the burst offloaded, which closes KR-255 (ruled 2026-10-28) | `lib/std/concurrent/` | M |
 | 10 | wasm over JSPI (decision 4) | `src/kama.driver.cpp`, `lib/std/net/web/`, `kama_fiber.h` | L |
 | 11 | lldb OS plugin; SPEC *Concurrency* gains *Fibers*; *Why not green threads* rewritten; this file deleted | `include/kama_lldb.py`, `docs/` | M |
 
