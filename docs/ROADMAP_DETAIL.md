@@ -3279,6 +3279,26 @@ interleaved): about 3 ms per seam TU. A program with any C header of its own kee
 
 ## 10. Tooling / distribution (deferred)
 
+<a id="s10-release-line"></a>
+
+#### A C-compiler error in a release build has no kama position (KR-256)
+
+**Found 2026-10-28,** running the wasm fixture corpus in release for the one-TU wasm build (`0.9.755`):
+`xfail/extern_const_missing.d` and `xfail/extern_enum_missing_constant` fail there because their recorded position
+(`main.kama:7:21`) is gone. The cause is one line in the driver, `if (release) emitLines = false;` ("release builds
+strip debug info and #line"), and it holds on every target. Built natively, the same program's error reads `main.c:679`
+under `--release` and points at `main.kama:7` in the debug build.
+
+**What it touches.** Only errors the C compiler finds: an `extern const` or extern enum constant the header does not
+define, an extern type's layout `_Static_assert`, and C warnings a vendored header raises in the program's own TU.
+kama's front end reports its own errors the same way in both tiers, and a runtime panic's location is a string the
+emitter writes, not `#line` (a release build prints `kama: division by zero (div_zero.kama:8)`).
+
+**What decides it.** `#line` feeds only diagnostics, debug info (none in release) and `__FILE__`/`__LINE__`. So: build
+the CPU suite and the server bench in release with and without it, and compare the binaries' bytes and the build
+time; check whether any runtime macro bakes `__FILE__` into a release binary. If the bytes match, release keeps
+`#line`, and the two xfails gain a release run.
+
 <a id="s10-release-signing"></a>
 
 ### Signed releases (KR-135)
