@@ -1,12 +1,13 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
 **Status: ruled 2026-10-28.** Decisions 1–6 and 8 as recommended (8 at 5%); decision 7 as revised, after the first
-recommendation rested on a false claim (§5). Next is decision 8's harness. A design doc and a measurement come before
-any code, as [ROADMAP_DETAIL §9](../ROADMAP_DETAIL.md#s9-io-uring) asks. The measurement is decision 8, and it can close
-the row: if no arm clears its bar, kama keeps epoll on Linux and this file records why, as Go's maintainers concluded
-for Go. This file builds on [fibers.md](fibers.md), whose decisions it cites by number, and is deleted when the work
-ships or closes. Facts about other runtimes were read from their source or their maintainers' own words on 2026-10-28
-(*Sources*). Kernel versions are from the liburing man pages. Every proposed spelling is a `kama fragment`.
+recommendation rested on a false claim (§5). Decision 8 is measured on aarch64 (§6); x86-64 is pending. A design doc and
+a measurement come before any code, as [ROADMAP_DETAIL §9](../ROADMAP_DETAIL.md#s9-io-uring) asks. The measurement is
+decision 8, and it can close the row: if no arm clears its bar, kama keeps epoll on Linux and this file records why, as
+Go's maintainers concluded for Go. This file builds on [fibers.md](fibers.md), whose decisions it cites by number, and
+is deleted when the work ships or closes. Facts about other runtimes were read from their source or their maintainers'
+own words on 2026-10-28 (*Sources*). Kernel versions are from the liburing man pages. Every proposed spelling is a `kama
+fragment`.
 
 ## 1. The problem
 
@@ -218,7 +219,49 @@ only when it beats the reference's run against itself in 12 of 15 rounds).
 If (b) clears the bar, the kama build is: the arm in `kama_sched.h` (setup, probe, submission and completion), the
 cancel-and-drain path, the fallback, and the server benchmark rerun with both arms.
 
-## 6. What is out of scope here
+## 6. Measurements (decision 8)
+
+### aarch64: the M4 VM, kernel 7.0.9, 15 rounds (2026-10-28)
+
+`bench/run uring`; raw rows in [benchmarks/uring-aarch64.tsv](../benchmarks/uring-aarch64.tsv). Server CPU per request
+against `et`, kama's epoll protocol today, as the median of the paired ratios; every ring arm's ratio held in 15 of
+15 rounds unless the cell says otherwise. `et#2`, `et` run again, is the noise floor: 0.99–1.04.
+
+| arm | 100, 64 B | 1,000, 64 B | 1,000, 4 KiB | 10,000, 64 B | 10,000, 4 KiB | the 5% bar |
+|---|---|---|---|---|---|---|
+| ring-poll (a) | 1.00 (8/15) | 0.99 (9/15) | 1.01 | 1.05 | 1.04 | no |
+| ring-op (b) | 0.88 | 0.89 | 0.90 | 1.06 (more, 15/15) | 1.04 | no: fails at 10,000 |
+| ring-op-pf | 0.94 | 0.94 | 0.95 (12/15) | 1.04 | 1.02 | no |
+| ring-send (b′) | **0.75** | **0.76** | **0.79** | **0.91** | **0.92** | **clears** |
+| ring-send-pf | 0.81 | 0.82 | 0.82 | **0.87** | **0.86** | **clears** |
+| ring-multishot (c) | 0.89 | 0.92 | 0.95 (14/15) | 1.03 | 1.01 | no |
+
+What it says, on this machine:
+- **Readiness through the ring buys nothing.** (a) is level with epoll everywhere, as the Loom prototype found.
+- **The ruled candidate, (b), fails the bar.** A read through the ring saves 10–12% at 100 and 1,000 connections and
+  costs 4–6% more at 10,000: each `RECV` arms a poll inside the kernel and tears it down, where epoll's registration is
+  made once. Kernel-chosen buffers, (c), fail the same way.
+- **Both directions through the ring, (b′), clears it everywhere,** 21–25% less CPU at 100 and 1,000 connections and
+  8–9% at 10,000: the reply's `write` system call goes too, and every `SEND` of a turn rides one `io_uring_enter`.
+- **`POLL_FIRST` helps at 10,000 connections and costs below it** (0.86–0.87 against 0.91–0.92 at 10,000; 0.81–0.82
+  against 0.75–0.79 at 100 and 1,000), so it would be chosen by load, or not at all.
+
+What the harness does not count, and what decides whether (b′)'s margin survives in kama:
+- **A park per write.** A task here is a struct; a fiber that sends through the ring parks until the `SEND` completes,
+  and a switch there and back costs 21.7 ns on this VM (fibers.md §6). With the scheduler's bookkeeping, say 25–50 ns
+  a request, against (b′)'s 171 ns saving at 10,000 echo connections: about 6% left there, `-pf` about 10%.
+- **Latency.** A reply through the ring leaves at the turn's `io_uring_enter`, not at the `write` call, so a turn of
+  40 requests holds the first reply until the 40th is answered. The server benchmark measures that once a kama arm
+  exists.
+- **Batching.** The ring returns about 40 completions per `io_uring_enter` here, against about 1,000 events per
+  `epoll_wait`, which looks like the kernel's cap on deferred task work run per call. At 0.025 calls a request it is
+  not where the cost is, but a ring arm would wait with a minimum batch (`min_wait_usec`, 6.13) only if a measurement
+  shows it pays.
+
+**Pending:** the same run on x86-64 (the maintainer's KVM box). If it agrees, decision 2's choice moves from (b) to
+(b′), which parks a fiber on every write, and that is the maintainer's ruling to make on both machines' numbers.
+
+## 7. What is out of scope here
 
 - **Regular files and DNS** stay on KR-3 step 7's offload pool, which every OS needs. io_uring reads regular files
   without blocking, and could serve them on Linux later; libuv moved its file operations back to the threadpool in

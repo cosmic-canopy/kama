@@ -3147,6 +3147,13 @@ a timed-out read losing data), no liburing, no operation that reads the caller's
 sets the bar: a ring arm is built only if it beats epoll by 5% in CPU per request at 1,000 and 10,000 connections on
 both machines; below that, this row closes with the measurement.
 
+**Measured on aarch64, 2026-10-28** (io_uring.md §6; the M4 VM, kernel 7.0.9, 15 rounds): readiness through the ring is
+level with epoll; the ruled candidate, reads through the ring, saves 10–12% at 100 and 1,000 connections and costs 4–6%
+more at 10,000, so it fails; both directions through the ring saves 21–25% and 8–9% there, 15/15, and clears, before a
+fiber's park per write (about 25–50 ns) is counted. **Owed:** the same run on x86-64 (`bench/run uring
+.scratch/x86-uring.tsv 15` on the maintainer's box after KR-250's, committed as `docs/benchmarks/uring-x86-64.tsv`);
+then decision 2 is ruled again on both machines' numbers.
+
 <a id="s9-fiber-memory"></a>
 
 #### Memory per idle fiber connection (KR-254)
