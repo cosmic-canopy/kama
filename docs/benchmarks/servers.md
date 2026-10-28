@@ -20,9 +20,10 @@ Read these before any number below.
   same servers run about 3.3 times faster. kama 0.9.752 and 0.9.753 also changed the fiber arm (below).
 - **The server is the limit, and the `busy` column shows it.** The container sees 8 vCPUs. Every server is pinned to 3
   of them (`taskset -c 0-2`) and the load client to the other 5. `busy` is the share of the server's 3 cores that was
-  not idle during the measured window, read from `/proc/stat` by the client. It is 99–100% for every arm in every
-  config except one Node process, which can use one core (34%). In the earlier run, the client on 3 cores capped the
-  four fastest arms instead.
+  not idle during the measured window, read from `/proc/stat` by the client. It is 99–100% for C, kama and
+  thread-per-core tokio in every saturated config. Go (91–98%) and work-stealing tokio (87–100%) leave a core idle at
+  times while the client is still able to send more, and one Node process can use only one core (34%). In the earlier
+  run, the client on 3 cores capped the four fastest arms instead.
 - **CPU per request is the server process's own user and system time** over the measured window. The kernel's softirq
   work, which on loopback delivers each packet to the other end, is charged to no process. So `busy` says whether the
   server was saturated, and requests per second is the throughput.
@@ -37,7 +38,7 @@ Read these before any number below.
 - **A fiber keeps more memory per idle connection than a stackless task.** A tokio future or a Node callback holds only
   its state; a fiber holds the stack pages it touched. The idle table shows it (KR-254).
 - **Thread-per-core does not steal work.** The skew configs are where that would show (below).
-- **x86-64 is not measured yet.** Every number here is aarch64.
+- **x86-64 has its own section** ([below](#x86-64)), on an i9-13900K. Every number before it is aarch64.
 
 ## Setup
 
@@ -316,6 +317,163 @@ Only differences that hold in at least 12 of 15 paired rounds are stated. In eve
   Each was measured interleaved against the version before it: the first serves 6.5% more echo requests a second at
   1,000 connections and 4.5% more at 10,000, and the second another 0.9% at 10,000 (none at 1,000).
 
+## x86-64
+
+_Measured 2026-10-28 · kama 0.9.755 · 15 rounds · natively, without the container, in a QEMU/KVM guest (16 vCPUs,
+Linux 6.17) on an Intel i9-13900K_
+
+The same harness, arms and protocol on x86-64. The raw rows are `servers-x86-64.tsv`, and `servers-x86-64.txt` holds
+the machine facts. What differs from the M4 run:
+
+- **No container.** `bench/server/run.sh` runs as is on Linux. Go 1.27.3 and Rust 1.97.1 were installed at the bench
+  image's pins. Node is the host's v24.13.0, where the image has 22.16.0. The server again has 3 cores (`taskset -c
+  0-2`), and the client has the other 13.
+- **Wider noise.** `c#2` sits within 4% of `c` here, against 0.4% on the M4. The i9-13900K mixes 8 performance and 16
+  efficiency cores, and a guest cannot see which of them the host runs its vCPUs on. The interleaved rounds keep that
+  from favouring an arm, and the 12-of-15 rule keeps it out of the claims below.
+- **`busy`** is 100% for C, kama and thread-per-core tokio in every config. Go (87–93%) and work-stealing tokio
+  (96–100%) leave a core idle at times, and one Node process can use only one core (34%). The client is not what
+  holds them back: it carries 0.8 to 1.3 million requests a second for the C and kama arms, and 0.28 to 0.69 million
+  for Go.
+- **No skew configs.** This is the default set: echo and HTTP at 100, 1,000 and 10,000 connections, and idle.
+  **1,080 runs, 0 errors.**
+
+### Results
+
+The same columns as above, against `c`.
+
+
+#### echo, 100 connections
+
+| arm | req/s | p50 µs | p99 µs | p99.9 µs | CPU µs / req | busy | RSS MiB | vs ref: req/s ratio | faster in | vs ref: CPU ratio | cheaper in |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| c | 1,171,498 | 74 | 188 | 205 | 2.56 | 100% | 2.0 | — | — | — | — |
+| c#2 | 1,189,126 | 74 | 180 | 197 | 2.52 | 100% | 2.0 | 1.039 | 8/15 | 0.963 | 8/15 |
+| go | 671,800 | 115 | 524 | 3146 | 3.98 | 90% | 7.4 | 0.595 | 1/15 | 1.542 | 1/15 |
+| kama-fibers | 1,216,127 | 78 | 106 | 115 | 2.47 | 100% | 2.5 | 1.005 | 8/15 | 0.994 | 8/15 |
+| kama-isolates | 621,052 | 131 | 377 | 475 | 4.83 | 100% | 3.4 | 0.590 | 1/15 | 1.698 | 1/15 |
+| node | 274,770 | 344 | 524 | 754 | 3.70 | 34% | 62.2 | 0.245 | 0/15 | 1.383 | 1/15 |
+| node-cluster | 772,527 | 119 | 278 | 344 | 3.88 | 100% | 234.2 | 0.663 | 1/15 | 1.509 | 1/15 |
+| tokio | 838,807 | 111 | 229 | 254 | 3.43 | 96% | 3.5 | 0.839 | 1/15 | 1.139 | 2/15 |
+| tokio-percore | 957,311 | 90 | 172 | 180 | 3.13 | 100% | 3.3 | 0.863 | 4/15 | 1.159 | 4/15 |
+
+#### echo, 1000 connections
+
+| arm | req/s | p50 µs | p99 µs | p99.9 µs | CPU µs / req | busy | RSS MiB | vs ref: req/s ratio | faster in | vs ref: CPU ratio | cheaper in |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| c | 1,255,833 | 786 | 918 | 1114 | 2.39 | 100% | 5.2 | — | — | — | — |
+| c#2 | 1,259,443 | 754 | 918 | 1180 | 2.38 | 100% | 5.2 | 1.009 | 11/15 | 0.990 | 11/15 |
+| go | 662,087 | 1376 | 3015 | 5505 | 4.11 | 91% | 14.9 | 0.522 | 0/15 | 1.734 | 0/15 |
+| kama-fibers | 1,144,613 | 852 | 950 | 1049 | 2.62 | 100% | 9.5 | 0.923 | 0/15 | 1.083 | 0/15 |
+| kama-isolates | 654,587 | 1442 | 4719 | 6029 | 4.58 | 100% | 15.4 | 0.512 | 0/15 | 1.953 | 0/15 |
+| node | 274,098 | 3670 | 4063 | 4981 | 3.71 | 34% | 63.2 | 0.215 | 0/15 | 1.573 | 0/15 |
+| node-cluster | 826,785 | 1180 | 1507 | 2359 | 3.63 | 100% | 241.6 | 0.653 | 0/15 | 1.530 | 0/15 |
+| tokio | 1,000,311 | 508 | 5243 | 7078 | 3.00 | 100% | 7.5 | 0.802 | 0/15 | 1.246 | 0/15 |
+| tokio-percore | 1,147,150 | 819 | 983 | 1114 | 2.62 | 100% | 7.3 | 0.919 | 1/15 | 1.089 | 1/15 |
+
+#### echo, 10000 connections
+
+| arm | req/s | p50 µs | p99 µs | p99.9 µs | CPU µs / req | busy | RSS MiB | vs ref: req/s ratio | faster in | vs ref: CPU ratio | cheaper in |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| c | 892,751 | 11010 | 12583 | 14156 | 3.36 | 100% | 40.6 | — | — | — | — |
+| c#2 | 879,059 | 11010 | 12583 | 14156 | 3.41 | 100% | 40.7 | 0.969 | 4/15 | 1.032 | 5/15 |
+| go | 493,554 | 18874 | 30409 | 32506 | 5.43 | 90% | 82.2 | 0.536 | 0/15 | 1.641 | 0/15 |
+| kama-fibers | 829,999 | 11534 | 12583 | 13107 | 3.61 | 100% | 82.4 | 0.923 | 0/15 | 1.084 | 0/15 |
+| kama-isolates | 447,704 | 22020 | 83886 | 159384 | 6.70 | 100% | 132.5 | 0.491 | 0/15 | 2.037 | 0/15 |
+| node | 161,245 | 50332 | 52429 | 52429 | 6.27 | 34% | 89.1 | 0.184 | 0/15 | 1.841 | 0/15 |
+| node-cluster | 521,587 | 13107 | 16777 | 25166 | 5.75 | 100% | 288.3 | 0.574 | 0/15 | 1.740 | 0/15 |
+| tokio | 828,514 | 557 | 62915 | 75498 | 3.62 | 100% | 49.2 | 0.924 | 2/15 | 1.081 | 2/15 |
+| tokio-percore | 840,319 | 12059 | 13107 | 13107 | 3.57 | 100% | 49.1 | 0.923 | 1/15 | 1.083 | 1/15 |
+
+#### http, 100 connections
+
+| arm | req/s | p50 µs | p99 µs | p99.9 µs | CPU µs / req | busy | RSS MiB | vs ref: req/s ratio | faster in | vs ref: CPU ratio | cheaper in |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| c | 1,124,349 | 74 | 188 | 213 | 2.67 | 100% | 2.0 | — | — | — | — |
+| c#2 | 1,144,706 | 74 | 205 | 229 | 2.62 | 100% | 2.0 | 0.985 | 5/15 | 1.015 | 5/15 |
+| go | 348,820 | 205 | 1311 | 4063 | 7.51 | 88% | 15.4 | 0.301 | 0/15 | 2.892 | 0/15 |
+| go-raw | 689,813 | 115 | 508 | 3146 | 3.85 | 90% | 7.4 | 0.636 | 1/15 | 1.429 | 1/15 |
+| kama-fibers | 1,133,138 | 82 | 131 | 139 | 2.65 | 100% | 2.5 | 1.020 | 10/15 | 0.981 | 10/15 |
+| kama-isolates | 646,799 | 131 | 344 | 475 | 4.64 | 100% | 3.4 | 0.607 | 1/15 | 1.648 | 1/15 |
+| node | 136,261 | 721 | 852 | 1376 | 7.38 | 34% | 73.0 | 0.124 | 0/15 | 2.676 | 0/15 |
+| node-cluster | 400,387 | 238 | 475 | 590 | 7.49 | 100% | 258.8 | 0.354 | 0/15 | 2.820 | 0/15 |
+| tokio | 627,755 | 148 | 311 | 344 | 4.65 | 97% | 4.5 | 0.641 | 0/15 | 1.516 | 1/15 |
+| tokio-percore | 698,877 | 123 | 246 | 262 | 4.30 | 100% | 4.0 | 0.686 | 1/15 | 1.457 | 1/15 |
+| tokio-percore-raw | 1,075,548 | 86 | 127 | 172 | 2.79 | 100% | 3.3 | 0.945 | 4/15 | 1.058 | 4/15 |
+| tokio-raw | 875,126 | 106 | 221 | 246 | 3.32 | 96% | 3.4 | 0.839 | 6/15 | 1.142 | 6/15 |
+
+#### http, 1000 connections
+
+| arm | req/s | p50 µs | p99 µs | p99.9 µs | CPU µs / req | busy | RSS MiB | vs ref: req/s ratio | faster in | vs ref: CPU ratio | cheaper in |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| c | 1,254,063 | 786 | 918 | 1114 | 2.39 | 100% | 5.2 | — | — | — | — |
+| c#2 | 1,248,838 | 786 | 918 | 1114 | 2.40 | 100% | 5.2 | 0.993 | 6/15 | 1.008 | 6/15 |
+| go | 340,839 | 2490 | 11534 | 16777 | 7.64 | 87% | 41.6 | 0.275 | 0/15 | 3.195 | 0/15 |
+| go-raw | 531,152 | 1770 | 4194 | 6554 | 4.93 | 90% | 14.9 | 0.424 | 0/15 | 2.042 | 0/15 |
+| kama-fibers | 1,122,467 | 885 | 983 | 1442 | 2.67 | 100% | 9.6 | 0.900 | 0/15 | 1.111 | 0/15 |
+| kama-isolates | 635,569 | 1573 | 4194 | 5505 | 4.72 | 100% | 15.4 | 0.513 | 0/15 | 1.949 | 0/15 |
+| node | 124,962 | 7340 | 8389 | 11010 | 8.05 | 34% | 83.4 | 0.100 | 0/15 | 3.367 | 0/15 |
+| node-cluster | 410,620 | 2359 | 2752 | 4456 | 7.31 | 100% | 273.3 | 0.323 | 0/15 | 3.092 | 0/15 |
+| tokio | 599,029 | 754 | 8126 | 10486 | 5.01 | 100% | 14.8 | 0.476 | 0/15 | 2.103 | 0/15 |
+| tokio-percore | 829,160 | 1180 | 1376 | 1442 | 3.62 | 100% | 13.2 | 0.653 | 0/15 | 1.530 | 0/15 |
+| tokio-percore-raw | 1,126,048 | 885 | 983 | 1049 | 2.66 | 100% | 7.3 | 0.900 | 0/15 | 1.111 | 0/15 |
+| tokio-raw | 842,554 | 524 | 5767 | 7340 | 3.56 | 100% | 7.5 | 0.669 | 0/15 | 1.495 | 0/15 |
+
+#### http, 10000 connections
+
+| arm | req/s | p50 µs | p99 µs | p99.9 µs | CPU µs / req | busy | RSS MiB | vs ref: req/s ratio | faster in | vs ref: CPU ratio | cheaper in |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| c | 885,068 | 11010 | 12583 | 14156 | 3.39 | 100% | 40.6 | — | — | — | — |
+| c#2 | 896,996 | 11010 | 12583 | 14156 | 3.34 | 100% | 40.6 | 0.994 | 6/15 | 1.006 | 6/15 |
+| go | 279,766 | 32506 | 56623 | 62915 | 9.88 | 93% | 306.9 | 0.323 | 0/15 | 2.891 | 0/15 |
+| go-raw | 498,969 | 18874 | 30409 | 33554 | 5.41 | 90% | 82.3 | 0.558 | 0/15 | 1.591 | 0/15 |
+| kama-fibers | 823,591 | 12059 | 13107 | 13632 | 3.64 | 100% | 83.8 | 0.941 | 0/15 | 1.062 | 0/15 |
+| kama-isolates | 438,433 | 25166 | 75498 | 130023 | 6.84 | 100% | 134.0 | 0.494 | 0/15 | 2.028 | 0/15 |
+| node | 92,021 | 88080 | 88080 | 88080 | 10.95 | 34% | 173.7 | 0.105 | 0/15 | 3.201 | 0/15 |
+| node-cluster | 289,217 | 23069 | 27263 | 32506 | 10.37 | 100% | 374.8 | 0.329 | 0/15 | 3.045 | 0/15 |
+| tokio | 547,446 | 852 | 104858 | 113246 | 5.47 | 100% | 117.7 | 0.640 | 0/15 | 1.560 | 0/15 |
+| tokio-percore | 616,178 | 16253 | 16777 | 17826 | 4.87 | 100% | 108.0 | 0.697 | 0/15 | 1.434 | 0/15 |
+| tokio-percore-raw | 838,389 | 11534 | 13107 | 13632 | 3.58 | 100% | 49.1 | 0.952 | 0/15 | 1.051 | 1/15 |
+| tokio-raw | 806,617 | 590 | 71303 | 79692 | 3.72 | 100% | 49.2 | 0.923 | 4/15 | 1.083 | 4/15 |
+
+#### idle, 10000 connections
+
+| arm | held | RSS MiB | RSS ÷ held, KiB (process baseline included) |
+|---|---|---|---|
+| c | 10000 | 41.0 | 4.2 |
+| c#2 | 10000 | 41.0 | 4.2 |
+| go | 10000 | 81.4 | 8.3 |
+| kama-fibers | 10000 | 82.7 | 8.5 |
+| kama-isolates | 10000 | 66.1 | 6.8 |
+| node | 10000 | 87.0 | 8.9 |
+| node-cluster | 10000 | 275.4 | 28.2 |
+| tokio | 10000 | 49.4 | 5.1 |
+| tokio-percore | 10000 | 49.3 | 5.0 |
+
+### What it says on x86-64
+
+Only differences that hold in at least 12 of 15 paired rounds are stated.
+
+- **Against tokio's thread-per-core arm:** level on echo and on like-for-like HTTP at 1,000 and 10,000 connections. On
+  echo at 100, kama serves 1.27 times as many requests (14/15). On HTTP at 100, kama's median is 10% higher, but only in
+  11 of 15 rounds, so it is not a claim. Against hyper on that runtime, kama's minimal handler serves 1.34 to 1.46
+  times as many.
+- **Against the C epoll loop:** level at 100 connections. From 1,000 up, the loop serves 6.3% to 11.1% more (15/15)
+  while spending 6% to 10% less CPU per request. On the M4, kama was ahead of it at 100 and 1,000 connections. tokio's
+  thread-per-core arm trails the loop by about the same margin here. This run does not show why the loop leads on
+  this CPU.
+- **Against tokio's work-stealing runtime:** 1.38 times on echo at 100 connections (14/15), 1.16 times at 1,000 (15/15),
+  and 1.35 times on raw HTTP at 1,000 (13/15). At 10,000 connections, the two are level on echo and raw HTTP, where on
+  the M4 tokio led by 6.5–7.9%. tokio's p99 there is about five times kama's: 63 ms against 12.6 on echo, and 71
+  against 13.1 on HTTP.
+- **Against Go:** 1.71 to 1.75 times on echo, 1.63 to 2.16 times `go-raw` on HTTP, and 2.9 to 3.3 times `net/http`.
+- **Against Node:** 4.1 to 5.0 times one Node process on echo, and 1.38 to 1.60 times `cluster`. On HTTP, 8.4 to 9.1
+  times and 2.7 to 2.8 times.
+- **Fibers against kama's isolate per connection:** 1.68 to 1.88 times the requests per second. At 10,000 connections,
+  the fibers' p99.9 is 13 to 14 ms, where the thread per connection reached 130 to 159 ms.
+- **Memory per idle connection:** about the same as the M4. Fibers hold 8.5 KiB, Go 8.3, Node 8.9, tokio 5.0 to 5.1,
+  and the C loop 4.2 (KR-254).
+
 ## Reproduce
 
 ```sh
@@ -338,6 +496,7 @@ exec /opt/podman/bin/krunkit "$@"
 `SLOTS`, `CONFIGS`, `CORES`, `WARMUP`, `SECONDS_`, `SKEW_HOT` and `SKEW_ROUNDS` narrow a run, and the low-load skew runs
 used `SLOTS="c go tokio tokio-percore kama-fibers c#2"`. `KAMA_B_TREE=<worktree>` adds a `kama-fibers-b` arm built by
 that tree's compiler, for an A/B in the same rounds, and `WRAP` runs each server under `perf record` or `strace`. The
-raw rows are beside this file: `servers.tsv` (the main run), `servers-skew-100us.tsv`, `servers-skew-1ms.tsv` and
-`servers-echo-low.tsv`. On Linux, `run.sh` first measures what a kernel clock read costs (`clockcost.c`) and refuses to
+raw rows are beside this file: `servers.tsv` (the main run), `servers-skew-100us.tsv`, `servers-skew-1ms.tsv`,
+`servers-echo-low.tsv` and `servers-x86-64.tsv`. On Linux the harness also runs without the container, with Go, Rust
+and Node on `PATH`, as the x86-64 run did: `CORES=3 bash bench/server/run.sh out.tsv 15`. On Linux, `run.sh` first measures what a kernel clock read costs (`clockcost.c`) and refuses to
 run where it is more than 200 ns, which a trapping VM is.

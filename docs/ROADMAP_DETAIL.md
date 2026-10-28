@@ -3050,7 +3050,7 @@ rather than here, so there is one number to keep current. Forward work:
   loads the whole module by design: nothing pins a file, and seeding from the importing file's tokens would
   be unsound, since a type reached only through inference is never spelled.
 
-### Toward the fastest server runtime (KR-250, KR-253..255)
+### Toward the fastest server runtime (KR-253..255)
 
 **Where it stands (2026-10-28, kama 0.9.753, [benchmarks/servers.md](benchmarks/servers.md)).** With the server
 saturated on 3 cores, kama's fibers (an isolate per core, a fiber per connection) are level with tokio's thread-per-core
@@ -3059,6 +3059,9 @@ hand-written C epoll loop at 100 and 1,000 connections (4.0% and 0.8%); 1.2–1.
 `cluster`; and ahead of tokio's work-stealing runtime except at 10,000 connections, where it serves 6.5–7.9% more by
 leaving some connections waiting (three times kama's p99). Thread-per-core loses where a few connections carry CPU
 bursts at low load (KR-255). Compute is at C's speed already ([benchmarks/RESULTS.md](benchmarks/RESULTS.md)).
+On x86-64 (an i9-13900K, kama 0.9.755, servers.md's *x86-64* section), kama is level with tokio's thread-per-core arm
+from 1,000 connections and with its work-stealing runtime at 10,000, and the C epoll loop leads both kama and
+thread-per-core tokio by 6–11% from 1,000 connections.
 
 The first run, on 2026-10-27, mostly measured a trap in the bench VM: podman ran it nested, so every kernel clock read
 cost about 1 µs (servers.md says how to check). On the fixed VM, the 1.1% and 4.8% it showed against tokio's
@@ -3075,52 +3078,6 @@ glommio and monoio in Rust), which complete I/O with fewer system calls than the
 hand-tuned HTTP stacks (vectorized parsing, pipelining) such as Go's fasthttp, .NET's Kestrel and the C++ and Rust
 servers at the top of TechEmpower's plaintext test. Java's virtual threads are kama's model on the JVM and were not
 measured.
-
-<a id="s9-bench-gaps"></a>
-
-#### The server benchmark on x86-64 Linux (KR-250)
-
-The rest of what this row asked for is measured (servers.md, kama 0.9.753): raw-socket Go and tokio arms with the C and
-kama arms' minimal HTTP parse, beside the full stacks; a skewed load, saturated and at low load; and a client that is
-never the limit (5 client cores, and a `busy` column that shows the server's cores 99–100% busy). What is left: every
-number is aarch64 in a VM on an Apple M4. The maintainer's Linux box is a KVM guest, so it runs on the host's own CPU,
-and the same harness runs there unchanged.
-
-**The run, on the Linux box** (any x86-64 Linux with podman or docker will do):
-1. `git pull` on `dev`. It needs the harness from 2026-10-28 on: it prints what a kernel clock read costs and refuses
-   to measure where the reads are trapped (`bench/server/clockcost.c`), the failure that spoiled the first M4 run.
-2. Check the box. `uname -m` should say `x86_64` and `systemd-detect-virt` `kvm` or `none`. `nproc` should be at least
-   8: the server gets 3 cores and the client the rest, and the `busy` column shows if the client became the limit.
-   Note `lscpu | grep 'Model name'` for the write-up.
-3. Quiet it: no content work, no other containers (`podman ps` or `docker ps`), no builds.
-4. Build the image, once: `bench/run build-image` (about 25 minutes, about 4.5 GB).
-5. Run it where a closed terminal cannot end it (`tmux`, or `nohup … &`). The full run takes about 4 hours; the
-   second form takes about 1 hour and keeps the configs that decide something:
-   ```sh
-   CORES=3 bench/run server .scratch/x86.tsv 15
-   CORES=3 CONFIGS="echo:10000 http:10000 skew:12 skew:1000" bench/run server .scratch/x86.tsv 15
-   ```
-6. Look: `python3 bench/server/summarize.py .scratch/x86.tsv` should report no error runs, and `busy` should be 99–100%
-   for every arm but single-process Node.
-7. Hand it back through the repo: copy `.scratch/x86.tsv` to `docs/benchmarks/servers-x86-64.tsv`, write
-   `docs/benchmarks/servers-x86-64.txt` with the outputs of `uname -r`, `lscpu | grep 'Model name'`, `nproc` and
-   `systemd-detect-virt`, then commit both as `bench: x86-64 server run (raw rows)` and push. The next session writes
-   servers.md's x86-64 section from them and closes this row.
-8. Optional, for KR-254, if `ls /sys/bus/event_source/devices/` lists `cpu` (the host passes its hardware counters
-   through), count them for the fiber arm and for tokio's thread-per-core arm:
-   ```sh
-   sudo sysctl -w kernel.perf_event_paranoid=-1
-   for arm in kama-fibers tokio-percore; do
-     CORES=3 SLOTS=$arm CONFIGS=echo:10000 \
-       WRAP="perf stat -e cycles,instructions,cache-misses,dTLB-load-misses -o /work/.scratch/x86-perf-$arm.txt --" \
-       bench/run server .scratch/x86-perf-$arm.tsv 1
-   done
-   ```
-   Commit the two `.txt` files beside the TSV. A count covers the server's whole life; divided by the run's req/s
-   times 6 s, it is per request.
-
-If the container will not start because of its descriptor limit (`--ulimit nofile=524288`), the user's hard limit is
-lower: `ulimit -Hn` shows it. Raise it in `/etc/security/limits.conf`, or use rootful docker.
 
 <a id="s9-io-uring"></a>
 
@@ -3150,9 +3107,11 @@ both machines; below that, this row closes with the measurement.
 **Measured on aarch64, 2026-10-28** (io_uring.md §6; the M4 VM, kernel 7.0.9, 15 rounds): readiness through the ring is
 level with epoll; the ruled candidate, reads through the ring, saves 10–12% at 100 and 1,000 connections and costs 4–6%
 more at 10,000, so it fails; both directions through the ring saves 21–25% and 8–9% there, 15/15, and clears, before a
-fiber's park per write (about 25–50 ns) is counted. **Owed:** the same run on x86-64 (`bench/run uring
-.scratch/x86-uring.tsv 15` on the maintainer's box after KR-250's, committed as `docs/benchmarks/uring-x86-64.tsv`);
-then decision 2 is ruled again on both machines' numbers.
+fiber's park per write (about 25–50 ns) is counted. **Measured on x86-64, 2026-10-28**
+([benchmarks/uring-x86-64.tsv](benchmarks/uring-x86-64.tsv); the i9-13900K KVM guest, kernel 6.17, 15 rounds): no arm
+clears the bar. Both directions saves 19–24% at 1,000 connections and 7% at 10,000 with 64-byte replies, but only 2% with
+4 KiB replies. Its POLL_FIRST variant saves 8% there, but in only 11 of 15 rounds. Reads through the ring save 14–15% and 3–7%.
+**Owed:** decision 2 is ruled again on both machines' numbers.
 
 <a id="s9-fiber-memory"></a>
 
@@ -3171,7 +3130,10 @@ before it, `frame_dummy`, since the asm label has no function type). `0.9.753` p
 while the current one runs: 1.7% less CPU per request at 10,000 connections (15/15 rounds), and no change at 1,000,
 where the frames stay cached. After it, kama and tokio-percore spend the same CPU per request at 10,000 connections,
 and tokio serves about 1% more requests a second; at 1,000 the two are within the noise floor. Frames and control
-blocks laid out densely, so that a switch touches fewer lines and pages, are the lever left.
+blocks laid out densely, so that a switch touches fewer lines and pages, are the lever left. On x86-64 the two are level
+at 10,000 (servers.md's *x86-64* section). Hardware counters (cycles, cache and dTLB misses for the fiber arm against
+tokio-percore, `perf stat` through the harness's `WRAP`) are still owed. The x86-64 box's guest exposes no `cpu` PMU,
+so they wait for a machine that passes them through.
 
 <a id="s9-skew"></a>
 
