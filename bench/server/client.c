@@ -4,8 +4,19 @@
 //        client -h                                                        prints the header that line follows
 //   mode  echo  64-byte ping-pongs: write 64 bytes, read the same 64 back, repeat — a server parks once per request
 //         http  HTTP/1.1 keep-alive `GET /` (no pipelining); the reply must be `200` with the body `Hello, World!`
+//         skew  echo, except that SKEW_HOT connections (default 2) are hot: each of their requests asks the server for
+//               SKEW_ROUNDS rounds (default 1500) of a mix over its 64 bytes, a CPU burst. A request's first four bytes
+//               are its rounds (little-endian), and the reply carries the mix in bytes 4-7, so no compiler can drop
+//               the work; every other byte must come back as sent. Latency is the light connections' only, the tail
+//               a burst puts on the connections that share its core; requests/s counts both.
 //         idle  open <conns> connections, make one echo round trip on each so the server has accepted it, print
 //               READY on stderr, hold them for <seconds>, and report how many were held
+//
+// SERVER_PID (Linux): the server's process. The client then reports the CPU it and its descendants (node's cluster
+// workers) spent inside the measured window (user + system: not its start, the connects, or the warm-up).
+// SERVER_CORES=<n> (Linux): the server is pinned to CPUs 0..n-1. The client then reports how busy those CPUs were over
+// the window, from /proc/stat: that includes the kernel's softirq time, which no process is charged for, so it, and not
+// the process's CPU, says whether the server was the limit.
 //
 // Every reply is VERIFIED — the echoed bytes, the HTTP status and body — and a mismatch, an unexpected close or a
 // connect failure counts as an error. Any error makes the exit status 2 after the line is printed, so a server that
@@ -18,6 +29,7 @@
 #define _DEFAULT_SOURCE
 #define _DARWIN_C_SOURCE
 #include <arpa/inet.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -39,12 +51,13 @@
 #include <sys/event.h>
 #endif
 
-enum { MODE_ECHO, MODE_HTTP, MODE_IDLE };
+enum { MODE_ECHO, MODE_HTTP, MODE_IDLE, MODE_SKEW };
 enum { PAYLOAD = 64, BUF = 2048 };
 static const char HTTP_REQ[] = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
 static const char HTTP_BODY[] = "Hello, World!";
 
 static int g_mode, g_port;
+static uint32_t g_hot, g_rounds;   // skew: how many connections are hot, and the rounds each of their requests asks for
 static atomic_int g_phase;   // 0 warm-up, 1 measuring, 2 stop
 
 static uint64_t now_ns(void) {
@@ -87,7 +100,7 @@ typedef struct {
     int first, count;        // this thread's connections: [first, first + count)
     conn* c;
     hist h;
-    uint64_t reqs, errors, maxlat, held;
+    uint64_t reqs, timed, errors, maxlat, held;   // timed: the requests in the latency histogram
     pthread_t th;
 } worker;
 
@@ -98,9 +111,13 @@ static void fill_payload(conn* c, char* p) {
     for (int i = 0; i < PAYLOAD; ++i) p[i] = (char)((c->id * 31 + c->seq * 7 + i) & 0xff);
 }
 static size_t request_len(void) { return g_mode == MODE_HTTP ? sizeof HTTP_REQ - 1 : PAYLOAD; }
+static uint32_t request_rounds(const conn* c) { return g_mode == MODE_SKEW && (uint32_t)c->id < g_hot ? g_rounds : 0; }
 static void request_bytes(conn* c, char* out) {
-    if (g_mode == MODE_HTTP) memcpy(out, HTTP_REQ, sizeof HTTP_REQ - 1);
-    else fill_payload(c, out);
+    if (g_mode == MODE_HTTP) { memcpy(out, HTTP_REQ, sizeof HTTP_REQ - 1); return; }
+    fill_payload(c, out);
+    if (g_mode != MODE_SKEW) return;
+    uint32_t r = request_rounds(c);
+    for (int i = 0; i < 4; ++i) out[i] = (char)(r >> (8 * i));
 }
 
 // 1: a whole, correct reply is in buf[0, in); 0: not yet; -1: a wrong one.
@@ -108,7 +125,9 @@ static int reply_complete(conn* c) {
     if (g_mode != MODE_HTTP) {
         if (c->in < PAYLOAD) return 0;
         if (c->in > PAYLOAD) return -1;
-        char want[PAYLOAD]; fill_payload(c, want);
+        char want[PAYLOAD]; request_bytes(c, want);
+        if (g_mode == MODE_SKEW)   // bytes 4-7 are the server's mix, unchecked: the client would pay the burst too
+            return memcmp(want, c->buf, 4) == 0 && memcmp(want + 8, c->buf + 8, PAYLOAD - 8) == 0 ? 1 : -1;
         return memcmp(want, c->buf, PAYLOAD) == 0 ? 1 : -1;
     }
     c->buf[c->in < BUF ? c->in : BUF - 1] = 0;
@@ -168,8 +187,11 @@ static void on_readable(worker* w, conn* c) {
     uint64_t lat = now_ns() - c->t0;
     if (g_mode == MODE_IDLE) { w->held++; return; }        // one round trip proves the connection is served
     if (atomic_load(&g_phase) == 1) {
-        hist_add(&w->h, lat); w->reqs++;
-        if (lat > w->maxlat) w->maxlat = lat;
+        w->reqs++;
+        if (request_rounds(c) == 0) {
+            hist_add(&w->h, lat); w->timed++;
+            if (lat > w->maxlat) w->maxlat = lat;
+        }
     }
     c->seq++;
     if (atomic_load(&g_phase) < 2) start_request(w, c);
@@ -236,6 +258,79 @@ static void* run(void* arg) {
     return NULL;
 }
 
+// The server's processes: SERVER_PID and its descendants, found when the measured window opens (Linux).
+static long g_pids[256];
+static int g_npids;
+static long parent_of(long pid) {
+    char path[64], line[1024];
+    snprintf(path, sizeof path, "/proc/%ld/stat", pid);
+    FILE* f = fopen(path, "r");
+    if (!f) return -1;
+    size_t n = fread(line, 1, sizeof line - 1, f); fclose(f); line[n] = 0;
+    char* q = strrchr(line, ')');   // the command name may hold spaces; the fields follow its closing paren
+    long ppid = -1;
+    if (!q || sscanf(q + 2, "%*c %ld", &ppid) != 1) return -1;
+    return ppid;
+}
+static void find_server(void) {
+    g_npids = 0;
+    const char* root = getenv("SERVER_PID");
+    if (!root) return;
+    g_pids[g_npids++] = atol(root);
+    for (int grew = 1; grew && g_npids < 256; ) {   // until a pass over /proc adds no one
+        grew = 0;
+        DIR* d = opendir("/proc");
+        if (!d) return;
+        for (struct dirent* e; (e = readdir(d)) != NULL && g_npids < 256; ) {
+            char* end; long pid = strtol(e->d_name, &end, 10);
+            if (*end || pid <= 0) continue;
+            int known = 0;
+            for (int i = 0; i < g_npids; ++i) known |= g_pids[i] == pid;
+            if (known) continue;
+            long pp = parent_of(pid);
+            for (int i = 0; i < g_npids; ++i) if (g_pids[i] == pp) { g_pids[g_npids++] = pid; grew = 1; break; }
+        }
+        closedir(d);
+    }
+}
+// The CPU the server's processes have spent so far, in seconds (0 off Linux, or without SERVER_PID).
+static double server_cpu(void) {
+    double s = 0;
+    long hz = sysconf(_SC_CLK_TCK);
+    for (int i = 0; i < g_npids; ++i) {
+        char path[64], line[1024];
+        snprintf(path, sizeof path, "/proc/%ld/stat", g_pids[i]);
+        FILE* f = fopen(path, "r");
+        if (!f) continue;
+        size_t n = fread(line, 1, sizeof line - 1, f); fclose(f); line[n] = 0;
+        char* q = strrchr(line, ')');
+        unsigned long long ut = 0, st = 0;
+        if (q && sscanf(q + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &ut, &st) == 2)
+            s += (double)(ut + st) / (double)hz;
+    }
+    return s;
+}
+
+// Busy and total ticks so far on CPUs 0..n-1 (Linux; 0 elsewhere or without SERVER_CORES).
+static void cores_ticks(unsigned long long* busy, unsigned long long* total) {
+    *busy = *total = 0;
+#ifdef __linux__
+    int n = getenv("SERVER_CORES") ? atoi(getenv("SERVER_CORES")) : 0;
+    FILE* f = n > 0 ? fopen("/proc/stat", "r") : NULL;
+    if (!f) return;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        int cpu; unsigned long long v[8] = {0};
+        if (sscanf(line, "cpu%d %llu %llu %llu %llu %llu %llu %llu %llu", &cpu,
+                   &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]) < 9 || cpu >= n) continue;
+        unsigned long long t = 0;
+        for (int i = 0; i < 8; ++i) t += v[i];
+        *total += t; *busy += t - v[3] - v[4];   // all but idle and iowait
+    }
+    fclose(f);
+#endif
+}
+
 static void raise_fd_limit(void) {
     struct rlimit r;
     if (getrlimit(RLIMIT_NOFILE, &r) == 0) {
@@ -249,11 +344,14 @@ static void raise_fd_limit(void) {
 
 int main(int argc, char** argv) {
     if (argc == 2 && strcmp(argv[1], "-h") == 0) {
-        puts("mode\tconns\tthreads\tseconds\trequests\trps\tp50_us\tp99_us\tp999_us\tmax_us\terrors");
+        puts("mode\tconns\tthreads\tseconds\trequests\trps\tp50_us\tp99_us\tp999_us\tmax_us\terrors\tsrv_cpu_s\tsrv_busy");
         return 0;
     }
-    if (argc != 7) { fprintf(stderr, "usage: client <echo|http|idle> <port> <conns> <threads> <warmup_s> <seconds>\n"); return 64; }
-    g_mode = strcmp(argv[1], "http") == 0 ? MODE_HTTP : strcmp(argv[1], "idle") == 0 ? MODE_IDLE : MODE_ECHO;
+    if (argc != 7) { fprintf(stderr, "usage: client <echo|http|skew|idle> <port> <conns> <threads> <warmup_s> <seconds>\n"); return 64; }
+    g_mode = strcmp(argv[1], "http") == 0 ? MODE_HTTP : strcmp(argv[1], "idle") == 0 ? MODE_IDLE
+           : strcmp(argv[1], "skew") == 0 ? MODE_SKEW : MODE_ECHO;
+    g_hot = (uint32_t)atoi(getenv("SKEW_HOT") ? getenv("SKEW_HOT") : "2");
+    g_rounds = (uint32_t)atoi(getenv("SKEW_ROUNDS") ? getenv("SKEW_ROUNDS") : "1500");
     if (g_mode == MODE_ECHO && strcmp(argv[1], "echo") != 0) { fprintf(stderr, "client: unknown mode '%s'\n", argv[1]); return 64; }
     g_port = atoi(argv[2]); g_conns = atoi(argv[3]);
     int threads = atoi(argv[4]);
@@ -282,6 +380,8 @@ int main(int argc, char** argv) {
     for (int t = 0; t < threads; ++t) pthread_create(&ws[t].th, NULL, run, &ws[t]);
 
     uint64_t t0 = 0, t1 = 0;
+    double cpu0 = 0, cpu1 = 0;
+    unsigned long long busy0 = 0, busy1 = 0, total0 = 0, total1 = 0;
     if (g_mode == MODE_IDLE) {
         // Ready once every live connection has made its round trip (or ten seconds have passed).
         uint64_t deadline = now_ns() + 10ull * 1000000000ull;
@@ -295,29 +395,30 @@ int main(int argc, char** argv) {
         usleep((useconds_t)(secs * 1e6));
     } else {
         usleep((useconds_t)(warm * 1e6));
-        t0 = now_ns(); atomic_store(&g_phase, 1);
+        find_server(); cpu0 = server_cpu(); cores_ticks(&busy0, &total0); t0 = now_ns(); atomic_store(&g_phase, 1);
         usleep((useconds_t)(secs * 1e6));
-        t1 = now_ns();
+        t1 = now_ns(); cpu1 = server_cpu(); cores_ticks(&busy1, &total1);
     }
     atomic_store(&g_phase, 2);
     for (int t = 0; t < threads; ++t) pthread_join(ws[t].th, NULL);
 
     hist h; memset(&h, 0, sizeof h);
-    uint64_t reqs = 0, errors = connectErrors, maxlat = 0, held = 0;
+    uint64_t reqs = 0, timed = 0, errors = connectErrors, maxlat = 0, held = 0;
     for (int t = 0; t < threads; ++t) {
         for (int i = 0; i < EXPS * SUB; ++i) h.n[i] += ws[t].h.n[i];
-        reqs += ws[t].reqs; errors += ws[t].errors; held += ws[t].held;
+        reqs += ws[t].reqs; timed += ws[t].timed; errors += ws[t].errors; held += ws[t].held;
         if (ws[t].maxlat > maxlat) maxlat = ws[t].maxlat;
     }
     if (g_mode == MODE_IDLE) {
-        printf("idle\t%d\t%d\t%.1f\t%llu\t0\t0\t0\t0\t0\t%llu\n", g_conns, threads, secs,
+        printf("idle\t%d\t%d\t%.1f\t%llu\t0\t0\t0\t0\t0\t%llu\t0\t0\n", g_conns, threads, secs,
                (unsigned long long)held, (unsigned long long)errors);
     } else {
         double el = (double)(t1 - t0) / 1e9;
-        printf("%s\t%d\t%d\t%.2f\t%llu\t%.0f\t%.1f\t%.1f\t%.1f\t%.1f\t%llu\n", argv[1], g_conns, threads, el,
+        printf("%s\t%d\t%d\t%.2f\t%llu\t%.0f\t%.1f\t%.1f\t%.1f\t%.1f\t%llu\t%.2f\t%.3f\n", argv[1], g_conns, threads, el,
                (unsigned long long)reqs, (double)reqs / el,
-               hist_pct(&h, reqs, 0.50) / 1e3, hist_pct(&h, reqs, 0.99) / 1e3, hist_pct(&h, reqs, 0.999) / 1e3,
-               maxlat / 1e3, (unsigned long long)errors);
+               hist_pct(&h, timed, 0.50) / 1e3, hist_pct(&h, timed, 0.99) / 1e3, hist_pct(&h, timed, 0.999) / 1e3,
+               maxlat / 1e3, (unsigned long long)errors, cpu1 - cpu0,
+               total1 > total0 ? (double)(busy1 - busy0) / (double)(total1 - total0) : 0.0);
     }
     for (int i = 0; i < g_conns; ++i) if (!g_all[i].done) close(g_all[i].fd);
     return errors ? 2 : 0;

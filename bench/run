@@ -7,7 +7,10 @@
 #   bench/run run [workload]  measure time/RSS/size (default: all nine workloads)
 #   bench/run report          render docs/benchmarks/RESULTS.md from results
 #   bench/run all             build + run + report (the image must already exist: build-image)
-#   bench/run server [out] [rounds]  KR-243's server benchmark (bench/server/), out under .scratch/ by default
+#   bench/run server [out] [rounds]  KR-243's server benchmark (bench/server/), out under .scratch/ by default.
+#                             run.sh's knobs (SLOTS, CONFIGS, CORES, WARMUP, SECONDS_, WRAP, SKEW_HOT, SKEW_ROUNDS)
+#                             pass through when set; KAMA_B_TREE=<a worktree> builds that tree's compiler for the
+#                             `kama-fibers-b` arm; WRAP (perf, strace) gets the container what they need
 #   bench/run sh              interactive shell in the bench image
 #
 # Override the engine with KAMA_ENGINE=docker|podman.
@@ -25,6 +28,21 @@ fi
 
 run_ni() { "$ENGINE" run --rm -v "$ROOT:/work" -w /work "$IMAGE" "$@"; }
 
+# The server benchmark's knobs, set on this side, reach run.sh inside the container.
+server_args=()
+for v in SLOTS CONFIGS CORES WARMUP SECONDS_ WRAP SKEW_HOT SKEW_ROUNDS; do
+  [ -n "${!v:-}" ] && server_args+=(-e "$v=${!v}")
+done
+server_pre=""
+if [ -n "${KAMA_B_TREE:-}" ]; then   # the variant compiler, built inside the container from its own tree
+  server_args+=(-v "$(cd "$KAMA_B_TREE" && pwd):/variant")
+  server_pre='make -s -C /variant kama >/dev/null && export KAMA_B=$(ROOT=/variant; . /variant/tools/kama-bin.sh; echo "$KAMA") && '
+fi
+# perf_event_open is refused twice in a container: by the engine's seccomp profile, and by the container SELinux type
+# on a Fedora CoreOS podman machine (no capability gets past either). The VM must also allow it:
+# `podman machine ssh sudo sysctl -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0` (lost on restart).
+[ -n "${WRAP:-}" ] && server_args+=(--security-opt seccomp=unconfined --security-opt label=disable)
+
 case "${1:-}" in
   build-image) "$ENGINE" build -t "$IMAGE" -f "$ROOT/bench/Dockerfile" "$ROOT" ;;
   build)       run_ni bash bench/scripts/build.sh ;;
@@ -35,8 +53,9 @@ case "${1:-}" in
   # limits on descriptors and processes would be the thing measured, so they are lifted for it. 524288 descriptors, not
   # more: a rootless engine cannot raise a container above its own user's hard limit, which is 524288 in the podman
   # machine (systemd's default), and asking for more fails the start. A run needs about 10k per process.
-  server)      "$ENGINE" run --rm --ulimit nofile=524288:524288 --pids-limit=-1 -v "$ROOT:/work" -w /work "$IMAGE" \
-                 bash -c "make -s kama >/dev/null && bash bench/server/run.sh ${2:-.scratch/bench-server.tsv} ${3:-15}" ;;
+  server)      "$ENGINE" run --rm --ulimit nofile=524288:524288 --pids-limit=-1 ${server_args[@]+"${server_args[@]}"} \
+                 -v "$ROOT:/work" -w /work "$IMAGE" \
+                 bash -c "${server_pre}make -s kama >/dev/null && bash bench/server/run.sh ${2:-.scratch/bench-server.tsv} ${3:-15}" ;;
   sh|shell)    "$ENGINE" run --rm -it -v "$ROOT:/work" -w /work "$IMAGE" bash ;;
   *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|sh}" >&2; exit 2 ;;
 esac

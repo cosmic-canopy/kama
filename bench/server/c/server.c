@@ -1,8 +1,9 @@
 // server.c — the C arm of KR-243, the ceiling: one event loop per thread, nothing between the loop and the socket.
 //
-// Usage: server <echo|http> <port> <threads>
+// Usage: server <echo|http|skew> <port> <threads>
 //   echo  writes back whatever it reads
 //   http  answers every complete HTTP/1.1 request in its buffer with `200` and `Hello, World!`, keep-alive
+//   skew  answers each 64-byte request after the rounds of mixing it asks for (client.c says how), the mix in bytes 4-7
 //
 // Linux: each thread has its own listener on the port (SO_REUSEPORT), so the kernel spreads connections — the
 // thread-per-core shape the kama fiber arm has. macOS balances no SO_REUSEPORT group, so there the threads share one
@@ -15,6 +16,7 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,7 +31,17 @@
 
 enum { BUF = 4096 };
 static const char RESP[] = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n\r\nHello, World!";
-static int g_http, g_port;
+enum { ECHO, HTTP, SKEW, REQ = 64 };
+static int g_mode, g_port;
+
+// The skew burst, the same in every arm: `rounds` passes of FNV-1a over the request's 64 bytes. Each step depends on
+// the one before, so no compiler can vectorize it away, and its result goes back in the reply.
+static uint32_t mix(const unsigned char* b, uint32_t rounds) {
+    uint32_t h = 2166136261u;
+    for (uint32_t r = 0; r < rounds; ++r)
+        for (int i = 0; i < REQ; ++i) h = (h ^ b[i]) * 16777619u;
+    return h;
+}
 
 typedef struct { int fd; size_t in; char buf[BUF]; } conn;
 
@@ -72,8 +84,18 @@ static int serve(conn* c) {
         ssize_t n = read(c->fd, c->buf + c->in, BUF - 1 - c->in);
         if (n == 0) return -1;
         if (n < 0) { if (errno == EINTR) continue; return errno == EAGAIN ? 0 : -1; }
-        if (!g_http) { if (write_all(c->fd, c->buf, (size_t)n) != 0) return -1; continue; }
-        c->in += (size_t)n; c->buf[c->in] = 0;
+        if (g_mode == ECHO) { if (write_all(c->fd, c->buf, (size_t)n) != 0) return -1; continue; }
+        c->in += (size_t)n;
+        if (g_mode == SKEW) {
+            for (; c->in >= REQ; c->in -= REQ, memmove(c->buf, c->buf + REQ, c->in)) {
+                unsigned char* b = (unsigned char*)c->buf;
+                uint32_t h = mix(b, (uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24);
+                for (int i = 0; i < 4; ++i) b[4 + i] = (unsigned char)(h >> (8 * i));
+                if (write_all(c->fd, c->buf, REQ) != 0) return -1;
+            }
+            continue;
+        }
+        c->buf[c->in] = 0;
         char* start = c->buf;
         for (char* end; (end = strstr(start, "\r\n\r\n")) != NULL; start = end + 4)
             if (write_all(c->fd, RESP, sizeof RESP - 1) != 0) return -1;
@@ -127,8 +149,8 @@ static void* loop(void* arg) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 4) { fprintf(stderr, "usage: server <echo|http> <port> <threads>\n"); return 64; }
-    g_http = strcmp(argv[1], "http") == 0;
+    if (argc != 4) { fprintf(stderr, "usage: server <echo|http|skew> <port> <threads>\n"); return 64; }
+    g_mode = strcmp(argv[1], "http") == 0 ? HTTP : strcmp(argv[1], "skew") == 0 ? SKEW : ECHO;
     g_port = atoi(argv[2]);
     int threads = atoi(argv[3]);
     struct rlimit r;

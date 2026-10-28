@@ -59,4 +59,11 @@ ENV PATH="/opt/dotnet:${PATH}" \
 # TypeScript (node comes from emsdk).
 RUN npm i -g typescript@5.5.4
 
+# Profiling the server arms (bench/run profile): perf for where the time goes, strace for the system calls. Ubuntu's
+# `perf` is a wrapper that wants a linux-tools package for the RUNNING kernel, which a VM's kernel never has, so the
+# versioned binary itself goes first on the PATH.
+RUN apt-get update && apt-get install -y --no-install-recommends linux-tools-generic strace \
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -s "$(ls -d /usr/lib/linux-tools/*/perf | head -1)" /usr/local/bin/perf
+
 WORKDIR /work
