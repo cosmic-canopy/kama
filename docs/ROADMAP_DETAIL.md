@@ -3050,15 +3050,23 @@ rather than here, so there is one number to keep current. Forward work:
   loads the whole module by design: nothing pins a file, and seeding from the importing file's tokens would
   be unsound, since a type reached only through inference is never spelled.
 
-### Toward the fastest server runtime (KR-250..254)
+### Toward the fastest server runtime (KR-250, KR-252..255)
 
-**Where it stands (2026-10-27, [benchmarks/servers.md](benchmarks/servers.md)).** On a 64-byte TCP echo, kama's
-fibers (an isolate per core, a fiber per connection) run within 0.6% of a hand-written C epoll loop, faster than Go
-(4–20%), Node (2.3–3 times one process) and tokio's work-stealing runtime (~5%), and behind tokio's thread-per-core
-runtime by 1.1% at 1,000 connections and 4.8% at 10,000, with longer tails there. Compute is at C's speed already
-([benchmarks/RESULTS.md](benchmarks/RESULTS.md)). Asked 2026-10-27 ("what can we do to become the most performant
-overall?"), the maintainer took this order: measure what the benchmark leaves out and close the one measured gap
-first, then cross-module inlining, then an io_uring design.
+**Where it stands (2026-10-28, kama 0.9.753, [benchmarks/servers.md](benchmarks/servers.md)).** With the server
+saturated on 3 cores, kama's fibers (an isolate per core, a fiber per connection) are level with tokio's thread-per-core
+runtime on echo and like-for-like HTTP at 100 and 1,000 connections and 1.1–2.9% behind it at 10,000; ahead of a
+hand-written C epoll loop at 100 and 1,000 connections (4.0% and 0.8%); 1.2–1.3 times Go and 1.4–1.5 times Node's
+`cluster`; and ahead of tokio's work-stealing runtime except at 10,000 connections, where it serves 6.5–7.9% more by
+leaving some connections waiting (three times kama's p99). Thread-per-core loses where a few connections carry CPU
+bursts at low load (KR-255). Compute is at C's speed already ([benchmarks/RESULTS.md](benchmarks/RESULTS.md)).
+
+The first run, on 2026-10-27, mostly measured a trap in the bench VM: podman ran it nested, so every kernel clock read
+cost about 1 µs (servers.md says how to check). On the fixed VM, the 1.1% and 4.8% it showed against tokio's
+thread-per-core arm were really 7.4% and 5.6%. kama 0.9.752 closed most of that by skipping the `recv` that can only
+answer `EAGAIN` after a short read (tokio's rule; [design/fibers.md](design/fibers.md) decision 7), and 0.9.753 by
+prefetching the next fiber's saved frame. Asked on 2026-10-27 "what can we do to become the most performant overall?",
+the maintainer chose this order: measure what the benchmark leaves out and close the one measured gap first, then
+cross-module inlining, then an io_uring design.
 
 **The field beyond the run.** The fastest servers today are io_uring thread-per-core runtimes (Seastar in C++,
 glommio and monoio in Rust), which complete I/O with fewer system calls than the epoll kama and tokio both use, and
@@ -3068,18 +3076,16 @@ measured.
 
 <a id="s9-bench-gaps"></a>
 
-#### Measure what the server benchmark leaves out (KR-250)
+#### The server benchmark on x86-64 Linux (KR-250)
 
-No "fastest" claim stands until these are measured, each as its own config or arm under the same interleaved protocol:
-- **HTTP like for like.** The C and kama arms find a request's end and write a fixed reply, while hyper, `net/http` and
-  Node's `http` parse every header. Add raw-socket Go and tokio arms with the same minimal parse, and keep the
-  full-stack arms as a separate comparison, the one a kama HTTP stack would join.
-- **A skewed load:** a few connections doing most of the work. Thread-per-core does not steal work, and this is where
-  tokio's and Go's work stealing are strongest. If it shows a real loss, a mitigation is filed then (an accept that
-  hands a connection to the least-loaded isolate, or KR-3 step 9's job pool for CPU bursts).
-- **A client that is never the limit.** At 100 and 1,000 connections the four fastest arms meet at ~255,000 requests/s,
-  the client's ceiling on 3 cores. More client cores, or a second machine.
-- **x86-64 Linux.** Every number so far is aarch64 in a VM on an Apple M4.
+The rest of what this row asked for is measured (servers.md, kama 0.9.753): raw-socket Go and tokio arms with the C and
+kama arms' minimal HTTP parse, beside the full stacks; a skewed load, saturated and at low load; and a client that is
+never the limit (5 client cores, and a `busy` column that shows the server's cores 99–100% busy). What is left: every
+number is aarch64 in a VM on an Apple M4. The maintainer's Linux box is a KVM guest, so it runs on the host's own CPU.
+If its host passes the hardware counters through, it can also count cache misses per request for KR-254. The run, with
+the box idle: `bench/run build-image` once (about 25 minutes), then `CORES=3 bench/run server .scratch/x86.tsv 15`
+(about 4 hours, or about 1 hour with `CONFIGS="echo:10000 http:10000 skew:12 skew:1000"`). Its tables join servers.md
+as their own section.
 
 <a id="s9-release-lto"></a>
 
@@ -3121,6 +3127,35 @@ while the current one runs: 1.7% less CPU per request at 10,000 connections (15/
 where the frames stay cached. After it, kama and tokio-percore spend the same CPU per request at 10,000 connections,
 and tokio serves about 1% more requests a second; at 1,000 the two are within the noise floor. Frames and control
 blocks laid out densely, so that a switch touches fewer lines and pages, are the lever left.
+
+<a id="s9-skew"></a>
+
+#### Thread-per-core under a few connections with CPU bursts (KR-255)
+
+**Measured** (servers.md, *Skew at low load*; 15 rounds each). With 12 connections, 2 of them asking for a CPU burst
+on every request, tokio's work-stealing runtime serves 1.29 times kama's requests with 100 µs bursts and 1.91 times with
+1 ms bursts (15/15 each), at a light-connection p99 of 131 and 123 µs against kama's 221 and 1,245. Go serves 1.12 and
+1.59 times. tokio's thread-per-core arm and the C loop fare as kama does. From 100 connections up, kama is ahead of the
+work-stealing runtime (12% at 100 connections, 9% with 1 ms bursts at 1,000, at a third of its p99).
+
+**Why.** `SO_REUSEPORT` hashes each connection to a core when it connects, and knows nothing about what it will cost.
+A core holding a hot connection serves its others only between bursts, while another core sits partly idle (`busy`
+80–88%). A work-stealing runtime moves the waiting tasks to the idle core. With 100 connections or more every core's
+queue is full, so stealing has nothing to do and its unfairness costs it.
+
+**What the thread-per-core runtimes do.** Seastar and glommio do not steal either. They tell a program to move
+CPU-heavy work off the reactor (Seastar's scheduling groups, glommio's executors with shares), and tokio has
+`spawn_blocking` for the same reason even though it steals. kama's isolates share nothing, so a parked fiber cannot
+move to another core, though its socket can (`TcpStream` is `Sendable`).
+
+**Recommendation (a ruling is owed).**
+1. The job pool, KR-3 step 9: a fiber hands its burst to a pool of worker threads and parks until the job finishes,
+   and its core keeps serving the other connections. This answers the measured case directly, it is already planned,
+   and it costs the program one spelled-out call, as `spawn_blocking` does. Once step 9 lands, measure `skew:12` with
+   the burst offloaded.
+2. Load-aware placement (an eBPF `SO_REUSEPORT` program, or an acceptor that hands each new connection to the
+   least-loaded core) only if a measured case with even per-request cost shows connection-count imbalance hurting. It
+   cannot help here: the hash cannot know which connection will be hot.
 
 <a id="s9-tu-header-cost"></a>
 
