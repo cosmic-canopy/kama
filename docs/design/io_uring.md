@@ -519,6 +519,23 @@ behind at 1,000, without fibers, so x86-64 measures the remedy before it is kept
 (its saved registers and first frames prefetched further ahead, or stacks packed to share TLB entries) would help both
 arms and every fiber program. It belongs to KR-254, not to this row.
 
+### The remedy, quick check, aarch64 (2026-10-29, `0.9.764`)
+
+A write makes its system call first and is a `SEND` only when the socket would block. Checked on the M4 with the quick
+run, 5 rounds, ring against epoll paired by round (raw rows not kept: the closing check replaces them):
+
+| config | req/s, ring ÷ epoll | CPU per request | p99, ring / epoll |
+|---|---|---|---|
+| echo, 1,000 | 0.99 · 2/5 (was 1.02) | 1.02 · 0/5 (was 0.985) | 3.67 / 3.41 ms |
+| echo, 10,000 | 1.02 · 3/5 (was 0.95) | 0.95 · 4/5 (was 1.08) | 30.4 / 29.4 ms |
+
+At 10,000 the loss is gone: the ring arm now uses 5% less CPU than epoll, where it used 8% more. At 1,000 it gives
+back about 2 points, as expected: there the stacks stay warm, the park on a write was cheap, and the `send` that
+replaced it costs more. p99 is within one histogram bucket (the buckets step about 7%) at both. **Next: the x86-64
+box's quick run, then the closing check on both machines** (§8 step 5). If the closing check holds everywhere but
+1,000 connections on the M4, the second suspect's fix is the next candidate there: at 1,000 two in three `RECV`s arm a
+poll in the kernel, and `POLL_FIRST` on a `RECV` that follows a short read skips the attempt that cannot succeed.
+
 ## 7. What is out of scope here
 
 - **Regular files and DNS** stay on KR-3 step 7's offload pool, which every OS needs. io_uring reads regular files
@@ -609,8 +626,9 @@ sanitizer leg runs epoll.
         short "Counts, x86-64" subsection in §6 saying what they show. A `perf record` of both arms at echo 10,000
         is welcome beside it, the profile of where the ring wins, but optional.
       - Push, and say in the commit that the M4's half is next.
-   2. **Done 2026-10-29: the M4's counts and profile (§6).** The loss is the park per write; the remedy it points to is
-      a write's system call first. **Next: build that remedy and measure it on both machines.** The M4, originally: `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
+   2. **Done 2026-10-29: the M4's counts and profile (§6), and the remedy built (`0.9.764`) and quick-checked on the M4
+      (§6).** **Next, the x86-64 box:** the quick run below with `bench/server/run.sh`, natively, then, if it holds, the
+      closing check (step 3) on both machines. The M4, originally: `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
       (below), the comparison in §6, then the profile at echo 10,000 and the fix the counts point to. To try a fix,
       the quick run is
       `CORES=3 SLOTS="c kama-fibers kama-fibers-epoll c#2" CONFIGS="echo:1000 echo:10000" bench/run server <out> 5`

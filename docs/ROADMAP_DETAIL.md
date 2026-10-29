@@ -3325,6 +3325,15 @@ at 10,000 (servers.md's *x86-64* section). Hardware counters (cycles, cache and 
 tokio-percore, `perf stat` through the harness's `WRAP`) are still owed. The x86-64 box's guest exposes no `cpu` PMU,
 so they wait for a machine that passes them through.
 
+**Measured again on the M4, 2026-10-29 (`0.9.763`, KR-253's profile, io_uring.md §6):** at 10,000 echo connections the
+switch is 5.3% of the epoll arm's server CPU, about 0.18 µs each time a fiber is switched into, and the first lines its
+code then touches on its cold stack cost about 0.1 µs more. That is more than the ~1% against tokio suggests, because
+it is paid on every park, and it decided KR-253's write path: handing every write to io_uring meant a second switch per
+request, which on the M4 cost more than the `send` system call it saved, so a write now makes its system call first
+(`0.9.764`). A cheaper switch into a cold fiber would help every fiber program, and could let the ring take every
+write again, which x86-64 preferred in decision 8's harness. Both arms' flat profiles are in
+[benchmarks/ring-profile-aarch64.txt](benchmarks/ring-profile-aarch64.txt).
+
 <a id="s9-skew"></a>
 
 #### Thread-per-core under a few connections with CPU bursts (KR-255)
