@@ -344,6 +344,13 @@ while (more) {
 
 **The bytes:** a decoder is the `BufReader`'s 4 KiB, the 32 KiB window, and the Huffman tables.
 
+**Corrected 2026-10-29, building it: the hand-back is KR-261.** kama refuses a move out of a field, and a method never
+moves its receiver (probed), so `finish()` cannot be a method that hands the `BufReader<R>` back, and neither can an
+encoder's `finish()` hand back its `W` (decision 6). The maintainer ruled for a consuming method in the language
+(KR-261), which is safe by the rule `match` already holds, over lending the inner or `unsafe` free functions per format.
+KR-5 builds its engines now: `make`, `read` and `write`, which stop exactly at the stream's end. Its `finish` lands on
+KR-261.
+
 **4. The limit.** A required `uint64 limit` on the decoded bytes, counted across a gzip file's members. Up to `limit`
 bytes are delivered, and the read that would pass it returns `Err` with the new kind `LimitExceeded`. The read stops
 there and never truncates silently, as Rust's `take` does. A ratio was rejected, because a ratio grows with the input
@@ -670,6 +677,53 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   (docs/packages.md): a fetched package cannot carry a local path. A `kama_workspace.json` holding both packages
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
+
+<a id="s2-consuming-method"></a>
+
+### A consuming method: an adapter hands its inner back (KR-261)
+
+**Found 2026-10-29, building KR-5.** An owning adapter cannot give back what it wraps. A method never moves its receiver
+(`give this` is refused), and `give w.field` is refused even on an owned local that is about to die. Probed on
+`0.9.760`, a free `fn Box unwrap(Wrap w) { return give w.inner; }` answers "cannot `give` out of a field/element — it
+would leave the owner holding a moved-from value". `replace(place:, with:)` needs a stand-in value, which generic code
+over `W` cannot make. So `BufReader<R>`, `BufWriter<W>` and the serializers' `…Stream` encoders keep their inner until
+they drop (SPEC: "A `…Stream` encoder CONSUMES its sink"), and KR-5's decoders and encoders would too. That rules out:
+an HTTP/1.1 connection that answers one response with gzip and the next with brotli; a socket handed on by value after
+a compressed body; a git pack read with a fresh zlib decoder per object, each taking the `BufReader` from the last.
+
+| | How an adapter gives its inner back |
+|---|---|
+| Rust | a method taking `self`: `GzEncoder::finish(self) -> io::Result<W>`, `BufWriter::into_inner(self)` (unsafe moves inside std and flate2) |
+| Swift 5.9 | a `consuming func` on a noncopyable type |
+| C++ | a move out of a member, leaving it valid but unspecified |
+| Go, Java, C# | nothing to give back: the wrapper only references the stream, and the GC keeps it alive |
+
+**Verdict: scheduled, ruled 2026-10-29** over the two alternatives. One was lending the inner (`innerRefMut()`) with a
+`restart()` for the next stream, which is safe but keeps the limit above. The other was handing it back through
+std-internal `unsafe` free functions per format, which serves compression only (its `unsafe` would have been bounded as
+GOALS 3a bounds every such seam, inside std's greppable `unsafe fn`s; a consuming method needs none). A consuming method is safe by the rule
+kama already holds for `match (give h) { case Halves(reader: r, writer: w): … }`, taking an owned value apart (since `0.9.760`),
+applied to a method's own receiver:
+1. The caller's value is moved: using it after the call is a compile error, as after any `give`.
+2. Only what the caller owns can be consumed: a local or a fresh value. A field or a `ref` is refused, as
+   `give w.field` is.
+3. Inside, each field is either moved out once or dropped, never both: the bookkeeping a `match` arm already does.
+4. A type with a destructor cannot be taken apart, so no destructor sees a moved-from field (Rust's E0509). KR-5's
+   adapters need no destructor, because a dropped encoder abandons its stream.
+
+**Decisions owed, in its own brief before any code:**
+1. The declaration's spelling: a marker on the method (Swift's `consuming`), or a receiver form (Rust's `self`).
+2. The call site: `gz.finish()` with `gz` moved after, or the move spelled, as in `give gz.finish()`. GOALS #5 and the
+   rule that a hand-off says `give` lean to spelling it.
+3. A type with a destructor: refused outright, or allowed when the method moves no field out.
+4. The failure path: whether `Result<W, IoError>` drops `W` on `Err`, or the error carries the inner back
+   (`Undelivered`'s shape), so a failed `finish` does not cost the caller its socket.
+5. Whether a contract may declare a consuming member, so that generic code can finish any encoder.
+6. Which std types gain one in the same commit: `BufReader`/`BufWriter` (`intoInner`), the serializers' `…Stream`
+   encoders, and KR-5's decoders and encoders (`finish`).
+
+A new keyword or contextual word makes it a grammar change: `kama.y`, `docs/grammar.bnf`, `tree-sitter-kama/`, then the
+editor pins.
 
 <a id="s2-quoted-format"></a>
 
