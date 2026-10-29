@@ -66,6 +66,11 @@ case "${1:-}" in
   uring)       "$ENGINE" run --rm --ulimit nofile=524288:524288 --security-opt seccomp=unconfined --security-opt label=disable \
                  ${uring_args[@]+"${uring_args[@]}"} -v "$ROOT:/work" -w /work "$IMAGE" \
                  sh bench/uring/run.sh "${2:-.scratch/uring.tsv}" "${3:-15}" ;;
+  # KR-253 §8 step 5's counts: perf's tracepoints need the container privileged and the VM's tracefs inside it, beside the
+  # seccomp and SELinux relaxation every server run has. The VM must also allow perf (see WRAP above).
+  count)       "$ENGINE" run --rm --privileged --ulimit nofile=524288:524288 --pids-limit=-1 ${server_args[@]+"${server_args[@]}"} \
+                 -v /sys/kernel/tracing:/sys/kernel/tracing -v "$ROOT:/work" -w /work "$IMAGE" \
+                 bash -c "make -s kama >/dev/null && bash bench/server/count.sh ${2:-.scratch/counts.tsv} ${3:-3}" ;;
   sh|shell)    "$ENGINE" run --rm -it -v "$ROOT:/work" -w /work "$IMAGE" bash ;;
-  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|uring [out] [rounds]|sh}" >&2; exit 2 ;;
+  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|uring [out] [rounds]|count [out] [runs]|sh}" >&2; exit 2 ;;
 esac

@@ -409,6 +409,45 @@ What it says:
 **Ruled 2026-10-29: the row stays open.** The ring is not the record until the M4's 10,000-connection loss is understood
 and remedied (§8 step 5). Until then the ring stays the default, and `KAMA_IO_URING=0` is the way off it.
 
+### Counts, x86-64 (2026-10-29, step 5)
+
+Produced by `bench/server/count.sh`, run as root on the host: echo, `CORES=3`, 3 runs of each arm and config. It ran
+in the `0.9.763` tree with the step-4 compiler, `0.9.758`. Nothing under `include/`, `lib/std/net/` or
+`bench/server/kama/` changed between the two, so the scheduler, the socket calls and the server are the same. Raw rows:
+[benchmarks/ring-counts-x86-64.tsv](../benchmarks/ring-counts-x86-64.tsv). Each figure is per request: the median of the
+3 runs, all within 1% of it. The request rates in the rows were taken under perf, so they are not measurements.
+
+| per request | ring, 1,000 | epoll, 1,000 | ring, 10,000 | epoll, 10,000 |
+|---|---|---|---|---|
+| `recvfrom` | 0 | 1.00 | 0 | 1.00 |
+| `sendto` | 0 | 1.00 | 0 | 1.00 |
+| `io_uring_enter` | 0.033 | — | 0.033 | — |
+| epoll waits | — | 0.016 | — | 0.016 |
+| every other system call | 0.0003 | 0.0005 | 0 | 0 |
+| `io_uring_submit_req` | 2.00 | — | 2.00 | — |
+| `io_uring_complete` | 2.00 | — | 2.00 | — |
+| `io_uring_poll_arm` | 0.0004 | — | 0.0001 | — |
+| `io_uring_local_work_run` | 0.0001 | — | 0 | — |
+| `io_uring_task_work_run` | 0 | — | 0 | — |
+| context switches | 0 | 0 | 0 | 0 |
+| completions per `io_uring_enter` | 61.0 | — | 61.0 | — |
+| events per epoll wait | — | 60.9 | — | 60.9 |
+
+What they show:
+- **The ring arm makes 0.033 system calls a request, where epoll makes 2.02.** Every request is one `RECV` and one
+  `SEND`, and no `recvfrom` or `sendto` is made.
+- **Both arms batch 61 to a kernel call, and the 61 is kama's own.** A saturated scheduler polls every
+  `KAMA_SCHED_POLL_EVERY` (61) fiber runs (decision 12). So 61 completions per `io_uring_enter` and 61 events per
+  epoll wait are not the kernel's limit on this machine. This is the M4's test for the first suspect. Fewer than 61
+  completions per enter there means its kernel caps the batch. 61 there rules the suspect out.
+- **A `RECV` almost never waits in the kernel:** 0.0001–0.0004 poll arms a request. A `RECV` is submitted at the
+  turn's `io_uring_enter`, up to 61 fiber runs after it was queued. By then the next request has nearly always
+  arrived, so the receive completes at once and no poll is armed. This is the test for the second suspect. Near one
+  poll arm a request on the M4 names it as the loss.
+- **Deferred task work almost never runs,** and no context switch happens: completions are posted at submission, and
+  the server's cores never sleep.
+- **The third suspect, the park per write, is not a count.** It is the M4 profile's to show.
+
 ## 7. What is out of scope here
 
 - **Regular files and DNS** stay on KR-3 step 7's offload pool, which every OS needs. io_uring reads regular files
@@ -480,7 +519,7 @@ sanitizer leg runs epoll.
    as a measured delta.
 
    **Who does what, from here (2026-10-29; the two machines work from this file, nothing is copied between them):**
-   1. **The x86-64 box, next: the counting script and x86-64's counts.** Counting only. Touch no `include/`, `lib/` or
+   1. **Done 2026-10-29: the counting script and x86-64's counts (§6, *Counts, x86-64*).** It was counting only. Touch no `include/`, `lib/` or
       `src/` file and take no VERSION number: the fix waits until both machines' counts exist.
       - Write `bench/server/count.sh`. For each arm, `kama-fibers` (the ring) and `kama-fibers-epoll` (the same binary
         under `KAMA_IO_URING=0`), at echo 1,000 and echo 10,000 connections with `CORES=3`, it starts the server and the
