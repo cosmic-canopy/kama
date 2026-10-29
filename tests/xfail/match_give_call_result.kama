@@ -1,0 +1,18 @@
+// `match (give f())` is refused: a call's result is already the match's own (KR-249), so it takes no `give`, the
+// same answer `T x = give f();` gets. It used to be refused as moving out of a field or an element, which the
+// subject is not.
+static int32 drops = 0;
+type resource Res {
+    int32 id = 0;
+    public ctor make(int32 id) { this.id = id; }
+    ~Res() { drops = drops + this.id; }
+}
+type enum Pair { Both(Res a, Res b), Neither; }
+fn Pair makePair(int32 n) { return Pair::Both(a: Res.make(id: n), b: Res.make(id: n * 10)); }
+fn uint8 main() {
+    match (give makePair(n: 1)) {
+        case Both(a: _, b: _): { }
+        case Neither: { }
+    };
+    return 0;
+}

@@ -1,0 +1,24 @@
+// A call that returns a PLACE (`fn ref T`) names storage its receiver still owns, so a `match` on it borrows, as on
+// a field, and a payload cannot be given out of it (KR-249 owns only a call's fresh result). Giving `x` here would
+// leave `Holder.pair` holding a resource that was moved away, and both would drop it.
+static int32 drops = 0;
+type resource Res {
+    int32 id = 0;
+    public ctor make(int32 id) { this.id = id; }
+    ~Res() { drops = drops + this.id; }
+}
+type enum Pair { Both(Res a, Res b), Neither; }
+type resource Holder {
+    Pair pair = Pair::Neither;
+    public ctor make() { this.pair = Pair::Both(a: Res.make(id: 1), b: Res.make(id: 2)); }
+    public fn ref Pair slot() { return this.pair; }
+}
+fn void keep(Res r) { }
+fn uint8 main() {
+    Holder h = Holder.make();
+    match (h.slot()) {
+        case Both(a: x, b: _): { keep(r: give x); }
+        case Neither: { }
+    };
+    return 0;
+}

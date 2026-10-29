@@ -870,6 +870,7 @@ match_borrow_give_iface_payload	match_borrow_give_iface_payload.kama:8:37
 match_borrow_give_payload	match_borrow_give_payload.kama:7:39
 match_const_payload_mutate	match_const_payload_mutate.kama:4:39
 match_empty_arm	match_empty_arm.kama:8:48
+match_give_call_result	match_give_call_result.kama:13:4
 match_handle_give	match_handle_give.kama:7:14
 match_handle_weak	match_handle_weak.kama:7:14
 match_integer_pattern	match_integer_pattern.kama:6:31
@@ -879,6 +880,7 @@ match_label_missing	match_label_missing.kama:5:23 match_label_missing.kama:5:40
 match_label_unknown	match_label_unknown.kama:6:23 match_label_unknown.kama:6:40
 match_nonexhaustive	match_nonexhaustive.kama:5:19
 match_partial_move	match_partial_move.kama:15:4
+match_place_call_give_payload	match_place_call_give_payload.kama:20:33
 match_statement_no_semicolon	match_statement_no_semicolon.kama:5:0
 match_subject_not_enum	match_subject_not_enum.kama:11:14
 match_ternary_arg_kind	match_ternary_arg_kind.kama:6:14 match_ternary_arg_kind.kama:6:26 match_ternary_arg_kind.kama:7:26

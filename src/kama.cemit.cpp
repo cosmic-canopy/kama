@@ -32737,7 +32737,11 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         indent(depth); *_out << subjCls << " " << subjOwner << " = " << subjExpr << ";\n";
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
         recordDestructibleLocal(subjOwner, subjCls);   // see the drop below
-        std::string mv = moveOnlySource(h->value, m->line); if (!mv.empty()) markMoved(mv);
+        if (!isNamedValue(h->value.get())) {           // a call's result is the match's own already (KR-249)
+            unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", m);
+        } else {
+            std::string mv = moveOnlySource(h->value, m->line); if (!mv.empty()) markMoved(mv);
+        }
     } else {
     // A1: pin the concrete instance so the inline variant ctor constructs `Optional_int32`, not bare `Optional`.
     // A value-producing nested `match`/variant-ternary subject needs the SAME pin: emitMatch requires a
@@ -32792,6 +32796,10 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         }
         indent(depth); *_out << subjCls << "* " << sp << " = &" << subjOwner << ";\n";
         recordDestructibleLocal(subjOwner, subjCls);   // see the drop below
+        // Nothing else owns a fresh value, so the match owns it as `match (give x)` owns its subject (KR-249): an arm
+        // may give a payload out, and the ones it leaves drop at its end. Borrowing it made `give` refuse a payload
+        // that aliased nothing, and every such match bound the call to a local first.
+        subjConsumed = true;
     }
     }
     // KR-131 — may a plain value payload be read IN PLACE (`T* b = &slot`) rather than copied into `b`? Only out of
@@ -33032,8 +33040,11 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 // (that arm is for a borrowing match), so `give e` moved an alias out from under a live
                 // owner. It survived only because an arm that `return`s jumped over the bare dtor line
                 // after the switch; the moment that drop became a real scope drop, the box was freed twice.
-                // A consumed subject hands ownership to the binding whatever the payload's shape is.
-                if (subjConsumed && (ownsByValue(bcty) || isSmartPtrClass(bcty))) {
+                // A consumed subject hands ownership to the binding whatever the payload's shape is — unless the
+                // binding is read IN PLACE (above: no destructor, never written, `ref`d or given), which takes
+                // nothing, so the payload stays where it lies: zeroing it here read a move-only `Task`'s fields
+                // back as 0 through the pointer (KR-249 made `match (pq.pop())` consumed, and found it).
+                if (subjConsumed && !inPlace && (ownsByValue(bcty) || isSmartPtrClass(bcty))) {
                     indent(depth + 2); *_out << slot << " = (" << bcty << "){0};\n";
                     _scopes.back().locals.push_back({bn, bcty, /*userName=*/true});
                     _moveState[bn] = MoveState::NotMoved;

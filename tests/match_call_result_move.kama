@@ -1,0 +1,75 @@
+// A `match` on a call's result OWNS it, as `match (give x)` owns a local (KR-249): an arm may `give` an owning
+// payload out, and the payloads it does not take drop at the arm's end, once. Before, the subject was held in a
+// temporary the match dropped, but its payload bindings were borrowed aliases, so `give x` was refused as moving
+// out of a still-owned subject, and the advice it gave, `match (give f())`, was refused too: every such match
+// bound the call to a local first. Rust and Swift move out of the temporary the same way.
+//
+// Each resource adds its id to `drops` when it drops, so the sum says which dropped and that none dropped twice.
+static int32 drops = 0;
+
+type resource Res {
+    int32 id = 0;
+    public ctor make(int32 id) { this.id = id; }
+    public const fn int32 get() { return this.id; }
+    ~Res() { drops = drops + this.id; }
+}
+
+type enum Pair { Both(Res a, Res b), Neither; }
+
+fn Pair makePair(int32 n) { return Pair::Both(a: Res.make(id: n), b: Res.make(id: n * 10)); }
+fn int32 keep(Res r) { return r.get(); }
+
+// A move-only payload with no destructor, which an arm that only reads it reads where it lies, through a pointer
+// into the subject. Taking ownership zeroed that slot first, so the read saw 0 (the same in `match (give x)`).
+type resource Task {
+    int32 prio;
+    public ctor make(int32 prio) { this.prio = prio; }
+    public const fn int32 priority() { return this.prio; }
+}
+fn Optional<Task> task(int32 p) { return Optional::Some(value: Task.make(prio: p)); }
+fn int32 run(Task t) { return t.priority(); }
+
+// An arm that returns: the discarded payload and the temporary still drop exactly once on the way out.
+fn int32 firstOf(int32 n) {
+    match (makePair(n: n)) {
+        case Both(a: x, b: _): { return keep(r: give x); }
+        case Neither: { return 0; }
+    };
+}
+
+fn uint8 main() {
+    int32 t = 0;
+
+    // One payload moved out, the other untaken: `x` drops in `keep`, `y` at the arm's end. drops: 1 + 10
+    match (makePair(n: 1)) {
+        case Both(a: x, b: y): { t = t + keep(r: give x) + y.get() - 10; }
+        case Neither: { }
+    };
+    if (drops != 11) { return 1; }
+
+    t = t + firstOf(n: 2);                                   // drops: + 2 + 20
+    if (drops != 33) { return 2; }
+
+    // The value-producing form hands a payload out of the match; `_` drops its field at the arm's end. drops: + 30
+    Res r = match (makePair(n: 3)) {
+        case Both(a: x, b: _): { := give x; }
+        case Neither: { return 3; }
+    };
+    if (drops != 63) { return 4; }
+    t = t + r.get();                                          // 1 + 2 + 3
+
+    // Every arm that takes nothing leaves both payloads to drop with the arm. drops: + 4 + 40
+    match (makePair(n: 4)) {
+        case Both(a: _, b: _): { }
+        case Neither: { }
+    };
+    if (drops != 107) { return 5; }
+
+    int32 read = match (task(p: 10)) { case Some(value: k): k.priority(); case None: 0; };
+    int32 moved = match (task(p: 20)) { case Some(value: k): run(t: give k); case None: 0; };
+    Optional<Task> o = task(p: 30);
+    int32 given = match (give o) { case Some(value: k): k.priority(); case None: 0; };
+    if (read + moved + given != 60) { return 7; }
+
+    return t == 6 ? 42 : 6;
+}

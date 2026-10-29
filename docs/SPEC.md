@@ -6580,10 +6580,14 @@ a `None` **arm** of the same construct, never as a trap.
 
 **A subject that names storage is borrowed where it lives**: a local, a field, an element, or a call that
 returns a place (`fn ref T`, `const fn const ref T`), so its payload bindings read storage the owner keeps. <!-- test: match_place_subject -->
-Only a fresh value, such as a constructor or a by-value call result, is held in a temporary, and the `match` drops
-that temporary when it ends. A binding of an OWNING payload (a collection, a `string`, a resource, a handle) <!-- test: match_payload_alias -->
+Only a fresh value, such as a constructor or a by-value call result, is held in a temporary, and the `match` OWNS <!-- test: match_call_result_move -->
+it, as `match (give x)` owns a local: nothing else does, so an arm may `give` an owning payload out, and the
+payloads it leaves drop at the arm's end: `match (resolve(host: h, port: 443)) { case Ok(value: list): addrs = give
+list; … }` needs no local to hold the result first. A fresh subject takes no `give` (`match (give f())` is refused, as `T x = give <!-- xfail: match_give_call_result -->
+f();` is). Through a storage-naming subject, a binding of an OWNING payload (a collection, a `string`, a resource, a handle) <!-- test: match_payload_alias -->
 is an alias of the subject's slot, as a `foreach (ref …)` binding is of an element: a change through it changes
-the subject's payload, and it cannot be `give`n away (`match (give x)` hands the arm the payload to own). A
+the subject's payload, and it cannot be `give`n away (`match (give x)` hands the arm the payload to own); a <!-- xfail: match_place_call_give_payload -->
+place-returning call is storage-naming, so its payload stays where its owner keeps it. A
 `const` subject's alias is `const`. A binding of a plain value is a copy the arm may change, as a by-value <!-- xfail: match_const_payload_mutate -->
 `foreach` binding is — and costs no copy when nothing could tell: a payload with no destructor, out of the <!-- test: match_binding_in_place -->
 `match`'s own temporary or a local (a by-value parameter is one) that the arm never writes, in an arm that never

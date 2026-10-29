@@ -451,36 +451,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-match-rvalue-move"></a>
-
-### A `match` on a call's result cannot move a payload out (KR-249)
-
-**Found 2026-10-27, probing KR-244's spelling** (`0.9.751`). A `match` whose subject is a call moves nothing out of it:
-
-```kama
-match (split(id: 20)) {
-    case Halves(reader: r, writer: w): { spawn fiber pumpIn(r: give r); … }
-};
-```
-
-```
-error: cannot `give` a borrowed `match` payload out of `match (x)` — it aliases the still-owned subject; consume the
-subject with `match (give x)` instead
-```
-
-The advice does not apply: nothing else owns a call's result, so the payload aliases nothing. Following it, `match (give
-split(id: 20))`, is refused with a message about moving out of a field or an element, which the subject is not. So the
-tree's idiom binds every result to a local first (`Result<TcpListener, IoError> rl = TcpListener.bind(…);` then
-`match (give rl)`), one line per match that says nothing. Rust's `match f() { Halves(r, w) => … }` moves out of the
-temporary; Swift's `switch f() { case let .halves(r, w): … }` does the same.
-
-**Recommendation:** a `match` on a call's result owns it, as `match (give x)` owns a local, so an arm may move a payload
-out, and the payloads it does not take drop at the arm's end; `give` on a call result is refused with a message that
-says a result needs no `give`. Size S: the subject's ownership is already decided for `match (give x)`, and this is the
-same for a subject that is not a place.
-
-**Ruled 2026-10-27: as recommended.** With it, KR-244's split is one statement: `match (split(stream: give conn)) { … }`.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)
@@ -2320,8 +2290,8 @@ spawn fiber pumpOut(to: h.takeWriter());
 Shape 1 builds and runs today with two stand-in resources: both halves move into two fibers and each drops once. It
 is the one with no empty state, where a second `take` in shape 2 would hand out an empty half. The probe found two
 things on the way. `Split` cannot name the enum, since std's string iterator `Split` is in every scope. And the
-subject must be a local today: `match (split(stream: give conn))` refuses to move a payload out of the call's result,
-which is KR-249. **The bytes:** a half
+subject had to be a local: `match (split(stream: give conn))` refused to move a payload out of the call's result,
+until a `match` came to own a call's result (SPEC, *A subject that names storage*). **The bytes:** a half
 is a pointer to the shared record and its own deadline, 16 bytes on a 64-bit target; the record is one allocation at
 the split, the descriptor, the registration pointer, the mode and a count, 24 bytes.
 
