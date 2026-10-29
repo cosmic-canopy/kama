@@ -479,6 +479,35 @@ sanitizer leg runs epoll.
    everywhere with aarch64's high-density cost recorded, or a per-platform default, which the platform rule allows only
    as a measured delta.
 
+   **Who does what, from here (2026-10-29; the two machines work from this file, nothing is copied between them):**
+   1. **The x86-64 box, next: the counting script and x86-64's counts.** Counting only. Touch no `include/`, `lib/` or
+      `src/` file and take no VERSION number: the fix waits until both machines' counts exist.
+      - Write `bench/server/count.sh`. For each arm, `kama-fibers` (the ring) and `kama-fibers-epoll` (the same binary
+        under `KAMA_IO_URING=0`), at echo 1,000 and echo 10,000 connections with `CORES=3`, it starts the server and the
+        client as `run.sh` does. Over the client's measured window it records, divided by the requests the client
+        completed: system calls by name (`recvfrom`, `sendto`, `io_uring_enter`, `epoll_pwait`/`epoll_pwait2`,
+        `eventfd` reads, all others summed), the tracepoints `io_uring:io_uring_submit_req`,
+        `io_uring:io_uring_complete`, `io_uring:io_uring_poll_arm`, `io_uring:io_uring_local_work_run` and
+        `io_uring:io_uring_task_work_run`, and the server's context switches. It also records completions per
+        `io_uring_enter` and events per `epoll_pwait`. One TSV row per arm, config and run, with 3 runs each. Counts are
+        not timings, so load on the machine does not matter.
+      - It must run the same way in the bench container, since the M4 runs it there: add `bench/run count <out.tsv>`,
+        passing what perf and the tracepoints need (the seccomp and SELinux relaxation `bench/run server` already passes,
+        and `/sys/kernel/tracing` if perf cannot see the tracepoints without it). On a tracepoint the kernel lacks, it
+        writes `-` and goes on.
+      - Run it on x86-64, natively as step 4 was, and commit the script, `docs/benchmarks/ring-counts-x86-64.tsv`, and a
+        short "Counts, x86-64" subsection in §6 saying what they show. A `perf record` of both arms at echo 10,000
+        is welcome beside it, the profile of where the ring wins, but optional.
+      - Push, and say in the commit that the M4's half is next.
+   2. **The M4, after that:** `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
+      (below), the comparison in §6, then the profile at echo 10,000 and the fix the counts point to. To try a fix,
+      the quick run is
+      `CORES=3 SLOTS="c kama-fibers kama-fibers-epoll c#2" CONFIGS="echo:1000 echo:10000" bench/run server <out> 5`
+      (40 runs, about 5 minutes).
+   3. **Whichever machine builds the fix** takes the next VERSION after origin's, and the other reruns the check. The
+      check that closes the row: `c`, both kama arms and `c#2` over the six echo and HTTP configs, 15 rounds, on both
+      machines (about 40 minutes each), where the full step-4 run with tokio took 75.
+
    **What it needs on the M4:** perf allowed in the VM (`podman machine ssh sudo sysctl -w kernel.perf_event_paranoid=-1
    kernel.kptr_restrict=0`, lost on restart); the bench container's seccomp and SELinux label relaxed, as `bench/run`
    does for `WRAP`; possibly `/sys/kernel/tracing` mounted into it for the tracepoints, checked on the first try. 8
