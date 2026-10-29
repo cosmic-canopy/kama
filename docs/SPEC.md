@@ -3852,7 +3852,7 @@ with no `||`, so a covering set is computable and is what "this code is checked 
   triples. So a gate is judged under a hosted target whenever one activates it, and as bare metal only when
   none does (`OS_NONE`, `!HOSTED`): `!OS_MACOS` checked on a Mac is judged as Linux. The default analysis
   is still the host's own, so *which* gates need a cover differs per host (`!OS_WINDOWS` is active by
-  default on a Mac). *Building* follows the host and its toolchain. Until `0.9.757` the built-in names were
+  default on a Mac). *Building* follows the host and its toolchain. Until `0.9.759` the built-in names were
   tried alphabetically, `EMBEDDED` first, so `!OS_WINDOWS` checked on Windows was judged as bare metal and
   refused a `spawn fiber` that macOS and Linux passed. Until 2026-09-18 a built-in target name resolved its arch to the host's, so a type
   error behind `@compileFor(ARCH_AARCH64)` was found on an arm Mac and reported OK on an x86_64 box, and

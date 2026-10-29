@@ -285,7 +285,7 @@ five formats are frozen RFCs (1950–1952, 7932, 8878); what differs between the
 | Node | std | — | experimental | std |
 | Rust | crates | crates | crates | crates |
 
-**What the tree has (read 2026-10-29, `0.9.760`):**
+**What the tree has (read 2026-10-29, `0.9.762`):**
 - `std::io`'s `Reader` and `Writer` (`read(View<uint8>)`, `write`, `flush`). Adapters own their inner by value through a
   generic: `BufReader<R: Reader>`, `BufWriter<W: Writer>`, `Lines<R>` (which holds a `BufReader<R>`). Helpers: `writeAll`,
   `pump`, `readAll` (UTF-8 only). `SliceReader` reads a `string`, so **nothing reads raw bytes held in memory**.
