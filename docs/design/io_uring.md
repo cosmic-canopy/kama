@@ -1,6 +1,6 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
-**Status: building (§8).** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
+**Status: building (§8), step 1 shipped in `0.9.756`.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
 2026-10-28.
 Decision 7 is ruled as revised, after the first recommendation rested on a false claim (§5). Decision 8 is measured on both machines
 (§6). Both directions through the ring, (b′), clears the bar on aarch64. On x86-64 it misses in one cell, 10,000
@@ -258,6 +258,10 @@ drain pass.
   It holds no buffer, but its completion names its waiter.
 - A socket cannot close or move while a fiber is parked on it, because the parked fiber borrows it (decision 5). A
   debug build checks that no record is in flight when a registration is released.
+- **A socket may have several submissions in flight at once.** KR-244's read and write halves park a `RECV` and a
+  `SEND` on one descriptor together. Each is its own record on its own fiber's stack. A cancel names its record, never
+  the descriptor, which would end the other half's operation too. The registration counts what is in flight rather
+  than keeping a slot per direction, and the ring arm uses neither of its `reader` and `writer` slots.
 
 ### Decision 11 — a write parks, and its bytes leave at the turn's `io_uring_enter`
 
@@ -359,7 +363,7 @@ On both machines' numbers, decision 2 is re-ruled to (b′).
 Each step is one commit, with fixtures on native Linux. The ring arm runs by default wherever the kernel allows it, so
 the native suite on Linux runs the ring. A container leg falls back to epoll, because Podman refuses io_uring, so the
 sanitizer leg runs epoll.
-1. **The arm, readiness only.** `kama_sched` grows a ring beside the epoll arm, chosen when the scheduler is made
+1. **The arm, readiness only** (`0.9.756`). `kama_sched` grows a ring beside the epoll arm, chosen when the scheduler is made
    (decisions 1, 6 and 7). The work in this step:
    - the probe, and `KAMA_IO_URING=0`;
    - the waker's multishot poll;

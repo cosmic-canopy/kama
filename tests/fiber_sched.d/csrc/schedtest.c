@@ -137,6 +137,7 @@ static int nonBlocking(int fd) { return (fcntl(fd, F_GETFL) & O_NONBLOCK) != 0; 
 // it does not.
 static int heldBy(kama_sched* s, int fd) {
 #if defined(KAMA__SCHED_EPOLL)
+    if (kama__sched_ring(s)) return 0;               // the ring arm registers nothing with the OS (io_uring.md decision 9)
     struct epoll_event ev; memset(&ev, 0, sizeof ev); ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
     return !(epoll_ctl(((kama__poller*)s->poller)->epfd, EPOLL_CTL_MOD, fd, &ev) != 0 && errno == ENOENT);
 #elif defined(KAMA__SCHED_KQUEUE)
@@ -494,7 +495,7 @@ int fiber_sched_selftest(void) {
     CHECK(190, pairUp());
     CHECK(191, kama_net_ready(np[0], &nio, &nmode, 0) == 0 && nio);   // on the root: registered here
 #if !defined(KAMA__SCHED_POLLER)
-    CHECK(192, heldBy(self, np[0]));
+    if (!kama__sched_ring(self)) CHECK(192, heldBy(self, np[0]));   // an arm that registers with the OS: it did
 #endif
     pthread_t el;
     CHECK(193, pthread_create(&el, NULL, netElsewhere, NULL) == 0);

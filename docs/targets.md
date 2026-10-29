@@ -778,6 +778,7 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
 | `KAMA_WGPU_DIR` | `--webgpu`, native | the wgpu-native SDK root, instead of the one `tools/fetch-webgpu.sh` fetched |
 | `KAMA_PTHREAD_POOL` | wasm builds | isolate worker slots to pre-warm (default 0) |
 | `KAMA_LOG` | the built program | the `std::log` filter, e.g. `warn,audio=debug`; `--log` overrides it |
+| `KAMA_IO_URING` | the built program, Linux | `0` runs the fiber scheduler on epoll instead of io_uring. Read when an isolate's scheduler is made. The ring is the default wherever the kernel allows it (6.1 or later, and not refused by a container's seccomp, SELinux or `kernel.io_uring_disabled`), and epoll runs everywhere else. Neither changes what a program does. A process on the ring holds an `anon_inode:[io_uring]` descriptor |
 | `KAMA_VERSION` | the `kama` selector, `install.sh` | run (or install) this toolchain version, `vX.Y.Z` ([packages.md](packages.md#toolchain-versions)) |
 | `KAMA_NO_SELECT` | the `kama` selector | run the binary you invoked, ignoring every pin |
 | `KAMA_STORE` | `kama pkg` | the shared package store (default `~/.kama/store`) |
