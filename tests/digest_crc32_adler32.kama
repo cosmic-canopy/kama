@@ -1,0 +1,52 @@
+// std::digest::crc32 and adler32 against their standard check values, and against Python's zlib on 100,000 bytes, which
+// crosses Adler-32's 5,552-byte run many times; streaming in uneven pieces must equal the one-shot. Bits sum to 255.
+import { std::digest::crc32::Crc32, std::digest::crc32::crc32, std::digest::adler32::Adler32,
+         std::digest::adler32::adler32, std::collections::DynamicArray };
+
+fn DynamicArray<uint8> pattern(bool ff) {
+    DynamicArray<uint8> d = DynamicArray::<uint8>.withCapacity(capacity: 100000);
+    isize i = 0;
+    while (i < 100000) {
+        d.add(item: ff ? 255ui8 : truncate<uint8>(cast<uint32>(i) * 7ui32 + 3ui32));
+        i = i + 1;
+    }
+    return d;
+}
+
+// Both checksums of `d` fed in pieces of 1, 7, 5552, 5553 bytes and then the rest.
+fn bool piecesMatch(const ref DynamicArray<uint8> d, uint32 wantCrc, uint32 wantAdler) {
+    Crc32 c = Crc32.make();
+    Adler32 a = Adler32.make();
+    borrow d.view() as v {
+        isize at = 0;
+        InlineArray<isize>#(4) sizes = [1, 7, 5552, 5553];
+        for (int32 k = 0; k < 4; k = k + 1) {
+            c.update(bytes: v.slice(from: at, count: sizes[k]));
+            a.update(bytes: v.slice(from: at, count: sizes[k]));
+            at = at + sizes[k];
+        }
+        c.update(bytes: v.slice(from: at, count: v.length() - at));
+        a.update(bytes: v.slice(from: at, count: v.length() - at));
+    }
+    return c.finish() == wantCrc && a.finish() == wantAdler;
+}
+
+fn uint8 main() {
+    int32 r = 0;
+    string empty = "";
+    string check = "123456789";
+    string fox = "The quick brown fox jumps over the lazy dog";
+    string wiki = "Wikipedia";
+    if (crc32(bytes: empty.bytes()) == 0ui32)                  { r = r + 1; }
+    if (crc32(bytes: check.bytes()) == 0xCBF43926ui32)         { r = r + 2; }
+    if (crc32(bytes: fox.bytes()) == 0x414FA339ui32)           { r = r + 4; }
+    if (adler32(bytes: empty.bytes()) == 1ui32)                { r = r + 8; }
+    if (adler32(bytes: wiki.bytes()) == 0x11E60398ui32)        { r = r + 16; }
+    if (adler32(bytes: check.bytes()) == 0x091E01DEui32)       { r = r + 32; }
+    DynamicArray<uint8> p = pattern(ff: false);
+    if (crc32(bytes: p.view()) == 0xF730CAA8ui32 && adler32(bytes: p.view()) == 0x2DFB940Fui32) { r = r + 64; }
+    DynamicArray<uint8> f = pattern(ff: true);
+    if (piecesMatch(d: p, wantCrc: 0xF730CAA8ui32, wantAdler: 0x2DFB940Fui32)
+        && piecesMatch(d: f, wantCrc: 0x68C6CEC4ui32, wantAdler: 0x149A302Cui32))                     { r = r + 128; }
+    return cast<uint8>(r);
+}

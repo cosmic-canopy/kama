@@ -2447,6 +2447,9 @@ arriving during a blocking call; `Poller.wait(timeoutMs:)` absorbs it and waits 
 `ERROR_TOO_MANY_OPEN_FILES`) or the whole system (ENFILE) at its limit on open files and sockets. That is an
 `accept` that cannot take the connection, an `open` or a `socket`. `NotConnected` is Rust's name too: a socket with <!-- test: net_not_connected -->
 no connection (ENOTCONN, Winsock's `WSAENOTCONN`), such as the peer of a UDP socket that never connected.
+`InvalidData` is Rust's name for someone else's bytes that the operation cannot accept: text that is not UTF-8, a <!-- test: fs_text -->
+compressed stream that is corrupt or fails its checksum, an archive header that does not parse. `InvalidInput` is the
+caller's own argument. `LimitExceeded` is a bound the caller set being reached, such as a decoder's limit on its output.
 
 **A write to a peer that has gone is an error, not the end of the program.** Writing to a socket whose peer <!-- test: net_write_closed_peer -->
 closed, or to the stdin of a child that exited, returns an error of kind `BrokenPipe` (or `ConnectionReset` or `NotConnected`, as the <!-- test: proc_write_exited_child -->
@@ -2519,7 +2522,7 @@ partial-write primitive, and `std::io::writeAll` is the loop over it that both u
 
 ⚠️ **`readText` validates, and so does every other path that builds a `string` out of foreign bytes** —
 `std::io::readAll` and `BufReader.readLine`, which are where the reading actually happens. Invalid UTF-8
-is `Err(InvalidInput)`, not an ill-formed `string`: `string`'s UTF-8 invariant is what `.chars()` assumes
+is `Err(InvalidData)`, not an ill-formed `string`: `string`'s UTF-8 invariant is what `.chars()` assumes
 and what `substring` traps to preserve, and until `0.9.433` `readAll` was a way around it (a binary file
 read as text yielded bogus codepoints from entirely safe code). Bad *input* is an error, the same way <!-- test: fs_text -->
 `parse` returns one; bad *output* written into a `StringWriter` is a caller bug, so `finish()` carries a

@@ -21,6 +21,12 @@
     "digest": {
       "visibility": "public",
       "modules": {
+        "adler32": {
+          "visibility": "public"
+        },
+        "crc32": {
+          "visibility": "public"
+        },
         "sha1": {
           "visibility": "public"
         },

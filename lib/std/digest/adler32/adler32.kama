@@ -1,0 +1,48 @@
+import { std::collections::ConstView };
+export { Adler32, adler32 };
+
+// Adler-32 (RFC 1950 §8.2), the checksum that ends every zlib stream: two sums modulo 65521, the largest prime below
+// 2^16, `a` over the bytes starting from 1 and `b` over each running `a`, packed as `b << 16 | a`. The same streaming
+// shape as `std::digest::crc32`:
+//
+//   Adler32 s = Adler32.make();
+//   s.update(bytes: part);
+//   uint32 v = s.finish();          // `update` may go on
+//   uint32 w = adler32(bytes: whole);
+//
+// Cheaper than CRC-32 and weaker on short inputs; a checksum against accident, never against an adversary.
+
+// The most bytes that can be summed before `b` could pass 2^32 - 1 with both sums starting just under 65521 (zlib's
+// NMAX): the modulo is taken once per run of this many bytes rather than once per byte.
+comptime isize RUN = 5552;
+comptime uint32 MOD = 65521ui32;
+
+type value Adler32 {
+    uint32 a;
+    uint32 b;
+
+    public ctor make() { this.a = 1ui32; this.b = 0ui32; }
+
+    public fn void update(ConstView<uint8> bytes) {
+        uint32 sa = this.a;
+        uint32 sb = this.b;
+        isize n = bytes.length();
+        isize i = 0;
+        while (i < n) {
+            isize end = n - i > RUN ? i + RUN : n;
+            while (i < end) { sa = sa + cast<uint32>(bytes[i]); sb = sb + sa; i = i + 1; }
+            sa = sa % MOD;
+            sb = sb % MOD;
+        }
+        this.a = sa;
+        this.b = sb;
+    }
+
+    public const fn uint32 finish() { return (this.b << 16ui32) | this.a; }
+}
+
+fn uint32 adler32(ConstView<uint8> bytes) {
+    Adler32 s = Adler32.make();
+    s.update(bytes: bytes);
+    return s.finish();
+}

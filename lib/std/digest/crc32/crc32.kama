@@ -1,0 +1,53 @@
+import { std::collections::ConstView };
+export { Crc32, crc32 };
+
+// CRC-32 as gzip (RFC 1952), zip and PNG carry it, and as zlib's `crc32` computes it: the polynomial 0x04C11DB7,
+// reflected (0xEDB88320), starting from and finishing with 0xFFFFFFFF (the ISO-HDLC parameters). The same streaming
+// shape as std's digests:
+//
+//   Crc32 c = Crc32.make();
+//   c.update(bytes: part);          // any number of times
+//   uint32 v = c.finish();          // the checksum of everything so far; `update` may go on
+//   uint32 w = crc32(bytes: whole);
+//
+// A checksum, not a digest: it catches the damage a channel does by accident, and anyone can forge a match, so it
+// says nothing against an adversary (sha256 does). Pure kama, a table baked at compile time, one byte a step.
+
+comptime fn InlineArray<uint32>#(256) crcTable() {
+    InlineArray<uint32>#(256) t = [0; 256];
+    for (int32 i = 0; i < 256; i = i + 1) {
+        uint32 c = cast<uint32>(i);
+        for (int32 k = 0; k < 8; k = k + 1) {
+            c = ((c & 1ui32) != 0ui32) ? (0xEDB88320ui32 ^ (c >> 1ui32)) : (c >> 1ui32);
+        }
+        t[i] = c;
+    }
+    return t;
+}
+
+comptime InlineArray<uint32>#(256) TABLE = crcTable();
+
+type value Crc32 {
+    uint32 state;
+
+    public ctor make() { this.state = 0xFFFFFFFFui32; }
+
+    public fn void update(ConstView<uint8> bytes) {
+        uint32 c = this.state;
+        isize n = bytes.length();
+        isize i = 0;
+        while (i < n) {
+            c = TABLE[cast<usize>((c ^ cast<uint32>(bytes[i])) & 255ui32)] ^ (c >> 8ui32);
+            i = i + 1;
+        }
+        this.state = c;
+    }
+
+    public const fn uint32 finish() { return this.state ^ 0xFFFFFFFFui32; }
+}
+
+fn uint32 crc32(ConstView<uint8> bytes) {
+    Crc32 c = Crc32.make();
+    c.update(bytes: bytes);
+    return c.finish();
+}

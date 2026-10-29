@@ -42,6 +42,10 @@ extern fn int32 kama_ENOTCONN();
 // its limit on open files and sockets: an `accept` that cannot take the connection, an `open`, a `socket`.
 // `NotConnected` is a socket with no connection (ENOTCONN): the peer of one never connected, or a send after a
 // reset has torn the connection down — what macOS answers once the first send after the peer left was buffered.
+// `InvalidData` is bytes from outside that the operation cannot accept: text that is not UTF-8, a compressed stream that
+// is corrupt or fails its checksum, an archive header that does not parse (Rust's name). `InvalidInput` is the caller's
+// argument; this is someone else's bytes. `LimitExceeded` is a bound the caller set being reached: a decoder's limit on
+// the bytes it may produce, so a decompression bomb ends there rather than in memory (std::compress, KR-5).
 @nonExhaustive
 type enum IoErrorKind implements Sendable {
     NotFound,
@@ -62,6 +66,8 @@ type enum IoErrorKind implements Sendable {
     Interrupted,
     TooManyOpenFiles,
     NotConnected,
+    InvalidData,
+    LimitExceeded,
     Other;
 
     public const fn string message() {
@@ -84,6 +90,8 @@ type enum IoErrorKind implements Sendable {
             case Interrupted:       "interrupted";
             case TooManyOpenFiles:  "too many open files";
             case NotConnected:      "not connected";
+            case InvalidData:       "invalid data";
+            case LimitExceeded:     "limit exceeded";
             case Other:             "i/o error";
         };
     }

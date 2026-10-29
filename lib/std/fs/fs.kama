@@ -627,7 +627,7 @@ fn Result<isize, IoError> writeFile(const ref string path, const ref DynamicArra
 // `os.ReadFile` + a conversion, Python `open().read()`). Before it, writing or reading a string meant a
 // hand loop over `s[i]` into a `DynamicArray`, because the byte API was the only API.
 //
-// ⚠️ It VALIDATES, so a binary file read as text is `Err(InvalidInput)` rather than an ill-formed
+// ⚠️ It VALIDATES, so a binary file read as text is `Err(InvalidData)` rather than an ill-formed
 // `string` that `.chars()` later reads garbage out of. That is Rust's `read_to_string` (`InvalidData`)
 // and Python's `decode` (raises), and it is the invariant kama already claims for `string`. A caller who
 // wants the bytes whatever they are has `readFile`, which is unchanged.
@@ -648,7 +648,7 @@ unsafe fn Result<string, IoError> textOf(const ref DynamicArray<uint8> bytes) {
         Result<string, Utf8Error> d = decode(bytes: v);
         return match (give d) {
             case Ok(value: s):  Result::Ok(value: give s);
-            case Err(error: u): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+            case Err(error: u): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData));
         };
     }
 }
@@ -708,7 +708,7 @@ unsafe fn Result<string, IoError> canonicalPath(const ref string path) {
             Result<string, Utf8Error> t = decode(bytes: buf.slice(from: 0, count: n));
             return match (give t) {
                 case Ok(value: s):  Result::Ok(value: give s);
-                case Err(error: e): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+                case Err(error: e): Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData));
             };
         }
         cap = n;

@@ -83,7 +83,7 @@ fn Result<string, IoError> readAll(Reader r) {
     Result<isize, IoError> pr = pump(from: r, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     borrow sw.view() as v {
-        if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData)); }
     }
     return Result::Ok(value: sw.finish());
 }
@@ -149,17 +149,31 @@ type resource StringWriter implements Writer, Viewable<ConstView<uint8>>, Sendab
     }
 }
 
-// The in-memory `Reader`: reads out of an owned byte source (a `string`'s UTF-8 bytes). This is the source
-// behind serde's `deserializeJsonBuffer(string)`. Single-pass, fully streamable, bounded memory in the reader's own
-// buffer (the source itself is held whole — that is the caller's `string`, by design for the sugar path).
+// The in-memory `Reader`: reads out of an owned source held whole — a `string`'s UTF-8 bytes (`make`, the source behind
+// serde's `deserializeJsonBuffer(string)`) or a byte array (`fromBytes`, for bytes that are not text: a compressed
+// body, a test vector). Go's `strings.Reader` and `bytes.Reader`, as one type. A string is kept as the string, since
+// it only lends its bytes and a copy would cost every serde parse; so the reader holds one source or the other, and
+// branches once per `read`, not per byte.
 type resource SliceReader implements Reader, Sendable {
     string src;
+    DynamicArray<uint8> bytes;
+    bool isText;
     isize pos;
     isize len;
 
     public ctor make(string src) {
         this.len = src.length();
         this.src = give src;
+        this.bytes = DynamicArray.empty();
+        this.isText = true;
+        this.pos = 0;
+    }
+
+    public ctor fromBytes(DynamicArray<uint8> bytes) {
+        this.len = bytes.length();
+        this.bytes = give bytes;
+        this.src = "";
+        this.isText = false;
         this.pos = 0;
     }
 
@@ -169,7 +183,11 @@ type resource SliceReader implements Reader, Sendable {
         isize want = into.length();
         isize k = avail < want ? avail : want;
         isize i = 0;
-        while (i < k) { into[i] = this.src[this.pos + i]; i = i + 1; }
+        if (this.isText) {
+            while (i < k) { into[i] = this.src[this.pos + i]; i = i + 1; }
+        } else {
+            while (i < k) { into[i] = this.bytes[this.pos + i]; i = i + 1; }
+        }
         this.pos = this.pos + k;
         return Result::Ok(value: k);
     }
@@ -347,7 +365,7 @@ type resource BufReader<R: Reader> implements Reader {
 unsafe fn Result<string, IoError> bytesToString(const ref DynamicArray<uint8> bytes) {
     if (bytes.length() == 0) { return Result::Ok(value: ""); }
     borrow bytes.view() as v {
-        if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData)); }
     }
     return Result::Ok(value: kama_string_from_raw(src: addr(of: bytes[0]), start: 0, len: bytes.length()));
 }

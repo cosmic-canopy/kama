@@ -1,0 +1,47 @@
+// SliceReader.fromBytes reads bytes that are not text, any value, in whatever pieces the caller asks for; read as text
+// they are InvalidData, the kind for someone else's bytes (InvalidInput is the caller's argument). `make` still reads a
+// string. The two new kinds name themselves. Bits sum to 63.
+import { std::io::SliceReader, std::io::readAll, std::io::IoError, std::io::IoErrorKind,
+         std::collections::DynamicArray, std::collections::FixedArray };
+
+fn uint8 main() {
+    int32 r = 0;
+    DynamicArray<uint8> src = DynamicArray::<uint8>.withCapacity(capacity: 10);
+    InlineArray<uint8>#(10) want = [0ui8, 255ui8, 192ui8, 128ui8, 7ui8, 0ui8, 31ui8, 139ui8, 8ui8, 254ui8];
+    for (int32 i = 0; i < 10; i = i + 1) { src.add(item: want[i]); }
+
+    // 1: every byte back, in pieces of 3, then a clean end.
+    SliceReader b = SliceReader.fromBytes(bytes: give src);
+    FixedArray<uint8> buf = FixedArray.make(size: 3);
+    isize got = 0;
+    bool same = true;
+    while (true) {
+        isize n = match (b.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n <= 0) { if (n < 0) { same = false; } break; }
+        for (isize j = 0; j < n; j = j + 1) { if (buf[j] != want[got + j]) { same = false; } }
+        got = got + n;
+    }
+    if (same && got == 10) { r = r + 1; }
+    // 2: a read after the end stays at the end.
+    match (b.read(into: buf.viewMut())) { case Ok(value: k): { if (k == 0) { r = r + 2; } } case Err(error: e): {} };
+
+    // 4: the same bytes read as text are InvalidData.
+    DynamicArray<uint8> again = DynamicArray::<uint8>.withCapacity(capacity: 10);
+    for (int32 i = 0; i < 10; i = i + 1) { again.add(item: want[i]); }
+    SliceReader t = SliceReader.fromBytes(bytes: give again);
+    match (readAll(r: t)) {
+        case Ok(value: s): {}
+        case Err(error: e): { match (e.kind()) { case InvalidData: { r = r + 4; } case _: {} }; }
+    };
+
+    // 8: `make` reads a string as it always has.
+    SliceReader s = SliceReader.make(src: "héllo");
+    match (readAll(r: s)) { case Ok(value: v): { if (v.equals(other: "héllo")) { r = r + 8; } } case Err(error: e): {} };
+
+    // 16, 32: the new kinds name themselves, with no OS code behind them.
+    IoError d = IoError.of(kind: IoErrorKind::InvalidData);
+    if (d.message().equals(other: "invalid data")) { r = r + 16; }
+    IoError l = IoError.of(kind: IoErrorKind::LimitExceeded);
+    if (l.message().equals(other: "limit exceeded") && !l.rawOsError().isSome()) { r = r + 32; }
+    return cast<uint8>(r);
+}

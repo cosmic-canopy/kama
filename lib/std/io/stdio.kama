@@ -47,7 +47,8 @@ type resource StdIn implements Reader {
 }
 
 // Standard output (fd 1) as a `Writer`. Unbuffered — every `write` is one syscall, so wrap it in a
-// `BufWriter` when writing many small pieces (and remember to `flush`, which `BufWriter` does on drop).
+// `BufWriter` when writing many small pieces, and `flush` it before it drops: a drop does not flush, since a write
+// there could not report its error, and an encoder dropped without `finish` abandons its stream the same way.
 type resource StdOut implements Writer {
     int32 fd = 1;
 
