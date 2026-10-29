@@ -68,6 +68,10 @@ case "${1:-}" in
                  sh bench/uring/run.sh "${2:-.scratch/uring.tsv}" "${3:-15}" ;;
   # KR-253 §8 step 5's counts: perf's tracepoints need the container privileged and the VM's tracefs inside it, beside the
   # seccomp and SELinux relaxation every server run has. The VM must also allow perf (see WRAP above).
+  # On a ROOTLESS podman machine (the macOS default) the container's root is the VM user, and the VM's tracefs is root's
+  # only, so perf cannot read an event's id even privileged. Before a count there, both revert when the VM restarts:
+  #   podman machine ssh sudo sysctl -w kernel.perf_event_paranoid=-1
+  #   podman machine ssh sudo mount -o remount,mode=0750,gid=$(podman machine ssh id -g) /sys/kernel/tracing
   count)       "$ENGINE" run --rm --privileged --ulimit nofile=524288:524288 --pids-limit=-1 ${server_args[@]+"${server_args[@]}"} \
                  -v /sys/kernel/tracing:/sys/kernel/tracing -v "$ROOT:/work" -w /work "$IMAGE" \
                  bash -c "make -s kama >/dev/null && bash bench/server/count.sh ${2:-.scratch/counts.tsv} ${3:-3}" ;;

@@ -448,6 +448,38 @@ What they show:
   the server's cores never sleep.
 - **The third suspect, the park per write, is not a count.** It is the M4 profile's to show.
 
+### Counts, aarch64 (2026-10-29, step 5)
+
+`bench/run count`, the same script in the bench container on the M4's podman VM (kernel 7.0.9, 6 vCPUs), 3 runs, the
+`0.9.763` tree. Raw rows: [benchmarks/ring-counts-aarch64.tsv](../benchmarks/ring-counts-aarch64.tsv). The median of
+the 3 runs, per request, beside x86-64's:
+
+| per request | ring, 1,000 | x86-64 | epoll, 1,000 | x86-64 | **ring, 10,000** | **x86-64** | epoll, 10,000 | x86-64 |
+|---|---|---|---|---|---|---|---|---|
+| `recvfrom` + `sendto` | 0 | 0 | 2.00 | 2.00 | **0** | **0** | 2.00 | 2.00 |
+| `io_uring_enter` / epoll waits | 0.045 | 0.033 | 0.033 | 0.016 | **0.033** | **0.033** | 0.022 | 0.016 |
+| completions per enter / events per wait | 44 | 61 | 31 | 61 | **61** | **61** | 43 | 61 |
+| `io_uring_submit_req`, `io_uring_complete` | 2.00 | 2.00 | — | — | **2.00** | **2.00** | — | — |
+| `io_uring_poll_arm` | **0.66** | 0.0004 | — | — | **0.038** | **0.0001** | — | — |
+| `io_uring_local_work_run` | 0.061 | 0.0001 | — | — | 0.004 | 0 | — | — |
+| context switches | 0.0015 | 0 | 0.002 | 0 | 0.0002 | 0 | 0.001 | 0 |
+
+What they show:
+- **The first suspect is ruled out where the loss is.** At 10,000 connections the M4 collects 61 completions per
+  `io_uring_enter`, kama's own polling interval, as x86-64 does. The harness's "about 40" does not happen in kama under
+  load. At 1,000 it collects 44, and epoll 31 events per wait: the server reaches an empty run queue more often there,
+  where the ring arm is level.
+- **The second suspect is real, at the count where the ring does not lose.** At 1,000 connections two in three of the
+  M4's `RECV`s arm a poll in the kernel, against almost none on x86-64: with fewer requests waiting, a `RECV` often meets
+  its socket before the next request has arrived. At 10,000, where the ring loses, it is 0.038 a request, too few to
+  carry a 0.21 µs loss even at a microsecond each.
+- **At 10,000 the two machines do the same work, count for count:** 0.033 system calls, 2 submissions, 2 completions,
+  61 to an enter. So the M4's ring arm spends 0.21 µs a request more than its own epoll arm (step 4: 3.30 against 3.09)
+  doing what x86-64's does in less time than epoll. That is the third suspect's shape: the ring path's own cost per
+  operation (two submissions, two parks and switches, two completions in the kernel and in kama) against the two
+  system calls it saves, which cost more on x86-64's guest than on the M4's. **Next: the profile of both arms at echo
+  10,000 on the M4**, to see where the 0.21 µs goes.
+
 ## 7. What is out of scope here
 
 - **Regular files and DNS** stay on KR-3 step 7's offload pool, which every OS needs. io_uring reads regular files

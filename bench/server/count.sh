@@ -29,6 +29,7 @@ command -v perf >/dev/null || { echo "count.sh: needs perf" >&2; exit 2; }
 if ! perf stat -e raw_syscalls:sys_enter -- true >/dev/null 2>&1; then
     echo "count.sh: perf cannot count tracepoints here: run it as root (sudo), or lower kernel.perf_event_paranoid" >&2
     echo "  and open /sys/kernel/tracing; in a container, \`bench/run count\` passes what it needs" >&2
+    echo "  (on a rootless podman machine, the VM needs two settings first: see the comment above \`count)\` in bench/run)" >&2
     exit 2
 fi
 mkdir -p "$(dirname "$out")"
