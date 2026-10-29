@@ -3320,7 +3320,10 @@ before it, `frame_dummy`, since the asm label has no function type). `0.9.753` p
 while the current one runs: 1.7% less CPU per request at 10,000 connections (15/15 rounds), and no change at 1,000,
 where the frames stay cached. After it, kama and tokio-percore spend the same CPU per request at 10,000 connections,
 and tokio serves about 1% more requests a second; at 1,000 the two are within the noise floor. Frames and control
-blocks laid out densely, so that a switch touches fewer lines and pages, are the lever left.
+blocks laid out densely, so that a switch touches fewer lines and pages, are the lever left. On x86-64 the two are level
+at 10,000 (servers.md's *x86-64* section). Hardware counters (cycles, cache and dTLB misses for the fiber arm against
+tokio-percore, `perf stat` through the harness's `WRAP`) are still owed: neither VM exposes a `cpu` PMU, so they wait
+for a machine that passes one through.
 
 **KR-253 left a decision here (2026-10-29).** On io_uring, `kama_net_write`'s rule is gated by architecture, as a
 measured delta:
@@ -3330,10 +3333,7 @@ Every write a `SEND` won on x86-64, at 1.22× and 1.08× epoll's requests agains
 1,000 connections and lost at 10,000, where switching back into a fiber whose stack had gone cold cost about 0.3 µs.
 So the real variable looks like the cost of a cold switch, which is this row's. Once this row cuts that cost, measure
 both write rules on both machines. If every write a `SEND` wins on both, delete the gate: one rule, x86-64's. The x86-64
-box runs its half. On x86-64 the two are level
-at 10,000 (servers.md's *x86-64* section). Hardware counters (cycles, cache and dTLB misses for the fiber arm against
-tokio-percore, `perf stat` through the harness's `WRAP`) are still owed. The x86-64 box's guest exposes no `cpu` PMU,
-so they wait for a machine that passes them through.
+box runs its half.
 
 **Measured again on the M4, 2026-10-29 (`0.9.763`, KR-253's profile, io_uring.md §6):** at 10,000 echo connections the
 switch is 5.3% of the epoll arm's server CPU, about 0.18 µs each time a fiber is switched into, and the first lines its
@@ -3343,6 +3343,37 @@ request, which on the M4 cost more than the `send` system call it saved, so a wr
 (`0.9.764`). A cheaper switch into a cold fiber would help every fiber program, and could let the ring take every
 write again, which x86-64 preferred in decision 8's harness. Both arms' flat profiles are in
 [benchmarks/ring-profile-aarch64.txt](benchmarks/ring-profile-aarch64.txt).
+
+**The cold switch: the plan (2026-10-29), which may let the write gate go.** What a switch into a fiber touches today
+(`include/kama_fiber.h`):
+- **Its saved registers, on its own stack:** 160 bytes on aarch64 (x19–x30 and d8–d15), three cache lines; on x86-64
+  the callee-saved set is about one line. That difference may be part of why x86-64 tolerates a park that the M4 does
+  not.
+- **A stack per fiber, each its own 256 KiB `mmap` with a guard page below it.** So 10,000 fibers put their saved
+  contexts on 10,000 different pages, which no TLB covers (and a guest's miss walks two levels of page tables), and
+  every context sits at the same offset within its page, so they compete for the same few cache sets.
+- **The control block, from `kama_alloc`**, which the scheduler has just touched to pop the fiber from its queue.
+
+The candidates, each cheap to try once the first step exists:
+1. **A cold-switch microbenchmark first** (`bench/fiber/`, beside `bench/poller/`): N fibers parked and woken round
+   robin with no I/O, nanoseconds per switch-in at N = 100, 1,000, 10,000 and 100,000, on both machines. It isolates
+   the cost the server benchmark buries, and judges every candidate below in seconds rather than a 40-minute run.
+2. **Prefetch on wake:** when a completion or an event makes a fiber ready, prefetch its saved context then. It runs a
+   whole ready queue later (up to 61 fibers), long enough to hide a miss and a page walk, where `0.9.753`'s prefetch of
+   the next fiber only has one run's time.
+3. **The saved context in the control block,** as Go keeps a goroutine's registers in its `g`: the switch loads from
+   memory the scheduler touched a moment before, and no longer from the stack's page. It changes the switch on every
+   architecture (aarch64, x86-64, Windows x64), so it is measured against 2 and 4 before it is chosen.
+4. **Stack colouring:** start each fiber's stack at a different offset within its page, so the contexts stop sharing
+   cache sets. It costs at most a page of a 256 KiB stack.
+5. **Stacks from one arena,** guard pages kept, so neighbouring stacks share page-table pages and a walk is shorter.
+   Huge pages are not an option while each stack has its own guard page.
+
+**Done when:** the switch into a cold fiber is cut, the server's echo 10,000 shows it, and then **both write rules are
+measured on both machines** (the quick run, then the closing check). If every write a `SEND` wins on both, the gate in
+`kama_net_write` goes and x86-64's rule is the one rule; if the system call first wins on both, the gate goes the other
+way; if they still split, the gate stays as a measured delta. Decisions owed before code: which candidates to build
+after the microbenchmark ranks them, and, if 3 is chosen, the context's layout per architecture.
 
 <a id="s9-skew"></a>
 
