@@ -150,6 +150,7 @@ typedef struct kama_fiber_thread {
     size_t stated;
     void* sched;                    // this isolate's fiber scheduler (kama_sched.h), once it has one
     void (*schedEnd)(void);         // lets go of it when the isolate ends (kama_sched.h sets it with the scheduler)
+    unsigned colour;                // how many cache lines into its page the next stack's top starts (kama_fiber_new)
 } kama_fiber_thread;
 // One per process.
 typedef struct kama_fiber_process {
@@ -571,7 +572,7 @@ static inline kama_fiber* kama_fiber_new(void (*entry)(void*), void* arg, size_t
     kama_fiber* f = NULL;
 #if !defined(KAMA_FIBER_WIN)
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
-    size_t size = (want + page - 1) & ~(page - 1);
+    size_t size = ((want + page - 1) & ~(page - 1)) + page;              // the last page holds the colour, below
     for (kama_fiber** p = &kama__fibers.idle; *p; p = &(*p)->next)          // a stack this size, if one is idle
         if ((*p)->size == size) { f = *p; *p = f->next; kama__fibers.idleN--; break; }
 #if defined(KAMA__FIBER_ASAN)
@@ -602,7 +603,13 @@ static inline kama_fiber* kama_fiber_new(void (*entry)(void*), void* arg, size_t
         f->tsan = __tsan_create_fiber(0);
 #endif
     }
-    f->sp = kama__fiber_frame(f->lo + f->size, f);
+    // Each stack's top starts one cache line further into its page than the last (KR-254). Every fiber parks at about
+    // the same depth, so with page-aligned tops every saved context would sit at one offset in its page, and the L1,
+    // indexed by those bits, would hold a few dozen of them however many fibers there are. Measured on the M4 (Linux,
+    // bench/fiber/): a switch into a fiber that last ran 10,000 switches ago went from 224 to 131 ns, and one at 100
+    // fibers from 93 to 72; at 100,000 fibers, where every context misses anyway, it costs 4-5%. The page it spends is
+    // the extra one reserved above, so a fiber still has the whole stack it asked for.
+    f->sp = kama__fiber_frame(f->lo + f->size - (size_t)(kama__fibers.colour++ % (page / 64)) * 64, f);
 #else
     f = (kama_fiber*)kama_alloc(sizeof *f, _Alignof(kama_fiber));
     if (!f) kama_panic(kama_string_lit("fiber: out of memory", 20));

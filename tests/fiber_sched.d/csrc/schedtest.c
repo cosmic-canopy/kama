@@ -305,6 +305,12 @@ static void netShortEof(void* a) {
 static int many;
 static void brief(void* a) { kama_sched_sleep((uint64_t)((intptr_t)a % 7) * 100000ull); many++; }
 
+// 281. two stacks made one after the other start at different lines of their pages, and inside their own stacks
+// (KR-254's colour), with at least the stack they asked for below.
+#if !defined(KAMA_FIBER_WIN)
+static void idleFiber(void* a) { (void)a; }
+#endif
+
 // 11–14. the root parks: a join, a `scope`'s wait (on the root and on a fiber), a timed sleep, each running the loop
 // inside the park until it is woken (decision 1).
 static int scoped, inner, nested;
@@ -624,6 +630,19 @@ int fiber_sched_selftest(void) {
     kama_sched_scopeWait(&outer);
     CHECK(14, nested);
 
+#if !defined(KAMA_FIBER_WIN)
+    {
+        kama_fiber* c1 = kama_sched_spawn(idleFiber, 0, 64 << 10);
+        kama_fiber* c2 = kama_sched_spawn(idleFiber, 0, 64 << 10);
+        const size_t pg = (size_t)sysconf(_SC_PAGESIZE);
+        const char* s1 = (const char*)c1->sp; const char* s2 = (const char*)c2->sp;
+        CHECK(281, (uintptr_t)s1 % pg != (uintptr_t)s2 % pg
+                   && s1 > c1->lo && s1 < c1->lo + c1->size && s2 > c2->lo && s2 < c2->lo + c2->size
+                   && (size_t)(s1 - c1->lo) >= (size_t)(64 << 10) && (size_t)(s2 - c2->lo) >= (size_t)(64 << 10));
+        kama_sched_detach(c1); kama_sched_detach(c2);
+        kama_sched_run();
+    }
+#endif
     for (int i = 0; i < 10000; i++) kama_sched_detach(kama_sched_spawn(brief, (void*)(intptr_t)i, 64 << 10));
     kama_sched_run();
     CHECK(9, many == 10000);
