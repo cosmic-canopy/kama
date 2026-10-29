@@ -45,30 +45,6 @@ What the language *is* lives in [SPEC.md](SPEC.md); the engine/MCU capability ma
 **The language surface is feature-complete.** Anything that would *break* source has to land before the
 tag or wait for 2.0.
 
-- **`std::io` transform adapters: compression and archives (KR-5).** kama's package format is a `.tar.gz`, and
-  since `0.9.452` the compiler writes it itself — `src/kama.archive.cpp`, deflate and gzip from RFC 1951/1952
-  plus POSIX ustar/pax — because the system `gzip` compresses the same input to different bytes on different
-  machines (measured: Apple gzip 479 vs GNU gzip 1.12) and a registry version is identified by its sha256. That
-  writer is C++ and the compiler cannot run kama, so it serves `kama publish` and nothing else. The open
-  question the maintainer raised (2026-09-26): should kama programs get the same from `std`, or from a package?
-  For `std`: deflate and tar are frozen, patent-free standards (Go and Python ship both); kama's own package
-  format already IS one, so a registry or package tool written in kama needs it; gzip `Content-Encoding` for
-  `examples/httpd` and the web-framework direction, and PNG's inflate on the engine track, are known consumers;
-  an unused stdlib module costs a program nothing (measured when the modular stdlib was declared a non-goal, `0.9.360`). Needs
-  the inflate half too — the compiler has only a compressor.
-
-  **Ruled 2026-10-19 (the maintainer): std.** Asked again by an HTTP package, which needs both halves, streaming,
-  with a limit on the decoded size. What others ship: deflate/zlib/gzip in std in Go, Python, Zig (both
-  directions, 0.16 checked), C#, Java and Node; Rust none (crates). brotli in C# and Node; zstd in Python 3.14
-  (`compression.zstd`, PEP 784), Node (experimental) and Zig (decode only); Go has an internal zstd decoder and an
-  open proposal. All five formats are frozen RFCs (1950–1952, 7932, 8878), so "a format that churns" was wrong:
-  what differs is implementation size (brotli's 122 KB dictionary, the zstd and brotli encoders). So:
-  1. **Now (this row):** deflate, zlib and gzip in both directions, and tar, as streaming `std::io` adapters; every
-     decoder takes a REQUIRED output limit (bytes, or a ratio), so a decompression bomb is refused by construction.
-     The compiler's C++ writer for `kama publish` stays: the compiler cannot run kama.
-  2. **Later, as their own std rows:** zstd (KR-212) and brotli (KR-213), decode first — a program must read what
-     others send (a `.tar.zst`, a server it does not control); a kama writer can always choose gzip.
-
 **The docs/naming reconcile — CLOSED `0.9.98`, and the row was wrong about its own subject.** It was
 scheduled as a NAMING pass (PascalCase types, lowerCamel methods, no `I`-prefix on contracts, lowercase
 `string`). Measured across `lib/` and `prelude/`, every one of those conventions **already held** — no
@@ -286,6 +262,250 @@ error (a refused `borrow` binder leaves its name unresolved, an abstract type wi
 …), read and left alone. **No error-count guard** was added: `DIAGNOSTIC_LINES` already pins every position
 a fixture's diagnostics name, so a spelling retired later would move a row and fail the suite — the count
 guard would duplicate that and need a per-fixture allowlist for the cascades above.
+
+<a id="s1-compression"></a>
+
+### Compression and archives: deflate, zlib, gzip and tar (KR-5), zstd (KR-212), brotli (KR-213)
+
+**Why std (ruled 2026-10-19).** kama's package format is a `.tar.gz`, and since `0.9.452` the compiler writes it itself
+(`src/kama.archive.cpp`), because the system `gzip` compresses one input to different bytes on different machines
+(measured: Apple gzip 479 vs GNU gzip 1.12) and a registry version is identified by its sha256. That writer is C++, and
+the compiler cannot run kama, so it serves `kama publish` and nothing else. The consumers are HTTP `Content-Encoding`
+(both halves, streaming, with a bound on the decoded size), WebSocket permessage-deflate, PNG on the engine track, and
+any registry or package tool written in kama. An unused std module costs a program nothing (measured `0.9.360`). All
+five formats are frozen RFCs (1950–1952, 7932, 8878); what differs between them is implementation size.
+
+| | deflate · zlib · gzip | tar | zstd | brotli |
+|---|---|---|---|---|
+| Go | std, both directions | std | internal decoder; a proposal | — |
+| Python | std, both | std | std since 3.14 (`compression.zstd`, PEP 784) | — |
+| Zig | std (compression removed in 0.15, back in 0.16) | std | std, decode | — |
+| C# | std | std (`System.Formats.Tar`) | — | std |
+| Java | std | — | — | — |
+| Node | std | — | experimental | std |
+| Rust | crates | crates | crates | crates |
+
+**What the tree has (read 2026-10-29, `0.9.760`):**
+- `std::io`'s `Reader` and `Writer` (`read(View<uint8>)`, `write`, `flush`). Adapters own their inner by value through a
+  generic: `BufReader<R: Reader>`, `BufWriter<W: Writer>`, `Lines<R>` (which holds a `BufReader<R>`). Helpers: `writeAll`,
+  `pump`, `readAll` (UTF-8 only). `SliceReader` reads a `string`, so **nothing reads raw bytes held in memory**.
+- `IoErrorKind` has no kind for corrupt data or for a bound being passed.
+- **`BufWriter` has no destructor, yet `stdio.kama` said it "flushes on drop".** The code is right, and decision 6 below
+  makes it the rule. The comment is corrected.
+- `std::digest` holds sha1/256/512 under `BlockDigest` (a block hash with `blockBytes()`); there is no crc32 or adler32
+  in `lib/`.
+- `kama.archive.cpp`: LZ77 over hash chains (15-bit multiplicative hash, a chain of 1024, lazy matching one byte ahead,
+  zlib's rule dropping a 3-byte match more than 4096 back), package-merge Huffman lengths capped at 15, and each block
+  of 16,384 tokens costed three ways (stored, fixed, dynamic). The gzip header is `1f 8b 08 00 00000000 00 ff`. The
+  tar side is ustar, with a pax `PaxHeader` for a name or link over 100 bytes, a fixed owner and time, and modes
+  0644/0755/0777. Its bytes are pinned by `KR_GOLDEN` in `tools/check-packages.sh`, and [packages.md](packages.md)
+  promises that rebuilding a commit "from any machine yields the same `integrity`".
+- `std::fs` opens with `CreateNew` and has `createDir*`, `setPermissions` and `symlinkStat`, but nothing creates a
+  symlink.
+
+#### The rulings (2026-10-29)
+
+The maintainer ruled 3, 5, 7 and 11 one by one, and approved the rest as recommended.
+
+**1. Modules.** `std::compress::deflate`, `std::compress::zlib`, `std::compress::gzip`, `std::archive::tar`, and the
+checksums as `std::digest::crc32` and `std::digest::adler32`. This is Go's layout, and the house rule that a module
+names a format. zstd and brotli follow as `std::compress::zstd` and `std::compress::brotli`.
+
+**2. Types.** `DeflateReader<R>`/`DeflateWriter<W>`, `ZlibReader`/`ZlibWriter`, `GzipReader`/`GzipWriter`,
+`TarReader`/`TarWriter`. The decoder is a `Reader` and the encoder a `Writer`, Go's two directions (flate2 has four:
+a compressing reader and a decompressing writer as well). A name is imported bare, so it carries its format, as
+`BufReader` does.
+
+**3. Where a decoder's input ends.** Back-to-back streams are real: a git packfile is zlib stream, header, zlib stream;
+a gzip file is one member after another, and PNG and WARC embed streams with more data after them. A decoder that
+reads its source in chunks has to read past the end of the stream, and what it read is lost unless it hands it back.
+
+| | |
+|---|---|
+| Go | `flate.NewReader(r)` may read past the end, unless `r` is an `io.ByteReader` |
+| Rust flate2 | `read::*` reads past; `bufread::*` over a `BufRead` consumes exactly |
+| Zig 0.15+ | exact: its `Reader` interface carries the buffer |
+| Python | `decompressobj().unused_data` holds the bytes read past the end |
+| zlib (C) | `avail_in` says how much input was not used |
+
+**Ruled: the source is a `BufReader<R>`, and the decoder consumes exactly the compressed bytes.** `finish()` hands the
+`BufReader<R>` back at the first byte after the stream. The decoders read its buffer through a `friend` grant on
+`BufReader` (as `map.kama` grants `std::concurrent::ConcurrentMap`), so `BufReader`'s public surface does not grow. The
+type stays the same around a loop:
+
+```kama fragment
+BufReader<File> src = BufReader.make(inner: give pack);
+while (more) {
+    ZlibReader<File> z = ZlibReader.make(source: give src, limit: 64 * 1024 * 1024);
+    // … read the object …
+    match (z.finish()) { case Ok(value: b): { src = give b; } case Err(error: e): { … } };
+}
+```
+
+**The bytes:** a decoder is the `BufReader`'s 4 KiB, the 32 KiB window, and the Huffman tables.
+
+**4. The limit.** A required `uint64 limit` on the decoded bytes, counted across a gzip file's members. Up to `limit`
+bytes are delivered, and the read that would pass it returns `Err` with the new kind `LimitExceeded`. The read stops
+there and never truncates silently, as Rust's `take` does. A ratio was rejected, because a ratio grows with the input
+and so bounds nothing.
+
+| | A bound on decoded output |
+|---|---|
+| Go, .NET, Java, Rust | none in the decoder (Go's `http.MaxBytesReader` is a separate layer; Rust's `take` truncates silently) |
+| Python | `max_length` per `decompress` call |
+| Node | `maxOutputLength`, on the buffer APIs only |
+
+Two `IoErrorKind`s are added, and the enum is already `@nonExhaustive`: **`InvalidData`** (a corrupt stream, a bad
+checksum or header; Rust's name) and **`LimitExceeded`**.
+
+**5. The level, a typed enum, one ctor per writer type.** The maintainer turned down a bare `uint8` 0–9 as a magic
+number, and a second ctor for the frozen setting as something a user would not know to look for:
+
+```kama fragment
+@nonExhaustive
+type enum DeflateLevel { Store, Level1, Level2, Level3, Level4, Level5, Level6, Level7, Level8, Level9, Frozen }
+
+GzipWriter<File> gz = GzipWriter.make(sink: give out, level: DeflateLevel::Level6);
+```
+
+`DeflateWriter`, `ZlibWriter` and `GzipWriter` share it, because they are one encoder: zlib and gzip are a deflate body
+inside a header and a trailer. There is no out-of-range value and nothing to trap. It is `@nonExhaustive` because 0–9
+is zlib's 1995 convention, not part of RFC 1951 (libdeflate runs 0–12), so a stronger level can join without breaking
+anyone's `match`. `LevelN` is kama's own scale and tracks zlib's: it does not reproduce `gzip -N`'s bytes, and no two
+deflate encoders do. The enum is not part of any contract, since a `Writer` has no ctor, so every other encoder takes
+its own (`ZstdLevel`, `BrotliLevel`) with its own points.
+
+| | Level spelling |
+|---|---|
+| Go | an int 0–9, with named constants (`BestSpeed`, `BestCompression`, `DefaultCompression`) |
+| Rust flate2 | `Compression::fast()`, `best()`, `none()`, and `Compression::new(0..=9)` |
+| Python, Java, zlib | an int 0–9 (Java adds named constants) |
+| Zig 0.12–0.14 | an enum: `fast`, `default`, `best`, and `level_4` … `level_9` |
+| .NET | an enum of four (`NoCompression`, `Fastest`, `Optimal`, `SmallestSize`); .NET 9 added an int 0–9 back (`ZLibCompressionOptions`) for users who tune between them |
+
+**6. An encoder's lifecycle.** `flush()` is a sync flush (an empty stored block, then the inner `flush`), so a peer can
+decode everything written so far; permessage-deflate and a streamed HTTP body need it. `finish()` consumes the encoder,
+writes the final block and the trailer, and returns `Result<W, IoError>`. **Dropping an encoder without `finish`
+abandons the stream:** no final block and no trailer, so a truncated stream never verifies. That is Go's behaviour.
+Rust finishes on drop and swallows the error, which turns an error path's partial output into a file that looks valid.
+`BufWriter` already follows this rule (no destructor), and its comment now says so.
+
+**7. The bytes, and `DeflateLevel::Frozen`.** Every level's output depends only on the input and the level, never on
+how the writes were split, on every target, **for one kama version**. `Store` through `Level9` stay free to get better
+between versions. **`Frozen` is the one setting whose bytes never change across kama versions,** and they equal what
+`kama publish` writes (its parameters sit around zlib's 8–9).
+
+`Frozen` is an encoder setting, chosen *instead of* a level, and the stream is encoded once: it is not a checksum. It
+matters only when the compressed file itself is the identity. A registry tarball is checked by its sha256 *before* it is
+decompressed, since decompressing untrusted bytes is the risk the check exists for. And when kama self-hosts, publish
+will run through std: with a level, a later version that tuned that level would rebuild an old commit to a different
+sha256, while with `Frozen` it rebuilds to the same one. It costs no extra code, because it selects one fixed parameter
+row, `kama.archive.cpp`'s. A guard proves it: std reads publish's own `.tar.gz` and rewrites it through
+`DeflateLevel::Frozen`, and the sha256 must equal `KR_GOLDEN`. Two independent encoders agreeing to the byte is also the
+strongest test the new one gets.
+
+**8. gzip.** `GzipReader.make` decodes every member to the end of the source (RFC 1952 §2.2; gzip(1), Go, Python).
+Bytes after a member that do not start another member are `InvalidData`, strict as KR-204's "refuse, never repair".
+`GzipReader.member(…)` decodes exactly one member and leaves the rest in the `BufReader` (Go's `Multistream(false)`;
+WARC records are one member each). `header()` gives the name, comment, mtime and OS byte, and a header CRC (FHCRC) is
+verified. The writer always writes publish's header (no flags, MTIME 0, XFL 0, OS 255). Writing a name or an mtime is
+**genuinely optional**: RFC 1952 makes them advisory, and a container, tar, is where names and times belong.
+
+**9. zlib.** One stream, with its Adler-32 verified; bytes after it stay in the `BufReader` (git packfiles, PNG). A
+stream that names a preset dictionary (FDICT) is `InvalidData` until KR-257.
+
+**10. tar.** `TarReader<R: Reader>`: `next()` returns `Result<Optional<TarHeader>, IoError>`, and `read` then yields that
+entry's body, ending at its end. It reads ustar, pax `x` and `g` records, GNU long names (`L`, `K`) and v7, and a header
+whose checksum fails is `InvalidData`. It returns every entry as written, since listing a hostile archive is how one
+audits it. `TarWriter<W: Writer>`: `begin(header:)`, then exactly `size` bytes of body through `write` (a short or long
+body is an error), then `finish()`, which writes the two zero blocks and returns `W`. It writes ustar, with pax for a
+long path or link and for a size or mtime that does not fit, making publish's choices. `TarHeader` is a value: path,
+kind (`File`, `Directory`, `Symlink`, `HardLink`, `CharDevice`, `BlockDevice`, `Fifo`), size, mode, mtime, linkTarget,
+uid, gid, uname, gname.
+
+**11. Extraction: `extractInto(archive:, dir:)`, strict.**
+
+| | Extracting an archive safely |
+|---|---|
+| Python 3.14 | the `data` filter is the default (PEP 706); its realpath-based checks had bypass CVEs in June 2025 (CVE-2025-4517 and siblings) |
+| Go | `tar.Reader.Next` returns `ErrInsecurePath` only under `GODEBUG=tarinsecurepath=0`, still opt-in; `os.Root` (1.24) refuses to walk out of a directory |
+| .NET | `TarFile.ExtractToDirectory` checks that each entry lands inside, links included; that symlink check was CVE-2026-45491 |
+| Rust `tar` | `unpack_in` refuses `..` and strips a leading `/` |
+
+Every check that resolves a path and then tests where it landed has failed somewhere, so **kama's extractor never
+traverses a link at all.** The destination must be new or empty. Refused, with an error naming the entry and the rule:
+an absolute path, a `..` component, a NUL, a Windows drive, UNC or reserved name, a device or FIFO, a link whose target
+is absolute or climbs out, a hard link to anything but an earlier regular file of the same archive, and **any entry
+whose parent the archive itself made a symlink**. Files are opened `CreateNew`, so nothing is written through a final
+link. The setuid, setgid and sticky bits and group/other write are dropped, and there is no chown: Python's `data`
+filter, without its resolve-then-check step. Creating a symlink needs a new `std::fs` binding (`symlink`,
+`CreateSymbolicLinkW`); where Windows refuses one (no Developer Mode, no privilege), the error says so.
+
+**12. Left out, each with its verdict:**
+- **Preset dictionaries** (RFC 1950 FDICT, raw-deflate dictionaries): **scheduled, KR-257.** zlib, Go, Python, Java and
+  Node take one, and permessage-deflate's context takeover is one by another name.
+- **zip**: **scheduled, KR-258.** jar, docx, epub and Python wheels are zip; Go, Python, Java, C# and Zig ship it. It
+  sits on this row's deflate and crc32.
+- **xz and bzip2, decode**: **scheduled, KR-259,** after KR-213. kernel.org and the distributions ship `.tar.xz`, and a
+  program must read what others send. Python ships both, Go bzip2 decode, Zig xz and lzma decode.
+- **What `kama pkg install` does with an archive's symlinks:** found reading for this brief, **KR-260** ([§10](#s10-install-symlinks)).
+
+**13. Bytes held in memory.** `SliceReader` gains a ctor over a `DynamicArray<uint8>` (Go's `bytes.Reader`, Rust's
+`Cursor<Vec<u8>>`). Without it, compressed bytes already in memory, such as an HTTP body or a test vector, cannot be
+read at all.
+
+#### KR-212 and KR-213, ruled provisionally (re-probed when each is built)
+
+- **Z1.** `std::compress::zstd`, KR-5's shape: a `BufReader<R>` source, a required limit, `InvalidData`/`LimitExceeded`.
+  Concatenated frames are one stream, and skippable frames are skipped.
+- **Z2.** A frame declares its window (RFC 8878 allows up to 2^41 bytes). The decoder allocates at most min(declared
+  window, `limit`), and refuses a window over 128 MiB, the reference decoder's default (`ZSTD_WINDOWLOG_LIMIT_DEFAULT`
+  27). That needs no second parameter, because the window can never usefully exceed the output. HTTP's zstd coding caps
+  the window at 8 MiB (RFC 9659), which a caller's limit already enforces.
+- **Z3.** The XXH64 content checksum is verified when present, and `std::digest::xxhash64` becomes public beside crc32.
+  A frame that names a dictionary is `InvalidData` until a dictionary row. The encoder keeps its own verdict.
+- **B1.** `std::compress::brotli`, the same shape. The window is at most the RFC's 16 MiB, and the large-window
+  extension is refused.
+- **B2.** The 122,784-byte static dictionary becomes a `comptime InlineArray<uint8>` literal. Measured 2026-10-29 with a
+  stand-in of that size: the release build went from 0.10 s to 0.41 s, the binary grew 115 KB, and the literal is
+  580 KB of source. Building it will split that cost between the kama front end and clang. If kama dominates, an
+  embed feature (Zig `@embedFile`, Rust `include_bytes!`, Go `//go:embed`, C23 `#embed`) gets its own row and verdict:
+  shaders and web assets want the same thing.
+- **B3.** kama's decoders run on every target now. In a browser, an HTTP body's `br` or `zstd` is decoded before wasm
+  sees it, and `DecompressionStream` is asynchronous where a kama `Reader` is not. The browser's own decoders come later,
+  under the platform rule.
+
+#### GOALS audit
+
+| Ruling | #1 kama lib | #3 allocation | #3a–e safety, kinds | #4 one way | #5 explicit | House practice |
+|---|---|---|---|---|---|---|
+| 1–2 modules, types | pure kama | — | a resource owns its inner by value | one type per direction | the format in every name | `BufReader`, `text::json` |
+| 3 `BufReader` source | yes | the buffer is spelled at the call | no stored borrow | one ctor | buffering is visible | `Lines<R>` holds a `BufReader<R>`; `friend` |
+| 4 limit | — | output bounded | a bomb is refused by construction | one spelling | a required argument | outside input fails with a `Result`, not a trap |
+| 5 level enum | — | — | no out-of-range value | one spelling per setting | every choice named | `@nonExhaustive` as `IoErrorKind`; `LogLevel` |
+| 6 lifecycle | — | — | a partial stream never verifies | `finish` only | completing is a call | `File.close`, `StringWriter.finish` |
+| 7 `Frozen` | prepares self-hosting | — | — | one encoder, one fixed row | the promise is a named variant | publish's reproducibility promise |
+| 11 extraction | yes | — | never traverses a link | one entry point | a refusal names the entry | strict, as KR-204 |
+
+#### The build (KR-5)
+
+1. **Groundwork.** `InvalidData` and `LimitExceeded`; the byte `SliceReader`; `BufWriter`'s comment; `std::digest::crc32`
+   and `adler32` (check values: crc32 of `123456789` is `CBF43926`, adler32 of `Wikipedia` is `11E60398`).
+2. **`DeflateReader`** and the `BufReader` grant. Fixtures: stored, fixed and dynamic blocks; every corrupt class is
+   `InvalidData`; the limit's edge (exactly `limit` passes, one more fails); the exact end.
+3. **`DeflateWriter`,** a streaming port of `kama.archive.cpp`. Its memory is bounded by the window, a 259-byte
+   lookahead, one block of 16,384 tokens and that block's input up to 64 KiB, since a stored block can only win below
+   that (a fixed-code token costs at most 9 + 5 + 5 + 13 bits, so 16,384 of them cost at most 64 KiB). `DeflateLevel`
+   selects a row of the parameter table; `Frozen` is publish's row. ⚠️ First, probe that the streaming port reproduces
+   the C++ tokens exactly (chain-walk order, the stop past 32 KiB, the final block flagged only at `finish`). If it cannot,
+   decision 7 comes back as a correction.
+4. **zlib and gzip.**
+5. **tar**, reader and writer.
+6. **`extractInto`** and the `std::fs` symlink binding, which goes in `kama_os.h`.
+7. **Guards.** `check-compress-interop.sh` runs both directions against python3's zlib, gzip and tarfile, at every
+   level, over edge corpora. `check-packages.sh` round-trips publish's tarball through `Frozen`. An xfail backs each
+   negative claim.
+8. **Docs.** SPEC's stdlib section, then this row is deleted.
 
 <a id="s1-http-package"></a>
 
@@ -3156,6 +3376,27 @@ interleaved): about 3 ms per seam TU. A program with any C header of its own kee
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
+
+<a id="s10-install-symlinks"></a>
+
+### What `kama pkg install` does with an archive's symlinks (KR-260)
+
+**Found 2026-10-29, reading for the compression brief, in the code and not yet by a probe.** A `url` or registry
+dependency is unpacked by the system `tar` (`fetchToStore`, `src/kama.driver.cpp`), and then `treeHashOf` takes the
+store identity over the unpacked tree. Its walk, `collectFilesRel`, decides "directory" with `dirExists`, which is
+`stat()` and so follows a link, and it reads each file through an `ifstream`, which follows one too. `kama publish` ships
+a tracked symlink as a symlink (`check-packages.sh` covers it), so a package can carry one:
+- `x -> /` makes the hash walk the installer's whole disk, and `x -> ..` recurses until the path is too long.
+- `x -> /home/someone/.ssh/id_ed25519` puts a file from outside the package into the hash. So the store identity depends
+  on the installing machine, and the installer reads a file it had no reason to open.
+
+The extraction itself leans on the system `tar`'s defaults: GNU tar and bsdtar both refuse a `..` member. Not yet
+measured: what each does with a member written through a symlink an earlier member created.
+
+**The fix wants a ruling before it is built:** hash a link as its target text, as git does, and decide whether a link
+that leaves the package is refused at install. The tree hash is the store identity, so a link that is hashed
+differently changes the identity of a package that contains one. Measure first which stored entries and lockfiles that
+would move. Size S, C++ only; the std extractor (KR-5, decision 11) cannot serve here, because the compiler cannot run kama.
 
 <a id="s10-release-signing"></a>
 
