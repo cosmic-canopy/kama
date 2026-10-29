@@ -2064,29 +2064,6 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
 native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
 
-<a id="s5-debug-frame-copies"></a>
-
-### Two debug-tier frames still hold a large value twice (KR-197)
-
-Measured 2026-10-18 on `0.9.667` (msys2 clang 23.1.3, `-O0`, `"cflags": ["-Wframe-larger-than=20000"]`). The
-constructor work since `0.9.559` builds a value where it lives, and `tools/check-construct-frame.sh` holds
-that down. Two shapes are outside it:
-
-- **A large value returned into a local.** With `type value Big { public InlineArray<float32>#(4096) a; public
-  int32 n; … }` (16,388 B), `fn Big newBig(int32 k) { Big r = Big.blank(); r.n = k; return r; }` and
-  `Big b = newBig(k: 3);` in `main`, `main`'s frame is 32,824 B. The local lowers to `Big k_b; k_b = newBig(…);`,
-  a declaration and then an assignment, so the call's result cannot be built in `k_b`. The guard's header leaves
-  this shape unasserted on the grounds that clang uses the caller's slot at -O0, and it would, for an
-  initializer. `newBig` itself, and `Big b = Big.blank();`, are each under the limit.
-- **A `[v; N]` field initializer.** `type value Det { InlineArray<float32>#(8192) fft = [0.0; 8192];
-  InlineArray<float32>#(640) hist = [0.0; 640]; … public ctor tuned(int32 k) { … } }` built with
-  `new Det.tuned(k: 2)` gives `Det__tuned__into` a 35,400 B frame: the initializer lowers to
-  `(*self).k_fft = InlineArray_float32_8192__fill(0.0f);`, a by-value fill into a temporary. The same fill
-  written in the constructor body is in place and under the limit.
-
-`--release` is clean for both. Close means both lower in place at -O0, and `check-construct-frame.sh` asserts
-them (the first by emitting an initializer rather than an assignment).
-
 <a id="s6"></a>
 
 ## 6. Concurrency — what is left above the primitives

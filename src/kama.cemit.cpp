@@ -8600,7 +8600,18 @@ void CEmitter::emitAggregateFill(const std::string& nm, const std::string& ty, i
                 unsupported(("a field default is stated once, for every way a `" + ty + "` is made, so it cannot "
                              "read `this` — the value is still being made; set the field in the constructor "
                              "instead").c_str(), at);
-            else
+            else if (isFillLiteral(f.initializer.get()) && isPlainFixed(fct)) {
+                // `[v; N]` is written into the field element by element, as a local's is (KR-197). By value it was
+                // a fill into a temporary the size of the array, and a 35 KB pair of them sat in the ctor's frame
+                // at -O0.
+                line(at);
+                ScopedStr _tv(_variantTargetType, fct), _tm(_matchTargetCType, fct);
+                bool ph = _hoistOK; _hoistOK = true;
+                const std::string st = emitArrayLiteral(static_cast<ArrayLiteralNode*>(f.initializer.get()), &target);
+                _hoistOK = ph;
+                flushHoisted(depth);
+                indent(depth); *_out << st << ";\n";
+            } else
                 emitOwnedValueInto(target, fct, f.initializer, at, depth, "a field initializer", /*kindChecked=*/true);
             _fieldDefaultHidden.swap(hidden);
             _currentClass = enclosing;
@@ -9011,7 +9022,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                 // Class-typed local: declare the value, then construct in place.
                 // Collections zero-init so an unconstructed one frees safely; extern
                 // structs zero-init so unset descriptor fields are well-defined.
-                line(n->line); indent(depth);
+                line(n->line);
                 // A bare (uninitialized) local must be brought to a valid state so its scope-exit dtor — and
                 // any `f = …` that first RELEASES the old field — don't free stack garbage. Collections /
                 // extern structs zero-init (no kama ctor); a destructible `resource` WITHOUT a zero-arg ctor
@@ -9031,7 +9042,20 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                 const bool fillInit = d->initializer && isFillLiteral(d->initializer.get()) && isPlainFixed(ty);
                 bool zeroInit = (_classes[ty].isIntrinsicColl || _classes[ty].isExternStruct
                     || !d->initializer) && !fillInit;
-                *_out << ty << " " << kName(nm) << (zeroInit ? " = {0}" : "") << ";\n";
+                // A local that receives a value is declared where the value is written, so a call initializes it:
+                // `T x = f(…);`. As an assignment after `T x;`, the call returned into a temporary the C compiler
+                // then copied from, and a 16 KB value sat in the frame twice at -O0 (KR-197). A branch below that
+                // writes into `x` before its value is known declares it first, with `declare()`.
+                std::string pendingDecl = ty + " " + kName(nm);
+                auto declare = [&]() {
+                    if (pendingDecl.empty()) return;
+                    indent(depth); *_out << pendingDecl << ";\n";
+                    pendingDecl.clear();
+                };
+                if (zeroInit || fillInit) {
+                    indent(depth); *_out << pendingDecl << (zeroInit ? " = {0}" : "") << ";\n";
+                    pendingDecl.clear();
+                }
                 // Track for RAII cleanup at scope exit (assumes init-at-decl).
                 if (_classes[ty].destructible || isMoveOnlyValue(ty) || isOwningFixed(ty)) recordDestructibleLocal(nm, ty, /*userName=*/true);  // track empty resources for move analysis
                 // `slot T x;` — a HOLE, so it is not live and must NOT be dropped. Seed the state the
@@ -9088,6 +9112,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                 // the operand needs a statement slot so it is evaluated once.
                 if (auto* cst = dynamic_cast<CastNode*>(init.get())) {
                     if (cst->isTry) {
+                        declare();
                         line(n->line);
                         bool ph = _hoistOK; _hoistOK = true;
                         std::string s = emitTryCast(ty, kName(nm), cst, n->line);
@@ -9098,6 +9123,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                 }
 
                 if (auto* oc = dynamic_cast<ObjectCreationNode*>(init.get())) {
+                    declare();
                     checkNamelessNewBanned(oc, n->line);   // M8 Phase E: no nameless `new Type(...)`
                     // no-heap gate (covers try/fallible new below) — a placement `new` into an allocator
                     // the program owns is judged by what that allocator reaches, see newDrawsFromHeap.
@@ -9275,6 +9301,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                                      "(`" + ty + " v = " + octy + ".<ctor>(...)`)").c_str(), n);
                     }
                 } else if (stackCtor) {
+                    declare();
                     // STACK value, constructed in place (`Box b = Box(id: 5)`).
                     if (_classes[ty].isAbstractClass)
                         unsupported(("cannot instantiate abstract class '" + ty + "'").c_str(), n);
@@ -9288,6 +9315,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                         rejectNamelessConstruction(_classes[ty], disp, /*viaNew=*/false, n->line);
                     }
                 } else if (intoHandleKind(ty, init) != IntoHandle::None) {
+                    declare();
                     // A value into a handle it is not — boxed into a contract handle, or widened from a concrete or
                     // derived owner (`Owned<Error> e = DeError.of(…)`, `Shared<Shape> s = sq;`). The same
                     // conversion every by-value position makes (emitIntoHandle). `nm` was zero-declared above.
@@ -9298,6 +9326,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                     flushHoisted(depth);
                     indent(depth); *_out << kName(nm) << " = " << e << ";\n";
                 } else if (isSmartPtrHandoffMismatch(ty, init)) {
+                    declare();
                     // Both sides own, but the widening isn't valid — a clear diagnostic instead of
                     // the misleading "collection hand-off" message below.
                     std::string k = declType->value ? *declType->value : "handle";
@@ -9308,6 +9337,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                                  "implements the contract `" + e + "`, or a derived of the base `" + e + "`)").c_str(),
                                 n);
                 } else if (isBindableClass(ty)) {
+                    declare();
                     // BindableFunctionPtr <- free function (promote) or another bindable (move). The
                     // marker rule differs between those two, so the handoff travels in and is judged there.
                     line(n->line);
@@ -9348,10 +9378,12 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                     _matchTargetCType = pmt;
                     _variantTargetType = pvt;
                     _hoistOK = ph;
+                    if (builtInPlace) declare();                          // the into call writes into `x`
                     flushHoisted(depth);
                     indent(depth);
-                    if (builtInPlace) *_out << iv << ";\n";
-                    else              *_out << kName(nm) << " = " << iv << ";\n";
+                    if (builtInPlace)              *_out << iv << ";\n";
+                    else if (!pendingDecl.empty()) { *_out << pendingDecl << " = " << iv << ";\n"; pendingDecl.clear(); }
+                    else                           *_out << kName(nm) << " = " << iv << ";\n";
                     if (isSmartPtrClass(ty) && isSmartPtrLValue(init)) {
                         CollKind k = smartKind(ty);
                         // Default: Owned -> give(move), Shared/Weak -> copy(retain). A marker overrides.

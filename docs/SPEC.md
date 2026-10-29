@@ -4933,7 +4933,9 @@ fn uint8 main() {
   `match` arm each hand the ctor their storage, so a large `type value` costs one copy in its own place rather <!-- test: construct_fallible_in_place -->
   than two or three (`tools/check-construct-frame.sh`). A fallible ctor builds in the `Ok` payload of the
   `Result` it is handed. An argument that reads the object being built (`this.c = Big.copyOf(src: this.b)`) is
-  the exception: that value is built apart, then stored.
+  the exception: that value is built apart, then stored. A local that receives a function's result (`Big b =
+  newBig(…)`) is declared with it, so the C compiler hands the call `b` as its return slot, and a `[v; N]` field
+  default is written into the field element by element: neither holds a second copy, in debug or release.
 - **Reuse is a visible call.** A ctor delegates by calling another (`return Buffer.make(…)`). There is no
   `init` hook, no designated/final ctor, and no mandatory funnel — shared logic lives in the ctor others
   chain to, and it is greppable.

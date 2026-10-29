@@ -13,9 +13,11 @@
 # temporary held `Fal` twice — the subject and the copy in `f` — 32,912 bytes at -O0 and 32,832 at -O2 on 0.9.654,
 # because the arm hands `f`'s address to C the compiler cannot see (`cfOpaque`), so not even -O2 could drop the copy.
 #
-# Not asserted: a FUNCTION returning a large value (`fn Big f() { return Big.make(…); }`). Its result is built in
-# place in the return temporary, but whether that temporary is the caller's return slot is the C compiler's call:
-# clang makes it so at -O0, GCC only at -O2.
+# And two shapes outside the ctor work until KR-197: a large value RETURNED into a local, `Big b = newBig(…)`, lowered
+# to `Big b;` and then `b = newBig(…);`, so the call returned into a temporary that was copied into `b` (32,824 bytes
+# at -O0); and a `[v; N]` field default, a by-value fill into a temporary as big as the array, in the frame of every
+# ctor (35,400 bytes for a 35 KB pair). The local is now initialized by the call, `Big b = newBig(…);`, which lets the
+# C compiler hand the call `b` as its return slot, and the field is filled in place.
 #
 # check-legs: native
 set -eu
@@ -63,8 +65,17 @@ type value Outer {
 fn int64 local(int64 v) { Big b = Big.make(v: v); return b.last(); }
 fn int64 heap(int64 v) { Owned<Big> p = new Big.make(v: v); return p.last(); }
 fn int64 outer(int64 v) { Outer o = Outer.make(v: v); return o.last(); }
+fn Big newBig(int64 v) { return Big.make(v: v); }
+fn int64 returned(int64 v) { Big b = newBig(v: v); return b.last(); }
+type value Det {
+    InlineArray<int64>#(2048) fft = [0i64; 2048];
+    int64 k = 0;
+    public ctor tuned(int64 k) { this.k = k; }
+    public const fn int64 last() { return this.fft[2047] + this.k; }
+}
+fn int64 det(int64 v) { Owned<Det> d = new Det.tuned(k: v); return d.last(); }
 fn uint8 main() { return cast<uint8>(local(v: 1i64) + heap(v: 2i64) + outer(v: 3i64) + fallible(v: 4i64)
-                                     + matchedLocal(v: 5i64) + matchedTemp(v: 6i64)); }
+                                     + matchedLocal(v: 5i64) + matchedTemp(v: 6i64) + returned(v: 7i64) + det(v: 8i64)); }
 KAMA
 "$KAMA" transpile "$tmp/cf.kama" -o "$tmp/cf.c" --no-line >/dev/null 2>"$tmp/t.err" || { cat "$tmp/t.err" >&2; fail "transpile failed"; }
 
@@ -81,8 +92,10 @@ for opt in -O0 -O2; do
     fl=$(frame k_Fcf__fallible); fi=$(frame k_Fcf__Fal__make__into)
     ml=$(frame k_Fcf__matchedLocal); mt=$(frame k_Fcf__matchedTemp)
     [ -n "$fi" ] || fi=$(frame k_Fcf__Fal__make)   # a compiler with no into form
+    rt=$(frame k_Fcf__returned); dt=$(frame k_Fcf__Det__tuned__into)
+    [ -n "$dt" ] || dt=$(frame k_Fcf__Det__tuned)
     [ -n "$loc" ] && [ -n "$hp" ] && [ -n "$ot" ] && [ -n "$oi" ] && [ -n "$fl" ] && [ -n "$fi" ] \
-        && [ -n "$ml" ] && [ -n "$mt" ] || fail "$opt: did not find every function in $su"
+        && [ -n "$ml" ] && [ -n "$mt" ] && [ -n "$rt" ] && [ -n "$dt" ] || fail "$opt: did not find every function in $su"
     # `Big` is 16,392 bytes. One copy plus spill room passes; a second (≥ 32,784) does not.
     [ "$loc" -lt 24576 ] || fail "$opt: \`Big b = Big.make(…)\` has a $loc-byte frame — Big is 16,392, so it holds a temporary too"
     [ "$ot" -lt 24576 ]  || fail "$opt: \`Outer o = Outer.make(…)\` has a $ot-byte frame — Outer is 16,400, so it holds a temporary too"
@@ -92,5 +105,7 @@ for opt in -O0 -O2; do
     [ "$fl" -lt 24576 ]  || fail "$opt: \`Result<Fal, Why> r = Fal.make(…)\` has a $fl-byte frame — Fal is 16,384, so it holds a temporary too"
     [ "$ml" -lt 24576 ]  || fail "$opt: \`match (r) { case Ok(value: f): … }\` over a local has a $ml-byte frame — it copied the payload into \`f\`"
     [ "$mt" -lt 24576 ]  || fail "$opt: \`match (Fal.make(…)) { case Ok(value: f): … }\` has a $mt-byte frame — it copied the payload into \`f\`"
+    [ "$rt" -lt 24576 ]  || fail "$opt: \`Big b = newBig(…)\` has a $rt-byte frame — the call returned into a temporary copied into \`b\`"
+    [ "$dt" -lt 1024 ]   || fail "$opt: a \`[v; N]\` field default costs a $dt-byte ctor frame — it was filled in a temporary"
 done
-echo "check-construct-frame: PASS (a 16 KB value built by its ctor, fallible or not, costs one copy in a local's frame, and none for a \`new\` block, a field under construction or the ctor's own frame, and a \`match\` reads its payload in place, at -O0 and -O2)"
+echo "check-construct-frame: PASS (a 16 KB value built by its ctor, fallible or not, or returned by a function, costs one copy in a local's frame, and none for a \`new\` block, a field under construction, a \`[v; N]\` field default or the ctor's own frame, and a \`match\` reads its payload in place, at -O0 and -O2)"
