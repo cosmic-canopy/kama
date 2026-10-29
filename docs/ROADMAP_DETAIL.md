@@ -834,8 +834,8 @@ shared pointee is not the caller's to consume. *Sacrifice:* no dynamic-dispatch 
   struct holds no borrow), so today one JSON message eats the socket, and a connection that sends many (JSON-RPC,
   line-delimited JSON) serializes each into memory and copies it out. `innerRefMut()` stays: it lends the sink while
   the serializer is in use, a different job from ending it (Rust has both `get_mut` and `into_inner`).
-- **The audit** (read 2026-10-29, `lib/std`, 86 files): every std type that owns what it was given. Each group wants its
-  verdict before the port; the recommendations:
+- **The audit** (read 2026-10-29, `lib/std`, 86 files): every std type that owns what it was given. **Ruled 2026-10-29:
+  every group as recommended**, the two that need their own design filed as KR-262 and KR-263:
 
   | group | today | recommended |
   |---|---|---|
@@ -846,8 +846,8 @@ shared pointee is not the caller's to consume. *Sacrifice:* no dynamic-dispatch 
   | `UnixStreamPair`, `UnixDatagramPair`, `MemoryStreamPair` | lent ends; a `MemoryStream` end can NEVER leave its pair | a consuming `split` into a one-variant enum of the two ends, the shape KR-244 ruled for `TcpHalves` |
   | `File`, `TcpStream`, `TcpListener`, `UdpSocket`, the Unix sockets, `Descriptor`: `takeDescriptor()` leaves `fd = -1` | the stream lives on as a zombie whose every call fails at run time | `give fn Descriptor intoDescriptor()`, replacing `takeDescriptor()`: use after it becomes a compile error (decision 3: the method sets `fd = -1`, its destructor still runs) |
   | `Output`, `SqlQuery` | `const ref` getters: copy to own | `give fn` into-parts, so a driver binds and a caller decodes without a copy |
-  | `Locked<T>`, `ReadWriteLocked<T>` | the payload can only be borrowed | its own row: `into_inner` must check it holds the last handle (Rust's `Arc::try_unwrap`) |
-  | `Map`'s `Entry`, `ConcurrentMap.entries()` | key and value only lent; `entries()` copies each pair twice | its own row, with a drain |
+  | `Locked<T>`, `ReadWriteLocked<T>` | the payload can only be borrowed | KR-262 |
+  | `Map`'s `Entry`, `ConcurrentMap.entries()` | key and value only lent; `entries()` copies each pair twice | KR-263 |
   | `Process`'s pipes, `Command`'s `Stdio` | lent, or taken leaving a stand-in | unchanged: it has a destructor (decision 3), and the stand-in works |
   | `JsonValue` subtrees, `JsonNumber`'s text, the deserializers' and `SliceReader`'s unread input | copy, or nothing | not this shape (a move out of a nested place, or a rest): unchanged |
   | `WsConnection`, `WtConnection`, `RtcConnection`; channel endpoints; `Atomic<T>` | nothing given to hand back | not applicable |
@@ -887,6 +887,31 @@ k_M__Box k_b = k_M__Wrap__unwrap(&k_w);         /* no k_M__Wrap__dtor(&k_w) at s
 `test/parse-errors.txt`, then the Zed and Helix pins as a second commit); the checker (the receiver's per-field move
 bookkeeping, the call-site marker, the kind and contract rules); decision 6's std; fixtures for each rule and an xfail
 for each refusal, run under ASan.
+
+<a id="s2-locked-into-inner"></a>
+
+### `Locked<T>` hands its value back once it is the last handle (KR-262)
+
+Filed 2026-10-29 from KR-261's audit. A `Locked<T>` moves its payload into a C cell shared by every handle, and the
+payload can only be borrowed inside a `lock()` window, so the value the workers built cannot leave when they are done:
+the last owner copies it out, or `replace`s it with a stand-in. Rust's answer is two steps, `Arc::try_unwrap(a) ->
+Result<T, Arc<T>>` (or `Arc::into_inner`, `Option<T>`, since 1.70) and then `Mutex::into_inner`; Go and Java have nothing
+to give back. The kama shape, on KR-261's consuming method: `public give fn Result<T, Locked<T>> intoInner()`, which
+hands the handle back in the `Err` when another handle still lives, so nothing is lost and a caller that waits for its
+workers to join cannot get it wrong. Work: a last-handle test on the cell's count (it is shared across isolates, so an
+atomic one), the payload relocated out inside std's `unsafe` (bounded, GOALS 3a), and the destructor told the cell is
+empty. `ReadWriteLocked<T>` the same. Waits on KR-261.
+
+<a id="s2-map-drain"></a>
+
+### Moving a map's entries out without copying them (KR-263)
+
+Filed 2026-10-29 from KR-261's audit. A `Map`'s `Entry<K, V>` lends its key and value (`const ref`, "never moved out —
+the pair owns it"), so nothing moves the pairs into another map or a list, and `ConcurrentMap.entries()` copies every
+pair twice. Rust has `HashMap::drain()`, `into_iter()` and `remove_entry`; Swift's `Dictionary` is copy-on-write; Go
+copies. Design first: a consuming `drain` on `Map` (and the ordered and sorted maps) yielding each pair once, taken
+apart by `match` as an `Undelivered`-shaped enum or by an `Entry` with a consuming `intoParts`, and a consuming
+`ConcurrentMap.intoMap()` that moves each shard's map out once the workers are done. Waits on KR-261.
 
 <a id="s2-quoted-format"></a>
 
@@ -3531,7 +3556,7 @@ What it says:
   into the page below, so a switch-in touches two pages where it touched one, and at 100,000 every page walk misses.
   A colour range that keeps the deepest park frame inside the top page would test it.
 
-**Decisions owed (2026-10-29):** build stack colouring, and with what range (the whole page, or only what keeps a park's
+**Ruled 2026-10-29: as recommended** — build stack colouring, the range chosen by measurement first; prefetch on wake only if it still pays at 100,000 beside it; 3 and 5 only if the server still shows the cost. The decisions as they were put: build stack colouring, and with what range (the whole page, or only what keeps a park's
 frames in one page, measured against each other first); whether prefetch on wake is kept beside it (only if it still
 pays at 100,000 on top of the chosen colour); and 3 and 5 are not built unless the server at 10,000 still shows the cost
 after colouring.
