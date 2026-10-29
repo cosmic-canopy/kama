@@ -1,4 +1,4 @@
-// A read cancelled by its deadline loses no byte (KR-253, docs/design/io_uring.md decision 3). On a scheduler that runs
+// A read cancelled by its deadline loses no byte (KR-253; SPEC.md, Sockets on a fiber). On a scheduler that runs
 // io_uring, a read that would block is handed to the kernel, into the reader's own buffer, and a deadline that passes
 // cancels it: the read returns `Err(TimedOut)` only once the kernel has let go of the buffer. What the peer writes after
 // that is the NEXT read's. Here the reader times out at 100 ms, the writer sends bytes 1–5 at 200 ms and 6–10 at 300 ms,

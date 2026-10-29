@@ -474,6 +474,59 @@ Only differences that hold in at least 12 of 15 paired rounds are stated.
 - **Memory per idle connection:** about the same as the M4. Fibers hold 8.5 KiB, Go 8.3, Node 8.9, tokio 5.0 to 5.1,
   and the C loop 4.2 (KR-254).
 
+## io_uring (Linux)
+
+_Measured 2026-10-29 · x86-64: kama 0.9.758, natively, the i9-13900K guest above · aarch64: kama 0.9.765, the
+`kama-bench` container on the M4's podman VM, **6 vCPUs** · 15 rounds each_
+
+Since `0.9.756` kama's fiber scheduler runs on io_uring on Linux wherever the kernel allows it (6.1 or later, and not
+refused by a container's seccomp, SELinux or `kernel.io_uring_disabled`), with epoll as the fallback and
+`KAMA_IO_URING=0` to turn it off ([targets.md](../targets.md)). A stream read that would block is a `RECV` into the
+caller's buffer, and a write a `SEND` from it, so a fiber does not wake to make the system call again, and the
+scheduler's one `io_uring_enter` a turn carries every wait of the turn. The results above were measured on epoll.
+Here `kama-fibers` (the ring) and `kama-fibers-epoll` (the same binary under `KAMA_IO_URING=0`) run in the same rounds,
+and each cell compares the two, paired by round, with the rounds the ring won. The harness reads which arm ran from
+`/proc/<pid>/fd`: the ring arm held 3 rings in every run, the epoll arm none.
+
+| config | x86-64 req/s, ring ÷ epoll | x86-64 CPU/req | aarch64 req/s | aarch64 CPU/req | aarch64 p99, ring / epoll |
+|---|---|---|---|---|---|
+| echo, 100 | 1.14 · 14/15 | 0.88 | 1.01 · 11/15 | 1.022 · 2/15 | 328 / 328 µs |
+| echo, 1,000 | 1.22 · 15/15 | 0.82 | 1.00 · 7/15 | 1.012 · 4/15 | 3.54 / 3.28 ms |
+| echo, 10,000 | 1.08 · 15/15 | 0.92 | 1.02 · 12/15 | 0.949 · 14/15 | 27.3 / 28.3 ms |
+| http, 100 | 1.12 · 12/15 | 0.89 | 1.00 · 11/15 | 1.020 · 0/15 | 344 / 328 µs |
+| http, 1,000 | 1.24 · 15/15 | 0.81 | 0.995 · 5/15 | 1.015 · 1/15 | 3.67 / 3.28 ms |
+| http, 10,000 | 1.08 · 15/15 | 0.92 | 1.03 · 14/15 | 0.942 · 15/15 | 25.2 / 29.4 ms |
+
+Raw rows: [ring-x86-64.tsv](ring-x86-64.tsv) and [ring-close-aarch64.tsv](ring-close-aarch64.tsv). `c#2` sits within
+3.6% of `c` on x86-64 and 0.7% on the M4. On x86-64 p99 is the same or lower at every config.
+
+**A write's rule differs by architecture, as a measured delta.** Handing every write to the kernel costs a second park
+per request, a switch back into the fiber when its `SEND` completes. On x86-64 that park costs less than the `send` it
+saves. On the M4 it costs more at 10,000 connections, where the fiber's stack has gone cold by then: about 0.3 µs
+against a 0.25 µs `send` (the profile: [ring-profile-aarch64.txt](ring-profile-aarch64.txt); the counts per request:
+[ring-counts-aarch64.tsv](ring-counts-aarch64.tsv), [ring-counts-x86-64.tsv](ring-counts-x86-64.tsv)). So x86-64 makes
+every write a `SEND`, and every other architecture makes the system call first and hands the write to the kernel only
+when the socket is full. Ring ÷ epoll, requests and CPU per request:
+
+| rule | x86-64, 1,000 | x86-64, 10,000 | M4, 100 | M4, 1,000 | M4, 10,000 |
+|---|---|---|---|---|---|
+| every write a `SEND` (x86-64's) | 1.22, 0.82 | 1.08, 0.92 | 1.02, 1.00 | 1.02, 0.985 | 0.95, 1.08 |
+| the system call first (the rest's) | 1.09, 0.92 ¹ | 1.00, 1.00 ¹ | 1.01, 1.022 | 1.00, 1.012 | 1.02, 0.949 |
+
+¹ a 5-round quick run; every other cell is 15 rounds. On the M4 neither rule wins at every density: the system call
+first wins at 10,000 and costs 1–2% CPU up to 1,000. Making the switch into a cold fiber cheaper (KR-254) may let
+every write be a `SEND` on both machines, and then one rule would serve both.
+
+What it says:
+- **On x86-64 the ring is the lever it was built to be:** 1.08 to 1.24 times epoll's requests at 0.81 to 0.92 of its CPU
+  each. In the same rounds, the ring arm served 1.21, 1.27 and 1.08 times tokio's thread-per-core arm on echo (12, 15
+  and 14/15) and 1.31, 1.25 and 1.09 times on raw HTTP, and 1.18 and 1.12 times the C epoll loop on echo at 100 and
+  1,000 connections, level with it at 10,000.
+- **On the M4 the ring is level with epoll up to 1,000 connections, at 1–2% more CPU, and ahead at 10,000:** 2–3% more
+  requests at 5–6% less CPU each. Against the C epoll loop in the same rounds it spends 5.3% to 8.3% less CPU per
+  request at every config (14–15/15), and serves 3.1% to 3.2% more requests at 10,000 (13–14/15).
+- **Memory:** an idle connection holds 8.5 KiB on the ring arm and 8.4 on epoll. The rings add 80 KiB a scheduler.
+
 ## Reproduce
 
 ```sh

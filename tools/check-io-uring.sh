@@ -1,5 +1,5 @@
 #!/bin/sh
-# check-io-uring.sh — the fiber scheduler's two Linux arms both hold (KR-253, docs/design/io_uring.md). The ring arm runs
+# check-io-uring.sh — the fiber scheduler's two Linux arms both hold (KR-253, SPEC.md). The ring arm runs
 # by default wherever the kernel allows it, so the native suite on such a host runs the ring and never the epoll
 # fallback, which is what every container, every kernel before 6.1, and `KAMA_IO_URING=0` get. So this runs the fiber
 # fixtures again under `KAMA_IO_URING=0`. A fallback that hides a broken ring would also pass every fixture, so it also
@@ -96,7 +96,7 @@ unsafe fn uint8 run() {
 }
 fn uint8 main() { return run(); }
 KAMA
-# A write that would block is a SEND (step 5's remedy, io_uring.md §6). The writer hands 16 MiB to writeAll while the
+# A write that would block is a SEND (KR-253's remedy, `0.9.764`). The writer hands 16 MiB to writeAll while the
 # reader sleeps, so the socket fills. On epoll every byte still leaves through sendto. On the ring the writes after a
 # would-block or a short one leave as SENDs, which strace does not see, so sendto carries fewer than all of them, and on
 # x86-64, where every write is a SEND, it carries none.

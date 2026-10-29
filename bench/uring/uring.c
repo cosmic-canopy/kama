@@ -1,6 +1,6 @@
 // uring.c — what a request costs a fiber scheduler's core on epoll, and on io_uring under each ring shape.
 //
-// KR-253 decision 8 (docs/design/io_uring.md). A fiber scheduler on Linux waits on epoll today: a socket is registered
+// KR-253's measurement before any kama code (docs/benchmarks/uring-*.tsv). It models the epoll arm: a socket is registered
 // once, edge-triggered, a read that would block parks its task, and a read that came back short of its buffer parks the
 // next one first, since the socket is drained (tokio's rule, kama since 0.9.752). This program runs that protocol and
 // the ring shapes the design weighs, with no fibers (a task is a struct; a stack switch is a separate cost), counts

@@ -2422,6 +2422,13 @@ non-blocking and registers it with the isolate's scheduler at its first wait; ne
 - **`std::time::sleep` parks too**, and so does `Poller.wait` on epoll and kqueue, on the Poller's own descriptor, so a <!-- test: fiber_sleep, fiber_poller_wait -->
   fiber that drives its own `Poller` does not stop the isolate's others. A Windows `Poller` has no descriptor to park
   on, and there a fiber's wait still blocks the thread until the offload pool (KR-3 step 7).
+- **On Linux the scheduler runs on io_uring** wherever the kernel allows it (6.1 or later, and not refused by a
+  container's seccomp, SELinux or `kernel.io_uring_disabled`), and on epoll everywhere else; `KAMA_IO_URING=0` picks
+  epoll ([targets.md](targets.md)). Neither changes what a program does. A stream read or write that waits is handed to <!-- test: fiber_read_cancel, fiber_write_cancel -->
+  the kernel with the caller's buffer, and the fiber leaves the wait only once the kernel has let go of it: a read whose
+  deadline passes loses no byte, and a write whose deadline passes has sent exactly the count it reports. On x86-64
+  every write is handed to the kernel, and elsewhere a write makes its system call first and is handed over only when
+  the socket is full: a measured delta ([benchmarks/servers.md](benchmarks/servers.md), *io_uring*).
 
 **Deadlines.** `setReadDeadline(at:)` and `setWriteDeadline(at:)` on a stream or a datagram socket, and <!-- test: net_deadline, fiber_deadline -->
 `setAcceptDeadline(at:)` on a listener, take an absolute `Instant` and keep it until it is reset; `Optional::None`

@@ -27,11 +27,17 @@
 //            system call either. No queued change outlives the wait that asked for it (see RELEASE).
 //   Poller   everything else — AFD on Windows, poll(2) on another POSIX — through the public `Poller`: a socket is
 //            in it only while a fiber waits on it, so a level-triggered backend never reports one nobody reads.
-//   io_uring Linux 6.1 on, chosen when the scheduler is made, with epoll as the fallback (KR-253,
-//            docs/design/io_uring.md): no registration at all. A fiber that waits submits its wait to the ring, and
+//   io_uring Linux 6.1 on, chosen when the scheduler is made, with epoll as the fallback (KR-253; SPEC.md,
+//            Sockets on a fiber): no registration at all. A fiber that waits submits its wait to the ring, and
 //            the scheduler's one `io_uring_enter` a turn submits every wait of the turn and harvests what completed.
-//            Every submission belongs to a parked fiber that waits for its own completion (decision 10), so a
-//            completion never names freed memory, and a scheduler ends with nothing in flight.
+//            Every submission belongs to a parked fiber that waits for its own completion, so a completion never
+//            names freed memory, and a scheduler ends with nothing in flight. No operation whose permission check
+//            reads the caller's credentials may go through it: a ring keeps the credentials of the thread that made
+//            it, so after a setuid() its operations would still run with the old ones (CVE-2024-22017, in libuv's file
+//            operations). recv, send, accept and connect on an open descriptor run no such check; a file arm (open,
+//            unlink, rename) would need the ring remade, or IORING_REGISTER_PERSONALITY, when they change. Regular
+//            files and DNS stay on the offload pool (KR-3 step 7), datagrams wait with a poll, and SEND_ZC pays only
+//            for large sends: each would be a measurement of its own.
 //
 // TIMERS are a min-heap of parked fibers on their deadlines (decision 11). A fiber woken before its deadline leaves
 // the heap at once, so the heap never holds a fiber that is not waiting.
@@ -83,7 +89,8 @@
 #define KAMA__SCHED_EVENTS 128
 // The ring's queues. A full submission queue is submitted at once, without waiting. A completion queue that overflows
 // is kept by the kernel (IORING_FEAT_NODROP) and handed over at the next wait, so these sizes cost speed when exceeded,
-// never a completion. The M4's measurement saw about 40 completions a wait (io_uring.md §6). 80 KiB per scheduler.
+// never a completion. The M4 saw about 61 completions a wait at 10,000 connections (docs/benchmarks/
+// ring-counts-aarch64.tsv). 80 KiB per scheduler.
 #define KAMA__SCHED_SQ 256
 #define KAMA__SCHED_CQ 4096
 

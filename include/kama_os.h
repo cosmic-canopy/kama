@@ -4392,7 +4392,7 @@ static inline int32_t kama_net_drained(void* io, int32_t mode, int32_t interest,
 // A stream's read: up to `n` bytes into `buf`. Returns the count, 0 when the peer closed, or -1 with errno set. On a
 // fiber whose scheduler runs io_uring, a read that would block, or that follows a short one so the socket is known
 // drained, is handed to the kernel as a RECV into `buf`. Its completion carries the data, so the fiber does not wake
-// to make the system call again (io_uring.md decision 2). Everywhere else it is the readiness protocol above.
+// to make the system call again (KR-253). Everywhere else it is the readiness protocol above.
 static inline ptrdiff_t kama_net_read(ptrdiff_t fd, void** io, int32_t* mode, uint64_t by, uint8_t* buf, size_t n) {
     if (kama_net_ready(fd, io, mode, by) != 0) return -1;
 #if defined(KAMA__OS_FIBERS)
@@ -4417,16 +4417,17 @@ static inline ptrdiff_t kama_net_read(ptrdiff_t fd, void** io, int32_t* mode, ui
 }
 // A stream's write: up to `n` bytes from `buf`, possibly fewer. Returns the count, or -1 with errno set. On a fiber
 // whose scheduler runs io_uring, a write is handed to the kernel as a SEND from `buf`, parked on until it completes,
-// and the turn's one io_uring_enter carries every write of the turn (io_uring.md decisions 2 and 11). The rule differs
-// by architecture, as a measured delta (io_uring.md §6, The remedy, quick check, x86-64):
+// and the turn's one io_uring_enter carries every write of the turn (KR-253). The rule differs by architecture, as a
+// measured delta (docs/benchmarks/servers.md, io_uring):
 //   - On x86-64 every write is a SEND. Parking on it there costs less than the send it saves: the ring served
 //     1.22x and 1.08x epoll's requests at 1,000 and 10,000 connections, where making the system call first gave 1.09x
 //     and 1.00x.
 //   - Elsewhere a write makes its system call first, as a read does, and is a SEND only when it would block or
 //     follows a short one, so the socket is known full. On aarch64, every write a SEND cost a second switch into a
 //     fiber whose stack had gone cold, about 0.3 us at 10,000 connections against the 0.25 us send it saved
-//     (io_uring.md §6, Profile). An architecture neither machine measured takes this rule, which was never worse than
-//     epoll on either.
+//     (docs/benchmarks/ring-profile-aarch64.txt). It costs the M4 1-2% CPU per request against epoll up to 1,000
+//     connections and saves 5-6% at 10,000. An architecture neither machine measured takes this rule. A cheaper
+//     switch into a cold fiber (KR-254) may let every write be a SEND everywhere, and the gate go.
 // Everywhere else it is the readiness protocol above.
 static inline ptrdiff_t kama_net_write(ptrdiff_t fd, void** io, int32_t* mode, uint64_t by, const uint8_t* buf, size_t n) {
     if (kama_net_ready(fd, io, mode, by) != 0) return -1;

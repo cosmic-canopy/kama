@@ -711,19 +711,182 @@ applied to a method's own receiver:
 4. A type with a destructor cannot be taken apart, so no destructor sees a moved-from field (Rust's E0509). KR-5's
    adapters need no destructor, because a dropped encoder abandons its stream.
 
-**Decisions owed, in its own brief before any code:**
-1. The declaration's spelling: a marker on the method (Swift's `consuming`), or a receiver form (Rust's `self`).
-2. The call site: `gz.finish()` with `gz` moved after, or the move spelled, as in `give gz.finish()`. GOALS #5 and the
-   rule that a hand-off says `give` lean to spelling it.
-3. A type with a destructor: refused outright, or allowed when the method moves no field out.
-4. The failure path: whether `Result<W, IoError>` drops `W` on `Err`, or the error carries the inner back
-   (`Undelivered`'s shape), so a failed `finish` does not cost the caller its socket.
-5. Whether a contract may declare a consuming member, so that generic code can finish any encoder.
-6. Which std types gain one in the same commit: `BufReader`/`BufWriter` (`intoInner`), the serializers' `…Stream`
-   encoders, and KR-5's decoders and encoders (`finish`).
+**Ruled 2026-10-29: all seven as recommended below,** then an audit of every std type that owns what it wraps, each
+ported in the same build (decision 6). The maintainer's question on decision 1, greppability, has a plain answer: a
+declaration is always `give fn`, and a use never is, so `grep -rn 'give fn'` lists the consuming methods and `grep -rnw
+give | grep -v 'give fn'` every move made, a consuming call included.
 
-A new keyword or contextual word makes it a grammar change: `kama.y`, `docs/grammar.bnf`, `tree-sitter-kama/`, then the
-editor pins.
+**The brief (2026-10-29b).** Probed on `0.9.765`; the probe programs are not kept, the facts are:
+- A method's receiver is a pointer in C (`int32_t k_M__Box__bump(k_M__Box* self)`). A resource given as an argument
+  is a struct by value that the callee drops (`k_M__eat(k_M__Box k_b) { … k_M__Box__dtor(&k_b); }`), and the caller
+  emits no drop for the moved local. kama has no drop flags: a value moved on some paths and not others is refused
+  ("`b` is moved on some paths but not others").
+- `give this` in a method is refused (`kama.cemit.cpp`, "a method borrows its receiver from the caller"), and so is
+  `give w.field` anywhere, a destructor's body included ("cannot `give` out of a field/element"). `match (give e)` on
+  a one-variant enum moves both payloads out cleanly, one drop each.
+- `give fn` lexes as `GIVE FN`, and adding `GIVE` to the `const_opt` slot of `method_declaration` keeps bison at its
+  baseline of one shift/reduce conflict. No member declaration begins with `give` today.
+- `give w.dup()` parses (`GIVE variable_reference`, whose operand is any expression) and is refused by the checker:
+  "`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker".
+- A contract member may be `const fn` (same `class_body`); a conformance matches it exactly.
+- **Two std results exist only because of this row:** `Undelivered<T>` and `CapacityFull<T>` are one-variant enums
+  because "a record cannot hand its field back". The four serializers lend their sink (`innerRefMut()`), and
+  `serializeJsonStream` and its three siblings consume the sink and return `Result<Unit, Owned<Error>>`.
+- **Found on the way: a `BufWriter` dropped without `flush` loses what it buffered**, silently. It has no destructor,
+  so nothing is written and no error is raised. Go's `bufio.Writer` does the same and documents it ("the client should
+  call `Flush`"). Rust's flushes on drop and ignores the error. kama says so only on `StdOut` ("a drop does not flush,
+  since a write there could not report its error", `stdio.kama`), not on `BufWriter` and not in SPEC.
+  It is the rule KR-5 ruled for its encoders, *drop abandons, `finish` completes*, so decision 6 makes it the rule for
+  every buffering adapter, and writes it down.
+
+**Decision 1 — how a method says it takes its receiver.**
+
+| | spelling |
+|---|---|
+| Rust | a receiver form: `fn finish(self) -> io::Result<W>` beside `&self`/`&mut self` |
+| Swift 5.9 | a modifier: `consuming func finish() -> W` (beside `borrowing`, `mutating`) |
+| C++ | a ref-qualifier: `W finish() &&` |
+| kama today | a marker in one slot: `const fn` is the read-only receiver; a bare `fn` borrows it mutably |
+
+**Recommended: `give fn`**, in the slot `const fn` uses: `public give fn Result<W, Unfinished<GzipWriter<W>>> finish()`.
+The receiver has one marker slot already, and the word for a move is `give`, the only word a hand-off says. No new
+keyword, the grammar's conflict count is unchanged (probed), and `grep -rn 'give fn'` lists every consuming method.
+`give const fn` is refused, since a method that consumes cannot also promise not to change. *Sacrifice:* `give` now
+also appears in a declaration, where until now it only marked a hand-off. A receiver form like Rust's would make two
+ways to write a receiver, and a new word like Swift's `consuming` would make two words for one move.
+GOALS: #4 one marker slot, one word for a move; #5 visible in the signature; #7 the grammar carries it.
+
+**Decision 2 — the call site.**
+
+| | call |
+|---|---|
+| Rust | `let w = gz.finish()?;` — the move is implicit; `gz` is unusable after |
+| Swift | `let w = gz.finish()` — implicit for a noncopyable value |
+| C++ | `W w = std::move(gz).finish();` — the move is spelled |
+
+**Recommended: spelled, as `give gz.finish()`.** A hand-off in kama always says `give` where it happens (`eat(b: give
+x)`, `return give x`, `match (give x)`), and the reader of a call should not need the declaration to know `gz` is dead
+after it. The form is unambiguous: a call's result is fresh and never takes a marker (refused today), so the one named
+value `give` can move is the receiver. The receiver must be one the caller owns, a local or a by-value parameter:
+`give this.gz.finish()` is refused as `give w.field` is, and a fresh receiver takes no marker (`BufWriter.make(inner:
+s).intoInner()`). A consuming call with no `give`, and `give` before a call of a method that does not consume, are
+both errors naming the other. Moving on one path only is the existing "moved on some paths" error.
+*Sacrifice:* `give` before a call gains a meaning it did not have; C++'s parenthesized `(give gz).finish()` says the
+same thing more literally, at the price of parentheses on every call.
+GOALS: #5 the move is visible at the call; #4 one form (the other two spellings refused); 3b use after the call is the
+existing use-after-move error.
+
+**Decision 3 — a type with a destructor.**
+
+| | consuming a type with a destructor |
+|---|---|
+| Rust | `self` methods are allowed and `Drop` runs at their end; moving a field out is refused (E0509), so std's `BufWriter::into_inner` uses unsafe code inside to skip its own `Drop` |
+| Swift | allowed; `discard self` (SE-0390) ends the value without running its `deinit` |
+
+**Recommended: allowed, Rust's rule without its escape.** A `give fn` on a type with a destructor may hand the whole
+receiver on (`give this`), or let it drop, and the destructor runs at the method's end; it may not move a field out,
+which is today's rule unchanged, so no destructor sees a moved-from field. Where such a type must give a field back it
+leaves a stand-in, as `TcpStream` does with `fd = -1`. That lets a consuming `close()` report the close error a
+destructor has to swallow (Go's `Close() error`; Rust's `File` cannot). Swift's `discard self` is **genuinely
+optional**: every std candidate either has no destructor (KR-5's adapters, `BufWriter`, the serializers) or has a
+natural empty state, and a skipped destructor run by omission would be the implicit act GOALS #5 refuses.
+*Sacrifice:* a type with a destructor and no empty state cannot hand back a field; it must hold it as `Optional`.
+GOALS: 3c the take-apart rule is the one `match` already has; 3a no `unsafe` (Rust's `into_inner` needs it); #3
+every destructor still runs exactly once.
+
+**Decision 4 — a consuming call that fails.**
+
+| | a failed finish |
+|---|---|
+| Rust | `BufWriter::into_inner(self) -> Result<W, IntoInnerError<BufWriter<W>>>`: the error hands the whole writer back, buffer included; flate2's `GzEncoder::finish(self) -> io::Result<W>` drops the socket on an error, which is why it also has `try_finish(&mut self)` |
+| Go | nothing is consumed: `Flush() error` |
+| kama | `send` hands the item back in `Undelivered<T>`; a full `InlineDynamicArray` in `CapacityFull<T>` |
+
+**Recommended: the error hands the adapter back,** in one std type: `type enum Unfinished<T> implements Error {
+Pending(T adapter, IoError error); }` in `std::io`. A `WouldBlock` from a non-blocking sink is the case that decides
+it: the caller must be able to call `finish` again, so it needs the adapter with its buffer, not only the inner. A
+caller that will not retry matches the error away, and the adapter drops, abandoning the stream. This is kama's own
+pattern for a hand-off that did not happen. *Sacrifice:* the signature is longer, and a retry takes two levels of
+`match`; flate2's `Result<W>` is shorter and loses the socket.
+GOALS: 3d the failure is a value; #3 nothing is dropped behind the caller's back.
+
+**Decision 5 — a contract may declare one.**
+
+| | |
+|---|---|
+| Rust | a trait may declare `fn finish(self)`, callable through a generic bound; through `dyn` only as `self: Box<Self>` |
+| Swift | a protocol may require `consuming func`; a conformance must match |
+
+**Recommended: yes, through a generic bound only.** A contract member may be `give fn`, a conformance must match the
+marker as it matches `const fn`, and `fn W finishAll<E: Finishable<W>>(E e) { … give e.finish() … }` finishes any
+encoder. Through a contract VALUE or a `Shared<C>` it is refused: a contract value is a borrow (GOALS 3e), and a
+shared pointee is not the caller's to consume. *Sacrifice:* no dynamic-dispatch finish, which Rust also lacks without
+`Box<Self>`.
+
+**Decision 6 — what std gains in the same commit.**
+- `BufWriter<W>`: `give fn Result<W, Unfinished<BufWriter<W>>> intoInner()` — flushes, then hands back the sink.
+- `BufReader<R>`: `give fn BufParts<R> intoParts()`, `BufParts<R> { Parts(R inner, DynamicArray<uint8> unread) }`. Rust's
+  `into_inner` drops the unread bytes ("any leftover data in the internal buffer is lost"); an HTTP server upgrading a
+  connection to WebSocket needs them, so kama hands them back and loses nothing.
+- The four serializers: `give fn W intoInner()`, and `serializeJsonStream` and its siblings return the sink:
+  `Result<W, …>` with the sink in the error too (decision 4's shape over `Owned<Error>`). A source change, made before
+  1.0 as the rest of this list allows. It is the second use after compression: a serializer must own its sink (a
+  struct holds no borrow), so today one JSON message eats the socket, and a connection that sends many (JSON-RPC,
+  line-delimited JSON) serializes each into memory and copies it out. `innerRefMut()` stays: it lends the sink while
+  the serializer is in use, a different job from ending it (Rust has both `get_mut` and `into_inner`).
+- **The audit** (read 2026-10-29, `lib/std`, 86 files): every std type that owns what it was given. Each group wants its
+  verdict before the port; the recommendations:
+
+  | group | today | recommended |
+  |---|---|---|
+  | `BufWriter`, `BufReader`, `Lines` | no accessor at all: the inner is lost | port, as above (`Lines` hands back its `BufReader`'s parts) |
+  | the four serializers and their `…Stream` functions | lend the sink; the functions eat it | port, as above |
+  | `StringWriter.finish()`, `.takeBytes()` | copy the buffer byte by byte; every `serialize…Buffer` pays it | `give fn` forms that MOVE the buffer, replacing the copying ones |
+  | `Fiber<R>`: the free `join(fiber: give f)` exists only for want of this | a `friend`-granted free function | `give f.join()`, replacing the free function (one way); `Isolate.join()` the same, so a second join is a compile error |
+  | `UnixStreamPair`, `UnixDatagramPair`, `MemoryStreamPair` | lent ends; a `MemoryStream` end can NEVER leave its pair | a consuming `split` into a one-variant enum of the two ends, the shape KR-244 ruled for `TcpHalves` |
+  | `File`, `TcpStream`, `TcpListener`, `UdpSocket`, the Unix sockets, `Descriptor`: `takeDescriptor()` leaves `fd = -1` | the stream lives on as a zombie whose every call fails at run time | `give fn Descriptor intoDescriptor()`, replacing `takeDescriptor()`: use after it becomes a compile error (decision 3: the method sets `fd = -1`, its destructor still runs) |
+  | `Output`, `SqlQuery` | `const ref` getters: copy to own | `give fn` into-parts, so a driver binds and a caller decodes without a copy |
+  | `Locked<T>`, `ReadWriteLocked<T>` | the payload can only be borrowed | its own row: `into_inner` must check it holds the last handle (Rust's `Arc::try_unwrap`) |
+  | `Map`'s `Entry`, `ConcurrentMap.entries()` | key and value only lent; `entries()` copies each pair twice | its own row, with a drain |
+  | `Process`'s pipes, `Command`'s `Stdio` | lent, or taken leaving a stand-in | unchanged: it has a destructor (decision 3), and the stand-in works |
+  | `JsonValue` subtrees, `JsonNumber`'s text, the deserializers' and `SliceReader`'s unread input | copy, or nothing | not this shape (a move out of a nested place, or a rest): unchanged |
+  | `WsConnection`, `WtConnection`, `RtcConnection`; channel endpoints; `Atomic<T>` | nothing given to hand back | not applicable |
+
+  `Undelivered<T>` and `CapacityFull<T>` stay enums, which is right for an error, and the four "The sink is CONSUMED"
+  comments go with the port.
+- `Undelivered<T>` and `CapacityFull<T>` stay: an error that carries a value is an enum, so `match` takes it apart.
+- SPEC states *drop abandons, a consuming finish completes* for every buffering adapter, with an xfail for using one
+  after `give … .intoInner()`.
+- KR-5's `finish` is the same marker when its engines land.
+
+**Decision 7 (found by the probes) — which kinds.** `type resource` and `type enum` (an enum's own `give fn` may `match
+(give this)`), and a generic body over either. Not `type value` (it is copied; there is nothing to consume) and not
+`type view` (it borrows). Refused with the reason at the declaration.
+
+**The bytes** (a sketch of the emission, not yet built). A consuming method keeps the `T* self` ABI: the caller passes
+its local's address and emits no drop for it afterwards, as for any moved local, and the callee drops the fields it did
+not move, statically. No flag, no copy of the receiver:
+```kama
+type resource Wrap { Box inner; Box spare;
+    public ctor make(Box inner) { this.inner = give inner; this.spare = Box.make(v: 0); }
+    public give fn Box unwrap() { return give this.inner; }      // `spare` drops here
+}
+Wrap w = Wrap.make(inner: Box.make(v: 7));
+Box b = give w.unwrap();                                         // `w` is moved; using it after is an error
+```
+```c
+k_M__Box k_M__Wrap__unwrap(k_M__Wrap* self) {
+    k_M__Box kama_ret = self->k_inner;          /* moved out */
+    k_M__Box__dtor(&self->k_spare);             /* what was not moved drops */
+    return kama_ret;
+}
+k_M__Box k_b = k_M__Wrap__unwrap(&k_w);         /* no k_M__Wrap__dtor(&k_w) at scope exit */
+```
+
+**Build, once ruled:** the grammar (`kama.y` `const_opt`, `docs/grammar.bnf`, `tree-sitter-kama/` + its
+`test/parse-errors.txt`, then the Zed and Helix pins as a second commit); the checker (the receiver's per-field move
+bookkeeping, the call-site marker, the kind and contract rules); decision 6's std; fixtures for each rule and an xfail
+for each refusal, run under ASan.
 
 <a id="s2-quoted-format"></a>
 
@@ -2584,7 +2747,7 @@ match (TcpHalves.split(stream: give conn)) {
    `UdpUnjoined`, `UnixDatagramUnjoined`. A generic `Unjoined<R, W>` would add two type arguments at every use, for a type
    that has exactly one pair per socket kind.
 
-**How it is built** (drafted 2026-10-28, held until KR-253's steps 2–3 have rewritten the same read and write paths):
+**How it is built** (drafted 2026-10-28, and held for the io_uring arm's read and write paths, which shipped in `0.9.757`–`0.9.765`):
 - **The cell** is three functions in `kama_os.h`: `kama_net_cell_new(size)`, 16 bytes of count and then the socket (out
   of memory is kama's panic); `kama_net_cell_leave(socket)`, 1 when that was the last half; `kama_net_cell_free(socket,
   size)`. A split moves the socket in with a raw store (`s[0] = give stream`, as `std::memory`'s `replace` does); the
@@ -2601,7 +2764,8 @@ match (TcpHalves.split(stream: give conn)) {
   between `net.kama`, `udp.kama` and `unix.kama`: each file binds the three externs and writes the moves inline.
 - **What the io_uring backend must allow:** a reader and a writer parked on one socket at once, so a `RECV` and a `SEND`
   in flight together on one descriptor. Until this row, no safe program could have two operations in flight on one
-  descriptor (passed to the KR-253 work, 2026-10-28).
+  descriptor. The ring arm keeps a reader and a writer per socket, each its own fiber's submission, and this row's
+  fixtures are what prove the two in flight together on it.
 - **Fixtures:** `fiber_tcp_split` (both ends split, four fibers, 8 MiB each way, each writer's drop the FIN its peer's
   reader ends on), `net_split_reunite` (reunite; halves of two streams come back in `Err` and still work; each half's
   deadline its own; the writer's FIN while the reader still reads; UDP), `fiber_dgram_split`, `fiber_unix_split.d`
@@ -3236,7 +3400,7 @@ rather than here, so there is one number to keep current. Forward work:
   loads the whole module by design: nothing pins a file, and seeding from the importing file's tokens would
   be unsound, since a type reached only through inference is never spelled.
 
-### Toward the fastest server runtime (KR-253..255)
+### Toward the fastest server runtime (KR-254, KR-255)
 
 **Where it stands (2026-10-28, kama 0.9.753, [benchmarks/servers.md](benchmarks/servers.md)).** With the server
 saturated on 3 cores, kama's fibers (an isolate per core, a fiber per connection) are level with tokio's thread-per-core
@@ -3257,51 +3421,15 @@ prefetching the next fiber's saved frame. Asked on 2026-10-27 "what can we do to
 the maintainer chose this order: measure what the benchmark leaves out and close the one measured gap first, then
 cross-module inlining, then an io_uring design. Cross-module inlining was in place for native already (a `--release`
 build folds the program into one translation unit, which beat ThinLTO 3.5 times on `math`); wasm gained the same fold
-in `0.9.755`, where `math` ran 2.46 times faster for it ([SPEC.md](SPEC.md) *Building & debugging*).
+in `0.9.755`, where `math` ran 2.46 times faster for it ([SPEC.md](SPEC.md) *Building & debugging*). The io_uring
+arm, the third, shipped in `0.9.756`–`0.9.765`: on x86-64 1.08–1.24 times epoll's requests at 0.81–0.92 of its CPU,
+and on the M4 level up to 1,000 connections and 5–6% less CPU at 10,000 (servers.md's *io_uring* section).
 
 **The field beyond the run.** The fastest servers today are io_uring thread-per-core runtimes (Seastar in C++,
 glommio and monoio in Rust), which complete I/O with fewer system calls than the epoll kama and tokio both use, and
 hand-tuned HTTP stacks (vectorized parsing, pipelining) such as Go's fasthttp, .NET's Kestrel and the C++ and Rust
 servers at the top of TechEmpower's plaintext test. Java's virtual threads are kama's model on the JVM and were not
 measured.
-
-<a id="s9-io-uring"></a>
-
-#### An io_uring backend for the fiber scheduler (KR-253)
-
-The largest single lever on Linux, and the one that would put kama ahead of tokio (which polls epoll) rather than level
-with it. A fiber parks on its submission and wakes on its completion: one submission is the read and the wait together,
-submissions batch across fibers, and registered files and buffers drop per-call work. Fibers suit completion I/O better
-than stackless futures: the read buffer stays put on the parked fiber's stack until the kernel is done with it, which is
-the ownership problem tokio-uring has to work around. A design doc first, in the shape of docs/design/fibers.md: what
-Seastar, glommio and monoio do, which kernels and which operations, how it sits beside the epoll arm (decision 6) and
-the deadline and cancellation rules (decision 11), and a measurement before any code.
-
-**Designed and ruled 2026-10-28: [docs/design/io_uring.md](design/io_uring.md).** Decisions 1–6 and 8 as recommended;
-decision 7 as revised (`KAMA_IO_URING=0` turns the ring off, beside `KAMA_LOG`). What it found: a Linux arm needs epoll
-beside it, because Docker (since 25.0), Podman, containerd 2.0 and gVisor refuse io_uring by default and Google disables
-it on its servers (Seastar and monoio fall back; glommio and tokio-uring fail there); the runtimes that lead (Seastar,
-glommio) try the system call first and use the ring only once a call would block, which is kama's protocol already; and
-no published number compares against an edge-triggered epoll that already skips the `EAGAIN` call. Recommended: a
-run-time arm of the scheduler on Linux 6.1+ (`SINGLE_ISSUER`, `DEFER_TASKRUN`), epoll kept as the fallback, the caller's
-buffer kept (a deadline cancels and the fiber waits for the kernel to let go, so no byte is lost, where monoio documents
-a timed-out read losing data), no liburing, no operation that reads the caller's credentials through the ring
-(CVE-2024-22017), and first a C harness (`bench/uring/`) measuring three ring shapes against today's epoll. Decision 8
-sets the bar: a ring arm is built only if it beats epoll by 5% in CPU per request at 1,000 and 10,000 connections on
-both machines; below that, this row closes with the measurement.
-
-**Measured on aarch64, 2026-10-28** (io_uring.md §6; the M4 VM, kernel 7.0.9, 15 rounds): readiness through the ring is
-level with epoll; the ruled candidate, reads through the ring, saves 10–12% at 100 and 1,000 connections and costs 4–6%
-more at 10,000, so it fails; both directions through the ring saves 21–25% and 8–9% there, 15/15, and clears, before a
-fiber's park per write (about 25–50 ns) is counted. **Measured on x86-64, 2026-10-28**
-([benchmarks/uring-x86-64.tsv](benchmarks/uring-x86-64.tsv); the i9-13900K KVM guest, kernel 6.17, 15 rounds): no arm
-clears the bar. Both directions saves 19–24% at 1,000 connections and 7% at 10,000 with 64-byte replies, but only 2% with
-4 KiB replies. Its POLL_FIRST variant saves 8% there, but in only 11 of 15 rounds. Reads through the ring save 14–15% and 3–7%.
-**Ruled 2026-10-28: build it,** reads and writes both through the ring (decision 2, re-ruled), for the most
-performance kama can have without giving up correctness or safety. Decisions 9–11 were ruled the same day: every other
-wait is a poll through the ring; every submission belongs to a parked fiber that waits for its own completion; and a
-write's latency is judged against epoll in the server benchmark. The build is four steps (io_uring.md §8), ending in that
-benchmark.
 
 <a id="s9-fiber-memory"></a>
 
@@ -3325,23 +3453,27 @@ at 10,000 (servers.md's *x86-64* section). Hardware counters (cycles, cache and 
 tokio-percore, `perf stat` through the harness's `WRAP`) are still owed: neither VM exposes a `cpu` PMU, so they wait
 for a machine that passes one through.
 
-**KR-253 left a decision here (2026-10-29).** On io_uring, `kama_net_write`'s rule is gated by architecture, as a
-measured delta:
+**The io_uring arm left a decision here (2026-10-29).** On io_uring, `kama_net_write`'s rule is gated by
+architecture, as a measured delta:
 - x86-64 hands every write to the kernel as a `SEND`;
-- elsewhere a write makes its system call first.
-Every write a `SEND` won on x86-64, at 1.22× and 1.08× epoll's requests against 1.09× and 1.00×. On the M4 it won at
-1,000 connections and lost at 10,000, where switching back into a fiber whose stack had gone cold cost about 0.3 µs.
-So the real variable looks like the cost of a cold switch, which is this row's. Once this row cuts that cost, measure
-both write rules on both machines. If every write a `SEND` wins on both, delete the gate: one rule, x86-64's. The x86-64
-box runs its half.
+- elsewhere a write makes its system call first, and is a `SEND` only when the socket is full.
+Both rules on both machines are servers.md's *io_uring* table. Every write a `SEND` wins on x86-64: 1.22× and 1.08×
+epoll's requests at 1,000 and 10,000 connections, against 1.09× and 1.00×. On the M4 neither wins everywhere. Every
+write a `SEND` is level or better up to 1,000 connections and costs 8% more CPU at 10,000; the system call first is
+the reverse, 1–2% more CPU per request than epoll up to 1,000 and 5–6% less at 10,000 (the closing check, `0.9.765`,
+15 rounds, [benchmarks/ring-close-aarch64.tsv](benchmarks/ring-close-aarch64.tsv)). The M4 ships with that cost at low
+density (ruled 2026-10-29), and this row owns it. What separates the rules is the second park a `SEND` costs per
+request, a switch back into a fiber whose stack has gone cold, about 0.3 µs at 10,000 connections against a 0.25 µs
+`send`. Once this row cuts that cost, measure both write rules on both machines. If every write a `SEND` wins on both,
+delete the gate: one rule, x86-64's, and the M4's low-density cost goes with it. The x86-64 box runs its half.
 
-**Measured again on the M4, 2026-10-29 (`0.9.763`, KR-253's profile, io_uring.md §6):** at 10,000 echo connections the
+**Measured again on the M4, 2026-10-29 (`0.9.763`, the io_uring arm's profile):** at 10,000 echo connections the
 switch is 5.3% of the epoll arm's server CPU, about 0.18 µs each time a fiber is switched into, and the first lines its
 code then touches on its cold stack cost about 0.1 µs more. That is more than the ~1% against tokio suggests, because
-it is paid on every park, and it decided KR-253's write path: handing every write to io_uring meant a second switch per
+it is paid on every park, and it decided the io_uring write path: handing every write to io_uring meant a second switch per
 request, which on the M4 cost more than the `send` system call it saved, so a write now makes its system call first
 (`0.9.764`). A cheaper switch into a cold fiber would help every fiber program, and could let the ring take every
-write again, which x86-64 preferred in decision 8's harness. Both arms' flat profiles are in
+write again, which x86-64 preferred in the io_uring design's C harness ([benchmarks/uring-x86-64.tsv](benchmarks/uring-x86-64.tsv)). Both arms' flat profiles are in
 [benchmarks/ring-profile-aarch64.txt](benchmarks/ring-profile-aarch64.txt).
 
 **The cold switch: the plan (2026-10-29), which may let the write gate go.** What a switch into a fiber touches today

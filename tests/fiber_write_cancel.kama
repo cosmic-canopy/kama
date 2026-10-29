@@ -1,4 +1,4 @@
-// A write cancelled by its deadline sent exactly what it reported (KR-253, docs/design/io_uring.md decisions 3 and 11).
+// A write cancelled by its deadline sent exactly what it reported (KR-253; SPEC.md, Sockets on a fiber).
 // On a scheduler that runs io_uring every stream write is handed to the kernel as a SEND, and a write deadline that
 // passes while one waits for room cancels it: the write returns `Err(TimedOut)` once the kernel has let go of the
 // buffer, or the count the kernel sent first. Here a writer fills a connection nobody reads until its deadline passes,

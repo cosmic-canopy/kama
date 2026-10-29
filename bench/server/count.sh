@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # count.sh — what one request costs kama's fiber server in system calls and io_uring events, on the ring arm against
-# the epoll arm (KR-253, docs/design/io_uring.md §8 step 5). Counts, not timings: load on the machine moves a timing
+# the epoll arm (KR-253, docs/benchmarks/ring-counts-*.tsv). Counts, not timings: load on the machine moves a timing
 # and not these, so the two machines' counts can be set side by side and a count that differs names the suspect.
 #
 # Usage: bench/server/count.sh <out.tsv> [runs]      Linux, with perf's tracepoints open to it: as root on a host
