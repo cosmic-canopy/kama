@@ -3556,6 +3556,16 @@ What it says:
   into the page below, so a switch-in touches two pages where it touched one, and at 100,000 every page walk misses.
   A colour range that keeps the deepest park frame inside the top page would test it.
 
+**The range, measured 2026-10-29** (Linux VM, 10 rounds, [benchmarks/coldswitch-range-linux.tsv](benchmarks/coldswitch-range-linux.tsv)),
+each against the tree's own build: the whole page 0.774 at 100 fibers, 0.583 and 0.876 at 10,000 (K = 1, 64), 1.049
+and 1.054 at 100,000; half a page 0.904, 0.586, 0.895, 1.029, 1.052; a quarter 0.987, 0.697, 0.884, 1.016, 1.033. **The
+whole page**, then: a bound gives up gains and keeps the cost at 100,000, so the two-pages explanation is wrong. A
+likelier one: uncoloured, 100,000 thrashing contexts stay in a few sets; coloured, they sweep the whole cache and evict
+the scheduler's and the channels' lines too. The server at 10,000 connections on 3 cores runs about 3,300 fibers a
+core, where colour wins; the 4–5% at 100,000 a core is recorded as measured. Prefetch on wake beside colour recovers
+about 6% at 100,000 with K = 1 and nothing with K = 64, the server's depth, so it is not kept; `0.9.753`'s prefetch of
+the next ready fiber stays.
+
 **Ruled 2026-10-29: as recommended** — build stack colouring, the range chosen by measurement first; prefetch on wake only if it still pays at 100,000 beside it; 3 and 5 only if the server still shows the cost. The decisions as they were put: build stack colouring, and with what range (the whole page, or only what keeps a park's
 frames in one page, measured against each other first); whether prefetch on wake is kept beside it (only if it still
 pays at 100,000 on top of the chosen colour); and 3 and 5 are not built unless the server at 10,000 still shows the cost
