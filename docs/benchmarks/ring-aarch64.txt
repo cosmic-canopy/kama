@@ -1,0 +1,4 @@
+7.0.9-205.fc44.aarch64
+Apple M4 (4 performance and 6 efficiency cores)
+6 vCPUs
+libkrun (Apple Hypervisor.framework), not nested: the guest starts at EL1, a kernel clock read costs 27-30 ns

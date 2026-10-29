@@ -1,6 +1,6 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
-**Status: building (§8); steps 1–3 shipped in `0.9.756`–`0.9.758`. Step 4 is measured on x86-64 (§6), and the M4 run is owed.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
+**Status: building (§8); steps 1–3 shipped in `0.9.756`–`0.9.758`. Step 4 is measured on both machines (§6): the ring gains 8–22% on x86-64, but the M4 is level up to 1,000 connections and loses 5% at 10,000, so step 5, profiling that, is next.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
 2026-10-28.
 Decision 7 is ruled as revised, after the first recommendation rested on a false claim (§5). Decision 8 is measured on both machines
 (§6). Both directions through the ring, (b′), clears the bar on aarch64. On x86-64 it misses in one cell, 10,000
@@ -372,7 +372,42 @@ What it says:
 - **Memory:** idle connections hold 8.5 KiB on both arms. The rings add about 0.2 MiB to a 3-core server, 80 KiB per
   scheduler.
 
-**Owed: the same run on the M4 VM, and the record.** §8 step 4 lists the exact steps.
+### kama on the ring: the server benchmark, aarch64 (2026-10-29, step 4)
+
+The same harness and slots at kama `0.9.758`, in the `kama-bench` container on the M4's podman VM: kernel 7.0.9, libkrun,
+not nested (a kernel clock read costs 27–30 ns), **6 vCPUs** where servers.md's M4 run had 8. The server is pinned to 3
+and the client has the other 3, but `busy` is 97–100% for both kama arms, so the server was the limit. 720 runs, no
+errors. `kama-fibers` held 3 rings in every run and every other arm none. Raw rows:
+[benchmarks/ring-aarch64.tsv](../benchmarks/ring-aarch64.tsv). Each cell compares the ring arm to the epoll arm, paired
+by round. `c#2` sits within 2% of `c` on requests and 1% on CPU.
+
+| config | req/s, ring ÷ epoll | CPU per request | p99, ring / epoll | p99.9, ring / epoll |
+|---|---|---|---|---|
+| echo, 100 | 1.02 · 13/15 | 1.00 · 9/15 | 311 / 328 µs | 426 / 426 µs |
+| echo, 1,000 | 1.02 · 13/15 | 0.985 · 13/15 | 3.28 / 3.28 ms | 4.19 / 4.19 ms |
+| echo, 10,000 | **0.95 · 1/15** | **1.08 · 0/15** | 26.2 / 27.3 ms | 37.7 / 33.6 ms |
+| http, 100 | 1.02 · 15/15 | 1.00 · 7/15 | 328 / 328 µs | 426 / 426 µs |
+| http, 1,000 | 1.01 · 14/15 | 0.99 · 14/15 | 3.28 / 3.28 ms | 4.46 / 4.19 ms |
+| http, 10,000 | **0.95 · 0/15** | **1.08 · 0/15** | 25.2 / 28.3 ms | 37.7 / 35.7 ms |
+
+What it says:
+- **Decision 11 holds here too:** p99 is the same or lower at every config. p99.9 at 10,000 connections is 2–4 ms
+  higher, as on x86-64.
+- **The lever does not reach kama on this machine.** The ring is level with epoll up to 1,000 connections (0–1.5% less
+  CPU, where decision 8's harness measured 21–25% here for (b′)), and at 10,000 it serves 5% fewer requests at 8% more
+  CPU each. On x86-64, kama got *more* than its harness.
+- **It is (b′), not a fallback.** The shape matches the harness's ring-poll (a) on this machine (1.00 and 0.99, then
+  1.04–1.05 at 10,000), so that was checked first: `check-io-uring.sh`, run with strace in the bench image on this VM,
+  finds no `recvfrom` returning data and no `sendto` on the ring arm. Reads and writes go through `RECV` and `SEND`.
+- **Two candidates, neither measured.** This VM returns about 40 completions per `io_uring_enter` against about 1,000
+  events per `epoll_wait` (§6, decision 8), which at 3,300 connections a core is many more enters per request. And the
+  park per write (decision 11) was estimated here at 25–50 ns a request, never measured in kama.
+- **Against tokio's thread-per-core runtime, in the same rounds** (its raw arm on HTTP; each arm's median against `c`):
+  at 100 and 1,000 connections the ring arm leads by 1–2% and the epoll arm is level with it; at 10,000 tokio leads the
+  ring arm by 9–10% and the epoll arm by 4–6%.
+
+**Ruled 2026-10-29: the row stays open.** The ring is not the record until the M4's 10,000-connection loss is understood
+and remedied (§8 step 5). Until then the ring stays the default, and `KAMA_IO_URING=0` is the way off it.
 
 ## 7. What is out of scope here
 
@@ -416,31 +451,25 @@ sanitizer leg runs epoll.
 3. **Stream writes as `SEND`**, through `kama_net_write`, with `MSG_NOSIGNAL` as `kama_send` sets it (`0.9.758`).
 4. **The server benchmark on both arms, in the same rounds.** `kama-fibers` runs on the ring and `kama-fibers-epoll`
    under `KAMA_IO_URING=0`. The harness records which arm each run used, in the `rings` column, from `/proc/<pid>/fd`.
-   It is judged on CPU per request, requests per second and p99 (decision 11). **x86-64 is done** (§6, `0.9.758`).
-   What is left, on the M4:
-   1. **Run it.** Pull `dev`, check that the podman VM is not nested (servers.md, *Read this first*), and close other
-      work. `bench/run server` now relaxes the container's seccomp and SELinux label, which the ring needs. Then:
-      ```sh
-      CORES=3 SLOTS="c kama-fibers kama-fibers-epoll tokio-percore tokio-percore-raw tokio tokio-raw c#2" \
-        bench/run server .scratch/ring-aarch64.tsv 15
-      python3 bench/server/summarize.py .scratch/ring-aarch64.tsv
-      REF=kama-fibers-epoll python3 bench/server/summarize.py .scratch/ring-aarch64.tsv
-      ```
-      The run took about 75 minutes on x86-64.
-   2. **Check it measured the ring.** The summary's first line must show `kama-fibers` holding rings and
-      `kama-fibers-epoll` none. If `kama-fibers` holds none, both slots measured epoll and the run says nothing. x86-64's
-      Node held rings of its own: libuv batches its epoll calls through one, and its sockets stay on epoll.
-   3. **Commit the rows** as `docs/benchmarks/ring-aarch64.tsv`, as the x86-64 rows are.
-   4. **Apply decision 11.** The ring arm's p99 must be the same as the epoll arm's, or lower, at every config, beyond
-      the `c#2` noise floor. If it is not, stop there and record it here. The remedy is built and measured again on the
-      x86-64 box.
-   5. **The record, if it holds:**
-      - servers.md: kama's fiber arm runs on io_uring on Linux, with both machines' numbers, ring against epoll and
-        against the others;
-      - SPEC.md: the fiber scheduler's Linux arm, its epoll fallback, and `KAMA_IO_URING=0`;
-      - targets.md: already lists `KAMA_IO_URING`;
-      - then delete KR-253 from ROADMAP.md and ROADMAP_DETAIL.md, and delete this file, after moving anything still
-        needed into those records. The x86-64 run's commit messages carry the history.
+   It is judged on CPU per request, requests per second and p99 (decision 11). **Measured on both machines** (§6,
+   `0.9.758`): p99 holds on both. x86-64 gains 8–22%, but the M4 is level up to 1,000 connections and loses 5% at 10,000.
+5. **Profile the M4's loss, remedy it, measure again on both machines** (ruled 2026-10-29). On this box, as quiet as it
+   can be made: quit heavy host apps, keep other containers off the podman VM, give the VM 8 vCPUs (`podman machine stop`,
+   `podman machine set --cpus 8`, start; servers.md's M4 run had 8, and the maintainer decides it, since other projects
+   share the VM), and grant perf in it (`podman machine ssh sudo sysctl -w kernel.perf_event_paranoid=-1
+   kernel.kptr_restrict=0`, lost on restart). Then profile `kama-fibers` and `kama-fibers-epoll` at echo 10,000 under
+   `WRAP` (`bench/run`; release builds strip, so use `--cc .scratch/cc-keep-symbols`), and count `io_uring_enter`s and
+   completions per request against `epoll_wait`s. The two candidates are in §6. The remedies already named are decision
+   11's (enter the ring sooner while a turn runs long; make the system call first for a write, which is (b) for
+   writes) and a minimum batch (`min_wait_usec`, 6.13). Whatever is built is measured again with step 4's command on
+   both machines.
+6. **The record, once both machines hold:**
+   - servers.md: kama's fiber arm runs on io_uring on Linux, with both machines' numbers, ring against epoll and
+     against the others;
+   - SPEC.md: the fiber scheduler's Linux arm, its epoll fallback, and `KAMA_IO_URING=0`;
+   - targets.md: already lists `KAMA_IO_URING`;
+   - then delete KR-253 from ROADMAP.md and ROADMAP_DETAIL.md, and delete this file, after moving anything still
+     needed into those records. The runs' commit messages carry the history.
 
 ## Sources
 
