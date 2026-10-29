@@ -536,7 +536,39 @@ box's quick run, then the closing check on both machines** (§8 step 5). If the 
 1,000 connections on the M4, the second suspect's fix is the next candidate there: at 1,000 two in three `RECV`s arm a
 poll in the kernel, and `POLL_FIRST` on a `RECV` that follows a short read skips the attempt that cannot succeed.
 
-## 7. What is out of scope here
+### The remedy, quick check, x86-64 (2026-10-29, `0.9.764`)
+
+The same quick run, natively on the x86-64 box: `bench/server/run.sh`, 5 rounds, ring against epoll paired by round.
+Raw rows are not kept, as on the M4. `kama-fibers` held 3 rings in every run. `check-io-uring.sh` and the 29 fiber
+fixtures pass natively on the ring at `0.9.764`.
+
+| config | req/s, ring ÷ epoll | CPU per request | p99, ring / epoll |
+|---|---|---|---|
+| echo, 1,000 | 1.09 · 4/5 (was 1.22) | 0.92 · 4/5 (was 0.82) | 918 / 1,016 µs |
+| echo, 10,000 | 1.00 · 2/5 (was 1.08) | 1.00 · 2/5 (was 0.92) | 13.1 / 13.1 ms |
+
+**The remedy costs x86-64 most of its lead.** The "was" figures are step 4's 15 rounds, when every write was a `SEND`.
+Here a parked write was cheap, and the `send` that replaced it costs more, as it does at 1,000 on the M4. The ring
+still leads epoll at 1,000, now by 9%, and is level at 10,000, where it led by 8%. p99 holds at both.
+
+**The two rules, side by side** (ring ÷ epoll, requests and CPU per request):
+
+| rule | x86-64, 1,000 | x86-64, 10,000 | M4, 1,000 | M4, 10,000 |
+|---|---|---|---|---|
+| every write a `SEND` (`0.9.758`) | 1.22, 0.82 | 1.08, 0.92 | 1.02, 0.985 | 0.95, 1.08 |
+| the system call first (`0.9.764`) | 1.09, 0.92 | 1.00, 1.00 | 0.99, 1.02 | 1.02, 0.95 |
+
+Under the second rule no cell is worse than epoll beyond noise, so §8 step 5's test ("the same as epoll or better")
+could close the row. But it would close it on giving up most of what the ring buys on x86-64. **That is the
+maintainer's ruling,** so the closing check was not started. The options:
+1. **The system call first, everywhere,** as `0.9.764` has it. One rule, and the closing check runs on it next.
+2. **Per platform:** every write a `SEND` on x86-64, the system call first on aarch64. The platform rule allows this
+   only as a measured delta, and this table is the measurement. It makes two ways where there was one, and whether the
+   difference follows the architecture or these two machines (both are VMs) is not known.
+3. **Make the park cheaper, then go back to every write a `SEND`.** The M4's park costs a switch into a cold fiber,
+   about 0.18 µs and its stack lines (KR-254). If KR-254 cuts that, rule 1 of `0.9.758` may win on both machines.
+   That is later work, and option 1 can ship now and give way to it.
+
 
 - **Regular files and DNS** stay on KR-3 step 7's offload pool, which every OS needs. io_uring reads regular files
   without blocking, and could serve them on Linux later; libuv moved its file operations back to the threadpool in
@@ -626,9 +658,9 @@ sanitizer leg runs epoll.
         short "Counts, x86-64" subsection in §6 saying what they show. A `perf record` of both arms at echo 10,000
         is welcome beside it, the profile of where the ring wins, but optional.
       - Push, and say in the commit that the M4's half is next.
-   2. **Done 2026-10-29: the M4's counts and profile (§6), and the remedy built (`0.9.764`) and quick-checked on the M4
-      (§6).** **Next, the x86-64 box:** the quick run below with `bench/server/run.sh`, natively, then, if it holds, the
-      closing check (step 3) on both machines. The M4, originally: `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
+   2. **Done 2026-10-29: the M4's counts and profile (§6), and the remedy built (`0.9.764`) and quick-checked on both
+      machines (§6).** On x86-64 it costs most of the ring's lead, so **the maintainer rules on the write rule first**
+      (§6, *The remedy, quick check, x86-64*). Then the closing check (step 3) runs on both machines, on the rule chosen. The M4, originally: `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
       (below), the comparison in §6, then the profile at echo 10,000 and the fix the counts point to. To try a fix,
       the quick run is
       `CORES=3 SLOTS="c kama-fibers kama-fibers-epoll c#2" CONFIGS="echo:1000 echo:10000" bench/run server <out> 5`
