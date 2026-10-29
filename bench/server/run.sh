@@ -11,6 +11,9 @@
 #   WARMUP, SECONDS_  the client's warm-up and measured window per run
 #   KAMA_B   a second compiler (a worktree holding one change): adds the arm `kama-fibers-b`, the fiber arm built with
 #            it, so a change is measured interleaved against the compiler this tree builds, in the same rounds
+# On Linux `kama-fibers` runs on io_uring wherever the kernel allows it, and `kama-fibers-epoll` is the same binary under
+# KAMA_IO_URING=0 (KR-253). The `rings` column counts the io_uring descriptors each server held, so a run shows which
+# arm it measured: a kernel or container that refuses the ring leaves kama-fibers on epoll too.
 #   ALLOW_SLOW_CLOCK=1  measure even where a kernel clock read is slow (see clockcost.c); otherwise run.sh refuses
 #   WRAP     a command the server runs under (`perf record -g -o /out/x.data --`, `strace -c -f -o /out/x.txt`): a
 #            profile of one arm on one config, through the same build and launch as a measurement
@@ -52,6 +55,7 @@ ROOT=$root; . "$root/tools/kama-bin.sh"   # the compiler built for THIS platform
 if [ -x "$KAMA" ]; then
     "$KAMA" build "$here/kama/server.kama" -o "$tmp/kama-server" --release >/dev/null && avail="$avail kama-isolates"
     "$KAMA" build "$here/kama/fibers.kama" -o "$tmp/kama-fibers" --release >/dev/null && avail="$avail kama-fibers"
+    $linux && avail="$avail kama-fibers-epoll"
 fi
 if [ -n "${KAMA_B:-}" ]; then
     "$KAMA_B" build "$here/kama/fibers.kama" -o "$tmp/kama-fibers-b" --release >/dev/null && avail="$avail kama-fibers-b"
@@ -63,7 +67,7 @@ if command -v cargo >/dev/null; then
         || CARGO_TARGET_DIR="$tmp/cargo" cargo build --release -q) && cp "$tmp/cargo/release/server" "$tmp/tokio-server" \
         && avail="$avail tokio tokio-percore tokio-raw tokio-percore-raw"
 fi
-slots=${SLOTS:-"c node node-cluster go go-raw tokio tokio-raw tokio-percore tokio-percore-raw kama-isolates kama-fibers c#2"}
+slots=${SLOTS:-"c node node-cluster go go-raw tokio tokio-raw tokio-percore tokio-percore-raw kama-isolates kama-fibers $($linux && echo kama-fibers-epoll) c#2"}
 run_slots=""
 for s in $slots; do case " $avail " in *" ${s%#*} "*) run_slots="$run_slots $s" ;; *) echo "run.sh: no $s here (its toolchain is missing)" >&2 ;; esac; done
 
@@ -85,6 +89,7 @@ start_server() {   # <arm> <mode> <port>
         tokio-percore|tokio-percore-raw) $pin "$tmp/tokio-server" "$raw" "$port" per-core "$cores" & ;;
         kama-isolates) BENCH_MODE=$mode BENCH_PORT=$port $pin "$tmp/kama-server" & ;;
         kama-fibers|kama-fibers-b) BENCH_MODE=$mode BENCH_PORT=$port BENCH_CORES=$cores $pin "$tmp/$arm" & ;;
+        kama-fibers-epoll) KAMA_IO_URING=0 BENCH_MODE=$mode BENCH_PORT=$port BENCH_CORES=$cores $pin "$tmp/kama-fibers" & ;;
     esac
     spid=$!
 }
@@ -97,6 +102,13 @@ rss_kb() {   # the server's process tree: peak resident set on Linux, current on
         sum=$((sum + ${k:-0}))
     done
     echo "$sum"
+}
+rings() {    # the io_uring instances the server's process tree holds: which arm a kama fiber server runs (Linux)
+    local n=0 k
+    if $linux; then for p in $(tree_pids "$spid"); do
+        k=$(ls -l "/proc/$p/fd" 2>/dev/null | grep -c 'anon_inode:\[io_uring\]' || true); n=$((n + ${k:-0}))
+    done; fi
+    echo "$n"
 }
 cpu_s() {    # the server's process tree: user + system seconds so far
     local sum=0 t
@@ -114,7 +126,7 @@ cpu_s() {    # the server's process tree: user + system seconds so far
 port=20000
 cthreads=$(( ncpu - cores > 0 ? ncpu - cores : 1 ))
 cpin=""; $linux && [ "$ncpu" -gt "$cores" ] && cpin="taskset -c $cores-$((ncpu - 1))"
-printf 'round\tslot\tcores\t%s\trss_kb\tcpu_s\n' "$("$tmp/client" -h)" > "$out"
+printf 'round\tslot\tcores\t%s\trss_kb\tcpu_s\trings\n' "$("$tmp/client" -h)" > "$out"
 n=$(echo $run_slots | wc -w | tr -d ' ')
 r=1
 while [ "$r" -le "$rounds" ]; do
@@ -132,14 +144,14 @@ while [ "$r" -le "$rounds" ]; do
                 $cpin "$tmp/client" idle "$port" "$conns" "$cthreads" 0 3 > "$tmp/line" 2> "$tmp/err" &
                 cl=$!
                 for _ in $(seq 1 200); do grep -q READY "$tmp/err" 2>/dev/null && break; sleep 0.1; done
-                rss=$(rss_kb); cpu=$(cpu_s)
+                rss=$(rss_kb); cpu=$(cpu_s); ring=$(rings)
                 wait "$cl" || true
             else
                 SERVER_PID=$spid SERVER_CORES=$cores CLIENT_WHY=1 $cpin "$tmp/client" "$mode" "$port" "$conns" "$cthreads" "$warm" "$secs" > "$tmp/line" 2> "$tmp/err" || true
-                rss=$(rss_kb); cpu=$(cpu_s)
+                rss=$(rss_kb); cpu=$(cpu_s); ring=$(rings)
             fi
             line=$(cat "$tmp/line"); [ -n "$line" ] || line="$mode	$conns	$cthreads	0	0	0	0	0	0	0	failed	0	0"
-            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$slot" "$cores" "$line" "$rss" "$cpu" >> "$out"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$r" "$slot" "$cores" "$line" "$rss" "$cpu" "$ring" >> "$out"
             [ -s "$tmp/err" ] && sed "s/^/  [$slot $cfg] /" "$tmp/err" | grep -v READY | head -5 >&2 || true
             kill_server
         done

@@ -34,6 +34,13 @@ for r in rows:
 
 rounds = len({r["round"] for r in rows})
 print(f"## {rounds} rounds\n")
+if rows and "rings" in rows[0]:   # which arm each kama fiber server ran (KR-253): its io_uring descriptors
+    held = defaultdict(set)
+    for r in rows:
+        held[r["slot"]].add(int(r["rings"] or 0))
+    print("**io_uring rings held per run:** " + ", ".join(
+        f"{s} {min(v)}" + (f"–{max(v)}" if max(v) != min(v) else "") for s, v in sorted(held.items()) if max(v) > 0
+    ) + (" (every other arm none)\n" if any(max(v) == 0 for v in held.values()) else "\n"))
 if bad:
     print(f"**{len(bad)} run(s) had errors and are left out:** " +
           ", ".join(f"{r['slot']} {r['mode']}:{r['conns']} (round {r['round']}, {r['errors']})" for r in bad) + "\n")
