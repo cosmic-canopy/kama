@@ -372,9 +372,7 @@ What it says:
 - **Memory:** idle connections hold 8.5 KiB on both arms. The rings add about 0.2 MiB to a 3-core server, 80 KiB per
   scheduler.
 
-**Owed: the same run on the M4 VM,** through `bench/run server`, which now relaxes the container's seccomp and SELinux
-label so the ring can run. After that, servers.md, SPEC.md and targets.md take the record, and this file is
-deleted.
+**Owed: the same run on the M4 VM, and the record.** §8 step 4 lists the exact steps.
 
 ## 7. What is out of scope here
 
@@ -417,10 +415,32 @@ sanitizer leg runs epoll.
    - A build with MemorySanitizer unpoisons what a `RECV` wrote, since the kernel's write is invisible to it.
 3. **Stream writes as `SEND`**, through `kama_net_write`, with `MSG_NOSIGNAL` as `kama_send` sets it (`0.9.758`).
 4. **The server benchmark on both arms, in the same rounds.** `kama-fibers` runs on the ring and `kama-fibers-epoll`
-   under `KAMA_IO_URING=0`. The harness records which arm each run used, from `/proc/<pid>/fd`. The benchmark is rerun on
-   the x86-64 box, natively, and on the M4 VM, which needs the container's seccomp and SELinux relaxed as `bench/run
-   uring` does. It is judged on CPU per request, requests per second and p99 (decision 11). Then servers.md is updated,
-   the row closes, and this file is deleted. Its record goes to SPEC.md, targets.md and servers.md.
+   under `KAMA_IO_URING=0`. The harness records which arm each run used, in the `rings` column, from `/proc/<pid>/fd`.
+   It is judged on CPU per request, requests per second and p99 (decision 11). **x86-64 is done** (§6, `0.9.758`).
+   What is left, on the M4:
+   1. **Run it.** Pull `dev`, check that the podman VM is not nested (servers.md, *Read this first*), and close other
+      work. `bench/run server` now relaxes the container's seccomp and SELinux label, which the ring needs. Then:
+      ```sh
+      CORES=3 SLOTS="c kama-fibers kama-fibers-epoll tokio-percore tokio-percore-raw tokio tokio-raw c#2" \
+        bench/run server .scratch/ring-aarch64.tsv 15
+      python3 bench/server/summarize.py .scratch/ring-aarch64.tsv
+      REF=kama-fibers-epoll python3 bench/server/summarize.py .scratch/ring-aarch64.tsv
+      ```
+      The run took about 75 minutes on x86-64.
+   2. **Check it measured the ring.** The summary's first line must show `kama-fibers` holding rings and
+      `kama-fibers-epoll` none. If `kama-fibers` holds none, both slots measured epoll and the run says nothing. x86-64's
+      Node held rings of its own: libuv batches its epoll calls through one, and its sockets stay on epoll.
+   3. **Commit the rows** as `docs/benchmarks/ring-aarch64.tsv`, as the x86-64 rows are.
+   4. **Apply decision 11.** The ring arm's p99 must be the same as the epoll arm's, or lower, at every config, beyond
+      the `c#2` noise floor. If it is not, stop there and record it here. The remedy is built and measured again on the
+      x86-64 box.
+   5. **The record, if it holds:**
+      - servers.md: kama's fiber arm runs on io_uring on Linux, with both machines' numbers, ring against epoll and
+        against the others;
+      - SPEC.md: the fiber scheduler's Linux arm, its epoll fallback, and `KAMA_IO_URING=0`;
+      - targets.md: already lists `KAMA_IO_URING`;
+      - then delete KR-253 from ROADMAP.md and ROADMAP_DETAIL.md, and delete this file, after moving anything still
+        needed into those records. The x86-64 run's commit messages carry the history.
 
 ## Sources
 
