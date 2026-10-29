@@ -1,6 +1,6 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
-**Status: building (§8); steps 1–3 shipped in `0.9.756`–`0.9.758`, and step 4, the measurement, is next.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
+**Status: building (§8); steps 1–3 shipped in `0.9.756`–`0.9.758`. Step 4 is measured on x86-64 (§6), and the M4 run is owed.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
 2026-10-28.
 Decision 7 is ruled as revised, after the first recommendation rested on a false claim (§5). Decision 8 is measured on both machines
 (§6). Both directions through the ring, (b′), clears the bar on aarch64. On x86-64 it misses in one cell, 10,000
@@ -341,6 +341,40 @@ What it says, against the M4:
   run spreads 10,000 over 3 cores, about 3,300 a core, between the harness's two densities.
 
 On both machines' numbers, decision 2 is re-ruled to (b′).
+
+### kama on the ring: the server benchmark, x86-64 (2026-10-29, step 4)
+
+`bench/server/run.sh` at kama `0.9.758`, natively, `CORES=3`, 15 interleaved rounds. `kama-fibers` held 3 rings in
+every run, one per isolate, and `kama-fibers-epoll`, the same binary under `KAMA_IO_URING=0`, held none. Raw rows:
+[benchmarks/ring-x86-64.tsv](../benchmarks/ring-x86-64.tsv). Each cell compares the ring arm to the epoll arm, paired
+by round, with the rounds in which the ring arm was faster. `c#2` sits within 3.6% of `c`.
+
+| config | req/s, ring ÷ epoll | CPU per request | p99, ring / epoll | p99.9, ring / epoll |
+|---|---|---|---|---|
+| echo, 100 | 1.14 · 14/15 | 0.88 | 164 / 205 µs | 172 / 213 µs |
+| echo, 1,000 | 1.22 · 15/15 | 0.82 | 786 / 950 µs | 918 / 1,049 µs |
+| echo, 10,000 | 1.08 · 15/15 | 0.92 | 12.6 / 12.6 ms | 14.2 / 13.1 ms |
+| http, 100 | 1.12 · 12/15 | 0.89 | 148 / 197 µs | 156 / 205 µs |
+| http, 1,000 | 1.24 · 15/15 | 0.81 | 786 / 983 µs | 918 / 1,049 µs |
+| http, 10,000 | 1.08 · 15/15 | 0.92 | 12.6 / 13.1 ms | 14.7 / 13.1 ms |
+
+What it says:
+- **The lever is real in kama, and larger than the harness measured.** The harness saw 19–24% less CPU per request at
+  1,000 connections a core and 2–7% at 10,000. kama's arm also drops the wake, the readiness bookkeeping and the
+  second recv the harness did not model.
+- **Decision 11 holds on this machine.** p99 is the same or lower at every config. p99.9 at 10,000 connections is 1.1
+  and 1.6 ms higher, on the order of the C loop's own 14.2 ms there.
+- **Against the others, in the same rounds:**
+  - tokio's thread-per-core runtime: 1.21×, 1.27× and 1.08× on echo (12, 15 and 14/15), and 1.31×, 1.25× and 1.09×
+    on raw HTTP (14–15/15);
+  - the C epoll loop: 1.18× and 1.12× on echo at 100 and 1,000 connections, 1.14× and 1.15× on raw HTTP, and level
+    at 10,000.
+- **Memory:** idle connections hold 8.5 KiB on both arms. The rings add about 0.2 MiB to a 3-core server, 80 KiB per
+  scheduler.
+
+**Owed: the same run on the M4 VM,** through `bench/run server`, which now relaxes the container's seccomp and SELinux
+label so the ring can run. After that, servers.md, SPEC.md and targets.md take the record, and this file is
+deleted.
 
 ## 7. What is out of scope here
 
