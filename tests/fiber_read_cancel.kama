@@ -1,0 +1,59 @@
+// A read cancelled by its deadline loses no byte (KR-253, docs/design/io_uring.md decision 3). On a scheduler that runs
+// io_uring, a read that would block is handed to the kernel, into the reader's own buffer, and a deadline that passes
+// cancels it: the read returns `Err(TimedOut)` only once the kernel has let go of the buffer. What the peer writes after
+// that is the NEXT read's. Here the reader times out at 100 ms, the writer sends bytes 1–5 at 200 ms and 6–10 at 300 ms,
+// and the reader, its deadline cleared, gets all ten in order. The read of 1–5 comes back short of its 64-byte buffer,
+// so the read of 6–10 goes to the kernel without a system call first. On epoll the same program reads the same bytes.
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber,
+         std::time::Instant, std::time::monotonicNow, std::time::Duration, std::time::sleep, std::collections::FixedArray };
+
+static bool timedOut = false;
+static int32 got = 0;
+static bool inOrder = true;
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn void reader(ref TcpStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    s.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 100)));
+    Result<isize, IoError> first = s.read(into: buf.viewMut());
+    bool late = match (first) { case Ok(value: n): false; case Err(error: e): match (e.kind()) { case TimedOut: true; case _: false; }; };
+    timedOut = late;
+    Optional<Instant> none = Optional::None;
+    s.setReadDeadline(at: none);
+    while (got < 10) {
+        Result<isize, IoError> r = s.read(into: buf.viewMut());
+        int32 n = match (r) { case Ok(value: k): cast<int32>(k); case Err(error: e): 0; };
+        if (n == 0) { return; }
+        for (int32 i = 0; i < n; i = i + 1) {
+            if (cast<int32>(buf[i]) != got + 1) { inOrder = false; }
+            got = got + 1;
+        }
+    }
+}
+unsafe fn void writer(ref TcpStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 5);
+    sleep(d: Duration.fromMillis(ms: 200));
+    for (int32 i = 0; i < 5; i = i + 1) { b[i] = cast<uint8>(i + 1); }
+    _ = writeAll(w: s, bytes: b.view());
+    sleep(d: Duration.fromMillis(ms: 100));
+    for (int32 i = 0; i < 5; i = i + 1) { b[i] = cast<uint8>(i + 6); }
+    _ = writeAll(w: s, bytes: b.view());
+}
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: portOf(l: l));
+    TcpStream near = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream far = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    scope {
+        spawn fiber reader(s: ref near);
+        spawn fiber writer(s: ref far);
+    }
+    if (!timedOut) { return 5; }
+    if (got != 10) { return cast<uint8>(10 + got); }
+    return inOrder ? 42 : 6;
+}
+fn uint8 main() { return run(); }

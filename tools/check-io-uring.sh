@@ -56,10 +56,64 @@ else
     [ "$on" = 0 ] || fail "the probe found io_uring refused here, and the scheduler made a ring anyway"
 fi
 
+# Reads go to the kernel (step 2, decision 2): on the ring arm a read that finds nothing waiting is a RECV whose
+# completion carries the data, so no recvfrom ever returns data here. The writer waits half a second, so the reader's
+# first attempt finds nothing, and every read after that follows a short one and makes no system call at all, so no
+# amount of load on the machine changes the count. Epoll's count shows strace is counting. Skipped without strace.
+cat > "$tmp/reads.kama" <<'KAMA'
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber,
+         std::time::Duration, std::time::sleep, std::collections::FixedArray };
+static int32 got = 0;
+unsafe fn void reader(ref TcpStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    while (got < 10) {
+        Result<isize, IoError> r = s.read(into: buf.viewMut());
+        int32 n = match (r) { case Ok(value: k): cast<int32>(k); case Err(error: e): 0; };
+        if (n == 0) { return; }
+        got = got + n;
+    }
+}
+unsafe fn void writer(ref TcpStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 5);
+    sleep(d: Duration.fromMillis(ms: 500));
+    _ = writeAll(w: s, bytes: b.view());
+    sleep(d: Duration.fromMillis(ms: 100));
+    _ = writeAll(w: s, bytes: b.view());
+}
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    uint16 port = match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: port);
+    TcpStream near = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream far = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    scope { spawn fiber reader(s: ref near); spawn fiber writer(s: ref far); }
+    return got == 10 ? 0 : 5;
+}
+fn uint8 main() { return run(); }
+KAMA
+reads=skipped
+if [ "$allowed" = yes ] && command -v strace >/dev/null 2>&1; then
+    "$KAMA" build "$tmp/reads.kama" -o "$tmp/reads" >/dev/null 2>"$tmp/build.err" || fail "the read program did not build:" "$tmp/build.err"
+    traced() {   # traced <KAMA_IO_URING value> — "<recvfrom calls> <of them, returned data>", or "none" if strace cannot
+        if KAMA_IO_URING=$1 strace -f -qq -e trace=recvfrom -o "$tmp/st$1" "$tmp/reads" >/dev/null 2>&1; then
+            echo "$(grep -c 'recvfrom(' "$tmp/st$1" || true) $(grep -c ') = [0-9]' "$tmp/st$1" || true)"
+        else echo none; fi
+    }
+    ring=$(traced 1); epoll=$(traced 0)
+    if [ "$ring" != none ] && [ "$epoll" != none ]; then
+        set -- $ring; [ "$1" -ge 1 ] && [ "$2" = 0 ] \
+            || fail "on the ring a recvfrom returned data ($2 of $1 calls): reads are not reaching the kernel as RECVs"
+        set -- $epoll; [ "$2" -ge 1 ] || fail "strace saw no recvfrom return data on epoll either, so it is not counting"
+        reads="no recvfrom returned data on the ring"
+    fi
+fi
+
 # The epoll arm, over every fiber fixture.
 fixtures=$(cd "$ROOT/tests" && ls -d fiber_*.kama fiber_*.d | sed 's/\.kama$//')
 (cd "$ROOT" && KAMA_IO_URING=0 KAMA_SKIP_CHECKS=1 ./run_tests.sh $fixtures) > "$tmp/epoll.log" 2>&1 \
     || fail "a fiber fixture failed on the epoll arm (KAMA_IO_URING=0):" "$tmp/epoll.log"
 n=$(echo "$fixtures" | wc -l | tr -d ' ')
 
-echo "check-io-uring: PASS (ring arm $([ "$allowed" = yes ] && echo in use || echo refused here, epoll in its place); $n fiber fixtures pass on epoll)"
+echo "check-io-uring: PASS (ring arm $([ "$allowed" = yes ] && echo in use || echo refused here, epoll in its place); reads: $reads; $n fiber fixtures pass on epoll)"

@@ -4254,6 +4254,8 @@ static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, ui
 //   kama_net_drained  a stream's read or write, after kama_net_ready: parks first when the last call in its direction
 //                   came back short, so the socket is known drained (or full) until the scheduler reports otherwise.
 //   kama_net_short  a stream's read or write, after it succeeded: records a short one (KR-251).
+//   kama_net_read   a stream's read, the whole protocol in one call. It is the one std calls, so that a scheduler on
+//                   io_uring can hand the kernel the read itself, into the caller's buffer (KR-253).
 // A socket's state is what std keeps beside its descriptor: the registration (`io`, NULL on a thread), the mode bits,
 // and a deadline per direction (kama_now_mono_ns times, the clock `Instant` holds; 0 for none).
 //   1  the program made it non-blocking: a would-block answers WouldBlock, as before fibers
@@ -4272,6 +4274,8 @@ static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by);  
 static inline void    kama__net_drop(void* io);                                    // off the queue, from any isolate
 static inline void    kama__net_short(void* io, int32_t interest);                 // a call came back short
 static inline int     kama__net_drained(void* io, int32_t interest);               // ...so park first: 1 once
+static inline int     kama__net_ring(void* io);                                    // its scheduler runs io_uring
+static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by);   // a read through the ring
 #endif
 
 static inline void kama__net_fail(int e) {
@@ -4381,6 +4385,32 @@ static inline int32_t kama_net_drained(void* io, int32_t mode, int32_t interest,
 #endif
     (void)io; (void)mode; (void)interest; (void)by;
     return 0;
+}
+// A stream's read: up to `n` bytes into `buf`. Returns the count, 0 when the peer closed, or -1 with errno set. On a
+// fiber whose scheduler runs io_uring, a read that would block, or that follows a short one so the socket is known
+// drained, is handed to the kernel as a RECV into `buf`. Its completion carries the data, so the fiber does not wake
+// to make the system call again (io_uring.md decision 2). Everywhere else it is the readiness protocol above.
+static inline ptrdiff_t kama_net_read(ptrdiff_t fd, void** io, int32_t* mode, uint64_t by, uint8_t* buf, size_t n) {
+    if (kama_net_ready(fd, io, mode, by) != 0) return -1;
+#if defined(KAMA__OS_FIBERS)
+    if (*io && !(*mode & KAMA_NET_PROGRAM_NB) && kama__net_ring(*io)) {
+        if (!kama__net_drained(*io, 1)) {
+            for (;;) {
+                const ptrdiff_t got = kama_recv(fd, buf, n, *mode);
+                if (got >= 0) { kama_net_short(*io, 1, got, (ptrdiff_t)n); return got; }
+                if (errno != EINTR) break;
+            }
+            if (errno != EAGAIN) return -1;
+        }
+        return kama__net_recv(*io, buf, n, by);
+    }
+#endif
+    if (kama_net_drained(*io, *mode, 1, by) != 0) return -1;
+    for (;;) {
+        const ptrdiff_t got = kama_recv(fd, buf, n, *mode);
+        if (got >= 0) { kama_net_short(*io, 1, got, (ptrdiff_t)n); return got; }
+        if (!kama_net_retry(fd, *io, *mode, 1, by)) return -1;
+    }
 }
 // After `connect` failed on a socket kama made non-blocking: wait until it resolves, as a blocking connect would, or
 // `by` passes. 0 connected, -1 with errno set. A wake is a hint, and an unconnected socket can report writable before

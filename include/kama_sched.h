@@ -406,6 +406,16 @@ static inline int kama__sched_ring(const kama_sched* s) {
 // record: 0, a cancel's own completion, and the waker's poll.
 typedef struct kama__ring_op { kama_fiber* f; int32_t res; int32_t done; } kama__ring_op;
 #define KAMA__RING_WAKER 1u
+// What a completion's kernel wrote into a caller's buffer, which MemorySanitizer cannot see, as it sees a recv's.
+#if defined(__has_feature)
+  #if __has_feature(memory_sanitizer)
+    #include <sanitizer/msan_interface.h>
+    #define KAMA__RING_WROTE(p, n) __msan_unpoison((p), (size_t)(n))
+  #endif
+#endif
+#if !defined(KAMA__RING_WROTE)
+  #define KAMA__RING_WROTE(p, n) ((void)(p), (void)(n))
+#endif
 
 // Make ready every fiber whose submission completed, and keep the waker's poll armed.
 static inline void kama__sched_ringReap(kama_sched* s) {
@@ -648,6 +658,40 @@ static inline int kama_sched_io_wait(kama_sched_io* io, int32_t interest, uint64
     return woke;
 }
 
+#if defined(KAMA__SCHED_URING)
+// A stream read through the ring (decision 2): a RECV into the caller's buffer, parked on until it completes, and its
+// completion carries the data. The count, or -1 with errno set: TimedOut when the deadline cancelled it first. A short
+// one marks the socket drained, as a short recv does, so the next read goes to the ring without a system call.
+static inline ptrdiff_t kama__sched_ringRecv(kama_sched_io* io, uint8_t* buf, size_t n, uint64_t deadline) {
+    kama_sched* s = io->s;
+    const unsigned len = n > 0x7fffffffu ? 0x7fffffffu : (unsigned)n;   // a submission's length is 32 bits
+    for (;;) {
+        kama__ring_op op; op.f = kama_fiber_current(); op.res = 0; op.done = 0;
+        struct io_uring_sqe* e = kama__sched_sqe(s);
+        e->opcode = IORING_OP_RECV; e->fd = (int)io->fd;
+        e->addr = (uint64_t)(uintptr_t)buf; e->len = len;
+        e->user_data = (uint64_t)(uintptr_t)&op;
+        io->inflight++;
+        kama__sched_ringPark(s, &op, deadline);
+        io->inflight--;
+        if (op.res >= 0) {
+            KAMA__RING_WROTE(buf, op.res);
+            if (op.res > 0 && (unsigned)op.res < len) kama_sched_io_short(io, 1);
+            return op.res;
+        }
+        if (op.res == -ECANCELED) { errno = ETIMEDOUT; return -1; }
+        if (op.res == -EINTR) continue;
+        // A kernel that answers a non-blocking socket rather than waiting on it: wait for readiness, then submit again.
+        if (op.res == -EAGAIN) {
+            if (!kama__sched_ringPoll(io, 1, deadline)) { errno = ETIMEDOUT; return -1; }
+            continue;
+        }
+        errno = -op.res;
+        return -1;
+    }
+}
+#endif
+
 // Release `io` from ANY isolate (decision 13, as corrected): on its own, close it; from another, take the socket off
 // its scheduler's queue from here and hand the record back, for its scheduler to free after the batch of events it
 // may be reading (see RELEASE). The socket's descriptor must still be open: it closes after this.
@@ -880,6 +924,14 @@ static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by) {
 static inline void kama__net_drop(void* io) { kama_sched_io_release((kama_sched_io*)io); }
 static inline void kama__net_short(void* io, int32_t interest) { kama_sched_io_short((kama_sched_io*)io, interest); }
 static inline int kama__net_drained(void* io, int32_t interest) { return kama_sched_io_drained((kama_sched_io*)io, interest); }
+static inline int kama__net_ring(void* io) { return kama__sched_ring(((kama_sched_io*)io)->s); }
+static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by) {
+#if defined(KAMA__SCHED_URING)
+    return kama__sched_ringRecv((kama_sched_io*)io, buf, n, by);
+#else
+    (void)io; (void)buf; (void)n; (void)by; errno = ENOSYS; return -1;   // never called: kama__net_ring said no
+#endif
+}
 #else
 static inline int kama__net_here(void) { return 0; }
 static inline int kama__net_mine(void* io) { (void)io; return 1; }
@@ -888,6 +940,10 @@ static inline int32_t kama__net_park(void* io, int32_t interest, uint64_t by) { 
 static inline void kama__net_drop(void* io) { (void)io; }
 static inline void kama__net_short(void* io, int32_t interest) { (void)io; (void)interest; }
 static inline int kama__net_drained(void* io, int32_t interest) { (void)io; (void)interest; return 0; }
+static inline int kama__net_ring(void* io) { (void)io; return 0; }
+static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by) {
+    (void)io; (void)buf; (void)n; (void)by; errno = ENOSYS; return -1;
+}
 #endif
 #elif defined(KAMA_FIBERS) && defined(KAMA_OS_H) && !defined(__EMSCRIPTEN__)
 #error "kama_os.h was read before KAMA_FIBERS was defined: its sockets would never park (define it before any kama header)"

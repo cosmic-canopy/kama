@@ -1,6 +1,6 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
-**Status: building (§8), step 1 shipped in `0.9.756`.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
+**Status: building (§8); steps 1 and 2 shipped in `0.9.756` and `0.9.757`.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
 2026-10-28.
 Decision 7 is ruled as revised, after the first recommendation rested on a false claim (§5). Decision 8 is measured on both machines
 (§6). Both directions through the ring, (b′), clears the bar on aarch64. On x86-64 it misses in one cell, 10,000
@@ -376,7 +376,7 @@ sanitizer leg runs epoll.
      that it holds none under `KAMA_IO_URING=0`.
 
    [targets.md](../targets.md) lists the variable.
-2. **Stream reads as `RECV`** (decision 2). One C entry, `kama_net_read`, carries a stream read's whole protocol. Std's
+2. **Stream reads as `RECV`** (decision 2, `0.9.757`). One C entry, `kama_net_read`, carries a stream read's whole protocol. Std's
    `TcpStream.read` and `UnixStream.read` call it in place of their loop. On the ring arm, a read that would block, or
    follows a short one, becomes a `RECV` into the caller's buffer. A passed deadline cancels it, and the fiber waits for
    the kernel to let go (decision 3), with a fixture for each.

@@ -64,6 +64,7 @@ extern fn int32 kama_net_retry(isize fd, UnsafePtr io, int32 mode, int32 interes
 extern fn int32 kama_net_connected(isize fd, UnsafePtr io, int32 mode, uint64 by);
 extern fn int32 kama_net_drained(UnsafePtr io, int32 mode, int32 interest, uint64 by);
 extern fn void kama_net_short(UnsafePtr io, int32 interest, isize got, isize asked);
+extern fn isize kama_net_read(isize fd, UnsafePtr io, UnsafePtr<int32> mode, uint64 by, UnsafePtr<uint8> buf, usize n);
 extern fn int32 kama_net_backoff(UnsafePtr io, int32 mode, int32 attempt, uint64 by);
 extern fn int32 kama_net_close(isize fd, UnsafePtr io);
 extern fn void kama_net_settle(isize fd, UnsafePtr io, int32 mode);
@@ -340,13 +341,9 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     @parks
     public unsafe fn Result<isize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: 0); }
-        if (kama_net_ready(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy) != 0) { return Result::Err(error: lastError()); }
-        if (kama_net_drained(io: this.io, mode: this.mode, interest: 1, by: this.readBy) != 0) { return Result::Err(error: lastError()); }
-        while (true) {
-            isize n = kama_recv(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()), mode: this.mode);
-            if (n >= 0) { kama_net_short(io: this.io, interest: 1, got: n, asked: into.length()); return Result::Ok(value: n); }
-            if (kama_net_retry(fd: this.fd, io: this.io, mode: this.mode, interest: 1, by: this.readBy) == 0) { return Result::Err(error: lastError()); }
-        }
+        isize n = kama_net_read(fd: this.fd, io: addr(of: this.io), mode: addr(of: this.mode), by: this.readBy, buf: addr(of: into[0]), n: cast<usize>(into.length()));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: n);
     }
     // `Writer` primitive: one send, possibly short (`std::io::writeAll` loops it). A write to a peer that has
     // gone is `BrokenPipe`, never SIGPIPE. EINTR-retried.
