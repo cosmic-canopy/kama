@@ -4256,7 +4256,8 @@ static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, ui
 //   kama_net_short  a stream's read or write, after it succeeded: records a short one (KR-251).
 //   kama_net_read   a stream's read, the whole protocol in one call. It is the one std calls, so that a scheduler on
 //                   io_uring can hand the kernel the read itself, into the caller's buffer (KR-253).
-//   kama_net_write  a stream's write, the same way: on io_uring one that would block is handed to the kernel.
+//   kama_net_write  a stream's write, the same way: on io_uring every write on x86-64, and elsewhere one that would
+//                   block, is handed to the kernel.
 // A socket's state is what std keeps beside its descriptor: the registration (`io`, NULL on a thread), the mode bits,
 // and a deadline per direction (kama_now_mono_ns times, the clock `Instant` holds; 0 for none).
 //   1  the program made it non-blocking: a would-block answers WouldBlock, as before fibers
@@ -4415,15 +4416,23 @@ static inline ptrdiff_t kama_net_read(ptrdiff_t fd, void** io, int32_t* mode, ui
     }
 }
 // A stream's write: up to `n` bytes from `buf`, possibly fewer. Returns the count, or -1 with errno set. On a fiber
-// whose scheduler runs io_uring, a write makes its system call first, as a read does, and one that would block, or that
-// follows a short one so the socket is known full, is handed to the kernel as a SEND from `buf`, parked on until it
-// completes (io_uring.md decision 11). Every write a SEND cost more than the send it saved on aarch64: a second switch
-// into a fiber whose stack had gone cold, about 0.3 us at 10,000 connections against 0.25 (io_uring.md §6, Profile).
+// whose scheduler runs io_uring, a write is handed to the kernel as a SEND from `buf`, parked on until it completes,
+// and the turn's one io_uring_enter carries every write of the turn (io_uring.md decisions 2 and 11). The rule differs
+// by architecture, as a measured delta (io_uring.md §6, The remedy, quick check, x86-64):
+//   - On x86-64 every write is a SEND. Parking on it there costs less than the send it saves: the ring served
+//     1.22x and 1.08x epoll's requests at 1,000 and 10,000 connections, where making the system call first gave 1.09x
+//     and 1.00x.
+//   - Elsewhere a write makes its system call first, as a read does, and is a SEND only when it would block or
+//     follows a short one, so the socket is known full. On aarch64, every write a SEND cost a second switch into a
+//     fiber whose stack had gone cold, about 0.3 us at 10,000 connections against the 0.25 us send it saved
+//     (io_uring.md §6, Profile). An architecture neither machine measured takes this rule, which was never worse than
+//     epoll on either.
 // Everywhere else it is the readiness protocol above.
 static inline ptrdiff_t kama_net_write(ptrdiff_t fd, void** io, int32_t* mode, uint64_t by, const uint8_t* buf, size_t n) {
     if (kama_net_ready(fd, io, mode, by) != 0) return -1;
 #if defined(KAMA__OS_FIBERS)
     if (*io && !(*mode & KAMA_NET_PROGRAM_NB) && kama__net_ring(*io)) {
+#if !defined(__x86_64__)
         if (!kama__net_drained(*io, 2)) {
             for (;;) {
                 const ptrdiff_t put = kama_send(fd, buf, n, *mode);
@@ -4432,6 +4441,7 @@ static inline ptrdiff_t kama_net_write(ptrdiff_t fd, void** io, int32_t* mode, u
             }
             if (errno != EAGAIN) return -1;
         }
+#endif
         return kama__net_send(*io, buf, n, by);
     }
 #endif

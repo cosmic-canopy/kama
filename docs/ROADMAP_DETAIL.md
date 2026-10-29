@@ -3320,7 +3320,17 @@ before it, `frame_dummy`, since the asm label has no function type). `0.9.753` p
 while the current one runs: 1.7% less CPU per request at 10,000 connections (15/15 rounds), and no change at 1,000,
 where the frames stay cached. After it, kama and tokio-percore spend the same CPU per request at 10,000 connections,
 and tokio serves about 1% more requests a second; at 1,000 the two are within the noise floor. Frames and control
-blocks laid out densely, so that a switch touches fewer lines and pages, are the lever left. On x86-64 the two are level
+blocks laid out densely, so that a switch touches fewer lines and pages, are the lever left.
+
+**KR-253 left a decision here (2026-10-29).** On io_uring, `kama_net_write`'s rule is gated by architecture, as a
+measured delta:
+- x86-64 hands every write to the kernel as a `SEND`;
+- elsewhere a write makes its system call first.
+Every write a `SEND` won on x86-64, at 1.22× and 1.08× epoll's requests against 1.09× and 1.00×. On the M4 it won at
+1,000 connections and lost at 10,000, where switching back into a fiber whose stack had gone cold cost about 0.3 µs.
+So the real variable looks like the cost of a cold switch, which is this row's. Once this row cuts that cost, measure
+both write rules on both machines. If every write a `SEND` wins on both, delete the gate: one rule, x86-64's. The x86-64
+box runs its half. On x86-64 the two are level
 at 10,000 (servers.md's *x86-64* section). Hardware counters (cycles, cache and dTLB misses for the fiber arm against
 tokio-percore, `perf stat` through the harness's `WRAP`) are still owed. The x86-64 box's guest exposes no `cpu` PMU,
 so they wait for a machine that passes them through.

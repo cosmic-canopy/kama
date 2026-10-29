@@ -569,6 +569,12 @@ maintainer's ruling,** so the closing check was not started. The options:
    about 0.18 µs and its stack lines (KR-254). If KR-254 cuts that, rule 1 of `0.9.758` may win on both machines.
    That is later work, and option 1 can ship now and give way to it.
 
+**Ruled 2026-10-29: option 2, per platform** (`0.9.765`). On x86-64 every write is a `SEND`. Elsewhere a write makes
+its system call first. An architecture neither machine measured takes the system-call-first rule, which was never worse
+than epoll on either. The gate is one `#if defined(__x86_64__)` in `kama_net_write`, and `check-io-uring.sh` holds each
+rule on its own architecture. Whether the difference follows the architecture or these two machines is still open.
+KR-254's cheaper park (option 3) may let one rule serve both, and is measured on both when it lands.
+
 
 - **Regular files and DNS** stay on KR-3 step 7's offload pool, which every OS needs. io_uring reads regular files
   without blocking, and could serve them on Linux later; libuv moved its file operations back to the threadpool in
@@ -659,8 +665,25 @@ sanitizer leg runs epoll.
         is welcome beside it, the profile of where the ring wins, but optional.
       - Push, and say in the commit that the M4's half is next.
    2. **Done 2026-10-29: the M4's counts and profile (§6), and the remedy built (`0.9.764`) and quick-checked on both
-      machines (§6).** On x86-64 it costs most of the ring's lead, so **the maintainer rules on the write rule first**
-      (§6, *The remedy, quick check, x86-64*). Then the closing check (step 3) runs on both machines, on the rule chosen. The M4, originally: `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
+      machines (§6).** On x86-64 it cost most of the ring's lead, so the write rule went to the maintainer: **ruled per
+      platform** (`0.9.765`, §6).
+      - **x86-64's closing check is step 4's run.** At `0.9.765` x86-64 sends every write as a `SEND`, the rule
+        `0.9.758` had. Step 4 measured that rule over the six configs, 15 rounds, against epoll: 1.08–1.24×, p99 the
+        same or lower. Between the two, only the compiler's emission changed, and it moves both arms of a paired ratio
+        alike.
+      - **From here everything runs on the M4.** The maintainer keeps the x86-64 box for other work, and it comes back
+        only for what only x86-64 Linux can test.
+        1. `./dev matrix` at `0.9.765`. The x86-64 box checked the change natively on the ring, so it did not run the
+           matrix: `check-io-uring.sh`, the 29 fiber fixtures, and the write and read fixtures under ASan and UBSan.
+        2. The closing check on the M4, whose write rule `0.9.765` leaves as `0.9.764` had it:
+           ```sh
+           CORES=3 SLOTS="c kama-fibers kama-fibers-epoll c#2" bench/run server .scratch/ring-close-aarch64.tsv 15
+           ```
+           The six default echo and HTTP configs, plus idle.
+        3. Step 6's record if it holds, which closes the row.
+        4. Then KR-254, whose detail now carries the follow-up: measure both write rules on both machines once the
+           cheaper park lands, and delete the gate if one rule wins on both. That measurement is when the x86-64 box is
+           next needed. The M4, originally: `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
       (below), the comparison in §6, then the profile at echo 10,000 and the fix the counts point to. To try a fix,
       the quick run is
       `CORES=3 SLOTS="c kama-fibers kama-fibers-epoll c#2" CONFIGS="echo:1000 echo:10000" bench/run server <out> 5`

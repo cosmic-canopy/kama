@@ -694,8 +694,8 @@ static inline ptrdiff_t kama__sched_ringRecv(kama_sched_io* io, uint8_t* buf, si
 
 #if defined(KAMA__SCHED_URING)
 // A stream write through the ring (decisions 2 and 11): a SEND from the caller's buffer, parked on until it completes,
-// so the buffer is the caller's again only once the kernel has let go of it. kama_net_write makes the system call first
-// and comes here only when that would block, or after a short one. The count, which may be short as a send's is, and
+// so the buffer is the caller's again only once the kernel has let go of it. On x86-64 kama_net_write sends every write
+// here. Elsewhere it makes the system call first, and comes here only when that would block, or after a short one. The count, which may be short as a send's is, and
 // then marks the socket full, as a short send does; or -1 with errno set: TimedOut when the deadline cancelled it first,
 // and BrokenPipe, never SIGPIPE, for a peer that has gone (KAMA__SEND_FLAGS, as kama_send passes).
 static inline ptrdiff_t kama__sched_ringSend(kama_sched_io* io, const uint8_t* buf, size_t n, uint64_t deadline) {

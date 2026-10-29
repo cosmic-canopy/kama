@@ -57,8 +57,9 @@ else
 fi
 
 # Reads and writes go to the kernel (steps 2 and 3, decision 2, and step 5's remedy). On the ring arm a read that finds
-# nothing waiting is a RECV whose completion carries the data, so no recvfrom ever returns data here. A write makes its
-# system call first, so these small ones, which always find room, are sendto calls. The writer waits half a second, so
+# nothing waiting is a RECV whose completion carries the data, so no recvfrom ever returns data here. The write rule
+# differs by architecture (kama_net_write). On x86-64 every write is a SEND, so there is no sendto at all. Elsewhere a
+# write makes its system call first, so these small ones, which always find room, are sendto calls. The writer waits half a second, so
 # the reader's first attempt finds nothing, and every read after that follows a short one and makes no system call at
 # all, so no amount of load on the machine changes the counts. Epoll's counts show strace is counting. Skipped without
 # strace.
@@ -96,8 +97,9 @@ unsafe fn uint8 run() {
 fn uint8 main() { return run(); }
 KAMA
 # A write that would block is a SEND (step 5's remedy, io_uring.md §6). The writer hands 16 MiB to writeAll while the
-# reader sleeps, so the socket fills: on epoll every byte still leaves through sendto, and on the ring the writes after
-# a would-block or a short one leave as SENDs, which strace does not see, so sendto carries fewer than all of them.
+# reader sleeps, so the socket fills. On epoll every byte still leaves through sendto. On the ring the writes after a
+# would-block or a short one leave as SENDs, which strace does not see, so sendto carries fewer than all of them, and on
+# x86-64, where every write is a SEND, it carries none.
 cat > "$tmp/writes.kama" <<'KAMA'
 import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber,
          std::time::Duration, std::time::sleep, std::collections::FixedArray };
@@ -144,11 +146,16 @@ if [ "$allowed" = yes ] && command -v strace >/dev/null 2>&1; then
                  "$(grep -c 'sendto(' "$tmp/st$1" || true)"
         else echo none; fi
     }
+    sendAll=no; [ "$(uname -m)" = x86_64 ] && sendAll=yes   # the architecture's write rule, as kama_net_write gates it
     ring=$(traced 1); epoll=$(traced 0)
     if [ "$ring" != none ] && [ "$epoll" != none ]; then
         set -- $ring; [ "$1" -ge 1 ] && [ "$2" = 0 ] \
             || fail "on the ring a recvfrom returned data ($2 of $1 calls): reads are not reaching the kernel as RECVs"
-        [ "$3" -ge 1 ] || fail "on the ring a stream write made no sendto: a write that can go now must make its system call"
+        if [ "$sendAll" = yes ]; then
+            [ "$3" = 0 ] || fail "on x86-64 every stream write on the ring is a SEND, and $3 were sendto calls"
+        else
+            [ "$3" -ge 1 ] || fail "on the ring a stream write made no sendto: a write that can go now must make its system call"
+        fi
         set -- $epoll; [ "$2" -ge 1 ] && [ "$3" -ge 1 ] \
             || fail "strace saw no recvfrom return data ($2) or no sendto ($3) on epoll either, so it is not counting"
         wring=$(sent 1); wepoll=$(sent 0)
@@ -156,7 +163,12 @@ if [ "$allowed" = yes ] && command -v strace >/dev/null 2>&1; then
         [ "$wepoll" = 16777216 ] || fail "on epoll sendto carried $wepoll of 16777216 bytes, so strace is not counting"
         [ "$wring" -lt 16777216 ] \
             || fail "on the ring sendto carried all 16777216 bytes: a write that would block is not reaching the kernel as a SEND"
-        reads="no recvfrom returned data on the ring; small writes are sendto, and $((16777216 - wring)) of 16777216 bytes left as SENDs"
+        if [ "$sendAll" = yes ]; then
+            [ "$wring" = 0 ] || fail "on x86-64 every stream write on the ring is a SEND, and sendto carried $wring bytes"
+            reads="no recvfrom returned data on the ring; every write was a SEND (x86-64), no sendto"
+        else
+            reads="no recvfrom returned data on the ring; small writes are sendto, and $((16777216 - wring)) of 16777216 bytes left as SENDs"
+        fi
     fi
 fi
 
