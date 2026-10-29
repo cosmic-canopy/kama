@@ -3501,6 +3501,41 @@ The candidates, each cheap to try once the first step exists:
 5. **Stacks from one arena,** guard pages kept, so neighbouring stacks share page-table pages and a walk is shorter.
    Huge pages are not an option while each stack has its own guard page.
 
+**Measured 2026-10-29: candidate 1 built, 2 and 4 prototyped** (`bench/fiber/`, 10 interleaved rounds each; raw rows
+[benchmarks/coldswitch-linux.tsv](benchmarks/coldswitch-linux.tsv) and
+[coldswitch-macos.tsv](benchmarks/coldswitch-macos.tsv)). N fibers in a ring pass K tokens, so each hop is one park
+and one switch into a fiber that last ran N hops ago; K = 64 keeps the ready queue as deep as the server's turn. A
+`touch` arm makes the same channel calls from one fiber with no switch: 15–37 ns a hop at every N, so the growth below
+is the switch, not the channels. Each prototype against the tree's own build, paired by round (`ring#2` sits within 1%,
+3.5% at one config):
+
+| Linux VM (the server's) | hop | colour | prefetch on wake | both |
+|---|---|---|---|---|
+| 100, K = 1 | 93 ns | 0.77 · 10/10 | 0.92 · 9/10 | 0.78 · 10/10 |
+| 10,000, K = 1 | 227 ns | **0.57** · 10/10 | 0.90 · 9/10 | **0.55** · 10/10 |
+| 10,000, K = 64 | 188 ns | **0.88** · 10/10 | 0.99 | 0.90 · 10/10 |
+| 100,000, K = 1 | 388 ns | 1.05 · 1/10 | **0.93** · 9/10 | 0.99 |
+| 100,000, K = 64 | 371 ns | 1.04 · 3/10 | 0.97 · 8/10 | 1.035 · 2/10 |
+
+macOS (16 KiB pages) agrees: colour 0.69 at 10,000 with K = 1 (421 → 290 ns), 0.94 with K = 64, and 1.03 at 100,000.
+
+What it says:
+- **The cost is cache-set conflict, as the plan suspected.** Every stack's top is page-aligned and every fiber parks at
+  the same depth, so every saved context sits at the same offset in its page, and the L1, indexed by those bits, holds
+  only a few dozen of them however many fibers there are. Starting each stack's top one cache line further into its
+  page than the last (the prototype: `colour++ % (page / 64)` lines, `kama_fiber_new`) takes 43% off a hop at 10,000
+  fibers, and 23% even at 100, where 100 contexts already overflow three sets.
+- **Prefetch on wake is small, and adds nothing once the contexts are coloured.** Alone it is 7–10% at 10,000 and
+  100,000 with K = 1.
+- **Colour costs 4–5% at 100,000 fibers.** The likely cause: a top shifted up to a page lets the frames under it cross
+  into the page below, so a switch-in touches two pages where it touched one, and at 100,000 every page walk misses.
+  A colour range that keeps the deepest park frame inside the top page would test it.
+
+**Decisions owed (2026-10-29):** build stack colouring, and with what range (the whole page, or only what keeps a park's
+frames in one page, measured against each other first); whether prefetch on wake is kept beside it (only if it still
+pays at 100,000 on top of the chosen colour); and 3 and 5 are not built unless the server at 10,000 still shows the cost
+after colouring.
+
 **Done when:** the switch into a cold fiber is cut, the server's echo 10,000 shows it, and then **both write rules are
 measured on both machines** (the quick run, then the closing check). If every write a `SEND` wins on both, the gate in
 `kama_net_write` goes and x86-64's rule is the one rule; if the system call first wins on both, the gate goes the other

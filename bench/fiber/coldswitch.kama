@@ -1,0 +1,112 @@
+// coldswitch.kama — KR-254's microbenchmark: what a switch into a fiber costs once its stack has gone cold, with no I/O
+// in the way (ROADMAP_DETAIL §9, "The cold switch: the plan").
+//
+// N fibers stand in a ring, each waiting on its own channel. K tokens go round it: a fiber that receives one passes it
+// to the next fiber's channel and waits again, so every hop is one park and one switch into the next fiber. With the K
+// tokens spread evenly round the ring, a fiber runs once every N hops, so at large N its saved registers and the stack
+// lines it touches have gone cold, as a connection's fiber has in a server at 10,000 connections. K is how deep the
+// ready queue runs: at 1 a fiber is woken and switched into at once, and at 64 it waits behind about as many others as
+// the server's turn holds (about 61 completions per `io_uring_enter`), which is the time a prefetch on wake has to work.
+//
+// The `touch` arm makes a send and a receive on the same channels in the same order from one fiber that never parks,
+// so its time is what the channels cost at that size, and `ring` minus `touch` is the park, the wake and the switches.
+//
+// Usage: BENCH_ARM=ring|touch BENCH_FIBERS=<N> BENCH_TOKENS=<K> BENCH_HOPS=<hops timed> ./coldswitch
+// Prints one TSV row: fibers, tokens, hops, nanoseconds over the timed hops.
+import { core::envOr, core::println,
+    std::concurrent::Channel,
+    std::concurrent::Sender,
+    std::concurrent::Receiver,
+    std::collections::DynamicArray,
+    std::time::Instant,
+    std::time::monotonicNow,
+};
+
+fn int32 parseInt(const ref string s) {
+    int32 v = 0;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int32 c = cast<int32>(s[i]);
+        if (c < 48 || c > 57) { return 0; }
+        v = v * 10 + c - 48;
+    }
+    return v;
+}
+
+// A setting from the environment, as a number.
+unsafe fn int32 setting(string name, string dflt) { return parseInt(s: envOr(name: give name, dflt: give dflt)); }
+unsafe fn string armSetting() { return envOr(name: "BENCH_ARM", dflt: "ring"); }
+
+// One fiber's place in the ring: its own channel, the next fiber's, and where a spent token goes.
+type resource Seat {
+    Receiver<int32> mine;
+    Sender<int32> next;
+    Sender<int32> done;
+    public ctor make(Receiver<int32> mine, Sender<int32> next, Sender<int32> done) {
+        this.mine = give mine; this.next = give next; this.done = give done;
+    }
+    // A token is the hops it has left: it goes on one fewer, and at none to `done`. A negative token is the stop,
+    // passed on before the fiber returns, so the whole ring ends.
+    public fn void run() {
+        while (true) {
+            int32 t = match (this.mine.recv()) { case Some(value: v): v; case None: -1; };
+            if (t < 0) { _ = this.next.send(item: -1); return; }
+            if (t == 0) { _ = this.done.send(item: 0); } else { _ = this.next.send(item: t - 1); }
+        }
+    }
+}
+
+fn void member(Seat seat) { seat.run(); }
+
+// K tokens of `each` hops, spread evenly round the ring, and back once every one has run out.
+fn void lap(ref DynamicArray<Channel<int32>> ring, ref Receiver<int32> finished, int32 n, int32 k, int32 each) {
+    for (int32 j = 0; j < k; j = j + 1) { _ = ring[j * n / k].sender().send(item: each); }
+    for (int32 j = 0; j < k; j = j + 1) { _ = finished.recv(); }
+}
+
+// The ring's channel calls in the ring's order, from one fiber: a send and a receive on the channel each hop reaches.
+fn void touchLap(ref DynamicArray<Sender<int32>> tx, ref DynamicArray<Receiver<int32>> rx, int32 n, int32 k,
+                 int32 steps) {
+    for (int32 s = 0; s < steps; s = s + 1) {
+        for (int32 j = 0; j < k; j = j + 1) {
+            int32 i = (j * n / k + s) % n;
+            _ = tx[i].send(item: s);
+            _ = rx[i].recv();
+        }
+    }
+}
+
+fn uint8 main() {
+    string arm = armSetting();
+    int32 n = setting(name: "BENCH_FIBERS", dflt: "1000");
+    int32 k = setting(name: "BENCH_TOKENS", dflt: "1");
+    int32 hops = setting(name: "BENCH_HOPS", dflt: "2000000");
+    if (n < 2 || k < 1 || k > n || hops < k) { println(s: "coldswitch: need 2 <= N, 1 <= K <= N, K <= hops"); return 2; }
+    DynamicArray<Channel<int32>> ring = DynamicArray::<Channel<int32>>.empty();
+    for (int32 i = 0; i < n; i = i + 1) { ring.add(item: Channel.bounded(capacity: cast<usize>(k))); }
+    int64 ns = 0i64;
+    if (arm == "touch") {
+        DynamicArray<Sender<int32>> tx = DynamicArray::<Sender<int32>>.empty();
+        DynamicArray<Receiver<int32>> rx = DynamicArray::<Receiver<int32>>.empty();
+        for (int32 i = 0; i < n; i = i + 1) { tx.add(item: ring[i].sender()); rx.add(item: ring[i].receiver()); }
+        touchLap(tx: ref tx, rx: ref rx, n: n, k: k, steps: n / k + 1);   // every channel touched once, as the ring warms
+        Instant t0 = monotonicNow();
+        touchLap(tx: ref tx, rx: ref rx, n: n, k: k, steps: hops / k);
+        ns = monotonicNow().since(earlier: t0).asNanos();
+    } else {
+        Channel<int32> done = Channel.bounded(capacity: cast<usize>(k));
+        Receiver<int32> finished = done.receiver();
+        scope {
+            for (int32 i = 0; i < n; i = i + 1) {
+                spawn fiber member(seat: Seat.make(mine: ring[i].receiver(), next: ring[(i + 1) % n].sender(), done: done.sender()));
+            }
+            lap(ring: ref ring, finished: ref finished, n: n, k: k, each: n / k + 1);   // every fiber started and parked
+            Instant t0 = monotonicNow();
+            lap(ring: ref ring, finished: ref finished, n: n, k: k, each: hops / k);
+            ns = monotonicNow().since(earlier: t0).asNanos();
+            _ = ring[0].sender().send(item: -1);
+        }
+    }
+    int32 timed = (hops / k) * k;
+    println(s: "${n}\t${k}\t${timed}\t${ns}");
+    return 0;
+}
