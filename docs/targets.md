@@ -27,6 +27,12 @@ program into one translation unit so the C compiler can inline across modules), 
 install, whose `zig cc` keeps its own object cache — one invocation re-compiles only what changed
 (~0.1 s), which beats anything splitting them could do.
 
+**Both tiers write `#line`**, so an error only the C compiler can find, such as an `extern const` the header does not
+define or an extern type's layout, names the kama line in a release build as it does in a debug one
+([`tools/check-release-line.sh`](../tools/check-release-line.sh)). It reaches no byte of a release binary, which
+carries no debug info and reads no `__FILE__`: the fixture corpus and the benchmarks build byte-identical with and
+without it. `--no-line` leaves it out.
+
 kama compiles to **ISO C11** and hands it to a C compiler. That is why cross-compiling is realistic:
 the hard part is not code generation, it's having a C compiler that can reach the target. Everything
 below is about that.

@@ -79,7 +79,7 @@ one_build() {
 one_build "single-invocation (-j 1)" 1
 one_build "per-TU (-j 2)"            2
 
-# RELEASE is the other half of the contract: `--release` turns `#line` and `-g` off on purpose, so it
+# RELEASE is the other half of the contract: `--release` turns `-g` off on purpose, so it
 # must NOT pay for a .dSYM. This also catches the opposite regression — running dsymutil unconditionally.
 "$KAMA" build "$tmp/probe.kama" -j 2 --release -o "$tmp/rel" > "$tmp/out" 2>&1 \
     || fail "the release build failed" "$tmp/out"

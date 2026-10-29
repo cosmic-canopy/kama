@@ -4819,7 +4819,8 @@ static ModuleId moduleIdForFile(const std::string& absPath)
 // the mount and store paths into every binary, and printed them to whoever saw the panic. This spelling is the
 // same on every machine that builds the package, so nothing needs a remap flag (measured on macOS: one project
 // built at two paths gives byte-identical release binaries, where before it did not). Debug info is untouched: a
-// debug build's `#line` keeps real paths, where a debugger needs them, and a release build writes none.
+// debug build's `#line` keeps real paths, where a debugger needs them; a release build's reach no byte of the binary
+// (no debug info, and nothing reads `__FILE__`), measured as the same two-path build, byte-identical.
 static std::string packageLocationOf(const std::string& unitPath)
 {
     if (unitPath.empty()) return unitPath;
@@ -11975,8 +11976,7 @@ int main(int argc, char** argv)
         return 2;
     }
 
-    // Release builds strip debug info and #line, optimize, and define NDEBUG.
-    if (release) emitLines = false;
+    // Release builds strip debug info, optimize, and define NDEBUG.
 
     // Where kama_runtime.h lives — resolved so an installed binary works from any
     // cwd (exe-relative: <exe>/../include, else <exe>, else <exe>/../.., else ".").

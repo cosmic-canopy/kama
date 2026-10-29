@@ -137,7 +137,7 @@ kama build graphics.kama physics.kama main.kama -o app && ./app
 kama build hello.kama --target wasm            # -> hello.html + .js + .wasm
 kama build hello.kama --target wasm -o app.js  # -> app.js + app.wasm (headless: node app.js)
 
-# Optimized release build (stripped, NDEBUG, no #line):
+# Optimized release build (stripped, NDEBUG):
 kama build hello.kama --release
 
 # Build the project entry (from kama.json "entry") and run it in one step:
