@@ -323,7 +323,8 @@ licwd="$tmp/licwd"
     || bad "monorepo --license mit-or-apache: root files or a member's key is missing"
 # The holder an MIT license names (KR-142): git's user.name when --holder is absent, and with neither seed
 # REFUSES, writing nothing. It used to write the package as its own copyright holder. Both cases pin git's
-# identity through the environment, so neither depends on how this machine is configured.
+# identity through the environment, so neither depends on how this machine is configured. The refusal also runs outside
+# any repository: seed asks git from where it is run, and a checkout's own .git/config may name someone.
 licg="$tmp/licg"
 env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name \
     GIT_CONFIG_VALUE_0="Git Person" "$KAMA" seed "$licg" --yes --license mit >/dev/null 2>&1 \
@@ -331,7 +332,7 @@ env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_COUNT=1 GIT_CON
     && ok "with no --holder the holder is git's user.name" \
     || bad "the git identity did not become the holder: $(sed -n 3p "$licg/LICENSE" 2>/dev/null)"
 n=$((n + 1)); nog="$tmp/rej$n"
-if env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$KAMA" seed "$nog" --yes --license mit >"$tmp/rej$n.out" 2>&1; then
+if (cd "$tmp" && env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$KAMA" seed "$nog" --yes --license mit) >"$tmp/rej$n.out" 2>&1; then
     bad "--license mit with no holder and no git identity was accepted: $(sed -n 3p "$nog/LICENSE" 2>/dev/null)"
 else
     [ -e "$nog" ] && bad "the holder refusal left $nog behind" || ok "--license mit with no holder at all is refused, writing nothing"
