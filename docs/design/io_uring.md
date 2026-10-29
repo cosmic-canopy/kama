@@ -453,16 +453,37 @@ sanitizer leg runs epoll.
    under `KAMA_IO_URING=0`. The harness records which arm each run used, in the `rings` column, from `/proc/<pid>/fd`.
    It is judged on CPU per request, requests per second and p99 (decision 11). **Measured on both machines** (§6,
    `0.9.758`): p99 holds on both. x86-64 gains 8–22%, but the M4 is level up to 1,000 connections and loses 5% at 10,000.
-5. **Profile the M4's loss, remedy it, measure again on both machines** (ruled 2026-10-29). On this box, as quiet as it
-   can be made: quit heavy host apps, keep other containers off the podman VM, give the VM 8 vCPUs (`podman machine stop`,
-   `podman machine set --cpus 8`, start; servers.md's M4 run had 8, and the maintainer decides it, since other projects
-   share the VM), and grant perf in it (`podman machine ssh sudo sysctl -w kernel.perf_event_paranoid=-1
-   kernel.kptr_restrict=0`, lost on restart). Then profile `kama-fibers` and `kama-fibers-epoll` at echo 10,000 under
-   `WRAP` (`bench/run`; release builds strip, so use `--cc .scratch/cc-keep-symbols`), and count `io_uring_enter`s and
-   completions per request against `epoll_wait`s. The two candidates are in §6. The remedies already named are decision
-   11's (enter the ring sooner while a turn runs long; make the system call first for a write, which is (b) for
-   writes) and a minimum batch (`min_wait_usec`, 6.13). Whatever is built is measured again with step 4's command on
-   both machines.
+5. **Find the M4's loss, remedy it, measure again on both machines** (ruled 2026-10-29). What differs per echo request:
+   the epoll arm parks once (waiting for data) and makes two system calls, `recv` and `send`; the ring arm makes none,
+   and parks twice, on its `RECV` and on its `SEND`, each a submission, a completion, a reap, an unpark and a switch. On
+   x86-64 the two calls saved outweigh the extra park; on the M4 they break even at 1,000 connections and lose at 10,000.
+   The ring itself is fast here (decision 8's C harness saved 21–25% at 1,000 on this VM), so the loss is in how kama
+   uses it. Three suspects, each with the count that confirms it and the fix it points to:
+
+   | suspect | what shows it | the fix it points to |
+   |---|---|---|
+   | too few completions per enter: about 40 per `io_uring_enter` here (§6), where kama asks for 1 when idle and 0 every 61 runs | `io_uring_enter`s per request, and the `io_uring:io_uring_local_work_run` tracepoint per enter, on both machines | have each enter collect more: a larger minimum count with a short timeout, or `min_wait_usec` (6.13) |
+   | each `RECV` arms and tears down a poll in the kernel: kama submits one only when the socket is believed empty, so the first attempt nearly always fails | `io_uring:io_uring_poll_arm` per request, and the poll functions in a profile | `POLL_FIRST` where kama knows the socket is empty (it helps at 10,000 and costs at 1,000 in the harness) |
+   | the park per write: estimated in decision 11, never measured, while a `send` here is cheap and nearly always succeeds at once | the profile's share in kama's own submit, reap and switch, and the counts with writes made as a direct `send` | the system call first for a write, the ring only when it would block ((b) for writes); x86-64's harness preferred (b′) by about 9 points at 1,000, so measured on both |
+
+   The steps:
+   1. **Count.** Both arms at echo 1,000 (level, the control) and 10,000 (the loss), under `perf stat` with the
+      system-call and io_uring tracepoints, per request. The x86-64 box runs the same. Counts are not timings, so load
+      on the machine does not matter; a count that differs between the machines names the suspect.
+   2. **Profile.** `perf record` (cpu-clock: the VM has no hardware counters) of both arms at 10,000, to see where the
+      ring arm's extra ~0.25 µs a request goes. Release builds strip, so build with `--cc .scratch/cc-keep-symbols`.
+   3. **Fix** the confirmed cause, as small as the evidence allows, and rerun step 4's command on both machines.
+
+   **Done when** the ring is the same as epoll or better at every config on both machines, beyond the `c#2` noise floor,
+   with p99 holding. If no fix gets there, the maintainer rules with the numbers: the ring as Linux's default
+   everywhere with aarch64's high-density cost recorded, or a per-platform default, which the platform rule allows only
+   as a measured delta.
+
+   **What it needs on the M4:** perf allowed in the VM (`podman machine ssh sudo sysctl -w kernel.perf_event_paranoid=-1
+   kernel.kptr_restrict=0`, lost on restart); the bench container's seccomp and SELinux label relaxed, as `bench/run`
+   does for `WRAP`; possibly `/sys/kernel/tracing` mounted into it for the tracepoints, checked on the first try. 8
+   vCPUs make the runs match servers.md's, but counts and paired ratios do not need them, and other projects share the
+   VM, so that is the maintainer's call. The x86-64 box runs the counting script too.
 6. **The record, once both machines hold:**
    - servers.md: kama's fiber arm runs on io_uring on Linux, with both machines' numbers, ring against epoll and
      against the others;
