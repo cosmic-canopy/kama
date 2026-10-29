@@ -2308,6 +2308,55 @@ the split, the descriptor, the registration pointer, the mode and a count, 24 by
 6. `UnixStream` splits the same way in the same commit, as the platform rule wants one interface. Datagram sockets
    (`UdpSocket`, `UnixDatagram`) have the same need, a receiving fiber beside a sending one, and take the same shape.
 
+**Revised 2026-10-28, building it: the spelling.** Decisions 2 and 4 named free functions, `split(stream:)` and
+`reunite(reader:, writer:)`. kama has no overloading (probed: "duplicate function 'split' — kama has no overloading"), and
+`TcpStream`, `UnixStream`, `UdpSocket` and `UnixDatagram` share one module, so only one free `split` and one `reunite`
+could exist there. **Ruled 2026-10-28: ctors,** the language's one way to make a value:
+- Decision 2 becomes `TcpHalves.split(stream: give s)`, a named ctor on the halves enum (an enum's ctor returns a
+  variant, `tests/enum_ctor.kama`), and so `UnixHalves.split(stream:)`, `UdpHalves.split(socket:)`,
+  `UnixDatagramHalves.split(socket:)`.
+- Decision 4 becomes `TcpStream.reunite(reader: give r, writer: give w)`, a fallible ctor returning
+  `Result<TcpStream, TcpUnjoined>`, as `TcpStream.connect` returns `Result<TcpStream, IoError>`.
+
+```kama fragment
+match (TcpHalves.split(stream: give conn)) {
+    case Halves(reader: r, writer: w): { scope { spawn fiber pumpIn(from: give r); spawn fiber pumpOut(to: give w); } }
+};
+```
+
+**Two more decisions, ruled 2026-10-28:**
+7. The datagram halves are named for their verbs: `UdpReceiver`/`UdpSender` and `UnixDatagramReceiver`/
+   `UnixDatagramSender`, whose calls are `recv`/`recvFrom` and `send`/`sendTo` (std's channel ends are already a
+   `Sender` and a `Receiver`). A `UnixStream`'s halves are `UnixReader`/`UnixWriter`.
+8. `reunite`'s failure is one `Error` enum per socket kind, shaped like `Undelivered<T>`:
+   `type enum TcpUnjoined implements Error { Halves(TcpReader reader, TcpWriter writer); }`, and `UnixUnjoined`,
+   `UdpUnjoined`, `UnixDatagramUnjoined`. A generic `Unjoined<R, W>` would add two type arguments at every use, for a type
+   that has exactly one pair per socket kind.
+
+**How it is built** (drafted 2026-10-28, held until KR-253's steps 2–3 have rewritten the same read and write paths):
+- **The cell** is three functions in `kama_os.h`: `kama_net_cell_new(size)`, 16 bytes of count and then the socket (out
+  of memory is kama's panic); `kama_net_cell_leave(socket)`, 1 when that was the last half; `kama_net_cell_free(socket,
+  size)`. A split moves the socket in with a raw store (`s[0] = give stream`, as `std::memory`'s `replace` does); the
+  last half's drop runs `drop(ptr:)` on it and frees the cell; `reunite` nulls both halves' pointers, so their drops
+  leave the cell alone, and `relocate`s the socket back out. A half is the socket's address, 8 bytes; a TCP cell is 16
+  bytes plus the stream's 40. The count is a plain one, since neither half leaves its isolate.
+- **The halves delegate** to the socket's own methods, so the deadlines, the mode bits, `sendFile` and decision 13's
+  re-registration stay the socket's, unchanged. A `TcpReader` is a `Reader` (`read`, `setReadDeadline`, `localAddr`,
+  `peerAddr`); a `TcpWriter` is a `Writer` (`write`, `flush`, `sendFile`, `setWriteDeadline`, the addresses). A
+  `UnixReader` adds `recvDescriptors` and `peerCredentials`, a `UnixWriter` `sendDescriptors`. Settings that belong to
+  the whole socket (`setNoDelay`, keepalive, multicast, `setNonBlocking`, a datagram `connect`) stay on it, set before
+  the split or after `reunite`.
+- **Visibility is per file, and every name a std::net file exports is public**, so no private helper can be shared
+  between `net.kama`, `udp.kama` and `unix.kama`: each file binds the three externs and writes the moves inline.
+- **What the io_uring backend must allow:** a reader and a writer parked on one socket at once, so a `RECV` and a `SEND`
+  in flight together on one descriptor. Until this row, no safe program could have two operations in flight on one
+  descriptor (passed to the KR-253 work, 2026-10-28).
+- **Fixtures:** `fiber_tcp_split` (both ends split, four fibers, 8 MiB each way, each writer's drop the FIN its peer's
+  reader ends on), `net_split_reunite` (reunite; halves of two streams come back in `Err` and still work; each half's
+  deadline its own; the writer's FIN while the reader still reads; UDP), `fiber_dgram_split`, `fiber_unix_split.d`
+  (descriptor passing on the halves; `UnixDatagram` where it exists, its path unlinked once), and the xfail
+  `tcp_half_not_sendable`.
+
 <a id="s6-noheap-per-isolate"></a>
 
 ### `@noheap` reach per isolate (KR-245)
