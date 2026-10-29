@@ -3566,6 +3566,19 @@ core, where colour wins; the 4–5% at 100,000 a core is recorded as measured. P
 about 6% at 100,000 with K = 1 and nothing with K = 64, the server's depth, so it is not kept; `0.9.753`'s prefetch of
 the next ready fiber stays.
 
+**Built (`0.9.767`), and the server does not show it** (the M4, 15 rounds, both kama arms coloured,
+[benchmarks/colour-rules-aarch64.tsv](benchmarks/colour-rules-aarch64.tsv)). CPU per request against the epoll arm,
+the system call first / every write a `SEND`: echo 1.023 / 1.008 at 100, 1.011 / 0.987 at 1,000, 0.963 / 1.084 at
+10,000; HTTP 1.018 / 1.005, 1.014 / 0.993, 0.943 / 1.066. The rules split as they did uncoloured, so the gate stays, and
+against the C loop in the same rounds kama's CPU per request is where it was (0.93 of C's at echo 10,000, 0.92 before).
+In the microbenchmark a fiber touches little but its stack, so set conflicts dominated; a server's fiber also touches
+its socket, its buffers, its control block and the kernel's state for its connection, some 3,300 of each per core, and
+those misses are capacity, which colour cannot move. **Owed (2026-10-29):** keep colouring (12–43% where a fiber's
+working set is small, as in channel pipelines; 4–5% worse at 100,000 fibers a core; neutral in the server) or revert
+it; and whether the M4's 10,000-connection park cost is worked further (candidate 3 moves the context load off the
+stack page, but the fiber's frames are on that page, so the page walk would only move), or the write rule stays a
+permanent measured delta and this part of the row closes.
+
 **Ruled 2026-10-29: as recommended** — build stack colouring, the range chosen by measurement first; prefetch on wake only if it still pays at 100,000 beside it; 3 and 5 only if the server still shows the cost. The decisions as they were put: build stack colouring, and with what range (the whole page, or only what keeps a park's
 frames in one page, measured against each other first); whether prefetch on wake is kept beside it (only if it still
 pays at 100,000 on top of the chosen colour); and 3 and 5 are not built unless the server at 10,000 still shows the cost
