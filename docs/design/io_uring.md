@@ -480,6 +480,45 @@ What they show:
   system calls it saves, which cost more on x86-64's guest than on the M4's. **Next: the profile of both arms at echo
   10,000 on the M4**, to see where the 0.21 µs goes.
 
+### Profile, aarch64 (2026-10-29, step 5)
+
+`perf record` (cpu-clock) of each arm at echo 10,000 on the M4, through `run.sh`'s own build and launch (`WRAP`), with
+kama built keeping its symbols. Flat profiles: [benchmarks/ring-profile-aarch64.txt](../benchmarks/ring-profile-aarch64.txt).
+Server CPU per request under perf: ring 3.53 µs, epoll 3.39. The ledger, per request:
+
+| | ring | epoll | ring − epoll |
+|---|---|---|---|
+| the fiber switch (`kama__fiber_swap`) | 0.37 µs | 0.18 µs | **+0.19** |
+| kama's own code, which runs first on a resumed fiber's cold stack | 0.28 | 0.11 | **+0.17** |
+| io_uring in the kernel (`io_submit_sqes`, `io_init_req`, …) | 0.19 | 0 | +0.19 |
+| arm64's hardened-usercopy heap check (`memblock_is_map_memory`) | 0.20 | 0.12 | +0.08 |
+| kernel clock reads (`arch_counter_get_cntvct`) | 0.18 | 0.11 | +0.07 |
+| system-call entry and exit, `recv` and `send` | 0.01 | 0.50 | **−0.49** |
+| the rest of the kernel: TCP, softirq, SELinux, descriptor lookup | 2.30 | 2.37 | −0.07 |
+| **total** | 3.53 | 3.39 | **+0.14** |
+
+What it says:
+- **The loss is the park per write, the third suspect.** perf names the switch `frame_dummy`, because the switch is
+  hand-written assembly with no symbol size. Nearly all its samples fall on the loads of the incoming fiber's saved
+  registers from its own stack, a cold-memory stall: at 10,000 connections a fiber's stack has left the cache by the
+  time it runs again. The ring arm switches into a fiber twice a request (after its `RECV` and after its `SEND`),
+  epoll once. The second switch, with the cold stack lines its code then touches, costs about 0.3 µs on this VM. The
+  system call it replaces costs about 0.25. That trade is the loss; the ring's other costs and savings roughly cancel.
+- **At 1,000 connections the stacks stay warm,** which is why the ring is level there, and why the harness, which has
+  no fibers, measured (b′) at 0.91 at 10,000 on this machine.
+- **Two kernel costs are arm64's own:** the hardened-usercopy check walks the memory map (`memblock_is_map_memory`) for
+  each heap object copied, and io_uring copies through more of them than a system call does. Kama cannot change
+  those; a `SEND` that is not submitted does not pay them.
+
+**The remedy the profile points to is decision 11's second option: a write makes the system call first**, and goes
+through the ring only when the socket would block ((b) for writes). A request is then one park, as on epoll, and one
+system call, the `send`, where epoll makes two. On these numbers that recovers about 0.3 µs a request here and pays
+back 0.25, so the ring arm comes out ahead of epoll by the `recv` it still saves, less its `RECV`'s cost. On x86-64 it
+gives back a `send` system call; decision 8's harness measured (b) against (b′) there as level at 10,000 and 9 points
+behind at 1,000, without fibers, so x86-64 measures the remedy before it is kept. A cheaper switch into a cold fiber
+(its saved registers and first frames prefetched further ahead, or stacks packed to share TLB entries) would help both
+arms and every fiber program. It belongs to KR-254, not to this row.
+
 ## 7. What is out of scope here
 
 - **Regular files and DNS** stay on KR-3 step 7's offload pool, which every OS needs. io_uring reads regular files
@@ -570,7 +609,8 @@ sanitizer leg runs epoll.
         short "Counts, x86-64" subsection in §6 saying what they show. A `perf record` of both arms at echo 10,000
         is welcome beside it, the profile of where the ring wins, but optional.
       - Push, and say in the commit that the M4's half is next.
-   2. **The M4, after that:** `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
+   2. **Done 2026-10-29: the M4's counts and profile (§6).** The loss is the park per write; the remedy it points to is
+      a write's system call first. **Next: build that remedy and measure it on both machines.** The M4, originally: `bench/run count docs/benchmarks/ring-counts-aarch64.tsv` with perf allowed in the VM
       (below), the comparison in §6, then the profile at echo 10,000 and the fix the counts point to. To try a fix,
       the quick run is
       `CORES=3 SLOTS="c kama-fibers kama-fibers-epoll c#2" CONFIGS="echo:1000 echo:10000" bench/run server <out> 5`
