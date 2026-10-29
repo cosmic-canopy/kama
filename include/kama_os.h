@@ -4256,6 +4256,7 @@ static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, ui
 //   kama_net_short  a stream's read or write, after it succeeded: records a short one (KR-251).
 //   kama_net_read   a stream's read, the whole protocol in one call. It is the one std calls, so that a scheduler on
 //                   io_uring can hand the kernel the read itself, into the caller's buffer (KR-253).
+//   kama_net_write  a stream's write, the same way: on io_uring every write is handed to the kernel.
 // A socket's state is what std keeps beside its descriptor: the registration (`io`, NULL on a thread), the mode bits,
 // and a deadline per direction (kama_now_mono_ns times, the clock `Instant` holds; 0 for none).
 //   1  the program made it non-blocking: a would-block answers WouldBlock, as before fibers
@@ -4276,6 +4277,7 @@ static inline void    kama__net_short(void* io, int32_t interest);              
 static inline int     kama__net_drained(void* io, int32_t interest);               // ...so park first: 1 once
 static inline int     kama__net_ring(void* io);                                    // its scheduler runs io_uring
 static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by);   // a read through the ring
+static inline ptrdiff_t kama__net_send(void* io, const uint8_t* buf, size_t n, uint64_t by);   // a write through it
 #endif
 
 static inline void kama__net_fail(int e) {
@@ -4410,6 +4412,22 @@ static inline ptrdiff_t kama_net_read(ptrdiff_t fd, void** io, int32_t* mode, ui
         const ptrdiff_t got = kama_recv(fd, buf, n, *mode);
         if (got >= 0) { kama_net_short(*io, 1, got, (ptrdiff_t)n); return got; }
         if (!kama_net_retry(fd, *io, *mode, 1, by)) return -1;
+    }
+}
+// A stream's write: up to `n` bytes from `buf`, possibly fewer. Returns the count, or -1 with errno set. On a fiber
+// whose scheduler runs io_uring, every write is handed to the kernel as a SEND, with no system call first: the fiber
+// parks until it completes, and the turn's one io_uring_enter carries every write of the turn (io_uring.md decisions 2
+// and 11). Everywhere else it is the readiness protocol above.
+static inline ptrdiff_t kama_net_write(ptrdiff_t fd, void** io, int32_t* mode, uint64_t by, const uint8_t* buf, size_t n) {
+    if (kama_net_ready(fd, io, mode, by) != 0) return -1;
+#if defined(KAMA__OS_FIBERS)
+    if (*io && !(*mode & KAMA_NET_PROGRAM_NB) && kama__net_ring(*io)) return kama__net_send(*io, buf, n, by);
+#endif
+    if (kama_net_drained(*io, *mode, 2, by) != 0) return -1;
+    for (;;) {
+        const ptrdiff_t put = kama_send(fd, buf, n, *mode);
+        if (put >= 0) { kama_net_short(*io, 2, put, (ptrdiff_t)n); return put; }
+        if (!kama_net_retry(fd, *io, *mode, 2, by)) return -1;
     }
 }
 // After `connect` failed on a socket kama made non-blocking: wait until it resolves, as a blocking connect would, or

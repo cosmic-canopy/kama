@@ -1,6 +1,6 @@
 # An io_uring backend for the fiber scheduler — design (KR-253)
 
-**Status: building (§8); steps 1 and 2 shipped in `0.9.756` and `0.9.757`.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
+**Status: building (§8); steps 1–3 shipped in `0.9.756`–`0.9.758`, and step 4, the measurement, is next.** Decisions 1, 3–6 and 8–11 are ruled as recommended, with 8's bar at 5%, and 9–11 on
 2026-10-28.
 Decision 7 is ruled as revised, after the first recommendation rested on a false claim (§5). Decision 8 is measured on both machines
 (§6). Both directions through the ring, (b′), clears the bar on aarch64. On x86-64 it misses in one cell, 10,000
@@ -381,7 +381,7 @@ sanitizer leg runs epoll.
    follows a short one, becomes a `RECV` into the caller's buffer. A passed deadline cancels it, and the fiber waits for
    the kernel to let go (decision 3), with a fixture for each.
    - A build with MemorySanitizer unpoisons what a `RECV` wrote, since the kernel's write is invisible to it.
-3. **Stream writes as `SEND`**, through `kama_net_write`, with `MSG_NOSIGNAL` as `kama_send` sets it.
+3. **Stream writes as `SEND`**, through `kama_net_write`, with `MSG_NOSIGNAL` as `kama_send` sets it (`0.9.758`).
 4. **The server benchmark on both arms, in the same rounds.** `kama-fibers` runs on the ring and `kama-fibers-epoll`
    under `KAMA_IO_URING=0`. The harness records which arm each run used, from `/proc/<pid>/fd`. The benchmark is rerun on
    the x86-64 box, natively, and on the M4 VM, which needs the container's seccomp and SELinux relaxed as `bench/run

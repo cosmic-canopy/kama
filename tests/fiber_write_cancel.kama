@@ -1,0 +1,67 @@
+// A write cancelled by its deadline sent exactly what it reported (KR-253, docs/design/io_uring.md decisions 3 and 11).
+// On a scheduler that runs io_uring every stream write is handed to the kernel as a SEND, and a write deadline that
+// passes while one waits for room cancels it: the write returns `Err(TimedOut)` once the kernel has let go of the
+// buffer, or the count the kernel sent first. Here a writer fills a connection nobody reads until its deadline passes,
+// adding up what each `write` reported, and a reader that starts once the writer is done must receive exactly that many
+// bytes, in order, and then nothing more: a byte lost or sent twice would show. On epoll the same program holds the same.
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::concurrent::Fiber, std::time::Instant,
+         std::time::monotonicNow, std::time::Duration, std::time::sleep, std::collections::FixedArray };
+
+static int64 accepted = 0;
+static bool writerDone = false;
+static bool timedOut = false;
+static int64 got = 0;
+static bool inOrder = true;
+static bool quietAfter = false;
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn void writer(ref TcpStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 251 * 257);            // byte k of the stream is k % 251
+    for (int32 i = 0; i < 251 * 257; i = i + 1) { b[i] = cast<uint8>(i % 251); }
+    s.setWriteDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 200)));
+    while (true) {
+        isize from = cast<isize>(accepted % 251i64);
+        Result<isize, IoError> r = s.write(bytes: b.view().slice(from: from, count: 251 * 256));
+        int32 status = match (r) { case Ok(value: k): 0; case Err(error: e): match (e.kind()) { case TimedOut: 1; case _: 2; }; };
+        if (status != 0) { timedOut = status == 1; writerDone = true; return; }
+        isize n = match (r) { case Ok(value: k): k; case Err(error: e): 0; };
+        accepted = accepted + cast<int64>(n);
+    }
+}
+unsafe fn void reader(ref TcpStream s) {
+    while (!writerDone) { sleep(d: Duration.fromMillis(ms: 10)); }
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (got < accepted) {
+        Result<isize, IoError> r = s.read(into: buf.viewMut());
+        int32 n = match (r) { case Ok(value: k): cast<int32>(k); case Err(error: e): 0; };
+        if (n == 0) { return; }
+        for (int32 i = 0; i < n; i = i + 1) {
+            if (cast<int64>(buf[i]) != got % 251i64) { inOrder = false; }
+            got = got + 1i64;
+        }
+    }
+    s.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromMillis(ms: 100)));
+    Result<isize, IoError> extra = s.read(into: buf.viewMut());
+    bool q = match (extra) { case Ok(value: k): false; case Err(error: e): match (e.kind()) { case TimedOut: true; case _: false; }; };
+    quietAfter = q;
+}
+
+unsafe fn uint8 run() {
+    Result<TcpListener, IoError> rl = TcpListener.bind(host: "127.0.0.1", port: 0ui16);
+    TcpListener l = match (give rl) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Result<TcpStream, IoError> rc = TcpStream.connect(host: "127.0.0.1", port: portOf(l: l));
+    TcpStream near = match (give rc) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    Result<TcpStream, IoError> ra = l.accept();
+    TcpStream far = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    scope {
+        spawn fiber writer(s: ref near);
+        spawn fiber reader(s: ref far);
+    }
+    if (!timedOut) { return 5; }
+    if (accepted == 0i64) { return 6; }
+    if (got != accepted) { return 7; }
+    if (!inOrder) { return 8; }
+    return quietAfter ? 42 : 9;
+}
+fn uint8 main() { return run(); }

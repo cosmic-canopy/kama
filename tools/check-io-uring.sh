@@ -56,10 +56,11 @@ else
     [ "$on" = 0 ] || fail "the probe found io_uring refused here, and the scheduler made a ring anyway"
 fi
 
-# Reads go to the kernel (step 2, decision 2): on the ring arm a read that finds nothing waiting is a RECV whose
-# completion carries the data, so no recvfrom ever returns data here. The writer waits half a second, so the reader's
-# first attempt finds nothing, and every read after that follows a short one and makes no system call at all, so no
-# amount of load on the machine changes the count. Epoll's count shows strace is counting. Skipped without strace.
+# Reads and writes go to the kernel (steps 2 and 3, decision 2). On the ring arm a read that finds nothing waiting is a
+# RECV whose completion carries the data, so no recvfrom ever returns data here, and every write is a SEND, so there is
+# no sendto at all. The writer waits half a second, so the reader's first attempt finds nothing, and every read after
+# that follows a short one and makes no system call at all, so no amount of load on the machine changes the counts.
+# Epoll's counts show strace is counting. Skipped without strace.
 cat > "$tmp/reads.kama" <<'KAMA'
 import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber,
          std::time::Duration, std::time::sleep, std::collections::FixedArray };
@@ -96,17 +97,20 @@ KAMA
 reads=skipped
 if [ "$allowed" = yes ] && command -v strace >/dev/null 2>&1; then
     "$KAMA" build "$tmp/reads.kama" -o "$tmp/reads" >/dev/null 2>"$tmp/build.err" || fail "the read program did not build:" "$tmp/build.err"
-    traced() {   # traced <KAMA_IO_URING value> — "<recvfrom calls> <of them, returned data>", or "none" if strace cannot
-        if KAMA_IO_URING=$1 strace -f -qq -e trace=recvfrom -o "$tmp/st$1" "$tmp/reads" >/dev/null 2>&1; then
-            echo "$(grep -c 'recvfrom(' "$tmp/st$1" || true) $(grep -c ') = [0-9]' "$tmp/st$1" || true)"
+    traced() {   # traced <KAMA_IO_URING value> — "<recvfrom calls> <of them, returned data> <sendto calls>", or "none"
+        if KAMA_IO_URING=$1 strace -f -qq -e trace=recvfrom,sendto -o "$tmp/st$1" "$tmp/reads" >/dev/null 2>&1; then
+            echo "$(grep -c 'recvfrom(' "$tmp/st$1" || true) $(grep 'recvfrom(' "$tmp/st$1" | grep -c ') = [0-9]' || true)" \
+                 "$(grep -c 'sendto(' "$tmp/st$1" || true)"
         else echo none; fi
     }
     ring=$(traced 1); epoll=$(traced 0)
     if [ "$ring" != none ] && [ "$epoll" != none ]; then
         set -- $ring; [ "$1" -ge 1 ] && [ "$2" = 0 ] \
             || fail "on the ring a recvfrom returned data ($2 of $1 calls): reads are not reaching the kernel as RECVs"
-        set -- $epoll; [ "$2" -ge 1 ] || fail "strace saw no recvfrom return data on epoll either, so it is not counting"
-        reads="no recvfrom returned data on the ring"
+        [ "$3" = 0 ] || fail "on the ring a stream write made $3 sendto calls: writes are not reaching the kernel as SENDs"
+        set -- $epoll; [ "$2" -ge 1 ] && [ "$3" -ge 1 ] \
+            || fail "strace saw no recvfrom return data ($2) or no sendto ($3) on epoll either, so it is not counting"
+        reads="no recvfrom returned data and no sendto on the ring"
     fi
 fi
 
@@ -116,4 +120,4 @@ fixtures=$(cd "$ROOT/tests" && ls -d fiber_*.kama fiber_*.d | sed 's/\.kama$//')
     || fail "a fiber fixture failed on the epoll arm (KAMA_IO_URING=0):" "$tmp/epoll.log"
 n=$(echo "$fixtures" | wc -l | tr -d ' ')
 
-echo "check-io-uring: PASS (ring arm $([ "$allowed" = yes ] && echo in use || echo refused here, epoll in its place); reads: $reads; $n fiber fixtures pass on epoll)"
+echo "check-io-uring: PASS (ring arm $([ "$allowed" = yes ] && echo in use || echo refused here, epoll in its place); reads and writes: $reads; $n fiber fixtures pass on epoll)"

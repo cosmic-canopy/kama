@@ -692,6 +692,37 @@ static inline ptrdiff_t kama__sched_ringRecv(kama_sched_io* io, uint8_t* buf, si
 }
 #endif
 
+#if defined(KAMA__SCHED_URING)
+// A stream write through the ring (decisions 2 and 11): a SEND from the caller's buffer, parked on until it completes,
+// so the buffer is the caller's again only once the kernel has let go of it. The count, which may be short as a send's
+// is, or -1 with errno set: TimedOut when the deadline cancelled it first, and BrokenPipe, never SIGPIPE, for a peer
+// that has gone (KAMA__SEND_FLAGS, as kama_send passes).
+static inline ptrdiff_t kama__sched_ringSend(kama_sched_io* io, const uint8_t* buf, size_t n, uint64_t deadline) {
+    kama_sched* s = io->s;
+    const unsigned len = n > 0x7fffffffu ? 0x7fffffffu : (unsigned)n;   // a submission's length is 32 bits
+    for (;;) {
+        kama__ring_op op; op.f = kama_fiber_current(); op.res = 0; op.done = 0;
+        struct io_uring_sqe* e = kama__sched_sqe(s);
+        e->opcode = IORING_OP_SEND; e->fd = (int)io->fd; e->msg_flags = KAMA__SEND_FLAGS;
+        e->addr = (uint64_t)(uintptr_t)buf; e->len = len;
+        e->user_data = (uint64_t)(uintptr_t)&op;
+        io->inflight++;
+        kama__sched_ringPark(s, &op, deadline);
+        io->inflight--;
+        if (op.res >= 0) return op.res;
+        if (op.res == -ECANCELED) { errno = ETIMEDOUT; return -1; }
+        if (op.res == -EINTR) continue;
+        // A kernel that answers a non-blocking socket rather than waiting on it: wait for room, then submit again.
+        if (op.res == -EAGAIN) {
+            if (!kama__sched_ringPoll(io, 2, deadline)) { errno = ETIMEDOUT; return -1; }
+            continue;
+        }
+        errno = -op.res;
+        return -1;
+    }
+}
+#endif
+
 // Release `io` from ANY isolate (decision 13, as corrected): on its own, close it; from another, take the socket off
 // its scheduler's queue from here and hand the record back, for its scheduler to free after the batch of events it
 // may be reading (see RELEASE). The socket's descriptor must still be open: it closes after this.
@@ -932,6 +963,13 @@ static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_
     (void)io; (void)buf; (void)n; (void)by; errno = ENOSYS; return -1;   // never called: kama__net_ring said no
 #endif
 }
+static inline ptrdiff_t kama__net_send(void* io, const uint8_t* buf, size_t n, uint64_t by) {
+#if defined(KAMA__SCHED_URING)
+    return kama__sched_ringSend((kama_sched_io*)io, buf, n, by);
+#else
+    (void)io; (void)buf; (void)n; (void)by; errno = ENOSYS; return -1;   // never called: kama__net_ring said no
+#endif
+}
 #else
 static inline int kama__net_here(void) { return 0; }
 static inline int kama__net_mine(void* io) { (void)io; return 1; }
@@ -942,6 +980,9 @@ static inline void kama__net_short(void* io, int32_t interest) { (void)io; (void
 static inline int kama__net_drained(void* io, int32_t interest) { (void)io; (void)interest; return 0; }
 static inline int kama__net_ring(void* io) { (void)io; return 0; }
 static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by) {
+    (void)io; (void)buf; (void)n; (void)by; errno = ENOSYS; return -1;
+}
+static inline ptrdiff_t kama__net_send(void* io, const uint8_t* buf, size_t n, uint64_t by) {
     (void)io; (void)buf; (void)n; (void)by; errno = ENOSYS; return -1;
 }
 #endif

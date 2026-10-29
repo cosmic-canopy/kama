@@ -36470,7 +36470,8 @@ static std::string parkSeam(const std::string& f)
     if (f == "kama_sched_scopeWait") return "the scope's close, which waits for its fibers";
     if (f == "kama_sched_yield") return "a yield";
     if (f == "kama_sched_sleep") return "a fiber's sleep";
-    if (f == "kama_sched_io_wait" || f == "kama__net_park" || f == "kama__net_recv") return "a fiber's wait on a socket";
+    if (f == "kama_sched_io_wait" || f == "kama__net_park" || f == "kama__net_recv" || f == "kama__net_send")
+        return "a fiber's wait on a socket";
     if (f == "kama__time_park") return "a fiber's sleep";
     if (f == "kama__channel_park") return "a fiber's wait on a channel";
     if (f == "kama__isolate_park") return "an isolate's join";
