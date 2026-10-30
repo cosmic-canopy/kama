@@ -1639,6 +1639,21 @@ static inline kama_string kama_string_from_raw(const uint8_t* base, ptrdiff_t st
     return r;
 }
 
+// A heap string that ADOPTS a block instead of copying it (KR-261): `StringWriter.finish` hands its buffer over. `data`
+// holds `len` bytes of UTF-8 and a NUL at `data[len]`, inside a block of `cap` bytes drawn through the allocation funnel
+// with alignment 1 (a `DynamicArray<uint8>`'s, which is what `kama__str_alloc` draws), so the string's own drop frees it
+// as it was allocated — the san leg's KAMA_ALLOC_CHECK holds that. `extern fn string kama_string_adopt(UnsafePtr<uint8>
+// data, isize len, isize cap);` in streams.kama. len<=0 frees the block and is "".
+static inline kama_string kama_string_adopt(uint8_t* data, ptrdiff_t len, ptrdiff_t cap) {
+    kama_string r;
+    if (len <= 0) {
+        if (data && cap > 0) kama_free(data, (size_t)cap, 1);
+        r.kama_data = NULL; r.kama_len = 0; r.kama_cap = 0; return r;
+    }
+    r.kama_data = (char*)data; r.kama_len = (size_t)len; r.kama_cap = (size_t)cap;
+    return r;
+}
+
 // ---- Number / char -> string -----------------------------------------------
 // The formatting primitives behind `std::fmt` AND the prelude `Display`/`Formatter`. They live HERE (not
 // in the opt-in kama_fmt.h) because the prelude — which is emitted into EVERY program and is NOT tree-shaken

@@ -1,6 +1,6 @@
 import { std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
 
-export { IoError, IoErrorKind, lastError };
+export { IoError, IoErrorKind, lastError, Unfinished };
 
 // Bindings for the platform's last-error accessors + errno constants (see kama_os.h). The constant
 // accessors let us classify without hardcoding per-OS errno numbers; they are module-internal.
@@ -185,4 +185,14 @@ unsafe fn IoErrorKind kindOf(int32 e) {
     if (e == kama_EMFILE() || e == kama_ENFILE()) { return IoErrorKind::TooManyOpenFiles; }
     if (e == kama_ENOTCONN())     { return IoErrorKind::NotConnected; }
     return IoErrorKind::Other;
+}
+
+// A consuming finish that did not complete (KR-261): the adapter comes back WHOLE in the error — its buffer, its
+// stream — beside the I/O error that stopped it. A `WouldBlock` from a non-blocking sink is the case that decides it:
+// the caller finishes again later, so it needs the adapter, not only what it wrapped. A caller that will not retry
+// matches the error away, and the adapter drops, abandoning its stream (a drop abandons; a finish completes).
+// `BufWriter.intoInner` returns it; Rust's `IntoInnerError<W>`, where flate2's `finish` drops the stream instead.
+type enum Unfinished<T> implements Error {
+    Pending(T adapter, IoError error);
+    public const fn string message() { return "the adapter's finish did not complete, and it comes back with the error that stopped it"; }
 }

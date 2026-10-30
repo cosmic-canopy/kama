@@ -37,7 +37,7 @@ type view InlineDynamicArrayIterConst<T> implements IteratorConst<T> {
 }
 
 // A growth that did not fit: the item is handed back, so nothing is lost — `match (give e) { case Item(item: x): … }`.
-// One variant, because a record cannot hand its field back (kama refuses `give this.field`); std's channels return
+// One variant: an error that carries a value is an enum, so `match` takes it apart; std's channels return
 // `Undelivered<T>` in the same shape. `addAll` copies from a view and has no item to return: it reports
 // `CapacityFull<Unit>`, as arrayvec's `try_extend_from_slice` reports `CapacityError<()>`.
 type enum CapacityFull<T> implements Error {

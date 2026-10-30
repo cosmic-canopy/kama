@@ -131,6 +131,16 @@ type resource DynamicArray<T, A: Allocator = GlobalAllocator> implements Copyabl
         this.mods = this.mods + 1;
         return od;
     }
+    // Give the block up, leaving this array empty: the caller adopts `data` (its `len` elements live, `cap` of them drawn
+    // through `alloc`) and frees it as `alloc` would. A `StringWriter`'s consuming `finish` hands its buffer to a
+    // `string` this way instead of copying it (KR-261), and is the one type granted it.
+    friend std::io::StringWriter[releaseData];
+    unsafe fn UnsafePtr<T> releaseData() {
+        UnsafePtr<T> d = this.data;
+        this.data = null; this.len = 0; this.cap = 0;
+        this.mods = this.mods + 1;
+        return d;
+    }
     unsafe fn void releaseBlock(UnsafePtr<T> block, isize cap) {
         if (cap > 0) {
             this.alloc.deallocate(pointer: cast<UnsafePtr>(block), bytes: cast<usize>(cap) * sizeof(T), align: alignof(T));

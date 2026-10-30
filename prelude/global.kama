@@ -430,6 +430,13 @@ type enum SerError implements Error, Sendable {
         };
     }
 }
+// A `serialize…Stream` that did not complete (KR-261): the sink comes back with the error, as the value the function
+// was handed — one hand-back error per situation, as `Undelivered<T>` is a channel's and `Unfinished<T>` an I/O
+// adapter's. What was written before the failure stays written.
+type enum Unserialized<W> implements Error {
+    Failed(W sink, std::memory::Owned<Error> error);
+    public const fn string message() { return match (this) { case Failed(sink: _, error: e): e.message(); }; }
+}
 // A fallible METHOD (not a ctor — write produces nothing, so `Result<Unit, …>`; read constructs a `T`, so
 // `Result<This, …>`). The ONE principled read/write asymmetry. Boxed `Owned<Error>` currency, same as read.
 type contract Serializable for value, resource, enum, intrinsic { const fn Result<Unit, std::memory::Owned<Error>> serialize(ref Serializer w); }

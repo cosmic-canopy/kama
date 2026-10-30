@@ -2883,7 +2883,12 @@ backends layer UTF-8 on top): the read-only `ConstView<uint8>` where the callee 
 `send`), the writable `View<uint8>` where it fills (`read`, `recv`). Write-all looping, `pump` (Go `io.Copy`), and `readAll` are **free helpers** over the
 primitive (contracts carry no default methods: a contract is purely an interface, so conformance is total and every body lives in the implementing type — helpers compose over the primitive); `StringWriter`/`SliceReader` are the in-memory impls and
 `BufWriter<W>`/`BufReader<R>` the buffering layer (each **owns** its inner sink/source by value — kama forbids
-stored borrows). `std::fs::File` implements both, and a reliable network stream is
+stored borrows). **A drop abandons, a consuming finish completes:** a `BufWriter` dropped with bytes buffered writes
+nothing and reports nothing, since a drop has no way to report an error, and `give bw.intoInner()` flushes and hands <!-- test: io_into_inner -->
+the sink back, or hands the writer itself back in `Unfinished` beside the error, so a `WouldBlock` can be finished
+again; the writer is gone after the call (KR-261). `give r.intoParts()` hands a `BufReader`'s, or a `Lines`', source <!-- xfail: bufwriter_use_after_into_inner -->
+back with the bytes it read ahead, and `give sw.finish()` and `give sw.takeBytes()` move a `StringWriter`'s buffer out
+without a copy. `std::fs::File` implements both, and a reliable network stream is
 `type contract ReliableStream for resource implements Reader, Writer` (refinement) + `setNonBlocking` — so `TcpStream` and
 the web `WsConnection` are drop-in `Reader`/`Writer`s. The upshot: the serde backends and `fmt` stream over a
 file or a socket with no transport-specific code (`deserializeJsonStream<T>(from: someReader)`), and unbounded data moves
@@ -7624,8 +7629,9 @@ Nothing is a runtime type registry: a type that did not opt in gets nothing.
     the wire names nothing the program holds. KBIN's positional form carries every field, so its merge writes <!-- test: ser_merge_kbin -->
     every field — in place, all or nothing.
 
-  A `…Stream` encoder CONSUMES its sink (kama refuses a move out of a field, so it cannot hand it back); to
-  keep writing to the same sink, construct the serializer yourself and call `encodeValue` on it. A
+  A `…Stream` encoder hands its sink back: `Result<W, Unserialized<W>>`, the sink in the `Ok` once the value is <!-- test: io_into_inner -->
+  written and in the error beside why when it is not, so one connection carries many messages (KR-261). To write
+  several values with one serializer, construct it, call `encodeValue`, and `give w.intoInner()` when done. A
   `…Stream` decoder drains its reader fully before parsing (Go's buffer-a-value model) — nothing seeks, so
   the streaming form is a convenience, not laziness.
 

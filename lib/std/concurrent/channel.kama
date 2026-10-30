@@ -115,8 +115,8 @@ type resource Waker implements Sendable, Copyable<This>(bare: give) {
 
 // A `send` the channel could not take: every receiver is gone, so nothing was enqueued, and the item comes BACK
 // intact in the `Err` — `match (give e) { case Item(item: x): … }` — rather than being destroyed: an ownership
-// language returns the value on failure (Rust's `mpsc::SendError<T>`). One variant, because a record cannot hand
-// its field back (kama refuses `give this.field`); `CapacityFull<T>` has the same shape for the same reason.
+// language returns the value on failure (Rust's `mpsc::SendError<T>`). One variant: an error that carries a value is
+// an enum, so `match` takes it apart; `CapacityFull<T>`, `Unfinished<T>` and `Unserialized<W>` have the same shape.
 // `send` returns `Result<Unit, Undelivered<T>>`, kama's one fallibility convention, so a `send` whose outcome is
 // thrown away is refused: `_ = tx.send(item: …);` says it is meant.
 type enum Undelivered<T> implements Error {

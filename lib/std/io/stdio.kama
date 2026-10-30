@@ -9,7 +9,7 @@ export { StdIn, StdOut, StdErr, stdin, stdout, stderr };
 // because they look like duplicates. The floor's print family is always available, needs no import,
 // survives `--no-std`, and writes immediately — it is for diagnostics that must work when nothing else
 // does. These handles are ordinary `Reader`/`Writer` values, so they COMPOSE: `pump(from: file, to:
-// stdout())`, `BufWriter.make(inner: stdout())`, `encodeTo(v, into: stdout())`, a function that takes a
+// stdout())`, `BufWriter.make(inner: stdout())`, `serializeJsonStream(v: cfg, to: stdout())`, a function that takes a
 // `Writer` and does not care whether it is a socket, a file or the terminal. Use print to say something;
 // use these to plumb something.
 //

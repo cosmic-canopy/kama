@@ -77,6 +77,9 @@ type resource KbinPositionalSerializer<W: Writer> implements Serializer {
 
     public const fn const ref W innerRef() { return this.sink; }
     public fn ref W innerRefMut() { return this.sink; }
+    // The sink back when the serializer is done: `give w.intoInner()` (KR-261). `innerRefMut` lends it while the
+    // serializer is still in use; this ends the serializer.
+    public give fn W intoInner() { return give this.sink; }
 
     // Stream a `Serializable` value's POS into this writer's owned sink, then flush — the streaming twin of
     // `serializeKbinPositionalBuffer`, without materializing the whole buffer. Mirrors BinaryWriter.encodeValue.
@@ -314,7 +317,7 @@ fn Result<DynamicArray<uint8>, Owned<Error>> serializeKbinPositionalBuffer(Seria
     Serializer s = w;
     Result<Unit, Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-    return Result::Ok(value: w.innerRefMut().takeBytes());
+    return Result::Ok(value: (give w.intoInner()).takeBytes());
 }
 
 // Decode a POS byte buffer into a `Deserializable` type. Name the target with turbofish:
@@ -332,7 +335,7 @@ fn Result<T, Owned<Error>> deserializeKbinPositionalStream<T: Deserializable<T>>
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: sw.takeBytes());
+    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give sw.takeBytes());
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -353,7 +356,7 @@ fn Result<Unit, Owned<Error>> mergeKbinPositionalStream<T: MergeDeserializable<T
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: sw.takeBytes());
+    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give sw.takeBytes());
     return into.mergeFrom(r: r);
 }
 
@@ -361,10 +364,16 @@ fn Result<Unit, Owned<Error>> mergeKbinPositionalStream<T: MergeDeserializable<T
 // materializing the whole encoding first. The streaming twin of `serializeKbinPositionalBuffer`, and the write-side peer of
 // `deserializeKbinPositionalStream`.
 //
-// The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
-// When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
-// the sink through `innerRefMut()`.
-fn Result<Unit, Owned<Error>> serializeKbinPositionalStream<W: Writer>(Serializable v, W to) {
+// The sink comes back when the value is written — `Ok(sink)` — and with the error when it is not (`Unserialized`), so
+// one connection carries many messages (JSON-RPC, line-delimited JSON) with no copy through memory:
+// `match (serializeKbinPositionalStream(v: m, to: give sock)) { case Ok(value: s): { sock = give s; } case Err(error: e): { … } };` (KR-261).
+// To write several values with one serializer, build it, call `encodeValue`, and `intoInner` when done.
+fn Result<W, Unserialized<W>> serializeKbinPositionalStream<W: Writer>(Serializable v, W to) {
     KbinPositionalSerializer<W> w = KbinPositionalSerializer::<W>.make(sink: give to);
-    return w.encodeValue(v: v);
+    Result<Unit, Owned<Error>> r = w.encodeValue(v: v);
+    W sink = give w.intoInner();
+    return match (give r) {
+        case Ok(value: _): Result::Ok(value: give sink);
+        case Err(error: e): Result::Err(error: Unserialized::Failed(sink: give sink, error: give e));
+    };
 }

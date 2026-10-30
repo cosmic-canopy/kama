@@ -24,7 +24,7 @@ fn string makePayload(int32 n) {
     while (i <= n) { data.add(item: cast<uint8>(i)); i = i + 1; }
     Result<Unit, IoError> wr = writeAll(w: w, bytes: data.view());
     match (wr) { case Err(error: e): { panic(msg: "writeAll failed"); } case Ok(value: _): {} };
-    return w.finish();
+    return give w.finish();
 }
 
 // Read a Reader fully via a fixed 8-byte buffer (forces multiple reads), summing every byte.

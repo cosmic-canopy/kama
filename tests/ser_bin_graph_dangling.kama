@@ -40,7 +40,7 @@ fn uint8 main() {
     w.endObject();
     w.endArray();
     w.endObject();
-    DynamicArray<uint8> bytes = w.innerRefMut().takeBytes();
+    DynamicArray<uint8> bytes = (give w.intoInner()).takeBytes();
 
     Result<Shared<Pair>, Owned<Error>> res = deserializeKbinNamedBuffer::<Shared<Pair>>(src: give bytes);
     match (res) {

@@ -6,15 +6,17 @@
 // agrees); the sticky-error `Serializer`/`Deserializer` token layer sits ABOVE this and latches these
 // Results. Unbounded data is first-class: read/write loop over a FIXED buffer → O(1) memory in the payload.
 
-import { IoError, IoErrorKind, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::collections::ConstView,
+import { IoError, IoErrorKind, Unfinished, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::collections::ConstView,
          std::encoding::utf8::validate };
 
-export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, Lines, writeAll, pump, readAll };
+export { Writer, Reader, StringWriter, SliceReader, BufWriter, BufReader, BufParts, Lines, writeAll, pump, readAll };
 
 // The runtime string constructor. An `extern` is a reference to a C symbol, not a module symbol — it keeps
 // its literal C spelling, so it is never `export`ed or `import`ed and a file that names one declares it
 // (SPEC; the file rung). Every declaration of it in a program must agree, which is checked.
 extern fn string kama_string_from_raw(UnsafeConstPtr<uint8> src, isize start, isize len);
+// ...and its twin that ADOPTS a block rather than copying it: `StringWriter.finish` hands its buffer over (KR-261).
+extern fn string kama_string_adopt(UnsafePtr<uint8> data, isize len, isize cap);
 
 // A byte SINK. `write` is the partial-write PRIMITIVE: it writes UP TO bytes.length() bytes and returns the
 // count actually taken (may be `< length` when the sink is full/slow — this is how backpressure is expressed;
@@ -85,7 +87,7 @@ fn Result<string, IoError> readAll(Reader r) {
     borrow sw.view() as v {
         if (!validate(bytes: v)) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidData)); }
     }
-    return Result::Ok(value: sw.finish());
+    return Result::Ok(value: give sw.finish());
 }
 
 // The in-memory `Writer`: accumulates bytes in a growable buffer and hands them back as an owned UTF-8
@@ -115,7 +117,8 @@ type resource StringWriter implements Writer, Viewable<ConstView<uint8>>, Sendab
     // to validate before materializing; a caller inspecting its own output wants it too.
     public unsafe const fn ConstView<uint8> view() { return this.buf.view(); }
 
-    // Materialize the accumulated bytes as an owned string (the writer is typically dropped after).
+    // The accumulated bytes as an owned string, CONSUMING the writer (KR-261): the string adopts the buffer, so
+    // nothing is copied — `give sw.finish()`. Every `serialize…Buffer -> string` ends here.
     //
     // ⚠️ The bytes must BE text. That is not a new rule — `takeBytes()` below already exists as the
     // byte-oriented twin "for a binary sink whose output is not valid UTF-8 … so it must NOT go through
@@ -127,26 +130,22 @@ type resource StringWriter implements Writer, Viewable<ConstView<uint8>>, Sendab
     // meant `takeBytes()` — and kama traps on a contract violation (`substring` on a split character) the
     // same way it errors on bad INPUT (`readAll`, `readLine`, `parse`). Being release-stripped also keeps
     // the serialize-to-string path exactly as fast as it was, which the performance invariant requires.
-    public unsafe fn string finish() {
-        if (this.buf.length() == 0) { return ""; }
+    public unsafe give fn string finish() {
+        isize n = this.buf.length();
+        if (n == 0) { return ""; }
         borrow this.buf.view() as v {
             debugAssert(cond: validate(bytes: v),
                         msg: "StringWriter.finish: the accumulated bytes are not valid UTF-8 — use takeBytes() for a binary sink");
         }
-        return kama_string_from_raw(src: addr(of: this.buf[0]), start: 0, len: this.buf.length());
+        this.buf.add(item: 0ui8);   // the NUL a heap string keeps after its bytes, inside the block it adopts
+        isize cap = this.buf.capacity();
+        return kama_string_adopt(data: this.buf.releaseData(), len: n, cap: cap);
     }
 
-    // Move the accumulated bytes out as a raw `DynamicArray<uint8>`, leaving the writer empty. The byte-oriented
-    // twin of `finish()` — for a binary sink whose output is not valid UTF-8 (embedded nulls, arbitrary bytes),
-    // so it must NOT go through `string`. Used by the binary serializers' `serializeKbin…Buffer -> DynamicArray<uint8>`.
-    public fn DynamicArray<uint8> takeBytes() {
-        DynamicArray<uint8> taken = DynamicArray.empty();
-        isize n = this.buf.length();
-        isize i = 0;
-        while (i < n) { taken.add(item: this.buf[i]); i = i + 1; }
-        this.buf.clear();
-        return give taken;
-    }
+    // The accumulated bytes as a raw `DynamicArray<uint8>`, CONSUMING the writer (KR-261): the buffer itself, moved,
+    // not a copy. The byte-oriented twin of `finish()` — for a binary sink whose output is not valid UTF-8 (embedded
+    // nulls, arbitrary bytes), so it must NOT go through `string`. Every `serializeKbin…Buffer` ends here.
+    public give fn DynamicArray<uint8> takeBytes() { return give this.buf; }
 }
 
 // The in-memory `Reader`: reads out of an owned source held whole — a `string`'s UTF-8 bytes (`make`, the source behind
@@ -238,6 +237,19 @@ type resource BufWriter<W: Writer> implements Writer {
         return this.inner.flush();
     }
 
+    // Flush, then hand the sink back: how a buffered stream COMPLETES (KR-261). A `BufWriter` dropped without it
+    // abandons what it buffered — nothing is written and no error is raised, since a drop has no way to report one —
+    // so a drop abandons and this finishes. On a failure the writer comes back WHOLE, buffer included, in
+    // `Unfinished`, so a caller can finish again after a `WouldBlock` (Rust's `BufWriter::into_inner`).
+    public give fn Result<W, Unfinished<BufWriter<W>>> intoInner() {
+        Result<Unit, IoError> fr = this.flush();
+        match (fr) {
+            case Err(error: e): { return Result::Err(error: Unfinished::Pending(adapter: give this, error: e)); }
+            case Ok(value: _): {}
+        };
+        return Result::Ok(value: give this.inner);
+    }
+
     // Everything buffered, to the sink. On an error, `sent` keeps what the sink took.
     fn Result<Unit, IoError> drain() {
         isize total = this.buf.length();
@@ -256,6 +268,11 @@ type resource BufWriter<W: Writer> implements Writer {
         return Result::Ok(value: Unit::Unit);
     }
 }
+
+// What a `BufReader` hands back when it is done (KR-261): its source, and the bytes it read ahead that no caller took.
+// An HTTP server upgrading a connection hands both on — the request's tail is the first WebSocket frame — so they are
+// kept, where Rust's `into_inner` drops them ("any leftover data in the internal buffer is lost").
+type enum BufParts<R> { Parts(R inner, DynamicArray<uint8> unread); }
 
 // A buffering `Reader` wrapper: reads the inner source in fixed chunks and serves callers out of the buffer,
 // so many small reads cost few downstream reads. Owns its inner `R` by value (same reason as BufWriter).
@@ -289,6 +306,15 @@ type resource BufReader<R: Reader> implements Reader {
         while (i < k) { into[i] = this.buf[this.pos + i]; i = i + 1; }
         this.pos = this.pos + k;
         return Result::Ok(value: k);
+    }
+
+    // The source back, with the bytes read ahead and not yet taken: `match (give r.intoParts()) { case Parts(inner: s,
+    // unread: rest): … }` — the source continues where `rest` ends.
+    public give fn BufParts<R> intoParts() {
+        DynamicArray<uint8> rest = DynamicArray.empty();
+        isize i = this.pos;
+        while (i < this.fill) { rest.add(item: this.buf[i]); i = i + 1; }
+        return BufParts::Parts(inner: give this.inner, unread: give rest);
     }
 
     // One LINE, with its terminator removed. `Ok(None)` is end of input; a final line with no terminator
@@ -406,4 +432,7 @@ type resource Lines<R: Reader> implements Iterator<string> {
 
     // The error that ended the iteration, if one did. `None` after a clean end of input.
     public const fn Optional<IoError> error() { return copy this.failure; }
+
+    // The reader's parts back — the source and what it read ahead (KR-261), as `BufReader.intoParts` hands them.
+    public give fn BufParts<R> intoParts() { return give this.inner.intoParts(); }
 }

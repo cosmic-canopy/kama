@@ -78,9 +78,12 @@ type resource KbinNamedSerializer<W: Writer> implements Serializer {
         this.code = SerError::NotRepresentable;
     }
 
-    // Borrow the underlying sink (e.g. so `serializeKbinNamedBuffer` can `takeBytes()` its concrete StringWriter). W-agnostic.
+    // Lend the underlying sink while the serializer is in use. W-agnostic.
     public const fn const ref W innerRef() { return this.sink; }   // read-only; `innerRefMut` to drive the sink
     public fn ref W innerRefMut() { return this.sink; }
+    // The sink back when the serializer is done: `give w.intoInner()` (KR-261). `innerRefMut` lends it while the
+    // serializer is still in use; this ends the serializer.
+    public give fn W intoInner() { return give this.sink; }
 
     // Stream a `Serializable` value's KBIN into this writer's owned sink, then flush — the streaming twin of the
     // `serializeKbinNamedBuffer` sugar (a generic free fn can't instantiate `KbinNamedSerializer<W>`, so this is an instance method the
@@ -365,7 +368,7 @@ fn Result<DynamicArray<uint8>, Owned<Error>> serializeKbinNamedBuffer(Serializab
     Serializer s = w;
     Result<Unit, Owned<Error>> r = v.serialize(w: ref s);
     match (give r) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
-    return Result::Ok(value: w.innerRefMut().takeBytes());
+    return Result::Ok(value: (give w.intoInner()).takeBytes());
 }
 
 // Deserializable a KBIN byte buffer into a `Deserializable` type. Name the target with turbofish:
@@ -384,7 +387,7 @@ fn Result<T, Owned<Error>> deserializeKbinNamedStream<T: Deserializable<T>>(Read
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: sw.takeBytes());
+    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes());
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -404,7 +407,7 @@ fn Result<Unit, Owned<Error>> mergeKbinNamedStream<T: MergeDeserializable<T>>(Re
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: sw.takeBytes());
+    KbinNamedDeserializer r = KbinNamedDeserializer.make(src: give sw.takeBytes());
     return into.mergeFrom(r: r);
 }
 
@@ -412,10 +415,16 @@ fn Result<Unit, Owned<Error>> mergeKbinNamedStream<T: MergeDeserializable<T>>(Re
 // materializing the whole encoding first. The streaming twin of `serializeKbinNamedBuffer`, and the write-side peer of
 // `deserializeKbinNamedStream`.
 //
-// The sink is CONSUMED: kama refuses a move out of a field, so there is no way to hand it back afterwards.
-// When you need to keep writing to it, build the serializer yourself and call `encodeValue` on it, then reach
-// the sink through `innerRefMut()`.
-fn Result<Unit, Owned<Error>> serializeKbinNamedStream<W: Writer>(Serializable v, W to) {
+// The sink comes back when the value is written — `Ok(sink)` — and with the error when it is not (`Unserialized`), so
+// one connection carries many messages (JSON-RPC, line-delimited JSON) with no copy through memory:
+// `match (serializeKbinNamedStream(v: m, to: give sock)) { case Ok(value: s): { sock = give s; } case Err(error: e): { … } };` (KR-261).
+// To write several values with one serializer, build it, call `encodeValue`, and `intoInner` when done.
+fn Result<W, Unserialized<W>> serializeKbinNamedStream<W: Writer>(Serializable v, W to) {
     KbinNamedSerializer<W> w = KbinNamedSerializer::<W>.make(sink: give to);
-    return w.encodeValue(v: v);
+    Result<Unit, Owned<Error>> r = w.encodeValue(v: v);
+    W sink = give w.intoInner();
+    return match (give r) {
+        case Ok(value: _): Result::Ok(value: give sink);
+        case Err(error: e): Result::Err(error: Unserialized::Failed(sink: give sink, error: give e));
+    };
 }

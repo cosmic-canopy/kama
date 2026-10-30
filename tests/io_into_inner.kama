@@ -1,0 +1,95 @@
+// An adapter hands back what it wraps (KR-261): `BufWriter.intoInner` flushes and returns the sink, and on a failure
+// returns ITSELF, buffer included, in `Unfinished` so a caller can finish again; `BufReader`/`Lines.intoParts` return
+// the source with the bytes read ahead; `StringWriter.finish`/`takeBytes` move the buffer; and a `serialize…Stream`
+// returns the sink, so one sink carries many messages, and hands it back with the error when a value cannot be written.
+import { std::io::StringWriter, std::io::SliceReader, std::io::BufWriter, std::io::BufReader, std::io::BufParts,
+         std::io::Lines, std::io::Writer, std::io::Reader, std::io::IoError, std::io::IoErrorKind, std::io::Unfinished,
+         std::io::writeAll, std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView,
+         std::memory::Owned,
+         std::serialization::text::json::serializeJsonStream,
+         std::serialization::binary::kbin::serializeKbinNamedStream };
+
+// Takes nothing on its first write (a `BufWriter` reads that as WouldBlock), then everything.
+type resource Flaky implements Writer {
+    int32 calls; isize got;
+    public ctor make() { this.calls = 0; this.got = 0; }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        this.calls = this.calls + 1;
+        if (this.calls == 1) { return Result::Ok(value: 0); }
+        this.got = this.got + bytes.length();
+        return Result::Ok(value: bytes.length());
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public const fn isize total() { return this.got; }
+}
+
+fn bool wroteAll(Result<Unit, IoError> r) { return match (r) { case Ok(value: _): true; case Err(error: e): false; }; }
+
+unsafe fn int32 run() {
+    // 1. a BufWriter finishes into its sink
+    BufWriter<StringWriter> bw = BufWriter::<StringWriter>.make(inner: StringWriter.make());
+    if (!wroteAll(r: writeAll(w: bw, bytes: "hello".bytes()))) { return 1; }
+    Result<StringWriter, Unfinished<BufWriter<StringWriter>>> r1 = give bw.intoInner();
+    StringWriter sw = match (give r1) { case Ok(value: s): { := give s; } case Err(error: e): { return 2; } };
+    string text = give sw.finish();
+    if (text != "hello") { return 3; }
+
+    // 2. a failed finish comes back whole and finishes again
+    BufWriter<Flaky> fb = BufWriter::<Flaky>.make(inner: Flaky.make());
+    if (!wroteAll(r: writeAll(w: fb, bytes: "abcdef".bytes()))) { return 4; }
+    Result<Flaky, Unfinished<BufWriter<Flaky>>> r2 = give fb.intoInner();
+    BufWriter<Flaky> again = match (give r2) {
+        case Ok(value: f): { return 5; }
+        case Err(error: u): { := match (give u) { case Pending(adapter: a, error: e): {
+            if (e.kind() != IoErrorKind::WouldBlock) { return 6; }
+            := give a; } }; }
+    };
+    Result<Flaky, Unfinished<BufWriter<Flaky>>> r3 = give again.intoInner();
+    Flaky fl = match (give r3) { case Ok(value: f): { := give f; } case Err(error: e): { return 7; } };
+    if (fl.total() != 6) { return 8; }
+
+    // 3. a BufReader hands back its source and the bytes it read ahead
+    BufReader<SliceReader> br = BufReader::<SliceReader>.make(inner: SliceReader.make(src: "abcdefgh"));
+    FixedArray<uint8> three = FixedArray.make(size: 3);
+    Result<isize, IoError> rd = br.read(into: three.viewMut());
+    BufParts<SliceReader> parts = give br.intoParts();
+    isize unread = match (give parts) { case Parts(inner: s, unread: rest): rest.length(); };
+    if (unread != 5) { return 9; }
+
+    // 4. Lines hands back its reader's parts
+    Lines<SliceReader> ls = Lines::<SliceReader>.make(src: SliceReader.make(src: "a\nbc\nd"));
+    Optional<string> first = ls.next();
+    BufParts<SliceReader> lp = give ls.intoParts();
+    isize left = match (give lp) { case Parts(inner: s, unread: rest): rest.length(); };
+    if (left != 4) { return 10; }
+
+    // 5. takeBytes moves the buffer
+    StringWriter tw = StringWriter.make();
+    if (!wroteAll(r: writeAll(w: tw, bytes: "xyz".bytes()))) { return 11; }
+    DynamicArray<uint8> bytes = give tw.takeBytes();
+    if (bytes.length() != 3 || bytes[2] != 122ui8) { return 12; }
+
+    // 6. one sink, many messages: the stream functions hand it back
+    StringWriter many = StringWriter.make();
+    int32 k = 1;
+    while (k <= 3) {
+        Result<StringWriter, Unserialized<StringWriter>> sr = serializeJsonStream(v: k, to: give many);
+        many = match (give sr) { case Ok(value: s): { := give s; } case Err(error: e): { return 13; } };
+        k = k + 1;
+    }
+    Result<StringWriter, Unserialized<StringWriter>> kr = serializeKbinNamedStream(v: 4, to: give many);
+    many = match (give kr) { case Ok(value: s): { := give s; } case Err(error: e): { return 14; } };
+    if (many.length() <= 3) { return 15; }
+
+    // 7. a value the format cannot write: the sink comes back with the error
+    float64 nan = 0.0 / 0.0;
+    StringWriter keep = StringWriter.make();
+    Result<StringWriter, Unserialized<StringWriter>> nr = serializeJsonStream(v: nan, to: give keep);
+    StringWriter back = match (give nr) {
+        case Ok(value: s): { return 16; }
+        case Err(error: u): { := match (give u) { case Failed(sink: s, error: e): { := give s; } }; }
+    };
+    if (back.length() != 0) { return 17; }
+    return 42;
+}
+fn uint8 main() { return cast<uint8>(run()); }

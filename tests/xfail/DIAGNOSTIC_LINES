@@ -145,6 +145,7 @@ brace_if_bare	brace_if_bare.kama:6:8
 brace_if_empty_semi	brace_if_empty_semi.kama:6:14
 brace_while_bare	brace_while_bare.kama:5:8
 break_no_loop	break_no_loop.kama:5:17
+bufwriter_use_after_into_inner	bufwriter_use_after_into_inner.kama:8:30
 bytes_view_blittable_numbers	bytes_view_blittable_numbers.kama:5:0 bytes_view_blittable_numbers.kama:7:0 bytes_view_blittable_numbers.kama:9:0
 bytes_view_clash	bytes_view_clash.kama:3:0
 bytes_view_instance	bytes_view_instance.kama:9:14

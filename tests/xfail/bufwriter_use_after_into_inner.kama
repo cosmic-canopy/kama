@@ -1,0 +1,10 @@
+// `intoInner` consumes the writer (KR-261): it flushes and hands the sink back, or hands the writer back in
+// `Unfinished` — either way the local is gone, and a write through it after is the use-after-move error
+// (tests/io_into_inner is the accepted shape).
+import { std::io::StringWriter, std::io::BufWriter, std::io::Unfinished, std::io::IoError };
+fn uint8 main() {
+    BufWriter<StringWriter> bw = BufWriter::<StringWriter>.make(inner: StringWriter.make());
+    Result<StringWriter, Unfinished<BufWriter<StringWriter>>> r = give bw.intoInner();
+    Result<Unit, IoError> f = bw.flush();   // -> REJECT
+    return 0;
+}
