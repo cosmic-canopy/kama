@@ -1,0 +1,37 @@
+// A view's constructor called in a `return`, handed a view DERIVED from `this` (`this.buf.view().slice(…)`), roots at
+// `this` as the derive does on its own. The by-value view parameter was judged by borrowArgRoot, which stops at the
+// first call, so the slice rooted nowhere and the return was refused as "a view over a local"; the plain
+// `this.buf.view()` and `this.part()` were accepted. Now the argument roots wherever the view it is roots, as the
+// view-depth rule already judged it. A derive off a local is still refused (xfail/view_ctor_derived_local_arg).
+import { std::collections::FixedArray, std::collections::ConstView };
+
+type view Cursor {
+    ConstView<uint8> rest;
+    public ctor over(ConstView<uint8> input) { this.rest = input; }
+    public const fn isize left() { return this.rest.length(); }
+}
+
+@viewable type contract Parts for resource { const fn ConstView<uint8> part(); }
+@viewable type contract Cursors for resource {
+    const fn Cursor whole(); const fn Cursor sliced(); const fn Cursor viaPart(); const fn Cursor viaPartSliced();
+}
+
+type resource Holder implements Parts, Cursors {
+    FixedArray<uint8> buf;
+    public ctor make() { this.buf = FixedArray.make(size: 8); }
+    public const fn ConstView<uint8> part() { return this.buf.view().slice(from: 2, count: 3); }
+    public const fn Cursor whole() { return Cursor.over(input: this.buf.view()); }
+    public const fn Cursor sliced() { return Cursor.over(input: this.buf.view().slice(from: 2, count: 3)); }
+    public const fn Cursor viaPart() { return Cursor.over(input: this.part()); }
+    public const fn Cursor viaPartSliced() { return Cursor.over(input: this.part().slice(from: 0, count: 2)); }
+}
+
+fn uint8 main() {
+    Holder h = Holder.make();
+    isize n = 0;
+    borrow h.whole() as c { n = n + c.left(); }          // 8
+    borrow h.sliced() as c { n = n + c.left(); }         // 3
+    borrow h.viaPart() as c { n = n + c.left(); }        // 3
+    borrow h.viaPartSliced() as c { n = n + c.left(); }  // 2
+    return n == 16 ? 42 : cast<uint8>(n);
+}

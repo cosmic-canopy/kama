@@ -1529,6 +1529,7 @@ view_contract_ctor_escape	view_contract_ctor_escape.kama:17:0 view_contract_ctor
 view_contract_ctor_infallible	view_contract_ctor_infallible.kama:14:0 view_contract_ctor_infallible.kama:17:4 view_contract_ctor_infallible.kama:18:0 view_contract_ctor_infallible.kama:18:4
 view_ctor_arg_order	view_ctor_arg_order.kama:25:8
 view_ctor_arg_order_second	view_ctor_arg_order_second.kama:25:8
+view_ctor_derived_local_arg	view_ctor_derived_local_arg.kama:14:8
 view_ctor_forge	view_ctor_forge.kama:15:11
 view_ctor_over_byval_param	view_ctor_over_byval_param.kama:19:0
 view_ctor_over_local	view_ctor_over_local.kama:10:0

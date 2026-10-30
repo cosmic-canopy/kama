@@ -28864,7 +28864,10 @@ std::string CEmitter::viewCtorBorrowRoot(IdentifierNode* typeId, const std::stri
         if (!p->identifier || !p->identifier->value) return "";
         auto it = byName.find(*p->identifier->value);
         if (it == byName.end()) return "";                  // a borrow argument we cannot see -> reject
-        const std::string r = borrowArgRoot(it->second);
+        // A by-value VIEW parameter is re-held, so it roots where the view handed to it roots, a derive included
+        // (`this.buf.view().slice(…)` roots at `this`): viewReturnRoot follows the chain, borrowArgRoot stops at the
+        // first call. The depth twin (viewDepthOf's ctor arm) already judged such a parameter by what it carries.
+        const std::string r = namesViewType(p->type) ? viewReturnRoot(it->second) : borrowArgRoot(it->second);
         if (!isSafeViewRoot(r)) return r;                   // name the one that actually dangles
         if (firstBorrowed.empty()) firstBorrowed = r;
     }

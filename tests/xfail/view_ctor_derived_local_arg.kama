@@ -1,0 +1,17 @@
+// A view ctor in a `return` handed a derive off a LOCAL still dangles, chain or not: the argument roots at the local
+// (tests/view_ctor_derived_arg is the `this` case).
+import { std::collections::FixedArray, std::collections::ConstView };
+type view Cursor {
+    ConstView<uint8> rest;
+    public ctor over(ConstView<uint8> input) { this.rest = input; }
+}
+@viewable type contract Cursors for resource { const fn Cursor cursor(); }
+type resource Holder implements Cursors {
+    FixedArray<uint8> buf;
+    public ctor make() { this.buf = FixedArray.make(size: 8); }
+    public const fn Cursor cursor() {
+        FixedArray<uint8> tmp = FixedArray.make(size: 4);
+        return Cursor.over(input: tmp.view().slice(from: 0, count: 2));   // -> REJECT
+    }
+}
+fn uint8 main() { Holder h = Holder.make(); return 0; }
