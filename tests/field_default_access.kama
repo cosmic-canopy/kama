@@ -1,0 +1,25 @@
+// A field default runs in its own type's constructor (SPEC *Construction*), so it has that type's access: its own
+// private statics, and whatever a `friend` grant gives the type. It was checked as if it ran nowhere: the emitter
+// clears the enclosing class so the body it is made inside cannot answer for its names, and the access check read
+// that cleared class as "no accessor", so `Token t = Token.make(n: 7);` was refused although the grant names Holder,
+// and the same call moved into Holder's ctor was accepted. A default of a type with no grant is still refused
+// (xfail/field_default_private_ungranted).
+type value Token {
+    int32 n = 0;
+    friend Holder[make];
+    ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }
+}
+
+type value Holder {
+    static fn int32 seed() { return 30; }
+    Token t = Token.make(n: 12);   // a granted private ctor
+    int32 start = Holder::seed();   // the type's own private static
+    public ctor make() { }
+    public const fn int32 value() { return this.t.value() + this.start; }
+}
+
+fn uint8 main() {
+    Holder h = Holder.make();
+    return cast<uint8>(h.value());
+}

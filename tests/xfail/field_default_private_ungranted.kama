@@ -1,0 +1,10 @@
+// A field default has its own type's access and no more: `Other` holds no grant from Token, so its default may not
+// call Token's private ctor, exactly as Other's own ctor may not (tests/field_default_access is the granted case).
+type value Token {
+    int32 n = 0;
+    friend Holder[make];
+    ctor make(int32 n) { this.n = n; }
+}
+type value Holder { Token t = Token.make(n: 7); public ctor make() { } }
+type value Other { Token t = Token.make(n: 1); public ctor make() { } }   // -> REJECT
+fn uint8 main() { Holder h = Holder.make(); Other o = Other.make(); return 0; }

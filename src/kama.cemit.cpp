@@ -31441,6 +31441,11 @@ bool CEmitter::canAccess(ClassInfo* owner, Visibility vis, const std::string& me
 // whether to report (a compile-time fold, KR-93) and says the same sentence when it does.
 bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string& memberIn)
 {
+    // The accessing type. A field default is emitted with `_currentClass` cleared, so the body it is made inside
+    // cannot answer for its names; it runs in its OWN type's constructor (SPEC *Construction*), so that type is
+    // what reaches its own privates and what a `friend` grant names.
+    ClassInfo* cur = _currentClass;
+    if (!cur && !_fieldDefaultOf.empty()) { auto fd = _classes.find(_fieldDefaultOf); if (fd != _classes.end()) cur = &fd->second; }
     if (vis == Visibility::Public || !owner) return true;
     // Callers disagree about what `member` is, and a grant is matched BY MEMBER NAME, so normalize once
     // here rather than at each site. The operator paths pass a C name (`Vec2__op_add`) where the unary one
@@ -31452,9 +31457,9 @@ bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string
     if (member.size() > pfx.size() && member.compare(0, pfx.size(), pfx) == 0)
         member = member.substr(pfx.size());
     if (vis == Visibility::Protected) {                 // owner or any subclass of owner
-        for (ClassInfo* c = _currentClass; c; c = c->base) if (c == owner) return true;
+        for (ClassInfo* c = cur; c; c = c->base) if (c == owner) return true;
     } else {                                            // Private — owner itself, or a friend grant
-        if (_currentClass == owner) return true;
+        if (cur == owner) return true;
         // an owner-granted `friend` may touch the named members. The accessing
         // context is the current class (any of its methods) or the current function/method.
         // A grant naming a GENERIC type reaches the CORRESPONDING instance, and only that one: inside
@@ -31478,9 +31483,9 @@ bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string
         // which instance it admits is judged when each real instance is emitted, against its own arguments, and the
         // probe's are nobody's. The function half is fnTemplateCorresponds'.
         auto probeInstanceOf = [&](const std::string& tmpl) {
-            if (!_probingTemplate || !_currentClass || !_currentClass->isGenericInst) return false;
-            auto of = _genericTypeInstOf.find(_currentClass->name);
-            auto gi = _genericTypeInsts.find(_currentClass->name);
+            if (!_probingTemplate || !cur || !cur->isGenericInst) return false;
+            auto of = _genericTypeInstOf.find(cur->name);
+            auto gi = _genericTypeInsts.find(cur->name);
             if (of == _genericTypeInstOf.end() || of->second != tmpl || gi == _genericTypeInsts.end()) return false;
             for (auto& a : gi->second.typeArgs)
                 if (a && a->value && _classes.count(cType(a)) && _classes[cType(a)].isOpaqueParam) return true;
@@ -31509,21 +31514,21 @@ bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string
                     if (!ownerConcrete || (size_t)e.first >= ownerConcrete->size()) { ok = false; break; }
                     key += "_" + mangleElem((*ownerConcrete)[e.first]);
                 }
-                if (ok && _currentClass && _currentClass->name == key) return true;
+                if (ok && cur && cur->name == key) return true;
                 continue;
             }
             if (g.accessorIsTemplate) {
                 if (ownerArgs.empty()) {
-                    if (!_currentClass) continue;
-                    auto cf = _genericTypeInstOf.find(_currentClass->name);
+                    if (!cur) continue;
+                    auto cf = _genericTypeInstOf.find(cur->name);
                     if (cf == _genericTypeInstOf.end() || cf->second != g.accessor) continue;
-                    acc = _currentClass->name;
+                    acc = cur->name;
                 } else {
                     acc += ownerArgs;
                 }
                 if (!g.accessorMethod.empty()) acc += "__" + g.accessorMethod;   // `Type::method` form
             }
-            if (g.accessorIsClass)          { if (_currentClass && _currentClass->name == acc) return true; }
+            if (g.accessorIsClass)          { if (cur && cur->name == acc) return true; }
             else if (g.accessorIsFnTemplate) { if (fnTemplateCorresponds(g.accessor, ownerArgs)) return true; }
             else                            { if (!_currentFunc.empty() && _currentFunc == acc) return true; }
         }
