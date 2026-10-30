@@ -321,7 +321,10 @@ fn Result<DynamicArray<uint8>, Owned<Error>> serializeKbinPositionalBuffer(Seria
 // `binary::deserializeKbinPositionalBuffer::<Point>(src)`. Both ends must be built from the same declarations.
 fn Result<T, Owned<Error>> deserializeKbinPositionalBuffer<T: Deserializable<T>>(DynamicArray<uint8> src) {
     KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give src);
-    return T.deserialize(r: r);
+    Result<T, Owned<Error>> got = T.deserialize(r: r);
+    // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    return give got;
 }
 
 // Decode from any `Reader` (a file, socket, …) — the streaming twin of `deserializeKbinPositionalBuffer`.
@@ -330,7 +333,10 @@ fn Result<T, Owned<Error>> deserializeKbinPositionalStream<T: Deserializable<T>>
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
     KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give sw.takeBytes());
-    return T.deserialize(r: r);
+    Result<T, Owned<Error>> got = T.deserialize(r: r);
+    // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    return give got;
 }
 
 // MERGE KBIN bytes into a value the program already holds (KR-125) — the `Positional` twin of `mergeJsonBuffer`: a field

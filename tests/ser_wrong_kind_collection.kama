@@ -1,0 +1,52 @@
+// A collection read from a value of another kind is an `Err`, never an empty `Ok`. Each std collection's
+// `deserialize` began with `beginArray`/`beginObject` and looped on `moreElems`, which a failed reader answers
+// false, so `deserializeJsonBuffer::<DynamicArray<int32>>(src: "5")` returned `Ok` with no elements: malformed input
+// decoded as a plausible value, in every back end. A derived record already asked `failed()` at its boundary; the
+// collections now ask after their begin, and the format entry points ask once more after `T.deserialize`, so a
+// hand-written `deserialize` that forgets the check cannot hand back an `Ok` from a reader that failed.
+import { std::collections::DynamicArray, std::collections::Deque, std::collections::InlineDynamicArray,
+         std::collections::Map, std::collections::Set, std::collections::OrderedMap, std::collections::OrderedSet,
+         std::collections::SortedMap, std::collections::SortedSet, std::collections::SlotMap, std::memory::Owned,
+         std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::serializeKbinNamedBuffer,
+         std::serialization::binary::kbin::deserializeKbinNamedBuffer };
+
+fn bool refused<T: Deserializable<T>>(string src) {
+    Result<T, Owned<Error>> r = deserializeJsonBuffer::<T>(src: give src);
+    return r.isErr();
+}
+
+// Forgets to ask the reader: only the entry point's own check stands between it and an `Ok`.
+type value Sloppy implements Deserializable<This> {
+    int32 n;
+    public ctor of(int32 n) { this.n = n; }
+    public ctor Result<Sloppy, Owned<Error>> deserialize(Deserializer r) {
+        r.beginArray();
+        return Result::Ok(value: Sloppy.of(n: 1));
+    }
+}
+
+fn uint8 main() {
+    if (!refused::<DynamicArray<int32>>(src: "5")) { return 1; }
+    if (!refused::<Deque<int32>>(src: "5")) { return 2; }
+    if (!refused::<InlineDynamicArray<int32>#(4)>(src: "5")) { return 3; }
+    if (!refused::<Map<string, int32>>(src: "5")) { return 4; }
+    if (!refused::<Set<int32>>(src: "5")) { return 5; }
+    if (!refused::<OrderedMap<string, int32>>(src: "5")) { return 6; }
+    if (!refused::<OrderedSet<int32>>(src: "5")) { return 7; }
+    if (!refused::<SortedMap<string, int32>>(src: "\"x\"")) { return 8; }
+    if (!refused::<SortedSet<int32>>(src: "true")) { return 9; }
+    if (!refused::<SlotMap<int32>>(src: "5")) { return 10; }
+    if (!refused::<Sloppy>(src: "{}")) { return 11; }
+    // Still read when the kind is right.
+    if (refused::<DynamicArray<int32>>(src: "[1,2]")) { return 12; }
+    if (refused::<Map<string, int32>>(src: "{\"a\":1}")) { return 13; }
+    if (refused::<Sloppy>(src: "[]")) { return 14; }
+    // The binary back end, the same way: an int32 on the wire is no list.
+    int32 five = 5;
+    Result<DynamicArray<uint8>, Owned<Error>> wire = serializeKbinNamedBuffer(v: five);
+    DynamicArray<uint8> bytes = match (give wire) { case Ok(value: b): { := give b; } case Err(error: e): { return 15; } };
+    Result<DynamicArray<int32>, Owned<Error>> back = deserializeKbinNamedBuffer::<DynamicArray<int32>>(src: give bytes);
+    if (!back.isErr()) { return 16; }
+    return 42;
+}

@@ -327,6 +327,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     public unsafe ctor Result<SlotMap<V, A>, Owned<Error>> deserialize(Deserializer r) when [V: Deserializable<V>, A: default] {
         SlotMap<V> result = SlotMap.empty();
         r.beginObject(count: 2ui64);
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
         r.beginArray();
         isize n = 0;

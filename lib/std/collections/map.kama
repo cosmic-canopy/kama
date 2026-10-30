@@ -526,6 +526,7 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
             return Result::Ok(value: give this);
         }
         r.beginArray();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         isize index = 0;   // the entry's place on the wire — a failure inside it is reported there
         while (r.moreElems()) {
             r.beginObject(count: 2);

@@ -70,6 +70,7 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     }
     public ctor Result<SortedSet<K, A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, A: default] {
         r.beginArray();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         isize index = 0;   // the element's place on the wire — a failure inside it is reported there
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);   // bind — a match needs a named enum subject

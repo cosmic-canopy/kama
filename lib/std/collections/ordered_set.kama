@@ -65,6 +65,7 @@ type resource OrderedSet<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, 
     }
     public ctor Result<OrderedSet<K,H,A>, Owned<Error>> deserialize(Deserializer r) when [K: Deserializable<K>, A: default] {
         r.beginArray();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         isize index = 0;
         while (r.moreElems()) {
             Result<K, Owned<Error>> __er = K.deserialize(r: r);

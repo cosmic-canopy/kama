@@ -257,6 +257,7 @@ type resource Deque<T, A: Allocator = GlobalAllocator> implements Copyable<This>
     }
     public ctor Result<Deque<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>, A: default] {
         r.beginArray();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         isize index = 0;   // the element's place on the wire — a failure inside it is reported there
         while (r.moreElems()) {
             Result<T, Owned<Error>> __er = T.deserialize(r: r);   // bind — a match needs a named enum subject

@@ -650,7 +650,10 @@ type resource JsonDeserializer implements Deserializer {
 // into a `Result` after checking `failed()`.
 fn Result<T, Owned<Error>> deserializeJsonBuffer<T: Deserializable<T>>(string src) {
     JsonDeserializer r = JsonDeserializer.make(src: give src);
-    return T.deserialize(r: r);   // fallibility lives inside the ctor (sticky check + boxed DeError)
+    Result<T, Owned<Error>> got = T.deserialize(r: r);
+    // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    return give got;
 }
 
 // Deserializable from any `Reader` — the streaming twin of `deserializeJsonBuffer`. Drains the reader fully into a string
@@ -663,7 +666,10 @@ fn Result<T, Owned<Error>> deserializeJsonStream<T: Deserializable<T>>(Reader fr
         case Err(error: e): { return Result::Err(error: e); }   // IoError auto-boxes into Owned<Error>
     };
     JsonDeserializer r = JsonDeserializer.make(src: give src);
-    return T.deserialize(r: r);
+    Result<T, Owned<Error>> got = T.deserialize(r: r);
+    // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
+    if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+    return give got;
 }
 
 // MERGE a JSON document into a value the program already holds (KR-125): a layered config file, a live reload, a

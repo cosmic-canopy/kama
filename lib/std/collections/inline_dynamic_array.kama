@@ -256,6 +256,7 @@ type resource InlineDynamicArray<T> comptime(int32 N) value when [T: value]
     // ...and read back. More than `N` elements is an `Err` at the first that has no place — never a truncation.
     public ctor Result<InlineDynamicArray<T>#(N), Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>] {
         r.beginArray();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         isize index = 0;
         while (r.moreElems()) {
             if (index == cast<isize>(N)) {

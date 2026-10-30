@@ -397,6 +397,7 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
             return Result::Ok(value: give this);
         }
         r.beginArray();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         isize index = 0;
         while (r.moreElems()) {
             r.beginObject(count: 2);
