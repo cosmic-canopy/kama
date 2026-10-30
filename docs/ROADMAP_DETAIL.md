@@ -619,13 +619,25 @@ Measured on `0.9.713`, two `UdpSocket.bind(host: "127.0.0.1", …)` calls on one
 sockets of the same user, and then a unicast datagram reaches one of them, so a second program can take a bound port's
 traffic. BSD semantics allow a duplicate UDP bind only for a multicast address, so macOS refuses.
 
-**What others do.** Rust's `UdpSocket::bind` sets no reuse option. Go sets `SO_REUSEADDR` (and on the BSDs
-`SO_REUSEPORT`) only in `ListenMulticastUDP`, the call for a multicast receiver. A receiver of multicast genuinely wants
-the port shared, since several processes may listen to one group.
+**What others do.** A plain bind is exclusive everywhere; they differ in how a multicast receiver, which genuinely wants
+the port shared (several processes listen to one group), asks for it:
 
-**Recommendation.** A plain bind sets nothing, as Rust and Go do, so a live port is `AddrInUse` everywhere. A multicast
-receiver asks for sharing at bind time, through options like `ListenOptions` (the platform rule; on BSD it is
-`SO_REUSEPORT`). The spelling, and whether the multicast fixtures (`net_udp_multicast`) need it, are what the ruling decides.
+| | how a program shares a UDP port |
+|---|---|
+| Go | a separate function, `ListenMulticastUDP` (`SO_REUSEADDR`, and `SO_REUSEPORT` on the BSDs) |
+| Java | a separate class, `MulticastSocket` (`SO_REUSEADDR`) |
+| Rust | not in std; the socket2 crate sets the option before bind |
+| .NET, Python | the socket option, set by hand before bind |
+
+**Ruled 2026-10-30.** A plain `bind`/`bindTo` sets no reuse option, so a live port is `AddrInUse` on every OS. Sharing is
+asked for on ONE ctor, `UdpSocket.bindWith(address:, options: UdpBindOptions)`, as `TcpListener.bindWith` takes
+`ListenOptions`; a separate call as Go's is the easy-to-miss second ctor the 2026-10-29 ruling refused. The
+choice is a typed per-platform `@nonExhaustive enum UdpPortShare` (the platform rule): `Alone` (the default), `Group` on
+every OS (every socket on the port receives each multicast and broadcast datagram: `SO_REUSEADDR` on Linux and Windows,
+`SO_REUSEADDR` + `SO_REUSEPORT` on macOS), and `Balance` on Linux only (`SO_REUSEPORT`: unicast spread across the
+sockets, the per-core server `ListenOptions.balance` is for TCP). macOS's unicast delivery under `SO_REUSEPORT` is
+measured in the build, and named if it is a distinct behaviour, as `handOff` was. Sacrifice: Linux code that relied on
+two plain binds gets `AddrInUse` until it asks for `Group`.
 
 <a id="s1-fuzz"></a>
 
@@ -2746,7 +2758,8 @@ own thread), which was this row's older half. **The three questions, as they wer
 2. **`File` (`lib/std/fs/fs.kama` ~390).** `UnsafePtr io = null; int32 mode = 0;` beside `fd`; a private
    `ctor makePipe(int32 fd)` setting OURS, granted to `Command::launch`; `read` (~476), `write` (~488) and `readAll`
    (~572, a direct `kama_read`) through the new calls; `close()`/`~File` through `kama_file_close`; `intoDescriptor`
-   settles first; `rawFd`'s comment says it lends as it is, as `TcpStream.rawHandle`'s does.
+   AND `duplicateDescriptor` settle an end kama made back to blocking for good (ruled below), so its later reads take
+   the inherited-pipe path; `rawFd`'s comment says it lends as it is, as `TcpStream.rawHandle`'s does.
 3. **`Command.launch` (`process.kama` ~288).** `File.makePipe` for the three KEEP ends only (`inKeep` ~308,
    `outKeep` ~330, `errKeep` ~353); the give ends stay `File.make`. `kama_pipe` itself is unchanged: its other caller,
    `kama_proc_spawn`'s session sync pipe (`kama_os.h` ~2352), must stay blocking, and `pipe2(O_NONBLOCK)` would set
@@ -2775,12 +2788,17 @@ own thread), which was this row's older half. **The three questions, as they wer
    capture wording; fibers.md decision 8; the compiler's `parkSeam` wording (`kama.cemit.cpp` ~36807, "a fiber's wait
    on a socket") and its "Steps 7–8 make files switch" comment.
 
-**Found mapping it, 2026-10-30 — one point open, two settled:**
-- **OPEN — a duplicate shares the mode.** A socket's data calls pass `MSG_DONTWAIT` per call, so a duplicate set back to
-  blocking cannot stall the core; `read()`/`write()` on a pipe have no such flag. A `duplicateDescriptor()` of a
-  fiber-used pipe end handed to a child as `Stdio::Handle` gives that child a non-blocking stream — Node's bug, in a
-  corner. Recommended: SPEC states it as it states the socket rule, and `intoDescriptor` settles (it already does for
-  sockets); Linux's `preadv2(RWF_NOWAIT)` is the per-call flag a later measurement may adopt.
+**Found mapping it, 2026-10-30 — three points, all settled:**
+- **RULED 2026-10-30 — a pipe end kama made is blocking again once handed out.** A socket's data calls pass
+  `MSG_DONTWAIT` per call, so a duplicate set back to blocking cannot stall the core; `read()`/`write()` on a pipe have
+  no such flag, so a `duplicateDescriptor()` of a fiber-used end handed to a child as `Stdio::Handle` would give that
+  child a non-blocking stream (`cat: stdin: Resource temporarily unavailable`) — Node's bug, whose libuv shares the
+  mode. Go's `File.Fd()` sets a file blocking for good, and tokio's `ChildStdout` → `Stdio` conversion does the same.
+  kama's rule: `duplicateDescriptor()` and `intoDescriptor()` settle an end kama made to blocking for good, and the
+  `File` keeps parking its fiber by ruling 1's inherited-pipe path (readiness, then a blocking read). That improves on
+  both: Go's reader then holds a thread and loses its deadlines; tokio's conversion consumes the handle. The one
+  caveat, two readers on one pipe (the parent's read after readiness blocks its thread if the child took the bytes),
+  is Go's too. Linux's `preadv2(RWF_NOWAIT)` is the per-call flag a later measurement may adopt.
 - **RULED 2026-10-30 — ruling 3 lands with KR-3 step 8.** If the parent's end is an overlapped named pipe, a pipeline
   that hands that end to the next child (`proc_stdio_redirect`: `takeStdout()` → `intoDescriptor()` →
   `Stdio::Handle`) gives the child an overlapped handle its synchronous reads cannot use — the reason `Stdio` refuses
@@ -3719,10 +3737,23 @@ a tracked symlink as a symlink (`check-packages.sh` covers it), so a package can
 The extraction itself leans on the system `tar`'s defaults: GNU tar and bsdtar both refuse a `..` member. Not yet
 measured: what each does with a member written through a symlink an earlier member created.
 
-**The fix wants a ruling before it is built:** hash a link as its target text, as git does, and decide whether a link
-that leaves the package is refused at install. The tree hash is the store identity, so a link that is hashed
-differently changes the identity of a package that contains one. Measure first which stored entries and lockfiles that
-would move. Size S, C++ only; the std extractor (KR-5, decision 11) cannot serve here, because the compiler cannot run kama.
+| | a symlink in a package |
+|---|---|
+| Go modules | not allowed: a module zip holds regular files only |
+| npm | left out of the tarball |
+| cargo, pip sdist | followed at packaging: the target's bytes ship as a plain file |
+| git, Nix | kept, hashed as the link's target text |
+
+**Ruled 2026-10-30: a package holds regular files only**, Go's rule. `kama publish` refuses a tracked link and names it
+(commit a copy, or list it in `publish.exclude`); `kama pkg install` refuses an archive or a git checkout that holds one;
+the tree-hash walk reads entries with `lstat` and never follows a link. A link is not portable across the OSes kama
+builds on (git on Windows checks one out as a text file holding the target; Windows' tar creates one only in Developer
+Mode), so a package holding one already built differently there. Keeping links git's way (hash the target text, refuse
+one that leaves the package) was the alternative; it keeps that divergence and moves the identity of every package that
+holds one. The hash format is unchanged, so no link-free package's identity moves; none of the `kama-*` packages beside
+this repo tracks a link (`git ls-files -s`, mode `120000`). This reverses `check-packages.sh` 26j ("a tracked symlink
+ships as a symlink"). Size S, C++ only; the std extractor (KR-5, decision 11) cannot serve here, because the compiler
+cannot run kama.
 
 <a id="s10-release-signing"></a>
 
