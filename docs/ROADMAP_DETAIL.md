@@ -603,42 +603,6 @@ FreeBSD leg, so a `@compileFor(OS_FREEBSD)` twin would compile nowhere this repo
 a FreeBSD leg (a CI runner or the container), then the twin, its `kama_set_reuseport_lb` helper, and the fixture's
 `shared()` branch.
 
-<a id="s1-udp-reuseaddr"></a>
-
-#### A second `UdpSocket.bind` on a live port succeeds on Linux (KR-228)
-
-Measured on `0.9.713`, two `UdpSocket.bind(host: "127.0.0.1", …)` calls on one port:
-
-| | Second bind |
-|---|---|
-| Linux (the container) | **succeeds** |
-| macOS | refused |
-| Windows | unmeasured; its `SO_REUSEADDR` lets a socket take a port in use, so likely succeeds |
-
-`UdpSocket.bindTo` (`lib/std/net/udp.kama`) sets `SO_REUSEADDR` before every bind. Linux honours it for UDP on two
-sockets of the same user, and then a unicast datagram reaches one of them, so a second program can take a bound port's
-traffic. BSD semantics allow a duplicate UDP bind only for a multicast address, so macOS refuses.
-
-**What others do.** A plain bind is exclusive everywhere; they differ in how a multicast receiver, which genuinely wants
-the port shared (several processes listen to one group), asks for it:
-
-| | how a program shares a UDP port |
-|---|---|
-| Go | a separate function, `ListenMulticastUDP` (`SO_REUSEADDR`, and `SO_REUSEPORT` on the BSDs) |
-| Java | a separate class, `MulticastSocket` (`SO_REUSEADDR`) |
-| Rust | not in std; the socket2 crate sets the option before bind |
-| .NET, Python | the socket option, set by hand before bind |
-
-**Ruled 2026-10-30.** A plain `bind`/`bindTo` sets no reuse option, so a live port is `AddrInUse` on every OS. Sharing is
-asked for on ONE ctor, `UdpSocket.bindWith(address:, options: UdpBindOptions)`, as `TcpListener.bindWith` takes
-`ListenOptions`; a separate call as Go's is the easy-to-miss second ctor the 2026-10-29 ruling refused. The
-choice is a typed per-platform `@nonExhaustive enum UdpPortShare` (the platform rule): `Alone` (the default), `Group` on
-every OS (every socket on the port receives each multicast and broadcast datagram: `SO_REUSEADDR` on Linux and Windows,
-`SO_REUSEADDR` + `SO_REUSEPORT` on macOS), and `Balance` on Linux only (`SO_REUSEPORT`: unicast spread across the
-sockets, the per-core server `ListenOptions.balance` is for TCP). macOS's unicast delivery under `SO_REUSEPORT` is
-measured in the build, and named if it is a distinct behaviour, as `handOff` was. Sacrifice: Linux code that relied on
-two plain binds gets `AddrInUse` until it asks for `Group`.
-
 <a id="s1-fuzz"></a>
 
 #### Coverage-guided fuzzing (KR-205)

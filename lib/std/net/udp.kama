@@ -2,7 +2,7 @@
 import { std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::io::Descriptor, std::collections::View, std::collections::ConstView, SocketAddr, RecvFrom, IpAddr,
          std::time::Instant };
 
-export { UdpSocket, DatagramSocket };
+export { UdpSocket, DatagramSocket, UdpBindOptions, UdpPortShare };
 
 // POSIX/Winsock UDP bindings — see kama_os.h. Same conventions as the TCP module: socket handles are
 // `isize` (`< 0 == error`), the sockaddr fill stays in C, and an address crosses in `IpAddr.bytes`' seam form
@@ -12,6 +12,7 @@ extern fn isize kama_desc_dup(isize h, int32 kind);
 extern fn int32 kama_net_init();
 extern fn isize kama_socket_udp(int32 family);
 extern fn int32 kama_set_reuseaddr(isize fd);
+extern fn int32 kama_set_reuseport(isize fd);
 extern fn int32 kama_bind_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
 extern fn int32 kama_connect_addr(isize fd, int32 family, UnsafeConstPtr<uint8> ip, uint16 port, uint32 scopeId);
 extern fn isize kama_sendto_addr(isize fd, UnsafeConstPtr<uint8> buf, usize n, int32 family, UnsafeConstPtr<uint8> ip,
@@ -63,6 +64,48 @@ type contract DatagramSocket<A> for resource {
     fn Result<Unit, IoError> setNonBlocking(bool on);
 }
 
+// How a UDP socket shares its port (KR-228): one type on every OS, each its own OS's (the platform rule), and every
+// socket on a shared port must ask for it. A plain `bind` is `Alone`, so a port another socket holds is `AddrInUse`.
+// - `Group`, on every OS: every socket on the port receives each multicast and broadcast datagram sent to it, which is
+//   what several programs listening to one group want. A unicast datagram reaches one of them, the one bound last on
+//   Linux and macOS (measured: 32 of 32 on both). Linux and Windows `SO_REUSEADDR`; macOS and the BSDs add
+//   `SO_REUSEPORT`, as Go's `ListenMulticastUDP` does.
+// - `Balance`, Linux only: the kernel spreads unicast datagrams across the sockets by their sender (`SO_REUSEPORT`),
+//   so each of several isolates serves its own socket. Measured: 15 and 17 of 32 senders.
+@compileFor(OS_LINUX)
+@nonExhaustive
+type enum UdpPortShare implements Sendable { Alone, Group, Balance }
+@compileFor(!OS_LINUX)
+@nonExhaustive
+type enum UdpPortShare implements Sendable { Alone, Group }
+
+// The options `UdpSocket.bindWith` takes, as `ListenOptions` are a TCP listener's.
+type value UdpBindOptions implements Sendable {
+    public UdpPortShare share = UdpPortShare::Alone;
+    public ctor make() { }
+}
+
+// The socket options `share` asks for, set before `bind`. 0, or the OS's refusal.
+@compileFor(OS_LINUX)
+unsafe fn int32 sharePort(isize fd, UdpPortShare share) {
+    return match (share) {
+        case Alone: 0;
+        case Group: kama_set_reuseaddr(fd: fd);
+        case Balance: kama_set_reuseport(fd: fd);
+    };
+}
+@compileFor(OS_WINDOWS)
+unsafe fn int32 sharePort(isize fd, UdpPortShare share) {
+    return match (share) { case Alone: 0; case Group: kama_set_reuseaddr(fd: fd); };
+}
+@compileFor(!OS_LINUX, !OS_WINDOWS)
+unsafe fn int32 sharePort(isize fd, UdpPortShare share) {
+    return match (share) {
+        case Alone: 0;
+        case Group: kama_set_reuseaddr(fd: fd) != 0 ? -1 : kama_set_reuseport(fd: fd);
+    };
+}
+
 // A UDP socket. Closes its handle on drop (RAII). Move-only. Blocking by default; `setNonBlocking(true)`
 // makes recv/recvFrom return `Err(WouldBlock)` instead of stalling (the game-loop drain model).
 type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
@@ -79,8 +122,9 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
 
     // Bind to a numeric host:port. host ""/"0.0.0.0" = every IPv4 interface, "::" = every interface of both
     // families (IPV6_V6ONLY off, as for `TcpListener`); port 0 = OS-assigned ephemeral (read the actual port
-    // back with localAddr()). Text that is not a numeric address is `Err(InvalidInput)`. SO_REUSEADDR is set.
-    // The socket's family is the address's, for its whole life. The socket closes on drop.
+    // back with localAddr()). Text that is not a numeric address is `Err(InvalidInput)`. A port another socket holds
+    // is `AddrInUse` on every OS; `bindWith` shares one. The socket's family is the address's, for its whole life.
+    // The socket closes on drop.
     public unsafe ctor Result<UdpSocket, IoError> bind(const ref string host, uint16 port) {
         return match (SocketAddr.host(text: host, port: port, forBind: true)) {
             case Err(error: e): Result::Err(error: e);
@@ -90,14 +134,25 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
 
     // `bind` to an address value — the one spelling that reaches a link-local V6 address (its `scopeId`).
     public unsafe ctor Result<UdpSocket, IoError> bindTo(const ref SocketAddr address) {
+        return UdpSocket.bindShared(address: address, share: UdpPortShare::Alone);
+    }
+
+    // `bindTo` with `UdpBindOptions`: a port several sockets share, as `options.share` says.
+    public unsafe ctor Result<UdpSocket, IoError> bindWith(const ref SocketAddr address, const ref UdpBindOptions options) {
+        return UdpSocket.bindShared(address: address, share: options.share);
+    }
+
+    unsafe ctor Result<UdpSocket, IoError> bindShared(const ref SocketAddr address, UdpPortShare share) {
         int32 ir = kama_net_init();
         if (ir != 0) { return Result::Err(error: lastError()); }
         int32 family = address.ip.family();
         InlineArray<uint8>#(16) bytes = address.ip.bytes();
         isize fd = kama_socket_udp(family: family);
         if (fd < 0) { return Result::Err(error: lastError()); }
-        int32 ro = kama_set_reuseaddr(fd: fd);              // best-effort; ignore failure
-        if (kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
+        // Asked for, so a refusal is the answer. Nothing is set for `Alone`: SO_REUSEADDR on every socket let a second
+        // plain bind on Linux take a live port's datagrams (through 0.9.784).
+        if (sharePort(fd: fd, share: share) != 0
+            || kama_bind_addr(fd: fd, family: family, ip: addr(of: bytes[0]), port: address.port, scopeId: address.scopeId) != 0) {
             IoError e = lastError();                        // capture before close (close may clear errno)
             int32 rc = kama_close_socket(fd: fd);
             return Result::Err(error: e);

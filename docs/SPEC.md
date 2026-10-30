@@ -2619,6 +2619,17 @@ Windows rebinds one by default, and there the option would let a second listener
 set it (Go and Rust set it on Unix only). `@compileFor` gates a declaration, never a statement, so code that sets
 `balance` is a function gated to Linux.
 
+**Sharing a UDP port (`std::net`).** A plain `UdpSocket.bind`/`bindTo` shares nothing: a port another socket holds is <!-- test: net_udp_share -->
+`AddrInUse` on every OS, as Rust's and Go's are. (Until `0.9.785` kama set `SO_REUSEADDR` on every UDP socket, and Linux
+then let a second program's plain bind take a live port's datagrams.) A socket that shares its port asks for it through
+`UdpSocket.bindWith(address:, options:)`, whose `UdpBindOptions.share` is a `UdpPortShare`, one type on every OS and
+each its own OS's. Every socket on a shared port must ask, and an `Alone` socket's port stays its own:
+- **`Group`, on every OS:** every socket on the port receives each multicast and broadcast datagram, which is what
+  several programs listening to one group want. A unicast datagram reaches one of them, the one bound last on Linux and
+  macOS. Go has `ListenMulticastUDP` for this, Java `MulticastSocket`.
+- **`Balance`, Linux only:** the kernel spreads unicast datagrams across the sockets by their sender
+  (`SO_REUSEPORT`), so each of several isolates serves its own socket, as `ListenOptions.balance` does for TCP.
+
 **Readiness (`std::net::Poller`).** A server waits once for whichever of its sockets is ready, and the wait costs what <!-- test: net_poller_tokens -->
 is ready, not what is watched. Each OS's own mechanism stands behind the one interface:
 - **Linux:** epoll.

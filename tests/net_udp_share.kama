@@ -1,0 +1,109 @@
+// UDP port sharing (KR-228). A plain `bind` sets no reuse option, so a port another socket holds is `AddrInUse` on every
+// OS: Linux used to let a second plain bind take a live port's datagrams, because kama set SO_REUSEADDR on every UDP
+// socket. Sharing is asked for through `bindWith` and `UdpBindOptions.share`: two `Group` sockets share a port and each
+// receives a multicast datagram sent to it, a `Group` socket cannot take a port an `Alone` one holds (Windows' own
+// SO_REUSEADDR could, so CI's Windows leg measures it), and on Linux two `Balance` sockets share a port and the kernel
+// spreads 64 senders' datagrams across both. Ephemeral ports throughout, so no twin fixture can race this one. Each
+// case is its own bit. Returns 0.
+import { std::net::UdpSocket, std::net::UdpBindOptions, std::net::UdpPortShare, std::net::SocketAddr, std::net::IpAddr,
+         std::net::RecvFrom, std::net::Poller, std::net::Events, std::net::Interest, std::io::IoError,
+         std::collections::DynamicArray, std::collections::FixedArray };
+
+fn uint16 portOf(const ref UdpSocket s) {
+    return match (s.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+}
+fn bool inUse(Result<UdpSocket, IoError> r) {
+    return match (r) { case Err(error: e): match (e.kind()) { case AddrInUse: true; case _: false; }; case Ok(value: s): false; };
+}
+fn SocketAddr v4(uint8 a, uint8 b, uint8 c, uint8 d, uint16 port) {
+    return SocketAddr.of(ip: IpAddr::V4(a: a, b: b, c: c, d: d), port: port);
+}
+fn UdpBindOptions sharing(UdpPortShare share) {
+    UdpBindOptions o = UdpBindOptions.make();
+    o.share = share;
+    return o;
+}
+// Whether `rx` has a datagram within two seconds.
+unsafe fn bool readable(ref UdpSocket rx) {
+    Result<Poller, IoError> rp = Poller.create();
+    Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return false; } };
+    Events events = Events.withCapacity(capacity: 1);
+    if (!p.add(fd: rx.rawHandle(), interest: Interest::Read, token: 0ui64).isOk()) { return false; }
+    int32 n = match (p.wait(events: events, timeoutMs: 2000)) { case Ok(value: k): k; case Err(error: e): 0; };
+    return n > 0;
+}
+// How many datagrams a non-blocking `rx` holds now.
+unsafe fn int32 drain(ref UdpSocket rx) {
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    int32 n = 0;
+    while (rx.recvFrom(into: buf.viewMut()).isOk()) { n = n + 1; }
+    return n;
+}
+fn DynamicArray<uint8> kama() {
+    DynamicArray<uint8> msg = DynamicArray.empty();
+    msg.add(item: 107ui8); msg.add(item: 97ui8); msg.add(item: 109ui8); msg.add(item: 97ui8);
+    return msg;
+}
+
+@compileFor(OS_LINUX)
+unsafe fn int32 balance() {   // `Balance`: 64 senders' datagrams reach both sockets (all to one has odds of 2^-63)
+    UdpBindOptions o = sharing(share: UdpPortShare::Balance);
+    Result<UdpSocket, IoError> r1 = UdpSocket.bindWith(address: v4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8, port: 0ui16), options: o);
+    UdpSocket first = match (give r1) { case Ok(value: s): give s; case Err(error: e): { return 16; } };
+    uint16 port = portOf(s: first);
+    Result<UdpSocket, IoError> r2 = UdpSocket.bindWith(address: v4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8, port: port), options: o);
+    UdpSocket second = match (give r2) { case Ok(value: s): give s; case Err(error: e): { return 16; } };
+    _ = first.setNonBlocking(on: true);
+    _ = second.setNonBlocking(on: true);
+    DynamicArray<uint8> msg = kama();
+    int32 i = 0;
+    while (i < 64) {   // each from its own socket, so each has its own source port to hash
+        Result<UdpSocket, IoError> rt = UdpSocket.bind(host: "127.0.0.1", port: 0ui16);
+        match (give rt) {
+            case Ok(value: tx): { _ = tx.sendTo(bytes: msg.view(), to: v4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8, port: port)); }
+            case Err(error: e): { return 16; }
+        };
+        i = i + 1;
+    }
+    int32 a = readable(rx: first) ? drain(rx: first) : 0;
+    int32 b = readable(rx: second) ? drain(rx: second) : 0;
+    return (a > 0 && b > 0) ? 0 : 16;
+}
+@compileFor(!OS_LINUX)
+unsafe fn int32 balance() { return 0; }   // Linux alone balances unicast datagrams
+
+unsafe fn int32 run() {
+    int32 bad = 0;
+    Result<UdpSocket, IoError> r = UdpSocket.bind(host: "127.0.0.1", port: 0ui16);
+    UdpSocket alone = match (give r) { case Ok(value: s): give s; case Err(error: e): { return 128; } };
+    uint16 port = portOf(s: alone);
+    if (!inUse(r: UdpSocket.bind(host: "127.0.0.1", port: port))) { bad = bad | 1; }   // a live port, on every OS
+    UdpBindOptions group = sharing(share: UdpPortShare::Group);
+    if (!inUse(r: UdpSocket.bindWith(address: v4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8, port: port), options: group))) {
+        bad = bad | 2;                                                                // `Group` cannot take an `Alone` port
+    }
+
+    // Two `Group` receivers on one port, both in 224.0.0.199 over loopback, each get the datagram sent to the group.
+    Result<UdpSocket, IoError> ra = UdpSocket.bindWith(address: v4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8, port: 0ui16), options: group);
+    UdpSocket a = match (give ra) { case Ok(value: s): give s; case Err(error: e): { return bad | 4; } };
+    uint16 shared = portOf(s: a);
+    Result<UdpSocket, IoError> rb = UdpSocket.bindWith(address: v4(a: 0ui8, b: 0ui8, c: 0ui8, d: 0ui8, port: shared), options: group);
+    UdpSocket b = match (give rb) { case Ok(value: s): give s; case Err(error: e): { return bad | 4; } };
+    IpAddr groupIp = IpAddr::V4(a: 224ui8, b: 0ui8, c: 0ui8, d: 199ui8);
+    IpAddr loop = IpAddr::V4(a: 127ui8, b: 0ui8, c: 0ui8, d: 1ui8);
+    if (!a.joinMulticastV4(group: groupIp, interface: loop).isOk() || !b.joinMulticastV4(group: groupIp, interface: loop).isOk()) {
+        return bad | 8;
+    }
+    Result<UdpSocket, IoError> rt = UdpSocket.bind(host: "127.0.0.1", port: 0ui16);
+    UdpSocket tx = match (give rt) { case Ok(value: s): give s; case Err(error: e): { return bad | 8; } };
+    if (!tx.setMulticastInterfaceV4(interface: loop).isOk() || !tx.setMulticastLoop(on: true).isOk()) { return bad | 8; }
+    DynamicArray<uint8> msg = kama();
+    if (!tx.sendTo(bytes: msg.view(), to: SocketAddr.of(ip: groupIp, port: shared)).isOk()) { return bad | 8; }
+    FixedArray<uint8> buf = FixedArray.make(size: 16);
+    if (!readable(rx: a) || !a.recvFrom(into: buf.viewMut()).isOk()) { bad = bad | 8; }
+    if (!readable(rx: b) || !b.recvFrom(into: buf.viewMut()).isOk()) { bad = bad | 8; }
+    bad = bad | balance();
+    return bad;
+}
+
+fn uint8 main() { return cast<uint8>(run()); }
