@@ -13,6 +13,14 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
+## [0.9.7] — 2026-10-30
+
+### Added
+
+- **`give fn` is highlighted as a receiver modifier.** A consuming method (kama 0.9.777) is declared `give fn`, the
+  slot `const fn` uses, and its `give` is coloured as `const` is there; `give` before a value or a call keeps the
+  hand-off colour.
+
 ## [0.9.6] — 2026-10-27
 
 ### Fixed
