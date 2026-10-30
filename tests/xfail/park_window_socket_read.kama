@@ -3,7 +3,7 @@
 // through the `Shared` the fiber was handed — and reads the stream inside the loop, so while it waits for bytes another
 // fiber could grow `xs` and free the buffer the loop is reading. Through `0.9.744` that read blocked the whole thread
 // and was no park (SPEC *Fibers* said so); now it parks only its fiber.
-import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::concurrent::Fiber, std::concurrent::join,
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::concurrent::Fiber,
          std::memory::Shared, std::collections::DynamicArray, std::collections::FixedArray };
 type resource Conn {
     DynamicArray<int32> xs;
@@ -27,6 +27,6 @@ unsafe fn uint8 run() {
     TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
     Shared<Conn> c = new Conn.make(s: give s);
     Fiber<int32> w = spawn fiber walk(c: copy c);
-    return cast<uint8>(join(fiber: give w));
+    return cast<uint8>(give w.join());
 }
 fn uint8 main() { return run(); }

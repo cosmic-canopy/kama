@@ -6,8 +6,7 @@
 //   - to a worker that runs fibers, which reads it parked on its own scheduler;
 //   - to a worker that drops it unread.
 // The sanitizer legs would see a record freed twice or never; TSan, a race between the two isolates.
-import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber,
-         std::concurrent::join, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::collections::FixedArray };
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::writeAll, std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender, std::concurrent::Receiver, std::collections::FixedArray };
 
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
@@ -46,7 +45,7 @@ fn void dropper(Receiver<TcpStream> rx) { Optional<TcpStream> next = rx.recv(); 
 unsafe fn TcpStream firstRead(TcpStream s) { int32 v = readByte(s: ref s); return give s; }
 unsafe fn TcpStream readHere(TcpStream s) {
     Fiber<TcpStream> f = spawn fiber firstRead(s: give s);
-    return join(fiber: give f);
+    return give f.join();
 }
 
 unsafe fn uint8 run() {

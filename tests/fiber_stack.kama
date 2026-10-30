@@ -1,7 +1,7 @@
 // `spawn fiber(stack: n)`: a fiber's stack, in bytes, where the stated default (256 KiB) is not what it needs — here
 // a recursion that wants more than the default, given a megabyte (trap/fiber_stack_overflow is the same recursion
 // without the clause).
-import { std::concurrent::Fiber, std::concurrent::join };
+import { std::concurrent::Fiber };
 
 fn int64 down(int64 n) {
     if (n == 0) { return 0; }
@@ -12,5 +12,5 @@ fn int64 deep(int64 depth) { return down(n: depth); }
 
 fn uint8 main() {
     Fiber<int64> f = spawn fiber(stack: 1024 * 1024) deep(depth: 6000);
-    return join(fiber: give f) == 6000 ? 42 : 1;
+    return (give f.join()) == 6000 ? 42 : 1;
 }

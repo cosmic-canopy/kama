@@ -20,6 +20,6 @@ fn uint8 main() {
     BindableFunctionPtr<Get> g = BindableFunctionPtr.bind(obj: p, method: Probe::read);
     Handler h = Handler.make(cb: give g);
     Isolate w = spawn worker(h: give h);
-    w.join();
+    give w.join();
     return cast<uint8>(p.read(d: 0));
 }

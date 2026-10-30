@@ -3,7 +3,7 @@
 // across that switch would land on another fiber's stack. The same region in a program with no fibers compiles
 // (onpanic_socket_no_fibers). A socket's first wait on a fiber also registers it, which allocates, so `@noheap` refuses
 // the region too (decision 15, as corrected).
-import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::concurrent::Fiber, std::concurrent::join };
+import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::concurrent::Fiber };
 fn int32 child(int32 n) { return n; }
 type resource Peer {
     TcpStream s;
@@ -22,6 +22,6 @@ unsafe fn uint8 run() {
     TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
     Peer p = Peer.make(s: give s);
     Fiber<int32> f = spawn fiber child(n: 1);                       // this isolate runs fibers
-    return cast<uint8>(p.region(i: 0) + join(fiber: give f));
+    return cast<uint8>(p.region(i: 0) + (give f.join()));
 }
 fn uint8 main() { return run(); }

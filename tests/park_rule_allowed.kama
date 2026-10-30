@@ -5,7 +5,7 @@
 // (a spawn queues the child; it switches to nothing), drop an `Owned` contract value (its size slot is read off the
 // vtable, and calls nothing), and join after it closes. An isolate that runs no fibers is not held to the rule at all:
 // `worker`'s window calls through a `fnptr`, which would be refused on an isolate whose code a fiber spawn reaches.
-import { core::println, std::concurrent::Fiber, std::concurrent::join, std::memory::Shared, std::memory::Owned,
+import { core::println, std::concurrent::Fiber, std::memory::Shared, std::memory::Owned,
          std::collections::DynamicArray };
 fnptr int32 Op(int32 x);
 type contract Shape for value { const fn int32 area(); }
@@ -30,7 +30,7 @@ type resource Box {
     public fn int32 joinAfter() {
         int32 n = cast<int32>(this.xs.length());
         Fiber<int32> f = spawn fiber child(n: n);
-        return join(fiber: give f);
+        return give f.join();
     }
     public fn int32 apply(Op op) {
         int32 t = 0;

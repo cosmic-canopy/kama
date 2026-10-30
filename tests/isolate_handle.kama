@@ -29,7 +29,7 @@ fn uint8 main() {
     Isolate h = spawn worker(p: give p);   // spawn — runs concurrently with the loop below
     int32 i = 0;
     while (i < 1000) { mainWork = mainWork + 1; i = i + 1; }   // main-thread work overlaps the isolate
-    h.join();                                // barrier: the isolate's write is now visible
+    give h.join();                                // barrier: the isolate's write is now visible
     if (shared == 42 && mainWork == 1000) { return 0; }
     return 1;
 }

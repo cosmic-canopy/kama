@@ -2,7 +2,7 @@
 // fibers, so a lasting access to `Shared` storage may not make one. `Clock.pace` iterates `this.ticks` — reached
 // through the `Shared` the fiber was handed — and sleeps inside the loop, so another fiber could grow `ticks` and free
 // the buffer the loop is reading while this one sleeps.
-import { std::concurrent::Fiber, std::concurrent::join, std::memory::Shared, std::collections::DynamicArray,
+import { std::concurrent::Fiber, std::memory::Shared, std::collections::DynamicArray,
          std::time::sleep, std::time::Duration };
 type resource Clock {
     DynamicArray<int32> ticks;
@@ -20,5 +20,5 @@ fn int32 walk(Shared<Clock> c) { return c.pace(); }
 fn uint8 main() {
     Shared<Clock> c = new Clock.make();
     Fiber<int32> w = spawn fiber walk(c: copy c);
-    return cast<uint8>(join(fiber: give w));
+    return cast<uint8>(give w.join());
 }

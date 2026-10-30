@@ -21,6 +21,6 @@ fn uint8 main() {
     Owned<Job> j = new Bad.make(s: copy s);
     Worker w = Worker.make(job: give j);
     Isolate iso = spawn worker(w: give w);
-    iso.join();
+    give iso.join();
     return cast<uint8>(s.v);
 }

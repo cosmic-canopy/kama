@@ -905,7 +905,7 @@ shared pointee is not the caller's to consume. *Sacrifice:* no dynamic-dispatch 
   | `BufWriter`, `BufReader`, `Lines` | no accessor at all: the inner is lost | port, as above (`Lines` hands back its `BufReader`'s parts) |
   | the four serializers and their `…Stream` functions | lend the sink; the functions eat it | port, as above |
   | `StringWriter.finish()`, `.takeBytes()` | copy the buffer byte by byte; every `serialize…Buffer` pays it | `give fn` forms that MOVE the buffer, replacing the copying ones |
-  | `Fiber<R>`: the free `join(fiber: give f)` exists only for want of this | a `friend`-granted free function | `give f.join()`, replacing the free function (one way); `Isolate.join()` the same, so a second join is a compile error |
+  | `Fiber<R>`: the free `(give f.join())` exists only for want of this | a `friend`-granted free function | `give f.join()`, replacing the free function (one way); `Isolate.join()` the same, so a second join is a compile error |
   | `UnixStreamPair`, `UnixDatagramPair`, `MemoryStreamPair` | lent ends; a `MemoryStream` end can NEVER leave its pair | a consuming `split` into a one-variant enum of the two ends, the shape KR-244 ruled for `TcpHalves` |
   | `File`, `TcpStream`, `TcpListener`, `UdpSocket`, the Unix sockets, `Descriptor`: `takeDescriptor()` leaves `fd = -1` | the stream lives on as a zombie whose every call fails at run time | `give fn Descriptor intoDescriptor()`, replacing `takeDescriptor()`: use after it becomes a compile error (decision 3: the method sets `fd = -1`, its destructor still runs) |
   | `Output`, `SqlQuery` | `const ref` getters: copy to own | `give fn` into-parts, so a driver binds and a caller decodes without a copy |
@@ -2644,7 +2644,7 @@ from data races keeps holding by construction.
 7. Transparent: the same `TcpStream.read` parks on a fiber (Loom, Go, Eio), not Zig's explicit `Io` parameter.
 8. Channels become fiber-aware, joins park, and regular files and DNS go to an offload pool (with KR-202); a pipe parks as a socket does (KR-7).
 9. `spawn fiber f(b: …)`, the isolate's fn-plus-one-bundle. A `Fiber<R>` handle whose join yields `R` — amended
-   2026-10-25: the join CONSUMES the handle, `R r = join(fiber: give f);` (Rust's `JoinHandle::join(self)`), so a
+   2026-10-25: the join CONSUMES the handle, `R r = give f.join();` (Rust's `JoinHandle::join(self)`), so a
    second join is a compile error. A panic still aborts the process.
 10. A fiber `spawn` may sit anywhere in its `scope`, which keeps a runtime list of live children (an accept loop).
 11. A timer heap per scheduler (high-resolution on Windows, as Go did in 2024), per-operation deadlines, and

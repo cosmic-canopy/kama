@@ -27,6 +27,6 @@ fn uint8 main() {
         };
     }
 
-    h.join();
+    give h.join();
     return cast<uint8>(got + 7);   // 7 iff recv returned None with zero items (closed + drained), no hang
 }

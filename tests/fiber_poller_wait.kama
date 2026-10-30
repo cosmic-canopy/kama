@@ -7,7 +7,7 @@
 //     descriptor to park on: there the wait blocks the thread until step 7's offload pool).
 // Port 0, read back.
 import { std::net::Poller, std::net::Events, std::net::Event, std::net::Interest, std::net::TcpListener, std::net::TcpStream,
-         std::concurrent::Fiber, std::concurrent::join, std::concurrent::Waker, std::io::IoError,
+         std::concurrent::Fiber, std::concurrent::Waker, std::io::IoError,
          std::time::Instant, std::time::monotonicNow, std::time::sleep, std::time::Duration,
          std::collections::FixedArray };
 
@@ -76,10 +76,10 @@ unsafe fn int32 sameCore(int32 n) { return 0; }
 
 unsafe fn uint8 run() {
     Fiber<int32> a = spawn fiber timesOut(n: 0);
-    int32 x = join(fiber: give a);
+    int32 x = give a.join();
     if (x != 0) { return cast<uint8>(x); }
     Fiber<int32> b = spawn fiber woken(n: 0);
-    int32 y = join(fiber: give b);
+    int32 y = give b.join();
     if (y != 0) { return cast<uint8>(y); }
     int32 z = sameCore(n: 0);
     return z == 0 ? 42 : cast<uint8>(z);

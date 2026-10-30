@@ -2,7 +2,7 @@
 // `this.xs` — reached through the `Shared` the fiber was handed — and parks in `join` inside the loop, so a second fiber
 // could grow `xs` and free the buffer the loop is reading. Fibers share one access record per thread, so the run-time
 // check alone cannot be trusted across a park: two windows interleaved there left it pointing into a dead frame.
-import { std::concurrent::Fiber, std::concurrent::join, std::memory::Shared, std::collections::DynamicArray };
+import { std::concurrent::Fiber, std::memory::Shared, std::collections::DynamicArray };
 fn int32 child(int32 n) { return n; }
 type resource Box {
     DynamicArray<int32> xs;
@@ -11,7 +11,7 @@ type resource Box {
         int32 total = 0;
         foreach (int32 x in this.xs) {
             Fiber<int32> f = spawn fiber child(n: x);
-            total = total + join(fiber: give f);
+            total = total + (give f.join());
         }
         return total;
     }
@@ -20,5 +20,5 @@ fn int32 walk(Shared<Box> s) { return s.sum(); }
 fn uint8 main() {
     Shared<Box> b = new Box.make();
     Fiber<int32> w = spawn fiber walk(s: copy b);
-    return cast<uint8>(join(fiber: give w));
+    return cast<uint8>(give w.join());
 }

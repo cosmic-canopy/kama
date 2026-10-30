@@ -3,7 +3,7 @@
 // the deadline is the scheduler's timer, so the wait costs the core nothing.
 // A fiber's 1 ms sleep resolves to the system timer on Windows, ~16 ms, until KR-3 step 8's high-resolution timer, so the
 // waits here are long enough to hold several ticks there, and a few ticks are all the proof needs: blocked, it saw none.
-import { std::concurrent::Fiber, std::concurrent::join, std::concurrent::Channel, std::concurrent::Sender,
+import { std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender,
          std::concurrent::Receiver, std::concurrent::RecvError, std::time::sleep, std::time::Duration,
          std::time::Instant, std::time::monotonicNow };
 
@@ -41,7 +41,7 @@ fn uint8 main() {
         spawn fiber late(tx: ch.sender());
         spawn fiber ticker(every: 1);
     }
-    int32 r = join(fiber: give t);
+    int32 r = give t.join();
     if (r != 42) { return cast<uint8>(r); }
     if (ticks < 3) { return 4; }                                           // the core ran the ticker meanwhile
     return 42;

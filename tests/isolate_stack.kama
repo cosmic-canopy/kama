@@ -60,7 +60,7 @@ fn uint8 main() {
     // The handle form — a crash here is the failure; nothing comes back over a moved bundle.
     Job handed = Job.deep();
     Isolate h = spawn(stack: BIG) owned(j: give handed);
-    h.join();
+    give h.join();
 
     // Each worker of a parallel loop.
     DynamicArray<Job> jobs = DynamicArray.empty();

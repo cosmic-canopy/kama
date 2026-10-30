@@ -2,7 +2,7 @@
 // fibers is a park: `region` receives, which parks the fiber until a value comes. A recovered panic is a longjmp, and
 // one across that switch would land on another fiber's stack. The same region in a program with no fibers compiles
 // (onpanic_channel_no_fibers).
-import { std::concurrent::Channel, std::concurrent::Receiver, std::concurrent::Fiber, std::concurrent::join };
+import { std::concurrent::Channel, std::concurrent::Receiver, std::concurrent::Fiber };
 fn int32 child(int32 n) { return n; }
 type resource Box {
     Receiver<int32> rx;
@@ -18,5 +18,5 @@ fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 1);
     Box b = Box.make(rx: ch.receiver());
     Fiber<int32> f = spawn fiber child(n: 1);                       // this isolate runs fibers
-    return cast<uint8>(b.region(i: 0) + join(fiber: give f));
+    return cast<uint8>(b.region(i: 0) + (give f.join()));
 }

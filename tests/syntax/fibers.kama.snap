@@ -1,6 +1,6 @@
 >// `fiber` is a keyword only directly after `spawn`; anywhere else it is a name, and must colour like one.
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
->import { std::concurrent::Fiber, std::concurrent::Atomic, std::concurrent::join };
+>import { std::concurrent::Fiber, std::concurrent::Atomic };
 #^^^^^^ source.kama keyword.other.kama
 #      ^^^^^^ source.kama
 #            ^^ source.kama punctuation.accessor.kama
@@ -12,11 +12,7 @@
 #                                      ^^^^^^^^^^ source.kama
 #                                                ^^ source.kama punctuation.accessor.kama
 #                                                  ^^^^^^ source.kama entity.name.type.kama
-#                                                        ^^^^^ source.kama
-#                                                             ^^ source.kama punctuation.accessor.kama
-#                                                               ^^^^^^^^^^ source.kama
-#                                                                         ^^ source.kama punctuation.accessor.kama
-#                                                                           ^^^^^^^^ source.kama
+#                                                        ^^^^ source.kama
 >
 >type value Holder {
 #^^^^ source.kama storage.type.kama
@@ -151,7 +147,7 @@
 #                                 ^ source.kama
 #                                  ^^^^ source.kama entity.name.function.kama
 #                                      ^^^^^^^^^^^^ source.kama
->    return cast<uint8>(join(fiber: give f) + h.fiber + n.load());
+>    return cast<uint8>((give f.join()) + h.fiber + n.load());
 #^^^^ source.kama
 #    ^^^^^^ source.kama keyword.control.kama
 #          ^ source.kama
@@ -159,17 +155,17 @@
 #               ^ source.kama keyword.operator.relational.kama
 #                ^^^^^ source.kama storage.type.primitive.kama
 #                     ^ source.kama keyword.operator.relational.kama
-#                      ^ source.kama
-#                       ^^^^ source.kama entity.name.function.kama
-#                           ^^^^^^^^ source.kama
-#                                   ^^^^ source.kama keyword.other.kama
-#                                       ^^^^ source.kama
-#                                           ^ source.kama keyword.operator.arithmetic.kama
-#                                            ^^^^^^^^^ source.kama
-#                                                     ^ source.kama keyword.operator.arithmetic.kama
-#                                                      ^^^ source.kama
-#                                                         ^^^^ source.kama entity.name.function.kama
-#                                                             ^^^^^ source.kama
+#                      ^^ source.kama
+#                        ^^^^ source.kama keyword.other.kama
+#                            ^^^ source.kama
+#                               ^^^^ source.kama entity.name.function.kama
+#                                   ^^^^ source.kama
+#                                       ^ source.kama keyword.operator.arithmetic.kama
+#                                        ^^^^^^^^^ source.kama
+#                                                 ^ source.kama keyword.operator.arithmetic.kama
+#                                                  ^^^ source.kama
+#                                                     ^^^^ source.kama entity.name.function.kama
+#                                                         ^^^^^ source.kama
 >}
 #^^ source.kama
 >

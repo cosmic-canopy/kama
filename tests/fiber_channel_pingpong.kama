@@ -2,7 +2,7 @@
 // parks the fiber, not the thread, so the isolate's other fiber runs and answers. Before 0.9.751 the first `recv` blocked
 // the thread on a condition variable, and the only fiber that could send never ran again: the isolate deadlocked.
 // Both directions are a rendezvous (capacity 0), so every send parks too, until its value is taken.
-import { std::concurrent::Fiber, std::concurrent::join, std::concurrent::Channel, std::concurrent::Sender,
+import { std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender,
          std::concurrent::Receiver };
 
 // One side of the conversation: where it speaks and where it listens.
@@ -49,8 +49,8 @@ fn uint8 main() {
     Ends b = Ends.make(to: back.sender(), back: there.receiver());
     Fiber<int32> p = spawn fiber pong(e: give b);
     Fiber<int32> q = spawn fiber ping(e: give a);
-    int32 sum = join(fiber: give q);      // ping ends, its sender drops, and pong hears the close
-    int32 answered = join(fiber: give p);
+    int32 sum = give q.join();      // ping ends, its sender drops, and pong hears the close
+    int32 answered = give p.join();
     if (sum != 501500) { return 1; }      // 2 + 3 + … + 1001
     if (answered != 1000) { return 2; }
     return 42;

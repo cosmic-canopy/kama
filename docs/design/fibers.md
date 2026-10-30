@@ -431,7 +431,7 @@ fibers when one of its units holds a `spawn fiber` (`CompilationUnit::spawnsFibe
   thread, so that reason is gone.
 - **Recommended:** a fiber entry may return a value, the handle form is `Fiber<R>`, and `join()` parks and yields
   `R`. A bare spawn in a scope takes a `void` entry; a discarded `Result` is already refused.
-  *Ruled 2026-10-25, as built:* the join **consumes** the handle, `R r = join(fiber: give f);`, as Rust's
+  *Ruled 2026-10-25, as built:* the join **consumes** the handle, `R r = give f.join();`, as Rust's
   `JoinHandle::join(self)` does, so a second join of one fiber is a compile error rather than a run-time one. A method
   never moves its receiver (SPEC), so the join is a free function in `std::concurrent`. A handle dropped unjoined joins
   and drops `R`. A `void` entry has no handle: it is spawned bare in a `scope`, and a nested `scope` is the early wait.

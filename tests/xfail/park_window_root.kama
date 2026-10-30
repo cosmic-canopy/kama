@@ -1,7 +1,7 @@
 // The park rule holds the ROOT too (KR-3 step 4, ruled 2026-10-25): `main` runs fibers, so its own code is in the rule,
 // not only what a fiber entry reaches. Here only the root's window parks — `grower` never parks — and before the rule
 // the program built and panicked at run time, when `grower` grew `xs` under the root's suspended loop.
-import { std::concurrent::Fiber, std::concurrent::join, std::memory::Shared, std::collections::DynamicArray };
+import { std::concurrent::Fiber, std::memory::Shared, std::collections::DynamicArray };
 fn int32 child(int32 n) { return n; }
 type resource Box {
     DynamicArray<int32> xs;
@@ -10,7 +10,7 @@ type resource Box {
         int32 total = 0;
         foreach (int32 x in this.xs) {
             Fiber<int32> f = spawn fiber child(n: x);
-            total = total + join(fiber: give f);
+            total = total + (give f.join());
         }
         return total;
     }
@@ -21,5 +21,5 @@ fn uint8 main() {
     Shared<Box> a = new Box.make();
     Fiber<int32> g = spawn fiber grower(s: copy a);
     int32 t = a.sum();
-    return cast<uint8>(t + join(fiber: give g));
+    return cast<uint8>(t + (give g.join()));
 }

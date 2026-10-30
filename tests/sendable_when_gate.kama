@@ -33,6 +33,6 @@ fn uint8 main() {
     Bundle b = Bundle.make(boxed: Box::<Leaf>.make(item: Leaf.make(v: 11)), items: give items);
     int32 local = b.sum();                       // 11 + 1 + 10 + 20 = 42
     Isolate iso = spawn work(b: give b);
-    iso.join();
+    give iso.join();
     return cast<uint8>(local);
 }

@@ -7,7 +7,7 @@
 //
 // No gate here has a positive twin (`OS_LINUX`, …): a twin is a second uncovered gate, and the solver prefers the
 // configuration activating the most of them, which picks a hosted target whatever the order and hides the defect.
-import { std::concurrent::Fiber, std::concurrent::join };
+import { std::concurrent::Fiber };
 
 @compileFor(!OS_MACOS)   fn int32 offMac()     { return 1; }
 @compileFor(!OS_LINUX)   fn int32 offLinux()   { return 1; }
@@ -17,5 +17,5 @@ fn int32 work(int32 n) { return n; }
 
 fn uint8 main() {
     Fiber<int32> f = spawn fiber work(n: 42);
-    return cast<uint8>(join(fiber: give f));
+    return cast<uint8>(give f.join());
 }

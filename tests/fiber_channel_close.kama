@@ -1,7 +1,7 @@
 // A close wakes every fiber parked on the other side (KR-3 step 6). Three receivers wait on an empty channel; when the
 // last sender drops, each wakes to `None`. A sender parked on a full channel wakes when the last receiver drops, and its
 // send answers `Err(Undelivered)`, handing the item back.
-import { std::concurrent::Fiber, std::concurrent::join, std::concurrent::Channel, std::concurrent::Sender,
+import { std::concurrent::Fiber, std::concurrent::Channel, std::concurrent::Sender,
          std::concurrent::Receiver, std::time::sleep, std::time::Duration };
 
 static int32 closed = 0;
@@ -35,6 +35,6 @@ fn uint8 main() {
     Channel<int32> full = Channel.bounded(capacity: 1);
     Fiber<int32> s = spawn fiber stuff(tx: full.sender());
     scope { spawn fiber walkAway(rx: full.receiver()); }
-    if (join(fiber: give s) != 1) { return 2; }                  // one delivered into the slot, the second refused
+    if ((give s.join()) != 1) { return 2; }                  // one delivered into the slot, the second refused
     return 42;
 }

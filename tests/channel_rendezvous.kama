@@ -33,6 +33,6 @@ fn uint8 main() {
         };
     }
 
-    h.join();
+    give h.join();
     return cast<uint8>(sum);   // 1+2+3+4+5 = 15
 }

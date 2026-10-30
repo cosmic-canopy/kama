@@ -2,7 +2,7 @@
 // `scope`'s close over an isolate child waits by parking, so a lasting access to `Shared` storage may not make one.
 // `Crew.run` iterates `this.shifts` — reached through the `Shared` the fiber was handed — and closes a scope with an
 // isolate in it inside the loop, so another fiber could free the buffer the loop is reading while this one waits.
-import { std::concurrent::Fiber, std::concurrent::join, std::memory::Shared, std::collections::DynamicArray };
+import { std::concurrent::Fiber, std::memory::Shared, std::collections::DynamicArray };
 type resource Shift implements Sendable {
     int32 n = 0;
     public ctor of(int32 n) { this.n = n; }
@@ -25,5 +25,5 @@ fn int32 walk(Shared<Crew> c) { return c.run(); }
 fn uint8 main() {
     Shared<Crew> c = new Crew.make();
     Fiber<int32> w = spawn fiber walk(c: copy c);
-    return cast<uint8>(join(fiber: give w));
+    return cast<uint8>(give w.join());
 }

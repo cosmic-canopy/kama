@@ -3,7 +3,7 @@
 // fiber keeps ticking. Before 0.9.751 each was a `pthread_join` that held the whole core, and the ticker stood still.
 // A fiber's 1 ms sleep resolves to the system timer on Windows, ~16 ms, until KR-3 step 8's high-resolution timer, so the
 // waits here are long enough to hold several ticks there, and a few ticks are all the proof needs: blocked, it saw none.
-import { std::concurrent::Fiber, std::concurrent::join, std::concurrent::Isolate, std::collections::FixedArray,
+import { std::concurrent::Fiber, std::concurrent::Isolate, std::collections::FixedArray,
          std::time::sleep, std::time::Duration };
 
 static int32 ticks = 0;
@@ -27,7 +27,7 @@ fn int32 joins(int64 ms) {
     before = ticks;
     Nap second = Nap.of(ms: ms);
     Isolate h = spawn nap(n: give second);
-    h.join();
+    give h.join();
     if (ticks - before >= 3) { seen = seen + 2; }
     FixedArray<int64> naps = FixedArray.make(size: 4);
     before = ticks;
@@ -43,7 +43,7 @@ fn void ticker(int64 every) {
 fn uint8 main() {
     Fiber<int32> j = spawn fiber joins(ms: 100);
     scope { spawn fiber ticker(every: 1); }
-    int32 seen = join(fiber: give j);
+    int32 seen = give j.join();
     if (seen != 7) { return cast<uint8>(seen + 1); }
     return 42;
 }

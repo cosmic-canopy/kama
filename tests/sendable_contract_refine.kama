@@ -18,6 +18,6 @@ fn uint8 main() {
     Owned<Job> j = new Task.make(n: 21);
     Worker w = Worker.make(job: give j);
     Isolate iso = spawn work(w: give w);
-    iso.join();
+    give iso.join();
     return 42;
 }

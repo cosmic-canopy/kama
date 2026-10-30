@@ -3,11 +3,11 @@
 // trips `@noheap` (a spawn allocates) and the region's destructor rule (a `Fiber` owns one); the park walk is the one
 // that names the switch. A socket's park (xfail/onpanic_park_socket) allocates too, at its first wait, which registers
 // the socket with the scheduler (KR-3 decision 15, as corrected).
-import { std::concurrent::Fiber, std::concurrent::join };
+import { std::concurrent::Fiber };
 fn int32 child(int32 n) { return n; }
 fn int32 waitOne() {
     Fiber<int32> f = spawn fiber child(n: 1);
-    return join(fiber: give f);
+    return give f.join();
 }
 @noheap @onPanic(recover: 0)
 fn int32 region(isize i) { return waitOne(); }   // ERROR: region -> waitOne -> join, which switches fibers

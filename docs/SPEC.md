@@ -7004,7 +7004,7 @@ import { std::concurrent::Isolate };
 
 scope { spawn worker(p: give payload); }     // the SCOPE owns the join — at its closing brace
 Isolate h = spawn worker(p: give payload);   // the HANDLE owns it; starts now, joins later
-h.join();                                    // explicit join; `~Isolate()` also joins (RAII)
+give h.join();                               // explicit join, consuming `h`; `~Isolate()` also joins (RAII)
 ```
 
 `spawn` and `parallel_for` are the language's, and they run on the isolate seam `std::concurrent` brings in (its <!-- xfail: spawn_needs_concurrent, parallel_for_needs_concurrent -->
@@ -7209,7 +7209,7 @@ empty value is the one it states (`fd = -1`), not zero, and until `0.9.474` ever
 
 A raw **`UnsafePtr` does cross**, and that is the `unsafe` seam working as designed rather than a hole: the
 bundle is built in an `unsafe ctor` and read through an `unsafe fn`, and **joining the child** — `scope`'s
-closing brace, or an explicit `h.join()` — is what orders the write against the parent's read. It is the
+closing brace, or an explicit `give h.join()` — is what orders the write against the parent's read. It is the
 primary isolate idiom, not an edge case. <!-- test: isolate_basic -->
 
 ### Structured concurrency — `scope` ✅

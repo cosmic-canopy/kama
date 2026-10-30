@@ -34,6 +34,6 @@ fn uint8 main() {
         };
     }
 
-    h.join();
+    give h.join();
     return cast<uint8>(ok);   // 20 iff every value arrived exactly once, in order
 }

@@ -35,6 +35,6 @@ fn uint8 main() {
         };
     }
 
-    h.join();
+    give h.join();
     return cast<uint8>(total);   // 60
 }

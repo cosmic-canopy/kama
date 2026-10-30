@@ -632,7 +632,7 @@ fn uint8 main()
             case None:    { going = false; }
         };
     }
-    h.join();
+    give h.join();
     return cast<uint8>(sum);   // 45
 }
 ```

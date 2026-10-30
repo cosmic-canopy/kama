@@ -8,6 +8,6 @@ fn void worker(Quiet q) { }
 fn uint8 main() {
     Quiet q = Quiet.make(n: 1);
     Isolate w = spawn worker(q: give q);   // ERROR: `Quiet` does not declare `implements Sendable`
-    w.join();
+    give w.join();
     return 0;
 }

@@ -5,7 +5,7 @@
 // would answer WouldBlock. And a stream the program made non-blocking keeps that through the round trip on POSIX
 // (Windows cannot read a socket's mode back, so there `adopt` takes it as blocking). Port 0, read back.
 import { std::net::TcpListener, std::net::TcpStream, std::io::IoError, std::io::IoErrorKind, std::io::Descriptor,
-         std::io::writeAll, std::concurrent::Fiber, std::concurrent::join, std::collections::FixedArray,
+         std::io::writeAll, std::concurrent::Fiber, std::collections::FixedArray,
          std::time::sleep, std::time::Duration };
 
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
@@ -39,7 +39,7 @@ unsafe fn int32 keepsProgramMode(ref TcpListener l, uint16 port) {
     Result<TcpStream, IoError> rb = TcpStream.adopt(descriptor: s.takeDescriptor());
     TcpStream back = match (give rb) { case Ok(value: x): give x; case Err(error: e): { return 32; } };
     Fiber<int32> f = spawn fiber readOnFiber(s: give back);
-    return join(fiber: give f) == 0 - 9 ? 0 : 33;
+    return (give f.join()) == 0 - 9 ? 0 : 33;
 }
 @compileFor(OS_WINDOWS)
 unsafe fn int32 keepsProgramMode(ref TcpListener l, uint16 port) { return 0; }
@@ -57,7 +57,7 @@ unsafe fn uint8 run() {
     one[0] = 5ui8;
     _ = writeAll(w: c, bytes: one.view());
     Fiber<TcpStream> f = spawn fiber firstRead(s: give s);      // registered with this isolate's scheduler
-    TcpStream back = join(fiber: give f);
+    TcpStream back = give f.join();
     int32 answer = 0;
     scope {
         Descriptor d = back.takeDescriptor();

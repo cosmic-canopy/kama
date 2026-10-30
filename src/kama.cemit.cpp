@@ -22241,7 +22241,7 @@ const FuncSig* CEmitter::fiberPrep(IsolateNode* iso, bool held, std::string& val
     if (!held && sig.retCType != "void") {
         unsupported(("a bare `spawn fiber` takes a `void` entry, and `" + fname + "` returns a value nobody would read — "
                      "hold the fiber to have it: `Fiber<…> f = spawn fiber " + fname + "(…);`, then "
-                     "`join(fiber: give f)`").c_str(), iso);
+                     "`give f.join()`").c_str(), iso);
         return nullptr;
     }
     if (held && sig.retCType == "void") {
@@ -22316,7 +22316,7 @@ void CEmitter::emitFiber(IsolateNode* iso, int depth)
 }
 
 // `Fiber<R> f = spawn fiber work(job: give j);` — the held form: start now, and hand the fiber and the cell its result
-// is written into to `Fiber<R>.fromRaw`, which owns the join (`join(fiber: give f)`, or the drop). The destination
+// is written into to `Fiber<R>.fromRaw`, which owns the join (`give f.join()`, or the drop). The destination
 // names `R`, and must agree with what the entry returns.
 std::string CEmitter::emitFiberExpr(IsolateNode* iso)
 {

@@ -1,5 +1,5 @@
 // `fiber` is a keyword only directly after `spawn`; anywhere else it is a name, and must colour like one.
-import { std::concurrent::Fiber, std::concurrent::Atomic, std::concurrent::join };
+import { std::concurrent::Fiber, std::concurrent::Atomic };
 
 type value Holder {
     public int32 fiber;
@@ -15,5 +15,5 @@ fn uint8 main() {
     Atomic<int32> n = Atomic.make(value: 0);
     scope { spawn fiber bump(n: ref n); }
     Fiber<int32> f = spawn  fiber work(n: fiber);
-    return cast<uint8>(join(fiber: give f) + h.fiber + n.load());
+    return cast<uint8>((give f.join()) + h.fiber + n.load());
 }

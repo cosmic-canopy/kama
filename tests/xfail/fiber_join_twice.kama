@@ -1,10 +1,10 @@
 // A join consumes the handle (Rust's `JoinHandle::join(self)`), so a second join of one fiber is a compile error —
 // the handle was given away — and never a run-time one.
-import { std::concurrent::Fiber, std::concurrent::join };
+import { std::concurrent::Fiber };
 fn int32 square(int32 n) { return n * n; }
 fn uint8 main() {
     Fiber<int32> f = spawn fiber square(n: 3);
-    int32 a = join(fiber: give f);
-    int32 b = join(fiber: give f);
+    int32 a = give f.join();
+    int32 b = give f.join();
     return cast<uint8>(a + b);
 }

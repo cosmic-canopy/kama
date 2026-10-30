@@ -1,0 +1,11 @@
+// An isolate's join CONSUMES its handle (KR-261): a second join is a compile error, where it was an idempotent run-time
+// no-op (tests/isolate_handle is one join; tests/isolate_raii_join the drop that joins).
+import { std::concurrent::Isolate };
+type value P implements Sendable { int32 n; public ctor make(int32 n) { this.n = n; } }
+fn void work(P p) { }
+fn uint8 main() {
+    Isolate h = spawn work(p: P.make(n: 1));
+    give h.join();
+    give h.join();   // -> REJECT
+    return 0;
+}

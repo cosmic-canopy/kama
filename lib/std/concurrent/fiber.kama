@@ -1,8 +1,8 @@
 import { std::ptr::relocate };
-export { Fiber, join };
+export { Fiber };
 
 // A fiber's handle (KR-3, docs/design/fibers.md decision 9). `Fiber<R> f = spawn fiber work(job: give j);` starts
-// `work` on this isolate's scheduler now, and `R r = join(fiber: give f);` parks until it has ended and hands back
+// `work` on this isolate's scheduler now, and `R r = give f.join();` parks until it has ended and hands back
 // what it returned. The join CONSUMES the handle, as Rust's `JoinHandle::join(self)` does, so a second join of one
 // fiber is a compile error — the handle was given away — and never a run-time one. A handle dropped unjoined joins,
 // and drops what the fiber returned: a fiber is never orphaned. Not `Sendable`: a fiber runs only on the isolate that
@@ -16,7 +16,6 @@ extern fn void kama_sched_join(UnsafePtr f);
 type resource Fiber<R> {
     UnsafePtr fiber;        // the control block, until the join
     UnsafePtr<R> result;    // the cell the entry's return is written into, which the join moves out and frees
-    friend join[finish];
 
     // `spawn fiber` lowers to this; a handle comes only from a spawn, so it is not called directly.
     unsafe ctor fromRaw(UnsafePtr fiber, UnsafePtr<R> result) {
@@ -24,7 +23,13 @@ type resource Fiber<R> {
         this.result = result;
     }
 
-    // Park until the fiber has ended, then move its result out of the cell and free the cell.
+    // Park until the fiber has ended, and hand back what its entry returned: `R r = give f.join();`. The join CONSUMES
+    // the handle (KR-261), so a second join is a compile error; the destructor then finds the fiber gone and does nothing.
+    @parks
+    public give fn R join() { return this.finish(); }
+
+    // Park until the fiber has ended, then move its result out of the cell and free the cell (the join's, and the
+    // destructor's for a handle dropped unjoined).
     @parks
     unsafe fn R finish() {
         kama_sched_join(f: this.fiber);
@@ -40,7 +45,3 @@ type resource Fiber<R> {
         if (this.fiber != null) { _ = this.finish(); }
     }
 }
-
-// Park until `fiber` has ended, and hand back what its entry returned.
-@parks
-fn R join<R>(Fiber<R> fiber) { return fiber.finish(); }
