@@ -1,0 +1,9 @@
+// `intoDescriptor` consumes the handle (KR-261): it used to leave an empty stream behind whose every call failed at run
+// time; now a use after it is the use-after-move error (tests/net_unix_fds gives a stream end up this way).
+import { std::fs::File, std::io::Descriptor };
+unsafe fn uint8 go(File f) {
+    Descriptor d = give f.intoDescriptor();
+    int32 n = f.rawFd();   // -> REJECT
+    return 0;
+}
+fn uint8 main() { return 0; }

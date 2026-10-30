@@ -1,0 +1,25 @@
+// The std types that own what they were given hand it back (KR-261): an in-memory pair comes apart into two owned
+// ends, and a `SqlQuery` into its text and values, each moved rather than copied off a borrow. (A Unix pair's
+// `split` is net_unix_pair's; `Output.intoParts` is proc_capture_both's.)
+import { std::net::MemoryStreamPair, std::net::MemoryStream, std::fmt::sql, std::fmt::SqlQuery, std::fmt::SqlValue,
+         std::collections::FixedArray, std::io::IoError };
+
+fn uint8 main() {
+    int32 r = 0;
+    MemoryStreamPair p = MemoryStreamPair.open(capacity: 16);
+    match (give p.split()) {
+        case Ends(first: a, second: b): {
+            Result<isize, IoError> w = a.write(bytes: "hi".bytes());
+            FixedArray<uint8> buf = FixedArray.make(size: 4);
+            Result<isize, IoError> got = b.read(into: buf.viewMut());
+            isize n = match (got) { case Ok(value: k): k; case Err(error: e): -1; };
+            if (n == 2 && buf[0] == 104ui8) { r = r + 1; }
+        }
+    };
+    int32 id = 7;
+    SqlQuery q = sql"SELECT ${id}";
+    match (give q.intoParts()) {
+        case Parts(text: t, params: ps): { if (t == "SELECT ?" && ps.length() == 1 && ps[0] == SqlValue::Int(value: 7)) { r = r + 2; } }
+    };
+    return r == 3 ? 42 : cast<uint8>(r);
+}

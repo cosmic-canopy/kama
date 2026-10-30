@@ -342,7 +342,7 @@ The public `Poller` keeps applying its own `add` at once; that is one call per s
   - the park points are named in std by `@parks`, so `grep @parks` lists every one.
 
 *Ruled 2026-10-26, for step 5:*
-- **The socket remembers the mode the program asked for,** since Windows cannot read `FIONBIO` back. `takeDescriptor()`
+- **The socket remembers the mode the program asked for,** since Windows cannot read `FIONBIO` back. `intoDescriptor()`
   hands the descriptor back in that mode with its registration released; `adopt` reads `O_NONBLOCK` on POSIX and assumes
   blocking on Windows; `rawHandle()` lends the descriptor as it is, which on a fiber is non-blocking.
 - **A Linux Unix `connect` that meets a full backlog** (`EAGAIN`, no connection started) retries on a short timer until

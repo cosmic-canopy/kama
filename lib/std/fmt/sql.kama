@@ -9,7 +9,7 @@
 
 import { std::collections::DynamicArray };
 
-export { SqlValue, SqlParam, SqlQuery, sql };
+export { SqlValue, SqlParam, SqlQuery, SqlQueryParts, sql };
 
 // One SQL value: what a driver binds to a `?`. The portable core every database has; a driver with richer
 // types (arrays, JSON, UUID, timestamps) defines its own contract for them.
@@ -77,7 +77,12 @@ type resource SqlQuery {
     public const fn const ref string queryText() { return this.text; }
     public const fn isize paramCount() { return this.params.length(); }
     public const fn const ref SqlValue param(isize at) { return this.params[at]; }
+    // Take the query apart, consuming it (KR-261): a driver binds the text and the values without copying either.
+    public give fn SqlQueryParts intoParts() { return SqlQueryParts::Parts(text: give this.text, params: give this.params); }
 }
+
+// A `SqlQuery` taken apart: its text and its values, owned (`intoParts`).
+type enum SqlQueryParts { Parts(string text, DynamicArray<SqlValue> params); }
 
 fn SqlQuery sql(Template<SqlParam> t) {
     Formatter f = Formatter.make();

@@ -355,14 +355,14 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // The stream keeps the mode the descriptor arrived in (read back on POSIX; Windows cannot, so there it is taken as
     // blocking, and a program that made it non-blocking says so with `setNonBlocking(true)`).
     public unsafe ctor Result<TcpStream, IoError> adopt(Descriptor descriptor) {
-        return match (descriptor.release(asSocket: true)) {
+        return match (give descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: TcpStream.make(fd: h, io: null, mode: kama_net_adopt_mode(fd: h)));
         };
     }
-    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing). It leaves in the mode the
+    // Give the socket up as a `Descriptor`, consuming this (KR-261; its destructor then finds nothing to close). It leaves in the mode the
     // program asked for, off any fiber scheduler.
-    public unsafe fn Descriptor takeDescriptor() {
+    public unsafe give fn Descriptor intoDescriptor() {
         isize h = this.fd;
         kama_net_settle(fd: h, io: this.io, mode: this.mode);
         this.fd = -1; this.io = null; this.mode = 0;
@@ -523,13 +523,13 @@ type resource TcpListener implements Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<TcpListener, IoError> adopt(Descriptor descriptor) {
-        return match (descriptor.release(asSocket: true)) {
+        return match (give descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: TcpListener.make(fd: h, mode: kama_net_adopt_mode(fd: h)));
         };
     }
-    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing), in the program's mode.
-    public unsafe fn Descriptor takeDescriptor() {
+    // Give the socket up as a `Descriptor`, consuming this (KR-261; its destructor then finds nothing to close), in the program's mode.
+    public unsafe give fn Descriptor intoDescriptor() {
         isize h = this.fd;
         kama_net_settle(fd: h, io: this.io, mode: this.mode);
         this.fd = -1; this.io = null; this.mode = 0;

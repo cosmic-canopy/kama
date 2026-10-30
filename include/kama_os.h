@@ -4501,7 +4501,7 @@ static inline int32_t kama_net_close(ptrdiff_t fd, void* io) {
     kama_net_release(io);
     return kama_close_socket(fd);
 }
-// A descriptor leaving its socket (`takeDescriptor`): released, and back in the mode the program asked for.
+// A descriptor leaving its socket (`intoDescriptor`): released, and back in the mode the program asked for.
 static inline void kama_net_settle(ptrdiff_t fd, void* io, int32_t mode) {
     kama_net_release(io);
     if ((mode & KAMA_NET_KAMA_NB) && !(mode & KAMA_NET_PROGRAM_NB)) (void)kama_set_nonblocking(fd, 0);

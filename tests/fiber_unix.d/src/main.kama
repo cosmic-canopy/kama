@@ -25,7 +25,7 @@ unsafe fn void writer(UnixStream s) {
     Result<File, IoError> fr = File.open(path: "fiber_unix.txt", mode: OpenMode::Read);
     File f = match (give fr) { case Ok(value: x): give x; case Err(error: e): { return; } };
     DynamicArray<Descriptor> ds = DynamicArray.empty();
-    ds.add(item: f.takeDescriptor());
+    ds.add(item: give f.intoDescriptor());
     FixedArray<uint8> msg = FixedArray.make(size: 3);
     msg[0] = 1ui8; msg[1] = 2ui8; msg[2] = 3ui8;
     _ = s.sendDescriptors(bytes: msg.view(), descriptors: give ds);

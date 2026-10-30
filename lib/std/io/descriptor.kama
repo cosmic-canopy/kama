@@ -4,8 +4,8 @@
 // model, decided by the maintainer 2026-09-30 (KR-104):
 //
 // - It closes on drop, so a descriptor can never leak: one received and never adopted is closed like any value.
-// - Every handle type converts both ways — `X.adopt(descriptor: give d)`, `x.takeDescriptor()` (leaving `x`
-//   empty) — and `x.duplicateDescriptor()` makes a second one for the same open file or socket, which is what
+// - Every handle type converts both ways — `X.adopt(descriptor: give d)`, `give x.intoDescriptor()` (consuming `x`,
+//   KR-261) — and `x.duplicateDescriptor()` makes a second one for the same open file or socket, which is what
 //   you send when you keep your own. The receiver says what a descriptor IS by the type it adopts it into.
 // - A raw number becomes one only through `Descriptor.adopt(raw:)` / `adoptSocket(raw:)` — `adopt`, as every
 //   ownership transfer in std is spelled — so `grep adopt(raw:` finds every place a program claims a number it
@@ -49,10 +49,11 @@ type resource Descriptor implements Sendable {
         if (d < 0) { return Result::Err(error: lastError()); }
         return Result::Ok(value: Descriptor.own(handle: d, kind: this.kind));
     }
-    // Give the number up to whatever adopts it, leaving this empty: the adopting type closes it from here. On
-    // Windows a file's descriptor cannot become a socket or the reverse — `InvalidInput`, and it is closed.
+    // Give the number up to whatever adopts it, consuming this (KR-261): the adopting type closes it from here. On
+    // Windows a file's descriptor cannot become a socket or the reverse — `InvalidInput`, and it is closed, by the
+    // destructor that runs at this method's end.
     // The bridge every `adopt` crosses; a program adopts rather than calling this.
-    public unsafe fn Result<isize, IoError> release(bool asSocket) {
+    public unsafe give fn Result<isize, IoError> release(bool asSocket) {
         if (kama_desc_kind_fits(kind: this.kind, socket: asSocket ? 1 : 0) == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
         isize h = this.handle;
         this.handle = -1;

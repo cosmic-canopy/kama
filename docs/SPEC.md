@@ -2411,7 +2411,7 @@ non-blocking and registers it with the isolate's scheduler at its first wait; ne
   its own `Poller`.
 - **A socket moved to another isolate** is taken off the first isolate's scheduler by whichever isolate next uses or <!-- test: fiber_net_handoff -->
   drops it; on an isolate that runs no fibers it is a blocking socket again.
-- **`takeDescriptor()` hands the descriptor back in the mode the program asked for**, off any scheduler; `adopt` reads <!-- test: fiber_net_descriptor -->
+- **`intoDescriptor()` hands the descriptor back in the mode the program asked for**, off any scheduler; `adopt` reads <!-- test: fiber_net_descriptor -->
   the mode a descriptor arrives in on POSIX, and takes it as blocking on Windows, which cannot read it back.
 - **`rawHandle()` lends the descriptor as it is**, non-blocking on a fiber. A `duplicateDescriptor()` shares the open
   socket's mode, so one used on a fiber is non-blocking; kama's own data calls there pass `MSG_DONTWAIT` (POSIX), so a
@@ -2703,9 +2703,9 @@ path with nothing at it is `NotFound` on every OS: Windows answers it as it answ
 
 **A connected pair with no path.** `UnixStreamPair.open()` makes two connected `UnixStream`s and no file — the shape <!-- test: net_unix_pair -->
 a parent uses to talk to a helper both ways: keep one end, hand the other to a child as its stdin and stdout <!-- test: proc_unix_pair -->
-(`Stdio::Handle(descriptor: pair.second().takeDescriptor())`) or to an isolate. Each end is lent in place, `first()`
-and `second()`, as `Process.stdin()` lends its pipe, and leaves the pair through its own `takeDescriptor()`; an end still
-in the pair closes when the pair drops. Both ends are close-on-exec, so a child holds only the end it is handed, and
+(`Stdio::Handle(descriptor: give b.intoDescriptor())`) or to an isolate. Each end is lent in place, `first()` and
+`second()`, as `Process.stdin()` lends its pipe, and the pair comes apart into two owned ends with `give pair.split()`
+(`match … { case Ends(first: a, second: b): … }`, KR-261); an end still in the pair closes when the pair drops. Both ends are close-on-exec, so a child holds only the end it is handed, and
 each end's peer is this process. POSIX makes it with `socketpair`; Windows has none, so there the pair is a private
 listener in the temp directory, connected to once and accepted, its path removed as soon as the connection is queued,
 and refused unless both ends name this process as their peer — a stranger who connected first is not paired. A
@@ -2721,7 +2721,7 @@ OS, where the kernel sizes a `UnixStreamPair`'s buffers. A write takes what fits
 and a read of an empty direction is `WouldBlock`. After the far end's `shutdown(how: Write)` or drop, a read is 0 once
 drained, and a write after this end's own `shutdown(how: Write)` is `BrokenPipe`, as is a write the far end shut its
 `Read` against. Always non-blocking, as a stream on the web is: `setNonBlocking` changes nothing. The ends are lent in
-place, `first()` and `second()`, as `UnixStreamPair`'s are, and are not `Sendable`: they share their buffers through a
+place, `first()` and `second()`, as `UnixStreamPair`'s are, or taken apart with `give pair.split()`, and are not `Sendable`: they share their buffers through a
 `Shared`, so the pair is one isolate's. tokio's `io::duplex(max_buf_size)` is the model; Go's `net.Pipe` is unbuffered.
 
 **Passing open descriptors.** `UnixStream.sendDescriptors(bytes:, descriptors:)` sends open files, sockets
@@ -2730,8 +2730,9 @@ and streams to the process on the other end, with at least one byte to carry the
 **`std::io::Descriptor`**, an OWNED descriptor that closes when it drops, so none can leak — one received and
 never adopted is closed like any value, and a message carrying more than 253, or more than the kernel kept, is
 `MessageTooLong` with every one that did arrive closed. Every handle type converts both ways: `X.adopt(descriptor:)`
-(the receiver says what a descriptor IS by the type it adopts it into), `x.takeDescriptor()` (leaving `x` empty)
-and `x.duplicateDescriptor()`. Sending CONSUMES the list — each is closed once the peer holds its own — so a
+(the receiver says what a descriptor IS by the type it adopts it into), `give x.intoDescriptor()`, which consumes `x`
+(a use after it is a compile error, KR-261), and `x.duplicateDescriptor()`. A pipe end a `Process` lends leaves it <!-- xfail: into_descriptor_use_after -->
+with `takeStdout()` (and `takeStdin()`, `takeStderr()`), which leaves an empty `File` in its place. <!-- test: proc_stdio_redirect --> Sending CONSUMES the list — each is closed once the peer holds its own — so a
 sender keeps a file by sending a duplicate. A raw number from outside kama becomes a `Descriptor` through ONE named
 door, `Descriptor.adopt(raw:)` / `adoptSocket(raw:)` — `adopt`, as every ownership transfer in std is spelled — and
 the per-type public `make(fd:)` doors are private since `0.9.485`, so `grep` finds every place a program claims a <!-- xfail: descriptor_raw_make -->

@@ -1,5 +1,5 @@
 // KR-3 step 5: a socket leaving as a descriptor leaves in the mode the PROGRAM asked for. A stream read once on a fiber
-// is non-blocking underneath (kama's, to park on it); `takeDescriptor` takes it off the scheduler and makes it blocking
+// is non-blocking underneath (kama's, to park on it); `intoDescriptor` takes it off the scheduler and makes it blocking
 // again, so a worker isolate that adopts it reads it as a blocking socket: its read waits for a byte sent after it
 // starts. Had the descriptor stayed non-blocking, `adopt` would read the mode back as the program's choice and the read
 // would answer WouldBlock. And a stream the program made non-blocking keeps that through the round trip on POSIX
@@ -36,7 +36,7 @@ unsafe fn int32 keepsProgramMode(ref TcpListener l, uint16 port) {
     Result<TcpStream, IoError> ra = l.accept();
     TcpStream s = match (give ra) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
     _ = s.setNonBlocking(on: true);
-    Result<TcpStream, IoError> rb = TcpStream.adopt(descriptor: s.takeDescriptor());
+    Result<TcpStream, IoError> rb = TcpStream.adopt(descriptor: give s.intoDescriptor());
     TcpStream back = match (give rb) { case Ok(value: x): give x; case Err(error: e): { return 32; } };
     Fiber<int32> f = spawn fiber readOnFiber(s: give back);
     return (give f.join()) == 0 - 9 ? 0 : 33;
@@ -60,7 +60,7 @@ unsafe fn uint8 run() {
     TcpStream back = give f.join();
     int32 answer = 0;
     scope {
-        Descriptor d = back.takeDescriptor();
+        Descriptor d = give back.intoDescriptor();
         spawn adopter(d: give d);
         sleep(d: Duration.fromMillis(ms: 30));                   // the worker's read is waiting by now
         one[0] = 41ui8;

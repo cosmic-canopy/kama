@@ -17,7 +17,7 @@
 import { std::io::IoError, std::io::IoErrorKind, std::collections::View, std::collections::ConstView,
          std::collections::FixedArray, std::memory::Shared, ReliableStream, Shutdown };
 
-export { MemoryStreamPair, MemoryStream };
+export { MemoryStreamPair, MemoryStreamEnds, MemoryStream };
 
 // One direction: a ring of `capacity` bytes; whether its writer has shut it (once drained, a read is 0); and whether
 // its reader has gone (a write is `BrokenPipe`). Not exported, so its members are this file's alone.
@@ -88,8 +88,8 @@ type resource MemoryStream implements ReliableStream {
     ~MemoryStream() { this.inbox.shutRead(); this.outbox.shutWrite(); }
 }
 
-// The two ends, each lent in place (`first()`, `second()`), as `UnixStreamPair` lends its ends. `capacity` bytes each
-// way, at least 1.
+// The two ends, each lent in place (`first()`, `second()`), as `UnixStreamPair` lends its ends, or taken apart into two
+// owned ends with `give pair.split()`. `capacity` bytes each way, at least 1.
 type resource MemoryStreamPair {
     MemoryStream a;
     MemoryStream b;
@@ -104,4 +104,9 @@ type resource MemoryStreamPair {
     }
     public fn ref MemoryStream first() { return this.a; }
     public fn ref MemoryStream second() { return this.b; }
+    // Take the pair apart, consuming it (KR-261): each end is then owned on its own, and may leave the other's frame.
+    public give fn MemoryStreamEnds split() { return MemoryStreamEnds::Ends(first: give this.a, second: give this.b); }
 }
+
+// A `MemoryStreamPair` taken apart: its two ends, owned (`split`).
+type enum MemoryStreamEnds { Ends(MemoryStream first, MemoryStream second); }

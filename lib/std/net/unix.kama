@@ -27,7 +27,7 @@ import {
  std::time::Instant, ConnectOptions,
 };
 
-export { UnixStream, UnixStreamPair, UnixListener, UnixAddr, UnixDatagram, UnixDatagramPair };
+export { UnixStream, UnixStreamPair, UnixStreamEnds, UnixListener, UnixAddr, UnixDatagram, UnixDatagramPair, UnixDatagramEnds };
 
 extern "kama_os.h";
 extern fn int32 kama_net_init();
@@ -388,13 +388,13 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<UnixStream, IoError> adopt(Descriptor descriptor) {
-        return match (descriptor.release(asSocket: true)) {
+        return match (give descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: UnixStream.make(fd: h, io: null, mode: kama_net_adopt_mode(fd: h)));
         };
     }
-    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing), in the program's mode.
-    public unsafe fn Descriptor takeDescriptor() {
+    // Give the socket up as a `Descriptor`, consuming this (KR-261; its destructor then finds nothing to close), in the program's mode.
+    public unsafe give fn Descriptor intoDescriptor() {
         isize h = this.fd;
         kama_net_settle(fd: h, io: this.io, mode: this.mode);
         this.fd = -1; this.io = null; this.mode = 0;
@@ -429,12 +429,13 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
 
 // A listening Unix-domain socket. Closes on drop and REMOVES the socket file it created. Move-only, `Sendable`.
 // A connected pair of Unix streams with no name on disk (KR-178): the shape a parent uses to talk to a helper both
-// ways — keep one end, hand the other to a child (`Stdio::Handle(descriptor: pair.second().takeDescriptor())`) or to
-// an isolate. POSIX makes it with `socketpair`; Windows has none, so there a private listener is made, connected to
+// ways — keep one end, hand the other to a child (`split()` the pair, then `Stdio::Handle(descriptor: give
+// b.intoDescriptor())`) or to an isolate. POSIX makes it with `socketpair`; Windows has none, so there a private listener is made, connected to
 // once and accepted, and its path removed as soon as the connection is queued — and both ends must name this process
 // as their peer, so a stranger who connected first is refused rather than paired. Both ends are close-on-exec, so a
 // child holds only the end it is handed. Each is lent in place (`first()`, `second()`), as `Process.stdin()` lends
-// its pipe, and leaves the pair through its `takeDescriptor()`; an end still in the pair closes when the pair drops.
+// its pipe, and the pair comes apart into two owned ends with `give pair.split()`; an end still in the pair closes
+// when the pair drops.
 // On Windows a socket is no child's stream (see `Stdio`), so there a pair serves isolates. Move-only, `Sendable`.
 type resource UnixStreamPair implements Sendable {
     UnixStream a;
@@ -451,7 +452,13 @@ type resource UnixStreamPair implements Sendable {
     }
     public fn ref UnixStream first() { return this.a; }
     public fn ref UnixStream second() { return this.b; }
+    // Take the pair apart, consuming it (KR-261): each end is then owned on its own, one kept and the other handed to a
+    // child or an isolate — `match (give pair.split()) { case Ends(first: a, second: b): … }`.
+    public give fn UnixStreamEnds split() { return UnixStreamEnds::Ends(first: give this.a, second: give this.b); }
 }
+
+// A `UnixStreamPair` taken apart: its two ends, owned (`split`).
+type enum UnixStreamEnds { Ends(UnixStream first, UnixStream second); }
 
 type resource UnixListener implements Sendable {
     isize fd = -1;
@@ -516,13 +523,13 @@ type resource UnixListener implements Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<UnixListener, IoError> adopt(Descriptor descriptor) {
-        return match (descriptor.release(asSocket: true)) {
+        return match (give descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: UnixListener.own(fd: h, created: "", mode: kama_net_adopt_mode(fd: h)));
         };
     }
     // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing — and the socket FILE stays: whoever holds the descriptor now serves it).
-    public unsafe fn Descriptor takeDescriptor() {
+    public unsafe give fn Descriptor intoDescriptor() {
         isize h = this.fd;
         kama_net_settle(fd: h, io: this.io, mode: this.mode);
         this.fd = -1; this.io = null; this.mode = 0; this.created = "";
@@ -668,13 +675,13 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<UnixDatagram, IoError> adopt(Descriptor descriptor) {
-        return match (descriptor.release(asSocket: true)) {
+        return match (give descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: UnixDatagram.own(fd: h, created: "", mode: kama_net_adopt_mode(fd: h)));
         };
     }
     // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing — and a bound FILE stays).
-    public unsafe fn Descriptor takeDescriptor() {
+    public unsafe give fn Descriptor intoDescriptor() {
         isize h = this.fd;
         kama_net_settle(fd: h, io: this.io, mode: this.mode);
         this.fd = -1; this.io = null; this.mode = 0; this.created = "";
@@ -712,7 +719,8 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
 
 // A connected pair of Unix datagram sockets with no name (KR-178) — `UnixStreamPair`'s twin where datagrams exist,
 // Linux and macOS: each `send` is one whole message to the other end, and neither needs an address. Close-on-exec
-// both, lent in place, leaving through `takeDescriptor()`. macOS caps one datagram at 2048 bytes. Move-only, `Sendable`.
+// both, lent in place, and taken apart with `give pair.split()`. macOS caps one datagram at 2048 bytes. Move-only,
+// `Sendable`.
 @compileFor(!OS_WINDOWS)
 type resource UnixDatagramPair implements Sendable {
     UnixDatagram a;
@@ -729,4 +737,10 @@ type resource UnixDatagramPair implements Sendable {
     }
     public fn ref UnixDatagram first() { return this.a; }
     public fn ref UnixDatagram second() { return this.b; }
+    // Take the pair apart, consuming it (KR-261), as `UnixStreamPair.split` does.
+    public give fn UnixDatagramEnds split() { return UnixDatagramEnds::Ends(first: give this.a, second: give this.b); }
 }
+
+// A `UnixDatagramPair` taken apart: its two ends, owned (`split`).
+@compileFor(!OS_WINDOWS)
+type enum UnixDatagramEnds { Ends(UnixDatagram first, UnixDatagram second); }

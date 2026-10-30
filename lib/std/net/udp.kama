@@ -302,13 +302,13 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adoptSocket(raw:)`. On Windows it must be a socket's (`InvalidInput`, and it is closed).
     public unsafe ctor Result<UdpSocket, IoError> adopt(Descriptor descriptor) {
-        return match (descriptor.release(asSocket: true)) {
+        return match (give descriptor.release(asSocket: true)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: UdpSocket.make(fd: h, mode: kama_net_adopt_mode(fd: h)));
         };
     }
-    // Give the socket up as a `Descriptor`, leaving this empty (its drop closes nothing).
-    public unsafe fn Descriptor takeDescriptor() {
+    // Give the socket up as a `Descriptor`, consuming this (KR-261; its destructor then finds nothing to close).
+    public unsafe give fn Descriptor intoDescriptor() {
         isize h = this.fd;
         kama_net_settle(fd: h, io: this.io, mode: this.mode);
         this.fd = -1; this.io = null; this.mode = 0;

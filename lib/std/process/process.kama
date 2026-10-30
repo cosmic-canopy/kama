@@ -14,7 +14,7 @@
 
 import { std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::io::Descriptor, std::memory::replace, std::fs::File, std::collections::DynamicArray, std::ptr::nonNull };
 
-export { Command, Process, ExitStatus, Output, Stdio, ProcessGroup };
+export { Command, Process, ExitStatus, Output, OutputParts, Stdio, ProcessGroup };
 
 extern "kama_os.h";
 // argv/envp marshalling — kama can't build a `char*[]`, so the vector is assembled in C (strdup'd, so it
@@ -84,7 +84,7 @@ fn int32 groupJoin(const ref ProcessGroup g) { return 0; }
 // Where one of a child's streams goes — one value per stream says it all (KR-171):
 //   `Inherit` — the parent's own; `Piped` — a pipe the parent keeps an end of (`Process.stdin()`/`stdout()`/
 //   `stderr()`); `Null` — the null device; `Handle(descriptor:)` — any owned handle: a `File`, a socket, a pipe end,
-//   another child's (`file.takeDescriptor()`). The child takes it: it is closed in the parent once the child holds
+//   another child's (`give file.intoDescriptor()`). The child takes it: it is closed in the parent once the child holds
 //   it, so a reader of the other end sees end-of-file when the child exits, and it serves ONE `start()` — a second
 //   without setting the stream again is `InvalidInput`. (Rust and Python keep the parent's copy open, a known trap.)
 //   `Stdout` — stderr into stdout, `2>&1`: it means "wherever stdout goes", so it belongs to stderr alone
@@ -125,7 +125,15 @@ type resource Output implements Sendable {
     public const fn ExitStatus status() { return this.st; }
     public const fn const ref DynamicArray<uint8> stdout() { return this.outBytes; }
     public const fn const ref DynamicArray<uint8> stderr() { return this.errBytes; }
+    // Take the result apart, consuming it (KR-261): the captured bytes move out rather than being copied off the
+    // borrows — `match (give out.intoParts()) { case Parts(status: s, stdout: o, stderr: e): … }`.
+    public give fn OutputParts intoParts() {
+        return OutputParts::Parts(status: this.st, stdout: give this.outBytes, stderr: give this.errBytes);
+    }
 }
+
+// An `Output` taken apart: the status and both captured streams, owned (`intoParts`).
+type enum OutputParts implements Sendable { Parts(ExitStatus status, DynamicArray<uint8> stdout, DynamicArray<uint8> stderr); }
 
 // Fold a raw wait-status into an ExitStatus (WIF* accessors stay in C; kama sees only the int status). A status that
 // is neither an exit nor a signal is a stopped or continued child, which `kama_proc_wait` never asks to hear about
@@ -455,6 +463,13 @@ type resource Process implements Sendable {
     public fn ref File stdin()  { return this.inPipe; }
     public fn ref File stdout() { return this.outPipe; }
     public fn ref File stderr() { return this.errPipe; }
+
+    // Take a pipe end out, leaving the empty `File` in its place (Rust's `child.stdout.take()`): what a pipeline hands
+    // the next child, `Stdio::Handle(descriptor: give out.intoDescriptor())`, or what a fiber reads apart from the
+    // process. A stream that was not Piped, or was taken already, comes back empty.
+    public unsafe fn File takeStdin()  { return replace(place: this.inPipe, with: File.make(fd: -1)); }
+    public unsafe fn File takeStdout() { return replace(place: this.outPipe, with: File.make(fd: -1)); }
+    public unsafe fn File takeStderr() { return replace(place: this.errPipe, with: File.make(fd: -1)); }
 
     // Close the child's stdin write end NOW → the child reading its stdin sees EOF. Explicit close (not a
     // drop) so the child (whose inherited copy of this fd is FD_CLOEXEC'd away at exec) is the last holder.

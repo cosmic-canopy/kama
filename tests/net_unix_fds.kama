@@ -2,7 +2,7 @@
 // connection travel with two bytes, and the receiver makes them what they are again (`File.adopt`,
 // `UnixStream.adopt`) and uses them — the file reads back its contents, and a byte written through the passed
 // stream end arrives at its partner. A `std::io::Descriptor` is OWNED, so the sender's list is consumed (it keeps
-// the file by sending a duplicate, and gives the stream end up with `takeDescriptor`, which leaves that stream
+// the file by sending a duplicate, and gives the stream end up with `intoDescriptor`, which consumes that stream
 // empty), and a raw number becomes one only through `Descriptor.adopt(raw:)`. Sending nothing, or no bytes
 // to carry them, is `InvalidInput`. POSIX passes them as SCM_RIGHTS; Windows puts each handle into the peer
 // process first. Both ends here are this one process, which is enough for the kernel either way. Returns 55.
@@ -51,13 +51,12 @@ fn uint8 main() {
     DynamicArray<Descriptor> none = DynamicArray.empty();
     if (!isInvalid(r: c.sendDescriptors(bytes: hi.view(), descriptors: give none))) { return 11; }   // nothing to send
 
-    // Keep the file (send a duplicate); give the stream end up (take it).
+    // Keep the file (send a duplicate); give the stream end up (`intoDescriptor` consumes it).
     Result<Descriptor, IoError> rd = f.duplicateDescriptor();
     Descriptor fileCopy = match (give rd) { case Ok(value: x): give x; case Err(error: e): { return 12; } };
     DynamicArray<Descriptor> outgoing = DynamicArray.empty();
     outgoing.add(item: give fileCopy);
-    outgoing.add(item: c2.takeDescriptor());
-    if (c2.rawHandle() != -1) { return 13; }                  // taken: the stream is empty now
+    outgoing.add(item: give c2.intoDescriptor());              // the stream is consumed: using `c2` now is a compile error
     usize sent = match (c.sendDescriptors(bytes: hi.view(), descriptors: give outgoing)) { case Ok(value: n): n; case Err(error: e): 0; };
     if (sent != 2) { return 14; }
 
@@ -87,7 +86,7 @@ fn uint8 main() {
     // A raw number from outside kama enters through the one named door.
     Result<Descriptor, IoError> rd2 = f.duplicateDescriptor();
     Descriptor again = match (give rd2) { case Ok(value: x): give x; case Err(error: e): { return 22; } };
-    isize raw = match (again.release(asSocket: false)) { case Ok(value: h): h; case Err(error: e): -1; };
+    isize raw = match (give again.release(asSocket: false)) { case Ok(value: h): h; case Err(error: e): -1; };
     Descriptor adopted = Descriptor.adopt(raw: raw);
     if (adopted.rawHandle() != raw || raw < 0) { return 23; }
     return 55;

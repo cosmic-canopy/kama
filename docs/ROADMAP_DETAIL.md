@@ -907,7 +907,7 @@ shared pointee is not the caller's to consume. *Sacrifice:* no dynamic-dispatch 
   | `StringWriter.finish()`, `.takeBytes()` | copy the buffer byte by byte; every `serialize…Buffer` pays it | `give fn` forms that MOVE the buffer, replacing the copying ones |
   | `Fiber<R>`: the free `(give f.join())` exists only for want of this | a `friend`-granted free function | `give f.join()`, replacing the free function (one way); `Isolate.join()` the same, so a second join is a compile error |
   | `UnixStreamPair`, `UnixDatagramPair`, `MemoryStreamPair` | lent ends; a `MemoryStream` end can NEVER leave its pair | a consuming `split` into a one-variant enum of the two ends, the shape KR-244 ruled for `TcpHalves` |
-  | `File`, `TcpStream`, `TcpListener`, `UdpSocket`, the Unix sockets, `Descriptor`: `takeDescriptor()` leaves `fd = -1` | the stream lives on as a zombie whose every call fails at run time | `give fn Descriptor intoDescriptor()`, replacing `takeDescriptor()`: use after it becomes a compile error (decision 3: the method sets `fd = -1`, its destructor still runs) |
+  | `File`, `TcpStream`, `TcpListener`, `UdpSocket`, the Unix sockets, `Descriptor`: `intoDescriptor()` leaves `fd = -1` | the stream lives on as a zombie whose every call fails at run time | `give fn Descriptor intoDescriptor()`, replacing `intoDescriptor()`: use after it becomes a compile error (decision 3: the method sets `fd = -1`, its destructor still runs) |
   | `Output`, `SqlQuery` | `const ref` getters: copy to own | `give fn` into-parts, so a driver binds and a caller decodes without a copy |
   | `Locked<T>`, `ReadWriteLocked<T>` | the payload can only be borrowed | KR-262 |
   | `Map`'s `Entry`, `ConcurrentMap.entries()` | key and value only lent; `entries()` copies each pair twice | KR-263 |
@@ -2786,7 +2786,7 @@ match (give h) {
         }
     }
 };
-// 2. A pair resource whose ends leave by a `take`, as `UnixStreamPair`'s leave by `takeDescriptor()`:
+// 2. A pair resource whose ends leave by a `take`, as `UnixStreamPair`'s leave by `intoDescriptor()`:
 TcpHalves h = split(stream: give conn);
 spawn fiber pumpIn(from: h.takeReader());
 spawn fiber pumpOut(to: h.takeWriter());

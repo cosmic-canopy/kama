@@ -22,22 +22,27 @@ unsafe fn Result<UnixStreamPair, IoError> pair() { return UnixStreamPair.open();
 unsafe fn int32 echoChild() {
     Result<UnixStreamPair, IoError> rp = pair();
     UnixStreamPair p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
-    Result<Descriptor, IoError> rd = p.second().duplicateDescriptor();
+    return match (give p.split()) { case Ends(first: a, second: b): echoWith(a: give a, b: give b); };   // KR-261
+}
+
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 echoWith(UnixStream a, UnixStream b) {
+    Result<Descriptor, IoError> rd = b.duplicateDescriptor();
     Descriptor dup = match (give rd) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
     Command c = Command.make(program: util());
     c.arg(a: "cat");
-    c.stdin(s: Stdio::Handle(descriptor: p.second().takeDescriptor()));
+    c.stdin(s: Stdio::Handle(descriptor: give b.intoDescriptor()));
     c.stdout(s: Stdio::Handle(descriptor: give dup));
     Result<Process, IoError> sr = c.start();
     Process child = match (give sr) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
     string ping = "ping";
-    if (match (p.first().write(bytes: ping.bytes())) { case Ok(value: n): n != 4; case Err(error: e): true; }) { return 4; }
-    if (match (p.first().shutdown(how: Shutdown::Write)) { case Ok(value: u): false; case Err(error: e): true; }) { return 5; }
+    if (match (a.write(bytes: ping.bytes())) { case Ok(value: n): n != 4; case Err(error: e): true; }) { return 4; }
+    if (match (a.shutdown(how: Shutdown::Write)) { case Ok(value: u): false; case Err(error: e): true; }) { return 5; }
     FixedArray<uint8> buf = FixedArray.make(size: 16);
     isize got = 0;
     bool more = true;
     while (more) {   // a stream may hand the echo back in pieces
-        isize n = match (p.first().read(into: buf.viewMut().slice(from: got, count: 16 - got))) { case Ok(value: k): k; case Err(error: e): -1; };
+        isize n = match (a.read(into: buf.viewMut().slice(from: got, count: 16 - got))) { case Ok(value: k): k; case Err(error: e): -1; };
         if (n < 0) { return 6; }
         if (n == 0) { more = false; } else { got += n; }
     }
@@ -52,6 +57,11 @@ unsafe fn int32 echoChild() {
 unsafe fn int32 nothingLeaks() {
     Result<UnixStreamPair, IoError> rp = pair();
     UnixStreamPair p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 21; } };
+    return match (give p.split()) { case Ends(first: a, second: b): leaksWith(a: give a, b: give b); };   // KR-261
+}
+
+@compileFor(!OS_WINDOWS)
+unsafe fn int32 leaksWith(UnixStream a, UnixStream b) {
     Command c = Command.make(program: util());
     c.arg(a: "cat");
     c.stdin(s: Stdio::Piped);
@@ -63,10 +73,10 @@ unsafe fn int32 nothingLeaks() {
     Result<isize, IoError> wx = child.stdin().write(bytes: x.bytes());
     FixedArray<uint8> back = FixedArray.make(size: 1);
     if (match (child.stdout().read(into: back.viewMut())) { case Ok(value: n): n != 1; case Err(error: e): true; }) { return 27; }
-    { Descriptor gone = p.second().takeDescriptor(); }   // the parent's only copy closes here
-    if (match (p.first().setNonBlocking(on: true)) { case Ok(value: u): false; case Err(error: e): true; }) { return 23; }
+    { Descriptor gone = give b.intoDescriptor(); }   // the parent's only copy closes here
+    if (match (a.setNonBlocking(on: true)) { case Ok(value: u): false; case Err(error: e): true; }) { return 23; }
     FixedArray<uint8> one = FixedArray.make(size: 1);
-    int32 rc = match (p.first().read(into: one.viewMut())) {
+    int32 rc = match (a.read(into: one.viewMut())) {
         case Ok(value: n): n == 0 ? 0 : 24;
         case Err(error: e): match (e.kind()) { case WouldBlock: 25; case _: 26; };   // 25: the child holds the end
     };

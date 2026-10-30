@@ -398,17 +398,18 @@ type resource File implements Reader, Writer, Sendable {
     // `std::io::Descriptor` and enters through `adopt`. -1 is an empty File.
     ctor make(int32 fd) { this.fd = fd; }
     friend std::process::Command::launch[make];
+    friend std::process::Process[make];   // the empty File a taken pipe end leaves behind
 
     // Adopt an owned descriptor (`std::io::Descriptor`) — one received over a Unix socket, or made from a raw
     // number by `Descriptor.adopt(raw:)`. On Windows it must be a file's (`InvalidInput` for a socket's, which is closed).
     public ctor Result<File, IoError> adopt(Descriptor descriptor) {
-        return match (descriptor.release(asSocket: false)) {
+        return match (give descriptor.release(asSocket: false)) {
             case Err(error: e): Result::Err(error: e);
             case Ok(value: h): Result::Ok(value: File.make(fd: cast<int32>(h)));
         };
     }
-    // Give the descriptor up as a `Descriptor`, leaving this File empty (its drop closes nothing).
-    public fn Descriptor takeDescriptor() { int32 f = this.fd; this.fd = -1; return Descriptor.adopt(raw: cast<isize>(f)); }
+    // Give the descriptor up as a `Descriptor`, consuming this File (KR-261; its destructor then finds nothing to close).
+    public give fn Descriptor intoDescriptor() { int32 f = this.fd; this.fd = -1; return Descriptor.adopt(raw: cast<isize>(f)); }
     // A second descriptor for this same open file, closed independently — what `sendDescriptors` consumes when
     // you keep this File.
     public unsafe fn Result<Descriptor, IoError> duplicateDescriptor() {

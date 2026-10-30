@@ -11,7 +11,7 @@ fn string text(ConstView<uint8> b) { Result<string, Utf8Error> t = decode(bytes:
 fn string fileText(const ref string path) { Result<string, IoError> r = readText(path: path); return match (give r) { case Ok(value: s): { := give s; } case Err(error: e): { := "?"; } }; }
 unsafe fn Descriptor opened(const ref string path, OpenMode mode) {   // an empty one (-1) if the open failed
     Result<File, IoError> r = File.open(path: path, mode: mode);
-    return match (give r) { case Ok(value: f): f.takeDescriptor(); case Err(error: e): Descriptor.adopt(raw: -1); };
+    return match (give r) { case Ok(value: f): give f.intoDescriptor(); case Err(error: e): Descriptor.adopt(raw: -1); };
 }
 fn int32 kindIsInvalid(Result<Process, IoError> r) {
     return match (give r) { case Ok(value: p): 1; case Err(error: e): match (e.kind()) { case InvalidInput: 0; case _: 2; }; };
@@ -58,7 +58,8 @@ unsafe fn int32 run() {
     Result<Process, IoError> er = e.start();
     Process ep = match (give er) { case Ok(value: v): { := give v; } case Err(error: x): { return 11; } };
     Command f = Command.make(program: util()); f.arg(a: "cat");
-    f.stdin(s: Stdio::Handle(descriptor: ep.stdout().takeDescriptor()));
+    File epOut = ep.takeStdout();   // the pipe end leaves the process (an empty File stays), then its descriptor
+    f.stdin(s: Stdio::Handle(descriptor: give epOut.intoDescriptor()));
     Result<Output, IoError> fr = f.run();
     Output fo = match (give fr) { case Ok(value: v): { := give v; } case Err(error: x): { return 12; } };
     Result<ExitStatus, IoError> ew = ep.wait();

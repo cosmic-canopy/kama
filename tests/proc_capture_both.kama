@@ -15,6 +15,9 @@ fn uint8 main() {
             else if (e != 4) { code = 61; }
             else if (o.stdout()[0] != cast<uint8>(111)) { code = 62; }   // 'o'
             else if (o.stderr()[0] != cast<uint8>(101)) { code = 63; }   // 'e'
+            // ...and taken apart, the captured bytes moved out rather than copied off the borrows (KR-261).
+            isize both = match (give o.intoParts()) { case Parts(status: s, stdout: so, stderr: se): so.length() + se.length(); };
+            if (code == 42 && both != 8) { code = 65; }
             := cast<uint8>(code);
         }
         case Err(error: x): 64;
