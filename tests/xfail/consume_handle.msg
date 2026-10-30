@@ -1,0 +1,1 @@
+the value behind a handle, which the caller does not own

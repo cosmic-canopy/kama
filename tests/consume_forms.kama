@@ -1,0 +1,31 @@
+// The consuming call's other forms (KR-261): a void consuming call as a statement (`give w.close();`), its result
+// discarded (`_ = give w.take();`), a chain whose second call takes the first's fresh result with no marker
+// (`(give w.intoInner()).take()`), a receiver re-armed in a loop before the next pass, and a consuming call on a
+// `match` binding the arm owns.
+static int32 drops = 0;
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 get() { return this.v; } ~Box() { drops = drops + 1; } }
+type resource Inner { Box b; public ctor make(int32 v) { this.b = Box.make(v: v); } public give fn Box take() { return give this.b; } }
+type resource W { Inner in1;
+    public ctor make(int32 v) { this.in1 = Inner.make(v: v); }
+    public give fn void close() { }
+    public give fn Box take() { return give this.in1.take(); }
+    public give fn Inner intoInner() { return give this.in1; }
+}
+type enum Holder { Has(W w); }
+fn uint8 main() {
+    int32 fails = 0;
+    drops = 0;
+    { W w = W.make(v: 1); give w.close(); if (drops != 1) { fails = fails + 1; } }
+    drops = 0;
+    { W w = W.make(v: 2); _ = give w.take(); if (drops != 1) { fails = fails + 2; } }
+    drops = 0;
+    { W w = W.make(v: 3); Box b = (give w.intoInner()).take(); if (b.get() != 3 || drops != 0) { fails = fails + 4; } }
+    drops = 0;
+    { W w = W.make(v: 4); int32 i = 0; while (i < 3) { Box b = give w.take(); w = W.make(v: i); i = i + 1; } }
+    if (drops != 4) { fails = fails + 8; }
+    drops = 0;
+    { Holder h = Holder::Has(w: W.make(v: 5));
+      match (give h) { case Has(w: x): { Box b = give x.take(); if (b.get() != 5) { fails = fails + 16; } } }; }
+    if (drops != 1) { fails = fails + 32; }
+    return fails == 0 ? 42 : cast<uint8>(fails);
+}

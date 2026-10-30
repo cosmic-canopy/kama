@@ -818,6 +818,7 @@ public:
 
 class ThisAccessNode : public ExpressionNode {
 public:
+    bool given = false;   // `give this` — inside a consuming method (`give fn`) it is the receiver's VALUE, `(*self)`
     ThisAccessNode(CodeGenContext& context) : ASTNode(context),  ExpressionNode(context) { }
 };
 
@@ -967,6 +968,10 @@ public:
     SharedExpression expression;
     SharedIdentifier identifier;
     SharedArgumentList args;
+    // `give w.finish()` — the parser takes `give` off a call and marks it here: the call consumes its receiver
+    // (KR-261). Only a call of a `give fn` on a named receiver may carry it; anything else is refused where the
+    // call is emitted, so no hand-off site needs to know.
+    bool consumesReceiver = false;
     InvocationNode(CodeGenContext& context, SharedExpression expression, SharedArgumentList args)
         : ASTNode(context),  ExpressionStatementNode(context)
         , expression(expression)
@@ -1130,6 +1135,7 @@ public:
     SharedParameterList params;
     SharedBlock body;
     bool isConst = false;   // `const fn …` — a non-mutating method
+    bool isConsuming = false; // `give fn …` — consumes its receiver (KR-261); `give const fn` sets both and is refused
     bool isRef = false;     // `fn ref T …` — returns a PLACE (a T*), deref'd at the caller
     bool isConstRef = false; // `fn const ref T …` — the place is READ-ONLY (a `T const*`); implies isRef
     bool isCtor = false;    // `ctor name(…)` — a named constructor (static factory returning the enclosing

@@ -1,0 +1,1 @@
+on a `type view` — only a `resource` or an `enum`

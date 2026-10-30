@@ -38,7 +38,7 @@ fn uint8 main() {
     Channel<int32> ch = Channel.bounded(capacity: 4);
     DynamicArray<Worker> workers = DynamicArray.empty();
     int32 i = 0;
-    while (i < k) { workers.add(item: Worker.make(rx: give ch.receiver())); i = i + 1; }
+    while (i < k) { workers.add(item: Worker.make(rx: ch.receiver())); i = i + 1; }
 
     scope {
         parallel_spawn (ref Worker w in workers) { w.run(); }   // K = k, deferred join

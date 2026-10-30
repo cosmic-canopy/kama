@@ -49,6 +49,7 @@
 ; (method_name), which colours `fn Point copy()` as a keyword.
 (handoff_expression operator: _ @keyword)
 (handoff_default) @keyword
+(method_declaration consumes: _ @keyword)   ; `give fn` — the consuming receiver marker (KR-261)
 
 (this_expression) @variable.special
 "base" @variable.special

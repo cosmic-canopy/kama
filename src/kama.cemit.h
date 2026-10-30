@@ -240,6 +240,8 @@ struct MethodInfo {
     bool                         takesLoc = false;    // an intrinsic that can trap: the call passes `"file", line` (KR-179)
     bool                         trackCaller = false; // `@trackCaller`: takes the caller's location as hidden args
     bool                         isConst = false;     // `const fn …` — non-mutating
+    bool                         isConsuming = false; // `give fn …` — consumes its receiver (KR-261); read it through
+                                                      // isConsumingMethod, which also asks the declaration
     // `@serializedGraphEdges` — this nullary accessor hands out the mutable iterator over the elements
     // that carry this container's graph EDGES, so the serde read half rewires them through it. Opt-in and
     // mandatory, the same rule `@field` already applies to a `@generate`d product's fields: serde walks
@@ -689,7 +691,10 @@ struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedPa
                          bool noHeap = false;
                          // `const ref T` on the member — the slot spells `T const*`. Same rule as noHeap:
                          // last in the struct, set explicitly beside the push_back.
-                         bool isConstPlace = false; };
+                         bool isConstPlace = false;
+                         // `give fn` on the member (KR-261): a conformance matches it exactly, as `static`. Last, set
+                         // beside the push_back, as the two above.
+                         bool isConsuming = false; };
 // The kinds that may `implements` a contract — its `for` clause (`type contract C for value, view`).
 // A BITMASK, not a set<string>: the gate is a test in the inner loop of a `_classes × interfaces`
 // sweep, the domain is CLOSED at five, and the clause has to render back into a diagnostic in a
@@ -2285,7 +2290,11 @@ private:
     // needs the KR-67 `k_` prefix — true for a user local/binding/parameter, false for an
     // emitter temp (`__strtmp0`, `__msubj1`, …), which is already in the emitter's own namespace.
     struct LiveLocal { std::string cVar; std::string className; bool userName = false;
-                       std::string guard; };   // a C flag: built only on some paths, dropped only if it was (guardHoisted)
+                       std::string guard;      // a C flag: built only on some paths, dropped only if it was (guardHoisted)
+                       // A consuming method's receiver and its fields (KR-261): `dropExpr` is the C place dropped
+                       // (`&self->k_f`, `self`) in place of `&cVar`; a `trackOnly` entry is move-tracked and never
+                       // dropped itself (`this` of a type dropped field by field).
+                       std::string dropExpr; bool trackOnly = false; };
     struct Scope { std::vector<LiveLocal> locals; std::vector<std::string> declaredNames;
                    bool isLoopBoundary = false; bool isFunctionRoot = false;
                    // A loop body's `break` lands just past the C loop — unless a `match` arm's C `switch`
@@ -2436,6 +2445,13 @@ private:
     std::set<std::string> _templatesFaultedInInstance;
     static bool instArgsNameRaw(const std::vector<SharedIdentifier>& args);
     bool               _inNamedCtorBody = false;       // emitting a named `ctor` factory body (const fields of the built local are writable)
+    // KR-261. `_consumingThis`: emitting a `give fn`'s body, whose receiver is the method's to move (`give this`,
+    // `give this.f`). `_consumeCall`/`_consumeClaimed`: the call `give` was written before, and whether the method
+    // call path took it as a consuming call; an unclaimed one is refused where the call was emitted.
+    bool               _consumingThis = false;
+    const InvocationNode* _consumeCall = nullptr;
+    bool               _consumeClaimed = false;
+    bool isConsumingMethod(const MethodInfo* mi) const;
     bool               _inStaticMethod = false;        // emitting a `static` method body (no `self`/`this`)
     // A `ctor` names the value it is building with `this`, but a ctor is a static factory with no `self`
     // PARAMETER — so the storage is synthesized at ctor entry and `self` points at it. Set the moment the
@@ -3668,6 +3684,14 @@ private:
     std::vector<std::string> contractsToEmitFor(const ClassInfo& ci) const;
     bool contractIsStaticOnlyFor(const ClassInfo& ci, const std::string& itf) const;   // itf on `cls` or any base
     std::string handleContractOf(const std::string& c, const std::string& itf);
+    // KR-261 — a consuming method (`give fn`); see the block above lvalueMoveKey.
+    std::string consumingFieldKey(SharedExpression e);
+    bool consumingFieldIsParam(const std::string& key);
+    void checkThisUsable(const std::string* field, int line);
+    void seedConsumingReceiver(ClassInfo& owner);
+    std::string consumeReceiverKey(SharedExpression receiver, int line);
+    void checkConsumingDecl(ClassMethodDeclarationNode* md, const std::string& typeShown, const char* refusedKind,
+                            bool inHierarchy);
     bool valueReachesContract(SharedExpression e, const std::string& c, const std::string& itf);
     // A concrete value bound to a contract it does not implement. One-sided: silent unless certain.
     void rejectContractNonConformance(const std::string& itf, SharedExpression value,

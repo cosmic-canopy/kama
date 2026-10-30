@@ -1,0 +1,1 @@
+`this.inner` is given away inside this loop

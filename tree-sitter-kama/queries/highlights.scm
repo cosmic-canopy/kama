@@ -67,6 +67,7 @@
 ; anonymous token inside (method_name), which is how `fn Point copy()` came back keyword-coloured.
 (handoff_expression operator: _ @keyword.operator)
 (handoff_default) @keyword.operator
+(method_declaration consumes: _ @keyword)   ; `give fn` — the consuming receiver marker (KR-261)
 
 (this_expression) @variable.builtin
 "base" @variable.builtin

@@ -65,6 +65,16 @@ type adapter <int32, bool> implements Sized {
     <bool> { public const fn int32 width() { return 1; } }
 }
 
+// `give fn` is the receiver's marker, scoped as `const` is (a modifier); `give` before a call stays the hand-off keyword.
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } }
+type resource Wrap {
+    Box inner;
+    public ctor make(Box inner) { this.inner = give inner; }
+    public give fn Box unwrap() { return give this.inner; }
+    public give fn void close() { }
+}
+fn void finish(Wrap w) { give w.close(); }
+
 // `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.
 @compileFor(HOSTED)
 fn int32 twice(int32 n) { return n + n; }

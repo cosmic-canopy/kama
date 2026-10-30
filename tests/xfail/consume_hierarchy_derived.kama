@@ -1,0 +1,10 @@
+// A derived type takes part in inheritance too: moving its base out would carry its vtable pointer (KR-261, a consuming method: `give fn`; tests/consume_basic is the accepted shape).
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 get() { return this.v; } ~Box() { } }
+type resource Wrap { Box inner; Box spare;
+    public ctor make(Box inner) { this.inner = give inner; this.spare = Box.make(v: 0); }
+    public give fn Box unwrap() { return give this.inner; }
+    public fn void poke() { }
+}
+type virtual(maxDepth: 1) resource Shape { int32 s; public ctor make() { this.s = 1; } protected virtual fn int32 area() { return 0; } }
+type final resource Circle extends Shape { public ctor make() { this.base = Base.make(); } protected override fn int32 area() { return 1; } give fn int32 t() { return 1; } }   // -> REJECT
+fn uint8 main() { return 0; }

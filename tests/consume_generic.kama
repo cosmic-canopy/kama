@@ -1,0 +1,22 @@
+// A contract may declare `give fn`, and a generic bound calls it (KR-261 decision 5): `finishAll` hands back any
+// encoder's sink. A field typed by the type parameter moves when the argument owns (`Enc<Box>`) and is copied when it
+// is a value (`Enc<Plain>`), judged per instance. No box is dropped behind the caller's back.
+import { core::println, std::memory::Owned };
+static int32 drops = 0;
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 get() { return this.v; } ~Box() { drops = drops + 1; } }
+type contract Finishable<W> for resource { give fn W finish(); }
+type resource Enc<W> implements Finishable<W> { W sink; int32 n;
+    public ctor make(W sink) { this.sink = give sink; this.n = 0; }
+    public give fn W finish() { return give this.sink; }
+}
+type value Plain { public int32 x; public ctor make(int32 x) { this.x = x; } }
+fn W finishAll<W, E: Finishable<W>>(E e) { return give e.finish(); }
+fn uint8 main() {
+    drops = 0;
+    Enc<Box> e = Enc.make(sink: Box.make(v: 4));
+    Box b = finishAll::<Box, Enc<Box>>(e: give e);
+    Enc<Plain> p = Enc.make(sink: Plain.make(x: 3));
+    Plain q = give p.finish();
+    int32 bv = b.get(); int32 qx = q.x; println(s: "b=${bv} q=${qx} drops=${drops}");
+    return (b.get() == 4 && q.x == 3 && drops == 0) ? 42 : 1;
+}

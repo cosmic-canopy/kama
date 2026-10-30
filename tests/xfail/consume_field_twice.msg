@@ -1,0 +1,1 @@
+use of `this.inner` after it was moved

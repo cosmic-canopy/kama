@@ -4759,6 +4759,12 @@ std::string CEmitter::unparseExpr(SharedExpression expr)
         return base + "[" + idx + "]";
     }
     if (auto* v = dynamic_cast<InvocationNode*>(n)) {
+        if (v->consumesReceiver) {   // `give w.finish()` reads back as written (KR-261)
+            v->consumesReceiver = false;
+            const std::string t = unparseExpr(expr);
+            v->consumesReceiver = true;
+            return "give " + t;
+        }
         std::string callee = v->identifier ? unparseExpr(v->identifier) : unparseExpr(v->expression);
         std::string args;
         if (v->args) for (auto& a : *v->args) {
@@ -5927,6 +5933,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                     unsupported(("'" + nm + "' is a field of '" + owner->name + "' — inside a constructor, "
                                  "reach it through the value being built: `this." + nm + "`").c_str(), v);
                 _ctorSelfUsed = true;           // in a ctor: the implicit `this` storage is needed
+                if (_consumingThis && v != _writeTarget) checkThisUsable(&nm, v->line);   // KR-261
                 checkFieldAccess(owner, nm, v->line);
                 recordFieldRef(owner, nm, v);   // implicit `this.` field read
                 return "self->" + basePathTo(_currentClass, owner) + kMember(*owner, nm);
@@ -5990,6 +5997,10 @@ std::string CEmitter::emitExpression(SharedExpression expr)
     if (auto* tn = dynamic_cast<ThisAccessNode*>(n)) {
         if (_inStaticMethod) unsupported("a `static` method has no `this`", tn);
         _ctorSelfUsed = true;               // in a ctor: the implicit `this` storage is needed
+        if (_consumingThis) {               // a `give fn`'s receiver, used whole (KR-261)
+            if (tn != _writeTarget) checkThisUsable(nullptr, tn->line);
+            if (tn->given) return receiverObject("self");   // `give this` hands on the VALUE
+        }
         return "self";
     }
 
@@ -6144,7 +6155,16 @@ std::string CEmitter::emitExpression(SharedExpression expr)
                 return "0";
             }
         }
-        return emitInvocation(v);
+        if (!v->consumesReceiver) return emitInvocation(v);
+        // `give` before a call (KR-261) belongs to a consuming method's call, which emitMethodCall claims. Anything
+        // else — a free function, a constructor — is a fresh value, and is told so here, once.
+        const InvocationNode* prevCall = _consumeCall; const bool prevClaimed = _consumeClaimed;
+        _consumeCall = v; _consumeClaimed = false;
+        std::string r = emitInvocation(v);
+        if (!_consumeClaimed)
+            unsupported("`give`/`copy` apply to a named value — a fresh `new`/constructor/call result needs no marker", v);
+        _consumeCall = prevCall; _consumeClaimed = prevClaimed;
+        return r;
     }
 
     if (auto* v = dynamic_cast<AssignmentNode*>(n)) {
@@ -6672,6 +6692,12 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
         }
     }
     for (auto it = s.locals.rbegin(); it != s.locals.rend(); ++it) {
+        // KR-261: a consuming method's fields went with `this` once it was handed on whole (`give this`); a `this`
+        // moved on some paths is reported once, by its own entry.
+        if (it->cVar.compare(0, 5, "this.") == 0) {
+            auto th = _moveState.find("this");
+            if (th != _moveState.end() && th->second != MoveState::NotMoved) continue;
+        }
         auto ms = _moveState.find(it->cVar);
         if (ms != _moveState.end()) {
             if (ms->second == MoveState::Moved) continue;   // moved out — skip its drop
@@ -6686,13 +6712,15 @@ void CEmitter::emitScopeCleanup(const Scope& s, int depth)
                                  "scope exit — move it on all paths or none, or use Optional<T>").c_str(), _curLine);
             }
         }
+        if (it->trackOnly) continue;   // a consuming method's `this` dropped field by field: its fields are entries
         // A move-only value that owns nothing (an empty `resource`/token) is tracked for move
         // analysis but has no destructor — skip the drop.
         auto ci = _classes.find(it->className);
         if (ci != _classes.end() && !ci->second.destructible && !ci->second.closesWindow) continue;
         indent(depth);
         if (!it->guard.empty()) *_out << "if (" << it->guard << ") ";   // built only on some paths (guardHoisted)
-        *_out << it->className << "__dtor(&" << (it->userName ? kName(it->cVar) : it->cVar) << ");\n";
+        *_out << it->className << "__dtor("
+              << (!it->dropExpr.empty() ? it->dropExpr : "&" + (it->userName ? kName(it->cVar) : it->cVar)) << ");\n";
     }
     // The borrows into `Shared` values this scope holds end here, on the same exits (KR-211).
     for (auto it = s.borrowLeaves.rbegin(); it != s.borrowLeaves.rend(); ++it) { indent(depth); *_out << *it << "\n"; }
@@ -8054,6 +8082,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         auto savedScopes              = _scopes;
         auto savedHoisted             = _hoisted;
         ClassInfo* savedClass         = _currentClass;
+        const bool savedConsuming     = _consumingThis;   // a worker has no receiver to consume (KR-261)
         std::string savedRetC         = _currentReturnCType;
         int savedTemp                 = _tempCounter;
 
@@ -8062,6 +8091,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _localTypes.clear(); _localCTypes.clear(); _localTypeNodes.clear();
         _constLocals.clear(); _moveState.clear(); _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear(); _scopes.clear(); _hoisted.clear();
         _currentClass = nullptr;
+        _consumingThis = false;
         _currentReturnCType = "void";
         _tempCounter = 0;
 
@@ -8097,6 +8127,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _slotLocals      = savedSlotLocals;  _slotDeclared    = savedSlotDeclared;  _slotGiven = savedSlotGiven;
         _moveState       = savedMoveState;   _scopes          = savedScopes;
         _hoisted         = savedHoisted;     _currentClass    = savedClass;
+        _consumingThis   = savedConsuming;
         _currentReturnCType = savedRetC;     _tempCounter     = savedTemp;
     }
 
@@ -10065,6 +10096,28 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                     _writeTarget = as->unaryExpression.get();
                     writeGuard.key = nm;
                 }
+        // KR-261: a store into a consuming method's field refills it, as a store re-arms a local, and a field moved on
+        // SOME paths is refused for the same reason a local is. After `give this` there is no value to store into.
+        if (as->token == EQ && _consumingThis) {
+            const std::string fk = lvalueMoveKey(as->unaryExpression);
+            if (fk.compare(0, 5, "this.") == 0) {
+                auto th = _moveState.find("this");
+                auto ms = _moveState.find(fk);
+                if (th != _moveState.end() && th->second != MoveState::NotMoved) {
+                    unsupported(("cannot assign `" + fk + "` — `this` was given away, so there is no value to store "
+                                 "into").c_str(), n);
+                    return;
+                }
+                if (ms != _moveState.end() && ms->second == MoveState::MaybeMoved) {
+                    unsupported(("`" + fk + "` was given away on some paths but not others, so this assignment "
+                                 "cannot know whether to drop its old value — give it away on every path or none "
+                                 "before assigning it, or assign it inside each branch").c_str(), n);
+                    writeGuard.key = fk;
+                    return;
+                }
+                if (ms != _moveState.end()) { _writeTarget = as->unaryExpression.get(); writeGuard.key = fk; }
+            }
+        }
         // Writing to a slot — whole (`x = …`) or to one of its fields (`x.f = …`) — makes it a live value
         // from here on, so its destructor comes back and ordinary move tracking takes over. Safe code never
         // gets here with a hole (checkDefiniteAssignment's rule 1: only an `out` argument fills a slot); the
@@ -11487,6 +11540,8 @@ void CEmitter::collectInterfaces(SharedCompilationUnit unit)
                         ii.methods.push_back({*md->name->value, md->returnType, md->params, md->isRef, md->isCtor, md->isConst,
                                               modHas(md->modifiers, "static"), md->name});
                         ii.methods.back().isConstPlace = md->isConstRef;   // `const ref T` member — see InterfaceMethod
+                        ii.methods.back().isConsuming = md->isConsuming;   // `give fn` member (KR-261)
+                        checkConsumingDecl(md, ii.name, nullptr, false);
                         // `@noheap` on a contract member. It parsed and was silently DISCARDED before this
                         // — the attribute reached `ClassMemberDeclarationNode::attributes` and nothing ever
                         // read it here, so a contract could promise a real-time guarantee that no
@@ -12809,6 +12864,10 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                         mi.params     = paramSigsOf(md->params);
                         mi.node       = md;
                         mi.isConst    = md->isConst;   // `const fn …`
+                        mi.isConsuming = md->isConsuming;   // `give fn …` (KR-261)
+                        checkConsumingDecl(md, ci.name, ci.isBorrow ? "a `type view`"   // a view's kind reads Value
+                                                      : ci.kind == TypeKind::Value ? "a `type value`" : nullptr,
+                                           !ci.baseName.empty() || ci.isVirtualClass || ci.isAbstractClass);
                         checkConstPlaceReturn(md->isConst, md->isRef, md->isConstRef, *md->name->value, md->line);
                         checkWhenParams(md->whenParams, cd->typeParams, ci.name, md->line);
                         if (md->whenParams)   // `fn … when [P: B, …]` — conditional method (AND of all)
@@ -18569,6 +18628,7 @@ std::vector<std::string> CEmitter::buildOpaqueParams(const std::string& template
                 mi.returnType   = inInst(m.returnType);
                 mi.params       = paramSigsOf(m.params);
                 mi.isConst      = m.isConst;
+                mi.isConsuming  = m.isConsuming;
                 mi.isStatic     = m.isStatic;
                 mi.isCtor       = m.isCtor;
                 mi.isPlaceReturn = m.isPlaceReturn;
@@ -21295,7 +21355,11 @@ void CEmitter::markMoved(const std::string& cVar)
     // `give`ing the host out of the window is as fatal as growing it — the storage leaves with the value
     // and the alias is left watching nothing. The single choke point for every move, so one check covers
     // `a = give b`, `f(d: give a)` and the ctor/return forms alike.
-    const Scope::FrozenPlace* f = frozenConflict({ cVar });
+    // A dotted key is a place (`this.inner`, a slot's `local.f`): judged as one, or a window over the field would
+    // not see its move.
+    std::vector<std::string> place;
+    for (size_t st = 0;;) { size_t dot = cVar.find('.', st); place.push_back(cVar.substr(st, dot - st)); if (dot == std::string::npos) break; st = dot + 1; }
+    const Scope::FrozenPlace* f = frozenConflict(place);
     if (f && f->fromChild)
         unsupported(("cannot `give` `" + cVar + "` — the child `spawn`ed at line " + std::to_string(f->line)
                      + " borrows it until this `scope` joins it, and moving it would take that storage out "
@@ -21469,9 +21533,30 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
     // A method's receiver is the CALLER's: moving it out would leave the caller holding a moved-from value it
     // never gave up. (A ctor's `this` is its own, and `give this` hands it back — below.)
     if (dynamic_cast<ThisAccessNode*>(e.get()) && !_inNamedCtorBody) {
+        if (_consumingThis) return "this";   // a `give fn` was handed its receiver: it may hand it on (KR-261)
         unsupported("cannot `give this` — a method borrows its receiver from the caller, who still owns it; "
-                    "hand off `copy this`, or take the value as a parameter", line);
+                    "hand off `copy this`, take the value as a parameter, or declare the method `give fn` so "
+                    "the call hands it over", line);
         return "";
+    }
+    // A field of the receiver, inside a `give fn` (KR-261): the method owns it, and moves it out once.
+    {
+        const std::string fk = _consumingThis ? consumingFieldKey(e) : std::string();
+        if (!fk.empty()) {
+            if (_currentClass && _currentClass->hasDtor) {
+                unsupported(("cannot `give " + fk + "` — `" + demangleForDisplay(_currentClass->name) + "` has a "
+                             "destructor, which runs at the end of this method and must find every field it drops "
+                             "still there; hand the whole value on (`give this`), or leave a stand-in in the field")
+                                .c_str(), line);
+                return "";
+            }
+            if (_moveState.count(fk)) return fk;
+            // A field whose type is an unbound or value parameter, or one probed as written: the instance judges it.
+            if (_probingTemplate || consumingFieldIsParam(fk)) return "";
+            unsupported(("cannot `give " + fk + "` — it is a plain value, copied, and `give` moves a move-only value; "
+                         "drop the `give`").c_str(), line);
+            return "";
+        }
     }
     // A move MUTATES its source — it leaves it holding a moved-from value — so a const binding may not be
     // one. Every other write through a const root is caught by `checkConstWrite` on an assignment LHS; a
@@ -21527,8 +21612,144 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
 // assignment handlers do: an unqualified local -> its name; a single-level `local.field` member
 // access whose receiver is an unqualified local -> "local.field" (mirrors checkNamedCtorComplete's
 // localFieldRef key format). Anything else (this.*, element access, nested, qualified) -> "".
+// ---- KR-261: a consuming method (`give fn`) -------------------------------------------------------------------------
+
+// A method consumes its receiver when it was declared `give fn` — asked of the declaration too, since 28 places build
+// a MethodInfo and only the collectors copy the flag.
+bool CEmitter::isConsumingMethod(const MethodInfo* mi) const
+{
+    return mi && (mi->isConsuming || (mi->node && mi->node->isConsuming));
+}
+
+// The move key of the receiver's field `e` names, inside a `give fn`: `this.f` for `this.f` and for a bare field name
+// (no local or parameter by that name). "" for anything else, a field of a field included: one level moves, as a
+// `match` arm takes its variant's payloads and not theirs.
+std::string CEmitter::consumingFieldKey(SharedExpression e)
+{
+    if (!_currentClass) return "";
+    std::string f;
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) {
+        if (!dynamic_cast<ThisAccessNode*>(ma->expression.get()) || !ma->identifier || !ma->identifier->value) return "";
+        f = *ma->identifier->value;
+    } else if (auto* id = dynamic_cast<IdentifierNode*>(e.get())) {
+        if (!id->value || (id->qualifier && !id->qualifier->empty())) return "";
+        f = *id->value;
+        if (_localTypes.count(f) || _localTypeNodes.count(f) || _paramNames.count(f) || _refParams.count(f)) return "";
+    } else return "";
+    return findFieldOwner(_currentClass, f) ? "this." + f : std::string();
+}
+
+// Whether the field a `this.f` key names is declared with a type parameter of its generic type: `W inner` in
+// `BufWriter<W>`. Such a field is judged per instance — moved when `W` owns, copied when it is a value.
+bool CEmitter::consumingFieldIsParam(const std::string& key)
+{
+    if (!_currentClass || key.compare(0, 5, "this.") != 0) return false;
+    const std::string f = key.substr(5);
+    for (auto& fi : _currentClass->fields)
+        if (fi.name == f) return fi.type && fi.type->value && _typeSubst.count(*fi.type->value) != 0;
+    return false;
+}
+
+// A use of the receiver, or of its field `*field`, inside a `give fn`: refused after `give this`, after the field
+// was moved, and — for the receiver whole — after any of its fields was moved (Rust's "partially moved").
+void CEmitter::checkThisUsable(const std::string* field, int line)
+{
+    auto th = _moveState.find("this");
+    if (th == _moveState.end()) return;
+    if (th->second != MoveState::NotMoved) {
+        unsupported(th->second == MoveState::Moved ? "use of `this` after it was given away (`give this`)"
+                                                   : "use of `this`, which was given away on some paths", line);
+        return;
+    }
+    if (field) {
+        auto ms = _moveState.find("this." + *field);
+        if (ms != _moveState.end() && ms->second != MoveState::NotMoved)
+            unsupported(("use of `this." + *field + "` after it was moved (a `give` consumed it)").c_str(), line);
+        return;
+    }
+    for (auto it = _moveState.lower_bound("this."); it != _moveState.end() && it->first.compare(0, 5, "this.") == 0; ++it)
+        if (it->second != MoveState::NotMoved) {
+            unsupported(("`this` is used whole after `" + it->first + "` was moved out of it — it is missing a field; "
+                         "use the fields still in it one by one, or move that field last").c_str(), line);
+            return;
+        }
+}
+
+// The receiver of a `give fn` is the method's to move, so `this` and its owning fields are entries of the method's
+// own scope: every exit — each `return`, the end — drops what was not moved, fields in reverse order, and one moved on
+// some paths is the error any local's is. A type with its own destructor, or an enum, drops whole (`T__dtor(self)`)
+// unless `give this` handed it on; a field may not leave it (decision 3). Seeded NotMoved before the body, because a
+// branch merge only sees keys that exist before the branch.
+void CEmitter::seedConsumingReceiver(ClassInfo& owner)
+{
+    const bool whole = owner.hasDtor || owner.isVariant || owner.isScalarEnum();
+    LiveLocal th; th.cVar = "this"; th.className = owner.name; th.userName = true;
+    if (whole) th.dropExpr = "self"; else th.trackOnly = true;
+    _scopes.back().locals.push_back(th);
+    _moveState["this"] = MoveState::NotMoved;
+    if (whole) { recordDestructibleOwner("this", owner.name); return; }
+    for (auto& f : owner.fields) {
+        const std::string fct = fieldCType(owner.name, f);
+        if (!ownsByValue(fct) && !isSmartPtrClass(fct)) continue;
+        LiveLocal fl; fl.cVar = "this." + f.name; fl.className = fct; fl.userName = true;
+        fl.dropExpr = "&self->" + kMember(owner, f.name);
+        _scopes.back().locals.push_back(fl);
+        _moveState[fl.cVar] = MoveState::NotMoved;
+        recordDestructibleOwner(fl.cVar, fct);
+    }
+}
+
+// The caller's receiver of a consuming call, as its move key: a local or a by-value parameter the caller owns. A
+// `ref`/`out` parameter belongs to the caller's caller; a local of a plain value type is copied, and keeps no key;
+// everything else — a field, an element, a `const` binding, a borrowed `match` alias — is moveOnlySource's to judge.
+std::string CEmitter::consumeReceiverKey(SharedExpression receiver, int line)
+{
+    if (auto* id = dynamic_cast<IdentifierNode*>(receiver.get()))
+        if (id->value && (!id->qualifier || id->qualifier->empty())) {
+            const std::string& nm = *id->value;
+            if (_refParams.count(nm)) {
+                unsupported(("cannot consume `" + nm + "` — it is a `ref` parameter, which its caller still owns; take "
+                             "it by value to consume it").c_str(), line);
+                return "";
+            }
+            if (!_moveState.count(nm) && _localTypes.count(nm) && !ownsByValue(_localTypes[nm])
+                && !isSmartPtrClass(_localTypes[nm]) && !_probingTemplate)
+                return "";   // a plain value: the call is handed a copy's address, and the local lives on
+        }
+    return moveOnlySource(receiver, line);
+}
+
+// Who may declare `give fn`, and how (KR-261 decision 7; the 2026-10-30 ruling on inheritance). `refusedKind` names the
+// kind when it is not a `resource` or an `enum`.
+void CEmitter::checkConsumingDecl(ClassMethodDeclarationNode* md, const std::string& typeShown, const char* refusedKind,
+                                  bool inHierarchy)
+{
+    if (!md || !md->isConsuming) return;
+    const std::string m = md->name && md->name->value ? *md->name->value : std::string("?");
+    const int line = md->line;
+    if (md->isConst)
+        unsupported(("`give const fn " + m + "` — a method that consumes its receiver cannot also promise not to "
+                     "change it; write `give fn` (it consumes) or `const fn` (it only reads)").c_str(), line);
+    else if (refusedKind)
+        unsupported(("`give fn " + m + "` on " + refusedKind + " — only a `resource` or an `enum` owns what a "
+                     "consuming method takes apart; a value is copied, and a view borrows").c_str(), line);
+    else if (inHierarchy)
+        unsupported(("`give fn " + m + "` on `" + typeShown + "`, which takes part in inheritance — a base's method "
+                     "sees only the base's fields, so consuming a derived value through it would drop only part of "
+                     "it; a consuming method belongs to a sealed `resource` or an `enum`").c_str(), line);
+    else if (modHas(md->modifiers, "static") || md->isCtor)
+        unsupported(("`give fn " + m + "` is `static` — a static function has no receiver to consume").c_str(), line);
+    else if (md->isRef)
+        unsupported(("`give fn ref " + m + "` — the place it would return is inside the receiver the call "
+                     "consumes; return the value").c_str(), line);
+}
+
 std::string CEmitter::lvalueMoveKey(SharedExpression lhs) const
 {
+    if (_consumingThis) {   // a consuming method's field, however it is spelled, is keyed as `this.f` (KR-261)
+        const std::string fk = const_cast<CEmitter*>(this)->consumingFieldKey(lhs);
+        if (!fk.empty()) return fk;
+    }
     if (auto* id = dynamic_cast<IdentifierNode*>(lhs.get()))
         if (id->value && (!id->qualifier || id->qualifier->empty())) return *id->value;
     if (auto* ma = dynamic_cast<MemberAccessNode*>(lhs.get()))
@@ -24559,6 +24780,17 @@ void CEmitter::checkConformanceSignature(ClassInfo& tci, const std::string& cont
                          + "; a conformance must match the signature the contract declares").c_str(), at);
             continue;
         }
+        // `give fn` is the receiver's other marker, matched as exactly (KR-261): a caller through a bound moves its
+        // value only when the contract says the member consumes, and the implementation drops it only when it does.
+        if (!m.isCtor && m.isConsuming != isConsumingMethod(mi)) {
+            unsupported(("`" + tkey + "` implements `" + shown + "`, but its `" + member + "` "
+                         + (isConsumingMethod(mi) ? "is `give fn` where the contract declares a method that borrows "
+                                                    "its receiver"
+                                                  : "borrows its receiver where the contract declares `give fn`, "
+                                                    "which consumes it")
+                         + "; a conformance must match the signature the contract declares").c_str(), at);
+            continue;
+        }
         reportSigMismatch(contractSigOf(ii, m), implSigOf(tci, owner, mi),
                           "`" + tkey + "` implements `" + shown + "`, but its `" + member + "` ",
                           "the contract", "a conformance must match the signature the contract declares", at);
@@ -24906,6 +25138,15 @@ MethodInfo CEmitter::enumMethodInfo(ClassMethodDeclarationNode* md, const std::s
     mi.params       = paramSigsOf(md->params);
     mi.node         = md;
     mi.isConst      = md->isConst;
+    mi.isConsuming  = md->isConsuming;   // `give fn …` (KR-261): an enum's own, or an adapter's onto a resource or enum
+    if (md->isConsuming) {
+        auto tc = _classes.find(tkey);
+        const bool ok = tc != _classes.end() && (tc->second.isVariant || tc->second.isScalarEnum()
+                                                 || (tc->second.kind == TypeKind::Resource && !tc->second.isBorrow));
+        const bool hier = tc != _classes.end() && (!tc->second.baseName.empty() || tc->second.isVirtualClass
+                                                   || tc->second.isAbstractClass);
+        checkConsumingDecl(md, tkey, ok ? nullptr : ("`" + demangleForDisplay(tkey) + "`").c_str(), hier);
+    }
     checkConstPlaceReturn(md->isConst, md->isRef, md->isConstRef, mname, md->line);
     mi.isUnsafe     = modHas(md->modifiers, "unsafe");
     mi.isPlaceReturn = md->isRef;
@@ -38077,6 +38318,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // missed, and a missed `@noheap` reads exactly like a body that legitimately allocates nothing.
     // `_memberAttrPrefix` is consumed by the signature line further down.
     _memberAttrPrefix = declAttrPrefix(attrs, nullptr, body ? body->line : 0, AttrSite::Member);
+    // KR-261: a `give fn` is handed its receiver. Asked of the owner's own entry for this C name, so a serde twin or
+    // a checked twin of some other method never inherits it.
+    bool isConsuming = false;
+    if (memberName && !isStatic && !_inNamedCtorBody) {
+        auto mit = owner.methods.find(memberName);
+        if (mit != owner.methods.end() && mit->second.cName == cName) isConsuming = isConsumingMethod(&mit->second);
+    }
     // `@trackCaller`: the signature takes the caller's location, and the body reports it (see trapLoc).
     const bool trackCaller = hasAttr(attrs, "trackCaller");
     ScopedBool _tcBody(_trackCallerBody, trackCaller);
@@ -38085,7 +38333,8 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     // escape an enclosing no-heap region.
     // KR-211: how this method spares the checks of its writes through `this` (cleanForm). A twinned one's checked twin
     // is emitted first, so the wrapper below can call it.
-    const CleanForm form = (_emittingCheckedTwin || _probingTemplate || !_serGraphArg.empty() || !_deGraphArg.empty())
+    const CleanForm form = (_emittingCheckedTwin || _probingTemplate || !_serGraphArg.empty() || !_deGraphArg.empty()
+                            || isConsuming)
                          ? CleanForm::None
                          : cleanForm(cName, owner, isStatic, isConstMethod, _inNamedCtorBody, body, memberName);
     if (form == CleanForm::Twinned) {
@@ -38208,6 +38457,13 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     _slotLocals.clear(); _slotDeclared.clear(); _slotGiven.clear();
     Scope root; root.isFunctionRoot = true;
     _scopes.push_back(root);
+    ScopedBool _consuming(_consumingThis, isConsuming);
+    if (isConsuming) {
+        if (retType && isViewCType(retType))
+            unsupported(("`give fn` returning a view — `" + demangleForDisplay(retType) + "` would borrow the "
+                         "receiver the call consumes; return what owns the data").c_str(), body ? body->line : 0);
+        seedConsumingReceiver(owner);
+    }
     if (params) {
         for (auto& p : *params) {
             if (!p->identifier || !p->identifier->value) continue;
@@ -42946,6 +43202,7 @@ std::string CEmitter::emitMemberAccess(MemberAccessNode* ma)
     if (dynamic_cast<ThisAccessNode*>(ma->expression.get())) {
         if (_inStaticMethod) unsupported("a `static` method has no `this`", ma);
         _ctorSelfUsed = true;               // in a ctor: the implicit `this` storage is needed
+        if (_consumingThis && ma != _writeTarget) checkThisUsable(&field, ma->line);   // KR-261
         return "self->" + basePath + (fieldOwner ? kMember(*fieldOwner, field) : kName(field));
     }
     // Emit the receiver as a PLACE: for an indexed-element receiver this is `(*NAME__at(&a,i)).field`
@@ -44683,6 +44940,51 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     // (`(a + b).length()`) — still classes as the `string` primitive. Localizes string knowledge to
     // `exprIsString`; the rvalue is made addressable below (addrOfOperand), like `.concat()` composes.
     if (cls.empty() && exprIsString(receiver)) cls = "kama_string";
+    // KR-261 — a consuming method (`give fn`). The call says so where the move happens (`give w.finish()`), the
+    // receiver is one the caller owns, and the caller's local is moved by it: no drop follows, and a use after it is
+    // the use-after-move error. The ABI is the borrow's — `&k_w` — and the callee drops what it does not hand on.
+    const bool consumeFlagged = (_consumeCall == call);
+    bool consumeTemp = false;
+    std::string consumeKey;
+    {
+        const std::string recvShown = unparseExpr(receiver);
+        const std::string shown = recvShown + "." + method + "()";
+        ClassInfo* cowner = nullptr;
+        MethodInfo* cmi = (_classes.count(cls) && !isSmartPtrClass(cls)) ? findMethod(&_classes[cls], method, &cowner) : nullptr;
+        // Reached through a handle, a contract value or `Deref<T>`, a consuming method is never callable: a contract
+        // value is a borrow, and a handle's pointee is not the caller's to consume.
+        const char* via = nullptr;
+        if (isSmartPtrClass(cls)) {
+            const std::string pc = _classes[cls].collElemClass;
+            if (isInterface(pc)) { if (const std::vector<InterfaceMethod>* ms = contractMethods(pc))
+                                       for (auto& m : *ms) if (m.name == method && m.isConsuming) via = "a handle"; }
+            else if (_classes.count(pc)) { ClassInfo* o = nullptr; if (isConsumingMethod(findMethod(&_classes[pc], method, &o))) via = "a handle"; }
+        } else if (isInterface(cls)) {
+            if (const std::vector<InterfaceMethod>* ms = contractMethods(cls))
+                for (auto& m : *ms) if (m.name == method && m.isConsuming) via = "a contract value";
+        } else if (!cmi && _classes.count(cls) && isConsumingMethod(placeMethodOf(cls, method))) via = "`Deref`, the value behind a handle";
+        const bool instanceCall = cmi && !cmi->isStatic && !cmi->isCtor;
+        if (consumeFlagged && (via || instanceCall)) _consumeClaimed = true;
+        if (via) {
+            unsupported(("`" + method + "` consumes its receiver (`give fn`), and `" + recvShown + "` reaches it through "
+                         + via + ", which the caller does not own — a consuming method is called on a value the "
+                         "caller owns, or through a generic bound").c_str(), call);
+            return "0";
+        }
+        if (isConsumingMethod(cmi)) {
+            if (!isNamedValue(receiver.get())) {
+                if (consumeFlagged)
+                    unsupported(("`give` before `" + shown + "` — its receiver is a fresh value, already the call's "
+                                 "own; drop the `give`").c_str(), call);
+                consumeTemp = true;
+            } else if (!consumeFlagged)
+                unsupported(("`" + shown + "` consumes `" + recvShown + "` (`" + method + "` is a `give fn`) — write `give "
+                             + shown + "`, so the move is visible where it happens").c_str(), call);
+            else consumeKey = consumeReceiverKey(receiver, call->line);
+        } else if (consumeFlagged && instanceCall)
+            unsupported(("`give` before `" + shown + "` — `" + method + "` does not consume its receiver (it is not a "
+                         "`give fn`), and a call's result is fresh, needing no marker; drop the `give`").c_str(), call);
+    }
     // (An iterator-invalidation guard stood here, keyed on `method == "add" && isIntrinsicColl`. It
     // could never fire: `isIntrinsicColl` is set only for String/Owned/Shared/Weak/Bindable/Fixed, and
     // none of those has an `add` — every growable collection is an ordinary library type. It is
@@ -44694,7 +44996,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         std::string mcls = isSmartPtrClass(cls) ? _classes[cls].collElemClass : cls;
         ClassInfo* owner = nullptr;
         MethodInfo* mi = _classes.count(mcls) ? findMethod(&_classes[mcls], method, &owner) : nullptr;
-        if (mi && !mi->isConst)
+        if (mi && !mi->isConst && !isConsumingMethod(mi))   // a consuming call's own refusal says it, once (KR-261)
             unsupported(("cannot call non-const method `" + method + "` on a const receiver "
                          "(declare it `const fn` if it does not mutate)").c_str(), call);
         // A CONTRACT-typed receiver resolves in `_interfaces`, not `_classes`, so the lookup above comes
@@ -45056,10 +45358,11 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         } else if (_hoistOK && byValueRvalue && _classes.count(cls) && _classes[cls].destructible) {
             std::string t = "kama_recv" + std::to_string(_tempCounter++);
             std::string ct = hoistCtorIfInline(receiver);                 // inline ctor -> its own temp init
-            if (!ct.empty()) { recordDestructibleLocal(ct, cls); recvPtr = "&" + ct; }
+            // A consuming call's fresh receiver is the callee's to drop (KR-261): the temp holds it, nothing more.
+            if (!ct.empty()) { if (!consumeTemp) recordDestructibleLocal(ct, cls); recvPtr = "&" + ct; }
             else {
                 _hoisted.push_back(cls + " " + t + " = " + emitExpression(receiver) + ";");
-                recordDestructibleLocal(t, cls);
+                if (!consumeTemp) recordDestructibleLocal(t, cls);
                 recvPtr = "&" + t;
             }
         } else {
@@ -45092,6 +45395,12 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         }
     }
     std::string callStr = emitDispatch(cls, recvPtr, method, call->args, call->line, recv->identifier.get(), receiver);
+    if (!consumeKey.empty()) {   // the receiver is the call's now — unless an argument already took it (KR-261)
+        auto ms = _moveState.find(consumeKey);
+        if (ms != _moveState.end() && ms->second == MoveState::Moved)
+            unsupported(("`" + consumeKey + "` is consumed by this call and moved by one of its arguments too").c_str(), call);
+        else markMoved(consumeKey);
+    }
     // a place-returning `fn ref T m(…)` returns a `T*`; deref it so the call is an lvalue EVERYWHERE
     // (read copies out; `m(…) = x` writes through; `m(…).f` / `ref m(…)` / nesting all compose via the
     // existing lvalue paths). `&(*…)` folds, so a chained `a.at(i).at(j)` stays clean ISO C.

@@ -969,3 +969,69 @@ type value Config { @field(default) int32 port = 5432; }
         (variable_declarator
           (identifier)
           (integer_literal))))))
+
+================================================================================
+A consuming method (`give fn`), and a consuming call as a statement and as a value
+================================================================================
+
+type resource Wrap
+{
+    Box inner;
+    public give fn Box unwrap() { return give this.inner; }
+}
+fn void use(Wrap w) { give w.close(); Box b = give w.unwrap(); }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (class_body
+      (field_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)))
+      (method_declaration
+        (modifier)
+        (type_name
+          (identifier))
+        (method_name
+          (identifier))
+        (parameter_list)
+        (block
+          (return_statement
+            (handoff_expression
+              (field_expression
+                (this_expression)
+                (identifier))))))))
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list
+      (parameter
+        (type_name
+          (identifier))
+        (identifier)))
+    (block
+      (expression_statement
+        (handoff_expression
+          (call_expression
+            (field_expression
+              (identifier)
+              (identifier))
+            (argument_list))))
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (handoff_expression
+            (call_expression
+              (field_expression
+                (identifier)
+                (identifier))
+              (argument_list))))))))

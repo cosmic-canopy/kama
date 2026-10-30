@@ -1,0 +1,9 @@
+// A `type value` is copied: there is nothing to consume (KR-261, a consuming method: `give fn`; tests/consume_basic is the accepted shape).
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 get() { return this.v; } ~Box() { } }
+type resource Wrap { Box inner; Box spare;
+    public ctor make(Box inner) { this.inner = give inner; this.spare = Box.make(v: 0); }
+    public give fn Box unwrap() { return give this.inner; }
+    public fn void poke() { }
+}
+type value V { int32 x; public ctor make() { this.x = 1; } public give fn int32 t() { return this.x; } }   // -> REJECT
+fn uint8 main() { return 0; }

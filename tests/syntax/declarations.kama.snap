@@ -329,6 +329,102 @@
 >}
 #^^ source.kama
 >
+>// `give fn` is the receiver's marker, scoped as `const` is (a modifier); `give` before a call stays the hand-off keyword.
+#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
+>type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } }
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^^^^ source.kama storage.modifier.kind.kama
+#             ^ source.kama
+#              ^^^ source.kama entity.name.type.kama
+#                 ^^^ source.kama
+#                    ^^^^^ source.kama storage.type.primitive.kama
+#                         ^^^^ source.kama
+#                             ^^^^^^ source.kama keyword.other.modifier.kama
+#                                   ^ source.kama
+#                                    ^^^^ source.kama keyword.other.kama
+#                                        ^ source.kama
+#                                         ^^^^ source.kama entity.name.function.kama
+#                                             ^ source.kama
+#                                              ^^^^^ source.kama storage.type.primitive.kama
+#                                                   ^^^^^^ source.kama
+#                                                         ^^^^ source.kama variable.language.kama
+#                                                             ^^^ source.kama
+#                                                                ^ source.kama keyword.operator.assignment.kama
+#                                                                 ^^^^^^^^ source.kama
+>type resource Wrap {
+#^^^^ source.kama storage.type.kama
+#    ^ source.kama
+#     ^^^^^^^^ source.kama storage.modifier.kind.kama
+#             ^ source.kama
+#              ^^^^ source.kama entity.name.type.kama
+#                  ^^^ source.kama
+>    Box inner;
+#^^^^ source.kama
+#    ^^^ source.kama entity.name.type.kama
+#       ^^^^^^^^ source.kama
+>    public ctor make(Box inner) { this.inner = give inner; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.kama
+#               ^ source.kama
+#                ^^^^ source.kama entity.name.function.kama
+#                    ^ source.kama
+#                     ^^^ source.kama entity.name.type.kama
+#                        ^^^^^^^^^^ source.kama
+#                                  ^^^^ source.kama variable.language.kama
+#                                      ^^^^^^^ source.kama
+#                                             ^ source.kama keyword.operator.assignment.kama
+#                                              ^ source.kama
+#                                               ^^^^ source.kama keyword.other.kama
+#                                                   ^^^^^^^^^^ source.kama
+>    public give fn Box unwrap() { return give this.inner; }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.modifier.kama
+#               ^ source.kama
+#                ^^ source.kama keyword.other.kama
+#                  ^ source.kama
+#                   ^^^ source.kama entity.name.type.kama
+#                      ^ source.kama
+#                       ^^^^^^ source.kama entity.name.function.kama
+#                             ^^^^^ source.kama
+#                                  ^^^^^^ source.kama keyword.control.kama
+#                                        ^ source.kama
+#                                         ^^^^ source.kama keyword.other.kama
+#                                             ^ source.kama
+#                                              ^^^^ source.kama variable.language.kama
+#                                                  ^^^^^^^^^^ source.kama
+>    public give fn void close() { }
+#^^^^ source.kama
+#    ^^^^^^ source.kama keyword.other.modifier.kama
+#          ^ source.kama
+#           ^^^^ source.kama keyword.other.modifier.kama
+#               ^ source.kama
+#                ^^ source.kama keyword.other.kama
+#                  ^ source.kama
+#                   ^^^^ source.kama storage.type.primitive.kama
+#                       ^ source.kama
+#                        ^^^^^ source.kama entity.name.function.kama
+#                             ^^^^^^^ source.kama
+>}
+#^^ source.kama
+>fn void finish(Wrap w) { give w.close(); }
+#^^ source.kama keyword.other.kama
+#  ^ source.kama
+#   ^^^^ source.kama storage.type.primitive.kama
+#       ^ source.kama
+#        ^^^^^^ source.kama entity.name.function.kama
+#              ^ source.kama
+#               ^^^^ source.kama entity.name.type.kama
+#                   ^^^^^^ source.kama
+#                         ^^^^ source.kama keyword.other.kama
+#                             ^^^ source.kama
+#                                ^^^^^ source.kama entity.name.function.kama
+#                                     ^^^^^^ source.kama
+>
 >// `compileFor` used to mis-scope as a FUNCTION CALL — #functions' trailing-`(` lookahead matched it.
 #^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ source.kama comment.line.double-slash.kama
 >@compileFor(HOSTED)

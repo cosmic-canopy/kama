@@ -5290,6 +5290,50 @@ What it deliberately does **not** mark is as informative:
   even though no kama field moves. Only the true accessors (`rawFd`, `rawHandle`, `state`, `id`,
   `status`, `success`) are const.
 
+## Consuming methods — `give fn` ✅
+
+A method marked `give fn` takes its receiver by move: the call hands the value over, as `eat(b: give x)` hands an
+argument over, and the method may take it apart. It is how a wrapper gives back what it wraps — a buffered writer
+its stream, an encoder its sink — and it is Rust's `self` method and Swift's `consuming func` (KR-261).
+
+```kama fragment
+type resource Wrap {
+    Box inner; Box spare;
+    public ctor make(Box inner) { this.inner = give inner; this.spare = Box.make(v: 0); }
+    public give fn Box unwrap() { return give this.inner; }      // `spare` drops here
+}
+Wrap w = Wrap.make(inner: Box.make(v: 7));
+Box b = give w.unwrap();                                         // `w` is moved; using it after is an error
+```
+
+- **The call says `give`, where the move happens:** `give w.unwrap()`. A consuming call without it is refused, <!-- xfail: consume_missing_give -->
+  naming it, and so is `give` before a method that does not consume, or before a free function's call, whose <!-- xfail: consume_stray_give, consume_free_call -->
+  result is fresh. A fresh receiver is already the call's own and takes no marker (`Wrap.make(…).unwrap()`). <!-- xfail: consume_fresh_give -->
+  Using `w` after the call is the use-after-move error, and a consuming call in a loop moves its receiver on <!-- xfail: consume_use_after_call -->
+  every pass unless the body gives it a new value. A void one is a statement, `give w.close();`, and the second <!-- xfail: consume_loop_caller -->
+  call of a chain takes the first one's fresh result unmarked: `(give w.intoInner()).take()`. <!-- test: consume_forms -->
+- **Only what the caller owns:** a local, or a by-value parameter. A field, an element, a `ref` parameter and a <!-- xfail: consume_field_receiver, consume_ref_receiver -->
+  `const` binding are refused, as a `give` out of them is. A contract value is a borrow and a handle's pointee <!-- xfail: consume_const_receiver -->
+  is not the caller's, so neither reaches a consuming member; a generic bound does, <!-- xfail: consume_contract_value, consume_handle -->
+  `fn W finishAll<W, E: Finishable<W>>(E e) { return give e.finish(); }`. <!-- test: consume_generic -->
+- **Inside, the receiver is the method's.** `give this.f` moves a field out once, and every owning field not <!-- test: consume_basic -->
+  moved drops when the method returns, on every path; one moved on some paths is the error a local's is. <!-- xfail: consume_moved_some_paths, consume_store_maybe_moved -->
+  `give this` hands the whole value on, and an enum's `give fn` may `match (give this)`. Once a field has left, <!-- xfail: consume_field_twice -->
+  it is not read again and `this` is not used whole: a method call on it, a `copy` or a `give this` would see <!-- xfail: consume_partial_then_whole, consume_give_this_after_partial -->
+  the hole. A field may not leave inside a loop that runs again, nor from under a `borrow` of it. <!-- xfail: consume_loop_field, consume_borrow_window -->
+- **A type with a destructor** may hand itself on or let itself drop — its destructor then runs at the method's
+  end, once — but no field may leave it, since the destructor must find every field it drops (Rust's E0509). <!-- xfail: consume_dtor_field -->
+  Such a type leaves a stand-in instead, as a consuming `close()` sets `fd = -1` and lets the destructor run.
+- **Where it is declared:** on a `resource` or an `enum`. Not on a `value`, which is copied and so has nothing to <!-- xfail: consume_on_value, consume_on_view -->
+  consume; not on a `view`, which borrows; not on a type in an inheritance hierarchy, whose base methods see only <!-- xfail: consume_hierarchy_base, consume_hierarchy_derived -->
+  the base's fields; not on a `static fn`, which has no receiver. `give const fn` is refused, and so is a place or a <!-- xfail: consume_static, consume_give_const -->
+  view return, which would borrow the receiver the call consumes. A contract member may be `give fn`, and a <!-- xfail: consume_ref_return, consume_view_return -->
+  conformance matches the marker exactly, as it matches `static`. <!-- xfail: consume_conform_missing, consume_conform_extra -->
+- **The C is the borrow's:** the receiver stays `T* self`. The caller passes its local's address and emits no drop
+  for it, and the callee drops what it did not move, statically: no flag, no copy of the receiver.
+
+The declaration is always `give fn` and a use never is, so `grep -rn 'give fn'` lists the consuming methods.
+
 ## Uninitialized storage — `slot` ✅
 
 A `slot` names the storage an **`out` parameter is about to fill** — declared externally so the reader can

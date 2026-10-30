@@ -1,0 +1,13 @@
+// A view returned from a consuming method would borrow the receiver the call consumes (KR-261, a consuming method: `give fn`; tests/consume_basic is the accepted shape).
+import { std::collections::DynamicArray, std::collections::ConstView };
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 get() { return this.v; } ~Box() { } }
+type resource Wrap { Box inner; Box spare;
+    public ctor make(Box inner) { this.inner = give inner; this.spare = Box.make(v: 0); }
+    public give fn Box unwrap() { return give this.inner; }
+    public fn void poke() { }
+}
+@viewable type contract Viewy for resource { const fn ConstView<int32> peek(); }
+type resource Xs implements Viewy { DynamicArray<int32> xs; public ctor make() { this.xs = DynamicArray.empty(); }
+    public const fn ConstView<int32> peek() { return this.xs.view(); }
+    public give fn ConstView<int32> gone() { return this.xs.view(); } }   // -> REJECT
+fn uint8 main() { return 0; }

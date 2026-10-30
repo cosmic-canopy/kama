@@ -1,0 +1,1 @@
+borrows its receiver where the contract declares `give fn`

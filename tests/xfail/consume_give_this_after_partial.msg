@@ -1,0 +1,1 @@
+`this` is used whole after `this.inner` was moved out of it

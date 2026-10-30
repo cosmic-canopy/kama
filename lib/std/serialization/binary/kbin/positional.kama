@@ -332,7 +332,7 @@ fn Result<T, Owned<Error>> deserializeKbinPositionalStream<T: Deserializable<T>>
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give sw.takeBytes());
+    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: sw.takeBytes());
     Result<T, Owned<Error>> got = T.deserialize(r: r);
     // A reader that failed is never `Ok`, whatever the type's own `deserialize` forgot to ask.
     if (got.isOk() && r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
@@ -353,7 +353,7 @@ fn Result<Unit, Owned<Error>> mergeKbinPositionalStream<T: MergeDeserializable<T
     StringWriter sw = StringWriter.make();
     Result<isize, IoError> pr = pump(from: from, to: sw);
     match (pr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
-    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: give sw.takeBytes());
+    KbinPositionalDeserializer r = KbinPositionalDeserializer.make(src: sw.takeBytes());
     return into.mergeFrom(r: r);
 }
 

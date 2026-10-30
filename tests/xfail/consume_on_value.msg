@@ -1,0 +1,1 @@
+on a `type value` — only a `resource` or an `enum`

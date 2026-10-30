@@ -13,6 +13,6 @@ type resource Bag {
 }
 fn uint8 main() {
     Bag b = Bag.make();
-    Token t = give b.at(i: 0);   // -> REJECT
+    Token t = b.at(i: 0);   // -> REJECT
     return cast<uint8>(t.id());
 }

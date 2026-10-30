@@ -13,7 +13,8 @@ unsafe fn int32 churn() {
     xs.add(item: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".concat(other: "bbbbbbbbbbbbbbbbbbbbbbbbbb"));
     int32 probe = 7;
     UnsafePtr<int32> raw = addr(of: probe);     // the raw half — what makes the function legitimately unsafe
-    xs[0] = give "cccccccccccccccccccccccccccccccccccccccccccccccccccc".concat(other: "dddddd");
+    string s = "cccccccccccccccccccccccccccccccccccccccccccccccccccc".concat(other: "dddddd");
+    xs[0] = give s;
     return xs.length() + raw[0] - 7;
 }
 

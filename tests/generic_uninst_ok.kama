@@ -32,11 +32,11 @@ fn void neverCalled2<T>(ref DynamicArray<T> d) {
 }
 
 // 3. dot-on-type construction of a generic whose arguments come from the enclosing template.
-//    `remove` is the element read that HANDS THE ELEMENT OVER, which is what `give` into `add` needs —
+//    `remove` is the element read that HANDS THE ELEMENT OVER — a fresh value, which `add` takes with no marker —
 //    and what an unbounded `T` supports, since nothing here promises it is copyable.
 fn void neverCalled3<T>(ref DynamicArray<T> src) {
     DynamicArray<T> d = DynamicArray.empty();
-    d.add(item: give src.remove(index: 0));
+    d.add(item: src.remove(index: 0));
 }
 
 // 4. mutual recursion between two templates — the walk must terminate, not chase instantiations

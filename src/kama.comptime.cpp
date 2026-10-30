@@ -41,7 +41,9 @@ bool CEmitter::ctExprKindSupported(const ASTNode* n)
         || dynamic_cast<const CastNode*>(n)    || dynamic_cast<const SimpleUnaryExpressionNode*>(n)
         || dynamic_cast<const LogicalAndOrNode*>(n) || dynamic_cast<const BinaryExpressionNode*>(n)
         || dynamic_cast<const TernaryExpressionNode*>(n) || dynamic_cast<const ElementAccessNode*>(n)
-        || dynamic_cast<const InvocationNode*>(n);
+        || (dynamic_cast<const InvocationNode*>(n) && !dynamic_cast<const InvocationNode*>(n)->consumesReceiver);
+    // A consuming call (`give w.finish()`, KR-261) never runs at compile time: only a `type value`'s methods do, and a
+    // value declares no `give fn`.
 }
 bool CEmitter::ctStmtKindSupported(const ASTNode* n)
 {

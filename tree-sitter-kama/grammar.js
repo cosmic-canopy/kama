@@ -515,7 +515,10 @@ module.exports = grammar({
       seq(
         optional($.attribute_list),
         repeat($.modifier),
-        choice(seq('comptime', 'fn'), seq(optional('const'), 'fn')),
+        // The receiver's marker: `const fn` reads it, `give fn` consumes it (KR-261); `give const fn` parses and the
+        // compiler refuses it with its reason. `give` comes from the scanner, never a string literal (see externals).
+        choice(seq('comptime', 'fn'),
+               seq(optional(choice('const', seq(field('consumes', alias($._give_keyword, 'give')), optional('const')))), 'fn')),
         field('return_type', $._function_return_type),
         field('name', $.method_name),
         field('parameters', $.parameter_list),
@@ -766,6 +769,9 @@ module.exports = grammar({
     _statement_expression: ($) =>
       choice(
         $.call_expression,
+        // `give iso.join();` — a consuming call whose result is void (kama.y: `GIVE invocation_expression`). Only a
+        // CALL follows the word here, so `give x;` stays the parse error the compiler makes it.
+        alias($.consuming_call, $.handoff_expression),
         $.object_creation_expression,
         $.assignment_expression,
         $.update_expression,
@@ -1256,6 +1262,10 @@ module.exports = grammar({
           field('right', $._expression),
         ),
       ),
+
+    // A statement's `give <call>` — the same node a `give` in an expression is (aliased above), so one query colours both.
+    consuming_call: ($) =>
+      seq(field('operator', alias($._give_keyword, 'give')), field('value', $.call_expression)),
 
     // `give x` / `copy x` — move and duplicate markers, at the loosest precedence.
     handoff_expression: ($) =>

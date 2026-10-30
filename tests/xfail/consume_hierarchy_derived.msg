@@ -1,0 +1,1 @@
+which takes part in inheritance

@@ -1,0 +1,76 @@
+// A consuming method (`give fn`, KR-261): the caller's value is moved by the call, and inside, each owning field is
+// moved out once or dropped at the method's end, on every path. The drop counts prove each shape drops each box
+// exactly once: a field moved out, the receiver handed on whole, early returns, a method that drops everything, a fresh
+// receiver (no `give`), a by-value parameter, a consuming call on `this`, an `Owned` field, a type with a destructor
+// (which still runs, once), and an enum taken apart by `match (give this)`. Run under ASan in the san leg.
+import { core::println, std::memory::Owned };
+static int32 drops = 0;
+static int32 dtorRuns = 0;
+type resource Box { int32 v;
+    public ctor make(int32 v) { this.v = v; }
+    public const fn int32 get() { return this.v; }
+    ~Box() { drops = drops + 1; }
+}
+// no destructor: field by field
+type resource Wrap { Box inner; Box spare; Owned<Box> held;
+    public ctor make(Box inner) { this.inner = give inner; this.spare = Box.make(v: 0); Owned<Box> h = new Box.make(v: 5); this.held = give h; }
+    public give fn Box unwrap() { return give this.inner; }
+    public give fn Wrap again() { return give this; }                       // hands on whole
+    public give fn Box early(bool c) { if (c) { return give this.inner; } return give this.spare; }
+    public give fn void eat() { }                                           // everything drops
+    public give fn Box viaOther() { return give this.unwrap(); }            // a consuming call on this
+    public give fn Owned<Box> heldOut() { return give this.held; }
+}
+fn Box take(Wrap w) { return give w.unwrap(); }                            // by-value param receiver
+// a destructor: whole only
+type resource Fd { int32 fd;
+    public ctor open(int32 fd) { this.fd = fd; }
+    public give fn int32 close() { int32 f = this.fd; this.fd = -1; return f; }   // dtor still runs
+    public give fn Fd pass() { return give this; }
+    ~Fd() { dtorRuns = dtorRuns + 1; }
+}
+type enum Pair { Both(Box a, Box b);
+    public give fn Box first() { return match (give this) { case Both(a: x, b: y): { := give x; } }; }
+}
+fn Wrap mk(int32 v) { return Wrap.make(inner: Box.make(v: v)); }
+fn uint8 main() {
+    int32 fails = 0;
+    // 1. unwrap: spare + held drop (2 boxes: spare, held)
+    drops = 0;
+    { Wrap w = mk(v: 7); Box b = give w.unwrap(); if (drops != 2) { fails = fails + 1; } if (b.get() != 7) { fails = fails + 1; } }
+    // 2. again: nothing drops in the call; w2 drops all 3 at scope end
+    drops = 0;
+    { Wrap w = mk(v: 1); Wrap w2 = give w.again(); if (drops != 0) { fails = fails + 10; } }
+    if (drops != 3) { fails = fails + 100; }
+    // 3. early both ways
+    drops = 0;
+    { Wrap w = mk(v: 2); Box b = give w.early(c: true); if (drops != 2) { fails = fails + 1000; } }
+    drops = 0;
+    { Wrap w = mk(v: 2); Box b = give w.early(c: false); if (drops != 2) { fails = fails + 10000; } }
+    // 4. eat: all three drop inside
+    drops = 0;
+    { Wrap w = mk(v: 3); give w.eat(); if (drops != 3) { fails = fails + 100000; } }
+    // 5. fresh receiver: no give
+    drops = 0;
+    { Box b = mk(v: 4).unwrap(); if (drops != 2) { fails = fails + 1000000; } }
+    // 6. by-value param receiver; viaOther
+    drops = 0;
+    { Box b = take(w: mk(v: 5)); if (drops != 2) { fails = fails + 2; } }
+    drops = 0;
+    { Wrap w = mk(v: 6); Box b = give w.viaOther(); if (b.get() != 6 || drops != 2) { fails = fails + 20; } }
+    // 7. destructor type: close returns fd, dtor runs once; pass hands on
+    dtorRuns = 0;
+    { Fd f = Fd.open(fd: 9); int32 n = give f.close(); if (n != 9 || dtorRuns != 1) { fails = fails + 200; } }
+    if (dtorRuns != 1) { fails = fails + 2000; }
+    dtorRuns = 0;
+    { Fd f = Fd.open(fd: 3); Fd g = give f.pass(); if (dtorRuns != 0) { fails = fails + 20000; } }
+    if (dtorRuns != 1) { fails = fails + 200000; }
+    // 8. enum: first takes a, b drops
+    drops = 0;
+    { Pair p = Pair::Both(a: Box.make(v: 8), b: Box.make(v: 9)); Box x = give p.first(); if (x.get() != 8 || drops != 1) { fails = fails + 3; } }
+    // 9. owned field out
+    drops = 0;
+    { Wrap w = mk(v: 1); Owned<Box> h = give w.heldOut(); if (drops != 2) { fails = fails + 30; } }
+    println(s: "fails=${fails}");
+    return fails == 0 ? 42 : 1;
+}

@@ -1,0 +1,1 @@
+is `give fn` where the contract declares a method that borrows

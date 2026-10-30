@@ -1,0 +1,1 @@
+`this.inner` is moved on some paths but not others

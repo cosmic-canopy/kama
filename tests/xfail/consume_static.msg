@@ -1,0 +1,1 @@
+is `static` — a static function has no receiver to consume

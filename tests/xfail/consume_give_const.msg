@@ -1,0 +1,1 @@
+`give const fn gc` — a method that consumes its receiver cannot also promise

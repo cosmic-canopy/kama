@@ -1,0 +1,10 @@
+// A conformance matches `give fn` exactly: a consuming implementation of a borrowing member (KR-261, a consuming method: `give fn`; tests/consume_basic is the accepted shape).
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 get() { return this.v; } ~Box() { } }
+type resource Wrap { Box inner; Box spare;
+    public ctor make(Box inner) { this.inner = give inner; this.spare = Box.make(v: 0); }
+    public give fn Box unwrap() { return give this.inner; }
+    public fn void poke() { }
+}
+type contract Fin for resource { fn Box finish(); }
+type resource E implements Fin { Box b; public ctor make() { this.b = Box.make(v: 1); } public give fn Box finish() { return give this.b; } }   // -> REJECT
+fn uint8 main() { return 0; }

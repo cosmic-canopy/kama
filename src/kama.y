@@ -563,7 +563,7 @@ struct kamayystype {
 %type <operatordeclarator> operator_declarator overloadable_operator_declarator
 %type <constructordeclarator> constructor_declarator
 %type <constructorinitializer> constructor_initializer_opt constructor_initializer
-%type <string> const_opt hardware_opt unsafe_opt method_name kind_name friend_member_name name_word binding_word
+%type <string> const_opt method_marker_opt hardware_opt unsafe_opt method_name kind_name friend_member_name name_word binding_word
 
 %start compilation_unit
 
@@ -1602,6 +1602,10 @@ expression_statement
   ;
 statement_expression
   : invocation_expression
+  | GIVE invocation_expression   {   /* `give iso.join();` — a consuming call whose result is void (KR-261) */
+        if (auto inv = std::dynamic_pointer_cast<InvocationNode>($2)) inv->consumesReceiver = true;
+        $$ = $2;
+    }
   | object_creation_expression
   | assignment
   | post_increment_expression
@@ -1772,7 +1776,13 @@ semicolon_opt
 expression
   : conditional_expression
   | assignment   { $$ = $1; }
-  | GIVE variable_reference   { $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, true,  $2); }   // move
+  | GIVE variable_reference   {   // move. Before a CALL it is the call's: `give w.finish()` consumes `w` (KR-261)
+        if (auto inv = std::dynamic_pointer_cast<InvocationNode>($2)) { inv->consumesReceiver = true; $$ = inv; }
+        else {
+            if (auto th = std::dynamic_pointer_cast<ThisAccessNode>($2)) th->given = true;
+            $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, true,  $2);
+        }
+    }
   | COPY variable_reference   { $$ = std::make_shared<HandoffNode>(SCANNER_CODEGENCONTEXT, false, $2); }   // duplicate
   ;
 assignment
@@ -2357,10 +2367,10 @@ field_declaration
   ;
 method_declaration
   : modifiers_opt COMPTIME FN type method_name LPAREN parameter_list_opt RPAREN block   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $9); STAMP_LOC(m->name, @5); m->isComptime = true; if (!$1 || $1->empty()) STAMP_START(m, @2); $$ = m; }   /* `comptime fn T name(…)` — a type-associated compile-time-only function (6b-3), read `Type::name()` */
-  | modifiers_opt const_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }
-  | modifiers_opt const_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 != nullptr); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }
-  | modifiers_opt const_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); STAMP_LOC(m->name, @6); m->isConst = ($2 != nullptr); m->isRef = true; if ($10) { m->whenParams = $10->whenParams; m->whenBounds = $10->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
-  | modifiers_opt const_opt FN CONST REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $6, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7), $9, $12); STAMP_LOC(m->name, @7); m->isConst = ($2 != nullptr); m->isRef = true; m->isConstRef = true; if ($11) { m->whenParams = $11->whenParams; m->whenBounds = $11->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }   /* `const fn const ref T at(…)` — a READ-ONLY place-returning method (the form a `const fn` may return) */
+  | modifiers_opt method_marker_opt FN type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $4, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 && *$2 != "give"); m->isConsuming = ($2 && *$2 != "const"); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }
+  | modifiers_opt method_marker_opt FN VOID method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $4, IDENTIFIER_VOID_VAL), std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $5), $7, $10); STAMP_LOC(m->name, @5); m->isConst = ($2 && *$2 != "give"); m->isConsuming = ($2 && *$2 != "const"); if ($9) { m->whenParams = $9->whenParams; m->whenBounds = $9->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }
+  | modifiers_opt method_marker_opt FN REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $5, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $6), $8, $11); STAMP_LOC(m->name, @6); m->isConst = ($2 && *$2 != "give"); m->isConsuming = ($2 && *$2 != "const"); m->isRef = true; if ($10) { m->whenParams = $10->whenParams; m->whenBounds = $10->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }   /* `fn ref T at(…)` — a place-returning method */
+  | modifiers_opt method_marker_opt FN CONST REF type method_name LPAREN parameter_list_opt RPAREN method_when_opt method_body   { auto m = std::make_shared<ClassMethodDeclarationNode>(SCANNER_CODEGENCONTEXT,  $1, $6, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $7), $9, $12); STAMP_LOC(m->name, @7); m->isConst = ($2 && *$2 != "give"); m->isConsuming = ($2 && *$2 != "const"); m->isRef = true; m->isConstRef = true; if ($11) { m->whenParams = $11->whenParams; m->whenBounds = $11->whenBounds; } if (!$1 || $1->empty()) STAMP_START(m, $2 ? @2 : @3); $$ = m; }   /* `const fn const ref T at(…)` — a READ-ONLY place-returning method (the form a `const fn` may return) */
   ;
 /* `fn … when [T: Bound, …]` — a method present only when every gated type-param satisfies its bound (the
    value `iterator()` needs a Copyable element; `Map.copy()` needs both K AND V Copyable). The holder
@@ -2386,6 +2396,15 @@ method_name
 const_opt
   : /* Nothing */   { $$ = SharedString(); }
   | CONST           { $$ = $1; }
+  ;
+/* The receiver's marker on a METHOD: `const fn` reads it, `give fn` consumes it (KR-261). One slot holds either word;
+   `give const fn` parses so the checker can refuse it with its reason (a method that consumes cannot also promise
+   not to change), rather than as a syntax error. `const_opt` stays the parameters' own. */
+method_marker_opt
+  : /* Nothing */   { $$ = SharedString(); }
+  | CONST           { $$ = $1; }
+  | GIVE            { $$ = $1; }
+  | GIVE CONST      { $$ = std::make_shared<std::string>("give const"); }
   ;
 /* `unsafe fn …` — the raw-memory qualifier on a FREE function. C#'s meaning, not Rust's: it marks the
    BODY as doing dangerous things, so CALLING an `unsafe fn` is unrestricted and its visibility is

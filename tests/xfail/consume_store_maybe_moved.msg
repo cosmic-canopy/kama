@@ -1,0 +1,1 @@
+`this.inner` was given away on some paths but not others

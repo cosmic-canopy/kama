@@ -1,0 +1,8 @@
+// `give` before a call of a method that does not consume is refused, naming why (KR-261, a consuming method: `give fn`; tests/consume_basic is the accepted shape).
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } public const fn int32 get() { return this.v; } ~Box() { } }
+type resource Wrap { Box inner; Box spare;
+    public ctor make(Box inner) { this.inner = give inner; this.spare = Box.make(v: 0); }
+    public give fn Box unwrap() { return give this.inner; }
+    public fn void poke() { }
+}
+fn uint8 main() { Wrap w = Wrap.make(inner: Box.make(v: 1)); give w.poke(); return 0; }   // -> REJECT
