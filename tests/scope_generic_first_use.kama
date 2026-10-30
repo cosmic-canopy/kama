@@ -1,0 +1,18 @@
+// A generic type first named inside a `scope { }` block is instantiated. Both pre-scans that find a program's generic
+// instances descended into every block statement but `scope`, so a `DynamicArray<int16>` named only there was refused
+// as "cannot tell which `DynamicArray` to construct", and a held `Fiber<int64>` as not a `Fiber<R>` at all, each with a
+// cascade of "has no method" behind it (through 0.9.786; found writing tests/proc_fiber_pipe). Returns 42.
+import { std::concurrent::Fiber, std::collections::DynamicArray };
+fn int64 work(isize n) { return cast<int64>(n); }
+fn void idle(int64 ms) { }
+fn uint8 main() {
+    int64 got = 0;
+    scope {
+        spawn fiber idle(ms: 0);
+        DynamicArray<int16> xs = DynamicArray.empty();
+        xs.add(item: 30i16);
+        Fiber<int64> r = spawn fiber work(n: 12);
+        got = cast<int64>(xs[0]) + (give r.join());
+    }
+    return cast<uint8>(got);
+}

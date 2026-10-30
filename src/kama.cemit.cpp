@@ -16817,6 +16817,8 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
         if (bn->bindings) for (auto& b : *bn->bindings) if (b) scanExprForCollections(b->host);
         scanStmtForCollections(bn->body);
+    } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {   // a `scope { … }` is a block that joins at its brace
+        scanStmtForCollections(sc->body);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForCollections(std::dynamic_pointer_cast<ExpressionNode>(s));
     }
@@ -18112,6 +18114,8 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
             }
         }
         scanStmtForGenerics(bn->body, bodyTys);
+    } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {   // a `scope { … }` is a block that joins at its brace
+        scanStmtForGenerics(sc->body, localTys);
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForGenerics(std::dynamic_pointer_cast<ExpressionNode>(s), localTys);
     }
