@@ -7462,23 +7462,38 @@ static bool sshVerify(const std::string& file, const std::string& signature, con
 // -----------------------------------------------------------------------------------------------
 
 // Collect every file under `root` as paths RELATIVE to root (recursively), for a deterministic tree hash.
-static void collectFilesRel(const std::string& root, const std::string& rel, std::vector<std::string>& out)
+// A package holds regular files only (KR-260), so anything else — a symlink, a junction, a FIFO — stops the walk
+// and lands in `bad`. It is never followed: `stat` would take `x -> /` through the installer's whole disk, and a
+// link to a file outside the package would read that file into the hash.
+static bool collectFilesRel(const std::string& root, const std::string& rel, std::vector<std::string>& out,
+                            std::string& bad)
 {
     std::string dir = rel.empty() ? root : root + "/" + rel;
     for (const std::string& n : listDir(dir)) {
         std::string childRel = rel.empty() ? n : rel + "/" + n;
-        if (dirExists(root + "/" + childRel)) collectFilesRel(root, childRel, out);
-        else out.push_back(childRel);
+        const std::string p = root + "/" + childRel;
+#ifdef _WIN32
+        struct stat st;
+        const bool ok = !kama_win_is_reparse(p) && stat(osp(p).c_str(), &st) == 0;
+#else
+        struct stat st;
+        const bool ok = lstat(p.c_str(), &st) == 0;
+#endif
+        if (ok && S_ISDIR(st.st_mode)) { if (!collectFilesRel(root, childRel, out, bad)) return false; }
+        else if (ok && S_ISREG(st.st_mode)) out.push_back(childRel);
+        else { bad = childRel; return false; }
     }
+    return true;
 }
 
 // The store identity: sha256 of the canonical unpacked source TREE (not the raw clone/tarball — git
 // adds .git/, tarballs vary in wrapper/compression). Sorted files, each hashed as `relpath\0` + bytes.
 // Built in C++ (robust to newlines-in-filenames, unlike a find|cat pipe) into a temp, then hashed once.
-std::string treeHashOf(const std::string& dir)
+// "" with `bad` set when the tree holds something other than a regular file or a directory.
+std::string treeHashOf(const std::string& dir, std::string& bad)
 {
     std::vector<std::string> files;
-    collectFilesRel(dir, "", files);
+    if (!collectFilesRel(dir, "", files, bad)) return "";
     std::sort(files.begin(), files.end());
     std::string tmp = dir + ".hashinput";
     std::ofstream out(osp(tmp), std::ios::binary);
@@ -7630,7 +7645,13 @@ static bool fetchToStore(const std::string& name, const DepSpec& d,
         remove(osp(tgz).c_str());
     }
 
-    std::string hash = treeHashOf(staging);   // "sha256-<hex>" — the store dir name + dedup key
+    std::string bad;
+    std::string hash = treeHashOf(staging, bad);   // "sha256-<hex>" — the store dir name + dedup key
+    if (!bad.empty()) {
+        err = "'" + name + "' holds " + bad + ", which is not a regular file (a symbolic link, most often) — a package "
+              "holds regular files only, so it is not installed";
+        runCmd(rmRfCmd(staging)); return false;
+    }
     if (hash.empty()) { err = "cannot hash '" + name + "' (is sha256sum/shasum available?)"; runCmd(rmRfCmd(staging)); return false; }
     if (!d.git.empty()) lockIntegrity = hash;   // git has no artifact; the tree hash IS its integrity
 
@@ -8843,6 +8864,7 @@ static bool writeRegistryCatalog(const std::string& regDir, std::string& err)
 struct VcsFile {
     std::string path;          // relative to the package directory
     ArchiveEntry::Kind kind;   // from the mode the VCS recorded, never the filesystem's
+    bool link;                 // a symbolic link, which no package holds (KR-260): refused once the excludes apply
     std::string repo;          // the repository holding the object: a submodule is a repository of its own
     std::string local;         // the path as that repository names it
     std::string object;        // its id there
@@ -8882,12 +8904,12 @@ static bool gitFiles(const std::string& dir, const std::string& prefix, std::vec
             if (!gitFiles(sub, path + "/", out, err)) return false;
             continue;
         }
-        ArchiveEntry::Kind kind;
-        if      (mode == "100644") kind = ArchiveEntry::File;
-        else if (mode == "100755") kind = ArchiveEntry::Executable;
-        else if (mode == "120000") kind = ArchiveEntry::Symlink;
-        else { err = "`" + path + "` has git mode " + mode + ", which no package file has"; return false; }
-        out.push_back({path, kind, dir, rec.substr(tab + 1), object});
+        ArchiveEntry::Kind kind = ArchiveEntry::File;
+        if (mode == "100755") kind = ArchiveEntry::Executable;
+        else if (mode != "100644" && mode != "120000") {
+            err = "`" + path + "` has git mode " + mode + ", which no package file has"; return false;
+        }
+        out.push_back({path, kind, mode == "120000", dir, rec.substr(tab + 1), object});
     }
     return true;
 }
@@ -9108,6 +9130,19 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
         if (p == "kama.lock" || p == "kama.local.json") continue;
         if (p.rfind("out/", 0) == 0 || p.rfind("build/", 0) == 0 || p.rfind(".kama/", 0) == 0) continue;
         ship.push_back(f);
+    }
+    // A package holds regular files only (KR-260), Go's rule: a link checks out as a text file on Windows, so a
+    // package holding one built differently there, and an install never follows one. Judged after the excludes,
+    // so leaving the link out is one way to publish.
+    std::vector<std::string> links;
+    for (const auto& f : ship) if (f.link) links.push_back(f.path);
+    if (!links.empty()) {
+        fprintf(stderr, "kama publish: git tracks %s, and a package holds regular files only:\n",
+                links.size() == 1 ? "a symbolic link" : "symbolic links");
+        for (const auto& p : links) fprintf(stderr, "    %s\n", p.c_str());
+        fprintf(stderr, "  Commit a copy of what %s at, or leave %s out with `publish.exclude`.\n",
+                links.size() == 1 ? "it points" : "each points", links.size() == 1 ? "it" : "them");
+        return 1;
     }
     // The backstop for the files that WILL ship: a secret committed by mistake. Judged after the excludes, so
     // a test fixture that only looks like a key (`tests/tls/server.key`) can be left out and the package

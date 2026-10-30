@@ -68,6 +68,10 @@ bool kama_win_make_junction(const std::string& target, const std::string& linkPa
 // junction. The reading half of kama_win_make_junction: how a dangling `.kama/deps` link is named.
 std::string kama_win_junction_target(const std::string& linkPath);
 
+// Whether `p` is a reparse point (a symlink, a junction), asked without following it: Windows' answer to
+// `lstat` + S_ISLNK, which mingw-w64 lacks. The store's tree walk refuses one (KR-260).
+bool kama_win_is_reparse(const std::string& p);
+
 // Start `line` as a child process via CreateProcessW with the command line passed VERBATIM — no argv
 // re-quoting layer — and return its process handle (for kama_win_wait), or -1. This is what the `-j`
 // pool uses in place of a generated .bat: cmd.exe parses a batch FILE in the console code page (437 by

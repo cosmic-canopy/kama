@@ -312,6 +312,12 @@ bool kama_win_make_junction(const std::string& target, const std::string& linkPa
     return true;
 }
 
+bool kama_win_is_reparse(const std::string& p)
+{
+    const DWORD a = GetFileAttributesW(wide(kama_win_ospath(p)).c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+}
+
 std::string kama_win_junction_target(const std::string& linkPath)
 {
     // The same MOUNT_POINT layout kama_win_make_junction writes, read back with FSCTL_GET_REPARSE_POINT.

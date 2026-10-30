@@ -15,10 +15,11 @@
 #include <string>
 #include <vector>
 
+// A regular file: a package holds nothing else (KR-260), so there is no symlink entry to write.
 struct ArchiveEntry {
-    enum Kind { File, Executable, Symlink };
+    enum Kind { File, Executable };
     std::string path;   // '/'-separated, relative to the archive's root directory
-    std::string data;   // the file's bytes, or a symlink's target
+    std::string data;   // the file's bytes
     Kind kind = File;
 };
 

@@ -190,6 +190,46 @@ case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*)
     ;;
 esac
 
+# 4c. a package holds regular files only (KR-260). The store's tree hash used to follow a link: `x -> /` walked
+#     the installer's whole disk, and a link to a file outside the package read that file into the hash, so the
+#     store identity depended on the installing machine. A url tarball and a git checkout holding a link are
+#     refused by name, and the store gains nothing. POSIX only: msys2's `ln -s` copies.
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) : ;; *)
+    echo outside > "$tmp/outside-secret"
+    before=$(ls "$KAMA_STORE" | wc -l)
+    for lk in root:/ file:"$tmp/outside-secret" up:..; do
+        lname=${lk%%:*}; ltarget=${lk#*:}
+        mkdir -p "$tmp/lk-$lname/lk$lname"; printf 'export { f };\nfn int32 f() { return 1; }\n' > "$tmp/lk-$lname/lk$lname/f.kama"
+        ln -s "$ltarget" "$tmp/lk-$lname/lk$lname/x"
+        tar -czf "$tmp/lk$lname.tgz" -C "$tmp/lk-$lname" "lk$lname"
+        mkdir -p "$tmp/plk$lname/src"; printf 'fn uint8 main() { return 0ui8; }\n' > "$tmp/plk$lname/src/main.kama"
+        printf '{ "name": "plk%s", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "lk%s": { "url": "%s/lk%s.tgz" } }, "modules": { ".": { "visibility": "internal" } } }\n' \
+            "$lname" "$lname" "$furl" "$lname" > "$tmp/plk$lname/kama.json"
+        if "$KAMA" pkg install "$tmp/plk$lname/kama.json" >"$tmp/lk$lname.out" 2>&1; then
+            echo "check-packages: FAIL — install accepted a tarball holding a link (x -> $ltarget)" >&2; exit 1
+        fi
+        grep -q "holds x, which is not a regular file" "$tmp/lk$lname.out" \
+            || { echo "check-packages: FAIL — a link in a tarball was refused, but not by name:" >&2; sed 's/^/  /' "$tmp/lk$lname.out" >&2; exit 1; }
+    done
+    lg="$tmp/lk-git"; mkdir -p "$lg/src"
+    printf '{ "name": "lkgit", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" } } }\n' > "$lg/kama.json"
+    printf 'export { g };\nfn int32 g() { return 2; }\n' > "$lg/src/g.kama"
+    ln -s g.kama "$lg/src/alias.kama"
+    git -C "$lg" init -q; git -C "$lg" -c user.email=t@t -c user.name=t add -A
+    git -C "$lg" -c user.email=t@t -c user.name=t commit -qm init; git -C "$lg" tag v1.0.0
+    mkdir -p "$tmp/plkgit/src"; printf 'fn uint8 main() { return 0ui8; }\n' > "$tmp/plkgit/src/main.kama"
+    printf '{ "name": "plkgit", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { "lkgit": { "git": "file://%s", "rev": "v1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }\n' \
+        "$lg" > "$tmp/plkgit/kama.json"
+    if "$KAMA" pkg install "$tmp/plkgit/kama.json" >"$tmp/lkgit.out" 2>&1; then
+        echo "check-packages: FAIL — install accepted a git dependency that tracks a link" >&2; exit 1
+    fi
+    grep -q "holds src/alias.kama, which is not a regular file" "$tmp/lkgit.out" \
+        || { echo "check-packages: FAIL — a git dependency's link was refused, but not by name:" >&2; sed 's/^/  /' "$tmp/lkgit.out" >&2; exit 1; }
+    [ "$(ls "$KAMA_STORE" | wc -l)" = "$before" ] \
+        || { echo "check-packages: FAIL — a refused install left a store entry:" >&2; ls -la "$KAMA_STORE" >&2; exit 1; }
+    no_tmp_left "$KAMA_STORE" "a refused install of a package holding a link" ;;
+esac
+
 # ---- M2.2: resolver + parseLock + dev-deps + pkg add/remove/update ------------------------------------
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 run() { if "$@"; then RC=0; else RC=$?; fi; }   # capture a program's exit code without tripping `set -e`
@@ -823,15 +863,20 @@ KR_GOLDEN=sha256-c810092dce694803902974ee8b297fc27e45f3a2259e7fea8fa7a2cdbc3122d
 grep -q "\"integrity\": \"$KR_GOLDEN\"" "$kreg/golden/index.json" \
     || kfail "the golden package's integrity moved — the archive writer's bytes changed (expected $KR_GOLDEN)" "$kreg/golden/index.json"
 
-# 26j. a tracked symlink ships as a symlink, its target the bytes git recorded. POSIX only: msys2's `ln -s`
-# copies, so git there would record a plain file.
+# 26j. a tracked symlink is refused by name, at publish and at --dry-run: a package holds regular files only (KR-260),
+# Go's rule. It shipped as a link through 0.9.783, which git on Windows checks out as a text file, so the package built
+# differently there. Leaving it out with `publish.exclude` publishes. POSIX only: msys2's `ln -s` copies.
 case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) : ;; *)
     sl="$tmp/kr-link"; kpkg "$sl" sl 1.0.0; ln -s src/sl.kama "$sl/alias.kama"; commit_all "$sl"
-    kpub "$sl" --registry "file://$kreg" >"$tmp/sl.out" 2>&1 || kfail "publish with a tracked symlink errored" "$tmp/sl.out"
-    if [ -n "$KPY" ]; then
-        python3 -c 'import sys,tarfile; m=tarfile.open(sys.argv[1]).getmember("sl/alias.kama"); sys.exit(0 if m.issym() and m.linkname=="src/sl.kama" else 1)' "$kreg/sl/1.0.0.tar.gz" \
-            || kfail "the tracked symlink did not ship as a symlink to src/sl.kama"
-    fi ;;
+    if kpub "$sl" --registry "file://$kreg" >"$tmp/sl.out" 2>&1; then kfail "publish accepted a tracked symlink" "$tmp/sl.out"; fi
+    grep -q '^    alias.kama$' "$tmp/sl.out" && grep -q 'a package holds regular files only' "$tmp/sl.out" \
+        || kfail "a tracked symlink was refused, but not by name" "$tmp/sl.out"
+    [ ! -e "$kreg/sl/1.0.0.tar.gz" ] || kfail "a refused publish left an archive in the registry"
+    if kpub "$sl" --dry-run >"$tmp/sld.out" 2>&1; then kfail "--dry-run accepted a tracked symlink" "$tmp/sld.out"; fi
+    grep -q '^    alias.kama$' "$tmp/sld.out" || kfail "--dry-run did not name the tracked symlink" "$tmp/sld.out"
+    printf '{ "name": "sl", "version": "1.0.0", "kind": "library", "kama": ">=0.9.453", "publish": { "exclude": ["alias.kama"] } }\n' > "$sl/kama.json"
+    git -C "$sl" commit -qam exclude
+    kpub "$sl" --registry "file://$kreg" >"$tmp/sle.out" 2>&1 || kfail "publish with the link left out by publish.exclude errored" "$tmp/sle.out" ;;
 esac
 
 # 26k. the secret backstop: a secret-shaped file git TRACKS is refused, every one named, with the advice to rotate
@@ -1898,4 +1943,4 @@ grep -qF "dependency '$rk': \`$rk\` is reserved" "$tmp/kn.out" \
     || { echo "check-packages: FAIL — the reserved key \`$rk\` was not refused by name:" >&2; sed 's/^/  /' "$tmp/kn.out" >&2; exit 1; }
 done
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind, Windows' own tar into a backslash-spelled store whatever tar PATH holds; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, symlink kept, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision (a refused install leaves the view it found; a project named like its dependency refused at install and at build); kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; $HTTPNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package; a dependency key that is not the package's name, and a reserved `core`/`std` key, refused by name)"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind, Windows' own tar into a backslash-spelled store whatever tar PATH holds; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, a symlink refused by name, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision (a refused install leaves the view it found; a project named like its dependency refused at install and at build); kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; $HTTPNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package; a dependency key that is not the package's name, and a reserved `core`/`std` key, refused by name)"

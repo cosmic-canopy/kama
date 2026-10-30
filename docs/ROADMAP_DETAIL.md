@@ -451,7 +451,7 @@ filter, without its resolve-then-check step. Creating a symlink needs a new `std
   sits on this row's deflate and crc32.
 - **xz and bzip2, decode**: **scheduled, KR-259,** after KR-213. kernel.org and the distributions ship `.tar.xz`, and a
   program must read what others send. Python ships both, Go bzip2 decode, Zig xz and lzma decode.
-- **What `kama pkg install` does with an archive's symlinks:** found reading for this brief, **KR-260** ([§10](#s10-install-symlinks)).
+- **What `kama pkg install` does with an archive's symlinks:** found reading for this brief, and fixed in `0.9.784`: a package holds regular files only ([docs/packages.md](packages.md)).
 
 **13. Bytes held in memory.** `SliceReader` gains a ctor over a `DynamicArray<uint8>` (Go's `bytes.Reader`, Rust's
 `Cursor<Vec<u8>>`). Without it, compressed bytes already in memory, such as an HTTP body or a test vector, cannot be
@@ -3709,40 +3709,6 @@ interleaved): about 3 ms per seam TU. A program with any C header of its own kee
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
-
-<a id="s10-install-symlinks"></a>
-
-### What `kama pkg install` does with an archive's symlinks (KR-260)
-
-**Found 2026-10-29, reading for the compression brief, in the code and not yet by a probe.** A `url` or registry
-dependency is unpacked by the system `tar` (`fetchToStore`, `src/kama.driver.cpp`), and then `treeHashOf` takes the
-store identity over the unpacked tree. Its walk, `collectFilesRel`, decides "directory" with `dirExists`, which is
-`stat()` and so follows a link, and it reads each file through an `ifstream`, which follows one too. `kama publish` ships
-a tracked symlink as a symlink (`check-packages.sh` covers it), so a package can carry one:
-- `x -> /` makes the hash walk the installer's whole disk, and `x -> ..` recurses until the path is too long.
-- `x -> /home/someone/.ssh/id_ed25519` puts a file from outside the package into the hash. So the store identity depends
-  on the installing machine, and the installer reads a file it had no reason to open.
-
-The extraction itself leans on the system `tar`'s defaults: GNU tar and bsdtar both refuse a `..` member. Not yet
-measured: what each does with a member written through a symlink an earlier member created.
-
-| | a symlink in a package |
-|---|---|
-| Go modules | not allowed: a module zip holds regular files only |
-| npm | left out of the tarball |
-| cargo, pip sdist | followed at packaging: the target's bytes ship as a plain file |
-| git, Nix | kept, hashed as the link's target text |
-
-**Ruled 2026-10-30: a package holds regular files only**, Go's rule. `kama publish` refuses a tracked link and names it
-(commit a copy, or list it in `publish.exclude`); `kama pkg install` refuses an archive or a git checkout that holds one;
-the tree-hash walk reads entries with `lstat` and never follows a link. A link is not portable across the OSes kama
-builds on (git on Windows checks one out as a text file holding the target; Windows' tar creates one only in Developer
-Mode), so a package holding one already built differently there. Keeping links git's way (hash the target text, refuse
-one that leaves the package) was the alternative; it keeps that divergence and moves the identity of every package that
-holds one. The hash format is unchanged, so no link-free package's identity moves; none of the `kama-*` packages beside
-this repo tracks a link (`git ls-files -s`, mode `120000`). This reverses `check-packages.sh` 26j ("a tracked symlink
-ships as a symlink"). Size S, C++ only; the std extractor (KR-5, decision 11) cannot serve here, because the compiler
-cannot run kama.
 
 <a id="s10-release-signing"></a>
 

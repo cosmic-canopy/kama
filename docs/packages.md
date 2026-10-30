@@ -681,6 +681,11 @@ Publish refuses:
   entry names, and there is no flag to publish anyway;
 - a **submodule that is not checked out**, which would ship without its files;
 - a file stored through a **git filter** such as Git LFS, whose committed bytes are a pointer, not the file;
+- a tracked **symbolic link**: a package holds regular files only, as a Go module does. Git on Windows checks a
+  link out as a text file holding its target, so a package carrying one built differently there. Commit a copy
+  of what it points at, or leave it out with `publish.exclude`. `kama pkg install` refuses a url tarball or a git
+  checkout that holds one the same way, by name, and never follows it (through `0.9.783` the install's tree hash
+  did, so a link to a file outside the package read that file);
 - a tracked file whose name **looks like a secret** — `.env` and `.env.*` (but not `.env.example`,
   `.sample`, `.template` or `.dist`), `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, the ssh
   private-key names (`id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`), `.netrc`, `.npmrc`, `.pypirc` and

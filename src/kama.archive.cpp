@@ -19,8 +19,7 @@ namespace {
 // as "no date".
 const unsigned long kMtime = 315532800UL;
 
-void tarHeader(std::string& out, const std::string& name, char type, size_t size, unsigned mode,
-               const std::string& link)
+void tarHeader(std::string& out, const std::string& name, char type, size_t size, unsigned mode)
 {
     char h[512];
     memset(h, 0, sizeof h);
@@ -30,8 +29,7 @@ void tarHeader(std::string& out, const std::string& name, char type, size_t size
     snprintf(h + 116, 8, "%07o", 0u);                               // gid
     snprintf(h + 124, 12, "%011llo", (unsigned long long)size);
     snprintf(h + 136, 12, "%011lo", kMtime);
-    h[156] = type;
-    memcpy(h + 157, link.data(), std::min<size_t>(link.size(), 100));
+    h[156] = type;                                                  // the link name after it stays empty
     memcpy(h + 257, "ustar", 6);                                    // magic, with its NUL
     memcpy(h + 263, "00", 2);                                       // version
     // uname and gname stay empty: what they held was the publisher's account.
@@ -377,18 +375,15 @@ std::string kamaTarGz(const std::string& root, const std::vector<ArchiveEntry>& 
     std::string tar;
     for (const ArchiveEntry& e : entries) {
         const std::string name = root + "/" + e.path;
-        const bool link = e.kind == ArchiveEntry::Symlink;
-        std::string pax;
-        if (name.size() > 100) pax += paxRecord("path", name);
-        if (link && e.data.size() > 100) pax += paxRecord("linkpath", e.data);
-        if (!pax.empty()) {
-            tarHeader(tar, "PaxHeader", 'x', pax.size(), 0644, "");
+        if (name.size() > 100) {
+            const std::string pax = paxRecord("path", name);
+            tarHeader(tar, "PaxHeader", 'x', pax.size(), 0644);
             tar += pax;
             pad512(tar);
         }
-        const unsigned mode = link ? 0777 : e.kind == ArchiveEntry::Executable ? 0755 : 0644;
-        tarHeader(tar, name, link ? '2' : '0', link ? 0 : e.data.size(), mode, link ? e.data : std::string());
-        if (!link) { tar += e.data; pad512(tar); }
+        tarHeader(tar, name, '0', e.data.size(), e.kind == ArchiveEntry::Executable ? 0755 : 0644);
+        tar += e.data;
+        pad512(tar);
     }
     tar.append(1024, '\0');   // the end: two zero blocks
     return gzip(tar);
