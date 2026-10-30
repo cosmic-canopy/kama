@@ -2696,7 +2696,7 @@ limit and both workarounds under *Sockets on a fiber*.
 `kama_net_ready`/`retry` protocol with `read`/`write` in place of `recv`/`send`, and a READ on io_uring in place of a
 RECV. Regular files stay with step 7's pool. `Process.wait()` parks on the child's exit, and `Command.run()` on both.
 Off a fiber nothing changes, and a live child stream read as it arrives on a thread already works (it blocks only its
-own thread), which was this row's older half. **Rulings owed before code:**
+own thread), which was this row's older half. **The three questions, as they were put:**
 1. Which descriptors kama makes non-blocking. Recommended: only the pipes it made (`Command`'s `Stdio::Piped` ends).
    O_NONBLOCK on an inherited descriptor changes it for every process that shares it, which is why tokio sends stdin
    to `spawn_blocking`; an inherited pipe waits for readiness, then reads blocking, which a level-triggered readiness
@@ -2705,6 +2705,34 @@ own thread), which was this row's older half. **Rulings owed before code:**
    self-pipe elsewhere.
 3. Windows: `Command`'s piped ends become overlapped named pipes, as Rust's std and libuv make them, read by completion
    once step 8 lands; until then a fiber's pipe read there blocks the thread, as a `Poller` wait does.
+
+**Ruled 2026-10-30, all three as recommended:**
+1. **Only the pipes kama made go non-blocking** — `Command`'s `Stdio::Piped` ends, which `Process.stdout()` lends and
+   `takeStdout()` hands out. An inherited or adopted descriptor (stdin, a FIFO opened by path, `File.adopt`) is never
+   switched: on a fiber its read waits for readiness through the scheduler, then reads blocking, which a
+   level-triggered readiness makes safe for one reader. This is Go's rule since 1.12 (`os.NewFile` uses the poller
+   only for a descriptor already non-blocking) and tokio's (stdin through `spawn_blocking`), and it avoids Node's,
+   whose libuv switches inherited stdio and leaves the parent shell's terminal non-blocking. kama goes one step past
+   both: the inherited read parks its fiber on readiness, so no thread is held.
+2. **The child's exit:** `pidfd_open` on Linux 5.3 and later (the descriptor polls readable at exit), `EVFILT_PROC` /
+   `NOTE_EXIT` on macOS and the BSDs, and a timed `waitpid(WNOHANG)` retry elsewhere (older kernels, the `poll(2)`
+   backend). Nothing process-wide is installed: no SIGCHLD handler for a host or a library to collide with.
+3. **Windows:** `Command`'s piped ends become named pipes, the parent's end opened `FILE_FLAG_OVERLAPPED` and the
+   child's synchronous, as Rust's std and libuv make them; a fiber's read completes through KR-3 step 8's completion
+   port, and until step 8 lands a fiber's pipe read on Windows blocks the thread, as SPEC says.
+
+**Build map (re-probe first):**
+- `File` gains the socket's wait state for a pipe end kama made: the `io` record and mode `TcpStream` keeps
+  (`lib/std/net/net.kama`), registered at its first wait; `File.read`/`write` (`lib/std/fs/fs.kama` ~472-490) take
+  the `kama_net_ready`/`kama_net_retry` protocol (`kama_os.h` ~4334-4378) with `read`/`write` in place of
+  `recv`/`send`. On io_uring a pipe waits with `POLL_ADD`, then reads: no new required ring op (`kama_sched.h` ~187).
+- An inherited descriptor: wait readable (POLL_ADD / the Poller arm), then a plain blocking `read`.
+- `Process.wait()` (`kama_proc_wait`, `kama_os.h` ~2404) parks on the pidfd / `EVFILT_PROC` registration;
+  `Command.run()`'s capture (`kama_capture2`'s `poll`) becomes the two pipe parks plus the exit park.
+- Descriptor lifetime as a socket's: deregister before close; `takeStdout()`/`intoDescriptor()` settle the mode back.
+- Fixtures: the 2026-10-30 probe made a fixture (a ticker fiber counts > 0 while a fiber reads a quiet child's pipe;
+  0 today), an inherited-pipe read, `wait()` parking, `run()` parking; Windows: the pipe pair is named and overlapped
+  (a build-and-read fixture), and the fiber read is stated as blocking until step 8.
 
 <a id="s6-memory-pair-park"></a>
 
