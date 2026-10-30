@@ -13,7 +13,7 @@
 #include <stdlib.h>   // strtod / strtof (float parsing)
 #include <errno.h>    // ERANGE — the checked parse distinguishes overflow from malformed
 #include <float.h>    // DBL_MAX / FLT_MAX — ERANGE alone does not say WHICH way the value left the range
-#include <math.h>     // isnan / signbit — a parsed NaN is canonicalized
+#include <math.h>     // isnan — a parsed NaN is canonicalized
 #include <string.h>   // memcpy — the canonical NaN is built from its bits
 
 // Is `p[0..n)` a float spelled the way `std::fmt::parse` reads one — Rust's grammar: an optional sign, then
@@ -64,12 +64,13 @@ static inline int32_t kama_parse_f64_ck(kama_string* s, double* out) {
     double v = strtod(p, &end);
     if (end != p + n) return 2;
     if (errno == ERANGE && (v > DBL_MAX || v < -DBL_MAX)) return 3;
-    // A NaN is the canonical quiet NaN, its sign kept. strtod hands back the C library's own bits — UCRT's
-    // `0x7fffffffffffffff`, glibc's and Apple's `0x7ff8000000000000` — so `bitcast<uint64>(parse("NaN"))`, and every
-    // byte a program wrote out from it, differed by platform. Built from the bits: UCRT's `NAN` macro is itself
-    // negative.
+    // A NaN is the canonical quiet NaN, with the sign the TEXT wrote. strtod hands back the C library's own bits —
+    // UCRT's `0x7fffffffffffffff`, glibc's and Apple's `0x7ff8000000000000` — so `bitcast<uint64>(parse("NaN"))`, and
+    // every byte a program wrote out from it, differed by platform; and on wasm the library negates a NaN with
+    // arithmetic, whose result sign WebAssembly leaves unspecified, so "-NaN" came back positive. Built from the bits
+    // (UCRT's `NAN` macro is itself negative), signed by the leading `-` the spelling check already accepted.
     if (isnan(v)) {
-        uint64_t b = 0x7ff8000000000000ull | (signbit(v) ? 0x8000000000000000ull : 0ull);
+        uint64_t b = 0x7ff8000000000000ull | (p[0] == '-' ? 0x8000000000000000ull : 0ull);
         memcpy(&v, &b, sizeof v);
     }
     *out = v;
@@ -90,8 +91,8 @@ static inline int32_t kama_parse_f32_ck(kama_string* s, float* out) {
     float v = strtof(p, &end);
     if (end != p + n) return 2;
     if (errno == ERANGE && (v > FLT_MAX || v < -FLT_MAX)) return 3;
-    if (isnan(v)) {   // the canonical quiet NaN, sign kept, as for float64
-        uint32_t b = 0x7fc00000u | (signbit(v) ? 0x80000000u : 0u);
+    if (isnan(v)) {   // the canonical quiet NaN, signed by the text, as for float64
+        uint32_t b = 0x7fc00000u | (p[0] == '-' ? 0x80000000u : 0u);
         memcpy(&v, &b, sizeof v);
     }
     *out = v;
