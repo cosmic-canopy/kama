@@ -362,7 +362,7 @@ contract_return_mismatch_enum	contract_return_mismatch_enum.kama:5:0
 contract_static	contract_static.kama:3:0
 contract_static_mismatch	contract_static_mismatch.kama:12:0
 contract_static_through_value	contract_static_through_value.kama:7:35
-contract_type_arg	contract_type_arg.kama:9:0 contract_type_arg.kama:9:22
+contract_type_arg	contract_type_arg.kama:9:0
 contract_value_not_refined	contract_value_not_refined.kama:14:36
 contract_with_body	contract_with_body.kama:2:30
 contract_with_field	contract_with_field.kama:2:30
@@ -700,7 +700,7 @@ identity_int_to_enum	identity_int_to_enum.kama:13:4
 identity_sig_arity	identity_sig_arity.kama:20:4
 identity_sig_cross_sig	identity_sig_cross_sig.kama:13:4
 if_optional_condition	if_optional_condition.kama:7:4
-iface_collection	iface_collection.kama:6:0 iface_collection.kama:6:43
+iface_collection	iface_collection.kama:6:0
 iface_field	iface_field.kama:5:0
 iface_method_private	iface_method_private.kama:7:0
 iface_ref_concrete	iface_ref_concrete.kama:12:23

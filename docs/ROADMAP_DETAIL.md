@@ -753,17 +753,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-field-default-path"></a>
-
-### A field default's diagnostic names its file as the command line did (KR-274)
-
-Seen 2026-10-30, fixing the field-default access defect (`0.9.770`): `kama build main.kama` reports an error inside a
-field default as `main.kama:12:14` and an error in a function of the same file as `/abs/path/main.kama:16:38`. The
-emitter enters the type's home unit to emit a default (`ScopedClassHome`, `kama.cemit.cpp`), and that sets
-`_collectingUnitPath` to the unit's name as the driver received it, while every other diagnostic reports `_sourcePath`,
-which is absolute. **Fix:** report a user unit by the path the driver resolved for it (as `reportPath` already maps a
-compiler-owned `<…>` unit to its file), and pin it with an xfail whose `.msg` names the absolute path.
-
 <a id="s2-locked-into-inner"></a>
 
 ### `Locked<T>` hands its value back once it is the last handle (KR-262)

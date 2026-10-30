@@ -459,6 +459,11 @@ void CEmitter::noteBuiltinFile(const CompilationUnit* u, const std::string& srcP
     if (u->name) _builtinFileByName[*u->name] = srcPath;
 }
 
+void CEmitter::noteUserFile(const CompilationUnit* u, const std::string& srcPath)
+{
+    if (u && u->name && !srcPath.empty() && *u->name != srcPath) _userFileByName[*u->name] = srcPath;
+}
+
 // The file a `panic`/`assert` site names in the program it is compiled into (KR-121). Two things were wrong with
 // writing `_sourcePath`: it is the UNIT being emitted, so a prelude or stdlib body instantiated into the user's
 // file reported the user's file at the prelude's line (`main.kama:713` in a six-line file); and it is an absolute
@@ -45928,6 +45933,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units) {
         if (!u || u == _preludeUnit || !u->exportList) continue;
         _nsCtx = _unitCtx[u.get()];
+        ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath);   // see diagFile(): a multi-file build has no _sourcePath here
         for (auto& name : *u->exportList) {
             if (!name) continue;
             // ⚠️ BEFORE `qualify`, which maps `main` to `kama_main` — an export list naming `main` was
@@ -45965,6 +45971,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     for (auto& u : units) {
         if (!u || !u->codeDeclarationList) continue;
         _nsCtx = _unitCtx[u.get()];
+        ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath);   // a duplicate named no file in a multi-file build
         for (auto& decl : *u->codeDeclarationList) {
             ASTNode* d = decl.get();
             if (auto* cd = dynamic_cast<ClassDeclarationNode*>(d)) {
@@ -47550,6 +47557,7 @@ void CEmitter::emitUnitIncludes(const std::string& moduleText, bool recordAsShar
 int CEmitter::emit(SharedCompilationUnit unit)
 {
     _runsFibers = unit && unit->spawnsFiber;
+    noteUserFile(unit.get(), _sourcePath);
     // Everything written from here on is the TU this build keeps — see EmitCapture. Restored on every return,
     // so `_out` never outlives the capture that wraps it.
     EmitCapture capture(*_out, _emittedC, _lines);
@@ -47607,6 +47615,7 @@ int CEmitter::emitProgram(const std::vector<SharedCompilationUnit>& units,
                           const std::vector<std::ostream*>& moduleStreams,
                           const std::vector<std::string>& sourcePaths)
 {
+    for (size_t i = 0; i < units.size() && i < sourcePaths.size(); ++i) noteUserFile(units[i].get(), sourcePaths[i]);
     collectProgram(units);
 
     // Every stream this build keeps is captured — see EmitCapture. Scoped to this call, like emit()'s.

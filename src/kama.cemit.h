@@ -1438,18 +1438,25 @@ private:
     // Record both keyings at once. Out of line because `CompilationUnit` is incomplete here and the
     // unit's NAME has to be read off it.
     void noteBuiltinFile(const CompilationUnit* u, const std::string& srcPath);
+    // A USER unit's name -> the path the driver resolved for it, where the two differ: a file named on the
+    // command line is parsed under the name as typed (`main.kama`) and handed to the emitter with its absolute
+    // path. A diagnostic reported through the unit's name (a collect pass, a field default) printed the first
+    // and one reported through `_sourcePath` the second, so one build named one file two ways (KR-274).
+    std::map<std::string, std::string> _userFileByName;
+    void noteUserFile(const CompilationUnit* u, const std::string& srcPath);
 
 public:
     // The file name to SHOW for a unit: a compiler-owned unit's real source when the install has it and
-    // the driver has verified it is still the text this binary compiled (builtinSourcePath), else the
-    // synthetic name unchanged. Applied only where a position leaves the compiler — a diagnostic's
-    // `file`, an instrument's row — never to `_collectingUnitPath` or `declFile`, which the `<` sentinel
-    // is read out of by checkReach, CEmitter::line, setPackageResolver and moduleOfUnit.
+    // the driver has verified it is still the text this binary compiled (builtinSourcePath), a user unit's
+    // resolved path (noteUserFile), else the name unchanged. Applied only where a position leaves the
+    // compiler — a diagnostic's `file`, an instrument's row — never to `_collectingUnitPath` or `declFile`,
+    // which the `<` sentinel is read out of by checkReach, CEmitter::line, setPackageResolver and moduleOfUnit.
     std::string reportPath(const std::string& unit) const
     {
-        if (unit.empty() || unit[0] != '<') return unit;
-        auto it = _builtinFileByName.find(unit);
-        return it == _builtinFileByName.end() ? unit : it->second;
+        if (unit.empty()) return unit;
+        const std::map<std::string, std::string>& byName = unit[0] == '<' ? _builtinFileByName : _userFileByName;
+        auto it = byName.find(unit);
+        return it == byName.end() ? unit : it->second;
     }
 
     // Render a line of EMITTED C — a debugger's frame label, a local's name, a clang error — back to the

@@ -39,6 +39,8 @@
 #      alphabetically first file — `src/a.kama FAILED` used to report an error that was in `src/b.kama`.
 #  12. A semantic diagnostic carries the COLUMN of what it is about (KR-147), not 0, in `check`, `--json` and
 #      `query --diagnostics` alike — an editor underlines the construct, not the line from its start.
+#  13. One build names a file ONE way (KR-274): a field default's diagnostic as a body's, and a multi-file
+#      build's duplicate type names its file at all.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -525,6 +527,26 @@ if ! printf '%s\n' "$out12q" | grep -q 'col\.kama:3:4: error:'; then
     printf '%s\n' "$out12q" | sed 's/^/    /' | head -4; exit 1
 fi
 
+# ---- 13. one build names one file one way (KR-274) -------------------------------------------------------
+# A file named on the command line is parsed under the name as typed and emitted with its absolute path. A
+# diagnostic reported through the unit's name (a field default, a collect pass) printed `main.kama:2:21`
+# while a body's printed `/abs/main.kama:6:14`, so an editor or a script matching paths saw two files. And
+# in a MULTI-file build the duplicate-type check scoped no unit at all, so it printed `:5:0:`, no file.
+mkdir -p "$tmp/p13"
+printf 'type value Holder {\n    public int32 x = undefinedName + 1;\n    public ctor make() { }\n}\nfn uint8 main() {\n    int32 y = alsoUndefined;\n    return 0ui8;\n}\n' > "$tmp/p13/main.kama"
+printf 'type value A {\n    public ctor make() { }\n}\ntype value A {\n    public ctor make() { }\n}\n' > "$tmp/p13/dup.kama"
+out13=$(cd "$tmp/p13" && "$KAMA" build main.kama -o "$tmp/p13.bin" 2>&1 || true)
+names13=$(printf '%s\n' "$out13" | LC_ALL=C sed -n 's/^\([^:]*main\.kama\):[0-9]*:[0-9]*: error.*/\1/p' | sort -u)
+if [ "$(printf '%s\n' "$names13" | grep -c .)" != 1 ] || ! printf '%s\n' "$out13" | grep -q 'main\.kama:2:'; then
+    echo "check-diag-file: FAIL — one build named main.kama more than one way (or missed the field default):"
+    printf '%s\n' "$out13" | sed 's/^/    /' | head -4; exit 1
+fi
+out13m=$(cd "$tmp/p13" && "$KAMA" build main.kama dup.kama -o "$tmp/p13m.bin" 2>&1 || true)
+if printf '%s\n' "$out13m" | LC_ALL=C grep -qE '^:[0-9]+:[0-9]+: '; then
+    echo "check-diag-file: FAIL — a multi-file build's duplicate type names no file:"
+    printf '%s\n' "$out13m" | sed 's/^/    /' | head -4; exit 1
+fi
+
 echo "check-diag-file: PASS (a diagnostic names the file that owns the declaration, imported or local,"
 echo "                       from the collect pass, a body, or a generic template's body; and one mistake"
 echo "                       in a generic body is reported once, not once per instantiation; an"
@@ -534,4 +556,5 @@ echo "                       failed generic bound is the USE SITE's mistake, rep
                        position raised in the HEADER PASS names the prelude, not the user's file; and
                        a generic-inference failure names its file in build, check and query alike; and
                        check's summary names the manifest, or the files that failed; and a semantic
-                       diagnostic carries its column, in check, --json and query)"
+                       diagnostic carries its column, in check, --json and query; and one build
+                       names a file one way, a field default's and a duplicate type's included)"
