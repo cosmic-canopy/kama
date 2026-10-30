@@ -1549,7 +1549,10 @@ A local moved on only some paths cannot be assigned: whether to drop its old val
 Moving, inside a loop, a value declared outside it is allowed only when every path back to the loop's start — the <!-- xfail: move_in_loop, move_in_loop_partial, move_in_loop_continue -->
 end of the body, and each `continue` — assigns it again; otherwise the next pass would move it a second time. A
 `break` carries its state out of the loop, so a local moved before a `break` and live at the loop's own exit is
-moved on some paths only.
+moved on some paths only. A `while` or `for` condition runs before every pass, so a value it moves is held to the <!-- xfail: loop_cond_move, loop_cond_move_for -->
+same rule, and since the loop ends on a failed test it is moved after the loop (`while (eat(b: give w)) { w = …; }`); <!-- xfail: loop_cond_move_after -->
+a `do … while` condition is a pass's last step, so nothing can give a value it moved a new one before the next. <!-- xfail: loop_cond_move_dowhile -->
+<!-- test: loop_cond_move_rearm -->
 
 **Shadowing is a compile error — kama has none.** A binding may not take the name of a parameter, an <!-- xfail: shadow_param, shadow_field, shadow_enclosing -->
 enclosing-scope local, or an in-scope field of the enclosing type (C#-aligned; one name = one binding within

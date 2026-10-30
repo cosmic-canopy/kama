@@ -2315,6 +2315,7 @@ private:
                    // `while (true)`) decides its state after the loop. `bodyDiverges`: the body's end is
                    // unreachable, so it is no back edge.
                    std::map<std::string, int> rearm;
+                   std::set<std::string> condMoved;   // rearm keys the loop's CONDITION moves: its normal exit, a failed test, leaves them moved
                    std::vector<std::map<std::string, MoveState>> breakStates;
                    bool exitsNormally = true, bodyDiverges = false;
                    const ASTNode* loopNode = nullptr;   // the `while`/`do`/`for`/`foreach` this body belongs to (see _loopsBroken)
@@ -3684,6 +3685,7 @@ private:
     std::vector<std::string> contractsToEmitFor(const ClassInfo& ci) const;
     bool contractIsStaticOnlyFor(const ClassInfo& ci, const std::string& itf) const;   // itf on `cls` or any base
     std::string handleContractOf(const std::string& c, const std::string& itf);
+    std::map<std::string, int> condMoves(const std::map<std::string, MoveState>& before, int line) const;
     // KR-261 — a consuming method (`give fn`); see the block above lvalueMoveKey.
     std::string consumingFieldKey(SharedExpression e);
     bool consumingFieldIsParam(const std::string& key);
@@ -3934,6 +3936,9 @@ private:
     const ASTNode* _writeTarget = nullptr;                     // the bare local an `=` is storing to — a write, not a read
     bool _nextLoopExitsNormally = true;                        // the loop site says whether its condition can end it
     const ASTNode* _nextLoopNode = nullptr;                     // ...and which loop it is
+    // ...and what its CONDITION moved: the condition runs before every pass, so a value it gives away must be given a
+    // new value on every path back to the top, as a move in the body must (the body scope's `rearm`).
+    std::map<std::string, int> _nextLoopCondMoves;
     // Every loop a `break` was emitted for. `hasLoopBreak` reads statements only, so a `break` in a `match` arm
     // inside an EXPRESSION (`int32 v = match (o) { …; case None: { break; } };`) is invisible to it; emission
     // resolves every `break` to its loop, so once a loop is emitted this answers exactly (KR-194).

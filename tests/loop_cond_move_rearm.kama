@@ -1,0 +1,9 @@
+// A loop's condition runs before every pass, so a value it gives away must be given a new value before the next
+// test, as a move in the body must; then it is accepted. Three boxes are made and each is dropped once, by `eat`.
+// `while (eat(b: give w)) {}` with no new value moved `w` again on the second test and was accepted, as was
+// a use of `w` after such a loop, whose last test moved it (xfail/loop_cond_move*).
+static int32 drops = 0;
+static int32 n = 0;
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } ~Box() { drops = drops + 1; } }
+fn bool eat(Box b) { n = n + 1; return n < 3; }
+fn uint8 main() { Box w = Box.make(v: 1); while (eat(b: give w)) { w = Box.make(v: 2); } return drops == 3 ? 42 : cast<uint8>(drops); }

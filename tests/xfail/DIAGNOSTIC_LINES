@@ -879,6 +879,10 @@ lock_window_sleep	lock_window_sleep.kama:6:0
 lock_window_with_closing_view	lock_window_with_closing_view.kama:19:0
 locked_payload_not_sendable	locked_payload_not_sendable.kama:7:11
 locked_shared_value_write	locked_shared_value_write.kama:6:41
+loop_cond_move	loop_cond_move.kama:6:42
+loop_cond_move_after	loop_cond_move_after.kama:6:102
+loop_cond_move_dowhile	loop_cond_move_dowhile.kama:6:42
+loop_cond_move_for	loop_cond_move_for.kama:6:42
 main_called	main_called.kama:6:20 main_called.kama:6:27
 main_exported	main_exported.kama:6:0
 main_int32	main_int32.kama:4:0

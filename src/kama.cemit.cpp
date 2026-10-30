@@ -6997,7 +6997,9 @@ void CEmitter::emitBlock(BlockNode* block, int depth)
 void CEmitter::emitBlockScoped(BlockNode* block, int depth, bool loopBoundary, bool functionRoot)
 {
     Scope sc; sc.isLoopBoundary = loopBoundary; sc.isFunctionRoot = functionRoot; sc.switchDepth = _switchDepth;
-    if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; sc.loopNode = _nextLoopNode; _nextLoopNode = nullptr; }
+    if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; sc.loopNode = _nextLoopNode; _nextLoopNode = nullptr;
+                           sc.rearm.insert(_nextLoopCondMoves.begin(), _nextLoopCondMoves.end());
+                           for (auto& cm : _nextLoopCondMoves) sc.condMoved.insert(cm.first); _nextLoopCondMoves.clear(); }
     _scopes.push_back(sc);
     // by-value smart-ptr params the callee owns drop at fn-end. Recorded FIRST in
     // the root scope, so they're destroyed LAST (after every local), at function exit.
@@ -9736,7 +9738,9 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
     if (auto* w = dynamic_cast<WhileNode*>(n)) {
         line(n->line);
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
+        const std::map<std::string, MoveState> preCond = _moveState;
         std::string cond = emitCondition(w->booleanExpression, "a `while` condition");
+        _nextLoopCondMoves = condMoves(preCond, w->line);   // the body must give each a new value before the next test
         _nextLoopExitsNormally = !alwaysTrue(w->booleanExpression);   // for settleLoopExit
         _nextLoopNode = w;
         if (_hoisted.empty()) {                                   // fast path — unchanged
@@ -9774,7 +9778,14 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
         _nextLoopNode = d;
         emitBody(d->doWhileStatement, depth, /*loopBoundary=*/true);
         requireBoolCondition(d->booleanExpression, "a `do … while` condition", d->line);
+        const std::map<std::string, MoveState> preCond = _moveState;
         *_out << " while (" << emitExpression(d->booleanExpression) << ");\n";
+        // The condition is the last thing a pass does and the next pass starts right after it: nothing can give a value
+        // it moved a new one first, so a move there is a move per pass.
+        for (auto& kv : condMoves(preCond, d->line))
+            unsupported(("`" + kv.first + "` is given away by this `do … while` condition, which runs at the end of every "
+                         "pass — the next pass would start without it and the next test would move it again; give it "
+                         "away in the body, or after the loop").c_str(), d->line);
         placeLoopExit(depth);
         return;
     }
@@ -9791,8 +9802,11 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
         _scopes.push_back(Scope());
         std::string init = emitForClause(f->initializerStatements);
         size_t preLoc = _scopes.empty() ? 0 : _scopes.back().locals.size();
+        const std::map<std::string, MoveState> preCond = _moveState;
         std::string cond = emitCondition(f->booleanExpression, "a `for` condition");
+        std::map<std::string, int> forCondMoves = condMoves(preCond, f->line);
         std::string iter = emitForClause(f->iteratorStatements);
+        _nextLoopCondMoves = forCondMoves;
         _nextLoopExitsNormally = f->booleanExpression && !alwaysTrue(f->booleanExpression);   // for settleLoopExit
         _nextLoopNode = f;
         if (_hoisted.empty()) {                                   // fast path — unchanged
@@ -10772,13 +10786,29 @@ bool CEmitter::emitDiscardedValue(SharedExpression e, int depth, bool explicitDi
 // A brace-wrapped body for if/while/for/do. Reuses an existing block as-is.
 // Always introduces a scope (even for a single-statement body) so RAII cleanup
 // and the loop boundary are tracked correctly.
+// The values a loop's condition just moved: each one that held a value before it (NotMoved in `before`) and holds
+// none now. The condition runs before EVERY pass, so each is a move per pass (`while (eat(b: give w)) {}` moved `w` again
+// on the second test, and was accepted).
+std::map<std::string, int> CEmitter::condMoves(const std::map<std::string, MoveState>& before, int line) const
+{
+    std::map<std::string, int> moved;
+    for (auto& kv : before)
+        if (kv.second == MoveState::NotMoved) {
+            auto it = _moveState.find(kv.first);
+            if (it != _moveState.end() && it->second != MoveState::NotMoved) moved[kv.first] = line;
+        }
+    return moved;
+}
+
 void CEmitter::emitBody(SharedStatement stmt, int depth, bool loopBoundary)
 {
     if (auto* b = dynamic_cast<BlockNode*>(stmt.get())) {
         emitBlockScoped(b, depth, loopBoundary, /*functionRoot=*/false);
     } else {
         Scope sc; sc.isLoopBoundary = loopBoundary; sc.switchDepth = _switchDepth;
-        if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; sc.loopNode = _nextLoopNode; _nextLoopNode = nullptr; }
+        if (loopBoundary) { sc.exitsNormally = _nextLoopExitsNormally; _nextLoopExitsNormally = true; sc.loopNode = _nextLoopNode; _nextLoopNode = nullptr;
+                           sc.rearm.insert(_nextLoopCondMoves.begin(), _nextLoopCondMoves.end());
+                           for (auto& cm : _nextLoopCondMoves) sc.condMoved.insert(cm.first); _nextLoopCondMoves.clear(); }
         _scopes.push_back(sc);
         *_out << "{\n";
         emitStatement(stmt, depth + 1);
@@ -21422,7 +21452,10 @@ void CEmitter::checkRearmed(const Scope& loop, int line, const char* where)
 void CEmitter::settleLoopExit(Scope& loop)
 {
     for (const auto& r : loop.rearm) {
-        bool moved = false, live = loop.exitsNormally;
+        // The normal exit is a failed test: the body re-armed what it moved before that test, but what the test itself
+        // moved is gone (`while (eat(b: give w))` leaves `w` moved however it ends).
+        const bool byCond = loop.condMoved.count(r.first) != 0;
+        bool moved = loop.exitsNormally && byCond, live = loop.exitsNormally && !byCond;
         for (const auto& b : loop.breakStates) {
             auto it = b.find(r.first);
             MoveState st = it == b.end() ? MoveState::NotMoved : it->second;

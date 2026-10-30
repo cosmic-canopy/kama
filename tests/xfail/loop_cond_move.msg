@@ -1,0 +1,1 @@
+`w` is given away inside this loop

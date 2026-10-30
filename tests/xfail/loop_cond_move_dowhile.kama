@@ -1,0 +1,6 @@
+// A `do … while` condition is the last thing a pass does: nothing can give the value back before the next pass (tests/loop_cond_move_rearm is the accepted shape).
+static int32 drops = 0;
+static int32 n = 0;
+type resource Box { int32 v; public ctor make(int32 v) { this.v = v; } ~Box() { drops = drops + 1; } }
+fn bool eat(Box b) { n = n + 1; return n < 3; }
+fn uint8 main() { Box w = Box.make(v: 1); do { n = n + 0; } while (eat(b: give w)); return 0; }   // -> REJECT
