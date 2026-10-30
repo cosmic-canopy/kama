@@ -72,6 +72,10 @@ static inline char* kama__sized_strdup(const char* s) {
 #define KAMA_NET_PROGRAM_NB 1     // the program made it non-blocking
 #define KAMA_NET_KAMA_NB    2     // kama did, to park on it or to wait out a deadline
 #define KAMA_NET_DEADLINE   4     // a deadline is set
+// ...and the bits a `File` keeps beside them (KR-7: kama_file_read, at the end of this file).
+#define KAMA_FILE_OURS      8     // a pipe end kama made, which kama may make non-blocking to park on it
+#define KAMA_FILE_SEEN      16    // what kind of descriptor it is has been looked up (fstat), and is the bit below
+#define KAMA_FILE_STREAM    32    // a pipe, FIFO, socket or terminal: a fiber waits for it to be ready
 
 #if defined(_WIN32)
 
@@ -2488,6 +2492,21 @@ static inline void kama_sleep_ms(int32_t ms) { poll((struct pollfd*)0, 0, (int)m
 // *outBuf/*outLen/*outCap and *errBuf/*errLen/*errCap — each a heap buffer the caller copies out then frees
 // with kama_free(buf, cap, 1) (a NULL buffer with len 0 when a stream produced no bytes). Returns -1 on a hard poll/read error (both
 // buffers freed). `poll` ignores a negative fd, so a finished stream is masked by setting its pollfd.fd to -1.
+// One read of `fd` onto the end of its capture buffer, grown by doubling from 64 KiB: the count, 0 at EOF, or -1 with
+// errno set (ENOMEM when the buffer cannot grow). kama_capture2_parked's too.
+static inline ptrdiff_t kama__capture_read(int fd, uint8_t** buf, size_t* len, size_t* cap) {
+    if (*len == *cap) {
+        size_t ncap = *cap ? *cap * 2 : 65536;
+        uint8_t* nb = (uint8_t*)kama_alloc(ncap, 1);
+        if (!nb) { errno = ENOMEM; return -1; }
+        if (*len) kama_copy(nb, *buf, *len);
+        if (*buf) kama_free(*buf, *cap, 1);
+        *buf = nb; *cap = ncap;
+    }
+    const ptrdiff_t r = (ptrdiff_t)read(fd, *buf + *len, *cap - *len);
+    if (r > 0) *len += (size_t)r;
+    return r;
+}
 static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
                                     uint8_t** outBuf, size_t* outLen, size_t* outCap,
                                     uint8_t** errBuf, size_t* errLen, size_t* errCap) {
@@ -2505,18 +2524,9 @@ static inline int32_t kama_capture2(int32_t outFd, int32_t errFd,
         if (pr < 0) { if (errno == EINTR) continue; goto fail; }
         for (int i = 0; i < 2; i++) {
             if (done[i] || !(pfd[i].revents & (POLLIN | POLLHUP | POLLERR))) continue;
-            if (len[i] == cap[i]) {
-                size_t ncap = cap[i] ? cap[i] * 2 : 65536;
-                uint8_t* nb = (uint8_t*)kama_alloc(ncap, 1);
-                if (!nb) goto fail;
-                if (len[i]) kama_copy(nb, buf[i], len[i]);
-                if (buf[i]) kama_free(buf[i], cap[i], 1);
-                buf[i] = nb; cap[i] = ncap;
-            }
-            ptrdiff_t r = read(fds[i], buf[i] + len[i], cap[i] - len[i]);
-            if (r > 0)       { len[i] += (size_t)r; }
-            else if (r == 0) { done[i] = 1; }               // EOF: child closed this end
-            else { if (errno == EINTR || errno == EAGAIN) continue; goto fail; }
+            const ptrdiff_t r = kama__capture_read(fds[i], &buf[i], &len[i], &cap[i]);
+            if (r == 0) { done[i] = 1; }                    // EOF: child closed this end
+            else if (r < 0) { if (errno == EINTR || errno == EAGAIN) continue; goto fail; }
         }
     }
     *outBuf = buf[0]; *outLen = len[0]; *outCap = cap[0];
@@ -4283,6 +4293,8 @@ static inline int     kama__net_drained(void* io, int32_t interest);            
 static inline int     kama__net_ring(void* io);                                    // its scheduler runs io_uring
 static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by);   // a read through the ring
 static inline ptrdiff_t kama__net_send(void* io, const uint8_t* buf, size_t n, uint64_t by);   // a write through it
+static inline int     kama__file_wait(ptrdiff_t fd, int32_t interest);             // one wait, no lasting record: 0 refused
+static inline int     kama__proc_park(int pid);                                    // until a child may have exited: -1 cannot
 #endif
 
 static inline void kama__net_fail(int e) {
@@ -4568,6 +4580,166 @@ static inline int32_t kama_poller_wait_parked(void* ph, void* eh, int32_t timeou
 #endif
     (void)io;
     return kama_poller_wait(ph, eh, timeoutMs);
+}
+
+// ---- files and children on a fiber (KR-7) -----------------------------------------------------------------------
+// A `File`'s read and write. Off a fiber, and on Windows until KR-3 step 8, the plain system call. On a fiber:
+//   - a pipe end kama made (`Command`'s piped ends, KAMA_FILE_OURS) parks as a socket does, by the protocol above:
+//     kama makes it non-blocking and registers it at its first wait. Its other end is the child's own open file, so
+//     the child never sees the mode. No ring branch: the ring's RECV and SEND are a socket's (ENOTSOCK on a pipe), and
+//     its wait is already a POLL_ADD.
+//   - any other pipe, FIFO, socket or terminal (stdin, an adopted descriptor, an end handed out) is never switched,
+//     since its mode belongs to every process sharing it (Node's libuv switched inherited stdio and left the parent
+//     shell's terminal non-blocking). Its call waits for readiness on a record that lasts the one wait, and is then
+//     made blocking, which readiness makes safe for one reader. A write then takes at most PIPE_BUF bytes, which a
+//     ready pipe takes whole.
+//   - a regular file is the plain system call (KR-3 step 7's pool will take it).
+// A descriptor the OS will not watch (/dev/null: epoll EPERM, kqueue EINVAL) is the plain call too, never an error.
+// Both return the count, or -1 with errno set; EINTR is retried here.
+#if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
+static inline int kama__file_stream(int32_t fd, int32_t* mode) {
+    if (!(*mode & KAMA_FILE_SEEN)) {
+        struct stat st;
+        *mode |= KAMA_FILE_SEEN;
+        if (fstat((int)fd, &st) == 0 && (S_ISFIFO(st.st_mode) || S_ISSOCK(st.st_mode) || S_ISCHR(st.st_mode)))
+            *mode |= KAMA_FILE_STREAM;
+    }
+    return (*mode & KAMA_FILE_STREAM) != 0;
+}
+// An inherited stream's turn: now when a level check says so (the registration is edge-triggered, and a read that left
+// data behind gets no new edge), else after a park. macOS's poll answers POLLNVAL for a terminal, so only a real
+// answer skips the park, and kqueue then watches the terminal.
+static inline void kama__file_await(int32_t fd, int32_t interest) {
+    struct pollfd p; p.fd = (int)fd; p.events = (short)(interest == 1 ? POLLIN : POLLOUT); p.revents = 0;
+    if (poll(&p, 1, 0) > 0 && !(p.revents & POLLNVAL)) return;
+    (void)kama__file_wait(fd, interest);
+}
+#endif
+// A descriptor kama never owns the mode of: the inherited half alone, which never registers for good and so never
+// allocates. std's standard streams call it directly, so a `@noheap` body may still read stdin in a program that runs
+// fibers; a `File` reaches it for every descriptor but a pipe end kama made.
+static inline ptrdiff_t kama_stream_read(int32_t fd, int32_t* mode, uint8_t* buf, size_t n) {
+#if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
+    if (kama__net_here() && kama__file_stream(fd, mode)) kama__file_await(fd, 1);
+#endif
+    (void)mode;
+    for (;;) { const ptrdiff_t got = kama_read(fd, buf, n); if (got >= 0 || errno != EINTR) return got; }
+}
+static inline ptrdiff_t kama_stream_write(int32_t fd, int32_t* mode, const uint8_t* buf, size_t n) {
+#if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
+    if (kama__net_here() && kama__file_stream(fd, mode)) {
+        kama__file_await(fd, 2);
+        if (n > PIPE_BUF) n = PIPE_BUF;
+    }
+#endif
+    (void)mode;
+    for (;;) { const ptrdiff_t put = kama_write(fd, buf, n); if (put >= 0 || errno != EINTR) return put; }
+}
+static inline ptrdiff_t kama_file_read(int32_t fd, void** io, int32_t* mode, uint8_t* buf, size_t n) {
+#if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
+    if (*mode & KAMA_FILE_OURS) {
+        if (kama_net_ready(fd, io, mode, 0) != 0 || kama_net_drained(*io, *mode, 1, 0) != 0) return -1;
+        for (;;) {
+            const ptrdiff_t got = kama_read(fd, buf, n);
+            if (got >= 0) { kama_net_short(*io, 1, got, (ptrdiff_t)n); return got; }
+            if (!kama_net_retry(fd, *io, *mode, 1, 0)) return -1;
+        }
+    }
+#endif
+    (void)io;
+    return kama_stream_read(fd, mode, buf, n);
+}
+static inline ptrdiff_t kama_file_write(int32_t fd, void** io, int32_t* mode, const uint8_t* buf, size_t n) {
+#if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
+    if (*mode & KAMA_FILE_OURS) {
+        if (kama_net_ready(fd, io, mode, 0) != 0 || kama_net_drained(*io, *mode, 2, 0) != 0) return -1;
+        for (;;) {
+            const ptrdiff_t put = kama_write(fd, buf, n);
+            if (put >= 0) { kama_net_short(*io, 2, put, (ptrdiff_t)n); return put; }
+            if (!kama_net_retry(fd, *io, *mode, 2, 0)) return -1;
+        }
+    }
+#endif
+    (void)io;
+    return kama_stream_write(fd, mode, buf, n);
+}
+// A `File`'s close: off the scheduler first (decision 13), then the descriptor.
+static inline int32_t kama_file_close(int32_t fd, void* io) {
+    kama_net_release(io);
+    return kama_close_fd(fd);
+}
+// A pipe end kama made, handed out (`intoDescriptor`, `duplicateDescriptor`): released, blocking again, and never
+// switched again, so a child handed it, or the duplicate, reads a blocking stream. Go's `File.Fd()` does the same, and
+// tokio's `ChildStdout` into a `Stdio`. The `File`'s own later calls on a fiber wait as an inherited stream's do, so it
+// still parks; a read socket has `MSG_DONTWAIT` for this instead, and a pipe's `read` has no such flag.
+static inline void kama_file_settle(int32_t fd, void** io, int32_t* mode) {
+#if !defined(_WIN32)
+    kama_net_settle(fd, *io, *mode);
+#else
+    (void)fd;
+#endif
+    *io = NULL;
+    *mode &= ~(KAMA_FILE_OURS | KAMA_NET_KAMA_NB);
+}
+
+// `Process.wait()`: on a fiber the wait parks on the child's exit, a pidfd on Linux and EVFILT_PROC on macOS and the
+// BSDs; where neither can watch it (an older kernel, a seccomp filter, any other target) it looks again after a pause
+// that doubles from 1 ms to 64 ms. Nothing process-wide is installed: no SIGCHLD handler for a host or a library to
+// collide with. Off a fiber, and on Windows, the blocking wait. kama_proc_wait's answers.
+static inline int32_t kama_proc_wait_parked(ptrdiff_t handle, int32_t* outStatus) {
+#if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
+    if (kama__net_here()) {
+        for (int32_t attempt = 0;; attempt++) {
+            const int32_t r = kama_proc_wait(handle, outStatus, WNOHANG);
+            if (r != 0) return r;
+            if (kama__proc_park((int)handle) != 0) kama_sleep_ns((uint64_t)1000000 << (attempt < 6 ? attempt : 6));
+        }
+    }
+#endif
+    return kama_proc_wait(handle, outStatus, 0);
+}
+
+// `Command.run()`'s capture: on a fiber both pipes are read as they fill, and the wait between parks on a Poller of
+// the two, nested in the scheduler's queue as `Poller.wait` is. Off a fiber, and on Windows, kama_capture2.
+static inline int32_t kama_capture2_parked(int32_t outFd, int32_t errFd,
+                                           uint8_t** outBuf, size_t* outLen, size_t* outCap,
+                                           uint8_t** errBuf, size_t* errLen, size_t* errCap) {
+#if defined(KAMA__OS_FIBERS) && !defined(_WIN32)
+    if (kama__net_here()) {
+        const int fds[2] = { (int)outFd, (int)errFd };
+        uint8_t* buf[2] = { NULL, NULL };
+        size_t len[2] = { 0, 0 }, cap[2] = { 0, 0 };
+        int done[2] = { outFd < 0, errFd < 0 };
+        void* ph = kama_poller_create();
+        void* eh = kama_poll_events_new(2);
+        void* io = NULL;
+        int err = (ph && eh) ? 0 : ENOMEM;
+        for (int i = 0; !err && i < 2; i++)
+            if (!done[i] && (kama_set_nonblocking(fds[i], 1) != 0 || kama_poller_add(ph, fds[i], 1, (uint64_t)i + 1) != 0)) err = errno;
+        while (!err && (!done[0] || !done[1])) {
+            for (int i = 0; !err && i < 2; i++)
+                while (!done[i]) {
+                    const ptrdiff_t r = kama__capture_read(fds[i], &buf[i], &len[i], &cap[i]);
+                    if (r == 0) done[i] = 1;                                    // EOF: the child closed this end
+                    else if (r < 0 && errno != EINTR) { if (errno != EAGAIN) err = errno; break; }
+                }
+            if (!err && (!done[0] || !done[1]) && kama_poller_wait_parked(ph, eh, -1, &io) < 0 && errno != EINTR) err = errno;
+        }
+        kama_net_release(io);
+        if (ph) kama_poller_free(ph);
+        if (eh) kama_poll_events_free(eh);
+        for (int i = 0; i < 2; i++) if (fds[i] >= 0) (void)kama_set_nonblocking(fds[i], 0);
+        if (err) {
+            for (int i = 0; i < 2; i++) if (buf[i]) kama_free(buf[i], cap[i], 1);
+            errno = err;
+            return -1;
+        }
+        *outBuf = buf[0]; *outLen = len[0]; *outCap = cap[0];
+        *errBuf = buf[1]; *errLen = len[1]; *errCap = cap[1];
+        return 0;
+    }
+#endif
+    return kama_capture2(outFd, errFd, outBuf, outLen, outCap, errBuf, errLen, errCap);
 }
 
 #if defined(KAMA__OS_FIBERS)

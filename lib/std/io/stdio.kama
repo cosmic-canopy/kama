@@ -22,14 +22,16 @@ export { StdIn, StdOut, StdErr, stdin, stdout, stderr };
 // Three types rather than one, following Rust's split: reading from standard OUTPUT is not a thing, and a
 // single Reader+Writer handle would let you write it.
 extern "kama_os.h";
-extern fn isize kama_read(int32 fd, UnsafePtr<uint8> buf, usize n);
-extern fn isize kama_write(int32 fd, UnsafeConstPtr<uint8> buf, usize n);
-extern fn int32 kama_last_error();
-extern fn int32 kama_EINTR();
+// The read and write of a descriptor kama never owns the mode of (kama_os.h, KR-7): on a fiber a pipe, FIFO or terminal
+// waits for readiness by parking only the fiber, and its mode is never switched — the three descriptors are the
+// process's, shared with whoever started it. `mode` caches what kind of descriptor each is.
+extern fn isize kama_stream_read(int32 fd, UnsafePtr<int32> mode, UnsafePtr<uint8> buf, usize n);
+extern fn isize kama_stream_write(int32 fd, UnsafePtr<int32> mode, UnsafeConstPtr<uint8> buf, usize n);
 
 // Standard input (fd 0) as a `Reader`. Wrap it in a `BufReader` for `readLine`.
 type resource StdIn implements Reader {
     int32 fd = 0;
+    int32 mode = 0;
 
     public ctor make() { this.fd = 0; }
 
@@ -38,11 +40,9 @@ type resource StdIn implements Reader {
     @parks
     public unsafe fn Result<isize, IoError> read(View<uint8> into) {
         if (into.length() == 0) { return Result::Ok(value: 0); }
-        while (true) {
-            isize n = kama_read(fd: this.fd, buf: addr(of: into[0]), n: cast<usize>(into.length()));
-            if (n >= 0) { return Result::Ok(value: n); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
-        }
+        isize n = kama_stream_read(fd: this.fd, mode: addr(of: this.mode), buf: addr(of: into[0]), n: cast<usize>(into.length()));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: n);
     }
 }
 
@@ -51,6 +51,7 @@ type resource StdIn implements Reader {
 // there could not report its error, and an encoder dropped without `finish` abandons its stream the same way.
 type resource StdOut implements Writer {
     int32 fd = 1;
+    int32 mode = 0;
 
     public ctor make() { this.fd = 1; }
 
@@ -59,11 +60,9 @@ type resource StdOut implements Writer {
     @parks
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
-        while (true) {
-            isize n = kama_write(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
-            if (n >= 0) { return Result::Ok(value: n); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
-        }
+        isize n = kama_stream_write(fd: this.fd, mode: addr(of: this.mode), buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: n);
     }
 
     // Nothing is held back, so there is nothing to drain — the OS buffers, not this handle.
@@ -74,6 +73,7 @@ type resource StdOut implements Writer {
 // and its diagnostics to the terminal without the two interleaving.
 type resource StdErr implements Writer {
     int32 fd = 2;
+    int32 mode = 0;
 
     public ctor make() { this.fd = 2; }
 
@@ -82,11 +82,9 @@ type resource StdErr implements Writer {
     @parks
     public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
         if (bytes.length() == 0) { return Result::Ok(value: 0); }
-        while (true) {
-            isize n = kama_write(fd: this.fd, buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
-            if (n >= 0) { return Result::Ok(value: n); }
-            if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
-        }
+        isize n = kama_stream_write(fd: this.fd, mode: addr(of: this.mode), buf: bytes.dataPtr(), n: cast<usize>(bytes.length()));
+        if (n < 0) { return Result::Err(error: lastError()); }
+        return Result::Ok(value: n);
     }
 
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }

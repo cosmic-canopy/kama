@@ -1652,11 +1652,12 @@ What the model counts:
 - **Fibers.** On an isolate that runs fibers — any code its entry, `main` included, reaches once it reaches a
   `spawn fiber` — a lasting access may not reach a **park**, a call that lets another fiber run: a `join`, a `Fiber`'s <!-- xfail: park_window_join, park_window_root, park_window_scope_close, park_window_fiber_drop -->
   drop, a `scope`'s close, a socket call that would block — a read, a write, an accept, a connect (*Sockets on a <!-- xfail: park_window_socket_read -->
-  fiber*) — a channel's wait — a receive with nothing queued, a send into a full channel (*Channels*) — or a <!-- xfail: park_window_channel_recv -->
+  fiber*) — any `File` read or write, a standard stream's, `Process.wait()` and `Command.run()` (*Pipes and children <!-- xfail: park_window_file_read -->
+  on a fiber*; whether a `File` holds a pipe is a run-time fact, so every one counts) — a channel's wait — a receive with nothing queued, a send into a full channel (*Channels*) — or a <!-- xfail: park_window_channel_recv -->
   `sleep`. Fibers share the thread's record, which ends accesses in the order they began; a fiber that <!-- xfail: park_window_sleep -->
   parked inside one would let another change what it holds. It is a compile error naming the chain, for a window and <!-- xfail: park_call_access -->
   a call that holds a field alike, and so is a call through a `fnptr` inside one, whose target could park. A call that <!-- xfail: park_window_fnptr -->
-  only blocks the thread, such as `println`, or (until KR-7) a `File` read, is no park: no other fiber runs. A spawn is none either,
+  only blocks the thread, such as `println`, is no park: no other fiber runs. A spawn is none either,
   so a window may spawn into a `scope` opened outside it, and an isolate that runs no fibers is not held to the rule. <!-- test: park_rule_allowed -->
   Take what is needed out of the window and wait after it; a broadcast takes the handles out of the list first. Rust's
   `RefCell` held across an `.await` panics at run time, and a lint (`await_holding_refcell_ref`) is all that warns.
@@ -2418,18 +2419,39 @@ non-blocking and registers it with the isolate's scheduler at its first wait; ne
   duplicate set back to blocking cannot stall the core.
 - **On Linux a Unix-socket connect to a full accept queue** is made again after a pause until there is room, as a
   blocking connect waits; the program's own non-blocking connect answers `WouldBlock` there.
-- **A socket's first wait on a fiber allocates its registration**, so in a program that runs fibers `@noheap` code may
-  make no socket call (KR-245), and since a timed park grows the scheduler's timer heap, no channel wait or join
+- **A socket's first wait on a fiber allocates its registration**, and so does a pipe end kama made, so in a program
+  that runs fibers `@noheap` code may make no socket call and no `File` read or write (KR-245); a standard stream's
+  wait lasts the one call and allocates nothing, and since a timed park grows the scheduler's timer heap, no channel wait or join
   either. A program runs fibers when its code spawns one: importing `std::concurrent` for a channel or an isolate is
   not running fibers, and such a program compiles none of this. <!-- test: onpanic_channel_no_fibers -->
 - **`std::time::sleep` parks too**, and so does `Poller.wait` on epoll and kqueue, on the Poller's own descriptor, so a <!-- test: fiber_sleep, fiber_poller_wait -->
   fiber that drives its own `Poller` does not stop the isolate's others. A Windows `Poller` has no descriptor to park
   on, and there a fiber's wait still blocks the thread until the offload pool (KR-3 step 7).
-- **A `File` does not park yet, a child's pipe included** (KR-7). `File.read` and `write` are plain system calls, so on
-  a fiber one that waits, on a quiet child's pipe, a FIFO or a terminal, stops every fiber on its isolate, and so do
-  `Process.wait()` and `Command.run()`. Until it lands, wait for the pipe through a `Poller` first and then read (epoll
-  and kqueue), or give the child one end of a `UnixStreamPair` as its stdout, whose reads park as a socket's do. A
-  regular file's read waits on the disk, not on a peer, and goes to the offload pool (KR-3 step 7).
+
+**Pipes and children on a fiber.** A `File` over a pipe, a FIFO or a terminal parks only its fiber while it waits, as a <!-- test: proc_fiber_pipe, fiber_sched -->
+socket does, and so do `StdIn`, `StdOut` and `StdErr`, `Process.wait()` until the child exits, and `Command.run()`
+while it captures; off a fiber each blocks its thread as before. Go and tokio put a child's pipes on their poller the
+same way, and Rust's std blocks. Which descriptors kama switches is the rule that keeps the parking invisible:
+- **Only a pipe end kama made is made non-blocking**: `Command`'s `Stdio::Piped` ends, which `Process.stdout()` lends
+  and `takeStdout()` hands out. The child's end is its own open file and never sees the mode.
+- **Any other descriptor is never switched**: stdin and the other standard streams, a FIFO opened by path, a
+  descriptor `File.adopt` took. Its mode belongs to every process sharing it (Node's libuv switched inherited stdio
+  and left the parent shell's terminal non-blocking). On a fiber its call waits for readiness, parked, and is then made
+  blocking, which readiness makes safe for one reader; a write then takes at most `PIPE_BUF` bytes, which a ready pipe
+  takes whole. A descriptor the OS will not watch, `/dev/null`, is read as off a fiber.
+- **A pipe end kama made is blocking again once it is handed out**, by `intoDescriptor()` or `duplicateDescriptor()`, <!-- test: proc_fiber_pipe -->
+  and for good: a child given it, or the duplicate, reads a blocking stream, and the `File`'s own later calls on a fiber
+  still park, as an inherited pipe's do. Go's `File.Fd()` and tokio's `ChildStdout` into a `Stdio` do the same; a
+  socket's duplicate keeps the mode instead, since its calls pass `MSG_DONTWAIT` and a pipe's `read` has no such flag.
+  `rawFd()` lends the descriptor as it is.
+- **A child's exit is watched without a process-wide handler**: a pidfd on Linux 5.3 and later, `EVFILT_PROC` on macOS
+  and the BSDs, and elsewhere, or where seccomp refuses `pidfd_open`, a look with `WNOHANG` after a pause that doubles
+  from 1 ms to 64 ms. No SIGCHLD handler is installed for a host or a library to collide with.
+- **Windows** blocks the thread for all of these until KR-3 step 8, which makes `Command`'s piped ends overlapped named
+  pipes read by completion, as Rust's std and libuv make them.
+- A regular file's read waits on the disk, not on a peer: it is the plain system call, and goes to the offload pool
+  with KR-3 step 7.
+
 - **On Linux the scheduler runs on io_uring** wherever the kernel allows it (6.1 or later, and not refused by a
   container's seccomp, SELinux or `kernel.io_uring_disabled`), and on epoll everywhere else; `KAMA_IO_URING=0` picks
   epoll ([targets.md](targets.md)). Neither changes what a program does. A stream read or write that waits is handed to <!-- test: fiber_read_cancel, fiber_write_cancel -->
@@ -2822,14 +2844,15 @@ never outlives the `Process` that owns it. A child in the parent's group has non
 a group with nobody left in it is `IoErrorKind::ProcessNotFound` <!-- test: proc_group -->; and the piped streams as
 `std::fs::File`s (`stdout()`/`stderr()` read, `stdin()`+`closeStdin()` feed-then-EOF). Dropping a `Process`
 **never blocks**: it reaps a already-exited child (no zombie) or detaches it (the OS reparents to init) —
-explicit `wait()` is how you get the status. **A child inherits its three streams and nothing else** of
+explicit `wait()` is how you get the status. On a fiber `wait()` and `run()` park only their fiber (*Pipes and children
+on a fiber*). **A child inherits its three streams and nothing else** of
 its parent's: every descriptor kama makes is close-on-exec on POSIX (atomically where the OS can, and on macOS under a
 gate a fork waits on) and non-inheritable on Windows, where the spawn also names exactly the three handles the child
 may take — so no child keeps a parent's listening port, file or pipe end open (Rust, Go and Python default the same). <!-- test: proc_no_inherit -->
 **POSIX and Windows both ship**: `process.kama` is byte-identical
 across platforms, with the whole difference behind `kama_os.h` (fork/execvp/pipe/waitpid vs `CreateProcess`),
-and `run()`'s two-pipe drain sits behind one `kama_capture2` seam (`poll` on POSIX, a reader thread per pipe on
-Windows) so both platforms take the same code path. wasm has no process model.
+and `run()`'s two-pipe drain sits behind one `kama_capture2_parked` seam (`poll` on POSIX, a reader thread per pipe on
+Windows, a park on both pipes on a fiber) so every platform takes the same code path. wasm has no process model.
 
 **An `ExitStatus` is each platform's own type, as `main`'s status is.** On POSIX a child either exits, with the one byte
 the platform keeps, or is killed by a signal: `@nonExhaustive type enum ExitStatus { Exited(uint8 code),

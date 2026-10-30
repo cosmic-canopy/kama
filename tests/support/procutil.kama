@@ -12,8 +12,13 @@
 //   printenv <k>     if env k is set: print its value + newline, exit 0; else exit 1
 //   spew <n>         emit n lines of 19 'A'+newline to stdout AND 19 'B'+newline to stderr (20 bytes each)
 //   hasfile <name>   exit 0 if a file <name> can be opened (relative to cwd), else 1   (proves cwd())
+//   tick <ms> <n>    n times: sleep ms, then print "tick"; exit 0   (a quiet child, for a reader that must park)
+//   drain <ms>       sleep ms, then read stdin to EOF and print the byte count; exit 0   (a writer that must park)
+//   fiberin          read stdin to EOF ON A FIBER while another fiber ticks every 5 ms; print "<bytes> ticked" if the
+//                    ticker ran 3+ times while the reader waited, else "<bytes> still"; exit 0   (KR-7: stdin parks)
 import { core::env, core::args, core::eprintln, core::println, std::fs::File, std::fs::OpenMode, std::io::IoError, std::io::pump, std::io::stdin, std::io::stdout,
-         std::collections::DynamicArray };
+         std::io::StdIn, std::collections::DynamicArray, std::collections::FixedArray, std::concurrent::Fiber,
+         std::time::sleep, std::time::Duration };
 
 extern "kama_os.h";
 extern fn void kama_sleep_ms(int32 ms);
@@ -23,6 +28,22 @@ fn string argAt(int32 i) {
     Optional<string> o = args().get(at: i);
     return match (give o) { case Some(value: v): { := give v; } case None: { := ""; } };
 }
+
+// `fiberin`'s two fibers: the reader counts stdin's bytes to EOF, the ticker counts its naps until it is done.
+static bool readerDone = false;
+static int32 ticks = 0;
+static int64 stdinBytes = 0;
+unsafe fn void countStdin(isize bufSize) {   // a fiber entry takes one argument, the bundle
+    StdIn input = stdin();
+    FixedArray<uint8> buf = FixedArray.make(size: bufSize);
+    bool more = true;
+    while (more) {
+        isize n = match (input.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n <= 0) { more = false; } else { stdinBytes = stdinBytes + cast<int64>(n); }
+    }
+    readerDone = true;
+}
+fn void ticker(int64 ms) { while (!readerDone) { sleep(d: Duration.fromMillis(ms: ms)); ticks = ticks + 1; } }
 
 // Parse a non-negative decimal string (the numeric subcommand args are always well-formed digits here).
 unsafe fn int32 parseIntArg(string s) {
@@ -84,6 +105,34 @@ unsafe fn int32 run() {
         while (k < 19) { a = a + "A"; b = b + "B"; k = k + 1; }
         int32 i = 0;
         while (i < n) { println(s: copy a); eprintln(s: copy b); i = i + 1; }
+        return 0;
+    }
+    if (cmd == "tick") {
+        int32 ms = parseIntArg(s: argAt(i: 1));
+        int32 n = parseIntArg(s: argAt(i: 2));
+        int32 i = 0;
+        while (i < n) { kama_sleep_ms(ms: ms); println(s: "tick"); i = i + 1; }
+        return 0;
+    }
+    if (cmd == "drain") {
+        kama_sleep_ms(ms: parseIntArg(s: argAt(i: 1)));
+        StdIn input = stdin();
+        FixedArray<uint8> buf = FixedArray.make(size: 65536);
+        int64 total = 0;
+        bool more = true;
+        while (more) {
+            isize n = match (input.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+            if (n <= 0) { more = false; } else { total = total + cast<int64>(n); }
+        }
+        println(s: "${total}");
+        return 0;
+    }
+    if (cmd == "fiberin") {
+        scope {
+            spawn fiber ticker(ms: 5);
+            spawn fiber countStdin(bufSize: 4096);
+        }
+        println(s: ticks >= 3 ? "${stdinBytes} ticked" : "${stdinBytes} still");   // one tick lands even if the read blocks the thread
         return 0;
     }
     if (cmd == "hasfile") {

@@ -561,36 +561,38 @@ static inline void kama__sched_arm(kama_sched_io* io) {
 }
 #endif
 
-// Register `fd` with this isolate's scheduler. NULL when the OS refuses it (errno set): a regular file, which no
-// readiness queue watches (those go to the offload pool, decision 8).
-static inline kama_sched_io* kama_sched_io_open(ptrdiff_t fd) {
+// Register `fd` with this isolate's scheduler, in the record `io` the caller holds. -1 when the OS refuses it (errno
+// set): a regular file, which no readiness queue watches (those go to the offload pool, decision 8), or a device such
+// as /dev/null (epoll EPERM, kqueue EINVAL).
+static inline int kama_sched_io_init(kama_sched_io* io, ptrdiff_t fd) {
     kama_sched* s = kama_sched_current();
-    kama_sched_io* io = (kama_sched_io*)kama_alloc(sizeof *io, _Alignof(kama_sched_io));
-    if (!io) { errno = ENOMEM; return NULL; }
     memset(io, 0, sizeof *io);
     io->fd = fd; io->s = s;
 #if defined(KAMA__SCHED_EPOLL)
     struct epoll_event ev; memset(&ev, 0, sizeof ev);
     ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
     ev.data.ptr = io;
-    if (!kama__sched_ring(s) && epoll_ctl(((kama__poller*)s->poller)->epfd, EPOLL_CTL_ADD, (int)fd, &ev) != 0) {
-        const int e = errno; kama_free(io, sizeof *io, _Alignof(kama_sched_io)); errno = e; return NULL;
-    }
+    if (!kama__sched_ring(s) && epoll_ctl(((kama__poller*)s->poller)->epfd, EPOLL_CTL_ADD, (int)fd, &ev) != 0) return -1;
 #elif defined(KAMA__SCHED_KQUEUE)
     // At once, not on the next wait's changelist: a socket may move to another isolate before that wait, and a
     // change still queued here would then register a record the other isolate has already released.
     struct kevent ch; EV_SET(&ch, (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_CLEAR, 0, 0, io);
-    if (kevent(((kama__poller*)s->poller)->kq, &ch, 1, NULL, 0, NULL) != 0) {
-        const int e = errno; kama_free(io, sizeof *io, _Alignof(kama_sched_io)); errno = e; return NULL;
-    }
+    if (kevent(((kama__poller*)s->poller)->kq, &ch, 1, NULL, 0, NULL) != 0) return -1;
 #endif
     __atomic_add_fetch(&s->refs, 1, __ATOMIC_RELAXED);
+    return 0;
+}
+// A registration that lives as long as its descriptor's owner: a socket's, a Poller's, a pipe end kama made.
+static inline kama_sched_io* kama_sched_io_open(ptrdiff_t fd) {
+    kama_sched_io* io = (kama_sched_io*)kama_alloc(sizeof *io, _Alignof(kama_sched_io));
+    if (!io) { errno = ENOMEM; return NULL; }
+    if (kama_sched_io_init(io, fd) != 0) { const int e = errno; kama_free(io, sizeof *io, _Alignof(kama_sched_io)); errno = e; return NULL; }
     return io;
 }
 // Take `io` off the scheduler, before its descriptor closes (decision 13: epoll watches the open file description, so
 // a descriptor dup'd elsewhere would keep a closed one's registration alive). A fiber still waiting on it is woken,
-// and its retry meets the closed socket.
-static inline void kama_sched_io_close(kama_sched_io* io) {
+// and its retry meets the closed socket. The record itself stays the caller's.
+static inline void kama_sched_io_fini(kama_sched_io* io) {
     kama_sched* s = io->s;
     kama__sched_ioIdle(io);
     kama_fiber* r = io->reader; kama_fiber* w = io->writer;
@@ -608,10 +610,13 @@ static inline void kama_sched_io_close(kama_sched_io* io) {
 #else
     if (io->armed) (void)kama_poller_remove(s->poller, io->fd);
 #endif
-    kama_free(io, sizeof *io, _Alignof(kama_sched_io));
     if (r) kama_sched_unpark(r);
     if (w) kama_sched_unpark(w);
     kama__sched_unref(s);
+}
+static inline void kama_sched_io_close(kama_sched_io* io) {
+    kama_sched_io_fini(io);
+    kama_free(io, sizeof *io, _Alignof(kama_sched_io));
 }
 
 // After an I/O call on `io` reported WouldBlock: park until it may be ready for `interest` (1 read, 2 write), or until
@@ -653,6 +658,9 @@ static inline int kama_sched_io_wait(kama_sched_io* io, int32_t interest, uint64
     if (interest & 2) kama__sched_change(io->s, io->fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, io);
 #elif defined(KAMA__SCHED_POLLER)
     kama__sched_arm(io);
+    // A descriptor the Poller refuses (/dev/null under kqueue) was answered at once by kama__sched_ioReady, which took
+    // this fiber off the record before it parked, so its wake was lost: it may be ready, and the call meets the reason.
+    if ((interest & 1 ? io->reader : io->writer) != f) return 1;
 #endif
     const int woke = kama_sched_parkUntil(deadline);
     if (io->reader == f) io->reader = NULL;          // timed out, or woken by something else: not waiting now
@@ -823,7 +831,8 @@ static inline void kama__sched_wait(kama_sched* s, int64_t timeoutNs) {
         if (k->filter == EVFILT_USER) { kama__waker_seen((kama__waker*)s->waker); continue; }
         kama_sched_io* io = (kama_sched_io*)k->udata;
         if (!io) continue;
-        int32_t bits = k->filter == EVFILT_READ ? 1 : k->filter == EVFILT_WRITE ? 2 : 0;
+        // A child's exit (EVFILT_PROC, kama__proc_park) wakes its waiter as a read would.
+        int32_t bits = k->filter == EVFILT_READ || k->filter == EVFILT_PROC ? 1 : k->filter == EVFILT_WRITE ? 2 : 0;
         if (k->flags & EV_ERROR) bits = 3;            // a change was refused: the retry meets the reason
         if (k->flags & EV_EOF) bits |= 1;
         if (k->flags & (EV_EOF | EV_ERROR)) io->closed |= bits;   // reported once: kama_sched_io_short
@@ -967,6 +976,48 @@ static inline void kama__net_drop(void* io) { kama_sched_io_release((kama_sched_
 static inline void kama__net_short(void* io, int32_t interest) { kama_sched_io_short((kama_sched_io*)io, interest); }
 static inline int kama__net_drained(void* io, int32_t interest) { return kama_sched_io_drained((kama_sched_io*)io, interest); }
 static inline int kama__net_ring(void* io) { return kama__sched_ring(((kama_sched_io*)io)->s); }
+// One wait on a descriptor kama does not own the mode of (KR-7): stdin, an inherited or adopted pipe, an end handed
+// out. Its record lives on this stack for the one wait, so a descriptor several values share (fd 0) is never
+// registered twice, and a `@noheap` caller stays legal. 0 when the OS will not watch it (/dev/null): the caller's call
+// is then a plain blocking one, never an error.
+static inline int kama__file_wait(ptrdiff_t fd, int32_t interest) {
+    kama_sched_io rec;
+    if (kama_sched_io_init(&rec, fd) != 0) return 0;
+    (void)kama_sched_io_wait(&rec, interest, 0);
+    kama_sched_io_fini(&rec);
+    return 1;
+}
+// Park until the child `pid` may have exited (KR-7): 0 to look with waitpid, -1 when nothing here can watch it (an
+// older kernel, a seccomp filter, a target with neither) and the caller pauses instead. Linux: a pidfd (5.3), which
+// polls readable once the child exits and is always close-on-exec. kqueue: EVFILT_PROC/NOTE_EXIT on a record of its
+// own, never kama_sched_io_init's, whose EVFILT_READ would name the pid as a descriptor.
+static inline int kama__proc_park(int pid) {
+#if defined(__linux__) && defined(SYS_pidfd_open)
+    const int pfd = (int)syscall(SYS_pidfd_open, pid, 0);
+    if (pfd < 0) return -1;
+    const int watched = kama__file_wait(pfd, 1);
+    (void)close(pfd);
+    return watched ? 0 : -1;
+#elif defined(KAMA__SCHED_KQUEUE)
+    kama_sched* s = kama_sched_current();
+    kama_sched_io rec; memset(&rec, 0, sizeof rec);
+    rec.fd = pid; rec.s = s;
+    struct kevent ch; EV_SET(&ch, (uintptr_t)pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, &rec);
+    if (kevent(((kama__poller*)s->poller)->kq, &ch, 1, NULL, 0, NULL) != 0) return errno == ESRCH ? 0 : -1;
+    __atomic_add_fetch(&s->refs, 1, __ATOMIC_RELAXED);
+    // An exit before the add may not report: look without reaping, and wait only for one still to come.
+    siginfo_t si; memset(&si, 0, sizeof si);
+    if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOHANG | WNOWAIT) != 0 || si.si_pid == 0) (void)kama_sched_io_wait(&rec, 1, 0);
+    kama__sched_purge(s, &rec);
+    struct kevent del, res; EV_SET(&del, (uintptr_t)pid, EVFILT_PROC, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
+    (void)kevent(((kama__poller*)s->poller)->kq, &del, 1, &res, 1, NULL);   // ENOENT once it fired: fine
+    kama__sched_unref(s);
+    return 0;
+#else
+    (void)pid;
+    return -1;
+#endif
+}
 static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by) {
 #if defined(KAMA__SCHED_URING)
     return kama__sched_ringRecv((kama_sched_io*)io, buf, n, by);
@@ -990,6 +1041,8 @@ static inline void kama__net_drop(void* io) { (void)io; }
 static inline void kama__net_short(void* io, int32_t interest) { (void)io; (void)interest; }
 static inline int kama__net_drained(void* io, int32_t interest) { (void)io; (void)interest; return 0; }
 static inline int kama__net_ring(void* io) { (void)io; return 0; }
+static inline int kama__file_wait(ptrdiff_t fd, int32_t interest) { (void)fd; (void)interest; return 0; }
+static inline int kama__proc_park(int pid) { (void)pid; return -1; }
 static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by) {
     (void)io; (void)buf; (void)n; (void)by; errno = ENOSYS; return -1;
 }

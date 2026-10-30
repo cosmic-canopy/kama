@@ -1139,6 +1139,7 @@ parfor_write_capture	parfor_write_capture.kama:11:4
 park_call_access	park_call_access.kama:12:0
 park_window_channel_recv	park_window_channel_recv.kama:14:0
 park_window_fiber_drop	park_window_fiber_drop.kama:8:0
+park_window_file_read	park_window_file_read.kama:17:0
 park_window_fnptr	park_window_fnptr.kama:12:0
 park_window_isolate_join	park_window_isolate_join.kama:18:0
 park_window_join	park_window_join.kama:14:0

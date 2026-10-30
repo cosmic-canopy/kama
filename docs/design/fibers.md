@@ -384,9 +384,10 @@ a short last one could wait forever (`0.9.754` fixed it, found by the ThreadSani
 - **Regular files and DNS go to an offload pool.** `read` of a regular file never reports WouldBlock on any OS, and
   `getaddrinfo` blocks for seconds. Both run on a small per-process pool while the fiber parks; libuv and tokio do
   the same. This is where KR-202 (a DNS lookup with a deadline) lands. A **pipe** is not a regular file: it has
-  readiness to wait on, so it parks as a socket does, and that is KR-7, filed 2026-10-30 when a fiber reading a quiet
-  child's pipe was measured stopping its whole isolate (as are `Process.wait()` and `Command.run()`); until it lands
-  SPEC (*Sockets on a fiber*) says so and names the two workarounds.
+  readiness to wait on, so it parks as a socket does. *As built (`0.9.786`):* a pipe end kama made is made
+  non-blocking and registered as a socket is; any other descriptor (stdin, an adopted FIFO) is never switched, and
+  waits for readiness on a record that lasts one wait, then reads blocking; a child's exit parks on a pidfd or
+  `EVFILT_PROC`, with no SIGCHLD handler. SPEC *Pipes and children on a fiber* states the rule.
 - **A foreign C call that blocks stalls its core.** That is stated plainly, as Java states pinning in native
   frames. The answer is an explicit `std::concurrent::offload(…)` that runs it on the pool, as tokio's
   `spawn_blocking` does. It is its own commit.
@@ -757,8 +758,8 @@ read off this document.
 | 4 | ✅ `0.9.743`. The park rule: on an isolate that runs fibers, no window over `Shared` storage and no call holding a field reaches a fiber switch or a blind call (`checkParkWindows`, on the lock window's regions); no park inside `@onPanic`; the debug assert in the park and the yield. A `kama_vsize`/`kama_valign` slot now names its vtable type, so a drop of an `Owned<Error>` is no longer a blind call to either walk. The job-entry rule moved to row 9, where job entries come to exist | `src/kama.cemit.cpp`, `kama_sched.h` | S |
 | 5 | ✅ `0.9.745`–`0.9.748`. Sockets park on a fiber: TCP, UDP, Unix, accept and connect, with deadlines (decision 11's ruling), the release rule (decision 13's correction) and DEL before close; `std::time::sleep` parks, and so does `Poller.wait` on epoll and kqueue. In four commits: the runtime seam tested from C (`tests/fiber_sched.d` checks 15–22), std's sockets, the deadline surface, `sleep` and the Poller | `lib/std/net/`, `lib/std/time/`, `kama_os.h`, `kama_sched.h`, `kama_time.h` | L |
 | 6 | ✅ `0.9.751`. Channels fiber-aware (waiter lists, send-side), and joins park: a `scope`'s close, an `Isolate`'s join and a `parallel_for`'s barrier, tested from C (`tests/fiber_sched.d` checks 23–29) | `include/kama_channel.h`, `kama_isolate.h`, `kama_sched.h`, `lib/std/concurrent/` | M |
-| 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-202), and `Poller.wait` on a fiber over AFD and `poll(2)`; a pipe parks as a socket does, which is KR-7 and no pool work | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |
-| 8 | Windows: the high-resolution timer, and completion I/O where readiness cannot serve (`TransmitFile`, KR-229), and a child's piped ends as overlapped named pipes (KR-7 ruling 3, ruled 2026-10-30 to land here), with the pipeline relay or reopen decided then | `kama_os.h` | M |
+| 7 | The offload pool: regular files, DNS, `offload(…)` (with KR-202), and `Poller.wait` on a fiber over AFD and `poll(2)`; a pipe parks as a socket does (built `0.9.786`) and is no pool work | `lib/std/fs/`, `lib/std/net/`, `kama_os.h` | M |
+| 8 | Windows: the high-resolution timer, and completion I/O where readiness cannot serve (`TransmitFile`, KR-229), and a child's piped ends as overlapped named pipes (ruled 2026-10-30 to land here, when pipes began to park on a fiber in `0.9.786`), with the pipeline relay or reopen decided then | `kama_os.h` | M |
 | 9 | The job pool (decision 5), and the job-entry rule over step 4's walk: a job entry that reaches a fiber switch is refused. Then rerun the server bench's `skew:12` with the burst offloaded, which closes KR-255 (ruled 2026-10-28) | `lib/std/concurrent/` | M |
 | 10 | wasm over JSPI (decision 4) | `src/kama.driver.cpp`, `lib/std/net/web/`, `kama_fiber.h` | L |
 | 11 | lldb OS plugin; SPEC *Concurrency* gains *Fibers*; *Why not green threads* rewritten; this file deleted | `include/kama_lldb.py`, `docs/` | M |

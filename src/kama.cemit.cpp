@@ -36815,6 +36815,10 @@ static std::string parkSeam(const std::string& f)
     if (f == "kama_sched_scopeWait") return "the scope's close, which waits for its fibers";
     if (f == "kama_sched_yield") return "a yield";
     if (f == "kama_sched_sleep") return "a fiber's sleep";
+    if (f == "kama_file_read" || f == "kama_file_write" || f == "kama_stream_read" || f == "kama_stream_write")
+        return "a fiber's wait on a pipe or terminal";   // KR-7
+    if (f == "kama_proc_wait_parked") return "a fiber's wait on a child's exit";
+    if (f == "kama_capture2_parked") return "a fiber's wait on a child's output";
     if (f == "kama_sched_io_wait" || f == "kama__net_park" || f == "kama__net_recv" || f == "kama__net_send")
         return "a fiber's wait on a socket";
     if (f == "kama__time_park") return "a fiber's sleep";
@@ -36836,8 +36840,9 @@ static std::string parkSeam(const std::string& f)
 // - The LEAF is a real switch, `kama_fiber_switch`, read off the graph: a `join`, a `Fiber`'s drop, a `scope`'s close,
 //   since step 5 a socket's wait (`kama_net_retry` reaches `kama_sched_io_wait`), and since step 6 a channel's wait
 //   (`kama_channel_recv` reaches `kama__channel_park`). A call that only blocks the thread (`println`) lets no other
-//   fiber in, so `@parks` — which since KR-226 means "waits" — is the lock window's leaf, not this one. Steps 7–8 make
-//   files switch, and the rule follows them with no change here.
+//   fiber in, so `@parks` — which since KR-226 means "waits" — is the lock window's leaf, not this one. Since KR-7 a
+//   pipe's, a terminal's and a child's wait switch too (`kama_file_read` reaches `kama_sched_io_wait`), and the rule
+//   followed them with no change here; steps 7–8 will make regular files switch the same way.
 // - A REGION is an access the run-time record would hold: a window (`borrow`, `foreach`, a `match`) over storage a
 //   `Shared` may hold, to the end of its scope, and a call that holds a field, around the call alone.
 // - A call whose target no graph can see may switch, as decision 3 rules for a lock window.

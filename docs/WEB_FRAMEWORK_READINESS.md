@@ -60,7 +60,7 @@ Related: [ROADMAP_DETAIL.md](ROADMAP_DETAIL.md) §1 (std foundations, and the ro
 | Percent-encoding and a URL type | ❌ ruled for std (strict RFC 3986, plus form encoding); not yet built | KR-204 |
 | Compression for `Content-Encoding` and permessage-deflate | ❌ ruled for std: deflate/zlib/gzip both ways, decoders with a required limit; zstd and brotli later | KR-5, KR-212, KR-213 |
 | Coverage-guided fuzzing | ❌ design first | KR-205 |
-| A non-blocking `File`; a pipe in the `Poller` on Windows | ❌ | KR-7 |
+| A pipe in the `Poller` on Windows, and a fiber's pipe read there | ❌ a pipe parks on a fiber on POSIX since `0.9.786`; Windows with KR-3 step 8 | KR-3 |
 | An event-loop scheduler and a timer wheel | ❌ libraries over `Poller` and `std::time` | KR-3 |
 | Capturing closures | 🟡 sized, not scheduled: a handler object's fields hold the captures | §1 |
 

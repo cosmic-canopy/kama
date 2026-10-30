@@ -1,0 +1,31 @@
+// The park rule (KR-3 step 4) follows a `File` once it parks (KR-7): on an isolate that runs fibers, a read of a pipe or
+// a terminal switches fibers, so a lasting access to `Shared` storage may not make one. `Log.tally` iterates `this.xs`
+// — reached through the `Shared` the fiber was handed — and reads the file inside the loop, so while it waits for
+// bytes another fiber could grow `xs` and free the buffer the loop is reading. The rule is static: what kind of
+// descriptor the `File` holds is a run-time fact, so every `File` read counts. Through `0.9.785` the read blocked the
+// whole thread and was no park.
+import { std::fs::File, std::fs::OpenMode, std::io::IoError, std::concurrent::Fiber,
+         std::memory::Shared, std::collections::DynamicArray, std::collections::FixedArray };
+type resource Log {
+    DynamicArray<int32> xs;
+    File f;
+    public ctor make(File f) { this.xs = DynamicArray::<int32>.empty(); this.xs.add(item: 1); this.f = give f; }
+    public unsafe fn int32 tally() {
+        FixedArray<uint8> buf = FixedArray.make(size: 1);
+        int32 total = 0;
+        foreach (int32 x in this.xs) {
+            Result<isize, IoError> r = this.f.read(into: buf.viewMut());   // ERROR: a fiber's wait on a pipe, inside the window
+            total = total + x;
+        }
+        return total;
+    }
+}
+fn int32 walk(Shared<Log> c) { return c.tally(); }
+unsafe fn uint8 run() {
+    Result<File, IoError> rf = File.open(path: "fifo", mode: OpenMode::Read);
+    File f = match (give rf) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    Shared<Log> c = new Log.make(f: give f);
+    Fiber<int32> w = spawn fiber walk(c: copy c);
+    return cast<uint8>(give w.join());
+}
+fn uint8 main() { return run(); }

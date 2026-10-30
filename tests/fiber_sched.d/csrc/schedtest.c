@@ -3,7 +3,8 @@
 // and by schedtest_poller.c with KAMA__SCHED_GENERIC, so the arm Windows and poll(2) take is tested on every host.
 // Checks 15–22 drive a socket's wait (kama_os.h, KR-3 step 5) the way std's socket calls do, in a program that runs
 // fibers — which defines KAMA_FIBERS before any kama header, as the emitter does for one; checks 30 and 32, a stream's
-// short read. Checks 23–29 drive a channel's wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6;
+// short read. Checks 34–37 drive a File's and a child's wait (KR-7): a pipe end kama made, an inherited one, /dev/null,
+// and a child's exit. Checks 23–29 drive a channel's wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6;
 // both are read AFTER the scheduler here, the order no emitted program has, so linking this proves the scheduler's half
 // of those seams is defined either way.
 #define KAMA_FIBERS 1
@@ -14,10 +15,52 @@
 #include <stdio.h>
 #if !defined(_WIN32)
 #include <sys/socket.h>
+#include <sys/wait.h>
 #endif
 
 static int failed;
 #define CHECK(n, cond) do { if (!(cond) && !failed) failed = (n); } while (0)
+
+#if !defined(_WIN32)
+// 34–37: a File's and a child's wait (kama_os.h, KR-7). A ticker counts while the waiter is parked, so a wait that
+// blocked the thread would leave it at 0.
+static int pp[2]; static void* pio; static int32_t pmode; static int pgot, pticks, pdone;
+static void pipeTicker(void* a) { (void)a; while (!pdone) { kama_sched_sleep(1000000); pticks++; } }
+static void pipeWriter(void* a) { (void)a; kama_sched_sleep(5000000); char c = 42; (void)write(pp[1], &c, 1); }
+// 34. a pipe end kama made parks as a socket does: made non-blocking and registered at its first wait; settled, it is
+// blocking again, off the scheduler, and no longer kama's to switch.
+static void pipeOurs(void* a) {
+    (void)a; uint8_t c = 0;
+    pgot = kama_file_read(pp[0], &pio, &pmode, &c, 1) == 1 ? c : -1;
+    pdone = 1;
+}
+// 35. an inherited pipe is never switched: its read waits on a record that lasts the one wait, then reads blocking.
+static void pipeInherited(void* a) {
+    (void)a; uint8_t c = 0;
+    pgot = kama_file_read(pp[0], &pio, &pmode, &c, 1) == 1 ? c : -1;
+    pdone = 1;
+}
+// 36. /dev/null, which epoll and kqueue refuse to watch, is read as off a fiber: end of file at once.
+static int nullEof;
+static void devNull(void* a) {
+    (void)a; uint8_t c; void* io = NULL; int32_t mode = 0;
+    const int fd = open("/dev/null", O_RDONLY);
+    nullEof = fd >= 0 && kama_file_read(fd, &io, &mode, &c, 1) == 0 && io == NULL && (mode & KAMA_FILE_STREAM);
+    if (fd >= 0) close(fd);
+}
+// 37. a child's exit, parked on (a pidfd, EVFILT_PROC, or on the Poller arm a pause that looks again).
+static int procStatus = -1;
+static void procWaiter(void* a) {
+    int32_t st = 0;
+    if (kama_proc_wait_parked((ptrdiff_t)(intptr_t)a, &st) > 0 && WIFEXITED(st)) procStatus = WEXITSTATUS(st);
+    pdone = 1;
+}
+static int pipeUp(void) {
+    if (pp[0] > 0) { close(pp[0]); close(pp[1]); }
+    pio = NULL; pmode = 0; pgot = 0; pticks = 0; pdone = 0;
+    return pipe(pp) == 0;
+}
+#endif
 
 // 1. park and unpark: two fibers hand a turn back and forth. A wake reaches only a parked fiber, so each looks at the
 // turn before it parks, which is the shape every waiter has.
@@ -555,6 +598,39 @@ int fiber_sched_selftest(void) {
     CHECK(32, eofShort && eofSeen);
     kama_net_release(nio); nio = NULL;
     kama_net_close(np[0], NULL); kama_net_close(np[1], NULL); np[0] = np[1] = 0;
+
+    CHECK(340, pipeUp());
+    pmode = KAMA_FILE_OURS;
+    kama_sched_detach(kama_sched_spawn(pipeOurs, 0, 0));
+    kama_sched_detach(kama_sched_spawn(pipeWriter, 0, 0));
+    kama_sched_detach(kama_sched_spawn(pipeTicker, 0, 0));
+    kama_sched_run();
+    CHECK(34, pgot == 42 && pticks >= 2 && pio && (pmode & KAMA_NET_KAMA_NB) && nonBlocking(pp[0]) && self->refs == baseRefs + 1);
+    kama_file_settle(pp[0], &pio, &pmode);
+    CHECK(341, !pio && !(pmode & (KAMA_FILE_OURS | KAMA_NET_KAMA_NB)) && !nonBlocking(pp[0]) && self->refs == baseRefs);
+
+    CHECK(350, pipeUp());
+    kama_sched_detach(kama_sched_spawn(pipeInherited, 0, 0));
+    kama_sched_detach(kama_sched_spawn(pipeWriter, 0, 0));
+    kama_sched_detach(kama_sched_spawn(pipeTicker, 0, 0));
+    kama_sched_run();
+    CHECK(35, pgot == 42 && pticks >= 2 && !pio && (pmode & KAMA_FILE_STREAM) && !nonBlocking(pp[0]) && self->refs == baseRefs);
+    close(pp[0]); close(pp[1]); pp[0] = pp[1] = 0;
+
+    kama_sched_detach(kama_sched_spawn(devNull, 0, 0));
+    kama_sched_run();
+    CHECK(36, nullEof && self->refs == baseRefs);
+
+    {
+        pdone = 0; pticks = 0;
+        const pid_t kid = fork();
+        if (kid == 0) { usleep(20000); _exit(7); }
+        CHECK(370, kid > 0);
+        kama_sched_detach(kama_sched_spawn(procWaiter, (void*)(intptr_t)kid, 0));
+        kama_sched_detach(kama_sched_spawn(pipeTicker, 0, 0));
+        kama_sched_run();
+        CHECK(37, procStatus == 7 && pticks >= 3 && self->refs == baseRefs);
+    }
 #endif
 
     chA = chanOf(0); chB = chanOf(0);

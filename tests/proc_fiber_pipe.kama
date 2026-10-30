@@ -1,0 +1,190 @@
+// A child's pipe and its exit on a fiber (KR-7). Each case runs beside a ticker fiber that naps 5 ms at a time: a wait
+// that parks lets it tick, and one that blocked the thread would hold it to the one tick it gets before the wait (on
+// 0.9.768 a fiber reading a quiet child's pipe let a ticker count 0 in 300 ms). The cases:
+//   1  a fiber reading a quiet child's stdout parks, and reads what arrives;
+//   2  `Process.wait()` parks until the child exits;
+//   4  `Command.run()` parks while it captures;
+//   8  ...and captures two busy streams whole (`spew`, both pipes filling at once);
+//   16 a write that fills the child's stdin parks until the child reads;
+//   32 a pipe end handed out by `duplicateDescriptor()` after a fiber read is blocking for the child that gets it: a
+//      non-blocking stdin makes `procutil cat` fail at its first empty read;
+//   64 ...and by `intoDescriptor()`, a pipeline;
+//   128 the child's own stdin read on a fiber: /dev/null is end of file at once, and a pipe the parent fills late
+//      parks the child's reader while its ticker runs.
+// Windows keeps a fiber's pipe read and wait on the thread until KR-3 step 8, so there the cases ask for the bytes and
+// not the ticks. Returns 0; else the bits of the cases that failed.
+import { core::envOr, std::process::Command, std::process::Process, std::process::Stdio, std::process::Output,
+         std::process::ExitStatus, std::fs::File, std::io::IoError, std::io::Descriptor, std::collections::DynamicArray,
+         std::collections::FixedArray, std::collections::ConstView, std::concurrent::Fiber, std::time::sleep,
+         std::time::Duration, std::encoding::utf8::decode, std::encoding::utf8::Utf8Error };
+
+@compileFor(OS_WINDOWS) fn bool parks() { return false; }
+@compileFor(!OS_WINDOWS) fn bool parks() { return true; }
+
+fn string util() { return envOr(name: "KAMA_PROCUTIL", dflt: "procutil"); }
+fn string text(ConstView<uint8> b) { Result<string, Utf8Error> t = decode(bytes: b); return match (give t) { case Ok(value: s): { := give s; } case Err(error: e): { := "?"; } }; }
+
+static bool done = false;
+static int32 ticks = 0;
+static int32 bad = 0;
+fn void ticker(int64 ms) { while (!done) { sleep(d: Duration.fromMillis(ms: ms)); ticks = ticks + 1; } }
+fn bool ticked() { return !parks() || ticks >= 3; }
+fn void fail(int32 bit) { bad = bad | bit; }
+
+fn Command util2(string sub, string a) { Command c = Command.make(program: util()); c.arg(a: give sub); c.arg(a: give a); return c; }
+fn Command util3(string sub, string a, string b) { Command c = util2(sub: give sub, a: give a); c.arg(a: give b); return c; }
+
+// 1: one read of a child that prints "tick" after 100 ms.
+unsafe fn void quietPipe(int32 bit) {
+    Command c = util3(sub: "tick", a: "100", b: "1");
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> r = c.start();
+    match (give r) {
+        case Ok(value: p): {
+            FixedArray<uint8> buf = FixedArray.make(size: 16);
+            isize got = match (p.stdout().read(into: buf.viewMut())) { case Ok(value: n): n; case Err(error: e): -1; };
+            Result<ExitStatus, IoError> w = p.wait();
+            if (got != 5) { fail(bit: bit); }
+        }
+        case Err(error: e): { fail(bit: bit); }
+    };
+    done = true;
+}
+// 2: the exit of a child that sleeps 150 ms.
+unsafe fn void quietExit(int32 bit) {
+    Command c = util2(sub: "sleep", a: "150");
+    Result<Process, IoError> r = c.start();
+    match (give r) {
+        case Ok(value: p): {
+            bool ok = match (p.wait()) { case Ok(value: s): s.success(); case Err(error: e): false; };
+            if (!ok) { fail(bit: bit); }
+        }
+        case Err(error: e): { fail(bit: bit); }
+    };
+    done = true;
+}
+// 4: run() of a child that prints "tick" after 100 ms.
+unsafe fn void quietRun(int32 bit) {
+    Command c = util3(sub: "tick", a: "100", b: "1");
+    Result<Output, IoError> r = c.run();
+    bool ok = match (give r) { case Ok(value: o): text(b: o.stdout().view()) == "tick\n" && o.status().success(); case Err(error: e): false; };
+    if (!ok) { fail(bit: bit); }
+    done = true;
+}
+// 8: run() of a child writing 100,000 bytes to each stream.
+unsafe fn void busyRun(int32 bit) {
+    Command c = util2(sub: "spew", a: "5000");
+    Result<Output, IoError> r = c.run();
+    bool ok = match (give r) {
+        case Ok(value: o): o.stdout().length() == 100000 && o.stderr().length() == 100000 && o.status().success();
+        case Err(error: e): false;
+    };
+    if (!ok) { fail(bit: bit); }
+    done = true;
+}
+// 16: 256 KiB into the stdin of a child that starts reading after 150 ms.
+unsafe fn void fullStdin(int32 bit) {
+    Command c = util2(sub: "drain", a: "150");
+    c.stdin(s: Stdio::Piped);
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> r = c.start();
+    match (give r) {
+        case Ok(value: p): {
+            DynamicArray<uint8> big = DynamicArray.empty();
+            for (int32 i = 0; i < 262144; i = i + 1) { big.add(item: 120ui8); }
+            bool wrote = p.stdin().writeAll(bytes: big).isOk();
+            p.closeStdin();
+            string said = match (p.stdout().readAll()) { case Ok(value: b): text(b: b.view()); case Err(error: e): "?"; };
+            Result<ExitStatus, IoError> w = p.wait();
+            if (!wrote || said != "262144\n") { fail(bit: bit); }
+        }
+        case Err(error: e): { fail(bit: bit); }
+    };
+    done = true;
+}
+// Read the first of three ticks 60 ms apart on this fiber, then hand the rest to `procutil cat`, whose stdin must be
+// blocking for it to wait out the next two.
+unsafe fn bool catRest(Descriptor rest) {
+    Command cat = Command.make(program: util()); cat.arg(a: "cat");
+    cat.stdin(s: Stdio::Handle(descriptor: give rest));
+    Result<Output, IoError> r = cat.run();
+    return match (give r) { case Ok(value: o): o.status().success() && text(b: o.stdout().view()) == "tick\ntick\n"; case Err(error: e): false; };
+}
+unsafe fn bool firstTick(ref File end) {
+    FixedArray<uint8> buf = FixedArray.make(size: 5);
+    return match (end.read(into: buf.viewMut())) { case Ok(value: n): n == 5; case Err(error: e): false; };
+}
+// 32: the rest through a duplicate.
+unsafe fn void handDuplicate(int32 bit) {
+    Command c = util3(sub: "tick", a: "60", b: "3");
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> r = c.start();
+    match (give r) {
+        case Ok(value: p): {
+            bool first = firstTick(end: p.stdout());
+            Result<Descriptor, IoError> d = p.stdout().duplicateDescriptor();
+            bool rest = match (give d) { case Ok(value: x): catRest(rest: give x); case Err(error: e): false; };
+            Result<ExitStatus, IoError> w = p.wait();
+            if (!first || !rest) { fail(bit: bit); }
+        }
+        case Err(error: e): { fail(bit: bit); }
+    };
+    done = true;
+}
+// 64: the rest through the end itself.
+unsafe fn void handOver(int32 bit) {
+    Command c = util3(sub: "tick", a: "60", b: "3");
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> r = c.start();
+    match (give r) {
+        case Ok(value: p): {
+            File end = p.takeStdout();
+            bool first = firstTick(end: end);
+            bool rest = catRest(rest: give end.intoDescriptor());
+            Result<ExitStatus, IoError> w = p.wait();
+            if (!first || !rest) { fail(bit: bit); }
+        }
+        case Err(error: e): { fail(bit: bit); }
+    };
+    done = true;
+}
+// 128: `procutil fiberin` reads its stdin on a fiber.
+unsafe fn void childStdin(int32 bit) {
+    Command n = Command.make(program: util()); n.arg(a: "fiberin");
+    n.stdin(s: Stdio::Null);
+    Result<Output, IoError> nr = n.run();
+    bool nullOk = match (give nr) { case Ok(value: o): text(b: o.stdout().view()).startsWith(prefix: "0 "); case Err(error: e): false; };
+    Command c = Command.make(program: util()); c.arg(a: "fiberin");
+    c.stdin(s: Stdio::Piped);
+    c.stdout(s: Stdio::Piped);
+    Result<Process, IoError> r = c.start();
+    match (give r) {
+        case Ok(value: p): {
+            sleep(d: Duration.fromMillis(ms: 150));
+            DynamicArray<uint8> abc = DynamicArray.empty();
+            abc.add(item: 97ui8); abc.add(item: 98ui8); abc.add(item: 99ui8);
+            bool wrote = p.stdin().writeAll(bytes: abc).isOk();
+            p.closeStdin();
+            string said = match (p.stdout().readAll()) { case Ok(value: b): text(b: b.view()); case Err(error: e): "?"; };
+            Result<ExitStatus, IoError> w = p.wait();
+            string want = parks() ? "3 ticked\n" : "3 still\n";
+            if (!nullOk || !wrote || said != want) { fail(bit: bit); }
+        }
+        case Err(error: e): { fail(bit: bit); }
+    };
+    done = true;
+}
+
+unsafe fn int32 run() {
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietPipe(bit: 1); }     if (!ticked()) { fail(bit: 1); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietExit(bit: 2); }     if (!ticked()) { fail(bit: 2); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber quietRun(bit: 4); }      if (!ticked()) { fail(bit: 4); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber busyRun(bit: 8); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber fullStdin(bit: 16); }    if (!ticked()) { fail(bit: 16); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber handDuplicate(bit: 32); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber handOver(bit: 64); }
+    done = false; ticks = 0; scope { spawn fiber ticker(ms: 5); spawn fiber childStdin(bit: 128); }
+    return bad;
+}
+
+fn uint8 main() { return cast<uint8>(run()); }

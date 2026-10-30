@@ -182,7 +182,7 @@ only moves at releases, so it would be stale by this rule for the whole window b
 
 Everything else here is library or toolchain work that does **not** gate the tag:
 
-1. **A child's pipe without blocking** is KR-7, now in §6 (*A child's pipe without blocking*). A served file's
+1. **A child's pipe without blocking** shipped in `0.9.786` (SPEC *Pipes and children on a fiber*). A served file's
    `stat`, `open` and `read` blocking a server's loop is KR-3 step 7's offload pool.
 2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN is COMPLETE** (M2a 2026-08-04; M2b
    `0.9.190`–`0.9.195` and M2c `0.9.196`–`0.9.197`, both 2026-09-05: sleep + wall clock, DNS, fs completion,
@@ -2408,7 +2408,7 @@ from data races keeps holding by construction.
    change batched into the next wait, so a park costs no system call. One-shot costs 8–13% on epoll, and an unbatched
    kqueue re-arm 6%. AFD stays one-shot. It is internal: the public `Poller` stays level-triggered.
 7. Transparent: the same `TcpStream.read` parks on a fiber (Loom, Go, Eio), not Zig's explicit `Io` parameter.
-8. Channels become fiber-aware, joins park, and regular files and DNS go to an offload pool (with KR-202); a pipe parks as a socket does (KR-7).
+8. Channels become fiber-aware, joins park, and regular files and DNS go to an offload pool (with KR-202); a pipe parks as a socket does (built `0.9.786`).
 9. `spawn fiber f(b: …)`, the isolate's fn-plus-one-bundle. A `Fiber<R>` handle whose join yields `R` — amended
    2026-10-25: the join CONSUMES the handle, `R r = give f.join();` (Rust's `JoinHandle::join(self)`), so a
    second join is a compile error. A panic still aborts the process.
@@ -2646,123 +2646,6 @@ exists.
 **Accepted as built 2026-10-26** (fibers.md decision 15): the refusal is conservative, never unsound, and moving the
 `@noheap` boundary out of the I/O call answers it. The precise answer — judging an allocation by the isolates that
 reach it, as the park rule does — is this row, beside KR-79's generalization of the same engine.
-
-<a id="s6-child-pipes"></a>
-
-### A child's pipe without blocking: pipes park on a fiber (KR-7)
-
-**Measured 2026-10-30 on `0.9.768`, macOS.** A fiber reading a child's stdout (`sh -c "sleep 0.3; echo hello"`) with
-`Process.stdout().read(…)` stopped every fiber on its isolate: a second fiber ticking on 10 ms sleeps counted 0 ticks
-before the data came. `File.read` and `write` are plain system calls (`kama_read`/`kama_write`, `lib/std/fs/fs.kama`
-~472-490); their `@parks` mark feeds only the lock-window rule. `Process.wait()` (a blocking `waitpid`) and
-`Command.run()` (`kama_capture2`'s `poll`) do the same. Nothing ruled it: fibers.md decision 8 sends *regular* files to
-step 7's pool and says nothing of pipes. Two workarounds measured the same day counted 28 ticks each: wait on a
-`Poller` holding `stdout().rawFd()` and then read (epoll and kqueue; Windows' AFD `Poller` refuses a pipe), or hand the
-child one end of a `UnixStreamPair` as its stdout (`Stdio::Handle`), whose reads park as a socket's do. SPEC states the
-limit and both workarounds under *Sockets on a fiber*.
-
-| | a child's pipe | a regular file | the child's exit |
-|---|---|---|---|
-| Go | non-blocking, on the netpoller (`os.Pipe`, `exec`'s `StdoutPipe`) | a blocking system call; the runtime hands the processor to another thread | a blocking `wait4` on its own thread (a pidfd on Linux since 1.23) |
-| tokio | non-blocking, registered with mio | `spawn_blocking`, and so is the process's own stdin | a SIGCHLD-driven reaper |
-| libuv, Node | a socketpair on the loop (`UV_CREATE_PIPE`) | the thread pool | SIGCHLD |
-| Rust std | blocking | blocking | blocking |
-
-**Recommended:** a `File` over a pipe, FIFO or terminal parks on a fiber as a socket does: the same
-`kama_net_ready`/`retry` protocol with `read`/`write` in place of `recv`/`send`, and on io_uring a POLL_ADD and then
-the read (the ring's existing `kama__sched_ringPoll`), so the probe needs no new op. Regular files stay with step 7's pool. `Process.wait()` parks on the child's exit, and `Command.run()` on both.
-Off a fiber nothing changes, and a live child stream read as it arrives on a thread already works (it blocks only its
-own thread), which was this row's older half. **The three questions, as they were put:**
-1. Which descriptors kama makes non-blocking. Recommended: only the pipes it made (`Command`'s `Stdio::Piped` ends).
-   O_NONBLOCK on an inherited descriptor changes it for every process that shares it, which is why tokio sends stdin
-   to `spawn_blocking`; an inherited pipe waits for readiness, then reads blocking, which a level-triggered readiness
-   makes safe for one reader.
-2. How the child's exit is waited on: a pidfd on Linux 5.3 and later, `EVFILT_PROC` on macOS and the BSDs, a SIGCHLD
-   self-pipe elsewhere.
-3. Windows: `Command`'s piped ends become overlapped named pipes, as Rust's std and libuv make them, read by completion
-   once step 8 lands; until then a fiber's pipe read there blocks the thread, as a `Poller` wait does.
-
-**Ruled 2026-10-30, all three as recommended:**
-1. **Only the pipes kama made go non-blocking** — `Command`'s `Stdio::Piped` ends, which `Process.stdout()` lends and
-   `takeStdout()` hands out. An inherited or adopted descriptor (stdin, a FIFO opened by path, `File.adopt`) is never
-   switched: on a fiber its read waits for readiness through the scheduler, then reads blocking, which a
-   level-triggered readiness makes safe for one reader. This is Go's rule since 1.12 (`os.NewFile` uses the poller
-   only for a descriptor already non-blocking) and tokio's (stdin through `spawn_blocking`), and it avoids Node's,
-   whose libuv switches inherited stdio and leaves the parent shell's terminal non-blocking. kama goes one step past
-   both: the inherited read parks its fiber on readiness, so no thread is held.
-2. **The child's exit:** `pidfd_open` on Linux 5.3 and later (the descriptor polls readable at exit), `EVFILT_PROC` /
-   `NOTE_EXIT` on macOS and the BSDs, and a timed `waitpid(WNOHANG)` retry elsewhere (older kernels, the `poll(2)`
-   backend). Nothing process-wide is installed: no SIGCHLD handler for a host or a library to collide with.
-3. **Windows:** `Command`'s piped ends become named pipes, the parent's end opened `FILE_FLAG_OVERLAPPED` and the
-   child's synchronous, as Rust's std and libuv make them; a fiber's read completes through KR-3 step 8's completion
-   port, and until step 8 lands a fiber's pipe read on Windows blocks the thread, as SPEC says.
-
-**Build map** (read 2026-10-30 on `0.9.782`; lines drift, re-probe first):
-1. **C (`kama_os.h`).** A mode bit `KAMA_FILE_OURS 8` beside `KAMA_NET_*` (~72). `kama_file_read`/`kama_file_write`
-   (after `kama_net_settle`, ~4508) with `kama_net_read`'s readiness path (~4415-4420: ready, drained, call, short,
-   retry), `by = 0` and NO ring branch — `kama_net_read`/`write` hand the ring a RECV/SEND, which fails `ENOTSOCK` on a
-   pipe, and `kama_sched_io_wait` already does POLL_ADD on the ring (`kama__sched_ringPoll`, `kama_sched.h` ~497).
-   A pipe end not ours (classified once with `fstat` and cached in the mode bits, so a regular file costs nothing):
-   a level check `poll(fd, 0)` first — registrations are edge-triggered (EPOLLET, EV_CLEAR), so a read that left data
-   behind gets no new edge — then park, then a blocking `read`; a write after POLLOUT is capped at `PIPE_BUF`. A
-   registration the OS refuses (epoll EPERM, a kqueue refusal on a tty or a write end) is a plain blocking call,
-   never an error. `kama_file_close` (`kama_net_release`, then `close`) and `kama_file_settle`. All of it
-   `#if !defined(_WIN32)`: there `kama_set_nonblocking` is `ioctlsocket` (~1486), sockets only.
-2. **`File` (`lib/std/fs/fs.kama` ~390).** `UnsafePtr io = null; int32 mode = 0;` beside `fd`; a private
-   `ctor makePipe(int32 fd)` setting OURS, granted to `Command::launch`; `read` (~476), `write` (~488) and `readAll`
-   (~572, a direct `kama_read`) through the new calls; `close()`/`~File` through `kama_file_close`; `intoDescriptor`
-   AND `duplicateDescriptor` settle an end kama made back to blocking for good (ruled below), so its later reads take
-   the inherited-pipe path; `rawFd`'s comment says it lends as it is, as `TcpStream.rawHandle`'s does.
-3. **`Command.launch` (`process.kama` ~288).** `File.makePipe` for the three KEEP ends only (`inKeep` ~308,
-   `outKeep` ~330, `errKeep` ~353); the give ends stay `File.make`. `kama_pipe` itself is unchanged: its other caller,
-   `kama_proc_spawn`'s session sync pipe (`kama_os.h` ~2352), must stay blocking, and `pipe2(O_NONBLOCK)` would set
-   both ends. `O_NONBLOCK` is per open file description, so the parent's end never touches the child's.
-4. **`kama_sched.h`: two primitives.** (a) A transient registration with a stack record
-   (`kama_sched_io_init`/`fini`, the code of `kama_sched_io_open`/`close` ~566-615 without the allocation) for
-   StdIn (fd 0, shared by several `StdIn` values, so a persistent epoll ADD would hit EEXIST), `run()`'s capture and
-   the exit wait; it also keeps `@noheap` callers legal. (b) `kama_sched_proc_wait(pid)`: Linux
-   `syscall(SYS_pidfd_open, pid, 0)` (always close-on-exec) on (a) with interest 1, then `waitpid(WNOHANG)`; kqueue
-   `EVFILT_PROC|NOTE_EXIT|EV_ONESHOT` on its own stack record (never through `kama_sched_io_open`, whose close deletes
-   READ/WRITE by ident = the pid), `waitpid(WNOHANG)` after the add to catch an earlier exit, and `EVFILT_PROC` → bit 1
-   in the event loop (~826); elsewhere, and when seccomp refuses `pidfd_open`, a `waitpid(WNOHANG)` backoff like
-   `kama_net_backoff` (~4479) — real code, not a dead fallback.
-5. **`Process.wait()` (`process.kama` ~479).** On a fiber (POSIX): `kama_proc_wait_parked` over 4(b). Off a fiber and
-   on Windows: unchanged. `tryWait()` needs nothing.
-6. **`Command.run()` (`kama_capture2`, `kama_os.h` ~2491).** On a fiber: both pipes non-blocking, read each to
-   EAGAIN or EOF, park on both — the cheapest form is a private Poller with `kama_poller_wait_parked` (~4556), which
-   works on epoll, kqueue and io_uring — then restore blocking; the closing `p.wait()` takes step 5.
-7. **Fixtures** (named `proc_*`: `run_tests.sh` ~491 builds procutil only for a filter naming `proc_`): procutil gains
-   `late <ms> <text>` (sleep, then print). `proc_fiber_pipe` (a ticker counts > 0 while a fiber reads `late`'s pipe;
-   0 on `0.9.768`), `proc_fiber_wait` (`sleep 300` and a ticker), `proc_fiber_run` (with the `spew` concurrency case),
-   an inherited-pipe read (StdIn or `File.adopt` over a FIFO), a stdin write that fills the pipe and parks, a
-   pipeline after a fiber read (settle), and C checks in `tests/fiber_sched.d/csrc/schedtest.c` for pidfd,
-   `EVFILT_PROC` and the transient record. Expect a `park_window_file_read` xfail: every `File` read is now a park.
-8. **Docs.** SPEC's "A `File` does not park yet" bullet and the park list ("until KR-7"), `wait()` and `run()`'s
-   capture wording; fibers.md decision 8; the compiler's `parkSeam` wording (`kama.cemit.cpp` ~36807, "a fiber's wait
-   on a socket") and its "Steps 7–8 make files switch" comment.
-
-**Found mapping it, 2026-10-30 — three points, all settled:**
-- **RULED 2026-10-30 — a pipe end kama made is blocking again once handed out.** A socket's data calls pass
-  `MSG_DONTWAIT` per call, so a duplicate set back to blocking cannot stall the core; `read()`/`write()` on a pipe have
-  no such flag, so a `duplicateDescriptor()` of a fiber-used end handed to a child as `Stdio::Handle` would give that
-  child a non-blocking stream (`cat: stdin: Resource temporarily unavailable`) — Node's bug, whose libuv shares the
-  mode. Go's `File.Fd()` sets a file blocking for good, and tokio's `ChildStdout` → `Stdio` conversion does the same.
-  kama's rule: `duplicateDescriptor()` and `intoDescriptor()` settle an end kama made to blocking for good, and the
-  `File` keeps parking its fiber by ruling 1's inherited-pipe path (readiness, then a blocking read). That improves on
-  both: Go's reader then holds a thread and loses its deadlines; tokio's conversion consumes the handle. The one
-  caveat, two readers on one pipe (the parent's read after readiness blocks its thread if the child took the bytes),
-  is Go's too. Linux's `preadv2(RWF_NOWAIT)` is the per-call flag a later measurement may adopt.
-- **RULED 2026-10-30 — ruling 3 lands with KR-3 step 8.** If the parent's end is an overlapped named pipe, a pipeline
-  that hands that end to the next child (`proc_stdio_redirect`: `takeStdout()` → `intoDescriptor()` →
-  `Stdio::Handle`) gives the child an overlapped handle its synchronous reads cannot use — the reason `Stdio` refuses
-  sockets there; Rust's std copies through a relay thread for that case. The overlapped pipe pays only once step 8's
-  completion port can wait on it, so KR-7 keeps today's anonymous pipes on Windows (a fiber's pipe read there blocks the
-  thread, as SPEC says), and step 8 builds the named pipe and decides the relay or a reopen for a pipeline.
-- **SETTLED BY PROBE 2026-10-30 (macOS 26.4) — kqueue registration.** `kama_sched_io_open` adds `EVFILT_READ` at once
-  (~582). XNU accepts it, `EV_ADD|EV_CLEAR`, on a pipe's read AND write end, a FIFO and a pty (a terminal), and
-  `EVFILT_WRITE` on a pipe's write end and a pty; it REFUSES `/dev/null` and `/dev/zero` (`EINVAL`), as Linux's epoll
-  refuses them (`EPERM`). So the fall-back-to-blocking rule is required, not defensive: a program run `< /dev/null`
-  reads stdin on a fiber through it (a fixture: StdIn from `/dev/null` on a fiber answers EOF).
 
 <a id="s6-memory-pair-park"></a>
 

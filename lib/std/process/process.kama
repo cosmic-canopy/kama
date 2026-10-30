@@ -29,6 +29,7 @@ extern fn int32 kama_proc_spawn(UnsafePtr argv, UnsafePtr envp, UnsafeConstPtr<c
 extern fn int32 kama_group_signal(isize job, int32 pgid, int32 sig);
 extern fn void  kama_job_close(isize job);
 extern fn int32 kama_proc_wait(isize handle, UnsafePtr<int32> outStatus, int32 flags);
+extern fn int32 kama_proc_wait_parked(isize handle, UnsafePtr<int32> outStatus);   // on a fiber: parks (KR-7)
 // The POSIX wait-status accessors (WIFEXITED & co.). Windows has no such encoding: its status IS the exit code.
 @compileFor(!OS_WINDOWS) extern fn int32 kama_proc_exited(int32 st);
 @compileFor(!OS_WINDOWS) extern fn uint8 kama_proc_exit_code(int32 st);
@@ -44,7 +45,7 @@ extern fn void  kama_proc_detach(isize handle);
 // `UnsafePtr<UnsafePtr<uint8>>`, not `UnsafePtr<UnsafePtr>`: the seam takes `uint8_t**`, and the looser spelling lowered to
 // `void**` — a real -Wincompatible-pointer-types on every `run()` build. An FFI declaration has to
 // name the C type exactly; nothing else checks it.
-extern fn int32 kama_capture2(int32 outFd, int32 errFd, UnsafePtr<UnsafePtr<uint8>> outBuf, UnsafePtr<usize> outLen, UnsafePtr<usize> outCap, UnsafePtr<UnsafePtr<uint8>> errBuf, UnsafePtr<usize> errLen, UnsafePtr<usize> errCap);
+extern fn int32 kama_capture2_parked(int32 outFd, int32 errFd, UnsafePtr<UnsafePtr<uint8>> outBuf, UnsafePtr<usize> outLen, UnsafePtr<usize> outCap, UnsafePtr<UnsafePtr<uint8>> errBuf, UnsafePtr<usize> errLen, UnsafePtr<usize> errCap);
 extern fn void  kama_free(UnsafePtr p, usize n, usize align);
 extern fn int32 kama_WNOHANG();
 extern fn int32 kama_SIGKILL();
@@ -185,7 +186,7 @@ unsafe fn Optional<UnsafePtr> buildEnvp(bool clear, const ref DynamicArray<strin
     return envp;
 }
 
-// Copy `n` bytes out of a raw heap buffer (produced by kama_capture2) into an owned DynamicArray<uint8>.
+// Copy `n` bytes out of a raw heap buffer (produced by kama_capture2_parked) into an owned DynamicArray<uint8>.
 // The caller frees the source buffer with kama_free afterwards.
 unsafe fn DynamicArray<uint8> bytesFromRaw(UnsafePtr raw, usize n) {
     isize c = cast<isize>(n);
@@ -305,7 +306,7 @@ type resource Command implements Sendable {
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
                 if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
-                inGive = File.make(fd: rd); inKeep = File.make(fd: wr); inPiped = true;
+                inGive = File.make(fd: rd); inKeep = File.makePipe(fd: wr); inPiped = true;
             }
             case Null: {
                 int32 fd = kama_open_null_read();
@@ -327,7 +328,7 @@ type resource Command implements Sendable {
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
                 if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
-                outGive = File.make(fd: wr); outKeep = File.make(fd: rd);
+                outGive = File.make(fd: wr); outKeep = File.makePipe(fd: rd);
             }
             case Null: {
                 int32 fd = kama_open_null_write();
@@ -350,7 +351,7 @@ type resource Command implements Sendable {
             case Piped: {
                 int32 rd = 0; int32 wr = 0;
                 if (kama_pipe(outRd: addr(of: rd), outWr: addr(of: wr)) != 0) { return Result::Err(error: lastError()); }
-                errGive = File.make(fd: wr); errKeep = File.make(fd: rd);
+                errGive = File.make(fd: wr); errKeep = File.makePipe(fd: rd);
             }
             case Null: {
                 int32 fd = kama_open_null_write();
@@ -402,8 +403,9 @@ type resource Command implements Sendable {
     }
 
     // One-shot: force stdout+stderr Piped, spawn, DRAIN BOTH CONCURRENTLY to EOF, then wait. The concurrent
-    // capture lives in the `kama_capture2` seam (POSIX poll / Windows threads) — reading one stream to EOF
-    // then the other would deadlock once the child fills the second pipe. One platform-neutral path here.
+    // capture lives in the `kama_capture2_parked` seam (POSIX poll / Windows threads; on a fiber, a park on both
+    // pipes, KR-7) — reading one stream to EOF then the other would deadlock once the child fills the second pipe.
+    // One platform-neutral path here.
     @parks
     public unsafe fn Result<Output, IoError> run() {
         // What was SET wins (KR-171): an unset stdout and stderr are captured, an unset stdin is the null device, and
@@ -417,7 +419,7 @@ type resource Command implements Sendable {
         p.closeStdin();   // a piped stdin nobody writes would hold a child reading to end-of-file
         UnsafePtr<uint8> outRaw = null; usize outLen = 0; usize outCap = 0;
         UnsafePtr<uint8> errRaw = null; usize errLen = 0; usize errCap = 0;
-        int32 rc = kama_capture2(outFd: p.stdout().rawFd(), errFd: p.stderr().rawFd(),
+        int32 rc = kama_capture2_parked(outFd: p.stdout().rawFd(), errFd: p.stderr().rawFd(),
                                  outBuf: addr(of: outRaw), outLen: addr(of: outLen), outCap: addr(of: outCap),
                                  errBuf: addr(of: errRaw), errLen: addr(of: errLen), errCap: addr(of: errCap));
         if (rc != 0) { return Result::Err(error: lastError()); }
@@ -475,13 +477,15 @@ type resource Process implements Sendable {
     // drop) so the child (whose inherited copy of this fd is FD_CLOEXEC'd away at exec) is the last holder.
     public fn void closeStdin() { this.inPipe.close(); }
 
-    // Blocking reap → the child's ExitStatus. EINTR-retried; sets reaped (a second wait/dtor is a no-op).
+    // Blocking reap → the child's ExitStatus. EINTR-retried; sets reaped (a second wait/dtor is a no-op). On a fiber it
+    // parks only this fiber until the child exits (KR-7), through a pidfd on Linux and EVFILT_PROC on macOS; Windows
+    // blocks the thread until KR-3 step 8.
     @parks
     public unsafe fn Result<ExitStatus, IoError> wait() {
         if (this.reaped) { return Result::Err(error: IoError.of(kind: IoErrorKind::Other)); }
         int32 st = 0;
         while (true) {
-            int32 r = kama_proc_wait(handle: this.handle, outStatus: addr(of: st), flags: 0);
+            int32 r = kama_proc_wait_parked(handle: this.handle, outStatus: addr(of: st));
             if (r >= 0) { this.reaped = true; this.handle = 0; this.pid = 0; return Result::Ok(value: statusOf(st: st)); }
             if (kama_last_error() != kama_EINTR()) { return Result::Err(error: lastError()); }
         }
