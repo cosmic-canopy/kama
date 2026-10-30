@@ -2775,19 +2775,23 @@ own thread), which was this row's older half. **The three questions, as they wer
    capture wording; fibers.md decision 8; the compiler's `parkSeam` wording (`kama.cemit.cpp` ~36807, "a fiber's wait
    on a socket") and its "Steps 7–8 make files switch" comment.
 
-**Open before the build (found mapping it, 2026-10-30):**
-- **A duplicate shares the mode.** A socket's data calls pass `MSG_DONTWAIT` per call, so a duplicate set back to
+**Found mapping it, 2026-10-30 — one point open, two settled:**
+- **OPEN — a duplicate shares the mode.** A socket's data calls pass `MSG_DONTWAIT` per call, so a duplicate set back to
   blocking cannot stall the core; `read()`/`write()` on a pipe have no such flag. A `duplicateDescriptor()` of a
   fiber-used pipe end handed to a child as `Stdio::Handle` gives that child a non-blocking stream — Node's bug, in a
   corner. Recommended: SPEC states it as it states the socket rule, and `intoDescriptor` settles (it already does for
   sockets); Linux's `preadv2(RWF_NOWAIT)` is the per-call flag a later measurement may adopt.
-- **Ruling 3's cost on Windows.** If the parent's end is an overlapped named pipe, a pipeline that hands that end to
-  the next child (`proc_stdio_redirect`: `takeStdout()` → `intoDescriptor()` → `Stdio::Handle`) gives the child an
-  overlapped handle its synchronous reads cannot use — the reason `Stdio` refuses sockets there. Rust's std copies
-  through a relay thread for that case. To settle: build the overlapped pipe with KR-3 step 8 (the only time it pays),
-  keeping today's anonymous pipes until then, and decide the relay or a reopen when it lands.
-- **kqueue on a pipe's write end and on ttys:** `kama_sched_io_open` adds `EVFILT_READ` at once (~582), and XNU may
-  refuse it on a write-only end or a terminal. Probe on macOS first; a refusal must fall back to a blocking call.
+- **RULED 2026-10-30 — ruling 3 lands with KR-3 step 8.** If the parent's end is an overlapped named pipe, a pipeline
+  that hands that end to the next child (`proc_stdio_redirect`: `takeStdout()` → `intoDescriptor()` →
+  `Stdio::Handle`) gives the child an overlapped handle its synchronous reads cannot use — the reason `Stdio` refuses
+  sockets there; Rust's std copies through a relay thread for that case. The overlapped pipe pays only once step 8's
+  completion port can wait on it, so KR-7 keeps today's anonymous pipes on Windows (a fiber's pipe read there blocks the
+  thread, as SPEC says), and step 8 builds the named pipe and decides the relay or a reopen for a pipeline.
+- **SETTLED BY PROBE 2026-10-30 (macOS 26.4) — kqueue registration.** `kama_sched_io_open` adds `EVFILT_READ` at once
+  (~582). XNU accepts it, `EV_ADD|EV_CLEAR`, on a pipe's read AND write end, a FIFO and a pty (a terminal), and
+  `EVFILT_WRITE` on a pipe's write end and a pty; it REFUSES `/dev/null` and `/dev/zero` (`EINVAL`), as Linux's epoll
+  refuses them (`EPERM`). So the fall-back-to-blocking rule is required, not defensive: a program run `< /dev/null`
+  reads stdin on a fiber through it (a fixture: StdIn from `/dev/null` on a fiber answers EOF).
 
 <a id="s6-memory-pair-park"></a>
 
