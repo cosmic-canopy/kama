@@ -224,7 +224,7 @@ type:
 ```json
 "select": { "BUILD_TYPE": {
     "ASAN": { "inherits": "DEBUG",
-              "cflags":  ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"],
+              "cflags":  ["-fsanitize=address,undefined", "-fno-sanitize=function", "-fno-omit-frame-pointer"],
               "ldflags": ["-fsanitize=address,undefined"] } } }
 ```
 
@@ -232,6 +232,10 @@ type:
 kama build kama.json --select BUILD_TYPE=ASAN
 kama build kama.json --select BUILD_TYPE=ASAN --target LINUX
 ```
+
+`-fno-sanitize=function` is not optional under `undefined`: a contract call goes through a slot typed with a `void*`
+receiver, which that one check reports on every call (SPEC *Building & debugging* gives the reason; the test suite
+passes the same flag).
 
 Any `select` value takes `cflags`, `ldflags`, `cxxflags` and `objcflags`, meaning what they mean on a target
 entry. The chosen value's flags come after the project's and the target's, base first along `inherits` (an

@@ -383,7 +383,10 @@ a short last one could wait forever (`0.9.754` fixed it, found by the ThreadSani
   never call `pthread_join` on a scheduler thread.
 - **Regular files and DNS go to an offload pool.** `read` of a regular file never reports WouldBlock on any OS, and
   `getaddrinfo` blocks for seconds. Both run on a small per-process pool while the fiber parks; libuv and tokio do
-  the same. This is where KR-7 (a non-blocking `File`) and KR-202 (a DNS lookup with a deadline) land.
+  the same. This is where KR-202 (a DNS lookup with a deadline) lands. A **pipe** is not a regular file: it has
+  readiness to wait on, so it parks as a socket does, and that is KR-7, filed 2026-10-30 when a fiber reading a quiet
+  child's pipe was measured stopping its whole isolate (as are `Process.wait()` and `Command.run()`); until it lands
+  SPEC (*Sockets on a fiber*) says so and names the two workarounds.
 - **A foreign C call that blocks stalls its core.** That is stated plainly, as Java states pinning in native
   frames. The answer is an explicit `std::concurrent::offload(…)` that runs it on the pool, as tokio's
   `spawn_blocking` does. It is its own commit.

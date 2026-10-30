@@ -182,12 +182,8 @@ only moves at releases, so it would be stale by this rule for the whole window b
 
 Everything else here is library or toolchain work that does **not** gate the tag:
 
-1. **`std::process` — async/Poller-driven *live* child-stream reads.** `run()` captures a finished child's
-   output today; streaming a running child's stdout as it arrives is the piece left. **And a non-blocking `File`**
-   (filed 2026-10-14): `kama_set_nonblocking` exists for POSIX descriptors, but `File` has no non-blocking mode, and
-   on Windows both it and the `Poller` reach sockets only, so a child's pipe cannot be read without blocking there.
-   An HTTP server meets both (reported 2026-10-18): `stat`, `open` and `read` of a file being served block its loop,
-   and on Windows an application cannot watch its own child's pipe in its server loop.
+1. **A child's pipe without blocking** is KR-7, now in §6 (*A child's pipe without blocking*). A served file's
+   `stat`, `open` and `read` blocking a server's loop is KR-3 step 7's offload pool.
 2. **Standard-library follow-ups — the M2 PARITY CAMPAIGN is COMPLETE** (M2a 2026-08-04; M2b
    `0.9.190`–`0.9.195` and M2c `0.9.196`–`0.9.197`, both 2026-09-05: sleep + wall clock, DNS, fs completion,
    `std::path`, stdio handles + `readLine`/`Lines`, then `std::random` and `std::encoding`). Its brief is
@@ -643,6 +639,73 @@ random bytes find. **Design first.** The questions:
 - toolchain reach: clang's `-fsanitize=fuzzer` needs a clang with the libFuzzer runtime. Linux's and Homebrew's
   LLVM have one, and Apple's clang does not;
 - how a corpus and crashes are kept in a project.
+
+<a id="s1-std-dirs"></a>
+
+#### The standard directories: temp, config, cache (KR-266)
+
+Filed 2026-10-30, from two programs that needed them. std names no temporary directory and no per-user configuration
+or cache directory, so a program reads `TMPDIR` or `APPDATA` itself, which a parent process can change. Go's `os` has
+all of them (`TempDir`, `UserConfigDir`, `UserCacheDir`, `UserHomeDir`); Rust's std has `env::temp_dir()` and leaves
+the rest to the `dirs` crate; Python has `tempfile.gettempdir()`. **Recommended shape:** `tempDir()` (`TMPDIR`, else
+`/tmp`; `GetTempPath2W`), and `userConfigDir()` / `userCacheDir()` (XDG with its fallbacks; `~/Library/Application
+Support` and `~/Library/Caches`; the Known Folder API's RoamingAppData and LocalAppData), each a `Result<string,
+IoError>`; and a `TempDir` resource that makes a fresh private directory (`mkdtemp`) and removes its tree on drop.
+
+<a id="s1-time-zones"></a>
+
+#### Time zones (KR-267)
+
+Filed 2026-10-30. `std::time` has instants, durations and the civil calendar, but no zone: no lookup by IANA
+name, no local zone, no offset at an instant. A database client needs it for a zoned timestamp, a server for a user's
+local time. Go's `time.LoadLocation` reads the system's TZif files, with an embeddable `time/tzdata`; Java ships
+`java.time.ZoneId` with bundled data; Rust leaves it to `chrono-tz` and `jiff`. **Design first:** a `TimeZone`
+looked up by name (TZif v2+ with its POSIX footer rule from `/usr/share/zoneinfo`; on Windows the ICU it ships since
+10 1903, or bundled data), the local zone (`TZ`, `/etc/localtime`, `GetDynamicTimeZoneInformation`), and the offset
+and abbreviation at an instant, with a civil time in a gap or a fold answered explicitly rather than guessed.
+
+<a id="s1-endian-load"></a>
+
+#### Fixed-width integers at an offset, in a stated byte order (KR-270)
+
+Filed 2026-10-30. `std::num::endian` exports only `byteswap*`, so a file header (a GLB, a zip entry, a gzip trailer)
+is read with a hand-written `le32`, and std keeps two private copies of its own: kbin's `getU` and `std::uuid`'s
+`loadWord`. Go has `binary.LittleEndian.Uint32(b)` and `PutUint32`; Rust `u32::from_le_bytes`; Zig
+`std.mem.readInt(u32, bytes, .little)`. **Recommended:** a load and a store of `uint16`/`uint32`/`uint64` at an offset
+of a `ConstView<uint8>`/`View<uint8>`, little- and big-endian, bounds-checked as an index is, with kbin's and uuid's
+copies folded onto it. The module's ruling against host-order helpers does not apply: a stated order needs no
+knowledge of the host. KR-5's gzip and KR-258's zip read their headers with it.
+
+<a id="s1-secure-zero"></a>
+
+#### Wiping secrets (KR-271)
+
+Filed 2026-10-30, from a TLS package's own triage. Nothing in std zeroes memory so that the compiler cannot remove the
+store, and a growing byte buffer leaves the old bytes in the block it freed. C11 has `memset_s`, glibc and the BSDs
+`explicit_bzero`, Windows `SecureZeroMemory`, libsodium `sodium_memzero`; Rust's answer is the `zeroize` crate.
+**Recommended shape:** a `wipe` over a `View<uint8>` that the optimizer cannot elide, and a byte buffer that wipes on
+drop and wipes its old block before freeing it on every reallocation. `constantTimeEquals`, already in std, is its sibling.
+
+<a id="s1-cpu-time"></a>
+
+#### A process's CPU time (KR-272)
+
+Filed 2026-10-30. std cannot say how much CPU a process has used, user and system time, which a benchmark and a
+resource limit both need; std has a process's liveness and start time, not this. C has `getrusage` and `clock()`, Windows
+`GetProcessTimes`, Python `time.process_time()` and `resource.getrusage`; Rust and Go leave it to crates or
+`syscall.Getrusage`. **Recommended:** the current process's user and system time as `Duration`s
+(`getrusage(RUSAGE_SELF)`, `GetProcessTimes`), and a waited child's from its exit (`wait4`'s rusage).
+
+<a id="s1-string-from-bytes"></a>
+
+#### A `string` from owned bytes without a copy (KR-273)
+
+Filed 2026-10-30. Every way from bytes to a `string` copies them (`utf8::decode` validates and copies,
+`kama_string_from_raw` copies), so a program that already holds UTF-8 in a `DynamicArray<uint8>` pays a copy, and one
+that knows its bytes are valid pays the validation too. Rust has `String::from_utf8(Vec<u8>)`, which validates and
+moves the buffer, and `unsafe from_utf8_unchecked`; Go's `string(b)` copies and `unsafe.String` does not. KR-261
+builds the mechanism inside std (a `StringWriter`'s consuming `finish` adopts its buffer); this row is the public
+surface: a moving constructor that validates and hands the bytes back in its error, and an `unsafe` one that does not.
 
 <a id="s2"></a>
 
@@ -1524,7 +1587,10 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
   dynamic call, which is the wrong trade for the embedded and hot-path targets. **DECIDED 2026-08-12: the
   exemption is permanent, and [SPEC.md](SPEC.md) now says so** in the numeric-safety/sanitizer section,
   including the guidance that a user building under `-fsanitize=undefined` should pass
-  `-fno-sanitize=function`. Closed — kept here only so it is not re-diagnosed as a hole a third time.
+  `-fno-sanitize=function`. Closed — kept here only so it is not re-diagnosed as a hole a third time. The one
+  reason that would reopen it, noted 2026-10-30: the ruling weighed UBSan alone, and clang's CFI
+  (`-fsanitize=cfi-icall`) would REFUSE these calls rather than report them, so a CFI build is where the typed thunk
+  would earn its indirection.
 - **Non-goal — function / constructor overloading.** Deliberately not planned: it conflicts with "one way to do
   a thing," and **named parameters** already cover the disambiguation overloading is usually reached for.
   **Operators are the sanctioned exception** — a type may carry several `operator*` distinguished by operand
@@ -2576,7 +2642,7 @@ from data races keeps holding by construction.
    change batched into the next wait, so a park costs no system call. One-shot costs 8–13% on epoll, and an unbatched
    kqueue re-arm 6%. AFD stays one-shot. It is internal: the public `Poller` stays level-triggered.
 7. Transparent: the same `TcpStream.read` parks on a fiber (Loom, Go, Eio), not Zig's explicit `Io` parameter.
-8. Channels become fiber-aware, joins park, and regular files and DNS go to an offload pool (with KR-7, KR-202).
+8. Channels become fiber-aware, joins park, and regular files and DNS go to an offload pool (with KR-202); a pipe parks as a socket does (KR-7).
 9. `spawn fiber f(b: …)`, the isolate's fn-plus-one-bundle. A `Fiber<R>` handle whose join yields `R` — amended
    2026-10-25: the join CONSUMES the handle, `R r = join(fiber: give f);` (Rust's `JoinHandle::join(self)`), so a
    second join is a compile error. A panic still aborts the process.
@@ -2815,6 +2881,63 @@ exists.
 `@noheap` boundary out of the I/O call answers it. The precise answer — judging an allocation by the isolates that
 reach it, as the park rule does — is this row, beside KR-79's generalization of the same engine.
 
+<a id="s6-child-pipes"></a>
+
+### A child's pipe without blocking: pipes park on a fiber (KR-7)
+
+**Measured 2026-10-30 on `0.9.768`, macOS.** A fiber reading a child's stdout (`sh -c "sleep 0.3; echo hello"`) with
+`Process.stdout().read(…)` stopped every fiber on its isolate: a second fiber ticking on 10 ms sleeps counted 0 ticks
+before the data came. `File.read` and `write` are plain system calls (`kama_read`/`kama_write`, `lib/std/fs/fs.kama`
+~472-490); their `@parks` mark feeds only the lock-window rule. `Process.wait()` (a blocking `waitpid`) and
+`Command.run()` (`kama_capture2`'s `poll`) do the same. Nothing ruled it: fibers.md decision 8 sends *regular* files to
+step 7's pool and says nothing of pipes. Two workarounds measured the same day counted 28 ticks each: wait on a
+`Poller` holding `stdout().rawFd()` and then read (epoll and kqueue; Windows' AFD `Poller` refuses a pipe), or hand the
+child one end of a `UnixStreamPair` as its stdout (`Stdio::Handle`), whose reads park as a socket's do. SPEC states the
+limit and both workarounds under *Sockets on a fiber*.
+
+| | a child's pipe | a regular file | the child's exit |
+|---|---|---|---|
+| Go | non-blocking, on the netpoller (`os.Pipe`, `exec`'s `StdoutPipe`) | a blocking system call; the runtime hands the processor to another thread | a blocking `wait4` on its own thread (a pidfd on Linux since 1.23) |
+| tokio | non-blocking, registered with mio | `spawn_blocking`, and so is the process's own stdin | a SIGCHLD-driven reaper |
+| libuv, Node | a socketpair on the loop (`UV_CREATE_PIPE`) | the thread pool | SIGCHLD |
+| Rust std | blocking | blocking | blocking |
+
+**Recommended:** a `File` over a pipe, FIFO or terminal parks on a fiber as a socket does: the same
+`kama_net_ready`/`retry` protocol with `read`/`write` in place of `recv`/`send`, and a READ on io_uring in place of a
+RECV. Regular files stay with step 7's pool. `Process.wait()` parks on the child's exit, and `Command.run()` on both.
+Off a fiber nothing changes, and a live child stream read as it arrives on a thread already works (it blocks only its
+own thread), which was this row's older half. **Rulings owed before code:**
+1. Which descriptors kama makes non-blocking. Recommended: only the pipes it made (`Command`'s `Stdio::Piped` ends).
+   O_NONBLOCK on an inherited descriptor changes it for every process that shares it, which is why tokio sends stdin
+   to `spawn_blocking`; an inherited pipe waits for readiness, then reads blocking, which a level-triggered readiness
+   makes safe for one reader.
+2. How the child's exit is waited on: a pidfd on Linux 5.3 and later, `EVFILT_PROC` on macOS and the BSDs, a SIGCHLD
+   self-pipe elsewhere.
+3. Windows: `Command`'s piped ends become overlapped named pipes, as Rust's std and libuv make them, read by completion
+   once step 8 lands; until then a fiber's pipe read there blocks the thread, as a `Poller` wait does.
+
+<a id="s6-memory-pair-park"></a>
+
+### An in-memory stream pair parks on a fiber (KR-264)
+
+Filed 2026-10-30. `MemoryStreamPair`'s ends answer `WouldBlock` on an empty read and on a full ring, on every isolate
+(`lib/std/net/memory.kama` ~38, ~51), so a test that drives a protocol over one on fibers has to spin. On a fiber an
+empty read should park until the other end writes or shuts, and a full write until the other end reads, as a socket's
+do; off a fiber it keeps answering `WouldBlock`. The pair is not `Sendable`, so both ends live on one isolate and the
+wake is local, with no remote queue. Go's `net.Pipe` blocks the goroutine; tokio's `io::duplex` returns `Pending` and
+wakes the task. KR-265 needs it: a fiber blocked on a real socket never counts as fully blocked.
+
+<a id="s6-virtual-clock"></a>
+
+### A virtual clock for the fiber scheduler (KR-265)
+
+Filed 2026-10-30. The scheduler's timers, `sleep`, timed receives and socket deadlines all read `kama_now_mono_ns()`
+directly (`kama_sched.h` ~369, ~879, ~909, ~1030; `kama_os.h` ~4335), so a test of a timeout waits in real time.
+Go's `testing/synctest` runs a bubble whose clock jumps to the next timer once every goroutine in it is durably blocked;
+tokio's `time::pause()` freezes the clock, which `advance` moves and the runtime moves itself when idle. **Design
+first:** a scope with its own clock that jumps when every fiber in it is parked on something the scope owns (a channel,
+a timer, an in-memory stream, KR-264, never a real socket), and how `monotonicNow()` reads it inside.
+
 <a id="s7"></a>
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
@@ -2971,6 +3094,9 @@ The current state:
   native and wasm on every run without the SDK, and builds them where it is installed.
 - The triangle leaks more than its five per-frame releases cover: the shader module, the `GetBindGroupLayout` ref, the
   adapter, the instance and the calloc'd `App`. It also hardcodes 512×512 BGRA8.
+- webgpu.h is not one header: the web's (emdawnwebgpu) and wgpu-native's differ in what each declares. A project that
+  generates its bindings from both found 199 functions shared, none declared differently, and gates what only one has
+  (reported 2026-10-30); the binding generates from both and gates the same way.
 - webgpu.h ref-counts all 23 handle types (`Release`/`AddRef`). Releasing the last Device ref destroys it, so its
   children turn INVALID (validation errors) rather than dangling.
 - The web leg is unprobed: there is no emcc on the host.
@@ -4223,3 +4349,25 @@ Mercurial (`hg files` / `hg status` / `hg cat`) and Subversion (`svn ls -R` / `s
 same shape. Perforce comes first because it is the game-studio default, and studios keep packages as
 subdirectories of one large depot — which is why the seam scopes the file list to the package directory. Not
 buildable blind: it needs a Perforce server to test against.
+
+<a id="s10-api-reference"></a>
+
+### An API reference for a package (KR-268)
+
+Filed 2026-10-30. A package cannot generate its API reference: `kama query --symbols`/`--type` report neither a
+declaration's doc comment nor whether it is exported, and `kama doc` is an unknown subcommand. Rust has `rustdoc` and
+docs.rs, Go `go doc` and pkg.go.dev, Zig `-femit-docs`. **Recommended:** the two fields in `kama query`'s JSON first,
+since it answers from what the compiler resolved and a renderer outside the compiler then gets them right; then a
+`kama doc` renderer, whose shape, and whether the registry hosts its output, wants its own brief. Beside KR-40.
+
+<a id="s10-csources-optimize"></a>
+
+### A package caps the optimization of its own C (KR-269)
+
+Filed 2026-10-30. A package that vendors constant-time C cannot keep it at `-O2` or `-Os`: a release build compiles
+every `csources` file at the root's level (`-O3`), a dependency's `cflags` reach every C file in the consumer's build,
+and a `csources` entry takes only `path` and `compileFor` (refused at `kama.driver.cpp` ~3569). docs/targets.md rules
+that only the root manifest's level applies, so this touches a ruled rule. The plumbing exists: each C input carries
+its own optimize flag, and each `csources` file is its own translation unit. Cargo sets a level per package from the
+root (`[profile.release.package.<name>] opt-level`); CMake per source (`COMPILE_OPTIONS`). **Ruling owed:** a ceiling
+the package sets on its own entries (a cap, never a floor, so it cannot slow the consumer's code), or Cargo's model.
