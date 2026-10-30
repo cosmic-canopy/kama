@@ -324,6 +324,7 @@ contract_operator_mismatch	contract_operator_mismatch.kama:9:0
 contract_operator_unsafe	contract_operator_unsafe.kama:3:0
 contract_param_mismatch	contract_param_mismatch.kama:7:0
 contract_public_cross_file	main.kama:11:0
+contract_ref_param_from_handle	contract_ref_param_from_handle.kama:9:14
 contract_refine_missing	contract_refine_missing.kama:4:0
 contract_return_mismatch	contract_return_mismatch.kama:9:0
 contract_return_mismatch_adapter	contract_return_mismatch_adapter.kama:5:0

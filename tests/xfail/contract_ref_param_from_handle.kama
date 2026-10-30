@@ -1,0 +1,11 @@
+// A `ref` contract parameter reseats the caller's contract VARIABLE, and a handle is none; the refusal says to take
+// the contract by value, which borrows the object behind the handle (tests/contract_param_from_handle).
+import { std::memory::Owned };
+type contract Drawable for resource { fn int32 area(); }
+type resource Sprite implements Drawable { public ctor make() { } public fn int32 area() { return 1; } }
+fn int32 drawRef(ref Drawable d) { return d.area(); }
+fn uint8 main() {
+    Owned<Drawable> o = new Sprite.make();
+    int32 t = drawRef(d: ref o);   // -> REJECT
+    return 0;
+}

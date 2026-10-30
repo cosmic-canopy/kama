@@ -5632,7 +5632,9 @@ the contract is fine — the local never moves — but an element of a container
 handle that can be reseated, is refused (`Formattable fo = arr[0]`, `Formattable fo = sh` over a `Shared<Box>`), and <!-- xfail: contract_local_over_handle -->
 so is a `static` of a contract type. The value behind a handle is a contract through a contract PARAMETER, <!-- test: contract_param_over_handle -->
 `width(f: sh)`, whose call holds `sh` still — the one way: Rust's `&*sh` freezes `sh` for the borrow's life, and
-kama keeps every freeze a visible block. A <!-- test: contract_local_rebind -->
+kama keeps every freeze a visible block. So does a handle over the contract itself, or over one that refines it <!-- test: contract_param_from_handle -->
+(`draw(d: o)` with `Owned<Drawable> o`); a `ref` contract parameter takes no handle, since it reseats a contract <!-- xfail: contract_ref_param_from_handle -->
+variable and a handle is none. A <!-- test: contract_local_rebind -->
 contract local may be rebound (`fo = y`) to any object that outlives it; one declared in a block nested inside
 the local's is refused, as a view store from a nested window is (rule 4 of *The window*). <!-- xfail: contract_local_store_inner -->
 

@@ -25725,7 +25725,8 @@ std::string CEmitter::contractBorrowOf(const std::string& iface, SharedExpressio
     // Both arms below take the argument's ADDRESS, so a call result (`use(g: makeG(k: 4))`) would be
     // `&(rvalue)` — illegal C that `kama check` never saw. Materialize it into a scope-dtor'd temp,
     // the borrow the callee reads, exactly as a `const ref` class rvalue is.
-    if ((dtImpl || (isClass(c) && !dynamic_cast<ThisAccessNode*>(e.get())))
+    const std::string hc = handleContractOf(c, iface);   // `Owned<Reader>` to a `Reader`
+    if ((dtImpl || !hc.empty() || (isClass(c) && !dynamic_cast<ThisAccessNode*>(e.get())))
         && !hoisted && (!isNamedValue(e.get()) || !constantTempCType(e).empty())) {
         if (_hoistOK) {
             std::string t = "kama_ifcarg" + std::to_string(_tempCounter++);
@@ -25735,6 +25736,11 @@ std::string CEmitter::contractBorrowOf(const std::string& iface, SharedExpressio
         } else
             unsupported(("a temporary cannot be borrowed as " + what
                          + " here — bind it to a local first, then pass that").c_str(), line);
+    }
+    if (!hc.empty()) {
+        // The handle IS the contract value plus its ownership: lend its {obj, vtbl}, or the refined parent's slot.
+        if (hc == iface) return "(" + iface + "){ (" + val + ").kama_obj, (" + val + ").kama_vtbl }";
+        return "(" + iface + "){ (" + val + ").kama_obj, (" + val + ").kama_vtbl->" + upSlot(iface) + " }";
     }
     if (dtImpl) {
         // `encode(v: sharedRoot)`: a `Shared`/`Owned<T>` whose pointee `T` implements the contract
@@ -27666,7 +27672,16 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 // concrete class would need a throwaway temp — reject it; bind first.
                 // One sentence for one mistake: an inline constructor was refused above. A value has no place, so it
                 // is bound first; a contract local cannot take it directly (KR-241).
-                if (!c.empty() && isClass(c) && !ctorToRefContract) {
+                if (!c.empty() && isSmartPtrClass(c) && !ctorToRefContract) {
+                    // A `ref` contract parameter reseats the caller's contract VARIABLE, and a handle is none; nor can
+                    // a contract local borrow what a handle holds (it can be reseated). A by-value contract parameter
+                    // borrows the object behind the handle, for writing too.
+                    const std::string ic = demangleForDisplay(p.className);
+                    unsupported(("cannot pass '" + demangleForDisplay(c) + "' by `ref`/`out` to contract parameter '"
+                                 + p.name + "' — `ref " + ic + "` reseats a contract variable, and a handle is none; "
+                                 "take `" + ic + " " + p.name + "` by value, which borrows the object behind the handle "
+                                 "for the call, writes included").c_str(), srcLine);
+                } else if (!c.empty() && isClass(c) && !ctorToRefContract) {
                     const std::string ic = demangleForDisplay(p.className), arg = unparseExpr(argExpr);
                     const std::string how = isNamedValue(argExpr.get())
                         ? ic + " s = " + arg + "; … ref s"
@@ -37665,6 +37680,21 @@ bool CEmitter::contractIsStaticOnlyFor(const ClassInfo& ci, const std::string& i
 // Every uncertainty must read as conforming, because the alternative is rejecting the shapes this
 // campaign spent five commits keeping legal — a type parameter, a const-generic binding, an unresolved
 // name. That is the same discipline `TKind::Unknown` and `IdFamily::None` keep, for the same reason.
+// An `Owned`/`Shared` over a CONTRACT is held as that contract's own {obj, vtbl} (KAMA_OWNED_IFACE_TYPE), so it reaches
+// a parameter of that contract, or of one it refines, by borrowing the object behind it for the call, as an
+// `Owned<Concrete>`'s pointee does. Answers the handle's contract when it reaches `itf`, else "". A `Weak` reaches
+// nothing until upgraded.
+std::string CEmitter::handleContractOf(const std::string& c, const std::string& itf)
+{
+    if (c.empty() || !isSmartPtrClass(c) || smartKind(c) == CollKind::Weak) return "";
+    auto ci = _classes.find(c);
+    if (ci == _classes.end() || !isInterface(ci->second.collElemClass)) return "";
+    const std::string pc = ci->second.collElemClass;
+    if (pc == itf) return pc;
+    const std::vector<std::string> up = refinedAncestors(pc);
+    return std::find(up.begin(), up.end(), itf) != up.end() ? pc : "";
+}
+
 bool CEmitter::valueReachesContract(SharedExpression e, const std::string& c, const std::string& itf)
 {
     if (c.empty() || !isInterface(itf)) return true;               // nothing certain to say
@@ -37677,6 +37707,7 @@ bool CEmitter::valueReachesContract(SharedExpression e, const std::string& c, co
     // and the POINTEE wrapped, so the handle itself never needs the conformance.
     const std::string dt = derefTarget(c);
     if (!dt.empty() && (isInterface(dt) || classDeclaresContract(dt, itf))) return true;
+    if (!handleContractOf(c, itf).empty())    return true;         // `Owned<Reader>` to a `Reader`: its {obj, vtbl}
     if (!primWidenKey(e, itf).empty())        return true;         // a primitive that declares it
     // A class the emitter knows nothing about cannot be judged. `isClass` is the test for "this name is a
     // resolved type", so anything failing it is an unresolved spelling and stays silent.

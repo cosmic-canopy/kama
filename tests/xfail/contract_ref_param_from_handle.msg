@@ -1,0 +1,1 @@
+reseats a contract variable, and a handle is none
