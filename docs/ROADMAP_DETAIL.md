@@ -2693,8 +2693,8 @@ limit and both workarounds under *Sockets on a fiber*.
 | Rust std | blocking | blocking | blocking |
 
 **Recommended:** a `File` over a pipe, FIFO or terminal parks on a fiber as a socket does: the same
-`kama_net_ready`/`retry` protocol with `read`/`write` in place of `recv`/`send`, and a READ on io_uring in place of a
-RECV. Regular files stay with step 7's pool. `Process.wait()` parks on the child's exit, and `Command.run()` on both.
+`kama_net_ready`/`retry` protocol with `read`/`write` in place of `recv`/`send`, and on io_uring a POLL_ADD and then
+the read (the ring's existing `kama__sched_ringPoll`), so the probe needs no new op. Regular files stay with step 7's pool. `Process.wait()` parks on the child's exit, and `Command.run()` on both.
 Off a fiber nothing changes, and a live child stream read as it arrives on a thread already works (it blocks only its
 own thread), which was this row's older half. **The three questions, as they were put:**
 1. Which descriptors kama makes non-blocking. Recommended: only the pipes it made (`Command`'s `Stdio::Piped` ends).
@@ -2721,18 +2721,62 @@ own thread), which was this row's older half. **The three questions, as they wer
    child's synchronous, as Rust's std and libuv make them; a fiber's read completes through KR-3 step 8's completion
    port, and until step 8 lands a fiber's pipe read on Windows blocks the thread, as SPEC says.
 
-**Build map (re-probe first):**
-- `File` gains the socket's wait state for a pipe end kama made: the `io` record and mode `TcpStream` keeps
-  (`lib/std/net/net.kama`), registered at its first wait; `File.read`/`write` (`lib/std/fs/fs.kama` ~472-490) take
-  the `kama_net_ready`/`kama_net_retry` protocol (`kama_os.h` ~4334-4378) with `read`/`write` in place of
-  `recv`/`send`. On io_uring a pipe waits with `POLL_ADD`, then reads: no new required ring op (`kama_sched.h` ~187).
-- An inherited descriptor: wait readable (POLL_ADD / the Poller arm), then a plain blocking `read`.
-- `Process.wait()` (`kama_proc_wait`, `kama_os.h` ~2404) parks on the pidfd / `EVFILT_PROC` registration;
-  `Command.run()`'s capture (`kama_capture2`'s `poll`) becomes the two pipe parks plus the exit park.
-- Descriptor lifetime as a socket's: deregister before close; `takeStdout()`/`intoDescriptor()` settle the mode back.
-- Fixtures: the 2026-10-30 probe made a fixture (a ticker fiber counts > 0 while a fiber reads a quiet child's pipe;
-  0 today), an inherited-pipe read, `wait()` parking, `run()` parking; Windows: the pipe pair is named and overlapped
-  (a build-and-read fixture), and the fiber read is stated as blocking until step 8.
+**Build map** (read 2026-10-30 on `0.9.782`; lines drift, re-probe first):
+1. **C (`kama_os.h`).** A mode bit `KAMA_FILE_OURS 8` beside `KAMA_NET_*` (~72). `kama_file_read`/`kama_file_write`
+   (after `kama_net_settle`, ~4508) with `kama_net_read`'s readiness path (~4415-4420: ready, drained, call, short,
+   retry), `by = 0` and NO ring branch — `kama_net_read`/`write` hand the ring a RECV/SEND, which fails `ENOTSOCK` on a
+   pipe, and `kama_sched_io_wait` already does POLL_ADD on the ring (`kama__sched_ringPoll`, `kama_sched.h` ~497).
+   A pipe end not ours (classified once with `fstat` and cached in the mode bits, so a regular file costs nothing):
+   a level check `poll(fd, 0)` first — registrations are edge-triggered (EPOLLET, EV_CLEAR), so a read that left data
+   behind gets no new edge — then park, then a blocking `read`; a write after POLLOUT is capped at `PIPE_BUF`. A
+   registration the OS refuses (epoll EPERM, a kqueue refusal on a tty or a write end) is a plain blocking call,
+   never an error. `kama_file_close` (`kama_net_release`, then `close`) and `kama_file_settle`. All of it
+   `#if !defined(_WIN32)`: there `kama_set_nonblocking` is `ioctlsocket` (~1486), sockets only.
+2. **`File` (`lib/std/fs/fs.kama` ~390).** `UnsafePtr io = null; int32 mode = 0;` beside `fd`; a private
+   `ctor makePipe(int32 fd)` setting OURS, granted to `Command::launch`; `read` (~476), `write` (~488) and `readAll`
+   (~572, a direct `kama_read`) through the new calls; `close()`/`~File` through `kama_file_close`; `intoDescriptor`
+   settles first; `rawFd`'s comment says it lends as it is, as `TcpStream.rawHandle`'s does.
+3. **`Command.launch` (`process.kama` ~288).** `File.makePipe` for the three KEEP ends only (`inKeep` ~308,
+   `outKeep` ~330, `errKeep` ~353); the give ends stay `File.make`. `kama_pipe` itself is unchanged: its other caller,
+   `kama_proc_spawn`'s session sync pipe (`kama_os.h` ~2352), must stay blocking, and `pipe2(O_NONBLOCK)` would set
+   both ends. `O_NONBLOCK` is per open file description, so the parent's end never touches the child's.
+4. **`kama_sched.h`: two primitives.** (a) A transient registration with a stack record
+   (`kama_sched_io_init`/`fini`, the code of `kama_sched_io_open`/`close` ~566-615 without the allocation) for
+   StdIn (fd 0, shared by several `StdIn` values, so a persistent epoll ADD would hit EEXIST), `run()`'s capture and
+   the exit wait; it also keeps `@noheap` callers legal. (b) `kama_sched_proc_wait(pid)`: Linux
+   `syscall(SYS_pidfd_open, pid, 0)` (always close-on-exec) on (a) with interest 1, then `waitpid(WNOHANG)`; kqueue
+   `EVFILT_PROC|NOTE_EXIT|EV_ONESHOT` on its own stack record (never through `kama_sched_io_open`, whose close deletes
+   READ/WRITE by ident = the pid), `waitpid(WNOHANG)` after the add to catch an earlier exit, and `EVFILT_PROC` → bit 1
+   in the event loop (~826); elsewhere, and when seccomp refuses `pidfd_open`, a `waitpid(WNOHANG)` backoff like
+   `kama_net_backoff` (~4479) — real code, not a dead fallback.
+5. **`Process.wait()` (`process.kama` ~479).** On a fiber (POSIX): `kama_proc_wait_parked` over 4(b). Off a fiber and
+   on Windows: unchanged. `tryWait()` needs nothing.
+6. **`Command.run()` (`kama_capture2`, `kama_os.h` ~2491).** On a fiber: both pipes non-blocking, read each to
+   EAGAIN or EOF, park on both — the cheapest form is a private Poller with `kama_poller_wait_parked` (~4556), which
+   works on epoll, kqueue and io_uring — then restore blocking; the closing `p.wait()` takes step 5.
+7. **Fixtures** (named `proc_*`: `run_tests.sh` ~491 builds procutil only for a filter naming `proc_`): procutil gains
+   `late <ms> <text>` (sleep, then print). `proc_fiber_pipe` (a ticker counts > 0 while a fiber reads `late`'s pipe;
+   0 on `0.9.768`), `proc_fiber_wait` (`sleep 300` and a ticker), `proc_fiber_run` (with the `spew` concurrency case),
+   an inherited-pipe read (StdIn or `File.adopt` over a FIFO), a stdin write that fills the pipe and parks, a
+   pipeline after a fiber read (settle), and C checks in `tests/fiber_sched.d/csrc/schedtest.c` for pidfd,
+   `EVFILT_PROC` and the transient record. Expect a `park_window_file_read` xfail: every `File` read is now a park.
+8. **Docs.** SPEC's "A `File` does not park yet" bullet and the park list ("until KR-7"), `wait()` and `run()`'s
+   capture wording; fibers.md decision 8; the compiler's `parkSeam` wording (`kama.cemit.cpp` ~36807, "a fiber's wait
+   on a socket") and its "Steps 7–8 make files switch" comment.
+
+**Open before the build (found mapping it, 2026-10-30):**
+- **A duplicate shares the mode.** A socket's data calls pass `MSG_DONTWAIT` per call, so a duplicate set back to
+  blocking cannot stall the core; `read()`/`write()` on a pipe have no such flag. A `duplicateDescriptor()` of a
+  fiber-used pipe end handed to a child as `Stdio::Handle` gives that child a non-blocking stream — Node's bug, in a
+  corner. Recommended: SPEC states it as it states the socket rule, and `intoDescriptor` settles (it already does for
+  sockets); Linux's `preadv2(RWF_NOWAIT)` is the per-call flag a later measurement may adopt.
+- **Ruling 3's cost on Windows.** If the parent's end is an overlapped named pipe, a pipeline that hands that end to
+  the next child (`proc_stdio_redirect`: `takeStdout()` → `intoDescriptor()` → `Stdio::Handle`) gives the child an
+  overlapped handle its synchronous reads cannot use — the reason `Stdio` refuses sockets there. Rust's std copies
+  through a relay thread for that case. To settle: build the overlapped pipe with KR-3 step 8 (the only time it pays),
+  keeping today's anonymous pipes until then, and decide the relay or a reopen when it lands.
+- **kqueue on a pipe's write end and on ttys:** `kama_sched_io_open` adds `EVFILT_READ` at once (~582), and XNU may
+  refuse it on a write-only end or a terminal. Probe on macOS first; a refusal must fall back to a blocking call.
 
 <a id="s6-memory-pair-park"></a>
 
