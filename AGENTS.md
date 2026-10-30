@@ -150,6 +150,12 @@ section). Delete a shipped item from **both** files once its record lands in the
 (`docs/SPEC.md` for language surface, `docs/packages.md` / `docs/editors.md` / `docs/targets.md` for
 workflow, the git log for *why*).
 
+**A defect is filed in ROADMAP.md's DEFECTS table, never beside a feature.** The file reads DEFECTS (open bugs,
+fixed before features), NOW (the next features, in build order), QUEUED (scoped, grouped by arc) and UNSCOPED, so the
+DEFECTS table's length is the regression signal the maintainer watches. A defect is behaviour wrong today (unsound,
+a crash, a wrong answer, two tools that disagree); a missing capability or a slow path is a feature. A session's
+handoff counts both: defects fixed and filed, features shipped and filed.
+
 **Cite a row by its `KR-<n>` id.** The id is permanent — assigned once, never reused, never renumbered —
 so it is safe to write in a commit message, a note or another doc, and deleting a shipped row leaves a
 gap rather than shifting anything. A new row takes the id on ROADMAP.md's **`Next id:`** counter and bumps it in the same edit — never "one more
