@@ -8,7 +8,7 @@
 # and, where the SDK is present, builds and runs the smoke (a windowless instance create), and where GLFW is too,
 # builds the example natively. It does not run the example: that opens a window.
 #
-# check-legs: native
+# check-legs: native wasm
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 KAMA=${KAMA:-$ROOT/kama}
@@ -23,6 +23,17 @@ for t in host wasm; do
     "$KAMA" check "$ROOT/tests/webgpu/smoke.kama" "$@" > "$tmp/log" 2>&1 || fail "tests/webgpu/smoke.kama does not check ($t)"
 done
 said="example and smoke check for native and wasm"
+
+# The wasm LINK, where emscripten is installed (the wasm leg's image and CI's wasm job have it). `--webgpu` pulls
+# emscripten's WebGPU port, and its releases since Dawn v20260423 are C++ inside and refuse a C link ("emdawnwebgpu
+# requires C++"), so the driver links such a build with DEFAULT_TO_CXX. `kama check` never links, so only a build
+# sees it; the port is fetched once into emscripten's cache.
+if command -v "${EMCC:-emcc}" >/dev/null 2>&1; then
+    mkdir -p "$tmp/wasm"
+    "$KAMA" build "$ROOT/tests/webgpu/smoke.kama" --target wasm --webgpu -o "$tmp/wasm/smoke.html" > "$tmp/log" 2>&1 \
+        || fail "the smoke does not link for wasm with --webgpu"
+    said="$said; the wasm smoke linked"
+fi
 
 wgpu=${KAMA_WGPU_DIR:-$ROOT/third_party/wgpu/$(sh "$ROOT/tools/platform.sh")}   # per platform, as the driver reads it
 if [ ! -f "$wgpu/include/webgpu/webgpu.h" ]; then

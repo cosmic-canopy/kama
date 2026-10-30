@@ -13807,6 +13807,10 @@ int main(int argc, char** argv)
             // here with the rest rather than in the flags. ⚠️ `-lc++ -lc++abi` is NOT the fix, though it
             // looks like one: emcc maps them to the `-noexcept` variants, which have no `__cxa_throw`.
             if (needsCxx) setScalar("DEFAULT_TO_CXX", "1");
+            // ...and so does a `--webgpu` build, C++ entry or not: emscripten's WebGPU port (emdawnwebgpu, Dawn
+            // v20260423 and later) is C++ inside and refuses a C link: "emdawnwebgpu requires C++. Link using em++ (or
+            // emcc -sDEFAULT_TO_CXX)". Older ports linked as C, so both are satisfied by setting it.
+            else if (webgpu) setScalar("DEFAULT_TO_CXX", "1");
             if (needsNetWeb) { addList("EXPORTED_RUNTIME_METHODS", "UTF8ToString");
                                addList("EXPORTED_RUNTIME_METHODS", "HEAPU8"); }
             if (needsPthread) {
