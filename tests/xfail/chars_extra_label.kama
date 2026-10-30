@@ -1,0 +1,9 @@
+// `chars()` and `split(separator:)` in a `foreach` are lowered to a borrowing iterator before the call checker runs,
+// which let any label through (`split(sep: …)` and `split(nonsense: …)` both ran). Their arguments are checked as
+// every call's are; tests/string_split is the call as declared.
+fn uint8 main() {
+    string s = "a/b/c";
+    isize n = 0;
+    foreach (char c in s.chars(bogus: 1)) { n = n + 1; }   // -> REJECT
+    return 0;
+}

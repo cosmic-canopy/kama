@@ -44950,6 +44950,23 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             }
             return emitExpression(e);                 // stable ref -> direct (zero-copy, unchanged)
         };
+        // Its arguments are checked as any call's are (`chars()`, `split(separator:)`): this lowering returns before
+        // emitReorderedCall would name a wrong label, so `split(sep: "/")` and `split()` used to pass.
+        {
+            const std::string shown = "string." + method;
+            const std::string want = method == "split" ? "separator" : "";
+            bool sawWant = false, bad = false;
+            if (call->args)
+                for (auto& a : *call->args) {
+                    const std::string nm = (a && a->name && a->name->value) ? *a->name->value : "";
+                    if (!want.empty() && nm == want && !sawWant) { sawWant = true; continue; }
+                    bad = true;
+                    unsupported((!want.empty() && nm == want ? argTwice(shown, nm)
+                                 : argNoParam(shown, nm, sawWant ? "" : want)).c_str(), call);
+                }
+            if (!want.empty() && !sawWant && !bad) { unsupported(argMissing(shown, want).c_str(), call); bad = true; }
+            if (bad) return "0";
+        }
         if (!_synthCtx) _synthCtx = std::make_shared<CodeGenContext>(std::make_shared<std::string>("<generic>"));
         if (method == "chars") {
             std::string sv = stableBorrow(receiver, "receiver");

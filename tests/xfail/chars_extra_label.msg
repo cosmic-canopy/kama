@@ -1,0 +1,1 @@
+`string.chars` has no parameter `bogus`

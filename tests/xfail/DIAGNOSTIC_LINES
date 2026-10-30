@@ -168,6 +168,7 @@ cchar_turbofish	cchar_turbofish.kama:3:28
 channel_send_shared	channel_send_shared.kama:12:0
 channel_send_shared_collection	channel_send_shared_collection.kama:17:0
 channel_send_shared_variant	channel_send_shared_variant.kama:17:0
+chars_extra_label	chars_extra_label.kama:7:23
 class_identity_generic_fn	class_identity_generic_fn.kama:7:24
 class_identity_generic_type	class_identity_generic_type.kama:8:28
 class_identity_operator	class_identity_operator.kama:18:13
@@ -1405,6 +1406,8 @@ spawn_named_fiber	spawn_named_fiber.kama:6:56
 spawn_needs_concurrent	spawn_needs_concurrent.kama:10:12
 spawn_outside_scope	spawn_outside_scope.kama:11:38 spawn_outside_scope.kama:15:4
 spawn_stack_zero	spawn_stack_zero.kama:7:12
+split_missing_separator	split_missing_separator.kama:7:29
+split_wrong_label	split_wrong_label.kama:7:29
 static_call_nonstatic	static_call_nonstatic.kama:8:23
 static_init_div_zero	static_init_div_zero.kama:3:0
 static_on_comptime	static_on_comptime.kama:5:0
