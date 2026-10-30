@@ -1,0 +1,20 @@
+// A parsed NaN is the canonical quiet NaN, its sign kept, on every platform. `parse` handed back strtod's own bits,
+// and the C libraries disagree: Windows' UCRT gave `0x7fffffffffffffff` where glibc and Apple give
+// `0x7ff8000000000000`, so the bits a program compared or wrote out depended on where it ran.
+import { std::fmt::parse, std::fmt::ParseError };
+fn uint64 bits64(string s) {
+    Result<float64, ParseError> r = parse::<float64>(s: s);
+    return match (r) { case Ok(value: v): bitcast<uint64>(v); case Err(error: e): 0ui64; };
+}
+fn uint32 bits32(string s) {
+    Result<float32, ParseError> r = parse::<float32>(s: s);
+    return match (r) { case Ok(value: v): bitcast<uint32>(v); case Err(error: e): 0ui32; };
+}
+fn uint8 main() {
+    if (bits64(s: "NaN") != 0x7ff8000000000000ui64) { return 1; }
+    if (bits64(s: "nan") != 0x7ff8000000000000ui64) { return 2; }
+    if (bits64(s: "-NaN") != 0xfff8000000000000ui64) { return 3; }
+    if (bits32(s: "NaN") != 0x7fc00000ui32) { return 4; }
+    if (bits32(s: "-nan") != 0xffc00000ui32) { return 5; }
+    return 42;
+}
