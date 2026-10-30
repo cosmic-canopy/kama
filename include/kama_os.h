@@ -1461,16 +1461,20 @@ static inline int32_t kama__sock_fail(void) { kama__capture_wsa(); return -1; }
 // apart by looking, so a missing socket file is NotFound on every OS. Both measured on Windows 11 26200: a connect
 // with room in the queue answers WSAEWOULDBLOCK, then polls writable with SO_ERROR 0; a path with no file answers
 // WSAECONNREFUSED, blocking or not. A path is at most 107 bytes (kama_unix_path_max), so it fits w[] whole.
+// A path whose DIRECTORY is not there answers WSAENETDOWN instead, and is NotFound too. Either way the code kept is
+// Winsock's (10061, 10050): `rawOsError()` is what the OS answered, whatever kind kama reads it as, as Rust's
+// `raw_os_error` stands apart from `kind`. The file probe's own ERROR_FILE_NOT_FOUND was reported once, a code no
+// call returned.
 static inline int32_t kama__connect_fail(const uint8_t* path, size_t n) {
     const int e = WSAGetLastError();
-    if (e == WSAECONNREFUSED && path && n > 0 && n < 128) {
+    if ((e == WSAECONNREFUSED || e == WSAENETDOWN) && path && n > 0 && n < 128) {
         wchar_t w[128];
         const int k = MultiByteToWideChar(CP_UTF8, 0, (const char*)path, (int)n, w, 127);
         if (k > 0) {
             w[k] = 0;
             if (GetFileAttributesW(w) == INVALID_FILE_ATTRIBUTES) {
                 const DWORD g = GetLastError();
-                if (g == ERROR_FILE_NOT_FOUND || g == ERROR_PATH_NOT_FOUND) { kama__os_fail(g, ENOENT); return -1; }
+                if (g == ERROR_FILE_NOT_FOUND || g == ERROR_PATH_NOT_FOUND) { kama__os_fail((unsigned long)e, ENOENT); return -1; }
             }
         }
     }

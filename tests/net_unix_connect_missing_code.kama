@@ -1,0 +1,36 @@
+// A Unix connect to a path with no socket is NotFound on every OS, and `rawOsError()` is the code the OS answered,
+// whatever kind kama reads it as. Windows answers a missing file with WSAECONNREFUSED (10061) and a missing
+// DIRECTORY with WSAENETDOWN (10050); kama looked at the path and made the first NotFound but reported the file
+// probe's own ERROR_FILE_NOT_FOUND (2), a code no call returned, and left the second as Other. POSIX answers
+// ENOENT (2) for both. Returns 42.
+import { std::net::UnixStream, std::io::IoError };
+
+@compileFor(!OS_WINDOWS)
+fn int32 missingFileCode() { return 2; }    // ENOENT
+@compileFor(!OS_WINDOWS)
+fn int32 missingDirCode() { return 2; }
+@compileFor(OS_WINDOWS)
+fn int32 missingFileCode() { return 10061; }   // WSAECONNREFUSED
+@compileFor(OS_WINDOWS)
+fn int32 missingDirCode() { return 10050; }    // WSAENETDOWN
+
+fn int32 check(const ref string path, int32 code) {   // 0 when NotFound with `code`
+    Result<UnixStream, IoError> r = UnixStream.connect(path: path);
+    return match (r) {
+        case Ok(value: s): 1;
+        case Err(error: e): {
+            bool nf = match (e.kind()) { case NotFound: true; case _: false; };
+            Optional<int32> raw = e.rawOsError();
+            int32 got = match (raw) { case Some(value: c): c; case None: -1; };
+            := !nf ? 2 : (got != code ? 3 : 0);
+        }
+    };
+}
+
+fn uint8 main() {
+    int32 a = check(path: "kr-missing-code.sock", code: missingFileCode());
+    if (a != 0) { return cast<uint8>(10 + a); }
+    int32 b = check(path: "kr-no-such-dir/x.sock", code: missingDirCode());
+    if (b != 0) { return cast<uint8>(20 + b); }
+    return 42;
+}
