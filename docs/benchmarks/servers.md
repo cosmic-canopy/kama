@@ -514,8 +514,10 @@ when the socket is full. Ring ÷ epoll, requests and CPU per request:
 | the system call first (the rest's) | 1.09, 0.92 ¹ | 1.00, 1.00 ¹ | 1.01, 1.022 | 1.00, 1.012 | 1.02, 0.949 |
 
 ¹ a 5-round quick run; every other cell is 15 rounds. On the M4 neither rule wins at every density: the system call
-first wins at 10,000 and costs 1–2% CPU up to 1,000. Making the switch into a cold fiber cheaper (KR-254) may let
-every write be a `SEND` on both machines, and then one rule would serve both.
+first wins at 10,000 and costs 1–2% CPU up to 1,000. Colouring the fiber stacks (`0.9.767`) made a switch into a cold
+fiber 43% cheaper in isolation and left both rules where they were here
+([colour-rules-aarch64.tsv](colour-rules-aarch64.tsv)), since a server fiber's misses are its socket, buffers and
+control block more than its stack. So the split stays, as a measured delta (KR-254).
 
 What it says:
 - **On x86-64 the ring is the lever it was built to be:** 1.08 to 1.24 times epoll's requests at 0.81 to 0.92 of its CPU

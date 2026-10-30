@@ -4426,8 +4426,9 @@ static inline ptrdiff_t kama_net_read(ptrdiff_t fd, void** io, int32_t* mode, ui
 //     follows a short one, so the socket is known full. On aarch64, every write a SEND cost a second switch into a
 //     fiber whose stack had gone cold, about 0.3 us at 10,000 connections against the 0.25 us send it saved
 //     (docs/benchmarks/ring-profile-aarch64.txt). It costs the M4 1-2% CPU per request against epoll up to 1,000
-//     connections and saves 5-6% at 10,000. An architecture neither machine measured takes this rule. A cheaper
-//     switch into a cold fiber (KR-254) may let every write be a SEND everywhere, and the gate go.
+//     connections and saves 5-6% at 10,000. An architecture neither machine measured takes this rule. Colouring
+//     the stacks (0.9.767) left both rules where they were on the M4, so the split stays; KR-254's smaller
+//     per-connection footprint is when it is measured again.
 // Everywhere else it is the readiness protocol above.
 static inline ptrdiff_t kama_net_write(ptrdiff_t fd, void** io, int32_t* mode, uint64_t by, const uint8_t* buf, size_t n) {
     if (kama_net_ready(fd, io, mode, by) != 0) return -1;

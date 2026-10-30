@@ -3573,7 +3573,11 @@ the system call first / every write a `SEND`: echo 1.023 / 1.008 at 100, 1.011 /
 against the C loop in the same rounds kama's CPU per request is where it was (0.93 of C's at echo 10,000, 0.92 before).
 In the microbenchmark a fiber touches little but its stack, so set conflicts dominated; a server's fiber also touches
 its socket, its buffers, its control block and the kernel's state for its connection, some 3,300 of each per core, and
-those misses are capacity, which colour cannot move. **Owed (2026-10-29):** keep colouring (12–43% where a fiber's
+those misses are capacity, which colour cannot move. **Ruled 2026-10-30, as recommended:** colouring stays, and the
+write rule's split is a permanent measured delta (SPEC's *Sockets on a fiber*), re-measured only if the footprint work
+below makes the second park cheap on the M4 (one 90-minute run: `kama-fibers-b` from a worktree whose gate reads
+`#if 0`). What this row does next is what it began as: shrink what a connection touches (its control block, its
+registration, its buffers), the capacity the server's misses are made of. The question as it was put: keep colouring (12–43% where a fiber's
 working set is small, as in channel pipelines; 4–5% worse at 100,000 fibers a core; neutral in the server) or revert
 it; and whether the M4's 10,000-connection park cost is worked further (candidate 3 moves the context load off the
 stack page, but the fiber's frames are on that page, so the page walk would only move), or the write rule stays a
