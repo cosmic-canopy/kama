@@ -2645,7 +2645,8 @@ set it (Go and Rust set it on Unix only). `@compileFor` gates a declaration, nev
 `AddrInUse` on every OS, as Rust's and Go's are. (Until `0.9.785` kama set `SO_REUSEADDR` on every UDP socket, and Linux
 then let a second program's plain bind take a live port's datagrams.) A socket that shares its port asks for it through
 `UdpSocket.bindWith(address:, options:)`, whose `UdpBindOptions.share` is a `UdpPortShare`, one type on every OS and
-each its own OS's. Every socket on a shared port must ask, and an `Alone` socket's port stays its own:
+each its own OS's. Every socket on a shared port must ask, and an `Alone` socket's port stays its own (on Windows,
+whose `SO_REUSEADDR` lets a later socket take a held port, an `Alone` socket is bound `SO_EXCLUSIVEADDRUSE`):
 - **`Group`, on every OS:** every socket on the port receives each multicast and broadcast datagram, which is what
   several programs listening to one group want. A unicast datagram reaches one of them, the one bound last on Linux and
   macOS. Go has `ListenMulticastUDP` for this, Java `MulticastSocket`.

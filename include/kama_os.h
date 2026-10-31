@@ -1091,6 +1091,13 @@ static inline ptrdiff_t kama_socket_tcp(int32_t family) {
 static inline int32_t kama_set_reuseaddr(ptrdiff_t fd) {
     BOOL one = 1; return (int32_t)setsockopt((SOCKET)fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&one, (int)sizeof one);
 }
+// A UDP socket that shares its port with nobody (`UdpPortShare::Alone`, KR-228). Windows lets a LATER socket that sets
+// SO_REUSEADDR bind a port another socket holds, unless the holder set this: measured on CI's windows-2025, where a
+// `Group` socket took an `Alone` one's port. UDP has no TIME_WAIT, so it costs a restart nothing (a TCP listener's
+// would; see kama_set_listen_reuseaddr). POSIX refuses the second bind without it, so the twin there sets nothing.
+static inline int32_t kama_set_exclusiveaddr(ptrdiff_t fd) {
+    BOOL one = 1; return (int32_t)setsockopt((SOCKET)fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&one, (int)sizeof one);
+}
 // A LISTENER sets nothing here (KR-206). POSIX's SO_REUSEADDR lets a new listener take a port whose old connections
 // linger in TIME_WAIT, which is what `kama_set_listen_reuseaddr` is for there. Windows' option means something else: a
 // socket that sets it may bind a port ANOTHER socket is actively listening on, so with it every kama listener could
@@ -2584,6 +2591,8 @@ static inline ptrdiff_t kama_socket_tcp(int32_t family) {
 static inline int32_t   kama_set_reuseaddr(ptrdiff_t fd) {
     int one = 1; return (int32_t)setsockopt((int)fd, SOL_SOCKET, SO_REUSEADDR, &one, (socklen_t)sizeof one);
 }
+// See the Windows twin: POSIX refuses a second bind of a held port without asking.
+static inline int32_t   kama_set_exclusiveaddr(ptrdiff_t fd) { (void)fd; return 0; }
 // A listener's: TIME_WAIT reuse, so a restarted server binds its port at once (see the Windows twin for why that
 // one sets nothing).
 static inline int32_t   kama_set_listen_reuseaddr(ptrdiff_t fd) { return kama_set_reuseaddr(fd); }

@@ -536,7 +536,7 @@ mkdir -p "$tmp/p13"
 printf 'type value Holder {\n    public int32 x = undefinedName + 1;\n    public ctor make() { }\n}\nfn uint8 main() {\n    int32 y = alsoUndefined;\n    return 0ui8;\n}\n' > "$tmp/p13/main.kama"
 printf 'type value A {\n    public ctor make() { }\n}\ntype value A {\n    public ctor make() { }\n}\n' > "$tmp/p13/dup.kama"
 out13=$(cd "$tmp/p13" && "$KAMA" build main.kama -o "$tmp/p13.bin" 2>&1 || true)
-names13=$(printf '%s\n' "$out13" | LC_ALL=C sed -n 's/^\([^:]*main\.kama\):[0-9]*:[0-9]*: error.*/\1/p' | sort -u)
+names13=$(printf '%s\n' "$out13" | LC_ALL=C sed -n 's/^\(.*main\.kama\):[0-9]*:[0-9]*: error.*/\1/p' | sort -u)   # greedy: a Windows path has `D:`
 if [ "$(printf '%s\n' "$names13" | grep -c .)" != 1 ] || ! printf '%s\n' "$out13" | grep -q 'main\.kama:2:'; then
     echo "check-diag-file: FAIL — one build named main.kama more than one way (or missed the field default):"
     printf '%s\n' "$out13" | sed 's/^/    /' | head -4; exit 1
