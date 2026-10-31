@@ -1492,6 +1492,17 @@ static inline int32_t kama__connect_fail(const uint8_t* path, size_t n) {
     kama__os_fail((unsigned long)e, e == WSAEWOULDBLOCK ? EINPROGRESS : kama__wsa_errno(e));
     return -1;
 }
+// A bind's WSAEACCES is an address another socket holds, which POSIX reports as EADDRINUSE: Winsock answers ACCESS, not
+// INUSE, when the two sockets' sharing options disagree (an `Alone` socket's SO_EXCLUSIVEADDRUSE against a `Group`
+// socket's SO_REUSEADDR, measured on CI's windows-2025 as `net_udp_share` bit 2) or the holder runs as another user
+// account (Microsoft's "Using SO_REUSEADDR and SO_EXCLUSIVEADDRUSE" tables), and for a port Windows has reserved
+// (`netsh int ipv4 show excludedportrange`). The same event, so the same IoError; the code kept is Winsock's 10013. The
+// one other WSAEACCES a bind returns, a datagram socket on a broadcast address without SO_BROADCAST, reads the same.
+static inline int32_t kama__bind_fail(void) {
+    const int e = WSAGetLastError();
+    kama__os_fail((unsigned long)e, e == WSAEACCES ? EADDRINUSE : kama__wsa_errno(e));
+    return -1;
+}
 
 // ---- socket options ----------------------------------------------------------
 static inline int32_t kama_set_nonblocking(ptrdiff_t fd, int32_t on) {
@@ -2998,6 +3009,7 @@ static inline ptrdiff_t kama_socket_udp(int32_t family) { return kama__socket(fa
 typedef int kama__sock;
 static inline int32_t kama__sock_fail(void) { return -1; }
 static inline int32_t kama__connect_fail(const uint8_t* path, size_t n) { (void)path; (void)n; return -1; }
+static inline int32_t kama__bind_fail(void) { return -1; }
 
 // ---- socket options ----------------------------------------------------------
 static inline int32_t kama_set_nonblocking(ptrdiff_t fd, int32_t on) {
@@ -3844,7 +3856,7 @@ static inline int32_t kama_bind_addr(ptrdiff_t fd, int32_t family, const uint8_t
         int off = 0;
         (void)setsockopt((kama__sock)fd, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&off, (socklen_t)sizeof off);
     }
-    if (bind((kama__sock)fd, (struct sockaddr*)&ss, len) != 0) return kama__sock_fail();
+    if (bind((kama__sock)fd, (struct sockaddr*)&ss, len) != 0) return kama__bind_fail();
     return 0;
 }
 static inline int32_t kama_connect_addr(ptrdiff_t fd, int32_t family, const uint8_t* ip, uint16_t port, uint32_t scope) {
