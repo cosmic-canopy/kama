@@ -208,7 +208,7 @@ jobs:
       # generator dates sitemap <lastmod> from each page's last commit.
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
-        with: { node-version: '20' }
+        with: { node-version: '24' }
       # The extension is NOT bundled — `.vscodeignore` deliberately ships node_modules — so `vsce
       # package` runs `npm list --production` and fails outright when the dependency tree is absent.
       # This job never installed it, and could not have been caught: it runs only on a `v*` tag, the

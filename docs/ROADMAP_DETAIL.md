@@ -474,6 +474,12 @@ read at all.
   580 KB of source. Building it will split that cost between the kama front end and clang. If kama dominates, an
   embed feature (Zig `@embedFile`, Rust `include_bytes!`, Go `//go:embed`, C23 `#embed`) gets its own row and verdict:
   shaders and web assets want the same thing.
+- **B4 (2026-10-31).** CVE-2026-111497 ("Node2Shell", CVSS 4.0 9.2): a crafted stream made Google's C decoder
+  (`c/dec/decode.c`, 1.0.3 through 1.2.0; fixed in 1.0.10, 1.1.1, 1.2.1) write outside its state, reached through
+  Node.js, Bun, .NET, Python's `Brotli` and `brotlicffi`, and Envoy. kama's decoder is kama: every buffer access is
+  bounds-checked, so the same mistake traps instead of writing. The CVE's published proof-of-concept stream and the
+  reference test vectors become `std::compress::brotli` fixtures that must answer `InvalidData` (or decode), under the
+  sanitizer leg, and the decoder is a first target for coverage-guided fuzzing (KR-205) when that lands.
 - **B3.** kama's decoders run on every target now. In a browser, an HTTP body's `br` or `zstd` is decoded before wasm
   sees it, and `DecompressionStream` is asynchronous where a kama `Reader` is not. The browser's own decoders come later,
   under the platform rule.

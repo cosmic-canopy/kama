@@ -140,7 +140,7 @@ jobs:
       - run: make -j4
       - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
           cache-dependency-path: |
             tree-sitter-kama/package-lock.json
