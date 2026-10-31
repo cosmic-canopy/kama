@@ -2500,8 +2500,55 @@ static inline void kama_print_write(int fd, const void* bytes, size_t n) {
     (void)kama_raw_write(fd, bytes, n);
 }
 #endif
-// Write a single newline to `fd` — the `println`/`eprintln` tail (avoids a second kama_string round-trip).
-static inline void kama_print_nl(int fd) { kama_print_write(fd, "\n", 1); }
+// Write one LINE, its text and its newline, in ONE call — `println`/`eprintln` (KR-276). Two writes let a reader wake
+// between them, so lines from two isolates, or from a parent and a child sharing a pipe, interleaved as `a`, `b`,
+// `\n`, `\n`, and a reader expecting a line whole saw "tick" alone (a fiber fixture flaked on it). Go's `fmt.Println`
+// and Rust's line-buffered stdout write a line whole.
+//   - POSIX and emscripten gather both parts in one `writev`, which a pipe takes whole up to PIPE_BUF (512 bytes on
+//     macOS, 4096 on Linux). A short count (a signal, a non-blocking fd) is finished in order. `kama__writev` and its
+//     two-field `kama__iovec` (struct iovec's layout everywhere kama runs) name the libc symbol by asm label, so this
+//     header still includes no system header and cannot clash with a later <sys/uio.h> — the `write` trick above.
+//   - Windows has no gather write for a pipe, so a line that fits 4 KiB (Linux's PIPE_BUF) is joined on the stack for
+//     one `_write`; the embedded sink gets one call for a line that fits 128 bytes, since on-chip stacks are KiB-sized.
+//     A longer line goes as text then newline: no OS promises a longer write whole, and this path may not allocate.
+#if defined(KAMA_TARGET_EMBEDDED)
+static inline void kama_print_line(int fd, const void* bytes, size_t n) {
+    (void)fd;
+    uint8_t line[128];
+    if (n >= sizeof line) { kama_log_sink((const uint8_t*)bytes, n); kama_log_sink((const uint8_t*)"\n", 1); return; }
+    for (size_t i = 0; i < n; ++i) line[i] = ((const uint8_t*)bytes)[i];
+    line[n] = '\n';
+    kama_log_sink(line, n + 1);
+}
+#elif defined(_WIN32)
+static inline void kama_print_line(int fd, const void* bytes, size_t n) {
+    char line[4096];
+    if (n >= sizeof line) { (void)kama_raw_write(fd, bytes, n); (void)kama_raw_write(fd, "\n", 1); return; }
+    if (n) kama_copy(line, bytes, n);   // an empty string's bytes may be NULL, which memcpy may not take
+    line[n] = '\n';
+    (void)kama_raw_write(fd, line, n + 1);
+}
+#else
+struct kama__iovec { const void* base; size_t len; };
+#if defined(__APPLE__)
+extern long kama__writev(int, const struct kama__iovec*, int) __asm("_writev");
+#else
+extern long kama__writev(int, const struct kama__iovec*, int) __asm("writev");
+#endif
+static inline void kama_print_line(int fd, const void* bytes, size_t n) {
+    struct kama__iovec v[2] = { { bytes, n }, { "\n", 1 } };
+    long r = kama__writev(fd, v, 2);
+    if (r < 0) {
+#if !defined(__EMSCRIPTEN__)
+        if (fd == 1 || fd == 2) { extern void kama__stdio_write_failed(void); kama__stdio_write_failed(); }
+#endif
+        return;
+    }
+    size_t done = (size_t)r;   // a short count: the rest in order, as kama_raw_write would have written it
+    if (done < n) { (void)kama_raw_write(fd, (const char*)bytes + done, n - done); done = n; }
+    if (done == n) (void)kama_raw_write(fd, "\n", 1);
+}
+#endif
 
 // Tiny tracing hook for tests/debugging: a folding accumulator that records a
 // sequence of integer events (e.g. constructor/destructor order). Declare in

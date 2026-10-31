@@ -34,8 +34,8 @@ fn void fail(int32 bit) { bad = bad | bit; }
 fn Command util2(string sub, string a) { Command c = Command.make(program: util()); c.arg(a: give sub); c.arg(a: give a); return c; }
 fn Command util3(string sub, string a, string b) { Command c = util2(sub: give sub, a: give a); c.arg(a: give b); return c; }
 
-// One line, read a byte at a time so nothing past its newline is taken: `println` writes the text and the newline in
-// two system calls (KR-276), so a read woken between them sees "tick" alone. True for "tick\n".
+// One line, read a byte at a time so nothing past its newline is taken: a later tick stays in the pipe for whoever
+// reads it next. True for "tick\n".
 unsafe fn bool oneTick(ref File end) {
     FixedArray<uint8> b = FixedArray.make(size: 1);
     isize total = 0;

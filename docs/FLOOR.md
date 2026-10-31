@@ -94,12 +94,20 @@ Diagnostics that **keep running**: write text to the standard streams. String-on
 interpolation (`println(s: "x = ${x}")`). Unbuffered line writes. On `--target embedded` there is no fd, so both
 streams route to the overridable weak `kama_log_sink` (default no-op; a firmware author pipes it to UART/RTT).
 
+**A line is written whole.** `println` and `eprintln` hand the text and its newline to the OS in one call, so two
+isolates, or a parent and a child, printing into one terminal or pipe never interleave as `a`, `b`, `\n`, `\n`, and
+a reader waiting for a line never wakes to half of one (Go's `fmt.Println` and Rust's line-buffered stdout do the
+same). POSIX gathers the two parts in one `writev`, which a pipe takes whole up to `PIPE_BUF` (512 bytes on macOS,
+4096 on Linux); Windows joins a line of up to 4 KiB for one write; the embedded sink gets one call for a line of up
+to 128 bytes. A longer line is still written in full, as its text and then its newline: no OS promises a longer
+write whole, and the print family never allocates.
+
 | Signature | Stream | Notes |
 |---|---|---|
 | `print(s: string)` | stdout (fd 1) | The program's data/results (a CLI's real output). No trailing newline. |
-| `println(s: string)` | stdout | `print` + `'\n'`. The 90% case. |
+| `println(s: string)` | stdout | `print` + `'\n'`, in **one write**: a line never interleaves with another isolate's or process's mid-line (up to `PIPE_BUF`). The 90% case. |
 | `eprint(s: string)` | stderr (fd 2) | Prompts / progress / diagnostics. `e` = "to stderr" (Rust convention), **not** "error" (that's a log level). |
-| `eprintln(s: string)` | stderr | `eprint` + `'\n'`. |
+| `eprintln(s: string)` | stderr | `eprint` + `'\n'`, in one write, as `println`. |
 
 A literal or interpolation temp passes by value directly; a **named** `string` is passed with `copy`/`give`
 like anywhere else in the value model.

@@ -1,0 +1,39 @@
+// `println` writes a line whole (KR-276). Through 0.9.791 it wrote the text and then the newline as two system calls,
+// so two isolates printing into one pipe interleaved as `a…`, `b…`, `\n`, `\n`, and a reader woke to half a line (a
+// fiber fixture flaked on it). `procutil lines` prints 2000 lines from each of two isolates at once, 63 'a's or 63 'b's,
+// into the pipe this captures; every line must arrive whole, and each letter 2000 times. Measured before the fix with
+// the same two isolates writing the old way: split lines in 3 runs of 3. Returns 0; 1 a split line; 2 a count off;
+// 4 the child did not run.
+import { core::envOr, std::process::Command, std::process::Output, std::io::IoError, std::collections::ConstView };
+
+fn int32 check(ConstView<uint8> bytes) {
+    isize start = 0;
+    isize i = 0;
+    int32 a = 0;
+    int32 b = 0;
+    int32 bad = 0;
+    while (i < bytes.length()) {
+        if (bytes[i] == 10ui8) {
+            bool whole = i - start == 63;
+            uint8 letter = whole ? bytes[start] : 0ui8;
+            isize j = start;
+            while (whole && j < i) { whole = bytes[j] == letter; j = j + 1; }
+            if (!whole) { bad = bad | 1; } else if (letter == 97ui8) { a = a + 1; } else if (letter == 98ui8) { b = b + 1; } else { bad = bad | 1; }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if (start != bytes.length() || a != 2000 || b != 2000) { bad = bad | 2; }
+    return bad;
+}
+
+fn uint8 main() {
+    Command c = Command.make(program: envOr(name: "KAMA_PROCUTIL", dflt: "procutil"));
+    c.arg(a: "lines");
+    Result<Output, IoError> r = c.run();
+    int32 bad = match (give r) {
+        case Ok(value: o): o.status().success() ? check(bytes: o.stdout().view()) : 4;
+        case Err(error: e): 4;
+    };
+    return cast<uint8>(bad);
+}

@@ -136,7 +136,9 @@ unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h:
 // ── Console output ──────────────────────────────────────────────────────────────────────────────────────
 // The print family: text to stdout (`print`/`println`, the program's data/results) or stderr
 // (`eprint`/`eprintln`, prompts/progress/diagnostics — `e` for "to stderr", the Rust convention). String-only
-// — formatting rides interpolation (`println("x = ${x}")`). Unbuffered line writes (v1). On `--target
+// — formatting rides interpolation (`println("x = ${x}")`). Unbuffered, and `println`/`eprintln` write the text and
+// its newline in ONE call (`kama_print_line`), so lines from two isolates, or from processes sharing a pipe, never
+// interleave mid-line (up to PIPE_BUF: 512 bytes on macOS, 4096 on Linux; 4 KiB on Windows). On `--target
 // embedded` there is no fd, so both streams route to the weak `kama_log_sink` (default no-op; a firmware
 // author overrides it to pipe out a UART/RTT). Survive `--no-std`. `cstr()` of an empty string may be NULL,
 // but the length is 0 then, so the write is a harmless no-op.
@@ -144,12 +146,12 @@ unsafe fn void setPanicHandler(PanicHandler handler) { kama_set_panic_handler(h:
 // is no ownership transfer. A literal / interpolation temp binds to the by-value param directly; a NAMED
 // string is passed with `copy`/`give` like anywhere else in the value model.
 extern fn void kama_print_write(int32 fd, UnsafeConstPtr<cchar> bytes, usize len);
-extern fn void kama_print_nl(int32 fd);
+extern fn void kama_print_line(int32 fd, UnsafeConstPtr<cchar> bytes, usize len);
 @parks
 unsafe fn void print(string s)    { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); }
 @parks
 unsafe fn void eprint(string s)   { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); }
 @parks
-unsafe fn void println(string s)  { kama_print_write(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 1); }
+unsafe fn void println(string s)  { kama_print_line(fd: 1, bytes: s.cstr(), len: cast<usize>(s.length())); }
 @parks
-unsafe fn void eprintln(string s) { kama_print_write(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); kama_print_nl(fd: 2); }
+unsafe fn void eprintln(string s) { kama_print_line(fd: 2, bytes: s.cstr(), len: cast<usize>(s.length())); }
