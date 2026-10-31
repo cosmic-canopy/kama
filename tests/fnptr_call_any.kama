@@ -1,0 +1,42 @@
+// Any expression of `fnptr` type is callable (KR-107): an element, a call's result, a parenthesized operator. Through
+// 0.9.789 only a bare local, a module static and a field could be called, and `handlers[i](x: 3)` was "indirect call".
+// The callee is evaluated FIRST, then the arguments left to right (Rust's, Go's and Java's order; C leaves it
+// unspecified), so an argument that replaces the handler does not change which one this call runs. A callee under a
+// short-circuit or a ternary is evaluated only when its operand is. Returns 0; else the bits that failed.
+import { std::collections::DynamicArray };
+
+fnptr int32 Op(int32 x);
+fnptr void Hook();
+
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 thrice(int32 x) { return x * 3; }
+fn Op pick(bool doubling) { return doubling ? twice : thrice; }
+
+static int32 hooked = 0;
+fn void hook() { hooked = hooked + 1; }
+fn Hook getHook() { return hook; }
+
+// Replaces `v[0]` while the arguments are evaluated.
+fn int32 swap(ref DynamicArray<Op> v) { v[0] = thrice; return 10; }
+
+fn uint8 main() {
+    DynamicArray<Op> xs = DynamicArray::<Op>.empty();
+    xs.add(item: twice);
+    int32 bad = 0;
+    if (xs[0](x: 3) != 6) { bad = bad | 1; }
+    if (pick(doubling: false)(x: 2) != 6) { bad = bad | 2; }
+    if (xs[0](x: swap(v: xs)) != 20) { bad = bad | 4; }   // twice(10): the callee was taken before `swap` ran
+    if (xs[0](x: 1) != 3) { bad = bad | 8; }              // ...and the swap did land
+    getHook()();
+    Op on = twice;
+    Op off = thrice;
+    if (hooked != 1 || (hooked > 0 ? on : off)(x: 4) != 8) { bad = bad | 16; }   // an operator's result
+    int32 n = 0;
+    while (pick(doubling: true)(x: n) < 6) { n = n + 1; }   // a loop condition, evaluated every pass
+    if (n != 3) { bad = bad | 32; }
+    // `xs[5]` is out of range: a callee evaluated before its guard would panic here
+    if (xs.length() > 5 && xs[5](x: 1) == 2) { bad = bad | 64; }
+    int32 v = xs.length() > 5 ? xs[5](x: 1) : 7;
+    if (v != 7) { bad = bad | 128; }
+    return cast<uint8>(bad);
+}

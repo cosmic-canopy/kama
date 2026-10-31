@@ -1,0 +1,78 @@
+// A callback registry: an `fnptr` type as a TYPE ARGUMENT (KR-107). SPEC calls a stored `fnptr` "the callback-registry
+// shape", and a registry is a collection, but through 0.9.789 no generic instantiated over one: `DynamicArray<Op>`,
+// `Map<string, Op>`, `Optional<Op>`, `FixedArray<Op>` and a user `Box<Op>` each reported "cannot tell which … to
+// construct" (the two predicates that ask "is this a real type" did not know the fnptr table, so `Op` read as an
+// unbound template parameter and every instance was deferred), and a generic FUNCTION over an `Op` passed kama and
+// failed in clang. A `foreach (Op g in xs)` binding could not be called either. Returns 0; else the bits that failed.
+import { std::collections::DynamicArray, std::collections::Map, std::collections::FixedArray };
+
+fnptr int32 Op(int32 x);
+
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 thrice(int32 x) { return x * 3; }
+fn int32 negate(int32 x) { return 0 - x; }
+
+type value Box<T> {
+    T v;
+    public ctor make(T v) { this.v = v; }
+    public fn T get() { return this.v; }
+}
+
+fn T id<T>(T v) { return v; }
+fn int32 sendable<T: Sendable>(T v) { return 1; }
+
+fn int32 sum(ref DynamicArray<Op> hs, int32 x) {
+    int32 t = 0;
+    foreach (Op g in hs) { t = t + g(x: x); }   // the loop binding is callable
+    return t;
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+
+    // 1: a list of handlers — add, index, foreach, length
+    DynamicArray<Op> hs = DynamicArray::<Op>.empty();
+    hs.add(item: twice);
+    hs.add(item: thrice);
+    Op first = hs[0];
+    if (first(x: 5) != 10 || sum(hs: hs, x: 1) != 5 || hs.length() != 2) { bad = bad | 1; }
+
+    // 2: `pop` hands one back in an `Optional<Op>`, the one maybe-a-callback
+    Optional<Op> last = hs.pop();
+    int32 p = match (last) { case Some(value: h): h(x: 10); case None: 0; };
+    if (p != 30 || hs.length() != 1) { bad = bad | 2; }
+    Optional<Op> none = Optional::None;
+    if (match (none) { case Some(value: h): true; case None: false; }) { bad = bad | 2; }
+
+    // 4: a registry keyed by name
+    Map<string, Op> byName = Map.empty();
+    byName.put(key: "twice", value: twice);
+    byName.put(key: "negate", value: negate);
+    int32 r = match (byName.get(key: "negate")) { case Some(value: f): f(x: 7); case None: 0; };
+    if (r != -7 || byName.get(key: "thrice").isSome()) { bad = bad | 4; }
+
+    // 8: a fixed array is FILLED — there is no default `fnptr` to make one with (an xfail pins `make`)
+    Op d = twice;
+    FixedArray<Op> fa = FixedArray.filled(size: 3, value: d);
+    fa[1] = thrice;
+    Op mid = fa[1];
+    if (mid(x: 3) != 9 || fa.length() != 3) { bad = bad | 8; }
+
+    // 16: a user generic over an `Op`
+    Box<Op> b = Box.make(v: negate);
+    Op got = b.get();
+    if (got(x: 4) != -4) { bad = bad | 16; }
+
+    // 32: generic functions over an `Op` — inferred from a typed local, and with the type argument written
+    Op g = thrice;
+    Op same = id(v: g);
+    Op named = id::<Op>(v: twice);
+    if (same(x: 2) != 6 || named(x: 2) != 4 || sendable(v: g) != 1) { bad = bad | 32; }
+
+    // 64: a copy of the registry is a second registry
+    DynamicArray<Op> dup = copy hs;
+    dup.add(item: negate);
+    if (dup.length() != 2 || hs.length() != 1 || sum(hs: dup, x: 1) != 1) { bad = bad | 64; }
+
+    return cast<uint8>(bad);
+}

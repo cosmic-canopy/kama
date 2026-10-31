@@ -1881,6 +1881,9 @@ member_access
   ;
 invocation_expression
   : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+    /* `(ready ? onOk : onErr)(x: 1)` — any expression of `fnptr` type is callable (KR-107), and a parenthesized one
+       is how an operator's result becomes a callee. Nothing else follows `( expr )` with `(`: kama has no C cast. */
+  | parenthesized_expression LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
     /* A call-site intrinsic (`addr(of: x)`, `assert(…)`). The node is the one a plain call builds —
        an IdentifierNode carrying the spelling — so every pass that recognises an intrinsic by name is
        untouched; the grammar only stops the word from being anything else. */

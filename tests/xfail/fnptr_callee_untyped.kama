@@ -1,0 +1,9 @@
+// Any expression of `fnptr` type is callable (KR-107), but two function NAMES chosen by an operator have no `fnptr`
+// type: types are nominal, and with no destination nothing names one. Binding the choice first gives it one.
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 thrice(int32 x) { return x * 3; }
+
+fn uint8 main() {
+    bool doubling = true;
+    return cast<uint8>((doubling ? twice : thrice)(x: 4));
+}

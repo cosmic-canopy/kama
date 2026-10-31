@@ -1,0 +1,1 @@
+a function name chosen by an operator gets its `fnptr` type from a destination: bind it first

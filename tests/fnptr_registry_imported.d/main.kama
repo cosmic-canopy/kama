@@ -1,0 +1,21 @@
+// A callback registry over an `fnptr` type IMPORTED from another module (KR-107): `Map<string, Op>` instantiates in
+// the importing module, the declaring module fills it, and both sides name the one instance. Returns 0; else the
+// bits that failed.
+import { voice::Op, voice::install, std::collections::Map, std::collections::DynamicArray };
+
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 negate(int32 x) { return 0 - x; }
+
+fn uint8 main() {
+    int32 bad = 0;
+    Map<string, Op> m = Map.empty();
+    install(m: m, name: "twice", h: twice);
+    m.put(key: "negate", value: negate);
+    int32 a = match (m.get(key: "twice")) { case Some(value: f): f(x: 4); case None: 0; };
+    int32 b = match (m.get(key: "negate")) { case Some(value: f): f(x: 4); case None: 0; };
+    if (a != 8 || b != -4) { bad = bad | 1; }
+    DynamicArray<Op> xs = DynamicArray::<Op>.empty();
+    xs.add(item: negate);
+    if (xs[0](x: 2) != -2) { bad = bad | 2; }
+    return cast<uint8>(bad);
+}

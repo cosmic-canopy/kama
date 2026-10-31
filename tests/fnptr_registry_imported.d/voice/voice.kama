@@ -1,0 +1,7 @@
+import { std::collections::Map };
+export { Op, install };
+
+fnptr int32 Op(int32 x);
+
+// a registry filled in the module that declares the type
+fn void install(ref Map<string, Op> m, string name, Op h) { m.put(key: give name, value: h); }

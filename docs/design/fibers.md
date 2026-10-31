@@ -418,7 +418,7 @@ fibers when one of its units holds a `spawn fiber` (`CompilationUnit::spawnsFibe
 |---|---|
 | **a contextual word after `spawn` (recommended)** | `spawn fiber handle(conn: give c);` · `Fiber<Reply> f = spawn fiber(stack: 64 * 1024) fetch(req: give r);` |
 | a clause | `spawn(here) handle(conn: give c);` |
-| a std function over a `fnptr` | `fibers.start(entry: handle, bundle: give c)`, blocked by KR-107 (a `fnptr` is not a type argument) |
+| a std function over a `fnptr` | `fibers.start(entry: handle, bundle: give c)`, blocked then by KR-107 (a `fnptr` was not a type argument until `0.9.790`) |
 
 - **The entry and the bundle.** The entry is the isolate's: a top-level `fn` and exactly one bundle. The bundle may
   be any movable value, because it never leaves the isolate, or a `ref` the scope outlives.

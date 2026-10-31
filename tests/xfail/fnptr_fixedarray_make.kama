@@ -1,0 +1,11 @@
+// An `fnptr` has no `default`, so a fixed array of them is FILLED, never made (KR-107). A function pointer is never
+// null, and no one function is everyone's: Rust, Swift and Zig also require a value, and Go and C# fill with a null
+// that crashes when called. The message used to advise electing a `default ctor`, which an `fnptr` cannot do.
+import { std::collections::FixedArray };
+
+fnptr int32 Op(int32 x);
+
+fn uint8 main() {
+    FixedArray<Op> xs = FixedArray.make(size: 2);
+    return cast<uint8>(xs.length());
+}

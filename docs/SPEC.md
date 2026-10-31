@@ -4377,6 +4377,19 @@ rules judge its result like any call's. The callee of such a call is the value, 
 share its name: a parameter `decode` is called through, whatever `decode` the program compiles elsewhere <!-- test: fnptr_call_named_like_fn -->
 ([tests/fnptr_call_named_like_fn.kama](../tests/fnptr_call_named_like_fn.kama)).
 
+**Any expression of an `fnptr` type is callable**: an element (`handlers[i](x: 3)`), a call's result <!-- test: fnptr_call_any -->
+(`pick()(x: 1)`), a parenthesized operator (`(ready ? onOk : onErr)(x: 1)`). The callee is evaluated **first**, then
+the arguments left to right, so `handlers[0](x: reinstall())` runs the handler that was there before `reinstall` did
+(Rust's, Go's and Java's order; C leaves it unspecified). Two function *names* chosen by an operator have no type
+until a destination names one, since `fnptr` types are nominal (below), so bind the choice first: `Op h = ready ? <!-- xfail: fnptr_callee_untyped -->
+twice : thrice;`.
+
+**An `fnptr` type is a type argument** like any other, which is what makes a registry a collection: <!-- test: fnptr_registry, fnptr_registry_imported -->
+`DynamicArray<Op>`, `Map<string, Op>`, a user `Box<Op>`, a generic function over one, and `Optional<Op>`, the one
+maybe-a-callback (Rust's `Option<fn>`, Swift's `(…)?`, Zig's `?*const fn`). It has no `default`, because there is no <!-- xfail: fnptr_fixedarray_make -->
+null function to fill with, so a fixed array of them is `FixedArray.filled(size:, value:)`, never `make`. A bare
+function name gives a generic `T` nothing to infer from: write the type argument, `id::<Op>(v: twice)`. <!-- xfail: fnptr_infer_bare_name -->
+
 A signature may carry **`@noheap`**, which makes non-allocating part of the type: `@noheap fnptr int32 <!-- test: noheap_fnptr -->
 Op(int32 x);` requires every function bound to it to be `@noheap` too, and in exchange a call through the
 slot is legal inside a no-heap region — the one slot whose target no build can see. See *No-heap subset*.

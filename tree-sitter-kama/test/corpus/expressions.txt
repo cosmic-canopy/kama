@@ -713,3 +713,52 @@ fn uint8 main()
         (block))
       (return_statement
         (integer_literal)))))
+
+===============================================================================
+Any fnptr expression is callable — an element, a call's result, a parenthesized operator
+===============================================================================
+
+fn void main()
+{
+    xs[0](x: 3);
+    pick()(x: 1);
+    (ready ? onOk : onErr)(x: 1);
+}
+
+-------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (call_expression
+          (subscript_expression
+            (identifier)
+            (integer_literal))
+          (argument_list
+            (argument
+              (identifier)
+              (integer_literal)))))
+      (expression_statement
+        (call_expression
+          (call_expression
+            (identifier)
+            (argument_list))
+          (argument_list
+            (argument
+              (identifier)
+              (integer_literal)))))
+      (expression_statement
+        (call_expression
+          (parenthesized_expression
+            (ternary_expression
+              (identifier)
+              (identifier)
+              (identifier)))
+          (argument_list
+            (argument
+              (identifier)
+              (integer_literal))))))))

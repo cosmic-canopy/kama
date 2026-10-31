@@ -1,0 +1,1 @@
+`Op` is an `fnptr`, which has no `default`

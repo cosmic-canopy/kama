@@ -1,0 +1,1 @@
+is the function `twice`, which has no type until an `fnptr` type names it — write that type as the type argument (`::<Op>`)

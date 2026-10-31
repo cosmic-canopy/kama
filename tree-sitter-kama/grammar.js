@@ -1056,6 +1056,10 @@ module.exports = grammar({
         $.turbofish_type_member,
         $.turbofish_member,
         $.primitive_type, // `string.fromInt(...)` — kama.y `class_type DOT IDENTIFIER`
+        // `pick()(x: 1)`, `(ready ? onOk : onErr)(x: 1)` — any expression of `fnptr` type is callable (KR-107):
+        // kama.y's `invocation_expression` takes a call and a parenthesized expression as the callee.
+        $.call_expression,
+        $.parenthesized_expression,
       ),
 
     call_expression: ($) =>

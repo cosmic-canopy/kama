@@ -845,80 +845,34 @@ together — never one at a time.
 
 <a id="s2-fnptr-type-arg"></a>
 
-### An `fnptr` type is not a type argument (KR-107)
+### `==` on two `fnptr` values compiles, but the type is not `Equatable` (KR-275)
 
-Found 2026-09-30 while probing the one default rule (`0.9.480`). SPEC calls a stored `fnptr` "the callback-registry shape",
-and a registry is a collection — but `DynamicArray<Op>` for `fnptr int32 Op(int32 x);` does not instantiate:
-`DynamicArray::<Op>.empty()` reports *"cannot tell which `DynamicArray` to construct"* (the turbofish IS
-written), `.add(item: twice)` reports the instance *"has no method `add`"*, and the element store trips *"a
-FunctionPtr binds a free function name or another FunctionPtr"*. `Op` itself resolves — an unknown name there
-reports "unknown type" first — so it is not KR-21's unresolved-generic-argument item, though the first message
-is the same. `FixedArray<Op>`, `Box<Op>` (any user generic) and `BindableFunctionPtr<Op>` as an argument all fail
-the same way. Close means a generic type instantiates over an `fnptr` element, including the default rule's answer
-for it (none — an `fnptr` is non-null, 0.9.480), with a fixture holding a registry of callbacks.
+Found 2026-10-30 while making an `fnptr` a type argument (shipped `0.9.790`): `f == g` on two `Op`s compiles
+(and runs: probed 2026-10-31), but `Op` does not satisfy an `Equatable` bound, so the operator and the bound disagree. The corpus compares two fnptrs nowhere
+(its one `cb == null` is the refused null check), so either answer breaks no kama code here.
 
-**Scoped 2026-10-30 (`0.9.787`): root cause found, a fix verified on a copy, size S.** Probed with
-`fnptr int32 Op(int32 x);`: `DynamicArray<Op>`, `FixedArray<Op>`, a user `Box<Op>`, `Map<string, Op>` (the registry
-keyed by name) and `DynamicArray<BindableFunctionPtr<Op>>` all fail with "cannot tell which … to construct";
-`Optional::Some(value: twice)` into an `Optional<Op>` with "takes its type from where it goes"; and worse, a generic
-FUNCTION over an `Op` (`apply<T>`, `need<T: Sendable>`) passes kama and fails in clang ("call to undeclared function").
-Already working: an `Op` field, a module static, `InlineArray<Op>#(2)`, `fn Op pick()`, an `Op` imported from another
-module.
-- **Cause.** Two "is this a real type" predicates do not know the fnptr table `_sigs`: `argCarriesUnboundParam`
-  (`kama.cemit.cpp` ~15633) and `isConcreteTypeArg` (~17410). `Op` resolves, but reads as an unbound template
-  parameter, so every instantiation is silently deferred as inside a template body (`registerGenericTypeInst`
-  ~15736, `genericInstBinding` ~15688, generic-fn inference ~17432/17532/17831/17858). No instance exists, and every
-  symptom follows. Mangling is fine.
-- **Then three library bodies block** once the instance exists: `slot T x;` (the fnptr local arm, ~9031, reports
-  "must be initialized" before the slot bookkeeping), `T v = copy value;` (`resolveFnPtrTarget`, ~32210, does not
-  look through `copy`/`give`), and `Optional::Some(value: give x)` (`plainValue`, ~34262, leaves sig types out).
-- **The verified fix, five hunks:** `_sigs` in both predicates; the fnptr local arm takes `slot` (into the slot
-  bookkeeping, `= 0`); `resolveFnPtrTarget` looks through a `HandoffNode`; `plainValue` takes `isSigType`. With it a
-  `DynamicArray<Op>` registry (add, index, `foreach`, `pop` into `Optional<Op>`), `Map<string, Op>` (also across
-  modules), `FixedArray.filled`, `Box<Op>`, `Optional<Op>`, `id::<Op>(v: twice)`, `need<T: Sendable>` and `copy` of
-  a `DynamicArray<Op>` build and run right; a wrong-signature `add` is still refused, `FixedArray<Op>.make(size:)`
-  still gets the 0.9.480 "no `default`" answer, and the native suite on that compiler was 2906/0 (guards, san and
-  wasm not run).
-- **Beside it, plain defects in the same work:** a `foreach (Op g in xs)` binding cannot be called ("call to unknown
-  function `g`": the binding's type is recorded as `elemClass`, which drops a sig, ~9979, 14955/15097); and
-  `Op g = copy f;` gives the misleading bind error.
-- **Settled by existing rules, stated in the fix:** `FixedArray<Op>.make(size:)` stays refused, `filled` is the way
-  (Rust, Swift, Zig also require a value; Go and C# fill with a null that crashes when called): an xfail pins it.
-  `Optional<Op>` is the one maybe-a-callback (Rust's `Option<fn>`, Swift's `(…)?`, Zig's `?*const fn`). A bare
-  function name for a generic `T` (`id(v: twice)`) stays "cannot infer": fnptr types are nominal; the message should
-  suggest `id::<Op>(…)`, and an xfail pins it.
-- **Ruled 2026-10-31: any expression of fnptr type is callable,** `xs[0](x: 3)` and `pick()(x: 1)` as a field call
-  already is (Rust, Go, C#, Swift and Zig all allow it). It is as safe as the call through a field: the index is
-  bounds-checked, an fnptr has no null to call, and the signature is checked at the call. One rule to build in: the
-  callee is evaluated FIRST, into a temporary (an fnptr is a plain value), then the arguments left to right as SPEC
-  already orders them, so `xs[0](x: f())` calls the function `xs[0]` held before `f` ran (Rust's, Go's and Java's
-  order; C leaves it unspecified). A fixture pins that order.
-- **Found, a separate defect, KR-275:** `f == g` on two `Op`s compiles (and runs: probed 2026-10-31), but `Op` does
-  not satisfy an `Equatable` bound, so the operator and the bound disagree. The corpus compares two fnptrs nowhere
-  (its one `cb == null` is the refused null check), so either answer breaks no kama code here.
+| | comparing two function values |
+|---|---|
+| C, Zig | allowed: a function pointer is an address |
+| Rust | `fn` pointers are `Eq`/`Hash`, and the comparison is now linted (`unpredictable_function_pointer_comparisons`): one function can have several addresses across codegen units, and identical-code folding can give two functions one |
+| C# | delegates compare by target and method, which is what `event -= handler` unsubscribes by |
+| Go, Swift | refused: their function values are CLOSURES carrying captured state, which have no meaningful identity |
 
-  | | comparing two function values |
-  |---|---|
-  | C, Zig | allowed: a function pointer is an address |
-  | Rust | `fn` pointers are `Eq`/`Hash`, and the comparison is now linted (`unpredictable_function_pointer_comparisons`): one function can have several addresses across codegen units, and identical-code folding can give two functions one |
-  | C# | delegates compare by target and method, which is what `event -= handler` unsubscribes by |
-  | Go, Swift | refused: their function values are CLOSURES carrying captured state, which have no meaningful identity |
+**Recommended: make an `fnptr` `Equatable` and `Hashable`,** so `==` and the bound agree and a `Map<Op, …>` or a
+remove-this-handler registry works. A kama `fnptr` is a plain function address with nothing captured, the C/Zig case
+rather than the Go/Swift one, and its equality has a definite meaning in kama: a non-generic function has one
+definition, so it always equals itself (Rust's several-addresses problem does not arise), and two different functions
+compare equal only when a linker folded identical machine code into one (lld-link and MSVC do by default), in which
+case calling either does the same thing. SPEC says equal means "calls the same code". *Sacrifice:* equality is not
+"same name". *Constraint recorded:* a generic instance is emitted `static` per file, so if one ever becomes an fnptr
+VALUE (`Op f = same::<int32>;` does not parse today) it must first get one address. The alternative, refusing `==`
+as Go does, removes the disagreement the other way, at the cost of every identity use (unsubscribe, dedupe, a key),
+and refuses what C, Zig, Rust and C# allow for exactly this kind of value. Size S.
 
-  **Recommended: make an `fnptr` `Equatable` and `Hashable`,** so `==` and the bound agree and a `Map<Op, …>` or a
-  remove-this-handler registry works. A kama `fnptr` is a plain function address with nothing captured, the C/Zig case
-  rather than the Go/Swift one, and its equality has a definite meaning in kama: a non-generic function has one
-  definition, so it always equals itself (Rust's several-addresses problem does not arise), and two different functions
-  compare equal only when a linker folded identical machine code into one (lld-link and MSVC do by default), in which
-  case calling either does the same thing. SPEC says equal means "calls the same code". *Sacrifice:* equality is not
-  "same name". *Constraint recorded:* a generic instance is emitted `static` per file, so if one ever becomes an fnptr
-  VALUE (`Op f = same::<int32>;` does not parse today) it must first get one address. The alternative, refusing `==`
-  as Go does, removes the disagreement the other way, at the cost of every identity use (unsubscribe, dedupe, a key),
-  and refuses what C, Zig, Rust and C# allow for exactly this kind of value. Size S.
-
-  **Ruled 2026-10-31: `Equatable` + `Hashable`,** as recommended: the answer C, Zig, Rust and C# give for a plain
-  function address, and the one that breaks nothing. GOALS: `==` and the bound agree (#4), equality's meaning is
-  stated in SPEC (#5). The work: an `fnptr` satisfies both bounds (the hash is the address), SPEC's sentence, a
-  fixture with a `Map<Op, int32>` and a remove-by-handler, and the recorded constraint for generic instances.
+**Ruled 2026-10-31: `Equatable` + `Hashable`,** as recommended: the answer C, Zig, Rust and C# give for a plain
+function address, and the one that breaks nothing. GOALS: `==` and the bound agree (#4), equality's meaning is
+stated in SPEC (#5). The work: an `fnptr` satisfies both bounds (the hash is the address), SPEC's sentence, a
+fixture with a `Map<Op, int32>` and a remove-by-handler, and the recorded constraint for generic instances.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 

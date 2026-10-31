@@ -1,0 +1,12 @@
+// A bare function name has no type of its own: `fnptr` types are nominal, so `twice` could be any `fnptr` type whose
+// signature it matches, and a generic `T` cannot be inferred from it (KR-107). The message names the type argument to
+// write, and the binding that follows it adds no second error.
+fnptr int32 Op(int32 x);
+
+fn int32 twice(int32 x) { return x * 2; }
+fn T id<T>(T v) { return v; }
+
+fn uint8 main() {
+    Op f = id(v: twice);
+    return cast<uint8>(f(x: 3));
+}

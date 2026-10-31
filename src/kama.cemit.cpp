@@ -9033,7 +9033,11 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                     _localTypes[nm] = ty;
                     line(n->line); indent(depth);
                     *_out << ty << " " << kName(nm);
-                    if (!d->initializer)
+                    if (!d->initializer && lvd && lvd->isSlot) {
+                        _slotLocals.insert(nm); _slotDeclared.insert(nm); _moveState[nm] = MoveState::Moved;
+                        *_out << " = 0";
+                    }
+                    else if (!d->initializer)
                         unsupported("a FunctionPtr must be initialized (it is non-null)", n);
                     else
                         *_out << " = " << emitFnPtrBind(ty, d->initializer, n->line);
@@ -9976,7 +9980,9 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
         // must not outlive the loop, and popScope puts back whatever `nm` named outside it.
         noteScopedBinding(nm);
         hideShadowedLocal(nm, fe->isRef);
-        _localTypes[nm] = elemClass;   // element binding's class (for x.method() resolution)
+        // element binding's class (for x.method() resolution), or its `fnptr` type, which is no class but is how the
+        // call arm finds a callable local: `foreach (Op g in xs) { g(x: 1); }` was "call to unknown function `g`"
+        _localTypes[nm] = !elemClass.empty() ? elemClass : isSigType(elemTy) ? elemTy : std::string();
         if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
 
         // `foreach (ref T e …)` binds each element by PLACE (a bounds-checked `T*` via `__at`), so
@@ -15631,7 +15637,7 @@ bool CEmitter::argCarriesUnboundParam(const SharedIdentifier& a)
     if (v == "This" || isRawPtrName(v)) return false;
     std::string r = resolveUserName(v, a->qualifier);
     return !_classes.count(r) && !_enums.count(r) && !_genericTypes.count(r)
-        && !_interfaces.count(r) && !_genericContracts.count(r);
+        && !_interfaces.count(r) && !_genericContracts.count(r) && !_sigs.count(r);
 }
 
 // Build one synthetic specialized ClassInfo per `Box<Arg>` (mirrors registerCollection): copy the
@@ -17407,7 +17413,7 @@ bool CEmitter::isConcreteTypeArg(SharedIdentifier t)
     }
     if (!t->value) return false;
     std::string m = resolveUserName(*t->value, t->qualifier);
-    return _classes.count(m) || _enums.count(m) || _interfaces.count(m);
+    return _classes.count(m) || _enums.count(m) || _interfaces.count(m) || _sigs.count(m);
 }
 
 // Unify a generic call's arguments against the template's parameters -> a deduped instantiation.
@@ -17431,8 +17437,21 @@ bool CEmitter::bindGenericArg(const std::string& pty, const std::string& pname, 
     // is what made a generic calling a generic need a turbofish the argument already implied (KR-21 a).
     if (!isConcreteTypeArg(at) && at && argCarriesUnboundParam(at)) { _inferSawOpenArg = true; return false; }
     if (!isConcreteTypeArg(at)) {
-        unsupported(("cannot infer generic type parameter '" + pty + "' — argument '" + pname +
-                     "' is not a literal or a locally-typed value").c_str(), line);
+        // A bare function name has no type of its own: `fnptr` types are nominal, so `twice` could be any of the
+        // `fnptr` types its signature matches (KR-107). Name the one to write, when exactly one matches.
+        std::string why = "is not a literal or a locally-typed value";
+        if (auto* id = dynamic_cast<IdentifierNode*>(arg.get())) {
+            auto fit = id->value && !localTys.count(*id->value) ? _funcs.find(resolveFunc(*id->value, id->qualifier))
+                                                                : _funcs.end();
+            if (fit != _funcs.end()) {
+                std::string only; int n = 0;
+                for (auto& s : _sigs) if (sigMatches(s.second, fit->second)) { only = s.first; ++n; }
+                why = "is the function `" + *id->value + "`, which has no type until an `fnptr` type names it — write "
+                    "that type as the type argument (" + (n == 1 ? "`::<" + demangleForDisplay(only) + ">`" : std::string("`::<F>`"))
+                    + ")";
+            }
+        }
+        unsupported(("cannot infer generic type parameter '" + pty + "' — argument '" + pname + "' " + why).c_str(), line);
         return false;
     }
     auto b = bind.find(pty);
@@ -20114,7 +20133,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     recordTypeParamRef(fe->type.get());                 // ...and its declared type, when it is a `T` (KR-134)
     noteScopedBinding(nm);   // the loop scope owns the binding — see the indexed path
     hideShadowedLocal(nm, fe->isRef);
-    _localTypes[nm] = elemClass;
+    _localTypes[nm] = !elemClass.empty() ? elemClass : isSigType(elemTy) ? elemTy : std::string();   // see the indexed path
     if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
     if (fe->isRef) {
         _refParams.insert(nm);   // reads/writes deref the place, like a `ref` param / built-in `foreach ref`
@@ -32210,6 +32229,8 @@ bool CEmitter::resolveFnPtrTarget(SharedExpression init, FnPtrTarget& out)
         out.kind = FnPtrTarget::SigValue;
         return true;
     }
+    if (auto* h = dynamic_cast<HandoffNode*>(init.get()))
+        if (isSigType(exprClass(h->value)) || isSigType(typeOfExpr(h->value))) { out.kind = FnPtrTarget::SigValue; return true; }
     return false;
 }
 
@@ -32557,6 +32578,8 @@ std::string CEmitter::emitFnPtrBind(const std::string& sigCName, SharedExpressio
     // A source with a type of its own (`F f = n;`, an `int32`) was already named by the identity rule at the local's
     // declaration — one mistake, one message. What is left is what has no type: `null`, an unknown name.
     if (idFamilyOf(typeOfExpr(init)) != IdFamily::None) return "0";
+    // ...and a generic call whose inference was refused already said why it has no type.
+    if (auto* inv = dynamic_cast<InvocationNode*>(init.get())) if (_genericInferFailed.count(inv)) return "0";
     unsupported("a FunctionPtr binds a free function name or another FunctionPtr (and may not be null)", line);
     return "0";
 }
@@ -34259,7 +34282,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
                 // Primitive / plain value / fresh smart-ptr rvalue (factory result): consumed in place.
                 // A `give`/`copy` on a plain value (primitive or `value` struct) is a no-op — a value is
                 // always copied — so only a stray marker on a fell-through resource rvalue is an error.
-                bool plainValue = argCls.empty() || isPlainFixed(argCls)   // an InlineArray of values owns nothing
+                bool plainValue = argCls.empty() || isPlainFixed(argCls) || isSigType(argCls)
                     || (_classes.count(argCls) && _classes[argCls].kind == TypeKind::Value);
                 // A tagged-union (enum) value accepts `give` into the outer variant — the tag+payload copies
                 // bitwise (a no-op move for a non-owning enum like `Result::Ok(value: give myEnum)` in
@@ -34471,6 +34494,35 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
                 return emitReorderedCall("base." + m, mi->cName, self, mi->params, call->args, call->line);
             }
 #endif
+            // Any other expression of `fnptr` type, called: `handlers[i](x: 3)`, `pick()(x: 1)`, `(f)(x: 1)` — the
+            // local, static and field arms' rule for a callee that is not a name (KR-107). The callee is evaluated
+            // FIRST, into a temporary, and only then the arguments left to right, so `xs[0](x: f())` calls what
+            // `xs[0]` held before `f` ran (Rust's, Go's and Java's order; C leaves it unspecified). A hoisted
+            // argument becomes a statement ahead of this one, so where hoisting is on the callee is hoisted too, ahead
+            // of them; elsewhere (a loop condition) it is the first declaration of a statement expression.
+            std::string sigName = exprClass(call->expression);
+            if (!isSigType(sigName)) sigName = typeOfExpr(call->expression);
+            if (isSigType(sigName)) {
+                const SigInfo& sig = _sigs.at(sigName);
+                noteParksBlind(call->line);
+                if (!sig.noHeap) rejectNoHeapIndirect("through a `fnptr`", call->line);   // see the local arm
+                if (_ctCheck) { ctRefuse(ctNotComptimeCall(sigName, _ctFnBody), call->line); return "0"; }   // KR-102
+                const std::string t = "kama_fncallee" + std::to_string(_tempCounter++);
+                const std::string decl = sigName + " " + t + " = " + emitExpression(call->expression) + ";";
+                if (_hoistOK) _hoisted.push_back(decl);
+                _blindCallee = call->line;   // as the local arm
+                const std::string c = emitReorderedCall(demangleForDisplay(sigName), t, "", sig.params, call->args, call->line);
+                return _hoistOK ? c : "({ " + decl + " " + c + "; })";
+            }
+            // What is left has no `fnptr` type: a value of another type, or function names chosen by an operator,
+            // which have no type until a destination names one (fnptr types are nominal, as for `id(v: twice)`).
+            const std::string ty = typeOfExpr(call->expression);
+            unsupported(ty.empty() ? "this callee has no type of its own — only a function or an `fnptr` value can be "
+                                     "called, and a function name chosen by an operator gets its `fnptr` type from a "
+                                     "destination: bind it first (`Op h = ready ? onOk : onErr;`, then `h(…)`)"
+                                   : ("this callee's type is `" + demangleForDisplay(primKeyOfCType(ty)) + "`, and only a function or an "
+                                      "`fnptr` value can be called").c_str(), call);
+            return "0";
         }
         unsupported("indirect call", call);
         return "0";
@@ -44584,14 +44636,20 @@ std::string CEmitter::emitDotOnTypeCtorCall(InvocationNode* call, MemberAccessNo
                         if (c < gm.whenBoundNodes.size()) wn.push_back(gm.whenBoundNodes[c]);
                         if (whenConditionsHold(wp, wb, wn, gp->second, gi->second.typeArgs)) continue;
                         std::string arg;
+                        SharedIdentifier argNode;
                         for (size_t k = 0; k < gp->second.size() && k < gi->second.typeArgs.size(); ++k)
                             if (gp->second[k] == gm.whenParams[c] && gi->second.typeArgs[k])
-                                arg = spelled(gi->second.typeArgs[k]);
+                                arg = spelled(argNode = gi->second.typeArgs[k]);
                         if (gm.whenBounds[c] != "default")
                             why = "; `" + arg + "` (for `" + gm.whenParams[c] + "`) is not `" + gm.whenBounds[c] + "`";
                         else if (gm.whenParams[c] == "A")
                             why = "; the allocator `" + arg + "` has no `default` — use an allocator-taking "
                                   "constructor instead";
+                        else if (argNode && isSigType(cType(argNode)))
+                            // an `fnptr` has no default and cannot elect one: it is never null, and no function is
+                            // everyone's (Rust, Swift and Zig also require a value)
+                            why = "; `" + arg + "` is an `fnptr`, which has no `default` — there is no null function to "
+                                  "fill with, so use a constructor that takes the value (`filled(…, value: …)`)";
                         else
                             why = "; `" + arg + "` has no `default` (a type a program declares has one only by "
                                   "electing it — `default ctor name()`); use a constructor that takes the value "
