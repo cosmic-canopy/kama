@@ -721,26 +721,93 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 ### `Locked<T>` hands its value back once it is the last handle (KR-262)
 
-Filed 2026-10-29 from the consuming method's std audit. A `Locked<T>` moves its payload into a C cell shared by every handle, and the
-payload can only be borrowed inside a `lock()` window, so the value the workers built cannot leave when they are done:
-the last owner copies it out, or `replace`s it with a stand-in. Rust's answer is two steps, `Arc::try_unwrap(a) ->
-Result<T, Arc<T>>` (or `Arc::into_inner`, `Option<T>`, since 1.70) and then `Mutex::into_inner`; Go and Java have nothing
-to give back. The kama shape, on the consuming method (`give fn`, `0.9.777`): `public give fn Result<T, Locked<T>> intoInner()`, which
-hands the handle back in the `Err` when another handle still lives, so nothing is lost and a caller that waits for its
-workers to join cannot get it wrong. Work: a last-handle test on the cell's count (it is shared across isolates, so an
-atomic one), the payload relocated out inside std's `unsafe` (bounded, GOALS 3a), and the destructor told the cell is
-empty. `ReadWriteLocked<T>` the same.
+Filed 2026-10-29 from the consuming method's std audit. A `Locked<T>` moves its payload into a C cell shared by every
+handle, and the payload can only be borrowed inside a `lock()` window, so the value the workers built cannot leave when
+they are done: the last owner copies it out, or `replace`s it with a stand-in.
+
+**Read against the code 2026-10-30 (`0.9.787`).** The cell already counts its handles atomically: `kama_locked_release`
+(`lib/std/concurrent/locked.kama`, kama_locked.h) is the decrement the destructor runs, and answers non-zero for the
+last. So `intoInner` needs no new C: the same decrement, and on the last, the payload's `sizeof(T)` bytes relocated out
+of the cell (std's `unsafe`, bounded, GOALS 3a), the cell freed without running the payload's destructor, and
+`this.cell = null` so the handle's own destructor finds nothing. `ReadWriteLocked<T>` the same. Size S.
+
+**The one question: what a caller gets when another handle still lives.**
+
+| | taking the value out of a shared, locked cell |
+|---|---|
+| Rust | `Arc::try_unwrap(a) -> Result<T, Arc<T>>` (1.0) and `Arc::into_inner(a) -> Option<T>` (1.70), then `Mutex::into_inner`. `into_inner` was ADDED because `try_unwrap` loses the value when the last two handles race: both see a count of 2, both get `Err`, both drop it, and the payload is destroyed with nobody holding it |
+| C++ | none: `shared_ptr::use_count() == 1` is a racy hint |
+| Swift | `isKnownUniquelyReferenced`, one thread only |
+| Go, Java | none (a collector) |
+
+```kama
+Locked<Map<string, int32>> hits = Locked.make(value: Map.empty());
+scope { for (int32 i = 0; i < 8; i = i + 1) { spawn count(hits: copy hits); } }   // joined: this is the last handle
+Map<string, int32> all = match (give hits.intoInner()) { case Some(value: m): give m; case None: Map.empty(); };
+```
+
+1. **(Recommended) `public give fn Optional<T> intoInner()`, Rust's `Arc::into_inner`.** It always consumes the handle;
+   the call whose release is the last gets `Some(value)`, any other gets `None` and the value lives on in the remaining
+   handles. If every holder calls it, exactly one gets the value, race or not. *Sacrifice:* a caller that is not last
+   loses its handle; there is no "try, and keep it if not". Bytes: one atomic decrement, and on the last a
+   `sizeof(T)` copy out of the cell and one free.
+2. `public give fn Result<T, Locked<T>> intoInner()`, Rust's `try_unwrap`: the handle comes back in the `Err`.
+   *Sacrifice:* the race above. Two holders that each try, fail and drop destroy the value unseen.
+
+`ConcurrentMap` (KR-263) is an array of these handles, so its consuming form inherits whichever is ruled.
+
+**Ruled 2026-10-31: option 1, `Optional<T>`,** as the comprehensive answer: it is correct in every interleaving, the
+joined-workers case (the caller is last, `Some`) and the last-one-out case alike (exactly one `Some`), where option 2's
+only extra power, checking without giving the handle up, is a decision that is stale the moment it is made. GOALS:
+one method (#4), the `None` handled at the call (#5), no value lost to a race (safety), no new C (#3, the destructor's
+own decrement).
 
 <a id="s2-map-drain"></a>
 
 ### Moving a map's entries out without copying them (KR-263)
 
-Filed 2026-10-29 from the consuming method's std audit. A `Map`'s `Entry<K, V>` lends its key and value (`const ref`, "never moved out —
-the pair owns it"), so nothing moves the pairs into another map or a list, and `ConcurrentMap.entries()` copies every
-pair twice. Rust has `HashMap::drain()`, `into_iter()` and `remove_entry`; Swift's `Dictionary` is copy-on-write; Go
-copies. Design first: a consuming `drain` on `Map` (and the ordered and sorted maps) yielding each pair once, taken
-apart by `match` as an `Undelivered`-shaped enum or by an `Entry` with a consuming `intoParts`, and a consuming
-`ConcurrentMap.intoMap()` that moves each shard's map out once the workers are done.
+Filed 2026-10-29 from the consuming method's std audit. A `Map`'s `Entry<K, V>` owns its pair but only lends it
+(`key()`, `value()`: "never moved out — the pair owns it"), and `entries()` exists only when both are `Copyable`
+(`MapEntryIter` deep-copies each pair), so nothing moves the pairs into another map or a list. `ConcurrentMap.entries()`
+copies every pair twice: once in each shard's `entries()`, again in `Entry.make(key: copy e.key(), value: copy
+e.value())` (`lib/std/concurrent/concurrent_map.kama` ~155; `give e` would make it once, a fix on its own).
+
+| | moving a map's pairs out |
+|---|---|
+| Rust | `HashMap::drain(&mut self)`: empties the map in place, keeps its capacity, yields owned `(K, V)`; a drain dropped early still empties it. `into_iter(self)` consumes the map. `extract_if` takes some |
+| C++ | `unordered_map::extract` node handles (C++17), `merge` |
+| Swift | `removeAll(keepingCapacity:)`; iteration copies (copy-on-write) |
+| Go | `range` copies, then `clear(m)` (1.21) |
+| Java | `entrySet().iterator()` with `remove()` |
+
+```kama
+foreach (Entry<string, Session> e in live.drain()) {           // live is empty after the loop, its table kept
+    match (give e.intoParts()) { case Parts(key: k, value: s): archived.put(key: give k, value: give s); };
+}
+```
+
+1. **(Recommended) `drain()` on the map (`Map`, `OrderedMap`, `SortedMap`), Rust's `drain`.** It needs no `Copyable`,
+   yields each pair once as the owned `Entry` iteration already uses, and leaves the map empty with its capacity kept,
+   whether the loop runs to the end or stops early (the rest drop). `Entry` gains `give fn EntryParts<K, V>
+   intoParts()`, `type enum EntryParts<K, V> { Parts(K key, V value); }`, as `Output.intoParts()` does (`0.9.781`), since
+   kama has no tuple. Consuming the map is `drain()` and then dropping it, so there is one way. `ConcurrentMap.drain()`
+   empties each shard under its own lock into one new `Map` (each pair moved once, rehashed once), which works while
+   other handles live; a put racing it into a shard already drained stays in the `ConcurrentMap`. *Sacrifice:* no
+   consuming `intoMap()` that guarantees the whole map in one moment; `drain()` is per shard, as `entries()` is.
+2. A consuming `give fn intoEntries()` (Rust's `into_iter`) instead. *Sacrifice:* the table cannot be reused, and a map
+   held in a field cannot be emptied without `replace`.
+3. Both: two ways to do one thing (GOALS #4).
+
+Size M: the drain view (a `type view` with a destructor, as `LockGuard`), three maps, `EntryParts`, the
+`ConcurrentMap` pair, fixtures under the sanitizer leg (every moved pair dropped once).
+
+**Ruled 2026-10-31: option 1,** `drain()` on `Map`, `OrderedMap` and `SortedMap`, `Entry.intoParts()` with
+`EntryParts`, and `ConcurrentMap.drain()` into one `Map`; `ConcurrentMap.entries()` copies once (`give e`). It is Rust's
+production answer and kama's own practice: the owned `Entry` is already the iteration item, and taking a value apart is
+the consuming `intoParts` that `Output` has. GOALS: one way (#4: consuming the map is `drain()` and a drop), each pair
+moved once and the table kept (#3), the parts taken apart by name (#5); a change to the map mid-drain panics, as it does
+mid-`entries()`. Taking only some pairs (Rust's `extract_if`) needs a predicate, which without closures is a `drain()`
+and a re-`put` of what stays.
 
 <a id="s2-quoted-format"></a>
 
@@ -769,6 +836,47 @@ reports "unknown type" first — so it is not KR-21's unresolved-generic-argumen
 is the same. `FixedArray<Op>`, `Box<Op>` (any user generic) and `BindableFunctionPtr<Op>` as an argument all fail
 the same way. Close means a generic type instantiates over an `fnptr` element, including the default rule's answer
 for it (none — an `fnptr` is non-null, 0.9.480), with a fixture holding a registry of callbacks.
+
+**Scoped 2026-10-30 (`0.9.787`): root cause found, a fix verified on a copy, size S.** Probed with
+`fnptr int32 Op(int32 x);`: `DynamicArray<Op>`, `FixedArray<Op>`, a user `Box<Op>`, `Map<string, Op>` (the registry
+keyed by name) and `DynamicArray<BindableFunctionPtr<Op>>` all fail with "cannot tell which … to construct";
+`Optional::Some(value: twice)` into an `Optional<Op>` with "takes its type from where it goes"; and worse, a generic
+FUNCTION over an `Op` (`apply<T>`, `need<T: Sendable>`) passes kama and fails in clang ("call to undeclared function").
+Already working: an `Op` field, a module static, `InlineArray<Op>#(2)`, `fn Op pick()`, an `Op` imported from another
+module.
+- **Cause.** Two "is this a real type" predicates do not know the fnptr table `_sigs`: `argCarriesUnboundParam`
+  (`kama.cemit.cpp` ~15633) and `isConcreteTypeArg` (~17410). `Op` resolves, but reads as an unbound template
+  parameter, so every instantiation is silently deferred as inside a template body (`registerGenericTypeInst`
+  ~15736, `genericInstBinding` ~15688, generic-fn inference ~17432/17532/17831/17858). No instance exists, and every
+  symptom follows. Mangling is fine.
+- **Then three library bodies block** once the instance exists: `slot T x;` (the fnptr local arm, ~9031, reports
+  "must be initialized" before the slot bookkeeping), `T v = copy value;` (`resolveFnPtrTarget`, ~32210, does not
+  look through `copy`/`give`), and `Optional::Some(value: give x)` (`plainValue`, ~34262, leaves sig types out).
+- **The verified fix, five hunks:** `_sigs` in both predicates; the fnptr local arm takes `slot` (into the slot
+  bookkeeping, `= 0`); `resolveFnPtrTarget` looks through a `HandoffNode`; `plainValue` takes `isSigType`. With it a
+  `DynamicArray<Op>` registry (add, index, `foreach`, `pop` into `Optional<Op>`), `Map<string, Op>` (also across
+  modules), `FixedArray.filled`, `Box<Op>`, `Optional<Op>`, `id::<Op>(v: twice)`, `need<T: Sendable>` and `copy` of
+  a `DynamicArray<Op>` build and run right; a wrong-signature `add` is still refused, `FixedArray<Op>.make(size:)`
+  still gets the 0.9.480 "no `default`" answer, and the native suite on that compiler was 2906/0 (guards, san and
+  wasm not run).
+- **Beside it, plain defects in the same work:** a `foreach (Op g in xs)` binding cannot be called ("call to unknown
+  function `g`": the binding's type is recorded as `elemClass`, which drops a sig, ~9979, 14955/15097); and
+  `Op g = copy f;` gives the misleading bind error.
+- **Settled by existing rules, stated in the fix:** `FixedArray<Op>.make(size:)` stays refused, `filled` is the way
+  (Rust, Swift, Zig also require a value; Go and C# fill with a null that crashes when called): an xfail pins it.
+  `Optional<Op>` is the one maybe-a-callback (Rust's `Option<fn>`, Swift's `(…)?`, Zig's `?*const fn`). A bare
+  function name for a generic `T` (`id(v: twice)`) stays "cannot infer": fnptr types are nominal; the message should
+  suggest `id::<Op>(…)`, and an xfail pins it.
+- **Ruled 2026-10-31: any expression of fnptr type is callable,** `xs[0](x: 3)` and `pick()(x: 1)` as a field call
+  already is (Rust, Go, C#, Swift and Zig all allow it). It is as safe as the call through a field: the index is
+  bounds-checked, an fnptr has no null to call, and the signature is checked at the call. One rule to build in: the
+  callee is evaluated FIRST, into a temporary (an fnptr is a plain value), then the arguments left to right as SPEC
+  already orders them, so `xs[0](x: f())` calls the function `xs[0]` held before `f` ran (Rust's, Go's and Java's
+  order; C leaves it unspecified). A fixture pins that order.
+- **Found, a separate defect, KR-275:** `f == g` on two `Op`s compiles, but `Op` does not satisfy an `Equatable`
+  bound, so the operator and the bound disagree. Rust implements `Eq` for fn pointers but now lints the comparison
+  (identical-code folding can merge two functions); Go and Swift refuse it; C# and Zig allow it. To rule when it is
+  taken up: refuse `==` on an fnptr (a registry keys by name), or make it `Equatable`; refusing is a source break.
 
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
@@ -3815,15 +3923,46 @@ text (S); symbol-named modes (M); call hierarchy (M); the guard (S); the dogfood
   (`return cast<int32>(base);`), not the declaration. Delete that second line and the entry fails.
   Measured; it is the reason this was found at all.
 
-  **The switch exists now** (checked 2026-10-08): the pinned CLI (0.26.11) has grammar-level `reserved` word
-  sets, and the first set is reserved EVERYWHERE, while `reserved(name, rule)` overrides it per rule (the
-  contextual words). That replaces both earlier candidates: an external scanner (the grammar has one now, for
-  `give`/`copy`/`truncate`, a different job) and a negative lookahead over 78 spellings in `identifier`. The
-  fix is that set, generated from `kama.l`'s keyword table so the two cannot drift.
+  **Re-measured and prototyped 2026-10-30 (`0.9.787`), in a copy of the grammar; nothing tracked changed.**
+  - **Today it is all of them.** `kama.l`'s table has 90 words, six contextual (`copy`, `give`, `truncate` through
+    `contextualWord()`, `type`, `slot`, `file` through kama.y's `binding_word`), so 84 reserved; tree-sitter parses
+    every one of them clean as a binding name, in both type positions, and the 38 C-only spellings the lexer also
+    refuses (`c_reserved[]`: `switch`, `goto`, `int`, `double`, …) too. The corpus already hides five instances the
+    guard cannot see: `prelude/builtin.kama`, `xfail/intrinsic_reserved`, `int_retired`, `double_retired`,
+    `contextual_word_type_name`.
+  - **The fix, proven on the copy:** the pinned CLI (0.26.11) has `reserved` sets and the committed `parser.c` is
+    already ABI 15. A global set of the 84 words is not enough on its own: the compiler admits keywords as names in
+    three places, `X.default()`, `expr.base` and `for value, enum` (`kind_name`), and 85 corpus files then error
+    wrongly. Two overrides fix it: `member` (global less `base`, `default`) on BOTH `field_expression.field` and
+    `turbofish_member.name` (⚠️ the state after `.` is shared, so one alone does nothing), and `kind` (global less
+    `enum`) on `kind_name`. Then all 168 keyword probes error AT THE DECLARATION; the contextual words, `fiber` and
+    the kind words still parse as names; 59/59 `tree-sitter test`, every query compiles; states 1290 unchanged,
+    `node-types.json` unchanged, `parser.c` +3.1%. Reserving the C words too needs them made tokens (an inert rule
+    over a never-emitted external token) and `int`/`double` dropped from `PRIMITIVE_TYPES`: 0 mismatches over all
+    274 probes, `parser.c` +10.7%.
+  - **Kept in step by a guard, not a build step:** one literal list in grammar.js (`member`/`kind` derived with
+    `.filter`), and `check-treesitter.sh` oracle 1 asserting `src/grammar.json`'s `reserved.global` equals `kama.l`'s
+    table less the contextual words. grammar.js reading `../src/kama.l` would break oracle 3, which regenerates in a
+    copy under `mktemp`.
+  - **Work (S; S–M with the C words):** grammar.js + regenerated `parser.c`/`grammar.json`; `test/parse-errors.txt`
+    gains `prelude/builtin.kama`, `intrinsic_reserved`, `null_as_name` (and `int_retired`, `double_retired`);
+    `test/corpus/errors.txt` pins the declaration-site ERROR and the clean `T.default()`, `this.base`, `for value,
+    enum`; `xfail/reserved_word_as_name` loses its use line so it proves the declaration; new `xfail/null_as_name`;
+    oracle 1's check. kama.y and `grammar.bnf` do not change, and no VERSION bump (no shipped tree changes). Then the
+    Zed and Helix pins as the second commit.
+  - **To rule before building:** (1) reserve the 38 C-only spellings too (recommended: yes, the same class); (2)
+    `prelude/builtin.kama`, the documentation file go-to-definition opens for a builtin, then shows ERROR nodes
+    (`type value bool { }`), which affects its highlighting only; its line layout is load-bearing
+    (`check-builtin-doc.sh`); (3) the six contextual words as a TYPE, free-function or enum-member name: the compiler
+    rejects all 18 probes, tree-sitter accepts all 18 before and after, and `give`/`copy`/`truncate` have no grammar
+    literal, so it needs per-rule work: in KR-29, or a row of its own.
+  - **Ruled 2026-10-31, all three:** (1) the 38 C-only spellings are reserved too; (2) `prelude/builtin.kama` shows
+    ERROR nodes on its few reserved-name declaration lines in Zed and Helix, colouring only (VS Code's TextMate grammar
+    is unaffected): it is documentation the compiler never builds, and the grammar agreeing with the compiler is the
+    point, so no carve-out that would let `type value else {}` parse again; (3) the contextual words as a type,
+    free-function or enum-member name are FOLDED INTO this row, so it closes the whole class, every position a name
+    takes. GOALS #7 (one grammar truth) and the DEFECTS rule's "two tools that disagree". Size S–M with (3).
 
-  `null` belongs to the class too. The compiler's reserved-word note names it (`0.9.554`), but no xfail can
-  pin that note until this lands: `int32 null` is a parse error to the compiler and clean to tree-sitter, so
-  the fixture would break the parse-error parity `check-treesitter.sh` holds. Add `xfail/null_as_name` here.
 
 
 - **AI/agent tooling — SHIPPED.** `kama query --search NAME` / `--diagnostics` / `--json`, the

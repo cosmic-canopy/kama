@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-275**
+**Next id: KR-276**
 
 ## The shape
 
@@ -55,8 +55,9 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-107 | **An `fnptr` type is not a type argument** — `DynamicArray<Op>` (the callback-registry shape SPEC names) does not instantiate: the turbofish is refused as ambiguous, the instance has no methods, and the element store trips the fnptr-bind rule. Any generic over an `fnptr` element, `BindableFunctionPtr` included. Found probing the default rule (`0.9.480`) | — | [§2](ROADMAP_DETAIL.md#s2-fnptr-type-arg) |
-| KR-29 | **tree-sitter accepts 78 of the 84 reserved words as a binding name** — `Thing else = …` renders as a valid declaration in every editor on this grammar, and the compiler then rejects it. The two reserve differently by construction: `kama.l` consults one table at every identifier, tree-sitter extracts keywords CONTEXTUALLY and a binding site expects `$.identifier`. ⚠️ `check-treesitter.sh` cannot see this class, and the one fixture that looks like it covers it passes on its USE site, not its declaration | — | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-107 | **An `fnptr` type is not a type argument** — `DynamicArray<Op>`, `Map<string, Op>` (the callback-registry shape SPEC names), `Optional<Op>` and any user generic over an `fnptr` do not instantiate, and a generic FUNCTION over one passes kama and fails in clang. **Scoped 2026-10-30:** two type predicates miss the fnptr table, so every instance is silently deferred; a five-hunk fix verified on a copy (native 2906/0), plus a `foreach` binding that cannot be called. Ruled 2026-10-31: any fnptr expression is callable, the callee evaluated before the arguments | S | [§2](ROADMAP_DETAIL.md#s2-fnptr-type-arg) |
+| KR-29 | **tree-sitter accepts every reserved word as a binding name** — all 84 kama keywords and the 38 C-only spellings the lexer refuses (re-measured `0.9.787`), so `Thing else = …` renders as a valid declaration in every editor on this grammar and the compiler then rejects it. **Proven on a copy 2026-10-30:** tree-sitter's `reserved` sets (CLI 0.26.11) with two per-rule overrides make all 168 keyword probes error at the declaration, the corpus unchanged, 59/59 grammar tests; a guard keeps the set equal to `kama.l`'s table. Ruled 2026-10-31: the C-only words reserved too, and the contextual words as a type or function name folded in (detail) | S–M | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-275 | **`==` on two `fnptr` values compiles, but an `fnptr` type does not satisfy `Equatable`** — the operator and the bound disagree, so a generic over `Equatable` refuses what a plain comparison accepts. Found scoping KR-107 (2026-10-30). Rust implements `Eq` for fn pointers and now lints the comparison; Go and Swift refuse it. A ruling first: refuse `==` (a source break) or make it `Equatable` | S? | [§2](ROADMAP_DETAIL.md#s2-fnptr-type-arg) |
 
 ## NOW — the next features, in build order
 
@@ -70,8 +71,8 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-262 | **`Locked<T>` hands its value back once it is the last handle** — today the payload can only be borrowed, so what the workers built cannot leave when they are done (Rust's `Arc::try_unwrap` then `Mutex::into_inner`). A consuming `intoInner` that hands the handle back while another lives; `ReadWriteLocked` too. Filed from the consuming method's std audit (`give fn`, shipped `0.9.777`) | S? | [§2](ROADMAP_DETAIL.md#s2-locked-into-inner) |
-| KR-263 | **Moving a map's entries out without copying them** — an `Entry` only lends its key and value, and `ConcurrentMap.entries()` copies each pair twice (Rust's `drain`, `into_iter`). A consuming drain, and `ConcurrentMap.intoMap()`. Filed from the consuming method's std audit (`give fn`, shipped `0.9.777`) | M? | [§2](ROADMAP_DETAIL.md#s2-map-drain) |
+| KR-262 | **`Locked<T>` hands its value back once it is the last handle** — today the payload can only be borrowed, so what the workers built cannot leave when they are done (Rust's `Arc::into_inner` then `Mutex::into_inner`). A consuming `intoInner`, `ReadWriteLocked` too; no new C (read 2026-10-30). **Ruled 2026-10-31:** `give fn Optional<T> intoInner()`, Rust's race-free `Arc::into_inner` | S | [§2](ROADMAP_DETAIL.md#s2-locked-into-inner) |
+| KR-263 | **Moving a map's entries out without copying them** — an `Entry` only lends its key and value, and `ConcurrentMap.entries()` copies each pair twice (Rust's `drain`, `into_iter`). **Ruled 2026-10-31:** `drain()` on each map (empties in place, keeps the table, no `Copyable`) with `Entry.intoParts()`, and `ConcurrentMap.drain()` into one `Map` | M | [§2](ROADMAP_DETAIL.md#s2-map-drain) |
 | KR-270 | **Fixed-width integers at an offset, in a stated byte order** — `std::num::endian` has only `byteswap`, so a file header is read with a hand-written `le32` and std keeps two private copies (Go's `binary.LittleEndian`, Rust's `from_le_bytes`). KR-5 needs it | S | [§1](ROADMAP_DETAIL.md#s1-endian-load) |
 | KR-5 | **`std::io` transform adapters: compression and archives** — deflate (RFC 1951), zlib (1950) and gzip (1952) in both directions, plus tar, in `std::compress::*` and `std::archive::tar`. **Ruled 2026-10-29:** a decoder reads a `BufReader<R>` and stops exactly at the stream's end, a REQUIRED decoded-byte limit (`LimitExceeded`), `level: DeflateLevel` with a `Frozen` variant whose bytes equal `kama publish`'s forever, drop abandons and `finish` completes, and a strict `extractInto` that never traverses a link. Eight commits mapped; its `finish` is a `give fn` (shipped `0.9.777`) | L | [§1](ROADMAP_DETAIL.md#s1-compression) |
 | KR-264 | **An in-memory stream pair parks on a fiber** — `MemoryStreamPair`'s ends answer `WouldBlock` on every isolate, so a protocol test over one on fibers must spin; an empty read parks until the other end writes or shuts, a full write until it reads (Go's `net.Pipe`, tokio's `duplex`) | S-M | [§6](ROADMAP_DETAIL.md#s6-memory-pair-park) |
