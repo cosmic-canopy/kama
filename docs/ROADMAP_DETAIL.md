@@ -770,6 +770,26 @@ moved once and the table kept (#3), the parts taken apart by name (#5); a change
 mid-`entries()`. Taking only some pairs (Rust's `extract_if`) needs a predicate, which without closures is a `drain()`
 and a re-`put` of what stays.
 
+**Found building it, 2026-10-31 (`0.9.793`): the ruled spelling does not compile.** A drain that empties the map when the
+loop stops early needs a destructor, and a `type view` with a destructor CLOSES ITS WINDOW (SPEC *The window*): only its own ctor
+and a `@viewable` mint hand one back, only a `borrow` may hold it, and `foreach` can neither mint nor copy one ("open it
+in a window and call `next()` on the alias"). So `foreach (Entry<K, V> e in live.drain())` is refused, while a drain
+with no destructor cannot keep the "empty after the loop, however it ends" half of the ruling. Measured on a copy: the
+Map half (`EntryParts`, `Entry.intoParts()`, `MapDrain`, `Map.drain()`) is written and reaches exactly those refusals;
+the patch and its probe are in `.scratch/kr263/` (machine-local).
+
+**Ruled 2026-10-31 (second ruling): option A, `foreach` holds a window-closing view.** A `foreach` is already a window
+(its operand is frozen for the body, `emitForeachIterator`), so it becomes the second holder the window rule admits
+beside `borrow`: its operand may mint a view that closes its window, and the view's destructor runs at every exit (the end,
+`break`, `return`). Rust's `HashMap::drain` guarantee, kept whole. Rejected: a drain without a destructor, whose `break`
+leaves the unreached pairs in the map, which makes the name promise more than a stopped loop delivers (GOALS #5). GOALS:
+`drain` always empties (#5), one way to empty a map (#4), the leftovers dropped at a known point (#3), and the
+window rule unchanged in substance. The work, in order: (1) the compiler: `foreach` over a window-closing view, the
+destructor on every exit path, xfails for keeping or copying the view out of the loop; (2) a `@viewable` contract the
+three maps implement for `drain()`; (3) `Map`/`OrderedMap`/`SortedMap` drains (`SortedMap` pops its minimum per step
+through the B-tree's own `takeMinPair`, in order, and `clear()`s the rest); (4) `ConcurrentMap.drain()` and `entries()`
+taking `give e`; fixtures on the native and sanitizer legs. Size M+.
+
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)
