@@ -723,51 +723,6 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-locked-into-inner"></a>
-
-### `Locked<T>` hands its value back once it is the last handle (KR-262)
-
-Filed 2026-10-29 from the consuming method's std audit. A `Locked<T>` moves its payload into a C cell shared by every
-handle, and the payload can only be borrowed inside a `lock()` window, so the value the workers built cannot leave when
-they are done: the last owner copies it out, or `replace`s it with a stand-in.
-
-**Read against the code 2026-10-30 (`0.9.787`).** The cell already counts its handles atomically: `kama_locked_release`
-(`lib/std/concurrent/locked.kama`, kama_locked.h) is the decrement the destructor runs, and answers non-zero for the
-last. So `intoInner` needs no new C: the same decrement, and on the last, the payload's `sizeof(T)` bytes relocated out
-of the cell (std's `unsafe`, bounded, GOALS 3a), the cell freed without running the payload's destructor, and
-`this.cell = null` so the handle's own destructor finds nothing. `ReadWriteLocked<T>` the same. Size S.
-
-**The one question: what a caller gets when another handle still lives.**
-
-| | taking the value out of a shared, locked cell |
-|---|---|
-| Rust | `Arc::try_unwrap(a) -> Result<T, Arc<T>>` (1.0) and `Arc::into_inner(a) -> Option<T>` (1.70), then `Mutex::into_inner`. `into_inner` was ADDED because `try_unwrap` loses the value when the last two handles race: both see a count of 2, both get `Err`, both drop it, and the payload is destroyed with nobody holding it |
-| C++ | none: `shared_ptr::use_count() == 1` is a racy hint |
-| Swift | `isKnownUniquelyReferenced`, one thread only |
-| Go, Java | none (a collector) |
-
-```kama
-Locked<Map<string, int32>> hits = Locked.make(value: Map.empty());
-scope { for (int32 i = 0; i < 8; i = i + 1) { spawn count(hits: copy hits); } }   // joined: this is the last handle
-Map<string, int32> all = match (give hits.intoInner()) { case Some(value: m): give m; case None: Map.empty(); };
-```
-
-1. **(Recommended) `public give fn Optional<T> intoInner()`, Rust's `Arc::into_inner`.** It always consumes the handle;
-   the call whose release is the last gets `Some(value)`, any other gets `None` and the value lives on in the remaining
-   handles. If every holder calls it, exactly one gets the value, race or not. *Sacrifice:* a caller that is not last
-   loses its handle; there is no "try, and keep it if not". Bytes: one atomic decrement, and on the last a
-   `sizeof(T)` copy out of the cell and one free.
-2. `public give fn Result<T, Locked<T>> intoInner()`, Rust's `try_unwrap`: the handle comes back in the `Err`.
-   *Sacrifice:* the race above. Two holders that each try, fail and drop destroy the value unseen.
-
-`ConcurrentMap` (KR-263) is an array of these handles, so its consuming form inherits whichever is ruled.
-
-**Ruled 2026-10-31: option 1, `Optional<T>`,** as the comprehensive answer: it is correct in every interleaving, the
-joined-workers case (the caller is last, `Some`) and the last-one-out case alike (exactly one `Some`), where option 2's
-only extra power, checking without giving the handle up, is a decision that is stale the moment it is made. GOALS:
-one method (#4), the `None` handled at the call (#5), no value lost to a race (safety), no new C (#3, the destructor's
-own decrement).
-
 <a id="s2-map-drain"></a>
 
 ### Moving a map's entries out without copying them (KR-263)

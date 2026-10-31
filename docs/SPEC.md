@@ -7477,6 +7477,12 @@ fn void hit(Locked<Map<string, int64>> cache, string path) {   // each isolate i
 - **`ReadWriteLocked<T>`** adds `lockShared()`, a `const fn` whose window's `value()` is a `const ref`: any number of <!-- xfail: locked_shared_value_write -->
   readers at once, and a `const ref ReadWriteLocked` can read but not write. Reach for it when reads are long or
   dominate; for a short section the readers' shared count costs more than an exclusive lock does.
+- **The value comes back out with `give h.intoInner()`**, a `give fn Optional<T>` on both: it consumes the handle, and <!-- test: locked_into_inner -->
+  the one whose release is the LAST gets `Some(value)`, any other `None`, the value living on in the handles that
+  remain. So the workers' result leaves once they are joined (`give hits.intoInner()` after the `scope`), and when every
+  holder calls it, exactly one gets the value, race or not: Rust's `Arc::into_inner` then `Mutex::into_inner`, which
+  Rust added beside `try_unwrap` because two last handles that each try, fail and drop destroy the value unseen. There
+  is no "try, and keep the handle if not": that answer is stale the moment it is given.
 
 **Deadlock-free by construction.** A lock window may reach no wait and take no other lock, so a critical section never
 waits on anything, and taking a lock blocks only for as long as some other section's CPU work:

@@ -1,3 +1,4 @@
+import { std::ptr::relocate };
 export { Locked, ReadWriteLocked, LockGuard, SharedLockGuard, Lockable, LockableShared };
 
 // Shared mutable state, safe at compile time (KR-226). A lock that OWNS its payload, reachable only inside a `borrow`
@@ -28,6 +29,16 @@ extern fn void      kama_locked_unlock_shared(UnsafePtr cell);
 unsafe fn void forget<T>(T value) {
     UnsafePtr<T> at = addr(of: value);
     at[0] = give value;
+}
+
+// `intoInner`'s work for both handles: release this handle's count, and on the last, move the payload out of the cell
+// (`sizeof(T)` bytes, its destructor not run) and free the cell.
+unsafe fn Optional<T> intoInnerOf<T>(UnsafePtr cell, UnsafePtr<T> payload) {
+    if (kama_locked_release(cell: cell) == 0) { return Optional::None; }
+    slot T value;
+    relocate(from: payload, at: 0, into: out value);
+    kama_locked_free(cell: cell);
+    return Optional::Some(value: give value);
 }
 
 // The mints: `lock()` grants the writable window, `lockShared()` the read-only one.
@@ -74,6 +85,15 @@ type resource Locked<T: Sendable> implements Sendable, Copyable<This>(bare: give
         kama_locked_acquire(cell: this.cell);
         return LockGuard.over(cell: this.cell, payload: this.payload);
     }
+    // The value back out, consuming this handle (KR-262): the handle whose release is the LAST gets `Some`, any other
+    // `None`, and the value lives on in the handles that remain. So when every holder calls it, exactly one gets the
+    // value, race or not — Rust's `Arc::into_inner` then `Mutex::into_inner`, which Rust added beside `try_unwrap`
+    // because two last handles that each try, fail and drop destroy the value unseen.
+    public unsafe give fn Optional<T> intoInner() {
+        UnsafePtr held = this.cell;
+        this.cell = null;   // the destructor finds nothing to release
+        return intoInnerOf(cell: held, payload: this.payload);
+    }
     unsafe ~Locked() {
         if (this.cell != null && kama_locked_release(cell: this.cell) != 0) {
             drop(ptr: this.payload);
@@ -106,6 +126,12 @@ type resource ReadWriteLocked<T: Sendable> implements Sendable, Copyable<This>(b
     public unsafe const fn SharedLockGuard<T> lockShared() {
         kama_locked_acquire_shared(cell: this.cell);
         return SharedLockGuard.over(cell: this.cell, payload: this.payload);
+    }
+    // As `Locked.intoInner`: `Some` to the last handle, `None` to any other.
+    public unsafe give fn Optional<T> intoInner() {
+        UnsafePtr held = this.cell;
+        this.cell = null;
+        return intoInnerOf(cell: held, payload: this.payload);
     }
     unsafe ~ReadWriteLocked() {
         if (this.cell != null && kama_locked_release(cell: this.cell) != 0) {
