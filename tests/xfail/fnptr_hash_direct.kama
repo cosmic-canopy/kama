@@ -1,0 +1,10 @@
+// An `fnptr`'s `hash` and `equals` come from its derived `Hashable` and `Equatable` (KR-275), so they are reached
+// through a bound, as a primitive's conformance is: `==` is how two are compared directly.
+fnptr int32 Op(int32 x);
+
+fn int32 twice(int32 x) { return x * 2; }
+
+fn uint8 main() {
+    Op f = twice;
+    return cast<uint8>(f.hash());
+}

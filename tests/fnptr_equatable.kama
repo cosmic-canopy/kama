@@ -1,0 +1,70 @@
+// An `fnptr` is `Equatable` and `Hashable` (KR-275): two values are equal when they call the same code, and the hash
+// is the address. Through 0.9.790 `f == g` compiled but `Op` satisfied no `Equatable` bound, so the operator and the
+// bound disagreed, and a `Map<Op, …>`, a `contains` or a remove-this-handler had no spelling. A kama `fnptr` is a plain
+// function address with nothing captured: C's, Zig's, Rust's and C#'s case, not Go's or Swift's closures. Returns 0;
+// else the bits that failed.
+import { std::collections::DynamicArray, std::collections::Map };
+
+fnptr int32 Op(int32 x);
+
+fn int32 twice(int32 x) { return x * 2; }
+fn int32 thrice(int32 x) { return x * 3; }
+fn int32 negate(int32 x) { return 0 - x; }
+
+fn bool same<T: Equatable<T>>(T a, T b) { return a.equals(other: b); }
+fn uint64 hashOf<T: Hashable>(T v) { return v.hash(); }
+
+// Unsubscribe: remove one handler from a list by identity.
+fn void unsubscribe(ref DynamicArray<Op> hs, Op h) {
+    isize i = 0;
+    while (i < hs.length()) {
+        if (hs[i] == h) { hs.remove(index: i); } else { i = i + 1; }
+    }
+}
+
+@generate(Equatable, Hashable)
+type value Route {
+    public Op handler;
+    public int32 weight;
+    public ctor make(Op handler, int32 weight) { this.handler = handler; this.weight = weight; }
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+    Op a = twice;
+    Op b = twice;
+    Op c = thrice;
+
+    // 1: the bound agrees with `==`
+    if (!same(a: a, b: b) || same(a: a, b: c) || (a == b) != same(a: a, b: b)) { bad = bad | 1; }
+
+    // 2: equal values hash equal
+    if (hashOf(v: a) != hashOf(v: b)) { bad = bad | 2; }
+
+    // 4: a handler as a map key — count calls per handler. A function NAME passed for the `const ref Op` key is
+    // borrowed through a temporary: it reached C as `&(twice)`, the function's own address, through 0.9.790.
+    Map<Op, int32> calls = Map.empty();
+    calls.put(key: a, value: 1);
+    calls.put(key: c, value: 5);
+    calls.put(key: b, value: 2);   // the same key as `a`: replaces it
+    int32 n = match (calls.get(key: twice)) { case Some(value: v): v; case None: 0; };
+    if (calls.length() != 2 || n != 2 || calls.get(key: negate).isSome()) { bad = bad | 4; }
+
+    // 8: `contains` and a remove-by-handler
+    DynamicArray<Op> hs = DynamicArray::<Op>.empty();
+    hs.add(item: twice);
+    hs.add(item: negate);
+    hs.add(item: twice);
+    if (!hs.contains(item: negate)) { bad = bad | 8; }
+    unsubscribe(hs: hs, h: twice);
+    Op neg = negate;
+    if (hs.length() != 1 || hs[0] != neg || hs.contains(item: twice)) { bad = bad | 8; }
+
+    // 16: a type holding one derives both
+    Route r1 = Route.make(handler: twice, weight: 1);
+    Route r2 = Route.make(handler: twice, weight: 1);
+    Route r3 = Route.make(handler: thrice, weight: 1);
+    if (!r1.equals(other: r2) || r1.equals(other: r3) || r1.hash() != r2.hash()) { bad = bad | 16; }
+
+    return cast<uint8>(bad);
+}

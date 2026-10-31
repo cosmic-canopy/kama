@@ -1,0 +1,11 @@
+// A function NAME where a `ref Op` is wanted is a value with no place, so it is a temporary, and a non-const `ref`
+// cannot take one. Through 0.9.790 it reached C as `&(twice)`, the function's own address, which clang refused.
+fnptr int32 Op(int32 x);
+
+fn int32 twice(int32 x) { return x * 2; }
+fn void reset(ref Op f) { f = twice; }
+
+fn uint8 main() {
+    reset(f: twice);
+    return 0;
+}

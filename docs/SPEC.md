@@ -4390,6 +4390,16 @@ maybe-a-callback (Rust's `Option<fn>`, Swift's `(…)?`, Zig's `?*const fn`). It
 null function to fill with, so a fixed array of them is `FixedArray.filled(size:, value:)`, never `make`. A bare
 function name gives a generic `T` nothing to infer from: write the type argument, `id::<Op>(v: twice)`. <!-- xfail: fnptr_infer_bare_name -->
 
+**An `fnptr` is `Equatable` and `Hashable`**, so `==` and the bound agree and a handler can be a `Map` key, be found <!-- test: fnptr_equatable -->
+with `contains`, or be removed from a registry by identity. Two values are **equal when they call the same code**:
+a function has one definition, so it always equals itself, and two different functions compare equal only when a
+linker folded identical machine code into one, in which case calling either does the same thing. Equality is not
+"same name". The hash is the address. Both methods are reached through a bound, as a primitive's are; `==` compares <!-- xfail: fnptr_hash_direct -->
+two directly. (C, Zig, Rust and C# compare function pointers the same way; Go and Swift refuse it, because their
+function values are closures carrying captured state, which a kama `fnptr` never is.) *Constraint:* a generic
+function's instance is emitted per file, so one could have two addresses; if an instance ever becomes an `fnptr`
+value, it must first get one.
+
 A signature may carry **`@noheap`**, which makes non-allocating part of the type: `@noheap fnptr int32 <!-- test: noheap_fnptr -->
 Op(int32 x);` requires every function bound to it to be `@noheap` too, and in exchange a call through the
 slot is legal inside a no-heap region — the one slot whose target no build can see. See *No-heap subset*.

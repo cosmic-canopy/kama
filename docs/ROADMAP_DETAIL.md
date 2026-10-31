@@ -843,37 +843,6 @@ contract or a mode of the one sink (`Formatter` already carries the specifier), 
 how a string escapes (JSON's rules are the obvious candidate), and that structs, enums and every collection take it
 together — never one at a time.
 
-<a id="s2-fnptr-type-arg"></a>
-
-### `==` on two `fnptr` values compiles, but the type is not `Equatable` (KR-275)
-
-Found 2026-10-30 while making an `fnptr` a type argument (shipped `0.9.790`): `f == g` on two `Op`s compiles
-(and runs: probed 2026-10-31), but `Op` does not satisfy an `Equatable` bound, so the operator and the bound disagree. The corpus compares two fnptrs nowhere
-(its one `cb == null` is the refused null check), so either answer breaks no kama code here.
-
-| | comparing two function values |
-|---|---|
-| C, Zig | allowed: a function pointer is an address |
-| Rust | `fn` pointers are `Eq`/`Hash`, and the comparison is now linted (`unpredictable_function_pointer_comparisons`): one function can have several addresses across codegen units, and identical-code folding can give two functions one |
-| C# | delegates compare by target and method, which is what `event -= handler` unsubscribes by |
-| Go, Swift | refused: their function values are CLOSURES carrying captured state, which have no meaningful identity |
-
-**Recommended: make an `fnptr` `Equatable` and `Hashable`,** so `==` and the bound agree and a `Map<Op, …>` or a
-remove-this-handler registry works. A kama `fnptr` is a plain function address with nothing captured, the C/Zig case
-rather than the Go/Swift one, and its equality has a definite meaning in kama: a non-generic function has one
-definition, so it always equals itself (Rust's several-addresses problem does not arise), and two different functions
-compare equal only when a linker folded identical machine code into one (lld-link and MSVC do by default), in which
-case calling either does the same thing. SPEC says equal means "calls the same code". *Sacrifice:* equality is not
-"same name". *Constraint recorded:* a generic instance is emitted `static` per file, so if one ever becomes an fnptr
-VALUE (`Op f = same::<int32>;` does not parse today) it must first get one address. The alternative, refusing `==`
-as Go does, removes the disagreement the other way, at the cost of every identity use (unsubscribe, dedupe, a key),
-and refuses what C, Zig, Rust and C# allow for exactly this kind of value. Size S.
-
-**Ruled 2026-10-31: `Equatable` + `Hashable`,** as recommended: the answer C, Zig, Rust and C# give for a plain
-function address, and the one that breaks nothing. GOALS: `==` and the bound agree (#4), equality's meaning is
-stated in SPEC (#5). The work: an `fnptr` satisfies both bounds (the hash is the address), SPEC's sentence, a
-fixture with a `Map<Op, int32>` and a remove-by-handler, and the recorded constraint for generic instances.
-
 ### `drop` — SHIPPED `0.9.290`/`0.9.291`, kept here for the rule it established
 
 `drop` takes an `UnsafePtr<T>` and destroys the pointee. The record, because the *rule* outlives the change:

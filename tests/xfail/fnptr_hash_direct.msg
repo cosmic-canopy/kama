@@ -1,0 +1,1 @@
+`hash` is not `Op`'s own method — it comes from a contract

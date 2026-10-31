@@ -19666,6 +19666,13 @@ std::string CEmitter::emitPlace(SharedExpression e)
 bool CEmitter::isCRvalue(SharedExpression e)
 {
     ASTNode* n = e.get();
+    // A FUNCTION's name, where an `fnptr` is wanted (`m.get(key: twice)` into a `const ref Op`), is a value with no
+    // place: `&(twice)` is the function's address, not a pointer to an `Op`, which kama passed and clang refused.
+    if (auto* id = dynamic_cast<IdentifierNode*>(n))
+        if (id->value && !_localTypes.count(*id->value) && !_refParams.count(*id->value)
+            && _moduleStatics.find(resolveModuleVar(*id->value, id->qualifier)) == _moduleStatics.end()
+            && _funcs.count(resolveFunc(*id->value, id->qualifier)))
+            return true;
     if (!n || dynamic_cast<IdentifierNode*>(n) || dynamic_cast<ThisAccessNode*>(n)
         || dynamic_cast<BaseAccessNode*>(n) || dynamic_cast<ElementAccessNode*>(n)) return false;
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) return !invocationReturnsPlace(inv);
@@ -21351,6 +21358,10 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
         if (!_classes.count(c->second.elemCType)) return true;   // a number, a `bool`, a `char`, a raw pointer: `==`
         return satisfiesBound(c->second.elemCType, bound_);
     }
+    // An `fnptr` is `Equatable` and `Hashable` (KR-275): equal means "calls the same code", and the hash is the address.
+    // DERIVED, like `Copyable` below, because the type is the program's own and no prelude adapter can name it; and it
+    // is the answer `==` on two of them already gave, so the operator and the bound agree.
+    if (isSigType(t) && (preludeLeaf(bound_) == "Equatable" || preludeLeaf(bound_) == "Hashable")) return true;
     if (preludeLeaf(bound_) == "Copyable") {
         if (it == _classes.end()) return true;                 // primitive C type → bitwise-copyable
         if (it->second.kind == TypeKind::Value) return true;   // a value → bitwise-copyable
@@ -45248,6 +45259,27 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     if (isInterface(cls))
         return emitInterfaceDispatch(emitExpression(receiver), cls, method, call->args, call->line, "",
                                      recv->identifier.get(), receiver);
+    // An `fnptr` receiver's two derived methods (KR-275, beside its bound in satisfiesBound): `hash` is the address and
+    // `equals` is `==`. Reached through a bound only, as a primitive's conformance is (below).
+    {
+        std::string sigTy = isSigType(cls) ? cls : std::string();
+        if (sigTy.empty()) { const std::string t = typeOfExpr(receiver); if (isSigType(t)) sigTy = t; }
+        if (!sigTy.empty() && (method == "hash" || method == "equals")) {
+            SharedIdentifier tn = receiverTypeNode(receiver);
+            const bool viaTypeParam = !tn || (tn->value && _typeSubst.count(*tn->value) != 0);
+            if (!viaTypeParam && !_inSynthDispatch)
+                unsupported(("`" + method + "` is not `" + demangleForDisplay(sigTy) + "`'s own method — it comes from "
+                             "a contract, so reach it through one: a bound (`fn f<T: C<T>>(T x)`), or `==` to compare "
+                             "two").c_str(), call);
+            const std::string r = emitExpression(receiver);
+            if (method == "hash") return "((uint64_t)(uintptr_t)(" + r + "))";
+            if (!call->args || call->args->size() != 1 || !(*call->args)[0]) {
+                unsupported("`equals` takes one argument, `other`", call);
+                return "0";
+            }
+            return "((" + r + ") == (" + emitExpression((*call->args)[0]->expression) + "))";
+        }
+    }
     // A PRIMITIVE receiver with a conformance (`type adapter <int32> implements Hashable`): the method's
     // `this` is the SCALAR itself, passed BY VALUE. `exprClass` is "" for a primitive, so recover the
     // receiver's type separately. Resolve on `_primConformances`; the call is a plain free function

@@ -569,7 +569,9 @@ fnptr_bind_extern_agg_shape	fnptr_bind_extern_agg_shape.kama:16:13
 fnptr_call_result_narrowed	fnptr_call_result_narrowed.kama:12:4 fnptr_call_result_narrowed.kama:13:4 fnptr_call_result_narrowed.kama:14:4
 fnptr_callee_untyped	fnptr_callee_untyped.kama:8:23
 fnptr_fixedarray_make	fnptr_fixedarray_make.kama:9:24
+fnptr_hash_direct	fnptr_hash_direct.kama:9:23
 fnptr_infer_bare_name	fnptr_infer_bare_name.kama:10:11
+fnptr_name_to_ref	fnptr_name_to_ref.kama:9:4
 fnptr_null_check	fnptr_null_check.kama:4:8
 for_clause_discards_owning	for_clause_discards_owning.kama:12:29
 for_on_type	for_on_type.kama:1:0
