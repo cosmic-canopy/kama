@@ -22,11 +22,11 @@ jobs:
           # -Werror gates the primary Linux leg only (zero-warnings gate); macOS/Windows stay
           # ungated to avoid compiler/bison-version drift breaking CI — the code is identical
           # across legs, so any warning in portable code is still caught here.
-          - { os: ubuntu-latest, name: linux-x64,   werror: "-Werror" }
-          - { os: macos-14,      name: macos-arm64, werror: "" }
+          - { os: ubuntu-26.04,  name: linux-x64,   werror: "-Werror" }
+          - { os: macos-26,      name: macos-arm64, werror: "" }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
@@ -47,7 +47,7 @@ jobs:
       # -j4: the compiler is ~10 TUs and, since it started building at -O2, a serial build costs ~23 s
       # against ~13 s at -j4. Safe by the same evidence `dev` records — -j and serial builds produce
       # byte-identical objects. Capped at 4 rather than unbounded because the largest TU
-      # (kama.cemit.cpp) peaks near 1.1 GB, and the smallest runner here is macos-14 at 3 cores / 7 GB.
+      # (kama.cemit.cpp) peaks near 1.1 GB, and the smallest runner here is macos-26 at 3 cores / 7 GB.
       - name: Build
         run: make -j4 EXTRA_CXXFLAGS=${{ matrix.werror }}
 
@@ -59,7 +59,7 @@ jobs:
 
   windows-test:
     name: build + test (windows-x64)
-    runs-on: windows-latest
+    runs-on: windows-2025
     # std::fs/std::net's Windows branch (kama_os.h Winsock/CRT) can only be verified here — it has no local
     # equivalent on the Linux/macOS dev boxes.
     #
@@ -77,7 +77,7 @@ jobs:
     defaults:
       run: { shell: 'msys2 {0}' }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
@@ -104,16 +104,21 @@ jobs:
 
   wasm:
     name: wasm (build + run every fixture under node)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
         with: { fetch-depth: 0 }
       - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
       - run: make -j4
-      - uses: mymindstorm/setup-emsdk@v16
+      - uses: emscripten-core/setup-emsdk@v16   # moved from mymindstorm/; v16 is its latest
+      # Node 24 LTS ahead of the emsdk's own (22.16, whose Brotli decoder is CVE-2026-111497's), for the tests and for
+      # emcc alike: the dev container (Dockerfile) does the same.
+      - uses: actions/setup-node@v7
+        with: { node-version: '24' }
+      - run: echo "EM_NODE_JS=$(command -v node)" >> "$GITHUB_ENV"
       - name: Quick smoke (arith -> wasm -> node == 42)
         # Into out/, not the repo root. Nothing a build generates belongs in the worktree — that is what
         # tools/check-clean-tree.sh holds down, and `out/` is the one ignored root (see .gitignore).
@@ -125,20 +130,20 @@ jobs:
 
   grammar:
     name: editor grammars (tree-sitter + TextMate) + site
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # The build-test legs deliberately never `npm install`, which is why tools/check-syntax.sh has always
     # SKIPped there and why the tree-sitter guard would too. This is the one leg where both have teeth: it
     # installs the PINNED tree-sitter CLI from the lockfile (the pin is what makes the "generate is a
     # no-op" oracle meaningful) and the vscode-textmate tokenizer, then runs the whole-corpus parse.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
         with: { fetch-depth: 0 }
       - run: sudo apt-get update && sudo apt-get install -y flex bison make clang
       - run: make -j4
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
           cache: npm

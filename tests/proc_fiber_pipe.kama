@@ -34,17 +34,30 @@ fn void fail(int32 bit) { bad = bad | bit; }
 fn Command util2(string sub, string a) { Command c = Command.make(program: util()); c.arg(a: give sub); c.arg(a: give a); return c; }
 fn Command util3(string sub, string a, string b) { Command c = util2(sub: give sub, a: give a); c.arg(a: give b); return c; }
 
-// 1: one read of a child that prints "tick" after 100 ms.
+// One line, read a byte at a time so nothing past its newline is taken: `println` writes the text and the newline in
+// two system calls (KR-276), so a read woken between them sees "tick" alone. True for "tick\n".
+unsafe fn bool oneTick(ref File end) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    isize total = 0;
+    while (total < 5) {
+        isize n = match (end.read(into: b.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n != 1) { return false; }
+        total = total + 1;
+        if (b[0] == 10ui8) { return total == 5; }
+    }
+    return false;
+}
+
+// 1: the line of a child that prints "tick" after 100 ms.
 unsafe fn void quietPipe(int32 bit) {
     Command c = util3(sub: "tick", a: "100", b: "1");
     c.stdout(s: Stdio::Piped);
     Result<Process, IoError> r = c.start();
     match (give r) {
         case Ok(value: p): {
-            FixedArray<uint8> buf = FixedArray.make(size: 16);
-            isize got = match (p.stdout().read(into: buf.viewMut())) { case Ok(value: n): n; case Err(error: e): -1; };
+            bool got = oneTick(end: p.stdout());
             Result<ExitStatus, IoError> w = p.wait();
-            if (got != 5) { fail(bit: bit); }
+            if (!got) { fail(bit: bit); }
         }
         case Err(error: e): { fail(bit: bit); }
     };
@@ -110,10 +123,6 @@ unsafe fn bool catRest(Descriptor rest) {
     Result<Output, IoError> r = cat.run();
     return match (give r) { case Ok(value: o): o.status().success() && text(b: o.stdout().view()) == "tick\ntick\n"; case Err(error: e): false; };
 }
-unsafe fn bool firstTick(ref File end) {
-    FixedArray<uint8> buf = FixedArray.make(size: 5);
-    return match (end.read(into: buf.viewMut())) { case Ok(value: n): n == 5; case Err(error: e): false; };
-}
 // 32: the rest through a duplicate.
 unsafe fn void handDuplicate(int32 bit) {
     Command c = util3(sub: "tick", a: "60", b: "3");
@@ -121,7 +130,7 @@ unsafe fn void handDuplicate(int32 bit) {
     Result<Process, IoError> r = c.start();
     match (give r) {
         case Ok(value: p): {
-            bool first = firstTick(end: p.stdout());
+            bool first = oneTick(end: p.stdout());
             Result<Descriptor, IoError> d = p.stdout().duplicateDescriptor();
             bool rest = match (give d) { case Ok(value: x): catRest(rest: give x); case Err(error: e): false; };
             Result<ExitStatus, IoError> w = p.wait();
@@ -139,7 +148,7 @@ unsafe fn void handOver(int32 bit) {
     match (give r) {
         case Ok(value: p): {
             File end = p.takeStdout();
-            bool first = firstTick(end: end);
+            bool first = oneTick(end: end);
             bool rest = catRest(rest: give end.intoDescriptor());
             Result<ExitStatus, IoError> w = p.wait();
             if (!first || !rest) { fail(bit: bit); }

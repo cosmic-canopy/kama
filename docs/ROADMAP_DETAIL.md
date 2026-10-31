@@ -516,6 +516,20 @@ read at all.
    negative claim.
 8. **Docs.** SPEC's stdlib section, then this row is deleted.
 
+<a id="s1-println-one-write"></a>
+
+#### `println` writes a line in two system calls (KR-276)
+
+Found 2026-10-31: a fiber fixture (`proc_fiber_pipe`) that read a child's `println("tick")` expecting `"tick\n"` in
+one read flaked under load with `"tick"` alone. `println`/`eprintln` write the text and then the newline as two
+`write`s (`kama_print_nl`, `include/kama_runtime.h`), so a reader can wake between them, and lines printed by two
+isolates, or by a parent and a child sharing a terminal or a pipe, interleave as `a`, `b`, `\n`, `\n`. Go's
+`fmt.Println` makes one write per call; Rust's `println!` goes through a line-buffered stdout that writes the line
+whole; C's `puts` is one `fwrite` into a line-buffered stream. **Fix:** one write of text plus newline, `writev` on
+POSIX (atomic into a pipe up to `PIPE_BUF`) and one `WriteFile` of a joined buffer on Windows, so a line of up to
+`PIPE_BUF` bytes is never split; the embedded sink gets one call too. Size S, runtime only, with a fixture where two
+isolates print many lines into one pipe and every line arrives whole.
+
 <a id="s1-http-package"></a>
 
 ### `@kama/http` — a first-party HTTP package for both targets (KR-173)

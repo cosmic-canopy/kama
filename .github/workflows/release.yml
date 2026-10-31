@@ -10,7 +10,9 @@ permissions:
 env:
   # Bundled-toolchain version for the "-bundled" installer variant (zero-dependency
   # `kama build`). Bumpable; uses zig's modern `zig-<arch>-<os>-<ver>` tarball naming.
-  ZIG_VERSION: "0.15.2"
+  # The version the guards run `zig cc` with (tools/check-target.sh, check-clean-tree.sh, …), so what ships is what
+  # is tested: 0.16.0 since 2026-10-31. 0.17.0 is out and unprobed; bump once the guards have run it.
+  ZIG_VERSION: "0.16.0"
 
 jobs:
   build:
@@ -19,15 +21,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest,    name: linux-x64,       extra: "",                         zig: x86_64-linux }
+          # The OS a release is BUILT on is the oldest its binary runs on: kama links the runner's glibc, and a Mac build
+          # defaults to the SDK's macOS. So the Linux legs stay pinned to 24.04 (glibc 2.39, every release so far) while CI
+          # tests on 26.04, and the Mac leg names its floor in MACOSX_DEPLOYMENT_TARGET below. `ubuntu-latest` moving to
+          # 26.04 (Nov 2026) would otherwise have raised the floor to glibc 2.43 unannounced. "Verify the OS floor" holds both.
+          - { os: ubuntu-24.04,     name: linux-x64,       extra: "",                         zig: x86_64-linux }
           - { os: ubuntu-24.04-arm, name: linux-arm64,     extra: "",                         zig: aarch64-linux }
           # One macOS UNIVERSAL2 artifact (arm64 + x86_64). The bundled zig is arm64-only
           # (zig ships per-arch, not universal): the bundled macOS variant targets Apple
           # Silicon; Intel Macs without a compiler should use the slim build + Xcode CLT.
-          - { os: macos-14,         name: macos-universal, extra: "-arch arm64 -arch x86_64", zig: aarch64-macos }
+          - { os: macos-26,         name: macos-universal, extra: "-arch arm64 -arch x86_64", zig: aarch64-macos }
     runs-on: ${{ matrix.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "14.0"   # the Mac floor (clang reads it; ignored on Linux)
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
@@ -53,6 +61,21 @@ jobs:
 
       - name: Verify version stamp
         run: ./kama --version | grep -q "$VERSION"
+
+      - name: Verify the OS floor (glibc 2.39, macOS 14.0)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            need=$(objdump -T ./kama | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
+            echo "needs glibc $need"
+            [ "$(printf '%s\n2.39\n' "$need" | sort -V | tail -1)" = 2.39 ] || { echo "::error::kama needs glibc $need, above the 2.39 floor"; exit 1; }
+          else
+            for a in arm64 x86_64; do
+              m=$(otool -arch "$a" -l ./kama | awk '/minos/ { print $2; exit }')
+              echo "$a minos $m"
+              [ "$m" = 14.0 ] || { echo "::error::the $a slice needs macOS $m, not the 14.0 floor"; exit 1; }
+            done
+          fi
 
       - name: Smoke (fixtures)
         run: ./run_tests.sh
@@ -111,14 +134,14 @@ jobs:
           tar czf "${PKG}.tar.gz" "$PKG"
           shasum -a 256 "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: kama-${{ matrix.name }}
           path: kama-*.tar.gz*
 
   windows:
     name: build windows-x64
-    runs-on: windows-latest
+    runs-on: windows-2025
     # Best-effort: a Windows failure must NEVER block the release (the macos-13
     # lesson). windows-latest runners are readily scheduled, so no hang risk; with
     # continue-on-error the publish job proceeds even if this build breaks.
@@ -126,7 +149,7 @@ jobs:
     defaults:
       run: { shell: 'msys2 {0}' }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
@@ -195,19 +218,19 @@ jobs:
           mv zigtmp/zig-*/* "$PKG/libexec/zig/"
           tar czf "${PKG}.tar.gz" "$PKG"
           sha256sum "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with: { name: kama-windows-x64, path: kama-*.tar.gz* }
 
   vsix:
     name: package VSCode extension
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Full history: tools/check-editors.sh resolves the commit `editor/zed/extension.toml` pins
       # (a shallow clone has only the tip, so any pin but HEAD looks like a bogus rev), and the site
       # generator dates sitemap <lastmod> from each page's last commit.
         with: { fetch-depth: 0 }
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with: { node-version: '24' }
       # The extension is NOT bundled — `.vscodeignore` deliberately ships node_modules — so `vsce
       # package` runs `npm list --production` and fails outright when the dependency tree is absent.
@@ -232,15 +255,15 @@ jobs:
           # it is why they read as coupled when nothing in the build couples them.
           EXT_VERSION=$(node -p 'require("./package.json").version')
           vsce package --allow-missing-repository -o "../../kama-vscode-${EXT_VERSION}.vsix"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with: { name: kama-vsix, path: kama-vscode-*.vsix }
 
   publish-extension:
     name: publish VSCode extension
     needs: [vsix]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with: { name: kama-vsix, path: . }
       # ⚠️ Deliberately NOT `continue-on-error`. Both steps were, under the comment "skips cleanly
       # until VSCE_PAT is configured" — and they did far more than that: EVERY failure was swallowed,
@@ -291,14 +314,14 @@ jobs:
     # `windows` is continue-on-error, so it satisfies `needs` even if it fails —
     # its artifact is included when it succeeds, never blocks the release when it doesn't.
     needs: [build, windows, vsix]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       # The release page carries the annotated tag's notes (`git tag -a`, the subject line dropped), above
       # GitHub's generated changelog link. Through v0.9.486 it carried the link alone: nothing read the
       # tag, so every release's notes were written and never shown. A pushed tag reaches the checkout as a
       # LIGHTWEIGHT ref naming the commit, so the annotated object is fetched over it; a tag with no notes
       # gets an empty body and a warning, never its commit's message.
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Release notes (the annotated tag's message)
         shell: bash
         run: |
@@ -309,7 +332,7 @@ jobs:
             echo "::warning title=release notes::$GITHUB_REF_NAME is not an annotated tag, so the release page carries only the generated changelog link"
             : > "$RUNNER_TEMP/notes.md"
           fi
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with: { path: dist, merge-multiple: true }
       - uses: softprops/action-gh-release@v3
         with:

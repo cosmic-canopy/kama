@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-276**
+**Next id: KR-277**
 
 ## The shape
 
@@ -58,6 +58,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 | KR-107 | **An `fnptr` type is not a type argument** — `DynamicArray<Op>`, `Map<string, Op>` (the callback-registry shape SPEC names), `Optional<Op>` and any user generic over an `fnptr` do not instantiate, and a generic FUNCTION over one passes kama and fails in clang. **Scoped 2026-10-30:** two type predicates miss the fnptr table, so every instance is silently deferred; a five-hunk fix verified on a copy (native 2906/0), plus a `foreach` binding that cannot be called. Ruled 2026-10-31: any fnptr expression is callable, the callee evaluated before the arguments | S | [§2](ROADMAP_DETAIL.md#s2-fnptr-type-arg) |
 | KR-29 | **tree-sitter accepts every reserved word as a binding name** — all 84 kama keywords and the 38 C-only spellings the lexer refuses (re-measured `0.9.787`), so `Thing else = …` renders as a valid declaration in every editor on this grammar and the compiler then rejects it. **Proven on a copy 2026-10-30:** tree-sitter's `reserved` sets (CLI 0.26.11) with two per-rule overrides make all 168 keyword probes error at the declaration, the corpus unchanged, 59/59 grammar tests; a guard keeps the set equal to `kama.l`'s table. Ruled 2026-10-31: the C-only words reserved too, and the contextual words as a type or function name folded in (detail) | S–M | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-275 | **`==` on two `fnptr` values compiles, but an `fnptr` type does not satisfy `Equatable`** — the operator and the bound disagree, so a generic over `Equatable` refuses what a plain comparison accepts. Found scoping KR-107 (2026-10-30). Rust implements `Eq` for fn pointers and now lints the comparison; Go and Swift refuse it. A ruling first: refuse `==` (a source break) or make it `Equatable` | S? | [§2](ROADMAP_DETAIL.md#s2-fnptr-type-arg) |
+| KR-276 | **`println` writes a line in two system calls** — the text, then the newline, so a reader can wake between them and lines from two isolates or two processes sharing a pipe interleave (`a`, `b`, `\n`, `\n`); a fiber fixture flaked on it under load (2026-10-31). Go's `fmt.Println` and Rust's line-buffered stdout write a line whole. Fix: one `writev` | S | [§1](ROADMAP_DETAIL.md#s1-println-one-write) |
 
 ## NOW — the next features, in build order
 

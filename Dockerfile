@@ -13,7 +13,11 @@
 # flag has changed across emscripten releases).
 FROM emscripten/emsdk:latest
 
+# `apt-get upgrade` first: the emsdk base is rebuilt only with an emscripten release, so its packages carry whatever
+# was current then. CVE-2026-111497 (the Brotli decoder) was fixed in Ubuntu's libbrotli1 1.1.0-2ubuntu0.1 weeks after
+# the base was built; a rebuild of this image now takes such fixes.
 RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends \
       bison \
       flex \
@@ -34,6 +38,19 @@ RUN apt-get update \
 # libclang-rt-18-dev ships the compiler-rt runtime (libclang_rt.asan/ubsan.*) that the bare
 # `clang` metapackage omits on arm64 — without it `-fsanitize=address,undefined` fails to LINK.
 # It tracks the clang version above (18 here); bump the suffix if the base image's clang moves.
+
+# Node 24 LTS, ahead of the emsdk's own Node on PATH and as emcc's (EM_NODE_JS): the emsdk pins its own Node (22.16, then
+# 24.19.0 in the base of 2026-10-31), older than the release that fixed CVE-2026-111497, the Brotli decoder (24.22.1),
+# and CI's wasm job sets up the same Node 24. Checked against the release's SHASUMS256.txt. Bump NODE_VERSION with the
+# LTS line's security releases.
+ARG NODE_VERSION=24.22.2
+RUN arch=$(dpkg --print-architecture) && case "$arch" in amd64) n=x64 ;; arm64) n=arm64 ;; *) echo "no Node for $arch" >&2; exit 1 ;; esac \
+ && f="node-v${NODE_VERSION}-linux-${n}.tar.xz" \
+ && curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${f}" \
+ && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" | grep " ${f}\$" | sha256sum -c - \
+ && mkdir -p /opt/node && tar -xJf "$f" -C /opt/node --strip-components=1 && rm "$f"
+ENV PATH=/opt/node/bin:$PATH
+ENV EM_NODE_JS=/opt/node/bin/node
 
 # Browser test harness for the wasm web transports (WebTransport / WebRTC / WebSocket-in-browser E2E, which
 # node can't run). Chromium + Playwright live in the IMAGE, not the repo, so the tree stays small. NODE_PATH

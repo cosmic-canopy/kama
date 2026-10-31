@@ -35,7 +35,9 @@ specific release.
 [Releases](https://github.com/cosmic-canopy/kama/releases) page, extract it, and add its `bin/` to your
 PATH — `kama` finds its runtime header and stdlib relative to the binary, so it runs from any directory.
 Packages are named `kama-<platform>-vX.Y.Z` — `linux-x64`, `linux-arm64`, `macos-universal`,
-`windows-x64` — with a `-bundled` variant that carries its own C compiler:
+`windows-x64` — with a `-bundled` variant that carries its own C compiler. A release runs on Linux with glibc 2.39 or
+later (Ubuntu 24.04, Debian 13, Fedora 40 and later), macOS 14 or later (one binary for Apple silicon and Intel), and
+Windows 10 version 1803 or later; the release workflow checks the Linux and macOS floors on every build:
 
 ```sh
 tar xzf kama-linux-x64-vX.Y.Z.tar.gz -C ~/.kama --strip-components=1
