@@ -66,11 +66,11 @@ const PREC = {
 
 /** kama.y `integral_type` + `floating_point_type` + BOOL / CHAR / STRING. */
 const PRIMITIVE_TYPES = [
-  'int', 'int8', 'int16', 'int32', 'int64',
+  'int8', 'int16', 'int32', 'int64',
   'uint8', 'uint16', 'uint32', 'uint64',
   'isize', 'usize',
   'cchar', 'clong', 'culong',
-  'double', 'float32', 'float64',
+  'float32', 'float64',
   'bool', 'char', 'string',
 ];
 
@@ -88,6 +88,33 @@ const OVERLOADABLE_OPERATORS = [
   '&', '|', '^', '<<', '>>', '==', '!=', '>', '<', '>=', '<=',
 ];
 
+/** Every word kama.l refuses as a name, everywhere a name is not explicitly opened to one (KR-29): its keyword table less
+ *  the six contextual words below, then the C spellings `c_reserved` adds (kama lowers to C, so a name that collides
+ *  with C's emits C that does not compile). `word: $.identifier` alone extracts keywords CONTEXTUALLY, so a keyword
+ *  lexed as a name wherever the grammar wanted one, and `Thing else = …` parsed clean in every editor on this grammar.
+ *  tools/check-treesitter.sh holds this list equal to kama.l's two tables, so it is written out rather than read from
+ *  ../src/kama.l, which would break the guard's regenerate-in-a-copy oracle. */
+const RESERVED_KAMA = [
+  'abstract', 'addr', 'alignof', 'as', 'asm', 'assert', 'base', 'bitcast', 'bool', 'borrow', 'break', 'case', 'cast',
+  'cchar', 'char', 'clong', 'comptime', 'const', 'continue', 'copyElements', 'ctor', 'culong', 'debugAssert',
+  'default', 'do', 'drop', 'else', 'enum', 'export', 'expose', 'extends', 'extern', 'false', 'final', 'float32',
+  'float64', 'fn', 'fnptr', 'for', 'foreach', 'friend', 'hardware', 'if', 'immutable', 'implements', 'import', 'in',
+  'int16', 'int32', 'int64', 'int8', 'isize', 'match', 'new', 'null', 'operator', 'out', 'override', 'panic',
+  'parallel_for', 'parallel_spawn', 'private', 'protected', 'public', 'ref', 'return', 'scope', 'sizeof', 'spawn',
+  'static', 'string', 'this', 'true', 'try', 'uint16', 'uint32', 'uint64', 'uint8', 'unsafe', 'usize', 'virtual',
+  'void', 'when', 'while',
+];
+const RESERVED_C = [
+  '_Alignas', '_Alignof', '_Atomic', '_BitInt', '_Bool', '_Complex', '_Decimal128', '_Decimal32', '_Decimal64',
+  '_Generic', '_Imaginary', '_Noreturn', '_Static_assert', '_Thread_local', 'alignas', 'auto', 'constexpr', 'double',
+  'float', 'goto', 'inline', 'int', 'long', 'nullptr', 'register', 'restrict', 'short', 'signed', 'static_assert',
+  'struct', 'switch', 'thread_local', 'typedef', 'typeof', 'typeof_unqual', 'union', 'unsigned', 'volatile',
+];
+const RESERVED = [...RESERVED_KAMA, ...RESERVED_C];
+/** kama.l's contextual words: each names a binding, a member or a method, and none names a declared type, function, enum
+ *  member or type parameter — the `declared` set below. */
+const CONTEXTUAL = ['copy', 'give', 'truncate', 'type', 'slot', 'file'];
+
 const commaSep1 = (rule) => seq(rule, repeat(seq(',', rule)));
 const commaSep = (rule) => optional(commaSep1(rule));
 
@@ -97,6 +124,16 @@ module.exports = grammar({
   // Keyword extraction. Without this, `newType` lexes as `new` + `Type` and the keyword/identifier tie
   // becomes order-dependent rather than longest-match.
   word: ($) => $.identifier,
+
+  // The first set is the GLOBAL one, applied wherever a rule does not name another. The others open a name position
+  // the way the compiler does: after `.`, `base` and `default` are members (`this.base`, `T.default()`), and a contract's
+  // `for` list takes `enum`. `declared` adds the six contextual words where the compiler refuses them too.
+  reserved: {
+    global: (_) => RESERVED,
+    member: (_) => RESERVED.filter((w) => w !== 'base' && w !== 'default'),
+    kind: (_) => RESERVED.filter((w) => w !== 'enum'),
+    declared: (_) => [...RESERVED, ...CONTEXTUAL],
+  },
 
   extras: ($) => [
     /\s/,
@@ -124,7 +161,15 @@ module.exports = grammar({
   // literal, `truncate` before `<`, a name and `>`. The decision needs the text AFTER the word, which a grammar
   // cannot see, so src/scanner.c makes it — the same lookahead, blanks and comments skipped. No string literal
   // `'give'`/`'copy'`/`'truncate'` appears in this grammar, so everywhere else the word lexes as an identifier.
-  externals: ($) => [$._give_keyword, $._copy_keyword, $._truncate_keyword],
+  //
+  // `_reserved_only` is never emitted. It leads `_reserved_tokens`, the one place the C-only spellings and these three
+  // words appear as string tokens, so a reserved set can name them and no input can ever reach them.
+  //
+  // `_contextual_declared_name` is the scanner's answer for those three words where a FUNCTION's name is wanted (a free
+  // function, an `fnptr`, an `extern fn`) and the compiler refuses them. A reserved set cannot refuse them there: the
+  // name is lexed in the state just after its return type, which `int32 give = 3;` shares, so the scanner decides it by
+  // the `(` or `<` a function's name is followed by and a binding's never is.
+  externals: ($) => [$._give_keyword, $._copy_keyword, $._truncate_keyword, $._reserved_only, $._contextual_declared_name],
 
   rules: {
     // ── Compilation unit ────────────────────────────────────────────────────────────────────────────
@@ -137,7 +182,16 @@ module.exports = grammar({
         optional($.import_declaration),
         optional($.export_manifest),
         repeat($._top_level_declaration),
+        optional($._reserved_tokens),
       ),
+
+    // Inert: see `externals`. Its tokens exist so the reserved sets can name them.
+    _reserved_tokens: ($) => seq($._reserved_only, choice(...RESERVED_C, 'give', 'copy', 'truncate')),
+    // A function's name: any name but a reserved word, and never `copy`/`give`/`truncate`. The second arm is never
+    // taken: it makes `_contextual_declared_name` valid here, which is how the scanner knows it is at a function's name
+    // (see `externals`), and the scanner then answers with the word's keyword, which no rule takes here.
+    _function_name: ($) =>
+      choice(reserved('declared', $.identifier), seq($._contextual_declared_name, $._reserved_only)),
 
     // THE FILE GATE — `file @compileFor(!ARCH_WASM32);`, kama.y's `file_directive_opt`. A unit's FIRST
     // line, ahead of `import`, gating the whole file the way `@compileFor` gates one declaration.
@@ -249,13 +303,13 @@ module.exports = grammar({
     // kama.y:735 — `for value, view` on a contract: a COMMA LIST, no `|` alternative. Kind words again,
     // contextual.
     for_kinds: ($) => seq('for', commaSep1($.kind_name)),
-    kind_name: ($) => $.identifier,
+    kind_name: ($) => reserved('kind', $.identifier),
 
     // kama.y:277 — the DECLARATION-site head, whose params can carry bounds. Distinct from the USE-site
     // `type_arguments`, which cannot.
     type_declaration_head: ($) =>
       seq(
-        field('name', $.identifier),
+        field('name', reserved('declared', $.identifier)),
         optional($.type_parameters),
         optional($.comptime_parameters),
       ),
@@ -270,12 +324,12 @@ module.exports = grammar({
         // permissive rule would make tree-sitter accept what the compiler will not. Listed first so
         // `T is …` cannot reduce as name-then-default.
         seq(
-          field('name', $.identifier),
+          field('name', reserved('declared', $.identifier)),
           'is',
           field('pin', $.type_name),
         ),
         seq(
-          field('name', $.identifier),
+          field('name', reserved('declared', $.identifier)),
           optional(seq(':', field('bounds', $.bound_list))),
           optional($._type_parameter_default),
         ),
@@ -373,7 +427,7 @@ module.exports = grammar({
 
     enum_member: ($) =>
       seq(
-        field('name', $.identifier),
+        field('name', reserved('declared', $.identifier)),
         optional(
           choice(
             seq('=', field('value', $._expression)),
@@ -407,7 +461,7 @@ module.exports = grammar({
         optional('comptime'),
         'fn',
         field('return_type', $._function_return_type),
-        field('name', $.identifier),
+        field('name', $._function_name),
         optional($.type_parameters),
         field('parameters', $.parameter_list),
         // A function's compile-time values are its LAST list — after the runtime one.
@@ -437,7 +491,7 @@ module.exports = grammar({
           'extern',
           'fn',
           field('return_type', $._function_return_type),
-          field('name', $.identifier),
+          field('name', $._function_name),
           field('parameters', $.parameter_list),
           ';',
         ),
@@ -450,7 +504,7 @@ module.exports = grammar({
         'extern',
         'const',
         field('type', $._type),
-        field('name', $.identifier),
+        field('name', reserved('declared', $.identifier)),
         ';',
       ),
 
@@ -459,7 +513,7 @@ module.exports = grammar({
         optional($.attribute_list),
         'fnptr',
         field('return_type', $._function_return_type),
-        field('name', $.identifier),
+        field('name', $._function_name),
         field('parameters', $.parameter_list),
         ';',
       ),
@@ -1029,7 +1083,7 @@ module.exports = grammar({
     field_expression: ($) =>
       prec.left(
         PREC.member,
-        seq(field('object', $._expression), '.', field('field', $._name)),
+        seq(field('object', $._expression), '.', field('field', reserved('member', $._name))),
       ),
 
     subscript_expression: ($) =>
@@ -1038,7 +1092,8 @@ module.exports = grammar({
         seq(field('object', $._expression), '[', commaSep1($._expression), ']'),
       ),
 
-    // Callees are restricted the way kama.y restricts them — a parenthesised expression is not callable.
+    // Callees are restricted the way kama.y restricts them: a name, a member, an element, a call's result or a
+    // parenthesized expression (KR-107), never an arbitrary operator expression.
     _callable: ($) =>
       choice(
         $.identifier,
@@ -1104,7 +1159,8 @@ module.exports = grammar({
         seq(
           field('object', $._expression),
           '.',
-          field('name', $.identifier),
+          // ⚠️ the state after `.` is shared with field_expression, so both carry `member` or neither does
+          field('name', reserved('member', $.identifier)),
           '::',
           $.type_arguments,
         ),

@@ -1,0 +1,8 @@
+// `null` is reserved: it is no value in kama (an `fnptr` and every handle are non-null, and a maybe is an `Optional`), and
+// it names nothing either. tree-sitter refuses it at the declaration as the compiler does (KR-29); before, the editor
+// grammar showed this file clean.
+fn uint8 main()
+{
+    isize null = 1;
+    return 0;
+}

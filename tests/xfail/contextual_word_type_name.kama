@@ -2,5 +2,5 @@
 // `slot` and `file` do, and like them they name no type. The message names the word and the rule.
 type value give { public int32 x; }
 fn uint8 main() { return 0; }
-// ⚠️ Not in tree-sitter-kama/test/parse-errors.txt: tree-sitter accepts a reserved word at a DECLARATION site, for every
-// reserved word alike — KR-29, which is the row that owns it. The editor shows this file clean; the compiler does not.
+// tree-sitter refuses it too (KR-29): a type, an enum member, a function and a type parameter take the `declared` reserved
+// set, the six contextual words included, so this file is in tree-sitter-kama/test/parse-errors.txt.

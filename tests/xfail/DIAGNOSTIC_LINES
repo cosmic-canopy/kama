@@ -1081,6 +1081,7 @@ noheap_unmarked_alloc	noheap_unmarked_alloc.kama:14:0
 nonexhaustive_args	nonexhaustive_args.kama:2:0
 nonexhaustive_package_outside	main.kama:4:32
 nonexhaustive_std_closed_match	nonexhaustive_std_closed_match.kama:6:11
+null_as_name	null_as_name.kama:6:10
 null_check_safe	null_check_safe.kama:4:57
 null_compare_null	null_compare_null.kama:3:13 null_compare_null.kama:4:13
 null_safe_assignment	null_safe_assignment.kama:10:4 null_safe_assignment.kama:11:4
@@ -1328,7 +1329,7 @@ reffn_static_local	reffn_static_local.kama:9:24 reffn_static_local.kama:9:37
 refreturn_local	refreturn_local.kama:5:78
 reserved_binding_name	reserved_binding_name.kama:2:18
 reserved_type_name	reserved_type_name.kama:3:11
-reserved_word_as_name	reserved_word_as_name.kama:14:10 reserved_word_as_name.kama:15:27
+reserved_word_as_name	reserved_word_as_name.kama:17:10
 result_given_element	result_given_element.kama:3:33 result_given_element.kama:4:34 result_given_element.kama:6:4
 scope_borrow_element	scope_borrow_element.kama:20:0 scope_borrow_element.kama:20:8
 scope_borrow_escape	scope_borrow_escape.kama:27:12

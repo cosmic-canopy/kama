@@ -9,7 +9,8 @@
 #
 #   ALWAYS (needs only $KAMA and grep — no CLI, so a fresh clone still gets real teeth):
 #     1. KEYWORD DRIFT — every keyword in kama.l's table is a terminal in the generated grammar, the
-#        numeric suffixes agree, and — the INVERSE check — the contextual kind words are NOT terminals.
+#        numeric suffixes agree, the INVERSE check — the contextual kind words are NOT terminals — and
+#        `reserved.global` is exactly the words kama.l refuses as a name (KR-29).
 #     2. THE SHARED FIXTURES — tests/syntax/*.kama agree with `kama check`, exactly as check-syntax.sh
 #        asserts, so the two guards cannot drift apart about what that corpus means.
 #
@@ -81,7 +82,23 @@ if [ -f "$G/src/grammar.json" ]; then
             note "'$kw' is a grammar TERMINAL, but it is a contextual IDENTIFIER in kama.l — promoting it to a keyword breaks 'int32 $kw = 1;'. It must stay a (type_kind)/(kind_name) node over an identifier."
         fi
     done
-    rm -f "$tmpk" "$tmpg"
+
+    # THE RESERVED SET (KR-29). tree-sitter refuses a word as a name only when it is in `reserved.global`, so that set
+    # must be exactly what kama.l refuses: its keyword table less the six contextual words, plus `c_reserved`. A word
+    # missing here parses as a name in every editor and fails in the compiler; one too many refuses a legal name.
+    tmpr=$(mktemp); tmpw=$(mktemp)
+    { lexer_keywords | grep -vxE 'copy|give|truncate|type|slot|file'
+      sed -n '/static const char\* c_reserved\[\]/,/};/p' "$ROOT/src/kama.l" | grep -oE '"[A-Za-z0-9_]+"' | tr -d '"'
+    } | sort -u > "$tmpw"
+    sed -n '/"reserved": {/,/^  }/p' "$G/src/grammar.json" |
+        sed -n '/"global": \[/,/\]/p' | grep -oE '"value": *"[^"]+"' | sed -E 's/.*"value": *"//; s/"$//' | sort -u > "$tmpr"
+    if ! cmp -s "$tmpw" "$tmpr"; then
+        note "reserved.global in src/grammar.json is not kama.l's reserved words (its keyword table less copy/give/truncate/type/slot/file, plus c_reserved):"
+        comm -23 "$tmpw" "$tmpr" | sed 's/^/      missing: /' >&2
+        comm -13 "$tmpw" "$tmpr" | sed 's/^/      extra:   /' >&2
+        echo "    Update RESERVED_KAMA / RESERVED_C in grammar.js and re-run 'tree-sitter generate'." >&2
+    fi
+    rm -f "$tmpk" "$tmpg" "$tmpr" "$tmpw"
 else
     note "$G/src/grammar.json is missing — run 'tree-sitter generate' in tree-sitter-kama/ and commit src/."
 fi

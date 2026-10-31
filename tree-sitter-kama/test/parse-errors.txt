@@ -22,6 +22,7 @@
 # lex_char_escape_*) is outside it too, though the compiler calls it a `Lexical error:`: it is a VALUE check
 # — a surrogate, or past U+10FFFF — and a grammar checks an escape's shape, not its number. The derivation
 # above lists those files; they do not belong here.
+prelude/builtin.kama
 tests/syntax/bad.kama
 tests/xfail/brace_do_bare.kama
 tests/xfail/brace_else_bare.kama
@@ -31,9 +32,11 @@ tests/xfail/brace_if_bare.kama
 tests/xfail/brace_if_empty_semi.kama
 tests/xfail/brace_while_bare.kama
 tests/xfail/comptime_value_in_angles.kama
+tests/xfail/contextual_word_type_name.kama
 tests/xfail/digit_sep_after_prefix.kama
 tests/xfail/digit_sep_double.kama
 tests/xfail/digit_sep_trailing.kama
+tests/xfail/double_retired.kama
 tests/xfail/enum_bare_spelling.kama
 tests/xfail/export_after_extern.kama
 tests/xfail/expose_on_method.kama
@@ -43,7 +46,9 @@ tests/xfail/float_bare_dot.kama
 tests/xfail/give_positional_call.kama
 tests/xfail/import_after_decl.kama
 tests/xfail/import_empty_braces.kama
+tests/xfail/int_retired.kama
 tests/xfail/interp_hole_operator.kama
+tests/xfail/intrinsic_reserved.kama
 tests/xfail/leading_zero.kama
 tests/xfail/lex_char_bad_utf8.kama
 tests/xfail/lex_comment_unterminated.kama
@@ -54,6 +59,7 @@ tests/xfail/lex_verbatim_unterminated.kama
 tests/xfail/match_integer_pattern.kama
 tests/xfail/match_statement_no_semicolon.kama
 tests/xfail/module_static_volatile.kama
+tests/xfail/null_as_name.kama
 tests/xfail/out_local.kama
 tests/xfail/pin_keyword_typo.kama
 tests/xfail/recover_multi_error.kama

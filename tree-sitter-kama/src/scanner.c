@@ -15,7 +15,9 @@
 #include <stdbool.h>
 #include <string.h>
 
-enum TokenType { GIVE_KEYWORD, COPY_KEYWORD, TRUNCATE_KEYWORD };
+// RESERVED_ONLY is never emitted: it leads grammar.js's inert `_reserved_tokens`, which exists only so the reserved
+// sets can name words no rule uses, and it follows CONTEXTUAL_DECLARED_NAME so that one is an error (KR-29).
+enum TokenType { GIVE_KEYWORD, COPY_KEYWORD, TRUNCATE_KEYWORD, RESERVED_ONLY, CONTEXTUAL_DECLARED_NAME };
 
 void *tree_sitter_kama_external_scanner_create(void) { return NULL; }
 void tree_sitter_kama_external_scanner_destroy(void *payload) { (void)payload; }
@@ -52,7 +54,8 @@ static void skip_blank(TSLexer *lexer) {
 
 bool tree_sitter_kama_external_scanner_scan(void *payload, TSLexer *lexer, const bool *valid_symbols) {
   (void)payload;
-  if (!valid_symbols[GIVE_KEYWORD] && !valid_symbols[COPY_KEYWORD] && !valid_symbols[TRUNCATE_KEYWORD]) return false;
+  if (!valid_symbols[GIVE_KEYWORD] && !valid_symbols[COPY_KEYWORD] && !valid_symbols[TRUNCATE_KEYWORD]
+      && !valid_symbols[CONTEXTUAL_DECLARED_NAME]) return false;
 
   while (lexer->lookahead == ' ' || lexer->lookahead == '\t' || lexer->lookahead == '\r' || lexer->lookahead == '\n')
     lexer->advance(lexer, true);
@@ -74,10 +77,18 @@ bool tree_sitter_kama_external_scanner_scan(void *payload, TSLexer *lexer, const
   else if (strcmp(word, "copy") == 0) kind = COPY_KEYWORD;
   else if (strcmp(word, "truncate") == 0) kind = TRUNCATE_KEYWORD;
   else return false;
-  if (!valid_symbols[kind]) return false;
 
   skip_blank(lexer);
   int32_t c = lexer->lookahead;
+  // A function named with the word: `fn int32 give(…)`, `fnptr T copy<…>` — where CONTEXTUAL_DECLARED_NAME is valid,
+  // which is only at a function's name, and followed by the `(` or `<` a binding's name never is. The word comes back as
+  // its KEYWORD, which no rule takes there, so the parse errors at the name as the compiler's does. (Returning the
+  // marker itself would let the parser recover by inventing the never-emitted token after it, an error no tool shows.)
+  if (valid_symbols[CONTEXTUAL_DECLARED_NAME] && (c == '(' || (c == '<' && !valid_symbols[TRUNCATE_KEYWORD]))) {
+    lexer->result_symbol = kind;
+    return true;
+  }
+  if (!valid_symbols[kind]) return false;
   if (kind == TRUNCATE_KEYWORD) {
     if (c != '<') return false;
     lexer->advance(lexer, false);

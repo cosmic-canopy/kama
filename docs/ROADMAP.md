@@ -55,7 +55,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-29 | **tree-sitter accepts every reserved word as a binding name** — all 84 kama keywords and the 38 C-only spellings the lexer refuses (re-measured `0.9.787`), so `Thing else = …` renders as a valid declaration in every editor on this grammar and the compiler then rejects it. **Proven on a copy 2026-10-30:** tree-sitter's `reserved` sets (CLI 0.26.11) with two per-rule overrides make all 168 keyword probes error at the declaration, the corpus unchanged, 59/59 grammar tests; a guard keeps the set equal to `kama.l`'s table. Ruled 2026-10-31: the C-only words reserved too, and the contextual words as a type or function name folded in (detail) | S–M | [§10](ROADMAP_DETAIL.md#s10) |
 
 ## NOW — the next features, in build order
 

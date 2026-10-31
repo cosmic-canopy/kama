@@ -100,3 +100,89 @@ fn void main() { }
 import a::b;
 
 --------------------------------------------------------------------------------
+
+================================================================================
+A reserved word is no name — kama's and C's alike (KR-29)
+================================================================================
+
+fn void main()
+{
+    Thing else = Thing.make();
+    isize switch = 1;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (expression_statement
+        (assignment_expression
+          (identifier)
+          (ERROR)
+          (call_expression
+            (field_expression
+              (identifier)
+              (identifier))
+            (argument_list))))
+      (ERROR
+        (primitive_type)
+        (integer_literal))
+      (empty_statement))))
+
+================================================================================
+`base` and `default` are members, and `enum` is a kind, where the compiler opens them
+================================================================================
+
+type contract Sized for value, enum { fn isize size(); }
+
+fn void main()
+{
+    T v = T.default();
+    int32 a = this.base;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_declaration
+    (type_kind
+      (identifier))
+    (type_declaration_head
+      (identifier))
+    (for_kinds
+      (kind_name
+        (identifier))
+      (kind_name
+        (identifier)))
+    (class_body
+      (method_declaration
+        (primitive_type)
+        (method_name
+          (identifier))
+        (parameter_list))))
+  (function_declaration
+    (void_type)
+    (identifier)
+    (parameter_list)
+    (block
+      (local_variable_declaration
+        (type_name
+          (identifier))
+        (variable_declarator
+          (identifier)
+          (call_expression
+            (field_expression
+              (identifier)
+              (identifier))
+            (argument_list))))
+      (local_variable_declaration
+        (primitive_type)
+        (variable_declarator
+          (identifier)
+          (field_expression
+            (this_expression)
+            (identifier)))))))

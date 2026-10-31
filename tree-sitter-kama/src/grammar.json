@@ -48,6 +48,222 @@
             "type": "SYMBOL",
             "name": "_top_level_declaration"
           }
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "_reserved_tokens"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "_reserved_tokens": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "_reserved_only"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "STRING",
+              "value": "_Alignas"
+            },
+            {
+              "type": "STRING",
+              "value": "_Alignof"
+            },
+            {
+              "type": "STRING",
+              "value": "_Atomic"
+            },
+            {
+              "type": "STRING",
+              "value": "_BitInt"
+            },
+            {
+              "type": "STRING",
+              "value": "_Bool"
+            },
+            {
+              "type": "STRING",
+              "value": "_Complex"
+            },
+            {
+              "type": "STRING",
+              "value": "_Decimal128"
+            },
+            {
+              "type": "STRING",
+              "value": "_Decimal32"
+            },
+            {
+              "type": "STRING",
+              "value": "_Decimal64"
+            },
+            {
+              "type": "STRING",
+              "value": "_Generic"
+            },
+            {
+              "type": "STRING",
+              "value": "_Imaginary"
+            },
+            {
+              "type": "STRING",
+              "value": "_Noreturn"
+            },
+            {
+              "type": "STRING",
+              "value": "_Static_assert"
+            },
+            {
+              "type": "STRING",
+              "value": "_Thread_local"
+            },
+            {
+              "type": "STRING",
+              "value": "alignas"
+            },
+            {
+              "type": "STRING",
+              "value": "auto"
+            },
+            {
+              "type": "STRING",
+              "value": "constexpr"
+            },
+            {
+              "type": "STRING",
+              "value": "double"
+            },
+            {
+              "type": "STRING",
+              "value": "float"
+            },
+            {
+              "type": "STRING",
+              "value": "goto"
+            },
+            {
+              "type": "STRING",
+              "value": "inline"
+            },
+            {
+              "type": "STRING",
+              "value": "int"
+            },
+            {
+              "type": "STRING",
+              "value": "long"
+            },
+            {
+              "type": "STRING",
+              "value": "nullptr"
+            },
+            {
+              "type": "STRING",
+              "value": "register"
+            },
+            {
+              "type": "STRING",
+              "value": "restrict"
+            },
+            {
+              "type": "STRING",
+              "value": "short"
+            },
+            {
+              "type": "STRING",
+              "value": "signed"
+            },
+            {
+              "type": "STRING",
+              "value": "static_assert"
+            },
+            {
+              "type": "STRING",
+              "value": "struct"
+            },
+            {
+              "type": "STRING",
+              "value": "switch"
+            },
+            {
+              "type": "STRING",
+              "value": "thread_local"
+            },
+            {
+              "type": "STRING",
+              "value": "typedef"
+            },
+            {
+              "type": "STRING",
+              "value": "typeof"
+            },
+            {
+              "type": "STRING",
+              "value": "typeof_unqual"
+            },
+            {
+              "type": "STRING",
+              "value": "union"
+            },
+            {
+              "type": "STRING",
+              "value": "unsigned"
+            },
+            {
+              "type": "STRING",
+              "value": "volatile"
+            },
+            {
+              "type": "STRING",
+              "value": "give"
+            },
+            {
+              "type": "STRING",
+              "value": "copy"
+            },
+            {
+              "type": "STRING",
+              "value": "truncate"
+            }
+          ]
+        }
+      ]
+    },
+    "_function_name": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "RESERVED",
+          "content": {
+            "type": "SYMBOL",
+            "name": "identifier"
+          },
+          "context_name": "declared"
+        },
+        {
+          "type": "SEQ",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "_contextual_declared_name"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "_reserved_only"
+            }
+          ]
         }
       ]
     },
@@ -653,8 +869,12 @@
       ]
     },
     "kind_name": {
-      "type": "SYMBOL",
-      "name": "identifier"
+      "type": "RESERVED",
+      "content": {
+        "type": "SYMBOL",
+        "name": "identifier"
+      },
+      "context_name": "kind"
     },
     "type_declaration_head": {
       "type": "SEQ",
@@ -663,8 +883,12 @@
           "type": "FIELD",
           "name": "name",
           "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
+            "type": "RESERVED",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            },
+            "context_name": "declared"
           }
         },
         {
@@ -741,8 +965,12 @@
               "type": "FIELD",
               "name": "name",
               "content": {
-                "type": "SYMBOL",
-                "name": "identifier"
+                "type": "RESERVED",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "identifier"
+                },
+                "context_name": "declared"
               }
             },
             {
@@ -766,8 +994,12 @@
               "type": "FIELD",
               "name": "name",
               "content": {
-                "type": "SYMBOL",
-                "name": "identifier"
+                "type": "RESERVED",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "identifier"
+                },
+                "context_name": "declared"
               }
             },
             {
@@ -1426,8 +1658,12 @@
           "type": "FIELD",
           "name": "name",
           "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
+            "type": "RESERVED",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            },
+            "context_name": "declared"
           }
         },
         {
@@ -1639,7 +1875,7 @@
           "name": "name",
           "content": {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "_function_name"
           }
         },
         {
@@ -1806,7 +2042,7 @@
               "name": "name",
               "content": {
                 "type": "SYMBOL",
-                "name": "identifier"
+                "name": "_function_name"
               }
             },
             {
@@ -1860,8 +2096,12 @@
           "type": "FIELD",
           "name": "name",
           "content": {
-            "type": "SYMBOL",
-            "name": "identifier"
+            "type": "RESERVED",
+            "content": {
+              "type": "SYMBOL",
+              "name": "identifier"
+            },
+            "context_name": "declared"
           }
         },
         {
@@ -1902,7 +2142,7 @@
           "name": "name",
           "content": {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "_function_name"
           }
         },
         {
@@ -3163,10 +3403,6 @@
       "members": [
         {
           "type": "STRING",
-          "value": "int"
-        },
-        {
-          "type": "STRING",
           "value": "int8"
         },
         {
@@ -3216,10 +3452,6 @@
         {
           "type": "STRING",
           "value": "culong"
-        },
-        {
-          "type": "STRING",
-          "value": "double"
         },
         {
           "type": "STRING",
@@ -5158,8 +5390,12 @@
             "type": "FIELD",
             "name": "field",
             "content": {
-              "type": "SYMBOL",
-              "name": "_name"
+              "type": "RESERVED",
+              "content": {
+                "type": "SYMBOL",
+                "name": "_name"
+              },
+              "context_name": "member"
             }
           }
         ]
@@ -5425,8 +5661,12 @@
             "type": "FIELD",
             "name": "name",
             "content": {
-              "type": "SYMBOL",
-              "name": "identifier"
+              "type": "RESERVED",
+              "content": {
+                "type": "SYMBOL",
+                "name": "identifier"
+              },
+              "context_name": "member"
             }
           },
           {
@@ -7322,9 +7562,1990 @@
     {
       "type": "SYMBOL",
       "name": "_truncate_keyword"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_reserved_only"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_contextual_declared_name"
     }
   ],
   "inline": [],
   "supertypes": [],
-  "reserved": {}
+  "reserved": {
+    "global": [
+      {
+        "type": "STRING",
+        "value": "abstract"
+      },
+      {
+        "type": "STRING",
+        "value": "addr"
+      },
+      {
+        "type": "STRING",
+        "value": "alignof"
+      },
+      {
+        "type": "STRING",
+        "value": "as"
+      },
+      {
+        "type": "STRING",
+        "value": "asm"
+      },
+      {
+        "type": "STRING",
+        "value": "assert"
+      },
+      {
+        "type": "STRING",
+        "value": "base"
+      },
+      {
+        "type": "STRING",
+        "value": "bitcast"
+      },
+      {
+        "type": "STRING",
+        "value": "bool"
+      },
+      {
+        "type": "STRING",
+        "value": "borrow"
+      },
+      {
+        "type": "STRING",
+        "value": "break"
+      },
+      {
+        "type": "STRING",
+        "value": "case"
+      },
+      {
+        "type": "STRING",
+        "value": "cast"
+      },
+      {
+        "type": "STRING",
+        "value": "cchar"
+      },
+      {
+        "type": "STRING",
+        "value": "char"
+      },
+      {
+        "type": "STRING",
+        "value": "clong"
+      },
+      {
+        "type": "STRING",
+        "value": "comptime"
+      },
+      {
+        "type": "STRING",
+        "value": "const"
+      },
+      {
+        "type": "STRING",
+        "value": "continue"
+      },
+      {
+        "type": "STRING",
+        "value": "copyElements"
+      },
+      {
+        "type": "STRING",
+        "value": "ctor"
+      },
+      {
+        "type": "STRING",
+        "value": "culong"
+      },
+      {
+        "type": "STRING",
+        "value": "debugAssert"
+      },
+      {
+        "type": "STRING",
+        "value": "default"
+      },
+      {
+        "type": "STRING",
+        "value": "do"
+      },
+      {
+        "type": "STRING",
+        "value": "drop"
+      },
+      {
+        "type": "STRING",
+        "value": "else"
+      },
+      {
+        "type": "STRING",
+        "value": "enum"
+      },
+      {
+        "type": "STRING",
+        "value": "export"
+      },
+      {
+        "type": "STRING",
+        "value": "expose"
+      },
+      {
+        "type": "STRING",
+        "value": "extends"
+      },
+      {
+        "type": "STRING",
+        "value": "extern"
+      },
+      {
+        "type": "STRING",
+        "value": "false"
+      },
+      {
+        "type": "STRING",
+        "value": "final"
+      },
+      {
+        "type": "STRING",
+        "value": "float32"
+      },
+      {
+        "type": "STRING",
+        "value": "float64"
+      },
+      {
+        "type": "STRING",
+        "value": "fn"
+      },
+      {
+        "type": "STRING",
+        "value": "fnptr"
+      },
+      {
+        "type": "STRING",
+        "value": "for"
+      },
+      {
+        "type": "STRING",
+        "value": "foreach"
+      },
+      {
+        "type": "STRING",
+        "value": "friend"
+      },
+      {
+        "type": "STRING",
+        "value": "hardware"
+      },
+      {
+        "type": "STRING",
+        "value": "if"
+      },
+      {
+        "type": "STRING",
+        "value": "immutable"
+      },
+      {
+        "type": "STRING",
+        "value": "implements"
+      },
+      {
+        "type": "STRING",
+        "value": "import"
+      },
+      {
+        "type": "STRING",
+        "value": "in"
+      },
+      {
+        "type": "STRING",
+        "value": "int16"
+      },
+      {
+        "type": "STRING",
+        "value": "int32"
+      },
+      {
+        "type": "STRING",
+        "value": "int64"
+      },
+      {
+        "type": "STRING",
+        "value": "int8"
+      },
+      {
+        "type": "STRING",
+        "value": "isize"
+      },
+      {
+        "type": "STRING",
+        "value": "match"
+      },
+      {
+        "type": "STRING",
+        "value": "new"
+      },
+      {
+        "type": "STRING",
+        "value": "null"
+      },
+      {
+        "type": "STRING",
+        "value": "operator"
+      },
+      {
+        "type": "STRING",
+        "value": "out"
+      },
+      {
+        "type": "STRING",
+        "value": "override"
+      },
+      {
+        "type": "STRING",
+        "value": "panic"
+      },
+      {
+        "type": "STRING",
+        "value": "parallel_for"
+      },
+      {
+        "type": "STRING",
+        "value": "parallel_spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "private"
+      },
+      {
+        "type": "STRING",
+        "value": "protected"
+      },
+      {
+        "type": "STRING",
+        "value": "public"
+      },
+      {
+        "type": "STRING",
+        "value": "ref"
+      },
+      {
+        "type": "STRING",
+        "value": "return"
+      },
+      {
+        "type": "STRING",
+        "value": "scope"
+      },
+      {
+        "type": "STRING",
+        "value": "sizeof"
+      },
+      {
+        "type": "STRING",
+        "value": "spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "static"
+      },
+      {
+        "type": "STRING",
+        "value": "string"
+      },
+      {
+        "type": "STRING",
+        "value": "this"
+      },
+      {
+        "type": "STRING",
+        "value": "true"
+      },
+      {
+        "type": "STRING",
+        "value": "try"
+      },
+      {
+        "type": "STRING",
+        "value": "uint16"
+      },
+      {
+        "type": "STRING",
+        "value": "uint32"
+      },
+      {
+        "type": "STRING",
+        "value": "uint64"
+      },
+      {
+        "type": "STRING",
+        "value": "uint8"
+      },
+      {
+        "type": "STRING",
+        "value": "unsafe"
+      },
+      {
+        "type": "STRING",
+        "value": "usize"
+      },
+      {
+        "type": "STRING",
+        "value": "virtual"
+      },
+      {
+        "type": "STRING",
+        "value": "void"
+      },
+      {
+        "type": "STRING",
+        "value": "when"
+      },
+      {
+        "type": "STRING",
+        "value": "while"
+      },
+      {
+        "type": "STRING",
+        "value": "_Alignas"
+      },
+      {
+        "type": "STRING",
+        "value": "_Alignof"
+      },
+      {
+        "type": "STRING",
+        "value": "_Atomic"
+      },
+      {
+        "type": "STRING",
+        "value": "_BitInt"
+      },
+      {
+        "type": "STRING",
+        "value": "_Bool"
+      },
+      {
+        "type": "STRING",
+        "value": "_Complex"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal128"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal32"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal64"
+      },
+      {
+        "type": "STRING",
+        "value": "_Generic"
+      },
+      {
+        "type": "STRING",
+        "value": "_Imaginary"
+      },
+      {
+        "type": "STRING",
+        "value": "_Noreturn"
+      },
+      {
+        "type": "STRING",
+        "value": "_Static_assert"
+      },
+      {
+        "type": "STRING",
+        "value": "_Thread_local"
+      },
+      {
+        "type": "STRING",
+        "value": "alignas"
+      },
+      {
+        "type": "STRING",
+        "value": "auto"
+      },
+      {
+        "type": "STRING",
+        "value": "constexpr"
+      },
+      {
+        "type": "STRING",
+        "value": "double"
+      },
+      {
+        "type": "STRING",
+        "value": "float"
+      },
+      {
+        "type": "STRING",
+        "value": "goto"
+      },
+      {
+        "type": "STRING",
+        "value": "inline"
+      },
+      {
+        "type": "STRING",
+        "value": "int"
+      },
+      {
+        "type": "STRING",
+        "value": "long"
+      },
+      {
+        "type": "STRING",
+        "value": "nullptr"
+      },
+      {
+        "type": "STRING",
+        "value": "register"
+      },
+      {
+        "type": "STRING",
+        "value": "restrict"
+      },
+      {
+        "type": "STRING",
+        "value": "short"
+      },
+      {
+        "type": "STRING",
+        "value": "signed"
+      },
+      {
+        "type": "STRING",
+        "value": "static_assert"
+      },
+      {
+        "type": "STRING",
+        "value": "struct"
+      },
+      {
+        "type": "STRING",
+        "value": "switch"
+      },
+      {
+        "type": "STRING",
+        "value": "thread_local"
+      },
+      {
+        "type": "STRING",
+        "value": "typedef"
+      },
+      {
+        "type": "STRING",
+        "value": "typeof"
+      },
+      {
+        "type": "STRING",
+        "value": "typeof_unqual"
+      },
+      {
+        "type": "STRING",
+        "value": "union"
+      },
+      {
+        "type": "STRING",
+        "value": "unsigned"
+      },
+      {
+        "type": "STRING",
+        "value": "volatile"
+      }
+    ],
+    "member": [
+      {
+        "type": "STRING",
+        "value": "abstract"
+      },
+      {
+        "type": "STRING",
+        "value": "addr"
+      },
+      {
+        "type": "STRING",
+        "value": "alignof"
+      },
+      {
+        "type": "STRING",
+        "value": "as"
+      },
+      {
+        "type": "STRING",
+        "value": "asm"
+      },
+      {
+        "type": "STRING",
+        "value": "assert"
+      },
+      {
+        "type": "STRING",
+        "value": "bitcast"
+      },
+      {
+        "type": "STRING",
+        "value": "bool"
+      },
+      {
+        "type": "STRING",
+        "value": "borrow"
+      },
+      {
+        "type": "STRING",
+        "value": "break"
+      },
+      {
+        "type": "STRING",
+        "value": "case"
+      },
+      {
+        "type": "STRING",
+        "value": "cast"
+      },
+      {
+        "type": "STRING",
+        "value": "cchar"
+      },
+      {
+        "type": "STRING",
+        "value": "char"
+      },
+      {
+        "type": "STRING",
+        "value": "clong"
+      },
+      {
+        "type": "STRING",
+        "value": "comptime"
+      },
+      {
+        "type": "STRING",
+        "value": "const"
+      },
+      {
+        "type": "STRING",
+        "value": "continue"
+      },
+      {
+        "type": "STRING",
+        "value": "copyElements"
+      },
+      {
+        "type": "STRING",
+        "value": "ctor"
+      },
+      {
+        "type": "STRING",
+        "value": "culong"
+      },
+      {
+        "type": "STRING",
+        "value": "debugAssert"
+      },
+      {
+        "type": "STRING",
+        "value": "do"
+      },
+      {
+        "type": "STRING",
+        "value": "drop"
+      },
+      {
+        "type": "STRING",
+        "value": "else"
+      },
+      {
+        "type": "STRING",
+        "value": "enum"
+      },
+      {
+        "type": "STRING",
+        "value": "export"
+      },
+      {
+        "type": "STRING",
+        "value": "expose"
+      },
+      {
+        "type": "STRING",
+        "value": "extends"
+      },
+      {
+        "type": "STRING",
+        "value": "extern"
+      },
+      {
+        "type": "STRING",
+        "value": "false"
+      },
+      {
+        "type": "STRING",
+        "value": "final"
+      },
+      {
+        "type": "STRING",
+        "value": "float32"
+      },
+      {
+        "type": "STRING",
+        "value": "float64"
+      },
+      {
+        "type": "STRING",
+        "value": "fn"
+      },
+      {
+        "type": "STRING",
+        "value": "fnptr"
+      },
+      {
+        "type": "STRING",
+        "value": "for"
+      },
+      {
+        "type": "STRING",
+        "value": "foreach"
+      },
+      {
+        "type": "STRING",
+        "value": "friend"
+      },
+      {
+        "type": "STRING",
+        "value": "hardware"
+      },
+      {
+        "type": "STRING",
+        "value": "if"
+      },
+      {
+        "type": "STRING",
+        "value": "immutable"
+      },
+      {
+        "type": "STRING",
+        "value": "implements"
+      },
+      {
+        "type": "STRING",
+        "value": "import"
+      },
+      {
+        "type": "STRING",
+        "value": "in"
+      },
+      {
+        "type": "STRING",
+        "value": "int16"
+      },
+      {
+        "type": "STRING",
+        "value": "int32"
+      },
+      {
+        "type": "STRING",
+        "value": "int64"
+      },
+      {
+        "type": "STRING",
+        "value": "int8"
+      },
+      {
+        "type": "STRING",
+        "value": "isize"
+      },
+      {
+        "type": "STRING",
+        "value": "match"
+      },
+      {
+        "type": "STRING",
+        "value": "new"
+      },
+      {
+        "type": "STRING",
+        "value": "null"
+      },
+      {
+        "type": "STRING",
+        "value": "operator"
+      },
+      {
+        "type": "STRING",
+        "value": "out"
+      },
+      {
+        "type": "STRING",
+        "value": "override"
+      },
+      {
+        "type": "STRING",
+        "value": "panic"
+      },
+      {
+        "type": "STRING",
+        "value": "parallel_for"
+      },
+      {
+        "type": "STRING",
+        "value": "parallel_spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "private"
+      },
+      {
+        "type": "STRING",
+        "value": "protected"
+      },
+      {
+        "type": "STRING",
+        "value": "public"
+      },
+      {
+        "type": "STRING",
+        "value": "ref"
+      },
+      {
+        "type": "STRING",
+        "value": "return"
+      },
+      {
+        "type": "STRING",
+        "value": "scope"
+      },
+      {
+        "type": "STRING",
+        "value": "sizeof"
+      },
+      {
+        "type": "STRING",
+        "value": "spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "static"
+      },
+      {
+        "type": "STRING",
+        "value": "string"
+      },
+      {
+        "type": "STRING",
+        "value": "this"
+      },
+      {
+        "type": "STRING",
+        "value": "true"
+      },
+      {
+        "type": "STRING",
+        "value": "try"
+      },
+      {
+        "type": "STRING",
+        "value": "uint16"
+      },
+      {
+        "type": "STRING",
+        "value": "uint32"
+      },
+      {
+        "type": "STRING",
+        "value": "uint64"
+      },
+      {
+        "type": "STRING",
+        "value": "uint8"
+      },
+      {
+        "type": "STRING",
+        "value": "unsafe"
+      },
+      {
+        "type": "STRING",
+        "value": "usize"
+      },
+      {
+        "type": "STRING",
+        "value": "virtual"
+      },
+      {
+        "type": "STRING",
+        "value": "void"
+      },
+      {
+        "type": "STRING",
+        "value": "when"
+      },
+      {
+        "type": "STRING",
+        "value": "while"
+      },
+      {
+        "type": "STRING",
+        "value": "_Alignas"
+      },
+      {
+        "type": "STRING",
+        "value": "_Alignof"
+      },
+      {
+        "type": "STRING",
+        "value": "_Atomic"
+      },
+      {
+        "type": "STRING",
+        "value": "_BitInt"
+      },
+      {
+        "type": "STRING",
+        "value": "_Bool"
+      },
+      {
+        "type": "STRING",
+        "value": "_Complex"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal128"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal32"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal64"
+      },
+      {
+        "type": "STRING",
+        "value": "_Generic"
+      },
+      {
+        "type": "STRING",
+        "value": "_Imaginary"
+      },
+      {
+        "type": "STRING",
+        "value": "_Noreturn"
+      },
+      {
+        "type": "STRING",
+        "value": "_Static_assert"
+      },
+      {
+        "type": "STRING",
+        "value": "_Thread_local"
+      },
+      {
+        "type": "STRING",
+        "value": "alignas"
+      },
+      {
+        "type": "STRING",
+        "value": "auto"
+      },
+      {
+        "type": "STRING",
+        "value": "constexpr"
+      },
+      {
+        "type": "STRING",
+        "value": "double"
+      },
+      {
+        "type": "STRING",
+        "value": "float"
+      },
+      {
+        "type": "STRING",
+        "value": "goto"
+      },
+      {
+        "type": "STRING",
+        "value": "inline"
+      },
+      {
+        "type": "STRING",
+        "value": "int"
+      },
+      {
+        "type": "STRING",
+        "value": "long"
+      },
+      {
+        "type": "STRING",
+        "value": "nullptr"
+      },
+      {
+        "type": "STRING",
+        "value": "register"
+      },
+      {
+        "type": "STRING",
+        "value": "restrict"
+      },
+      {
+        "type": "STRING",
+        "value": "short"
+      },
+      {
+        "type": "STRING",
+        "value": "signed"
+      },
+      {
+        "type": "STRING",
+        "value": "static_assert"
+      },
+      {
+        "type": "STRING",
+        "value": "struct"
+      },
+      {
+        "type": "STRING",
+        "value": "switch"
+      },
+      {
+        "type": "STRING",
+        "value": "thread_local"
+      },
+      {
+        "type": "STRING",
+        "value": "typedef"
+      },
+      {
+        "type": "STRING",
+        "value": "typeof"
+      },
+      {
+        "type": "STRING",
+        "value": "typeof_unqual"
+      },
+      {
+        "type": "STRING",
+        "value": "union"
+      },
+      {
+        "type": "STRING",
+        "value": "unsigned"
+      },
+      {
+        "type": "STRING",
+        "value": "volatile"
+      }
+    ],
+    "kind": [
+      {
+        "type": "STRING",
+        "value": "abstract"
+      },
+      {
+        "type": "STRING",
+        "value": "addr"
+      },
+      {
+        "type": "STRING",
+        "value": "alignof"
+      },
+      {
+        "type": "STRING",
+        "value": "as"
+      },
+      {
+        "type": "STRING",
+        "value": "asm"
+      },
+      {
+        "type": "STRING",
+        "value": "assert"
+      },
+      {
+        "type": "STRING",
+        "value": "base"
+      },
+      {
+        "type": "STRING",
+        "value": "bitcast"
+      },
+      {
+        "type": "STRING",
+        "value": "bool"
+      },
+      {
+        "type": "STRING",
+        "value": "borrow"
+      },
+      {
+        "type": "STRING",
+        "value": "break"
+      },
+      {
+        "type": "STRING",
+        "value": "case"
+      },
+      {
+        "type": "STRING",
+        "value": "cast"
+      },
+      {
+        "type": "STRING",
+        "value": "cchar"
+      },
+      {
+        "type": "STRING",
+        "value": "char"
+      },
+      {
+        "type": "STRING",
+        "value": "clong"
+      },
+      {
+        "type": "STRING",
+        "value": "comptime"
+      },
+      {
+        "type": "STRING",
+        "value": "const"
+      },
+      {
+        "type": "STRING",
+        "value": "continue"
+      },
+      {
+        "type": "STRING",
+        "value": "copyElements"
+      },
+      {
+        "type": "STRING",
+        "value": "ctor"
+      },
+      {
+        "type": "STRING",
+        "value": "culong"
+      },
+      {
+        "type": "STRING",
+        "value": "debugAssert"
+      },
+      {
+        "type": "STRING",
+        "value": "default"
+      },
+      {
+        "type": "STRING",
+        "value": "do"
+      },
+      {
+        "type": "STRING",
+        "value": "drop"
+      },
+      {
+        "type": "STRING",
+        "value": "else"
+      },
+      {
+        "type": "STRING",
+        "value": "export"
+      },
+      {
+        "type": "STRING",
+        "value": "expose"
+      },
+      {
+        "type": "STRING",
+        "value": "extends"
+      },
+      {
+        "type": "STRING",
+        "value": "extern"
+      },
+      {
+        "type": "STRING",
+        "value": "false"
+      },
+      {
+        "type": "STRING",
+        "value": "final"
+      },
+      {
+        "type": "STRING",
+        "value": "float32"
+      },
+      {
+        "type": "STRING",
+        "value": "float64"
+      },
+      {
+        "type": "STRING",
+        "value": "fn"
+      },
+      {
+        "type": "STRING",
+        "value": "fnptr"
+      },
+      {
+        "type": "STRING",
+        "value": "for"
+      },
+      {
+        "type": "STRING",
+        "value": "foreach"
+      },
+      {
+        "type": "STRING",
+        "value": "friend"
+      },
+      {
+        "type": "STRING",
+        "value": "hardware"
+      },
+      {
+        "type": "STRING",
+        "value": "if"
+      },
+      {
+        "type": "STRING",
+        "value": "immutable"
+      },
+      {
+        "type": "STRING",
+        "value": "implements"
+      },
+      {
+        "type": "STRING",
+        "value": "import"
+      },
+      {
+        "type": "STRING",
+        "value": "in"
+      },
+      {
+        "type": "STRING",
+        "value": "int16"
+      },
+      {
+        "type": "STRING",
+        "value": "int32"
+      },
+      {
+        "type": "STRING",
+        "value": "int64"
+      },
+      {
+        "type": "STRING",
+        "value": "int8"
+      },
+      {
+        "type": "STRING",
+        "value": "isize"
+      },
+      {
+        "type": "STRING",
+        "value": "match"
+      },
+      {
+        "type": "STRING",
+        "value": "new"
+      },
+      {
+        "type": "STRING",
+        "value": "null"
+      },
+      {
+        "type": "STRING",
+        "value": "operator"
+      },
+      {
+        "type": "STRING",
+        "value": "out"
+      },
+      {
+        "type": "STRING",
+        "value": "override"
+      },
+      {
+        "type": "STRING",
+        "value": "panic"
+      },
+      {
+        "type": "STRING",
+        "value": "parallel_for"
+      },
+      {
+        "type": "STRING",
+        "value": "parallel_spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "private"
+      },
+      {
+        "type": "STRING",
+        "value": "protected"
+      },
+      {
+        "type": "STRING",
+        "value": "public"
+      },
+      {
+        "type": "STRING",
+        "value": "ref"
+      },
+      {
+        "type": "STRING",
+        "value": "return"
+      },
+      {
+        "type": "STRING",
+        "value": "scope"
+      },
+      {
+        "type": "STRING",
+        "value": "sizeof"
+      },
+      {
+        "type": "STRING",
+        "value": "spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "static"
+      },
+      {
+        "type": "STRING",
+        "value": "string"
+      },
+      {
+        "type": "STRING",
+        "value": "this"
+      },
+      {
+        "type": "STRING",
+        "value": "true"
+      },
+      {
+        "type": "STRING",
+        "value": "try"
+      },
+      {
+        "type": "STRING",
+        "value": "uint16"
+      },
+      {
+        "type": "STRING",
+        "value": "uint32"
+      },
+      {
+        "type": "STRING",
+        "value": "uint64"
+      },
+      {
+        "type": "STRING",
+        "value": "uint8"
+      },
+      {
+        "type": "STRING",
+        "value": "unsafe"
+      },
+      {
+        "type": "STRING",
+        "value": "usize"
+      },
+      {
+        "type": "STRING",
+        "value": "virtual"
+      },
+      {
+        "type": "STRING",
+        "value": "void"
+      },
+      {
+        "type": "STRING",
+        "value": "when"
+      },
+      {
+        "type": "STRING",
+        "value": "while"
+      },
+      {
+        "type": "STRING",
+        "value": "_Alignas"
+      },
+      {
+        "type": "STRING",
+        "value": "_Alignof"
+      },
+      {
+        "type": "STRING",
+        "value": "_Atomic"
+      },
+      {
+        "type": "STRING",
+        "value": "_BitInt"
+      },
+      {
+        "type": "STRING",
+        "value": "_Bool"
+      },
+      {
+        "type": "STRING",
+        "value": "_Complex"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal128"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal32"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal64"
+      },
+      {
+        "type": "STRING",
+        "value": "_Generic"
+      },
+      {
+        "type": "STRING",
+        "value": "_Imaginary"
+      },
+      {
+        "type": "STRING",
+        "value": "_Noreturn"
+      },
+      {
+        "type": "STRING",
+        "value": "_Static_assert"
+      },
+      {
+        "type": "STRING",
+        "value": "_Thread_local"
+      },
+      {
+        "type": "STRING",
+        "value": "alignas"
+      },
+      {
+        "type": "STRING",
+        "value": "auto"
+      },
+      {
+        "type": "STRING",
+        "value": "constexpr"
+      },
+      {
+        "type": "STRING",
+        "value": "double"
+      },
+      {
+        "type": "STRING",
+        "value": "float"
+      },
+      {
+        "type": "STRING",
+        "value": "goto"
+      },
+      {
+        "type": "STRING",
+        "value": "inline"
+      },
+      {
+        "type": "STRING",
+        "value": "int"
+      },
+      {
+        "type": "STRING",
+        "value": "long"
+      },
+      {
+        "type": "STRING",
+        "value": "nullptr"
+      },
+      {
+        "type": "STRING",
+        "value": "register"
+      },
+      {
+        "type": "STRING",
+        "value": "restrict"
+      },
+      {
+        "type": "STRING",
+        "value": "short"
+      },
+      {
+        "type": "STRING",
+        "value": "signed"
+      },
+      {
+        "type": "STRING",
+        "value": "static_assert"
+      },
+      {
+        "type": "STRING",
+        "value": "struct"
+      },
+      {
+        "type": "STRING",
+        "value": "switch"
+      },
+      {
+        "type": "STRING",
+        "value": "thread_local"
+      },
+      {
+        "type": "STRING",
+        "value": "typedef"
+      },
+      {
+        "type": "STRING",
+        "value": "typeof"
+      },
+      {
+        "type": "STRING",
+        "value": "typeof_unqual"
+      },
+      {
+        "type": "STRING",
+        "value": "union"
+      },
+      {
+        "type": "STRING",
+        "value": "unsigned"
+      },
+      {
+        "type": "STRING",
+        "value": "volatile"
+      }
+    ],
+    "declared": [
+      {
+        "type": "STRING",
+        "value": "abstract"
+      },
+      {
+        "type": "STRING",
+        "value": "addr"
+      },
+      {
+        "type": "STRING",
+        "value": "alignof"
+      },
+      {
+        "type": "STRING",
+        "value": "as"
+      },
+      {
+        "type": "STRING",
+        "value": "asm"
+      },
+      {
+        "type": "STRING",
+        "value": "assert"
+      },
+      {
+        "type": "STRING",
+        "value": "base"
+      },
+      {
+        "type": "STRING",
+        "value": "bitcast"
+      },
+      {
+        "type": "STRING",
+        "value": "bool"
+      },
+      {
+        "type": "STRING",
+        "value": "borrow"
+      },
+      {
+        "type": "STRING",
+        "value": "break"
+      },
+      {
+        "type": "STRING",
+        "value": "case"
+      },
+      {
+        "type": "STRING",
+        "value": "cast"
+      },
+      {
+        "type": "STRING",
+        "value": "cchar"
+      },
+      {
+        "type": "STRING",
+        "value": "char"
+      },
+      {
+        "type": "STRING",
+        "value": "clong"
+      },
+      {
+        "type": "STRING",
+        "value": "comptime"
+      },
+      {
+        "type": "STRING",
+        "value": "const"
+      },
+      {
+        "type": "STRING",
+        "value": "continue"
+      },
+      {
+        "type": "STRING",
+        "value": "copyElements"
+      },
+      {
+        "type": "STRING",
+        "value": "ctor"
+      },
+      {
+        "type": "STRING",
+        "value": "culong"
+      },
+      {
+        "type": "STRING",
+        "value": "debugAssert"
+      },
+      {
+        "type": "STRING",
+        "value": "default"
+      },
+      {
+        "type": "STRING",
+        "value": "do"
+      },
+      {
+        "type": "STRING",
+        "value": "drop"
+      },
+      {
+        "type": "STRING",
+        "value": "else"
+      },
+      {
+        "type": "STRING",
+        "value": "enum"
+      },
+      {
+        "type": "STRING",
+        "value": "export"
+      },
+      {
+        "type": "STRING",
+        "value": "expose"
+      },
+      {
+        "type": "STRING",
+        "value": "extends"
+      },
+      {
+        "type": "STRING",
+        "value": "extern"
+      },
+      {
+        "type": "STRING",
+        "value": "false"
+      },
+      {
+        "type": "STRING",
+        "value": "final"
+      },
+      {
+        "type": "STRING",
+        "value": "float32"
+      },
+      {
+        "type": "STRING",
+        "value": "float64"
+      },
+      {
+        "type": "STRING",
+        "value": "fn"
+      },
+      {
+        "type": "STRING",
+        "value": "fnptr"
+      },
+      {
+        "type": "STRING",
+        "value": "for"
+      },
+      {
+        "type": "STRING",
+        "value": "foreach"
+      },
+      {
+        "type": "STRING",
+        "value": "friend"
+      },
+      {
+        "type": "STRING",
+        "value": "hardware"
+      },
+      {
+        "type": "STRING",
+        "value": "if"
+      },
+      {
+        "type": "STRING",
+        "value": "immutable"
+      },
+      {
+        "type": "STRING",
+        "value": "implements"
+      },
+      {
+        "type": "STRING",
+        "value": "import"
+      },
+      {
+        "type": "STRING",
+        "value": "in"
+      },
+      {
+        "type": "STRING",
+        "value": "int16"
+      },
+      {
+        "type": "STRING",
+        "value": "int32"
+      },
+      {
+        "type": "STRING",
+        "value": "int64"
+      },
+      {
+        "type": "STRING",
+        "value": "int8"
+      },
+      {
+        "type": "STRING",
+        "value": "isize"
+      },
+      {
+        "type": "STRING",
+        "value": "match"
+      },
+      {
+        "type": "STRING",
+        "value": "new"
+      },
+      {
+        "type": "STRING",
+        "value": "null"
+      },
+      {
+        "type": "STRING",
+        "value": "operator"
+      },
+      {
+        "type": "STRING",
+        "value": "out"
+      },
+      {
+        "type": "STRING",
+        "value": "override"
+      },
+      {
+        "type": "STRING",
+        "value": "panic"
+      },
+      {
+        "type": "STRING",
+        "value": "parallel_for"
+      },
+      {
+        "type": "STRING",
+        "value": "parallel_spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "private"
+      },
+      {
+        "type": "STRING",
+        "value": "protected"
+      },
+      {
+        "type": "STRING",
+        "value": "public"
+      },
+      {
+        "type": "STRING",
+        "value": "ref"
+      },
+      {
+        "type": "STRING",
+        "value": "return"
+      },
+      {
+        "type": "STRING",
+        "value": "scope"
+      },
+      {
+        "type": "STRING",
+        "value": "sizeof"
+      },
+      {
+        "type": "STRING",
+        "value": "spawn"
+      },
+      {
+        "type": "STRING",
+        "value": "static"
+      },
+      {
+        "type": "STRING",
+        "value": "string"
+      },
+      {
+        "type": "STRING",
+        "value": "this"
+      },
+      {
+        "type": "STRING",
+        "value": "true"
+      },
+      {
+        "type": "STRING",
+        "value": "try"
+      },
+      {
+        "type": "STRING",
+        "value": "uint16"
+      },
+      {
+        "type": "STRING",
+        "value": "uint32"
+      },
+      {
+        "type": "STRING",
+        "value": "uint64"
+      },
+      {
+        "type": "STRING",
+        "value": "uint8"
+      },
+      {
+        "type": "STRING",
+        "value": "unsafe"
+      },
+      {
+        "type": "STRING",
+        "value": "usize"
+      },
+      {
+        "type": "STRING",
+        "value": "virtual"
+      },
+      {
+        "type": "STRING",
+        "value": "void"
+      },
+      {
+        "type": "STRING",
+        "value": "when"
+      },
+      {
+        "type": "STRING",
+        "value": "while"
+      },
+      {
+        "type": "STRING",
+        "value": "_Alignas"
+      },
+      {
+        "type": "STRING",
+        "value": "_Alignof"
+      },
+      {
+        "type": "STRING",
+        "value": "_Atomic"
+      },
+      {
+        "type": "STRING",
+        "value": "_BitInt"
+      },
+      {
+        "type": "STRING",
+        "value": "_Bool"
+      },
+      {
+        "type": "STRING",
+        "value": "_Complex"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal128"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal32"
+      },
+      {
+        "type": "STRING",
+        "value": "_Decimal64"
+      },
+      {
+        "type": "STRING",
+        "value": "_Generic"
+      },
+      {
+        "type": "STRING",
+        "value": "_Imaginary"
+      },
+      {
+        "type": "STRING",
+        "value": "_Noreturn"
+      },
+      {
+        "type": "STRING",
+        "value": "_Static_assert"
+      },
+      {
+        "type": "STRING",
+        "value": "_Thread_local"
+      },
+      {
+        "type": "STRING",
+        "value": "alignas"
+      },
+      {
+        "type": "STRING",
+        "value": "auto"
+      },
+      {
+        "type": "STRING",
+        "value": "constexpr"
+      },
+      {
+        "type": "STRING",
+        "value": "double"
+      },
+      {
+        "type": "STRING",
+        "value": "float"
+      },
+      {
+        "type": "STRING",
+        "value": "goto"
+      },
+      {
+        "type": "STRING",
+        "value": "inline"
+      },
+      {
+        "type": "STRING",
+        "value": "int"
+      },
+      {
+        "type": "STRING",
+        "value": "long"
+      },
+      {
+        "type": "STRING",
+        "value": "nullptr"
+      },
+      {
+        "type": "STRING",
+        "value": "register"
+      },
+      {
+        "type": "STRING",
+        "value": "restrict"
+      },
+      {
+        "type": "STRING",
+        "value": "short"
+      },
+      {
+        "type": "STRING",
+        "value": "signed"
+      },
+      {
+        "type": "STRING",
+        "value": "static_assert"
+      },
+      {
+        "type": "STRING",
+        "value": "struct"
+      },
+      {
+        "type": "STRING",
+        "value": "switch"
+      },
+      {
+        "type": "STRING",
+        "value": "thread_local"
+      },
+      {
+        "type": "STRING",
+        "value": "typedef"
+      },
+      {
+        "type": "STRING",
+        "value": "typeof"
+      },
+      {
+        "type": "STRING",
+        "value": "typeof_unqual"
+      },
+      {
+        "type": "STRING",
+        "value": "union"
+      },
+      {
+        "type": "STRING",
+        "value": "unsigned"
+      },
+      {
+        "type": "STRING",
+        "value": "volatile"
+      },
+      {
+        "type": "STRING",
+        "value": "copy"
+      },
+      {
+        "type": "STRING",
+        "value": "give"
+      },
+      {
+        "type": "STRING",
+        "value": "truncate"
+      },
+      {
+        "type": "STRING",
+        "value": "type"
+      },
+      {
+        "type": "STRING",
+        "value": "slot"
+      },
+      {
+        "type": "STRING",
+        "value": "file"
+      }
+    ]
+  }
 }

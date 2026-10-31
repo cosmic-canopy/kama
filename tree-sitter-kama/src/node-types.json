@@ -3996,7 +3996,7 @@
     "fields": {
       "name": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "identifier",
@@ -4465,7 +4465,7 @@
       },
       "name": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
             "type": "identifier",
@@ -9248,11 +9248,71 @@
     "named": false
   },
   {
+    "type": "_Alignas",
+    "named": false
+  },
+  {
+    "type": "_Alignof",
+    "named": false
+  },
+  {
+    "type": "_Atomic",
+    "named": false
+  },
+  {
+    "type": "_BitInt",
+    "named": false
+  },
+  {
+    "type": "_Bool",
+    "named": false
+  },
+  {
+    "type": "_Complex",
+    "named": false
+  },
+  {
+    "type": "_Decimal128",
+    "named": false
+  },
+  {
+    "type": "_Decimal32",
+    "named": false
+  },
+  {
+    "type": "_Decimal64",
+    "named": false
+  },
+  {
+    "type": "_Generic",
+    "named": false
+  },
+  {
+    "type": "_Imaginary",
+    "named": false
+  },
+  {
+    "type": "_Noreturn",
+    "named": false
+  },
+  {
+    "type": "_Static_assert",
+    "named": false
+  },
+  {
+    "type": "_Thread_local",
+    "named": false
+  },
+  {
     "type": "abstract",
     "named": false
   },
   {
     "type": "addr",
+    "named": false
+  },
+  {
+    "type": "alignas",
     "named": false
   },
   {
@@ -9269,6 +9329,10 @@
   },
   {
     "type": "assert",
+    "named": false
+  },
+  {
+    "type": "auto",
     "named": false
   },
   {
@@ -9326,6 +9390,10 @@
   },
   {
     "type": "const",
+    "named": false
+  },
+  {
+    "type": "constexpr",
     "named": false
   },
   {
@@ -9409,6 +9477,10 @@
     "named": false
   },
   {
+    "type": "float",
+    "named": false
+  },
+  {
     "type": "float32",
     "named": false
   },
@@ -9453,6 +9525,10 @@
     "named": false
   },
   {
+    "type": "goto",
+    "named": false
+  },
+  {
     "type": "hardware",
     "named": true
   },
@@ -9478,6 +9554,10 @@
   },
   {
     "type": "in",
+    "named": false
+  },
+  {
+    "type": "inline",
     "named": false
   },
   {
@@ -9518,6 +9598,10 @@
     "extra": true
   },
   {
+    "type": "long",
+    "named": false
+  },
+  {
     "type": "match",
     "named": false
   },
@@ -9528,6 +9612,10 @@
   {
     "type": "null_literal",
     "named": true
+  },
+  {
+    "type": "nullptr",
+    "named": false
   },
   {
     "type": "operator",
@@ -9579,11 +9667,27 @@
     "named": false
   },
   {
+    "type": "register",
+    "named": false
+  },
+  {
+    "type": "restrict",
+    "named": false
+  },
+  {
     "type": "return",
     "named": false
   },
   {
     "type": "scope",
+    "named": false
+  },
+  {
+    "type": "short",
+    "named": false
+  },
+  {
+    "type": "signed",
     "named": false
   },
   {
@@ -9603,6 +9707,10 @@
     "named": false
   },
   {
+    "type": "static_assert",
+    "named": false
+  },
+  {
     "type": "string",
     "named": false
   },
@@ -9611,8 +9719,20 @@
     "named": true
   },
   {
+    "type": "struct",
+    "named": false
+  },
+  {
+    "type": "switch",
+    "named": false
+  },
+  {
     "type": "this_expression",
     "named": true
+  },
+  {
+    "type": "thread_local",
+    "named": false
   },
   {
     "type": "true",
@@ -9628,6 +9748,18 @@
   },
   {
     "type": "type",
+    "named": false
+  },
+  {
+    "type": "typedef",
+    "named": false
+  },
+  {
+    "type": "typeof",
+    "named": false
+  },
+  {
+    "type": "typeof_unqual",
     "named": false
   },
   {
@@ -9647,7 +9779,15 @@
     "named": false
   },
   {
+    "type": "union",
+    "named": false
+  },
+  {
     "type": "unsafe",
+    "named": false
+  },
+  {
+    "type": "unsigned",
     "named": false
   },
   {
@@ -9665,6 +9805,10 @@
   {
     "type": "void_type",
     "named": true
+  },
+  {
+    "type": "volatile",
+    "named": false
   },
   {
     "type": "when",

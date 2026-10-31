@@ -3,14 +3,17 @@
 // bison's own message is `unexpected BASE, expecting IDENTIFIER` — it names the TOKEN and
 // never says what the token IS, so it reads like a parser fault. That made
 // three of these (`base`, `type`, `slot`) read as possible compiler bugs when they were hit. `type` and
-// `slot` are contextual keywords now and name bindings freely; `base` is one of the 83 that do not, and
+// `slot` are contextual keywords now and name bindings freely; `base` is one of the 84 that do not, and
 // this is the message those get.
 //
 // ⚠️ The note is gated on the parser having WANTED an identifier. `unexpected ELSE` in a malformed `if`
 // is not a naming mistake, and a note there would be noise — so the gate is part of the claim, not an
 // optimisation.
+//
+// The DECLARATION is the only line that names it, so tree-sitter-kama/test/parse-errors.txt proves the editor
+// grammar refuses it there too (KR-29): with a later use of `base`, the use alone used to carry the ERROR node.
 fn uint8 main()
 {
     isize base = 1;
-    return cast<int32>(base);
+    return 0;
 }

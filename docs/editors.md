@@ -149,6 +149,14 @@ queries in the Helix/nvim vocabulary; Zed's flatter vocabulary needs its own cop
 `editor/zed/languages/kama/`. The generated parser under `src/` is committed, because every consumer
 compiles `parser.c` rather than running the grammar generator.
 
+**A reserved word is no name in the editor either.** tree-sitter extracts keywords contextually, so on its own it lexes
+any keyword as a name wherever a name is wanted, and `Thing else = …` rendered as a clean declaration that the compiler
+then refused. The grammar's `reserved` sets carry every word `kama.l` refuses (its keyword table less the six contextual
+words, plus C's spellings), opened only where the compiler opens them: `base` and `default` after a `.`, `enum` in a
+contract's `for` list. A type, an enum member, a function and a type parameter refuse the six contextual words too, as
+the compiler does; `src/scanner.c` decides `copy`/`give`/`truncate` as a function's name. `check-treesitter.sh` holds
+the set equal to `kama.l`'s tables.
+
 ## Getting the compiler on `PATH`
 
 Every snippet below runs the bare command `kama`. If you installed via the toolchain manager, that is
