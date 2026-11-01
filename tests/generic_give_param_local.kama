@@ -1,0 +1,25 @@
+// One generic body serves every type argument, so `give` of a local spelled with the type parameters (`Optional<V>`)
+// is accepted in every instance: the move a move-only `V` needs, nothing for a plain one. Through 0.9.797 the instance
+// where `V` copies refused it ("a plain value … drop the `give`") — which the author could not do without breaking the
+// move-only instance — for a local declared with an initializer, while the same local assigned later was accepted.
+// Returns 42.
+type resource Box<V> {
+    V held;
+    public ctor make(V v) { this.held = give v; }
+    public fn V passInit(V x) {
+        Optional<V> had = Optional::Some(value: give x);
+        return match (give had) { case Some(value: v): give v; case None: panic(msg: "never"); };
+    }
+    public fn V passLater(V x) {
+        Optional<V> had = Optional::None;
+        had = Optional::Some(value: give x);
+        return match (give had) { case Some(value: v): give v; case None: panic(msg: "never"); };
+    }
+}
+fn uint8 main() {
+    Box<int64> n = Box.make(v: 1i64);
+    Box<string> s = Box.make(v: "a");
+    if (n.passInit(x: 20i64) + n.passLater(x: 22i64) != 42i64) { return 1; }
+    if (s.passInit(x: "b") != "b" || s.passLater(x: "c") != "c") { return 2; }
+    return 42;
+}

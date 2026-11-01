@@ -1768,6 +1768,7 @@ private:
     // distinguishable once the parameter is unbound, and the distinction is the whole measurement.
     DeferKind classifyDeferredReceiver(SharedExpression recv);
     bool typeMentionsProbedParam(const SharedIdentifier& t) const;
+    bool typeMentionsBoundParam(const SharedIdentifier& t) const;   // ...a parameter of the instantiation being emitted
     // A member missing from an OPAQUE PARAMETER is a different claim from a member missing from a real
     // type, and it deserves a different message. "`DynamicArray<T>` has no `get`" names a type that does
     // not have a method. "`T` has no bound providing `fromStr`" names a PROMISE that was never made — the

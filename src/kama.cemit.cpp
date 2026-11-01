@@ -18304,6 +18304,14 @@ bool CEmitter::typeMentionsProbedParam(const SharedIdentifier& t) const
     return false;
 }
 
+bool CEmitter::typeMentionsBoundParam(const SharedIdentifier& t) const
+{
+    if (!t || !t->value) return false;
+    if (!t->genericArg && _typeSubst.count(*t->value)) return true;
+    if (t->genericArgs) for (auto& a : *t->genericArgs) if (typeMentionsBoundParam(a)) return true;
+    return false;
+}
+
 CEmitter::DeferKind CEmitter::classifyDeferredReceiver(SharedExpression recv)
 {
     // The receiver may be the PARAMETER ITSELF rather than a value of it — `T.fromStr(s: s)`,
@@ -21767,6 +21775,12 @@ std::string CEmitter::moveOnlySource(SharedExpression e, int line)
             && !(_localTypes.count(*id->value)
                  && (ownsByValue(_localTypes[*id->value]) || isSmartPtrClass(_localTypes[*id->value]))))
         {
+            // ...except in an instantiation, for a local spelled with its type parameters (`Optional<V> d`): one body
+            // serves every argument, and `give` is the move a move-only `V` needs and nothing for a plain one, so the
+            // instance where `V` copies is not told to drop it — the author could not. Through 0.9.797 that was refused
+            // for a local declared with an initializer and accepted for the same local assigned after its declaration.
+            auto ltn = _localTypeNodes.find(*id->value);
+            if (!_typeSubst.empty() && ltn != _localTypeNodes.end() && typeMentionsBoundParam(ltn->second)) return "";
             unsupported(("cannot `give` `" + *id->value + "` — it is a plain value, copied on assignment, "
                          "and `give` moves a move-only value; drop the `give`").c_str(), line);
             return "";
