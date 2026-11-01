@@ -857,7 +857,8 @@ dry, `break`, `return` — because the drain is a view that closes its window: t
 destructor drops what the loop did not take (*A `foreach` is the other window*). The table is kept for reuse. The
 loop freezes the map, so a `put`/`remove` in the body is refused, and a read is legal and sees exactly the pairs <!-- xfail: map_drain_put -->
 not yet taken. `Map` drains in table order, `OrderedMap` oldest first, `SortedMap` smallest key first; `Set`,
-`OrderedSet` and `SortedSet` drain their members the same way (`foreach (string k in seen.drain())`). Consuming a map is
+`OrderedSet` and `SortedSet` drain their members the same way (`foreach (string k in seen.drain())`), and
+`ConcurrentMap.drain()` moves every pair into one `Map`, shard by shard under each shard's lock. Consuming a map is <!-- test: concurrent_map_drain -->
 `drain()` and then dropping it, so there is no second, consuming spelling. The grant is the `@viewable` contract
 `Drainable<I>` (`std::collections`), as the other iterations are granted.
 
@@ -7601,7 +7602,10 @@ fn uint8 main() {
 - **A handle is shared as a `Locked` handle is:** `Sendable` and `Copyable(bare: give)`, so `copy counts` is a second <!-- xfail: concurrent_map_key_not_sendable -->
   handle to the same shards, which is what each isolate is handed. Keys and values must be `Sendable`.
 - **`length()` counts shard by shard,** under each shard's lock in turn, so it is the count at some moment, as Java's
-  `size()` is; `keys()` and `entries()` are snapshots taken the same way.
+  `size()` is; `keys()` and `entries()` are snapshots taken the same way, each pair copied once. `drain()` moves <!-- test: concurrent_map_drain -->
+  every pair into one `Map` the same way, each shard empty after its turn: a `put` that lands in a shard already
+  drained stays for the next drain, so drains together take every pair exactly once. A value may own memory <!-- test: concurrent_map_string_values -->
+  (`ConcurrentMap<string, string>`).
 - **The shard count is `cpuCount() × 4`, rounded up to a power of two** (dashmap's rule) and fixed for the map's life.
   `withShards(count:)` states it; `withAllocator(allocator:, shards:)` gives each shard's `Map` its own copy of an
   allocator; `reserve(n:)` spreads room for `n` entries over the shards. The hasher `H` and allocator `A` default as

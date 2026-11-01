@@ -3,7 +3,7 @@
 // meet. Java's `ConcurrentHashMap`, C#'s `ConcurrentDictionary` and Rust's `dashmap` answer the same need.
 //
 // Every method takes ONE shard's lock for its own extent and nothing else, so the map adds no lock order of its own,
-// and a value only ever leaves by copy: kama has no closures, so there is no `compute`, and nothing hands out a shard,
+// and a value leaves by copy, or moved by `drain()`: kama has no closures, so there is no `compute`, and nothing hands out a shard,
 // so no caller can insert a key that hashes elsewhere. An entry changed in place is a `Locked<V>` value, copied out
 // under the shard's lock (a handle copy) and locked on its own after that window closes. Called inside another lock
 // window, a method is refused as any lock is: it takes one.
@@ -162,7 +162,24 @@ type resource ConcurrentMap<K: Hashable + Equatable<K> + Sendable, V: Sendable, 
         DynamicArray<Entry<K, V>> all = DynamicArray.empty();
         isize i = 0;
         while (i < this.shards.length()) {
-            borrow this.shards[i].lock().value() as m { foreach (Entry<K, V> e in m.entries()) { all.add(item: Entry.make(key: copy e.key(), value: copy e.value())); } }
+            borrow this.shards[i].lock().value() as m { foreach (Entry<K, V> e in m.entries()) { all.add(item: give e); } }
+            i = i + 1;
+        }
+        return all;
+    }
+    // Every pair MOVED out into one `Map`, shard by shard under each shard's lock (KR-263): each pair moved once and
+    // hashed once more, and each shard empty after its turn. Not one moment, as `entries()` is not: a `put` that lands in
+    // a shard the drain has already emptied stays in this map.
+    public fn Map<K, V, H> drain() {
+        Map<K, V, H> all = Map.empty();
+        isize i = 0;
+        while (i < this.shards.length()) {
+            borrow this.shards[i].lock().value() as m {
+                all.reserve(n: all.length() + m.length());
+                foreach (Entry<K, V> e in m.drain()) {
+                    match (give e.intoParts()) { case Parts(key: k, value: v): { all.put(key: give k, value: give v); } };
+                }
+            }
             i = i + 1;
         }
         return all;

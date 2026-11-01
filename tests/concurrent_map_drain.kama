@@ -1,0 +1,44 @@
+// `ConcurrentMap.drain()` (KR-263) while another isolate writes: each drain moves every pair it finds into one `Map`, shard
+// by shard under each shard's lock, and leaves each shard empty after its turn. A `put` landing in a shard already
+// drained stays for the next drain, so the drains together take every pair exactly once, however they interleave with
+// the writer. `entries()` copies each pair once. Returns 42.
+import { std::concurrent::ConcurrentMap, std::collections::Map, std::collections::Entry, std::collections::DynamicArray };
+
+type resource Writer implements Sendable {
+    ConcurrentMap<int64, string> m;
+    public ctor make(ConcurrentMap<int64, string> m) { this.m = give m; }
+    public fn void run() { int64 i = 0; while (i < 2000) { this.m.put(key: i, value: "v${i}"); i = i + 1; } }
+}
+fn void work(Writer w) { w.run(); }
+
+// Moves every pair of `from` into `into`, counting them.
+fn int32 merge(ref Map<int64, string> into, ref Map<int64, string> from) {
+    int32 n = 0;
+    foreach (Entry<int64, string> e in from.drain()) {
+        match (give e.intoParts()) { case Parts(key: k, value: v): { into.put(key: give k, value: give v); } };
+        n += 1;
+    }
+    return n;
+}
+
+fn uint8 main() {
+    ConcurrentMap<int64, string> live = ConcurrentMap.withShards(count: 8);
+    Map<int64, string> all = Map.empty();
+    int32 moved = 0;
+    scope {
+        Writer w = Writer.make(m: copy live);
+        spawn work(w: give w);
+        int32 round = 0;
+        while (round < 40) { Map<int64, string> part = live.drain(); moved += merge(into: ref all, from: ref part); round += 1; }
+    }
+    Map<int64, string> rest = live.drain();
+    moved += merge(into: ref all, from: ref rest);
+    if (moved != 2000 || all.length() != 2000 || live.length() != 0) { return 1; }
+    int64 i = 0;
+    while (i < 2000) { if (all.getRef(key: i) != "v${i}") { return 2; } i = i + 1; }
+
+    live.put(key: 1, value: "one");
+    DynamicArray<Entry<int64, string>> snap = live.entries();
+    if (snap.length() != 1 || snap[0].value() != "one" || live.length() != 1) { return 3; }
+    return 42;
+}
