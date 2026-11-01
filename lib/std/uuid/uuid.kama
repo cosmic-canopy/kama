@@ -1,4 +1,4 @@
-import { std::random::entropy, std::time::unixNow };
+import { std::random::entropy, std::time::unixNow, std::num::loadU64, std::num::storeU64, std::num::ByteOrder };
 export { Uuid, UuidError };
 
 // UUIDs — RFC 9562 (IETF, May 2024), which obsoletes RFC 4122. Two ways to make one:
@@ -81,15 +81,7 @@ fn uint64 nextTicks() {
 }
 
 // Big-endian: the first byte of `b` from `at` is the most significant of the word.
-fn uint64 loadWord(InlineArray<uint8>#(16) b, isize at) {
-    uint64 w = 0ui64;
-    isize i = 0;
-    while (i < 8) {
-        w = (w << 8ui64) | cast<uint64>(b[cast<usize>(at + i)]);
-        i = i + 1;
-    }
-    return w;
-}
+fn uint64 loadWord(InlineArray<uint8>#(16) b, isize at) { return loadU64(from: b.view(), at: at, order: ByteOrder::Big); }
 
 type value Uuid implements Equatable<This>, Comparable<This>, Hashable, Formattable,
                            Serializable, Deserializable<This>, Sendable {
@@ -131,13 +123,8 @@ type value Uuid implements Equatable<This>, Comparable<This>, Hashable, Formatta
 
     public const fn InlineArray<uint8>#(16) bytes() {
         InlineArray<uint8>#(16) octets = [0; 16];
-        isize i = 0;
-        while (i < 8) {
-            uint64 shift = cast<uint64>(56 - i * 8);
-            octets[cast<usize>(i)]     = truncate<uint8>((this.hi >> shift) & 255ui64);
-            octets[cast<usize>(8 + i)] = truncate<uint8>((this.lo >> shift) & 255ui64);
-            i = i + 1;
-        }
+        storeU64(into: octets.viewMut(), at: 0, value: this.hi, order: ByteOrder::Big);
+        storeU64(into: octets.viewMut(), at: 8, value: this.lo, order: ByteOrder::Big);
         return octets;
     }
 

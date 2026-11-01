@@ -1,0 +1,9 @@
+// A load whose bytes run past the end of its view traps, naming the caller's line, as an index past the end does.
+import { std::num::loadU32, std::num::ByteOrder, std::collections::DynamicArray };
+fn uint8 main() {
+    DynamicArray<uint8> hdr = DynamicArray.empty();
+    isize i = 0;
+    while (i < 12) { hdr.add(item: 0ui8); i = i + 1; }
+    uint32 v = loadU32(from: hdr.view(), at: 10, order: ByteOrder::Little);
+    return cast<uint8>(v);
+}

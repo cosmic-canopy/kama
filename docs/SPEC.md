@@ -2000,6 +2000,13 @@ a numeric type that exists on some targets, which the fixed-width position forbi
 reach for one — a `Fixed<int64>` backing's intermediate product, an unbiased random range — need exactly this
 product, which is four 32-bit limb multiplies in plain unsigned arithmetic on every target.
 
+**A number at a byte offset, in a stated order** — `loadU16`/`loadU32`/`loadU64(from: ConstView<uint8>, at:, order:)` <!-- test: endian_load_store -->
+and `storeU16`/`storeU32`/`storeU64(into: View<uint8>, at:, value:, order:)`, with `ByteOrder { Little, Big }` the
+format's order (KR-270): `loadU32(from: hdr.view(), at: 8, order: ByteOrder::Little)` reads a glTF header's length.
+The order is one typed argument, as Go's `binary.LittleEndian` and Zig's `.little` are, not a suffix on twelve names;
+signed widths go through `bitcast`; bytes past the view's end trap, naming the caller's line, as an index does. <!-- test: endian_load_past_end -->
+`byteswap*` stays the value transform; host-order helpers stay out, since a stated order needs no knowledge of the host.
+
 ### Sorting & searching (`std::collections`) ✅
 
 `import { std::collections::sort, std::collections::sortUnstable, std::collections::binarySearch,

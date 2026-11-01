@@ -1,3 +1,4 @@
+import { std::collections::ConstView, std::collections::View };
 
 // Byte-order reversal (endian swap) for the unsigned integer widths and the floats. A `byteswap*` is a
 // pure VALUE transform — it reverses the byte lanes of the number, independent of host endianness — so it
@@ -12,7 +13,68 @@
 // on is little-endian, so `byteswap*` composed with a known target order IS the serialization primitive; a
 // big-endian target, if one is ever added, brings the `@compileFor` flag with it — a target dependency, not
 // a consumer one.
-export { byteswapU16, byteswapU32, byteswapU64, byteswapF32, byteswapF64 };
+//
+// A STATED order is another matter, and it is here (KR-270): a file format or a protocol says which order its
+// integers are written in, which needs no knowledge of the host at all. `loadU32(from: hdr, at: 4, order:
+// ByteOrder::Little)` reads one out of a byte view and `storeU32(into: out, at: 8, value: n, order: ByteOrder::Big)`
+// writes one — Go's `binary.LittleEndian.Uint32`, Zig's `readInt(u32, b, .little)` — with the order one typed
+// argument rather than a suffix on twelve names. Signed widths go through `bitcast`.
+export { byteswapU16, byteswapU32, byteswapU64, byteswapF32, byteswapF64, ByteOrder, loadU16, loadU32, loadU64,
+         storeU16, storeU32, storeU64 };
+
+// The order a format writes a number's bytes in: `Little`, the lowest byte first (x86, ARM, wasm, gzip, zip, glTF), or
+// `Big`, the highest first (network order, PNG, JPEG, Java's `DataOutputStream`).
+type enum ByteOrder { Little, Big }
+
+// The bytes `at .. at + width` must lie inside a view of `n` bytes: past either end is a trap that names the caller's
+// line, as an index past the end is — `bytes 10..14 run past a 12-byte view`.
+@trackCaller
+fn void checkRange(isize n, isize at, isize width) {
+    if (at < 0 || at > n - width) {
+        isize end = at + width;
+        panic(msg: "bytes ${at}..${end} run past a ${n}-byte view");
+    }
+}
+
+@trackCaller
+fn uint64 loadWidth(ConstView<uint8> from, isize at, isize width, ByteOrder order) {
+    checkRange(n: from.length(), at: at, width: width);
+    uint64 v = 0ui64;
+    isize i = 0;
+    while (i < width) {   // the most significant byte first: the last one for `Little`, the first for `Big`
+        isize k = match (order) { case Little: at + width - 1 - i; case Big: at + i; };
+        v = (v << 8ui64) | cast<uint64>(from[k]);
+        i = i + 1;
+    }
+    return v;
+}
+
+@trackCaller
+fn void storeWidth(View<uint8> into, isize at, isize width, uint64 value, ByteOrder order) {
+    checkRange(n: into.length(), at: at, width: width);
+    isize i = 0;
+    while (i < width) {   // the least significant byte first: at the start for `Little`, the end for `Big`
+        isize k = match (order) { case Little: at + i; case Big: at + width - 1 - i; };
+        into[k] = truncate<uint8>(value >> cast<uint64>(i * 8));
+        i = i + 1;
+    }
+}
+
+// The number at byte `at` of `from`, in `order`.
+@trackCaller
+fn uint16 loadU16(ConstView<uint8> from, isize at, ByteOrder order) { return truncate<uint16>(loadWidth(from: from, at: at, width: 2, order: order)); }
+@trackCaller
+fn uint32 loadU32(ConstView<uint8> from, isize at, ByteOrder order) { return truncate<uint32>(loadWidth(from: from, at: at, width: 4, order: order)); }
+@trackCaller
+fn uint64 loadU64(ConstView<uint8> from, isize at, ByteOrder order) { return loadWidth(from: from, at: at, width: 8, order: order); }
+
+// `value` written at byte `at` of `into`, in `order`.
+@trackCaller
+fn void storeU16(View<uint8> into, isize at, uint16 value, ByteOrder order) { storeWidth(into: into, at: at, width: 2, value: cast<uint64>(value), order: order); }
+@trackCaller
+fn void storeU32(View<uint8> into, isize at, uint32 value, ByteOrder order) { storeWidth(into: into, at: at, width: 4, value: cast<uint64>(value), order: order); }
+@trackCaller
+fn void storeU64(View<uint8> into, isize at, uint64 value, ByteOrder order) { storeWidth(into: into, at: at, width: 8, value: value, order: order); }
 
 fn uint16 byteswapU16(uint16 x) {
     uint32 v = cast<uint32>(x);

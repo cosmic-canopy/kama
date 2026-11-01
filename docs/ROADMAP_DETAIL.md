@@ -646,29 +646,6 @@ looked up by name (TZif v2+ with its POSIX footer rule from `/usr/share/zoneinfo
 10 1903, or bundled data), the local zone (`TZ`, `/etc/localtime`, `GetDynamicTimeZoneInformation`), and the offset
 and abbreviation at an instant, with a civil time in a gap or a fold answered explicitly rather than guessed.
 
-<a id="s1-endian-load"></a>
-
-#### Fixed-width integers at an offset, in a stated byte order (KR-270)
-
-Filed 2026-10-30. `std::num::endian` exports only `byteswap*`, so a file header (a GLB, a zip entry, a gzip trailer)
-is read with a hand-written `le32`, and std keeps two private copies of its own: kbin's `getU` and `std::uuid`'s
-`loadWord`. Go has `binary.LittleEndian.Uint32(b)` and `PutUint32`; Rust `u32::from_le_bytes`; Zig
-`std.mem.readInt(u32, bytes, .little)`. **Recommended:** a load and a store of `uint16`/`uint32`/`uint64` at an offset
-of a `ConstView<uint8>`/`View<uint8>`, little- and big-endian, bounds-checked as an index is, with kbin's and uuid's
-copies folded onto it. The module's ruling against host-order helpers does not apply: a stated order needs no
-knowledge of the host. KR-5's gzip and KR-258's zip read their headers with it.
-
-**Ruled 2026-10-31: one typed order.** `type enum ByteOrder { Little; Big; }` and six functions, a load and a store per
-width: `loadU16`/`loadU32`/`loadU64(from: ConstView<uint8>, at: isize, order: ByteOrder)` and
-`storeU16`/`storeU32`/`storeU64(into: View<uint8>, at: isize, value: …, order: ByteOrder)`, imported from `std::num` as
-`byteswap*` is. Go's shape (`binary.LittleEndian` is a value of the `ByteOrder` interface) and Zig's (`.little` is an
-argument), and the typed-choice rule: every choice a variant of one typed parameter met at the call, not a two-letter
-suffix on twelve names (Rust's `from_le_bytes`, C#'s `ReadUInt32LittleEndian`). Signed widths go through `bitcast`, as
-kbin's readers do; a range past the view's end traps as an index does, naming the caller's line. *Sacrifice:* one
-argument more per call; a literal order folds at `-O2` and costs a compare at `-O0`. The GLB header
-`67 6C 54 46 | 02 00 00 00 | 60 0F 00 00` reads `2` and `3936` little-endian at offsets 4 and 8, and `33554432` read
-big-endian at 4.
-
 <a id="s1-secure-zero"></a>
 
 #### Wiping secrets (KR-271)

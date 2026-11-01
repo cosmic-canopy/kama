@@ -1,0 +1,38 @@
+// A fixed-width integer at a byte offset, in a STATED byte order (KR-270): `loadU16/32/64` read one buf of a byte
+// view, `storeU16/32/64` write one, and `ByteOrder` says which order — the format's, never the host's. A glTF binary
+// header is the worked case: `67 6C 54 46 | 02 00 00 00 | 60 0F 00 00` is the magic "glTF", version 2 and length
+// 3936, all little-endian. Signed widths go through `bitcast`. tests/trap/endian_load_past_end reads past the end.
+// Returns 42.
+import { std::num::loadU16, std::num::loadU32, std::num::loadU64, std::num::storeU16, std::num::storeU32,
+         std::num::storeU64, std::num::ByteOrder, std::collections::DynamicArray };
+
+fn uint8 main() {
+    DynamicArray<uint8> hdr = DynamicArray.empty();
+    hdr.add(item: 0x67ui8); hdr.add(item: 0x6Cui8); hdr.add(item: 0x54ui8); hdr.add(item: 0x46ui8);
+    hdr.add(item: 0x02ui8); hdr.add(item: 0x00ui8); hdr.add(item: 0x00ui8); hdr.add(item: 0x00ui8);
+    hdr.add(item: 0x60ui8); hdr.add(item: 0x0Fui8); hdr.add(item: 0x00ui8); hdr.add(item: 0x00ui8);
+    if (loadU32(from: hdr.view(), at: 0, order: ByteOrder::Little) != 0x46546C67ui32) { return 1; }   // "glTF"
+    if (loadU32(from: hdr.view(), at: 4, order: ByteOrder::Little) != 2ui32) { return 2; }
+    if (loadU32(from: hdr.view(), at: 8, order: ByteOrder::Little) != 3936ui32) { return 3; }
+    if (loadU32(from: hdr.view(), at: 4, order: ByteOrder::Big) != 33554432ui32) { return 4; }       // 0x02000000
+    if (loadU16(from: hdr.view(), at: 8, order: ByteOrder::Little) != 0x0F60ui16) { return 5; }
+    if (loadU16(from: hdr.view(), at: 8, order: ByteOrder::Big) != 0x600Fui16) { return 6; }
+    if (loadU64(from: hdr.view(), at: 4, order: ByteOrder::Little) != 0x00000F6000000002ui64) { return 7; }
+    if (loadU64(from: hdr.view(), at: 0, order: ByteOrder::Big) != 0x676C544602000000ui64) { return 8; }
+
+    DynamicArray<uint8> buf = DynamicArray.empty();
+    isize i = 0;
+    while (i < 16) { buf.add(item: 0ui8); i = i + 1; }
+    storeU32(into: buf.viewMut(), at: 8, value: 3936ui32, order: ByteOrder::Little);
+    if (buf[8] != 0x60ui8 || buf[9] != 0x0Fui8 || buf[10] != 0ui8 || buf[11] != 0ui8) { return 9; }
+    storeU16(into: buf.viewMut(), at: 0, value: 0xBEEFui16, order: ByteOrder::Big);
+    if (buf[0] != 0xBEui8 || buf[1] != 0xEFui8) { return 10; }
+    storeU64(into: buf.viewMut(), at: 0, value: 0x0102030405060708ui64, order: ByteOrder::Big);
+    if (loadU64(from: buf.view(), at: 0, order: ByteOrder::Big) != 0x0102030405060708ui64) { return 11; }
+    if (loadU64(from: buf.view(), at: 0, order: ByteOrder::Little) != 0x0807060504030201ui64) { return 12; }
+    int32 neg = -2;
+    storeU32(into: buf.viewMut(), at: 12, value: bitcast<uint32>(neg), order: ByteOrder::Little);   // a signed width
+    uint32 back = loadU32(from: buf.view(), at: 12, order: ByteOrder::Little);
+    if (bitcast<int32>(back) != -2) { return 13; }
+    return 42;
+}
