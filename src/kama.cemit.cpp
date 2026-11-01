@@ -33685,7 +33685,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                 }
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
-        } else if (resultTemp) {
+        } else if (resultTemp && !exprDiverges(a->body.get())) {   // a `panic(…)` arm has no value: emitted as a statement
             emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, kMatchArm);   // `case X: give x;`
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
         } else if (emitDiscardedValue(a->body, depth + 2)) {   // an arm whose value owns: dropped as a statement's is
@@ -33709,7 +33709,8 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
         // live before the match and falls back to their before-state for a key that is missing, so the
         // post-pop map — arm locals gone, shadowed names restored, moves of enclosing locals kept — is exact.
         armEnds.push_back(_moveState);
-        armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
+        armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block))
+                                   : (a->body && exprDiverges(a->body.get())));
         indent(depth + 1); *_out << "}\n";
     }
     mergeMatchMoveStates(beforeMove, armEnds, armDivs);
@@ -34012,7 +34013,7 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
                 }
             }
             emitScopeCleanup(_scopes.back(), depth + 2);
-        } else if (resultTemp) {
+        } else if (resultTemp && !exprDiverges(a->body.get())) {   // a `panic(…)` arm has no value: emitted as a statement
             emitOwnedValueInto(*resultTemp, _matchTargetCType, a->body, a->line, depth + 2, kMatchArm);   // `case X: give x;`
             emitScopeCleanup(_scopes.back(), depth + 2);   // drop owned sub-expr temps (e.g. concat intermediates)
         } else if (emitDiscardedValue(a->body, depth + 2)) {   // an arm whose value owns: dropped as a statement's is
@@ -34027,7 +34028,8 @@ void CEmitter::emitMatchPlainEnum(MatchNode* m, const std::string& enumTy, const
         }
         indent(depth + 2); *_out << "break;\n";
         armEnds.push_back(_moveState);
-        armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block)) : false);
+        armDivs.push_back(a->block ? bodyDiverges(std::static_pointer_cast<StatementNode>(a->block))
+                                   : (a->body && exprDiverges(a->body.get())));
         popScope();
         indent(depth + 1); *_out << "}\n";
     }

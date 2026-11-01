@@ -1,0 +1,3 @@
+// A `match` arm that is a bare `panic(…)` runs the panic when it is taken (tests/match_arm_panic: when it is not).
+fn int64 get(Optional<int64> o) { return match (o) { case Some(value: v): v; case None: panic(msg: "absent"); }; }
+fn uint8 main() { return cast<uint8>(get(o: Optional::None)); }

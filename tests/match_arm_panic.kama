@@ -1,0 +1,11 @@
+// A value-producing `match` arm may be a bare `panic(…)`: it never returns, so it has no value to give (Rust's
+// `None => panic!()`). Through 0.9.797 `kama check` accepted it and the build failed in clang, the arm's `void`
+// assigned to the match's result. Here no arm that panics is taken; tests/trap/match_arm_panic takes one. Returns 42.
+fn int64 get(Optional<int64> o) { return match (o) { case Some(value: v): v; case None: panic(msg: "absent"); }; }
+type enum Code { One, Two, Retired }
+fn string name(Code c) { return match (c) { case One: "one"; case Two: "two"; case Retired: panic(msg: "retired"); }; }
+fn uint8 main() {
+    if (get(o: Optional::Some(value: 40i64)) != 40i64) { return 1; }
+    if (name(c: Code::Two) != "two") { return 2; }
+    return 42;
+}
