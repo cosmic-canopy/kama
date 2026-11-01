@@ -658,6 +658,17 @@ of a `ConstView<uint8>`/`View<uint8>`, little- and big-endian, bounds-checked as
 copies folded onto it. The module's ruling against host-order helpers does not apply: a stated order needs no
 knowledge of the host. KR-5's gzip and KR-258's zip read their headers with it.
 
+**Ruled 2026-10-31: one typed order.** `type enum ByteOrder { Little; Big; }` and six functions, a load and a store per
+width: `loadU16`/`loadU32`/`loadU64(from: ConstView<uint8>, at: isize, order: ByteOrder)` and
+`storeU16`/`storeU32`/`storeU64(into: View<uint8>, at: isize, value: …, order: ByteOrder)`, imported from `std::num` as
+`byteswap*` is. Go's shape (`binary.LittleEndian` is a value of the `ByteOrder` interface) and Zig's (`.little` is an
+argument), and the typed-choice rule: every choice a variant of one typed parameter met at the call, not a two-letter
+suffix on twelve names (Rust's `from_le_bytes`, C#'s `ReadUInt32LittleEndian`). Signed widths go through `bitcast`, as
+kbin's readers do; a range past the view's end traps as an index does, naming the caller's line. *Sacrifice:* one
+argument more per call; a literal order folds at `-O2` and costs a compare at `-O0`. The GLB header
+`67 6C 54 46 | 02 00 00 00 | 60 0F 00 00` reads `2` and `3936` little-endian at offsets 4 and 8, and `33554432` read
+big-endian at 4.
+
 <a id="s1-secure-zero"></a>
 
 #### Wiping secrets (KR-271)
@@ -789,6 +800,15 @@ destructor on every exit path, xfails for keeping or copying the view out of the
 three maps implement for `drain()`; (3) `Map`/`OrderedMap`/`SortedMap` drains (`SortedMap` pops its minimum per step
 through the B-tree's own `takeMinPair`, in order, and `clear()`s the rest); (4) `ConcurrentMap.drain()` and `entries()`
 taking `give e`; fixtures on the native and sanitizer legs. Size M+.
+
+**Ruled 2026-10-31 (third ruling): the sets drain too.** `Set`, `OrderedSet` and `SortedSet` have the same gap: a
+member leaves only by copy (`foreach (string k in seen)` builds a new string per member), and a set whose key is not
+`Copyable` cannot hand its members out at all. Each gets `drain()` under the same grant, yielding `K`, over its inner
+map's storage (Rust's `HashSet::drain`, indexmap's `IndexSet::drain`). *Sacrifice:* three more drain views and their
+fixtures. Two facts the build must keep, found reading the maps: a `const fn` read inside the loop is legal (the
+operand is frozen against writes only), so a taken `Map` slot becomes a tombstone rather than EMPTY (an EMPTY slot ends
+a probe and would hide a key not yet taken), and a taken `OrderedMap` entry's index slot is written REMOVED before its
+key moves, since `slotOf` reads the key of every index entry without checking `live`.
 
 <a id="s2-quoted-format"></a>
 
