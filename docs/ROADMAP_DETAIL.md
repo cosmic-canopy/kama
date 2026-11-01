@@ -734,81 +734,24 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-map-drain"></a>
+<a id="s2-infer-optional-arg"></a>
 
-### Moving a map's entries out without copying them (KR-263)
+### A type argument inferred from an `Optional<T>` argument inside a generic (KR-277)
 
-Filed 2026-10-29 from the consuming method's std audit. A `Map`'s `Entry<K, V>` owns its pair but only lends it
-(`key()`, `value()`: "never moved out — the pair owns it"), and `entries()` exists only when both are `Copyable`
-(`MapEntryIter` deep-copies each pair), so nothing moves the pairs into another map or a list. `ConcurrentMap.entries()`
-copies every pair twice: once in each shard's `entries()`, again in `Entry.make(key: copy e.key(), value: copy
-e.value())` (`lib/std/concurrent/concurrent_map.kama` ~155; `give e` would make it once, a fix on its own).
-
-| | moving a map's pairs out |
-|---|---|
-| Rust | `HashMap::drain(&mut self)`: empties the map in place, keeps its capacity, yields owned `(K, V)`; a drain dropped early still empties it. `into_iter(self)` consumes the map. `extract_if` takes some |
-| C++ | `unordered_map::extract` node handles (C++17), `merge` |
-| Swift | `removeAll(keepingCapacity:)`; iteration copies (copy-on-write) |
-| Go | `range` copies, then `clear(m)` (1.21) |
-| Java | `entrySet().iterator()` with `remove()` |
+Found 2026-11-01 writing `ConcurrentMap.compareAndSwap`'s fix (`0.9.800`), measured on `0.9.799`:
 
 ```kama
-foreach (Entry<string, Session> e in live.drain()) {           // live is empty after the loop, its table kept
-    match (give e.intoParts()) { case Parts(key: k, value: s): archived.put(key: give k, value: give s); };
-}
+import { std::memory::replace };
+fn Optional<T> takeOpt<T>(ref Optional<T> p) { return replace(place: ref p, with: Optional::None); }   // refused
+fn uint8 main() { Optional<int64> o = Optional::Some(value: 5i64); Optional<int64> t = takeOpt(p: ref o); return 0; }
 ```
 
-1. **(Recommended) `drain()` on the map (`Map`, `OrderedMap`, `SortedMap`), Rust's `drain`.** It needs no `Copyable`,
-   yields each pair once as the owned `Entry` iteration already uses, and leaves the map empty with its capacity kept,
-   whether the loop runs to the end or stops early (the rest drop). `Entry` gains `give fn EntryParts<K, V>
-   intoParts()`, `type enum EntryParts<K, V> { Parts(K key, V value); }`, as `Output.intoParts()` does (`0.9.781`), since
-   kama has no tuple. Consuming the map is `drain()` and then dropping it, so there is one way. `ConcurrentMap.drain()`
-   empties each shard under its own lock into one new `Map` (each pair moved once, rehashed once), which works while
-   other handles live; a put racing it into a shard already drained stays in the `ConcurrentMap`. *Sacrifice:* no
-   consuming `intoMap()` that guarantees the whole map in one moment; `drain()` is per shard, as `entries()` is.
-2. A consuming `give fn intoEntries()` (Rust's `into_iter`) instead. *Sacrifice:* the table cannot be reused, and a map
-   held in a field cannot be emptied without `replace`.
-3. Both: two ways to do one thing (GOALS #4).
-
-Size M: the drain view (a `type view` with a destructor, as `LockGuard`), three maps, `EntryParts`, the
-`ConcurrentMap` pair, fixtures under the sanitizer leg (every moved pair dropped once).
-
-**Ruled 2026-10-31: option 1,** `drain()` on `Map`, `OrderedMap` and `SortedMap`, `Entry.intoParts()` with
-`EntryParts`, and `ConcurrentMap.drain()` into one `Map`; `ConcurrentMap.entries()` copies once (`give e`). It is Rust's
-production answer and kama's own practice: the owned `Entry` is already the iteration item, and taking a value apart is
-the consuming `intoParts` that `Output` has. GOALS: one way (#4: consuming the map is `drain()` and a drop), each pair
-moved once and the table kept (#3), the parts taken apart by name (#5); a change to the map mid-drain panics, as it does
-mid-`entries()`. Taking only some pairs (Rust's `extract_if`) needs a predicate, which without closures is a `drain()`
-and a re-`put` of what stays.
-
-**Found building it, 2026-10-31 (`0.9.793`): the ruled spelling does not compile.** A drain that empties the map when the
-loop stops early needs a destructor, and a `type view` with a destructor CLOSES ITS WINDOW (SPEC *The window*): only its own ctor
-and a `@viewable` mint hand one back, only a `borrow` may hold it, and `foreach` can neither mint nor copy one ("open it
-in a window and call `next()` on the alias"). So `foreach (Entry<K, V> e in live.drain())` is refused, while a drain
-with no destructor cannot keep the "empty after the loop, however it ends" half of the ruling. Measured on a copy: the
-Map half (`EntryParts`, `Entry.intoParts()`, `MapDrain`, `Map.drain()`) is written and reaches exactly those refusals;
-the patch and its probe are in `.scratch/kr263/` (machine-local).
-
-**Ruled 2026-10-31 (second ruling): option A, `foreach` holds a window-closing view.** A `foreach` is already a window
-(its operand is frozen for the body, `emitForeachIterator`), so it becomes the second holder the window rule admits
-beside `borrow`: its operand may mint a view that closes its window, and the view's destructor runs at every exit (the end,
-`break`, `return`). Rust's `HashMap::drain` guarantee, kept whole. Rejected: a drain without a destructor, whose `break`
-leaves the unreached pairs in the map, which makes the name promise more than a stopped loop delivers (GOALS #5). GOALS:
-`drain` always empties (#5), one way to empty a map (#4), the leftovers dropped at a known point (#3), and the
-window rule unchanged in substance. The work, in order: (1) the compiler: `foreach` over a window-closing view, the
-destructor on every exit path, xfails for keeping or copying the view out of the loop; (2) a `@viewable` contract the
-three maps implement for `drain()`; (3) `Map`/`OrderedMap`/`SortedMap` drains (`SortedMap` pops its minimum per step
-through the B-tree's own `takeMinPair`, in order, and `clear()`s the rest); (4) `ConcurrentMap.drain()` and `entries()`
-taking `give e`; fixtures on the native and sanitizer legs. Size M+.
-
-**Ruled 2026-10-31 (third ruling): the sets drain too.** `Set`, `OrderedSet` and `SortedSet` have the same gap: a
-member leaves only by copy (`foreach (string k in seen)` builds a new string per member), and a set whose key is not
-`Copyable` cannot hand its members out at all. Each gets `drain()` under the same grant, yielding `K`, over its inner
-map's storage (Rust's `HashSet::drain`, indexmap's `IndexSet::drain`). *Sacrifice:* three more drain views and their
-fixtures. Two facts the build must keep, found reading the maps: a `const fn` read inside the loop is legal (the
-operand is frozen against writes only), so a taken `Map` slot becomes a tombstone rather than EMPTY (an EMPTY slot ends
-a probe and would hide a key not yet taken), and a taken `OrderedMap` entry's index slot is written REMOVED before its
-key moves, since `slotOf` reads the key of every index entry without checking `live`.
+`replace<X>(ref X place, X with)` is inferred with `X = T` rather than `X = Optional<T>`, so the result is "a `T`",
+and in a `pick2<T>` that binds the result to a local the declared type prints as `Optional<>`. The same call in
+plain code (`Optional<int64> p`) and in a generic TYPE's method (`ConcurrentMap<K, V>`'s `Optional<V> pending`) both
+compile, so the miss is in inferring through a generic free function's own parameter. Unprobed: where inference
+unwraps — probably the literal-typed-by-destination path that wraps a bare value into `Optional`, applied to the
+`with: Optional::None` argument. The fix is a fixture of exactly this program plus the inference site.
 
 <a id="s2-quoted-format"></a>
 

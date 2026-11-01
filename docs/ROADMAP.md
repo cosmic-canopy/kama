@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-277**
+**Next id: KR-278**
 
 ## The shape
 
@@ -55,6 +55,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
+| KR-277 | **A generic's type argument inferred from an `Optional<T>` argument, inside a generic, binds `T`** — `fn Optional<T> takeOpt<T>(ref Optional<T> p) { return replace(place: ref p, with: Optional::None); }` is refused ("a return value expects an `Optional<T>`, and a `T` is not one"): `replace`'s parameter is inferred as `T`, not `Optional<T>`. The same call in plain code and in a generic type's method compiles (2026-11-01) | S? | [§2](ROADMAP_DETAIL.md#s2-infer-optional-arg) |
 
 ## NOW — the next features, in build order
 
@@ -68,7 +69,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-263 | **Moving a map's entries out without copying them** — an `Entry` only lends its key and value, and `ConcurrentMap.entries()` copies each pair twice (Rust's `drain`, `into_iter`). **Ruled 2026-10-31:** `drain()` on each map (empties in place, keeps the table, no `Copyable`) with `Entry.intoParts()`, and `ConcurrentMap.drain()` into one `Map`. **Ruled again 2026-10-31:** a `foreach` may hold the window-closing drain view (a compiler change), so the map is empty after the loop however it ends. **And again:** the three sets drain too | M+ | [§2](ROADMAP_DETAIL.md#s2-map-drain) |
 | KR-270 | **Fixed-width integers at an offset, in a stated byte order** — `std::num::endian` has only `byteswap`, so a file header is read with a hand-written `le32` and std keeps two private copies (Go's `binary.LittleEndian`, Rust's `from_le_bytes`). KR-5 needs it. **Ruled 2026-10-31:** one typed `ByteOrder` argument, a load and a store per width | S | [§1](ROADMAP_DETAIL.md#s1-endian-load) |
 | KR-5 | **`std::io` transform adapters: compression and archives** — deflate (RFC 1951), zlib (1950) and gzip (1952) in both directions, plus tar, in `std::compress::*` and `std::archive::tar`. **Ruled 2026-10-29:** a decoder reads a `BufReader<R>` and stops exactly at the stream's end, a REQUIRED decoded-byte limit (`LimitExceeded`), `level: DeflateLevel` with a `Frozen` variant whose bytes equal `kama publish`'s forever, drop abandons and `finish` completes, and a strict `extractInto` that never traverses a link. Eight commits mapped; its `finish` is a `give fn` (shipped `0.9.777`) | L | [§1](ROADMAP_DETAIL.md#s1-compression) |
 | KR-264 | **An in-memory stream pair parks on a fiber** — `MemoryStreamPair`'s ends answer `WouldBlock` on every isolate, so a protocol test over one on fibers must spin; an empty read parks until the other end writes or shuts, a full write until it reads (Go's `net.Pipe`, tokio's `duplex`) | S-M | [§6](ROADMAP_DETAIL.md#s6-memory-pair-park) |
