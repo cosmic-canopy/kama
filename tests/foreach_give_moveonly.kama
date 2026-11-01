@@ -1,0 +1,18 @@
+// A `foreach` binding of a move-only type is the loop pass's own, and may be given away, whether or not the type has
+// anything to drop. Through 0.9.796 one with nothing to drop — `Entry<int64, int64>`, a `resource` of two numbers — had no
+// move state, so `give e` was refused as a move "out of a field/element", while the same loop over `Entry<string, …>`
+// compiled. Here inside a lock window too, as `ConcurrentMap.entries()` writes it. Returns 42.
+import { std::collections::Map, std::collections::Entry, std::collections::DynamicArray, std::concurrent::Locked };
+
+fn uint8 main() {
+    Map<int64, int64> m = Map.empty();
+    m.put(key: 1, value: 10); m.put(key: 2, value: 20);
+    DynamicArray<Entry<int64, int64>> all = DynamicArray.empty();
+    foreach (Entry<int64, int64> e in m.entries()) { all.add(item: give e); }
+    Locked<Map<int64, int64>> l = Locked.make(value: give m);
+    borrow l.lock().value() as w { foreach (Entry<int64, int64> e in w.entries()) { all.add(item: give e); } }
+    int64 sum = 0;
+    isize i = 0;
+    while (i < all.length()) { sum = sum + all[i].key() + all[i].value(); i = i + 1; }
+    return sum == 66 ? 42 : 1;
+}

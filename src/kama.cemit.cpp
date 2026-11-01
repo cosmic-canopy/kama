@@ -20249,7 +20249,10 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         // and must drop it each iteration. This is sound because a `next()` returning an owning value into
         // its `Optional<T>` must hand it off with `give`/`copy` (a bare named payload is rejected at variant
         // construction), so the yield is always a fresh/owned value, never an alias the iterator still owns.
-        if (_classes.count(elemTy) && _classes[elemTy].destructible) {
+        // A move-only element with nothing to drop (`Entry<int64, int64>`) is owned all the same: registered, it may be
+        // given away (`all.add(item: give e)`), which through 0.9.796 was refused as a move "out of a field/element"
+        // because the binding had no move state — while the same loop over `Entry<string, …>` was fine.
+        if ((_classes.count(elemTy) && _classes[elemTy].destructible) || ownsByValue(elemTy)) {
             recordDestructibleLocal(nm, elemTy, /*userName=*/true);
             _localCTypes[nm] = elemTy;   // an owned binding: writing it drops the copy it held (see hideShadowedLocal)
         }
