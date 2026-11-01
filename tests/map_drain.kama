@@ -1,0 +1,77 @@
+// `Map.drain()` and `Set.drain()` (KR-263): every pair moved out once, as an owned `Entry` — neither key nor value needs
+// `Copyable` — and the map empty after the loop however the loop ends: run dry, `break`, `return`. What the loop did not
+// take is dropped once when it is left, and the table is kept for reuse. A read inside the loop is legal and sees
+// exactly the pairs not yet taken: a taken slot becomes a tombstone, so a key further down a probe chain is still found.
+// Each `Session` counts its own drop. Returns 42.
+import { std::collections::Map, std::collections::Set, std::collections::Entry, std::collections::DynamicArray };
+
+type resource Session {
+    string user; UnsafePtr<int32> drops;
+    public unsafe ctor make(string user, UnsafePtr<int32> drops) { this.user = give user; this.drops = drops; }
+    public const fn const ref string name() { return this.user; }
+    unsafe ~Session() { this.drops[0] = this.drops[0] + 1; }
+}
+
+fn string keyOf(int32 i) { return "k${i}"; }
+
+unsafe fn Map<string, Session> filled(int32 n, UnsafePtr<int32> drops) {
+    Map<string, Session> m = Map.empty();
+    int32 i = 0;
+    while (i < n) { m.put(key: keyOf(i: i), value: Session.make(user: "u${i}", drops: drops)); i += 1; }
+    return m;
+}
+
+// Stops at the first pair, and returns from inside the loop: the drain still empties the map.
+fn int32 takeOne(ref Map<string, Session> m) { foreach (Entry<string, Session> e in m.drain()) { return 1; } return 0; }
+
+unsafe fn uint8 run() {
+    InlineArray<int32>#(1) cell = [0; 1];
+    UnsafePtr<int32> drops = addr(of: cell[0]);
+
+    // Run dry, with a tombstone before the drain and 40 keys so probe chains form: every pair reaches `archived`, none
+    // is dropped, and at every step each key not yet taken is still found.
+    Map<string, Session> live = filled(n: 40, drops: drops);
+    Optional<Session> gone = live.remove(key: "k7");
+    if (cell[0] != 0) { return 1; }
+    gone = Optional::None;                                     // the removed one drops: 1
+    Map<string, Session> archived = Map.empty();
+    int32 lost = 0;
+    foreach (Entry<string, Session> e in live.drain()) {
+        if (live.contains(key: e.key())) { lost += 1; }        // the pair just taken is gone from the map
+        int32 i = 0;
+        while (i < 40) {                                        // ...and every pair not yet taken is still there
+            string k = keyOf(i: i);
+            if (i != 7 && !archived.contains(key: k) && k != e.key() && !live.contains(key: k)) { lost += 1; }
+            i += 1;
+        }
+        match (give e.intoParts()) { case Parts(key: k, value: s): { archived.put(key: give k, value: give s); } };
+    }
+    if (lost != 0) { return 2; }
+    if (live.length() != 0 || archived.length() != 39 || cell[0] != 1) { return 3; }
+    if (archived.getRef(key: "k12").name() != "u12") { return 4; }
+    live.put(key: "again", value: Session.make(user: "a", drops: drops));   // the table is kept and usable
+    if (live.length() != 1 || !live.contains(key: "again")) { return 5; }
+
+    // `break` after one: that one moves into `kept`; the other 38 drop when the loop is left, and `archived` is empty.
+    Map<string, Session> kept = Map.empty();
+    foreach (Entry<string, Session> e in archived.drain()) {
+        match (give e.intoParts()) { case Parts(key: k, value: s): { kept.put(key: give k, value: give s); } };
+        break;
+    }
+    if (archived.length() != 0 || kept.length() != 1 || cell[0] != 39) { return 6; }
+
+    // `return` from inside the loop: the entry bound there drops, and so does the rest.
+    if (takeOne(m: ref live) != 1 || live.length() != 0 || cell[0] != 40) { return 7; }
+
+    // A set's members moved out: each string once, with no copy (`foreach (string k in seen)` copies).
+    Set<string> seen = Set.empty();
+    seen.add(key: "x"); seen.add(key: "y"); seen.add(key: "z");
+    DynamicArray<string> got = DynamicArray.empty();
+    foreach (string k in seen.drain()) { got.add(item: give k); }
+    if (seen.length() != 0 || got.length() != 3) { return 8; }
+    seen.add(key: "w");
+    foreach (string k in seen.drain()) { break; }
+    if (seen.length() != 0) { return 9; }
+    return 42;
+}
+fn uint8 main() { return run(); }

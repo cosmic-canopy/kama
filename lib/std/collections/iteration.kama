@@ -1,4 +1,4 @@
-export { ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable };
+export { ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable };
 
 // The container-side mint grants for the iterations that are NOT `foreach (x in container)`.
 //
@@ -21,3 +21,7 @@ export { ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable
 // The read-only twin (KR-175): `valuesConst()` is a `const fn`, so a `const ref` map is walked in place.
 @viewable type contract ValuesIterableConst<I> for resource { const fn I valuesConst(); }
 @viewable type contract EntriesIterable<I> for resource { fn I entries(); }
+// The drain (KR-263): every element MOVED out, the container empty after the loop however it ends. Its iterator closes
+// its window — the `foreach` that makes it runs its destructor, which takes what the loop left — so it is a mint like
+// the others, granted by the container whose storage it empties.
+@viewable type contract Drainable<I> for resource { fn I drain(); }

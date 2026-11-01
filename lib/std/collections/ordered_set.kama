@@ -1,11 +1,11 @@
-import { OrderedMap, MapKeyIter, Hasher };
+import { OrderedMap, OrderedSetDrain, Drainable, MapKeyIter, Hasher };
 export { OrderedSet };
 
 // An insertion-ordered hash set over `K: Hashable + Equatable` (KR-186) — `OrderedMap<K, Unit>`, as `Set` wraps `Map`:
 // O(1) membership, iteration in the order members were first added, `first()`/`last()` (the oldest and the newest)
 // and `moveToEnd` for an LRU. Removal leaves a hole that `compact()` (or the next growth) reclaims — see `OrderedMap`.
 type resource OrderedSet<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator>
-        implements Iterable<K> when [K: Copyable<K>],
+        implements Iterable<K> when [K: Copyable<K>], Drainable<OrderedSetDrain<K, Unit, H, A>>,
         Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>, A: default],
         Sendable when [K: Sendable, H: Sendable, A: Sendable], Formattable when [K: Formattable, K: Copyable<K>] {
     OrderedMap<K, Unit, H, A> m;
@@ -49,6 +49,9 @@ type resource OrderedSet<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, 
 
     public const fn isize length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
+    // `foreach (K k in s.drain())` — every member moved out, oldest first, the set empty after the loop however it ends
+    // (KR-263): the map's drain, yielding each key.
+    public unsafe fn OrderedSetDrain<K, Unit, H, A> drain() { return OrderedSetDrain::<K, Unit, H, A>.over(m: addr(of: this.m)); }
     public fn void reserve(isize n) { this.m.reserve(n: n); }
     public fn void compact() { this.m.compact(); }
     public const fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }

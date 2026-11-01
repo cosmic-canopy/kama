@@ -1,0 +1,44 @@
+// `OrderedMap.drain()` and `OrderedSet.drain()` (KR-263): every pair moved out once, OLDEST FIRST, and the map empty after
+// the loop however it ends. A read inside the loop sees exactly the pairs not yet taken — `contains`, and `first()`, which
+// names the oldest one left — because each taken entry's index slot is marked removed before its key moves. Returns 42.
+import { std::collections::OrderedMap, std::collections::OrderedSet, std::collections::Entry, std::collections::DynamicArray };
+
+type resource Job {
+    int32 n; UnsafePtr<int32> drops;
+    public unsafe ctor make(int32 n, UnsafePtr<int32> drops) { this.n = n; this.drops = drops; }
+    public const fn int32 id() { return this.n; }
+    unsafe ~Job() { this.drops[0] = this.drops[0] + 1; }
+}
+
+unsafe fn uint8 run() {
+    InlineArray<int32>#(1) cell = [0; 1];
+    UnsafePtr<int32> drops = addr(of: cell[0]);
+    OrderedMap<string, Job> q = OrderedMap.empty();
+    int32 i = 0;
+    while (i < 20) { int32 n = (i * 7) % 20; q.put(key: "j${n}", value: Job.make(n: n, drops: drops)); i += 1; }
+    Optional<Job> gone = q.remove(key: "j0");                 // the oldest, removed first: `head` moves past it
+    gone = Optional::None;
+    DynamicArray<int32> order = DynamicArray.empty();
+    int32 bad = 0;
+    foreach (Entry<string, Job> e in q.drain()) {
+        if (q.contains(key: e.key())) { bad += 1; }
+        match (q.first()) { case Some(value: f): { if (f == e.key()) { bad += 1; } } case None: { } };
+        order.add(item: e.value().id());
+    }
+    if (bad != 0) { return 1; }
+    if (q.length() != 0 || order.length() != 19 || cell[0] != 20) { return 2; }   // all 20 dropped: 1 removed + 19 bound
+    i = 1;
+    while (i < 20) { if (order[cast<isize>(i - 1)] != (i * 7) % 20) { return 3; } i += 1; }   // insertion order
+    q.put(key: "again", value: Job.make(n: 99, drops: drops));
+    if (q.length() != 1) { return 4; }
+    foreach (Entry<string, Job> e in q.drain()) { break; }
+    if (q.length() != 0 || cell[0] != 21) { return 5; }
+
+    OrderedSet<string> s = OrderedSet.empty();
+    s.add(key: "c"); s.add(key: "a"); s.add(key: "b");
+    string joined = "";
+    foreach (string k in s.drain()) { joined = joined + k; }
+    if (joined != "cab" || s.length() != 0) { return 6; }
+    return 42;
+}
+fn uint8 main() { return run(); }

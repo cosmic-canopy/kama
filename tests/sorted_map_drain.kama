@@ -1,0 +1,44 @@
+// `SortedMap.drain()` and `SortedSet.drain()` (KR-263): every pair moved out once, SMALLEST KEY FIRST — each step takes
+// the tree's minimum, so the tree stays a tree mid-drain and a read inside the loop sees exactly what is left — and the
+// map empty after the loop however it ends. 200 keys make a tree three levels deep. Returns 42.
+import { std::collections::SortedMap, std::collections::SortedSet, std::collections::Entry };
+
+type resource Job {
+    int32 n; UnsafePtr<int32> drops;
+    public unsafe ctor make(int32 n, UnsafePtr<int32> drops) { this.n = n; this.drops = drops; }
+    public const fn int32 id() { return this.n; }
+    unsafe ~Job() { this.drops[0] = this.drops[0] + 1; }
+}
+
+unsafe fn uint8 run() {
+    InlineArray<int32>#(1) cell = [0; 1];
+    UnsafePtr<int32> drops = addr(of: cell[0]);
+    SortedMap<int32, Job> t = SortedMap.empty();
+    int32 i = 0;
+    while (i < 200) { int32 k = (i * 37) % 200; t.put(key: k, value: Job.make(n: k, drops: drops)); i += 1; }
+    int32 expect = 0;
+    int32 bad = 0;
+    foreach (Entry<int32, Job> e in t.drain()) {
+        if (e.key() != expect || e.value().id() != expect) { bad += 1; }
+        if (t.contains(key: expect) || t.length() != cast<isize>(199 - expect)) { bad += 1; }
+        if (expect < 199 && !t.contains(key: expect + 1)) { bad += 1; }
+        match (t.first()) { case Some(value: f): { if (f != expect + 1) { bad += 1; } } case None: { if (expect != 199) { bad += 1; } } };
+        expect += 1;
+    }
+    if (bad != 0 || expect != 200 || t.length() != 0 || cell[0] != 200) { return 1; }
+    i = 0;
+    while (i < 50) { t.put(key: i, value: Job.make(n: i, drops: drops)); i += 1; }
+    int32 seen = 0;
+    foreach (Entry<int32, Job> e in t.drain()) { seen += 1; if (seen == 3) { break; } }
+    if (seen != 3 || t.length() != 0 || cell[0] != 250) { return 2; }   // 3 bound and dropped, 47 left and dropped
+    t.put(key: 5, value: Job.make(n: 5, drops: drops));                   // the emptied tree is a tree
+    if (t.length() != 1 || !t.contains(key: 5)) { return 3; }
+
+    SortedSet<string> s = SortedSet.empty();
+    s.add(key: "pear"); s.add(key: "apple"); s.add(key: "fig");
+    string joined = "";
+    foreach (string k in s.drain()) { joined = joined + k + ","; }
+    if (joined != "apple,fig,pear," || s.length() != 0) { return 4; }
+    return 42;
+}
+fn uint8 main() { return run(); }

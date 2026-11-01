@@ -1,5 +1,5 @@
-import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
-export { Map, Entry, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter };
+import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, DynamicArray, MapKeyText, MapKeyOrder, MapKeyReader, sortUnstableWith };
+export { Map, Entry, EntryParts, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapDrain, SetDrain };
 
 // Buffers are drawn from the map's `A alloc` (an `Allocator` handle), not libc directly. `allocate`
 // returns UNINITIALIZED bytes, so the `state` tag buffer is zeroed with `memset` after allocation
@@ -103,8 +103,41 @@ type view MapValueIterConst<V> implements IteratorConst<V> {
 type resource Entry<K, V> implements Sendable when [K: Sendable, V: Sendable] {
     K k; V v;   // private (a `resource` exposes behavior through methods); read via key()/value()
     public ctor make(K key, V value) { this.k = give key; this.v = give value; }
-    public const fn const ref K key() { return this.k; }       // borrow the key  (never moved out — the pair owns it)
+    public const fn const ref K key() { return this.k; }       // borrow the key
     public const fn const ref V value() { return this.v; }      // borrow the value (read-only: the pair is a snapshot)
+    // The pair taken apart, consuming the entry (KR-263): `match (give e.intoParts()) { case Parts(key: k, value: v): … }`.
+    // kama has no tuple, so the two leave as a one-variant enum's named payload, as `Output.intoParts()` does.
+    public give fn EntryParts<K, V> intoParts() { return EntryParts::Parts(key: give this.k, value: give this.v); }
+}
+
+// An `Entry`'s key and value, owned, by name.
+type enum EntryParts<K, V> implements Sendable when [K: Sendable, V: Sendable] { Parts(K key, V value); }
+
+// Moving a map's pairs out (`foreach (Entry<K, V> e in m.drain())`, KR-263): each live pair MOVED out once as an owned
+// `Entry`, so neither key nor value needs `Copyable` (`entries()` copies both). It closes its window: the `foreach`
+// that makes it holds it, and when the loop is left — run dry, `break`, `return` — its destructor `clear()`s what the
+// loop did not take. So the map is empty after the loop however it ends, with its table kept (Rust's
+// `HashMap::drain`). The walk itself is the map's own (`drainNext`), shared with `SetDrain`.
+type view MapDrain<K: Hashable + Equatable<K>, V, H: Hasher, A: Allocator> implements Iterator<Entry<K,V>> {
+    UnsafePtr<Map<K,V,H,A>> m; isize pos;
+    unsafe ctor over(UnsafePtr<Map<K,V,H,A>> m) { this.m = m; this.pos = 0; }
+    public unsafe fn Optional<Entry<K,V>> next() { return this.m[0].drainNext(pos: ref this.pos); }
+    unsafe ~MapDrain() { this.m[0].clear(); }
+}
+
+// A `Set`'s members moved out (`foreach (K k in s.drain())`): `MapDrain` over the set's map, yielding the key alone.
+// It takes the map's own parameters, `V` the set's `Unit`, so the map's `friend` grant reaches it.
+type view SetDrain<K: Hashable + Equatable<K>, V, H: Hasher, A: Allocator> implements Iterator<K> {
+    UnsafePtr<Map<K,V,H,A>> m; isize pos;
+    unsafe ctor over(UnsafePtr<Map<K,V,H,A>> m) { this.m = m; this.pos = 0; }
+    public unsafe fn Optional<K> next() {
+        Optional<Entry<K,V>> e = this.m[0].drainNext(pos: ref this.pos);
+        return match (give e) {
+            case Some(value: x): { := match (give x.intoParts()) { case Parts(key: k, value: v): Optional::Some(value: give k); }; }
+            case None: Optional::None;
+        };
+    }
+    unsafe ~SetDrain() { this.m[0].clear(); }
 }
 
 // A by-value iterator over a map's ENTRIES (`foreach (Entry<K,V> e in map.entries())`), present only when
@@ -149,10 +182,13 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
                    ValuesIterable<MapValueIter<V>> when [V: Copyable<V>], ValuesIterableMut<MapValueIterMut<V>>,
                    ValuesIterableConst<MapValueIterConst<V>>,
                    EntriesIterable<MapEntryIter<K,V>> when [K: Copyable<K>, V: Copyable<V>],
+                   Drainable<MapDrain<K,V,H,A>>,
                    Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    Sendable when [K: Sendable, V: Sendable, H: Sendable, A: Sendable],
                    Formattable when [K: Formattable, V: Formattable] {
+    friend MapDrain[drainNext];   // the drains walk the table through the map's own step (KR-263)
+    friend SetDrain[drainNext];
     UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> state = null;
     isize len = 0; isize cap = 0; isize tombs = 0; uint32 mods = 0; A alloc;
 
@@ -325,6 +361,28 @@ type resource Map<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHasher, A: A
     public unsafe const fn MapEntryIter<K,V> entries() when [K: Copyable<K>, V: Copyable<V>] {
         return MapEntryIter::<K,V>.make(keys: this.keys, vals: this.vals, state: this.state, cap: this.cap,
                                         modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+
+    // `foreach (Entry<K, V> e in m.drain())` — every pair moved out, the map empty after the loop however it ends, its
+    // table kept (KR-263; see `MapDrain`). A `put` or `remove` inside the loop is a compile error (the loop freezes the
+    // map); reads stay legal and see exactly the pairs not yet taken.
+    public unsafe fn MapDrain<K,V,H,A> drain() { return MapDrain::<K,V,H,A>.over(m: addr(of: this)); }
+
+    // The drain's step: the next live pair at or after `pos` moved out. Its slot becomes a TOMBSTONE, not EMPTY — a
+    // `const fn` read inside the loop is legal, and an EMPTY slot would end the probe of a key not yet taken. The
+    // drain's destructor `clear()`s the rest, tombstones included.
+    unsafe fn Optional<Entry<K,V>> drainNext(ref isize pos) {
+        while (pos < this.cap) {
+            isize p = pos; pos = pos + 1;
+            if (this.state[p] == 1ui8) {
+                slot K k;
+                relocate(from: this.keys, at: p, into: out k);
+                V v = this.takeVal(at: p);
+                this.state[p] = 2ui8; this.len = this.len - 1; this.tombs = this.tombs + 1;
+                return Optional::Some(value: Entry.make(key: give k, value: give v));
+            }
+        }
+        return Optional::None;
     }
 
     // Insert or overwrite. Consumes both `key` and `value` (owns what it stores). On overwrite the

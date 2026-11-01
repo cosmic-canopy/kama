@@ -911,6 +911,7 @@ main_int32	main_int32.kama:4:0
 main_status_literal_oob	main_status_literal_oob.kama:3:18
 main_uint32_off_windows	main.kama:4:0
 main_void	main_void.kama:4:0
+map_drain_put	map_drain_put.kama:7:52
 map_hashed_private	map_hashed_private.kama:7:11
 match_alias_after_subject_write	match_alias_after_subject_write.kama:10:86
 match_alias_subject_write_branch	match_alias_subject_write_branch.kama:7:101

@@ -1,4 +1,4 @@
-import { Map, MapKeyIter, Hasher };
+import { Map, MapKeyIter, SetDrain, Drainable, Hasher };
 export { Set };
 
 // A hash set over `K: Hashable + Equatable` — a thin wrapper on `Map<K, Unit>` (the value carries no
@@ -6,6 +6,7 @@ export { Set };
 // key; the compiler-derived destructor drops the map (and thus the keys). Lookups borrow the key.
 // `foreach (K k in set)` iterates the members (the map's key iterator), for a `Copyable` key.
 type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allocator = GlobalAllocator> implements Iterable<K> when [K: Copyable<K>],
+        Drainable<SetDrain<K, Unit, H, A>>,
         Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>, A: default],
         Sendable when [K: Sendable, H: Sendable, A: Sendable], Formattable when [K: Formattable, K: Copyable<K>] {
     Map<K, Unit, H, A> m;
@@ -60,6 +61,9 @@ type resource Set<K: Hashable + Equatable<K>, H: Hasher = DefaultHasher, A: Allo
 
     public const fn isize length() { return this.m.length(); }
     public fn void clear() { this.m.clear(); }
+    // `foreach (K k in s.drain())` — every member moved out, the set empty after the loop however it ends (KR-263), its
+    // table kept: the map's drain, yielding each key. Needs no `Copyable` key, as the copying `foreach (K k in s)` does.
+    public unsafe fn SetDrain<K, Unit, H, A> drain() { return SetDrain::<K, Unit, H, A>.over(m: addr(of: this.m)); }
     public const fn MapKeyIter<K> iterator() when [K: Copyable<K>] { return this.m.iterator(); }
 
     // Serializable as a JSON array of the members. Serializable needs a `Copyable` key (the key iterator yields

@@ -1,5 +1,30 @@
-import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Entry, DynamicArray, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapKeyText, MapKeyReader };
-export { OrderedMap };
+import { std::ptr::relocate, Hasher, DefaultHasher, ValuesIterable, ValuesIterableMut, ValuesIterableConst, EntriesIterable, Drainable, Entry, DynamicArray, MapKeyIter, MapValueIter, MapValueIterMut, MapValueIterConst, MapEntryIter, MapKeyText, MapKeyReader };
+export { OrderedMap, OrderedMapDrain, OrderedSetDrain };
+
+// Moving an `OrderedMap`'s pairs out, in insertion order (`foreach (Entry<K, V> e in m.drain())`, KR-263): `MapDrain`'s
+// guarantee — each pair moved once, the map empty after the loop however it ends, its table kept — over this map's
+// entries. The walk is the map's own step (`drainNext`), shared with `OrderedSetDrain`.
+type view OrderedMapDrain<K: Hashable + Equatable<K>, V, H: Hasher, A: Allocator> implements Iterator<Entry<K,V>> {
+    UnsafePtr<OrderedMap<K,V,H,A>> m; isize pos;
+    unsafe ctor over(UnsafePtr<OrderedMap<K,V,H,A>> m) { this.m = m; this.pos = 0; }
+    public unsafe fn Optional<Entry<K,V>> next() { return this.m[0].drainNext(pos: ref this.pos); }
+    unsafe ~OrderedMapDrain() { this.m[0].clear(); }
+}
+
+// An `OrderedSet`'s members moved out, oldest first: the map's drain yielding each key. It takes the map's own
+// parameters, `V` the set's `Unit`, so the map's `friend` grant reaches it.
+type view OrderedSetDrain<K: Hashable + Equatable<K>, V, H: Hasher, A: Allocator> implements Iterator<K> {
+    UnsafePtr<OrderedMap<K,V,H,A>> m; isize pos;
+    unsafe ctor over(UnsafePtr<OrderedMap<K,V,H,A>> m) { this.m = m; this.pos = 0; }
+    public unsafe fn Optional<K> next() {
+        Optional<Entry<K,V>> e = this.m[0].drainNext(pos: ref this.pos);
+        return match (give e) {
+            case Some(value: x): { := match (give x.intoParts()) { case Parts(key: k, value: v): Optional::Some(value: give k); }; }
+            case None: Optional::None;
+        };
+    }
+    unsafe ~OrderedSetDrain() { this.m[0].clear(); }
+}
 
 // The `index` table is reset with `memset` (every byte 0xFF is the EMPTY position, -1), as `Map` zeroes its tags.
 extern "<string.h>";
@@ -34,10 +59,13 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
                    ValuesIterable<MapValueIter<V>> when [V: Copyable<V>], ValuesIterableMut<MapValueIterMut<V>>,
                    ValuesIterableConst<MapValueIterConst<V>>,
                    EntriesIterable<MapEntryIter<K,V>> when [K: Copyable<K>, V: Copyable<V>],
+                   Drainable<OrderedMapDrain<K,V,H,A>>,
                    Serializable when [K: Serializable, V: Serializable], Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    Sendable when [K: Sendable, V: Sendable, H: Sendable, A: Sendable],
                    Formattable when [K: Formattable, V: Formattable] {
+    friend OrderedMapDrain[drainNext];   // the drains walk the entries through the map's own step (KR-263)
+    friend OrderedSetDrain[drainNext];
     UnsafePtr<K> keys = null; UnsafePtr<V> vals = null; UnsafePtr<uint8> live = null; UnsafePtr<isize> index = null;
     isize len = 0; isize used = 0; isize head = 0; isize filled = 0; isize cap = 0; uint32 mods = 0; A alloc;
 
@@ -164,6 +192,31 @@ type resource OrderedMap<K: Hashable + Equatable<K>, V, H: Hasher = DefaultHashe
     public unsafe const fn MapEntryIter<K,V> entries() when [K: Copyable<K>, V: Copyable<V>] {
         return MapEntryIter::<K,V>.make(keys: this.keys, vals: this.vals, state: this.live, cap: this.used,
                                         modsp: addr(of: this.mods), modsAt: this.mods);
+    }
+
+    // `foreach (Entry<K, V> e in m.drain())` — every pair moved out in insertion order, the map empty after the loop
+    // however it ends, its table kept (KR-263; see `OrderedMapDrain`). Writes inside the loop are compile errors.
+    public unsafe fn OrderedMapDrain<K,V,H,A> drain() { return OrderedMapDrain::<K,V,H,A>.over(m: addr(of: this)); }
+
+    // The drain's step: the next live entry at or after `pos` moved out, as `remove` takes one — its index slot written
+    // REMOVED first (`slotOf` reads the key of every index entry, so a `const fn` read inside the loop would otherwise
+    // read a key already moved), then `head`/`used` moved past it, so `first()`/`last()` stay true mid-drain.
+    unsafe fn Optional<Entry<K,V>> drainNext(ref isize pos) {
+        while (pos < this.used) {
+            isize p = pos; pos = pos + 1;
+            if (this.live[p] == 1ui8) {
+                isize s = this.slotOf(key: this.keys[p]);
+                this.index[s] = 0 - 2;
+                slot K k;
+                relocate(from: this.keys, at: p, into: out k);
+                V v = this.takeVal(at: p);
+                this.live[p] = 0ui8;
+                this.len = this.len - 1;
+                this.vacated(p: p);
+                return Optional::Some(value: Entry.make(key: give k, value: give v));
+            }
+        }
+        return Optional::None;
     }
 
     // Insert or replace. A new key goes at the end; a present one keeps its place and takes the new value (both the

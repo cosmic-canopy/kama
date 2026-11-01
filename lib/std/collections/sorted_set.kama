@@ -1,4 +1,4 @@
-import { SortedMap, DynamicArray };
+import { SortedMap, SortedSetDrain, Drainable, DynamicArray };
 export { SortedSet };
 
 // An ordered set over `K: Comparable` — a thin wrapper on `SortedMap<K, Unit>` (the value is the zero-size
@@ -6,6 +6,7 @@ export { SortedSet };
 // ordered queries as the map (`first`/`last`/`floor`/`ceil`/`range`) that a hash `Set` can't. Move-only: it
 // owns the backing map (and thus every key); lookups borrow the key.
 type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [K: Copyable<K>],
+        Drainable<SortedSetDrain<K, Unit, A>>,
         Serializable when [K: Serializable, K: Copyable<K>], Deserializable<This> when [K: Deserializable<K>, A: default],
         Sendable when [K: Sendable, A: Sendable], Formattable when [K: Formattable, K: Copyable<K>] {
     SortedMap<K, Unit, A> m;
@@ -43,6 +44,9 @@ type resource SortedSet<K: Comparable<K>, A: Allocator = GlobalAllocator> implem
     public const fn isize length() { return this.m.length(); }
     public const fn bool isEmpty() { return this.m.isEmpty(); }
     public fn void clear() { this.m.clear(); }
+    // `foreach (K k in s.drain())` — every member moved out smallest first, the set empty after the loop however it ends
+    // (KR-263): the map's drain, yielding each key.
+    public unsafe fn SortedSetDrain<K, Unit, A> drain() { return SortedSetDrain::<K, Unit, A>.over(m: addr(of: this.m)); }
 
     // Ordered queries + iteration forward to the backing map's key views.
     public const fn Optional<K> first() when [K: Copyable<K>] { return this.m.first(); }

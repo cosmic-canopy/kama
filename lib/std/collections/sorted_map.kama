@@ -1,5 +1,30 @@
-import { std::memory::Owned, DynamicArray, ValuesIterableMut, ValuesIterableConst, MapKeyText, MapKeyReader };
-export { SortedMap, SortedMapValueIterMut, SortedMapValueIterConst };
+import { std::memory::Owned, DynamicArray, ValuesIterableMut, ValuesIterableConst, Drainable, Entry, MapKeyText, MapKeyReader };
+export { SortedMap, SortedMapValueIterMut, SortedMapValueIterConst, SortedMapDrain, SortedSetDrain };
+
+// Moving a `SortedMap`'s pairs out, in ascending key order (`foreach (Entry<K, V> e in m.drain())`, KR-263): each step
+// takes the minimum out of the tree (`drainNext`), so the tree stays a tree mid-drain and a `const fn` read inside the
+// loop sees exactly the pairs not yet taken. When the loop is left its destructor `clear()`s the rest.
+type view SortedMapDrain<K: Comparable<K>, V, A: Allocator> implements Iterator<Entry<K,V>> {
+    UnsafePtr<SortedMap<K,V,A>> m;
+    unsafe ctor over(UnsafePtr<SortedMap<K,V,A>> m) { this.m = m; }
+    public unsafe fn Optional<Entry<K,V>> next() { return this.m[0].drainNext(); }
+    unsafe ~SortedMapDrain() { this.m[0].clear(); }
+}
+
+// A `SortedSet`'s members moved out, smallest first: the map's drain yielding each key. It takes the map's own
+// parameters, `V` the set's `Unit`, so the map's `friend` grant reaches it.
+type view SortedSetDrain<K: Comparable<K>, V, A: Allocator> implements Iterator<K> {
+    UnsafePtr<SortedMap<K,V,A>> m;
+    unsafe ctor over(UnsafePtr<SortedMap<K,V,A>> m) { this.m = m; }
+    public unsafe fn Optional<K> next() {
+        Optional<Entry<K,V>> e = this.m[0].drainNext();
+        return match (give e) {
+            case Some(value: x): { := match (give x.intoParts()) { case Parts(key: k, value: v): Optional::Some(value: give k); }; }
+            case None: Optional::None;
+        };
+    }
+    unsafe ~SortedSetDrain() { this.m[0].clear(); }
+}
 
 // An ordered map over `K: Comparable` -> `V`, backed by a B-tree (peer: Rust `BTreeMap`, C++ `std::map`).
 // Unlike `Map` (a hash table, unordered), a `SortedMap` keeps its keys in ascending `compareTo` order, so
@@ -182,6 +207,7 @@ type resource BTreeNode<K: Comparable<K>, V, A: Allocator = GlobalAllocator> imp
     // sibling instance does.
     friend SortedMap[serializeInto];
     friend SortedMap[formatInto];
+    friend SortedMap[takeMinPair];   // the drain's step (KR-263)
     DynamicArray<K, A> keys;
     DynamicArray<V, A> vals;                            // parallel to keys (vals[i] belongs to keys[i])
     DynamicArray<Owned<BTreeNode<K,V,A>, A>, A> kids;   // empty for a leaf; length == keys.length()+1 internal
@@ -697,6 +723,7 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
         implements Copyable<This>(bare: give) when [K: Copyable<K>, V: Copyable<V>],
                    ValuesIterableMut<SortedMapValueIterMut<K,V,A>>,
                    ValuesIterableConst<SortedMapValueIterConst<K,V,A>>,
+                   Drainable<SortedMapDrain<K,V,A>>,
                    Serializable when [K: Serializable, V: Serializable],
                    Deserializable<This> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
                    MergeByKey<K, V> when [K: Deserializable<K>, V: Deserializable<V>, A: default],
@@ -704,6 +731,8 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
                    Formattable when [K: Formattable, V: Formattable] {
     // Every node box, the root included, is drawn from `A` through a placement `new(allocator:)`, so the whole tree
     // lives in the allocator it names. Each ctor assigns `alloc` before it builds the root from it.
+    friend SortedMapDrain[drainNext];   // the drains take the minimum through the map's own step (KR-263)
+    friend SortedSetDrain[drainNext];
     Owned<BTreeNode<K,V,A>, A> root;
     isize len = 0; uint32 mods = 0;
     A alloc;                                            // the allocator the tree's nodes + arrays draw from
@@ -804,6 +833,21 @@ type resource SortedMap<K: Comparable<K>, V, A: Allocator = GlobalAllocator>
 
     // Drop every entry, resetting to an empty single-leaf tree (keeps the root box).
     public fn void clear() { this.root.clearNode(); this.len = 0; this.mods = this.mods + 1; }
+
+    // `foreach (Entry<K, V> e in m.drain())` — every pair moved out smallest key first, the map empty after the loop
+    // however it ends (KR-263; see `SortedMapDrain`). Writes inside the loop are compile errors.
+    public unsafe fn SortedMapDrain<K,V,A> drain() { return SortedMapDrain::<K,V,A>.over(m: addr(of: this)); }
+
+    // The drain's step: the minimum pair taken out of the tree as `remove` takes one, the root shrunk when a merge
+    // emptied it. O(log n) per pair, in order.
+    fn Optional<Entry<K,V>> drainNext() {
+        if (this.len == 0) { return Optional::None; }
+        slot K k;
+        V v = this.root.takeMinPair(outKey: out k);
+        if (this.root.keyCount() == 0) { if (!this.root.isLeaf()) { this.root.promoteOnlyChild(); } }
+        this.len = this.len - 1;
+        return Optional::Some(value: Entry.make(key: give k, value: give v));
+    }
 
     // Deep-copy the whole map (present only when both key and value are Copyable): a fresh tree with an
     // independent clone of every entry, rebuilt from the sorted key/value copies (popped from the end, an

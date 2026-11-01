@@ -843,6 +843,24 @@ of `iterator()` (keys) and `values()`. `Entry<K,V>` is a named pair (the languag
 mutated in place (that would corrupt the table), so there is no `entriesMut()` — mutate values via
 `valuesMut()` / `getRefMut`.
 
+**`drain()` moves every pair out** (KR-263; Rust's `HashMap::drain`), with no `Copyable` asked of either half: <!-- test: map_drain, ordered_map_drain, sorted_map_drain -->
+
+```kama fragment
+foreach (Entry<string, Session> e in live.drain()) {           // live is empty after the loop, its table kept
+    match (give e.intoParts()) { case Parts(key: k, value: s): { archived.put(key: give k, value: give s); } };
+}
+```
+
+Each pair is moved once, as the owned `Entry` the loop binds, and taken apart by name with `give e.intoParts()` →
+`EntryParts::Parts(key:, value:)` (kama has no tuple). The map is **empty after the loop however it ends** — run
+dry, `break`, `return` — because the drain is a view that closes its window: the `foreach` holds it and its
+destructor drops what the loop did not take (*A `foreach` is the other window*). The table is kept for reuse. The
+loop freezes the map, so a `put`/`remove` in the body is refused, and a read is legal and sees exactly the pairs <!-- xfail: map_drain_put -->
+not yet taken. `Map` drains in table order, `OrderedMap` oldest first, `SortedMap` smallest key first; `Set`,
+`OrderedSet` and `SortedSet` drain their members the same way (`foreach (string k in seen.drain())`). Consuming a map is
+`drain()` and then dropping it, so there is no second, consuming spelling. The grant is the `@viewable` contract
+`Drainable<I>` (`std::collections`), as the other iterations are granted.
+
 `Map` is **move-only**: it owns its keys and values (dropping the key + handing the value back on `remove`,
 dropping both on overwrite/`clear`/end of life — ASan/UBSan-clean for owning keys *and* values, e.g.
 `Map<string, DynamicArray<string>>`). Lookups **borrow** the key (`ref K`), so they don't consume a key you're

@@ -1,0 +1,9 @@
+// A `foreach` over `m.drain()` holds the map for the loop — what it moves out comes from the map's own table — so a
+// `put` into it inside the loop is refused, as growing any container a loop iterates is. Reads stay legal.
+import { std::collections::Map, std::collections::Entry };
+fn uint8 main() {
+    Map<string, int32> m = Map.empty();
+    m.put(key: "a", value: 1);
+    foreach (Entry<string, int32> e in m.drain()) { m.put(key: "b", value: 2); }
+    return 0;
+}
