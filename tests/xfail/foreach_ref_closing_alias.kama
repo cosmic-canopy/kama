@@ -1,0 +1,16 @@
+// A `foreach (ref …)` over a view that closes its window, named by a `borrow`, would advance a copy of it while the
+// window's destructor ran on the original, unadvanced one. Iterate the mint itself: `foreach (ref … in b.walkMut())`.
+@viewable type contract WalksMut for resource { fn WalkMut walkMut(); }
+type view WalkMut implements IteratorMut<int32> {
+    UnsafePtr<int32> at; int32 left;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; this.left = 2; }
+    public const fn bool hasNext() { return this.left > 0; }
+    public unsafe fn ref int32 next() { this.left -= 1; return this.at[0]; }
+    unsafe ~WalkMut() { this.at[0] = 0; }
+}
+type resource Bag implements WalksMut {
+    InlineArray<int32>#(1) v;
+    public ctor make() { this.v = [7; 1]; }
+    public unsafe fn WalkMut walkMut() { return WalkMut.over(at: addr(of: this.v[0])); }
+}
+fn uint8 main() { Bag b = Bag.make(); borrow b.walkMut() as it { foreach (ref int32 x in it) { x = 1; } } return 0; }

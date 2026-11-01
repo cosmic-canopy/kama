@@ -6151,7 +6151,7 @@ std::string CEmitter::emitExpression(SharedExpression expr)
         // Made anywhere else (`c.begin().commit()`) nothing would ever close it, so its destructor would not run.
         auto cmt = _closingMintTemps.find(v);   // a closing mint a `borrow` already made (KR-226): its temporary
         if (cmt != _closingMintTemps.end()) return cmt->second;
-        if (!_closingViewReturnOK && !_probingTemplate && v->line != _closingViewRefusedLine) {
+        if (v != _foreachMint && !_closingViewReturnOK && !_probingTemplate && v->line != _closingViewRefusedLine) {
             const std::string rc = callReturnTypeRaw(v);
             if (closesWindowCType(rc)) {
                 unsupported(("a `" + demangleForDisplay(rc) + "` closes its window when it is dropped, so it is made "
@@ -9576,12 +9576,16 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
             const std::string owner = retExpr ? refReturnRoot(retExpr, aliasStatic) : root;
             // A place a window reached through a view that closes it (KR-226) is held only until the window closes: a
             // lock guard's payload, a transaction's row. Said as that, not as a local.
+            // Walked back through the `ref` bindings the result is reached through (`x`, `x.f`, a `ref` loop nested in
+            // another), so a field of the binding is judged as the binding is — `return x.f` returned the place too.
             SharedExpression closedHost;
-            if (auto* rid = dynamic_cast<IdentifierNode*>(retExpr ? retExpr.get() : nullptr))
-                if (rid->value) {
-                    auto op = _refBindingOperand.find(*rid->value);
-                    if (op != _refBindingOperand.end() && op->second && closingMintIn(op->second, nullptr)) closedHost = op->second;
-                }
+            std::string hop = retExpr ? rootBinding(retExpr) : std::string();
+            for (std::set<std::string> seen; !hop.empty() && seen.insert(hop).second; ) {
+                auto op = _refBindingOperand.find(hop);
+                if (op == _refBindingOperand.end() || !op->second) break;
+                if (_closingLoopRefs.count(hop) || closingMintIn(op->second, nullptr)) { closedHost = op->second; break; }
+                hop = rootBinding(op->second);
+            }
             if (closedHost)
                 unsupported(("`" + unparseExpr(retExpr) + "` is `" + unparseExpr(closedHost) + "`, reached through a view "
                              "whose window closes when this returns — the place is held only inside it. Return a copy "
@@ -19885,9 +19889,17 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     // materialization so we can relocate those temps into the loop wrapper (declared before the iterator,
     // dropped after the loop) below — the A4 receiver-materialize pattern.
     size_t outerPre = _scopes.empty() ? 0 : _scopes.back().locals.size();
+    // KR-263 — a `foreach` is the second window a view that closes it may live in: an operand that MINTS one
+    // (`live.drain()`) is made here, held for the loop, and closed when the loop is left. emitExpression refuses every
+    // other closing mint; this one call is let through it (`_foreachMint`), so it keeps the normal call path's checks.
+    InvocationNode* closingMint = nullptr;
+    if (auto* inv = dynamic_cast<InvocationNode*>(fe->expression.get()))
+        if (!invocationReturnsPlace(inv) && closesWindowCType(callReturnTypeRaw(inv))) closingMint = inv;
     auto emitIterable = [&]() -> std::string {
         bool ph = _hoistOK; _hoistOK = true;
+        const InvocationNode* pm = _foreachMint; _foreachMint = closingMint;
         std::string r = receiverObject(emitExpression(fe->expression));   // `foreach (x in this)` iterates the object
+        _foreachMint = pm;
         _hoistOK = ph;
         return r;
     };
@@ -19921,6 +19933,17 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     // still needs its window (requirePlaceOperand says how), and so does a `ref` loop, whose writes would land in
     // something about to be dropped.
     std::string ownTemp, ownSrc;
+    auto operandIsPlace = [&]() -> bool {   // operandAddr's first three answers, asked without emitting anything
+        if (!placePath(fe->expression).empty()) return true;
+        if (auto* inv = dynamic_cast<InvocationNode*>(fe->expression.get())) return invocationReturnsPlace(inv);
+        if ((dynamic_cast<ElementAccessNode*>(fe->expression.get()) || dynamic_cast<MemberAccessNode*>(fe->expression.get()))
+            && !rootIsTemporary(fe->expression)) {
+            std::vector<std::vector<std::string>> ep;
+            elemPlaces(fe->expression, ep);
+            return !ep.empty();
+        }
+        return false;
+    };
     auto operandAddr = [&](bool allowTemp) -> std::string {
         if (!placePath(fe->expression).empty()) return "&(" + emitIterable() + ")";
         // A call that returns a PLACE (`fn ref T`, `fn const ref T`) is a borrow of storage its owner keeps, not an
@@ -19971,6 +19994,40 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         return true;
     };
     std::string iterCType, iterInit, nextCall, hasNextCall, optC;
+    ClassInfo* ic = nullptr;          // the iterator's class
+    MethodInfo* mintMi = nullptr;     // the mint of an iterator that closes its window (KR-263)
+    bool inPlace = false;             // a named owning iterator, advanced where it lives rather than copied
+    auto itArg = [&]() { return inPlace ? it : "&" + it; };
+    // The operand IS the iterator. A view that closes its window is held only as a mint this loop makes; an iterator
+    // that OWNS its source (a `resource`, `std::io::Lines`) is advanced where it is named, so what it records — a read
+    // error, a count — is still there after the loop. Through 0.9.793 both were bitwise copies: the copy advanced, the
+    // original did not, and a `foreach (ref …)` over a closing alias left its window's destructor running on the
+    // original, which a drain would have emptied twice.
+    auto operandIsIterator = [&]() -> bool {
+        iterCType = container; ic = cc;
+        if (cc->closesWindow) {
+            if (!closingMint) {
+                unsupported(("`" + demangleForDisplay(container) + "` closes its window when it is dropped, and `"
+                             + unparseExpr(fe->expression) + "` is one already open — a `foreach` over it would copy it "
+                             "out of its window and advance the copy. Iterate its mint instead, `foreach (… in "
+                             "<host>.<mint>())`: the loop holds the view and closes it").c_str(), fe);
+                *_out << "\n"; return false;
+            }
+            if (!foreachClosingMintOK(closingMint, fe, mintMi)) { *_out << "\n"; return false; }
+        } else if (cc->kind == TypeKind::Resource && !cc->isBorrow && operandIsPlace()) {
+            auto* pinv = dynamic_cast<InvocationNode*>(fe->expression.get());
+            if (isConstReceiver(fe->expression) || (pinv && invocationIsConstPlace(pinv))) {
+                unsupported(("`" + unparseExpr(fe->expression) + "` is read-only here, and a `foreach` advances the "
+                             "iterator it names — iterate one the loop may change").c_str(), fe);
+                *_out << "\n"; return false;
+            }
+            if (rejectFrozenWrite(fe->expression, fe->line)) { *_out << "\n"; return false; }
+            noteSubjectWrite(fe->expression, fe->line);
+            inPlace = true;
+        }
+        iterInit = emitIterable();
+        return true;
+    };
     // What the iterator ACTUALLY yields, as opposed to what the loop binding claims. Both branches fill
     // it; the mismatch check below is the same rule the intrinsic-collection path enforces.
     std::string actualElem;
@@ -19994,7 +20051,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         // (`m.valuesConst()`) and is iterated by value, as in the other two forms.
         MethodInfo* iterMi = findMethod(cc, "iterConst", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
-        ClassInfo* ic = nullptr;
         if (iterMi) {
             if (!implementsContractTemplate(cc, "IterableConst")) {   // nominal: the container must declare it
                 unsupported(("`" + container + "` must `implements IterableConst<T>` to be used in a "
@@ -20008,10 +20064,10 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             if (at.empty()) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
             ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+            if (ic && ic->closesWindow) mintMi = iterMi;
             iterInit = iterMi->cName + "(" + at + ")";
         } else if (implementsContractTemplate(cc, "IteratorConst")) {   // the operand IS the iterator
-            iterCType = container; ic = cc;
-            iterInit = emitIterable();
+            if (!operandIsIterator()) return;
         } else {
             unsupported(("`" + container + "` has no read-only iteration — `foreach (const ref …)` needs "
                          "`iterConst()` (`implements IterableConst<T>`), or an operand that is itself an "
@@ -20027,8 +20083,8 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             unsupported(("the read-only iterator `" + iterCType + "` must `implements IteratorConst<T>` "
                          "to be used in a `foreach (const ref …)`").c_str(), fe); *_out << "\n"; return;
         }
-        hasNextCall = hasNextMi->cName + "(&" + it + ")";
-        nextCall    = nextMi->cName + "(&" + it + ")";
+        hasNextCall = hasNextMi->cName + "(" + itArg() + ")";
+        nextCall    = nextMi->cName + "(" + itArg() + ")";
         actualElem  = cTypeInInstance(iterCType, nextMi->returnType);   // `const ref T next()` -> T
     } else if (fe->isRef) {
         // Mirror the by-value branch: a container hands out a mutable iterator via `iterMut()`, OR the operand
@@ -20044,7 +20100,6 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         }
         MethodInfo* iterMi = findMethod(cc, "iterMut", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
-        ClassInfo* ic = nullptr;
         if (iterMi) {
             if (!implementsContractTemplate(cc, "IterableMut")) {   // nominal: the container must declare it
                 unsupported(("`" + container + "` must `implements IterableMut<T>` to be used in a "
@@ -20053,10 +20108,10 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             if (!requirePlaceOperand() || !mintWrites(iterMi, "iterMut")) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
             ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+            if (ic && ic->closesWindow) mintMi = iterMi;
             iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
         } else {   // the operand IS the mutable iterator (used by value — an rvalue materializes into `__it`)
-            iterCType = container; ic = cc;
-            iterInit = emitIterable();
+            if (!operandIsIterator()) return;
         }
         MethodInfo* hasNextMi = ic ? findMethod(ic, "hasNext", nullptr) : nullptr;
         MethodInfo* nextMi    = ic ? findMethod(ic, "next", nullptr) : nullptr;
@@ -20068,33 +20123,24 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
             unsupported(("the mutable iterator `" + iterCType + "` must `implements IteratorMut<T>` "
                          "to be used in a `foreach (ref …)`").c_str(), fe); *_out << "\n"; return;
         }
-        hasNextCall = hasNextMi->cName + "(&" + it + ")";
-        nextCall    = nextMi->cName + "(&" + it + ")";
+        hasNextCall = hasNextMi->cName + "(" + itArg() + ")";
+        nextCall    = nextMi->cName + "(" + itArg() + ")";
         actualElem  = cTypeInInstance(iterCType, nextMi->returnType);   // `ref T next()` -> T
     } else {
         MethodInfo* iterMi = findMethod(cc, "iterator", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
-        ClassInfo* ic = nullptr;
         if (iterMi) { if (!mintWrites(iterMi, "iterator")) return;
                       const std::string at = operandAddr(/*allowTemp=*/true);
                       if (at.empty()) return;
                       iterCType = cTypeInInstance(container, iterMi->returnType);
                       ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
+                      if (ic && ic->closesWindow) mintMi = iterMi;
                       iterInit = iterMi->cName + "(" + at + ")";
                       if (!implementsContractTemplate(cc, "Iterable")) {   // nominal: the container declares it
                           unsupported(("`" + container + "` must `implements Iterable<T>` to be used in a "
                                        "`foreach`").c_str(), fe); *_out << "\n"; return;
                       } }
-        else        { iterCType = container; ic = cc;                       // the container IS the iterator
-                      iterInit = emitIterable(); }                          // (needs only Iterator<T>, below)
-        // KR-124 — an iterator that closes its window cannot drive a `foreach`: the loop would mint it (and close
-        // nothing) or copy it out of its alias (and advance the copy). Its alias calls `next()` itself.
-        if (ic && ic->closesWindow) {
-            unsupported(("`" + demangleForDisplay(iterCType) + "` closes its window when it is dropped, so a `foreach` "
-                         "can neither mint it nor copy it out of its alias — open it in a window and call `next()` on "
-                         "the alias: `borrow <host>.<mint>() as it { while (…) { match (it.next()) { … }; } }`").c_str(), fe);
-            *_out << "\n"; return;
-        }
+        else if (!operandIsIterator()) return;                              // the container IS the iterator
         MethodInfo* nextMi = ic ? findMethod(ic, "next", nullptr) : nullptr;
         if (!nextMi || !nextMi->params.empty()) {
             unsupported(("`foreach` over `" + container + "` needs a nullary `iterator()`, or a nullary "
@@ -20105,7 +20151,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
                          "in a `foreach`").c_str(), fe); *_out << "\n"; return;
         }
         optC     = cTypeInInstance(iterCType, nextMi->returnType);
-        nextCall = nextMi->cName + "(&" + it + ")";
+        nextCall = nextMi->cName + "(" + itArg() + ")";
         // `Optional<T> next()` -> T, read off the monomorphized Optional's `Some` payload rather than
         // re-deriving it from the return type's generic argument: this is the very field the binding is
         // initialized from two lines down (`__o.u.k_Some.k_value`), so it cannot disagree with what is emitted.
@@ -20145,10 +20191,21 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         indent(depth + 1); *_out << container << " " << ownTemp << " = " << ownSrc << ";\n";
         _scopes.back().locals.push_back({ ownTemp, container, /*userName=*/false });
     }
-    indent(depth + 1); *_out << iterCType << " " << it << " = " << iterInit << ";\n";
+    indent(depth + 1);
+    if (inPlace) *_out << iterCType << "* " << it << " = &(" << iterInit << ");\n";
+    else         *_out << iterCType << " " << it << " = " << iterInit << ";\n";
+    // What the loop made, it drops when it is left — at the end, after a `break`, on a `return` — by the wrapper's own
+    // cleanup, after the body's locals: a view that closes its window (KR-263), or an owning iterator an operand
+    // returned (`foreach (… in Lines::<File>.make(…))`, never dropped through 0.9.793). As `emitBorrow` holds its view.
+    if (!inPlace && ic && (ic->closesWindow || ic->destructible)) {
+        _scopes.back().locals.push_back({ it, iterCType, /*userName=*/false });
+        recordDestructibleOwner(it, iterCType);
+        if (ic->closesWindow) openLockRegion(unparseExpr(fe->expression), mintMi->cName, fe->line, depth + 1);
+    }
     // A `foreach` is a window over its operand (KR-211): an access for the loop, ended with the wrapper scope — begun
-    // once the operand is evaluated, since minting the iterator (`this.kids.valuesMut()`) is itself an access to it.
-    enterAccess(fe->expression, fe->isRef, "", "", depth + 1, fe->line);
+    // once the operand is evaluated, since minting the iterator (`this.kids.valuesMut()`) is itself an access to it. A
+    // loop that writes is a write access: a `ref` loop, one advancing a named iterator, one over a non-`const` mint.
+    enterAccess(fe->expression, fe->isRef || inPlace || (mintMi && !mintMi->isConst), "", "", depth + 1, fe->line);
     indent(depth + 1); *_out << "while (" << (fe->isRef ? hasNextCall : std::string("1")) << ") {\n";
 
     Scope sc; sc.isLoopBoundary = true; sc.switchDepth = _switchDepth; sc.loopNode = fe;
@@ -20172,6 +20229,8 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     hideShadowedLocal(nm, fe->isRef);
     _localTypes[nm] = !elemClass.empty() ? elemClass : isSigType(elemTy) ? elemTy : std::string();   // see the indexed path
     if (fe->type) _localTypeNodes[nm] = fe->type;   // element kama type node (char vs uint32 for interpolation)
+    const bool closingLoop = ic && ic->closesWindow;
+    if (closingLoop) _closingLoopRefs.insert(nm);   // what it points into closes with the loop (the `fn ref` return check)
     if (fe->isRef) {
         _refParams.insert(nm);   // reads/writes deref the place, like a `ref` param / built-in `foreach ref`
         _refBindingOperand[nm] = fe->expression;   // ...but it is no parameter: it borrows the operand
@@ -20204,6 +20263,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     if (!(last && stmtIsJump(last))) emitScopeCleanup(_scopes.back(), depth + 2);
     _scopes.back().bodyDiverges = last && bodyDiverges(last);
     popScope();   // retires the binding
+    if (closingLoop) _closingLoopRefs.erase(nm);
 
     indent(depth + 1); *_out << "}\n";   // close while
     placeLoopExit(depth + 1);
@@ -21467,6 +21527,10 @@ void CEmitter::markMoved(const std::string& cVar)
         unsupported(("cannot `give` `" + cVar + "` — this `match` arm holds it still while its binding `" + f->alias
                      + "` views it, and moving it would take that storage with it; move it in an arm that binds no "
                        "view, or after the `match`").c_str(), _curLine);
+    else if (f && !f->fromBorrow && !f->fromMatch)   // a `foreach`'s operand (rejectFrozenWrite says the same)
+        unsupported(("cannot `give` `" + cVar + "` — it is frozen by the `foreach` at line " + std::to_string(f->line)
+                     + " that is iterating it, and moving it would take what the loop iterates with it; move it after "
+                       "the loop").c_str(), _curLine);
     else if (f)
         unsupported(("cannot `give` `" + cVar + "` — it is frozen by the enclosing `borrow` (opened at "
                      "line " + std::to_string(f->line) + " as `" + f->alias + "`), and moving it would "
@@ -28445,6 +28509,46 @@ bool CEmitter::borrowHostIsTemporary(SharedExpression e)
         }
         if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) return borrowHostIsTemporary(ma->expression);
         return false;                                     // a free `fn ref`: its place is in its arguments or static
+    }
+    return true;
+}
+
+// KR-263 — what a `foreach` header must be to make a view that closes its window: its host's GRANTED mint, nullary,
+// on a receiver something names (a view of a value would view what nothing holds past the header), and reaching
+// through no other closing view, since one window closes one. The call itself then goes the normal way (emitIterable,
+// let through by `_foreachMint`), which asks its access, its const receiver and the freeze, so `foreach (… in
+// m.drain())` nested in another over `m` is refused as any write to `m` there is.
+bool CEmitter::foreachClosingMintOK(InvocationNode* inv, ForEachNode* fe, MethodInfo*& mi)
+{
+    auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get());
+    const std::string shown = demangleForDisplay(callReturnTypeRaw(inv));
+    const std::string mint = (ma && ma->identifier && ma->identifier->value) ? *ma->identifier->value : std::string();
+    const std::string cls = (ma && ma->expression) ? exprClass(ma->expression) : std::string();
+    mi = (!cls.empty() && _classes.count(cls)) ? findMethod(&_classes[cls], mint, nullptr) : nullptr;
+    if (!mi || mi->isCtor || !grantedMint(_classes[cls], mint)) {
+        unsupported(("a `" + shown + "` closes its window when it is dropped, so a `foreach` makes one only from its "
+                     "host's granted mint — `foreach (… in <host>.<mint>())`, a member of a `@viewable` contract the "
+                     "host implements").c_str(), fe);
+        return false;
+    }
+    if (inv->args && !inv->args->empty()) {
+        unsupported(("a mint takes no arguments, so `" + mint + "(…)` cannot open a window — iterate the bare mint")
+                        .c_str(), fe);
+        return false;
+    }
+    if (borrowHostIsTemporary(ma->expression)) {
+        unsupported(("a window views storage that outlives it, and `" + unparseExpr(ma->expression) + "` is a value, or "
+                     "rooted in one — nothing holds it past the loop's header. Bind it to a local first, and iterate "
+                     "from that").c_str(), fe);
+        return false;
+    }
+    int n = 0;
+    closingMintIn(ma->expression, &n);
+    if (n) {
+        unsupported(("`" + unparseExpr(ma->expression) + "` is reached through a view that closes its window, and this "
+                     "loop makes another — one window closes one. Open a `borrow` for the first and iterate inside it")
+                        .c_str(), fe);
+        return false;
     }
     return true;
 }
@@ -37123,12 +37227,16 @@ void CEmitter::checkOnPanicRegions()
                              + " a borrow into the `Shared` value `" + d->second.name + "` — a recovered panic is a longjmp "
                              "out of the fault, which would skip the borrow's end and leave every later mutation of that "
                              "value trapping. Open the window outside the region").c_str(), d->second.line);
-            else
+            else {
+            // A window's own temporary (a `foreach`'s iterator, a lock guard) has a C name, not a kama one: said as what it is.
+            const bool hidden = d->second.name.compare(0, 5, "kama_") == 0;
             unsupported(("`" + kv.second.display + "` is `@onPanic`, but " + (chain.size() > 1 ? path + " owns" : "it owns")
-                         + " `" + d->second.name + "` (a `" + d->second.className + "`), which has a destructor — "
+                         + (hidden ? " a `" + demangleForDisplay(d->second.className) + "` a window holds"
+                                   : " `" + d->second.name + "` (a `" + d->second.className + "`)") + ", which has a destructor — "
                          "a recovered panic is a longjmp out of the fault, which would skip it. Keep the region's "
                          "state in the pointer the callback receives, or move the owner outside the region").c_str(),
                         d->second.line);
+            }
             break;   // one sentence per region: the nearest frame, shortest chain
         }
     }

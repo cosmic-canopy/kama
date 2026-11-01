@@ -1,0 +1,51 @@
+// A `foreach` over an iterator that OWNS its source (a `resource`, as `std::io::Lines` is) advances that iterator where
+// it is named, so what it recorded is there after the loop — `Lines.error()`'s read failure, here a count — and drops it
+// once, at its own scope's end. One the operand MAKES (`foreach (… in Counter.make(…))`) belongs to the loop, which drops
+// it when it is left. Through 0.9.793 the loop advanced a bitwise copy of a named one (the count after the loop read 0)
+// and never dropped one it made. A read error in the middle of a `Lines` loop reaches `error()` after it. Returns 42.
+import { std::io::Lines, std::io::Reader, std::io::IoError, std::io::IoErrorKind, std::collections::View };
+
+type resource Counter implements Iterator<int32> {
+    int32 at; int32 seen; UnsafePtr<int32> drops;
+    public unsafe ctor make(UnsafePtr<int32> drops) { this.at = 0; this.seen = 0; this.drops = drops; }
+    public fn Optional<int32> next() { if (this.at == 3) { return Optional::None; } this.at += 1; this.seen += 1; return Optional::Some(value: this.at); }
+    public const fn int32 seenCount() { return this.seen; }
+    unsafe ~Counter() { this.drops[0] = this.drops[0] + 1; }
+}
+
+// Hands out one line, then fails: a reset connection in the middle of a read.
+type resource Flaky implements Reader {
+    bool sent;
+    public ctor make() { this.sent = false; }
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        if (this.sent) { return Result::Err(error: IoError.of(kind: IoErrorKind::ConnectionReset)); }
+        this.sent = true;
+        into[0] = 104ui8; into[1] = 105ui8; into[2] = 10ui8;   // "hi\n"
+        return Result::Ok(value: 3);
+    }
+}
+
+unsafe fn uint8 run() {
+    InlineArray<int32>#(1) cell = [0; 1];
+    UnsafePtr<int32> drops = addr(of: cell[0]);
+    int32 s = 0;
+    {
+        Counter c = Counter.make(drops: drops);
+        foreach (int32 x in c) { s += x; if (x == 2) { break; } }
+        if (c.seenCount() != 2) { return 1; }             // the loop advanced `c` itself
+        foreach (int32 x in c) { s += x; }                // and it resumes where the first loop stopped
+        if (c.seenCount() != 3 || cell[0] != 0) { return 2; }
+    }
+    if (cell[0] != 1) { return 3; }                       // `c` dropped once, at its own scope's end
+    foreach (int32 x in Counter.make(drops: drops)) { s += x; }
+    if (cell[0] != 2) { return 4; }                       // the one the operand made, dropped with the loop
+    if (s != 12) { return 5; }
+
+    Lines<Flaky> ls = Lines::<Flaky>.make(src: Flaky.make());
+    int32 n = 0;
+    foreach (string ln in ls) { if (ln == "hi") { n += 1; } }
+    bool failed = match (ls.error()) { case Some(value: e): true; case None: false; };
+    if (n != 1 || !failed) { return 6; }
+    return 42;
+}
+fn uint8 main() { return run(); }

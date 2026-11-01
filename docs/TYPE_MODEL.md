@@ -148,8 +148,9 @@ A view's constructor is **always private**: a view is handed out by the containe
   it has an invariant (a borrowed `UnsafePtr<T>` that must not leak, `ptr`/`len` kept consistent), so — like a
   `resource` — its **fields are private-only**.
 - **Owns nothing.** A `view` may **not** have an owning/resource field (that would make it try to free memory it <!-- xfail: view_owns -->
-  doesn't own). It **may** declare a `~dtor`, which frees nothing: it **closes its window** — the `borrow` that minted <!-- test: borrow_view_closes -->
-  the view runs it when the window closes, on every path out (a transaction that rolls back unless it committed). Such
+  doesn't own). It **may** declare a `~dtor`, which frees nothing: it **closes its window** — the `borrow` or `foreach` <!-- test: borrow_view_closes, foreach_view_closes -->
+  that minted the view runs it when the window closes, on every path out (a transaction that rolls back unless it
+  committed, a map's `drain()` that empties it however the loop ends). Such
   a view is pinned to its window: a helper takes it `ref`/`const ref`, and nothing copies it (SPEC *The window*).
 - **Second-class borrow (the escape rule).** Exactly like a `contract` value, a `view` may be a
   **parameter or a local** but **not** a field, a collection element, or an `enum` payload — and it may be
@@ -308,7 +309,8 @@ Eight rules make the grid memorable:
    **contract** (or a public non-virtual method). This bakes in **NVI** (Non-Virtual Interface).
 4. **public fields ⟺ `value`**; a `resource` (ownership encapsulated) **and a `view`** (its borrowed
    raw `UnsafePtr` must not leak) keep fields **private**.
-5. **`~dtor` ⟺ `resource`** (forbidden on a `value` or a `view` — neither owns anything to free).
+5. **`~dtor` frees ⟺ `resource`** (forbidden on a `value`, which owns nothing to free; a `view` may declare one that
+   frees nothing and closes its window).
 6. **`virtual`/`abstract`/`final` ⟺ `resource`** (values and views are sealed → use contracts; a
    contract already *is* the abstraction).
 7. **`contract`** = all-public signatures (methods, and optionally a `ctor`/`static fn` requirement),

@@ -1,4 +1,5 @@
-// An iterator that closes its window cannot drive a `foreach`: the loop would mint it, or copy it out of its alias (KR-124).
+// A `foreach` holds a view that closes its window only as a mint it makes (KR-263): over one a `borrow` already holds, the
+// loop would copy the view out of its window and advance the copy, while the window's destructor ran on the original.
 @viewable type contract Walks for resource { fn Cursor walk(); }
 type view Cursor implements Iterator<int32> {
     UnsafePtr<int32> at; int32 left;

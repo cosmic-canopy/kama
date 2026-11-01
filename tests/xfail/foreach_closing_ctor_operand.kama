@@ -1,0 +1,11 @@
+// A view that closes its window is made only by its host's granted mint, which a `foreach` holds; its constructor named
+// in the loop's header is not that.
+@viewable type contract Walks for resource { fn Walk walk(); }
+type view Walk implements Iterator<int32> {
+    UnsafePtr<int32> at; int32 left;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; this.left = 2; }
+    public unsafe fn Optional<int32> next() { if (this.left == 0) { return Optional::None; } this.left -= 1; return Optional::Some(value: copy this.at[0]); }
+    unsafe ~Walk() { this.at[0] = 0; }
+}
+unsafe fn int32 total(UnsafePtr<int32> p) { int32 s = 0; foreach (int32 x in Walk.over(at: p)) { s += x; } return s; }
+fn uint8 main() { return 0; }

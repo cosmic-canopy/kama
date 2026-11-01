@@ -1,0 +1,11 @@
+// A `foreach` over a named iterator that OWNS its source advances that iterator in place, so a read-only one cannot
+// drive the loop: through 0.9.793 the loop advanced a bitwise copy instead, and what it recorded (a read error, a count)
+// never reached the original.
+type resource Counter implements Iterator<int32> {
+    int32 at;
+    public ctor make() { this.at = 0; }
+    public fn Optional<int32> next() { if (this.at == 3) { return Optional::None; } this.at += 1; return Optional::Some(value: this.at); }
+    ~Counter() { }
+}
+fn int32 total(const ref Counter c) { int32 s = 0; foreach (int32 x in c) { s += x; } return s; }
+fn uint8 main() { Counter c = Counter.make(); return cast<uint8>(total(c: c)); }

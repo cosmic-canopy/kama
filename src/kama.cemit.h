@@ -4259,6 +4259,12 @@ private:
     // it reaches (KR-226). The window holds the view it makes in a temporary, named here while the host is emitted.
     InvocationNode* closingMintIn(SharedExpression host, int* count);
     std::map<const InvocationNode*, std::string> _closingMintTemps;
+    // KR-263: the closing mint a `foreach` header makes (`live.drain()`), the one such call emitExpression lets through,
+    // checked first by foreachClosingMintOK; and the `ref`/`const ref` bindings of loops that hold one, whose places
+    // close with the loop.
+    const InvocationNode* _foreachMint = nullptr;
+    std::set<std::string> _closingLoopRefs;
+    bool foreachClosingMintOK(InvocationNode* inv, ForEachNode* fe, MethodInfo*& mi);
     const std::vector<ParamSig>* placeCallParams(InvocationNode* inv, bool* constPlace = nullptr);        // the root identifier a write targets
     // The PLACE a expression designates: the base binding plus its chain of field names. This is the
     // whole safety core of the view model — see `placesConflict`. Not `const`: resolving a bare field

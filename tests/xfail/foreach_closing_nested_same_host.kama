@@ -1,0 +1,15 @@
+// One storage takes one name: a `foreach` holding a drain-like view over `b` freezes `b`, so a second one over `b`
+// inside it — two views moving out of one container — is refused.
+@viewable type contract Walks for resource { fn Walk walk(); }
+type view Walk implements Iterator<int32> {
+    UnsafePtr<int32> at; int32 left;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; this.left = 2; }
+    public unsafe fn Optional<int32> next() { if (this.left == 0) { return Optional::None; } this.left -= 1; return Optional::Some(value: copy this.at[0]); }
+    unsafe ~Walk() { this.at[0] = 0; }
+}
+type resource Bag implements Walks {
+    InlineArray<int32>#(1) v;
+    public ctor make() { this.v = [7; 1]; }
+    public unsafe fn Walk walk() { return Walk.over(at: addr(of: this.v[0])); }
+}
+fn uint8 main() { Bag b = Bag.make(); int32 s = 0; foreach (int32 x in b.walk()) { foreach (int32 y in b.walk()) { s += y; } } return cast<uint8>(s); }

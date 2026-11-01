@@ -518,10 +518,21 @@ borrow conn.begin() as tx { tx.execute(sql: "…"); tx.commit(); }   // ~Tx() ro
 Such a view is **pinned to its window**, because a second one is a transaction no window ends — committing a copy
 commits nothing the window sees. A helper takes it `ref`/`const ref`; refused are a local of it, a copy of the alias, <!-- xfail: view_closes_local, view_closes_copy, view_closes_by_value, view_closes_out -->
 a by-value or `out` parameter, a return from anything but its own constructor or a granted mint, a type argument, <!-- xfail: view_closes_return, view_closes_generic, view_closes_outside_borrow, view_closes_foreach -->
-a mint outside a `borrow` host (`conn.begin().commit()`), and a `foreach` over one (call `next()` on the alias). A
-trap aborts without running it, as for every destructor; an `@onPanic` region may not reach one, since recovery <!-- xfail: view_closes_onpanic -->
-skips it — the same rule as for any owner with a destructor. (A database server rolls back an uncommitted
-transaction when its connection drops, so an abort loses nothing the server kept.)
+a mint anywhere but a window (`conn.begin().commit()`), and a `foreach` over one a window already holds, which would
+copy it out of that window. A trap aborts without running it, as for every destructor; an `@onPanic` region may not <!-- xfail: view_closes_onpanic, foreach_closing_onpanic -->
+reach one, since recovery skips it — the same rule as for any owner with a destructor. (A database server rolls back
+an uncommitted transaction when its connection drops, so an abort loses nothing the server kept.)
+
+**A `foreach` is the other window such a view lives in** (KR-263), when it is an iterator: the loop makes it — its <!-- test: foreach_view_closes -->
+operand is the mint (`foreach (Entry<K, V> e in live.drain())`), or the container's own `iterator()`/`iterMut()`/
+`iterConst()` returns one — holds it for the whole loop, and runs its destructor when the loop is left: run dry,
+`break` (from a `match` arm too), `return` (from a nested loop too), after the body's locals and the pass's binding,
+once; `continue` stays in the loop. So `Map.drain()` empties the map however the loop ends, Rust's `HashMap::drain`
+guarantee, with no guard to name. The operand is a `borrow` host's kind of mint — granted, nullary, on a receiver <!-- xfail: foreach_closing_ctor_operand, foreach_closing_temp_receiver -->
+something names, reaching through no other closing view — and it is a call like any other: a non-`const` mint is <!-- xfail: foreach_closing_const_receiver, foreach_closing_nested_same_host -->
+refused on a read-only receiver and inside another loop over the same host. Refused too: a loop over a view a window <!-- xfail: view_closes_foreach, foreach_ref_closing_alias -->
+already holds, in all three loop forms, and returning a `ref` binding of such a loop, or a field of one, whose place <!-- xfail: foreach_closing_ref_return, foreach_closing_ref_return_field -->
+the view's destructor ends.
 
 **Why a window and not a `ref` local.** `ref Joint j = this.rig.joint(name: n);` is safe only if its host stays
 frozen from the declaration to `j`'s last use — a region nobody wrote. Rust infers that region (lifetimes and a
@@ -543,6 +554,13 @@ itself, and a non-`const` one (`iterMut()`, an `iterator()` that writes) is a wr
 read-only place, and inside another loop over the same container, as `d.iterMut()` written out would be. Reads stay free: a `const fn` call on the operand, an element write through a
 `ref` binding (that is what `foreach (ref …)` is *for*), and any disjoint container or sibling field. The
 mods counter remains as defense in depth for the `unsafe`/FFI paths that no static rule sees.
+
+An iterator that **owns** its source — a `resource`, as `std::io::Lines` is — is advanced **where it is named**: <!-- test: foreach_owning_iter -->
+`foreach (string ln in ls)` moves `ls` itself on, so what it recorded is still there after the loop (`ls.error()`), a
+second loop resumes where the first stopped, and `ls` is dropped once, at its own scope's end. It is frozen for the <!-- xfail: foreach_owning_iter_give -->
+body and may not be read-only, since the loop writes it. One the operand MAKES (`foreach (… in <!-- xfail: foreach_owning_iter_const -->
+Lines::<File>.make(src: give f))`) belongs to the loop, which drops it when it is left. A `value` or `view` iterator
+is copied into the loop, as every value is.
 
 **So is a `match` arm that binds a view of a lookup.** A container may return an `Optional` view (`public const fn <!-- test: match_view_window -->
 Optional<ConstView<int32>> find(int32 k)`), and `match (s.find(k: 1))` takes it apart: an arm that binds the view

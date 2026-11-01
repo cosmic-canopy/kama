@@ -1,0 +1,10 @@
+// A `foreach` advances a named owning iterator in place, so the iterator is held for the loop: moving it out of its
+// name inside the body is refused, as growing a container a loop iterates is.
+type resource Counter implements Iterator<int32> {
+    int32 at;
+    public ctor make() { this.at = 0; }
+    public fn Optional<int32> next() { if (this.at == 3) { return Optional::None; } this.at += 1; return Optional::Some(value: this.at); }
+    ~Counter() { }
+}
+fn void consume(Counter c) { }
+fn uint8 main() { Counter c = Counter.make(); foreach (int32 x in c) { consume(c: give c); } return 0; }

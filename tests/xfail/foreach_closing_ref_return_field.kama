@@ -1,0 +1,18 @@
+// A field of a `ref` loop binding is reached through the same view as the binding: when the loop holds a view that
+// closes its window, `return x.n` returns a place the view's destructor ends, as `return x` would.
+type value Pair { public int32 n; public ctor make() { this.n = 1; } }
+@viewable type contract WalksMut for resource { fn WalkMut walkMut(); }
+type view WalkMut implements IteratorMut<Pair> {
+    UnsafePtr<Pair> at; int32 left;
+    unsafe ctor over(UnsafePtr<Pair> at) { this.at = at; this.left = 1; }
+    public const fn bool hasNext() { return this.left > 0; }
+    public unsafe fn ref Pair next() { this.left -= 1; return this.at[0]; }
+    unsafe ~WalkMut() { this.at[0].n = 0; }
+}
+type resource Bag implements WalksMut {
+    InlineArray<Pair>#(1) v;
+    public ctor make() { this.v = [Pair.make(); 1]; }
+    public unsafe fn WalkMut walkMut() { return WalkMut.over(at: addr(of: this.v[0])); }
+}
+fn ref int32 first(ref Bag b) { foreach (ref Pair x in b.walkMut()) { return x.n; } panic(msg: "empty"); }
+fn uint8 main() { Bag b = Bag.make(); int32 v = first(b: ref b); return cast<uint8>(v); }

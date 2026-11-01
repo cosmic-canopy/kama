@@ -1,0 +1,17 @@
+// A `ref` binding of a loop that holds a view closing its window points where that view reaches, and the view closes
+// when the loop is left — so the binding cannot be returned.
+@viewable type contract WalksMut for resource { fn WalkMut walkMut(); }
+type view WalkMut implements IteratorMut<int32> {
+    UnsafePtr<int32> at; int32 left;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; this.left = 2; }
+    public const fn bool hasNext() { return this.left > 0; }
+    public unsafe fn ref int32 next() { this.left -= 1; return this.at[0]; }
+    unsafe ~WalkMut() { this.at[0] = 0; }
+}
+type resource Bag implements WalksMut {
+    InlineArray<int32>#(1) v;
+    public ctor make() { this.v = [7; 1]; }
+    public unsafe fn WalkMut walkMut() { return WalkMut.over(at: addr(of: this.v[0])); }
+}
+fn ref int32 first(ref Bag b) { foreach (ref int32 x in b.walkMut()) { return x; } panic(msg: "empty"); }
+fn uint8 main() { Bag b = Bag.make(); int32 v = first(b: ref b); return cast<uint8>(v); }

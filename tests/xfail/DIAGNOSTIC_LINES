@@ -578,10 +578,20 @@ fnptr_null_check	fnptr_null_check.kama:4:8
 for_clause_discards_owning	for_clause_discards_owning.kama:12:29
 for_on_type	for_on_type.kama:1:0
 foreach_char_over_string	foreach_char_over_string.kama:12:4
+foreach_closing_const_receiver	foreach_closing_const_receiver.kama:14:67
+foreach_closing_ctor_operand	foreach_closing_ctor_operand.kama:10:57
+foreach_closing_nested_same_host	foreach_closing_nested_same_host.kama:15:103
+foreach_closing_onpanic	foreach_closing_onpanic.kama:15:0
+foreach_closing_ref_return	foreach_closing_ref_return.kama:16:71
+foreach_closing_ref_return_field	foreach_closing_ref_return_field.kama:17:70
+foreach_closing_temp_receiver	foreach_closing_temp_receiver.kama:15:31
 foreach_const_container_mint	foreach_const_container_mint.kama:13:47
 foreach_const_ref_write	foreach_const_ref_write.kama:12:37
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12:4
 foreach_element_grow_container	foreach_element_grow_container.kama:12:34
+foreach_owning_iter_const	foreach_owning_iter_const.kama:10:51
+foreach_owning_iter_give	foreach_owning_iter_give.kama:10:46 foreach_owning_iter_give.kama:10:71
+foreach_ref_closing_alias	foreach_ref_closing_alias.kama:16:65
 foreach_ref_comptime	foreach_ref_comptime.kama:13:4
 foreach_ref_const_fn_field	foreach_ref_const_fn_field.kama:9:8
 foreach_ref_const_local	foreach_ref_const_local.kama:5:4
@@ -1568,7 +1578,7 @@ view_arg_overlap_through_fn	view_arg_overlap_through_fn.kama:15:23
 view_chain_over_local	view_chain_over_local.kama:11:4
 view_closes_by_value	view_closes_by_value.kama:14:0
 view_closes_copy	view_closes_copy.kama:17:29
-view_closes_foreach	view_closes_foreach.kama:19:28
+view_closes_foreach	view_closes_foreach.kama:20:28
 view_closes_generic	view_closes_generic.kama:18:39
 view_closes_local	view_closes_local.kama:17:4
 view_closes_onpanic	view_closes_onpanic.kama:15:0

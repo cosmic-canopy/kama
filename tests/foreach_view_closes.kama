@@ -1,0 +1,95 @@
+// A `foreach` holds a view that closes its window (KR-263): the loop mints it — from its operand, `b.walk()`, or from the
+// container's own `iterator()`/`iterMut()`/`iterConst()` — holds it for the whole loop, and runs its destructor when the
+// loop ends, on every path out: running dry, `break` (also from inside a `match`), and `return` (also from a nested
+// loop). `continue` stays in the loop and closes nothing. It closes once, after the body's locals and the pass's
+// binding, and before an owned operand is dropped. Each close appends a digit to the bag's log. Returns 42.
+@viewable type contract Walks for resource { fn Walk walk(); }
+
+// Yields 1, 2, 3 (or until the bag's `limit`), and logs 9 when it closes, or its own `tag`.
+type view Walk implements Iterator<int32> {
+    UnsafePtr<int64> log; int32 at; int32 limit; int64 tag;
+    unsafe ctor over(UnsafePtr<int64> log, int32 limit, int64 tag) { this.log = log; this.at = 0; this.limit = limit; this.tag = tag; }
+    public unsafe fn Optional<int32> next() { if (this.at == this.limit) { return Optional::None; } this.at += 1; return Optional::Some(value: this.at); }
+    unsafe ~Walk() { this.log[0] = this.log[0] * 10i64 + this.tag; }
+}
+type view WalkMut implements IteratorMut<int32> {
+    UnsafePtr<int32> cell; UnsafePtr<int64> log; int32 left;
+    unsafe ctor over(UnsafePtr<int32> cell, UnsafePtr<int64> log) { this.cell = cell; this.log = log; this.left = 2; }
+    public const fn bool hasNext() { return this.left > 0; }
+    public unsafe fn ref int32 next() { this.left -= 1; return this.cell[0]; }
+    unsafe ~WalkMut() { this.log[0] = this.log[0] * 10i64 + 7i64; }
+}
+type view WalkConst implements IteratorConst<int32> {
+    UnsafeConstPtr<int32> cell; UnsafePtr<int64> log; int32 left;
+    unsafe ctor over(UnsafeConstPtr<int32> cell, UnsafePtr<int64> log) { this.cell = cell; this.log = log; this.left = 2; }
+    public const fn bool hasNext() { return this.left > 0; }
+    public unsafe fn const ref int32 next() { this.left -= 1; return this.cell[0]; }
+    unsafe ~WalkConst() { this.log[0] = this.log[0] * 10i64 + 6i64; }
+}
+
+type resource Bag implements Walks, Iterable<int32>, IterableMut<int32>, IterableConst<int32> {
+    UnsafePtr<int64> log;   // the caller's: each close appends a digit to it
+    InlineArray<int32>#(1) cell;
+    int32 limit;
+    public unsafe ctor make(UnsafePtr<int64> log, int32 limit) { this.log = log; this.cell = [5; 1]; this.limit = limit; }
+    public unsafe fn Walk walk() { return Walk.over(log: this.log, limit: this.limit, tag: 9i64); }
+    public unsafe fn Walk iterator() { return Walk.over(log: this.log, limit: this.limit, tag: 8i64); }
+    public unsafe fn WalkMut iterMut() { return WalkMut.over(cell: addr(of: this.cell[0]), log: this.log); }
+    public unsafe const fn WalkConst iterConst() { return WalkConst.over(cell: addr(of: this.cell[0]), log: this.log); }
+    public const fn int32 value() { return this.cell[0]; }
+}
+
+// A body local that logs its own drop (3), to show the loop's view closes after it.
+type resource Marker {
+    UnsafePtr<int64> log;
+    public unsafe ctor at(UnsafePtr<int64> log) { this.log = log; }
+    unsafe ~Marker() { this.log[0] = this.log[0] * 10i64 + 3i64; }
+}
+
+fn int32 sum(ref Bag b) { int32 s = 0; foreach (int32 x in b.walk()) { s += x; } return s; }
+fn int32 firstOver(ref Bag b, int32 n) { foreach (int32 x in b.walk()) { if (x > n) { return x; } } return 0; }
+fn int32 nested(ref Bag b) {
+    foreach (int32 x in b.walk()) { int32 i = 0; while (i < 5) { if (i == 2 && x == 2) { return 7; } i += 1; } }
+    return 0;
+}
+fn int32 fromMatch(ref Bag b) {
+    foreach (int32 x in b.walk()) {
+        Optional<int32> o = Optional::Some(value: x);
+        match (o) { case Some(value: v): { if (v == 2) { return v; } } case None: { } };
+    }
+    return 0;
+}
+unsafe fn void localsFirst(ref Bag b, UnsafePtr<int64> log) {
+    foreach (int32 x in b.walk()) { Marker m = Marker.at(log: log); break; }
+}
+
+unsafe fn uint8 run() {
+    InlineArray<int64>#(3) logs = [0i64; 3];
+    Bag b = Bag.make(log: addr(of: logs[0]), limit: 3);
+    if (sum(b: ref b) != 6) { return 1; }                     // 9 — ran dry
+    if (firstOver(b: ref b, n: 1) != 2) { return 2; }         // 99 — `return` from the loop
+    if (nested(b: ref b) != 7) { return 3; }                  // 999 — `return` from a nested loop
+    if (fromMatch(b: ref b) != 2) { return 4; }               // 9999 — `return` from a `match` arm
+    int32 n = 0;
+    foreach (int32 x in b.walk()) { if (x == 1) { continue; } n += 1; }   // 99999 — `continue` closes nothing
+    if (n != 2) { return 5; }
+    foreach (int32 x in b.walk()) { if (x == 2) { break; } }              // 999999 — `break`
+    foreach (int32 x in b.walk()) {                                       // 9999999 — `break` from a `match` arm
+        Optional<int32> o = Optional::Some(value: x);
+        match (o) { case Some(value: v): { if (v == 1) { break; } } case None: { } };
+    }
+    if (logs[0] != 9999999i64) { return 6; }
+
+    Bag c = Bag.make(log: addr(of: logs[1]), limit: 2);
+    int32 t = 0;
+    foreach (int32 x in c) { t += x; }                        // 8 — the container's own `iterator()`
+    foreach (ref int32 x in c) { x = x + 1; }                 // 87 — `iterMut()`: 5, 6, 7
+    foreach (const ref int32 x in c) { t += x; }              // 876 — `iterConst()`: t = 3 + 7 + 7
+    if (t != 17 || c.value() != 7 || logs[1] != 876i64) { return 7; }
+
+    Bag d = Bag.make(log: addr(of: logs[2]), limit: 3);
+    localsFirst(b: ref d, log: addr(of: logs[2]));            // 39 — the body's local, then the view
+    if (logs[2] != 39i64) { return 8; }
+    return 42;
+}
+fn uint8 main() { return run(); }

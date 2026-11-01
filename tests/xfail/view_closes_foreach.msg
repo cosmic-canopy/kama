@@ -1,1 +1,1 @@
-can neither mint it nor copy it
+would copy it out of its window
