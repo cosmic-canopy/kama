@@ -1,0 +1,19 @@
+// A `borrow` emits its mint as a direct call, so it asks the mint's access itself: through 0.9.793 a private mint
+// opened a window from outside its type, while `b.walk().get()` beside it was refused as private.
+@viewable type contract Walks for resource { fn Peek walk(); }
+type view Peek {
+    UnsafePtr<int32> at;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; }
+    public unsafe const fn int32 get() { return this.at[0]; }
+}
+type resource Bag implements Walks {
+    InlineArray<int32>#(1) v;
+    public ctor make() { this.v = [7; 1]; }
+    unsafe fn Peek walk() { return Peek.over(at: addr(of: this.v[0])); }
+}
+fn uint8 main() {
+    Bag b = Bag.make();
+    int32 s = 0;
+    borrow b.walk() as c { s = c.get(); }
+    return cast<uint8>(s);
+}

@@ -457,8 +457,9 @@ A host is a **place** or a **mint**, and nothing else:
   not be returned.
 
 Refused, each with its own sentence and no cascade after it: **a bare local** (`borrow a as v` — `a` already names <!-- xfail: borrow_bare_host -->
-its place), and **a value**: a call that returns one, or a field of one (`mk().x`), which nothing holds beyond the <!-- xfail: borrow_place_value_call, borrow_place_value_fn, borrow_place_temporary -->
-statement — bind it to a local first.
+its place), and **a value**: a call that returns one, a field of one (`mk().x`), or a mint on one (`mk().view()`), which <!-- xfail: borrow_place_value_call, borrow_place_value_fn, borrow_place_temporary, borrow_mint_temp_receiver -->
+nothing holds beyond the statement — bind it to a local first. A mint answers to access as any call does: a private one <!-- xfail: borrow_mint_private -->
+opens no window outside its type.
 
 Four rules, and together they are what lets the paragraph above say "cannot dangle":
 
@@ -475,7 +476,7 @@ Four rules, and together they are what lets the paragraph above say "cannot dang
    mutable*: `borrow this.buf.view() as b { this.hits = this.hits + 1; … }` is legal, because two distinct
    fields cannot overlap in storage. Reads are untouched — a `const fn` call, an index, a `foreach` over the
    frozen host, and (under a view) an element written in place, which moves no buffer — `arr[0][1] = 5` inside a
-   window over `arr[0]`, or `arr[0].add(…)` under `borrow arr.view()`, whose buffer stays where it is. One storage takes one name: two <!-- xfail: borrow_place_overlap, borrow_place_nested_same, borrow_two_bindings_overlap, borrow_nested_same_place -->
+   window over `arr[0]`, or `arr[0].add(…)` under `borrow arr.view()`, whose buffer stays where it is. One storage takes one name: two <!-- xfail: borrow_place_overlap, borrow_place_nested_same, borrow_two_bindings_overlap, borrow_nested_same_place, foreach_ref_nested_same -->
    bindings over one container, or a window inside a window over the same storage, are refused — `xs[0]` and
    `xs[1]` are disjoint only when the indices are, which nothing proves in general. A window reached THROUGH an <!-- test: borrow_nested_through_alias -->
    enclosing window's alias is not a second name: `borrow tx.conn().transaction() as inner` freezes `tx` for its <!-- xfail: borrow_nested_alias_frozen -->
@@ -537,7 +538,9 @@ iterator over its operand for the extent of the body, so the operand is frozen t
 `foreach (int32 x in d) { d.add(item: 9); }` is a **compile error**, not the runtime panic the growable <!-- xfail: iter_reserve_dynarray, iter_reserve_map -->
 containers' mods counter used to raise. The operand roots through its receiver, so `foreach (v in
 m.values())` freezes `m`, and an element operand is iterated where it lives and freezes its container:
-`foreach (x in arr[0]) { arr.add(…) }` is refused. <!-- xfail: foreach_element_grow_container --> Reads stay free: a `const fn` call on the operand, an element write through a
+`foreach (x in arr[0]) { arr.add(…) }` is refused. <!-- xfail: foreach_element_grow_container --> The loop calls its container's mint
+itself, and a non-`const` one (`iterMut()`, an `iterator()` that writes) is a write to the container: refused over a <!-- xfail: foreach_const_container_mint -->
+read-only place, and inside another loop over the same container, as `d.iterMut()` written out would be. Reads stay free: a `const fn` call on the operand, an element write through a
 `ref` binding (that is what `foreach (ref …)` is *for*), and any disjoint container or sibling field. The
 mods counter remains as defense in depth for the `unsafe`/FFI paths that no static rule sees.
 

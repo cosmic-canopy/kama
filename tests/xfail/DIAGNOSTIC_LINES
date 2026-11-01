@@ -114,7 +114,9 @@ borrow_frozen_ref_arg	borrow_frozen_ref_arg.kama:14:8
 borrow_frozen_spawn	borrow_frozen_spawn.kama:17:16
 borrow_mint_call_receiver_frozen	borrow_mint_call_receiver_frozen.kama:18:27
 borrow_mint_not_a_view	borrow_mint_not_a_view.kama:30:4
+borrow_mint_private	borrow_mint_private.kama:17:4
 borrow_mint_takes_args	borrow_mint_takes_args.kama:12:4
+borrow_mint_temp_receiver	borrow_mint_temp_receiver.kama:17:4
 borrow_nested_alias_frozen	borrow_nested_alias_frozen.kama:22:50
 borrow_nested_same_place	borrow_nested_same_place.kama:13:8
 borrow_not_viewable	borrow_not_viewable.kama:18:4
@@ -576,6 +578,7 @@ fnptr_null_check	fnptr_null_check.kama:4:8
 for_clause_discards_owning	for_clause_discards_owning.kama:12:29
 for_on_type	for_on_type.kama:1:0
 foreach_char_over_string	foreach_char_over_string.kama:12:4
+foreach_const_container_mint	foreach_const_container_mint.kama:13:47
 foreach_const_ref_write	foreach_const_ref_write.kama:12:37
 foreach_elem_type_mismatch	foreach_elem_type_mismatch.kama:12:4
 foreach_element_grow_container	foreach_element_grow_container.kama:12:34
@@ -585,6 +588,7 @@ foreach_ref_const_local	foreach_ref_const_local.kama:5:4
 foreach_ref_const_ref_param	foreach_ref_const_ref_param.kama:8:4
 foreach_ref_const_view	foreach_ref_const_view.kama:9:8
 foreach_ref_give	foreach_ref_give.kama:8:30
+foreach_ref_nested_same	foreach_ref_nested_same.kama:8:33
 foreach_ref_string	foreach_ref_string.kama:7:4
 foreach_ref_temporary	foreach_ref_temporary.kama:8:4
 foreach_view_rvalue	foreach_view_rvalue.kama:11:4

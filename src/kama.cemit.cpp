@@ -7446,6 +7446,9 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                              "one — implement a `@viewable` contract carrying `" + mint + "()`").c_str(), bn);
                 return false;
             }
+            // The mint is emitted as a direct call below, never through the dispatch site, so its access is asked here,
+            // as that site asks it: an intrinsic collection's mints are its own and carry no visibility.
+            if (!mmi->isIntrinsic && !canAccess(&_classes[mcls], mmi->visibility, mint, bn->line)) return false;
             if (!mmi->isConst && isConstReceiver(mrecv)) {
                 unsupported(("cannot call non-const method `" + mint + "` on a const receiver — `" + unparseExpr(mrecv)
                              + "` is read-only here").c_str(), bn);
@@ -7547,6 +7550,14 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
                              + "`, which is free").c_str(), bn);
                 continue;
             }
+            // A view of a VALUE (`Bag.make().walk()`) would view storage nothing holds past this statement — and the mint
+            // takes its receiver's address, which C refuses for an rvalue, so `kama check` passed what the build refused.
+            if (borrowHostIsTemporary(recvExpr)) {
+                unsupported(("a window views storage that outlives it, and `" + unparseExpr(recvExpr) + "` is a value, or "
+                             "rooted in one — nothing holds it beyond this statement. Bind it to a local first, and borrow "
+                             "from that").c_str(), bn);
+                continue;
+            }
             // The receiver's ROOTS, frozen for the block as a place host's are: the receiver itself when it is a place
             // (`a.viewMut()`), and when it is a call returning a place (`h.items().viewMut()`, `tx.conn().transaction()`),
             // that call's receiver and every `ref` argument, since the signature lets the result point into any of
@@ -7615,6 +7626,9 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             // A mint is a CALL on its receiver, so it answers to deep const like any other: the writable
             // window (`viewMut()`, not `const fn`) cannot be opened over a `const` place. Said here because
             // this gate emits the call directly and never passes through the dispatch site's receiver check.
+            // The mint is emitted as a direct call below, never through the dispatch site, so its access is asked here,
+            // as that site asks it: an intrinsic collection's mints are its own and carry no visibility.
+            if (!vmi->isIntrinsic && !canAccess(&_classes[hostCls], vmi->visibility, mint, bn->line)) continue;
             if (!vmi->isConst && isConstReceiver(recvExpr)) {
                 const bool bytesMint = mint == "bytesMut";   // a byte view's read-only twin is `bytes()` (KR-127)
                 unsupported(("cannot call non-const method `" + mint + "` on a const receiver — a window over "
@@ -19941,6 +19955,21 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         return "";
     };
 
+    // A container's mint (`iterMut()`, a non-`const` `iterator()`) is called straight from here, never through the
+    // dispatch site, so a non-`const` one answers here to the write checks that site makes (`emitMethodCall`): a const
+    // receiver, the freeze — without it a `ref` loop nested in another over the same container named one storage
+    // twice, both writable — and a `match` payload read in place, which this loop writes.
+    auto mintWrites = [&](MethodInfo* mi, const char* mint) -> bool {
+        if (mi->isConst) return true;
+        if (isConstReceiver(fe->expression)) {
+            unsupported(("cannot call non-const method `" + std::string(mint) + "` on a const receiver — `"
+                         + unparseExpr(fe->expression) + "` is read-only here").c_str(), fe);
+            *_out << "\n"; return false;
+        }
+        if (rejectFrozenWrite(fe->expression, fe->line)) { *_out << "\n"; return false; }
+        noteSubjectWrite(fe->expression, fe->line);
+        return true;
+    };
     std::string iterCType, iterInit, nextCall, hasNextCall, optC;
     // What the iterator ACTUALLY yields, as opposed to what the loop binding claims. Both branches fill
     // it; the mismatch check below is the same rule the intrinsic-collection path enforces.
@@ -20021,7 +20050,7 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
                 unsupported(("`" + container + "` must `implements IterableMut<T>` to be used in a "
                              "`foreach (ref …)`").c_str(), fe); *_out << "\n"; return;
             }
-            if (!requirePlaceOperand()) return;
+            if (!requirePlaceOperand() || !mintWrites(iterMi, "iterMut")) return;
             iterCType = cTypeInInstance(container, iterMi->returnType);
             ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;
             iterInit = iterMi->cName + "(&(" + emitIterable() + "))";
@@ -20046,7 +20075,8 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
         MethodInfo* iterMi = findMethod(cc, "iterator", nullptr);
         if (iterMi && !iterMi->params.empty()) iterMi = nullptr;
         ClassInfo* ic = nullptr;
-        if (iterMi) { const std::string at = operandAddr(/*allowTemp=*/true);
+        if (iterMi) { if (!mintWrites(iterMi, "iterator")) return;
+                      const std::string at = operandAddr(/*allowTemp=*/true);
                       if (at.empty()) return;
                       iterCType = cTypeInInstance(container, iterMi->returnType);
                       ic = _classes.count(iterCType) ? &_classes[iterCType] : nullptr;

@@ -1,0 +1,19 @@
+// A window views storage that outlives it, and a mint's receiver that is a VALUE is held by nothing past the
+// statement. Through 0.9.793 `kama check` passed this and the build failed in clang ("cannot take the address of an
+// rvalue"): the mint takes its receiver's address.
+@viewable type contract Walks for resource { fn Peek walk(); }
+type view Peek {
+    UnsafePtr<int32> at;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; }
+    public unsafe const fn int32 get() { return this.at[0]; }
+}
+type resource Bag implements Walks {
+    InlineArray<int32>#(1) v;
+    public ctor make() { this.v = [7; 1]; }
+    public unsafe fn Peek walk() { return Peek.over(at: addr(of: this.v[0])); }
+}
+fn uint8 main() {
+    int32 s = 0;
+    borrow Bag.make().walk() as c { s = c.get(); }
+    return cast<uint8>(s);
+}
