@@ -37318,6 +37318,7 @@ void CEmitter::emitFunctionPrototype(FunctionDeclarationNode* fn, const std::str
 
 void CEmitter::emitFunction(FunctionDeclarationNode* fn, const std::string* nameOverride)
 {
+    ScopedStr _mg(_mintGrant, std::string());   // a free function is granted no view's mint (see emitMethodOrCtorBody)
     bool isEntry = false;
     std::string name = nameOverride ? *nameOverride : mangledFunctionName(fn, isEntry);
     if (!_probingTemplate && fn->name && fn->name->value)   // KR-124 — see checkClosingViewSignature
@@ -38309,6 +38310,7 @@ void CEmitter::emitGraphTwinProtos(ClassInfo& ci)
 // reverse declaration order. (Early return inside a dtor body is unsupported.)
 void CEmitter::emitDtorDefinition(ClassInfo& ci)
 {
+    ScopedStr _mg(_mintGrant, std::string());   // no `@viewable` member is a destructor (see emitMethodOrCtorBody)
     line(ci.dtorNode ? ci.dtorNode->line : (ci.declLine()));
     // A destructor is the one member body that does NOT route through emitMethodOrCtorBody, so it needs
     // its own copy of the member-attribute handling — and it is the body that most wants `@noheap`, since
@@ -38531,15 +38533,20 @@ void CEmitter::emitMethodOrCtorBody(const std::string& cName, const char* retTyp
     //
     // Computed once here rather than at each mint site, because the question is a property of the ENCLOSING
     // METHOD, and a per-site lookup would have to re-derive the member name from the mangled C name.
-    _mintGrant.clear();
+    //
+    // Scoped to this body: methods are emitted in NAME order (`ci.methods` is a map), then each type's destructor,
+    // then every free function, so a grant left set here leaked into all of them — a free `unsafe fn` could build a
+    // `Peek.over(at: p)` whenever the method that sorted last held `Peek`'s grant.
+    std::string grant;
     if (retType && memberName && *memberName && isViewCType(retType))
         for (auto& base : owner.interfaces) {
             auto it = _interfaces.find(base);
             if (it == _interfaces.end() || !it->second.isViewable) continue;
             for (auto& m : it->second.methods)
-                if (!m.isCtor && m.name == memberName) { _mintGrant = retType; break; }
-            if (!_mintGrant.empty()) break;
+                if (!m.isCtor && m.name == memberName) { grant = retType; break; }
+            if (!grant.empty()) break;
         }
+    ScopedStr _mg(_mintGrant, grant);
     // A named `ctor` is emitted as a static factory (no `self` PARAMETER), but it does have a `this`: the
     // value it is building. Storage for it is synthesized below, so `this` must resolve here even though
     // the C signature is static.

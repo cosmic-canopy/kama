@@ -1,0 +1,15 @@
+// The type being viewed mints its view from the member its `@viewable` contract grants, and from no other body: a
+// destructor is emitted after the methods, and through 0.9.793 it inherited the grant of the method emitted last.
+@viewable type contract Walks for resource { fn Peek walk(); }
+type view Peek {
+    UnsafePtr<int32> at;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; }
+    public unsafe const fn int32 get() { return this.at[0]; }
+}
+type resource Bag implements Walks {
+    InlineArray<int32>#(1) v;
+    public ctor make() { this.v = [7; 1]; }
+    public unsafe fn Peek walk() { return Peek.over(at: addr(of: this.v[0])); }
+    unsafe ~Bag() { int32 g = Peek.over(at: addr(of: this.v[0])).get(); }
+}
+fn uint8 main() { Bag b = Bag.make(); return 0; }

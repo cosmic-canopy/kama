@@ -1600,6 +1600,8 @@ view_local_inline_array	view_local_inline_array.kama:7:4
 view_local_ternary_root	view_local_ternary_root.kama:10:4
 view_local_unbounded	view_local_unbounded.kama:9:4
 view_match_unbounded_subject	view_match_unbounded_subject.kama:9:31
+view_mint_grant_dtor	view_mint_grant_dtor.kama:13:30
+view_mint_grant_free_fn	view_mint_grant_free_fn.kama:17:51
 view_optional_field	view_optional_field.kama:4:0
 view_out_param	view_out_param.kama:7:0
 view_owns	view_owns.kama:3:0

@@ -603,9 +603,10 @@ behind a `Shared` gets the arm the runtime access a window gets. <!-- test: matc
   creates no borrow — it only re-holds views it was handed — so it may declare a public constructor, whose
   result roots where its view arguments root (*Views compose*). Two places may call it: the **view itself**, which is what makes `View.slice`
   work; and the **type being viewed**, which declares that relationship by implementing a member of a
-  contract marked **`@viewable`**. Implementing such a member lets that member's body mint the view it
+  contract marked **`@viewable`**. Implementing such a member lets that member's body mint the view it <!-- xfail: view_ctor_forge, viewable_not_marked -->
   returns — the return type self-selects, so a marked contract cannot over-grant, and a member returning
-  `int32` mints nothing.
+  `int32` mints nothing. No other body may: not a free function, nor the viewed type's own destructor or other <!-- xfail: view_mint_grant_free_fn, view_mint_grant_dtor -->
+  members.
 
   ```kama fragment
   @viewable type contract Viewable<V>    for resource, value, view { fn V view(); }      // the read-only window

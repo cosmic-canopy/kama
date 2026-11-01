@@ -1,0 +1,18 @@
+// A view's mint grant belongs to the body of the member that holds it. Methods are emitted in name order, then each
+// type's destructor, then the free functions, and through 0.9.793 the grant of whichever method was emitted last
+// stayed live after it: here `walk` (granted) sorts after `aaa`, so the free `forge` below built a `Peek` over any
+// pointer it was handed, while the same function in a program with no grant was refused.
+@viewable type contract Walks for resource { fn Peek walk(); }
+type view Peek {
+    UnsafePtr<int32> at;
+    unsafe ctor over(UnsafePtr<int32> at) { this.at = at; }
+    public unsafe const fn int32 get() { return this.at[0]; }
+}
+type resource Bag implements Walks {
+    InlineArray<int32>#(1) v;
+    public ctor make() { this.v = [7; 1]; }
+    public fn int32 aaa() { return 1; }
+    public unsafe fn Peek walk() { return Peek.over(at: addr(of: this.v[0])); }
+}
+unsafe fn int32 forge(UnsafePtr<int32> p) { return Peek.over(at: p).get(); }
+fn uint8 main() { Bag b = Bag.make(); return 0; }
