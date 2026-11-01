@@ -1,0 +1,15 @@
+// `ConcurrentMap` with a value that owns memory (`string`). Through 0.9.796 no such map compiled: `compareAndSwap`
+// moved `desired` only when it swapped, and a value with a destructor must move on every path or none. Now it moves
+// into the swap or drops unswapped — once either way (the sanitizer leg checks both). Returns 42.
+import { std::concurrent::ConcurrentMap };
+
+fn uint8 main() {
+    ConcurrentMap<string, string> m = ConcurrentMap.empty();
+    m.put(key: "k", value: "old");
+    if (!m.compareAndSwap(key: "k", expected: "old", desired: "new")) { return 1; }    // swapped: "new" moved in
+    if (m.compareAndSwap(key: "k", expected: "old", desired: "never")) { return 2; }   // not: "never" dropped
+    if (m.compareAndSwap(key: "zz", expected: "old", desired: "absent")) { return 3; } // absent: dropped
+    match (m.get(key: "k")) { case Some(value: v): { if (v != "new") { return 4; } } case None: { return 5; } };
+    if (m.getOrPut(key: "j", value: "jay") != "jay" || m.length() != 2) { return 6; }
+    return 42;
+}

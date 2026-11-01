@@ -12,7 +12,7 @@
 // the shard's `Map` through its granted cores, whose LOW bits pick the slot — the same bits twice would cluster every
 // shard's table.
 import { std::collections::Map, std::collections::Entry, std::collections::DynamicArray, std::collections::Hasher,
-         std::collections::DefaultHasher, Locked, cpuCount };
+         std::collections::DefaultHasher, std::memory::replace, Locked, cpuCount };
 
 export { ConcurrentMap };
 
@@ -106,10 +106,16 @@ type resource ConcurrentMap<K: Hashable + Equatable<K> + Sendable, V: Sendable, 
         uint64 h = H::finish(raw: key.hash());
         isize s = this.shardOf(hash: h);
         bool swapped = false;
+        // `desired` moves on every path: into `pending` first, out of it only on a swap, and what is not swapped in
+        // drops with `pending`. Moved on the swap alone, it made any `V` with a destructor (`string`) a compile error.
+        Optional<V> pending = Optional::Some(value: give desired);
         borrow this.shards[s].lock().value() as m {
             if (m.containsHashed(key: key, hash: h)) {
                 borrow m.refMutHashed(key: key, hash: h) as v {
-                    if (v.equals(other: expected)) { v = give desired; swapped = true; }
+                    if (v.equals(other: expected)) {
+                        Optional<V> d = replace(place: ref pending, with: Optional::None);
+                        match (give d) { case Some(value: x): { v = give x; swapped = true; } case None: { } };
+                    }
                 }
             }
         }
