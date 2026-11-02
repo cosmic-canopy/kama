@@ -282,6 +282,10 @@ type resource BufReader<R: Reader> implements Reader {
     isize pos;    // next unread byte in buf
     isize fill;   // count of valid bytes in buf
 
+    // A decoder reads the buffer byte by byte and takes only the bytes of its own stream, so the source is left exactly
+    // at the stream's end for whatever reads it next (KR-5).
+    friend std::compress::deflate::DeflateReader[buf, pos, fill, refill];
+
     public ctor make(R inner) {
         this.inner = give inner;
         FixedArray<uint8> b = FixedArray.make(size: 4096);
@@ -290,13 +294,19 @@ type resource BufReader<R: Reader> implements Reader {
         this.fill = 0;
     }
 
+    // The buffer refilled from the source, once every byte in it has been taken: `Ok(0)` at the source's end. An error
+    // leaves the buffer as it was.
+    fn Result<isize, IoError> refill() {
+        Result<isize, IoError> rr = this.inner.read(into: this.buf.viewMut());
+        return match (rr) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: n): { this.fill = cast<isize>(n); this.pos = 0; := Result::Ok(value: this.fill); }
+        };
+    }
+
     public fn Result<isize, IoError> read(View<uint8> into) {
         if (this.pos >= this.fill) {
-            Result<isize, IoError> rr = this.inner.read(into: this.buf.viewMut());
-            match (rr) {
-                case Err(error: e): { return Result::Err(error: e); }
-                case Ok(value: n): { this.fill = cast<isize>(n); this.pos = 0; }
-            };
+            match (this.refill()) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: n): { } };
             if (this.fill == 0) { return Result::Ok(value: 0); }   // EOF
         }
         isize avail = this.fill - this.pos;
@@ -341,11 +351,7 @@ type resource BufReader<R: Reader> implements Reader {
         bool any = false;
         while (true) {
             if (this.pos >= this.fill) {
-                Result<isize, IoError> rr = this.inner.read(into: this.buf.viewMut());
-                match (rr) {
-                    case Err(error: e): { return Result::Err(error: e); }
-                    case Ok(value: n): { this.fill = cast<isize>(n); this.pos = 0; }
-                };
+                match (this.refill()) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: n): { } };
                 if (this.fill == 0) {
                     // End of input: a final unterminated line is still a line; nothing at all is None.
                     if (!any) { return Result::Ok(value: Optional::None); }

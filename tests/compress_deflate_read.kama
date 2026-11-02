@@ -1,0 +1,191 @@
+// `DeflateReader` (KR-5): raw deflate (RFC 1951) decoded from a `BufReader`. Every block type, stored, fixed and
+// dynamic, and a stream mixing them (python3's zlib with a sync flush and a full flush in it), plus three shapes zlib
+// never writes: a copy from exactly 32,768 bytes back, a dynamic block with no distance code, and one whose distance code
+// is a single one-bit code. Each is read 1, 7 and 4,096 bytes at a time and checked against python3's zlib by length
+// and CRC-32. Then the stream's END: `finish` hands the `BufReader` back at the first byte after it, so two streams back
+// to back decode one after the other and the bytes after them are still there; and a source that answers `WouldBlock`
+// before every byte, one byte a read, decodes the same bytes, every step resumed where it stopped. Returns 42.
+import { std::compress::deflate::DeflateReader, std::io::BufReader, std::io::SliceReader, std::io::Reader,
+         std::io::IoError, std::io::IoErrorKind, std::collections::DynamicArray, std::collections::FixedArray,
+         std::collections::View, std::encoding::hex::decode, std::digest::crc32::crc32 };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+fn DeflateReader<SliceReader> over(const ref string stream, uint64 limit) {
+    return DeflateReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: bytesOf(text: stream))),
+                              limit: limit);
+}
+
+// 0 for bytes, else the error's kind: 1 InvalidData, 2 UnexpectedEof, 3 LimitExceeded, 9 any other.
+fn int32 kindOf(IoError e) {
+    return match (e.kind()) { case InvalidData: 1; case UnexpectedEof: 2; case LimitExceeded: 3; case _: 9; };
+}
+
+// Reads `d` to its end `chunk` bytes at a time: 0 when that is `len` bytes with this CRC-32.
+fn int32 drain(ref DeflateReader<SliceReader> d, int32 len, uint32 crc, isize chunk) {
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: chunk);
+    while (true) {
+        isize n = match (d.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return 1; }
+        if (n == 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    if (cast<int32>(got.length()) != len) { return 2; }
+    if (crc32(bytes: got.view()) != crc) { return 3; }
+    return 0;
+}
+
+fn int32 check(const ref string stream, int32 len, uint32 crc) {
+    DeflateReader<SliceReader> a = over(stream: stream, limit: 1000000ui64);
+    DeflateReader<SliceReader> b = over(stream: stream, limit: 1000000ui64);
+    DeflateReader<SliceReader> c = over(stream: stream, limit: 1000000ui64);
+    return drain(d: ref a, len: len, crc: crc, chunk: 1) + drain(d: ref b, len: len, crc: crc, chunk: 7)
+         + drain(d: ref c, len: len, crc: crc, chunk: 4096);
+}
+
+// A source that gives one byte per read and answers `WouldBlock` before each one.
+type resource Choppy implements Reader {
+    DynamicArray<uint8> bytes;
+    isize pos;
+    bool ready;
+
+    public ctor make(DynamicArray<uint8> bytes) { this.bytes = give bytes; this.pos = 0; this.ready = false; }
+
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        if (!this.ready) {
+            this.ready = true;
+            return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock));
+        }
+        this.ready = false;
+        if (this.pos >= this.bytes.length() || into.length() == 0) { return Result::Ok(value: 0); }
+        into[0] = this.bytes[this.pos];
+        this.pos = this.pos + 1;
+        return Result::Ok(value: 1);
+    }
+}
+
+fn uint8 main() {
+    // one stored block
+    if (check(stream: "011300ecff68656c6c6f2c2073746f72656420626c6f636b", len: 19, crc: 3340945396ui32) != 0) { return 1; }
+    // one fixed block with a match
+    if (check(stream: "cb48cdc9c957c8402701", len: 23, crc: 2369606115ui32) != 0) { return 2; }
+    // a fixed block holding only its end
+    if (check(stream: "0300", len: 0, crc: 0ui32) != 0) { return 3; }
+    // one dynamic block
+    if (check(stream: "7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2"
+        + "cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca4637"
+        + "94449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e"
+        + "79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b6a20"
+        + "c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c03503170750"
+        + "dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df5"
+        + "8e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd4312907a6"
+        + "68aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a5090dd1dd08c26597083b9c1578a7d7575f4c127ac746f"
+        + "2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27d2936fdfdc48bc5da50d6a54e2f9e8abaf922f455353"
+        + "83ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe22cca83508db7c5c83d74366cd0bba06730693ea72f4"
+        + "ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4ab5140f545ffd03", len: 2817, crc: 2695899570ui32) != 0) { return 4; }
+    // dynamic, empty stored (a sync flush), fixed, stored, dynamic
+    if (check(stream: "6c4f8b0e802008fc157e8d04d3e5634bfaff34f3b1728ce171780762181c875d0c106b87c290e464f4c081da13bf1cd9"
+        + "24181443863cd162fac85b54a4c5af31662ead3d869fc1245872c68f646b74a22c5299e68239165b60459b8bea18bd22"
+        + "5c2e6e7af873207b030000ffffaa201200000000ffff7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa6"
+        + "9ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac"
+        + "8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114c"
+        + "f6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae0"
+        + "6b402017f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce1290513330881de94600eebcfd0193a06525571a3461"
+        + "6bf3cb5906d424cb444f8c6058fa1410c03503170750dba14093b60414028c62e45629ba830aa51367a532a83db450fb"
+        + "06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9"
+        + "d4848da4092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a50"
+        + "90dd1dd08c26597083b9c1578a7d7575f4c127ac746f2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27"
+        + "d2936fdfdc48bc5da50d6a54e2f9e8abaf922f45535383ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe"
+        + "22cca83508db7c5c83d74366cd0bba06730693ea72f4ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4a"
+        + "b5140f545ffd03", len: 3157, crc: 3977157745ui32) != 0) { return 5; }
+    // a match at distance 32768
+    if (check(stream: "6360646266616563e7e0e4e2e6e1e5e3171014121611151397909492969195935750545256515553d7d0d4d2d6d1d5d3"
+        + "3730343236313533b7b0b4b2b6b1b5b37770747276717573f7f0f4f2f6f1f5f30f080c0a0e090d0b8f888c8a8e898d8b"
+        + "4f484c4a4e494d4bcfc8cccacec9cdcb2f282c2a2e292d2bafa8acaaaea9adab6f686c6a6e696d6befe8eceaeee9edeb"
+        + "9f3071d2e42953a74d9f3173d6ec3973e7cd5fb070d1e2254b972d5fb172d5ea356bd7addfb071d3e62d5bb76ddfb173"
+        + "d7ee3d7bf7ed3f70f0d0e123478f1d3f71f2d4e93367cf9dbf70f1d2e52b57af5dbf71f3d6ed3b77efdd7ff0f0d1e327"
+        + "4f9f3d7ff1f2d5eb376fdfbdfff0f1d3e72f5fbf7dfff1f3d7ef3f7ffffd1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3"
+        + "fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3fea"
+        + "ff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe"
+        + "1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff"
+        + "51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1f"
+        + "f5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51"
+        + "ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa7fd4ffa3fe1ff5ffa8ff47fd3feaff51ff8ffa1fe4ffd1fbff01", len: 33026, crc: 3812485171ui32) != 0) { return 6; }
+    // a dynamic block of literals with no distance code
+    if (check(stream: "05e031090000000230a82655fb779074e901", len: 5, crc: 1721022851ui32) != 0) { return 7; }
+    // a dynamic block whose distance code is one 1-bit code
+    if (check(stream: "05e331090000000230a82655fb77f058baf4", len: 5, crc: 1721022851ui32) != 0) { return 8; }
+
+    // Two streams back to back and four bytes after them: each `finish` leaves the source at the next one.
+    DeflateReader<SliceReader> one = over(stream: "cb48cdc9c957c84027017d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e9623"
+        + "9dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e17"
+        + "40392cbf7a5d5dca463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4"
+        + "a4a36e49a535d371fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e"
+        + "1c06718d9bd87d4b6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c60"
+        + "58fa1410c03503170750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdf"
+        + "ceedf10e64ec1b056df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da0"
+        + "33fae7952bd4312907a668aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a5090dd1dd08c26597083b9c157"
+        + "8a7d7575f4c127ac746f2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27d2936fdfdc48bc5da50d6a54"
+        + "e2f9e8abaf922f45535383ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe22cca83508db7c5c83d74366"
+        + "cd0bba06730693ea72f4ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4ab5140f545ffd035441494c", limit: 1000000ui64);
+    if (drain(d: ref one, len: 23, crc: 2369606115ui32, chunk: 64) != 0) { return 9; }
+    BufReader<SliceReader> rest = match (give one.finish()) { case Ok(value: b): give b; case Err(error: e): { return 10; } };
+    DeflateReader<SliceReader> two = DeflateReader.make(source: give rest, limit: 1000000ui64);
+    if (drain(d: ref two, len: 2817, crc: 2695899570ui32, chunk: 64) != 0) { return 11; }
+    BufReader<SliceReader> after = match (give two.finish()) { case Ok(value: b): give b; case Err(error: e): { return 12; } };
+    FixedArray<uint8> t = FixedArray.make(size: 16);
+    isize k = match (after.read(into: t.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+    if (k != 4 || t[0] != 84ui8 || t[3] != 76ui8) { return 13; }   // "TAIL"
+
+    // `finish` before the stream was read decodes the rest to find its end.
+    DeflateReader<SliceReader> early = over(stream: "7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2"
+        + "cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca4637"
+        + "94449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e"
+        + "79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b6a20"
+        + "c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c03503170750"
+        + "dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df5"
+        + "8e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd4312907a6"
+        + "68aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a5090dd1dd08c26597083b9c1578a7d7575f4c127ac746f"
+        + "2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27d2936fdfdc48bc5da50d6a54e2f9e8abaf922f455353"
+        + "83ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe22cca83508db7c5c83d74366cd0bba06730693ea72f4"
+        + "ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4ab5140f545ffd035441494c", limit: 1000000ui64);
+    BufReader<SliceReader> past = match (give early.finish()) { case Ok(value: b): give b; case Err(error: e): { return 14; } };
+    isize j = match (past.read(into: t.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+    if (j != 4 || t[0] != 84ui8) { return 15; }
+
+    // A source that stalls before every byte.
+    BufReader<Choppy> slow = BufReader.make(inner: Choppy.make(bytes: bytesOf(text: "6c4f8b0e802008fc157e8d04d3e5634bfaff34f3b1728ce171780762181c875d0c106b87c290e464f4c081da13bf1cd9"
+        + "24181443863cd162fac85b54a4c5af31662ead3d869fc1245872c68f646b74a22c5299e68239165b60459b8bea18bd22"
+        + "5c2e6e7af873207b030000ffffaa201200000000ffff7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa6"
+        + "9ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac"
+        + "8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114c"
+        + "f6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae0"
+        + "6b402017f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce1290513330881de94600eebcfd0193a06525571a3461"
+        + "6bf3cb5906d424cb444f8c6058fa1410c03503170750dba14093b60414028c62e45629ba830aa51367a532a83db450fb"
+        + "06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9"
+        + "d4848da4092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a50"
+        + "90dd1dd08c26597083b9c1578a7d7575f4c127ac746f2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27"
+        + "d2936fdfdc48bc5da50d6a54e2f9e8abaf922f45535383ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe"
+        + "22cca83508db7c5c83d74366cd0bba06730693ea72f4ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4a"
+        + "b5140f545ffd03")));
+    DeflateReader<Choppy> c = DeflateReader.make(source: give slow, limit: 1000000ui64);
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 5);
+    int32 blocked = 0;
+    while (true) {
+        isize m = match (c.read(into: buf.viewMut())) {
+            case Ok(value: v): v;
+            case Err(error: e): match (e.kind()) { case WouldBlock: -2; case _: -1; };
+        };
+        if (m == -1) { return 16; }
+        if (m == -2) { blocked = blocked + 1; }
+        else if (m == 0) { break; }
+        else { for (isize i = 0; i < m; i = i + 1) { got.add(item: buf[i]); } }
+    }
+    if (cast<int32>(got.length()) != 3157 || crc32(bytes: got.view()) != 3977157745ui32) { return 17; }
+    if (blocked == 0) { return 18; }   // a stall with nothing decoded yet comes back; a later one waits for the next read
+    return 42;
+}

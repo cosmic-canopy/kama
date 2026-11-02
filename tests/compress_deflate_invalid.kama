@@ -1,0 +1,69 @@
+// `DeflateReader` (KR-5) refuses what RFC 1951 does not allow, with the kind that says why: `InvalidData` for a stream
+// that breaks the format, `UnexpectedEof` for a source that ends inside it. One stream per class, each checked against
+// python3's zlib, which refuses it too: a reserved block type, a stored block whose length and complement disagree,
+// literal/length symbol 286 and distance symbol 30 (the fixed codes can spell both), a distance reaching before the first
+// byte, an over-subscribed code, an incomplete literal/length code, a repeat with nothing to repeat, repeats running past
+// the code lengths, no code for the end of block, 287 literal/length codes, and a stream cut short in a dynamic block
+// and in a stored one. The error is final: the read after it answers the same, and so does `finish`. Returns 42.
+import { std::compress::deflate::DeflateReader, std::io::BufReader, std::io::SliceReader, std::io::Reader,
+         std::io::IoError, std::io::IoErrorKind, std::collections::DynamicArray, std::collections::FixedArray,
+         std::collections::View, std::encoding::hex::decode, std::digest::crc32::crc32 };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+fn DeflateReader<SliceReader> over(const ref string stream, uint64 limit) {
+    return DeflateReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: bytesOf(text: stream))),
+                              limit: limit);
+}
+
+// 0 for bytes, else the error's kind: 1 InvalidData, 2 UnexpectedEof, 3 LimitExceeded, 9 any other.
+fn int32 kindOf(IoError e) {
+    return match (e.kind()) { case InvalidData: 1; case UnexpectedEof: 2; case LimitExceeded: 3; case _: 9; };
+}
+
+// 0 when reading `stream` 7 bytes at a time ends in an error of kind `want`, and the next read and `finish` repeat it.
+fn int32 refused(const ref string stream, int32 want) {
+    DeflateReader<SliceReader> d = over(stream: stream, limit: 1000000ui64);
+    FixedArray<uint8> buf = FixedArray.make(size: 7);
+    int32 got = 0;
+    while (got == 0) {
+        got = match (d.read(into: buf.viewMut())) { case Ok(value: k): k == 0 ? 8 : 0; case Err(error: e): kindOf(e: e); };
+    }
+    if (got != want) { return 1; }
+    int32 again = match (d.read(into: buf.viewMut())) { case Ok(value: k): 8; case Err(error: e): kindOf(e: e); };
+    if (again != want) { return 2; }
+    int32 fin = match (give d.finish()) { case Ok(value: b): 8; case Err(error: e): kindOf(e: e); };
+    return fin == want ? 0 : 3;
+}
+
+fn uint8 main() {
+    // block type 3
+    if (refused(stream: "07", want: 1) != 0) { return 1; }
+    // stored LEN/NLEN disagree
+    if (refused(stream: "010500fbff68656c6c6f", want: 1) != 0) { return 2; }
+    // fixed literal/length symbol 286
+    if (refused(stream: "1b03", want: 1) != 0) { return 3; }
+    // fixed distance symbol 30
+    if (refused(stream: "4b043e", want: 1) != 0) { return 4; }
+    // a distance past the output's start
+    if (refused(stream: "4b0442", want: 1) != 0) { return 5; }
+    // an over-subscribed code-length code
+    if (refused(stream: "05e081240000000000000000000000000000", want: 1) != 0) { return 6; }
+    // an incomplete literal/length code
+    if (refused(stream: "05e0010900000080206cedff890400000000", want: 1) != 0) { return 7; }
+    // a repeat with no length before it
+    if (refused(stream: "05e0030400000000000400000000", want: 1) != 0) { return 8; }
+    // repeated lengths past HLIT + HDIST
+    if (refused(stream: "05e081000000000010fcffff0300000000", want: 1) != 0) { return 9; }
+    // no code for the end of block
+    if (refused(stream: "05e081000000000010f05f0d00000000", want: 1) != 0) { return 10; }
+    // HLIT of 287
+    if (refused(stream: "f500000000000000000000", want: 1) != 0) { return 11; }
+    // a dynamic stream cut short
+    if (refused(stream: "7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7", want: 2) != 0) { return 12; }
+    // a stored block cut short
+    if (refused(stream: "011300ecff68656c6c6f", want: 2) != 0) { return 13; }
+    return 42;
+}

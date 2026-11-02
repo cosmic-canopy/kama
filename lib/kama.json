@@ -15,6 +15,14 @@
     "collections": {
       "visibility": "public"
     },
+    "compress": {
+      "visibility": "public",
+      "modules": {
+        "deflate": {
+          "visibility": "public"
+        }
+      }
+    },
     "concurrent": {
       "visibility": "public"
     },

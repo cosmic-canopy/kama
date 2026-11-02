@@ -502,8 +502,20 @@ read at all.
    `std::digest::crc32` and `adler32` (check values: crc32 of `123456789` is `CBF43926`, adler32 of `Wikipedia` is
    `11E60398`). Also in since: `finish` as a `give fn` (`0.9.777`), and `std::num`'s byte-order loads and stores
    (`0.9.803`), which the headers and trailers below are read and written with.
-2. **`DeflateReader`** and the `BufReader` grant. Fixtures: stored, fixed and dynamic blocks; every corrupt class is
-   `InvalidData`; the limit's edge (exactly `limit` passes, one more fails); the exact end.
+2. ✅ **`DeflateReader`** and the `BufReader` grant (`0.9.805`). The grant is `[buf, pos, fill, refill]`; `refill` is a
+   private `BufReader` method its own `read` and `readLine` now share. A byte is taken only when a code needs its bits
+   (Go's technique over an `io.ByteReader`), so after the final block nothing but the last byte's padding is left. A
+   stream cut short is `UnexpectedEof`, which `IoErrorKind` already defines as a read that returned 0 where more was
+   required; every other corrupt class is `InvalidData`. An incomplete code is accepted only when none of its codes is
+   longer than one bit (zlib's and puff's rule), which is what lets a block of literals send an empty distance code
+   (RFC 1951 §3.2.7); the first cut refused that, and a crafted vector caught it. The fixed codes' tables are baked at
+   compile time. Vectors: python3's zlib for every block type and a mix of them; built by hand for a copy from 32,768
+   back, the two short distance codes, and one stream per corrupt class, each refused by zlib too. Speed, measured
+   roughly on M4 with the machine loaded: about 150 MB/s against zlib's 760 over 8 MB of text.
+2b. **The decoder's fast path**, zlib's `inflate_fast`: with 258 bytes of room and enough input buffered, decode
+   without a check per step, from a bit buffer refilled a word at a time, and at the stream's end hand back the whole
+   bytes read ahead (`pos` moves back, which holds while they came from the buffer's current fill). Measure it
+   interleaved against zlib before and after (a byte-at-a-time decoder is roughly five times slower).
 3. **`DeflateWriter`,** a streaming port of `kama.archive.cpp`. Its memory is bounded by the window, a 259-byte
    lookahead, one block of 16,384 tokens and that block's input up to 64 KiB, since a stored block can only win below
    that (a fixed-code token costs at most 9 + 5 + 5 + 13 bits, so 16,384 of them cost at most 64 KiB). `DeflateLevel`
