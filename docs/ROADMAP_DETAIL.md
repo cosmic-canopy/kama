@@ -2399,9 +2399,10 @@ the table above.
 ### Android, for Meta Quest's native route (KR-280, KR-282, KR-283) — measured on `0.9.803`
 
 **The brief for the session that builds it, on the Windows box (it has the headset).** The owner, 2026-11-01: a game
-engine on kama will ship on Meta Quest both through the browser (WebXR) and natively; XR itself is the engine's (§8). Quest is an Android
-device (Horizon OS is Android 14, SDK 34), and its native XR is OpenXR, so the native route is an Android target
-first. VR work is on Windows because Quest Link, which runs a desktop OpenXR app in the headset, is Windows-only.
+engine on kama will ship on Meta Quest both through the browser (WebXR) and natively; XR itself is the engine's (§8).
+Quest is an Android device (Horizon OS is Android 14, SDK 34), and its native XR is OpenXR, so the native route is an
+Android target first. The SDK's emulator carries everything up to the VR launch itself (item 4), so the work does not
+wait on the headset; nor on the PC's GPU, since a Quest-native app renders on the headset.
 
 **Measured 2026-11-01**, Windows 11, NDK r30 LTS (`30.0.16248370`, installed at
 `%LOCALAPPDATA%\Android\Sdk\ndk\30.0.16248370`):
@@ -2419,7 +2420,15 @@ first. VR work is on Windows because Quest Link, which runs a desktop OpenXR app
    `channel`, `random_`, `concurrent`): 74 link. 61 fail only on `ld.lld: unable to find library -lpthread`, because
    bionic keeps pthreads in libc and the NDK ships no `libpthread`. The other 7 are `std::net::web`, which is
    browser-only on every native target. With an empty `libpthread.a` on the search path, all 61 link: **135 of 135**.
-   **Nothing was run**, because that needs a device.
+4. **Run on the SDK's emulator, 2026-11-02, with no headset.** `system-images;android-34;google_apis;x86_64` (AVD
+   `kama34`) boots headless in about 35 s under WHPX, which Windows 11 had usable already (VBS on; no admin, no reboot).
+   It reports `x86_64,arm64-v8a`: an arm64 executable runs through Google's `ndk_translation` (`binfmt_misc`), so
+   Quest's own ABI runs as well as an x86_64 twin of the target (`--target=x86_64-linux-android29`). The 135, pushed to
+   `/data/local/tmp` and run in `adb shell` against their `.expect`: **110 pass on both ABIs, with identical failures.**
+   16 are `proc_` fixtures that start the `procutil` helper `run_tests.sh` builds and names in `KAMA_PROCUTIL`, which
+   the probe did not provide, so they are unmeasured. 9 fail and are not yet looked at: `fs_file_kind` (23),
+   `fs_permissions_api` (1), `fs_readdir` (31), `net_accept_mode` (3), `net_addr_const` (16) and `net_unix_fds`,
+   `_nonblocking_connect`, `_peer`, `_stream` (4, 1, 2, 2).
 
 **What kama needs, in order:**
 - **KR-282, then the API level's spelling.** clang's spelling is the triple's suffix, `aarch64-linux-android29`, and
@@ -2428,9 +2437,10 @@ first. VR work is on Windows because Quest Link, which runs a desktop OpenXR app
   glibc-only.
 - **Output.** Under `adb shell` a program has a stdout; an app the launcher starts has none, so `println` goes nowhere
   unless something routes it to logcat (`__android_log_write`, `-llog`).
-- **A device leg.** `./dev test android` pushes each fixture to `/data/local/tmp` and runs it in `adb shell`, with the
-  Quest itself as the device. That is how "135 link" becomes "135 pass". It is the Android twin of `test wasm`, which
-  runs under node.
+- **A device leg.** `./dev test android` pushes each fixture to `/data/local/tmp` and runs it in `adb shell`, on the
+  emulator by default and on the Quest when one is attached. That is how "110 pass" becomes "135 pass". It is the
+  Android twin of `test wasm`, which runs under node; since it needs no headset, CI could run it too (GitHub's Linux
+  runners expose KVM to the emulator; untried here).
 - **KR-283, an app.** Quest launches an APK whose activity is `android.app.NativeActivity`. It loads `lib<name>.so` and
   calls `android_main` through the NDK's `sources/android/native_app_glue`. The entry needs no compiler change:
   `@linkName("android_main") expose fn` fixes the symbol verbatim (SPEC § Exposing to a host), and the glue is a
@@ -2463,17 +2473,20 @@ first. VR work is on Windows because Quest Link, which runs a desktop OpenXR app
    declares its target, as the probe did.
 4. **Where output goes on a device:** std routes stdout and stderr to logcat when no terminal is attached, or the app
    glue does. Recommended: the app glue (KR-283), since `adb shell` runs already have a stdout.
-5. **The device leg is KR-280's gate:** `./dev test android`, run on the Quest over adb.
+5. **The device leg is KR-280's gate:** `./dev test android` over adb, the emulator by default and the Quest when
+   attached. The headset gates only KR-283's last step, the VR launch on Horizon OS.
 6. **Who builds the APK (KR-283).** The options: a documented recipe over the SDK's tools; `kama build` emitting it,
    as it emits an HTML harness for wasm (the precedent for the driver making a platform's runnable artifact); or a
    tool. Recommended: the recipe first, measured on the headset, then decide whether to promote it into the driver.
 7. **Where the activity glue lives:** `std::app` growing an Android arm (it already owns "the platform owns the loop"
    on wasm), or a package. The glue's C comes from the NDK, not from kama.
 
-**Before the session.** On this box, the NDK is installed. Still to install: the Android SDK command-line tools,
-then `platform-tools` (adb), `build-tools`, `platforms;android-34`, and a JDK 17+ for `sdkmanager` and `apksigner`.
-On the headset: developer mode (a Meta developer organisation, then the Meta Horizon app), a USB-C cable, and accept
-its USB-debugging prompt, after which `adb devices` lists it.
+**The toolchain on the Windows box** (2026-11-02, under `%LOCALAPPDATA%\Android`, every download hash-checked): the
+NDK; the SDK's `cmdline-tools`, `platform-tools` (adb), `build-tools;37.0.0` (aapt2, zipalign, apksigner),
+`platforms;android-34`, the emulator with the image in item 4; and a portable Temurin JDK 21 for `sdkmanager` and
+`apksigner`, which a script names in `JAVA_HOME`. For KR-283's last step, the headset: developer mode (a Meta developer
+organisation, then the Meta Horizon app), a USB-C cable, and its USB-debugging prompt accepted, after which `adb
+devices` lists it.
 
 <a id="s5-ios"></a>
 
