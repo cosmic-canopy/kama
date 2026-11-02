@@ -2355,29 +2355,103 @@ component is a known vendor (`apple`, `pc`, `unknown`, `w64`), and `arm64` as an
 (`aarch64-macos-none`), rather than alias them, which would add a second spelling of one target. A fixture per row of
 the table above.
 
-<a id="s5-mobile-targets"></a>
+<a id="s5-android"></a>
 
-### Android and iOS targets (KR-280, KR-281)
+### Android, for Meta Quest's native route (KR-280, KR-282, KR-283) — measured on `0.9.803`
 
-Filed 2026-11-01 from a game engine's platform plan, which needs Android for Meta Quest's native route (OpenXR runs
-on Quest's Android) and lists iOS among its platforms. Probed on `0.9.803` by transpiling only; this machine has
-neither the NDK nor a Mac.
+**The brief for the session that builds it, on the Windows box (it has the headset).** The owner, 2026-11-01: a game
+engine on kama will ship on Meta Quest both through the browser (WebXR, KR-284) and natively. Quest is an Android
+device (Horizon OS is Android 14, SDK 34), and its native XR is OpenXR, so the native route is an Android target
+first. VR work is on Windows because Quest Link, which runs a desktop OpenXR app in the headset, is Windows-only.
 
-- **Where kama is.** Neither is a built-in target name. Both triples are accepted: `aarch64-linux-android` derives
-  `OS_LINUX`, `ABI_ANDROID` and `HOSTED`, so std compiles its Linux branch against bionic, which no fixture has run;
-  `aarch64-ios-none` derives `OS_IOS`, and std's `OS_MACOS` declarations (`std::net`'s `ListenOptions`, for one) fall
-  to their generic branch. A triple's components are its only flags, so nothing names the Darwin half macOS and iOS
-  share.
-- **What each needs beyond the triple.** A toolchain entry (the NDK's clang and sysroot; Apple's clang and the iOS
-  SDK). An entry point the OS owns: Android starts a shared library through `android_main` (a native activity) and
-  delivers pause, resume and a lost surface; iOS runs `UIApplicationMain` and drives frames from `CADisplayLink`.
-  That is the inverted loop wasm already has, where `std::app::run` is driven by `requestAnimationFrame`. And
-  packaging: an APK or AAB, signed; a `.app`, signed with a provisioning profile.
-- **The verdict: scheduled, not yet designed.** These are targets of a general-purpose systems language, so neither is
-  optional, and the size is unknown until the design is done. Settle first: how much the driver packages, against
-  what a target entry and a documented recipe leave to the project. Also settle whether `std::app::run` grows those
-  two entry points, and how std spells the Darwin family. KR-279 comes first, since an Xcode-spelled triple is the
-  first thing an iOS user types.
+**Measured 2026-11-01**, Windows 11, NDK r30 LTS (`30.0.16248370`, installed at
+`%LOCALAPPDATA%\Android\Sdk\ndk\30.0.16248370`):
+
+1. `--target aarch64-linux-android --cc <ndk>/clang.exe` fails in the NDK's own `sys/cdefs.h`: *"Unversioned target
+   triples are not supported!"*. The per-API wrapper `aarch64-linux-android29-clang.cmd` fails the same way, because
+   kama hands it `-target aarch64-linux-android` as well, overriding the `29` in its name (KR-282: `takesTargetFlag`
+   tests for `clang` anywhere in the name, while docs/targets.md says an NDK wrapper is spared).
+2. A `kama.json` target gets past it, since the later `--target` wins:
+   `"QUEST": { "triple": "aarch64-linux-android", "cc": "<ndk>/…/bin/clang.exe", "ar": "<ndk>/…/bin/llvm-ar.exe",
+   "cflags": ["--target=aarch64-linux-android29"], "ldflags": ["--target=aarch64-linux-android29"] }`. A hello builds
+   as an AArch64 PIE (`NEEDED libdl.so libc.so`, the `NT_ANDROID_TYPE_IDENT` note), and `--shared` builds a `.so` that
+   exports its `expose fn` (as `probe_kama_answer`, module-prefixed per SPEC).
+3. 142 fixtures cross-built through that target (`fiber_`, `net_`, `proc_`, `fs_`, `time_`, `app_`, `isolate`,
+   `channel`, `random_`, `concurrent`): 74 link. 61 fail only on `ld.lld: unable to find library -lpthread`, because
+   bionic keeps pthreads in libc and the NDK ships no `libpthread`. The other 7 are `std::net::web`, which is
+   browser-only on every native target. With an empty `libpthread.a` on the search path, all 61 link: **135 of 135**.
+   **Nothing was run**, because that needs a device.
+
+**What kama needs, in order:**
+- **KR-282, then the API level's spelling.** clang's spelling is the triple's suffix, `aarch64-linux-android29`, and
+  kama would read `android29` as the abi today (deriving `ABI_ANDROID29`).
+- **The link tail:** no `-lpthread` when the abi is `android` (at `kama.driver.cpp` ~13742), and nothing else
+  glibc-only.
+- **Output.** Under `adb shell` a program has a stdout; an app the launcher starts has none, so `println` goes nowhere
+  unless something routes it to logcat (`__android_log_write`, `-llog`).
+- **A device leg.** `./dev test android` pushes each fixture to `/data/local/tmp` and runs it in `adb shell`, with the
+  Quest itself as the device. That is how "135 link" becomes "135 pass". It is the Android twin of `test wasm`, which
+  runs under node.
+- **KR-283, an app.** Quest launches an APK whose activity is `android.app.NativeActivity`. It loads `lib<name>.so` and
+  calls `android_main` through the NDK's `sources/android/native_app_glue`. The entry needs no compiler change:
+  `@linkName("android_main") expose fn` fixes the symbol verbatim (SPEC § Exposing to a host), and the glue is a
+  `csources` entry. The OS owns the loop, as the browser does on wasm: events arrive through `ALooper_pollOnce`, the
+  window through `APP_CMD_INIT_WINDOW` and `APP_CMD_TERM_WINDOW`, plus pause and resume.
+  - **Packaging.** An `AndroidManifest.xml` with Meta's required entries (the `android.hardware.vr.headtracking`
+    `uses-feature`, the `com.oculus.intent.category.VR` launcher category, `com.oculus.supportedDevices`; minSdk 29 to
+    32; targetSdk 34, required of new store apps since 2026-03-01), compiled by `aapt2` against the platform's
+    `android.jar`. Then the `.so` at `lib/arm64-v8a/`, `zipalign`, and `apksigner` (v2 signing, which store review
+    requires). Every tool is in the Android SDK, and `apksigner` needs a JDK.
+
+**What others do.**
+- **Rust:** cargo builds the `.so` (`cargo-ndk` wires the NDK linker), and the `android-activity` crate is the
+  NativeActivity/GameActivity glue. Packaging is a separate tool (`xbuild`, formerly `cargo-apk`). Rust names the OS
+  `target_os = "android"`, apart from Linux.
+- **Go:** `gomobile build -target=android` packages and signs an APK itself, writing binary XML without the SDK's
+  tools. `GOOS=android` also satisfies the `linux` build tag, which is kama's `OS_LINUX` + `ABI_ANDROID` shape.
+- **Zig:** `zig cc` has no bionic, so it uses the NDK's sysroot; packaging is community templates.
+- **C and C++:** Gradle with CMake or ndk-build, or aapt2 and apksigner driven by hand. A Gradle-free Quest 3
+  OpenXR sample exists (CMU's 15-466 `ndk-openxr`).
+
+**Decisions owed** (recommendations first):
+1. **The API level: accept clang's versioned triple** `<arch>-linux-android<api>`. It keeps abi `android`, derives
+   `ABI_ANDROID`, and passes the full string to clang. Refuse the unversioned form, naming the spelling. Whether a
+   level is also a flag (as `__ANDROID_API__` is in C) waits until std needs to gate on one.
+2. **Android stays `OS_LINUX` + `ABI_ANDROID`** (Go's shape, not Rust's): bionic runs std's Linux code, and the probe
+   shows it compiles.
+3. **A built-in `ANDROID` name, or none.** A named target follows the host's architecture (docs/targets.md), which
+   would mean x86_64 on this box, and Quest is aarch64. Recommended: no built-in name until it can be right; a project
+   declares its target, as the probe did.
+4. **Where output goes on a device:** std routes stdout and stderr to logcat when no terminal is attached, or the app
+   glue does. Recommended: the app glue (KR-283), since `adb shell` runs already have a stdout.
+5. **The device leg is KR-280's gate:** `./dev test android`, run on the Quest over adb.
+6. **Who builds the APK (KR-283).** The options: a documented recipe over the SDK's tools; `kama build` emitting it,
+   as it emits an HTML harness for wasm (the precedent for the driver making a platform's runnable artifact); or a
+   tool. Recommended: the recipe first, measured on the headset, then decide whether to promote it into the driver.
+7. **Where the activity glue lives:** `std::app` growing an Android arm (it already owns "the platform owns the loop"
+   on wasm), or a package. The glue's C comes from the NDK, not from kama.
+
+**Before the session.** On this box, the NDK is installed. Still to install: the Android SDK command-line tools,
+then `platform-tools` (adb), `build-tools`, `platforms;android-34`, and a JDK 17+ for `sdkmanager` and `apksigner`.
+On the headset: developer mode (a Meta developer organisation, then the Meta Horizon app), a USB-C cable, and accept
+its USB-debugging prompt, after which `adb devices` lists it.
+
+<a id="s5-ios"></a>
+
+### An iOS target (KR-281)
+
+Filed 2026-11-01 from the same engine's platform plan, which lists iOS. Probed on `0.9.803` by transpiling only,
+since building needs a Mac (Apple licenses its SDK only on Apple hardware). **The iOS work is done on the Mac.**
+
+- **Where kama is.** `--target IOS` is refused. `aarch64-ios-none` derives `OS_IOS`, so std's `OS_MACOS` declarations
+  (`std::net`'s `ListenOptions`, for one) fall to their generic branch. A triple's components are its only flags, so
+  nothing names the Darwin half that macOS and iOS share. Xcode's spelling, `arm64-apple-ios`, is misread (KR-279),
+  so that comes first.
+- **What it needs beyond the triple.** Apple's clang and the iOS SDK. An app whose loop the OS owns: it runs
+  `UIApplicationMain` and drives frames from `CADisplayLink`, the inverted loop wasm already has. And a `.app` signed
+  with a provisioning profile. `dlopen` is barred, so KR-24's hot reload stays desktop-only.
+- **The verdict: scheduled, not yet designed.** It is a target of a general-purpose systems language, so it is not
+  optional. Settle with KR-283's packaging decision, and decide how std spells the Darwin family.
 
 <a id="s6"></a>
 
@@ -2994,6 +3068,43 @@ Size **L** (commit 0 is S, then 4).
 3. **The physical key (USB HID ids), plus a separate `Text` event** — the DOM's `code` versus its `input` event.
 4. **An explicit `pump()`.** An implicit pump inside `pollEvent` can livelock under a high-rate mouse.
 5. **The coalescing ring plus `Event::Dropped(n)`,** never a silent drop.
+
+<a id="s8-xr"></a>
+
+### `@kama/xr` — OpenXR natively, WebXR in the browser (KR-284) — filed 2026-11-01, unprobed
+
+A game engine on kama ships VR on Meta Quest by both routes: WebXR in the Quest browser, and OpenXR natively on
+Quest's Android (KR-280, KR-283). Each is a binding a kama program reaches through the seams that already ship.
+Nothing here has been compiled yet.
+
+- **OpenXR is a C API** (`openxr.h`, plus a loader that finds the runtime), bound with `extern` as webgpu.h is.
+  - **On Quest:** Khronos's `openxr_loader_for_android` AAR carries `libopenxr_loader.so` per ABI, and Meta supports
+    only loader 1.0.34 and later. The loader is initialized with the activity's `JavaVM` and `jobject`
+    (`XR_KHR_loader_init_android`), which NativeActivity supplies.
+  - **On Windows:** Khronos's `openxr_loader.dll`, with Quest Link as the runtime, so the binding can be built and
+    tested on the Windows box with the headset **before KR-280 exists**. Whether mingw links the release's DLL
+    directly is to verify.
+- **The swapchain belongs to a graphics API:** Vulkan or OpenGL ES on Quest; D3D11, D3D12, Vulkan or OpenGL on
+  Windows. KR-25's `@kama/gpu` wraps webgpu.h over wgpu-native, and whether that exposes the Vulkan handles OpenXR's
+  swapchain needs is unprobed. That decides whether `@kama/gpu` grows an interop surface, or an XR renderer goes to
+  Vulkan itself.
+- **WebXR is a JS API**, reached through `jsLibraries`, with `expose fn` as the callback (on wasm, `KAMA_EXPORT` is
+  `EMSCRIPTEN_KEEPALIVE`).
+  - **Frames.** An immersive session's frames come from `XRSession.requestAnimationFrame`, not the window's, so
+    `std::app::run` (emscripten's main loop) cannot drive one. The binding owns that loop and calls an exposed tick,
+    which needs no std change; to verify.
+  - **The page thread only.** WebXR exists only on the page's main thread, so a threaded wasm build (`main` on a
+    worker under `PROXY_TO_PTHREAD`) cannot reach it directly.
+  - **Rendering.** WebGL2 is WebXR's shipping layer. WebGPU in WebXR (`XRGPUBinding`) is experimental and behind a flag
+    in the Quest browser (its release notes 146 to 152, 2026).
+
+**Decisions owed:**
+1. **Who owns it.** A first-party `@kama/xr`, as `@kama/gpu` and `@kama/window` are (§8: SDK-bound, built in its own
+   repository, never std), or the engine's own package. Recommended: first-party, one interface with an OpenXR and a
+   WebXR backend chosen by target, since every engine on kama that wants XR needs the same binding.
+2. **The swapchain interop with KR-25,** probed before the binding's graphics half is designed.
+3. **The order.** OpenXR on Windows over Link first (no Android needed), then Quest native once KR-280 and KR-283
+   land; WebXR alongside, since kama builds wasm today.
 
 <a id="s9"></a>
 
