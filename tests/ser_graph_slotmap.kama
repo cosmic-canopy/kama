@@ -71,7 +71,7 @@ fn uint8 main() {
     // the two stored handles are beside it. A slot map writes in ascending slot order, so this is
     // deterministic.
     if (j != "{\"root\":1,\"objects\":[{\"id\":1,\"type\":\"World\",\"value\":{"
-             + "\"items\":{\"slots\":[1,1,1],\"values\":[2,2,3]},"
+             + "\"items\":{\"slots\":[1,1,1],\"values\":[2,2,3],\"free\":[]},"
              + "\"a\":{\"index\":0,\"generation\":1},\"b\":{\"index\":1,\"generation\":1}}},"
              + "{\"id\":2,\"type\":\"Leaf\",\"value\":{\"v\":7}},"
              + "{\"id\":3,\"type\":\"Leaf\",\"value\":{\"v\":11}}]}") { return 249; }

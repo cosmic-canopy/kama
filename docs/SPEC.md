@@ -893,9 +893,12 @@ and a dangling handle is caught, not a use-after-free. `contains(handle:)`, `len
 **A `Handle` survives a serde round trip** — save a slot map, load it, and every handle a caller stored
 elsewhere still resolves to the same value, which is the only reason to hold handles rather than indices.
 That is what the wire format is for: it preserves the slot LAYOUT — the per-slot generation array
-*including vacant slots*, then the live values in ascending slot order (`{"slots":[1,2,1],"values":[10,30]}`)
-— so a hole costs a generation and no payload, and the size is proportional to the high-water slot count
-rather than to the live count. `len` and the free list are derived on read and never go on the wire.
+*including vacant slots*, then the live values in ascending slot order, then the free list as a stack whose
+last entry is the next slot reused (`{"slots":[1,2,1],"values":[10,30],"free":[1]}`) — so a hole costs a
+generation and no payload, and the size is proportional to the high-water slot count rather than to the live
+count. The free list is written because its order is state: it picks the slot the next insert reuses, so a
+map loaded and stepped is the map saved and stepped, which replay and rollback rely on. A free list that does
+not name every vacant slot exactly once is refused as `Malformed`. Only `len` is derived on read. <!-- test: slotmap_serde_reuse -->
 The compact alternative (write only the live values, rebuild dense) was rejected for failing **silently**: a
 stale handle could then coincidentally match a rebuilt slot and alias the wrong value, which is the exact
 accident the generation check exists to prevent. `Handle` is itself `Serializable`, so the handles a caller

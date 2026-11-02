@@ -7,9 +7,9 @@
 // slot map would all dangle. Rust's `slotmap` makes the same promise for the same reason.
 //
 // So the wire form preserves the slot LAYOUT, not just the live values: the per-slot generation array
-// INCLUDING vacant slots, then the live values in ascending slot order.
+// INCLUDING vacant slots, then the live values in ascending slot order, then the free list.
 //
-//     {"slots":[1,2,1],"values":[10,30]}      <- slot 1 was removed: generation 2 (even = vacant), no payload
+//     {"slots":[1,2,1],"values":[10,30],"free":[1]}   <- slot 1 was removed: generation 2 (even = vacant), no payload
 //
 // ⚠️ THE ALTERNATIVE WAS REJECTED FOR FAILING SILENTLY, which is what this fixture pins. Writing only the
 // live values and rebuilding dense from slot 0 is smaller, and then a stale handle can COINCIDENTALLY match
@@ -17,9 +17,9 @@
 // check exists to prevent. Every assertion below is about handle identity rather than about the values:
 // a dense rebuild would pass a length check and a sum check and fail here.
 //
-// `freeLen` and `len` are derived on read and never go on the wire (the odd count, and the even slots), so
-// the last block checks the derived free list too: a fresh insert must take the lowest vacant slot and mint
-// a generation the stale handle for that slot does not match.
+// The free list is on the wire too, so a fresh insert after the read takes the slot it would have taken
+// before it, and mints a generation the stale handle for that slot does not match. Its ORDER is pinned in
+// tests/slotmap_serde_reuse.kama.
 import { std::serialization::text::json::serializeJsonBuffer,
          std::serialization::text::json::deserializeJsonBuffer,
          std::serialization::binary::kbin::serializeKbinPositionalBuffer,
@@ -36,7 +36,7 @@ fn uint8 main() {
     Result<string, Owned<Error>> jr = serializeJsonBuffer(v: sm);
     string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 240; } };
     // The layout is on the wire, holes and all. This is the assertion the compact form would fail.
-    if (j != "{\"slots\":[1,2,1],\"values\":[10,30]}") { return 241; }
+    if (j != "{\"slots\":[1,2,1],\"values\":[10,30],\"free\":[1]}") { return 241; }
 
     Result<SlotMap<int32>, Owned<Error>> br = deserializeJsonBuffer::<SlotMap<int32>>(src: give j);
     SlotMap<int32> back = match (give br) { case Ok(value: x): give x; case Err(error: e): { return 242; } };
@@ -51,8 +51,8 @@ fn uint8 main() {
     // resolve to whatever landed in slot 1 — here, `30`.
     if (back.contains(handle: b)) { return 246; }
 
-    // The derived free list: the lowest vacant slot is reused, and the stale handle to it STAYS stale
-    // because the generation moves on.
+    // The free list read back: the vacant slot is reused, and the stale handle to it STAYS stale because
+    // the generation moves on.
     Handle d = back.insert(value: 40);
     if (d.index != 1) { return 247; }
     if (back.contains(handle: b)) { return 248; }

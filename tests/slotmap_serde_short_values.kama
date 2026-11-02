@@ -1,0 +1,24 @@
+// A `SlotMap` whose `values` array is shorter than its occupied slots is an `Err`, and dropping what was read
+// so far frees only the values that were read.
+//
+// The generations are read first, so every occupied slot is marked occupied before its value arrives. When a
+// value read failed, the half-built map was dropped with those marks in place, and `~SlotMap` dropped every
+// slot marked occupied, the unread ones included: for a `string` value that freed whatever bytes the buffer
+// held. On Windows a truncated save of a `SlotMap<string>` ended the process with STATUS_HEAP_CORRUPTION
+// (0xC0000374) (0.9.805). The heap is churned first so the unread slots hold stale pointers, not zeros.
+import { std::serialization::text::json::deserializeJsonBuffer, std::collections::SlotMap, std::collections::DynamicArray };
+
+fn uint8 main() {
+    int32 errs = 0;
+    int32 round = 0;
+    while (round < 200) {
+        DynamicArray<string> churn = DynamicArray.empty();
+        int32 k = 0;
+        while (k < 50) { churn.add(item: "a string long enough to live on the heap ${k} ${round}"); k = k + 1; }
+        // Twelve occupied slots and one value: the second value read fails.
+        Result<SlotMap<string>, Owned<Error>> r = deserializeJsonBuffer::<SlotMap<string>>(src: "{\"slots\":[1,1,1,1,1,1,1,1,1,1,1,1],\"values\":[\"x\"],\"free\":[]}");
+        match (give r) { case Ok(value: m): {} case Err(error: e): { errs = errs + 1; } };
+        round = round + 1;
+    }
+    return errs == 200 ? 0 : 1;
+}

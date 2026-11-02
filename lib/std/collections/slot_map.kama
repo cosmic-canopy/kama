@@ -286,9 +286,10 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // prevent. Silence disqualified it.
     //
     // So the wire form preserves the slot LAYOUT: the per-slot generation array including vacant slots,
-    // then the live values in ascending slot order.
+    // then the live values in ascending slot order, then the free list as the stack it is (the last entry is
+    // the slot the next insert reuses).
     //
-    //     {"slots":[1,0,3,5], "values":[…,…,…]}
+    //     {"slots":[1,2,3,4], "values":[…,…], "free":[3,1]}
     //
     // Two parallel arrays rather than one array of per-slot optional records, because a POSITIONAL backend
     // has no names and no delimiters — its reader is bounded only by the counts — so a per-slot shape that
@@ -296,12 +297,14 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // A hole costs 4 bytes of generation and no payload, so the cost is proportional to the high-water slot
     // count rather than to the live count; that is the honest price of the guarantee.
     //
-    // `freeList` and `len` are DERIVED on read (`len` = the odd count, the free list = the even slots) —
-    // neither goes on the wire. The free list's ORDER decides which slot the next insert reuses, which is
-    // not observable through any accessor, so rebuilding it descending (lowest slot reused first) is a
-    // deterministic choice rather than a lost one.
+    // ⚠️ THE FREE LIST GOES ON THE WIRE, because its ORDER is state: it decides which slot the next insert
+    // reuses, and `Handle.index` and `values()` both show it. It used to be derived on read, lowest slot first,
+    // while a live map reuses the slot vacated LAST, so a world saved, loaded and stepped was not the world
+    // saved and stepped: replay, rollback and save games all diverged (insert 0–3, remove 1 then 3, round-trip,
+    // insert: the live map reused slot 3, the reloaded one slot 1). With it written, equal bytes are equal
+    // futures, and insert and remove stay O(1). Only `len` is derived (the odd count).
     public unsafe const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [V: Serializable] {
-        w.beginObject(count: 2ui64);
+        w.beginObject(count: 3ui64);
         w.field(name: "slots", id: 0ui32);
         w.beginArray(count: cast<usize>(this.slotCount));
         isize i = 0;
@@ -318,6 +321,11 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
             i = i + 1;
         }
         w.endArray();
+        w.field(name: "free", id: 2ui32);
+        w.beginArray(count: cast<usize>(this.freeLen));
+        i = 0;
+        while (i < this.freeLen) { w.writeI64(v: cast<int64>(this.freeList[i])); i = i + 1; }   // int64, as Handle's index
+        w.endArray();
         w.endObject();
         return Result::Ok(value: Unit::Unit);
     }
@@ -326,7 +334,7 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
     // collections' A-ignoring deserialize follows.
     public unsafe ctor Result<SlotMap<V, A>, Owned<Error>> deserialize(Deserializer r) when [V: Deserializable<V>, A: default] {
         SlotMap<V> result = SlotMap.empty();
-        r.beginObject(count: 2ui64);
+        r.beginObject(count: 3ui64);
         if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an array/object at all: say so, never an empty `Ok`
         bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
         r.beginArray();
@@ -357,22 +365,37 @@ type resource SlotMap<V, A: Allocator = GlobalAllocator>
                 Result<V, Owned<Error>> __ev = V.deserialize(r: r);
                 match (give __ev) {
                     // Reported at its place in the `values` array, which holds the live slots only — `result.len` of them so far.
-                    case Err(error: e): { return Result::Err(error: DeError::inField(error: DeError::inElement(error: give e, index: result.len), name: "values")); }
+                    // ⚠️ `slotCount` drops to `i` first: the slots from here on are occupied by their generation but hold
+                    // no value yet, and `~SlotMap` drops every occupied slot it walks.
+                    case Err(error: e): { result.slotCount = i; return Result::Err(error: DeError::inField(error: DeError::inElement(error: give e, index: result.len), name: "values")); }
                     case Ok(value: v):  { result.slotValues[i] = give v; result.len = result.len + 1; }
                 };
             }
             i = i + 1;
         }
         bool __f3 = r.moreElems();                    // close the values array
-        bool __f4 = r.moreFields();
-        r.endObject();
-        // The free list, descending so the LOWEST vacant slot is reused first — derived, never on the wire.
+        // The free list, as written: a stack whose last entry is reused first. It must name every vacant slot
+        // exactly once and nothing else, or an insert would overwrite a live value (an occupied slot) or reuse
+        // one slot twice, so anything else is `Malformed`. A slot is marked as seen by making its generation
+        // odd while the list is read, which turns a second mention into "occupied"; every mark is undone before
+        // any return, since `~SlotMap` drops an occupied slot.
+        bool __f4 = r.moreFields(); FieldKey __n3 = r.field();
+        r.beginArray();
+        isize vacant = n - result.len;
+        bool bad = false;
         result.freeLen = 0;
-        i = n;
-        while (i > 0) {
-            i = i - 1;
-            if ((result.gens[i] & 1ui32) == 0ui32) { result.freeList[result.freeLen] = i; result.freeLen = result.freeLen + 1; }
+        while (r.moreElems()) {
+            int64 f = r.readI64();
+            if (result.freeLen == vacant || f < 0i64 || f >= cast<int64>(n) || (result.gens[cast<isize>(f)] & 1ui32) == 1ui32) { bad = true; break; }
+            result.gens[cast<isize>(f)] = result.gens[cast<isize>(f)] + 1ui32;
+            result.freeList[result.freeLen] = cast<isize>(f); result.freeLen = result.freeLen + 1;
         }
+        i = 0;
+        while (i < result.freeLen) { result.gens[result.freeList[i]] = result.gens[result.freeList[i]] - 1ui32; i = i + 1; }
+        if (!bad) { bool __f5 = r.moreFields(); r.endObject(); }
+        // Asked once, here, for the whole read: a failed read is sticky and returns zeros.
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        if (bad || result.freeLen != vacant) { return Result::Err(error: DeError.at(kind: DeErrorKind::Malformed, field: "free")); }
         return Result::Ok(value: give result);
     }
 
