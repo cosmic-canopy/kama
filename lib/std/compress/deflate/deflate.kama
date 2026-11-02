@@ -1,6 +1,7 @@
-import { std::collections::View, std::collections::ConstView, std::collections::FixedArray, std::io::Reader,
-         std::io::BufReader, std::io::IoError, std::io::IoErrorKind };
-export { DeflateReader };
+import { std::collections::View, std::collections::ConstView, std::collections::FixedArray,
+         std::collections::DynamicArray, std::io::Reader, std::io::Writer, std::io::BufReader, std::io::IoError,
+         std::io::IoErrorKind, std::io::Unfinished };
+export { DeflateReader, DeflateWriter, DeflateLevel };
 
 // deflate (RFC 1951), the compressed format inside zlib, gzip, zip and PNG, and HTTP's `Content-Encoding: deflate`
 // once its zlib wrapper is taken off. A `DeflateReader` decodes one raw stream: it is a `Reader` of the decoded bytes.
@@ -27,6 +28,20 @@ export { DeflateReader };
 // last one stopped.
 //
 // Its memory is the `BufReader`'s buffer, the 32 KiB window a match copies from, and two decoding tables.
+//
+// A `DeflateWriter` is the other direction: a `Writer` of the bytes to compress, over the `Writer` they go to.
+//
+//   DeflateWriter<File> w = DeflateWriter.make(sink: give f, level: DeflateLevel::Level6);
+//   … w.write(bytes: chunk), and w.flush() when a peer must be able to decode what has been written …
+//   match (give w.finish()) { case Ok(value: f2): { … the sink again … } case Err(error: u): { … } };
+//
+// The output depends only on the input and the level, never on how the writes were split, on every target, for one kama
+// version; only `Frozen` promises the same across versions. Dropping a writer abandons its stream, which then never
+// verifies: `finish` is how a stream completes.
+//
+// Its memory is the input it holds (68 KiB), 256 KiB of hash chains, and one block being gathered: 64 KiB of tokens and
+// up to 64 KiB of that block's input. Building a block's codes takes more for a moment, so its peak is 700 to 900 KiB
+// (measured). `Store` holds no chains and no tokens, and peaks at about 320 KiB.
 
 // The bits a table lookup decodes at once. Every code of at most this many bits is one lookup; a longer one (dynamic
 // codes run to 15) is walked a bit at a time. 9 covers every fixed code and nearly every literal of a dynamic one.
@@ -497,5 +512,587 @@ type resource DeflateReader<R: Reader> implements Reader {
             return this.fail(kind: IoErrorKind::InvalidData);
         }
         return true;
+    }
+}
+
+// ---- the encoder ---------------------------------------------------------------------------------------------------
+
+// How hard a `DeflateWriter` looks for matches. `Level1` to `Level9` track zlib's scale and may get better between kama
+// versions; `Store` compresses nothing. `Frozen` is the one setting whose bytes never change across kama versions: they
+// are what `kama publish` writes, because there the compressed file itself is the identity (a package's sha256).
+@nonExhaustive
+type enum DeflateLevel { Store, Level1, Level2, Level3, Level4, Level5, Level6, Level7, Level8, Level9, Frozen }
+
+comptime int32 HASH_BITS = 15;
+comptime int32 MAX_MATCH = 258;
+comptime int32 TOO_FAR = 4096;           // a 3-byte match further back than this costs more than its 3 literals (zlib's rule)
+comptime isize LOOKAHEAD = 262;          // how far past a position its search, its lazy check and its inserts read
+comptime isize INPUT = 65536 + 4096;     // the input held: slides by WINDOW once a position passes 64 KiB
+comptime isize PIECE = 4096;             // the most taken in at once, so that one block at most comes out of it
+comptime isize BLOCK_TOKENS = 16384;
+comptime isize STORED_MAX = 65535;       // the most one stored block carries (RFC 1951 §3.2.4)
+// A block's input is kept only below this. Past it, a stored block cannot win: a token costs at most 8 + 5 + 5 + 13 bits
+// in the fixed code, so 16,384 of them cost at most 62 KiB, where a stored block would cost 64 KiB.
+comptime isize RAW_KEPT = 65536;
+
+// Each length's and each distance's symbol, for the two passes over a block's tokens. A distance above 256 is looked up
+// by its high bits, since a distance code above that spans whole multiples of 128 (zlib's `d_code`).
+comptime fn InlineArray<uint8>#(259) lengthSymbols() {
+    InlineArray<uint8>#(259) t = [0; 259];
+    for (int32 v = 3; v <= MAX_MATCH; v = v + 1) {
+        int32 k = 0;
+        while (k + 1 < 29 && cast<int32>(LEN_BASE[k + 1]) <= v) { k = k + 1; }
+        t[v] = cast<uint8>(k);
+    }
+    return t;
+}
+comptime fn InlineArray<uint8>#(512) distanceSymbols() {
+    InlineArray<uint8>#(512) t = [0; 512];
+    for (int32 v = 1; v <= 256; v = v + 1) {
+        int32 k = 0;
+        while (k + 1 < 30 && cast<int32>(DIST_BASE[k + 1]) <= v) { k = k + 1; }
+        t[v - 1] = cast<uint8>(k);
+    }
+    for (int32 h = 2; h < 256; h = h + 1) {
+        int32 v = h * 128 + 1;
+        int32 k = 0;
+        while (k + 1 < 30 && cast<int32>(DIST_BASE[k + 1]) <= v) { k = k + 1; }
+        t[256 + h] = cast<uint8>(k);
+    }
+    return t;
+}
+comptime InlineArray<uint8>#(259) LEN_SYMBOL = lengthSymbols();
+comptime InlineArray<uint8>#(512) DIST_SYMBOL = distanceSymbols();
+// The extra bits each code-length symbol carries: 16, 17 and 18 say how long a run is (RFC 1951 §3.2.7).
+comptime InlineArray<uint8>#(19) RUN_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 7];
+
+fn int32 distSymbol(int32 d) { return cast<int32>(d <= 256 ? DIST_SYMBOL[d - 1] : DIST_SYMBOL[256 + ((d - 1) >> 7)]); }
+
+// A symbol's length in the fixed literal/length code (RFC 1951 §3.2.6).
+fn int32 fixedLength(int32 s) { return s < 144 ? 8 : (s < 256 ? 9 : (s < 280 ? 7 : 8)); }
+
+// Code lengths capped at `limit`, by package-merge. Every tie is broken the same way, equal weights keeping symbol order
+// and a leaf going before a package, because a tie decides a length and `Frozen` promises the bytes.
+fn DynamicArray<uint8> codeLengths(const ref DynamicArray<uint32> freq, int32 limit) {
+    DynamicArray<uint64> w = DynamicArray.empty();
+    DynamicArray<int32> sym = DynamicArray.empty();
+    DynamicArray<int32> ka = DynamicArray.empty();
+    DynamicArray<int32> kb = DynamicArray.empty();
+    DynamicArray<int32> leaves = DynamicArray.empty();
+    for (isize s = 0; s < freq.length(); s = s + 1) {
+        if (freq[s] != 0ui32) {
+            w.add(item: cast<uint64>(freq[s]));
+            sym.add(item: cast<int32>(s));
+            ka.add(item: -1);
+            kb.add(item: -1);
+            leaves.add(item: cast<int32>(w.length() - 1));
+        }
+    }
+    for (isize x = 1; x < leaves.length(); x = x + 1) {      // a stable sort by weight
+        int32 v = leaves[x];
+        isize y = x - 1;
+        while (y >= 0 && w[cast<isize>(leaves[y])] > w[cast<isize>(v)]) { leaves[y + 1] = leaves[y]; y = y - 1; }
+        leaves[y + 1] = v;
+    }
+    DynamicArray<int32> list = copy leaves;
+    for (int32 level = 1; level < limit; level = level + 1) {
+        DynamicArray<int32> packages = DynamicArray.empty();
+        for (isize k = 0; k + 1 < list.length(); k = k + 2) {
+            w.add(item: w[cast<isize>(list[k])] + w[cast<isize>(list[k + 1])]);
+            sym.add(item: -1);
+            ka.add(item: list[k]);
+            kb.add(item: list[k + 1]);
+            packages.add(item: cast<int32>(w.length() - 1));
+        }
+        DynamicArray<int32> merged = DynamicArray.empty();
+        isize i = 0;
+        isize j = 0;
+        while (i < leaves.length() || j < packages.length()) {
+            if (j < packages.length() && (i >= leaves.length() || w[cast<isize>(packages[j])] < w[cast<isize>(leaves[i])])) {
+                merged.add(item: packages[j]);
+                j = j + 1;
+            } else {
+                merged.add(item: leaves[i]);
+                i = i + 1;
+            }
+        }
+        list = give merged;
+    }
+    DynamicArray<uint8> len = DynamicArray.empty();
+    for (isize s = 0; s < freq.length(); s = s + 1) { len.add(item: 0); }
+    DynamicArray<int32> stack = DynamicArray.empty();
+    for (isize k = 0; k < 2 * leaves.length() - 2; k = k + 1) {
+        stack.add(item: list[k]);
+        while (stack.length() > 0) {
+            int32 x = stack[stack.length() - 1];
+            Optional<int32> popped = stack.pop();
+            isize who = cast<isize>(sym[cast<isize>(x)]);
+            if (who >= 0) { len[who] = len[who] + 1ui8; }
+            else {
+                stack.add(item: ka[cast<isize>(x)]);
+                stack.add(item: kb[cast<isize>(x)]);
+            }
+        }
+    }
+    return len;
+}
+
+// Each symbol's code, bit-reversed for a stream written least significant bit first (RFC 1951 §3.2.2).
+fn DynamicArray<uint16> canonicalCodes(const ref DynamicArray<uint8> len) {
+    InlineArray<int32>#(16) count = [0; 16];
+    for (isize s = 0; s < len.length(); s = s + 1) { if (len[s] != 0ui8) { count[len[s]] = count[len[s]] + 1; } }
+    InlineArray<int32>#(16) next = [0; 16];
+    int32 code = 0;
+    for (int32 b = 1; b < 16; b = b + 1) {
+        code = (code + count[b - 1]) << 1;
+        next[b] = code;
+    }
+    DynamicArray<uint16> codes = DynamicArray.empty();
+    for (isize s = 0; s < len.length(); s = s + 1) {
+        int32 n = cast<int32>(len[s]);
+        if (n == 0) { codes.add(item: 0); continue; }
+        int32 reversed = 0;
+        for (int32 b = 0; b < n; b = b + 1) { reversed = reversed | (((next[n] >> b) & 1) << (n - 1 - b)); }
+        next[n] = next[n] + 1;
+        codes.add(item: cast<uint16>(reversed));
+    }
+    return codes;
+}
+
+fn DynamicArray<uint32> zeros(isize count) {
+    DynamicArray<uint32> z = DynamicArray.empty();
+    for (isize k = 0; k < count; k = k + 1) { z.add(item: 0); }
+    return z;
+}
+
+// A code needs at least two symbols to be a code at all, so the first unused ones stand in.
+fn DynamicArray<uint32> atLeastTwo(const ref DynamicArray<uint32> f) {
+    DynamicArray<uint32> g = copy f;
+    int32 nonzero = 0;
+    for (isize s = 0; s < g.length(); s = s + 1) { if (g[s] != 0ui32) { nonzero = nonzero + 1; } }
+    for (isize s = 0; nonzero < 2 && s < g.length(); s = s + 1) {
+        if (g[s] == 0ui32) {
+            g[s] = 1;
+            nonzero = nonzero + 1;
+        }
+    }
+    return g;
+}
+
+type resource DeflateWriter<W: Writer> implements Writer {
+    W sink;
+    int32 chain;                 // how many earlier positions a search walks; 0 compresses nothing
+    bool lazy;                   // a match waits a byte, in case the next position has a longer one
+    // The input. `d[..have]` has arrived and `d[..i]` is decided. Positions are indexes into `d`, which slides by WINDOW,
+    // so `prev` keeps its meaning under the mask.
+    FixedArray<uint8> d;
+    isize have;
+    isize i;
+    FixedArray<int32> head;      // the newest position per hash, -1 for none
+    FixedArray<int32> prev;      // the position before it with the same hash, per position under the mask
+    bool pending;                // position i - 1's search is waiting on position i's
+    int32 pendingLen;
+    int32 pendingDist;
+    // The block being gathered. A full one waits for the next token, since only that says it is not the last.
+    FixedArray<uint32> tokens;   // a literal is its byte; a match is its length | distance << 16
+    isize tokenCount;
+    FixedArray<uint8> raw;       // the block's input, for a stored block, up to RAW_KEPT
+    isize rawLen;                // the block's whole input, which may be more
+    // What has been encoded and not yet taken by the sink.
+    DynamicArray<uint8> encoded;
+    isize sent;
+    uint64 bitBuf;
+    int32 bitCount;
+    bool syncWritten;            // `flush` has written its marker, and only the sink is left
+    bool finalWritten;           // `finish` has written the final block, and only the sink is left
+
+    public ctor make(W sink, DeflateLevel level) {
+        int32 chain = 0;
+        bool lazy = true;
+        match (level) {
+            case Store:  { chain = 0; }
+            case Level1: { chain = 4; lazy = false; }
+            case Level2: { chain = 8; lazy = false; }
+            case Level3: { chain = 32; lazy = false; }
+            case Level4: { chain = 16; }
+            case Level5: { chain = 32; }
+            case Level6: { chain = 128; }
+            case Level7: { chain = 256; }
+            case Level8: { chain = 1024; }
+            case Level9: { chain = 4096; }
+            case Frozen: { chain = 1024; }      // never changes: kama.archive.cpp's row
+        };
+        this.sink = give sink;
+        this.chain = chain;
+        this.lazy = lazy;
+        this.d = FixedArray.make(size: INPUT);
+        this.have = 0;
+        this.i = 0;
+        this.head = FixedArray.filled(size: chain == 0 ? 0 : cast<isize>(1 << HASH_BITS), value: -1);
+        this.prev = FixedArray.filled(size: chain == 0 ? 0 : cast<isize>(WINDOW), value: -1);
+        this.pending = false;
+        this.pendingLen = 0;
+        this.pendingDist = 0;
+        this.tokens = FixedArray.make(size: chain == 0 ? 0 : BLOCK_TOKENS);
+        this.tokenCount = 0;
+        this.raw = FixedArray.make(size: RAW_KEPT);
+        this.rawLen = 0;
+        this.encoded = DynamicArray.empty();
+        this.sent = 0;
+        this.bitBuf = 0;
+        this.bitCount = 0;
+        this.syncWritten = false;
+        this.finalWritten = false;
+    }
+
+    // Takes up to `bytes.length()` bytes. How the writes are split changes nothing in the output. An error from the sink
+    // loses nothing: what it did not take stays here, and the next call offers it first.
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        if (this.finalWritten) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        isize k = 0;
+        while (k < bytes.length()) {
+            Result<Unit, IoError> dr = this.drain();
+            match (dr) {
+                case Err(error: e): {
+                    if (k > 0) { return Result::Ok(value: k); }
+                    return Result::Err(error: e);
+                }
+                case Ok(value: _): {}
+            };
+            this.syncWritten = false;
+            if (this.i >= 2 * cast<isize>(WINDOW)) { this.slide(); }
+            isize take = bytes.length() - k;
+            if (take > INPUT - this.have) { take = INPUT - this.have; }
+            if (take > PIECE) { take = PIECE; }
+            for (isize j = 0; j < take; j = j + 1) { this.d[this.have + j] = bytes[k + j]; }
+            this.have = this.have + take;
+            k = k + take;
+            this.run(last: false);
+        }
+        return Result::Ok(value: k);
+    }
+
+    // A sync flush: everything written so far goes out in whole bytes, so a peer can decode it, and then the sink flushes.
+    // It ends with the empty stored block `00 00 FF FF` that permessage-deflate strips. Positions still waiting on their
+    // lookahead are decided now, so a flush changes the tokens, on purpose. With nothing written since the last one,
+    // including after a `WouldBlock`, flushing again writes no second marker (zlib's rule; Go writes one every time).
+    public fn Result<Unit, IoError> flush() {
+        if (this.finalWritten) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (!this.syncWritten) {
+            this.run(last: true);
+            if (this.tokenCount > 0 || this.rawLen > 0) { this.writeBlock(last: false); }
+            this.storedHeader(len: 0, last: false);
+            this.syncWritten = true;
+        }
+        Result<Unit, IoError> dr = this.drain();
+        match (dr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): {} };
+        return this.sink.flush();
+    }
+
+    // Writes the final block and hands the sink back, flushing nothing of the sink's own: the next layer decides that. On
+    // a failure the writer comes back whole in `Unfinished`, and finishing it again writes no second final block. Dropping
+    // a writer abandons its stream, which then never verifies.
+    public give fn Result<W, Unfinished<DeflateWriter<W>>> finish() {
+        if (!this.finalWritten) {
+            this.run(last: true);
+            this.writeBlock(last: true);
+            if (this.bitCount > 0) { this.put(v: 0, count: 8 - this.bitCount); }
+            this.finalWritten = true;
+        }
+        Result<Unit, IoError> dr = this.drain();
+        match (dr) {
+            case Err(error: e): { return Result::Err(error: Unfinished::Pending(adapter: give this, error: e)); }
+            case Ok(value: _): {}
+        };
+        return Result::Ok(value: give this.sink);
+    }
+
+    fn Result<Unit, IoError> drain() {
+        isize total = this.encoded.length();
+        while (this.sent < total) {
+            Result<isize, IoError> wr = this.sink.write(bytes: this.encoded.slice(from: this.sent, count: total - this.sent));
+            match (wr) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: m): {
+                    if (m == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+                    this.sent = this.sent + m;
+                }
+            };
+        }
+        this.encoded.clear();
+        this.sent = 0;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Drops the oldest 32 KiB. Every position that goes is more than 32,768 behind `i`, where a search stops anyway, so no
+    // answer changes. zlib's rule, sliding earlier and capping distances short of 32,768, would change tokens.
+    fn void slide() {
+        isize w = cast<isize>(WINDOW);
+        for (isize k = w; k < this.have; k = k + 1) { this.d[k - w] = this.d[k]; }
+        this.have = this.have - w;
+        this.i = this.i - w;
+        for (isize k = 0; k < this.head.length(); k = k + 1) { this.head[k] = this.head[k] >= WINDOW ? this.head[k] - WINDOW : -1; }
+        for (isize k = 0; k < this.prev.length(); k = k + 1) { this.prev[k] = this.prev[k] >= WINDOW ? this.prev[k] - WINDOW : -1; }
+    }
+
+    // The 15-bit multiplicative hash of the three bytes at `p`.
+    fn int32 hash(isize p) {
+        uint32 v = (cast<uint32>(this.d[p]) << 16ui32) | (cast<uint32>(this.d[p + 1]) << 8ui32) | cast<uint32>(this.d[p + 2]);
+        return cast<int32>((v * 2654435761ui32) >> cast<uint32>(32 - HASH_BITS));
+    }
+
+    fn void insert(isize p, isize n) {
+        if (p + 3 > n) { return; }
+        int32 h = this.hash(p: p);
+        this.prev[p & cast<isize>(WINDOW - 1)] = this.head[h];
+        this.head[h] = cast<int32>(p);
+    }
+
+    // The longest earlier match at `p`, packed as length << 16 | distance, 0 for none.
+    fn int32 longest(isize p, isize n) {
+        if (p + 3 > n) { return 0; }
+        isize bestLen = 0;
+        isize bestDist = 0;
+        isize maxLen = n - p < cast<isize>(MAX_MATCH) ? n - p : cast<isize>(MAX_MATCH);
+        isize c = cast<isize>(this.head[this.hash(p: p)]);
+        for (int32 walked = 0; c >= 0 && walked < this.chain; walked = walked + 1) {
+            isize dist = p - c;
+            if (dist > cast<isize>(WINDOW)) { break; }
+            if (bestLen == 0 || this.d[c + bestLen] == this.d[p + bestLen]) {
+                isize l = 0;
+                while (l < maxLen && this.d[c + l] == this.d[p + l]) { l = l + 1; }
+                if (l > bestLen) {
+                    bestLen = l;
+                    bestDist = dist;
+                    if (l == maxLen) { break; }
+                }
+            }
+            isize next = cast<isize>(this.prev[c & cast<isize>(WINDOW - 1)]);
+            if (next >= c) { break; }
+            c = next;
+        }
+        if (bestLen < 3 || (bestLen == 3 && bestDist > cast<isize>(TOO_FAR))) { return 0; }
+        return cast<int32>((bestLen << 16) | bestDist);
+    }
+
+    // Decides every position whose lookahead has arrived, or all of them when `last`, so a write's size changes no token.
+    fn void run(bool last) {
+        isize n = this.have;
+        if (this.chain == 0) {      // `Store`
+            while (this.i < n) {
+                if (this.rawLen == STORED_MAX) { this.writeBlock(last: false); }
+                isize take = n - this.i < STORED_MAX - this.rawLen ? n - this.i : STORED_MAX - this.rawLen;
+                for (isize k = 0; k < take; k = k + 1) { this.raw[this.rawLen + k] = this.d[this.i + k]; }
+                this.rawLen = this.rawLen + take;
+                this.i = this.i + take;
+            }
+            return;
+        }
+        while (this.i < n && (last || this.i + LOOKAHEAD <= n)) {
+            int32 m = this.longest(p: this.i, n: n);
+            int32 len = m >> 16;
+            int32 dist = m & 65535;
+            this.insert(p: this.i, n: n);
+            if (!this.lazy) {
+                if (len >= 3) {
+                    this.token(at: this.i, len: len, dist: dist);
+                    isize end = this.i + cast<isize>(len);
+                    for (isize j = this.i + 1; j < end; j = j + 1) { this.insert(p: j, n: n); }
+                    this.i = end;
+                } else {
+                    this.token(at: this.i, len: cast<int32>(this.d[this.i]), dist: 0);
+                    this.i = this.i + 1;
+                }
+                continue;
+            }
+            if (this.pending && this.pendingLen >= 3 && this.pendingLen >= len) {
+                this.token(at: this.i - 1, len: this.pendingLen, dist: this.pendingDist);
+                isize end = this.i - 1 + cast<isize>(this.pendingLen);
+                for (isize j = this.i + 1; j < end; j = j + 1) { this.insert(p: j, n: n); }
+                this.i = end;
+                this.pending = false;
+                continue;
+            }
+            if (this.pending) { this.token(at: this.i - 1, len: cast<int32>(this.d[this.i - 1]), dist: 0); }
+            this.pending = true;
+            this.pendingLen = len;
+            this.pendingDist = dist;
+            this.i = this.i + 1;
+        }
+        if (last && this.pending && this.i == n) {
+            this.token(at: n - 1, len: cast<int32>(this.d[n - 1]), dist: 0);
+            this.pending = false;
+        }
+    }
+
+    fn void token(isize at, int32 len, int32 dist) {
+        if (this.tokenCount == BLOCK_TOKENS) { this.writeBlock(last: false); }
+        this.tokens[this.tokenCount] = cast<uint32>(len) | (cast<uint32>(dist) << 16ui32);
+        this.tokenCount = this.tokenCount + 1;
+        isize count = dist != 0 ? cast<isize>(len) : 1;
+        for (isize k = 0; k < count && this.rawLen + k < RAW_KEPT; k = k + 1) { this.raw[this.rawLen + k] = this.d[at + k]; }
+        this.rawLen = this.rawLen + count;
+    }
+
+    fn void put(uint32 v, int32 count) {
+        this.bitBuf = this.bitBuf | (cast<uint64>(v) << cast<uint64>(this.bitCount));
+        this.bitCount = this.bitCount + count;
+        while (this.bitCount >= 8) {
+            this.encoded.add(item: cast<uint8>(this.bitBuf & 255ui64));
+            this.bitBuf = this.bitBuf >> 8ui64;
+            this.bitCount = this.bitCount - 8;
+        }
+    }
+
+    // A stored block's header: its three bits, then whole bytes.
+    fn void storedHeader(isize len, bool last) {
+        this.put(v: last ? 1ui32 : 0ui32, count: 3);
+        if (this.bitCount > 0) { this.put(v: 0, count: 8 - this.bitCount); }
+        this.put(v: cast<uint32>(len), count: 16);
+        this.put(v: cast<uint32>(len) ^ 65535ui32, count: 16);
+    }
+
+    // The block gathered so far, as whichever of stored, fixed and dynamic costs fewest bits, a tie going to the later.
+    fn void writeBlock(bool last) {
+        if (this.chain == 0) { this.writeStored(last: last); return; }
+        DynamicArray<uint32> lf = zeros(count: 286);
+        DynamicArray<uint32> df = zeros(count: 30);
+        uint64 extra = 0;
+        for (isize k = 0; k < this.tokenCount; k = k + 1) {
+            uint32 t = this.tokens[k];
+            int32 td = cast<int32>(t >> 16ui32);
+            int32 tl = cast<int32>(t & 65535ui32);
+            if (td == 0) { lf[cast<isize>(tl)] = lf[cast<isize>(tl)] + 1ui32; continue; }
+            int32 ls = cast<int32>(LEN_SYMBOL[tl]);
+            int32 ds = distSymbol(d: td);
+            lf[cast<isize>(257 + ls)] = lf[cast<isize>(257 + ls)] + 1ui32;
+            df[cast<isize>(ds)] = df[cast<isize>(ds)] + 1ui32;
+            extra = extra + cast<uint64>(LEN_EXTRA[ls]) + cast<uint64>(DIST_EXTRA[ds]);
+        }
+        lf[256] = 1;
+        DynamicArray<uint32> lf2 = atLeastTwo(f: lf);
+        DynamicArray<uint32> df2 = atLeastTwo(f: df);
+        DynamicArray<uint8> ll = codeLengths(freq: lf2, limit: 15);
+        DynamicArray<uint8> dl = codeLengths(freq: df2, limit: 15);
+        int32 hlit = 286;
+        while (hlit > 257 && ll[cast<isize>(hlit - 1)] == 0ui8) { hlit = hlit - 1; }
+        int32 hdist = 30;
+        while (hdist > 1 && dl[cast<isize>(hdist - 1)] == 0ui8) { hdist = hdist - 1; }
+        // The two codes' lengths, run-length coded (RFC 1951 §3.2.7).
+        DynamicArray<uint8> seq = DynamicArray.empty();
+        for (int32 s = 0; s < hlit; s = s + 1) { seq.add(item: ll[cast<isize>(s)]); }
+        for (int32 s = 0; s < hdist; s = s + 1) { seq.add(item: dl[cast<isize>(s)]); }
+        DynamicArray<uint8> runSym = DynamicArray.empty();
+        DynamicArray<uint8> runExtra = DynamicArray.empty();
+        isize at = 0;
+        while (at < seq.length()) {
+            uint8 v = seq[at];
+            isize run = 1;
+            while (at + run < seq.length() && seq[at + run] == v) { run = run + 1; }
+            isize left = run;
+            if (v == 0ui8) {
+                while (left >= 3) {
+                    isize r = left < 138 ? left : 138;
+                    if (r >= 11) { runSym.add(item: 18); runExtra.add(item: cast<uint8>(r - 11)); }
+                    else { runSym.add(item: 17); runExtra.add(item: cast<uint8>(r - 3)); }
+                    left = left - r;
+                }
+            } else if (run >= 4) {
+                runSym.add(item: v);
+                runExtra.add(item: 0);
+                left = left - 1;
+                while (left >= 3) {
+                    isize r = left < 6 ? left : 6;
+                    runSym.add(item: 16);
+                    runExtra.add(item: cast<uint8>(r - 3));
+                    left = left - r;
+                }
+            }
+            while (left > 0) {
+                runSym.add(item: v);
+                runExtra.add(item: 0);
+                left = left - 1;
+            }
+            at = at + run;
+        }
+        DynamicArray<uint32> cf = zeros(count: 19);
+        for (isize r = 0; r < runSym.length(); r = r + 1) { cf[cast<isize>(runSym[r])] = cf[cast<isize>(runSym[r])] + 1ui32; }
+        DynamicArray<uint32> cf2 = atLeastTwo(f: cf);
+        DynamicArray<uint8> cl = codeLengths(freq: cf2, limit: 7);
+        int32 hclen = 19;
+        while (hclen > 4 && cl[cast<isize>(CL_ORDER[hclen - 1])] == 0ui8) { hclen = hclen - 1; }
+        // What each form would cost.
+        uint64 dynBits = cast<uint64>(3 + 5 + 5 + 4 + 3 * hclen) + extra;
+        for (isize r = 0; r < runSym.length(); r = r + 1) {
+            dynBits = dynBits + cast<uint64>(cl[cast<isize>(runSym[r])]) + cast<uint64>(RUN_EXTRA[runSym[r]]);
+        }
+        uint64 fixBits = 3ui64 + extra;
+        for (int32 s = 0; s < 286; s = s + 1) {
+            uint64 f = cast<uint64>(lf[cast<isize>(s)]);
+            dynBits = dynBits + f * cast<uint64>(ll[cast<isize>(s)]);
+            fixBits = fixBits + f * cast<uint64>(fixedLength(s: s));
+        }
+        for (int32 s = 0; s < 30; s = s + 1) {
+            uint64 f = cast<uint64>(df[cast<isize>(s)]);
+            dynBits = dynBits + f * cast<uint64>(dl[cast<isize>(s)]);
+            fixBits = fixBits + f * 5ui64;
+        }
+        uint64 storedBits = 42ui64 + 8ui64 * cast<uint64>(this.rawLen);
+        if (storedBits < fixBits && storedBits < dynBits) {     // never past what `raw` keeps: see RAW_KEPT
+            this.writeStored(last: last);
+            return;
+        }
+        this.put(v: last ? 1ui32 : 0ui32, count: 1);
+        if (fixBits <= dynBits) {
+            this.put(v: 1, count: 2);
+            DynamicArray<uint8> fl = DynamicArray.empty();
+            for (int32 s = 0; s < 288; s = s + 1) { fl.add(item: cast<uint8>(fixedLength(s: s))); }
+            DynamicArray<uint8> fd = DynamicArray.empty();
+            for (int32 s = 0; s < 30; s = s + 1) { fd.add(item: 5); }
+            this.writeTokens(lens: fl, dists: fd);
+        } else {
+            this.put(v: 2, count: 2);
+            this.put(v: cast<uint32>(hlit - 257), count: 5);
+            this.put(v: cast<uint32>(hdist - 1), count: 5);
+            this.put(v: cast<uint32>(hclen - 4), count: 4);
+            for (int32 q = 0; q < hclen; q = q + 1) { this.put(v: cast<uint32>(cl[cast<isize>(CL_ORDER[q])]), count: 3); }
+            DynamicArray<uint16> cc = canonicalCodes(len: cl);
+            for (isize r = 0; r < runSym.length(); r = r + 1) {
+                isize rs = cast<isize>(runSym[r]);
+                this.put(v: cast<uint32>(cc[rs]), count: cast<int32>(cl[rs]));
+                this.put(v: cast<uint32>(runExtra[r]), count: cast<int32>(RUN_EXTRA[rs]));
+            }
+            this.writeTokens(lens: ll, dists: dl);
+        }
+        this.tokenCount = 0;
+        this.rawLen = 0;
+    }
+
+    fn void writeStored(bool last) {
+        this.storedHeader(len: this.rawLen, last: last);
+        for (isize k = 0; k < this.rawLen; k = k + 1) { this.encoded.add(item: this.raw[k]); }
+        this.tokenCount = 0;
+        this.rawLen = 0;
+    }
+
+    fn void writeTokens(const ref DynamicArray<uint8> lens, const ref DynamicArray<uint8> dists) {
+        DynamicArray<uint16> lc = canonicalCodes(len: lens);
+        DynamicArray<uint16> dc = canonicalCodes(len: dists);
+        for (isize k = 0; k < this.tokenCount; k = k + 1) {
+            uint32 t = this.tokens[k];
+            int32 td = cast<int32>(t >> 16ui32);
+            int32 tl = cast<int32>(t & 65535ui32);
+            if (td == 0) {
+                this.put(v: cast<uint32>(lc[cast<isize>(tl)]), count: cast<int32>(lens[cast<isize>(tl)]));
+                continue;
+            }
+            int32 ls = cast<int32>(LEN_SYMBOL[tl]);
+            int32 ds = distSymbol(d: td);
+            this.put(v: cast<uint32>(lc[cast<isize>(257 + ls)]), count: cast<int32>(lens[cast<isize>(257 + ls)]));
+            this.put(v: cast<uint32>(tl - cast<int32>(LEN_BASE[ls])), count: cast<int32>(LEN_EXTRA[ls]));
+            this.put(v: cast<uint32>(dc[cast<isize>(ds)]), count: cast<int32>(dists[cast<isize>(ds)]));
+            this.put(v: cast<uint32>(td - cast<int32>(DIST_BASE[ds])), count: cast<int32>(DIST_EXTRA[ds]));
+        }
+        this.put(v: cast<uint32>(lc[256]), count: cast<int32>(lens[256]));
     }
 }

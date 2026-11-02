@@ -1,0 +1,12 @@
+// `DeflateLevel` is `@nonExhaustive`: 0–9 is zlib's convention and not part of RFC 1951, so a stronger level can join
+// without breaking anyone. Outside std, a `match` on it needs `case _:` even when it lists every level there is today.
+import { std::compress::deflate::DeflateLevel };
+
+fn int32 code(DeflateLevel l) {
+    return match (l) {
+        case Store: 0; case Level1: 1; case Level2: 2; case Level3: 3; case Level4: 4; case Level5: 5;
+        case Level6: 6; case Level7: 7; case Level8: 8; case Level9: 9; case Frozen: 10;
+    };
+}
+
+fn uint8 main() { return cast<uint8>(code(l: DeflateLevel::Frozen)); }

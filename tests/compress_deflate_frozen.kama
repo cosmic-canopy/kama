@@ -1,0 +1,111 @@
+// `DeflateLevel::Frozen` (KR-5, ruling 7): its bytes are what `kama publish` writes, and they never change across kama
+// versions, because there the compressed file itself is the identity. Each input is made here, and each pin is the sha256
+// of what `kama.archive.cpp`'s own `deflate` wrote for those bytes. A pin that fails is a broken promise, so it is never
+// updated to pass: a change here belongs in a new level. The cases are the shapes the writer has to get exactly right: an
+// empty stream, multi-block text, a block ending exactly where the input does (its BFINAL is known only at `finish`) and
+// one byte past it, stored blocks past the point a block's input is kept, a match at the full 32,768-byte distance, a
+// long run of one byte, and a run of everything. Returns 42.
+import { std::compress::deflate::DeflateWriter, std::compress::deflate::DeflateLevel, std::collections::DynamicArray,
+         std::collections::ConstView, std::io::Writer, std::io::IoError, std::digest::sha256::sha256,
+         std::encoding::hex::encode };
+
+// Every byte goes into an array.
+type resource Sink implements Writer {
+    DynamicArray<uint8> got;
+    public ctor make() { this.got = DynamicArray.empty(); }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        for (isize k = 0; k < bytes.length(); k = k + 1) { this.got.add(item: bytes[k]); }
+        return Result::Ok(value: bytes.length());
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public give fn DynamicArray<uint8> bytes() { return give this.got; }
+}
+
+// xorshift32: the same bytes on every target, with no library to pin.
+type value Rand {
+    uint32 s;
+    public ctor seeded(uint32 s) { this.s = s; }
+    public fn uint32 next() {
+        this.s = this.s ^ (this.s << 13ui32);
+        this.s = this.s ^ (this.s >> 17ui32);
+        this.s = this.s ^ (this.s << 5ui32);
+        return this.s;
+    }
+}
+
+fn void addRandom(ref DynamicArray<uint8> into, isize n, uint32 seed) {
+    Rand r = Rand.seeded(s: seed);
+    for (isize k = 0; k < n; k = k + 1) { into.add(item: cast<uint8>(r.next() & 255ui32)); }
+}
+
+fn void addText(ref DynamicArray<uint8> into, const ref string text) {
+    borrow text.bytes() as v { foreach (uint8 b in v) { into.add(item: b); } }
+}
+
+// Twelve words in a random order: matches everywhere, ties in the chains, and more than one block's worth of tokens.
+fn void addWords(ref DynamicArray<uint8> into, isize n, uint32 seed) {
+    Rand r = Rand.seeded(s: seed);
+    InlineArray<string>#(12) words = ["alpha ", "beta ", "gamma ", "delta\n", "epsilon ", "zeta ", "eta ", "theta\n", "iota ",
+                                      "kappa ", "lambda ", "mu\n"];
+    isize start = into.length();
+    while (into.length() - start < n) {
+        addText(into: ref into, text: words[cast<isize>(r.next() % 12ui32)]);
+    }
+}
+
+fn DynamicArray<uint8> input(int32 k) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    if (k == 1) { addText(into: ref a, text: "the quick brown fox jumps o"); }
+    if (k == 2) { addWords(into: ref a, n: 150000, seed: 1ui32); }
+    if (k == 3) { addRandom(into: ref a, n: 16384, seed: 2ui32); }
+    if (k == 4) { addRandom(into: ref a, n: 16385, seed: 3ui32); }
+    if (k == 5) { addRandom(into: ref a, n: 70000, seed: 4ui32); }
+    if (k == 6) {
+        addRandom(into: ref a, n: 600, seed: 5ui32);
+        for (isize z = 0; z < 32168; z = z + 1) { a.add(item: 0); }
+        addRandom(into: ref a, n: 600, seed: 5ui32);
+    }
+    if (k == 7) { for (isize z = 0; z < 100000; z = z + 1) { a.add(item: 7); } }
+    if (k == 8) {
+        addWords(into: ref a, n: 30000, seed: 6ui32);
+        addRandom(into: ref a, n: 40000, seed: 7ui32);
+        for (isize z = 0; z < 40000; z = z + 1) { a.add(item: cast<uint8>(z & 3)); }
+        addWords(into: ref a, n: 30000, seed: 6ui32);
+    }
+    return a;
+}
+
+fn string frozen(const ref DynamicArray<uint8> bytes) {
+    DeflateWriter<Sink> w = DeflateWriter.make(sink: Sink.make(), level: DeflateLevel::Frozen);
+    match (w.write(bytes: bytes.view())) { case Ok(value: n): { } case Err(error: e): { panic(msg: "write"); } };
+    return match (give w.finish()) {
+        case Ok(value: s): hexOfSha(s: give s);
+        case Err(error: u): "unfinished";
+    };
+}
+
+fn string hexOfSha(Sink s) {
+    DynamicArray<uint8> b = give s.bytes();
+    InlineArray<uint8>#(32) digest = sha256(bytes: b.view());
+    return encode(bytes: digest.view());
+}
+
+fn uint8 main() {
+    InlineArray<string>#(9) pins = [
+        "9b4fb24edd6d1d8830e272398263cdbf026b97392cc35387b991dc0248a628f9",
+        "e9212e402eb97091dc13c8eb92537b4fbb56784de003d6b3d09cecf1376bddbc",
+        "56618a2f3cf4d37459d845e078e4be2f7877b32ae2a93e6f5e2dca2238fa4aad",
+        "6a7eeda20c15de1d1a03d440d37154b291244476401329f51bcc9e353e723197",
+        "25027a7305b17eafd92a1b2f7fad13721666a189bab4a747df7099f7d9d14d4a",
+        "d35cc0dc5a90d5593ba8be8636eb1e370b3f0e98cf8ddddca7b44e63ba88589e",
+        "a96e55afe47eafadc602abfc3cb80ad8f8d27f18917e27b742bb3ab1e050a92d",
+        "fc2a19fca75a1c4eca760f302060837e7a6e593671c52af5e278c895274cd861",
+        "8cad5385a09ba04f0c925b1297317913dc6d2435eaaacb666dea8b9abdfeebd3"
+    ];
+    for (int32 k = 0; k < 9; k = k + 1) {
+        DynamicArray<uint8> in0 = input(k: k);
+        string got = frozen(bytes: in0);
+        if (got != pins[k]) { return cast<uint8>(100 + k); }
+    }
+    return 42;
+}

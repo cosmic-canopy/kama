@@ -186,6 +186,7 @@ compilefor_member_pair	compilefor_member_pair.kama:10:0 compilefor_member_pair.k
 compilefor_negated_component_typo	compilefor_negated_component_typo.kama:7:0
 compilefor_on_method	compilefor_on_method.kama:9:0 compilefor_on_method.kama:9:23
 compilefor_unknown_platform	compilefor_unknown_platform.kama:8:0
+compress_deflate_level_closed	compress_deflate_level_closed.kama:6:11
 comptime_arg_sizeof_extern	main.kama:7:18 main.kama:7:32
 comptime_arg_unify_conflict	comptime_arg_unify_conflict.kama:14:23
 comptime_args_arity	comptime_args_arity.kama:3:37

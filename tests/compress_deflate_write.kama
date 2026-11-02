@@ -1,0 +1,250 @@
+// `DeflateWriter` (KR-5): what its bytes promise, and how it meets a sink. At every level: the bytes do not depend on how
+// the writes were split, or on a sink that takes a little at a time and stalls; and `DeflateReader` reads back what went
+// in. Then `flush`: what came before it decodes on its own, the output ends with the empty stored block
+// `00 00 FF FF`, and a second one with nothing new writes no second marker. Then `finish` on a sink that answers
+// `WouldBlock`: the writer comes back whole in `Unfinished`, finishing it again writes no second final block, and it
+// refuses more input. `compress_deflate_frozen` pins `Frozen`'s bytes. Returns 42.
+import { std::compress::deflate::DeflateWriter, std::compress::deflate::DeflateLevel,
+         std::compress::deflate::DeflateReader, std::collections::DynamicArray, std::collections::ConstView,
+         std::collections::FixedArray, std::io::Writer, std::io::Reader, std::io::BufReader, std::io::SliceReader,
+         std::io::IoError, std::io::IoErrorKind, std::io::Unfinished };
+
+// `every` > 0: all but every `every`-th call answers `WouldBlock`, and the rest take at most 777 bytes.
+type resource Sink implements Writer {
+    DynamicArray<uint8> got;
+    int32 every;
+    int32 calls;
+    public ctor make(int32 every) {
+        this.got = DynamicArray.empty();
+        this.every = every;
+        this.calls = 0;
+    }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        this.calls = this.calls + 1;
+        if (this.every > 0 && this.calls % this.every != 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        isize n = this.every > 0 && bytes.length() > 777 ? 777 : bytes.length();
+        for (isize k = 0; k < n; k = k + 1) { this.got.add(item: bytes[k]); }
+        return Result::Ok(value: n);
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public const fn isize length() { return this.got.length(); }
+    public give fn DynamicArray<uint8> bytes() { return give this.got; }
+}
+
+fn DeflateLevel levelOf(int32 k) {
+    InlineArray<DeflateLevel>#(11) all = [DeflateLevel::Store, DeflateLevel::Level1, DeflateLevel::Level2, DeflateLevel::Level3,
+                                          DeflateLevel::Level4, DeflateLevel::Level5, DeflateLevel::Level6, DeflateLevel::Level7,
+                                          DeflateLevel::Level8, DeflateLevel::Level9, DeflateLevel::Frozen];
+    return all[k];
+}
+
+// Text, then bytes with no pattern, then a run: every kind of block, and more than one window's worth.
+fn DynamicArray<uint8> sample() {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    uint32 s = 2463534242ui32;
+    for (isize k = 0; k < 90000; k = k + 1) {
+        s = s ^ (s << 13ui32);
+        s = s ^ (s >> 17ui32);
+        s = s ^ (s << 5ui32);
+        if (k < 40000) { a.add(item: cast<uint8>(97ui32 + (s & 7ui32))); }
+        else if (k < 70000) { a.add(item: cast<uint8>(s & 255ui32)); }
+        else { a.add(item: 120); }
+    }
+    return a;
+}
+
+// Writes all of `bytes` at `level`, in pieces of `a` and `b` in turn. A `WouldBlock` is met by asking again.
+fn DynamicArray<uint8> encode(const ref DynamicArray<uint8> bytes, int32 level, isize a, isize b, int32 every) {
+    DeflateWriter<Sink> w = DeflateWriter.make(sink: Sink.make(every: every), level: levelOf(k: level));
+    isize at = 0;
+    bool first = true;
+    while (at < bytes.length()) {
+        isize want = first ? a : b;
+        first = !first;
+        isize n = bytes.length() - at < want ? bytes.length() - at : want;
+        isize took = match (w.write(bytes: bytes.view().slice(from: at, count: n))) { case Ok(value: m): m; case Err(error: e): 0; };
+        at = at + took;
+    }
+    DeflateWriter<Sink> cur = give w;
+    while (true) {
+        match (give cur.finish()) {
+            case Ok(value: s): {
+                Sink done = give s;
+                return give done.bytes();
+            }
+            case Err(error: u): { match (give u) { case Pending(adapter: ad, error: e): { cur = give ad; } }; }
+        };
+    }
+}
+
+fn bool same(const ref DynamicArray<uint8> a, const ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    for (isize k = 0; k < a.length(); k = k + 1) { if (a[k] != b[k]) { return false; } }
+    return true;
+}
+
+// Decodes a whole stream. Empty on any error.
+fn DynamicArray<uint8> decode(const ref DynamicArray<uint8> stream, isize upTo) {
+    DeflateReader<SliceReader> d = DeflateReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: copy stream)),
+                                                      limit: 10000000ui64);
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (got.length() < upTo) {
+        isize n = match (d.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return DynamicArray.empty(); }
+        if (n == 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    return got;
+}
+
+fn int32 levels() {
+    DynamicArray<uint8> in0 = sample();
+    for (int32 level = 0; level <= 10; level = level + 1) {
+        DynamicArray<uint8> whole = encode(bytes: in0, level: level, a: 1000000, b: 1000000, every: 0);
+        DynamicArray<uint8> fine = encode(bytes: in0, level: level, a: 1, b: 7, every: 0);
+        DynamicArray<uint8> coarse = encode(bytes: in0, level: level, a: 300, b: 70000, every: 0);
+        DynamicArray<uint8> stalled = encode(bytes: in0, level: level, a: 4096, b: 300, every: 3);
+        if (!same(a: whole, b: fine)) { return 1; }
+        if (!same(a: whole, b: coarse)) { return 2; }
+        if (!same(a: whole, b: stalled)) { return 3; }
+        DynamicArray<uint8> back = decode(stream: whole, upTo: 10000000);
+        if (!same(a: back, b: in0)) { return 4; }
+        // `Store` compresses nothing. Everything else compresses this: 30 KB of it cannot shrink, the text is 3 bits a
+        // byte, and the run is nothing, so about 45 KB of the 90 KB.
+        if (level == 0 && whole.length() < in0.length()) { return 5; }
+        if (level != 0 && whole.length() > 54000) { return 6; }
+    }
+    // The stream of nothing, at each extreme.
+    DynamicArray<uint8> none = DynamicArray.empty();
+    DynamicArray<uint8> empty = encode(bytes: none, level: 10, a: 1, b: 1, every: 0);
+    if (empty.length() != 2 || empty[0] != 3ui8 || empty[1] != 0ui8) { return 7; }
+    DynamicArray<uint8> emptyStored = encode(bytes: none, level: 0, a: 1, b: 1, every: 0);
+    if (emptyStored.length() != 5 || emptyStored[0] != 1ui8) { return 8; }
+    return 0;
+}
+
+// `flush`, through a sink that stalls: flush is asked again until it answers.
+fn void flushed(ref DeflateWriter<Sink> w) {
+    bool done = false;
+    while (!done) { done = match (w.flush()) { case Ok(value: _): true; case Err(error: e): false; }; }
+}
+fn void wrote(ref DeflateWriter<Sink> w, ConstView<uint8> bytes) {
+    isize at = 0;
+    while (at < bytes.length()) {
+        isize took = match (w.write(bytes: bytes.slice(from: at, count: bytes.length() - at))) { case Ok(value: m): m; case Err(error: e): 0; };
+        at = at + took;
+    }
+}
+fn DynamicArray<uint8> finished(DeflateWriter<Sink> w) {
+    DeflateWriter<Sink> cur = give w;
+    while (true) {
+        match (give cur.finish()) {
+            case Ok(value: s): {
+                Sink done = give s;
+                return give done.bytes();
+            }
+            case Err(error: u): { match (give u) { case Pending(adapter: ad, error: e): { cur = give ad; } }; }
+        };
+    }
+}
+
+fn int32 flushes() {
+    DynamicArray<uint8> in0 = sample();
+    for (int32 every = 0; every <= 3; every = every + 3) {
+        // What `flush` sent is decodable with nothing after it, and ends with the marker.
+        DeflateWriter<Sink> a = DeflateWriter.make(sink: Sink.make(every: every), level: DeflateLevel::Level6);
+        wrote(w: ref a, bytes: in0.view().slice(from: 0, count: 30000));
+        flushed(w: ref a);
+        DynamicArray<uint8> upTo = finished(w: give a);
+        isize at = -1;
+        for (isize k = 0; k + 4 <= upTo.length(); k = k + 1) {
+            if (upTo[k] == 0ui8 && upTo[k + 1] == 0ui8 && upTo[k + 2] == 255ui8 && upTo[k + 3] == 255ui8) { at = k; }
+        }
+        if (at < 0) { return 1; }
+        DynamicArray<uint8> front = DynamicArray.empty();
+        for (isize k = 0; k < at + 4; k = k + 1) { front.add(item: upTo[k]); }
+        DynamicArray<uint8> read = decode(stream: front, upTo: 30000);
+        if (read.length() != 30000) { return 2; }
+        for (isize k = 0; k < 30000; k = k + 1) { if (read[k] != in0[k]) { return 3; } }
+
+        // Flushing twice is flushing once, and then the rest of the stream still reads back.
+        DeflateWriter<Sink> b = DeflateWriter.make(sink: Sink.make(every: every), level: DeflateLevel::Level6);
+        DeflateWriter<Sink> c = DeflateWriter.make(sink: Sink.make(every: every), level: DeflateLevel::Level6);
+        wrote(w: ref b, bytes: in0.view().slice(from: 0, count: 30000));
+        wrote(w: ref c, bytes: in0.view().slice(from: 0, count: 30000));
+        flushed(w: ref b);
+        flushed(w: ref c);
+        flushed(w: ref c);
+        wrote(w: ref b, bytes: in0.view().slice(from: 30000, count: in0.length() - 30000));
+        wrote(w: ref c, bytes: in0.view().slice(from: 30000, count: in0.length() - 30000));
+        DynamicArray<uint8> once = finished(w: give b);
+        DynamicArray<uint8> twice = finished(w: give c);
+        if (!same(a: once, b: twice)) { return 4; }
+        DynamicArray<uint8> back = decode(stream: once, upTo: 10000000);
+        if (!same(a: back, b: in0)) { return 5; }
+
+        // A flush before anything was written is still a stream.
+        DeflateWriter<Sink> d = DeflateWriter.make(sink: Sink.make(every: every), level: DeflateLevel::Frozen);
+        flushed(w: ref d);
+        DynamicArray<uint8> nothing = finished(w: give d);
+        DynamicArray<uint8> none = decode(stream: nothing, upTo: 1);
+        if (none.length() != 0) { return 6; }
+    }
+    return 0;
+}
+
+fn int32 unfinished() {
+    DynamicArray<uint8> in0 = sample();
+    DeflateWriter<Sink> w = DeflateWriter.make(sink: Sink.make(every: 1000000), level: DeflateLevel::Level1);
+    wroteNoWait(w: ref w, bytes: in0.view());
+    // Everything stalls, so `finish` comes back with the writer, and the error that stopped it.
+    return match (give w.finish()) {
+        case Ok(value: s): 1;
+        case Err(error: u): stopped(u: give u);
+    };
+}
+
+// Writes until the sink first stalls.
+fn void wroteNoWait(ref DeflateWriter<Sink> w, ConstView<uint8> bytes) {
+    isize at = 0;
+    bool stalled = false;
+    while (at < bytes.length() && !stalled) {
+        match (w.write(bytes: bytes.slice(from: at, count: bytes.length() - at))) {
+            case Ok(value: m): { at = at + m; if (m == 0) { stalled = true; } }
+            case Err(error: e): { stalled = true; }
+        };
+    }
+}
+
+fn int32 stopped(Unfinished<DeflateWriter<Sink>> u) {
+    return match (give u) {
+        case Pending(adapter: ad, error: e): stoppedAdapter(w: give ad, kind: e.kind());
+    };
+}
+
+fn int32 refused(IoError e) { return match (e.kind()) { case InvalidInput: 0; case _: 2; }; }
+
+fn int32 stoppedAdapter(DeflateWriter<Sink> w, IoErrorKind kind) {
+    bool blocked = match (kind) { case WouldBlock: true; case _: false; };
+    if (!blocked) { return 2; }
+    // A finished stream takes no more.
+    DeflateWriter<Sink> cur = give w;
+    uint8 one = 1;
+    InlineArray<uint8>#(1) more = [one];
+    int32 afterWrite = match (cur.write(bytes: more.view())) { case Ok(value: n): 1; case Err(error: e): refused(e: e); };
+    if (afterWrite != 0) { return 3; }
+    int32 afterFlush = match (cur.flush()) { case Ok(value: _): 1; case Err(error: e): refused(e: e); };
+    if (afterFlush != 0) { return 4; }
+    return 0;
+}
+
+fn uint8 main() {
+    int32 a = levels();
+    if (a != 0) { return cast<uint8>(100 + a); }
+    int32 b = flushes();
+    if (b != 0) { return cast<uint8>(120 + b); }
+    int32 c = unfinished();
+    if (c != 0) { return cast<uint8>(140 + c); }
+    return 42;
+}
