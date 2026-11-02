@@ -2257,6 +2257,29 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   optionals" ctor pattern. A **non-goal**, settled by the audit: one way to do a thing (GOALS 4) — named static factories + named params cover it, and SPEC § *Generics* says the same.
   (Distinct from **default *type* parameters**, which shipped.)
 
+<a id="s4-slotmap-free-order"></a>
+
+### A `SlotMap` reloaded from its serialized form reuses a different slot (KR-287)
+
+Reported 2026-11-02 by a game engine on kama; reproduced on `0.9.805`, Windows. A live `SlotMap` keeps its free list
+as a stack, so the slot vacated last is reused first (`insert` and `remove` in `lib/std/collections/slot_map.kama`).
+`deserialize` rebuilds the list lowest-first, and the comment above `serialize` says the order "is not observable
+through any accessor". It is: `Handle.index` is public, and `values()` walks slot order. Insert 0, 1, 2 and 3; remove
+the handles of 1, then 3; round-trip through `serializeJsonBuffer` and `deserializeJsonBuffer::<SlotMap<int32>>`;
+insert 9 into each. The live map reuses slot 3 and iterates `0 2 9`; the reloaded one reuses slot 1 and iterates
+`0 9 2`. A world saved, loaded and stepped is then not the world saved and stepped, which breaks replay from a
+snapshot, rollback and save games: the uses a generational table has in a game.
+
+The fix, one of two:
+- **The free list's order goes on the wire** (recommended): a third field, the vacant slots in reuse order. Live
+  insertion stays O(1) and reuses the slot vacated last, and equal bytes mean equal futures, which a rollback
+  checksum relies on. It changes the format, which before 1.0 is allowed.
+- **The live list is lowest-first too:** the order becomes a function of occupancy, so nothing new goes on the wire,
+  but insert and remove cost O(log n) (a min-heap) on an entity store's hot path.
+
+Either way the comment goes, and a fixture holds the round trip through JSON and kbin: an insert after a reload lands
+where the same insert lands live.
+
 <a id="s5"></a>
 
 ## 5. 1.x — systems & runtime (post-1.0)
@@ -2389,10 +2412,24 @@ program, and the full flag set follows from `derivedTargetFlags` (one flag per c
 
 A cross build hands clang `-target <arch>-<os>-<abi>` rebuilt from the parts, which is the original string, so clang
 builds for macOS while std's `@compileFor(OS_MACOS)` declarations and the driver's `isMacOS()` (shared-library suffix,
-link tail) take the non-macOS branch. Nothing warns. **Recommended:** refuse a three-part triple whose middle
+link tail) take the non-macOS branch. Nothing warns. **Decided 2026-11-02:** refuse a three-part triple whose middle
 component is a known vendor (`apple`, `pc`, `unknown`, `w64`), and `arm64` as an arch, each naming kama's spelling
 (`aarch64-macos-none`), rather than alias them, which would add a second spelling of one target. A fixture per row of
 the table above.
+
+<a id="s5-wasm-closure"></a>
+
+### A wasm release build does not run Closure (KR-289)
+
+Reported 2026-11-02 (emscripten 6.0.13); the flag's absence checked on `0.9.805`, the sizes not re-measured here. A
+`--release` wasm build passes `-Oz` and section GC (`kama.driver.cpp`, the release block) and never `--closure=1`,
+while emdawnwebgpu's README says to enable Closure in every release. On `examples/webgpu` (brotli -q 11) it was
+reported to take the JS from 11,768 to 7,117 bytes and the whole build from 22,518 to 17,867, drawing the same pixels.
+
+What a default needs: std's own `jsLibraries` Closure-safe (Closure renames unquoted property names), the rule
+written in docs/targets.md for a project's `jsLibraries`, and a way out for a library that is not. A project opts in
+today with an `ldflags` entry gated to `ARCH_WASM32`. Which Closure emsdk runs on each host (a native binary or the
+JVM) is to check.
 
 <a id="s5-android"></a>
 
@@ -2462,24 +2499,32 @@ wait on the headset; nor on the PC's GPU, since a Quest-native app renders on th
 - **C and C++:** Gradle with CMake or ndk-build, or aapt2 and apksigner driven by hand. A Gradle-free Quest 3
   OpenXR sample exists (CMU's 15-466 `ndk-openxr`).
 
-**Decisions owed** (recommendations first):
-1. **The API level: accept clang's versioned triple** `<arch>-linux-android<api>`. It keeps abi `android`, derives
-   `ABI_ANDROID`, and passes the full string to clang. Refuse the unversioned form, naming the spelling. Whether a
+**Decided 2026-11-02** (the maintainer took the production answer for each; 3 and 6 replace a first step proposed the
+day before, and 7 is a direction whose shape KR-283 designs):
+1. **The API level: clang's versioned triple** `<arch>-linux-android<api>`. It keeps abi `android`, derives
+   `ABI_ANDROID`, and passes the full string to clang. The unversioned form is refused, naming the spelling. Whether a
    level is also a flag (as `__ANDROID_API__` is in C) waits until std needs to gate on one.
 2. **Android stays `OS_LINUX` + `ABI_ANDROID`** (Go's shape, not Rust's): bionic runs std's Linux code, and the probe
-   shows it compiles.
-3. **A built-in `ANDROID` name, or none.** A named target follows the host's architecture (docs/targets.md), which
-   would mean x86_64 on this box, and Quest is aarch64. Recommended: no built-in name until it can be right; a project
-   declares its target, as the probe did.
-4. **Where output goes on a device:** std routes stdout and stderr to logcat when no terminal is attached, or the app
-   glue does. Recommended: the app glue (KR-283), since `adb shell` runs already have a stdout.
+   shows it compiles. An Android delta is a declaration gated on `ABI_ANDROID`, never a conditional inside one.
+3. **kama finds the NDK; the triple is the only spelling.** When the abi is `android`, the driver takes clang from
+   `$ANDROID_NDK_HOME`, else the newest `ndk/<version>` under `$ANDROID_HOME`, and refuses with an error naming both
+   when neither has one, as `--webgpu` finds wgpu-native. So `kama build --target aarch64-linux-android29` needs no
+   `kama.json` target and no paths; a target's `cc` still overrides. No short built-in name: a named target follows
+   the host's architecture (docs/targets.md), and the triple already says the architecture and the level.
+4. **Output goes to logcat through the app glue** (KR-283), when the launcher starts the app; `adb shell` runs keep
+   their stdout. Go's gomobile does the same.
 5. **The device leg is KR-280's gate:** `./dev test android` over adb, the emulator by default and the Quest when
    attached. The headset gates only KR-283's last step, the VR launch on Horizon OS.
-6. **Who builds the APK (KR-283).** The options: a documented recipe over the SDK's tools; `kama build` emitting it,
-   as it emits an HTML harness for wasm (the precedent for the driver making a platform's runnable artifact); or a
-   tool. Recommended: the recipe first, measured on the headset, then decide whether to promote it into the driver.
-7. **Where the activity glue lives:** `std::app` growing an Android arm (it already owns "the platform owns the loop"
-   on wasm), or a package. The glue's C comes from the NDK, not from kama.
+6. **`kama build` makes the APK** for an Android app, as it makes the HTML harness for wasm: the `.so` with the NDK's
+   `native_app_glue` compiled in, a manifest the project supplies or `kama.json` generates (with room for Meta's
+   entries), then aapt2, zipalign and apksigner from the SDK's newest build-tools, debug-signed with a generated key
+   by default and release-signed with the project's keystore. The SDK's tools are external, as clang and emcc are.
+   The commands are proven by hand inside KR-283, never shipped as a recipe. `kama.json`'s shape is its first step.
+7. **`main` stays the entry on every target** (direction; the shape is KR-283's). The runtime supplies
+   `android_main`, runs kama's `main` on the glue's thread, and `std::app::run` pumps the looper and calls the tick,
+   as emscripten's loop does on wasm; the lifecycle (pause, resume, a lost window) reaches the program as events, and
+   a package (a window, XR) reaches the activity through a std accessor. A program that wants the glue to itself
+   still writes its own `@linkName("android_main")` entry.
 
 **The toolchain on the Windows box** (2026-11-02, under `%LOCALAPPDATA%\Android`, every download hash-checked): the
 NDK; the SDK's `cmdline-tools`, `platform-tools` (adb), `build-tools;37.0.0` (aapt2, zipalign, apksigner),
@@ -2503,7 +2548,9 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   `UIApplicationMain` and drives frames from `CADisplayLink`, the inverted loop wasm already has. And a `.app` signed
   with a provisioning profile. `dlopen` is barred, so KR-24's hot reload stays desktop-only.
 - **The verdict: scheduled, not yet designed.** It is a target of a general-purpose systems language, so it is not
-  optional. Settle with KR-283's packaging decision, and decide how std spells the Darwin family.
+  optional. Android's rulings (§ Android, decisions 3, 6 and 7) are the expected shape, to confirm on the Mac: kama
+  finds Apple's SDK, `kama build` makes the signed `.app`, and `main` stays the entry. Also to decide: how std spells
+  the Darwin family.
 
 <a id="s6"></a>
 
@@ -2815,6 +2862,25 @@ Go's `testing/synctest` runs a bubble whose clock jumps to the next timer once e
 tokio's `time::pause()` freezes the clock, which `advance` moves and the runtime moves itself when idle. **Design
 first:** a scope with its own clock that jumps when every fiber in it is parked on something the scope owns (a channel,
 a timer, an in-memory stream, KR-264, never a real socket), and how `monotonicNow()` reads it inside.
+
+<a id="s6-shared-read-borrow"></a>
+
+### Children of one `scope` sharing a read-only borrow (KR-288)
+
+Reported 2026-11-02 by a game engine on kama; reproduced on `0.9.805`. `fn void reader(const ref DynamicArray<int32>
+c)`, spawned twice in one `scope` as `spawn reader(c: ref c)`, is refused: the two children borrow overlapping places,
+and the second spawn is reported as a write that races the first. That is SPEC's rule (*What a child may borrow*: the
+same local twice is refused), which treats every child borrow as mutable. `c: const ref c` does not parse. The only
+read-only sharing across tasks is `parallel_for (const ref T e in coll)`.
+
+Several systems reading one store at once is where an entity system's parallelism comes from; without it each
+parallel task must own a disjoint store, or copy. Rust's `std::thread::scope` shares a `&T` among any number of
+threads when `T: Sync`.
+
+**The verdict: scheduled, design first.** The questions: what makes a type safe to read from several tasks at once,
+since reading through `const ref` may still write (a `Shared<T>`'s count, a cache), and how `parallel_for`'s `const
+ref` already answers that is the first thing to read; the call-site spelling (`const ref c` at the `spawn`); and that
+the parent may not write the place until the scope joins, as with a mutable borrow.
 
 <a id="s7"></a>
 
@@ -4205,6 +4271,16 @@ that only the root manifest's level applies, so this touches a ruled rule. The p
 its own optimize flag, and each `csources` file is its own translation unit. Cargo sets a level per package from the
 root (`[profile.release.package.<name>] opt-level`); CMake per source (`COMPILE_OPTIONS`). **Ruling owed:** a ceiling
 the package sets on its own entries (a cap, never a floor, so it cannot slow the consumer's code), or Cargo's model.
+
+<a id="s10-compiler-path"></a>
+
+### A failed C compile names the compiler that ran (KR-290)
+
+Reported 2026-11-02; read on `0.9.805`. When the C compile fails the driver prints `kama: %s failed (exit %d)` with
+the compiler's configured name (`kama.driver.cpp`), not the program the OS ran. With emsdk's `upstream/bin` ahead of
+msys2's on `PATH`, a native build runs emsdk's clang, which has no Windows sysroot, fails on `stdio.h`, and nothing
+says which clang that was, so it reads as a broken install. The fix: print the path the OS resolved (a `PATH` search
+on POSIX, `SearchPathW` on Windows), for `ar` as well. It sits beside KR-282, in the same compiler selection.
 
 <a id="s10-run-library"></a>
 
