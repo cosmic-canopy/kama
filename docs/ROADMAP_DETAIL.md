@@ -527,10 +527,12 @@ read at all.
    lookahead, one block of 16,384 tokens and that block's input up to 64 KiB, since a stored block can only win below
    that (a token costs at most 8 + 5 + 5 + 13 bits in the fixed code, so 16,384 of them cost at most 62 KiB). `DeflateLevel`
    selects a row of the parameter table; `Frozen` is publish's row. **Probed 2026-11-02, decision 7 stands:** a
-   streaming kama port, matcher and block writer, wrote raw deflate BYTE-IDENTICAL to `kama.archive.cpp`'s `deflate`
-   on empty input, 23 bytes, 300 KB of text (dynamic blocks, many of them), 120 KB of random bytes (stored) and 400 KB
-   of four-byte runs, fed in writes of 1, 7, 300, 4,096 and 70,000 bytes. The reference was a scratch C++ file that
-   `#include`s `src/kama.archive.cpp` and calls its `lz77` and `deflate`. What the port must keep, each one load-bearing:
+   kama port wrote raw deflate BYTE-IDENTICAL to `kama.archive.cpp`'s `deflate` on empty input, 23 bytes, 300 KB of text
+   (dynamic blocks, many of them), 120 KB of random bytes (stored) and 400 KB of four-byte runs. The MATCHER ran
+   streaming, fed in writes of 1, 7, 300, 4,096 and 70,000 bytes; the block writer ran afterwards, over every token and
+   the whole input in memory. So holding a block, capping its raw input, draining to the sink, `flush`, and every
+   `DeflateLevel` but `Frozen` are NOT proven yet. The reference was a scratch C++ file that `#include`s
+   `src/kama.archive.cpp` and calls its `lz77` and `deflate`. What the port must keep, each one load-bearing:
    - **Position `i` is decided only once `i + 262` bytes have arrived** (or at `finish`/`flush`). `longest(i)` reads
      up to `i + 257`, and a taken match inserts positions up to `i + 256`, each needing 3 bytes. A write's size then
      changes no token.
@@ -543,6 +545,19 @@ read at all.
      before a package (`std::stable_sort`, `std::merge`).
    - **`finish` is `BufWriter.intoInner`'s shape**: `give fn Result<W, Unfinished<DeflateWriter<W>>>`, safe to call
      again after a `WouldBlock` without writing a second final block.
+
+   Still to settle while building, each with a recommendation:
+   - **The level rows.** zlib's `configuration_table`, written from memory, so check it against `deflate.c`: chain 4, 8
+     and 32 without lazy matching for `Level1`–`Level3`, then chain 16, 32, 128, 256, 1024 and 4096 with it for
+     `Level4`–`Level9`. `Store` writes stored blocks only. `Frozen` is chain 1024, lazy, a 15-bit hash, and a 3-byte match
+     dropped past 4,096 back. `LevelN` may change later (decision 7); `Frozen` may not.
+   - **`flush` changes tokens, on purpose:** it decides the positions still waiting on their lookahead, so decision 7's
+     "never on how the writes were split" holds between flushes.
+   - **Memory, calculated and not measured:** about 450 KiB a writer, from the 68 KiB buffer, 256 KiB of heads and chain
+     (`int32`, 32,768 of each), 64 KiB of tokens, and up to 64 KiB of raw input. zlib's default is about 256 KiB.
+   - **Fixtures:** `Frozen` against the C++ by a pinned sha256, over inputs a small generator makes in the fixture rather
+     than files; the same bytes however the writes are split; a round trip through `DeflateReader` at every level; a sink
+     answering `WouldBlock`, with `finish` called again after it.
 4. **zlib and gzip.** Their fixed fields go through `std::num`'s `loadU32`/`storeU32` and `loadU16`: the zlib trailer's
    Adler-32 is `ByteOrder::Big`; gzip's MTIME, trailer CRC-32 and ISIZE, and FEXTRA's XLEN, are `ByteOrder::Little`.
 5. **tar**, reader and writer.
