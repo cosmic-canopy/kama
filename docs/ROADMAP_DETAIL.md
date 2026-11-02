@@ -2442,9 +2442,9 @@ wait on the headset; nor on the PC's GPU, since a Quest-native app renders on th
   Android twin of `test wasm`, which runs under node; since it needs no headset, CI could run it too (GitHub's Linux
   runners expose KVM to the emulator; untried here).
 - **KR-283, an app.** Quest launches an APK whose activity is `android.app.NativeActivity`. It loads `lib<name>.so` and
-  calls `android_main` through the NDK's `sources/android/native_app_glue`. The entry needs no compiler change:
-  `@linkName("android_main") expose fn` fixes the symbol verbatim (SPEC § Exposing to a host), and the glue is a
-  `csources` entry. The OS owns the loop, as the browser does on wasm: events arrive through `ALooper_pollOnce`, the
+  calls `android_main` through the NDK's `sources/android/native_app_glue`. The entry needs no compiler change
+  (built 2026-11-02): `@linkName("android_main") expose unsafe fn void androidMain(UnsafePtr app)` exports
+  `android_main` from the `.so` (`unsafe`, since it takes a raw pointer), and the glue is a `csources` entry. The OS owns the loop, as the browser does on wasm: events arrive through `ALooper_pollOnce`, the
   window through `APP_CMD_INIT_WINDOW` and `APP_CMD_TERM_WINDOW`, plus pause and resume.
   - **Packaging.** An `AndroidManifest.xml` with Meta's required entries (the `android.hardware.vr.headtracking`
     `uses-feature`, the `com.oculus.intent.category.VR` launcher category, `com.oculus.supportedDevices`; minSdk 29 to
