@@ -1461,6 +1461,8 @@ spawn_fiber_two_args	spawn_fiber_two_args.kama:4:26
 spawn_fiber_use_after_give	spawn_fiber_use_after_give.kama:8:23
 spawn_fiber_view_bundle	spawn_fiber_view_bundle.kama:7:35
 spawn_fiber_void_handle	spawn_fiber_void_handle.kama:4:35
+spawn_generic_fiber_type	spawn_generic_fiber_type.kama:7:21
+spawn_generic_no_inference	spawn_generic_no_inference.kama:8:24
 spawn_in_nested_block	spawn_in_nested_block.kama:24:12
 spawn_named_fiber	spawn_named_fiber.kama:6:56
 spawn_needs_concurrent	spawn_needs_concurrent.kama:10:12

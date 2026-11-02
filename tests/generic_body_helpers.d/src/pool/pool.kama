@@ -1,0 +1,40 @@
+// A generic's body lives in the shared header, and a helper it needs lives there with it: the `spawn fiber` trampoline
+// here, for a private entry and for a generic one. Clang answered "use of undeclared identifier `__kama_fib_…`". Two
+// units instantiate these same bodies, so each helper must exist once and be seen by both TUs.
+import { std::concurrent::Fiber };
+export { Pool, Job, run };
+
+type resource Job<T> {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }
+}
+
+static int32 seen = 0;
+fn void privateEntry(int32 n) { seen = seen + n; }
+fn void generic<T>(Job<T> j) { seen = seen + j.value(); }
+fn int32 held<T>(Job<T> j) { return j.value(); }
+fn void borrowed(ref int32 v) { seen = seen + v; }
+
+type resource Pool<T> {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 go() {
+        seen = 0;
+        scope {
+            spawn fiber privateEntry(n: this.n);
+            spawn fiber generic::<T>(j: Job::<T>.make(n: 1));
+            spawn fiber borrowed(v: ref this.n);
+        }
+        Fiber<int32> f = spawn fiber held::<T>(j: Job::<T>.make(n: 1));
+        int32 r = give f.join();
+        return seen + r;
+    }
+}
+
+fn int32 run<T>(int32 n) {
+    Pool<T> p = Pool::<T>.make(n: n);
+    int32 r = p.go();
+    scope { spawn fiber privateEntry(n: 0); }   // in a generic FUNCTION's body too
+    return r;
+}

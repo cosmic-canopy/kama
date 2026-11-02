@@ -1,0 +1,54 @@
+// A generic function as a fiber's entry: the trampoline is the INSTANCE's, as an ordinary call is routed to one. The
+// trampoline used to name the template, which no body defines, so `kama check` passed and clang refused the program:
+// "use of undeclared identifier `Job_T`", "call to undeclared function `work`". A generic call inside a plain entry's
+// bundle was never discovered, and was refused with "turbofish type arguments are only valid on a generic function".
+// spawn_generic_entry is the isolate twin; generic_body_helpers.d is a spawn written inside a generic's body.
+import { std::concurrent::Fiber };
+
+type resource Job<T> {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }
+    public fn void add() { this.n = this.n + 1; }
+}
+
+static int32 total = 0;
+fn void work<T>(Job<T> j) { total = total + j.value(); }
+fn void sized<T>(int32 n) { total = total + n + cast<int32>(sizeof(T)); }
+fn void borrowed<T>(ref Job<T> j) { j.add(); }
+fn int32 held<T>(Job<T> j) { return j.value(); }
+fn T echo<T>(T v) { return v; }
+fn Job<T> minted<T>(int32 n) { Job<T> j = Job::<T>.make(n: n); return give j; }
+fn void plain(Job<int32> j) { total = total + j.value(); }
+
+fn void inner<T>(Job<T> j) { total = total + j.value(); }
+fn void outer<T>(int32 n) {
+    Job<T> a = Job::<T>.make(n: n);
+    Job<T> b = Job::<T>.make(n: n);
+    scope {
+        spawn fiber inner::<T>(j: give a);       // the enclosing `T`, spelled
+        spawn fiber inner(j: give b);            // and inferred
+    }
+}
+
+fn uint8 main() {
+    Job<int32> a = Job.make(n: 2);
+    Job<int32> b = Job.make(n: 3);
+    Job<int64> c = Job.make(n: 4);               // a second instance, so a second trampoline
+    Job<int32> d = Job.make(n: 4);
+    scope {
+        spawn fiber work::<int32>(j: give a);    // total += 2
+        spawn fiber work(j: give b);             // total += 3, its argument inferred
+        spawn fiber work::<int64>(j: give c);    // total += 4
+        spawn fiber sized::<int64>(n: 1);        // total += 9, `T` in no parameter
+        spawn fiber plain(j: minted::<int32>(n: 2));   // total += 2, a generic call inside a plain entry's bundle
+        spawn fiber borrowed::<int32>(j: ref d); // d = 5, a borrowed bundle
+    }
+    outer::<int32>(n: 3);                        // total += 6
+    Job<int32> e = Job.make(n: 8);
+    Fiber<int32> f = spawn fiber held::<int32>(j: give e);   // held: its result is the instance's
+    Fiber<int64> g = spawn fiber echo(v: 3i64);              // and `R` is the instance's `T`
+    int32 h = give f.join();
+    int64 i = give g.join();
+    return cast<uint8>(total + d.value() + h + cast<int32>(i));   // 26 + 5 + 8 + 3
+}

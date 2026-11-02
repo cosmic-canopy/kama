@@ -1,0 +1,77 @@
+// A generic's body lives in the shared header, and a helper it needs lives there with it. Queued with a module's
+// helpers, the helper came after the header's use and reached the first TU only, so each of these passed `kama check`
+// and failed in clang: "use of undeclared identifier `kama_kama_pf_arg0`", `__kama_bind_release_…`, `__kama_iso_…`.
+// generic_body_helpers.d takes fibers across two modules.
+import { std::collections::DynamicArray, std::concurrent::Isolate, std::concurrent::cpuCount, std::memory::Owned };
+
+fnptr int32 Compare(int32 a, int32 b);
+type value Scaler {
+    int32 k;
+    public ctor make(int32 k) { this.k = k; }
+    fn int32 apply(int32 a, int32 b) { return (a - b) * this.k; }
+}
+type resource Bun implements Sendable {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }
+    public fn void run() { this.n = this.n + 1; }
+}
+fn void entry(Bun b) { if (b.value() != 1) { panic(msg: "wrong bundle"); } }
+fn void bump(ref int32 v) { v = v + 1; }
+
+// In a generic FUNCTION's body.
+fn int32 forEach<T>(int32 n) {
+    DynamicArray<int32> a = DynamicArray.empty();
+    a.add(item: n);
+    parallel_for (ref int32 e in a, workers: cpuCount()) { e = e + 1; }
+    return a[0];
+}
+fn int32 perElement<T>(int32 n) {
+    DynamicArray<Bun> a = DynamicArray.empty();
+    a.add(item: Bun.make(n: n));
+    scope { parallel_spawn (ref Bun w in a) { w.run(); } }
+    return a[0].value();
+}
+fn int32 bound<T>(int32 k) {
+    Owned<Scaler> s = new Scaler.make(k: k);
+    BindableFunctionPtr<Compare> c = BindableFunctionPtr.bind(obj: s, method: Scaler::apply);
+    return c(a: 3, b: 2);
+}
+fn int32 spawned<T>(int32 n) {
+    Bun b = Bun.make(n: 1);
+    int32 v = n;
+    scope { spawn entry(b: give b); spawn bump(v: ref v); }
+    return v;
+}
+
+// In a generic TYPE's method.
+type resource Srv<T> {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 forEach() {
+        DynamicArray<int32> a = DynamicArray.empty();
+        a.add(item: this.n);
+        parallel_for (ref int32 e in a, workers: cpuCount()) { e = e + 1; }
+        return a[0];
+    }
+    public fn int32 bound() {
+        Owned<Scaler> s = new Scaler.make(k: this.n);
+        BindableFunctionPtr<Compare> c = BindableFunctionPtr.bind(obj: s, method: Scaler::apply);
+        return c(a: 3, b: 2);
+    }
+    public fn int32 spawned() {
+        Bun b = Bun.make(n: 1);
+        scope { spawn entry(b: give b); spawn bump(v: ref this.n); }
+        return this.n;
+    }
+}
+
+fn uint8 main() {
+    int32 fn1 = forEach::<int32>(n: 1) + forEach::<int64>(n: 1);    // 2 + 2: two instances, two workers
+    int32 fn2 = perElement::<int32>(n: 1);                          // 2
+    int32 fn3 = bound::<int32>(k: 5);                               // 5
+    int32 fn4 = spawned::<int32>(n: 7);                             // 8
+    Srv<int32> s = Srv.make(n: 7);
+    int32 ty = s.forEach() + s.bound() + s.spawned();               // 8 + 7 + 8
+    return cast<uint8>(fn1 + fn2 + fn3 + fn4 + ty);                 // 4 + 2 + 5 + 8 + 23
+}

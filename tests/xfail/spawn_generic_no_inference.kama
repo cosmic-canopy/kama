@@ -1,0 +1,10 @@
+// A generic entry's type argument is inferred from its bundle, as for any call, and is refused when it cannot be. It
+// used to be accepted, and clang refused the program: "call to undeclared function `work`".
+import { std::concurrent::Fiber };
+
+fn void work<T>(int32 n) { }
+
+fn uint8 main() {
+    scope { spawn fiber work(n: 3); }
+    return 0;
+}

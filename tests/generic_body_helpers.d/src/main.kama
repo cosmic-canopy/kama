@@ -1,0 +1,8 @@
+import { many::pool::run, many::other::fromOther };
+
+fn uint8 main() {
+    int32 a = run::<int32>(n: 10);        // 10 + 1 + 10 + 1 = 22
+    int32 b = run::<int64>(n: 7);         // 7 + 1 + 7 + 1 = 16: a second instance of each helper
+    int32 c = fromOther();                // 2 + 1 + 2 + 1 = 6
+    return cast<uint8>(a + b + c - 2);    // 42
+}

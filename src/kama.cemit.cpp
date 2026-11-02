@@ -8116,7 +8116,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         _currentReturnCType = "void";
         _tempCounter = 0;
 
-        body << "static void " << bodyFn << "(" << viewCType << " " << kName("kama_slice");
+        body << "static inline void " << bodyFn << "(" << viewCType << " " << kName("kama_slice");
         for (auto& c : caps) body << ", " << c.cType << "* " << kName(c.name);
         body << ") {\n";
 
@@ -8153,17 +8153,18 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
     }
 
     // ── (e) Arg struct + trampoline (crosses the isolate ABI's single void*). ─────────────────────────
-    std::ostringstream helper;
-    helper << "typedef struct { " << viewCType << " slice;";
-    for (size_t i = 0; i < caps.size(); ++i) helper << " " << caps[i].cType << "* c" << i << ";";
-    helper << " } " << argTy << ";\n";
+    std::ostringstream ahead, helper;
+    const std::string tramp = "static inline void* " + trampFn + "(void* __p)";
+    ahead << "typedef struct { " << viewCType << " slice;";
+    for (size_t i = 0; i < caps.size(); ++i) ahead << " " << caps[i].cType << "* c" << i << ";";
+    ahead << " } " << argTy << ";\n" << tramp << ";\n";
     helper << body.str();
-    helper << "static void* " << trampFn << "(void* __p) {\n";
+    helper << tramp << " {\n";
     helper << "    " << argTy << "* kama_a = (" << argTy << "*)__p;\n";
     helper << "    " << bodyFn << "(kama_a->slice";
     for (size_t i = 0; i < caps.size(); ++i) helper << ", kama_a->c" << i;
     helper << ");\n    kama_free(__p, " << layoutOf(argTy) << ");\n    return (void*)0;\n}\n";
-    _fileScopeHelpers.push_back(helper.str());
+    addFileScopeHelper("pf:" + std::to_string(seq), ahead.str(), helper.str());
 
     // ── (f) Call site: split into K disjoint slices, spawn K workers, join ALL at the brace. ──────────
     flushHoisted(depth);
@@ -17951,6 +17952,8 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
         scanExprForGenerics(tn->condition, localTys); scanExprForGenerics(tn->LHS, localTys); scanExprForGenerics(tn->RHS, localTys);
     } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
         scanExprForGenerics(as->unaryExpression, localTys); scanExprForGenerics(as->expression, localTys);
+    } else if (auto* iso = dynamic_cast<IsolateNode*>(n)) {   // `spawn f(…)`: a call like any other, in either position
+        scanExprForGenerics(iso->call, localTys); scanExprForGenerics(iso->stack, localTys);
     } else if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         scanExprForGenerics(inv->expression, localTys);
         if (inv->args) for (auto& a : *inv->args) if (a) scanExprForGenerics(a->expression, localTys);
@@ -22151,6 +22154,54 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
     return "(void*)" + emitReorderedCall(fname, "", "", { p }, dynamic_cast<InvocationNode*>(iso->call.get())->args, iso->line);
 }
 
+// A helper a body needs at file scope, once: `ahead` declares what the body names, a type or a prototype, and `def`
+// defines the rest. A module's body has it in its own TU. A GENERIC's body is in the shared header, which every TU
+// includes, so its helper goes there too, declared ahead of the header's bodies and defined after them, past every
+// prototype it calls. Queued with the module's helpers it came after that use and reached the first TU only: a `spawn`,
+// a `parallel_for` or a `bind` in a generic body passed `kama check` and then failed in clang.
+void CEmitter::addFileScopeHelper(const std::string& key, const std::string& ahead, const std::string& def)
+{
+    if (_headerHelperKeys.count(key)) return;   // every TU has it already
+    if (_inHeaderPass) {
+        _headerHelperKeys.insert(key);
+        _headerHelpersAhead += ahead;
+        _headerHelpersAfter += def;
+    } else if (_moduleHelperKeys.insert(key).second) {
+        _fileScopeHelpers.push_back(ahead + def);
+    }
+}
+
+// The function a `spawn` starts. A generic's is the instance discovery routed this call to, as an ordinary call's is
+// (emitInvocation): the template names no body, and its signature names no C type. Null after a diagnostic, and silently
+// while a template is probed as written, since discovery never walks that body and each instance's walk judges the spawn.
+const FuncSig* CEmitter::spawnEntry(IsolateNode* iso, InvocationNode* inv)
+{
+    const std::string& fname = *inv->identifier->value;
+    const std::string key = resolveFunc(fname, inv->identifier->qualifier);
+    auto it = _funcs.find(key);
+    if (it == _funcs.end()) {
+        unsupported(((iso->fiber ? "`spawn fiber` entry `" : "`spawn` entry `") + fname
+                     + "` names no known top-level function").c_str(), iso);
+        return nullptr;
+    }
+    if (!_generics.count(key)) return &it->second;
+    const std::string inst = callInstOf(inv);
+    if (inst.empty()) {
+        if (!deferUnknownWhileProbing(DK_Turbofish) && !_genericInferFailed.count(inv))
+            unsupported(("`" + fname + "` is a generic function and no instantiation was resolved for this "
+                         "call — pass the type arguments explicitly (`" + fname + "::<…>(…)`)").c_str(), iso);
+        return nullptr;
+    }
+    auto known = _instSigs.find(inst);
+    if (known != _instSigs.end()) return &known->second;
+    const GenericInst& gi = _genericInsts[inst];
+    FuncSig sig = it->second;
+    sig.cName = gi.mangledName;
+    sig.params = instParamSigs(gi);
+    if (SharedIdentifier r = genericCallReturnNode(inv, key)) sig.retCType = cType(r);
+    return &(_instSigs[inst] = sig);
+}
+
 std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
                                   bool& isBorrow, bool borrowOK)
 {
@@ -22169,10 +22220,9 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     }
 
     const std::string fname = *inv->identifier->value;
-    auto it = _funcs.find(resolveFunc(fname, inv->identifier->qualifier));
-    if (it == _funcs.end())
-        unsupported(("`spawn` entry `" + fname + "` names no known top-level function").c_str(), iso);
-    const FuncSig& sig = it->second;
+    const FuncSig* entry = spawnEntry(iso, inv);
+    if (!entry) return "";
+    const FuncSig& sig = *entry;
 
     // A `void` entry taking exactly one argument (the bundle) — `void` because there is no channel to
     // hand a result back over (use an M3 channel, or a `ref` borrow's fields, for results). The single
@@ -22215,14 +22265,11 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
 
         // Borrow trampoline: `__p` IS `&local` — pass it straight through as the `ref T` (`T*`) param.
         // No heap box, no free, no move (the caller keeps the local and drops it after the join).
-        if (_moduleHelperKeys.insert("iso:" + symbolOf(sig)).second) {
-            std::ostringstream tr;
-            tr << "static void* __kama_iso_" << symbolOf(sig) << "(void* __p) {\n"
-               << "    " << symbolOf(sig) << "((" << cls << "*)__p);   /* borrow: __p IS &local — no box, no free, no move */\n"
-               << "    return (void*)0;\n"
-               << "}\n";
-            _fileScopeHelpers.push_back(tr.str());
-        }
+        const std::string tramp = "static inline void* __kama_iso_" + symbolOf(sig) + "(void* __p)";
+        addFileScopeHelper("iso:" + symbolOf(sig), tramp + ";\n", tramp + " {\n"
+                           "    " + symbolOf(sig) + "((" + cls + "*)__p);   /* borrow: __p IS &local — no box, no free, no move */\n"
+                           "    return (void*)0;\n"
+                           "}\n");
         return symbolOf(sig);
     }
 
@@ -22242,16 +22289,13 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     SharedExpression src = h->value;
 
     // Emit the per-entry trampoline once (the same worker may be spawned from several sites / both forms).
-    if (_moduleHelperKeys.insert("iso:" + symbolOf(sig)).second) {
-        std::ostringstream tr;
-        tr << "static void* __kama_iso_" << symbolOf(sig) << "(void* __p) {\n"
-           << "    " << cls << " __v = *(" << cls << "*)__p;   /* relocate the bundle out of the heap box */\n"
-           << "    kama_free(__p, " << layoutOf(cls) << ");\n"
-           << "    " << symbolOf(sig) << "(__v);                   /* callee owns __v and drops it at fn-end */\n"
-           << "    return (void*)0;\n"
-           << "}\n";
-        _fileScopeHelpers.push_back(tr.str());
-    }
+    const std::string tramp = "static inline void* __kama_iso_" + symbolOf(sig) + "(void* __p)";
+    addFileScopeHelper("iso:" + symbolOf(sig), tramp + ";\n", tramp + " {\n"
+                       "    " + cls + " __v = *(" + cls + "*)__p;   /* relocate the bundle out of the heap box */\n"
+                       "    kama_free(__p, " + layoutOf(cls) + ");\n"
+                       "    " + symbolOf(sig) + "(__v);                   /* callee owns __v and drops it at fn-end */\n"
+                       "    return (void*)0;\n"
+                       "}\n");
 
     // Read the source, then mark it moved (post-spawn use → use-after-move via the normal `give` seam).
     // moveOnlySource rejects a field/element move, matching every other `give` site.
@@ -22394,12 +22438,9 @@ const FuncSig* CEmitter::fiberPrep(IsolateNode* iso, bool held, std::string& val
         return nullptr;
     }
     const std::string fname = *inv->identifier->value;
-    auto it = _funcs.find(resolveFunc(fname, inv->identifier->qualifier));
-    if (it == _funcs.end()) {
-        unsupported(("`spawn fiber` entry `" + fname + "` names no known top-level function").c_str(), iso);
-        return nullptr;
-    }
-    const FuncSig& sig = it->second;
+    const FuncSig* entry = spawnEntry(iso, inv);
+    if (!entry) return nullptr;
+    const FuncSig& sig = *entry;
     if (sig.params.size() != 1 || !inv->args || inv->args->size() != 1) {
         unsupported(("`spawn fiber` entry `" + fname + "` must take exactly one argument, the bundle").c_str(), iso);
         return nullptr;
@@ -22459,16 +22500,12 @@ void CEmitter::emitFiber(IsolateNode* iso, int depth)
     const FuncSig* sig = fiberPrep(iso, /*held=*/false, val, isBorrow);
     if (!sig) return;
     const std::string sym = symbolOf(*sig), cls = sig->params[0].className;
-    if (_moduleHelperKeys.insert("fib:" + sym).second) {
-        std::ostringstream tr;
-        tr << "static void __kama_fib_" << sym << "(void* __p) {\n";
-        if (isBorrow) tr << "    " << sym << "((" << cls << "*)__p);   /* borrow: __p IS the place */\n";
-        else tr << "    " << cls << " __v = *(" << cls << "*)__p;   /* relocate the bundle out of its box */\n"
-                << "    kama_free(__p, " << layoutOf(cls) << ");\n"
-                << "    " << sym << "(__v);                   /* the entry owns __v and drops it */\n";
-        tr << "}\n";
-        _fileScopeHelpers.push_back(tr.str());
-    }
+    const std::string tramp = "static inline void __kama_fib_" + sym + "(void* __p)";
+    addFileScopeHelper("fib:" + sym, tramp + ";\n", tramp + " {\n" + (isBorrow
+        ? "    " + sym + "((" + cls + "*)__p);   /* borrow: __p IS the place */\n"
+        : "    " + cls + " __v = *(" + cls + "*)__p;   /* relocate the bundle out of its box */\n"
+          "    kama_free(__p, " + layoutOf(cls) + ");\n"
+          "    " + sym + "(__v);                   /* the entry owns __v and drops it */\n") + "}\n");
     const std::string stk = isolateStackArg(iso->stack, iso->line, /*fiber=*/true);
     const std::string start = stk.empty() ? "0" : stk;
     line(iso->line);
@@ -22511,16 +22548,14 @@ std::string CEmitter::emitFiberExpr(IsolateNode* iso)
         return "0";
     }
     const std::string sym = symbolOf(*sig), cls = sig->params[0].className, box = "__kama_fibbox_" + sym;
-    if (_moduleHelperKeys.insert("fibv:" + sym).second) {
-        std::ostringstream tr;
-        tr << "typedef struct { " << cls << " arg; " << rc << "* res; } " << box << ";\n"
-           << "static void __kama_fibv_" << sym << "(void* __p) {\n"
-           << "    " << box << " __b = *(" << box << "*)__p;   /* relocate the bundle out of its box */\n"
-           << "    kama_free(__p, " << layoutOf(box) << ");\n"
-           << "    *__b.res = " << sym << "(__b.arg);           /* into the cell the handle owns */\n"
-           << "}\n";
-        _fileScopeHelpers.push_back(tr.str());
-    }
+    const std::string tramp = "static inline void __kama_fibv_" + sym + "(void* __p)";
+    addFileScopeHelper("fibv:" + sym,
+                       "typedef struct { " + cls + " arg; " + rc + "* res; } " + box + ";\n" + tramp + ";\n",
+                       tramp + " {\n"
+                       "    " + box + " __b = *(" + box + "*)__p;   /* relocate the bundle out of its box */\n"
+                       "    kama_free(__p, " + layoutOf(box) + ");\n"
+                       "    *__b.res = " + sym + "(__b.arg);           /* into the cell the handle owns */\n"
+                       "}\n");
     const std::string stk = isolateStackArg(iso->stack, iso->line, /*fiber=*/true);
     const std::string n = std::to_string(_tempCounter++), r = "kama_kama_fib_res" + n, a = "kama_kama_fib_arg" + n;
     return "({ " + rc + "* " + r + " = (" + rc + "*)kama_alloc(" + layoutOf(rc) + "); "
@@ -32861,18 +32896,13 @@ void CEmitter::emitBindableBind(const std::string& nm, const std::string& octy,
                     if (kv.second.isDefaultCtor) { allocInit = "    h.k_alloc = " + kv.second.cName + "();\n"; break; }
         }
         releaseFn = "__kama_bind_release_" + objCls;
-        if (_moduleHelperKeys.insert("bind:" + objCls).second) {
-            std::ostringstream th;
-            th << "static void " << releaseFn << "(void* obj, kama_ctrl* ctrl) {\n"
-               << "    " << objCls << " h = {0};\n"
-               << "    h.k_p = (" << T << "*)obj;\n";
-            if (retain) th << "    h.k_c = (void*)ctrl;\n";
-            else        th << "    (void)ctrl;\n";
-            th << allocInit
-               << "    " << objCls << "__dtor(&h);\n"
-               << "}\n";
-            _fileScopeHelpers.push_back(th.str());
-        }
+        const std::string thunk = "static inline void " + releaseFn + "(void* obj, kama_ctrl* ctrl)";
+        addFileScopeHelper("bind:" + objCls, thunk + ";\n", thunk + " {\n"
+                           "    " + objCls + " h = {0};\n"
+                           "    h.k_p = (" + T + "*)obj;\n" +
+                           (retain ? "    h.k_c = (void*)ctrl;\n" : "    (void)ctrl;\n") + allocInit +
+                           "    " + objCls + "__dtor(&h);\n"
+                           "}\n");
     }
     // The receiver pointer comes from `deref()` (T*); the refcount block is the library `.c`, whose `Ctrl`
     // layout is `kama_ctrl`-compatible (`usize` counts for this).
@@ -47314,7 +47344,9 @@ void CEmitter::emitHeaderContent(const std::vector<SharedCompilationUnit>& units
     _out = headerOut;
     *_out << _intrinsicVtblsHeaderText;
     *_out << _headerConstsText;   // the private constants a header body read — see noteHeaderConst
+    *_out << _headerHelpersAhead;   // what a header body's helpers declare — see addFileScopeHelper
     *_out << headerBodies.str();
+    *_out << _headerHelpersAfter;
 }
 
 // This file's DEFINITIONS: its classes' vtable instances + interface vtables +

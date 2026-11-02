@@ -2929,26 +2929,6 @@ the parent may not write the place until the scope joins, as with a mutable borr
 
 <a id="s7"></a>
 
-<a id="s6-fiber-generic-emit"></a>
-
-### Fiber trampolines and generics (KR-293, KR-294)
-
-Filed 2026-11-02, run on `0.9.811`. `kama check` accepts all of these and clang refuses them, which is the failure this
-compiler treats as a defect on its own: a program the checker passes must build.
-
-| shape | clang says |
-|---|---|
-| `fn void work<T>(Job<T> j)`, `spawn fiber work::<int32>(j: j)` | `use of undeclared identifier 'k_F…__Job_T'`, `call to undeclared function 'k_F…__work'` |
-| `fn void work<T>(int32 n)`, `spawn fiber work::<int64>(n: 4)` | `call to undeclared function 'k_F…__work'` |
-| a generic type's method: `scope { spawn fiber work(j: Job.make(n: 7)); }` with a plain `work` | `use of undeclared identifier '__kama_fib_k_F…__work'` |
-
-Reported as the same failure, not re-run here: an inferred type argument, and a held `Fiber<int32>`. KR-293: `fiberPrep`
-looks the entry up as a plain function, so nothing routes to the instance; instantiate the trampoline per instance, as Go's
-`go work[int](j)` and tokio's `spawn(work::<R>(j))` do. KR-294: the trampoline goes to `_fileScopeHelpers`, flushed after
-the module's header include, while a generic type's instance bodies are emitted in the header pass; declare it before them.
-A generic server's natural shape meets both, and the workaround is an erased, non-generic entry that costs a dynamic call
-per request.
-
 <a id="s6-fiber-cancel"></a>
 
 ### Cancelling a fiber (KR-296)

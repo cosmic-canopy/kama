@@ -58,8 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-293 | *Claimed: Mac, 2026-11-02.* **A generic fiber entry passes `kama check`, then fails in the C compiler** — `spawn fiber work::<int32>(j: j);` over `fn void work<T>(Job<T> j)` emits a trampoline from the generic function rather than its instance: "use of undeclared identifier `Job_T`", "call to undeclared function `work`" (2026-11-02, `0.9.811`) | S? | [§6](ROADMAP_DETAIL.md#s6-fiber-generic-emit) |
-| KR-294 | *Claimed: Mac, 2026-11-02.* **A plain fiber entry spawned from a generic type's method fails the same way** — `kama check` passes, and clang answers "use of undeclared identifier `__kama_fib_…`": the trampoline is flushed after the instance bodies that name it (2026-11-02, `0.9.811`) | S? | [§6](ROADMAP_DETAIL.md#s6-fiber-generic-emit) |
 | KR-295 | *Claimed: Mac, 2026-11-02.* **A generic contract naming a type of its own internal module is refused in that module's other files** — "module `gc` is not visible from a file in no module", in the implementer's file at the contract's line. It builds when the module is public (2026-11-02, `0.9.811`) | S? | [§2](ROADMAP_DETAIL.md#s2-contract-internal-module) |
 | KR-299 | *Claimed: Mac, 2026-11-02.* **A method call through a raw pointer never names the pointee** — `s.get()` on an `UnsafePtr<Stats>` answers with a sentence about contracts, and `(*s).get()` with a bare parse error; neither says `s[0]`, the spelling that works (2026-11-02, `0.9.811`) | S | [§2](ROADMAP_DETAIL.md#s2-raw-pointer-method) |
 

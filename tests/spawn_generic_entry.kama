@@ -1,0 +1,36 @@
+// A generic function as an isolate's entry. `spawn` looked up the template, so its parameter named no C type and the
+// bundle was refused: "must be a moved `resource` value". fiber_generic_entry is the fiber twin.
+import { std::concurrent::Isolate };
+
+type resource Job<T> implements Sendable {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 value() { return this.n; }
+    public fn void add() { this.n = this.n + 1; }
+}
+
+fn void work<T>(Job<T> j) { if (j.value() != 20) { panic(msg: "wrong bundle"); } }
+fn void borrowed<T>(ref Job<T> j) { j.add(); }
+
+fn void outer<T>(int32 n) {
+    Job<T> a = Job::<T>.make(n: n);
+    scope { spawn work::<T>(j: give a); }
+}
+
+fn uint8 main() {
+    Job<int32> a = Job.make(n: 20);
+    Job<int32> b = Job.make(n: 20);
+    Job<int64> c = Job.make(n: 20);
+    Job<int32> d = Job.make(n: 41);
+    Job<int32> e = Job.make(n: 20);
+    scope {
+        spawn work::<int32>(j: give a);
+        spawn work(j: give b);                   // inferred
+        spawn work::<int64>(j: give c);          // a second instance, so a second trampoline
+        spawn borrowed::<int32>(j: ref d);       // d = 42
+    }
+    Isolate h = spawn work::<int32>(j: give e);  // the handle form
+    give h.join();
+    outer::<int32>(n: 20);
+    return cast<uint8>(d.value());
+}

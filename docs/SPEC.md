@@ -7180,6 +7180,10 @@ parameter — the **bundle**. <!-- xfail: parallel_spawn_no_scope --> It is `voi
 no channel to hand a result back over, and one parameter because the bundle *is* the boundary:
 one object, one owner, one transfer. Everything an isolate receives, it receives here.
 
+The entry may be a generic function, with its type arguments written or inferred as in a call:
+`spawn work::<int32>(j: give j)`, and `spawn fiber` the same. <!-- test: spawn_generic_entry --> <!-- test: fiber_generic_entry -->
+A `spawn`, a `parallel_for` and a `BindableFunctionPtr.bind` may each be written in a generic's body. <!-- test: generic_body_parallel --> <!-- test: generic_body_helpers -->
+
 The bundle has two forms, and the choice is not a style preference — they restrict on **opposite
 axes**:
 

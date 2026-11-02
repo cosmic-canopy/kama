@@ -1,0 +1,9 @@
+// A held fiber's `R` is what the entry's INSTANCE returns. `fiber_generic_entry` is the shape that agrees.
+import { std::concurrent::Fiber };
+
+fn T echo<T>(T v) { return v; }
+
+fn uint8 main() {
+    Fiber<int64> f = spawn fiber echo::<int32>(v: 1);
+    return 0;
+}

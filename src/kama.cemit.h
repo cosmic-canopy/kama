@@ -1425,6 +1425,10 @@ private:
     // release thunk (`bind:<owner>`). Every helper is `static`, so it is deduped PER MODULE and cleared with the
     // drain: a program-wide set once left the second module that spawned a worker without its trampoline.
     std::set<std::string>    _moduleHelperKeys;
+    // The helpers a GENERIC's body needs, which live in the shared header with that body (addFileScopeHelper).
+    std::set<std::string>    _headerHelperKeys;
+    std::string              _headerHelpersAhead, _headerHelpersAfter;
+    void addFileScopeHelper(const std::string& key, const std::string& ahead, const std::string& def);
     std::map<std::string, std::string> _exposedNames;   // exported C symbol -> "module::name (file:line)" — collision check
     std::ostream* _out;
     SharedCompilationUnit _preludeUnit;   // implicit prelude (Optional/Result), collect-only
@@ -3907,6 +3911,8 @@ private:
     // KR-3: `spawn fiber` — a child on this isolate's scheduler (docs/design/fibers.md decisions 9, 10).
     std::string fiberTargetRefusal() const;          // why this target has no fibers yet, or ""
     const FuncSig* fiberPrep(IsolateNode* iso, bool held, std::string& val, bool& isBorrow);
+    const FuncSig* spawnEntry(IsolateNode* iso, InvocationNode* inv);
+    std::map<std::string, FuncSig> _instSigs;   // a generic instance a `spawn` starts -> its signature (spawnEntry)
     void emitFiber(IsolateNode* iso, int depth);     // `spawn fiber work(job: give j);` — a child of its `scope`
     std::string emitFiberExpr(IsolateNode* iso);     // `Fiber<R> f = spawn fiber work(…);` — the held form
     bool hasFiberChild(const SharedStatement& s) const;   // a bare `spawn fiber` the scope being entered owns

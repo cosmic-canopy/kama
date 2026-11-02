@@ -1,0 +1,5 @@
+// The same instances as main's, from a second TU.
+import { many::pool::run };
+export { fromOther };
+
+fn int32 fromOther() { return run::<int32>(n: 2); }
