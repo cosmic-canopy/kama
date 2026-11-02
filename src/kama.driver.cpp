@@ -638,6 +638,53 @@ std::string resolveCCompiler(const char* argv0)
     return "clang";
 }
 
+// The file a command line's program resolves to, searched the way the shell that runs it searches: cmd.exe's on
+// Windows (the current directory, then each `PATH` directory, with each `PATHEXT` extension), execvp's elsewhere.
+// "" when the program is already spelled as a path, which a message prints as is, or when nothing is found, which
+// the shell reports itself. For a failure message: `kama: clang failed` named the configured name, so with emsdk's
+// `upstream/bin` ahead of msys2's on PATH a native build ran emsdk's clang, which has no Windows sysroot, failed on
+// <stdio.h>, and read as a broken install.
+static std::string resolvedProgram(const std::string& cmd)
+{
+    std::string prog;
+    if (!cmd.empty() && cmd[0] == '"') prog = cmd.substr(1, cmd.find('"', 1) - 1);
+    else                               prog = cmd.substr(0, cmd.find(' '));
+    if (prog.empty() || prog.find_first_of("/\\") != std::string::npos) return "";
+    auto split = [](const char* s, char sep) {
+        std::vector<std::string> out;
+        std::string cur;
+        for (const char* p = s ? s : ""; ; ++p) {
+            if (*p == sep || *p == '\0') { if (!cur.empty()) out.push_back(cur); cur.clear(); if (!*p) break; }
+            else cur += *p;
+        }
+        return out;
+    };
+#ifdef _WIN32
+    std::vector<std::string> dirs = split(getenv("PATH"), ';');
+    dirs.insert(dirs.begin(), ".");
+    std::vector<std::string> exts;
+    if (prog.find('.') != std::string::npos) exts.push_back("");   // cmd.exe runs a bare name only by PATHEXT
+    const char* pe = getenv("PATHEXT");
+    for (std::string e : split(pe && *pe ? pe : ".COM;.EXE;.BAT;.CMD", ';')) {
+        for (char& c : e) c = (char)tolower((unsigned char)c);   // the file system ignores case; a message should not shout
+        exts.push_back(e);
+    }
+#else
+    const std::vector<std::string> dirs = split(getenv("PATH"), ':'), exts = { "" };
+#endif
+    for (const auto& d : dirs)
+        for (const auto& e : exts) {
+            const std::string c = d + "/" + prog + e;
+            struct stat st;
+            if (stat(osp(c).c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+#ifndef _WIN32
+            if (access(c.c_str(), X_OK) != 0) continue;
+#endif
+            return absolutePath(c);
+        }
+    return "";
+}
+
 // The C++ spelling of a C driver, or "" when it has none. Measured for KR-20: the C++ runtime follows the
 // DRIVER — `clang++`, `g++`, `zig c++` and `em++` each link the right one where the C spelling does not
 // (macOS `clang` misses `std::logic_error`, `zig cc` cannot find `<vector>`) — so linking a C++ build
@@ -14117,6 +14164,7 @@ int main(int argc, char** argv)
             }
             return r;
         };
+        std::string failedTool = compiler;   // what a nonzero `rc` below is reported against
         if (perTU) {
             std::vector<std::string> objs;
             std::vector<const CcInput*> all;
@@ -14130,12 +14178,12 @@ int main(int argc, char** argv)
                     // than the host's (an ar from another toolchain writes an index the target linker
                     // cannot read).
                     std::ostringstream ar;
-                    ar << (g_target.ar.empty() ? std::string("ar") : g_target.ar) << " rcs \"" << toolPath(linkOut) << "\"";
+                    failedTool = g_target.ar.empty() ? std::string("ar") : g_target.ar;
+                    ar << failedTool << " rcs \"" << toolPath(linkOut) << "\"";
                     SpillList arObjs; arObjs.rsp = stripExtension(outPath) + ".objects.rsp";
                     for (auto& o : objs) arObjs.add(" \"" + toolPath(o) + "\"");
                     ar << arObjs.text;
                     rc = runCmd(fitCommand(ar.str(), { &arObjs }, genFiles));
-                    if (rc != 0) fprintf(stderr, "kama: ar failed (exit %d)\n", rc);
                 } else {
                     // Link the objects with the SAME flag prefix the compiles used, not a bare compiler
                     // name: `--cc "clang -fsanitize=address,undefined"` (the sanitizer leg) needs those
@@ -14189,7 +14237,11 @@ int main(int argc, char** argv)
         }
 
         if (rc != 0) {                       // genCleanup removes the generated files on the way out
-            fprintf(stderr, "kama: %s failed (exit %d)\n", compiler.c_str(), rc);
+            // Named as configured AND as the OS resolved it: an `ar` failure was followed by a second line
+            // blaming the compiler, and a `clang` shadowed earlier on PATH read as a broken install.
+            const std::string ran = resolvedProgram(failedTool);
+            if (ran.empty()) fprintf(stderr, "kama: %s failed (exit %d)\n", failedTool.c_str(), rc);
+            else             fprintf(stderr, "kama: %s (%s) failed (exit %d)\n", failedTool.c_str(), ran.c_str(), rc);
             if (linkOut != outPath) remove(osp(linkOut).c_str());
             return rc;
         }

@@ -192,6 +192,11 @@ Worth knowing before debugging, because each of these produced a confident wrong
   `Microsoft-Windows-CodeIntegrity/Operational`. SAC has no per-app exception, so a machine that builds
   software runs with it Off (Windows Security → App & browser control). Signing a release `kama.exe`
   helps a user start kama, never the programs it builds (KR-135).
+- **emsdk's `clang` can shadow msys2's.** With emsdk's `upstream/bin` ahead of msys2's on `PATH`, a native
+  build runs emsdk's clang, which has no Windows sysroot, and fails on `'stdio.h' file not found`: it reads
+  as a broken install. The failure names the program the OS resolved (`kama: clang
+  (C:/…/emsdk/upstream/bin/clang.exe) failed (exit 1)`, since `0.9.811`). Put emsdk after msys2 on `PATH`,
+  or name the compiler with `--cc`.
 - **`long` is 32-bit** (LLP64). `strtol` silently saturates above `INT32_MAX`; use `strtoll`.
 - **Every path handed to the OS is converted, and the conversion lives on the STACK** (`kama__wpathbuf`
   in `include/kama_os.h` — a `wchar_t[32776]`, 64 KB, one per fs wrapper and two in `kama_rename`). POSIX
