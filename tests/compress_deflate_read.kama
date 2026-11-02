@@ -67,6 +67,30 @@ type resource Choppy implements Reader {
     }
 }
 
+// Two streams back to back, then "TAIL": 0 when both decode, read `chunk` bytes at a time, and the tail is left.
+fn int32 twoStreams(isize chunk) {
+    DeflateReader<SliceReader> one = over(stream: "cb48cdc9c957c84027017d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e9623"
+                                          + "9dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e17"
+                                          + "40392cbf7a5d5dca463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4"
+                                          + "a4a36e49a535d371fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e"
+                                          + "1c06718d9bd87d4b6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c60"
+                                          + "58fa1410c03503170750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdf"
+                                          + "ceedf10e64ec1b056df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da0"
+                                          + "33fae7952bd4312907a668aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a5090dd1dd08c26597083b9c157"
+                                          + "8a7d7575f4c127ac746f2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27d2936fdfdc48bc5da50d6a54"
+                                          + "e2f9e8abaf922f45535383ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe22cca83508db7c5c83d74366"
+                                          + "cd0bba06730693ea72f4ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4ab5140f545ffd035441494c",
+                                          limit: 1000000ui64);
+    if (drain(d: ref one, len: 23, crc: 2369606115ui32, chunk: chunk) != 0) { return 1; }
+    BufReader<SliceReader> rest = match (give one.finish()) { case Ok(value: b): give b; case Err(error: e): { return 2; } };
+    DeflateReader<SliceReader> two = DeflateReader.make(source: give rest, limit: 1000000ui64);
+    if (drain(d: ref two, len: 2817, crc: 2695899570ui32, chunk: chunk) != 0) { return 3; }
+    BufReader<SliceReader> after = match (give two.finish()) { case Ok(value: b): give b; case Err(error: e): { return 4; } };
+    FixedArray<uint8> t = FixedArray.make(size: 16);
+    isize k = match (after.read(into: t.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+    return (k == 4 && t[0] == 84ui8 && t[3] == 76ui8) ? 0 : 5;   // "TAIL"
+}
+
 fn uint8 main() {
     // one stored block
     if (check(stream: "011300ecff68656c6c6f2c2073746f72656420626c6f636b", len: 19, crc: 3340945396ui32) != 0) { return 1; }
@@ -119,28 +143,13 @@ fn uint8 main() {
     // a dynamic block whose distance code is one 1-bit code
     if (check(stream: "05e331090000000230a82655fb77f058baf4", len: 5, crc: 1721022851ui32) != 0) { return 8; }
 
-    // Two streams back to back and four bytes after them: each `finish` leaves the source at the next one.
-    DeflateReader<SliceReader> one = over(stream: "cb48cdc9c957c84027017d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e9623"
-        + "9dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e17"
-        + "40392cbf7a5d5dca463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4"
-        + "a4a36e49a535d371fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e"
-        + "1c06718d9bd87d4b6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c60"
-        + "58fa1410c03503170750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdf"
-        + "ceedf10e64ec1b056df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da0"
-        + "33fae7952bd4312907a668aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a5090dd1dd08c26597083b9c157"
-        + "8a7d7575f4c127ac746f2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27d2936fdfdc48bc5da50d6a54"
-        + "e2f9e8abaf922f45535383ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe22cca83508db7c5c83d74366"
-        + "cd0bba06730693ea72f4ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4ab5140f545ffd035441494c", limit: 1000000ui64);
-    if (drain(d: ref one, len: 23, crc: 2369606115ui32, chunk: 64) != 0) { return 9; }
-    BufReader<SliceReader> rest = match (give one.finish()) { case Ok(value: b): give b; case Err(error: e): { return 10; } };
-    DeflateReader<SliceReader> two = DeflateReader.make(source: give rest, limit: 1000000ui64);
-    if (drain(d: ref two, len: 2817, crc: 2695899570ui32, chunk: 64) != 0) { return 11; }
-    BufReader<SliceReader> after = match (give two.finish()) { case Ok(value: b): give b; case Err(error: e): { return 12; } };
-    FixedArray<uint8> t = FixedArray.make(size: 16);
-    isize k = match (after.read(into: t.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
-    if (k != 4 || t[0] != 84ui8 || t[3] != 76ui8) { return 13; }   // "TAIL"
+    // Two streams back to back and four bytes after them: each `finish` leaves the source at the next one. Read 64
+    // bytes at a time and 4,096: the second is where the decoder takes bytes ahead and must hand them back.
+    if (twoStreams(chunk: 64) != 0) { return 9; }
+    if (twoStreams(chunk: 4096) != 0) { return 10; }
 
     // `finish` before the stream was read decodes the rest to find its end.
+    FixedArray<uint8> t = FixedArray.make(size: 16);
     DeflateReader<SliceReader> early = over(stream: "7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2"
         + "cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca4637"
         + "94449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e"
@@ -152,9 +161,9 @@ fn uint8 main() {
         + "2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27d2936fdfdc48bc5da50d6a54e2f9e8abaf922f455353"
         + "83ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe22cca83508db7c5c83d74366cd0bba06730693ea72f4"
         + "ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4ab5140f545ffd035441494c", limit: 1000000ui64);
-    BufReader<SliceReader> past = match (give early.finish()) { case Ok(value: b): give b; case Err(error: e): { return 14; } };
+    BufReader<SliceReader> past = match (give early.finish()) { case Ok(value: b): give b; case Err(error: e): { return 11; } };
     isize j = match (past.read(into: t.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
-    if (j != 4 || t[0] != 84ui8) { return 15; }
+    if (j != 4 || t[0] != 84ui8) { return 12; }
 
     // A source that stalls before every byte.
     BufReader<Choppy> slow = BufReader.make(inner: Choppy.make(bytes: bytesOf(text: "6c4f8b0e802008fc157e8d04d3e5634bfaff34f3b1728ce171780762181c875d0c106b87c290e464f4c081da13bf1cd9"
@@ -180,12 +189,12 @@ fn uint8 main() {
             case Ok(value: v): v;
             case Err(error: e): match (e.kind()) { case WouldBlock: -2; case _: -1; };
         };
-        if (m == -1) { return 16; }
+        if (m == -1) { return 13; }
         if (m == -2) { blocked = blocked + 1; }
         else if (m == 0) { break; }
         else { for (isize i = 0; i < m; i = i + 1) { got.add(item: buf[i]); } }
     }
-    if (cast<int32>(got.length()) != 3157 || crc32(bytes: got.view()) != 3977157745ui32) { return 17; }
-    if (blocked == 0) { return 18; }   // a stall with nothing decoded yet comes back; a later one waits for the next read
+    if (cast<int32>(got.length()) != 3157 || crc32(bytes: got.view()) != 3977157745ui32) { return 14; }
+    if (blocked == 0) { return 15; }   // a stall with nothing decoded yet comes back; a later one waits for the next read
     return 42;
 }

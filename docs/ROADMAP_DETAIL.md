@@ -510,12 +510,19 @@ read at all.
    longer than one bit (zlib's and puff's rule), which is what lets a block of literals send an empty distance code
    (RFC 1951 §3.2.7); the first cut refused that, and a crafted vector caught it. The fixed codes' tables are baked at
    compile time. Vectors: python3's zlib for every block type and a mix of them; built by hand for a copy from 32,768
-   back, the two short distance codes, and one stream per corrupt class, each refused by zlib too. Speed, measured
-   roughly on M4 with the machine loaded: about 150 MB/s against zlib's 760 over 8 MB of text.
-2b. **The decoder's fast path**, zlib's `inflate_fast`: with 258 bytes of room and enough input buffered, decode
-   without a check per step, from a bit buffer refilled a word at a time, and at the stream's end hand back the whole
-   bytes read ahead (`pos` moves back, which holds while they came from the buffer's current fill). Measure it
-   interleaved against zlib before and after (a byte-at-a-time decoder is roughly five times slower).
+   back, the two short distance codes, and one stream per corrupt class, each refused by zlib too.
+2b. ✅ **The decoder's fast path** (`0.9.806`), zlib's `inflate_fast`: with room for the longest match, the limit
+   allowing one and 8 bytes in the `BufReader`'s buffer, a literal or a whole length/distance pair decodes with no
+   stage step, from a bit buffer refilled to 57+ bits out of that buffer. At the stream's end the whole bytes read
+   ahead go back (`pos` moves back: after any byte-at-a-time pull fewer than 8 bits remain once its code is taken, so
+   every byte left in the bit buffer came from the current fill), and a stored block now drops only the partial byte.
+   **Measured** (M4, decode alone into one buffer, 8 MB of text from python3's zlib level 6, the median of 7 passes,
+   before and after interleaved over 5 rounds): 40.3 ms → 24.4 ms, 199 → 328 MB/s; zlib takes 8.5 ms (940 MB/s). zlib's
+   other half, writing only to the caller's buffer and copying matches in runs, measured SLOWER here (each run costs a
+   slice, a bounds check and an overlap check, which text's short matches do not repay) and was dropped. What is left
+   between this and zlib is the checked access per byte: every index, and every narrowing `cast`, is checked in a
+   release build too. 300 random streams (every level, five strategies, flushes, read in mixed sizes) decode to
+   zlib's bytes and leave the tail; that test lived in the session's scratchpad.
 3. **`DeflateWriter`,** a streaming port of `kama.archive.cpp`. Its memory is bounded by the window, a 259-byte
    lookahead, one block of 16,384 tokens and that block's input up to 64 KiB, since a stored block can only win below
    that (a fixed-code token costs at most 9 + 5 + 5 + 13 bits, so 16,384 of them cost at most 64 KiB). `DeflateLevel`

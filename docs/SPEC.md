@@ -2993,8 +2993,8 @@ fn uint8 main() {
 ```
 
 **Compressed streams (`std::compress`).** `DeflateReader<R>` decodes raw deflate (RFC 1951) and is a `Reader` of the
-decoded bytes. Its source is a `BufReader<R>`, and it takes exactly the stream's bytes from it, a byte only when a code
-needs its bits: `give d.finish()` hands the `BufReader` back at the first byte after the stream, so streams back to back <!-- test: compress_deflate_read -->
+decoded bytes. Its source is a `BufReader<R>`, and it takes exactly the stream's bytes from it, handing back what it read
+ahead: `give d.finish()` hands the `BufReader` back at the first byte after the stream, so streams back to back <!-- test: compress_deflate_read -->
 (a gzip file's members, a packfile's objects) decode one after another. Its `limit` on the decoded bytes is required:
 up to `limit` bytes are delivered, and the read that would deliver one more answers `LimitExceeded`. A stream that <!-- test: compress_deflate_limit -->
 breaks RFC 1951 is `InvalidData` and one cut short is `UnexpectedEof`, and either is final; an error from the source <!-- test: compress_deflate_invalid -->

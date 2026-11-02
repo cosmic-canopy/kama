@@ -9,9 +9,9 @@ export { DeflateReader };
 //   … d.read(into: buf) until it answers Ok(0) …
 //   match (give d.finish()) { case Ok(value: rest): { … the bytes after the stream … } case Err(error: e): { … } };
 //
-// Its source is a `BufReader`, and it takes exactly the stream's bytes from it, no more: a byte is taken only when the
-// code being read needs its bits, so when the stream ends, the next byte is still in the `BufReader`. `finish` hands
-// the `BufReader` back there. That is what back-to-back streams need: a gzip file's members, a git packfile's objects,
+// Its source is a `BufReader`, and it takes exactly the stream's bytes from it, no more: it reads ahead only out of the
+// `BufReader`'s buffer, and when the stream ends it hands back the whole bytes it read ahead, so the next byte is still
+// in the `BufReader`. `finish` hands the `BufReader` back there. That is what back-to-back streams need: a gzip file's members, a git packfile's objects,
 // a stream inside a PNG chunk. A decoder that read its source in chunks of its own would lose what it read past the
 // end (Go's `flate.NewReader` over anything but an `io.ByteReader`; Rust's `read::DeflateDecoder`).
 //
@@ -295,12 +295,13 @@ type resource DeflateReader<R: Reader> implements Reader {
             match (this.stage) {
                 case Done: { return true; }
                 case Header: {
-                    // After the final block the stream is over, and the bits left are its last byte's padding.
-                    if (this.last) { this.bits = 0; this.nbits = 0; this.stage = Stage::Done; return true; }
+                    // After the final block the stream is over. The bits left are its last byte's padding plus any whole
+                    // bytes `fast` took ahead, and those go back: they all came from the buffer's current fill.
+                    if (this.last) { this.finishBits(); this.stage = Stage::Done; return true; }
                     if (!this.need(n: 3)) { return false; }
                     this.last = this.take(n: 1) == 1;
                     int32 t = this.take(n: 2);
-                    if (t == 0) { this.take(n: this.nbits); this.stage = Stage::StoredLength; }   // to a byte boundary
+                    if (t == 0) { this.take(n: this.nbits % 8); this.stage = Stage::StoredLength; }   // to a byte boundary
                     else if (t == 1) { this.lit.fast = FIXED_LIT; this.dist.fast = FIXED_DIST; this.stage = Stage::Codes; }
                     else if (t == 2) { this.stage = Stage::Table; }
                     else { return this.fail(kind: IoErrorKind::InvalidData); }
@@ -349,6 +350,8 @@ type resource DeflateReader<R: Reader> implements Reader {
                     this.stage = Stage::Codes;
                 }
                 case Codes: {
+                    if (!this.fast(into: into, filled: ref filled)) { return false; }
+                    if (this.stage != Stage::Codes || filled >= want) { continue; }
                     int32 sym = this.decode(literal: true);
                     if (sym < 0) { return false; }
                     if (sym < 256) {
@@ -389,6 +392,72 @@ type resource DeflateReader<R: Reader> implements Reader {
             };
         }
         return true;
+    }
+
+    // zlib's `inflate_fast`. While `into` has room for the longest match, the limit allows one, and the BufReader's buffer
+    // holds 8 more bytes, a literal or a whole length/distance pair is decoded with no stage step between: the bit buffer
+    // is refilled to at least 57 bits first, and a pair needs at most 48 (15 + 5 + 15 + 13). Bytes taken ahead stay in
+    // `bits`, so `need` never reads past them; the stream's end hands the whole ones back (`finishBits`). Returns false
+    // when the stream is refused, and otherwise stops at the end of a block or where the conditions fail, for `run`'s
+    // byte-at-a-time steps to go on from.
+    fn bool fast(View<uint8> into, ref isize filled) {
+        isize want = into.length();
+        while (want - filled >= 258 && this.src.fill - this.src.pos >= 8 && this.limit - this.produced >= 258ui64) {
+            while (this.nbits <= 56) {
+                this.bits = this.bits | (cast<uint64>(this.src.buf[this.src.pos]) << cast<uint64>(this.nbits));
+                this.src.pos = this.src.pos + 1;
+                this.nbits = this.nbits + 8;
+            }
+            uint16 e = this.lit.fast[cast<int32>(this.bits & 511ui64)];
+            int32 sym = 0;
+            if (e != 0ui16) { this.take(n: cast<int32>(e & 15ui16)); sym = cast<int32>(e >> 4ui16); }
+            else {
+                sym = this.slow(literal: true);
+                if (sym < 0) { return false; }
+            }
+            if (sym < 256) {
+                uint8 b = cast<uint8>(sym);
+                into[filled] = b;
+                filled = filled + 1;
+                this.window[this.wpos] = b;
+                this.wpos = (this.wpos + 1) & (WINDOW - 1);
+                this.produced = this.produced + 1ui64;
+            } else if (sym == 256) {
+                this.stage = Stage::Header;
+                return true;
+            } else {
+                if (sym > 285) { return this.fail(kind: IoErrorKind::InvalidData); }
+                int32 li = sym - 257;
+                int32 len = cast<int32>(LEN_BASE[li]) + this.take(n: cast<int32>(LEN_EXTRA[li]));
+                uint16 de = this.dist.fast[cast<int32>(this.bits & 511ui64)];
+                int32 ds = 0;
+                if (de != 0ui16) { this.take(n: cast<int32>(de & 15ui16)); ds = cast<int32>(de >> 4ui16); }
+                else {
+                    ds = this.slow(literal: false);
+                    if (ds < 0) { return false; }
+                }
+                if (ds > 29) { return this.fail(kind: IoErrorKind::InvalidData); }
+                int32 distance = cast<int32>(DIST_BASE[ds]) + this.take(n: cast<int32>(DIST_EXTRA[ds]));
+                if (cast<uint64>(distance) > this.produced) { return this.fail(kind: IoErrorKind::InvalidData); }
+                int32 from = this.wpos - distance;
+                for (int32 k = 0; k < len; k = k + 1) {
+                    uint8 b = this.window[(from + k) & (WINDOW - 1)];
+                    into[filled] = b;
+                    filled = filled + 1;
+                    this.window[this.wpos] = b;
+                    this.wpos = (this.wpos + 1) & (WINDOW - 1);
+                }
+                this.produced = this.produced + cast<uint64>(len);
+            }
+        }
+        return true;
+    }
+
+    // The stream is over: the whole bytes still in the bit buffer go back to the BufReader, and the rest is padding.
+    fn void finishBits() {
+        this.src.pos = this.src.pos - cast<isize>(this.nbits / 8);
+        this.bits = 0;
+        this.nbits = 0;
     }
 
     // A dynamic block's code lengths (RFC 1951 §3.2.7), read with the code-length code, then its two codes.
