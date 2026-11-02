@@ -1,0 +1,12 @@
+// A scalar receiver is handed over by value, so a write through `ref this` lands in a copy and the caller's `m` keeps its
+// old value. Assigning `this` whole is refused for the same reason (this_assign). ref_this_scalar is the read.
+type enum Mode : int32 { A, B;
+    public fn void set() { flip(m: ref this); }
+}
+fn void flip(ref Mode m) { m = Mode::B; }
+
+fn uint8 main() {
+    Mode m = Mode::A;
+    m.set();
+    return 0;
+}

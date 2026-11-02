@@ -1,0 +1,10 @@
+// A `ref` bundle's label is the parameter's name, as in a call. A wrong one used to go unread.
+import { std::concurrent::Fiber };
+
+fn void bump(ref int32 v) { v = v + 1; }
+
+fn uint8 main() {
+    int32 x = 41;
+    scope { spawn fiber bump(nope: ref x); }
+    return cast<uint8>(x);
+}

@@ -1,0 +1,18 @@
+// A `ref` bundle's argument must be what the parameter takes. These built and ran, and the child wrote a `Core` over a
+// `float64`, in safe code. DIAGNOSTIC_LINES holds both kinds of child down.
+import { std::concurrent::Fiber, std::concurrent::Isolate };
+
+type resource Core implements Sendable {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn void work() { this.n = this.n + 1; }
+}
+fn void running(ref Core c) { c.work(); }
+
+fn uint8 main() {
+    float64 x = 1.5;
+    float64 y = 2.5;
+    scope { spawn fiber running(c: ref x); }
+    scope { spawn running(c: ref y); }
+    return 0;
+}

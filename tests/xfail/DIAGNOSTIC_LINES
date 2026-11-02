@@ -1335,6 +1335,7 @@ ref_return_temporary_pointer	ref_return_temporary_pointer.kama:8:41
 ref_rvalue_mutable	ref_rvalue_mutable.kama:9:4
 ref_string_literal_mutable	ref_string_literal_mutable.kama:10:4
 ref_temporary_nonconst	ref_temporary_nonconst.kama:14:4
+ref_this_scalar_write	ref_this_scalar_write.kama:4:27
 ref_through_weak	ref_through_weak.kama:8:23
 reffn_byval	reffn_byval.kama:7:35 reffn_byval.kama:7:42
 reffn_foreach_ref_local	reffn_foreach_ref_local.kama:12:41
@@ -1464,6 +1465,10 @@ spawn_in_nested_block	spawn_in_nested_block.kama:24:12
 spawn_named_fiber	spawn_named_fiber.kama:6:56
 spawn_needs_concurrent	spawn_needs_concurrent.kama:10:12
 spawn_outside_scope	spawn_outside_scope.kama:11:38 spawn_outside_scope.kama:15:4
+spawn_ref_bad_label	spawn_ref_bad_label.kama:8:12
+spawn_ref_const	spawn_ref_const.kama:10:43 spawn_ref_const.kama:11:43 spawn_ref_const.kama:12:47 spawn_ref_const.kama:16:42 spawn_ref_const.kama:20:12
+spawn_ref_shared_handle	spawn_ref_shared_handle.kama:16:12 spawn_ref_shared_handle.kama:16:43
+spawn_ref_wrong_type	spawn_ref_wrong_type.kama:15:12 spawn_ref_wrong_type.kama:16:12
 spawn_stack_zero	spawn_stack_zero.kama:7:12
 split_missing_separator	split_missing_separator.kama:7:29
 split_wrong_label	split_wrong_label.kama:7:29

@@ -2929,34 +2929,6 @@ the parent may not write the place until the scope joins, as with a mutable borr
 
 <a id="s7"></a>
 
-<a id="s6-spawn-ref-this"></a>
-
-### A `ref this` bundle passes the address of `self` (KR-292)
-
-Filed 2026-11-02, run on `0.9.811`. Unsound, in safe code, in every build:
-
-```kama fragment
-type resource Core {
-    int32 n;
-    public ctor make(int32 n) { this.n = n; }
-    public fn void work() { this.n = this.n + 1; }
-    public fn int32 serve() { scope { spawn fiber running(c: ref this); } return this.n; }   // 42 expected
-}
-fn void running(ref Core c) { c.work(); }
-```
-
-| shape | result |
-|---|---|
-| `spawn fiber running(c: ref this)` | `fiber sees 1794631004`, then `after: -2147483648`, different each run; 41 and 42 expected |
-| `spawn running(c: ref this)` on a `Sendable` type | `after: -2147483648`, the same bug across threads |
-| `spawn fiber bump(v: ref this.n)` | right: 42 |
-| a free function holding the scope, `ref` its parameter | right, as reported |
-| `Fiber<R> f = spawn fiber …(c: ref this)` | refused, correctly: a held fiber takes no `ref` bundle |
-
-The emitted C is `kama_sched_scopeSpawn(&fs, &__kama_fib_…, (void*)&(self), 0)`: `self` is already the pointer, so the child
-gets its address. `CEmitter::bundleBorrow` serves both spawn forms, so one fix covers them. **First step:** a fixture of the table
-that exits by the field's value, run under ASan too, then lower `ref this` as the pointer it is.
-
 <a id="s6-fiber-generic-emit"></a>
 
 ### Fiber trampolines and generics (KR-293, KR-294)

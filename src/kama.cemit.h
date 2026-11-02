@@ -2454,6 +2454,7 @@ private:
     std::set<std::string> _templatesFaultedInInstance;
     static bool instArgsNameRaw(const std::vector<SharedIdentifier>& args);
     bool               _inNamedCtorBody = false;       // emitting a named `ctor` factory body (const fields of the built local are writable)
+    bool               _loweringBundle = false;        // lowering a `spawn`'s `ref` bundle: its window is the scope's, not a call's
     // KR-261. `_consumingThis`: emitting a `give fn`'s body, whose receiver is the method's to move (`give this`,
     // `give this.f`). `_consumeCall`/`_consumeClaimed`: the call `give` was written before, and whether the method
     // call path took it as a consuming call; an unclaimed one is refused where the call was emitted.

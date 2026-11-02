@@ -1,0 +1,27 @@
+// An isolate's `ref` bundle, lowered as the entry's own call would pass that argument: fiber_ref_bundle's twin, since
+// both kinds of child take this one path. `ref this` handed the child the address of `self` here too, and it wrote
+// through that across threads.
+import { std::concurrent::Isolate, std::memory::Owned };
+
+type resource Core implements Sendable {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn void work() { this.n = this.n + 1; }
+    public const fn int32 value() { return this.n; }
+    public fn void whole() { scope { spawn running(c: ref this); } }
+    public fn void field() { scope { spawn bump(v: ref this.n); } }
+    public const fn void readOnly() { scope { spawn look(c: ref this); } }
+}
+fn void running(ref Core c) { c.work(); }
+fn void bump(ref int32 v) { v = v + 1; }
+fn void look(const ref Core c) { if (c.value() != 40) { panic(msg: "the child read the wrong place"); } }
+
+fn uint8 main() {
+    Core k = Core.make(n: 38);
+    k.whole();                              // 39
+    k.field();                              // 40
+    k.readOnly();
+    Owned<Core> o = new Core.make(n: 1);
+    scope { spawn running(c: ref o); }
+    return cast<uint8>(k.value() + o.value());   // 40 + 2
+}

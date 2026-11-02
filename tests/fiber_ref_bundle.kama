@@ -1,0 +1,36 @@
+// A fiber's `ref` bundle is lowered as the entry's own call would pass that argument. `ref this` handed over the address
+// of `self` when it was written out as `&(place)`: a field of 38 read as a different garbage number on each run, in safe
+// code, in every build. An `Owned` handed over the address of its handle in the same way. The twin on isolates is
+// spawn_ref_bundle; the refusals are xfail/spawn_ref_const, spawn_ref_wrong_type, spawn_ref_shared_handle and
+// spawn_ref_bad_label. Each step below moves the field by one, so a wrong address cannot land on the expected exit.
+import { std::concurrent::Fiber, std::memory::Owned };
+
+type resource Core {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn void work() { this.n = this.n + 1; }
+    public const fn int32 value() { return this.n; }
+    public fn void whole() { scope { spawn fiber running(c: ref this); } }
+    public fn void field() { scope { spawn fiber bump(v: ref this.n); } }
+    public const fn void readOnly() { scope { spawn fiber look(c: ref this); } }
+}
+fn void running(ref Core c) { c.work(); }
+fn void bump(ref int32 v) { v = v + 1; }
+fn void look(const ref Core c) { if (c.value() != 40) { panic(msg: "the child read the wrong place"); } }
+
+// A scalar receiver is the value itself: a read-only child reads it, at the receiver's own address.
+type enum Mode : int32 { A, B;
+    public const fn int32 serve() { scope { spawn fiber sees(m: ref this); } return 1; }
+}
+fn void sees(const ref Mode m) { if (m != Mode::B) { panic(msg: "the child read the wrong value"); } }
+
+fn uint8 main() {
+    Core k = Core.make(n: 38);
+    k.whole();                              // 39
+    k.field();                              // 40
+    k.readOnly();
+    Owned<Core> o = new Core.make(n: 0);
+    scope { spawn fiber running(c: ref o); }
+    Mode m = Mode::B;
+    return cast<uint8>(k.value() + o.value() + m.serve());   // 40 + 1 + 1
+}

@@ -1,0 +1,1 @@
+a `ref` to it would write a copy the caller never sees

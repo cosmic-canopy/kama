@@ -22040,18 +22040,23 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
     // distinct pointees and containment still holds; a `Shared`/`Weak` says outright that someone else
     // may hold it, which is the premise disjointness has to deny. Keying on copyability rather than on
     // a list of type names also covers the intrinsic and the library heap-owner families at once.
-    for (ASTNode* n = argNode->expression.get(); ; ) {
+    // The whole place counts too: `ref s` on a `Shared<T>` borrows the object behind the handle, as a call's would.
+    auto sharedHandle = [&](const SharedExpression& e) {
+        const std::string bc = exprClass(e);
+        return (isSmartPtrClass(bc) || !heapOwnerTarget(bc).empty()) && isCopyable(bc);
+    };
+    bool throughShared = sharedHandle(argNode->expression);
+    for (ASTNode* n = argNode->expression.get(); !throughShared; ) {
         auto* ma = dynamic_cast<MemberAccessNode*>(n);
         if (!ma || !ma->expression) break;
-        std::string bc = exprClass(ma->expression);
-        if ((isSmartPtrClass(bc) || !heapOwnerTarget(bc).empty()) && isCopyable(bc)) {
-            unsupported((kw + " borrows `" + placeText(place) + "`, a place inside `" + root
-                         + "`'s own storage — but `" + root + "` is a shared handle, and another handle "
-                         "can name the same object, so two children are not provably disjoint. Own it "
-                         "uniquely (`Owned<T>`), or move the bundle in with `give`").c_str(), iso);
-            return "";
-        }
+        throughShared = sharedHandle(ma->expression);
         n = ma->expression.get();
+    }
+    if (throughShared) {
+        unsupported((kw + " borrows `" + placeText(place) + "`, but `" + root + "` is a shared handle, and another "
+                     "handle can name the same object, so two children are not provably disjoint. Own it "
+                     "uniquely (`Owned<T>`), or move the bundle in with `give`").c_str(), iso);
+        return "";
     }
 
     // Escape check: the borrowed root must OUTLIVE the scope's join — be declared in the task scope itself or an
@@ -22103,9 +22108,9 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
     }
     // ...nor something an enclosing `borrow` froze. A `ref` handed to a task is a mutable borrow like
     // any other — the direct call `grow(d: ref a)` is rejected inside a window, and routing the same
-    // call through `spawn` must not launder it. This path never reaches `checkConstWrite`, which is
-    // where every other `ref` argument is caught.
-    rejectFrozenWrite(argNode->expression, iso->line);
+    // call through `spawn` must not launder it. A mutable one is caught with the call's other rules, at
+    // the lowering below; a read-only child is refused here.
+    if (p.isConst) rejectFrozenWrite(argNode->expression, iso->line);
     // Disjointness: no two children of one scope may borrow OVERLAPPING places (they would race on the
     // shared storage). Two places overlap iff one is a prefix of the other — which is the exact
     // statement, not an approximation, so `w.bodies` and `w.springs` are admitted while `w` beside
@@ -22138,7 +22143,12 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
         }
     }
 
-    return "(void*)&(" + emitExpression(argNode->expression) + ")";
+    // The argument as `fname(…)` itself would be passed it: with no callee, the reordered call is that argument alone.
+    // One lowering, so a bundle keeps every rule a call's `ref` has. Written out here as `&(place)`, `ref this` handed
+    // over the address of `self`, an `Owned` the address of its handle, and a `const` place or a place of another type
+    // went through unchecked. The child's hold on the place is the scope's, ruled above, so it starts no call's access.
+    ScopedFlag _bundle(_loweringBundle);
+    return "(void*)" + emitReorderedCall(fname, "", "", { p }, dynamic_cast<InvocationNode*>(iso->call.get())->args, iso->line);
 }
 
 std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
@@ -28135,6 +28145,12 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
             // const binding (or a const field outside its ctor) may not be passed to one
             // — that would silently launder away const. (A `const ref` borrow is fine.)
             if (!p.isConst) checkConstWrite(argExpr, srcLine);
+            // A scalar receiver is the value, handed over by value, so a write through `ref this` would land in a
+            // copy the caller never sees. Assigning `this` whole is refused for the same reason.
+            if (!p.isConst && dynamic_cast<ThisAccessNode*>(argExpr.get()) && _currentClass && _currentClass->isScalarRecv)
+                unsupported("`this` is a value here, not a place, so a `ref` to it would write a copy the caller never "
+                            "sees — return the new value and let the caller assign it (`x = x.next();`), or take "
+                            "`const ref` if it is only read", srcLine);
             // a borrow names the OBJECT (`ref T`). If the argument is a smart pointer
             // holding a T, auto-deref to its T* — `ref p` borrows the heap object, uniformly
             // with `ref stackValue`. (Weak can't be borrowed — it may be dead; tryUpgrade.)
@@ -28171,11 +28187,12 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 const std::string hp = "&(" + val + ")";
                 s += (p.isConst ? "(" + p.className + "*)" : std::string()) + derefFnName(argCls, !p.isConst)
                      + "(" + hp + ")";
-            } else if (dynamic_cast<ThisAccessNode*>(argExpr.get())) {
+            } else if (dynamic_cast<ThisAccessNode*>(argExpr.get()) && !(_currentClass && _currentClass->isScalarRecv)) {
                 // `this` lowers to `self`, which is ALREADY a `T*` (the receiver pointer). Pass it straight
                 // to a `ref T` param — `&(self)` would hand over the address of the param slot (a `T**`), so
                 // a whole-`this` borrow (`w.writeString(v: this)` in an impl on `string`) would read the
-                // pointer's own bytes, not the value. (Cast for a `ref Base` upcast.)
+                // pointer's own bytes, not the value. (Cast for a `ref Base` upcast.) A scalar receiver is the
+                // value itself, and is addressed below like any other place.
                 s += (isClass(p.className) && argCls != p.className) ? ("(" + p.className + "*)" + val) : val;
             } else {
                 // A `ref T` arg must BE a T, a subclass of T (upcast to `ref Base`), or a
@@ -28311,7 +28328,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     std::string lead = leadArg;
     std::string accessSeq;
     std::string heldShown;   // what the first access this call holds is to — set only when one is emitted
-    if (!_probingTemplate && !_inNamedCtorBody && !_inDtorBody) {
+    if (!_probingTemplate && !_inNamedCtorBody && !_inDtorBody && !_loweringBundle) {
         for (size_t pi = 0; pi < params.size(); ++pi) {
             const ParamSig& p = params[pi];
             auto f = byName.find(p.name);

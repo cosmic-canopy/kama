@@ -5141,6 +5141,8 @@ change one field" is a private constructor that takes every field. A method borr
 the receiver's fields, or returns the new value for the caller to assign (`l = l.next();`). Replacing a receiver
 whole (C++'s `*this = …`, Rust's `*self = …`) is a non-goal: an enum's receiver is a copy, and the assignment
 would change nothing the caller can see.
+A `ref this` argument on such a receiver is refused for the same reason. <!-- xfail: ref_this_scalar_write -->
+A `const ref this` one reads it. <!-- test: ref_this_scalar -->
 
 **`self` is reserved inside a type body.** It is the emitted C name of the receiver pointer, so a local or
 parameter called `self` anywhere in a `type` — method, constructor or `static fn` — is a compile error <!-- xfail: self_param -->
@@ -7381,7 +7383,15 @@ A place may project through an indirection only when the handle is **unique**. A
 nothing can copy one — so distinct roots really are distinct objects and its fields are borrowable.
 <!-- test: scope_borrow_owned_fields --> A `Shared`/`Weak` is not: another handle may name the same
 object, so `a.bodies` and `b.springs` could be one cell under two non-prefix names, and it is
-refused. <!-- xfail: scope_borrow_through_shared -->
+refused. <!-- xfail: scope_borrow_through_shared --> So is `ref s` on the handle itself, which would
+borrow that object. <!-- xfail: spawn_ref_shared_handle -->
+
+A `ref` bundle is lowered as the entry's own call would pass that argument, and every rule of a call's
+`ref` holds. `ref this` borrows the object and `ref o` on an `Owned<T>` the object it holds,
+<!-- test: fiber_ref_bundle --> for both kinds of child. <!-- test: spawn_ref_bundle --> The label names
+the parameter, <!-- xfail: spawn_ref_bad_label --> the argument is what the parameter takes,
+<!-- xfail: spawn_ref_wrong_type --> and a read-only place cannot go into a parameter that may write it.
+<!-- xfail: spawn_ref_const -->
 
 ### Data parallelism — `parallel_for` ✅
 

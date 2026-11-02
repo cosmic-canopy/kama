@@ -1,0 +1,18 @@
+// `ref s` on a `Shared<T>` borrows the object behind the handle, and another handle can name that object, so two children
+// holding `s` and `t` would write one object at once. scope_borrow_through_shared is the same rule for a field reached
+// through a handle. This one built and crashed: the child was handed the handle's address as a `Core*`.
+import { std::concurrent::Fiber, std::memory::Shared };
+
+type resource Core {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn void work() { this.n = this.n + 1; }
+}
+fn void running(ref Core c) { c.work(); }
+
+fn uint8 main() {
+    Shared<Core> s = new Core.make(n: 40);
+    Shared<Core> t = copy s;
+    scope { spawn fiber running(c: ref s); spawn fiber running(c: ref t); }
+    return 0;
+}

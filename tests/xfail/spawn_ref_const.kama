@@ -1,0 +1,22 @@
+// A `ref` bundle may write, so a read-only place cannot go into one, as it cannot into a call's `ref` parameter. Each
+// of these ran, and the child wrote the place: a `const fn` changed its own object, and a `const ref` parameter its
+// caller's. DIAGNOSTIC_LINES holds each line down.
+import { std::concurrent::Fiber, std::concurrent::Isolate };
+
+type resource Core implements Sendable {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn void work() { this.n = this.n + 1; }
+    public const fn void whole() { scope { spawn fiber running(c: ref this); } }
+    public const fn void field() { scope { spawn fiber bump(v: ref this.n); } }
+    public const fn void onIsolate() { scope { spawn running(c: ref this); } }
+}
+fn void running(ref Core c) { c.work(); }
+fn void bump(ref int32 v) { v = v + 1; }
+fn void param(const ref Core c) { scope { spawn fiber running(c: ref c); } }
+
+fn uint8 main() {
+    const int32 k = 41;
+    scope { spawn fiber bump(v: ref k); }
+    return cast<uint8>(k);
+}

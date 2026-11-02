@@ -1,0 +1,12 @@
+// `const ref this` on a scalar receiver, a payload-less enum or a primitive's method, reads the receiver at its own
+// address. It lowered to the value itself, which clang refused in a program `kama check` had passed. Writing through
+// `ref this` is refused instead (xfail/ref_this_scalar_write).
+type enum Mode : int32 { A, B;
+    public const fn int32 score() { return points(m: ref this); }
+}
+fn int32 points(const ref Mode m) { if (m == Mode::B) { return 42; } return 1; }
+
+fn uint8 main() {
+    Mode m = Mode::B;
+    return cast<uint8>(m.score());
+}
