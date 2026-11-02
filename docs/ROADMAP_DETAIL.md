@@ -2482,10 +2482,25 @@ day before, and 7 is a direction whose shape KR-283 designs):
 2. **Android stays `OS_LINUX` + `ABI_ANDROID`** (Go's shape, not Rust's): bionic runs std's Linux code, and the probe
    shows it compiles. An Android delta is a declaration gated on `ABI_ANDROID`, never a conditional inside one.
 3. **kama finds the NDK; the triple is the only spelling.** When the abi is `android`, the driver takes clang from
-   `$ANDROID_NDK_HOME`, else the newest `ndk/<version>` under `$ANDROID_HOME`, and refuses with an error naming both
-   when neither has one, as `--webgpu` finds wgpu-native. So `kama build --target aarch64-linux-android29` needs no
+   `$ANDROID_NDK_HOME`, else the newest `ndk/<version>` under the SDK, and refuses with an error naming every place it
+   looked, as `--webgpu` finds wgpu-native. The SDK is `$ANDROID_HOME`, else Android Studio's default install
+   (amended 2026-11-02, below). So `kama build --target aarch64-linux-android29` needs no
    `kama.json` target and no paths; a target's `cc` still overrides. No short built-in name: a named target follows
    the host's architecture (docs/targets.md), and the triple already says the architecture and the level.
+   **The default location, amended 2026-11-02** (the maintainer asked whether others fall back to it; they do).
+   gomobile reads `ANDROID_HOME`, else `<home>/AppData/Local/Android/sdk` on Windows, `<home>/Library/Android/sdk`
+   on macOS and `<home>/Android/Sdk` elsewhere (`internal/sdkpath`); Flutter's tool checks the same three paths
+   after its own config and the variables; cargo-ndk detects an NDK "installed with Android Studio to its default
+   location" unless `ANDROID_NDK_HOME` says otherwise. The Android Gradle plugin is the exception: it asks for
+   `sdk.dir` or `ANDROID_HOME` and searches nothing, because Android Studio writes `local.properties` for it. So:
+   - **Order:** `ANDROID_NDK_HOME` (an NDK root), else the SDK from `ANDROID_HOME`, else gomobile's three paths.
+     Not the deprecated `ANDROID_SDK_ROOT`, and not a search of `PATH` for `adb` or `aapt` as Flutter does: each
+     would be a second way to say where the SDK is.
+   - **"Newest" compares versions numerically** (`30.0.16248370` over `9.x`, which a string sort gets wrong);
+     gomobile compares `Pkg.Revision` from each NDK's `source.properties`, Flutter sorts the directory names.
+   - The refusal lists the variables and the default path it tried, so the fallback is never invisible, and a
+     failed compile already names the clang that ran (since `0.9.811`). This box then builds for Android with
+     nothing set, since its SDK is at the Windows default.
 4. **Output goes to logcat through the app glue** (KR-283), when the launcher starts the app; `adb shell` runs keep
    their stdout. Go's gomobile does the same.
 5. **The device leg is KR-280's gate:** `./dev test android` over adb, the emulator by default and the Quest when
