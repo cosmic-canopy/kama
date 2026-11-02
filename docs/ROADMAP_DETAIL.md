@@ -2278,29 +2278,6 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   optionals" ctor pattern. A **non-goal**, settled by the audit: one way to do a thing (GOALS 4) — named static factories + named params cover it, and SPEC § *Generics* says the same.
   (Distinct from **default *type* parameters**, which shipped.)
 
-<a id="s4-slotmap-free-order"></a>
-
-### A `SlotMap` reloaded from its serialized form reuses a different slot (KR-287)
-
-Reported 2026-11-02 by a game engine on kama; reproduced on `0.9.805`, Windows. A live `SlotMap` keeps its free list
-as a stack, so the slot vacated last is reused first (`insert` and `remove` in `lib/std/collections/slot_map.kama`).
-`deserialize` rebuilds the list lowest-first, and the comment above `serialize` says the order "is not observable
-through any accessor". It is: `Handle.index` is public, and `values()` walks slot order. Insert 0, 1, 2 and 3; remove
-the handles of 1, then 3; round-trip through `serializeJsonBuffer` and `deserializeJsonBuffer::<SlotMap<int32>>`;
-insert 9 into each. The live map reuses slot 3 and iterates `0 2 9`; the reloaded one reuses slot 1 and iterates
-`0 9 2`. A world saved, loaded and stepped is then not the world saved and stepped, which breaks replay from a
-snapshot, rollback and save games: the uses a generational table has in a game.
-
-The fix, one of two:
-- **The free list's order goes on the wire** (recommended): a third field, the vacant slots in reuse order. Live
-  insertion stays O(1) and reuses the slot vacated last, and equal bytes mean equal futures, which a rollback
-  checksum relies on. It changes the format, which before 1.0 is allowed.
-- **The live list is lowest-first too:** the order becomes a function of occupancy, so nothing new goes on the wire,
-  but insert and remove cost O(log n) (a min-heap) on an entity store's hot path.
-
-Either way the comment goes, and a fixture holds the round trip through JSON and kbin: an insert after a reload lands
-where the same insert lands live.
-
 <a id="s5"></a>
 
 ## 5. 1.x — systems & runtime (post-1.0)
@@ -2415,29 +2392,6 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
 native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
 
-<a id="s5-vendor-triples"></a>
-
-### A triple in clang's three-part spelling is read in the wrong positions (KR-279)
-
-Found 2026-11-01 on `0.9.803`. `parseTriple` (`kama.driver.cpp`) takes three components as `<arch>-<os>-<abi>`, as
-docs/targets.md says, and drops a vendor only from four. But the triples people copy are often three parts with a
-vendor in the middle. Each was declared under `select.TARGET` and probed with `@compileFor` gates in a transpiled
-program, and the full flag set follows from `derivedTargetFlags` (one flag per component):
-
-| triple | where it comes from | derives | should mean |
-|---|---|---|---|
-| `aarch64-apple-darwin` | clang, Rust | `ARCH_AARCH64 OS_APPLE` | macOS |
-| `arm64-apple-ios` | Xcode | `ARCH_ARM64 OS_APPLE` | iOS on aarch64 |
-| `x86_64-w64-mingw32` | gcc, msys2 | `ARCH_X86_64 OS_W64` | Windows |
-| `aarch64-macos-none` | kama | `ARCH_AARCH64 OS_MACOS` | macOS (correct) |
-
-A cross build hands clang `-target <arch>-<os>-<abi>` rebuilt from the parts, which is the original string, so clang
-builds for macOS while std's `@compileFor(OS_MACOS)` declarations and the driver's `isMacOS()` (shared-library suffix,
-link tail) take the non-macOS branch. Nothing warns. **Decided 2026-11-02:** refuse a three-part triple whose middle
-component is a known vendor (`apple`, `pc`, `unknown`, `w64`), and `arm64` as an arch, each naming kama's spelling
-(`aarch64-macos-none`), rather than alias them, which would add a second spelling of one target. A fixture per row of
-the table above.
-
 <a id="s5-wasm-closure"></a>
 
 ### A wasm release build does not run Closure (KR-289)
@@ -2454,7 +2408,7 @@ JVM) is to check.
 
 <a id="s5-android"></a>
 
-### Android, for Meta Quest's native route (KR-280, KR-282, KR-283) — measured on `0.9.803`
+### Android, for Meta Quest's native route (KR-280, KR-283) — measured on `0.9.803`
 
 **The brief for the session that builds it, on the Windows box (it has the headset).** The owner, 2026-11-01: a game
 engine on kama will ship on Meta Quest both through the browser (WebXR) and natively; XR itself is the engine's (§8).
@@ -2466,9 +2420,9 @@ wait on the headset; nor on the PC's GPU, since a Quest-native app renders on th
 `%LOCALAPPDATA%\Android\Sdk\ndk\30.0.16248370`):
 
 1. `--target aarch64-linux-android --cc <ndk>/clang.exe` fails in the NDK's own `sys/cdefs.h`: *"Unversioned target
-   triples are not supported!"*. The per-API wrapper `aarch64-linux-android29-clang.cmd` fails the same way, because
-   kama hands it `-target aarch64-linux-android` as well, overriding the `29` in its name (KR-282: `takesTargetFlag`
-   tests for `clang` anywhere in the name, while docs/targets.md says an NDK wrapper is spared).
+   triples are not supported!"*. The per-API wrapper `aarch64-linux-android29-clang.cmd` failed the same way on
+   `0.9.803`, handed `-target aarch64-linux-android` too; since `0.9.809` a wrapper is spared, and a hello builds
+   through it with no `kama.json` target.
 2. A `kama.json` target gets past it, since the later `--target` wins:
    `"QUEST": { "triple": "aarch64-linux-android", "cc": "<ndk>/…/bin/clang.exe", "ar": "<ndk>/…/bin/llvm-ar.exe",
    "cflags": ["--target=aarch64-linux-android29"], "ldflags": ["--target=aarch64-linux-android29"] }`. A hello builds
@@ -2489,7 +2443,7 @@ wait on the headset; nor on the PC's GPU, since a Quest-native app renders on th
    `_nonblocking_connect`, `_peer`, `_stream` (4, 1, 2, 2).
 
 **What kama needs, in order:**
-- **KR-282, then the API level's spelling.** clang's spelling is the triple's suffix, `aarch64-linux-android29`, and
+- **The API level's spelling.** clang's spelling is the triple's suffix, `aarch64-linux-android29`, and
   kama would read `android29` as the abi today (deriving `ABI_ANDROID29`).
 - **The link tail:** no `-lpthread` when the abi is `android` (at `kama.driver.cpp` ~13742), and nothing else
   glibc-only.
@@ -2563,8 +2517,8 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
 
 - **Where kama is.** `--target IOS` is refused. `aarch64-ios-none` derives `OS_IOS`, so std's `OS_MACOS` declarations
   (`std::net`'s `ListenOptions`, for one) fall to their generic branch. A triple's components are its only flags, so
-  nothing names the Darwin half that macOS and iOS share. Xcode's spelling, `arm64-apple-ios`, is misread (KR-279),
-  so that comes first.
+  nothing names the Darwin half that macOS and iOS share. Xcode's spelling, `arm64-apple-ios`, is refused, naming
+  `aarch64-ios-none` (`0.9.808`).
 - **What it needs beyond the triple.** Apple's clang and the iOS SDK. An app whose loop the OS owns: it runs
   `UIApplicationMain` and drives frames from `CADisplayLink`, the inverted loop wasm already has. And a `.app` signed
   with a provisioning profile. `dlopen` is barred, so KR-24's hot reload stays desktop-only.
@@ -4292,31 +4246,3 @@ that only the root manifest's level applies, so this touches a ruled rule. The p
 its own optimize flag, and each `csources` file is its own translation unit. Cargo sets a level per package from the
 root (`[profile.release.package.<name>] opt-level`); CMake per source (`COMPILE_OPTIONS`). **Ruling owed:** a ceiling
 the package sets on its own entries (a cap, never a floor, so it cannot slow the consumer's code), or Cargo's model.
-
-<a id="s10-compiler-path"></a>
-
-### A failed C compile names the compiler that ran (KR-290)
-
-Reported 2026-11-02; read on `0.9.805`. When the C compile fails the driver prints `kama: %s failed (exit %d)` with
-the compiler's configured name (`kama.driver.cpp`), not the program the OS ran. With emsdk's `upstream/bin` ahead of
-msys2's on `PATH`, a native build runs emsdk's clang, which has no Windows sysroot, fails on `stdio.h`, and nothing
-says which clang that was, so it reads as a broken install. The fix: print the path the OS resolved (a `PATH` search
-on POSIX, `SearchPathW` on Windows), for `ar` as well. It sits beside KR-282, in the same compiler selection.
-
-<a id="s10-run-library"></a>
-
-### `kama run` executes a library (KR-278)
-
-Found 2026-11-01 on `0.9.803`, Windows 11, from a downstream engine's library package. `run` forces its output to
-`<tmp>/kama-run-<pid>[.exe]` (`kama.driver.cpp`, the `runMode` arm of `build`) and executes whatever the build left
-there, whatever the project's `OUTPUT` is:
-
-- `kama run lib/kama.json` with `"kind": "library"`, or `kama run f.kama --select OUTPUT=STATIC`, runs a `.a`. Windows
-  answers "This version of …\kama-run-<pid>.exe is not compatible with the version of Windows you're running", exit 1.
-- `--select OUTPUT=SHARED` runs a DLL: "Access is denied", exit 1.
-- `kama run` on a workspace refuses and names the member to run instead, and a library member is named.
-
-Not tried on Linux or macOS, where executing an archive fails differently. `cargo run` refuses with "a bin target
-must be available", and `go run` with "is not a main package". **Fix:** refuse before building when the resolved
-`OUTPUT` is not an executable, naming the project and `kama build`. Let the workspace refusal list only executable
-members, or say that none is. A fixture each.
