@@ -1194,7 +1194,10 @@ raw_elem_const_write	raw_elem_const_write.kama:8:4
 raw_elem_private_field	raw_elem_private_field.kama:12:11
 raw_generic_spelled	raw_generic_spelled.kama:4:87
 raw_pointer_operand	raw_pointer_operand.kama:4:14 raw_pointer_operand.kama:5:14 raw_pointer_operand.kama:6:14 raw_pointer_operand.kama:7:14
+raw_ptr_arrow	raw_ptr_arrow.kama:11:9 raw_ptr_arrow.kama:8:56
+raw_ptr_deref_star	raw_ptr_deref_star.kama:10:60 raw_ptr_deref_star.kama:11:47 raw_ptr_deref_star.kama:9:51
 raw_ptr_field_access	raw_ptr_field_access.kama:6:51
+raw_ptr_method	raw_ptr_method.kama:10:60 raw_ptr_method.kama:9:50
 rc_bare_handoff	rc_bare_handoff.kama:6:0
 reach_as_downcast_private	main.kama:2:112 main.kama:2:173
 reach_as_downcast_unimported	main.kama:2:112 main.kama:2:173

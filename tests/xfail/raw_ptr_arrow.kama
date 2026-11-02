@@ -1,0 +1,14 @@
+// C's `->`, which the lexer hands on as `-` then `>`, so a bare "unexpected >" pointed at half of what was written.
+type value Stats {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 get() { return this.n; }
+}
+
+unsafe fn int32 sameLine(UnsafePtr<Stats> s) { return s->get(); }
+unsafe fn int32 ownLine(UnsafePtr<Stats> s) {
+    return s
+        ->n;
+}
+
+fn uint8 main() { return 0; }

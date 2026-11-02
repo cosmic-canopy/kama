@@ -805,23 +805,6 @@ So nothing in the corpus was being checked only through the capture.
 checks its arguments as the turbofish arm does; then the gate: zero new diagnostics over the corpus on bodies that
 compile, with `--probe-templates` counting the sites it moves from deferred to resolved.
 
-<a id="s2-raw-pointer-method"></a>
-
-### A method call through a raw pointer never names the pointee (KR-299)
-
-Filed 2026-11-02, run on `0.9.811`. With `UnsafePtr<Stats> s`, in an `unsafe fn`:
-
-```kama fragment
-return s.get();      // `Stats*` has no method `get` — no contract that declares it is implemented for `Stats*` (an
-                     // interpolation hole needs `Formattable`, a `Map` key needs `Hashable`, `sort` needs `Comparable`)
-return (*s).get();   // Parse error: syntax error, unexpected *
-return s[0].get();   // compiles
-```
-
-The first message talks about contracts, which is not the problem, and neither names `s[0]`. Someone arriving from C reaches
-for `(*s)` or `s->` first, and turning its context pointer into a value is the first thing a `@foreignEntry` callback does.
-Wanted: both say the pointee is `s[0]`. An xfail's `.msg` holds each sentence down.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)

@@ -1,0 +1,1 @@
+is a raw pointer, which has no method `get` — its pointee does; call it through the pointer as `s[0].get(…)`

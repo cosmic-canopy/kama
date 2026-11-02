@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-299 | *Claimed: Mac, 2026-11-02.* **A method call through a raw pointer never names the pointee** — `s.get()` on an `UnsafePtr<Stats>` answers with a sentence about contracts, and `(*s).get()` with a bare parse error; neither says `s[0]`, the spelling that works (2026-11-02, `0.9.811`) | S | [§2](ROADMAP_DETAIL.md#s2-raw-pointer-method) |
 
 ## NOW — the next features, in build order
 

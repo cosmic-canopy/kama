@@ -310,6 +310,8 @@ struct LexerInstanceData {
       FIBER at exactly that byte. `fiberLine` is its line, for the hint when the spawn does not parse. */
    const char* fiberAt = nullptr;
    int fiberLine = 0;
+   /* The line of the last `->`, which the lexer hands on as `-` then `>`, for the hint when it does not parse. */
+   int arrowLine = 0;
 };
 
 struct kamayystype {
@@ -3090,6 +3092,10 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
         else if (tok == YYSYMBOL_IDENTIFIER && n == 1 && expected[0] == YYSYMBOL_OPERATOR)
             msg += " — a `ref T` member is a place-returning `ref T operator[](…)`; a field is never a `ref` (a place "
                    "is passed and returned, never stored), so declare the field by value";
+        /* C's dereference. A literal is wanted only where an expression begins, so this `*` cannot be a multiplication. */
+        else if (tok == YYSYMBOL_STAR && wantsLiteral)
+            msg += " — kama has no `*` dereference: a raw pointer's pointee is its element zero, `p[0]`, as in "
+                   "`p[0].get()` and `p[0] = x`";
         /* `import`/`export` appear nowhere but a file's header, so an unexpected one is always out of order. */
         else if (tok == YYSYMBOL_IMPORT || tok == YYSYMBOL_EXPORT)
             msg += std::string(" — `") + (tok == YYSYMBOL_IMPORT ? "import" : "export") + " { … };` belongs to the "
@@ -3101,7 +3107,9 @@ static int yyreport_syntax_error(const yypcontext_t* ctx, yyscan_t scanner)
            error is about its labels. Say which reading the parser took. */
         const LexerInstanceData* data = yyget_extra(scanner);
         const YYLTYPE* at = yypcontext_location(ctx);
-        if (data && data->fiberLine && at && at->first_line == data->fiberLine)
+        if (tok == YYSYMBOL_GT && data && at && at->first_line == data->arrowLine)
+            msg += " (kama has no `->`: a raw pointer's pointee is its element zero, `p[0]`, so `p->x` is `p[0].x`)";
+        else if (data && data->fiberLine && at && at->first_line == data->fiberLine)
             msg += " (after `spawn`, `fiber` starts a fiber — `spawn fiber handle(conn: give c);` — so a function "
                    "named `fiber` is never spawned as an isolate)";
         else if (data && !data->parenWord.empty() && at && at->first_line == data->parenWordLine)

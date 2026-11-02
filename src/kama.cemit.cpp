@@ -45601,6 +45601,11 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             unsupported(viewWhy.c_str(), call);
         else if (!unpinned.empty())
             unsupported(unpinned.c_str(), call);
+        else if (!rct.empty() && rct.back() == '*') {   // the field arm's sentence: a pointee is reached by indexing
+            const std::string place = unparseExpr(receiver);
+            unsupported(("`" + place + "` is a raw pointer, which has no method `" + method + "` — its pointee does; "
+                         "call it through the pointer as `" + place + "[0]." + method + "(…)`").c_str(), call, rk);
+        }
         else if (!rk.empty())
             unsupported(("`" + rk + "` has no method `" + method + "` — no contract that declares it is "
                          "implemented for `" + rk + "` (an interpolation hole needs `Formattable`, a `Map` key "

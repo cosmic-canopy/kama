@@ -1,0 +1,12 @@
+// A raw pointer has no methods, and its pointee does. This answered with a sentence about contracts, `Stats*` has no
+// method `get`, which is not the problem and names no way forward. raw_ptr_field_access is the field's twin.
+type value Stats {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 get() { return this.n; }
+}
+
+unsafe fn int32 read(UnsafePtr<Stats> s) { return s.get(); }
+unsafe fn int32 readConst(UnsafeConstPtr<Stats> s) { return s.get(); }
+
+fn uint8 main() { return 0; }

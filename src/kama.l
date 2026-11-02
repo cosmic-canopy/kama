@@ -436,6 +436,7 @@ identifier                  ({letter_char}|"_"){ident_char}*
 ")"     { RETURN_TOKEN(RPAREN, 1); }
 "*"     { RETURN_TOKEN(STAR, 1); }
 "+"     { RETURN_TOKEN(PLUS, 1); }
+"->"    { yyextra->arrowLine = yyextra->next_line_number; yyless(1); RETURN_TOKEN(MINUS, 1); }   /* no such token: see yyreport_syntax_error */
 "-"     { RETURN_TOKEN(MINUS, 1); }
 "..."   { RETURN_TOKEN(ELLIPSIS, 3); }
 "."     { RETURN_TOKEN(DOT, 1); }

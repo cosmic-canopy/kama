@@ -62,6 +62,8 @@ tests/xfail/module_static_volatile.kama
 tests/xfail/null_as_name.kama
 tests/xfail/out_local.kama
 tests/xfail/pin_keyword_typo.kama
+tests/xfail/raw_ptr_arrow.kama
+tests/xfail/raw_ptr_deref_star.kama
 tests/xfail/recover_multi_error.kama
 tests/xfail/ref_arg_unlabeled.kama
 tests/xfail/ref_field.kama

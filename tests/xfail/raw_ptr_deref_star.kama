@@ -1,0 +1,13 @@
+// C's dereference, in each place an expression begins. A bare "unexpected *" named neither the rule nor `p[0]`.
+type value Stats {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public const fn int32 get() { return this.n; }
+}
+fn int32 id(int32 v) { return v; }
+
+unsafe fn int32 call(UnsafePtr<Stats> s) { return (*s).get(); }
+unsafe fn int32 argument(UnsafePtr<int32> p) { return id(v: *p); }
+unsafe fn void statement(UnsafePtr<int32> p) { *p = 4; }
+
+fn uint8 main() { return 0; }

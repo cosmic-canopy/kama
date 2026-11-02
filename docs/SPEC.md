@@ -3680,6 +3680,8 @@ unsafe fn void upload(const ref FixedArray<float32> verts) {
 
 A pointer to a struct is read the same way, through its element: `p[0].x`. The pointer itself has no fields, so
 `p.x` is refused with that spelling — there is no `->`, since `[0]` already is the one way to reach a pointee. <!-- xfail: raw_ptr_field_access -->
+A method is reached the same way: `p[0].get()`, and `p.get()` is refused with that spelling. <!-- xfail: raw_ptr_method -->
+`(*p)` and `p->x`, the C spellings, are refused with a note naming `p[0]`. <!-- xfail: raw_ptr_deref_star --> <!-- xfail: raw_ptr_arrow -->
 
 **The raw seam is a seam, not a second ownership system.** An element `p[i]` of a raw `UnsafePtr<T>` is
 **untyped to ownership**: `p[i] = v` is a plain store (the old bytes are overwritten, no destructor runs),
