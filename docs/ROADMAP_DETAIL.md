@@ -523,12 +523,26 @@ read at all.
    between this and zlib is the checked access per byte: every index, and every narrowing `cast`, is checked in a
    release build too. 300 random streams (every level, five strategies, flushes, read in mixed sizes) decode to
    zlib's bytes and leave the tail; that test lived in the session's scratchpad.
-3. **`DeflateWriter`,** a streaming port of `kama.archive.cpp`. Its memory is bounded by the window, a 259-byte
+3. **`DeflateWriter`,** a streaming port of `kama.archive.cpp`. Its memory is bounded by the window, a 262-byte
    lookahead, one block of 16,384 tokens and that block's input up to 64 KiB, since a stored block can only win below
-   that (a fixed-code token costs at most 9 + 5 + 5 + 13 bits, so 16,384 of them cost at most 64 KiB). `DeflateLevel`
-   selects a row of the parameter table; `Frozen` is publish's row. ⚠️ First, probe that the streaming port reproduces
-   the C++ tokens exactly (chain-walk order, the stop past 32 KiB, the final block flagged only at `finish`). If it cannot,
-   decision 7 comes back as a correction.
+   that (a token costs at most 8 + 5 + 5 + 13 bits in the fixed code, so 16,384 of them cost at most 62 KiB). `DeflateLevel`
+   selects a row of the parameter table; `Frozen` is publish's row. **Probed 2026-11-02, decision 7 stands:** a
+   streaming kama port, matcher and block writer, wrote raw deflate BYTE-IDENTICAL to `kama.archive.cpp`'s `deflate`
+   on empty input, 23 bytes, 300 KB of text (dynamic blocks, many of them), 120 KB of random bytes (stored) and 400 KB
+   of four-byte runs, fed in writes of 1, 7, 300, 4,096 and 70,000 bytes. The reference was a scratch C++ file that
+   `#include`s `src/kama.archive.cpp` and calls its `lz77` and `deflate`. What the port must keep, each one load-bearing:
+   - **Position `i` is decided only once `i + 262` bytes have arrived** (or at `finish`/`flush`). `longest(i)` reads
+     up to `i + 257`, and a taken match inserts positions up to `i + 256`, each needing 3 bytes. A write's size then
+     changes no token.
+   - **The hash heads and chain hold positions relative to a 64 + 4 KiB buffer, which slides 32 KiB once `i` passes
+     64 KiB.** Every entry the slide drops is then more than 32,768 back, where the C++ walk stops anyway. zlib's rule,
+     sliding earlier and capping distances at `32768 - 262`, would change tokens.
+   - **A full block of 16,384 tokens is held until the next token exists**, since its BFINAL is known only then; an
+     input ending on a block boundary marks that block final, as the C++ does.
+   - **Package-merge with stable ties**: equal weights keep symbol order in the sort, and the merge takes a leaf
+     before a package (`std::stable_sort`, `std::merge`).
+   - **`finish` is `BufWriter.intoInner`'s shape**: `give fn Result<W, Unfinished<DeflateWriter<W>>>`, safe to call
+     again after a `WouldBlock` without writing a second final block.
 4. **zlib and gzip.** Their fixed fields go through `std::num`'s `loadU32`/`storeU32` and `loadU16`: the zlib trailer's
    Adler-32 is `ByteOrder::Big`; gzip's MTIME, trailer CRC-32 and ISIZE, and FEXTRA's XLEN, are `ByteOrder::Little`.
 5. **tar**, reader and writer.
