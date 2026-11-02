@@ -2570,6 +2570,29 @@ static bool parseTriple(const std::string& s, TargetSpec& out, std::string& err)
     }
     for (const auto& p : parts)
         if (p.empty()) { err = "empty component in target triple '" + s + "'"; return false; }
+    // clang and gcc spell many triples in three parts with a VENDOR in the middle (`aarch64-apple-darwin`,
+    // `x86_64-w64-mingw32`), and read in kama's positions those named another OS: `aarch64-apple-darwin`
+    // derived `OS_APPLE` while clang, handed the same string, built for macOS, so std's `OS_MACOS` gates and
+    // `isMacOS()` took the other branch with nothing said. Refused, not aliased, since an alias is a second
+    // spelling of one target; `arm64`, clang's other name for `aarch64`, likewise.
+    const std::string arch = parts[0] == "arm64" ? "aarch64" : parts[0];
+    static const std::set<std::string> kVendors = { "apple", "pc", "unknown", "w64" };
+    if (parts.size() == 3 && kVendors.count(parts[1])) {
+        const std::string& os = parts[2];
+        auto starts = [&](const std::string& p) { return os.compare(0, p.size(), p) == 0; };
+        const std::string fix = starts("darwin") || starts("macos") ? arch + "-macos-none"
+                              : starts("ios")                       ? arch + "-ios-none"
+                              : os == "mingw32"                     ? arch + "-windows-gnu"
+                              :                                       arch + "-" + os + "-<abi>";
+        err = "target triple '" + s + "' has a vendor (`" + parts[1] + "`) in the middle, as clang spells "
+              "it; kama's triple is <arch>-<os>-<abi> — write `" + fix + "`";
+        return false;
+    }
+    if (parts[0] == "arm64") {
+        err = "target triple '" + s + "': kama spells this architecture `aarch64` — write `" + arch +
+              s.substr(parts[0].size()) + "`";
+        return false;
+    }
     if (parts.size() == 2)      { out.arch = parts[0]; out.os = parts[1]; out.abi = "none"; }
     else if (parts.size() == 3) { out.arch = parts[0]; out.os = parts[1]; out.abi = parts[2]; }
     else if (parts.size() == 4) { out.arch = parts[0]; out.os = parts[2]; out.abi = parts[3]; }  // drop vendor

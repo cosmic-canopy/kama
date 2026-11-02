@@ -60,6 +60,11 @@ kama build firmware.kama --target thumbv7em-none-eabihf --cc "arm-none-eabi-gcc"
 kama build app.kama      --target riscv64-linux-musl
 ```
 
+Four components are `<arch>-<vendor>-<os>-<abi>`, and the vendor is dropped. The three-part spelling clang
+and gcc often use puts a vendor in the middle (`aarch64-apple-darwin`, `x86_64-w64-mingw32`), and kama
+refuses it rather than misreading it: a middle `apple`, `pc`, `unknown` or `w64` is an error naming kama's
+spelling (`aarch64-macos-none`, `x86_64-windows-gnu`). The architecture is `aarch64`, never `arm64`.
+
 ## Getting a cross toolchain
 
 Three routes. **Try them in this order** — the first one that describes you is the least work.

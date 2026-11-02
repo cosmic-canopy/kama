@@ -538,6 +538,33 @@ if printf '%s' "$gccline" | grep -qF -- "-target "; then
     exit 1
 fi
 
+# 8b. CLANG'S VENDOR SPELLING IS REFUSED, NOT MISREAD. Three parts are read as <arch>-<os>-<abi>, so
+#     `aarch64-apple-darwin` derived OS_APPLE while clang, handed the same string, built for macOS: std's
+#     OS_MACOS gates and the driver's isMacOS() disagreed with the compiler, and nothing said so (0.9.803).
+#     Each is refused naming kama's spelling, on --target and as a kama.json `triple` alike.
+vendorRefused() {   # vendorRefused <triple> <kama's spelling> <transpile args...>
+    bad=$1; good=$2; shift 2
+    if "$KAMA" transpile "$@" -o "$tmp/vt.c" >"$tmp/vt.out" 2>&1 || ! grep -qF -- "write \`$good\`" "$tmp/vt.out"; then
+        echo "check-target: FAIL — the triple $bad was not refused naming \`$good\`:" >&2
+        sed 's/^/    /' "$tmp/vt.out" >&2; exit 1
+    fi
+}
+vendorRefused aarch64-apple-darwin aarch64-macos-none  "$FIXTURE" --target aarch64-apple-darwin
+vendorRefused arm64-apple-ios      aarch64-ios-none    "$FIXTURE" --target arm64-apple-ios
+vendorRefused x86_64-w64-mingw32   x86_64-windows-gnu  "$FIXTURE" --target x86_64-w64-mingw32
+vendorRefused arm64-linux-gnu      aarch64-linux-gnu   "$FIXTURE" --target arm64-linux-gnu
+vt="$tmp/vt"; mkdir -p "$vt/src"
+printf '@compileFor(OS_MACOS) fn uint8 probe() { return 0; }\nfn uint8 main() { return probe(); }\n' > "$vt/src/app.kama"
+printf '{ "name": "vt", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "select": { "TARGET": { "MAC": { "triple": "aarch64-apple-darwin" } } },
+  "modules": { ".": { "visibility": "internal" } } }\n' > "$vt/kama.json"
+vendorRefused "aarch64-apple-darwin (in kama.json)" aarch64-macos-none "$vt/kama.json" --target MAC
+# kama's own spelling derives OS_MACOS, and a four-part triple drops its vendor, as it always has.
+for t in aarch64-macos-none aarch64-apple-macos-none; do
+    "$KAMA" transpile "$vt/src/app.kama" --target "$t" -o "$tmp/vt.c" >"$tmp/vt.out" 2>&1 || {
+        echo "check-target: FAIL — --target $t did not derive OS_MACOS:" >&2; sed 's/^/    /' "$tmp/vt.out" >&2; exit 1; }
+done
+
 # 9. TARGET SPECS — a target declared in kama.json carries its own toolchain, so a team shares one
 #    checked-in cross setup instead of each developer remembering flags.
 spec="$tmp/spec"
