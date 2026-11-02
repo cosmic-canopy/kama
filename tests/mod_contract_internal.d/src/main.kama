@@ -1,0 +1,15 @@
+import { gc::Handler, gc::Ctx, gc::app::run };
+
+type value Route { public int32 n; public ctor make(int32 n) { this.n = n; } }
+
+type resource App implements Handler<Route> {
+    int32 unused;
+    public ctor make() { this.unused = 0; }
+    public fn int32 handle(Route route, ref Ctx ctx) { return route.n + ctx.value(); }
+}
+
+fn uint8 main() {
+    App a = App.make();
+    Ctx c = Ctx.make();
+    return cast<uint8>(a.handle(route: Route.make(n: 1), ctx: ref c) + run());   // 2 + 40
+}

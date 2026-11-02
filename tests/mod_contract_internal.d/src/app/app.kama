@@ -1,0 +1,43 @@
+import { gc::core::Ctx, gc::api::SubPlain, gc::api::Sub, gc::api::SubOfPlain, gc::api::Handler };
+export { run };
+
+type value Route { public int32 n; public ctor make(int32 n) { this.n = n; } }
+
+type resource A implements SubPlain {
+    int32 u;
+    public ctor make() { this.u = 0; }
+    public fn int32 plain(ref Ctx ctx) { return ctx.value(); }
+    public fn int32 more(ref Ctx ctx) { return 1; }
+}
+type resource B implements Sub<Route> {
+    int32 u;
+    public ctor make() { this.u = 0; }
+    public fn int32 first(Route route, ref Ctx ctx) { return route.n; }
+    public fn int32 second(Route route, ref Ctx ctx) { return 0; }
+}
+type resource C implements SubOfPlain<Route> {
+    int32 u;
+    public ctor make() { this.u = 0; }
+    public fn int32 plain(ref Ctx ctx) { return 0; }
+    public fn int32 mine(Route route, ref Ctx ctx) { return route.n; }
+}
+type resource D implements Handler<Route> {
+    int32 u;
+    public ctor make() { this.u = 0; }
+    public fn int32 handle(Route route, ref Ctx ctx) { return route.n; }
+}
+
+fn int32 viaContract(SubPlain s, ref Ctx c) { return s.more(ctx: ref c) + s.plain(ctx: ref c); }
+fn int32 viaGeneric(Handler<Route> h, ref Ctx c) { return h.handle(route: Route.make(n: 1), ctx: ref c); }
+
+fn int32 run() {
+    A a = A.make();
+    B b = B.make();
+    C c = C.make();
+    D d = D.make();
+    Ctx x = Ctx.make();
+    return viaContract(s: a, c: ref x)                              // 1 + 38
+         + viaGeneric(h: d, c: ref x)                               // 1
+         + b.first(route: Route.make(n: 0), ctx: ref x)
+         + c.mine(route: Route.make(n: 0), ctx: ref x);
+}

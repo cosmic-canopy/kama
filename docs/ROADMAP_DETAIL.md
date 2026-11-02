@@ -805,29 +805,6 @@ So nothing in the corpus was being checked only through the capture.
 checks its arguments as the turbofish arm does; then the gate: zero new diagnostics over the corpus on bodies that
 compile, with `--probe-templates` counting the sites it moves from deferred to resolved.
 
-<a id="s2-contract-internal-module"></a>
-
-### A generic contract over its own internal module's type (KR-295)
-
-Filed 2026-11-02, run on `0.9.811`. A generic contract names a type of its own module and is implemented in another file
-of that module, whose `visibility` is `"internal"`:
-
-```kama fragment
-// src/handler.kama
-export { Handler, Ctx };
-type resource Ctx { int32 hits; public ctor make() { this.hits = 0; } }
-type contract Handler<R> for resource { fn int32 handle(R route, Ctx ctx); }
-// src/main.kama: `type resource App implements Handler<Route> { … }`, importing Handler and Ctx
-```
-
-`kama check kama.json` answers `src/main.kama:3:0: error: module `gc` is not visible from a file in no module`. Line 3 is
-the contract's line in `handler.kama`, not a line of `main.kama`, so the message is wrong about the place and about the
-cause. With the module `"public"` it builds and runs (run). Reported as also building, not re-run here: `Handler` not
-generic, everything in one file, a std type in place of `Ctx`, and a contract in a public library implemented by an
-application. It looks as if the contract's instance is checked from outside every module. What it blocks is an application
-or a test program declaring a generic contract over its own types. **First step:** a fixture of the above, then find where
-a contract instance is registered and which module it is checked from.
-
 <a id="s2-raw-pointer-method"></a>
 
 ### A method call through a raw pointer never names the pointee (KR-299)

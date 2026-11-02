@@ -1,0 +1,1 @@
+module `gc::core` is not visible from `gc::app`

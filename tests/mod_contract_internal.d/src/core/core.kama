@@ -1,0 +1,11 @@
+// The same across internal modules: a type and two parent contracts here, the contracts refining them in `api`, their
+// implementers in `app`.
+export { Ctx, Plain, Base };
+
+type resource Ctx {
+    int32 hits;
+    public ctor make() { this.hits = 38; }
+    public const fn int32 value() { return this.hits; }
+}
+type contract Plain for resource { fn int32 plain(ref Ctx ctx); }
+type contract Base<R> for resource { fn int32 first(R route, ref Ctx ctx); }

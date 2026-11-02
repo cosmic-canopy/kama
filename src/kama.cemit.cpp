@@ -864,10 +864,13 @@ std::string CEmitter::kMember(const ClassInfo& owner, const std::string& name)
 
 void CEmitter::restoreFileRung(NsCtx& ns, const std::string& declFile) const
 {
-    ns.privScope.clear(); ns.exportedHere.clear();
+    ns.privScope.clear(); ns.exportedHere.clear(); ns.module.clear();
     if (declFile.empty() || declFile[0] == '<') return;          // compiler-owned, or unknown
     for (auto& kv : _unitCtx)
-        if (kv.second.unitPath == declFile) { ns.privScope = kv.second.privScope; ns.exportedHere = kv.second.exportedHere; return; }
+        if (kv.second.unitPath == declFile) {
+            ns.privScope = kv.second.privScope; ns.exportedHere = kv.second.exportedHere; ns.module = kv.second.module;
+            return;
+        }
 }
 
 std::string CEmitter::siblingPrivateKey(const std::string& name,

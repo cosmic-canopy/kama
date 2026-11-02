@@ -1,0 +1,5 @@
+// `core` names only `api`. mod_contract_internal.d is the same contract with every module internal: fixing a false
+// refusal of that one must leave this true one standing, and at a place in the implementer's own file.
+export { Ctx };
+
+type resource Ctx { int32 hits; public ctor make() { this.hits = 40; } }

@@ -1,0 +1,6 @@
+import { gc::app::D };
+
+fn uint8 main() {
+    D d = D.make();
+    return 0;
+}

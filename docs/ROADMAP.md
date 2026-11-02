@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-295 | *Claimed: Mac, 2026-11-02.* **A generic contract naming a type of its own internal module is refused in that module's other files** — "module `gc` is not visible from a file in no module", in the implementer's file at the contract's line. It builds when the module is public (2026-11-02, `0.9.811`) | S? | [§2](ROADMAP_DETAIL.md#s2-contract-internal-module) |
 | KR-299 | *Claimed: Mac, 2026-11-02.* **A method call through a raw pointer never names the pointee** — `s.get()` on an `UnsafePtr<Stats>` answers with a sentence about contracts, and `(*s).get()` with a bare parse error; neither says `s[0]`, the spelling that works (2026-11-02, `0.9.811`) | S | [§2](ROADMAP_DETAIL.md#s2-raw-pointer-method) |
 
 ## NOW — the next features, in build order

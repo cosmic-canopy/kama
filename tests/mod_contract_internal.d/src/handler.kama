@@ -1,0 +1,11 @@
+// A generic contract naming a type of its own internal module, implemented in another file of that module (main.kama).
+// It was refused: "module `gc` is not visible from a file in no module", with the contract's line under main.kama's name. The
+// instance's context had been rebuilt from a type, which kept the type's scope and dropped its module.
+export { Handler, Ctx };
+
+type resource Ctx {
+    int32 hits;
+    public ctor make() { this.hits = 1; }
+    public const fn int32 value() { return this.hits; }
+}
+type contract Handler<R> for resource { fn int32 handle(R route, ref Ctx ctx); }

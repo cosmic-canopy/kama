@@ -1,0 +1,4 @@
+import { gc::core::Ctx };
+export { Handler };
+
+type contract Handler<R> for resource { fn int32 handle(R route, ref Ctx ctx); }

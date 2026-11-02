@@ -960,6 +960,7 @@ mint_protocol_not_a_value	mint_protocol_not_a_value.kama:16:4
 missing_return	missing_return.kama:6:26
 mod_call_private	main.kama:4:18 main.kama:4:25 main.kama:4:33
 mod_collision	main.kama:1:20
+mod_contract_not_visible	app.kama:1:9 app.kama:4:0 app.kama:7:0
 mod_ctor_private	main.kama:1:18 main.kama:1:25 main.kama:1:33
 mod_export_private	main.kama:1:9 main.kama:2:25
 mod_export_undefined	mod_export_undefined.kama:1:0

@@ -1,0 +1,7 @@
+import { gc::core::Ctx, gc::core::Plain, gc::core::Base };
+export { SubPlain, Sub, SubOfPlain, Handler };
+
+type contract SubPlain for resource implements Plain { fn int32 more(ref Ctx ctx); }
+type contract Sub<R> for resource implements Base<R> { fn int32 second(R route, ref Ctx ctx); }
+type contract SubOfPlain<R> for resource implements Plain { fn int32 mine(R route, ref Ctx ctx); }
+type contract Handler<R> for resource { fn int32 handle(R route, ref Ctx ctx); }

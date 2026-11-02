@@ -1,0 +1,8 @@
+import { gc::core::Ctx, gc::api::Handler };
+export { D };
+
+type resource D implements Handler<int32> {
+    int32 u;
+    public ctor make() { this.u = 0; }
+    public fn int32 handle(int32 route, ref Ctx ctx) { return route; }
+}
