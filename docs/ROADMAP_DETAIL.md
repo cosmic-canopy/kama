@@ -498,8 +498,10 @@ read at all.
 
 #### The build (KR-5)
 
-1. **Groundwork.** `InvalidData` and `LimitExceeded`; the byte `SliceReader`; `BufWriter`'s comment; `std::digest::crc32`
-   and `adler32` (check values: crc32 of `123456789` is `CBF43926`, adler32 of `Wikipedia` is `11E60398`).
+1. ✅ **Groundwork** (`0.9.763`). `InvalidData` and `LimitExceeded`; the byte `SliceReader`; `BufWriter`'s comment;
+   `std::digest::crc32` and `adler32` (check values: crc32 of `123456789` is `CBF43926`, adler32 of `Wikipedia` is
+   `11E60398`). Also in since: `finish` as a `give fn` (`0.9.777`), and `std::num`'s byte-order loads and stores
+   (`0.9.803`), which the headers and trailers below are read and written with.
 2. **`DeflateReader`** and the `BufReader` grant. Fixtures: stored, fixed and dynamic blocks; every corrupt class is
    `InvalidData`; the limit's edge (exactly `limit` passes, one more fails); the exact end.
 3. **`DeflateWriter`,** a streaming port of `kama.archive.cpp`. Its memory is bounded by the window, a 259-byte
@@ -508,7 +510,8 @@ read at all.
    selects a row of the parameter table; `Frozen` is publish's row. ⚠️ First, probe that the streaming port reproduces
    the C++ tokens exactly (chain-walk order, the stop past 32 KiB, the final block flagged only at `finish`). If it cannot,
    decision 7 comes back as a correction.
-4. **zlib and gzip.**
+4. **zlib and gzip.** Their fixed fields go through `std::num`'s `loadU32`/`storeU32` and `loadU16`: the zlib trailer's
+   Adler-32 is `ByteOrder::Big`; gzip's MTIME, trailer CRC-32 and ISIZE, and FEXTRA's XLEN, are `ByteOrder::Little`.
 5. **tar**, reader and writer.
 6. **`extractInto`** and the `std::fs` symlink binding, which goes in `kama_os.h`.
 7. **Guards.** `check-compress-interop.sh` runs both directions against python3's zlib, gzip and tarfile, at every
@@ -713,22 +716,45 @@ language-completeness residual is **closed**; what remains here is genuinely lat
 
 <a id="s2-infer-optional-arg"></a>
 
-### A type argument inferred from an `Optional<T>` argument inside a generic (KR-277)
+### A callee's type parameter read as the caller's (KR-277)
 
-Found 2026-11-01 writing `ConcurrentMap.compareAndSwap`'s fix (`0.9.800`), measured on `0.9.799`:
+Found 2026-11-01 writing `ConcurrentMap.compareAndSwap`'s fix (`0.9.800`); root cause probed on `0.9.803`:
 
 ```kama
 import { std::memory::replace };
 fn Optional<T> takeOpt<T>(ref Optional<T> p) { return replace(place: ref p, with: Optional::None); }   // refused
-fn uint8 main() { Optional<int64> o = Optional::Some(value: 5i64); Optional<int64> t = takeOpt(p: ref o); return 0; }
+fn uint8 main() { return 0; }
 ```
 
-`replace<X>(ref X place, X with)` is inferred with `X = T` rather than `X = Optional<T>`, so the result is "a `T`",
-and in a `pick2<T>` that binds the result to a local the declared type prints as `Optional<>`. The same call in
-plain code (`Optional<int64> p`) and in a generic TYPE's method (`ConcurrentMap<K, V>`'s `Optional<V> pending`) both
-compile, so the miss is in inferring through a generic free function's own parameter. Unprobed: where inference
-unwraps — probably the literal-typed-by-destination path that wraps a bare value into `Optional`, applied to the
-`with: Optional::None` argument. The fix is a fixture of exactly this program plus the inference site.
+"a return value expects an `Optional<T>`, and a `T` is not one". Measured, each variant on its own:
+
+| variant | result |
+|---|---|
+| as above, `takeOpt` never called | refused: the generic body's own check, no instance needed |
+| `replace::<Optional<T>>(…)`, the argument written out | refused the same way |
+| `with: give none` from a typed local `Optional<T> none` | refused the same way |
+| **the caller's parameter renamed, `takeOpt<U>(ref Optional<U> p)`** | **compiles, and returns 5 for `Some(5)`** |
+| plain code (`Optional<int64> p`); a generic TYPE's method (`ConcurrentMap<K, V>`, its `Optional<V>`) | compiles |
+
+So it is **name capture**: `replace<T>` returns `T`, the call binds the callee's `T` to `Optional<T>` (the caller's),
+and the result type is read back as the bare name `T`, which the caller's scope then resolves as its OWN `T`. A
+generic type's method escapes only because its parameter is `V`. Unrelated to `Optional` or to inference: any
+generic function calling a generic function whose type parameter shares a name with its own, where the callee's
+return type is that parameter, should show it. **First step:** a fixture of the table above (`T`/`T`, `T`/`U`, a
+two-parameter `K`/`V` swap — `fn pair<K, V>(…)` calling `fn pair2<V, K>(…)`), then find where a generic call's
+return type is computed while the caller's `_typeSubst` is live, and substitute the callee's bindings into the
+callee's return type before the caller's names can see it. Seen beside it and NOT the same thing — it fails with the parameter renamed, and in plain code — is KR-285:
+
+```kama
+DynamicArray<int64> o = DynamicArray.empty();
+DynamicArray<int64> t = replace(place: ref o, with: DynamicArray.empty());   // "cannot infer `T` — argument `with` is …"
+```
+
+`place` fixes `replace`'s `T` as `DynamicArray<int64>`, but the `with:` argument is not typed from that binding, so the
+bare `DynamicArray.empty()` has no type arguments to build with. A literal is typed by its destination elsewhere; here
+the destination is a type parameter another argument has already bound. Rust infers `mem::replace(&mut v,
+Vec::new())`. A missing capability with a spelled workaround (`DynamicArray::<int64>.empty()`), so a feature row, not a
+defect; unscoped — the order in which `inferGenericInst` binds and then types its arguments is the place to look.
 
 <a id="s2-quoted-format"></a>
 
