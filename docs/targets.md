@@ -554,7 +554,9 @@ kama build app.kama --target aarch64-linux-gnu --cc "clang" \
 
 kama detects that `clang` is a multi-target driver and passes `-target <triple>` for you. A
 **per-target** compiler (`aarch64-linux-gnu-gcc`, a vendor ARM gcc, an NDK wrapper) has its triple in
-its name, so kama deliberately does *not* pass `-target` — that would break it.
+its name, so kama deliberately does *not* pass `-target` — that would break it. The program's name decides:
+`clang`, `clang-18` or a path to `clang.exe` takes `-target`, while a name with a prefix before `clang`
+(`aarch64-linux-android29-clang`) is a per-target wrapper.
 
 ### 3. You have neither — use zig
 

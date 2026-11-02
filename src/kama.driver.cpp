@@ -13093,9 +13093,19 @@ int main(int argc, char** argv)
         //   * multi-target driver — `clang`, `zig cc` — one binary for every target, `-target <triple>`.
         //   * per-target binary — `aarch64-linux-gnu-gcc`, a vendor ARM gcc, an NDK wrapper — the triple
         //     is already in its NAME, and passing `-target` would confuse or break it.
+        // The program's NAME decides: a word whose basename STARTS with `clang` (`clang`, `clang-18`, a quoted
+        // path to `clang.exe`) is the driver, and a prefix before it (`aarch64-linux-android29-clang`) makes a
+        // per-target wrapper. "clang anywhere in the string" handed the NDK's wrapper `-target
+        // aarch64-linux-android`, which overrode the API level in its name.
         auto takesTargetFlag = [](const std::string& c) {
-            return c.find("clang") != std::string::npos
-                || (c.find("zig") != std::string::npos && c.find(" cc") != std::string::npos);
+            if (c.find("zig") != std::string::npos && c.find(" cc") != std::string::npos) return true;
+            std::istringstream words(c);
+            for (std::string w; words >> w; ) {
+                if (w.back() == '"') w.pop_back();
+                const size_t slash = w.find_last_of("/\\\"");
+                if (w.compare(slash == std::string::npos ? 0 : slash + 1, 5, "clang") == 0) return true;
+            }
+            return false;
         };
         auto isZig = [](const std::string& c) { return c.find("zig") != std::string::npos; };
 

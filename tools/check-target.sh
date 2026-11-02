@@ -537,6 +537,23 @@ if printf '%s' "$gccline" | grep -qF -- "-target "; then
     why gcc
     exit 1
 fi
+# …and so does an NDK wrapper, whose name ends in `clang`. Matched as "clang anywhere in the name", it was handed
+# `-target aarch64-linux-android`, which overrides the API level its name carries, and NDK r30's headers refuse
+# the result: "Unversioned target triples are not supported!" (0.9.803).
+ndkline=$(tryline ndk build "$FIXTURE" --target "$CROSS_LINUX" --cc "echo aarch64-linux-android29-clang" -o "$tmp/c3")
+if printf '%s' "$ndkline" | grep -qF -- "-target "; then
+    echo "check-target: FAIL — an NDK wrapper (aarch64-linux-android29-clang) was handed -target" >&2
+    why ndk
+    exit 1
+fi
+# A path to clang is still clang, versioned or not.
+for c in "echo /usr/lib/llvm-18/bin/clang" "echo clang-18"; do
+    if ! tryline clangpath build "$FIXTURE" --target "$CROSS_LINUX" --cc "$c" -o "$tmp/c4" | grep -qF -- "-target $CROSS_LINUX"; then
+        echo "check-target: FAIL — \`$c\` did not receive -target for a cross build" >&2
+        why clangpath
+        exit 1
+    fi
+done
 
 # 8b. CLANG'S VENDOR SPELLING IS REFUSED, NOT MISREAD. Three parts are read as <arch>-<os>-<abi>, so
 #     `aarch64-apple-darwin` derived OS_APPLE while clang, handed the same string, built for macOS: std's
