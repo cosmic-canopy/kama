@@ -4288,7 +4288,8 @@ the collision check; neither named a mechanism, and the only rename that works i
 so; the comment goes with the fix. **Why it matters now:** `@kama/gpu` and `@kama/window` import as `gpu` and
 `window`, the names a game gives its own modules, and a downstream engine wants a scope of its own over general nouns
 (`net`, `physics`) that games use too. Today the way out is a prefix in every name, which leaves the scope doing
-nothing for the code.
+nothing for the code; the maintainer refused that as a workaround (2026-11-02), so this row is the fix and goes first
+on the Windows box.
 
 **The bare name does four jobs,** which is why a manifest key alone cannot fix it:
 1. the consumer's import (`net::who`);
@@ -4325,12 +4326,55 @@ package's manifest. It leaves the common case alone, since a key that is the pac
 bare name. Its costs: a scoped package's C names change, which breaks a C caller of a published scoped library's
 unannotated exports (an `@linkName` keeps its name), and the resolver gains a view of names per package.
 
-**Decisions owed:**
-1. A, B or C. Recommended: A.
-2. A scoped package's C prefix, which no unscoped package's module path may be able to spell. Recommended: a
-   separator a package name cannot contain, settled in SPEC § C names.
-3. Two dependencies of ONE consumer importing as one name stay an error, which now names the `package` key as the fix;
-   across consumers there is no collision. A dependency importing as the project's own name follows the same rule.
-4. Scope ownership, the other half of the report: nothing binds a publisher to a scope yet, and `@kama` and `@std` are
-   reserved only the day a hosted registry exists. A second official scope beside `@kama`, and a way for a third party
-   to claim one, belong to the registry's trust model (KR-27); this row does not decide them.
+**Ruled 2026-11-02** (the maintainer):
+1. **A.** The dependency's key is the consumer's local name, and `"package"` names the package when the two differ,
+   in Cargo's spelling: `"mmnet": { "package": "net", "path": "../net" }`. A key that is the package's own name needs
+   no `package` and imports as today. The alias lives in the manifest, as Cargo's, npm's and Zig's do, not in each
+   file as Go's does: the per-symbol `as` already settles a clash inside one file. Each package resolves its imports
+   through its own manifest, so a library deeper in the graph keeps its own names, and the full name is the identity
+   (the view, the module, the C). Unscoped names stay one per graph: a scope is what lets two packages of one name meet.
+2. **C names: `kS_` for a scoped package, and `k_F` becomes `kF_`.**
+
+   | declaration | before | after |
+   |---|---|---|
+   | `who` in unscoped `net` | `net__who` | `net__who` |
+   | `who` in `@south/net` | `net__who` | `kS_south__net__who` |
+   | `Device` in `@kama/gpu` | `gpu__Device` | `kS_kama__gpu__Device` |
+   | file-private `helper` in `app.kama` | `k_Fapp__helper` | `kF_app__helper` |
+
+   The rule: `k`, an uppercase tag and `_` is a prefix kama builds (`kF_` for a file's private declarations, `kS_` for
+   a scoped package's). It is set apart by its second character, as `k_` and `kama_` already are: no user name
+   (`k_…`), compiler name (`kama_…`), macro (`KAMA_…`) or project prefix (lowercase) has an uppercase second letter.
+   `k_S` was proposed first, to mirror `k_F`, and refused: the tag fuses with the scope (`k_Ssouth`), and `k_F` is
+   kept apart from a user's `k_` name only by the rule that no name contains `__`. An unscoped package keeps
+   `<project>__`, so std, core and every unscoped package are unchanged. A scope is held to the identifier rule a
+   project's name already meets (no `-`, no `__`), since it now reaches C; every scope the corpus and this box's
+   downstream projects use passes. `kama demangle` reverses both prefixes, and the declared C surface (`extern`,
+   `expose`, `@linkName`) keeps its spelling. **Measured:** no header in msys2's UCRT64, the NDK r30 sysroot or
+   emscripten's sysroot has an identifier starting `k_F`, `k_S`, `kF_` or `kS_`. The rename's footprint: 7 lines in
+   `src/`, `include/kama_lldb.py`, one test, ten guards that read emitted C, and three docs (a benchmark profile in
+   `docs/benchmarks/` keeps the names it recorded).
+3. **A collision is one consumer's.** Two of its dependencies under one local name, or one under the project's own
+   name, stay an error, which names the `package` key as the fix. Across consumers a local name never collides. What
+   stays refused across the graph is two packages with one identity, so an unscoped dependency named as the project
+   still is (both would be `net__…` in C), while a scoped one deeper in the graph no longer is.
+4. **Scope ownership is the registry's.** A scope the maintainer's own products publish under is reserved in the
+   registry project, which enforces it, not in the compiler, which keeps no list of scopes; kama's docs name only
+   `@kama` and `@std`, which mean something to the language. A third party's claim to a scope is KR-27's trust model.
+
+**Where it lands**, read off the code on `0.9.811` (line numbers approximate):
+- `importNameOf` (`kama.driver.cpp`, 25 call sites): each one means either the local name or the identity, and
+  sorting them is the row's risk.
+- `ModuleId.project` (~1406) holds the import name; it becomes the identity, `@south/net` for a scoped package, which
+  no source can spell and so cannot meet an unscoped name.
+- `resolveModuleFiles` (4 callers) and `moduleFilesInProject`: a file's root segment becomes an identity through its
+  own package's manifest before the lookup.
+- `kama pkg install`: the view's links (~8420, ~8465) are laid out by full name (`.kama/deps/@south/net`), and the
+  `importUsedBy` collision checks (~8368) become per consumer, with the `package` key parsed beside the others.
+- The emitter: `mangleNs` (12 call sites) and the import bindings (~737–790) take a per-unit map from local root to
+  identity, applied before mangling, and the `projectRoots` rule (§2f.29) reads local names.
+- `k_F` → `kF_`: `kama.cemit.cpp` ~699 and the host header's strip (~27155), `kama demangle`'s help and its comment in
+  the driver, and `include/kama_lldb.py`.
+- Guards and docs: `check-packages.sh` case 24 and the project-name cases change, and a new section covers an alias,
+  two scopes through aliases, a deeper library keeping its own names, and `kama demangle` on both prefixes.
+  packages.md § Scopes and SPEC § C names are rewritten.
