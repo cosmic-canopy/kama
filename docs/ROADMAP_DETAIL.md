@@ -805,6 +805,46 @@ So nothing in the corpus was being checked only through the capture.
 checks its arguments as the turbofish arm does; then the gate: zero new diagnostics over the corpus on bodies that
 compile, with `--probe-templates` counting the sites it moves from deferred to resolved.
 
+<a id="s2-contract-internal-module"></a>
+
+### A generic contract over its own internal module's type (KR-295)
+
+Filed 2026-11-02, run on `0.9.811`. A generic contract names a type of its own module and is implemented in another file
+of that module, whose `visibility` is `"internal"`:
+
+```kama fragment
+// src/handler.kama
+export { Handler, Ctx };
+type resource Ctx { int32 hits; public ctor make() { this.hits = 0; } }
+type contract Handler<R> for resource { fn int32 handle(R route, Ctx ctx); }
+// src/main.kama: `type resource App implements Handler<Route> { … }`, importing Handler and Ctx
+```
+
+`kama check kama.json` answers `src/main.kama:3:0: error: module `gc` is not visible from a file in no module`. Line 3 is
+the contract's line in `handler.kama`, not a line of `main.kama`, so the message is wrong about the place and about the
+cause. With the module `"public"` it builds and runs (run). Reported as also building, not re-run here: `Handler` not
+generic, everything in one file, a std type in place of `Ctx`, and a contract in a public library implemented by an
+application. It looks as if the contract's instance is checked from outside every module. What it blocks is an application
+or a test program declaring a generic contract over its own types. **First step:** a fixture of the above, then find where
+a contract instance is registered and which module it is checked from.
+
+<a id="s2-raw-pointer-method"></a>
+
+### A method call through a raw pointer never names the pointee (KR-299)
+
+Filed 2026-11-02, run on `0.9.811`. With `UnsafePtr<Stats> s`, in an `unsafe fn`:
+
+```kama fragment
+return s.get();      // `Stats*` has no method `get` — no contract that declares it is implemented for `Stats*` (an
+                     // interpolation hole needs `Formattable`, a `Map` key needs `Hashable`, `sort` needs `Comparable`)
+return (*s).get();   // Parse error: syntax error, unexpected *
+return s[0].get();   // compiles
+```
+
+The first message talks about contracts, which is not the problem, and neither names `s[0]`. Someone arriving from C reaches
+for `(*s)` or `s->` first, and turning its context pointer into a value is the first thing a `@foreignEntry` callback does.
+Wanted: both say the pointee is `s[0]`. An xfail's `.msg` holds each sentence down.
+
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)
@@ -2888,6 +2928,96 @@ ref` already answers that is the first thing to read; the call-site spelling (`c
 the parent may not write the place until the scope joins, as with a mutable borrow.
 
 <a id="s7"></a>
+
+<a id="s6-spawn-ref-this"></a>
+
+### A `ref this` bundle passes the address of `self` (KR-292)
+
+Filed 2026-11-02, run on `0.9.811`. Unsound, in safe code, in every build:
+
+```kama fragment
+type resource Core {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn void work() { this.n = this.n + 1; }
+    public fn int32 serve() { scope { spawn fiber running(c: ref this); } return this.n; }   // 42 expected
+}
+fn void running(ref Core c) { c.work(); }
+```
+
+| shape | result |
+|---|---|
+| `spawn fiber running(c: ref this)` | `fiber sees 1794631004`, then `after: -2147483648`, different each run; 41 and 42 expected |
+| `spawn running(c: ref this)` on a `Sendable` type | `after: -2147483648`, the same bug across threads |
+| `spawn fiber bump(v: ref this.n)` | right: 42 |
+| a free function holding the scope, `ref` its parameter | right, as reported |
+| `Fiber<R> f = spawn fiber …(c: ref this)` | refused, correctly: a held fiber takes no `ref` bundle |
+
+The emitted C is `kama_sched_scopeSpawn(&fs, &__kama_fib_…, (void*)&(self), 0)`: `self` is already the pointer, so the child
+gets its address. `CEmitter::bundleBorrow` serves both spawn forms, so one fix covers them. **First step:** a fixture of the table
+that exits by the field's value, run under ASan too, then lower `ref this` as the pointer it is.
+
+<a id="s6-fiber-generic-emit"></a>
+
+### Fiber trampolines and generics (KR-293, KR-294)
+
+Filed 2026-11-02, run on `0.9.811`. `kama check` accepts all of these and clang refuses them, which is the failure this
+compiler treats as a defect on its own: a program the checker passes must build.
+
+| shape | clang says |
+|---|---|
+| `fn void work<T>(Job<T> j)`, `spawn fiber work::<int32>(j: j)` | `use of undeclared identifier 'k_F…__Job_T'`, `call to undeclared function 'k_F…__work'` |
+| `fn void work<T>(int32 n)`, `spawn fiber work::<int64>(n: 4)` | `call to undeclared function 'k_F…__work'` |
+| a generic type's method: `scope { spawn fiber work(j: Job.make(n: 7)); }` with a plain `work` | `use of undeclared identifier '__kama_fib_k_F…__work'` |
+
+Reported as the same failure, not re-run here: an inferred type argument, and a held `Fiber<int32>`. KR-293: `fiberPrep`
+looks the entry up as a plain function, so nothing routes to the instance; instantiate the trampoline per instance, as Go's
+`go work[int](j)` and tokio's `spawn(work::<R>(j))` do. KR-294: the trampoline goes to `_fileScopeHelpers`, flushed after
+the module's header include, while a generic type's instance bodies are emitted in the header pass; declare it before them.
+A generic server's natural shape meets both, and the workaround is an erased, non-generic entry that costs a dynamic call
+per request.
+
+<a id="s6-fiber-cancel"></a>
+
+### Cancelling a fiber (KR-296)
+
+Filed 2026-11-02. KR-3's decision 11 ([docs/design/fibers.md](design/fibers.md)) says cancelling a scope marks its fibers, and
+each one's current and every later park returns `Err(IoError{Cancelled})` until it ends. It is unbuilt: `Cancelled` appears
+nowhere in `lib/std`, `include` or `src` on `0.9.811`, and the design's implementation map gives it no step.
+
+A server with a fiber per connection has to end parks it did not write: evicting a connection at the cap, graceful shutdown,
+a request the application never answers, a client gone while its request is held. Reported workarounds, not re-run here:
+`shutdown` on a duplicate descriptor wakes a parked read, which costs a descriptor per connection and withholds the FIN
+until the duplicate closes; a connect to its own port wakes a parked `accept`; slicing deadlines costs a wake per slice per
+connection. Nothing wakes a fiber parked on a `sleep` or a channel with no timeout, so a handler that never answers holds its
+fiber and its scope's closing brace.
+
+Go closes a `net.Conn` from any goroutine (`net.ErrClosed`) and cancels a request's `context.Context`; tokio cancels at the
+next `.await` when a future is dropped; .NET passes a `CancellationToken` to every wait. Wanted, as designed, in two forms:
+one fiber, by a `cancel()` on a handle, which a bare spawn does not give back today; and a whole scope. Which handle a bare
+spawn gives back wants a ruling first.
+
+<a id="s6-fiber-yield"></a>
+
+### `std::concurrent::yield()` (KR-297)
+
+Filed 2026-11-02. KR-3's decision 12 says "`std::concurrent::yield()` for a long loop". It is unbuilt on `0.9.811`: nothing in
+`lib/std/concurrent` declares it, and `sleep` of a zero span returns without parking, as its comment says. A fiber gives way
+only at a park, and a socket call parks only when it would otherwise block, so a client with pipelined requests already
+buffered, or a large body to a fast client, runs while every other fiber of its isolate waits. The workaround is a budget and
+a one-nanosecond `sleep`, a trip through the timer heap where a `yield` would be one run-queue push. Off a fiber it should be
+a no-op. Go preempts; tokio budgets 128 operations per task inside its resources, so no loop has to think about it, and that
+is the larger question to rule: a `yield` alone, or a budget in std's socket calls as well.
+
+<a id="s6-channel-try-send"></a>
+
+### `Sender.trySend` (KR-298)
+
+Filed 2026-11-02. `Receiver` has `tryRecv` and `recvTimeout`; `Sender` has only `send`, which parks (`lib/std/concurrent/channel.kama`,
+no `trySend` on `0.9.811`). A broadcaster with one bounded channel per client therefore waits for its slowest reader. Wanted:
+`trySend(item:)`, which never parks and hands the item back when the channel is full or closed, as `Undelivered` does today.
+Go's `select` with a `default`, tokio's `try_send` answering `Full(value)`, crossbeam's `try_send`. The reported workaround is
+a counter kept by hand on both sides of every channel.
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
 
