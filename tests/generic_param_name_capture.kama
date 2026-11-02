@@ -1,0 +1,50 @@
+// A generic calling a generic whose type parameter has the SAME NAME as its own (KR-277). The callee's return type was
+// read back in the caller's scope: `ident<T>` called with the caller's `Optional<T>` returns its own `T`, which is
+// `Optional<T>`, but it came back as the bare name `T` and resolved to the CALLER's `T`, so the body was refused. The
+// same body with its parameter renamed compiled. Every shape below failed on 0.9.803: a return, a turbofish, a local's
+// initializer, a method on the result, two parameters swapped (`swapped<V, K>` calling `second<K, V>`), a returned
+// generic type whose argument differs (`wrap<T>` returns `Optional<T>` with its `T = DynamicArray<T>`), a generic
+// type's method, and `std::memory::replace` through a `ref Optional<T>`. Each was refused as written, called or not.
+// Returns 42.
+import { std::memory::replace, std::collections::DynamicArray };
+
+fn T ident<T>(T x) { return x; }
+fn V second<K, V>(K k, V v) { return v; }
+fn Optional<T> wrap<T>(T x) { return Optional::Some(value: give x); }
+
+fn Optional<T> viaReturn<T>(Optional<T> a) { return ident(x: a); }
+fn Optional<T> viaTurbofish<T>(Optional<T> a) { return ident::<Optional<T>>(x: a); }
+fn Optional<T> viaLocal<T>(Optional<T> a) { Optional<T> r = ident(x: a); return r; }
+fn bool viaMethod<T>(Optional<T> a) { return ident(x: a).isSome(); }
+fn K swapped<V, K>(V a, K b) { return second(k: a, v: b); }
+fn Optional<DynamicArray<T>> viaWrap<T>(DynamicArray<T> a) { return wrap(x: give a); }
+fn Optional<T> takeOpt<T>(ref Optional<T> p) { return replace(place: ref p, with: Optional::None); }
+
+type value Holder<T> {
+    Optional<T> o;
+    public ctor make(Optional<T> o) { this.o = o; }
+    public fn Optional<T> get() { return ident(x: this.o); }
+}
+
+fn int64 orZero(Optional<int64> o) { return match (o) { case Some(value: v): v; case None: 0; }; }
+
+fn uint8 main() {
+    Optional<int64> five = Optional::Some(value: 5);
+    int64 total = orZero(o: viaReturn(a: five));                            // 5
+    total = total + orZero(o: viaTurbofish(a: five));                      // 10
+    total = total + orZero(o: viaLocal(a: five));                          // 15
+    if (viaMethod(a: five)) { total = total + 1; }                         // 16
+    int64 seven = 7;
+    total = total + swapped(a: true, b: seven);                            // 23
+    DynamicArray<int64> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    xs.add(item: 2);
+    Optional<DynamicArray<int64>> w = viaWrap(a: give xs);
+    if (w.isSome()) { total = total + 2; }                                 // 25
+    Holder<int64> h = Holder.make(o: Optional::Some(value: 9));
+    total = total + orZero(o: h.get());                                    // 34
+    Optional<int64> held = Optional::Some(value: 8);
+    total = total + orZero(o: takeOpt(p: ref held));                       // 42
+    if (held.isSome()) { return 1; }                                       // replace left None behind
+    return cast<uint8>(total);
+}

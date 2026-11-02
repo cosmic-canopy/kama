@@ -17164,8 +17164,19 @@ SharedIdentifier CEmitter::genericCallReturnNode(InvocationNode* iv, const std::
         // outer call defers too (bindGenericArg), and one that does not (`fn int32 count<T>(…)`) binds. An
         // inner call that FAILED reads the same way, and that is right as well: it has said why, and the
         // outer call deferring on it adds no second error about the same mistake.
+        //
+        // Its parameters are RENAMED on the way out, to names nothing declares, because the caller reads this
+        // type in its own scope (KR-277). Returned bare, `ident<T>`'s `T` resolved to the CALLER's `T` there:
+        // `fn Optional<T> g<T>(Optional<T> a) { return ident(x: a); }` was refused ("a `T` is not one"), and
+        // compiled with `g<U>`. A const parameter is a value, and stays unbound as before.
         _typeSubst.clear();
         _comptimeSubst.clear();
+        if (tmpl->typeParams)
+            for (size_t i = 0; i < tmpl->typeParams->size(); ++i) {
+                const SharedString& p = (*tmpl->typeParams)[i];
+                const bool isConst = tmpl->constTypes && i < tmpl->constTypes->size() && (*tmpl->constTypes)[i];
+                if (p && !isConst) _typeSubst[*p] = synthId("__open_" + k + "_" + *p);
+            }
         r = deepSubstType(tmpl->returnType);
     }
     _typeSubst = savedSubst; _comptimeSubst = savedComptime; _nsCtx = savedCtx;
