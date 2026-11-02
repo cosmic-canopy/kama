@@ -11778,9 +11778,22 @@ int main(int argc, char** argv)
             std::set<std::string> members;
             std::string werr;
             expandWorkspace(dirName(manifestOperand), members, werr);
+            // Only an executable can be run, so `run` names only those; naming a library sent the user
+            // to a second refusal.
+            std::vector<std::string> named;
+            for (const auto& m : members) {
+                std::string kind, kerr;
+                if (runMode && loadManifestKind(m + "/kama.json", kind, kerr) && kind == "library") continue;
+                named.push_back(m);
+            }
+            if (named.empty()) {
+                fprintf(stderr, "kama run: %s is a workspace of %zu project(s), none of them executable — "
+                                "`kama build` it\n", manifestOperand.c_str(), members.size());
+                return 2;
+            }
             fprintf(stderr, "kama %s: %s is a workspace of %zu project(s) — name the one to %s:\n",
                     subcommand.c_str(), manifestOperand.c_str(), members.size(), subcommand.c_str());
-            for (const auto& m : members)
+            for (const auto& m : named)
                 fprintf(stderr, "    kama %s %s/kama.json\n", subcommand.c_str(),
                         memberAsSpelled(manifestOperand, m).c_str());
             return 2;
@@ -11939,6 +11952,17 @@ int main(int argc, char** argv)
                            : projectKind == "library"       ? "STATIC"
                            : "EXE";
     if (shared) outputKind = "SHARED";
+    // `kama run` execs what it built, so only an executable can be its output. It used to build the archive or
+    // DLL under the throwaway executable's name and run THAT: Windows answered "not compatible with the version
+    // of Windows" for a `.a` and "Access is denied" for a DLL. `cargo run` and `go run` refuse the same way.
+    if (runMode && outputKind != "EXE") {
+        const char* what = outputKind == "STATIC" ? "a static library"
+                         : outputKind == "SHARED" ? "a shared library" : "an object file";
+        fprintf(stderr, "kama run: %s builds %s (OUTPUT=%s), which cannot be run — `kama build` it, or run "
+                        "an executable project\n",
+                (manifestOperand.empty() ? input : manifestOperand).c_str(), what, outputKind.c_str());
+        return 2;
+    }
     // Asking for an EXECUTABLE of a library cannot work — it has no `main` — and until `kind` existed
     // nothing could say so: the build ran to completion and the LINKER reported `Undefined symbols: _main`,
     // naming a C symbol for a kama mistake. Only reachable now by asking for it explicitly, since the
