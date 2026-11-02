@@ -2360,7 +2360,7 @@ the table above.
 ### Android, for Meta Quest's native route (KR-280, KR-282, KR-283) — measured on `0.9.803`
 
 **The brief for the session that builds it, on the Windows box (it has the headset).** The owner, 2026-11-01: a game
-engine on kama will ship on Meta Quest both through the browser (WebXR, KR-284) and natively. Quest is an Android
+engine on kama will ship on Meta Quest both through the browser (WebXR) and natively; XR itself is the engine's (§8). Quest is an Android
 device (Horizon OS is Android 14, SDK 34), and its native XR is OpenXR, so the native route is an Android target
 first. VR work is on Windows because Quest Link, which runs a desktop OpenXR app in the headset, is Windows-only.
 
@@ -2864,6 +2864,21 @@ downstream engines bind `<webgpu/webgpu.h>` and their own GLFW platform layer, b
 static that input cannot be attached to — so nothing waits on the packages, and those layers are their reference
 consumers when they are built.
 
+**XR is the engine's: neither std nor a first-party package — ruled 2026-11-02** (filed the day before as `@kama/xr`). The
+maintainer's rule: a capability is the language's or std's if it belongs there, a first-party package if it stands
+alone, and otherwise the engine's. GPU and window stand alone: the downstream games each wrote their own WebGPU binding
+and GLFW layer, and a tool or an editor needs both as much as a game does. XR does not, yet. Its one consumer is an
+engine, and its hard half is engine design: the swapchain handed to the renderer (Vulkan or GLES on Quest; whether
+wgpu-native exposes either is unprobed) and, on the web, the frame loop `XRSession.requestAnimationFrame` owns. One
+interface over OpenXR and WebXR is an engine abstraction (Godot's `XRServer`). A bare OpenXR binding can stand alone, as
+Rust's `openxr` crate does, so the engine may publish one later. What kama owes XR is Quest's Android target (KR-280,
+KR-283); a gap the engine meets past that is filed here as a row. The 2026-11-01 survey, for that engine: Quest's loader
+is Khronos's `openxr_loader_for_android` AAR (Meta supports 1.0.34 and later), initialized with the activity's `JavaVM`
+and `jobject`; on Windows it is `openxr_loader.dll` with Quest Link as the runtime, so a desktop build is tested in the
+headset before the Android target exists; WebXR is reached through `jsLibraries` with an `expose fn` as the per-frame
+callback, only on the page thread (a threaded wasm build's `main` runs on a worker), and renders through WebGL2, since
+WebGPU in WebXR is behind a flag in the Quest browser.
+
 **What stays in the toolchain: `--webgpu` / `"webgpu": true`** (docs/targets.md). It is the platform half — it finds
 the wgpu-native SDK (`tools/fetch-webgpu.sh` or `$KAMA_WGPU_DIR`, with an actionable error when it is missing), adds
 its include, library and rpath, and on wasm passes emscripten's own `--use-port=emdawnwebgpu`. Without it every
@@ -3068,43 +3083,6 @@ Size **L** (commit 0 is S, then 4).
 3. **The physical key (USB HID ids), plus a separate `Text` event** — the DOM's `code` versus its `input` event.
 4. **An explicit `pump()`.** An implicit pump inside `pollEvent` can livelock under a high-rate mouse.
 5. **The coalescing ring plus `Event::Dropped(n)`,** never a silent drop.
-
-<a id="s8-xr"></a>
-
-### `@kama/xr` — OpenXR natively, WebXR in the browser (KR-284) — filed 2026-11-01, unprobed
-
-A game engine on kama ships VR on Meta Quest by both routes: WebXR in the Quest browser, and OpenXR natively on
-Quest's Android (KR-280, KR-283). Each is a binding a kama program reaches through the seams that already ship.
-Nothing here has been compiled yet.
-
-- **OpenXR is a C API** (`openxr.h`, plus a loader that finds the runtime), bound with `extern` as webgpu.h is.
-  - **On Quest:** Khronos's `openxr_loader_for_android` AAR carries `libopenxr_loader.so` per ABI, and Meta supports
-    only loader 1.0.34 and later. The loader is initialized with the activity's `JavaVM` and `jobject`
-    (`XR_KHR_loader_init_android`), which NativeActivity supplies.
-  - **On Windows:** Khronos's `openxr_loader.dll`, with Quest Link as the runtime, so the binding can be built and
-    tested on the Windows box with the headset **before KR-280 exists**. Whether mingw links the release's DLL
-    directly is to verify.
-- **The swapchain belongs to a graphics API:** Vulkan or OpenGL ES on Quest; D3D11, D3D12, Vulkan or OpenGL on
-  Windows. KR-25's `@kama/gpu` wraps webgpu.h over wgpu-native, and whether that exposes the Vulkan handles OpenXR's
-  swapchain needs is unprobed. That decides whether `@kama/gpu` grows an interop surface, or an XR renderer goes to
-  Vulkan itself.
-- **WebXR is a JS API**, reached through `jsLibraries`, with `expose fn` as the callback (on wasm, `KAMA_EXPORT` is
-  `EMSCRIPTEN_KEEPALIVE`).
-  - **Frames.** An immersive session's frames come from `XRSession.requestAnimationFrame`, not the window's, so
-    `std::app::run` (emscripten's main loop) cannot drive one. The binding owns that loop and calls an exposed tick,
-    which needs no std change; to verify.
-  - **The page thread only.** WebXR exists only on the page's main thread, so a threaded wasm build (`main` on a
-    worker under `PROXY_TO_PTHREAD`) cannot reach it directly.
-  - **Rendering.** WebGL2 is WebXR's shipping layer. WebGPU in WebXR (`XRGPUBinding`) is experimental and behind a flag
-    in the Quest browser (its release notes 146 to 152, 2026).
-
-**Decisions owed:**
-1. **Who owns it.** A first-party `@kama/xr`, as `@kama/gpu` and `@kama/window` are (§8: SDK-bound, built in its own
-   repository, never std), or the engine's own package. Recommended: first-party, one interface with an OpenXR and a
-   WebXR backend chosen by target, since every engine on kama that wants XR needs the same binding.
-2. **The swapchain interop with KR-25,** probed before the binding's graphics half is designed.
-3. **The order.** OpenXR on Windows over Link first (no Android needed), then Quest native once KR-280 and KR-283
-   land; WebXR alongside, since kama builds wasm today.
 
 <a id="s9"></a>
 
