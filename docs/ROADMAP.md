@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-286**
+**Next id: KR-287**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-277 | **A generic call inside a generic reads the callee's type parameter as the caller's when both are named `T`** — `fn Optional<T> takeOpt<T>(ref Optional<T> p) { return replace(place: ref p, with: Optional::None); }` is refused ("a return value expects an `Optional<T>`, and a `T` is not one"), even with `replace::<Optional<T>>`, even never called; renamed `takeOpt<U>`, it compiles and runs. Name capture: the callee's `T` return type is resolved in the caller's scope (2026-11-01) | S? | [§2](ROADMAP_DETAIL.md#s2-infer-optional-arg) |
 | KR-278 | **`kama run` executes a library** — on a `"kind": "library"` project, or under `--select OUTPUT=STATIC`/`SHARED`, it builds the archive or DLL under the throwaway executable's name and runs it: Windows answers "This version of …\kama-run-<pid>.exe is not compatible with the version of Windows you're running" for a `.a` and "Access is denied" for a DLL. A workspace's refusal lists a library member as the one to run. `kama build` is correct (2026-11-01, `0.9.803`, Windows) | S | [§10](ROADMAP_DETAIL.md#s10-run-library) |
 | KR-279 | *Claimed: Windows box, 2026-11-02.* **A triple in clang's three-part `<arch>-<vendor>-<os>` spelling is read as `<arch>-<os>-<abi>`** — `aarch64-apple-darwin` (clang's and Rust's name for Apple Silicon macOS) derives `OS_APPLE`, not `OS_MACOS`, while clang is handed the same string and builds for macOS; `arm64-apple-ios` derives neither `ARCH_AARCH64` nor `OS_IOS`; `x86_64-w64-mingw32` is not `OS_WINDOWS`. Accepted silently, so std's gates and the driver's `isMacOS()` disagree with the compiler (2026-11-01, `0.9.803`) | S | [§5](ROADMAP_DETAIL.md#s5-vendor-triples) |
 | KR-282 | *Claimed: Windows box, 2026-11-02.* **An NDK compiler wrapper is handed `-target`** — docs/targets.md says a per-target compiler ("… an NDK wrapper") gets no `-target`, but the test is "its name contains `clang`", so `aarch64-linux-android29-clang` is handed `-target aarch64-linux-android`, which overrides the API level its name carries, and NDK r30's headers refuse the result: "Unversioned target triples are not supported!" (2026-11-01, `0.9.803`) | S | [§5](ROADMAP_DETAIL.md#s5-android) |
@@ -129,7 +128,8 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-222 | **A quoted, structural rendering (`${x:?}`)** — `${xs}` prints `[a, b]` for both `["a", "b"]` and `["a, b"]`, as the derive prints `name: a` for any string; Rust's `{:?}`, Python's `repr` and Swift's `debugDescription` quote. One spelling for structs and collections together, designed before any code | — | [§2](ROADMAP_DETAIL.md#s2-quoted-format) |
 | KR-233 | **Fibers on bare metal** — a Cortex-M switch, stacks from a static pool under `--no-heap`, wakes from an interrupt handler (KR-3's decision 15). After KR-3, beside KR-19 | — | [§5](ROADMAP_DETAIL.md#s5-mcu-fibers) |
 | KR-281 | **An iOS target** — `--target IOS` is refused; `aarch64-ios-none` derives `OS_IOS`, which none of std's `OS_MACOS` declarations cover, and no flag names what macOS and iOS share. Shipping needs Apple's SDK (so a Mac), an app whose loop the OS owns (`UIApplicationMain`, `CADisplayLink`, as the browser owns it on wasm), and a signed `.app`. `dlopen` is barred, so KR-24 stays desktop-only | — | [§5](ROADMAP_DETAIL.md#s5-ios) |
-| KR-285 | **A generic's argument typed by a parameter another argument fixed** — `replace(place: ref o, with: DynamicArray.empty())` is refused ("cannot infer `T` — argument `with` is not a literal…") though `place` fixes `T` as `DynamicArray<int64>`, in plain code too; Rust's `mem::replace(&mut v, Vec::new())` infers it. Written today as `DynamicArray::<int64>.empty()` | — | [§2](ROADMAP_DETAIL.md#s2-infer-optional-arg) |
+| KR-285 | **A generic's argument typed by a parameter another argument fixed** — `replace(place: ref o, with: DynamicArray.empty())` is refused ("cannot infer `T` — argument `with` is not a literal…") though `place` fixes `T` as `DynamicArray<int64>`, in plain code too; Rust's `mem::replace(&mut v, Vec::new())` infers it. Written today as `DynamicArray::<int64>.empty()` | — | [§2](ROADMAP_DETAIL.md#s2-infer-from-bound-arg) |
+| KR-286 | **The as-written probe solves a generic call inside a generic body** — in a generic nobody instantiates, an inferred inner call (`return ident(x: a)`) is never solved, so its arguments and the use of its result are checked only per instantiation; a turbofish one is solved on demand. Rust and Swift check it, the outer parameters as rigid type variables. A first cut raised false errors (2026-11-01): it needs an inference that stays silent when it cannot solve, and `this.field` typed in the probe | — | [§2](ROADMAP_DETAIL.md#s2-probe-inner-calls) |
 
 ## LATER — tooling & ecosystem
 

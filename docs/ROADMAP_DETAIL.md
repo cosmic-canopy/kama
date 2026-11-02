@@ -714,36 +714,12 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
 
-<a id="s2-infer-optional-arg"></a>
+<a id="s2-infer-from-bound-arg"></a>
 
-### A callee's type parameter read as the caller's (KR-277)
+### An argument typed by a parameter another argument fixed (KR-285)
 
-Found 2026-11-01 writing `ConcurrentMap.compareAndSwap`'s fix (`0.9.800`); root cause probed on `0.9.803`:
-
-```kama
-import { std::memory::replace };
-fn Optional<T> takeOpt<T>(ref Optional<T> p) { return replace(place: ref p, with: Optional::None); }   // refused
-fn uint8 main() { return 0; }
-```
-
-"a return value expects an `Optional<T>`, and a `T` is not one". Measured, each variant on its own:
-
-| variant | result |
-|---|---|
-| as above, `takeOpt` never called | refused: the generic body's own check, no instance needed |
-| `replace::<Optional<T>>(…)`, the argument written out | refused the same way |
-| `with: give none` from a typed local `Optional<T> none` | refused the same way |
-| **the caller's parameter renamed, `takeOpt<U>(ref Optional<U> p)`** | **compiles, and returns 5 for `Some(5)`** |
-| plain code (`Optional<int64> p`); a generic TYPE's method (`ConcurrentMap<K, V>`, its `Optional<V>`) | compiles |
-
-So it is **name capture**: `replace<T>` returns `T`, the call binds the callee's `T` to `Optional<T>` (the caller's),
-and the result type is read back as the bare name `T`, which the caller's scope then resolves as its OWN `T`. A
-generic type's method escapes only because its parameter is `V`. Unrelated to `Optional` or to inference: any
-generic function calling a generic function whose type parameter shares a name with its own, where the callee's
-return type is that parameter, should show it. **First step:** a fixture of the table above (`T`/`T`, `T`/`U`, a
-two-parameter `K`/`V` swap — `fn pair<K, V>(…)` calling `fn pair2<V, K>(…)`), then find where a generic call's
-return type is computed while the caller's `_typeSubst` is live, and substitute the callee's bindings into the
-callee's return type before the caller's names can see it. Seen beside it and NOT the same thing — it fails with the parameter renamed, and in plain code — is KR-285:
+Found 2026-11-01 beside a generic reading a callee's type parameter as its own (fixed in `0.9.804`), and not the same
+thing: it fails with the parameter renamed, and in plain code:
 
 ```kama
 DynamicArray<int64> o = DynamicArray.empty();
@@ -755,6 +731,31 @@ bare `DynamicArray.empty()` has no type arguments to build with. A literal is ty
 the destination is a type parameter another argument has already bound. Rust infers `mem::replace(&mut v,
 Vec::new())`. A missing capability with a spelled workaround (`DynamicArray::<int64>.empty()`), so a feature row, not a
 defect; unscoped — the order in which `inferGenericInst` binds and then types its arguments is the place to look.
+
+<a id="s2-probe-inner-calls"></a>
+
+### The as-written probe solves a generic call inside a generic body (KR-286)
+
+`checkTemplatesAsWritten` walks a generic nobody instantiates (a library's) with each type parameter bound to an opaque
+type, so the body is checked without a type argument. A generic call inside it is solved there only when written with a
+turbofish (`ident::<Optional<T>>(x: a)`, solved on demand by `explicitGenericInst`). An inferred one (`ident(x: a)`) is
+never solved, so its arguments, its arity and the use of its result are checked only per instantiation. Since `0.9.804`
+its result reads as an open type, a name nothing declares, and the probe defers on it. Before that, the callee's `T` was
+read as the caller's (fixed in `0.9.804`). Rust and Swift check a generic body this way: the outer parameters are rigid
+type variables, and `ident(x: a)` with `a: Optional<T>` types as `Optional<T>`.
+
+**Measured 2026-11-01.** In `genericCallReturnNode`, solving the call on demand while probing (`inferGenericInst` over
+`_localTypeNodes`, `explicitGenericInst` for a turbofish) raised two false errors at once, on
+`tests/generic_param_name_capture.kama`. `Holder<T>.get()`'s `ident(x: this.o)` got "cannot infer generic type
+parameter 'T' — argument 'x' is not a literal or a locally-typed value". The probe's emission walk types no `this.field`
+(`_scanThisCls` is a discovery-walk table), and inference reports when it fails. Over the 1,165 top-level fixtures, the
+`0.9.804` fix moved one probe site from resolved to deferred (that fixture's `viaMethod`) and no other template's tally.
+So nothing in the corpus was being checked only through the capture.
+
+**What it needs, in order:** an inference that stays silent when it cannot solve (the call then stays open, as now);
+`this` and its fields typed in the probe walk; the solution recorded in `_callInst`, so emission routes the call and
+checks its arguments as the turbofish arm does; then the gate: zero new diagnostics over the corpus on bodies that
+compile, with `--probe-templates` counting the sites it moves from deferred to resolved.
 
 <a id="s2-quoted-format"></a>
 
