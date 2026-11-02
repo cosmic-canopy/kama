@@ -2332,6 +2332,53 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
 native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
 
+<a id="s5-vendor-triples"></a>
+
+### A triple in clang's three-part spelling is read in the wrong positions (KR-279)
+
+Found 2026-11-01 on `0.9.803`. `parseTriple` (`kama.driver.cpp`) takes three components as `<arch>-<os>-<abi>`, as
+docs/targets.md says, and drops a vendor only from four. But the triples people copy are often three parts with a
+vendor in the middle. Each was declared under `select.TARGET` and probed with `@compileFor` gates in a transpiled
+program, and the full flag set follows from `derivedTargetFlags` (one flag per component):
+
+| triple | where it comes from | derives | should mean |
+|---|---|---|---|
+| `aarch64-apple-darwin` | clang, Rust | `ARCH_AARCH64 OS_APPLE` | macOS |
+| `arm64-apple-ios` | Xcode | `ARCH_ARM64 OS_APPLE` | iOS on aarch64 |
+| `x86_64-w64-mingw32` | gcc, msys2 | `ARCH_X86_64 OS_W64` | Windows |
+| `aarch64-macos-none` | kama | `ARCH_AARCH64 OS_MACOS` | macOS (correct) |
+
+A cross build hands clang `-target <arch>-<os>-<abi>` rebuilt from the parts, which is the original string, so clang
+builds for macOS while std's `@compileFor(OS_MACOS)` declarations and the driver's `isMacOS()` (shared-library suffix,
+link tail) take the non-macOS branch. Nothing warns. **Recommended:** refuse a three-part triple whose middle
+component is a known vendor (`apple`, `pc`, `unknown`, `w64`), and `arm64` as an arch, each naming kama's spelling
+(`aarch64-macos-none`), rather than alias them, which would add a second spelling of one target. A fixture per row of
+the table above.
+
+<a id="s5-mobile-targets"></a>
+
+### Android and iOS targets (KR-280, KR-281)
+
+Filed 2026-11-01 from a game engine's platform plan, which needs Android for Meta Quest's native route (OpenXR runs
+on Quest's Android) and lists iOS among its platforms. Probed on `0.9.803` by transpiling only; this machine has
+neither the NDK nor a Mac.
+
+- **Where kama is.** Neither is a built-in target name. Both triples are accepted: `aarch64-linux-android` derives
+  `OS_LINUX`, `ABI_ANDROID` and `HOSTED`, so std compiles its Linux branch against bionic, which no fixture has run;
+  `aarch64-ios-none` derives `OS_IOS`, and std's `OS_MACOS` declarations (`std::net`'s `ListenOptions`, for one) fall
+  to their generic branch. A triple's components are its only flags, so nothing names the Darwin half macOS and iOS
+  share.
+- **What each needs beyond the triple.** A toolchain entry (the NDK's clang and sysroot; Apple's clang and the iOS
+  SDK). An entry point the OS owns: Android starts a shared library through `android_main` (a native activity) and
+  delivers pause, resume and a lost surface; iOS runs `UIApplicationMain` and drives frames from `CADisplayLink`.
+  That is the inverted loop wasm already has, where `std::app::run` is driven by `requestAnimationFrame`. And
+  packaging: an APK or AAB, signed; a `.app`, signed with a provisioning profile.
+- **The verdict: scheduled, not yet designed.** These are targets of a general-purpose systems language, so neither is
+  optional, and the size is unknown until the design is done. Settle first: how much the driver packages, against
+  what a target entry and a documented recipe leave to the project. Also settle whether `std::app::run` grows those
+  two entry points, and how std spells the Darwin family. KR-279 comes first, since an Xcode-spelled triple is the
+  first thing an iOS user types.
+
 <a id="s6"></a>
 
 ## 6. Concurrency — what is left above the primitives
@@ -4017,3 +4064,21 @@ that only the root manifest's level applies, so this touches a ruled rule. The p
 its own optimize flag, and each `csources` file is its own translation unit. Cargo sets a level per package from the
 root (`[profile.release.package.<name>] opt-level`); CMake per source (`COMPILE_OPTIONS`). **Ruling owed:** a ceiling
 the package sets on its own entries (a cap, never a floor, so it cannot slow the consumer's code), or Cargo's model.
+
+<a id="s10-run-library"></a>
+
+### `kama run` executes a library (KR-278)
+
+Found 2026-11-01 on `0.9.803`, Windows 11, from a downstream engine's library package. `run` forces its output to
+`<tmp>/kama-run-<pid>[.exe]` (`kama.driver.cpp`, the `runMode` arm of `build`) and executes whatever the build left
+there, whatever the project's `OUTPUT` is:
+
+- `kama run lib/kama.json` with `"kind": "library"`, or `kama run f.kama --select OUTPUT=STATIC`, runs a `.a`. Windows
+  answers "This version of …\kama-run-<pid>.exe is not compatible with the version of Windows you're running", exit 1.
+- `--select OUTPUT=SHARED` runs a DLL: "Access is denied", exit 1.
+- `kama run` on a workspace refuses and names the member to run instead, and a library member is named.
+
+Not tried on Linux or macOS, where executing an archive fails differently. `cargo run` refuses with "a bin target
+must be available", and `go run` with "is not a main package". **Fix:** refuse before building when the resolved
+`OUTPUT` is not an executable, naming the project and `kama build`. Let the workspace refusal list only executable
+members, or say that none is. A fixture each.

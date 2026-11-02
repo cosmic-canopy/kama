@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-278**
+**Next id: KR-282**
 
 ## The shape
 
@@ -56,6 +56,8 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-277 | **A generic's type argument inferred from an `Optional<T>` argument, inside a generic, binds `T`** — `fn Optional<T> takeOpt<T>(ref Optional<T> p) { return replace(place: ref p, with: Optional::None); }` is refused ("a return value expects an `Optional<T>`, and a `T` is not one"): `replace`'s parameter is inferred as `T`, not `Optional<T>`. The same call in plain code and in a generic type's method compiles (2026-11-01) | S? | [§2](ROADMAP_DETAIL.md#s2-infer-optional-arg) |
+| KR-278 | **`kama run` executes a library** — on a `"kind": "library"` project, or under `--select OUTPUT=STATIC`/`SHARED`, it builds the archive or DLL under the throwaway executable's name and runs it: Windows answers "This version of …\kama-run-<pid>.exe is not compatible with the version of Windows you're running" for a `.a` and "Access is denied" for a DLL. A workspace's refusal lists a library member as the one to run. `kama build` is correct (2026-11-01, `0.9.803`, Windows) | S | [§10](ROADMAP_DETAIL.md#s10-run-library) |
+| KR-279 | **A triple in clang's three-part `<arch>-<vendor>-<os>` spelling is read as `<arch>-<os>-<abi>`** — `aarch64-apple-darwin` (clang's and Rust's name for Apple Silicon macOS) derives `OS_APPLE`, not `OS_MACOS`, while clang is handed the same string and builds for macOS; `arm64-apple-ios` derives neither `ARCH_AARCH64` nor `OS_IOS`; `x86_64-w64-mingw32` is not `OS_WINDOWS`. Accepted silently, so std's gates and the driver's `isMacOS()` disagree with the compiler (2026-11-01, `0.9.803`) | S | [§5](ROADMAP_DETAIL.md#s5-vendor-triples) |
 
 ## NOW — the next features, in build order
 
@@ -120,6 +122,8 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-83 | **Extended `asm` (operand constraints) and `@naked` functions** — SPEC called them "tracked follow-ons" with no row; they are the MCU seam's remaining half | — | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-222 | **A quoted, structural rendering (`${x:?}`)** — `${xs}` prints `[a, b]` for both `["a", "b"]` and `["a, b"]`, as the derive prints `name: a` for any string; Rust's `{:?}`, Python's `repr` and Swift's `debugDescription` quote. One spelling for structs and collections together, designed before any code | — | [§2](ROADMAP_DETAIL.md#s2-quoted-format) |
 | KR-233 | **Fibers on bare metal** — a Cortex-M switch, stacks from a static pool under `--no-heap`, wakes from an interrupt handler (KR-3's decision 15). After KR-3, beside KR-19 | — | [§5](ROADMAP_DETAIL.md#s5-mcu-fibers) |
+| KR-280 | **An Android target** — `--target ANDROID` is refused, and the triple `aarch64-linux-android` builds as `OS_LINUX` with `ABI_ANDROID`, so std compiles its Linux branch against bionic, untested. Shipping needs the NDK as a target, a shared library entered through a native activity rather than `main`, the activity's lifecycle, and APK/AAB packaging and signing. Meta Quest's native (OpenXR) route runs on Android | — | [§5](ROADMAP_DETAIL.md#s5-mobile-targets) |
+| KR-281 | **An iOS target** — `--target IOS` is refused; `aarch64-ios-none` derives `OS_IOS`, which none of std's `OS_MACOS` declarations cover, and no flag names what macOS and iOS share. Shipping needs Apple's SDK (so a Mac), an app whose loop the OS owns (`UIApplicationMain`, `CADisplayLink`, as the browser owns it on wasm), and a signed `.app`. `dlopen` is barred, so KR-24 stays desktop-only | — | [§5](ROADMAP_DETAIL.md#s5-mobile-targets) |
 
 ## LATER — tooling & ecosystem
 
