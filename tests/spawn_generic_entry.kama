@@ -1,6 +1,6 @@
 // A generic function as an isolate's entry. `spawn` looked up the template, so its parameter named no C type and the
 // bundle was refused: "must be a moved `resource` value". fiber_generic_entry is the fiber twin.
-import { std::concurrent::Isolate };
+import { std::concurrent::Isolate, std::collections::DynamicArray };
 
 type resource Job<T> implements Sendable {
     int32 n;
@@ -21,14 +21,16 @@ fn uint8 main() {
     Job<int32> a = Job.make(n: 20);
     Job<int32> b = Job.make(n: 20);
     Job<int64> c = Job.make(n: 20);
-    Job<int32> d = Job.make(n: 41);
+    Job<int32> d = Job.make(n: 40);
     Job<int32> e = Job.make(n: 20);
     scope {
         spawn work::<int32>(j: give a);
         spawn work(j: give b);                   // inferred
         spawn work::<int64>(j: give c);          // a second instance, so a second trampoline
-        spawn borrowed::<int32>(j: ref d);       // d = 42
+        spawn borrowed::<int32>(j: ref d);       // d = 41
     }
+    // A type named nowhere but a stack clause gets its struct: clang refused this one too.
+    scope { spawn(stack: cast<isize>(sizeof(DynamicArray<int16>)) * 8192) borrowed::<int32>(j: ref d); }   // d = 42
     Isolate h = spawn work::<int32>(j: give e);  // the handle form
     give h.join();
     outer::<int32>(n: 20);

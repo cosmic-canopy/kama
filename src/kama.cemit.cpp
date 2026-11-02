@@ -16710,6 +16710,8 @@ void CEmitter::scanExprForCollections(SharedExpression e)
         scanExprForCollections(b->LHS); scanExprForCollections(b->RHS);
     } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
         scanExprForCollections(l->LHS); scanExprForCollections(l->RHS);
+    } else if (auto* iso = dynamic_cast<IsolateNode*>(n)) {   // `spawn f(…)`: a call like any other, in either position
+        scanExprForCollections(iso->call); scanExprForCollections(iso->stack);
     } else if (auto* tn = dynamic_cast<TernaryExpressionNode*>(n)) {
         scanExprForCollections(tn->condition); scanExprForCollections(tn->LHS); scanExprForCollections(tn->RHS);
     } else if (auto* as = dynamic_cast<AssignmentNode*>(n)) {
