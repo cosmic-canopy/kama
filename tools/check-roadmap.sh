@@ -23,7 +23,8 @@ RD="$ROOT/docs/ROADMAP_DETAIL.md"
 
 # The ceiling. Deliberately not tight — it is a drift alarm, not a style rule. Raise it only together
 # with a reason; if the list genuinely has 60 items, the rows are fine and the prose is what to look for.
-MAX_LINES=160
+# 160 -> 200 (2026-11-02): two machines file rows now, and the list reached 161 on rows alone, each one line.
+MAX_LINES=200
 
 fail() { echo "check-roadmap: FAIL — $1" >&2; exit 1; }
 
