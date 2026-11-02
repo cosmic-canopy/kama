@@ -801,7 +801,8 @@ name. Bind scopes (and the default) with a top-level `registries` object:
 - `"default": false` **drops** the default entirely — the built-in one too — a fully-private / air-gapped
   setup where an unscoped name with no other source is simply unresolvable.
 - Two scopes cannot expose the **same** bare name in one project (both would import as `name`) — that's a
-  hard error; alias one by renaming. **The project's own name counts too**: it is the root module, so a
+  hard error, and nothing aliases a dependency yet (KR-291), so the way out is for one package's publisher to
+  rename it. **The project's own name counts too**: it is the root module, so a
   dependency anywhere in the graph that imports as that name (an application called `tls` over a library that
   uses `@kama/tls`) would be shadowed by the application in every module that imports it. `kama pkg install`
   refuses it, and `kama build`/`kama check` refuse a view already on disk that holds one — rename the project.

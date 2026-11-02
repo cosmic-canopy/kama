@@ -2972,6 +2972,12 @@ downstream engines bind `<webgpu/webgpu.h>` and their own GLFW platform layer, b
 static that input cannot be attached to — so nothing waits on the packages, and those layers are their reference
 consumers when they are built.
 
+**A downstream engine builds both — 2026-11-02** (KR-25 and KR-26 are its claim). Its sessions build each in its own
+repository, to the designs below and from the platform layers it replaces, and it is their first consumer. The
+packages stay first-party and these designs stay kama's: a change the build needs comes back as an amendment of its
+section here, and a compiler or std gap the build meets is filed as a row. What stays in the engine is what the
+designs already leave out of them: frame pacing, the renderer and the XR swapchain.
+
 **XR is the engine's: neither std nor a first-party package — ruled 2026-11-02** (filed the day before as `@kama/xr`). The
 maintainer's rule: a capability is the language's or std's if it belongs there, a first-party package if it stands
 alone, and otherwise the engine's. GPU and window stand alone: the downstream games each wrote their own WebGPU binding
@@ -4261,3 +4267,70 @@ that only the root manifest's level applies, so this touches a ruled rule. The p
 its own optimize flag, and each `csources` file is its own translation unit. Cargo sets a level per package from the
 root (`[profile.release.package.<name>] opt-level`); CMake per source (`COMPILE_OPTIONS`). **Ruling owed:** a ceiling
 the package sets on its own entries (a cap, never a floor, so it cannot slow the consumer's code), or Cargo's model.
+
+<a id="s10-dep-alias"></a>
+
+### A consumer cannot alias a dependency (KR-291)
+
+Filed 2026-11-02, measured on `0.9.810`: two libraries, `@north/net` and `@south/net`, each exporting
+`fn string who()`, and five executables that path-depend on them.
+
+| the consumer | `kama pkg install` |
+|---|---|
+| `@north/net` alone | installs, and `import { core::println, net::who };` prints `north` |
+| both | exit 1: *import-name collision on 'net': both '@north/net' and '@south/net' import as 'net' — two scopes cannot expose the same name* |
+| a project named `net`, over `@north/net` | exit 1: *'@north/net' … imports as 'net', which is this project's own name …; rename the project* |
+| the key `nnet` | exit 2: *dependency 'nnet' … is the package '@north/net' — the key must be the package's own name, which is what a build finds it by* |
+| `"nnet": { "package": "@north/net", … }` | exit 2: *unknown key `package` in dependency 'nnet'* |
+
+docs/packages.md § Scopes said to "alias one by renaming", and the driver's comment still says "(alias one)" beside
+the collision check; neither named a mechanism, and the only rename that works is the publisher's. The doc now says
+so; the comment goes with the fix. **Why it matters now:** `@kama/gpu` and `@kama/window` import as `gpu` and
+`window`, the names a game gives its own modules, and a downstream engine wants a scope of its own over general nouns
+(`net`, `physics`) that games use too. Today the way out is a prefix in every name, which leaves the scope doing
+nothing for the code.
+
+**The bare name does four jobs,** which is why a manifest key alone cannot fix it:
+1. the consumer's import (`net::who`);
+2. the package's root module, which its own files import each other by (§ the self-import exemption in packages.md);
+3. the C prefix of its declarations (`net__who` in the emitted C; SPEC § C names);
+4. its link in the build's one dependency view (`.kama/deps/net`), shared by the whole graph.
+
+**What others do.** Each ecosystem that met this lets the consumer name its dependency, and keeps the identity
+somewhere else:
+- **Cargo:** `nnet = { package = "net", … }`. The key is the name that crate's code uses, and rustc tells two `net`s
+  apart by a hash in their symbols, so a rename asks nothing of the dependency.
+- **npm:** `"nnet": "npm:@north/net@^1"` installs it as `nnet`, and each package resolves through its own
+  `node_modules`.
+- **Go:** the import path is the identity (`example.com/north/net`); `net` is only the default local name, and
+  `import nnet "…"` renames it in one file.
+- **Zig:** the consumer names both the dependency (`build.zig.zon`'s key) and the import
+  (`addImport("nnet", dep.module("net"))`).
+- **SwiftPM** had kama's shape, a module name global and in every symbol, and added module aliasing (SE-0339, Swift
+  5.7): the consumer's manifest renames a module, symbols included, for the build.
+
+**Options.**
+- **A. The consumer's key is its local name; the full name is the identity.** `"nnet": { "package": "@north/net", … }`
+  imports as `nnet` in that consumer only. Jobs 2–4 move to the full name: the C prefix spells the scope, and each
+  package resolves its imports through its own dependencies, so one graph may hold both `net`s. This is the answer of
+  Cargo, npm, Zig and Go.
+- **B. One rename for the whole build** (SwiftPM's): the root renames `@north/net` to `nnet` in all four jobs. Less to
+  change, but a library deeper in the graph that imports `@north/net` as `net` breaks when the root renames it, so an
+  alias is safe only where nothing else imports the package.
+- **C. The scope in every import** (`north::net::who`). No manifest key, but every scoped import grows to cure a
+  collision most graphs never have.
+
+**Recommendation: A.** It is the settled answer elsewhere. It is explicit: the name a file uses is in its own
+package's manifest. It leaves the common case alone, since a key that is the package's name still imports under the
+bare name. Its costs: a scoped package's C names change, which breaks a C caller of a published scoped library's
+unannotated exports (an `@linkName` keeps its name), and the resolver gains a view of names per package.
+
+**Decisions owed:**
+1. A, B or C. Recommended: A.
+2. A scoped package's C prefix, which no unscoped package's module path may be able to spell. Recommended: a
+   separator a package name cannot contain, settled in SPEC § C names.
+3. Two dependencies of ONE consumer importing as one name stay an error, which now names the `package` key as the fix;
+   across consumers there is no collision. A dependency importing as the project's own name follows the same rule.
+4. Scope ownership, the other half of the report: nothing binds a publisher to a scope yet, and `@kama` and `@std` are
+   reserved only the day a hosted registry exists. A second official scope beside `@kama`, and a way for a third party
+   to claim one, belong to the registry's trust model (KR-27); this row does not decide them.
