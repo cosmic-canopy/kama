@@ -338,7 +338,7 @@ for. The grammar lives in a subdirectory of the compiler repo, which is what `su
 ```toml
 [[grammar]]
 name = "kama"
-source = { git = "https://github.com/cosmic-canopy/kama", rev = "d1015dc01e9d848d7897887927438654ae640067", subpath = "tree-sitter-kama" }
+source = { git = "https://github.com/cosmic-canopy/kama", rev = "cd139d83a6b2e01d8931e0ca228fce257c7ec41a", subpath = "tree-sitter-kama" }
 ```
 
 If you are working on the grammar itself, point it at your checkout instead — a local path needs no git, no
