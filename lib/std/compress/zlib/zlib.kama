@@ -1,0 +1,187 @@
+import { std::collections::View, std::collections::ConstView, std::io::Reader, std::io::Writer, std::io::BufReader,
+         std::io::IoError, std::io::IoErrorKind, std::io::Unfinished, std::compress::deflate::DeflateReader,
+         std::compress::deflate::DeflateWriter, std::compress::deflate::DeflateLevel, std::digest::adler32::Adler32,
+         std::num::loadU32, std::num::storeU32, std::num::ByteOrder };
+export { ZlibReader, ZlibWriter };
+
+// zlib (RFC 1950): a deflate stream between a two-byte header and an Adler-32 of the decoded bytes. git's objects, PNG's
+// image data and HTTP's `Content-Encoding: deflate` are zlib.
+//
+//   ZlibReader<File> z = ZlibReader.make(source: BufReader.make(inner: give f), limit: 64 * 1024 * 1024);
+//   … z.read(into: buf) until it answers Ok(0), which is when the checksum is verified …
+//   match (give z.finish()) { case Ok(value: rest): { … the bytes after the stream … } case Err(error: u): { … } };
+//
+// One stream, and whatever follows it stays in the `BufReader`. It reads as `DeflateReader` does, and `limit`, `finish` and
+// `abandon` mean what they mean there. What it adds: `InvalidData` for a header that is not zlib's or names a preset
+// dictionary, and for a checksum that does not match. A window smaller than 32 KiB is accepted and not enforced, as zlib
+// and Go accept it.
+//
+//   ZlibWriter<File> w = ZlibWriter.make(sink: give f, level: DeflateLevel::Level6);
+//   … w.write(bytes: chunk), and w.flush() when a peer must be able to decode what has been written …
+//   match (give w.finish()) { case Ok(value: f2): { … the sink again … } case Err(error: u): { … } };
+//
+// It writes as `DeflateWriter` does, with the same promise about its bytes, and its header's FLEVEL is the one zlib writes
+// for that level. Dropping a writer abandons its stream.
+
+type enum Stage { Header, Body, Trailer, Done }
+
+type resource ZlibReader<R: Reader> implements Reader {
+    DeflateReader<R> body;
+    Adler32 sum;
+    Stage stage;
+    InlineArray<uint8>#(4) fixed;   // the header's or the trailer's bytes so far, kept across a stalled source
+    isize have;
+
+    public ctor make(BufReader<R> source, uint64 limit) {
+        this.body = DeflateReader.make(source: give source, limit: limit);
+        this.sum = Adler32.make();
+        this.stage = Stage::Header;
+        this.fixed = [0; 4];
+        this.have = 0;
+    }
+
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        match (this.body.failure) { case Some(value: e): { return Result::Err(error: e); } case None: { } };
+        // A read of nothing finds no end: a body that answers `Ok(0)` to it has not finished.
+        if (into.length() == 0) { return Result::Ok(value: 0); }
+        if (this.stage == Stage::Header) {
+            Result<Unit, IoError> h = this.header();
+            match (h) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        }
+        if (this.stage == Stage::Body) {
+            Result<isize, IoError> r = this.body.read(into: into);
+            match (r) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: n): {
+                    if (n > 0) {
+                        this.sum.update(bytes: into.slice(from: 0, count: n));
+                        return Result::Ok(value: n);
+                    }
+                    this.stage = Stage::Trailer;
+                }
+            };
+        }
+        if (this.stage == Stage::Trailer) {
+            Result<Unit, IoError> t = this.trailer();
+            match (t) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        }
+        return Result::Ok(value: 0);
+    }
+
+    // The source back, at the first byte after the stream. It reads nothing: see `DeflateReader.finish`.
+    public give fn Result<BufReader<R>, Unfinished<ZlibReader<R>>> finish() {
+        match (this.body.failure) {
+            case Some(value: e): {
+                IoError kept = e;
+                return Result::Err(error: Unfinished::Pending(adapter: give this, error: kept));
+            }
+            case None: { }
+        };
+        if (this.stage != Stage::Done) {
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
+        }
+        return Result::Ok(value: give this.body.abandon());
+    }
+
+    // The source as it stands, nothing verified: see `DeflateReader.abandon`.
+    public give fn BufReader<R> abandon() { return give this.body.abandon(); }
+
+    // A stream's own error is the body's: it ends both, and `finish` and every later read answer it.
+    fn Result<Unit, IoError> fail(IoErrorKind kind) {
+        IoError e = IoError.of(kind: kind);
+        this.body.failure = Optional::Some(value: e);
+        return Result::Err(error: e);
+    }
+
+    // `fixed` filled to `want` bytes. An error from the source passes through and loses nothing.
+    fn Result<Unit, IoError> gather(isize want) {
+        while (this.have < want) {
+            Result<isize, IoError> r = this.body.src.read(into: this.fixed.viewMut().slice(from: this.have, count: want - this.have));
+            match (r) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: n): {
+                    if (n == 0) { return this.fail(kind: IoErrorKind::UnexpectedEof); }
+                    this.have = this.have + n;
+                }
+            };
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // CMF and FLG (RFC 1950 §2.2): the deflate method, a window of at most 32 KiB, the two bytes a multiple of 31, and no
+    // preset dictionary (KR-257).
+    fn Result<Unit, IoError> header() {
+        Result<Unit, IoError> g = this.gather(want: 2);
+        match (g) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        uint32 cmf = cast<uint32>(this.fixed[0]);
+        uint32 flg = cast<uint32>(this.fixed[1]);
+        if ((cmf & 15ui32) != 8ui32 || (cmf >> 4ui32) > 7ui32 || (cmf * 256ui32 + flg) % 31ui32 != 0ui32 || (flg & 32ui32) != 0ui32) {
+            return this.fail(kind: IoErrorKind::InvalidData);
+        }
+        this.have = 0;
+        this.stage = Stage::Body;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    fn Result<Unit, IoError> trailer() {
+        Result<Unit, IoError> g = this.gather(want: 4);
+        match (g) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        if (loadU32(from: this.fixed.view(), at: 0, order: ByteOrder::Big) != this.sum.finish()) {
+            return this.fail(kind: IoErrorKind::InvalidData);
+        }
+        this.stage = Stage::Done;
+        return Result::Ok(value: Unit::Unit);
+    }
+}
+
+// CMF is `78`, deflate with a 32 KiB window, and the FLG that goes with it says how hard the encoder worked: the bytes zlib
+// writes for each level. RFC 1950 makes it advisory.
+fn uint8 flagsFor(DeflateLevel level) {
+    return match (level) {
+        case Store: 0x01; case Level1: 0x01;
+        case Level2: 0x5E; case Level3: 0x5E; case Level4: 0x5E; case Level5: 0x5E;
+        case Level6: 0x9C;
+        case Level7: 0xDA; case Level8: 0xDA; case Level9: 0xDA; case Frozen: 0xDA;
+    };
+}
+
+type resource ZlibWriter<W: Writer> implements Writer {
+    DeflateWriter<W> body;
+    Adler32 sum;
+
+    // The header waits in the body's buffer, so nothing here can fail and the first `drain` sends it.
+    public ctor make(W sink, DeflateLevel level) {
+        this.body = DeflateWriter.make(sink: give sink, level: level);
+        this.sum = Adler32.make();
+        this.body.encoded.add(item: 0x78);
+        this.body.encoded.add(item: flagsFor(level: level));
+    }
+
+    // Takes up to `bytes.length()` bytes, and the checksum covers exactly the count it answers.
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        Result<isize, IoError> r = this.body.write(bytes: bytes);
+        return match (r) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: k): { this.sum.update(bytes: bytes.slice(from: 0, count: k)); := Result::Ok(value: k); }
+        };
+    }
+
+    public fn Result<Unit, IoError> flush() { return this.body.flush(); }
+
+    // The final block and the trailer, then the sink back, flushing nothing of the sink's own. On a failure the writer comes
+    // back whole in `Unfinished`, and finishing it again writes neither twice.
+    public give fn Result<W, Unfinished<ZlibWriter<W>>> finish() {
+        if (!this.body.finalWritten) {
+            this.body.endBlocks();
+            InlineArray<uint8>#(4) t = [0; 4];
+            storeU32(into: t.viewMut(), at: 0, value: this.sum.finish(), order: ByteOrder::Big);
+            for (int32 k = 0; k < 4; k = k + 1) { this.body.encoded.add(item: t[k]); }
+        }
+        Result<Unit, IoError> dr = this.body.drain();
+        match (dr) {
+            case Err(error: e): { return Result::Err(error: Unfinished::Pending(adapter: give this, error: e)); }
+            case Ok(value: _): {}
+        };
+        return Result::Ok(value: give this.body.intoSink());
+    }
+}

@@ -1,0 +1,70 @@
+// `ZlibReader` (KR-5) refuses what RFC 1950 does not allow, with the kind that says why: `InvalidData` for a stream that
+// breaks the format or fails its checksum, `UnexpectedEof` for a source that ends inside it. One stream per class, each
+// checked against python3's zlib, which refuses it too. The error is final: the read after it answers the same, and so does
+// `finish`, and `abandon` still hands the source back. Returns 42.
+import { std::compress::zlib::ZlibReader, std::io::BufReader, std::io::SliceReader, std::io::IoError, std::io::IoErrorKind,
+         std::collections::DynamicArray, std::collections::FixedArray, std::encoding::hex::decode };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+// 0 for bytes, else the error's kind: 2 InvalidData, 3 UnexpectedEof, 9 any other.
+fn int32 kindOf(IoError e) {
+    return match (e.kind()) { case InvalidData: 2; case UnexpectedEof: 3; case _: 9; };
+}
+
+// 0 when reading `stream` 7 bytes at a time ends in an error of kind `want`, and the next read and `finish` repeat it.
+fn int32 refused(const ref string stream, int32 want) {
+    ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: bytesOf(text: stream))),
+                                                limit: 1000000ui64);
+    FixedArray<uint8> buf = FixedArray.make(size: 7);
+    int32 got = 0;
+    while (got == 0) {
+        got = match (z.read(into: buf.viewMut())) { case Ok(value: k): k == 0 ? 8 : 0; case Err(error: e): kindOf(e: e); };
+    }
+    if (got != want) { return 1; }
+    int32 again = match (z.read(into: buf.viewMut())) { case Ok(value: k): 8; case Err(error: e): kindOf(e: e); };
+    if (again != want) { return 2; }
+    return match (give z.finish()) {
+        case Ok(value: b): 3;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): settled(z: give back, kind: kindOf(e: e), want: want); };
+    };
+}
+
+fn int32 settled(ZlibReader<SliceReader> z, int32 kind, int32 want) {
+    ZlibReader<SliceReader> mine = give z;
+    if (kind != want) { return 4; }
+    BufReader<SliceReader> left = give mine.abandon();
+    return 0;
+}
+
+fn uint8 main() {
+    // a compression method other than deflate
+    if (refused(stream: "7709cb48cdc9c957c8402701680308b1", want: 2) != 0) { return 1; }
+    // a window over 32 KiB
+    if (refused(stream: "881ccb48cdc9c957c8402701680308b1", want: 2) != 0) { return 2; }
+    // a header that is no multiple of 31
+    if (refused(stream: "789dcb48cdc9c957c8402701680308b1", want: 2) != 0) { return 3; }
+    // a preset dictionary, until KR-257
+    if (refused(stream: "78bb062c0215cb00110a182400680308b1", want: 2) != 0) { return 4; }
+    // FDICT set over a stream that would otherwise read
+    if (refused(stream: "7820cb48cdc9c957c8402701680308b1", want: 2) != 0) { return 5; }
+    // a checksum off by one bit
+    if (refused(stream: "789ccb48cdc9c957c8402701680308b0", want: 2) != 0) { return 6; }
+    // a checksum in the wrong byte order
+    if (refused(stream: "789ccb48cdc9c957c8402701b1080368", want: 2) != 0) { return 7; }
+    // a body with a reserved block type
+    if (refused(stream: "789c07", want: 2) != 0) { return 8; }
+    // a source with nothing in it
+    if (refused(stream: "", want: 3) != 0) { return 9; }
+    // one byte of header
+    if (refused(stream: "78", want: 3) != 0) { return 10; }
+    // cut inside the body
+    if (refused(stream: "789ccb48cd", want: 3) != 0) { return 11; }
+    // no trailer
+    if (refused(stream: "789ccb48cdc9c957c8402701", want: 3) != 0) { return 12; }
+    // half a trailer
+    if (refused(stream: "789ccb48cdc9c957c84027016803", want: 3) != 0) { return 13; }
+    return 42;
+}

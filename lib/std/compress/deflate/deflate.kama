@@ -153,6 +153,10 @@ type value Huffman {
 type enum Stage { Header, StoredLength, Stored, Table, CodeLengths, Lengths, Codes, Length, Distance, DistanceExtra, Copy, Done }
 
 type resource DeflateReader<R: Reader> implements Reader {
+    // zlib and gzip are a deflate body between a header and a trailer on the same source, and a stream that fails in
+    // either fails as a body does (KR-5).
+    friend std::compress::zlib::ZlibReader[src, failure];
+
     BufReader<R> src;
     uint64 limit;
     uint64 produced;            // decoded bytes so far, which is also how far back a distance may reach
@@ -693,6 +697,10 @@ fn DynamicArray<uint32> atLeastTwo(const ref DynamicArray<uint32> f) {
 }
 
 type resource DeflateWriter<W: Writer> implements Writer {
+    // A wrapper's header and trailer go out through this writer's own buffer, so one `drain` covers everything and finishing
+    // again is as simple as it is here (zlib's one `pending` buffer; KR-5).
+    friend std::compress::zlib::ZlibWriter[encoded, finalWritten, endBlocks, drain, intoSink];
+
     W sink;
     int32 chain;                 // how many earlier positions a search walks; 0 compresses nothing
     bool lazy;                   // a match waits a byte, in case the next position has a longer one
@@ -806,12 +814,7 @@ type resource DeflateWriter<W: Writer> implements Writer {
     // a failure the writer comes back whole in `Unfinished`, and finishing it again writes no second final block. Dropping
     // a writer abandons its stream, which then never verifies.
     public give fn Result<W, Unfinished<DeflateWriter<W>>> finish() {
-        if (!this.finalWritten) {
-            this.run(last: true);
-            this.writeBlock(last: true);
-            if (this.bitCount > 0) { this.put(v: 0, count: 8 - this.bitCount); }
-            this.finalWritten = true;
-        }
+        if (!this.finalWritten) { this.endBlocks(); }
         Result<Unit, IoError> dr = this.drain();
         match (dr) {
             case Err(error: e): { return Result::Err(error: Unfinished::Pending(adapter: give this, error: e)); }
@@ -819,6 +822,17 @@ type resource DeflateWriter<W: Writer> implements Writer {
         };
         return Result::Ok(value: give this.sink);
     }
+
+    // The final block, padded to a whole byte, waiting in `encoded`.
+    fn void endBlocks() {
+        this.run(last: true);
+        this.writeBlock(last: true);
+        if (this.bitCount > 0) { this.put(v: 0, count: 8 - this.bitCount); }
+        this.finalWritten = true;
+    }
+
+    // The sink, for a wrapper whose `drain` has just emptied `encoded`.
+    give fn W intoSink() { return give this.sink; }
 
     fn Result<Unit, IoError> drain() {
         isize total = this.encoded.length();

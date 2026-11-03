@@ -20,6 +20,9 @@
       "modules": {
         "deflate": {
           "visibility": "public"
+        },
+        "zlib": {
+          "visibility": "public"
         }
       }
     },

@@ -1,0 +1,248 @@
+// `ZlibReader` (KR-5): zlib (RFC 1950) decoded from a `BufReader`. Streams from python3's zlib at each header it writes, the
+// empty stream, a smaller declared window, flushes inside a stream, and a run long enough for Adler-32's modulo: each read
+// 1, 7 and 4,096 bytes at a time and checked by length and CRC-32. Then the stream's END: two streams back to back decode one
+// after the other with the bytes after them still there; a source that stalls before every byte decodes the same, stopping
+// inside the header and the trailer and resuming there; a read of nothing is not the end, before the header or after the
+// last byte; `finish` before the trailer has been verified answers `InvalidInput` and the reader reads on; `abandon` hands
+// the source back; and `limit` holds as `DeflateReader`'s does. Returns 42.
+import { std::compress::zlib::ZlibReader, std::io::BufReader, std::io::SliceReader, std::io::Reader, std::io::IoError,
+         std::io::IoErrorKind, std::collections::DynamicArray, std::collections::FixedArray, std::collections::View,
+         std::encoding::hex::decode, std::digest::crc32::crc32 };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+fn ZlibReader<SliceReader> over(const ref string stream, uint64 limit) {
+    return ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: bytesOf(text: stream))), limit: limit);
+}
+
+// 1 InvalidInput, 2 InvalidData, 3 UnexpectedEof, 4 LimitExceeded, 5 WouldBlock, 9 any other.
+fn int32 kindOf(IoError e) {
+    return match (e.kind()) { case InvalidInput: 1; case InvalidData: 2; case UnexpectedEof: 3; case LimitExceeded: 4; case WouldBlock: 5; case _: 9; };
+}
+
+// Reads `d` to its end `chunk` bytes at a time: 0 when that is `len` bytes with this CRC-32.
+fn int32 drain(ref ZlibReader<SliceReader> d, int32 len, uint32 crc, isize chunk) {
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: chunk);
+    while (true) {
+        isize n = match (d.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return 1; }
+        if (n == 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    if (cast<int32>(got.length()) != len) { return 2; }
+    if (crc32(bytes: got.view()) != crc) { return 3; }
+    return 0;
+}
+
+fn int32 check(const ref string stream, int32 len, uint32 crc) {
+    ZlibReader<SliceReader> a = over(stream: stream, limit: 1000000ui64);
+    ZlibReader<SliceReader> b = over(stream: stream, limit: 1000000ui64);
+    ZlibReader<SliceReader> c = over(stream: stream, limit: 1000000ui64);
+    return drain(d: ref a, len: len, crc: crc, chunk: 1) + drain(d: ref b, len: len, crc: crc, chunk: 7)
+         + drain(d: ref c, len: len, crc: crc, chunk: 4096);
+}
+
+// A source that gives one byte per read and answers `WouldBlock` before each one.
+type resource Choppy implements Reader {
+    DynamicArray<uint8> bytes;
+    isize pos;
+    bool ready;
+
+    public ctor make(DynamicArray<uint8> bytes) { this.bytes = give bytes; this.pos = 0; this.ready = false; }
+
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        if (!this.ready) {
+            this.ready = true;
+            return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock));
+        }
+        this.ready = false;
+        if (this.pos >= this.bytes.length() || into.length() == 0) { return Result::Ok(value: 0); }
+        into[0] = this.bytes[this.pos];
+        this.pos = this.pos + 1;
+        return Result::Ok(value: 1);
+    }
+}
+
+// Two streams back to back, then "TAIL": 0 when both decode, read `chunk` bytes at a time, and the tail is left.
+fn int32 twoStreams(isize chunk) {
+    ZlibReader<SliceReader> one = over(stream: "789ccb48cdc9c957c8402701680308b1789c7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c"
+                                            + "7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db835"
+                                            + "8eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491"
+                                            + "d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017"
+                                            + "f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb59"
+                                            + "06d424cb444f8c6058fa1410c03503170750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9e"
+                                            + "c790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4"
+                                            + "092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae5669f48613f79961c10db4d998961b54e51010ab2bb039a"
+                                            + "d1240b6e3037f84ab1afae8e3ef88495eecd45850435e62738c2436eb056e05cc533d52a9420d02d24b8f5a44210bcb9"
+                                            + "9178bb4a1bd4a8c4f3d1575f255f8aa6a606d7633153028a3adb891acbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10"
+                                            + "b6f9b806af87cc9a17740de60c26d5e5e8ff0ba13b03c1d9941d1d9a7af86082a0e74ecce0f1ec090fbd956a291ea8be"
+                                            + "fa071d37fbc75441494c", limit: 1000000ui64);
+    if (drain(d: ref one, len: 23, crc: 2369606115ui32, chunk: chunk) != 0) { return 1; }
+    BufReader<SliceReader> rest = match (give one.finish()) { case Ok(value: b): give b; case Err(error: u): { return 2; } };
+    ZlibReader<SliceReader> two = ZlibReader.make(source: give rest, limit: 1000000ui64);
+    if (drain(d: ref two, len: 2817, crc: 2695899570ui32, chunk: chunk) != 0) { return 3; }
+    BufReader<SliceReader> after = match (give two.finish()) { case Ok(value: b): give b; case Err(error: u): { return 4; } };
+    FixedArray<uint8> t = FixedArray.make(size: 16);
+    isize k = match (after.read(into: t.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+    return (k == 4 && t[0] == 84ui8 && t[3] == 76ui8) ? 0 : 5;   // "TAIL"
+}
+
+// Every byte stalls first, so a read stops inside the header, the body and the trailer, and each resumes.
+fn int32 stalled() {
+    BufReader<Choppy> slow = BufReader.make(inner: Choppy.make(bytes: bytesOf(text: "789c7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94"
+        + "d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca"
+        + "463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371"
+        + "fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b"
+        + "6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c0350317"
+        + "0750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b05"
+        + "6df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd43129"
+        + "07a668aa33c1383ae5669f48613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84ab1afae8e3ef88495"
+        + "eecd45850435e62738c2436eb056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4f3d1575f255f8aa6"
+        + "a606d7633153028a3adb891acbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a17740de60c26d5e5"
+        + "e8ff0ba13b03c1d9941d1d9a7af86082a0e74ecce0f1ec090fbd956a291ea8befa071d37fbc7")));
+    ZlibReader<Choppy> z = ZlibReader.make(source: give slow, limit: 1000000ui64);
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 5);
+    int32 blocked = 0;
+    while (true) {
+        isize m = match (z.read(into: buf.viewMut())) {
+            case Ok(value: v): v;
+            case Err(error: e): kindOf(e: e) == 5 ? -2 : -1;
+        };
+        if (m == -1) { return 1; }
+        if (m == -2) { blocked = blocked + 1; }
+        else if (m == 0) { break; }
+        else { for (isize i = 0; i < m; i = i + 1) { got.add(item: buf[i]); } }
+    }
+    if (cast<int32>(got.length()) != 2817 || crc32(bytes: got.view()) != 2695899570ui32) { return 2; }
+    if (blocked == 0) { return 3; }
+    return match (give z.finish()) { case Ok(value: b): 0; case Err(error: u): 4; };
+}
+
+fn int32 finishKind(ZlibReader<SliceReader> z, ref bool cameBack) {
+    ZlibReader<SliceReader> mine = give z;
+    return match (give mine.finish()) {
+        case Ok(value: b): 0;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): pending(z: give back, kind: kindOf(e: e), cameBack: ref cameBack); };
+    };
+}
+
+fn int32 pending(ZlibReader<SliceReader> z, int32 kind, ref bool cameBack) {
+    ZlibReader<SliceReader> mine = give z;
+    int32 readOn = drain(d: ref mine, len: 23, crc: 2369606115ui32, chunk: 64);
+    bool finished = match (give mine.finish()) { case Ok(value: b): true; case Err(error: u): false; };
+    cameBack = readOn == 0 && finished;
+    return kind;
+}
+
+fn uint8 main() {
+    // stored (level 0), header 78 01
+    if (check(stream: "7801011700e8ff68656c6c6f2068656c6c6f2068656c6c6f2068656c6c6f680308b1", len: 23, crc: 2369606115ui32) != 0) { return 1; }
+    // level 1, header 78 01
+    if (check(stream: "7801cb48cdc9c957c8402701680308b1", len: 23, crc: 2369606115ui32) != 0) { return 2; }
+    // level 5, header 78 5E, a dynamic block
+    if (check(stream: "785e7d558b6ec33008fc95fc1a4bdc255a9a4aada7fefeea00f6f1c854b58d8d0dc77190ba96692fc7775da7a5dc76aa"
+        + "657ad567a1fb548e451fc9db96ed55e998cbf4591630d7b51f91bff9b124b7c6b1f5f776bbd3110280c3f6c5f5e95237"
+        + "baa101618b46a1cf274141bcfada1ff3cfd86b8e5bc6ea8f4204835e9c0873889030bb7dabe549fbb9a5999e48c7e93b"
+        + "d5791d48f514bad7c37a94a1f32ae1abfb8ad56033a242e8ced7a0402fc8018e6f985757319c0f120a77618f25390329"
+        + "3fa6705680c29aa141ed5e6ee326d3795dfe4449ae640d2b0d998895fd0aca449a6495188591344bef0282f31989ae2c"
+        + "3d3eda5d8206b60654018c64f4564bba93ea5227410508ce1a5aaa6301fbf5a86307d6369e6cbeb76379bc750563ec3f"
+        + "09daec83383d71a69f40347a4e3040c1e1c6593abe8a1d0227581230a72ed4482878b5f10dfe4da833f3cf1218579652"
+        + "df45b13e097f3023cde4169f5ec2b1f3ac385cecd06526869d7520059790dd1dd48c225972712791627b165f55a7630c"
+        + "7ea1ca5eda204259bb695cf9159cf1a1376456f8beca7b8a33d420ae5a5ee0d6138420f7ceadc9f00e9932d57e12e730"
+        + "5dc7285ecabae60c8e6de139cf5bc096cbd316de44bd3efafeb1edcd5a92084aa3a7196b9e248c5479daaedbd5011ea2"
+        + "a664a02399573441952d27c37593bb102168da0e86a61e3ee92057f330cc3a02a7d6316f355bd024a6d8577f1d37fbc7", len: 2817, crc: 2695899570ui32) != 0) { return 3; }
+    // level 6, header 78 9C
+    if (check(stream: "789c7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94"
+        + "d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca"
+        + "463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371"
+        + "fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b"
+        + "6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c0350317"
+        + "0750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b05"
+        + "6df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd43129"
+        + "07a668aa33c1383ae5669f48613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84ab1afae8e3ef88495"
+        + "eecd45850435e62738c2436eb056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4f3d1575f255f8aa6"
+        + "a606d7633153028a3adb891acbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a17740de60c26d5e5"
+        + "e8ff0ba13b03c1d9941d1d9a7af86082a0e74ecce0f1ec090fbd956a291ea8befa071d37fbc7", len: 2817, crc: 2695899570ui32) != 0) { return 4; }
+    // level 9, header 78 DA
+    if (check(stream: "78da7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94"
+        + "d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca"
+        + "463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371"
+        + "fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b"
+        + "6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c0350317"
+        + "0750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b05"
+        + "6df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd43129"
+        + "07a668aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a5090dd1dd08c26597083b9c1578a7d7575f4c127ac"
+        + "746f2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27d2936fdfdc48bc5da50d6a54e2f9e8abaf922f45"
+        + "535383ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe22cca83508db7c5c83d74366cd0bba06730693ea"
+        + "72f4ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4ab5140f545ffd031d37fbc7", len: 2817, crc: 2695899570ui32) != 0) { return 5; }
+    // the empty stream, whose checksum is 1
+    if (check(stream: "789c030000000001", len: 0, crc: 0ui32) != 0) { return 6; }
+    // a header declaring a 512-byte window
+    if (check(stream: "1895cb48cdc9c957c8402701680308b1", len: 23, crc: 2369606115ui32) != 0) { return 7; }
+    // a sync flush and a full flush inside
+    if (check(stream: "789cca48cdc9c957c8402701000000ffff7c568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e"
+        + "9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb679994b978e323fcb13eb6e0d638"
+        + "b6ff5d2e773a5d00e5b0fcea7575291bdd5012691689429f9f200b6aab9fe3b1fe8ebde2b8542cfec84530d9b313464e"
+        + "6748babae396d3938eba2595d64cc7e93be5751f99ca29ed5e0ecbd1967a5b0578755fbe1bcdacb3d2a983af01815ce0"
+        + "032dbe415e5cf97018c4356e62f72da981041fd3384b4046cdc02076a41b01b8f3f6074c8296955c69d084adcd2f6719"
+        + "50932c133d318261e9534000d70c5c1c406d87024dda125008308a915ba5e80e2a944e9c95caa0f6d042ed1bd8af7b1e"
+        + "43b276f078f37d3bb7c73b90b16f14b4d53b722270669e1469e41ce7a01aae6ed4d6b5ab7a42d4894609a55313369226"
+        + "bcd8da8df63780cee89f57ae50c7a41c98a2a9ce04e3e8949b7d2285fde45972406c37652686d53a450528c8ee0e6846"
+        + "932cb8c1dce02bc5beba3afae01356ba37171512d4989fe0080fb9c15a817315cf54ab508240b790e0d6930a41f0e646"
+        + "e2ed2a6d50a312cf475f7d957c299a9a1a5c8fc54c0928ea6c276a2cfbae8afefed8f16e5c22ab2708f3176146ad41d8"
+        + "e6e31abc1e326b5ed0359833985497a3ff2f84ee0c046753767468eae18309829e3b3183c7b3273cf456aaa578a0faea"
+        + "1f0000ffffcb48cdc9c957c8402701f3800d36", len: 2863, crc: 4268997289ui32) != 0) { return 8; }
+    // 6,000 bytes of 0xFF: Adler-32's two sums are taken modulo 65521 along the way
+    if (check(stream: "78daedc13101000000c2a0fea967085fa0000000000080d700a49759ea", len: 6000, crc: 3078791141ui32) != 0) { return 9; }
+    // Each `finish` leaves the source at the next stream. 64 bytes at a time and 4,096: the second is where the decoder takes
+    // bytes ahead and must hand them back before the trailer is read.
+    if (twoStreams(chunk: 64) != 0) { return 20; }
+    if (twoStreams(chunk: 4096) != 0) { return 21; }
+    if (stalled() != 0) { return 22; }
+
+    // A read of nothing is not the end: before the header, and once every byte is delivered and the trailer is unread.
+    FixedArray<uint8> none = FixedArray.make(size: 0);
+    FixedArray<uint8> buf = FixedArray.make(size: 23);
+    ZlibReader<SliceReader> quiet = over(stream: "789ccb48cdc9c957c8402701680308b1", limit: 1000000ui64);
+    isize q0 = match (quiet.read(into: none.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (q0 != 0) { return 30; }
+    isize q1 = match (quiet.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (q1 != 23) { return 31; }
+    isize q2 = match (quiet.read(into: none.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (q2 != 0) { return 32; }
+    isize q3 = match (quiet.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (q3 != 0) { return 33; }
+    int32 qf = match (give quiet.finish()) { case Ok(value: b): 0; case Err(error: u): 1; };
+    if (qf != 0) { return 34; }
+
+    // `finish` before the checksum has been checked, here with nothing read, answers `InvalidInput`, and that reader reads on.
+    bool cameBack = false;
+    ZlibReader<SliceReader> early = over(stream: "789ccb48cdc9c957c8402701680308b1", limit: 1000000ui64);
+    if (finishKind(z: give early, cameBack: ref cameBack) != 1) { return 40; }
+    if (!cameBack) { return 41; }
+
+    // `abandon` hands the source back wherever the stream has got to.
+    ZlibReader<SliceReader> dropped = over(stream: "789ccb48cdc9c957c8402701680308b1", limit: 1000000ui64);
+    FixedArray<uint8> two = FixedArray.make(size: 2);
+    isize d0 = match (dropped.read(into: two.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (d0 != 2) { return 42; }
+    BufReader<SliceReader> left = give dropped.abandon();
+
+    // `limit`: the whole stream at exactly its size, and with one less every byte up to it and then `LimitExceeded`.
+    ZlibReader<SliceReader> whole = over(stream: "789ccb48cdc9c957c8402701680308b1", limit: 23ui64);
+    if (drain(d: ref whole, len: 23, crc: 2369606115ui32, chunk: 7) != 0) { return 50; }
+    ZlibReader<SliceReader> cut = over(stream: "789ccb48cdc9c957c8402701680308b1", limit: 22ui64);
+    isize cutTotal = 0;
+    int32 cutKind = 0;
+    while (cutKind == 0) {
+        isize n = match (cut.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): { cutKind = kindOf(e: e); := 0; } };
+        if (n == 0 && cutKind == 0) { return 51; }
+        cutTotal = cutTotal + n;
+    }
+    if (cutTotal != 22 || cutKind != 4) { return 52; }
+    return 42;
+}

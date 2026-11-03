@@ -1,0 +1,221 @@
+// `ZlibWriter` (KR-5): a `DeflateWriter`'s bytes between zlib's header and an Adler-32. At every level the FLG is the one zlib
+// writes, the body is exactly `DeflateWriter`'s at that level, the trailer is the Adler-32 of the input, the highest byte
+// first, and none of that depends on how the writes were split or on a sink that takes a little at a time and stalls: a
+// checksum over anything but the count `write` answered would differ. `ZlibReader` reads back what went in. Then the empty
+// stream, which is python3's zlib's bytes; `flush`, whose marker stays inside the stream; and `finish` on a stalled sink,
+// which brings the writer back whole, writes one trailer however many times it is called, and refuses more input. Returns 42.
+import { std::compress::zlib::ZlibWriter, std::compress::zlib::ZlibReader, std::compress::deflate::DeflateWriter,
+         std::compress::deflate::DeflateLevel, std::collections::DynamicArray, std::collections::ConstView,
+         std::collections::FixedArray, std::io::Writer, std::io::BufReader, std::io::SliceReader, std::io::IoError,
+         std::io::IoErrorKind, std::digest::adler32::adler32, std::num::loadU32, std::num::ByteOrder };
+
+// `every` > 0: all but every `every`-th call answers `WouldBlock`, and the rest take at most 777 bytes.
+type resource Sink implements Writer {
+    DynamicArray<uint8> got;
+    int32 every;
+    int32 calls;
+    public ctor make(int32 every) {
+        this.got = DynamicArray.empty();
+        this.every = every;
+        this.calls = 0;
+    }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        this.calls = this.calls + 1;
+        if (this.every > 0 && this.calls % this.every != 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        isize n = this.every > 0 && bytes.length() > 777 ? 777 : bytes.length();
+        for (isize k = 0; k < n; k = k + 1) { this.got.add(item: bytes[k]); }
+        return Result::Ok(value: n);
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public give fn DynamicArray<uint8> bytes() { return give this.got; }
+}
+
+fn DeflateLevel levelOf(int32 k) {
+    InlineArray<DeflateLevel>#(11) all = [DeflateLevel::Store, DeflateLevel::Level1, DeflateLevel::Level2, DeflateLevel::Level3,
+                                          DeflateLevel::Level4, DeflateLevel::Level5, DeflateLevel::Level6, DeflateLevel::Level7,
+                                          DeflateLevel::Level8, DeflateLevel::Level9, DeflateLevel::Frozen];
+    return all[k];
+}
+
+// The FLG zlib writes for each level, in `levelOf`'s order.
+fn uint8 flagsOf(int32 k) {
+    InlineArray<uint8>#(11) all = [0x01, 0x01, 0x5E, 0x5E, 0x5E, 0x5E, 0x9C, 0xDA, 0xDA, 0xDA, 0xDA];
+    return all[k];
+}
+
+// Text, then bytes with no pattern, then a run: every kind of block, and more than one window's worth.
+fn DynamicArray<uint8> sample() {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    uint32 s = 2463534242ui32;
+    for (isize k = 0; k < 90000; k = k + 1) {
+        s = s ^ (s << 13ui32);
+        s = s ^ (s >> 17ui32);
+        s = s ^ (s << 5ui32);
+        if (k < 40000) { a.add(item: cast<uint8>(97ui32 + (s & 7ui32))); }
+        else if (k < 70000) { a.add(item: cast<uint8>(s & 255ui32)); }
+        else { a.add(item: 120); }
+    }
+    return a;
+}
+
+// Writes all of `bytes` at `level`, in pieces of `a` and `b` in turn. A `WouldBlock` is met by asking again.
+fn DynamicArray<uint8> encode(const ref DynamicArray<uint8> bytes, int32 level, isize a, isize b, int32 every) {
+    ZlibWriter<Sink> w = ZlibWriter.make(sink: Sink.make(every: every), level: levelOf(k: level));
+    wrote(w: ref w, bytes: bytes.view(), a: a, b: b);
+    return finished(w: give w);
+}
+
+fn void wrote(ref ZlibWriter<Sink> w, ConstView<uint8> bytes, isize a, isize b) {
+    isize at = 0;
+    bool first = true;
+    while (at < bytes.length()) {
+        isize want = first ? a : b;
+        first = !first;
+        isize n = bytes.length() - at < want ? bytes.length() - at : want;
+        isize took = match (w.write(bytes: bytes.slice(from: at, count: n))) { case Ok(value: m): m; case Err(error: e): 0; };
+        at = at + took;
+    }
+}
+
+fn DynamicArray<uint8> finished(ZlibWriter<Sink> w) {
+    ZlibWriter<Sink> cur = give w;
+    while (true) {
+        match (give cur.finish()) {
+            case Ok(value: s): {
+                Sink done = give s;
+                return give done.bytes();
+            }
+            case Err(error: u): { match (give u) { case Pending(adapter: ad, error: e): { cur = give ad; } }; }
+        };
+    }
+}
+
+fn DynamicArray<uint8> rawBody(const ref DynamicArray<uint8> bytes, int32 level) {
+    DeflateWriter<Sink> w = DeflateWriter.make(sink: Sink.make(every: 0), level: levelOf(k: level));
+    match (w.write(bytes: bytes.view())) { case Ok(value: m): { } case Err(error: e): { } };
+    return match (give w.finish()) {
+        case Ok(value: s): { Sink done = give s; := give done.bytes(); }
+        case Err(error: u): DynamicArray.empty();
+    };
+}
+
+fn bool same(const ref DynamicArray<uint8> a, const ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    for (isize k = 0; k < a.length(); k = k + 1) { if (a[k] != b[k]) { return false; } }
+    return true;
+}
+
+// Decodes a whole stream. Empty on any error, and on a checksum that fails.
+fn DynamicArray<uint8> decode(const ref DynamicArray<uint8> stream) {
+    ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: copy stream)),
+                                                limit: 10000000ui64);
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (true) {
+        isize n = match (z.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return DynamicArray.empty(); }
+        if (n == 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    return got;
+}
+
+fn int32 levels() {
+    DynamicArray<uint8> in0 = sample();
+    uint32 sum = adler32(bytes: in0.view());
+    for (int32 level = 0; level <= 10; level = level + 1) {
+        DynamicArray<uint8> whole = encode(bytes: in0, level: level, a: 1000000, b: 1000000, every: 0);
+        DynamicArray<uint8> fine = encode(bytes: in0, level: level, a: 1, b: 7, every: 0);
+        DynamicArray<uint8> coarse = encode(bytes: in0, level: level, a: 300, b: 70000, every: 0);
+        // Pieces bigger than a writer's step over a sink that stalls, so `write` answers a short count.
+        DynamicArray<uint8> stalled = encode(bytes: in0, level: level, a: 20000, b: 9000, every: 3);
+        if (!same(a: whole, b: fine)) { return 1; }
+        if (!same(a: whole, b: coarse)) { return 2; }
+        if (!same(a: whole, b: stalled)) { return 3; }
+        if (whole[0] != 0x78ui8 || whole[1] != flagsOf(k: level)) { return 4; }
+        DynamicArray<uint8> body = rawBody(bytes: in0, level: level);
+        if (whole.length() != body.length() + 6) { return 5; }
+        for (isize k = 0; k < body.length(); k = k + 1) { if (whole[k + 2] != body[k]) { return 6; } }
+        if (loadU32(from: whole.view(), at: whole.length() - 4, order: ByteOrder::Big) != sum) { return 7; }
+        DynamicArray<uint8> back = decode(stream: whole);
+        if (!same(a: back, b: in0)) { return 8; }
+    }
+    // python3's zlib.compress(b"") and zlib.compress(b"", 0), to the byte.
+    DynamicArray<uint8> none = DynamicArray.empty();
+    DynamicArray<uint8> empty = encode(bytes: none, level: 6, a: 1, b: 1, every: 0);
+    InlineArray<uint8>#(8) want = [0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01];
+    if (empty.length() != 8) { return 9; }
+    for (isize k = 0; k < 8; k = k + 1) { if (empty[k] != want[k]) { return 10; } }
+    DynamicArray<uint8> stored = encode(bytes: none, level: 0, a: 1, b: 1, every: 0);
+    InlineArray<uint8>#(11) wantStored = [0x78, 0x01, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01];
+    if (stored.length() != 11) { return 11; }
+    for (isize k = 0; k < 11; k = k + 1) { if (stored[k] != wantStored[k]) { return 12; } }
+    return 0;
+}
+
+fn int32 flushes() {
+    DynamicArray<uint8> in0 = sample();
+    for (int32 every = 0; every <= 3; every = every + 3) {
+        ZlibWriter<Sink> a = ZlibWriter.make(sink: Sink.make(every: every), level: DeflateLevel::Level6);
+        wrote(w: ref a, bytes: in0.view().slice(from: 0, count: 30000), a: 4096, b: 4096);
+        bool done = false;
+        while (!done) { done = match (a.flush()) { case Ok(value: _): true; case Err(error: e): false; }; }
+        wrote(w: ref a, bytes: in0.view().slice(from: 30000, count: in0.length() - 30000), a: 4096, b: 4096);
+        DynamicArray<uint8> flushed = finished(w: give a);
+        DynamicArray<uint8> back = decode(stream: flushed);
+        if (!same(a: back, b: in0)) { return 1; }
+    }
+    return 0;
+}
+
+// Every write stalls, so `finish` comes back with the writer and the error that stopped it.
+fn int32 unfinished() {
+    ZlibWriter<Sink> w = ZlibWriter.make(sink: Sink.make(every: 1000000), level: DeflateLevel::Level1);
+    return match (give w.finish()) {
+        case Ok(value: s): 1;
+        case Err(error: u): match (give u) { case Pending(adapter: ad, error: e): stopped(w: give ad, kind: e.kind()); };
+    };
+}
+
+fn int32 refused(IoError e) { return match (e.kind()) { case InvalidInput: 0; case _: 2; }; }
+
+fn int32 stopped(ZlibWriter<Sink> w, IoErrorKind kind) {
+    ZlibWriter<Sink> cur = give w;
+    bool blocked = match (kind) { case WouldBlock: true; case _: false; };
+    if (!blocked) { return 2; }
+    uint8 one = 1;
+    InlineArray<uint8>#(1) more = [one];
+    int32 afterWrite = match (cur.write(bytes: more.view())) { case Ok(value: n): 1; case Err(error: e): refused(e: e); };
+    if (afterWrite != 0) { return 3; }
+    int32 afterFlush = match (cur.flush()) { case Ok(value: _): 1; case Err(error: e): refused(e: e); };
+    if (afterFlush != 0) { return 4; }
+    // While the sink stays stalled, each `finish` brings the writer back.
+    for (int32 tries = 0; tries < 10; tries = tries + 1) {
+        match (give cur.finish()) {
+            case Ok(value: s): { return 5; }
+            case Err(error: u): { match (give u) { case Pending(adapter: ad, error: e): { cur = give ad; } }; }
+        };
+    }
+    return 0;
+}
+
+// Asked many times over a sink that stalls, `finish` writes one final block and one trailer: the stream of nothing, finished
+// that way, is the same bytes as one that never stalled.
+fn int32 sameAfterStalls() {
+    DynamicArray<uint8> none = DynamicArray.empty();
+    DynamicArray<uint8> plain = encode(bytes: none, level: 6, a: 1, b: 1, every: 0);
+    DynamicArray<uint8> slow = encode(bytes: none, level: 6, a: 1, b: 1, every: 5);
+    return same(a: plain, b: slow) ? 0 : 1;
+}
+
+fn uint8 main() {
+    int32 a = levels();
+    if (a != 0) { return cast<uint8>(100 + a); }
+    int32 b = flushes();
+    if (b != 0) { return cast<uint8>(120 + b); }
+    int32 c = unfinished();
+    if (c != 0) { return cast<uint8>(140 + c); }
+    int32 d = sameAfterStalls();
+    if (d != 0) { return cast<uint8>(160 + d); }
+    return 42;
+}
