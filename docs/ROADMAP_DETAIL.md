@@ -470,6 +470,72 @@ long path or link and for a size or mtime that does not fit, making publish's ch
 kind (`File`, `Directory`, `Symlink`, `HardLink`, `CharDevice`, `BlockDevice`, `Fifo`), size, mode, mtime, linkTarget,
 uid, gid, uname, gname.
 
+**Brief, 2026-11-02, before step 5: what ruling 10 needs corrected.** The ruling cannot be built as written: a `type value` holding a
+string or a byte array is refused ("a `value` owns nothing"), so `TarHeader` is a `type resource`, shaped like `Output`. That forces
+the rest open. Measured here with GNU tar 1.35, bsdtar 3.5.3 and Python 3.9; Go and Rust's `tar` crate are from their docs, since
+neither is on this machine.
+
+| An archive that has | GNU tar | bsdtar | Python | Recommended |
+|---|---|---|---|---|
+| no end marker | reads, silent | reads, silent | reads, silent | `UnexpectedEof`, after every entry |
+| one zero block, then the end | reads, warns | reads, silent | reads, silent | `UnexpectedEof`, after every entry |
+| nothing at all | refused | reads as empty | refused | `UnexpectedEof` |
+| a cut inside a header or a body | refused | refused | refused | `UnexpectedEof` |
+| a bad header checksum | refused | refused | refused | `InvalidData` |
+| bytes after the end marker | ignored | ignored | ignored | left in the source |
+| an unknown type flag | lists it, flagged unknown | as a regular file | keeps `Z` | `TarKind::Other(flag, size)` |
+| a name that is not UTF-8 | `caf\351.txt` | the bytes | `caf\udce9.txt` | the bytes |
+| a pax record declaring 8 GiB | refused, for want of bytes | "too large" | refused, for want of bytes | `InvalidData` past 1 MiB, before reading any |
+
+**T1. Names are raw bytes:** path, link target, uname and gname, as `const ref DynamicArray<uint8>`, for the reason `GzipHeader`'s are.
+A `string` promises UTF-8 and tar promises nothing: Python smuggles such a byte through a surrogate, and Go's strings hold anything,
+where kama's cannot. A caller writes `"docs/a.txt".bytes()`, and `extractInto` refuses a name that is not UTF-8, since `std::fs` takes
+a `string`. Gives up: a printed path takes a conversion.
+
+**T2. A typed kind carries what only that kind has:** `@nonExhaustive type enum TarKind { File(uint64 size), Directory,
+Symlink(DynamicArray<uint8> target), HardLink(DynamicArray<uint8> target), CharDevice(uint32 major, uint32 minor), BlockDevice(uint32
+major, uint32 minor), Fifo, Other(uint8 flag, uint64 size) }`. A symlink cannot have a size or a file a target, which Go, Python and
+Rust's flat headers can only check later. The ruling's list had no device numbers, and listing a device wants them. `TarWriter`
+refuses `Other`. Gives up: reading a size means a `match`.
+
+**T3. One ctor:** `TarHeader.make(path:, kind:, mode:, mtime:, owner:)`, with `owner: TarOwner::None` or `TarOwner::Named(uid, gid,
+uname, gname)`. `None` is publish's choice, uid 0, gid 0, no names, because what those fields hold is a person's account. Gives up:
+one more required argument, and a type.
+
+**T4. `mode` is a `uint32`,** not `std::fs::Permissions`, which refuses any bit outside `0o777`: an archive can carry setuid, and listing
+one is how it is audited. Past `0o7777`, `begin` answers `InvalidInput`, so it is no magic number with no range. Every peer uses an
+integer. Gives up: `Permissions`' named constants at this one call.
+
+**T5. `mtime` is a `std::time::Timestamp`,** which keeps pax's fractional seconds, where a `uint32` of seconds could not. A value
+`Timestamp` cannot hold is `InvalidData`, since `fromUnixSecs` traps on overflow and this is outside input. Gives up: nothing a caller
+would want.
+
+**T6. Bounds.** A pax or GNU extension record is at most 1 MiB, Go's bound, and past that is `InvalidData` before any of it is read.
+Without one, 512 bytes can ask for 8 GiB. Gives up: a path over a megabyte, which no filesystem has.
+
+**T7. An archive must end with its two zero blocks.** This is the row where kama would stand alone, so why do the others accept it?
+Because a tar has no checksum over the whole, the marker is a convention, and writers do forget it (Go's `Writer.Close` is a common
+omission). What strictness buys is narrow: it catches a cut landing exactly between entries, and a `.tar.gz` is caught by gzip anyway.
+What it costs is narrow too, since every entry has been delivered before `next` answers, so a caller who wants the lenient reading
+stops there. Recommended strict, as decision 8 is about bytes after a gzip member, because silence is the one answer a caller cannot
+recover from, and an error it can ignore. Gives up: an error at the end of an archive every other tool reads silently.
+
+**T8. The hand-back is the decoders':** `give fn Result<R, Unfinished<TarReader<R>>> finish()` reads nothing and answers `InvalidInput`
+before the end marker, and `abandon` gives `R` back as it stands. `next()` skips what was left of the last body, which is its visible
+I/O. Over a `GzipReader` that leaves the gzip trailer to the caller, and `GzipReader.finish` refuses until it has been read:
+
+```kama fragment
+TarReader<GzipReader<File>> t = TarReader.make(source: give g);
+… t.next() until it answers Ok(None) …
+GzipReader<File> g2 = match (give t.finish()) { case Ok(value: r): give r; case Err(error: u): { … } };
+… g2.read(into: buf) until Ok(0), which is when the checksum is verified …
+```
+
+**Left out, each with its verdict.** GNU and pax sparse files, read as `Other`, whose body is the raw sparse form: **scheduled** as a
+row when this ships, since Go, Python and Rust's `tar` all expand them, and VM images use them. Other pax records (`SCHILY.xattr.*`,
+which OCI layers carry): **scheduled** with them, read and written. GNU's incremental, volume and multi-volume types: **genuinely
+optional**, since `Other` lists them and a body is still readable, and no format a program receives today needs more.
+
 **11. Extraction: `extractInto(archive:, dir:)`, strict.**
 
 | | Extracting an archive safely |
