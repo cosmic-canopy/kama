@@ -373,7 +373,9 @@ fn uint8 main() {
 }
 EOF
 TINY=$(wc -l < "$tmp/tiny.kama" | tr -d ' ')
-rows=$("$KAMA" build --strict-numeric "$tmp/tiny.kama" -o "$tmp/tiny.bin" 2>&1 | LC_ALL=C grep '^kama-strictnum' || true)
+# The rows are on stdout, which a pipe buffers, and `kama: built …` is on stderr, which it does not: merged, a
+# checkout at a long path pushed stdout past one buffer, and stderr's line landed in the middle of a row.
+rows=$("$KAMA" build --strict-numeric "$tmp/tiny.kama" -o "$tmp/tiny.bin" 2>/dev/null | LC_ALL=C grep '^kama-strictnum' || true)
 
 # A probe that produced nothing must not read as a pass — check-diag-line.sh learned this one the hard way.
 n9=$(printf '%s\n' "$rows" | LC_ALL=C grep -c '^kama-strictnum' || true)
