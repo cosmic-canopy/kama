@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-300**
+**Next id: KR-301**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -58,6 +58,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
+| KR-300 | **Two names the `__` join makes can meet when a segment starts or ends with `_`** — project `geo_`'s module `x` and project `geo`'s module `_x` are both `geo___x`, so a valid program is refused as a "duplicate function" (measured `0.9.817`); scopes and file stems by the same arithmetic. Ruling owed: refuse the underscore, or escape the join | S? | [§2](ROADMAP_DETAIL.md#s2-underscore-join) |
 
 ## NOW — the next features, in build order
 
@@ -71,7 +72,6 @@ detail, so it is only as good as that reasoning: `?` marks a row the detail itse
 
 | id | item | size | detail |
 |---|---|---|---|
-| KR-291 | *Claimed: Windows box, 2026-11-02.* **A consumer aliases a dependency, so two scopes' packages of one name can meet** — today `@north/net` and `@south/net` both import as `net`, and one graph cannot hold both, nor a project named `net` over either. **Ruled 2026-11-02:** the key is the consumer's local name and `"package"` names the package (Cargo's spelling); each package resolves its imports through its own manifest, and the full name is the identity; a scoped package's C names take `kS_<scope>__<name>__`, file-private ones move from `k_F` to `kF_`, unscoped ones are unchanged, and a scope meets the identifier rule; two dependencies of one consumer under one name stay an error naming the key. No prefix workaround: this is the fix | M | [§10](ROADMAP_DETAIL.md#s10-dep-alias) |
 | KR-280 | *Claimed: Windows box, 2026-11-02.* **An Android target, for Meta Quest's native route** — measured with NDK r30: a `kama.json` target carrying `--target=aarch64-linux-android29` in `cflags` and `ldflags` builds an executable and a `.so`, and 135 of 135 std-seam fixtures link once `-lpthread` is gone (bionic has none); on the SDK's emulator 110 pass, arm64 and x86_64 alike, with no headset. **Ruled 2026-11-02:** the versioned triple `aarch64-linux-android29` is the one spelling, kama finds the NDK itself (`$ANDROID_NDK_HOME`, else the newest in the SDK's `ndk/`: `$ANDROID_HOME`, else Android Studio's default), `OS_LINUX` + `ABI_ANDROID`. Left: those, the link tail, the 9 failures, and a `./dev test android` leg over adb | M | [§5](ROADMAP_DETAIL.md#s5-android) |
 | KR-283 | *Claimed: Windows box, 2026-11-02.* **An installable Android app** — Quest launches an APK whose `NativeActivity` loads the `.so` through the NDK's `native_app_glue`. **Ruled 2026-11-02:** `kama build` makes the APK, as it makes wasm's HTML harness (manifest with room for Meta's entries, aapt2, zipalign, apksigner; a debug key by default, the project's keystore for release), logcat output through the glue, and `main` stays the entry, with the lifecycle as events (its shape designed here). An exposed `android_main` already builds (`0.9.803`). Emulator first, the headset last. After KR-280 | L? | [§5](ROADMAP_DETAIL.md#s5-android) |
 | KR-5 | *Claimed: Mac, 2026-11-02.* **`std::io` transform adapters: compression and archives** — deflate (RFC 1951), zlib (1950) and gzip (1952) in both directions, plus tar, in `std::compress::*` and `std::archive::tar`. **Ruled 2026-10-29:** a decoder reads a `BufReader<R>` and stops exactly at the stream's end, a REQUIRED decoded-byte limit (`LimitExceeded`), `level: DeflateLevel` with a `Frozen` variant whose bytes equal `kama publish`'s forever, drop abandons and `finish` completes, and a strict `extractInto` that never traverses a link. Nine steps mapped, 1, 2, 2b and 3 shipped (`DeflateReader` and its fast path, `0.9.805`–`0.9.806`; `DeflateWriter`, `0.9.817`); next step 4, zlib and gzip | L | [§1](ROADMAP_DETAIL.md#s1-compression) |
