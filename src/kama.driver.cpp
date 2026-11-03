@@ -2580,6 +2580,9 @@ struct TargetSpec {
     // target were always the same machine, and the one hard blocker to cross-compiling.
     bool isMacOS()     const { return os == "macos"; }
     bool isWindows()   const { return os == "windows"; }
+    // Android's abi carries its API level as clang spells it, `android29` (parseTriple holds the level there); the
+    // flag it derives is `ABI_ANDROID`, and the triple reaches clang whole (KR-280).
+    bool isAndroid()   const { return abi.compare(0, 7, "android") == 0; }
     const char* sharedLibExt() const {
         return isWindows() ? ".dll" : isMacOS() ? ".dylib" : ".so";
     }
@@ -2670,6 +2673,13 @@ static bool parseTriple(const std::string& s, TargetSpec& out, std::string& err)
     else if (parts.size() == 3) { out.arch = parts[0]; out.os = parts[1]; out.abi = parts[2]; }
     else if (parts.size() == 4) { out.arch = parts[0]; out.os = parts[2]; out.abi = parts[3]; }  // drop vendor
     else { err = "target triple '" + s + "' must be <arch>-<os>[-<abi>] (2 to 4 components)"; return false; }
+    // Android's API level is the abi's suffix (`aarch64-linux-android29`), the one spelling clang takes: the NDK's
+    // own headers refuse an unversioned triple ("Unversioned target triples are not supported!"), so kama does first.
+    if (out.isAndroid() && (out.abi.size() == 7 || out.abi.find_first_not_of("0123456789", 7) != std::string::npos)) {
+        err = "target triple '" + s + "' names no Android API level, which follows the abi as clang spells it — "
+              "write `" + out.arch + "-" + out.os + "-android29` (or the level you build for)";
+        return false;
+    }
     out.name = s;
     return true;
 }
@@ -2693,7 +2703,7 @@ static std::set<std::string> derivedTargetFlags(const TargetSpec& t, bool nameIs
     if (!nameIsBuiltin && !t.name.empty() && t.name.find('-') == std::string::npos) f.insert(t.name);
     f.insert("ARCH_" + up(t.arch));
     f.insert("OS_"   + up(t.os));
-    f.insert("ABI_"  + up(t.abi));
+    f.insert("ABI_"  + up(t.isAndroid() ? std::string("android") : t.abi));   // not ABI_ANDROID29: no flag per level
     if (t.hosted()) f.insert("HOSTED");
     // SIMD128 — "this target has 128-bit vector lanes", derived from the triple exactly as the rest are.
     //
@@ -2746,7 +2756,7 @@ static TargetSpec g_target;
 static std::string activeTargetLabel()
 {
     if (g_target.arch.empty()) return "this build";
-    const std::string triple = g_target.arch + "-" + g_target.os + "-" + g_target.abi;
+    const std::string triple = g_target.triple();
     if (!g_target.name.empty() && g_target.name != triple) return g_target.name + " (" + triple + ")";
     return triple;
 }
@@ -2908,13 +2918,14 @@ static const std::vector<TargetSpec>& catalogTargets()
         auto mk = [&](const char* arch, const char* os, const char* abi) {
             TargetSpec t;
             t.arch = arch; t.os = os; t.abi = abi;
-            t.name = t.arch + "-" + t.os + "-" + t.abi;
+            t.name = t.triple();
             v.push_back(t);
         };
         for (const char* arch : { "x86_64", "aarch64" }) {
             mk(arch, "macos",   "none");
             mk(arch, "windows", "gnu");
             mk(arch, "linux",   "gnu");
+            mk(arch, "linux",   "android29");   // ABI_ANDROID's gates are known, and covered, on every build (KR-280)
             mk(arch, "none",    "none");   // bare metal — a real board triple gets the same OS_NONE
         }
         mk("wasm32", "emscripten", "none");
@@ -3213,6 +3224,49 @@ static int cmpSemVer(const SemVer& a, const SemVer& b)
     if (a.minor != b.minor) return a.minor < b.minor ? -1 : 1;
     if (a.patch != b.patch) return a.patch < b.patch ? -1 : 1;
     return 0;
+}
+
+// The NDK's clang for an Android target (KR-280, ruled 2026-11-02), found as `--webgpu` finds wgpu-native: the NDK
+// at `$ANDROID_NDK_HOME`, else the newest `ndk/<version>` of the SDK at `$ANDROID_HOME`, else of Android Studio's
+// default SDK, gomobile's three paths under the user's home (`%USERPROFILE%` on Windows, as Go's os.UserHomeDir
+// reads it: an msys2 shell's HOME is its own). Each place is the answer when it is set, never a fallback past a
+// wrong one. The newest by version, numerically (`30.0.16248370` over `9.0.x`, which a string sort gets wrong).
+// `ar` is the NDK's llvm-ar beside clang. "" with `why` naming the place it looked, and why that one.
+static std::string findNdkClang(std::string& ar, std::string& why)
+{
+    const TargetSpec& host = hostTarget();
+    std::string ndk, where;
+    const char* ndkHome = getenv("ANDROID_NDK_HOME");
+    const char* sdkHome = getenv("ANDROID_HOME");
+    if (ndkHome && *ndkHome) {
+        ndk = ndkHome; where = "$ANDROID_NDK_HOME";
+    } else {
+        std::string sdk;
+        if (sdkHome && *sdkHome) { sdk = sdkHome; where = "$ANDROID_HOME's SDK"; }
+        else {
+            const char* home = getenv(host.isWindows() ? "USERPROFILE" : "HOME");
+            sdk = std::string(home ? home : "") + (host.isWindows() ? "/AppData/Local/Android/sdk"
+                                                 : host.isMacOS()   ? "/Library/Android/sdk" : "/Android/Sdk");
+            where = "Android Studio's default SDK (neither $ANDROID_NDK_HOME nor $ANDROID_HOME is set)";
+        }
+        SemVer best; std::string newest;
+        for (const std::string& v : listDir(sdk + "/ndk")) {
+            SemVer sv;
+            if (parseSemVer(v, sv) && (newest.empty() || cmpSemVer(sv, best) > 0)) { best = sv; newest = v; }
+        }
+        if (newest.empty()) { why = where + ", " + sdk + ", has no NDK in ndk/<version>"; return ""; }
+        ndk = sdk + "/ndk/" + newest;
+    }
+    const std::string prebuilt = ndk + "/toolchains/llvm/prebuilt", exe = host.isWindows() ? ".exe" : "";
+    for (const std::string& h : listDir(prebuilt)) {           // the one host directory the NDK ships
+        const std::string bin = prebuilt + "/" + h + "/bin/";
+        if (fileExists(bin + "clang" + exe)) {               // quoted, as the bundled zig is: a home can hold a space
+            ar = "\"" + bin + "llvm-ar" + exe + "\"";
+            return "\"" + bin + "clang" + exe + "\"";
+        }
+    }
+    why = "the NDK at " + ndk + ", from " + where + ", has no toolchains/llvm/prebuilt/<host>/bin/clang" + exe;
+    return "";
 }
 
 // A range normalized to an optional lower + optional upper bound, so `satisfies` is one interval
@@ -6755,7 +6809,7 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
             for (const auto& kv : declaredTargets) {
                 targets.push_back(kv.first);
                 TargetSpec t; std::string terr;
-                if (resolveTarget(kv.first, declaredTargets, t, terr)) seen.insert(t.arch + "-" + t.os + "-" + t.abi);
+                if (resolveTarget(kv.first, declaredTargets, t, terr)) seen.insert(t.triple());
             }
             // The built-in names in ONE written order, hosted first (KR-247). The map's own order is
             // alphabetical, which put EMBEDDED first: `!OS_WINDOWS` checked on Windows was judged as bare
@@ -6765,7 +6819,7 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
                 const TargetSpec& t = builtinTargets().at(n);
                 if (declaredTargets.count(n)) continue;
                 targets.push_back(n);
-                seen.insert(t.arch + "-" + t.os + "-" + t.abi);
+                seen.insert(t.triple());
             }
             // ...and the catalog's ARCH-PINNED triples, which is what makes the cover host-independent
             // (KR-69 D2): a built-in NAME resolves its arch to the host's, so before this a type error
@@ -6777,7 +6831,7 @@ static std::vector<CoverConfig> coverGates(const std::vector<std::vector<GateLit
             // pinned triple is only reached when no name activates the gate. Deduped by triple, so the
             // host's own arch is not enumerated twice under two spellings.
             for (const auto& t : catalogTargets())
-                if (seen.insert(t.arch + "-" + t.os + "-" + t.abi).second) targets.push_back(t.name);
+                if (seen.insert(t.triple()).second) targets.push_back(t.name);
         }
         std::vector<std::pair<std::string, std::vector<std::string>>> axes(varyGroups.begin(), varyGroups.end());
 
@@ -13365,6 +13419,18 @@ int main(int argc, char** argv)
             if (wasm) {
                 const char* env = getenv("EMCC");
                 compiler = env ? env : "emcc";
+            } else if (g_target.isAndroid()) {         // the NDK's clang; zig has no bionic, so none other will do
+                std::string ar, why;
+                compiler = findNdkClang(ar, why);
+                if (compiler.empty()) {
+                    fprintf(stderr, "kama: cannot build for %s — no Android NDK: %s.\n"
+                                    "      Set $ANDROID_NDK_HOME to an NDK, or $ANDROID_HOME to an SDK with one in ndk/\n"
+                                    "      (Android Studio's SDK Manager installs it), or give the target a `cc`.\n",
+                            g_target.triple().c_str(), why.c_str());
+                    return 2;
+                }
+                if (g_target.ar.empty()) g_target.ar = ar;
+                ccIsExplicit = true;
             } else {
                 compiler = resolveCCompiler(argv[0]);   // bundled `zig cc` if the install shipped one, else clang
             }
@@ -13376,8 +13442,10 @@ int main(int argc, char** argv)
         // the host's own arch (`-ffreestanding -nostdlib -c`, stopping at an object) is something the
         // host clang does perfectly well — which is what has always made bare-metal builds
         // triple-agnostic, and `--no-heap --target embedded` regressed when this was got wrong.
+        // Android always crosses: its libc is bionic, so even `x86_64-linux-android29` on an x86_64 Linux host needs
+        // the NDK's clang handed the triple (the abi is otherwise not compared: a musl triple keeps the host's rule).
         const bool crossing = !wasm
-            && (g_target.arch != hostTarget().arch
+            && (g_target.arch != hostTarget().arch || g_target.isAndroid()
                 || (g_target.hosted() && g_target.os != hostTarget().os));
 
         // Does this compiler take the triple as a FLAG? Two shapes, needing opposite treatment:
@@ -14101,7 +14169,7 @@ int main(int argc, char** argv)
                 // ldflags) changes meaning. Opt back into the DLL with --dynamic-runtime or a target's
                 // "runtime": "dynamic" — see docs/targets.md.
                 link << "-Wl,-Bstatic -lpthread -Wl,-Bdynamic ";
-            } else {
+            } else if (!g_target.isAndroid()) {         // bionic keeps pthreads in libc, and the NDK has no libpthread
                 link << "-lpthread ";
             }
             // (KAMA_PARFOR_WORKERS lived here — a build-time pin for parallel_for's worker count, back

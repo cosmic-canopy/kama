@@ -166,6 +166,25 @@ if ! grep -q 'kama_ret_0 = 2;' "$tmp/derived_wasm.c"; then
     echo "check-compilefor: FAIL — a non-linux triple still activated the derived OS_LINUX flag" >&2
     exit 1
 fi
+# Android is OS_LINUX + ABI_ANDROID (KR-280): bionic runs std's Linux code, and an Android delta is a declaration
+# gated on ABI_ANDROID. The level is the abi's suffix and derives no flag of its own, and ABI_ANDROID is a gate kama
+# knows on every build, as the catalog's android rows make it, so a host build of the same file is not refused.
+cat > "$tmp/derived_android.kama" <<'KAMA'
+@compileFor(OS_LINUX, ABI_ANDROID) fn int32 pick() { return 1; }
+@compileFor(!ABI_ANDROID)          fn int32 pick() { return 2; }
+fn uint8 main() { return cast<uint8>(pick()); }
+KAMA
+"$KAMA" transpile --no-line "$tmp/derived_android.kama" --target aarch64-linux-android29 -o "$tmp/da.c" >/dev/null
+if ! grep -q 'kama_ret_0 = 1;' "$tmp/da.c"; then
+    echo "check-compilefor: FAIL — aarch64-linux-android29 did not activate OS_LINUX and ABI_ANDROID" >&2
+    exit 1
+fi
+if ! "$KAMA" transpile --no-line "$tmp/derived_android.kama" -o "$tmp/dh.c" >"$tmp/dh.err" 2>&1 \
+   || ! grep -q 'kama_ret_0 = 2;' "$tmp/dh.c"; then
+    echo "check-compilefor: FAIL — a host build of an ABI_ANDROID gate was refused or took its branch:" >&2
+    sed 's/^/  /' "$tmp/dh.err" >&2
+    exit 1
+fi
 
 # 4e. SELECT GROUPS — a project declares its own single-select axes under `select`, and `--select
 #     GROUP=VALUE` picks one. The value's name joins the active flag set (so no separate `flags` entry is

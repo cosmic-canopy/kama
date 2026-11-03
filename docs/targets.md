@@ -65,6 +65,27 @@ and gcc often use puts a vendor in the middle (`aarch64-apple-darwin`, `x86_64-w
 refuses it rather than misreading it: a middle `apple`, `pc`, `unknown` or `w64` is an error naming kama's
 spelling (`aarch64-macos-none`, `x86_64-windows-gnu`). The architecture is `aarch64`, never `arm64`.
 
+**Android** is `<arch>-linux-android<level>`, clang's spelling, the API level the abi's suffix:
+`aarch64-linux-android29` (Meta Quest's ABI, at its lowest level), or `x86_64-linux-android29` for the SDK's
+emulator. It derives `OS_LINUX` and `ABI_ANDROID`, and no flag per level: bionic runs std's Linux code, and an
+Android difference is a declaration gated on `ABI_ANDROID`. An unversioned `aarch64-linux-android` is refused, as
+the NDK's own headers would refuse it. With no `cc`, kama finds the NDK's clang itself:
+
+1. `$ANDROID_NDK_HOME`, an NDK root;
+2. else the newest `ndk/<version>` (by number) of the SDK at `$ANDROID_HOME`;
+3. else of Android Studio's default SDK: `%USERPROFILE%\AppData\Local\Android\sdk` on Windows,
+   `~/Library/Android/sdk` on macOS, `~/Android/Sdk` elsewhere.
+
+The first that is set is the answer, never a fallback past a wrong one, and a refusal names where it looked. The
+NDK's `llvm-ar` archives a static library. A target's `cc` (an NDK wrapper, say) still wins. Bionic keeps pthreads
+in libc, so nothing links `-lpthread`. A program built this way runs under `adb shell` with a stdout; packaging an
+app the launcher starts (an APK) is not built yet.
+
+```sh
+kama build app.kama --target aarch64-linux-android29
+adb push app /data/local/tmp/ && adb shell /data/local/tmp/app
+```
+
 ## Getting a cross toolchain
 
 Three routes. **Try them in this order** — the first one that describes you is the least work.

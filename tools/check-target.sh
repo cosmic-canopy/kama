@@ -555,6 +555,47 @@ for c in "echo /usr/lib/llvm-18/bin/clang" "echo clang-18"; do
     fi
 done
 
+# 8a. ANDROID (KR-280). The API level is the abi's suffix, `aarch64-linux-android29`, and clang is handed the triple
+#     whole, on every host: bionic makes even a same-arch build a cross one (the x86_64 row is that case on an
+#     x86_64 Linux host). Bionic keeps pthreads in libc and the NDK ships no libpthread, so none is linked.
+for t in aarch64-linux-android29 x86_64-linux-android29; do
+    if ! tryline android build "$FIXTURE" --target "$t" --cc "echo clang" -o "$tmp/a1" | grep -qF -- "-target $t"; then
+        echo "check-target: FAIL — clang was not handed -target $t whole" >&2
+        why android
+        exit 1
+    fi
+done
+reject aarch64-linux-android29 "-lpthread" "bionic has no libpthread for the link to find" "$THREADED"
+#     With no `cc`, kama finds the NDK: $ANDROID_NDK_HOME, else the newest ndk/<version> of $ANDROID_HOME's SDK,
+#     else of Android Studio's default SDK under the user's home. Each fake NDK's clang is a stub that fails, so
+#     the build fails, and the failure names the clang it ran: that is the choice. A kama program, not a script or
+#     an empty file: cmd.exe runs a build's commands on Windows, and an empty `clang.exe` hung it.
+exe=""; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) exe=.exe ;; esac
+printf 'import { core::println };\nfn uint8 main() { println(s: "clang version 0.0.0 (a stub that fails)"); return 1; }\n' > "$tmp/ndkstub.kama"
+"$KAMA" build "$tmp/ndkstub.kama" -o "$tmp/ndkstub$exe" >/dev/null 2>&1 || { echo "check-target: FAIL — the NDK stub did not build" >&2; exit 1; }
+ndkfake() {   # ndkfake <ndk root>
+    mkdir -p "$1/toolchains/llvm/prebuilt/host/bin"; cp "$tmp/ndkstub$exe" "$1/toolchains/llvm/prebuilt/host/bin/clang$exe"
+}
+ah="$tmp/ahome"
+for sdk in "$ah/Android/Sdk" "$ah/Library/Android/sdk" "$ah/AppData/Local/Android/sdk"; do   # gomobile's three
+    ndkfake "$sdk/ndk/9.0.7"; ndkfake "$sdk/ndk/30.0.16248370"; mkdir -p "$sdk/ndk/notaversion"
+done
+ndkpick() {   # ndkpick <label> <want in the failure> <env assignments...>
+    _l=$1; _w=$2; shift 2
+    env -u ANDROID_NDK_HOME -u ANDROID_HOME HOME="$ah" USERPROFILE="$(kama_native_path "$ah")" "$@" \
+        "$KAMA" build "$FIXTURE" --target aarch64-linux-android29 -o "$tmp/a2" >"$tmp/$_l.out" 2>&1 || true   # it fails: the stub
+    if ! grep -qF -- "$_w" "$tmp/$_l.out"; then
+        echo "check-target: FAIL — Android NDK discovery ($_l) did not name \`$_w\`:" >&2
+        sed 's/^/    /' "$tmp/$_l.out" >&2; exit 1
+    fi
+}
+ndkpick ndkdefault "ndk/30.0.16248370/toolchains"   # newest by number: 30 over 9, which a string sort gets wrong
+ndkfake "$ah/sdk2/ndk/30.0.16248370"
+ndkpick ndkhome "sdk2/ndk/30.0.16248370" ANDROID_HOME="$(kama_native_path "$ah/sdk2")"
+ndkfake "$ah/one"
+ndkpick ndkroot "one/toolchains" ANDROID_NDK_HOME="$(kama_native_path "$ah/one")" ANDROID_HOME="$(kama_native_path "$ah/sdk2")"
+ndkpick ndknone "Android Studio's default SDK" HOME="$tmp/nohome" USERPROFILE="$(kama_native_path "$tmp/nohome")"
+
 # 8b. CLANG'S VENDOR SPELLING IS REFUSED, NOT MISREAD. Three parts are read as <arch>-<os>-<abi>, so
 #     `aarch64-apple-darwin` derived OS_APPLE while clang, handed the same string, built for macOS: std's
 #     OS_MACOS gates and the driver's isMacOS() disagreed with the compiler, and nothing said so (0.9.803).
@@ -576,6 +617,11 @@ printf '{ "name": "vt", "version": "0.1.0", "kind": "executable", "entry": "src/
   "select": { "TARGET": { "MAC": { "triple": "aarch64-apple-darwin" } } },
   "modules": { ".": { "visibility": "internal" } } }\n' > "$vt/kama.json"
 vendorRefused "aarch64-apple-darwin (in kama.json)" aarch64-macos-none "$vt/kama.json" --target MAC
+# An Android triple without its API level is refused the same way: the NDK's headers refuse it anyway (KR-280).
+vendorRefused aarch64-linux-android aarch64-linux-android29 "$FIXTURE" --target aarch64-linux-android
+sed 's/"MAC": { "triple": "aarch64-apple-darwin" }/"QUEST": { "triple": "x86_64-linux-android" }/' "$vt/kama.json" > "$tmp/vq.json"
+mkdir -p "$tmp/vq"; mv "$tmp/vq.json" "$tmp/vq/kama.json"; cp -r "$vt/src" "$tmp/vq/src"
+vendorRefused "x86_64-linux-android (in kama.json)" x86_64-linux-android29 "$tmp/vq/kama.json" --target QUEST
 # kama's own spelling derives OS_MACOS, and a four-part triple drops its vendor, as it always has.
 for t in aarch64-macos-none aarch64-apple-macos-none; do
     "$KAMA" transpile "$vt/src/app.kama" --target "$t" -o "$tmp/vt.c" >"$tmp/vt.out" 2>&1 || {
