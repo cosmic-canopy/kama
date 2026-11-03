@@ -13,15 +13,23 @@ import { std::net::Poller, std::net::Events, std::net::Event, std::net::Interest
 
 fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
 
+// Twenty waits of 15 ms, each started 0 to 1.9 ms after the last one ended. Windows ends a wait on its ~15.6 ms timer
+// tick, and on one whose end fell just past a tick the port returned at that tick, early: one 30 ms wait here failed
+// about 1 run in 10, and these failed every run (up to 0.9.820).
 unsafe fn int32 timesOut(int32 n) {
     Result<Poller, IoError> rp = Poller.create();
     Poller p = match (give rp) { case Ok(value: x): give x; case Err(error: e): { return 10; } };
     Events ev = Events.withCapacity(capacity: 4);
-    Instant t = monotonicNow();
-    Result<int32, IoError> r = p.wait(events: ref ev, timeoutMs: 30);
-    int32 got = match (r) { case Ok(value: k): k; case Err(error: e): 0 - 1; };
-    if (got != 0) { return 11; }
-    return t.elapsed().asMillis() >= 30 ? 0 : 12;
+    for (int32 i = 0; i < 20; i = i + 1) {
+        Instant s = monotonicNow();
+        while (s.elapsed().asMicros() < cast<int64>(i) * 100i64) { }
+        Instant t = monotonicNow();
+        Result<int32, IoError> r = p.wait(events: ref ev, timeoutMs: 15);
+        int32 got = match (r) { case Ok(value: k): k; case Err(error: e): 0 - 1; };
+        if (got != 0) { return 11; }
+        if (t.elapsed().asMillis() < 15) { return 12; }
+    }
+    return 0;
 }
 
 unsafe fn void wakeLater(Waker w) { sleep(d: Duration.fromMillis(ms: 20)); w.wake(); }

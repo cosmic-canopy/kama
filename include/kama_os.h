@@ -3156,6 +3156,8 @@ static inline kama__waker* kama__waker_new(uint64_t token) {
 // The wait saw this waker's event: clear first, then the backend drains (see above).
 static inline void kama__waker_seen(kama__waker* w) { __atomic_store_n(&w->pending, 0, __ATOMIC_SEQ_CST); }
 
+#include "kama_time.h"   // kama_now_mono_ns: a timed wait and a socket's deadline count on the clock `Instant` reads
+
 #if defined(_WIN32)
 // AFD polling over an I/O completion port (KR-230): readiness, as epoll and kqueue give it, with no FD_SETSIZE ceiling
 // and a wait that costs what is ready. mio (tokio's), wepoll and Java's Windows selector since JDK 17 use the same
@@ -3445,7 +3447,9 @@ static inline int kama__afd_arm(kama__poller* p, kama__afd_sock* st) {
 static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
     kama__poller* p = (kama__poller*)ph; kama__poll_events* e = (kama__poll_events*)eh;
     OVERLAPPED_ENTRY* os = (OVERLAPPED_ENTRY*)e->os;
-    const ULONGLONG start = GetTickCount64();
+    // The time is counted on the clock `Instant` reads, and the port's wait is only a way to spend it: the port ends
+    // a wait on the ~15.6 ms timer tick, and one whose end falls just past a tick may end on it, early (KR-301).
+    const uint64_t by = timeoutMs >= 0 ? kama_now_mono_ns() + (uint64_t)timeoutMs * 1000000ull : 0;
     for (;;) {
         int n = 0;
         // Arm what is queued. A socket that cannot be polled any more (closed under us) leaves; any other refusal is
@@ -3464,14 +3468,15 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
         if (n > 0) return (int32_t)n;
         DWORD wait = INFINITE;
         if (timeoutMs >= 0) {
-            const ULONGLONG spent = GetTickCount64() - start;
-            wait = spent >= (ULONGLONG)timeoutMs ? 0 : (DWORD)((ULONGLONG)timeoutMs - spent);
+            const uint64_t now = kama_now_mono_ns();
+            wait = now >= by ? 0 : (DWORD)((by - now + 999999) / 1000000);   // rounded up: never early
         }
         ULONG got = 0;
         if (!GetQueuedCompletionStatusEx(p->port, os, (ULONG)e->kama_cap, &got, wait, FALSE)) {
             const DWORD err = GetLastError();
-            if (err == WAIT_TIMEOUT) return 0;
-            kama__os_fail(err, EINVAL); return -1;
+            if (err != WAIT_TIMEOUT) { kama__os_fail(err, EINVAL); return -1; }
+            if (kama_now_mono_ns() >= by) return 0;
+            continue;                                  // the port gave up before the time did: wait out the rest
         }
         for (ULONG i = 0; i < got; i++) {
             if (os[i].lpCompletionKey == KAMA__WAKE_KEY) {   // a waker's packet: its event, once however many wakes
@@ -3500,7 +3505,7 @@ static inline int32_t kama_poller_wait(void* ph, void* eh, int32_t timeoutMs) {
             kama__afd_enqueue(p, st);                  // level-triggered: armed again at the next wait
         }
         if (n > 0) return (int32_t)n;
-        if (timeoutMs >= 0 && GetTickCount64() - start >= (ULONGLONG)timeoutMs) return 0;
+        if (timeoutMs >= 0 && kama_now_mono_ns() >= by) return 0;
         // Only cancellations and re-arms came in: wait out the time that is left.
     }
 }
@@ -4346,7 +4351,6 @@ static inline int32_t kama_resolve_host(const char* host, int32_t* outFamily, ui
 //   2  kama made it non-blocking, to park on it (a fiber) or to wait out a deadline (a thread's poll)
 //   4  a deadline is set, so a thread keeps it non-blocking rather than flipping it back for one call
 // A socket with no deadline on a thread is left blocking, so its call costs the one system call it always did.
-#include "kama_time.h"
 
 #if defined(KAMA_FIBERS) && !defined(__EMSCRIPTEN__)
 // A program that runs fibers: the scheduler's half, defined in kama_sched.h, which this header includes at its end.
