@@ -583,6 +583,18 @@ them either.
 is the filesystem's spelling and would want its own answer), or make the join one-to-one by escaping `_`. Either may
 break a name in the corpus, so count those first.
 
+<a id="s2-deep-chain"></a>
+
+### A long `+` chain crashes the compiler (KR-304)
+
+Found 2026-11-03, when `check-compiler-asan` overflowed on a fixture's 213-line hex literal. On the ordinary compiler, on an 8 MiB stack, a `string` of 1,000 concatenated
+literals checks and one of 2,000 dies with SIGSEGV, so a valid program gets a crash and no diagnostic. The operators nest to the left, so the depth is the term count, and
+`exprClass` recurses through `operatorResultClass` at about 3 frames a term; other walks over the same tree may recurse as well, and each wants measuring.
+
+What others do: clang checks its remaining stack and grows it (`runWithSufficientStackSpace`), rustc grows its stack on demand (`stacker`), and GCC raises its own stack limit. A
+walk made iterative fixes one walk, so the likely answer is the compiler running on a stack large enough that its own recursion stops being the limit, with a clean diagnostic past
+that. The fix decides that: measure which walks go deep first.
+
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)

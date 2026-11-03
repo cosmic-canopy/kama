@@ -1031,16 +1031,14 @@ KAMA_NOINLINE static int32_t kama_rename(const char* from, const char* to) {
 // are the ones a link is read with. Developer Mode lets an unprivileged process make one (0x2, which a Windows before 1703 refuses
 // as an invalid parameter, so it is retried without). Past that it is ERROR_PRIVILEGE_NOT_HELD, which is EACCES and quotes the OS's text.
 KAMA_NOINLINE static int kama__link_target_is_dir(const char* original, const char* at) {
+    kama__wpathbuf b;   // this helper's own frame, so kama_symlink's two buffers do not stack a third on it
     const int absolute = original[0] == '/' || original[0] == '\\' || (original[0] != 0 && original[1] == ':');
-    size_t dirLen = 0;
-    if (!absolute) for (const char* p = at; *p; ++p) if (*p == '/' || *p == '\\') dirLen = (size_t)(p - at) + 1;
-    const size_t n = strlen(original);
-    char* joined = (char*)malloc(dirLen + n + 1);
-    if (!joined) return 0;
-    memcpy(joined, at, dirLen);
-    memcpy(joined + dirLen, original, n + 1);
-    const DWORD a = kama__attrs(joined);
-    free(joined);
+    int dirLen = 0;
+    if (!absolute) for (const char* p = at; *p; ++p) if (*p == '/' || *p == '\\') dirLen = (int)(p - at) + 1;
+    int n = 0;
+    if (dirLen > 0 && (n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, at, dirLen, b.w, KAMA__WPATH_CAP)) <= 0) return 0;
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, original, -1, b.w + n, KAMA__WPATH_CAP - n) <= 0) return 0;
+    const DWORD a = GetFileAttributesW(b.w);
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 KAMA_NOINLINE static int32_t kama_symlink(const char* original, const char* at) {
