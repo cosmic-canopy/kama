@@ -1,0 +1,3 @@
+export { who };
+
+fn int32 who() { return 12; }

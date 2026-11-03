@@ -1,0 +1,13 @@
+{
+  "name": "pkgdepalias",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "dependencies": {
+    "@north/net": { "path": "./vendor/north" },
+    "snet": { "package": "@south/net", "path": "./vendor/south" }
+  },
+  "modules": {
+    ".": { "visibility": "internal" }
+  }
+}

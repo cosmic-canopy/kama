@@ -893,6 +893,19 @@ for want in "--shell-file $efd/web/shell.html" "--embed-file $efd/assets@/assets
 done
 [ "$emok" = 1 ] \
     && ok "\`shellFile\`, \`embedFiles\` and \`preloadFiles\` resolve against their manifest, a dependency's too"
+# A scoped dependency is held at its full name (`.kama/deps/@acme/geo`, KR-291), and emcc splits `src@dst` at the
+# first `@`, reading `@@` as a literal one — so the `@` in the path is doubled.
+sed 's/"geo": { "path"/"@acme\/geo": { "path"/' "$tmp/emfiles/kama.json" > "$tmp/emfiles/k2" && mv "$tmp/emfiles/k2" "$tmp/emfiles/kama.json"
+sed 's/"name": "geo"/"name": "@acme\/geo"/' "$tmp/emfiles/vendor/geo/kama.json" > "$tmp/emfiles/k2" && mv "$tmp/emfiles/k2" "$tmp/emfiles/vendor/geo/kama.json"
+"$KAMA" pkg install "$tmp/emfiles/kama.json" >/dev/null 2>&1 || true
+line=$(cd / && "$KAMA" build "$tmp/emfiles/kama.json" --target wasm --cc "echo emcc" -o "$tmp/emfiles/app.html" 2>/dev/null || true)
+line=$(printf '%s' "$line" | tr -d '"')
+printf '%s' "$line" | grep -qF -- "--embed-file $efd/.kama/deps/@@acme/geo/fonts@/fonts" \
+    && ok "...and a scoped dependency's path doubles its \`@\`, which emcc reads as a literal one" \
+    || { bad "a scoped dependency's embedFiles path does not escape its \`@\`"; printf '%s\n' "$line" | sed 's/^/    /' >&2; }
+sed 's/"@acme\/geo": { "path"/"geo": { "path"/' "$tmp/emfiles/kama.json" > "$tmp/emfiles/k2" && mv "$tmp/emfiles/k2" "$tmp/emfiles/kama.json"
+sed 's/"name": "@acme\/geo"/"name": "geo"/' "$tmp/emfiles/vendor/geo/kama.json" > "$tmp/emfiles/k2" && mv "$tmp/emfiles/k2" "$tmp/emfiles/vendor/geo/kama.json"
+"$KAMA" pkg install "$tmp/emfiles/kama.json" >/dev/null 2>&1 || true
 # A dependency may pack files, never choose the page.
 cat > "$tmp/emfiles/vendor/geo/kama.json" <<'JSON'
 { "name": "geo", "version": "1.0.0", "kind": "library", "source": "src", "shellFile": "page.html",

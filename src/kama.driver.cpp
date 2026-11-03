@@ -3033,8 +3033,10 @@ static void configureEmitter(CEmitter& e)
 // JSON serialization (lib/std/serialization/json) is kama-level runtime code and cannot parse the
 // compiler's own build-time config (different layer).
 // One `dependencies` entry from `kama.json`. Exactly one source of {path, git, url} is set;
-// `rev`/`integrity`/`version` refine it. The map key (not stored here) is the import-root segment.
+// `rev`/`integrity`/`version` refine it. The map key (not stored here) names the package, or with
+// `package` set it is the consumer's local name for it (KR-291; depIdentity, depLocalName).
 struct DepSpec {
+    std::string package;    // the package this entry is, when its key is a local name (`"nnet": { "package": "@north/net" }`)
     std::string path;       // local directory (relative to the manifest) — no fetch, no store
     std::string git;        // repo URL (+ rev)
     std::string url;        // tarball URL (+ integrity)
@@ -3144,9 +3146,11 @@ static std::string importNameOf(const std::string& name)
     if (!name.empty() && name[0] == '@') { size_t s = name.rfind('/'); if (s != std::string::npos) return name.substr(s + 1); }
     return name;
 }
-// A dependency entry's two names (KR-291): the PACKAGE it is, and the name its consumer's files import it by.
-static std::string depIdentity(const std::string& key, const DepSpec&) { return key; }
-static std::string depLocalName(const std::string& key, const DepSpec&) { return importNameOf(key); }
+// A dependency entry's two names (KR-291): the PACKAGE it is, and the name its consumer's files import it by. The
+// key is both unless `package` says otherwise, in Cargo's spelling: `"nnet": { "package": "@north/net", … }`
+// imports `@north/net` as `nnet`, while `"@north/net": { … }` imports it under its bare name, `net`.
+static std::string depIdentity(const std::string& key, const DepSpec& spec) { return spec.package.empty() ? key : spec.package; }
+static std::string depLocalName(const std::string& key, const DepSpec& spec) { return spec.package.empty() ? importNameOf(key) : key; }
 // The scope of a package name (`@acme` for `@acme/foo`), or "" for an unscoped name.
 static std::string scopeOf(const std::string& name)
 {
@@ -4225,7 +4229,16 @@ struct ManifestReader {
         return true;
     }
 
-    bool depsObject(std::map<std::string, DepSpec>* target) {   // { "name": { "git":.., "rev":.., "url":.., "integrity":.., "path":.., "version":.. }, ... }
+    // Which list a `depsObject` reads (KR-291): a project's own `dependencies`/`dev-dependencies` name what its files
+    // import, so their local names are this manifest's to keep apart; a workspace's are shared specs, and an override
+    // (kama.local.json) names by its key the package it stands in for.
+    enum class DepSection { Consumer, Workspace, Override };
+    // A consumer's import names across its two lists: local name -> { key, package }, and package -> key.
+    std::map<std::string, std::pair<std::string, std::string>> localNames_;
+    std::map<std::string, std::string> packageKeys_;
+    std::string ownName_;   // `name`, wherever it sits in the file — read at the end against localNames_
+
+    bool depsObject(std::map<std::string, DepSpec>* target, DepSection section) {   // { "name": { "git":.., "rev":.., "url":.., "integrity":.., "path":.., "version":.. }, ... }
         ws(); if (i >= s.size() || s[i] != '{') return fail("`dependencies` must be a JSON object");
         ++i; ws(); if (i < s.size() && s[i] == '}') { ++i; return true; }
         while (true) {
@@ -4253,13 +4266,18 @@ struct ManifestReader {
                 if (k == "compileFor") {
                     if (!gateArray(spec.gate, "dependency '" + name + "'")) return false;
                     if (topKeysOut) topKeysOut->insert("dependencies.compileFor");
+                } else if (k == "package" && section == DepSection::Override) {
+                    return fail("`package` in the override '" + name + "' — an override names the package it stands in "
+                                "for by its key, so it takes no `package`");
                 } else {
                     std::string* field = k == "path" ? &spec.path : k == "git" ? &spec.git : k == "url" ? &spec.url
                                        : k == "rev" ? &spec.rev : k == "integrity" ? &spec.integrity
-                                       : k == "version" ? &spec.version : k == "registry" ? &spec.registry : nullptr;
+                                       : k == "version" ? &spec.version : k == "registry" ? &spec.registry
+                                       : k == "package" ? &spec.package : nullptr;
                     if (!field)
-                        return fail("unknown key `" + k + "` in dependency '" + name + "' — a dependency takes `path`, "
-                                    "`git`, `url`, `rev`, `integrity`, `version`, `registry` and `compileFor`");
+                        return fail("unknown key `" + k + "` in dependency '" + name + "' — a dependency takes `package`, "
+                                    "`path`, `git`, `url`, `rev`, `integrity`, `version`, `registry` and `compileFor`");
+                    if (k == "package" && topKeysOut) topKeysOut->insert("dependencies.package");
                     if (i >= s.size() || s[i] != '"')
                         return fail("`" + k + "` in dependency '" + name + "' must be a string");
                     if (!str(*field)) return false;
@@ -4292,6 +4310,40 @@ struct ManifestReader {
                     err = "dependency '" + name + "': \"registry\" requires a \"version\" range";
                     return false;
                 }
+            }
+            // The key names the package, or with `package` it is the local name a file imports it by (KR-291). Either
+            // way each name is one a build can use: a package name is the identity C names are made of, and a local
+            // name is what an `import` spells.
+            if (spec.package.empty()) {
+                const std::string bad = packageNameError(name);
+                if (!bad.empty()) return fail("dependency '" + name + "' names a package, but " + bad);
+            } else {
+                const std::string bad = packageNameError(spec.package);
+                if (!bad.empty()) return fail("`package` in dependency '" + name + "' is \"" + spec.package + "\", but " + bad);
+                if (!kamaIsIdentifier(name) || !segmentCReason(name).empty())
+                    return fail("dependency '" + name + "' names the package `" + spec.package + "`, so its key is the "
+                                "name this project's files import it by — and `" + name + "` is not one an `import` "
+                                "can spell; use a plain identifier");
+                if (importNameOf(spec.package) == name)
+                    return fail("dependency '" + name + "' is `" + spec.package + "`, which imports as `" + name +
+                                "` already — write \"" + spec.package + "\" as the key and drop `package`");
+            }
+            // A collision is one consumer's (KR-291 decision 3): two of its dependencies under one local name, or one
+            // package under two. Listing a package in both lists under one key is one dependency, as it always was.
+            if (section == DepSection::Consumer) {
+                const std::string local = depLocalName(name, spec), pkg = depIdentity(name, spec);
+                auto l = localNames_.emplace(local, std::make_pair(name, pkg));
+                if (!l.second && l.first->second.first != name) {
+                    const std::string scope = scopeOf(pkg);
+                    const std::string suggest = !scope.empty() ? scope.substr(1) + "_" + importNameOf(pkg) : "<a local name>";
+                    return fail("import-name collision on `" + local + "`: dependencies '" + l.first->second.first +
+                                "' and '" + name + "' both import as `" + local + "` — give one a local name of its "
+                                "own with `package`: \"" + suggest + "\": { \"package\": \"" + pkg + "\", … }");
+                }
+                auto p = packageKeys_.emplace(pkg, name);
+                if (!p.second && p.first->second != name)
+                    return fail("dependencies '" + p.first->second + "' and '" + name + "' are both the package `" +
+                                pkg + "` — a package is one dependency, under one name");
             }
             if (target) (*target)[name] = spec;
             ws();
@@ -4539,7 +4591,7 @@ struct ManifestReader {
             // never reads its workspace file for anything affecting compilation) rules out a pin here.
             if (workspaceFile) {
                 if (key == "projects") { if (!wsProjectsObject()) return false; }
-                else if (key == "dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(deps ? deps : &scratch)) return false; }
+                else if (key == "dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(deps ? deps : &scratch, DepSection::Workspace)) return false; }
                 // `modules` gets its own refusal rather than falling into the generic one below: a
                 // workspace has no `source` and no root module, so there is nothing for a module map
                 // to be relative TO — and putting one here would make a project's identity depend on a
@@ -4557,10 +4609,10 @@ struct ManifestReader {
             }
             if (key == "flags") { if (!flagsObject()) return false; }
             else if (key == "select") { if (!selectObject()) return false; }   // build-config groups
-            else if (key == "dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(deps ? deps : &scratch)) return false; }
-            else if (key == "dev-dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(devDeps ? devDeps : &scratch)) return false; }
+            else if (key == "dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(deps ? deps : &scratch, DepSection::Consumer)) return false; }
+            else if (key == "dev-dependencies") { std::map<std::string, DepSpec> scratch; if (!depsObject(devDeps ? devDeps : &scratch, DepSection::Consumer)) return false; }
             else if (key == "registries") { if (registriesOut) { if (!registriesObject(registriesOut)) return false; } else if (!skipValue()) return false; }
-            else if (key == "overrides") { std::map<std::string, DepSpec> scratch; if (!depsObject(overridesOut ? overridesOut : &scratch)) return false; }  // kama.local.json dep path-overrides (M5.3)
+            else if (key == "overrides") { std::map<std::string, DepSpec> scratch; if (!depsObject(overridesOut ? overridesOut : &scratch, DepSection::Override)) return false; }  // kama.local.json dep path-overrides (M5.3)
             else if (key == "log") { if (logOut) { if (!logObject()) return false; } else if (!skipValue()) return false; }   // baked log default (M5)
             else if (key == "debug") {   // validated wherever it is read; APPLIED only from the root manifest (KR-128)
                 std::vector<std::string> scratch;
@@ -4710,6 +4762,7 @@ struct ManifestReader {
                 const std::string why = reservedNameReason(ident);
                 if (!why.empty() && !((ident == "std" || ident == "core") && isCompilerStdlibManifest(manifestPath)))
                     return fail("`name` is \"" + nm + "\": " + why);
+                ownName_ = nm;
                 if (nameOut) *nameOut = nm;
             }
             else if (key == "version") { if (versionOut) { if (!str(*versionOut)) return false; } else if (!skipValue()) return false; }
@@ -4738,6 +4791,17 @@ struct ManifestReader {
             if (i < s.size() && s[i] == ',') { ++i; continue; }
             if (i < s.size() && s[i] == '}') { ++i; break; }
             return fail("expected ',' or '}' at top level");
+        }
+        // A dependency under the project's own name would be shadowed by the project's root module (KR-218) — read
+        // here, at the end, because `name` may follow `dependencies`. The fix is the dependency's local name
+        // (KR-291), so a project `net` can depend on `@north/net` as `nnet`.
+        if (!ownName_.empty()) {
+            auto l = localNames_.find(importNameOf(ownName_));
+            if (l != localNames_.end())
+                return fail("dependency '" + l->second.first + "' imports as `" + l->first + "`, which is this project's "
+                            "own name — a project's name is its root module, so `" + l->first + "::…` would name both; "
+                            "give the dependency a local name of its own: \"<a local name>\": { \"package\": \"" +
+                            l->second.second + "\", … }");
         }
         return true;
     }
@@ -5146,10 +5210,24 @@ static std::vector<std::string> moduleFilesInProject(const std::string& projDir,
     return out;
 }
 
-// Where a directory OF projects (a dependency view, a $KAMA_PATH entry) keeps the package `identity`.
+// Where a directory OF projects (a dependency view, a $KAMA_PATH entry) keeps the package `identity`: by its full
+// name (KR-291), so a scoped package sits one level down (`.kama/deps/@north/net`) beside another scope's `net`.
 static std::string viewDirOf(const std::string& root, const std::string& identity)
 {
-    return root + "/" + importNameOf(identity);
+    return root + "/" + identity;
+}
+
+// The packages a dependency view holds, by identity: an entry is a package, except an `@scope` folder, whose
+// entries are that scope's packages. No unscoped name starts with `@`, so the spelling tells them apart.
+static std::vector<std::string> viewEntries(const std::string& view)
+{
+    std::vector<std::string> out;
+    for (const std::string& e : listDir(view)) {
+        if (e.empty() || e[0] != '@') { out.push_back(e); continue; }
+        for (const std::string& p : listDir(view + "/" + e)) out.push_back(e + "/" + p);
+    }
+    std::sort(out.begin(), out.end());   // deterministic: the view is a set, not a sequence
+    return out;
 }
 
 std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs,
@@ -5696,7 +5774,11 @@ static std::string emFileArg(const std::string& dir, const std::string& entry)
     const std::string src = at == std::string::npos ? entry : entry.substr(0, at);
     std::string dst = at == std::string::npos ? joinPathLexical(".", src) : entry.substr(at + 1);
     if (at == std::string::npos) dst = "/" + dst;
-    return joinPathLexical(dir, src) + "@" + dst;
+    // emcc's file packager splits at the first `@` and reads `@@` as a literal one, and a scoped dependency's files
+    // are reached through `.kama/deps/@scope/…` (KR-291).
+    std::string path = joinPathLexical(dir, src);
+    for (size_t p = 0; (p = path.find('@', p)) != std::string::npos; p += 2) path.insert(p, 1, '@');
+    return path + "@" + dst;
 }
 
 // A dependency's relative `-I`/`-L`/`-isystem` resolves against the CONSUMER's working directory, not
@@ -6281,7 +6363,7 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 if (!loadManifestDeps(v.manifest, deps, derr, root && req.dev ? &devDeps : nullptr)) continue;   // said where it is read
                 for (const auto* m : { &deps, &devDeps })
                     for (const auto& kv : *m) {
-                        const std::string n = importNameOf(kv.first);
+                        const std::string n = depIdentity(kv.first, kv.second);   // the view holds it by identity
                         bool on = true;
                         if (!judgeGate(kv.second.gate, "dependency '" + kv.first + "' (" + v.manifest + ")", on)) return false;
                         on = on && v.active;
@@ -6294,21 +6376,19 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                     }
             }
         }
-        // A dependency that imports under this project's own name would be shadowed by the project's root module
-        // in every module that imports it (KR-218). `kama pkg install` refuses that tree; this refuses one already
-        // on disk — an install from before that check, or a project renamed since — rather than build it wrong.
+        // A dependency that IS this project's package — an unscoped `net` under a project `net` — would be one module
+        // with it (KR-218; KR-291 made this a matter of identity, so a scoped `@north/net` sits under `net` freely).
+        // `kama pkg install` refuses that tree; this refuses one already on disk — an install from before that
+        // check, or a project renamed since — rather than build it wrong.
         std::string rootName, rootVersion, rootErr;
         loadManifestNameVersion(req.manifest, rootName, rootVersion, rootErr);
-        const std::string rootModule = rootName.empty() ? std::string() : importNameOf(rootName);
         for (const std::string& view : views) {
-            std::vector<std::string> names = listDir(view);
-            std::sort(names.begin(), names.end());   // deterministic: the view is a set, not a sequence
-            for (const std::string& n : names) {
-                if (!rootModule.empty() && n == rootModule) {
+            for (const std::string& n : viewEntries(view)) {
+                if (!rootName.empty() && n == rootName) {
                     if (req.strictDeps) {
-                        err = view + "/" + n + " is a dependency that imports as '" + n + "', which is this project's "
-                              "own name — a project's name is its root module, so `" + n + "::…` would name both; "
-                              "rename the project and run `kama pkg install` again";
+                        err = view + "/" + n + " is the package '" + n + "', which is this project's own name — a "
+                              "package's full name is its identity, so the two would be one module; rename one of "
+                              "them and run `kama pkg install` again";
                         return false;
                     }
                     continue;
@@ -6318,6 +6398,17 @@ static bool resolveBuildConfig(const BuildConfigRequest& req, BuildConfigResult&
                 // first-party paths and print a store path the user cannot see.
                 const std::string depManifest = joinPathLexical(view, n) + "/kama.json";
                 if (!fileExists(depManifest)) continue;
+                // A view holds each package at its full name (KR-291). One laid out by an older kama holds a scoped
+                // package at its bare name, and building it would read its flags and sources under the wrong name.
+                const std::string held = packageIdentityOf(dirName(depManifest));
+                if (!held.empty() && held != n) {
+                    if (req.strictDeps) {
+                        err = view + "/" + n + " is the package '" + held + "', so this view is out of date — an older "
+                              "kama laid it out by import name; run `kama pkg install " + req.manifest + "`";
+                        return false;
+                    }
+                    continue;
+                }
                 BuildSettings bs; bs.owner = n;
                 std::string derr;
                 if (!loadBuildSettings(depManifest, g_target.name, bs, derr)) {
@@ -8178,16 +8269,16 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         // `requestor` is a display name for diagnostics; `requestorDir` is the directory of the manifest
         // that declared this dep — what a path spec is actually relative to. `localRequestor`: that
         // manifest is on this disk as written — the root, or a package reached by path — not a fetched copy.
+        // `name` is the package's IDENTITY (KR-291), which every map below is keyed by; `key` is the entry as its
+        // requestor wrote it — the same unless `package` gave it a local name — kept for what a diagnostic quotes.
         struct Req { std::string name; DepSpec spec; std::string requestor; std::string requestorDir; bool dev;
-                     bool localRequestor; };
+                     bool localRequestor; std::string key; };
         std::map<std::string, DepSpec> chosen;        // name -> the one resolved (tag-pinned) spec
         std::map<std::string, std::string> chosenBy;  // name -> first requestor (conflict diagnostics)
         std::map<std::string, std::string> chosenVer; // range deps: name -> resolved concrete "x.y.z"
         std::map<std::string, VersionReq>  accReq;    // range deps: name -> intersected range so far
         std::map<std::string, std::string> reqStr;    // range deps: name -> first requestor's range text
         std::map<std::string, std::string> regBaseOf; // registry deps: name -> resolved registry base URI
-        std::map<std::string, std::string> importUsedBy; // import (bare) name -> the scoped name that claimed it
-        if (!rootName.empty()) importUsedBy[importNameOf(rootName)] = rootName;
         std::map<std::string, LockEntry> lock;        // output
         std::set<std::string> overriddenInstall;      // root deps a `kama.local.json` override stood in for (KR-160)
         bool madeDevDir = false;
@@ -8479,23 +8570,16 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     e.source = "registry"; e.registry = regBaseOf[r.name];
                 }
                 e.dev = r.dev;
-                // A scoped `@acme/foo` imports under its bare last segment (`foo`). Two distinct packages
-                // resolving to the same bare name would collide on one view link — a hard error (alias one).
-                std::string importName = importNameOf(r.name);
-                auto iu = importUsedBy.find(importName);
-                if (iu != importUsedBy.end() && iu->second == rootName && !rootName.empty()) {
-                    fprintf(stderr, "kama pkg install: '%s' (required by %s) imports as '%s', which is this project's own "
-                            "name — a project's name is its root module, so `%s::…` would name both; rename the project\n",
-                            r.name.c_str(), r.requestor.c_str(), importName.c_str(), importName.c_str());
+                // A collision of local names is one consumer's, refused where its manifest is read (KR-291 decision
+                // 3), so two scopes' `net` meet freely across the graph. What stays refused graph-wide is one
+                // IDENTITY twice: a dependency that is this project's own package — an unscoped `net` under a project
+                // `net`, at any depth — would be one module, and one set of C names (`net__…`), with the project.
+                if (!rootName.empty() && r.name == rootName) {
+                    fprintf(stderr, "kama pkg install: '%s' (required by %s) has this project's own name — a package's "
+                            "full name is its identity, so the two would be one module; rename one of them\n",
+                            r.name.c_str(), r.requestor.c_str());
                     return 1;
                 }
-                if (iu != importUsedBy.end() && iu->second != r.name) {
-                    fprintf(stderr, "kama pkg install: import-name collision on '%s': both '%s' and '%s' import as "
-                            "'%s' — two scopes cannot expose the same name\n",
-                            importName.c_str(), iu->second.c_str(), r.name.c_str(), importName.c_str());
-                    return 1;
-                }
-                importUsedBy[importName] = r.name;
                 if (r.dev && !madeDevDir) {
                     if (!makeDirs(devViewDir)) { fprintf(stderr, "kama pkg install: cannot create %s\n", devViewDir.c_str()); return 1; }
                     madeDevDir = true;
@@ -8516,24 +8600,35 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                     if (!kamaReqSatisfied(childReq, "`" + r.name + "`", cerr)) {
                         fprintf(stderr, "kama pkg install: %s\n", cerr.c_str()); return 2;
                     }
-                    // A dependency's KEY is the name a build looks it up by, so it must be the package's own (KR-111):
-                    // a key that differed installed silently and then failed every build with "declares `foo`, but
-                    // it is not installed".
+                    // A dependency names the package a build finds it by (KR-111) — its key, or `package` when the key is
+                    // a local name (KR-291) — so the package found must be that one: a name that differed installed
+                    // silently and then failed every build with "declares `foo`, but it is not installed".
                     std::string ownName, ownVersion, nerr;
                     if (loadManifestNameVersion(childManifest, ownName, ownVersion, nerr) && !ownName.empty()
                         && ownName != r.name) {
-                        fprintf(stderr, "kama pkg install: dependency '%s' (required by %s) is the package '%s' — the "
-                                "key must be the package's own name, which is what a build finds it by; write \"%s\"\n",
-                                r.name.c_str(), r.requestor.c_str(), ownName.c_str(), ownName.c_str());
+                        if (!r.spec.package.empty())
+                            fprintf(stderr, "kama pkg install: dependency '%s' (required by %s) names the package '%s', "
+                                    "but what it points at is the package '%s'\n",
+                                    r.key.c_str(), r.requestor.c_str(), r.name.c_str(), ownName.c_str());
+                        else
+                            fprintf(stderr, "kama pkg install: dependency '%s' (required by %s) is the package '%s' — a key "
+                                    "names the package unless `package` says otherwise: write \"%s\", or \"%s\": { "
+                                    "\"package\": \"%s\", … } to import it as `%s`\n",
+                                    r.key.c_str(), r.requestor.c_str(), ownName.c_str(), ownName.c_str(),
+                                    r.key.c_str(), ownName.c_str(), r.key.c_str());
                         return 2;
                     }
-                    for (auto& ck : childDeps) { directNames.push_back(ck.first);
+                    for (auto& ck : childDeps) { directNames.push_back(depIdentity(ck.first, ck.second));
                         // storePath is where THIS package's manifest lives — the dir its own path specs
                         // are relative to. For a path dep that is the local package dir itself.
-                        q.push_back({ck.first, ck.second, r.name, storePath, r.dev, !r.spec.path.empty()}); }
+                        q.push_back({depIdentity(ck.first, ck.second), ck.second, r.name, storePath, r.dev,
+                                     !r.spec.path.empty(), ck.first}); }
                     std::sort(directNames.begin(), directNames.end());   // deterministic dependencies[] order
                 }
-                if (!linkDir(storePath, (r.dev ? devViewDir : viewDir) + "/" + importName)) {
+                // The view holds a package by its identity (KR-291) — `.kama/deps/@north/net` — so two scopes' `net`
+                // sit side by side, and each consumer's own manifest says which one its local name means.
+                const std::string link = viewDirOf(r.dev ? devViewDir : viewDir, r.name);
+                if (!makeDirs(dirName(link)) || !linkDir(storePath, link)) {
                     fprintf(stderr, "kama pkg install: cannot link dependency '%s'\n", r.name.c_str()); return 1;
                 }
                 e.dependencies = directNames;
@@ -8543,8 +8638,8 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
         };
 
         std::deque<Req> prodQ, devQ;
-        for (auto& kv : deps)    prodQ.push_back({kv.first, kv.second, "<root manifest>", base, false, true});
-        for (auto& kv : devDeps) devQ.push_back({kv.first, kv.second, "<root manifest>", base, true, true});
+        for (auto& kv : deps)    prodQ.push_back({depIdentity(kv.first, kv.second), kv.second, "<root manifest>", base, false, true, kv.first});
+        for (auto& kv : devDeps) devQ.push_back({depIdentity(kv.first, kv.second), kv.second, "<root manifest>", base, true, true, kv.first});
         int rc = drain(prodQ);                       // phase 1 (prod) drains fully before phase 2 → prod wins
         if (rc == 0) rc = drain(devQ);               // phase 2 (dev)
         if (rc == RESTART) continue;                 // a tighter range surfaced — re-resolve with it seeded
@@ -8568,8 +8663,14 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 fprintf(stderr, "kama: override '%s' in kama.local.json must specify a \"path\" "
                         "(only local path-overrides are supported)\n", name.c_str()); return 1;
             }
-            bool isDev = deps.count(name) == 0 && devDeps.count(name) != 0;
-            if (!deps.count(name) && !isDev) {
+            // An override is keyed by the package it stands in for — its identity, whatever local name a consumer
+            // gives it (KR-291).
+            auto declares = [&](const std::map<std::string, DepSpec>& m) {
+                for (const auto& kv : m) if (depIdentity(kv.first, kv.second) == name) return true;
+                return false;
+            };
+            bool isDev = !declares(deps) && declares(devDeps);
+            if (!declares(deps) && !isDev) {
                 fprintf(stderr, "kama: override '%s' in kama.local.json is not a dependency of this "
                         "project — declare it in kama.json first\n", name.c_str()); return 1;
             }
@@ -8578,9 +8679,9 @@ static int resolveProject(const std::string& base, const std::map<std::string, L
                 fprintf(stderr, "kama: override '%s' target not found at %s\n", name.c_str(), target.c_str());
                 return 1;
             }
-            std::string link = (isDev ? devViewDir : viewDir) + "/" + importNameOf(name);
+            std::string link = viewDirOf(isDev ? devViewDir : viewDir, name);
             runCmd(rmRfCmd(link));
-            if (!linkDir(target, link)) {
+            if (!makeDirs(dirName(link)) || !linkDir(target, link)) {
                 fprintf(stderr, "kama: cannot link override '%s'\n", name.c_str()); return 1;
             }
             fprintf(stderr, "kama: override '%s' -> %s (local, not locked)\n", name.c_str(), target.c_str());
@@ -8639,11 +8740,15 @@ int cmdPkgUpdate(const std::string& projectDir, const std::string& onlyPkg)
         }
         std::map<std::string, DepSpec> d, dd; std::string err;   // <pkg> must be a declared (dev-)dependency
         if (!loadManifestDeps(manifest, d, err, &dd)) { fprintf(stderr, "kama: %s: %s\n", manifest.c_str(), err.c_str()); return 2; }
-        if (!d.count(onlyPkg) && !dd.count(onlyPkg)) {
+        const std::map<std::string, DepSpec>& in = d.count(onlyPkg) ? d : dd;   // named as the manifest keys it
+        auto entry = in.find(onlyPkg);
+        if (entry == in.end()) {
             fprintf(stderr, "kama pkg update: '%s' is not a dependency in %s\n", onlyPkg.c_str(), manifest.c_str());
             return 2;
         }
-        oldLock.erase(onlyPkg);   // drop just this pin → it (and any now-orphaned subtree) re-resolves fresh
+        // drop just this pin → it (and any now-orphaned subtree) re-resolves fresh. The lock holds it by identity
+        // (KR-291), which a key with `package` is not.
+        oldLock.erase(depIdentity(entry->first, entry->second));
     }
     return resolveProject(base, oldLock);   // onlyPkg empty → empty oldLock → everything fresh
 }
@@ -8707,6 +8812,7 @@ static std::string depEntryValue(const DepSpec& d)   // the "{ ... }" value for 
     std::string f;
     auto add = [&](const char* k, const std::string& v){ if (!v.empty()) { if (!f.empty()) f += ", ";
         f += std::string("\"") + k + "\": \"" + jsonEscape(v) + "\""; } };
+    add("package", d.package);
     add("path", d.path); add("git", d.git); add("url", d.url); add("registry", d.registry);
     add("rev", d.rev); add("version", d.version); add("integrity", d.integrity);
     return "{ " + f + " }";
@@ -8952,6 +9058,8 @@ static const struct { const char* key; const char* since; } kManifestKeySince[] 
     { "select.TARGET.preloadFiles", "0.9.603" },
     // …and the gates KR-144 added: on a dependency edge, and on a `link` entry (an object where a string was).
     { "dependencies.compileFor", "0.9.609" }, { "link.compileFor", "0.9.609" },
+    // …and a dependency's local name (KR-291): `package` names the package when the key is the consumer's own name for it.
+    { "dependencies.package", "0.9.820" },
     // …and a select value's build flags (KR-145), named generically: they are the same four keys on any group's value.
     { "select.value.cflags", "0.9.610" }, { "select.value.ldflags", "0.9.610" },
     { "select.value.cxxflags", "0.9.610" }, { "select.value.objcflags", "0.9.610" },
@@ -9422,11 +9530,12 @@ int cmdPublish(const std::string& base, const std::string& registryArg, const st
     }
 
     // Build the index entry. `dependencies` are recorded for protocol conformance (the resolver reads the
-    // fetched manifest, so this is informational metadata) — a name → its declared version range.
+    // fetched manifest, so this is informational metadata) — a package → its declared version range, by the package's
+    // full name, never the local name its consumer gives it (KR-291).
     std::string depsJson;
     for (auto& kv : deps) {   // sorted map => deterministic
         if (!depsJson.empty()) depsJson += ", ";
-        depsJson += "\"" + jsonEscape(kv.first) + "\": {";
+        depsJson += "\"" + jsonEscape(depIdentity(kv.first, kv.second)) + "\": {";
         if (!kv.second.version.empty()) depsJson += " \"version\": \"" + jsonEscape(kv.second.version) + "\" ";
         depsJson += "}";
     }
@@ -10260,7 +10369,8 @@ void usage(FILE* out = stderr)
         "                                    a workspace resolves every member, each on its own\n"
         "                                      (--verify: require + check registry-package signatures)\n"
         "  kama pkg add   [--dev] <kama.json> <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
-        "                                --version V [--registry BASE])   (bare --version = a registry dependency)\n"
+        "                                --version V [--registry BASE]) [--package P]   (bare --version = a registry\n"
+        "                                dependency; with --package, <name> is the local name a file imports P by)\n"
         "  kama pkg remove <kama.json> <name>\n"
         "  kama pkg update <kama.json> [<pkg>] re-resolve pins (advance a branch pin) and rewrite the lock\n"
         "  kama pkg search <words…> [--registry BASE]…   packages whose name, description or keywords match every word\n"
@@ -10281,7 +10391,7 @@ void pkgUsage()
         "usage:\n"
         "  kama pkg install <kama.json|kama_workspace.json> [--verify]   resolve dependencies + write kama.lock\n"
         "  kama pkg add   [--dev] <kama.json> <name> (--git U [--rev R | --version V] | --url U [--integrity H] | --path P |\n"
-        "                                --version V [--registry BASE])\n"
+        "                                --version V [--registry BASE]) [--package P]\n"
         "  kama pkg remove <kama.json> <name>\n"
         "  kama pkg update <kama.json> [<pkg>] re-resolve pins and rewrite the lock\n"
         "  kama pkg search <words…> [--registry BASE]…   find packages in a registry's catalog\n");
@@ -11692,6 +11802,7 @@ int main(int argc, char** argv)
                 else if (a == "--integrity" && i + 1 < argc) integ = argv[++i];
                 else if (a == "--version" && i + 1 < argc)   ver = argv[++i];
                 else if (a == "--registry" && i + 1 < argc)  registry = argv[++i];
+                else if (a == "--package" && i + 1 < argc)   d.package = argv[++i];   // <name> is then the local name
                 else if (!a.empty() && a[0] == '-') { fprintf(stderr, "kama pkg add: unknown option '%s'\n", a.c_str()); return 2; }
                 else if (manifest.empty()) manifest = a;
                 else if (name.empty()) name = a;
@@ -12558,8 +12669,7 @@ int main(int argc, char** argv)
             }
         }
         if (!manifestOperand.empty()) {
-            std::vector<std::string> deps = listDir(dirName(manifestOperand) + "/.kama/deps");
-            std::sort(deps.begin(), deps.end());
+            std::vector<std::string> deps = viewEntries(dirName(manifestOperand) + "/.kama/deps");   // by identity
             if (!deps.empty()) {
                 printf("\ndependencies\n");
                 for (const auto& d : deps) printf("  %s\n", d.c_str());
@@ -13842,7 +13952,8 @@ int main(int argc, char** argv)
                     return 2;
                 }
                 // The whole file name, extension included, so `foo.c` beside `foo.cpp` is two objects.
-                std::string obj = genDir + "/csrc__" + (cs.owner.empty() ? std::string("self") : cs.owner)
+                // A package owner is an identity (KR-291), labelled as its C names are: `kS_north__net`, no `/`.
+                std::string obj = genDir + "/csrc__" + (cs.owner.empty() ? std::string("self") : CEmitter::mangleNs(cs.owner))
                                 + "__" + baseName(cs.path) + ".o";
                 auto claimed = objClaimed.emplace(obj, cs.path);
                 if (!claimed.second) {
@@ -13866,7 +13977,7 @@ int main(int argc, char** argv)
                     default:            tok = "-x c "; break;
                 }
                 ccInputs.push_back({ tok + "\"" + cs.path + "\" ", obj, lang,
-                                     !release && optimizedPackage(cs.owner.empty() ? rootProject : importRootIdentity(rootDir, cs.owner)) });
+                                     !release && optimizedPackage(cs.owner.empty() ? rootProject : cs.owner) });
             }
         }
 

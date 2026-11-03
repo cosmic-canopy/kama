@@ -792,7 +792,7 @@ Every variable the toolchain reads, in one place. None is needed for an ordinary
 | variable | read by | effect |
 |---|---|---|
 | `KAMA_BUILD_JOBS` | `kama build` | parallel C compiles when `-j` is not given (default: the core count) |
-| `KAMA_PATH` | module resolution | extra `:`-separated roots searched for an `import`, after the manifest and before the bundled stdlib |
+| `KAMA_PATH` | module resolution | extra `:`-separated roots searched for an `import`, after the manifest and before the bundled stdlib. A root is a project or a folder of projects, each found at its full name (`<root>/geo`, `<root>/@acme/geo`); an undeclared root names itself, so a scoped package there is reached only as a declared dependency |
 | `KAMA_WGPU_DIR` | `--webgpu`, native | the wgpu-native SDK root, instead of the one `tools/fetch-webgpu.sh` fetched |
 | `KAMA_PTHREAD_POOL` | wasm builds | isolate worker slots to pre-warm (default 0) |
 | `KAMA_LOG` | the built program | the `std::log` filter, e.g. `warn,audio=debug`; `--log` overrides it |

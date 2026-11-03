@@ -1,0 +1,6 @@
+// Two scopes' packages of one name, `@north/net` and `@south/net`, in one program (KR-291). The first imports
+// under its bare name; kama.json gives the second the local name `snet` with `"package"`. Each is its own module,
+// with its own C names (`kS_north__net__who`, `kS_south__net__who`).
+import { net::who, snet::who as swho };
+
+fn uint8 main() { return cast<uint8>(who() + swho()); }   // 30 + 12

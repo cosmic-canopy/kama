@@ -632,7 +632,7 @@ if ! "$KAMA" pkg install "$rc2/kama.json" >"$tmp/rc2off.out" 2>&1 || ! cmp -s "$
 mv "$reg.hidden" "$reg"
 
 # ==== M3.1b: scopes + `registries` config + dependency-confusion guard =================================
-# A scoped `@acme/foo` imports under its BARE last segment (`foo`); the scope only selects which registry
+# A scoped `@acme/foo` imports under its BARE last segment (`foo`) unless its consumer names it otherwise; the scope selects which registry
 # routes the fetch (via `registries` config). The lock pins content identity (the integrity), not the URI.
 
 # 22. scoped routing + opt-out-of-default. Publish `@acme/sc` to a scope registry; a consumer routes
@@ -652,7 +652,7 @@ cat > "$scp/kama.json" <<JSON
 JSON
 printf 'import { sc::val };\nfn uint8 main() { return cast<uint8>(val()); }\n' > "$scp/src/main.kama"
 if ! "$KAMA" pkg install "$scp/kama.json" >"$tmp/scp.out" 2>&1; then echo "check-packages: FAIL — scoped install errored:" >&2; sed 's/^/  /' "$tmp/scp.out" >&2; exit 1; fi
-[ -L "$scp/.kama/deps/sc" ] || { echo "check-packages: FAIL — scoped dep did not import under its bare name (.kama/deps/sc)" >&2; ls "$scp/.kama/deps" >&2; exit 1; }
+[ -L "$scp/.kama/deps/@acme/sc" ] || { echo "check-packages: FAIL — the view does not hold @acme/sc by its full name (.kama/deps/@acme/sc, KR-291)" >&2; find "$scp/.kama/deps" >&2; exit 1; }
 mkdir -p "$tmp/scc"
 if "$KAMA" build "$scp/kama.json" -o "$tmp/scc/scapp" --keep-c >"$tmp/scb.out" 2>&1; then
     if "$tmp/scc/scapp"; then rc=0; else rc=$?; fi
@@ -700,7 +700,8 @@ cfjson "$rc_"
 if "$KAMA" pkg install "$cfp/kama.json" >"$tmp/cfc.out" 2>&1; then echo "check-packages: FAIL — confusion guard let a different-bytes mirror install" >&2; exit 1; fi
 grep -qi "confusion" "$tmp/cfc.out" || { echo "check-packages: FAIL — confusion-guard message unclear:" >&2; sed 's/^/  /' "$tmp/cfc.out" >&2; exit 1; }
 
-# 24. import-name collision: two DIFFERENT scopes exposing the same bare name -> a hard error (alias one).
+# 24. import-name collision: two DIFFERENT scopes exposing the same bare name to ONE consumer -> a hard error that
+# names the fix, a local name with `package` (KR-291; the KR-291 section below covers what that fix builds).
 creg="$(kama_native_path "$tmp")/creg"; mkdir -p "$creg"
 for scp2 in acme other; do d="$tmp/col-$scp2"; mkdir -p "$d/src"; printf '{ "name": "@%s/cn", "version": "1.0.0", "kind": "library" }\n' "$scp2" > "$d/kama.json"; printf 'export { val };\nfn int32 val() { return 1; }\n' > "$d/src/cn.kama"; commit_all "$d"; ( cd "$d" && "$KAMA" publish kama.json --registry "file://$creg" ) >/dev/null 2>&1; done
 colp="$tmp/colp"; mkdir -p "$colp"
@@ -720,14 +721,20 @@ cat > "$colp/kama.json" <<JSON
   "dependencies": { "@acme/cn": { "version": "^1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 "$KAMA" pkg install "$colp/kama.json" >"$tmp/colp1.out" 2>&1 || { echo "check-packages: FAIL — the one-dependency install failed:" >&2; sed 's/^/  /' "$tmp/colp1.out" >&2; exit 1; }
-view_before=$(ls -l "$colp/.kama/deps" | sed 1d)
+view_before=$(ls -lR "$colp/.kama/deps" | sed 1d)
+# The collision is now one consumer's, refused as its manifest is read — so this one sits in a path dependency,
+# reached once the install has begun staging the view.
+colmid="$tmp/colmid"; mkdir -p "$colmid/src"
+printf '{ "name": "colmid", "version": "0.1.0", "kind": "library", "dependencies": { "@acme/cn": { "version": "^1.0.0" }, "@other/cn": { "version": "^1.0.0" } }, "modules": { ".": { "visibility": "public" } } }\n' > "$colmid/kama.json"
+printf 'export { m };\nfn int32 m() { return 1; }\n' > "$colmid/src/colmid.kama"
 cat > "$colp/kama.json" <<JSON
 { "name": "colp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
   "registries": { "default": false, "@acme": "file://$creg", "@other": "file://$creg" },
-  "dependencies": { "@acme/cn": { "version": "^1.0.0" }, "@other/cn": { "version": "^1.0.0" } }, "modules": { ".": { "visibility": "internal" } } }
+  "dependencies": { "@acme/cn": { "version": "^1.0.0" }, "colmid": { "path": "../colmid" } }, "modules": { ".": { "visibility": "internal" } } }
 JSON
 if "$KAMA" pkg install "$colp/kama.json" >"$tmp/colp2.out" 2>&1; then echo "check-packages: FAIL — import-name collision was not rejected over an existing view" >&2; exit 1; fi
-[ "$(ls -l "$colp/.kama/deps" | sed 1d)" = "$view_before" ] || { echo "check-packages: FAIL — a refused install changed the view it found" >&2; ls -l "$colp/.kama/deps" >&2; exit 1; }
+grep -qi "collision" "$tmp/colp2.out" || { echo "check-packages: FAIL — a dependency's own collision was not named:" >&2; sed 's/^/  /' "$tmp/colp2.out" >&2; exit 1; }
+[ "$(ls -lR "$colp/.kama/deps" | sed 1d)" = "$view_before" ] || { echo "check-packages: FAIL — a refused install changed the view it found" >&2; ls -l "$colp/.kama/deps" >&2; exit 1; }
 for st in deps.staging dev-deps.staging; do [ ! -e "$colp/.kama/$st" ] || { echo "check-packages: FAIL — a refused install left .kama/$st behind" >&2; exit 1; }; done
 # An application named like a dependency's module (KR-218): its root module would shadow that dependency in every
 # module that imports it. Refused at install, naming the project's own name...
@@ -1939,6 +1946,8 @@ if "$KAMA" pkg install "$kn/kama.json" >"$tmp/kn.out" 2>&1; then
     echo "check-packages: FAIL — a dependency key that is not the package's name was accepted" >&2; exit 1; fi
 grep -qF "dependency 'shapes' (required by" "$tmp/kn.out" && grep -qF "is the package 'knlib'" "$tmp/kn.out" \
     || { echo "check-packages: FAIL — the key refusal did not name both names:" >&2; sed 's/^/  /' "$tmp/kn.out" >&2; exit 1; }
+grep -qF '"shapes": { "package": "knlib"' "$tmp/kn.out" \
+    || { echo "check-packages: FAIL — the key refusal did not offer the local-name spelling (KR-291):" >&2; sed 's/^/  /' "$tmp/kn.out" >&2; exit 1; }
 for rk in core std; do
 cat > "$kn/kama.json" <<JSON
 { "name": "knapp", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
@@ -1950,4 +1959,136 @@ grep -qF "dependency '$rk': \`$rk\` is reserved" "$tmp/kn.out" \
     || { echo "check-packages: FAIL — the reserved key \`$rk\` was not refused by name:" >&2; sed 's/^/  /' "$tmp/kn.out" >&2; exit 1; }
 done
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind, Windows' own tar into a backslash-spelled store whatever tar PATH holds; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, a symlink refused by name, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision (a refused install leaves the view it found; a project named like its dependency refused at install and at build); kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; $HTTPNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package; a dependency key that is not the package's name, and a reserved `core`/`std` key, refused by name)"
+# ==== KR-291: a consumer names its dependency, and a package's full name is its identity ==================
+# Two scopes' `net` (and an unscoped one), as path dependencies of one workspace: a path dependency between two
+# packages is allowed only between members of one. Each consumer's manifest says which package its `net` means.
+al="$tmp/alias"; mkdir -p "$al/libs" "$al/apps"
+printf '{ "projects": { "libs/*": { "optional": false }, "apps/*": { "optional": false } } }\n' > "$al/kama_workspace.json"
+alib() {   # alib <dir> <name> <deps-json> <file> <body>  — a library whose root module is <file>
+    mkdir -p "$al/libs/$1/src"
+    printf '{ "name": "%s", "version": "1.0.0", "kind": "library", "dependencies": { %s }, "modules": { ".": { "visibility": "public" } } }\n' "$2" "$3" > "$al/libs/$1/kama.json"
+    printf '%s\n' "$5" > "$al/libs/$1/src/$4.kama"
+}
+aapp() {   # aapp <dir> <name> <deps-json> <main body>
+    mkdir -p "$al/apps/$1/src"
+    printf '{ "name": "%s", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama", "dependencies": { %s }, "modules": { ".": { "visibility": "internal" } } }\n' "$2" "$3" > "$al/apps/$1/kama.json"
+    printf '%s\n' "$4" > "$al/apps/$1/src/main.kama"
+}
+arun() {   # arun <dir> <expected stdout> — install, build (keeping the C), run
+    d="$al/apps/$1"
+    "$KAMA" pkg install "$d/kama.json" >"$tmp/al-$1.i" 2>&1 \
+        || { echo "check-packages: FAIL — KR-291 $1: install refused:" >&2; sed 's/^/  /' "$tmp/al-$1.i" >&2; exit 1; }
+    mkdir -p "$d/c"
+    "$KAMA" build "$d/kama.json" -o "$d/c/app" --keep-c >"$tmp/al-$1.b" 2>&1 \
+        || { echo "check-packages: FAIL — KR-291 $1: build failed:" >&2; sed 's/^/  /' "$tmp/al-$1.b" >&2; exit 1; }
+    got=$("$d/c/app" 2>&1 | tr -d '\r') || true
+    [ "$got" = "$2" ] || { echo "check-packages: FAIL — KR-291 $1 printed \`$got\`, expected \`$2\`" >&2; exit 1; }
+}
+arefuse() {   # arefuse <dir> <needle> <what> — install refuses with exit 2, saying <needle>
+    if "$KAMA" pkg install "$al/apps/$1/kama.json" >"$tmp/al-$1.r" 2>&1; then
+        echo "check-packages: FAIL — KR-291: $3 installed" >&2; exit 1; fi
+    grep -qF -- "$2" "$tmp/al-$1.r" \
+        || { echo "check-packages: FAIL — KR-291: $3 was refused without \"$2\":" >&2; sed 's/^/  /' "$tmp/al-$1.r" >&2; exit 1; }
+}
+N='"path": "../../libs/north"'; S='"path": "../../libs/south"'
+alib north '@north/net' '' net 'export { who };
+fn string who() { return "north"; }'
+alib south '@south/net' '' net 'export { who };
+fn string who() { return "south"; }'
+alib unet net '' net 'export { who };
+fn string who() { return "plain"; }'
+alib mid mid "\"@north/net\": { \"path\": \"../north\" }" mid 'import { net::who };
+export { midwho };
+fn string midwho() { return who(); }'
+alib wrap wrap '"net": { "path": "../unet" }' wrap 'import { net::who };
+export { wrapwho };
+fn string wrapwho() { return who(); }'
+mkdir -p "$al/libs/acmelib/src/a"
+printf '{ "name": "@acme/lib", "version": "1.0.0", "kind": "library", "modules": { ".": { "visibility": "public" }, "a": { "visibility": "public" } } }\n' > "$al/libs/acmelib/kama.json"
+printf 'import { lib::a::av };\nexport { lv };\nfn string lv() { return av() + "!"; }\n' > "$al/libs/acmelib/src/lib.kama"
+printf 'export { av };\nfn string av() { return "a"; }\n' > "$al/libs/acmelib/src/a/a.kama"
+
+# 42. A local name: `nnet` is `@north/net` in this project alone. The view and the lock hold the package by its full
+# name, never the local one, and its C names carry the scope.
+aapp a42 a42 "\"nnet\": { \"package\": \"@north/net\", $N }" 'import { core::println, nnet::who };
+fn uint8 main() { println(s: who()); return 0; }'
+arun a42 north
+[ -L "$al/apps/a42/.kama/deps/@north/net" ] || [ -d "$al/apps/a42/.kama/deps/@north/net" ] \
+    || { echo "check-packages: FAIL — KR-291: the view does not hold @north/net at .kama/deps/@north/net:" >&2; find "$al/apps/a42/.kama" -maxdepth 3 >&2; exit 1; }
+grep -qF '"@north/net"' "$al/apps/a42/kama.lock" && ! grep -qF '"nnet"' "$al/apps/a42/kama.lock" \
+    || { echo "check-packages: FAIL — KR-291: the lock does not hold the package by its full name:" >&2; cat "$al/apps/a42/kama.lock" >&2; exit 1; }
+grep -q 'kS_north__net__who' "$al/apps/a42/c"/*.c \
+    || { echo "check-packages: FAIL — KR-291: @north/net's who is not kS_north__net__who" >&2; exit 1; }
+# 43. Two scopes' `net` in one consumer, one of them under a local name.
+aapp a43 a43 "\"@north/net\": { $N }, \"snet\": { \"package\": \"@south/net\", $S }" 'import { core::println, net::who, snet::who as swho };
+fn uint8 main() { println(s: who() + " " + swho()); return 0; }'
+arun a43 'north south'
+# 44. A library deeper in the graph keeps its own names: `mid` imports `net` as `@north/net` while this project's
+# `net` is `@south/net`, and each resolves through its own manifest.
+aapp a44 a44 "\"@south/net\": { $S }, \"mid\": { \"path\": \"../../libs/mid\" }" 'import { core::println, net::who, mid::midwho };
+fn uint8 main() { println(s: who() + " " + midwho()); return 0; }'
+arun a44 'south north'
+# 45. One module, two spellings: `@acme/lib`'s own files say `lib::a`, this project says `mylib::a`, and both are the
+# module `@acme/lib::a` — compiled once, so nothing in it is declared twice.
+aapp a45 a45 '"mylib": { "package": "@acme/lib", "path": "../../libs/acmelib" }' 'import { core::println, mylib::lv, mylib::a::av };
+fn uint8 main() { println(s: lv() + av()); return 0; }'
+arun a45 'a!a'
+# 46. What a consumer's manifest refuses (decision 3), each naming the fix.
+aapp r1 r1 "\"@north/net\": { $N }, \"@south/net\": { $S }" 'fn uint8 main() { return 0; }'
+arefuse r1 'import-name collision on `net`' "two scopes' net under one local name"
+grep -qF '"package": "@south/net"' "$tmp/al-r1.r" || { echo "check-packages: FAIL — KR-291: the collision does not offer \`package\`" >&2; exit 1; }
+aapp net net "\"@north/net\": { $N }" 'fn uint8 main() { return 0; }'
+arefuse net "which is this project's own name" "a dependency under the project's own name"
+grep -qF '"package": "@north/net"' "$tmp/al-net.r" || { echo "check-packages: FAIL — KR-291: the own-name refusal does not offer \`package\`" >&2; exit 1; }
+aapp r3 r3 "\"net\": { \"package\": \"@north/net\", $N }" 'fn uint8 main() { return 0; }'
+arefuse r3 'drop `package`' "a \`package\` its key already says"
+aapp r4 r4 "\"n-net\": { \"package\": \"@north/net\", $N }" 'fn uint8 main() { return 0; }'
+arefuse r4 'not one an `import` can spell' "a local name no import can spell"
+aapp r5 r5 "\"nnet\": { \"package\": \"@south/net\", $N }" 'fn uint8 main() { return 0; }'
+arefuse r5 "names the package '@south/net', but what it points at is the package '@north/net'" "a \`package\` the path does not hold"
+aapp r6 r6 "\"nnet\": { \"package\": \"@north/net\", $N }, \"@north/net\": { $N }" 'fn uint8 main() { return 0; }'
+arefuse r6 'are both the package `@north/net`' "one package under two names"
+aapp r7 r7 "\"onet\": { \"package\": \"@my-org/net\", $N }" 'fn uint8 main() { return 0; }'
+arefuse r7 'Try "@my_org"' "a \`package\` whose scope is not an identifier"
+aapp r8 r8 "\"@north/net\": { $N }" 'fn uint8 main() { return 0; }'
+printf '{ "overrides": { "@north/net": { "package": "@south/net", %s } } }\n' "$S" > "$al/apps/r8/kama.local.json"
+arefuse r8 'takes no `package`' "\`package\` in an override"
+# 47. What stays refused graph-wide is one IDENTITY twice. A scoped `@north/net` under a project `net` is another
+# package (its C names are kS_north__net__…), so it installs; an unscoped `net` anywhere under it is refused, at
+# install and at build over a view already on disk.
+aapp n47 net '"mid": { "path": "../../libs/mid" }' 'import { core::println, mid::midwho };
+fn uint8 main() { println(s: midwho()); return 0; }'
+arun n47 north
+aapp u47 net '"wrap": { "path": "../../libs/wrap" }' 'fn uint8 main() { return 0; }'
+arefuse u47 "has this project's own name" "an unscoped dependency named as the project"
+aapp o47 o47 '"wrap": { "path": "../../libs/wrap" }' 'fn uint8 main() { return 0; }'
+"$KAMA" pkg install "$al/apps/o47/kama.json" >"$tmp/al-o47.i" 2>&1 || { echo "check-packages: FAIL — KR-291: o47 did not install" >&2; sed 's/^/  /' "$tmp/al-o47.i" >&2; exit 1; }
+mkdir -p "$al/apps/u47/.kama" && cp -R "$al/apps/o47/.kama/deps" "$al/apps/u47/.kama/deps"
+if "$KAMA" build "$al/apps/u47/kama.json" -o "$tmp/u47-bin" >"$tmp/al-u47.b" 2>&1; then echo "check-packages: FAIL — KR-291: a view holding this project's own package built" >&2; exit 1; fi
+grep -qF "which is this project's own name" "$tmp/al-u47.b" || { echo "check-packages: FAIL — KR-291: the build did not name the clash:" >&2; sed 's/^/  /' "$tmp/al-u47.b" >&2; exit 1; }
+# 48. A view an older kama laid out by import name is refused by name, and a fresh install replaces it — leaving the
+# path dependency's own sources intact, junctions and all (Windows removes a view with `rmdir /s /q`).
+rm -rf "$al/apps/a42/.kama/deps" && mkdir -p "$al/apps/a42/.kama/deps" && cp -R "$al/libs/north" "$al/apps/a42/.kama/deps/net"
+if "$KAMA" build "$al/apps/a42/kama.json" -o "$al/apps/a42/c/app" >"$tmp/al-stale.b" 2>&1; then echo "check-packages: FAIL — KR-291: a stale view built" >&2; exit 1; fi
+grep -qF "is the package '@north/net', so this view is out of date" "$tmp/al-stale.b" && grep -qF 'kama pkg install' "$tmp/al-stale.b" \
+    || { echo "check-packages: FAIL — KR-291: the stale view was not named as such:" >&2; sed 's/^/  /' "$tmp/al-stale.b" >&2; exit 1; }
+arun a42 north
+arun a42 north
+[ -f "$al/libs/north/src/net.kama" ] || { echo "check-packages: FAIL — KR-291: reinstalling over a scoped view removed the path dependency's sources" >&2; exit 1; }
+# 49. The commands speak local names: `pkg update` takes the key, and `pkg add --package` writes one.
+cp "$al/apps/a42/kama.lock" "$tmp/a42.lock"
+"$KAMA" pkg update "$al/apps/a42/kama.json" nnet >"$tmp/al-up.out" 2>&1 || { echo "check-packages: FAIL — KR-291: pkg update nnet:" >&2; sed 's/^/  /' "$tmp/al-up.out" >&2; exit 1; }
+cmp -s "$tmp/a42.lock" "$al/apps/a42/kama.lock" || { echo "check-packages: FAIL — KR-291: pkg update by a local name changed the lock" >&2; exit 1; }
+aapp a49 a49 "\"@south/net\": { $S }" 'fn uint8 main() { return 0; }'
+"$KAMA" pkg add "$al/apps/a49/kama.json" nnet --path ../../libs/north --package @north/net >"$tmp/al-add.out" 2>&1 \
+    || { echo "check-packages: FAIL — KR-291: pkg add --package:" >&2; sed 's/^/  /' "$tmp/al-add.out" >&2; exit 1; }
+grep -qF '"nnet": { "package": "@north/net", "path": "../../libs/north" }' "$al/apps/a49/kama.json" \
+    || { echo "check-packages: FAIL — KR-291: pkg add --package did not write the entry:" >&2; cat "$al/apps/a49/kama.json" >&2; exit 1; }
+# 50. An override names the package by its identity, whatever the consumer calls it, and leaves the lock alone.
+mkdir -p "$al/libs/north2/src"; cp "$al/libs/north/kama.json" "$al/libs/north2/kama.json"
+printf 'export { who };\nfn string who() { return "north2"; }\n' > "$al/libs/north2/src/net.kama"
+printf '{ "overrides": { "@north/net": { "path": "../../libs/north2" } } }\n' > "$al/apps/a42/kama.local.json"
+arun a42 north2
+cmp -s "$tmp/a42.lock" "$al/apps/a42/kama.lock" || { echo "check-packages: FAIL — KR-291: an override changed the lock" >&2; exit 1; }
+
+echo "check-packages: PASS (store+integrity+tamper, no download left behind, Windows' own tar into a backslash-spelled store whatever tar PATH holds; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, a symlink refused by name, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision (a refused install leaves the view it found; a project named like its dependency refused at install and at build); kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; $HTTPNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package; a dependency key that is not the package's name, and a reserved \`core\`/\`std\` key, refused by name; KR-291 a local name with \`package\`, two scopes' net in one consumer, a deeper library keeping its own names, one module under two spellings, each consumer's collision refused naming the fix, one identity twice refused at install and at build, a stale bare-name view refused, pkg update/add by local name, an override by identity)"

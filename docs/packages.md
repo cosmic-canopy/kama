@@ -168,8 +168,10 @@ The same rule holds wherever a name is read — a project's `name`, `kama seed`,
 reached, since `import core::v` resolves to the floor. Only the compiler's own two manifests, `lib/kama.json`
 (`std`) and `lib/core/kama.json` (`core`), are exempt, recognized by their path under the stdlib the compiler
 resolves — so another compiler's checkout of kama's own `lib/` reads as a project claiming those names. And a
-dependency's key **is** the package's own `name`, because the key is what a build finds it by: `"shapes":
-{ "path": "../geo" }` over a package named `geo` is refused at `kama pkg install`, naming both.
+dependency's key **is** the package's own `name` unless `package` says otherwise ([§ A dependency's local
+name](#a-dependencys-local-name--package)), because the package is what a build finds it by: `"shapes":
+{ "path": "../geo" }` over a package named `geo` is refused at `kama pkg install`, naming both and offering
+`"shapes": { "package": "geo", … }`.
 
 ## Build output — `out`
 
@@ -195,7 +197,8 @@ A loose `.kama` file with **no manifest** is unchanged: `kama build hello.kama` 
 beside it. `out/` is a project's concept, and one file is not a project — and with no manifest to name
 it, the file's own stem is the honest answer.
 
-**A path dependency's view link is relative.** `.kama/deps/<name>` points at `../../../<dir>` rather than
+**A path dependency's view link is relative.** `.kama/deps/<name>` (a scoped package one level down,
+`.kama/deps/@acme/geo`) points at `../../../<dir>` rather than
 an absolute path, so **one resolved tree is valid under every mount point at once** — the same checkout
 served from a host and a container, a second worktree, CI with a different root. An absolute link dangles
 on the first move, and the error it produces blames the manifest (`declares no dependency named …`),
@@ -775,8 +778,11 @@ the same rule to the same file, so the two always agree.
 ### Scopes and the `registries` config
 
 A package name may be **scoped** as `@scope/name`. A scoped dependency **imports under its bare last
-segment** — `@acme/geo` is `import { geo::X };` in your code — the scope only selects which registry serves
-it. **`@kama` is the official scope**: a package named `@kama/<name>` is maintained alongside the compiler
+segment** — `@acme/geo` is `import { geo::X };` in your code — unless you give it a local name (below), and the
+scope selects which registry serves it. The full name is the package's **identity**: it is how the dependency
+view holds it (`.kama/deps/@acme/geo`), how the lock records it, and what its C names carry
+(`kS_acme__geo__…`, [SPEC.md](SPEC.md) *C names*), so two scopes' `geo` are two packages that can meet in one
+program. A scope is a legal identifier for that reason (`@my_org`, never `@my-org`). **`@kama` is the official scope**: a package named `@kama/<name>` is maintained alongside the compiler
 and served from the official registry, and a community package is unscoped or under its own scope; `@kama`
 and `@std` are reserved the day a hosted registry exists, which refuses them from any other publisher.
 `@std` is reserved for a different reason than `@kama`: **the standard library is not a package.** It
@@ -804,12 +810,42 @@ name. Bind scopes (and the default) with a top-level `registries` object:
 - With no `default`, the default is the built-in official registry, `https://registry.kama-lang.org`.
 - `"default": false` **drops** the default entirely — the built-in one too — a fully-private / air-gapped
   setup where an unscoped name with no other source is simply unresolvable.
-- Two scopes cannot expose the **same** bare name in one project (both would import as `name`) — that's a
-  hard error, and nothing aliases a dependency yet (KR-291), so the way out is for one package's publisher to
-  rename it. **The project's own name counts too**: it is the root module, so a
-  dependency anywhere in the graph that imports as that name (an application called `tls` over a library that
-  uses `@kama/tls`) would be shadowed by the application in every module that imports it. `kama pkg install`
-  refuses it, and `kama build`/`kama check` refuse a view already on disk that holds one — rename the project.
+- Two of **one project's** dependencies cannot import under the same name — `@north/net` and `@south/net`
+  would both be `net` — and neither can one under the **project's own name**, its root module. Both are
+  refused where the manifest is read, naming the fix: a **local name**.
+
+### A dependency's local name — `package`
+
+A dependency's key is the name **this** project's files import it by. When that is not the package's own
+bare name, `package` names the package (Cargo's spelling):
+
+```json
+"dependencies": {
+  "@north/net": { "version": "^1.0.0" },
+  "snet":       { "package": "@south/net", "version": "^2.0.0" }
+}
+```
+
+```kama fragment
+import { net::who, snet::who as southWho };
+```
+
+- The local name is this manifest's alone. Each package resolves its imports through **its own**
+  dependencies, so a library deeper in the graph that imports `@south/net` as `net` keeps doing so, and a
+  package's own files still name it by its bare name (`lib::a` inside `@acme/lib`, `mylib::a` in a project
+  that calls it `mylib` — one module either way).
+- The key with `package` is a plain identifier, since an `import` spells it. A `package` whose bare name *is*
+  the key says nothing, so it is refused: write the package's name as the key. One package under two keys
+  is refused too.
+- An application called `net` can depend on `@north/net` as `nnet`. What stays refused across the whole
+  graph is one **identity** twice: an unscoped `net` anywhere under a project named `net` would be one module
+  with it. `kama pkg install` refuses that tree, and `kama build`/`kama check` refuse a view already on disk
+  that holds one.
+- `kama pkg add <kama.json> snet --package @south/net --version ^2.0.0` writes such an entry, `kama pkg
+  update <kama.json> snet` takes the key, and a `kama.local.json` override names the package it replaces by
+  its full name (`"@south/net"`), whatever a consumer calls it.
+- A view laid out by a kama before 0.9.820 held a scoped package at its bare name; a build refuses it as out
+  of date, and `kama pkg install` lays it out again.
 
 Because the lock pins **content identity (the integrity), not the URL**, a scope can be **re-pointed** to a
 mirror by editing `registries`: a mirror serving the same bytes re-resolves identically. A mirror serving

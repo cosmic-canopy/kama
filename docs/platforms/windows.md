@@ -341,7 +341,9 @@ Worth knowing before debugging, because each of these produced a confident wrong
   broke is the harness. `LoadLibraryA`/`GetProcAddress`/`FreeLibrary` are the same three operations
   (`tests/support/expose_shared_check.sh`).
 - **A directory junction stores an ABSOLUTE path**, by definition of its reparse point. `kama pkg install`
-  materializes `.kama/deps/<name>` with `mklink /J` because the relative alternative — a directory
+  materializes `.kama/deps/<name>` (a scoped package inside an `@scope` folder, `.kama/deps/@acme/geo`; the
+  `rmdir /s /q` that replaces a view removes those junctions, never what they point at — check-packages case
+  48) with `mklink /J` because the relative alternative — a directory
   *symlink* — needs `SeCreateSymbolicLinkPrivilege` (Developer Mode or elevation), which an ordinary
   install cannot depend on. So a resolved dependency tree is **not relocatable here**, and
   `tools/check-packages.sh`'s relative-link case asserts only what survives: the link is made, and the tree builds
