@@ -175,7 +175,7 @@ function symbolNames(binary) {
     const out = cp.execFileSync('nm', ['-U', binary], { encoding: 'utf8', maxBuffer: 1 << 24 });
     const seen = new Set();
     for (const line of out.split('\n')) {
-      const m = /\s[TtSsDd]\s+_?(kF_[A-Za-z0-9_]+|kama__[A-Za-z0-9_]+|std__[A-Za-z0-9_]+)\s*$/.exec(line);
+      const m = /\s[TtSsDd]\s+_?(kF_[A-Za-z0-9_]+|k_F[A-Za-z0-9_]+|kama__[A-Za-z0-9_]+|std__[A-Za-z0-9_]+)\s*$/.exec(line);   // `k_F`: KR-305
       if (m) seen.add(m[1]);
     }
     return [...seen];

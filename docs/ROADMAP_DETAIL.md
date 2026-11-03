@@ -4114,6 +4114,18 @@ same shape. Perforce comes first because it is the game-studio default, and stud
 subdirectories of one large depot — which is why the seam scopes the file list to the package directory. Not
 buildable blind: it needs a Perforce server to test against.
 
+<a id="s10-ext-old-prefix"></a>
+
+### Retire the extension's `k_F` (KR-305)
+
+Kama 0.9.818 moved a file's private names in C from `k_F<stem>__` to `kF_<stem>__`. The extension's demangler and its symbol scan read one spelling at a time, and the extension updates by itself where a
+compiler does not, so extension 0.9.8 showed `Fapp__probe` for a program built by the released compiler and 0.9.7 shows `kF_app::probe` for one built by a newer. 0.9.9 reads both, by the maintainer's
+ruling (2026-11-03): for now, and not to stay.
+
+**The trigger: the second compiler release that writes `kF_`.** By then a project that has moved has had a release to move from, and one pinned to a compiler before 0.9.818 sees `Fapp__probe` again, in the debugger
+alone: it is a cosmetic cost, on a pre-1.0 compiler, and it is what retiring it means. The work is `names.js`'s regex, `extension.js`'s scan, the three assertions in `check-extension-names`, and an extension
+version bump.
+
 <a id="s10-api-reference"></a>
 
 ### An API reference for a package (KR-268)

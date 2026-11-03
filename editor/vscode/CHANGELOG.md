@@ -13,6 +13,14 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
+## [0.9.9] — 2026-11-03
+
+### Fixed
+
+- **The debugger reads a private function's name from any compiler.** 0.9.8, which was never published, read only the spelling kama 0.9.818
+  began to write, so a program built by an earlier compiler would have shown `Fapp__probe` for `probe`. Both spellings read correctly now,
+  so the extension no longer depends on which compiler a project uses.
+
 ## [0.9.8] — 2026-11-02
 
 ### Changed

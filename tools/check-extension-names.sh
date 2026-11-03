@@ -70,6 +70,10 @@ eq(lexical('k_near'),           'near',       'a local loses the register');
 eq(lexical('k_k_near'),         'k_near',     'EXACTLY one strip: the author really wrote k_near');
 eq(lexical('kF_app__Pair'),     'Pair',       'a file-private scope comes off');
 eq(lexical('kF_kk__k_Box'),     'k_Box',      "a declaration's leaf keeps its own k_");
+// The spelling before kama 0.9.818, read for a pinned or older compiler until KR-305 retires it.
+eq(lexical('k_Fapp__Pair'),     'Pair',       "a compiler before 0.9.818's file-private scope comes off");
+eq(lexical('k_Fkk__k_Box'),     'k_Box',      '...and its leaf keeps its own k_');
+eq(lexical('k_Foo'),            'Foo',        'a local that starts with F is no scope');
 eq(lexical('kama_main'),        'main',       'the entry point');
 eq(lexical('kama__print'),      'print',      'the prelude scope is implicit in source');
 eq(lexical('std__collections__Map'), 'std::collections::Map', 'a module scope reads as a path');

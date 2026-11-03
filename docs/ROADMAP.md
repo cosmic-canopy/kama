@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-305**
+**Next id: KR-306**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -149,6 +149,7 @@ Most of this gates on the repo going public.
 | KR-30 | **LSP residuals** — one build configuration per server process; the prelude-analysis floor per keystroke; ⚠️ **a receiver typed by a generic instance over an UNBOUND parameter resolves to nothing in completion** — `const ref Node<K>` inside another generic offers no members at all, PUBLIC ones included, while the same receiver spelled `Node<int32>` offers every one (measured `0.9.300`, writing the `friend`-across-generics fixtures; it is receiver resolution, not visibility); a type argument's span runs into a NAMED size (`InlineArray<int32>#(LIMIT)`: hover on `LI` answers `int32`) | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-31 | **`kama fmt`** — a native formatter. Substrate settled: use the compiler's own front end, **not** tree-sitter | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-33 | **`kama query` residuals** — no `callers-of`, no stdin/unsaved-buffer mode; a `fnptr` signature type has no definition site | [§10](ROADMAP_DETAIL.md#s10) |
+| KR-305 | **Retire the extension's `k_F`** — extension 0.9.9 reads a private function's C name in both spellings, `kF_` and the `k_F` every compiler before 0.9.818 writes, because the extension updates by itself and a compiler does not. Taken out, with its assertions, at the second compiler release that writes `kF_` | [§10](ROADMAP_DETAIL.md#s10-ext-old-prefix) |
 | KR-268 | **An API reference for a package** — `kama query` reports neither a declaration's doc comment nor whether it is exported, and there is no `kama doc` (rustdoc, `go doc`). The two fields first, then a renderer | [§10](ROADMAP_DETAIL.md#s10-api-reference) |
 | KR-84 | **`kama describe --json`** — the language surface as data, the other half of `kama query --json` (GOALS §7) | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-148 | **kama's own AI-agent tooling** — brief written 2026-10-15, nine decisions owed: recommended a `kama` Claude Code plugin (`kama lsp` pushes diagnostics after every edit; the skill's text printed by the installed compiler), symbol-named `kama query` modes, call hierarchy, a guard that runs the guidance, the same tools in this repo; MCP proposed a non-goal. L once decided | [§10](ROADMAP_DETAIL.md#s10-agent-tooling) |

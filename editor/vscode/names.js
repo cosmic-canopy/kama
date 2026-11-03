@@ -46,7 +46,9 @@ function lexical(name) {
   // A file-private scope is `kF_<stem>__`; a module scope is `<a>__<b>__`. Both are prefixes no user
   // can spell in source, so they come off; what is left may itself be `k_`-prefixed and must not be
   // stripped again — a type the author called `k_Box` emits `kF_kk__k_Box`.
-  const fileScoped = /^kF_[A-Za-z0-9_]+?__(.+)$/.exec(s);
+  // `k_F` is the spelling before kama 0.9.818, read for a compiler that is pinned or not yet updated, since
+  // the extension updates by itself and the compiler does not. KR-305 retires it.
+  const fileScoped = /^(?:kF_|k_F)[A-Za-z0-9_]+?__(.+)$/.exec(s);
   if (fileScoped) return fileScoped[1].replace(/__/g, '::');
   // A scoped package heads its names with `kS_<scope>__<name>__`, which reads back as `@scope/name`.
   const scoped = /^kS_([A-Za-z0-9_]+?)__([A-Za-z0-9_]+?)(?:__(.+))?$/.exec(s);
