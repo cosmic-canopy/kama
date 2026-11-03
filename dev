@@ -23,6 +23,7 @@ Test — each task builds first, so it can never run against a stale compiler
   test tsan         ThreadSanitizer fixture suite   (container on macOS — opt-in, see below)
   test msan         MemorySanitizer fixture suite   (container on macOS — opt-in, see below)
   test wasm         wasm/node fixture suite         (container on macOS)
+  test android      Android fixture suite over adb  (host — a booted emulator or an attached device)
   test linux        the CI Linux leg, exactly       (container on macOS — opt-in, see below)
   test all          native + san + wasm
   check             the tools/check-*.sh guard scripts (host)
@@ -137,6 +138,10 @@ case "$task" in
       tsan)   leg KAMA_TSAN ;;
       msan)   leg KAMA_MSAN ;;
       wasm)   leg KAMA_WASM ;;
+      # Android (KR-280): every fixture built for KAMA_ANDROID_TARGET (default aarch64-linux-android29) and run over
+      # adb. Host-only, since the container has no adb, and not in `all`/`matrix`, since it needs a device.
+      # `KAMA_ANDROID=1 ./dev fixture <name>…` runs chosen fixtures there.
+      android) build_host; KAMA_ANDROID=1 ./run_tests.sh ;;
       # The CI Linux leg, run the way CI runs it: plain run_tests.sh on Linux, no KAMA_SAN/KAMA_WASM.
       # NOTHING else here is that. `native` runs it on the host; `san`/`wasm` run a DIFFERENT set on Linux
       # and carry 1 and 0 guards respectively. So a Linux-only guard failure was invisible locally — a
@@ -150,7 +155,7 @@ case "$task" in
         build_host;      ./run_tests.sh
         leg KAMA_SAN
         leg KAMA_WASM ;;
-      *) echo "dev test: expected native|linux|san|tsan|msan|wasm|all" >&2; exit 2 ;;
+      *) echo "dev test: expected native|linux|san|tsan|msan|wasm|android|all" >&2; exit 2 ;;
     esac ;;
 
   check)

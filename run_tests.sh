@@ -142,6 +142,40 @@ if [ "${KAMA_WASM:-0}" != "0" ]; then
     echo "(wasm mode: build every positive fixture to wasm + run under node)"
 fi
 
+# Opt-in Android pass (KR-280): KAMA_ANDROID=1 builds every positive (and multi-file) fixture for an Android triple,
+# KAMA_ANDROID_TARGET (default aarch64-linux-android29: Meta Quest's ABI, which the SDK's x86_64 emulator also runs),
+# with the NDK kama finds itself, and runs it on the device adb sees (ANDROID_SERIAL picks one), each in a directory
+# of its own under /data/local/tmp, as a native run gets one here. The device's `timeout` bounds a run: the watchdog
+# here would only kill adb. Mutually exclusive with the sanitizers and with KAMA_WASM.
+ANDROID=0; ADEV=""; ATARGET=(); ANDROID_ENV=""
+if [ "${KAMA_ANDROID:-0}" != "0" ]; then
+    if [ ${#SAN_FLAGS[@]} -gt 0 ] || [ "$WASM" = 1 ]; then
+        echo "error: KAMA_ANDROID is mutually exclusive with the sanitizers and KAMA_WASM" >&2; exit 2
+    fi
+    ANDROID=1; ATARGET=(--target "${KAMA_ANDROID_TARGET:-aarch64-linux-android29}")
+    # adb from the SDK kama finds the NDK in (docs/targets.md): $ANDROID_HOME, else Android Studio's default; else PATH.
+    up=""; [ -n "${USERPROFILE:-}" ] && command -v cygpath >/dev/null 2>&1 && up="$(cygpath -u "$USERPROFILE")"
+    ADB=""
+    for sdk in "${ANDROID_HOME:-}" "${up:+$up/AppData/Local/Android/sdk}" "$HOME/Library/Android/sdk" "$HOME/Android/Sdk"; do
+        [ -n "$sdk" ] || continue
+        for a in "$sdk/platform-tools/adb" "$sdk/platform-tools/adb.exe"; do [ -x "$a" ] && { ADB="$a"; break 2; }; done
+    done
+    [ -n "$ADB" ] || ADB="$(command -v adb || true)"
+    [ -n "$ADB" ] || { echo "error: KAMA_ANDROID needs adb (the SDK's platform-tools)" >&2; exit 2; }
+    # msys2 would rewrite /data/local/tmp/… for a native adb.exe. And adb is handed a TMP of its own: a server it
+    # starts lives on after this run, writing its log into $TMP, so this run's $TMP could never be removed.
+    adb_() { MSYS2_ARG_CONV_EXCL='*' TMP="${TMPDIR:-/tmp}" TEMP="${TMPDIR:-/tmp}" "$ADB" "$@"; }
+    adb_ start-server >/dev/null 2>&1
+    for _ in 1 2 3 4 5; do [ "$(adb_ get-state 2>/dev/null)" = device ] && break; sleep 1; done   # a new server finds the emulator in a moment
+    if [ "$(adb_ get-state 2>/dev/null)" != device ]; then
+        echo "error: KAMA_ANDROID: adb sees no device — boot an emulator (emulator -avd <name> -no-window) or attach" \
+             "one, and pick one of several with ANDROID_SERIAL" >&2; exit 2
+    fi
+    ADEV="/data/local/tmp/kama-tests-$$"
+    adb_ shell "rm -rf $ADEV && mkdir -p $ADEV" || exit 2
+    echo "(android mode: build every positive fixture for ${ATARGET[1]} + run on $(adb_ get-serialno))"
+fi
+
 # (There used to be a `wait -n` capability probe here, for a gate that polled. The gate is a fifo token
 # semaphore now — see `spawn` below — which blocks on a `read` and needs no probe. Worth remembering why
 # the probe had to sit exactly here if one is ever reintroduced: `wait -n` waits for the NEXT job to
@@ -175,7 +209,7 @@ if [ "$WASM" = 1 ] && [ "$BROWSER_TESTS" != 0 ] && [ -f "$TESTS_DIR/support/wt_e
     done
 fi
 [ "$WASM" = 1 ] && sleep 0.3
-trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
+trap '[ -n "$WS_ECHO_PID" ] && kill "$WS_ECHO_PID" 2>/dev/null; [ -n "$WT_ECHO_PID" ] && kill "$WT_ECHO_PID" 2>/dev/null; [ -n "$SIG_RELAY_PID" ] && kill "$SIG_RELAY_PID" 2>/dev/null; [ -n "$ADEV" ] && adb_ shell "rm -rf $ADEV" >/dev/null 2>&1; rm -rf "$TMP"' EXIT
 
 # The concurrency gate: a TOKEN SEMAPHORE over a fifo. `spawn` takes a token before forking and the job
 # hands it back as its last act, so the pool is exactly $NCPU wide.
@@ -233,8 +267,20 @@ build_one() {
     if [ "$WASM" = 1 ]; then
         "$KAMA" build "$@" --target wasm --cc "${EMCC:-emcc}" -o "$out.js"
     else
-        "$KAMA" build "$@" ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} -o "$out"
+        "$KAMA" build "$@" ${SAN_FLAGS[@]+"${SAN_FLAGS[@]}"} ${ATARGET[@]+"${ATARGET[@]}"} -o "$out"
     fi
+}
+# Run a built fixture on the Android device, in a directory of its own there named as its build dir is here. $1 =
+# the executable, $2 = the stderr capture; sets `actual`. A run the device's `timeout` ended (124) touches the
+# watchdog's marker, so it reports as a hang does.
+device_run() {
+    local here="${1%/*}" d b="${1##*/}"; d="$ADEV/${here##*/}"
+    if ! adb_ push "$(kama_native_path "$1")" "$d/$b" >/dev/null 2>"$2"; then actual=125; return; fi
+    # chmod: a file pushed from Windows arrives with no execute bit. umask: adb shell's is 000, which makes every new
+    # file world-writable; 022 is the one the native leg runs under.
+    adb_ shell "cd $d && chmod 755 $b && umask 022 && $ANDROID_ENV timeout $KAMA_FIXTURE_TIMEOUT ./$b" 2>"$2"; actual=$?
+    [ "$actual" = 124 ] && : >"$here/timed_out"
+    adb_ shell "rm -rf $d" >/dev/null 2>&1
 }
 # Run a fixture under a WATCHDOG, because a fixture that hangs used to wedge the whole suite forever.
 #
@@ -397,6 +443,8 @@ run_one() {
             (cd "$rdir" && NODE_OPTIONS="--report-on-signal --report-directory=$rdir --report-filename=hang.json" \
              watchdog_run "$rdir/timed_out" node --no-concurrent-recompilation "$1.js") 2>"$2"
         fi
+    elif [ "$ANDROID" = 1 ]; then
+        device_run "$1" "$2"; return
     else
         (cd "$rdir" && watchdog_run "$rdir/timed_out" "$1") 2>"$2"
     fi
@@ -468,6 +516,7 @@ if [ "${KAMA_SKIP_CHECKS:-0}" = 0 ]; then
     leg=native
     [ "${KAMA_SAN:-0}"  != 0 ] && leg=san
     [ "${KAMA_WASM:-0}" != 0 ] && leg=wasm
+    [ "$ANDROID" = 1 ] && leg=android   # a guard asks for it with `# check-legs:`; none does yet
     phase_start "check-*.sh guards"
     # $KAMA is NOT passed through: ROOT is "." here, so it is relative, and guards `cd`. The runner
     # resolves an absolute one itself.
@@ -491,19 +540,26 @@ fi
 case "$ONLY" in " "|*" proc_"*) need_procutil=1 ;; *) need_procutil=0 ;; esac   # a filtered run builds it only if used
 if [ "$WASM" = 0 ] && [ "$need_procutil" = 1 ] && [ -f "$TESTS_DIR/support/procutil.kama" ]; then
     procutil_bin="$TMP/procutil"
-    case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) procutil_bin="$TMP/procutil.exe" ;; esac
-    if "$KAMA" build "$TESTS_DIR/support/procutil.kama" -o "$procutil_bin" >/dev/null 2>"$TMP/procutil.err"; then
+    [ "$ANDROID" = 0 ] && case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) procutil_bin="$TMP/procutil.exe" ;; esac
+    if "$KAMA" build "$TESTS_DIR/support/procutil.kama" ${ATARGET[@]+"${ATARGET[@]}"} -o "$procutil_bin" >/dev/null 2>"$TMP/procutil.err"; then
         warned "$TMP/procutil.err" procutil && fail=$((fail+1))   # see warned()
         procutil_dir="$(dirname "$procutil_bin")"
         export KAMA_PROCUTIL_BASE="$(basename "$procutil_bin")"
-        case "$(uname -s)" in
+        # On Android the helper lives on the device, in a directory no fixture runs in, and the three names go on
+        # each run's command line: the host's environment never reaches `adb shell`.
+        if [ "$ANDROID" = 1 ]; then
+            { adb_ push "$(kama_native_path "$procutil_bin")" "$ADEV/procutil/procutil" \
+                && adb_ shell "chmod 755 $ADEV/procutil/procutil"; } >/dev/null 2>&1 \
+                || { echo "FAIL procutil (could not push the helper)"; fail=$((fail+1)); }
+            ANDROID_ENV="KAMA_PROCUTIL=$ADEV/procutil/procutil KAMA_PROCUTIL_DIR=$ADEV/procutil KAMA_PROCUTIL_BASE=procutil"
+        else case "$(uname -s)" in
             MINGW*|MSYS*|CYGWIN*)
                 export KAMA_PROCUTIL="$(cygpath -w "$procutil_bin")"
                 export KAMA_PROCUTIL_DIR="$(cygpath -w "$procutil_dir")" ;;
             *)
                 export KAMA_PROCUTIL="$procutil_bin"
                 export KAMA_PROCUTIL_DIR="$procutil_dir" ;;
-        esac
+        esac; fi
     else
         echo "FAIL procutil (helper build failed)"; cat "$TMP/procutil.err"; fail=$((fail+1))
     fi
@@ -549,6 +605,9 @@ test_one() {
         if [ "$uses_net_web" = 1 ]; then
             echo "SKIP $name (web net: browser-only transport)" >"$out"; echo SKIP >"$res"; return
         fi
+        if [ "$ANDROID" = 1 ]; then case "$SET_FILE_NODE" in *"|$name|"*)
+            echo "SKIP $name (Android: adb shell may not create a socket or FIFO file)" >"$out"; echo SKIP >"$res"; return;;
+        esac; fi
     fi
     case "$SET_BROWSER" in *"|$name|"*) BROWSER=1;; esac
     if [ "$BROWSER" = 1 ] && [ "$BROWSER_TESTS" = 0 ]; then
@@ -583,7 +642,7 @@ test_one() {
     else
         echo FAIL >"$res"   # the verdict first: nothing below may keep it from being written
         { echo "FAIL $name (got $actual, expected $expected)"; stderr_tail "$TMP/$name.san"
-          if [ "$actual" = 127 ] && [ "$WASM" != 1 ]; then windows_status "$exe"; fi; } >"$out"
+          if [ "$actual" = 127 ] && [ "$WASM" != 1 ] && [ "$ANDROID" != 1 ]; then windows_status "$exe"; fi; } >"$out"
     fi
 }
 
@@ -618,6 +677,9 @@ SET_PROC=$(sweep 'std::process')
 SET_ASM=$(sweep 'asm\(')
 SET_FIBER=$(sweep 'spawn fiber')
 SET_BROWSER=$(sweep 'kama_wt_|kama_rtc_')
+# A socket or FIFO FILE: adb shell's SELinux domain may create neither in /data/local/tmp (EACCES, measured on the
+# SDK's emulator), though an app may in its own directory. So the Android leg skips them; an app's run is KR-283's.
+SET_FILE_NODE=$(sweep 'std::net::Unix|"mkfifo"')
 
 phase_start "single-file fixtures"
 fixture_pids=()
@@ -676,6 +738,9 @@ multi_one() {
         if grep -rqE 'kama_(fiber|sched)\.h|spawn fiber' --include='*.kama' "$dir"; then
             echo "SKIP $name (fibers: no wasm switch yet)" >"$out"; echo SKIP >"$res"; return
         fi
+    fi
+    if [ "$ANDROID" = 1 ] && grep -rqE 'std::net::Unix|"mkfifo"' --include='*.kama' "$dir"; then   # see SET_FILE_NODE
+        echo "SKIP $name (Android: adb shell may not create a socket or FIFO file)" >"$out"; echo SKIP >"$res"; return
     fi
     # Its own build dir, for the reason test_one has one: the driver writes multi-unit intermediates to
     # dirname(-o) and names an imported module's .c after the MODULE, so two fixtures importing the same
@@ -1036,6 +1101,7 @@ done
 # `ulimit -c 0` is best-effort core suppression (a pipe core_pattern ignores it, but those cores go
 # unwritten to systemd-coredump anyway).
 if [ "$WASM" = 1 ]; then TRAP_STYLE=wasm
+elif [ "$ANDROID" = 1 ]; then TRAP_STYLE=posix   # the device's shell reports a signal as 128 + its number
 else case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) TRAP_STYLE=windows ;; *) TRAP_STYLE=posix ;; esac
 fi
 ulimit -c 0
@@ -1056,11 +1122,13 @@ for src in "$TESTS_DIR"/trap/*.kama; do
         if warned "$TMP/trap_$name.builderr" "trap/$name"; then fail=$((fail+1)); continue; fi
         (cd "$tdir" && node --no-concurrent-recompilation "$tdir/$name.js") >/dev/null 2>"$err"; actual=$?
     else
-        if ! "$KAMA" build "$src" -o "$tdir/$name" >/dev/null 2>"$TMP/trap_$name.builderr"; then
+        if ! "$KAMA" build "$src" ${ATARGET[@]+"${ATARGET[@]}"} -o "$tdir/$name" >/dev/null 2>"$TMP/trap_$name.builderr"; then
             echo "FAIL trap/$name (build failed)"; head -5 "$TMP/trap_$name.builderr"; fail=$((fail+1)); continue
         fi
         if warned "$TMP/trap_$name.builderr" "trap/$name"; then fail=$((fail+1)); continue; fi
-        (cd "$tdir" && exec "$tdir/$name") 2>"$err"; actual=$?
+        if [ "$ANDROID" = 1 ]; then device_run "$tdir/$name" "$err"
+        else (cd "$tdir" && exec "$tdir/$name") 2>"$err"; actual=$?
+        fi
     fi
     # The exit-code predicate is the ONLY thing that differs between targets; keep it that way.
     case "$TRAP_STYLE" in
