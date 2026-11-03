@@ -1,0 +1,7 @@
+// KR-300: a name kama joins into C names with `__` may not start or end with `_`, as it may not hold `__` (KR-88).
+// The join beside an edge `_` could move: project `geo_`'s module `x` and project `geo`'s module `_x` are both
+// `geo___x`, and a function `_w` in `x` is `…__x___w`, which is also a function `w` in a module `x_`. Up to
+// 0.9.820 both of these built. A local, parameter or field is `k_<name>` and joined to nothing, so it stays free.
+static int32 count_ = 0;
+fn int32 _w() { return 3; }
+fn uint8 main() { int32 __ok = _w(); return cast<uint8>(__ok + count_); }

@@ -3467,12 +3467,18 @@ static bool opensBuiltPrefix(const std::string& s)
 
 // Why `seg` cannot be one segment of the C names kama joins with `__` — a project's name, a scope, a module, a loose
 // folder — or "". The lexer refuses an inner `__` in a source name for the same reason (KR-88), but a manifest's names
-// never reach the lexer until someone imports them, so `a__b` installed and then no `import` could spell it.
+// never reach the lexer until someone imports them, so `a__b` installed and then no `import` could spell it. A `_` at
+// either end is refused too (KR-300): project `geo_`'s module `x` and project `geo`'s module `_x` both emitted
+// `geo___x`, and a program depending on both was refused as two units that "would both generate" one file.
 static std::string segmentCReason(const std::string& seg)
 {
     if (hasInnerDoubleUnderscore(seg.c_str()))
         return "`" + seg + "` has `__` inside it, and kama joins the segments of a C name with `__`, so the join "
                "could spell another declaration's name";
+    if (hasEdgeUnderscore(seg.c_str()))
+        return "`" + seg + "` " + (seg[0] == '_' ? "starts" : "ends") + " with `_`, and kama joins the segments of a "
+               "C name with `__`, so the join could spell another declaration's name (`geo_` + `x` and `geo` + `_x` "
+               "are both `geo___x`)";
     if (opensBuiltPrefix(seg))
         return "`" + seg + "` opens `" + seg.substr(0, 2) + "_`, a prefix kama builds for C names of its own "
                "(`kF_` heads a file's private names)";

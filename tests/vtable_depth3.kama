@@ -19,10 +19,10 @@ type virtual(maxDepth: 2) resource Root
 {
     int32 n;
     public ctor make() { this.n = 1; }
-    protected fn int32 n_() { return this.n; }
+    protected fn int32 readN() { return this.n; }
     protected virtual fn int32 step() { return 0; }
     protected virtual fn int32 seal() { return 7; }
-    public fn int32 rank() { return this.n_() + this.step() + this.seal(); }
+    public fn int32 rank() { return this.readN() + this.step() + this.seal(); }
 }
 
 type virtual(maxDepth: 1) resource Mid extends Root

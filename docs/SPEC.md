@@ -4713,7 +4713,14 @@ project `k`'s `x` was `k__x`, which a local `_x` also emits; a project `kF_app`'
 private `h`). And **a name may
 start with `__` but not contain one** — `__` is how scopes join in C, so a type `a__b` in `geo` would be <!-- xfail: identifier_inner_double_underscore -->
 `geo__a__b`, module `geo::a`'s `b`. A project's name, a scope and a module segment are held to the same,
-since they are joined the same way. The one place that rule meets C is the declared
+since they are joined the same way. **Nor may a joined name start or end with `_`**: beside an edge `_` the <!-- xfail: join_edge_underscore, join_edge_underscore_member, join_edge_underscore_file_ -->
+join could move, so project `geo_`'s module `x` and project `geo`'s module `_x` would both be `geo___x`, and type
+`T_`'s method `m` and type `T`'s method `_m` both `T___m`. The rule holds for every name kama joins: a project, a
+scope, a module segment, a file's name (its private names are `kF_<file>__<name>`), and a declaration's own
+name — a top-level declaration, a type's method, constructor or constant. A local, a parameter, a field and a
+binding are `k_<name>` and joined to nothing, so `__ok` and a field `a_` stay legal. With both rules, every run
+of underscores longer than one in a C name is exactly one join, and `kama demangle` reads it one way. The one
+place that rule meets C is the declared
 surface: an `extern fn` whose C name has `__` inside it is bound with `@linkName`.
 
 **The declared C surface keeps its spelling**, because code on the other side depends on it: `extern fn`

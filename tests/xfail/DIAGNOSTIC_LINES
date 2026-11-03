@@ -836,6 +836,9 @@ iter_reserve_dynarray	iter_reserve_dynarray.kama:15:29
 iter_reserve_map	iter_reserve_map.kama:16:38
 iter_reserve_slotmap	iter_reserve_slotmap.kama:16:38
 iter_return_over_local	iter_return_over_local.kama:12:4
+join_edge_underscore	join_edge_underscore.kama:5:13 join_edge_underscore.kama:6:9
+join_edge_underscore_file_	join_edge_underscore_file_.kama:1:0
+join_edge_underscore_member	join_edge_underscore_member.kama:4:11 join_edge_underscore_member.kama:4:38 join_edge_underscore_member.kama:5:75
 kind_argument	kind_argument.kama:6:37
 kind_clause_bound	kind_clause_bound.kama:3:34
 kind_clause_not_generic	kind_clause_not_generic.kama:3:16

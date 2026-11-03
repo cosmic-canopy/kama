@@ -1,0 +1,5 @@
+// KR-300: a file's name is a segment of its private names' C names (`kF_<stem>__<name>`), so this file's `h` would be
+// `kF_join_edge_underscore_file___h`, which is also a private `_h` in `join_edge_underscore_file.kama`. Up to 0.9.820
+// this built; the file is refused by name now, whatever it declares.
+fn int32 h() { return 1; }
+fn uint8 main() { return cast<uint8>(h()); }

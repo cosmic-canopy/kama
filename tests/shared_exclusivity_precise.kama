@@ -39,9 +39,9 @@ type resource Core {
         return s;
     }
     public fn isize own() {
-        borrow this.observers.viewMut() as v { v[0] = 5; return this.observers.length() + this.other_(); }
+        borrow this.observers.viewMut() as v { v[0] = 5; return this.observers.length() + this.otherCount(); }
     }
-    const fn isize other_() { return 0; }
+    const fn isize otherCount() { return 0; }
 }
 fn uint8 main() {
     Shared<Core> a = new Core.make();

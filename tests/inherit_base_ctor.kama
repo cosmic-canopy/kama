@@ -21,11 +21,11 @@ type virtual(maxDepth: 1) resource Base {
 
     public ctor make(int32 scale) { this.scale = scale; }
 
-    protected fn int32 n_() { return this.n; }
-    protected fn int32 scale_() { return this.scale; }
+    protected fn int32 readN() { return this.n; }
+    protected fn int32 readScale() { return this.scale; }
     protected virtual fn int32 kind() { return 1; }
 
-    public fn int32 total() { return this.n_() + this.scale_() + this.kind(); }
+    public fn int32 total() { return this.readN() + this.readScale() + this.kind(); }
 }
 
 type final resource Leaf extends Base {

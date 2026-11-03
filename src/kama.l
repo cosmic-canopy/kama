@@ -105,6 +105,11 @@ bool hasInnerDoubleUnderscore(const char *s)   /* `__` after the leading undersc
   while (*s == '_') ++s;
   return strstr(s, "__") != nullptr;
 }
+bool hasEdgeUnderscore(const char *s)          /* a `_` at either end (KR-300) */
+{
+  const size_t n = strlen(s);
+  return n && (s[0] == '_' || s[n - 1] == '_');
+}
 static std::string cReservedWhy(const std::string&);
 char getSimpleEscape(const char* input, int index);
 std::string hexToUTF8(unsigned cp);

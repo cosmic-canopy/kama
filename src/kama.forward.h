@@ -198,6 +198,10 @@ bool kamaIsIdentifier(const std::string& word);
 // Does this spelling hold `__` after its leading underscores (KR-88)? The lexer refuses such a source name, and the
 // manifest reader refuses such a project, scope or module name, because kama joins C name segments with `__`.
 bool hasInnerDoubleUnderscore(const char* s);
+// Does it start or end with `_` (KR-300)? A `__` join beside that `_` could move: `geo_` + `x` and `geo` + `_x` are both
+// `geo___x`. Refused in every segment kama joins (a project, scope, module, file stem, joined declaration); a binding
+// is `k_<name>` and joined to nothing, so the lexer leaves it alone.
+bool hasEdgeUnderscore(const char* s);
 // The lexer's keyword table, for keyword completion (LSP M4.3) — one source of truth, as above.
 size_t      kamaKeywordCount();
 const char* kamaKeywordAt(size_t i);

@@ -1,0 +1,6 @@
+// KR-300: type `T_`'s method `m` and type `T`'s method `_m` were both `kF_<file>__T___m` in C, which neither
+// duplicate check saw, and clang refused the second as "conflicting types" (0.9.820). A type's name and its
+// methods, constructors and constants are joined, so each is held to the rule; the field `a_` is `k_a_`, and free.
+type value T_ { int32 a_; public ctor make_() { this.a_ = 1; } public fn int32 m() { return this.a_; } }
+type value T { int32 a; public ctor make() { this.a = 2; } public fn int32 _m() { return this.a; } }
+fn uint8 main() { T_ x = T_.make_(); T y = T.make(); return cast<uint8>(x.m() + y._m()); }

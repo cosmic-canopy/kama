@@ -635,11 +635,17 @@ proj scopedjoin <<'JSON'
 { "name": "@a__b/geo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject scopedjoin '`a__b` has `__` inside it' "a scope holding \`__\`, which a C join cannot keep apart"
+proj scopededge <<'JSON'
+{ "name": "@a_/geo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject scopededge '`a_` ends with `_`' "a scope ending in \`_\` (KR-300: \`@a_/net\` and \`@a/_net\` were both \`kS_a___net\`)"
 
 # A project's name heads its C names, so it is a segment C can join: no `__` inside it (no `import` could
 # spell `a__b` anyway; it installed and was a dead end), and not `k` + an uppercase tag (+ `_`), the
-# register of the prefixes kama builds — a project `kF_app` would spell `app.kama`'s private names.
-for nm in a__b kF_app kS_x kS; do
+# register of the prefixes kama builds — a project `kF_app` would spell `app.kama`'s private names. Nor a `_` at
+# either end (KR-300): project `geo_`'s module `x` and project `geo`'s module `_x` both emitted `geo___x`, and a
+# program depending on both was refused as two units that "would both generate" one file (0.9.820).
+for nm in a__b kF_app kS_x kS geo_ _geo; do
     proj "cname_$nm" <<JSON
 { "name": "$nm", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
@@ -648,6 +654,8 @@ reject cname_a__b '`a__b` has `__` inside it' "a project name holding \`__\`"
 reject cname_kF_app '`kF_app` opens `kF_`, a prefix kama builds' "a project name opening a built prefix"
 reject cname_kS_x '`kS_x` opens `kS_`' "...any uppercase tag"
 reject cname_kS '`kS` opens `kS_`' "...and the tag alone, which a \`__\` join extends"
+reject cname_geo_ '`geo_` ends with `_`' "a project name ending in \`_\`"
+reject cname__geo '`_geo` starts with `_`' "...or starting with one"
 proj cname_kfine <<'JSON'
 { "name": "kFine", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
@@ -811,6 +819,11 @@ proj modjoinseg <<'JSON'
   "modules": { ".": { "visibility": "internal" }, "c__d": { "visibility": "public" } } }
 JSON
 reject modjoinseg '`c__d` has `__` inside it' "a module segment holding \`__\`"
+proj modedgeseg <<'JSON'
+{ "name": "modedgeseg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "_x": { "visibility": "public" } } }
+JSON
+reject modedgeseg '`_x` starts with `_`' "a module segment starting with \`_\`"
 proj modbuilt <<'JSON'
 { "name": "modbuilt", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "modules": { ".": { "visibility": "internal" }, "net": { "visibility": "public", "name": "kF_app" } } }

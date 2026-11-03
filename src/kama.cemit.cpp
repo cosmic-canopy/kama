@@ -29775,15 +29775,47 @@ void CEmitter::checkDeclaredNames(const std::vector<SharedCompilationUnit>& unit
                              + "` is in every scope, like `string`, so nothing may be named it; rename it").c_str(),
                             id, *id->value);
         };
+        // A name kama joins into C names with `__` — a top-level declaration, a type's method, constructor or constant —
+        // may not start or end with `_` (KR-300), as none may hold `__` (KR-88): type `T_`'s `m` and type `T`'s `_m`
+        // were both `T___m`, and clang refused the second. With neither, a run of underscores longer than one in a C
+        // name is exactly one join. An `extern` declaration keeps its C spelling and a field or binding is `k_<name>`,
+        // so neither is joined.
+        auto joined = [&](const SharedIdentifier& id, const char* what) {
+            if (id && id->value && hasEdgeUnderscore(id->value->c_str()))
+                unsupported((std::string(what) + " `" + *id->value + "` " + ((*id->value)[0] == '_' ? "starts" : "ends")
+                             + " with `_` — kama joins it into C names with `__`, and beside an edge `_` that join "
+                             "could move, so two names would meet (type `T_`'s method `m` and type `T`'s method `_m` "
+                             "are one C name); rename it").c_str(), id, *id->value);
+        };
+        // A file's name is a segment too: its private names are `kF_<stem>__<name>`, so `app_.kama`'s `h` and
+        // `app.kama`'s `_h` would both be `kF_app___h`. Judged as C spells it, after privateScopeFor's folding.
+        {
+            const std::string stem = privateScopeFor(*u->name).substr(3);
+            const bool edge = hasEdgeUnderscore(stem.c_str());
+            if (edge || hasInnerDoubleUnderscore(stem.c_str()))
+                unsupportedAt(("the file name `" + stem + "` " + (!edge ? "has `__` inside it" : stem[0] == '_'
+                               ? "starts with `_`" : "ends with `_`") + " — kama joins a file's name into the C names "
+                               "of its private declarations with `__`, so two would meet (`app_.kama`'s `h` and "
+                               "`app.kama`'s `_h` are one C name); rename the file").c_str(), 1, 0, 0, 0, stem);
+        }
+        auto isExternType = [](const ClassDeclarationNode* cd) {
+            if (cd->modifiers) for (auto& mod : *cd->modifiers) if (mod->value && *mod->value == "extern") return true;
+            return false;
+        };
         for (auto& decl : *u->codeDeclarationList) {
             if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(decl.get())) {
-                if (!isExtern(fn)) topLevel(fn->name, "function");
+                if (!isExtern(fn)) { topLevel(fn->name, "function"); joined(fn->name, "function"); }
                 kindWordParams(fn->typeParamIds, fn->constTypes);
                 continue;
             }
             if (auto* en = dynamic_cast<EnumDeclarationNode*>(decl.get())) {
                 topLevel(en->identifier, "type"); kindWordName(en->identifier, "type");
+                if (!enumHasModifier(en, "extern")) joined(en->identifier, "type");
                 kindWordParams(en->typeParamIds, en->constTypes);
+                continue;
+            }
+            if (auto* mv = dynamic_cast<ModuleVariableDeclaration*>(decl.get())) {
+                if (mv->variables) for (auto& d : *mv->variables) if (d) joined(d->name, mv->isComptime ? "constant" : "static");
                 continue;
             }
             auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get());
@@ -29791,7 +29823,18 @@ void CEmitter::checkDeclaredNames(const std::vector<SharedCompilationUnit>& unit
             topLevel(cd->name, "type");
             kindWordName(cd->name, "type");
             kindWordParams(cd->typeParamIds, cd->constTypes);
+            if (!isExternType(cd)) joined(cd->name, "type");
             if (!cd->members) continue;
+            if (!isExternType(cd)) {
+                for (auto& m : *cd->members) {
+                    if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) joined(md->name, "method");
+                    else if (auto* ct = dynamic_cast<ClassConstructorDeclarationNode*>(m.get())) {
+                        if (ct->declarator) joined(ct->declarator->constructorName, "constructor");
+                    } else if (auto* kd = dynamic_cast<ClassConstDeclarationNode*>(m.get())) {
+                        if (kd->isComptime && kd->declarators) for (auto& d : *kd->declarators) if (d) joined(d->name, "constant");
+                    }
+                }
+            }
             std::set<std::string> methods;
             for (auto& m : *cd->members)
                 if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(m.get())) if (md->name && md->name->value) methods.insert(*md->name->value);
