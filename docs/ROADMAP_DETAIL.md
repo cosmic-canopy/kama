@@ -470,6 +470,9 @@ long path or link and for a size or mtime that does not fit, making publish's ch
 kind (`File`, `Directory`, `Symlink`, `HardLink`, `CharDevice`, `BlockDevice`, `Fifo`), size, mode, mtime, linkTarget,
 uid, gid, uname, gname.
 
+**Ruled 2026-11-03: T1 to T8 as written below, by the maintainer, after asking of T7 whether strictness was an improvement or a gap, and
+whether all of them were the production answer.** The brief as it stands is the answer to that.
+
 **Brief, 2026-11-02, before step 5: what ruling 10 needs corrected.** The ruling cannot be built as written: a `type value` holding a
 string or a byte array is refused ("a `value` owns nothing"), so `TarHeader` is a `type resource`, shaped like `Output`. That forces
 the rest open. Measured here with GNU tar 1.35, bsdtar 3.5.3 and Python 3.9; Go and Rust's `tar` crate are from their docs, since
@@ -547,9 +550,9 @@ GzipReader<File> g2 = match (give t.finish()) { case Ok(value: r): give r; case 
 … g2.read(into: buf) until Ok(0), which is when the checksum is verified …
 ```
 
-**Left out, each with its verdict.** GNU and pax sparse files, read as `Other`, whose body is the raw sparse form: **scheduled** as a
-row when this ships, since Go, Python and Rust's `tar` all expand them, and VM images use them. Other pax records (`SCHILY.xattr.*`,
-which OCI layers carry): **scheduled** with them, read and written. GNU's incremental, volume and multi-volume types: **genuinely
+**Left out, each with its verdict.** GNU and pax sparse files, read as `Other`, whose body is the raw sparse form: **scheduled, KR-303,**
+since Go, Python and Rust's `tar` all expand them, and VM images use them. Other pax records (`SCHILY.xattr.*`,
+which OCI layers carry): **scheduled, KR-303,** read and written. GNU's incremental, volume and multi-volume types: **genuinely
 optional**, since `Other` lists them and a body is still readable, and no format a program receives today needs more.
 
 **11. Extraction: `extractInto(archive:, dir:)`, strict.**
@@ -724,7 +727,24 @@ read at all.
    | zlib | 8.0 ms | 8.2 ms | 228 ms | 227 ms |
 
    Decoding the bare body takes 24.4 ms (step 2b), so CRC-32 is about 14 ms of gzip's 38, which is KR-302, and Adler-32 about 3.
-5. **tar**, reader and writer.
+5. ✅ **tar,** reader and writer, to the brief under decision 10 (`0.9.825`). It reads whole blocks from `R` and never ahead, so `finish`
+   is exact, and pax records are parsed as they arrive, so only what is kept is held.
+
+   **Decision 7 holds:** a tar of regular files through `TarWriter` and `GzipWriter` at `Frozen` is the C++ `kamaTarGz`'s bytes, and
+   `archive_tar_frozen` pins six by sha256, among them a name of exactly 100 bytes and one of 101, which takes a pax record. `kama
+   publish`'s golden tarball, read through `TarReader` over `GzipReader` and rewritten, hashes to `KR_GOLDEN` (a manual run; step 7's
+   guard makes it standing). Archives from GNU tar 1.35 (`gnu`, `oldgnu`, `pax`, `posix`, `ustar`, `v7`, a global record), bsdtar 3.5.3 (`pax`,
+   `gnutar`, `ustar`, `v7`) and `git archive` list the same as python3 reads them, field by field and each body's CRC-32, but for a GNU sparse
+   file, which is `Other` by design. All three read `TarWriter`'s archive, and GNU tar extracts it. 10,000 mutated archives in one process, 6,000
+   of them aimed at numeric extremes and malformed records, in debug and release: no trap.
+
+   **Where python3 is the odd one out, measured against GNU tar:** given `path=` with an empty value it uses an empty name, where POSIX, GNU tar and
+   bsdtar keep the header's own. It takes the prefix and the owner names whatever the magic says, where GNU tar reads no prefix behind GNU's magic and
+   no owner names in v7.
+
+   **72 mutants each fail a fixture.** Four were missed at first. One was equivalent, a check the end of the extension makes redundant, and that line
+   is gone. The others were holes in the fixtures, and working out what one needed found a real trap: a base-256 mtime of exactly `-2^63` reached `-s`
+   in `entryTime` and overflowed, in the one field T5 promises can stop nothing. No hostile batch had hit it, and the next one aimed at it.
 6. **`extractInto`** and the `std::fs` symlink binding, which goes in `kama_os.h`.
 7. **Guards.** `check-compress-interop.sh` runs both directions against python3's zlib, gzip and tarfile, at every
    level, over edge corpora. `check-packages.sh` round-trips publish's tarball through `Frozen`. An xfail backs each

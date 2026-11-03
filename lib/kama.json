@@ -9,6 +9,14 @@
     "app": {
       "visibility": "public"
     },
+    "archive": {
+      "visibility": "public",
+      "modules": {
+        "tar": {
+          "visibility": "public"
+        }
+      }
+    },
     "ascii": {
       "visibility": "public"
     },

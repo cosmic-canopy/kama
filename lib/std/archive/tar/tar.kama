@@ -1,0 +1,971 @@
+import { std::collections::View, std::collections::ConstView, std::collections::DynamicArray, std::io::Reader, std::io::Writer,
+         std::io::IoError, std::io::IoErrorKind, std::io::Unfinished, std::time::Timestamp };
+export { TarReader, TarWriter, TarHeader, TarKind, TarOwner, TarEndMarker };
+
+// tar: a file of entries, each a 512-byte header and its body in whole blocks. This reads ustar, pax `x` and `g` records, GNU long
+// names and v7, and writes ustar with pax for whatever does not fit.
+//
+//   TarReader<File> t = TarReader.make(source: give f, endMarker: TarEndMarker::NotRequired);
+//   … t.next() for each entry's header, then t.read(into: buf) for its body, until next answers Ok(None) …
+//   match (give t.finish()) { case Ok(value: rest): { … the bytes after the archive … } case Err(error: u): { … } };
+//
+//   TarWriter<File> w = TarWriter.make(sink: give f);
+//   w.begin(header: h); … w.write(bytes: body), exactly the size `h` declares …
+//   match (give w.finish()) { case Ok(value: f2): { … the sink again … } case Err(error: u): { … } };
+//
+// A reader hands back every entry as written, since listing a hostile archive is how one audits it. `extractInto` is what judges
+// one. Names are the bytes the archive holds: a tar promises nothing about them, and a `string` promises UTF-8. So a `TarHeader`
+// takes `"docs/a.txt".bytes()`, and a caller wanting text converts it, and decides what a name that is not UTF-8 means.
+//
+// A reader reads whole blocks from `R` and never ahead, so `finish` hands `R` back exactly after the end. It reads nothing itself:
+// see `DeflateReader.finish`. Over a `GzipReader` that leaves the gzip trailer to the caller, and that reader's own `finish` refuses
+// until it has been read.
+//
+// What a read can answer besides bytes: `InvalidData` for a header whose checksum fails or whose numbers do not parse, for a pax
+// record that is malformed, or for a path, link target or owner name past 1 MiB; `UnexpectedEof` for a source that ends inside a
+// header or a body. Those are final: every later call answers the same. An error from the source passes through and changes
+// nothing, so a call after `WouldBlock` resumes where the last one stopped. A pax record of any other key is skipped without being
+// held, however long, so memory is bounded without refusing an archive with a large extended attribute, which GNU tar and Python
+// read and Go and bsdtar refuse.
+//
+// A time `Timestamp` cannot hold, the years 1678 to 2262, is `None` rather than a refusal: it is one advisory field, and GNU tar,
+// bsdtar and Python all list the year 36812. A symlink, a directory or a device has no body whatever size its header declares, as
+// all three read it. GNU and pax sparse files arrive as `Other`, with their raw sparse form as the body.
+
+// What a `TarReader` takes as the archive's end. A tar has no checksum over the whole, so the two zero blocks POSIX asks for are a
+// convention, and writers do leave them out: Python's `tarfile`, never closed, writes none. `NotRequired` reads what GNU tar, bsdtar,
+// Python and Go read: the source ending between entries, or the first zero block, ends the archive, and what follows stays in the
+// source. `Required` asks for what none of them offers, two zero blocks and nothing less: their absence is `UnexpectedEof`, and a
+// zero block followed by anything else is `InvalidData`. It catches a cut landing exactly between entries, which gzip's trailer
+// already catches in a `.tar.gz`.
+type enum TarEndMarker { Required, NotRequired }
+
+// What an entry is, carrying what only that kind has. `Other` is a type flag this does not know, which POSIX reads as a regular file:
+// its body is readable, and a `TarWriter` refuses it. It is `@nonExhaustive` so that a later kama can give one of those a name.
+@nonExhaustive
+type enum TarKind {
+    File(uint64 size),
+    Directory,
+    Symlink(DynamicArray<uint8> target),
+    HardLink(DynamicArray<uint8> target),
+    CharDevice(uint32 major, uint32 minor),
+    BlockDevice(uint32 major, uint32 minor),
+    Fifo,
+    Other(uint8 flag, uint64 size)
+}
+
+// Who an entry belongs to. `None` is uid 0, gid 0 and no names, which is what `kama publish` writes, since what those fields hold is a
+// person's account.
+type enum TarOwner { None, Named(int64 uid, int64 gid, DynamicArray<uint8> uname, DynamicArray<uint8> gname) }
+
+// An entry's header. `mode` is the archive's own bits, setuid and sticky among them, which `std::fs::Permissions` cannot hold.
+// `mtime` is `None` only when read: see the head of this file.
+type resource TarHeader {
+    friend TarReader[fromArchive];
+
+    DynamicArray<uint8> pathBytes;
+    TarKind entryKind;
+    uint32 modeBits;
+    Optional<Timestamp> stamp;
+    TarOwner who;
+
+    public ctor make(ConstView<uint8> path, TarKind kind, uint32 mode, Timestamp mtime, TarOwner owner) {
+        this.pathBytes = bytesFrom(v: path);
+        this.entryKind = give kind;
+        this.modeBits = mode;
+        this.stamp = Optional::Some(value: mtime);
+        this.who = give owner;
+    }
+
+    ctor fromArchive(DynamicArray<uint8> path, TarKind kind, uint32 mode, Optional<Timestamp> stamp, TarOwner owner) {
+        this.pathBytes = give path;
+        this.entryKind = give kind;
+        this.modeBits = mode;
+        this.stamp = stamp;
+        this.who = give owner;
+    }
+
+    public const fn const ref DynamicArray<uint8> path() { return this.pathBytes; }
+    public const fn const ref TarKind kind() { return this.entryKind; }
+    public const fn uint32 mode() { return this.modeBits; }
+    public const fn Optional<Timestamp> mtime() { return this.stamp; }
+    public const fn const ref TarOwner owner() { return this.who; }
+}
+
+comptime isize BLOCK = 512;
+// The most of a path, a link target or an owner name held in memory.
+comptime isize NAME_MAX = 1048576;
+// A pax key this reads is short, so a longer one is another key however it goes on.
+comptime isize KEY_MAX = 32;
+// `Timestamp` is an `int64` of nanoseconds, so this many seconds from the epoch, with a fraction, is the most it holds.
+comptime int64 SECS_MAX = 9223372035i64;
+
+fn DynamicArray<uint8> bytesFrom(ConstView<uint8> v) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    for (isize k = 0; k < v.length(); k = k + 1) { a.add(item: v[k]); }
+    return a;
+}
+
+// A numeric field: octal, with NULs and spaces around the digits, or GNU's two's complement base-256 when the top bit is set. `None`
+// for one that is malformed or past an `int64`.
+fn Optional<int64> numberIn(ConstView<uint8> f) {
+    if (f.length() > 0 && (f[0] & 0x80ui8) != 0ui8) {
+        bool negative = (f[0] & 0x40ui8) != 0ui8;
+        uint64 x = 0;
+        for (isize k = 0; k < f.length(); k = k + 1) {
+            uint8 c = negative ? (f[k] ^ 0xFFui8) : f[k];
+            if (k == 0) { c = c & 0x7Fui8; }
+            if ((x >> 56ui64) != 0ui64) { return Optional::None; }
+            x = (x << 8ui64) | cast<uint64>(c);
+        }
+        if ((x >> 63ui64) != 0ui64) { return Optional::None; }
+        int64 v = cast<int64>(x);
+        return Optional::Some(value: negative ? -v - 1i64 : v);
+    }
+    isize at = 0;
+    isize end = f.length();
+    while (at < end && (f[at] == 0ui8 || f[at] == 32ui8)) { at = at + 1; }
+    while (end > at && (f[end - 1] == 0ui8 || f[end - 1] == 32ui8)) { end = end - 1; }
+    uint64 v = 0;
+    while (at < end) {
+        if (f[at] < 48ui8 || f[at] > 55ui8 || (v >> 60ui64) != 0ui64) { return Optional::None; }
+        v = (v << 3ui64) | cast<uint64>(f[at] - 48ui8);
+        at = at + 1;
+    }
+    if ((v >> 63ui64) != 0ui64) { return Optional::None; }
+    return Optional::Some(value: cast<int64>(v));
+}
+
+// A pax number: decimal digits, and at least one. `None` for anything else or past an `int64`.
+fn Optional<int64> decimalIn(const ref DynamicArray<uint8> v) {
+    if (v.length() == 0) { return Optional::None; }
+    int64 n = 0;
+    for (isize k = 0; k < v.length(); k = k + 1) {
+        if (v[k] < 48ui8 || v[k] > 57ui8 || n > 922337203685477579i64) { return Optional::None; }
+        n = n * 10i64 + cast<int64>(v[k] - 48ui8);
+    }
+    return Optional::Some(value: n);
+}
+
+fn Optional<Timestamp> timeAt(int64 secs, int64 nanos, bool negative) {
+    if (secs > SECS_MAX) { return Optional::None; }
+    int64 total = secs * 1000000000i64 + nanos;
+    return Optional::Some(value: Timestamp.fromUnixNanos(n: negative ? -total : total));
+}
+
+// A pax time, `-?digits(.digits)?`, into `at`: `None` when it is well formed and past what a `Timestamp` holds. False when malformed.
+fn bool paxTimeIn(const ref DynamicArray<uint8> v, ref Optional<Timestamp> at) {
+    isize k = 0;
+    bool negative = v.length() > 0 && v[0] == 45ui8;
+    if (negative) { k = 1; }
+    isize digits = 0;
+    bool far = false;
+    int64 secs = 0;
+    while (k < v.length() && v[k] != 46ui8) {
+        if (v[k] < 48ui8 || v[k] > 57ui8) { return false; }
+        if (secs > SECS_MAX) { far = true; } else { secs = secs * 10i64 + cast<int64>(v[k] - 48ui8); }
+        digits = digits + 1;
+        k = k + 1;
+    }
+    if (digits == 0) { return false; }
+    int64 nanos = 0;
+    if (k < v.length()) {
+        k = k + 1;
+        int32 place = 0;
+        while (k < v.length()) {
+            if (v[k] < 48ui8 || v[k] > 57ui8) { return false; }
+            if (place < 9) { nanos = nanos * 10i64 + cast<int64>(v[k] - 48ui8); place = place + 1; }
+            k = k + 1;
+        }
+        while (place < 9) { nanos = nanos * 10i64; place = place + 1; }
+    }
+    if (far) { at = Optional::None; } else { at = timeAt(secs: secs, nanos: nanos, negative: negative); }
+    return true;
+}
+
+// A name that is present and not empty wins; an empty one is POSIX's way of removing what an earlier record said.
+fn DynamicArray<uint8> pickName(const ref Optional<DynamicArray<uint8>> entry, const ref Optional<DynamicArray<uint8>> shared,
+                                DynamicArray<uint8> own) {
+    DynamicArray<uint8> mine = give own;
+    match (entry) {
+        case Some(value: v): { if (v.length() > 0) { return copy v; } return mine; }
+        case None: { }
+    };
+    match (shared) {
+        case Some(value: v): { if (v.length() > 0) { return copy v; } return mine; }
+        case None: { }
+    };
+    return mine;
+}
+
+fn TarOwner ownerOf(int64 uid, int64 gid, DynamicArray<uint8> uname, DynamicArray<uint8> gname) {
+    if (uid == 0i64 && gid == 0i64 && uname.length() == 0 && gname.length() == 0) { return TarOwner::None; }
+    return TarOwner::Named(uid: uid, gid: gid, uname: give uname, gname: give gname);
+}
+
+fn int64 pickNumber(Optional<int64> entry, Optional<int64> shared, int64 own) {
+    match (entry) { case Some(value: v): { return v; } case None: { } };
+    match (shared) { case Some(value: v): { return v; } case None: { } };
+    return own;
+}
+
+// What pax records and GNU long names say about the next entry (`x`, `L`, `K`) or every entry after (`g`).
+type resource Overrides {
+    friend TarReader[...];
+
+    Optional<DynamicArray<uint8>> path;
+    Optional<DynamicArray<uint8>> link;
+    Optional<DynamicArray<uint8>> uname;
+    Optional<DynamicArray<uint8>> gname;
+    Optional<int64> size;
+    Optional<int64> uid;
+    Optional<int64> gid;
+    bool hasTime;
+    Optional<Timestamp> stamp;
+
+    ctor make() {
+        this.path = Optional::None;
+        this.link = Optional::None;
+        this.uname = Optional::None;
+        this.gname = Optional::None;
+        this.size = Optional::None;
+        this.uid = Optional::None;
+        this.gid = Optional::None;
+        this.hasTime = false;
+        this.stamp = Optional::None;
+    }
+}
+
+// Where the reader is. A step that needs more than the source has stops without changing the stage, so the next call repeats it.
+type enum Stage { Header, SecondZero, Extension, Done }
+
+// Where a pax record's parse is. A record is `<length> <key>=<value>\n`, the length counting all of it.
+type enum Record { Length, Key, Value }
+
+type resource TarReader<R: Reader> implements Reader {
+    R source;
+    TarEndMarker endMarker;
+    Stage stage;
+    InlineArray<uint8>#(512) block;  // the block so far, kept across a stall
+    isize have;
+    uint64 left;                     // of this entry's body, not yet read
+    uint64 pad;                      // the padding after it
+    uint8 extension;                 // the type flag of the extension being read
+    uint64 extensionLeft;
+    bool extended;                   // an extension has been read, and the entry it describes has not
+    Overrides entry;
+    Overrides shared;
+    DynamicArray<uint8> longName;    // a GNU long name so far
+    Record record;
+    uint64 recordLength;
+    uint64 recordSeen;
+    bool recordDigits;
+    DynamicArray<uint8> key;
+    DynamicArray<uint8> value;
+    bool keeping;
+    Optional<IoError> failure;       // the archive's own error, which ends it
+
+    public ctor make(R source, TarEndMarker endMarker) {
+        this.source = give source;
+        this.endMarker = endMarker;
+        this.stage = Stage::Header;
+        this.block = [0; 512];
+        this.have = 0;
+        this.left = 0;
+        this.pad = 0;
+        this.extension = 0;
+        this.extensionLeft = 0;
+        this.extended = false;
+        this.entry = Overrides.make();
+        this.shared = Overrides.make();
+        this.longName = DynamicArray.empty();
+        this.record = Record::Length;
+        this.recordLength = 0;
+        this.recordSeen = 0;
+        this.recordDigits = false;
+        this.key = DynamicArray.empty();
+        this.value = DynamicArray.empty();
+        this.keeping = false;
+        this.failure = Optional::None;
+    }
+
+    // The next entry's header, or `None` at the archive's end. What is left of the last entry's body is skipped first, which reads
+    // the source, as anything that finds the next header must.
+    public fn Result<Optional<TarHeader>, IoError> next() {
+        match (this.failure) { case Some(value: e): { return Result::Err(error: e); } case None: { } };
+        Result<Unit, IoError> sk = this.skip();
+        match (sk) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        while (true) {
+            match (this.stage) {
+                case Done: { return Result::Ok(value: Optional::None); }
+                case SecondZero: {
+                    Result<bool, IoError> g = this.gather();
+                    match (g) {
+                        case Err(error: e): { return Result::Err(error: e); }
+                        case Ok(value: whole): {
+                            if (!whole) { return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof)); }
+                        }
+                    };
+                    if (!this.allZero()) { return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData)); }
+                    this.have = 0;
+                    this.stage = Stage::Done;
+                }
+                case Extension: {
+                    Result<Unit, IoError> x = this.readExtension();
+                    match (x) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+                }
+                case Header: {
+                    Result<bool, IoError> g = this.gather();
+                    match (g) {
+                        case Err(error: e): { return Result::Err(error: e); }
+                        case Ok(value: whole): {
+                            if (!whole) {
+                                bool ends = match (this.endMarker) { case Required: false; case NotRequired: true; };
+                                if (!ends || this.extended) { return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof)); }
+                                this.stage = Stage::Done;
+                                continue;
+                            }
+                        }
+                    };
+                    if (this.allZero()) {
+                        if (this.extended) { return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof)); }
+                        this.have = 0;
+                        match (this.endMarker) {
+                            case Required: { this.stage = Stage::SecondZero; }
+                            case NotRequired: { this.stage = Stage::Done; }
+                        };
+                        continue;
+                    }
+                    if (!this.checksumOk()) { return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData)); }
+                    uint8 flag = this.block[156];
+                    if (flag == 120ui8 || flag == 103ui8 || flag == 76ui8 || flag == 75ui8) {   // `x`, `g`, `L`, `K`
+                        Result<Unit, IoError> b = this.beginExtension(flag: flag);
+                        match (b) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+                        continue;
+                    }
+                    Result<TarHeader, IoError> h = this.assemble(flag: flag);
+                    this.have = 0;
+                    return match (give h) {
+                        case Err(error: e): Result::Err(error: e);
+                        case Ok(value: v): Result::Ok(value: Optional::Some(value: give v));
+                    };
+                }
+            };
+        }
+    }
+
+    // This entry's body, ending with `Ok(0)` at its end.
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        match (this.failure) { case Some(value: e): { return Result::Err(error: e); } case None: { } };
+        if (this.left == 0ui64 || into.length() == 0) { return Result::Ok(value: 0); }
+        isize want = this.left < cast<uint64>(into.length()) ? cast<isize>(this.left) : into.length();
+        Result<isize, IoError> r = this.source.read(into: into.slice(from: 0, count: want));
+        return match (r) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: n): {
+                if (n == 0) { return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof)); }
+                this.left = this.left - cast<uint64>(n);
+                := Result::Ok(value: n);
+            }
+        };
+    }
+
+    // The source back, at the first byte after the archive's end. It reads nothing: `next` finds the end. Before that it answers
+    // `InvalidInput`, and an archive that failed answers its error, each with the reader back whole in `Unfinished`.
+    public give fn Result<R, Unfinished<TarReader<R>>> finish() {
+        match (this.failure) {
+            case Some(value: e): {
+                IoError kept = e;
+                return Result::Err(error: Unfinished::Pending(adapter: give this, error: kept));
+            }
+            case None: { }
+        };
+        if (this.stage != Stage::Done) {
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
+        }
+        return Result::Ok(value: give this.source);
+    }
+
+    // The source as it stands, nothing verified, for an archive that will not be read to its end.
+    public give fn R abandon() { return give this.source; }
+
+    fn IoError fail(IoErrorKind kind) {
+        IoError e = IoError.of(kind: kind);
+        this.failure = Optional::Some(value: e);
+        return e;
+    }
+
+    // `block` filled, true. False when the source ended before any of it, which only the caller can judge, and a cut inside it is
+    // `UnexpectedEof`. An error from the source passes through and loses nothing.
+    fn Result<bool, IoError> gather() {
+        while (this.have < BLOCK) {
+            Result<isize, IoError> r = this.source.read(into: this.block.viewMut().slice(from: this.have, count: BLOCK - this.have));
+            match (r) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: n): {
+                    if (n == 0) {
+                        if (this.have == 0) { return Result::Ok(value: false); }
+                        return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof));
+                    }
+                    this.have = this.have + n;
+                }
+            };
+        }
+        return Result::Ok(value: true);
+    }
+
+    // What is left of the last body and its padding.
+    fn Result<Unit, IoError> skip() {
+        while (this.left + this.pad > 0ui64) {
+            uint64 more = this.left + this.pad;
+            isize want = more < cast<uint64>(BLOCK) ? cast<isize>(more) : BLOCK;
+            Result<isize, IoError> r = this.source.read(into: this.block.viewMut().slice(from: 0, count: want));
+            match (r) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: n): {
+                    if (n == 0) { return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof)); }
+                    uint64 took = cast<uint64>(n);
+                    if (took <= this.left) { this.left = this.left - took; }
+                    else { this.pad = this.pad - (took - this.left); this.left = 0; }
+                }
+            };
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    fn bool allZero() {
+        for (isize k = 0; k < BLOCK; k = k + 1) { if (this.block[k] != 0ui8) { return false; } }
+        return true;
+    }
+
+    // The sum of the header's bytes with its checksum field read as spaces, in either of the two ways archives have summed them.
+    fn bool checksumOk() {
+        Optional<int64> stored = numberIn(f: this.block.view().slice(from: 148, count: 8));
+        int64 want = match (stored) { case Some(value: v): v; case None: -1i64; };
+        int64 plain = 0;
+        int64 twos = 0;
+        for (isize k = 0; k < BLOCK; k = k + 1) {
+            int64 b = (k >= 148 && k < 156) ? 32i64 : cast<int64>(this.block[k]);
+            plain = plain + b;
+            twos = twos + (b >= 128i64 ? b - 256i64 : b);
+        }
+        return want == plain || want == twos;
+    }
+
+    fn Optional<int64> number(isize at, isize width) { return numberIn(f: this.block.view().slice(from: at, count: width)); }
+
+    // A NUL-terminated field, or all of it when it fills its width.
+    fn DynamicArray<uint8> text(isize at, isize width) {
+        DynamicArray<uint8> a = DynamicArray.empty();
+        for (isize k = at; k < at + width && this.block[k] != 0ui8; k = k + 1) { a.add(item: this.block[k]); }
+        return a;
+    }
+
+    fn bool isMagic() {
+        return this.block[257] == 117ui8 && this.block[258] == 115ui8 && this.block[259] == 116ui8 && this.block[260] == 97ui8
+            && this.block[261] == 114ui8;   // `ustar`
+    }
+
+    // A header's extension: its body comes next. A GNU long name is held, so its size is judged before any of it is read.
+    fn Result<Unit, IoError> beginExtension(uint8 flag) {
+        Optional<int64> sz = this.number(at: 124, width: 12);
+        int64 size = match (sz) { case Some(value: v): v; case None: -1i64; };
+        if (size < 0i64) { return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData)); }
+        if ((flag == 76ui8 || flag == 75ui8) && size > cast<int64>(NAME_MAX)) {
+            return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData));
+        }
+        this.extension = flag;
+        this.extensionLeft = cast<uint64>(size);
+        this.longName.clear();
+        this.record = Record::Length;
+        this.recordLength = 0;
+        this.recordSeen = 0;
+        this.recordDigits = false;
+        this.have = 0;
+        this.stage = Stage::Extension;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // An extension's body, a block at a time, so it costs a read per block however long a record runs.
+    fn Result<Unit, IoError> readExtension() {
+        while (this.extensionLeft > 0ui64) {
+            Result<bool, IoError> g = this.gather();
+            match (g) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: whole): {
+                    if (!whole) { return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof)); }
+                }
+            };
+            isize n = this.extensionLeft < cast<uint64>(BLOCK) ? cast<isize>(this.extensionLeft) : BLOCK;
+            for (isize k = 0; k < n; k = k + 1) {
+                if (this.extension == 76ui8 || this.extension == 75ui8) { this.longName.add(item: this.block[k]); }
+                else if (!this.recordByte(b: this.block[k])) {
+                    return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData));
+                }
+            }
+            this.have = 0;
+            this.extensionLeft = this.extensionLeft - cast<uint64>(n);
+        }
+        if (this.extension == 76ui8 || this.extension == 75ui8) {
+            DynamicArray<uint8> name = DynamicArray.empty();
+            for (isize k = 0; k < this.longName.length() && this.longName[k] != 0ui8; k = k + 1) { name.add(item: this.longName[k]); }
+            if (this.extension == 76ui8) { this.entry.path = Optional::Some(value: give name); }
+            else { this.entry.link = Optional::Some(value: give name); }
+        } else if (this.record != Record::Length || this.recordDigits) {
+            return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData));    // a record cut off by the extension's end
+        }
+        // A global record says nothing that the next header has to complete.
+        if (this.extension != 103ui8) { this.extended = true; }
+        this.stage = Stage::Header;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // One byte of a pax extension, parsed as it arrives. False for a malformed record, or a kept value past its bound.
+    fn bool recordByte(uint8 b) {
+        this.recordSeen = this.recordSeen + 1ui64;
+        match (this.record) {
+            case Length: {
+                if (b == 32ui8) {
+                    if (!this.recordDigits || this.recordSeen >= this.recordLength) { return false; }
+                    this.key.clear();
+                    this.value.clear();
+                    this.record = Record::Key;
+                } else {
+                    if (b < 48ui8 || b > 57ui8 || this.recordLength > 100000000000000000ui64) { return false; }
+                    this.recordLength = this.recordLength * 10ui64 + cast<uint64>(b - 48ui8);
+                    this.recordDigits = true;
+                }
+            }
+            case Key: {
+                if (b == 61ui8) {
+                    this.keeping = this.keptKey();
+                    this.record = Record::Value;
+                } else if (this.key.length() <= KEY_MAX) { this.key.add(item: b); }
+            }
+            case Value: {
+                if (this.recordSeen == this.recordLength) {
+                    if (b != 10ui8) { return false; }
+                    if (this.keeping && !this.applyRecord()) { return false; }
+                    this.record = Record::Length;
+                    this.recordLength = 0;
+                    this.recordSeen = 0;
+                    this.recordDigits = false;
+                } else if (this.keeping) {
+                    if (this.value.length() == NAME_MAX) { return false; }
+                    this.value.add(item: b);
+                }
+            }
+        };
+        return true;
+    }
+
+    fn bool keyIs(const ref string name) {
+        bool same = false;
+        borrow name.bytes() as v {
+            same = v.length() == this.key.length();
+            for (isize k = 0; same && k < v.length(); k = k + 1) { same = v[k] == this.key[k]; }
+        }
+        return same;
+    }
+
+    fn bool keptKey() {
+        return this.keyIs(name: "path") || this.keyIs(name: "linkpath") || this.keyIs(name: "uname") || this.keyIs(name: "gname")
+            || this.keyIs(name: "size") || this.keyIs(name: "mtime") || this.keyIs(name: "uid") || this.keyIs(name: "gid");
+    }
+
+    // One record, onto what the next entry or every entry after will read. False for a number that does not parse. An empty value
+    // removes what an earlier record said.
+    fn bool applyRecord() {
+        bool global = this.extension == 103ui8;
+        if (this.keyIs(name: "path")) {
+            if (global) { this.shared.path = Optional::Some(value: copy this.value); } else { this.entry.path = Optional::Some(value: copy this.value); }
+        } else if (this.keyIs(name: "linkpath")) {
+            if (global) { this.shared.link = Optional::Some(value: copy this.value); } else { this.entry.link = Optional::Some(value: copy this.value); }
+        } else if (this.keyIs(name: "uname")) {
+            if (global) { this.shared.uname = Optional::Some(value: copy this.value); } else { this.entry.uname = Optional::Some(value: copy this.value); }
+        } else if (this.keyIs(name: "gname")) {
+            if (global) { this.shared.gname = Optional::Some(value: copy this.value); } else { this.entry.gname = Optional::Some(value: copy this.value); }
+        } else if (this.keyIs(name: "mtime")) {
+            Optional<Timestamp> at = Optional::None;
+            if (this.value.length() > 0 && !paxTimeIn(v: this.value, at: ref at)) { return false; }
+            bool has = this.value.length() > 0;
+            if (global) { this.shared.hasTime = has; this.shared.stamp = at; } else { this.entry.hasTime = has; this.entry.stamp = at; }
+        } else {
+            Optional<int64> n = decimalIn(v: this.value);
+            if (this.value.length() > 0) {
+                match (n) { case Some(value: v): { } case None: { return false; } };
+            }
+            if (this.keyIs(name: "size")) { if (global) { this.shared.size = n; } else { this.entry.size = n; } }
+            else if (this.keyIs(name: "uid")) { if (global) { this.shared.uid = n; } else { this.entry.uid = n; } }
+            else { if (global) { this.shared.gid = n; } else { this.entry.gid = n; } }
+        }
+        return true;
+    }
+
+    // The header in `block`, with what the extensions before it said, and the reader set to its body.
+    fn Result<TarHeader, IoError> assemble(uint8 flag) {
+        bool magic = this.isMagic();
+        bool posix = magic && this.block[262] == 0ui8;    // GNU's `ustar  ` keeps other things where POSIX keeps the prefix
+        DynamicArray<uint8> name = this.text(at: 0, width: 100);
+        if (posix && this.block[345] != 0ui8) {
+            DynamicArray<uint8> whole = this.text(at: 345, width: 155);
+            whole.add(item: 47);
+            for (isize k = 0; k < name.length(); k = k + 1) { whole.add(item: name[k]); }
+            name = give whole;
+        }
+        DynamicArray<uint8> path = pickName(entry: this.entry.path, shared: this.shared.path, own: give name);
+
+        Optional<int64> sizeField = this.number(at: 124, width: 12);
+        Optional<int64> modeField = this.number(at: 100, width: 8);
+        Optional<int64> uidField = this.number(at: 108, width: 8);
+        Optional<int64> gidField = this.number(at: 116, width: 8);
+        int64 ownSize = match (sizeField) { case Some(value: v): v; case None: -1i64; };
+        int64 ownMode = match (modeField) { case Some(value: v): v; case None: -1i64; };
+        bool numbers = match (uidField) { case Some(value: v): true; case None: false; }
+                    && match (gidField) { case Some(value: v): true; case None: false; };
+        int64 size = pickNumber(entry: this.entry.size, shared: this.shared.size, own: ownSize);
+        if (!numbers || size < 0i64 || ownMode < 0i64 || ownMode > 4294967295i64) {
+            return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData));
+        }
+        int64 uid = pickNumber(entry: this.entry.uid, shared: this.shared.uid, own: match (uidField) { case Some(value: v): v; case None: 0i64; });
+        int64 gid = pickNumber(entry: this.entry.gid, shared: this.shared.gid, own: match (gidField) { case Some(value: v): v; case None: 0i64; });
+
+        // v7 has neither name: `ustar`'s magic is what says those bytes are names.
+        DynamicArray<uint8> uname = pickName(entry: this.entry.uname, shared: this.shared.uname, own: this.text(at: 265, width: magic ? 32 : 0));
+        DynamicArray<uint8> gname = pickName(entry: this.entry.gname, shared: this.shared.gname, own: this.text(at: 297, width: magic ? 32 : 0));
+        DynamicArray<uint8> link = pickName(entry: this.entry.link, shared: this.shared.link, own: this.text(at: 157, width: 100));
+
+        Optional<Timestamp> stamp = this.entryTime();
+        uint32 major = magic ? this.device(at: 329) : 0ui32;
+        uint32 minor = magic ? this.device(at: 337) : 0ui32;
+        TarKind kind = this.kindOf(flag: flag, size: cast<uint64>(size), path: path, link: give link, major: major, minor: minor);
+
+        // A body only for what has one, whatever size the header declares (as GNU tar, bsdtar and Python all read it).
+        uint64 body = match (kind) { case File(size: s): s; case Other(flag: f, size: s): s; case _: 0ui64; };
+        this.left = body;
+        this.pad = (512ui64 - body % 512ui64) % 512ui64;
+        this.entry = Overrides.make();
+        this.extended = false;
+
+        return Result::Ok(value: TarHeader.fromArchive(path: give path, kind: give kind, mode: cast<uint32>(ownMode), stamp: stamp,
+                                                       owner: ownerOf(uid: uid, gid: gid, uname: give uname, gname: give gname)));
+    }
+
+    // What pax said, or the header's own field. One that does not parse is `None`: it is advisory, and stops nothing.
+    fn Optional<Timestamp> entryTime() {
+        if (this.entry.hasTime) { return this.entry.stamp; }
+        if (this.shared.hasTime) { return this.shared.stamp; }
+        Optional<int64> secs = this.number(at: 136, width: 12);
+        match (secs) {
+            case Some(value: s): {
+                if (s < -SECS_MAX) { return Optional::None; }    // and `-s` of the lowest `int64` has no answer
+                if (s < 0i64) { return timeAt(secs: -s, nanos: 0, negative: true); }
+                return timeAt(secs: s, nanos: 0, negative: false);
+            }
+            case None: { return Optional::None; }
+        };
+    }
+
+    // A device number: it is advisory too, so what does not parse is 0.
+    fn uint32 device(isize at) {
+        Optional<int64> n = this.number(at: at, width: 8);
+        int64 v = match (n) { case Some(value: x): x; case None: 0i64; };
+        return (v >= 0i64 && v <= 4294967295i64) ? cast<uint32>(v) : 0ui32;
+    }
+
+    // `\0` and `0` are a regular file, as is `7`, a contiguous file, which POSIX reads as one. v7 marks a directory by its name alone.
+    fn TarKind kindOf(uint8 flag, uint64 size, const ref DynamicArray<uint8> path, DynamicArray<uint8> link, uint32 major, uint32 minor) {
+        DynamicArray<uint8> mine = give link;
+        if (flag == 0ui8 && path.length() > 0 && path[path.length() - 1] == 47ui8) { return TarKind::Directory; }
+        if (flag == 0ui8 || flag == 48ui8 || flag == 55ui8) { return TarKind::File(size: size); }
+        if (flag == 49ui8) { return TarKind::HardLink(target: give mine); }
+        if (flag == 50ui8) { return TarKind::Symlink(target: give mine); }
+        if (flag == 51ui8) { return TarKind::CharDevice(major: major, minor: minor); }
+        if (flag == 52ui8) { return TarKind::BlockDevice(major: major, minor: minor); }
+        if (flag == 53ui8) { return TarKind::Directory; }
+        if (flag == 54ui8) { return TarKind::Fifo; }
+        return TarKind::Other(flag: flag, size: size);
+    }
+}
+
+// ---- the writer ----------------------------------------------------------------------------------------------------
+
+// `digits` octal digits and then a NUL, as ustar writes every number.
+fn void octalInto(View<uint8> h, isize at, isize digits, uint64 value) {
+    uint64 v = value;
+    for (isize k = digits - 1; k >= 0; k = k - 1) {
+        h[at + k] = cast<uint8>(48ui64 + (v & 7ui64));
+        v = v >> 3ui64;
+    }
+}
+
+fn bool hasNul(ConstView<uint8> v) {
+    for (isize k = 0; k < v.length(); k = k + 1) { if (v[k] == 0ui8) { return true; } }
+    return false;
+}
+
+fn void addDecimal(ref DynamicArray<uint8> into, uint64 value) {
+    InlineArray<uint8>#(20) d = [0; 20];
+    int32 n = 0;
+    uint64 v = value;
+    while (v > 0ui64 || n == 0) {
+        d[n] = cast<uint8>(48ui64 + v % 10ui64);
+        v = v / 10ui64;
+        n = n + 1;
+    }
+    while (n > 0) { n = n - 1; into.add(item: d[n]); }
+}
+
+fn isize decimalDigits(isize value) {
+    isize n = 1;
+    isize v = value;
+    while (v >= 10) { v = v / 10; n = n + 1; }
+    return n;
+}
+
+// One pax record, `<length> <key>=<value>\n`, where the length counts every byte, its own digits among them.
+fn void addRecord(ref DynamicArray<uint8> into, const ref string key, ConstView<uint8> value) {
+    isize body = key.length() + value.length() + 3;   // ' ', '=', '\n'
+    isize length = body + 1;
+    while (length != body + decimalDigits(value: length)) { length = body + decimalDigits(value: length); }
+    addDecimal(into: ref into, value: cast<uint64>(length));
+    into.add(item: 32);
+    borrow key.bytes() as k { foreach (uint8 b in k) { into.add(item: b); } }
+    into.add(item: 61);
+    for (isize j = 0; j < value.length(); j = j + 1) { into.add(item: value[j]); }
+    into.add(item: 10);
+}
+
+// `secs.fraction`, with no trailing zeros, for a time no ustar field can hold.
+fn DynamicArray<uint8> paxTimeOf(Timestamp at) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    int64 nanos = at.asUnixNanos();
+    bool negative = nanos < 0i64;
+    uint64 total = negative ? cast<uint64>(-(nanos + 1i64)) + 1ui64 : cast<uint64>(nanos);
+    if (negative) { a.add(item: 45); }
+    addDecimal(into: ref a, value: total / 1000000000ui64);
+    uint64 frac = total % 1000000000ui64;
+    if (frac != 0ui64) {
+        a.add(item: 46);
+        InlineArray<uint8>#(9) d = [0; 9];
+        for (int32 k = 8; k >= 0; k = k - 1) { d[k] = cast<uint8>(48ui64 + frac % 10ui64); frac = frac / 10ui64; }
+        int32 end = 9;
+        while (end > 1 && d[end - 1] == 48ui8) { end = end - 1; }
+        for (int32 k = 0; k < end; k = k + 1) { a.add(item: d[k]); }
+    }
+    return a;
+}
+
+comptime uint64 FITS_7 = 2097152ui64;       // 8^7, the first number seven octal digits cannot hold
+comptime uint64 FITS_11 = 8589934592ui64;   // 8^11
+
+type resource TarWriter<W: Writer> implements Writer {
+    W sink;
+    DynamicArray<uint8> pending;     // headers and padding the sink has not taken
+    isize sent;
+    uint64 left;                     // of this entry's body, still owed
+    uint64 pad;                      // the padding it will take after that
+    bool finalWritten;               // the two zero blocks are in `pending`
+
+    public ctor make(W sink) {
+        this.sink = give sink;
+        this.pending = DynamicArray.empty();
+        this.sent = 0;
+        this.left = 0;
+        this.pad = 0;
+        this.finalWritten = false;
+    }
+
+    // Starts an entry, whose body then goes through `write`, exactly as many bytes as `header` declares. `InvalidInput` for a last
+    // body still short, for `TarKind::Other`, for a time `None`, for a name that is empty or holds a NUL, a mode past `0o7777`, a
+    // negative owner, or a device number past seven octal digits. An error from the sink changes nothing: ask again.
+    public fn Result<Unit, IoError> begin(const ref TarHeader header) {
+        if (this.finalWritten || this.left != 0ui64) { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        if (header.path().length() == 0 || hasNul(v: header.path().view()) || header.mode() > 4095ui32) {
+            return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+        }
+        Optional<Timestamp> given = header.mtime();
+        Timestamp stamp = match (given) {
+            case Some(value: t): t;
+            case None: { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        };
+        uint8 flag = 48;
+        uint64 size = 0;
+        uint64 major = 0;
+        uint64 minor = 0;
+        DynamicArray<uint8> link = DynamicArray.empty();
+        match (header.kind()) {
+            case File(size: s): { size = s; }
+            case Directory: { flag = 53; }
+            case Symlink(target: t): { flag = 50; link = copy t; }
+            case HardLink(target: t): { flag = 49; link = copy t; }
+            case CharDevice(major: a, minor: b): { flag = 51; major = cast<uint64>(a); minor = cast<uint64>(b); }
+            case BlockDevice(major: a, minor: b): { flag = 52; major = cast<uint64>(a); minor = cast<uint64>(b); }
+            case Fifo: { flag = 54; }
+            case Other(flag: f, size: s): { return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput)); }
+        };
+        int64 uid = 0;
+        int64 gid = 0;
+        DynamicArray<uint8> uname = DynamicArray.empty();
+        DynamicArray<uint8> gname = DynamicArray.empty();
+        match (header.owner()) {
+            case None: { }
+            case Named(uid: u, gid: g, uname: un, gname: gn): { uid = u; gid = g; uname = copy un; gname = copy gn; }
+        };
+        if (uid < 0i64 || gid < 0i64 || major >= FITS_7 || minor >= FITS_7 || hasNul(v: link.view()) || hasNul(v: uname.view())
+            || hasNul(v: gname.view())) {
+            return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+        }
+        Result<Unit, IoError> dr = this.drain();
+        match (dr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+
+        // What the ustar fields cannot hold goes in a pax record ahead of the entry, publish's choice over ustar's split-name prefix.
+        DynamicArray<uint8> pax = DynamicArray.empty();
+        if (header.path().length() > 100) { addRecord(into: ref pax, key: "path", value: header.path().view()); }
+        if (link.length() > 100) { addRecord(into: ref pax, key: "linkpath", value: link.view()); }
+        if (size >= FITS_11) {
+            DynamicArray<uint8> digits = DynamicArray.empty();
+            addDecimal(into: ref digits, value: size);
+            addRecord(into: ref pax, key: "size", value: digits.view());
+        }
+        int64 secs = stamp.asUnixSecs();
+        bool plainTime = stamp.asUnixNanos() >= 0i64 && stamp.asUnixNanos() % 1000000000i64 == 0i64 && cast<uint64>(secs) < FITS_11;
+        if (!plainTime) {
+            DynamicArray<uint8> digits = paxTimeOf(at: stamp);
+            addRecord(into: ref pax, key: "mtime", value: digits.view());
+        }
+        if (cast<uint64>(uid) >= FITS_7) {
+            DynamicArray<uint8> digits = DynamicArray.empty();
+            addDecimal(into: ref digits, value: cast<uint64>(uid));
+            addRecord(into: ref pax, key: "uid", value: digits.view());
+        }
+        if (cast<uint64>(gid) >= FITS_7) {
+            DynamicArray<uint8> digits = DynamicArray.empty();
+            addDecimal(into: ref digits, value: cast<uint64>(gid));
+            addRecord(into: ref pax, key: "gid", value: digits.view());
+        }
+        if (uname.length() > 32) { addRecord(into: ref pax, key: "uname", value: uname.view()); }
+        if (gname.length() > 32) { addRecord(into: ref pax, key: "gname", value: gname.view()); }
+
+        uint64 timeField = plainTime ? cast<uint64>(secs) : 0ui64;
+        if (pax.length() > 0) {
+            DynamicArray<uint8> none = DynamicArray.empty();
+            string paxName = "PaxHeader";
+            DynamicArray<uint8> nameBytes = DynamicArray.empty();
+            borrow paxName.bytes() as v { foreach (uint8 b in v) { nameBytes.add(item: b); } }
+            this.queueHeader(name: nameBytes.view(), flag: 120, size: cast<uint64>(pax.length()), mode: 420ui32, uid: 0ui64, gid: 0ui64,
+                             mtime: timeField, link: none.view(), uname: none.view(), gname: none.view(), major: 0ui64, minor: 0ui64, device: false);
+            for (isize k = 0; k < pax.length(); k = k + 1) { this.pending.add(item: pax[k]); }
+            this.queuePadding(after: cast<uint64>(pax.length()));
+        }
+        isize pathLength = header.path().length();
+        this.queueHeader(name: header.path().view().slice(from: 0, count: pathLength < 100 ? pathLength : 100), flag: flag,
+                         size: size < FITS_11 ? size : 0ui64, mode: header.mode(),
+                         uid: cast<uint64>(uid) < FITS_7 ? cast<uint64>(uid) : 0ui64, gid: cast<uint64>(gid) < FITS_7 ? cast<uint64>(gid) : 0ui64,
+                         mtime: timeField,
+                         link: link.view().slice(from: 0, count: link.length() < 100 ? link.length() : 100),
+                         uname: uname.view().slice(from: 0, count: uname.length() <= 32 ? uname.length() : 0),
+                         gname: gname.view().slice(from: 0, count: gname.length() <= 32 ? gname.length() : 0),
+                         major: major, minor: minor, device: flag == 51ui8 || flag == 52ui8);
+        this.left = size;
+        this.pad = (512ui64 - size % 512ui64) % 512ui64;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // Takes body bytes, up to what the sink takes. More than the entry has left is `InvalidInput`, with nothing taken.
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        if (this.finalWritten || cast<uint64>(bytes.length()) > this.left) {
+            return Result::Err(error: IoError.of(kind: IoErrorKind::InvalidInput));
+        }
+        Result<Unit, IoError> dr = this.drain();
+        match (dr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        if (bytes.length() == 0) { return Result::Ok(value: 0); }
+        Result<isize, IoError> wr = this.sink.write(bytes: bytes);
+        return match (wr) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: m): {
+                this.left = this.left - cast<uint64>(m);
+                if (this.left == 0ui64) {
+                    for (uint64 k = 0; k < this.pad; k = k + 1ui64) { this.pending.add(item: 0); }
+                    this.pad = 0;
+                }
+                := Result::Ok(value: m);
+            }
+        };
+    }
+
+    public fn Result<Unit, IoError> flush() {
+        Result<Unit, IoError> dr = this.drain();
+        match (dr) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        return this.sink.flush();
+    }
+
+    // The two zero blocks, then the sink back, flushing nothing of the sink's own. `InvalidInput` for a body still short. On a failure
+    // the writer comes back whole in `Unfinished`, and finishing it again writes no second end. Dropping a writer abandons its archive.
+    public give fn Result<W, Unfinished<TarWriter<W>>> finish() {
+        if (this.left != 0ui64) {
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
+        }
+        if (!this.finalWritten) {
+            for (isize k = 0; k < 2 * BLOCK; k = k + 1) { this.pending.add(item: 0); }
+            this.finalWritten = true;
+        }
+        Result<Unit, IoError> dr = this.drain();
+        match (dr) {
+            case Err(error: e): { return Result::Err(error: Unfinished::Pending(adapter: give this, error: e)); }
+            case Ok(value: _): {}
+        };
+        return Result::Ok(value: give this.sink);
+    }
+
+    fn Result<Unit, IoError> drain() {
+        isize total = this.pending.length();
+        while (this.sent < total) {
+            Result<isize, IoError> wr = this.sink.write(bytes: this.pending.slice(from: this.sent, count: total - this.sent));
+            match (wr) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: m): {
+                    if (m == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+                    this.sent = this.sent + m;
+                }
+            };
+        }
+        this.pending.clear();
+        this.sent = 0;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    fn void queuePadding(uint64 after) {
+        for (uint64 k = (512ui64 - after % 512ui64) % 512ui64; k > 0ui64; k = k - 1ui64) { this.pending.add(item: 0); }
+    }
+
+    // One ustar header, the bytes of `kama.archive.cpp`'s `tarHeader` for the same fields: magic `ustar`, version `00`, and a checksum of
+    // six digits, a NUL and a space.
+    fn void queueHeader(ConstView<uint8> name, uint8 flag, uint64 size, uint32 mode, uint64 uid, uint64 gid, uint64 mtime, ConstView<uint8> link,
+                        ConstView<uint8> uname, ConstView<uint8> gname, uint64 major, uint64 minor, bool device) {
+        InlineArray<uint8>#(512) h = [0; 512];
+        for (isize k = 0; k < name.length(); k = k + 1) { h[k] = name[k]; }
+        octalInto(h: h.viewMut(), at: 100, digits: 7, value: cast<uint64>(mode));
+        octalInto(h: h.viewMut(), at: 108, digits: 7, value: uid);
+        octalInto(h: h.viewMut(), at: 116, digits: 7, value: gid);
+        octalInto(h: h.viewMut(), at: 124, digits: 11, value: size);
+        octalInto(h: h.viewMut(), at: 136, digits: 11, value: mtime);
+        h[156] = flag;
+        for (isize k = 0; k < link.length(); k = k + 1) { h[157 + k] = link[k]; }
+        InlineArray<uint8>#(8) magic = [117, 115, 116, 97, 114, 0, 48, 48];   // `ustar`, a NUL, `00`
+        for (isize k = 0; k < 8; k = k + 1) { h[257 + k] = magic[k]; }
+        for (isize k = 0; k < uname.length(); k = k + 1) { h[265 + k] = uname[k]; }
+        for (isize k = 0; k < gname.length(); k = k + 1) { h[297 + k] = gname[k]; }
+        if (device) {
+            octalInto(h: h.viewMut(), at: 329, digits: 7, value: major);
+            octalInto(h: h.viewMut(), at: 337, digits: 7, value: minor);
+        }
+        for (isize k = 148; k < 156; k = k + 1) { h[k] = 32; }
+        uint64 sum = 0;
+        for (isize k = 0; k < BLOCK; k = k + 1) { sum = sum + cast<uint64>(h[k]); }
+        octalInto(h: h.viewMut(), at: 148, digits: 6, value: sum);
+        h[154] = 0;
+        h[155] = 32;
+        for (isize k = 0; k < BLOCK; k = k + 1) { this.pending.add(item: h[k]); }
+    }
+}

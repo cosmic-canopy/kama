@@ -1,0 +1,88 @@
+// What `kama publish` writes (KR-5, ruling 7): a tar of regular files through `TarWriter`, gzipped at `DeflateLevel::Frozen`, is the same
+// file `kama.archive.cpp` writes, so a package's identity can be rebuilt by std. Each pin is the sha256 of what that C++ wrote for the same
+// entries. A name of exactly 100 bytes fits its field, and 101 takes a pax record named `PaxHeader`; a body may end on a block or not; and
+// an executable and a plain file differ only in their modes. A pin that fails is a broken promise, so it is never updated to pass. Returns 42.
+import { std::archive::tar::TarWriter, std::archive::tar::TarHeader, std::archive::tar::TarKind, std::archive::tar::TarOwner,
+         std::compress::gzip::GzipWriter, std::compress::deflate::DeflateLevel, std::collections::DynamicArray, std::collections::ConstView,
+         std::io::Writer, std::io::IoError, std::digest::sha256::sha256, std::encoding::hex::encode, std::time::Timestamp };
+
+type resource Sink implements Writer {
+    DynamicArray<uint8> got;
+    public ctor make() { this.got = DynamicArray.empty(); }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        for (isize k = 0; k < bytes.length(); k = k + 1) { this.got.add(item: bytes[k]); }
+        return Result::Ok(value: bytes.length());
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public give fn DynamicArray<uint8> bytes() { return give this.got; }
+}
+
+// The time `kama.archive.cpp` stamps every entry with: 1980-01-01, so it is not the publish time, and not 0, which zip-era readers read
+// as no date.
+fn Timestamp stamp() { return Timestamp.fromUnixSecs(s: 315532800i64); }
+
+fn DynamicArray<uint8> fill(isize n, uint8 b) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    for (isize k = 0; k < n; k = k + 1) { a.add(item: b); }
+    return a;
+}
+
+// Adds an entry of `size` bytes of `b` to `root/`, as publish names and modes them.
+fn void entry(ref TarWriter<GzipWriter<Sink>> w, const ref DynamicArray<uint8> name, isize size, uint8 b, bool executable) {
+    TarHeader h = TarHeader.make(path: name.view(), kind: TarKind::File(size: cast<uint64>(size)), mode: executable ? 0o755 : 0o644,
+                                 mtime: stamp(), owner: TarOwner::None);
+    match (w.begin(header: h)) { case Ok(value: _): { } case Err(error: e): { panic(msg: "begin"); } };
+    DynamicArray<uint8> body = fill(n: size, b: b);
+    if (size > 0) { match (w.write(bytes: body.view())) { case Ok(value: n): { } case Err(error: e): { panic(msg: "write"); } }; }
+}
+
+fn DynamicArray<uint8> named(isize total) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    InlineArray<uint8>#(5) root = [114, 111, 111, 116, 47];       // `root/`
+    for (isize k = 0; k < 5; k = k + 1) { a.add(item: root[k]); }
+    for (isize k = 5; k < total; k = k + 1) { a.add(item: 120); }
+    return a;
+}
+
+fn string pinOf(int32 k) {
+    TarWriter<GzipWriter<Sink>> w = TarWriter.make(sink: GzipWriter.make(sink: Sink.make(), level: DeflateLevel::Frozen));
+    if (k == 1) { entry(w: ref w, name: named(total: 10), size: 5, b: 97, executable: false); }
+    if (k == 2) {
+        entry(w: ref w, name: named(total: 10), size: 512, b: 97, executable: false);
+        entry(w: ref w, name: named(total: 11), size: 513, b: 98, executable: true);
+        entry(w: ref w, name: named(total: 12), size: 0, b: 99, executable: false);
+    }
+    if (k == 3) { entry(w: ref w, name: named(total: 100), size: 7, b: 97, executable: false); }
+    if (k == 4) { entry(w: ref w, name: named(total: 101), size: 7, b: 97, executable: false); }
+    if (k == 5) {
+        entry(w: ref w, name: named(total: 300), size: 70000, b: 97, executable: true);
+        entry(w: ref w, name: named(total: 20), size: 3, b: 98, executable: false);
+    }
+    GzipWriter<Sink> g = match (give w.finish()) { case Ok(value: x): give x; case Err(error: u): { panic(msg: "finish tar"); } };
+    return match (give g.finish()) {
+        case Ok(value: s): hexOfSha(s: give s);
+        case Err(error: u): "unfinished";
+    };
+}
+
+fn string hexOfSha(Sink s) {
+    DynamicArray<uint8> b = give s.bytes();
+    InlineArray<uint8>#(32) digest = sha256(bytes: b.view());
+    return encode(bytes: digest.view());
+}
+
+fn uint8 main() {
+    InlineArray<string>#(6) pins = [
+        "62539018952ddec37a4fcf8d77171cfbcd5b21fc3520f32028cd9cfdae546a31",
+        "fd79bd84ac833cd054d4d302237741ffcbe85db976b5a7e34986a91e9c0671dd",
+        "3447bca610c12d1bcb04951f7e0331d1daca051f25c38c4499c50ab9510f937d",
+        "ee7b648f012c35237dbf3e13260c54aa4984f2cc60d09c9f5b02ee960c9d915c",
+        "e191eae8b18a692fc8d76aee75b91ef5f81e73ad0e61b17619757138e1ace71f",
+        "7437b6c9d7c95d9f9e1ef89925a39f0a263f3401ae42f0f9954badbc1759a04b"
+    ];
+    for (int32 k = 0; k < 6; k = k + 1) {
+        string got = pinOf(k: k);
+        if (got != pins[k]) { return cast<uint8>(100 + k); }
+    }
+    return 42;
+}

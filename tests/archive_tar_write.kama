@@ -1,0 +1,276 @@
+// `TarWriter` (KR-5). Every kind goes through it and back through `TarReader`, with its fields whole, including what ustar's fields cannot
+// hold, which goes in a pax record: a path and a link past 100 bytes, an owner past seven octal digits, names past 32 bytes, and a time
+// before 1970, with a fraction, or past eight octal digits' worth. The bytes do not depend on how the body's writes were split or on a sink
+// that takes a little at a time and stalls. `begin` refuses what cannot be written, a body must be exactly the size declared, `finish`
+// over a stalled sink brings the writer back whole and writes one end however many times it is asked. Returns 42.
+import { std::archive::tar::TarReader, std::archive::tar::TarWriter, std::archive::tar::TarHeader, std::archive::tar::TarKind,
+         std::archive::tar::TarOwner, std::archive::tar::TarEndMarker, std::collections::DynamicArray, std::collections::ConstView,
+         std::collections::FixedArray, std::io::Writer, std::io::SliceReader, std::io::IoError, std::io::IoErrorKind, std::time::Timestamp };
+
+// `every` > 0: all but every `every`-th call answers `WouldBlock`, and the rest take at most 777 bytes.
+type resource Sink implements Writer {
+    DynamicArray<uint8> got;
+    int32 every;
+    int32 calls;
+    public ctor make(int32 every) {
+        this.got = DynamicArray.empty();
+        this.every = every;
+        this.calls = 0;
+    }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        this.calls = this.calls + 1;
+        if (this.every > 0 && this.calls % this.every != 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        isize n = this.every > 0 && bytes.length() > 777 ? 777 : bytes.length();
+        for (isize k = 0; k < n; k = k + 1) { this.got.add(item: bytes[k]); }
+        return Result::Ok(value: n);
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public give fn DynamicArray<uint8> bytes() { return give this.got; }
+}
+
+fn DynamicArray<uint8> repeated(uint8 b, isize n) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    for (isize k = 0; k < n; k = k + 1) { a.add(item: b); }
+    return a;
+}
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    borrow s.bytes() as v { foreach (uint8 b in v) { a.add(item: b); } }
+    return a;
+}
+
+fn Timestamp at(int64 secs) { return Timestamp.fromUnixSecs(s: secs); }
+
+// A body the size of `n`, of a pattern a mistaken offset would show.
+fn DynamicArray<uint8> bodyOf(isize n) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    for (isize k = 0; k < n; k = k + 1) { a.add(item: cast<uint8>(k % 251)); }
+    return a;
+}
+
+// The headers this fixture writes, by number, each kind and each thing a field cannot hold.
+fn TarHeader headerOf(int32 k) {
+    DynamicArray<uint8> long150 = repeated(b: 110, n: 150);
+    DynamicArray<uint8> exactly100 = repeated(b: 120, n: 100);
+    DynamicArray<uint8> exactly101 = repeated(b: 121, n: 101);
+    if (k == 0) { return TarHeader.make(path: "plain.txt".bytes(), kind: TarKind::File(size: 11ui64), mode: 0o644, mtime: at(secs: 315532800i64), owner: TarOwner::None); }
+    if (k == 1) { return TarHeader.make(path: "empty".bytes(), kind: TarKind::File(size: 0ui64), mode: 0o600, mtime: at(secs: 0i64), owner: TarOwner::None); }
+    if (k == 2) { return TarHeader.make(path: "exact512".bytes(), kind: TarKind::File(size: 512ui64), mode: 0o644, mtime: at(secs: 1i64), owner: TarOwner::None); }
+    if (k == 3) { return TarHeader.make(path: "big".bytes(), kind: TarKind::File(size: 70000ui64), mode: 0o755, mtime: at(secs: 2i64), owner: TarOwner::None); }
+    if (k == 4) { return TarHeader.make(path: "d/".bytes(), kind: TarKind::Directory, mode: 0o755, mtime: at(secs: 3i64), owner: TarOwner::None); }
+    if (k == 5) { return TarHeader.make(path: "ln".bytes(), kind: TarKind::Symlink(target: bytesOf(s: "plain.txt")), mode: 0o777, mtime: at(secs: 4i64), owner: TarOwner::None); }
+    if (k == 6) { return TarHeader.make(path: "hl".bytes(), kind: TarKind::HardLink(target: bytesOf(s: "plain.txt")), mode: 0o644, mtime: at(secs: 5i64), owner: TarOwner::None); }
+    if (k == 7) { return TarHeader.make(path: "c".bytes(), kind: TarKind::CharDevice(major: 1ui32, minor: 3ui32), mode: 0o644, mtime: at(secs: 6i64), owner: TarOwner::None); }
+    if (k == 8) { return TarHeader.make(path: "b".bytes(), kind: TarKind::BlockDevice(major: 8ui32, minor: 16ui32), mode: 0o644, mtime: at(secs: 7i64), owner: TarOwner::None); }
+    if (k == 9) { return TarHeader.make(path: "pipe".bytes(), kind: TarKind::Fifo, mode: 0o644, mtime: at(secs: 8i64), owner: TarOwner::None); }
+    if (k == 10) { return TarHeader.make(path: "owned".bytes(), kind: TarKind::File(size: 1ui64), mode: 0o4755, mtime: at(secs: 9i64), owner: TarOwner::Named(uid: 501i64, gid: 20i64, uname: bytesOf(s: "alice"), gname: bytesOf(s: "staff"))); }
+    if (k == 11) { return TarHeader.make(path: long150.view(), kind: TarKind::File(size: 3ui64), mode: 0o644, mtime: at(secs: 10i64), owner: TarOwner::None); }
+    if (k == 12) { return TarHeader.make(path: exactly100.view(), kind: TarKind::File(size: 3ui64), mode: 0o644, mtime: at(secs: 11i64), owner: TarOwner::None); }
+    if (k == 13) { return TarHeader.make(path: exactly101.view(), kind: TarKind::File(size: 3ui64), mode: 0o644, mtime: at(secs: 12i64), owner: TarOwner::None); }
+    if (k == 14) { return TarHeader.make(path: "longlink".bytes(), kind: TarKind::Symlink(target: repeated(b: 116, n: 150)), mode: 0o777, mtime: at(secs: 13i64), owner: TarOwner::None); }
+    if (k == 15) { return TarHeader.make(path: "bigowner".bytes(), kind: TarKind::File(size: 1ui64), mode: 0o644, mtime: at(secs: 14i64), owner: TarOwner::Named(uid: 3000000i64, gid: 3000001i64, uname: repeated(b: 117, n: 40), gname: repeated(b: 103, n: 40))); }
+    if (k == 16) { return TarHeader.make(path: "before1970".bytes(), kind: TarKind::File(size: 1ui64), mode: 0o644, mtime: at(secs: -1i64), owner: TarOwner::None); }
+    if (k == 17) { return TarHeader.make(path: "half".bytes(), kind: TarKind::File(size: 1ui64), mode: 0o644, mtime: Timestamp.fromUnixNanos(n: 1500000000i64), owner: TarOwner::None); }
+    if (k == 18) { return TarHeader.make(path: "far".bytes(), kind: TarKind::File(size: 1ui64), mode: 0o644, mtime: at(secs: 9000000000i64), owner: TarOwner::None); }
+    if (k == 19) { return TarHeader.make(path: "lastfit".bytes(), kind: TarKind::File(size: 1ui64), mode: 0o644, mtime: at(secs: 8589934591i64), owner: TarOwner::None); }
+    return TarHeader.make(path: "caf\u{E9}".bytes(), kind: TarKind::File(size: 2ui64), mode: 0o644, mtime: at(secs: 15i64), owner: TarOwner::None);
+}
+comptime int32 HEADERS = 21;
+
+fn isize bodySize(const ref TarHeader h) {
+    return match (h.kind()) { case File(size: s): cast<isize>(s); case _: 0; };
+}
+
+// Writes every entry, each body in pieces of `piece`. A `WouldBlock` is met by asking again.
+fn DynamicArray<uint8> archive(isize piece, int32 every) {
+    TarWriter<Sink> w = TarWriter.make(sink: Sink.make(every: every));
+    for (int32 k = 0; k < HEADERS; k = k + 1) {
+        TarHeader h = headerOf(k: k);
+        bool begun = false;
+        while (!begun) { begun = match (w.begin(header: h)) { case Ok(value: _): true; case Err(error: e): false; }; }
+        DynamicArray<uint8> body = bodyOf(n: bodySize(h: h));
+        isize at0 = 0;
+        while (at0 < body.length()) {
+            isize n = body.length() - at0 < piece ? body.length() - at0 : piece;
+            isize took = match (w.write(bytes: body.view().slice(from: at0, count: n))) { case Ok(value: m): m; case Err(error: e): 0; };
+            at0 = at0 + took;
+        }
+    }
+    TarWriter<Sink> cur = give w;
+    while (true) {
+        match (give cur.finish()) {
+            case Ok(value: s): { Sink done = give s; return give done.bytes(); }
+            case Err(error: u): { match (give u) { case Pending(adapter: ad, error: e): { cur = give ad; } }; }
+        };
+    }
+}
+
+fn bool same(const ref DynamicArray<uint8> a, const ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    for (isize k = 0; k < a.length(); k = k + 1) { if (a[k] != b[k]) { return false; } }
+    return true;
+}
+
+fn bool kindsEqual(const ref TarKind a, const ref TarKind b) {
+    return match (a) {
+        case File(size: s): match (b) { case File(size: t): s == t; case _: false; };
+        case Directory: match (b) { case Directory: true; case _: false; };
+        case Symlink(target: s): match (b) { case Symlink(target: t): same(a: s, b: t); case _: false; };
+        case HardLink(target: s): match (b) { case HardLink(target: t): same(a: s, b: t); case _: false; };
+        case CharDevice(major: x, minor: y): match (b) { case CharDevice(major: p, minor: q): x == p && y == q; case _: false; };
+        case BlockDevice(major: x, minor: y): match (b) { case BlockDevice(major: p, minor: q): x == p && y == q; case _: false; };
+        case Fifo: match (b) { case Fifo: true; case _: false; };
+        case _: false;
+    };
+}
+
+fn bool ownersEqual(const ref TarOwner a, const ref TarOwner b) {
+    return match (a) {
+        case None: match (b) { case None: true; case _: false; };
+        case Named(uid: u, gid: g, uname: un, gname: gn): match (b) {
+            case Named(uid: p, gid: q, uname: rn, gname: sn): u == p && g == q && same(a: un, b: rn) && same(a: gn, b: sn);
+            case _: false;
+        };
+    };
+}
+
+fn int64 nanosOf(const ref TarHeader h) {
+    Optional<Timestamp> t = h.mtime();
+    return match (t) { case Some(value: x): x.asUnixNanos(); case None: -999i64; };
+}
+
+// 0 when the archive reads back as `headerOf` wrote it, every field and every body.
+fn int32 readBack(const ref DynamicArray<uint8> tar) {
+    TarReader<SliceReader> r = TarReader.make(source: SliceReader.fromBytes(bytes: copy tar), endMarker: TarEndMarker::Required);
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    for (int32 k = 0; k < HEADERS; k = k + 1) {
+        TarHeader want = headerOf(k: k);
+        Optional<TarHeader> next = match (r.next()) { case Ok(value: o): give o; case Err(error: e): { return 1; } };
+        int32 got = match (give next) {
+            case None: 2;
+            case Some(value: h): sameHeader(a: h, b: want);
+        };
+        if (got != 0) { return 10 + got; }
+        DynamicArray<uint8> body = bodyOf(n: bodySize(h: want));
+        isize seen = 0;
+        while (true) {
+            isize n = match (r.read(into: buf.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+            if (n < 0) { return 3; }
+            if (n == 0) { break; }
+            for (isize j = 0; j < n; j = j + 1) { if (buf[j] != body[seen + j]) { return 4; } }
+            seen = seen + n;
+        }
+        if (seen != body.length()) { return 5; }
+    }
+    Optional<TarHeader> last = match (r.next()) { case Ok(value: o): give o; case Err(error: e): { return 6; } };
+    bool ended = match (last) { case Some(value: h): false; case None: true; };
+    if (!ended) { return 7; }
+    return match (give r.finish()) { case Ok(value: s): 0; case Err(error: u): 8; };
+}
+
+fn int32 sameHeader(const ref TarHeader a, const ref TarHeader b) {
+    if (!same(a: a.path(), b: b.path())) { return 1; }
+    if (!kindsEqual(a: a.kind(), b: b.kind())) { return 2; }
+    if (a.mode() != b.mode()) { return 3; }
+    if (nanosOf(h: a) != nanosOf(h: b)) { return 4; }
+    if (!ownersEqual(a: a.owner(), b: b.owner())) { return 5; }
+    return 0;
+}
+
+fn int32 refused(IoError e) { return match (e.kind()) { case InvalidInput: 0; case _: 1; }; }
+
+fn int32 begins(TarHeader h) {
+    TarWriter<Sink> w = TarWriter.make(sink: Sink.make(every: 0));
+    return match (w.begin(header: h)) { case Ok(value: _): 1; case Err(error: e): refused(e: e); };
+}
+
+// What `begin` refuses, each with nothing written.
+fn int32 refusals() {
+    if (begins(h: TarHeader.make(path: "".bytes(), kind: TarKind::Directory, mode: 0, mtime: at(secs: 0i64), owner: TarOwner::None)) != 0) { return 1; }
+    DynamicArray<uint8> nul = bytesOf(s: "a");
+    nul.add(item: 0);
+    if (begins(h: TarHeader.make(path: nul.view(), kind: TarKind::Directory, mode: 0, mtime: at(secs: 0i64), owner: TarOwner::None)) != 0) { return 2; }
+    if (begins(h: TarHeader.make(path: "a".bytes(), kind: TarKind::Directory, mode: 0o10000, mtime: at(secs: 0i64), owner: TarOwner::None)) != 0) { return 3; }
+    if (begins(h: TarHeader.make(path: "a".bytes(), kind: TarKind::Other(flag: 90, size: 0ui64), mode: 0, mtime: at(secs: 0i64), owner: TarOwner::None)) != 0) { return 4; }
+    if (begins(h: TarHeader.make(path: "a".bytes(), kind: TarKind::CharDevice(major: 2097152ui32, minor: 0ui32), mode: 0, mtime: at(secs: 0i64), owner: TarOwner::None)) != 0) { return 5; }
+    if (begins(h: TarHeader.make(path: "a".bytes(), kind: TarKind::Directory, mode: 0, mtime: at(secs: 0i64), owner: TarOwner::Named(uid: -1i64, gid: 0i64, uname: DynamicArray.empty(), gname: DynamicArray.empty()))) != 0) { return 6; }
+    if (begins(h: TarHeader.make(path: "a".bytes(), kind: TarKind::Symlink(target: nul), mode: 0, mtime: at(secs: 0i64), owner: TarOwner::None)) != 0) { return 7; }
+    return 0;
+}
+
+// A body must be exactly what the header declared.
+fn int32 bodies() {
+    InlineArray<uint8>#(6) six = [1, 2, 3, 4, 5, 6];
+
+    // Too long is refused, with nothing taken, and then the right size goes through.
+    TarWriter<Sink> a = TarWriter.make(sink: Sink.make(every: 0));
+    TarHeader h5 = TarHeader.make(path: "a".bytes(), kind: TarKind::File(size: 5ui64), mode: 0, mtime: at(secs: 0i64), owner: TarOwner::None);
+    match (a.begin(header: h5)) { case Ok(value: _): { } case Err(error: e): { return 1; } };
+    int32 tooLong = match (a.write(bytes: six.view())) { case Ok(value: n): 1; case Err(error: e): refused(e: e); };
+    if (tooLong != 0) { return 2; }
+    isize five = match (a.write(bytes: six.view().slice(from: 0, count: 5))) { case Ok(value: n): n; case Err(error: e): -1; };
+    if (five != 5) { return 3; }
+    // A body written whole leaves nothing owed, so the next entry may begin.
+    match (a.begin(header: h5)) { case Ok(value: _): { } case Err(error: e): { return 4; } };
+
+    // Too short: the next `begin` is refused, and so is `finish`, and the writer comes back to finish the body.
+    int32 shortNext = match (a.begin(header: h5)) { case Ok(value: _): 1; case Err(error: e): refused(e: e); };
+    if (shortNext != 0) { return 5; }
+    int32 afterShort = match (give a.finish()) {
+        case Ok(value: s): 1;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): finishShort(w: give back, kind: refused(e: e)); };
+    };
+    if (afterShort != 0) { return 6; }
+
+    // Writing with no entry begun is too long.
+    TarWriter<Sink> b = TarWriter.make(sink: Sink.make(every: 0));
+    int32 none = match (b.write(bytes: six.view())) { case Ok(value: n): 1; case Err(error: e): refused(e: e); };
+    return none == 0 ? 0 : 7;
+}
+
+fn int32 finishShort(TarWriter<Sink> w, int32 kind) {
+    TarWriter<Sink> mine = give w;
+    if (kind != 0) { return 1; }
+    InlineArray<uint8>#(5) body = [1, 2, 3, 4, 5];
+    match (mine.write(bytes: body.view())) { case Ok(value: n): { } case Err(error: e): { return 2; } };
+    return match (give mine.finish()) { case Ok(value: s): 0; case Err(error: u): 3; };
+}
+
+// A stalled sink: `finish` brings the writer back, and it takes no more.
+fn int32 stalls() {
+    TarWriter<Sink> w = TarWriter.make(sink: Sink.make(every: 1000000));
+    return match (give w.finish()) {
+        case Ok(value: s): 1;
+        case Err(error: u): match (give u) { case Pending(adapter: ad, error: e): stopped(w: give ad, kind: e.kind()); };
+    };
+}
+
+fn int32 stopped(TarWriter<Sink> w, IoErrorKind kind) {
+    TarWriter<Sink> cur = give w;
+    bool blocked = match (kind) { case WouldBlock: true; case _: false; };
+    if (!blocked) { return 2; }
+    InlineArray<uint8>#(1) more = [1];
+    int32 afterWrite = match (cur.write(bytes: more.view())) { case Ok(value: n): 1; case Err(error: e): refused(e: e); };
+    if (afterWrite != 0) { return 3; }
+    TarHeader h = TarHeader.make(path: "a".bytes(), kind: TarKind::Directory, mode: 0, mtime: at(secs: 0i64), owner: TarOwner::None);
+    int32 afterBegin = match (cur.begin(header: h)) { case Ok(value: _): 1; case Err(error: e): refused(e: e); };
+    return afterBegin == 0 ? 0 : 4;
+}
+
+fn uint8 main() {
+    DynamicArray<uint8> whole = archive(piece: 1000000, every: 0);
+    DynamicArray<uint8> fine = archive(piece: 7, every: 0);
+    DynamicArray<uint8> slow = archive(piece: 9000, every: 3);
+    if (!same(a: whole, b: fine)) { return 1; }
+    if (!same(a: whole, b: slow)) { return 2; }
+    int32 r = readBack(tar: whole);
+    if (r != 0) { return cast<uint8>(100 + r); }
+    int32 a = refusals();
+    if (a != 0) { return cast<uint8>(130 + a); }
+    int32 b = bodies();
+    if (b != 0) { return cast<uint8>(150 + b); }
+    int32 c = stalls();
+    if (c != 0) { return cast<uint8>(170 + c); }
+    return 42;
+}

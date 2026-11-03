@@ -1,0 +1,268 @@
+// `TarReader` (KR-5) refuses a broken archive with the kind that says why: `InvalidData` for a header whose checksum fails or whose
+// numbers do not parse and a pax record that is malformed, `UnexpectedEof` for a source that ends inside a header or a body, or after an
+// extension with no entry for it. The error is final: the next call to `next` and to `read` answer the same, and so does `finish`, and
+// `abandon` still hands the source back. A held name past 1 MiB is refused and one of exactly 1 MiB is read, from a pax record and from
+// a GNU long name, and that long name's size is judged before any of it is read. Then the end marker, which is the caller's choice:
+// `Required` wants both zero blocks and `NotRequired` reads what GNU tar, bsdtar and python3 read, which is all of these. A zero block
+// followed by another entry is `InvalidData` under `Required`, and under `NotRequired` ends the archive there, leaving the rest in
+// the source. Returns 42.
+import { std::archive::tar::TarReader, std::archive::tar::TarHeader, std::archive::tar::TarEndMarker, std::compress::gzip::GzipReader,
+         std::compress::gzip::GzipMembers, std::io::BufReader, std::io::SliceReader, std::io::IoError, std::io::IoErrorKind,
+         std::collections::DynamicArray, std::collections::FixedArray, std::encoding::hex::decode };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+// What the fixture's streams are stored as, since a tar is mostly zeros.
+fn DynamicArray<uint8> ungzip(const ref string gz) {
+    GzipReader<SliceReader> g = GzipReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: bytesOf(text: gz))),
+                                                limit: 100000000ui64, members: GzipMembers::All);
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (true) {
+        isize n = match (g.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n <= 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    return got;
+}
+
+// 2 InvalidData, 3 UnexpectedEof, 9 any other.
+fn int32 kindOf(IoError e) { return match (e.kind()) { case InvalidData: 2; case UnexpectedEof: 3; case _: 9; }; }
+
+// 0 when reading to the end ends in an error of kind `want`, and the calls after it, and `finish`, repeat it.
+fn int32 refusedBytes(DynamicArray<uint8> stream, int32 want) {
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromBytes(bytes: give stream), endMarker: TarEndMarker::NotRequired);
+    FixedArray<uint8> buf = FixedArray.make(size: 7);
+    int32 got = 0;
+    while (got == 0) {
+        Optional<TarHeader> next = Optional::None;
+        got = match (t.next()) { case Ok(value: o): { next = give o; := 0; } case Err(error: e): kindOf(e: e); };
+        if (got != 0) { break; }
+        bool some = match (next) { case Some(value: h): true; case None: false; };
+        if (!some) { return 1; }
+        while (got == 0) {
+            isize n = match (t.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): { got = kindOf(e: e); := -1; } };
+            if (n <= 0) { break; }
+        }
+    }
+    if (got != want) { return 2; }
+    int32 again = match (t.next()) { case Ok(value: o): 8; case Err(error: e): kindOf(e: e); };
+    if (again != want) { return 3; }
+    int32 reread = match (t.read(into: buf.viewMut())) { case Ok(value: k): 8; case Err(error: e): kindOf(e: e); };
+    if (reread != want) { return 4; }
+    return match (give t.finish()) {
+        case Ok(value: b): 5;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): settled(t: give back, kind: kindOf(e: e), want: want); };
+    };
+}
+
+fn int32 settled(TarReader<SliceReader> t, int32 kind, int32 want) {
+    TarReader<SliceReader> mine = give t;
+    if (kind != want) { return 6; }
+    SliceReader left = give mine.abandon();
+    return 0;
+}
+
+fn int32 refused(const ref string gz, int32 want) { return refusedBytes(stream: ungzip(gz: gz), want: want); }
+
+// Whether the archive reads to its end, and is handed back, under one choice of end marker.
+fn bool readsWhole(DynamicArray<uint8> stream, TarEndMarker end) {
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromBytes(bytes: give stream), endMarker: end);
+    while (true) {
+        Optional<TarHeader> next = match (t.next()) { case Ok(value: o): give o; case Err(error: e): { return false; } };
+        bool some = match (next) { case Some(value: h): true; case None: false; };
+        if (!some) { break; }
+    }
+    return match (give t.finish()) { case Ok(value: s): true; case Err(error: u): false; };
+}
+
+fn int32 ending(const ref string gz, bool required, bool notRequired) {
+    if (readsWhole(stream: ungzip(gz: gz), end: TarEndMarker::Required) != required) { return 1; }
+    if (readsWhole(stream: ungzip(gz: gz), end: TarEndMarker::NotRequired) != notRequired) { return 2; }
+    return 0;
+}
+
+// One block's header, with its checksum.
+fn void addHeader(ref DynamicArray<uint8> b, uint8 flag, isize size) {
+    isize start = b.length();
+    for (isize k = 0; k < 512; k = k + 1) { b.add(item: 0); }
+    b[start] = 97;                                                     // the name `a`
+    isize v = size;
+    for (isize k = 10; k >= 0; k = k - 1) { b[start + 124 + k] = cast<uint8>(48 + (v & 7)); v = v >> 3; }
+    b[start + 156] = flag;
+    for (isize k = 148; k < 156; k = k + 1) { b[start + k] = 32; }
+    int32 sum = 0;
+    for (isize k = 0; k < 512; k = k + 1) { sum = sum + cast<int32>(b[start + k]); }
+    for (isize k = 5; k >= 0; k = k - 1) { b[start + 148 + k] = cast<uint8>(48 + (sum & 7)); sum = sum >> 3; }
+    b[start + 154] = 0;
+}
+
+// An archive whose one name is `n` bytes, held from a pax record, and its end.
+fn DynamicArray<uint8> paxName(isize n) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    // `<length> path=<n bytes>\n`, whose length counts its own digits.
+    isize body = n + 7;
+    isize digits = 1;
+    isize t = body + 2;
+    while (t >= 10) { t = t / 10; digits = digits + 1; }
+    isize length = body + digits;
+    isize probe = length;
+    isize have = 1;
+    while (probe >= 10) { probe = probe / 10; have = have + 1; }
+    if (have != digits) { length = body + have; }
+    addHeader(b: ref b, flag: 120, size: length);
+    string text = "${length} path=";
+    borrow text.bytes() as v { foreach (uint8 c in v) { b.add(item: c); } }
+    for (isize k = 0; k < n; k = k + 1) { b.add(item: 112); }
+    b.add(item: 10);
+    while (b.length() % 512 != 0) { b.add(item: 0); }
+    addHeader(b: ref b, flag: 48, size: 0);
+    for (isize k = 0; k < 1024; k = k + 1) { b.add(item: 0); }
+    return b;
+}
+
+// An archive whose one name is `n` bytes, from a GNU long name.
+fn DynamicArray<uint8> gnuName(isize n) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    addHeader(b: ref b, flag: 76, size: n + 1);
+    for (isize k = 0; k < n; k = k + 1) { b.add(item: 112); }
+    b.add(item: 0);                                                    // its NUL, which the size counts
+    while (b.length() % 512 != 0) { b.add(item: 0); }
+    addHeader(b: ref b, flag: 48, size: 0);
+    for (isize k = 0; k < 1024; k = k + 1) { b.add(item: 0); }
+    return b;
+}
+
+// 0 when the first entry's name is `n` bytes long.
+fn int32 named(DynamicArray<uint8> stream, isize n) {
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromBytes(bytes: give stream), endMarker: TarEndMarker::Required);
+    Optional<TarHeader> next = match (t.next()) { case Ok(value: o): give o; case Err(error: e): { return 1; } };
+    return match (give next) {
+        case Some(value: h): h.path().length() == n ? 0 : 2;
+        case None: 3;
+    };
+}
+
+fn uint8 main() {
+    // a checksum off by one
+    if (refused(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e834109822b141e266e646460c0a060c7400a5c525"
+        + "8945402b194626c848cdc9c9671805a360148c825130d200006df76a8200080000", want: 2) != 0) { return 1; }
+    // a size that is not octal
+    if (refused(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e8b481816522820d1637076a60503060a003282d2e"
+        + "492c025ac9303241466a4e4e3ec3281805a360148c8291060043a66f3a00080000", want: 2) != 0) { return 2; }
+    // a negative size in base-256
+    if (refused(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d0470fa3f1230400006034363333303060503063a80d2"
+        + "e292c422a0931846c1281805a360640100d2282bf500060000", want: 2) != 0) { return 3; }
+    // a base-256 size past int64
+    if (refused(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d0470bae13f021820008381a1b1899921838201031d40"
+        + "6971496211d0490ca360148c825130b200000e76c63c00060000", want: 2) != 0) { return 4; }
+    // a base-256 size past int64, whose low bytes look like nothing
+    if (refused(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d0470bae1ffffffc86a10f2e626e6860c0a060c7400a5"
+        + "c5258945402b1946c1281805a360640100a2742a5600060000", want: 2) != 0) { return 5; }
+    // a cut inside a header
+    if (refused(gz: "1f8b08000000000002ff4bd42ba92861a02d00008888956c64000000", want: 3) != 0) { return 6; }
+    // a cut inside a body
+    if (refused(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e834109822b141e266e646860c0a060c7400a5c525"
+        + "8945402b194626c848cd0100456f63b803020000", want: 3) != 0) { return 7; }
+    // a cut inside the padding
+    if (refused(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e834109822b141e266e646860c0a060c7400a5c525"
+        + "8945402b194626c848cdc9c9a7874500d0d71c7169020000", want: 3) != 0) { return 8; }
+    // a pax length that is not a number
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a121820d16373733366450a860"
+        + "a003282d2e492c025ac93032418542416249866d2217c32818892051afa4a284c67610ccff06a668f9dfccdc0898ff0d"
+        + "46f33fcd41466a4e4efe68361805a360148c82110700e038f55b000c0000", want: 2) != 0) { return 9; }
+    // a pax record with no length
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b4818121121b2c6e6e666cc0a050c140"
+        + "07505a5c925804b4926164028582c4920cdb442e8651302241a25e4945098ded2098ff0d4cd1f2bf99b991218382c168"
+        + "fea739c848cdc9c91fcd06a360148c825130e20000c1a9c91e000c0000", want: 2) != 0) { return 10; }
+    // a pax record with no `=`
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a131820d16373733366650a860"
+        + "a003282d2e492c025ac9303281a181424162494662622217c32818792051afa4a284c67610ccff06a668f9dfccdcc890"
+        + "41c16034ffd31c64a4e6e4e48f668351300a46c12818710000c2a8d030000c0000", want: 2) != 0) { return 11; }
+    // a pax record not ending in a newline
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a121820d16373733366450a860"
+        + "a003282d2e492c025ac9303281a542416249866d6212c32818892051afa4a284c67610ccff06a668f9dfccdc0898ff0d"
+        + "46f33fcd41466a4e4efe68361805a360148c8211070016ece600000c0000", want: 2) != 0) { return 12; }
+    // a pax length running past its extension
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a111820d16373733366250a860"
+        + "a003282d2e492c025ac9303281a5a542416249866d2217c32818812051afa4a284c67610ccff06a668f9dfccdcc89041"
+        + "c16034ffd31c64a4e6e4e48f668351300a46c12818710000748cb2de000c0000", want: 2) != 0) { return 13; }
+    // a pax size that is not a number
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a109820d16373733366150a860"
+        + "a003282d2e492c025ac9303281a19142716655aa6d62523217c32818712051afa4a284c67610ccff06a668f9dfccdcc8"
+        + "9041c16034ffd31c64a4e6e4e48f668351300a46c1281871000047730200000c0000", want: 2) != 0) { return 14; }
+    // a pax uid that is not a number
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a121820d16373733366450a860"
+        + "a003282d2e492c025ac9303281a54269668a6d852117c32818892051afa4a284c67610ccff06a668f9dfccdc0898ff0d"
+        + "46f33fcd41466a4e4efe68361805a360148c82110700379c2b0d000c0000", want: 2) != 0) { return 15; }
+    // a pax time that is not a number
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a119820d16373733366350a860"
+        + "a003282d2e492c025ac9303281a189426e49666eaa6d5e7e7e1e17c32818612051afa4a284c67610ccff06a668f9dfcc"
+        + "dcc89041c16034ffd31c64a4e6e4e48f668351300a46c12818710000eb865886000c0000", want: 2) != 0) { return 16; }
+    // a pax time with no digits before its point
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a109820d16373733366150a860"
+        + "a003282d2e492c025ac9303281a191426e49666eaaad9e2917c32818712051afa4a284c67610ccff06a668f9dfccdcc8"
+        + "9041c16034ffd31c64a4e6e4e48f668351300a46c12818710000c54eda44000c0000", want: 2) != 0) { return 17; }
+    // a pax extension and then the end of the source
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a121820d16373733366450a860"
+        + "a003282d2e492c025ac9303281a542416249866d2217c3281889000068f5591e00040000", want: 3) != 0) { return 18; }
+    // a pax extension and then a zero block
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e8b48181a121820d16373733366450a860"
+        + "a003282d2e492c025ac9303281a542416249866d2217c3281805a360148c829104008dab3a6500080000", want: 3) != 0) { return 19; }
+    // a GNU long name and then the end of the source
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d04e834109820b141e2e6a6a6e60c0a3e0c74"
+        + "00a5c5258945402b194626484c4a6618052317000033599d1b00040000", want: 3) != 0) { return 20; }
+    // a pax extension declaring nearly 8 GiB, with one well-formed block of it
+    if (refused(gz: "1f8b08000000000002ff0b48acf0484d4c492d62a01d300002331313300d0470da1c0a90c4a0f2e6e686e60c0a150c74"
+        + "00a5c5258945402b1946263035345248cecfcd4dcd2bb12d1b05230d700100f15d3db700040000", want: 3) != 0) { return 21; }
+    // both marks
+    if (ending(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e834109822b141e266e646860c0a060c7400a5c525"
+        + "8945402b194626c848cdc9c9671805a360148c825130d20000bcf137c900080000", required: true, notRequired: true) != 0) { return 70; }
+    // no end marker, as python's `tarfile` writes when never closed
+    if (ending(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e834109822b141e266e646860c0a060c7400a5c525"
+        + "8945402b194626c848cdc9c967180523150000398464ea00040000", required: false, notRequired: true) != 0) { return 71; }
+    // one zero block
+    if (ending(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e834109822b141e266e646860c0a060c7400a5c525"
+        + "8945402b194626c848cdc9c9671805a360148c440000563710af00060000", required: false, notRequired: true) != 0) { return 72; }
+    // nothing at all
+    if (ending(gz: "1f8b08000000000002ff03000000000000000000", required: false, notRequired: true) != 0) { return 73; }
+    // A zero block and then another entry.
+    string gz = "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e834109822b141e266e646860c0a060c7400a5c525"
+                 + "8945402b194626c848cdc9c9671805a360148c44903458cb7fa3d1f27fb4fc1f05a360148c8251402b000016624c1100"
+                 + "0e0000";
+    if (refusedRequired(stream: ungzip(gz: gz)) != 0) { return 50; }
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromBytes(bytes: ungzip(gz: gz)), endMarker: TarEndMarker::NotRequired);
+    Optional<TarHeader> first = match (t.next()) { case Ok(value: o): give o; case Err(error: e): { return 51; } };
+    Optional<TarHeader> second = match (t.next()) { case Ok(value: o): give o; case Err(error: e): { return 52; } };
+    bool ended = match (second) { case Some(value: h): false; case None: true; };
+    if (!ended) { return 53; }
+    SliceReader rest = match (give t.finish()) { case Ok(value: s): give s; case Err(error: u): { return 54; } };
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    isize k = match (rest.read(into: one.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+    if (k != 1 || one[0] != 98ui8) { return 55; }     // the next entry's name, still in the source
+
+    // A body cut short is an error from `read` itself: `Ok(0)` would read as a complete, shorter file.
+    TarReader<SliceReader> cut = TarReader.make(source: SliceReader.fromBytes(bytes: ungzip(gz: "1f8b08000000000002ff4bd42ba92861a02d300002331313300d04e834109822b141e266e646860c0a060c7400a5c525"
+        + "8945402b194626c848cd0100456f63b803020000")), endMarker: TarEndMarker::NotRequired);
+    Optional<TarHeader> ch = match (cut.next()) { case Ok(value: o): give o; case Err(error: e): { return 56; } };
+    FixedArray<uint8> five = FixedArray.make(size: 5);
+    isize c0 = match (cut.read(into: five.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+    if (c0 != 3) { return 57; }
+    int32 c1 = match (cut.read(into: five.viewMut())) { case Ok(value: m): 8; case Err(error: e): kindOf(e: e); };
+    if (c1 != 3) { return 58; }
+
+    // The bound on what is held: exactly 1 MiB is read, and one byte more refused.
+    if (named(stream: paxName(n: 1048576), n: 1048576) != 0) { return 60; }
+    if (refusedBytes(stream: paxName(n: 1048577), want: 2) != 0) { return 61; }
+    if (named(stream: gnuName(n: 1048575), n: 1048575) != 0) { return 62; }
+    if (refusedBytes(stream: gnuName(n: 1048576), want: 2) != 0) { return 63; }
+    return 42;
+}
+
+fn int32 refusedRequired(DynamicArray<uint8> stream) {
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromBytes(bytes: give stream), endMarker: TarEndMarker::Required);
+    Optional<TarHeader> first = match (t.next()) { case Ok(value: o): give o; case Err(error: e): { return 1; } };
+    return match (t.next()) { case Ok(value: o): 2; case Err(error: e): kindOf(e: e) == 2 ? 0 : 3; };
+}

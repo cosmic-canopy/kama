@@ -1,0 +1,72 @@
+// A `TarReader` meets a stranger's bytes (KR-5), so every single-bit flip and every cut of a small archive, under both end-marker choices,
+// must answer `Ok` or `Err` and never trap, and reading must end. The archive holds every extension this reads: a pax record, a global one,
+// GNU long names, a base-256 number. A tar has no checksum over a body, so what a flip changes is not judged, only that it is answered. On
+// the sanitizer leg this also shows no bad read or write on any of those paths. Returns 42.
+import { std::archive::tar::TarReader, std::archive::tar::TarHeader, std::archive::tar::TarEndMarker, std::io::SliceReader,
+         std::collections::DynamicArray, std::collections::FixedArray, std::compress::gzip::GzipReader, std::compress::gzip::GzipMembers,
+         std::io::BufReader, std::encoding::hex::decode };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+fn DynamicArray<uint8> ungzip(const ref string gz) {
+    GzipReader<SliceReader> g = GzipReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: bytesOf(text: gz))),
+                                                limit: 100000000ui64, members: GzipMembers::All);
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (true) {
+        isize n = match (g.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n <= 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    return got;
+}
+
+// How many entries were listed before the archive ended or was refused. `next` is asked no more than the source has blocks to give, so a
+// reader that went round without reading would fail here.
+fn int32 walk(const ref DynamicArray<uint8> s, TarEndMarker end) {
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromBytes(bytes: copy s), endMarker: end);
+    FixedArray<uint8> buf = FixedArray.make(size: 256);
+    isize asked = 0;
+    int32 entries = 0;
+    while (asked <= s.length() / 512 + 1) {
+        asked = asked + 1;
+        Optional<TarHeader> next = match (t.next()) { case Ok(value: o): give o; case Err(error: e): { return entries; } };
+        bool some = match (next) { case Some(value: h): true; case None: false; };
+        if (!some) { return entries; }
+        entries = entries + 1;
+        // Half the bodies are read, so `next` skips the others.
+        if (entries % 2 == 0) {
+            while (true) {
+                isize n = match (t.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+                if (n <= 0) { break; }
+            }
+        }
+    }
+    return -1;
+}
+
+fn uint8 main() {
+    DynamicArray<uint8> s = ungzip(gz: "1f8b08000000000002ffed97b16e833010403df72bfc03217780f184d43103437fc1250ea0c4a44aa894319fd6a9df55505555414ad3c527a4bbb780586e383d9e9dac93f5f38bbb6cbcdbfa938a027c73ef0980e6f77dfa8e8016946e1401efe7c19dc6f18a2798e9fa1882ef87b2795202379205f83fc93ef33fc54ce98bf81fdfff14f49b1bdab227457e350b8162d993d4459edfef3f64b7fe672363ff41fc8f8e7bad4502e9ffd2ceff29a2f49fe8fc1f862ef812132351e647eb0ebbd8331ef73fbdf51facb1d4fd7787aef6fcf6bff5e200fbfe57c7bea9ba7e1fd1ff3fefffc6cefdb7c5e87f45e6bfd65cf71f4811df38eeffa7ffd769e0eaf3e31ff7ffbcb094fde7ebffae694502c6ec09663c3effe3acff051814ff29e84401411004967c010d19aa3100240000");
+    if (walk(s: s, end: TarEndMarker::Required) != 4) { return 1; }
+    if (walk(s: s, end: TarEndMarker::NotRequired) != 4) { return 2; }
+    for (isize at = 0; at < s.length(); at = at + 1) {
+        // Most of the archive is zeros that no parse reads closely, so each byte gets every flip only in the headers and records.
+        int32 flips = (at % 512 < 512 && s[at] != 0ui8) ? 8 : 1;
+        for (int32 bit = 0; bit < flips; bit = bit + 1) {
+            uint8 mask = cast<uint8>(1 << bit);
+            s[at] = s[at] ^ mask;
+            if (walk(s: s, end: TarEndMarker::Required) < 0) { return 3; }
+            if (walk(s: s, end: TarEndMarker::NotRequired) < 0) { return 4; }
+            s[at] = s[at] ^ mask;
+        }
+    }
+    for (isize n = 0; n < s.length(); n = n + 37) {
+        DynamicArray<uint8> cut = DynamicArray.empty();
+        for (isize k = 0; k < n; k = k + 1) { cut.add(item: s[k]); }
+        if (walk(s: cut, end: TarEndMarker::Required) < 0) { return 5; }
+        if (walk(s: cut, end: TarEndMarker::NotRequired) < 0) { return 6; }
+    }
+    return 42;
+}
