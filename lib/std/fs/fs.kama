@@ -704,7 +704,8 @@ unsafe fn Result<Metadata, IoError> symlinkStat(const ref string path) { return 
 
 
 // Does the path exist? A plain `bool`, not a `Result`: "no" and "the lookup failed" are the same answer
-// to this question, and a caller that needs to tell them apart wants `stat`.
+// to this question, and a caller that needs to tell them apart wants `stat`. A link is followed, as `stat`
+// follows it, so one that dangles is not there; `symlinkStat` asks about the link.
 //
 // ⚠️ It is a SNAPSHOT, and acting on it is the time-of-check/time-of-use race every language's docs warn
 // about: between `exists` and the `open` that follows, another process can create or delete the path. To
@@ -872,7 +873,8 @@ unsafe fn Result<Unit, IoError> hardLink(const ref string original, const ref st
     return Result::Ok(value: Unit::Unit);
 }
 
-// Delete a file. Ok on success; Err(NotFound) if the path did not exist.
+// Delete a file. Ok on success; Err(NotFound) if the path did not exist. A symbolic link is deleted itself,
+// whatever it names, a directory included; what it names is left alone.
 @parks
 unsafe fn Result<Unit, IoError> remove(const ref string path) {
     if (kama_unlink(path: path.cstr()) != 0) { return Result::Err(error: lastError()); }

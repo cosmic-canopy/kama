@@ -416,9 +416,13 @@ static inline unsigned int kama__io_count(size_t n) { return n > 0x7fffffffu ? 0
 static inline ptrdiff_t kama_read(int32_t fd, uint8_t* buf, size_t n)        { return (ptrdiff_t)_read((int)fd, buf, kama__io_count(n)); }
 static inline ptrdiff_t kama_write(int32_t fd, const uint8_t* buf, size_t n) { return (ptrdiff_t)_write((int)fd, buf, kama__io_count(n)); }
 static inline int32_t   kama_close_fd(int32_t fd) { return (int32_t)_close((int)fd); }
+// A link to a directory (or a junction) is a directory to DeleteFileW, so `_wunlink` refuses it where POSIX's `unlink` takes any
+// link. RemoveDirectoryW removes the link and not what it names, as CPython's os.unlink does; a plain directory is still refused.
 KAMA_NOINLINE static int32_t kama_unlink(const char* path) {
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
-    return (int32_t)_wunlink(w);
+    if (_wunlink(w) == 0) return 0;
+    const DWORD a = GetFileAttributesW(w), link = FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY;
+    return errno == EACCES && a != INVALID_FILE_ATTRIBUTES && (a & link) == link && RemoveDirectoryW(w) ? 0 : -1;
 }
 
 // ---- the current directory and a canonical path (KR-167) ----------------------------------------------------
@@ -1079,8 +1083,19 @@ KAMA_NOINLINE static int32_t kama_hard_link(const char* original, const char* at
     kama__os_fail(e, kama__win_path_errno(e));
     return -1;
 }
-static inline int32_t kama_exists(const char* path) {
-    return kama__attrs(path) == INVALID_FILE_ATTRIBUTES ? 0 : 1;
+// What the path names, as POSIX's `stat` answers: GetFileAttributesW reads a link itself, so a link is opened through to what it
+// names, and one that dangles is not there. A reparse point nothing can follow (an app execution alias: ERROR_CANT_ACCESS_FILE) is still something
+// there, as Rust's `metadata` reads it.
+KAMA_NOINLINE static int32_t kama_exists(const char* path) {
+    kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return 0;
+    const DWORD a = GetFileAttributesW(w);
+    if (a == INVALID_FILE_ATTRIBUTES) return 0;
+    if (!(a & FILE_ATTRIBUTE_REPARSE_POINT)) return 1;
+    HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_CANT_ACCESS_FILE;
+    CloseHandle(h);
+    return 1;
 }
 
 // ---- directory iteration (Win32 FindFirstFileW) ----------------------------
