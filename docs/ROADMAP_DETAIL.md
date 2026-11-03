@@ -573,6 +573,26 @@ link. The setuid, setgid and sticky bits and group/other write are dropped, and 
 filter, without its resolve-then-check step. Creating a symlink needs a new `std::fs` binding (`symlink`,
 `CreateSymbolicLinkW`); where Windows refuses one (no Developer Mode, no privilege), the error says so.
 
+**Built 2026-11-03, where taking the ruling's words literally would have been wrong.** The ruling stands, and each of these is how it holds:
+
+- **A Windows name is refused on Windows alone.** `aux.c`, `con` and `a:b` are ordinary names on any other system, and refusing them there would
+  limit every platform to Windows's rules (the rule on platform deltas).
+- **A link's target may climb only at its start.** "Climbs out" judged lexically is unsound: `a/b/d/up -> ../..` and then `a/b/escape -> d/up/../..`
+  stays inside by every lexical reading and, for real, goes to the destination's parent. `..` after a name is what makes a chain possible, so it is
+  refused however it looks.
+- **Each parent is asked of the operating system,** with `symlinkStat`, and never compared by name: a case-insensitive filesystem reads `LINK/x`
+  through `link`, and this Mac's does. That is the ruling's "any entry whose parent the archive itself made a symlink", since the destination started new
+  or empty.
+- **A file's mode is set as it is created, through `File.openWith`,** so a private file is never readable while it is written. A directory keeps its
+  owner's access whatever the archive says, since entries are still to come inside it: a `0500` directory is `0700`, and one `0700` stays private,
+  which Python's `data` filter, leaving it to the umask, does not promise.
+- **A hard link on a filesystem with none is a copy,** as Python's `tarfile` does: FAT and wasm's have none, and the bytes are the same.
+
+**One choice this keeps, against every other tool, for the maintainer to know.** The same name twice is refused by `CreateNew`, where GNU tar 1.35, bsdtar
+3.5.3 and Python all leave the last, as tar's old append-to-update model reads it. `tar -r` and `tar -u` write such archives, so `extractInto` refuses them,
+and a program that wants them lists with `TarReader` and decides. The reason to keep it is the ruling's: a listing that shows one file and an extraction
+that leaves another is how a scanner is fooled, and nothing is lost that a listing does not still show.
+
 **12. Left out, each with its verdict:**
 - **Preset dictionaries** (RFC 1950 FDICT, raw-deflate dictionaries): **scheduled, KR-257.** zlib, Go, Python, Java and
   Node take one, and permessage-deflate's context takeover is one by another name.
@@ -745,7 +765,13 @@ read at all.
    **72 mutants each fail a fixture.** Four were missed at first. One was equivalent, a check the end of the extension makes redundant, and that line
    is gone. The others were holes in the fixtures, and working out what one needed found a real trap: a base-256 mtime of exactly `-2^63` reached `-s`
    in `entryTime` and overflowed, in the one field T5 promises can stop nothing. No hostile batch had hit it, and the next one aimed at it.
-6. **`extractInto`** and the `std::fs` symlink binding, which goes in `kama_os.h`.
+6. ✅ **`extractInto`** and `std::fs`'s `symlink` and `hardLink` (`0.9.826`), to decision 11 as built above. The Windows half of those bindings and of the
+   name rule has met no compiler here, so CI is its first run.
+
+   **Held by trying to break it:** 12,000 archives from a small grammar of `..`, links, hard links and case variants, each extracted for real, and the
+   filesystem then asked directly: nothing outside the destination changed, every link left behind resolves inside it through any chain, and no mode keeps
+   a bit the ruling drops. 23 mutants each fail `archive_tar_extract`. Three were missed at first: the chain test passed by the wrong rule, since at that
+   depth counting `..` caught it first, and so needed a deeper chain; the other two were equivalent, and one of those was a redundant condition, now gone.
 7. **Guards.** `check-compress-interop.sh` runs both directions against python3's zlib, gzip and tarfile, at every
    level, over edge corpora. `check-packages.sh` round-trips publish's tarball through `Frozen`. An xfail backs each
    negative claim.

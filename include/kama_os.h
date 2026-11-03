@@ -1025,6 +1025,51 @@ KAMA_NOINLINE static int32_t kama_rename(const char* from, const char* to) {
                      : e == ERROR_DIR_NOT_EMPTY ? ENOTEMPTY : EACCES);
     return -1;
 }
+// A symbolic link at `at` holding `original`, and a second name for an existing file (std::fs::symlink, std::fs::hardLink).
+// A link to a directory must say so here, decided from what `original` names now, relative to the link's own directory (Go's
+// `os.Symlink`); one to nothing yet is a file's. `original` is stored as written, so it takes no `\\?\` prefix, and its separators
+// are the ones a link is read with. Developer Mode lets an unprivileged process make one (0x2, which a Windows before 1703 refuses
+// as an invalid parameter, so it is retried without). Past that it is ERROR_PRIVILEGE_NOT_HELD, which is EACCES and quotes the OS's text.
+KAMA_NOINLINE static int kama__link_target_is_dir(const char* original, const char* at) {
+    const int absolute = original[0] == '/' || original[0] == '\\' || (original[0] != 0 && original[1] == ':');
+    size_t dirLen = 0;
+    if (!absolute) for (const char* p = at; *p; ++p) if (*p == '/' || *p == '\\') dirLen = (size_t)(p - at) + 1;
+    const size_t n = strlen(original);
+    char* joined = (char*)malloc(dirLen + n + 1);
+    if (!joined) return 0;
+    memcpy(joined, at, dirLen);
+    memcpy(joined + dirLen, original, n + 1);
+    const DWORD a = kama__attrs(joined);
+    free(joined);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+KAMA_NOINLINE static int32_t kama_symlink(const char* original, const char* at) {
+    const DWORD kind = kama__link_target_is_dir(original, at) ? 0x1u : 0u;   // SYMBOLIC_LINK_FLAG_DIRECTORY
+    kama__wpathbuf bo, bl;
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, original, -1, bo.w, KAMA__WPATH_CAP) <= 0) {
+        kama__os_fail(GetLastError(), EINVAL);
+        return -1;
+    }
+    for (wchar_t* p = bo.w; *p; ++p) if (*p == L'/') *p = L'\\';
+    wchar_t* wl = kama__wpath(at, &bl); if (!wl) return -1;
+    if (CreateSymbolicLinkW(wl, bo.w, kind | 0x2u /* SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE */)) return 0;
+    DWORD e = GetLastError();
+    if (e == ERROR_INVALID_PARAMETER) {
+        if (CreateSymbolicLinkW(wl, bo.w, kind)) return 0;
+        e = GetLastError();
+    }
+    kama__os_fail(e, e == ERROR_PRIVILEGE_NOT_HELD ? EACCES : kama__win_path_errno(e));
+    return -1;
+}
+KAMA_NOINLINE static int32_t kama_hard_link(const char* original, const char* at) {
+    kama__wpathbuf bo, bl;
+    wchar_t* wo = kama__wpath(original, &bo); if (!wo) return -1;
+    wchar_t* wl = kama__wpath(at, &bl); if (!wl) return -1;
+    if (CreateHardLinkW(wl, wo, NULL)) return 0;
+    const DWORD e = GetLastError();
+    kama__os_fail(e, kama__win_path_errno(e));
+    return -1;
+}
 static inline int32_t kama_exists(const char* path) {
     return kama__attrs(path) == INVALID_FILE_ATTRIBUTES ? 0 : 1;
 }
@@ -1887,6 +1932,8 @@ extern int  unlink(const char*);
 // asm-label alias on macOS, so redeclaring is safe even if a socket header transitively pulls <unistd.h>.
 extern int   rename(const char*, const char*);   // <stdio.h>'s, and the only thing this file wants from it
 extern int   rmdir(const char*);                 // <unistd.h>'s, which this file deliberately does not pull
+extern int   symlink(const char*, const char*);
+extern int   link(const char*, const char*);
 extern int   pipe(int[2]);
 extern int   dup2(int, int);
 extern int   chdir(const char*);
@@ -2267,6 +2314,8 @@ static inline int32_t kama_is_symlink(const char* path) {
     return S_ISLNK(st.st_mode) ? 1 : 0;
 }
 static inline int32_t kama_rename(const char* from, const char* to) { return (int32_t)rename(from, to); }
+static inline int32_t kama_symlink(const char* original, const char* at) { return (int32_t)symlink(original, at); }
+static inline int32_t kama_hard_link(const char* original, const char* at) { return (int32_t)link(original, at); }
 static inline int32_t kama_exists(const char* path) {
     struct stat st; return stat(path, &st) == 0 ? 1 : 0;
 }

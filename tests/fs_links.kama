@@ -1,0 +1,88 @@
+// `std::fs::symlink` and `hardLink`. A symbolic link holds its target as written, may dangle, and is read through; an existing path is
+// `AlreadyExists` and is left as it was. A hard link is a second name for one file: the same contents, the same `FileId`, and it outlives
+// the first name. A hard link to nothing is `NotFound`. Windows wants Developer Mode or a privilege for a symbolic link, and where neither
+// is held that half answers `PermissionDenied`, which is the one thing it may answer in its place. wasm's filesystem has no hard links. Returns
+// 42.
+import { std::fs::symlink, std::fs::hardLink, std::fs::symlinkStat, std::fs::stat, std::fs::readText, std::fs::writeText, std::fs::remove,
+         std::fs::removeDirAll, std::fs::createDirAll, std::fs::exists, std::fs::Metadata, std::io::IoError };
+
+// 0 for success, 1 `AlreadyExists`, 2 `NotFound`, 3 `PermissionDenied`, 9 any other.
+fn int32 codeOf(Result<Unit, IoError> r) {
+    return match (r) {
+        case Ok(value: _): 0;
+        case Err(error: e): match (e.kind()) { case AlreadyExists: 1; case NotFound: 2; case PermissionDenied: 3; case _: 9; };
+    };
+}
+
+fn string textOf(const ref string path) {
+    return match (readText(path: path)) { case Ok(value: t): give t; case Err(error: e): "<unreadable>"; };
+}
+
+fn bool isLink(const ref string path) {
+    return match (symlinkStat(path: path)) { case Ok(value: m): m.isSymlink(); case Err(error: e): false; };
+}
+
+fn int32 links(const ref string dir) {
+    string target = dir + "/target.txt";
+    string ln = dir + "/ln";
+    int32 made = codeOf(r: symlink(original: "target.txt", link: ln));
+    if (made == 3) { return 0; }                  // Windows, without the privilege
+    if (made != 0) { return 1; }
+    if (!isLink(path: ln)) { return 2; }
+    if (textOf(path: ln) != "original") { return 3; }
+    // An existing path is refused, and left alone.
+    if (codeOf(r: symlink(original: "elsewhere", link: target)) != 1) { return 4; }
+    if (textOf(path: target) != "original") { return 5; }
+    if (codeOf(r: symlink(original: "elsewhere", link: ln)) != 1) { return 6; }
+    if (textOf(path: ln) != "original") { return 7; }
+    // It may dangle, and then is still a link.
+    string dangling = dir + "/dangling";
+    if (codeOf(r: symlink(original: "not/there", link: dangling)) != 0) { return 8; }
+    if (!isLink(path: dangling) || exists(path: dangling)) { return 9; }
+    // In a directory's own terms: the target is read from where the link is.
+    string sub = dir + "/sub";
+    if (codeOf(r: createDirAll(path: sub)) != 0) { return 10; }
+    string up = sub + "/up";
+    if (codeOf(r: symlink(original: "../target.txt", link: up)) != 0) { return 11; }
+    return textOf(path: up) == "original" ? 0 : 12;
+}
+
+// wasm's virtual filesystem has no hard links, and says so. `extractInto` copies there; this function does what it is named.
+@compileFor(ARCH_WASM32)
+fn int32 hardLinks(const ref string dir) {
+    string first = dir + "/first.txt";
+    match (writeText(path: first, text: "one file")) { case Ok(value: n): { } case Err(error: e): { return 1; } };
+    return codeOf(r: hardLink(original: first, link: dir + "/second.txt")) != 0 ? 0 : 2;
+}
+
+@compileFor(!ARCH_WASM32)
+fn int32 hardLinks(const ref string dir) {
+    string first = dir + "/first.txt";
+    string second = dir + "/second.txt";
+    match (writeText(path: first, text: "one file")) { case Ok(value: n): { } case Err(error: e): { return 1; } };
+    if (codeOf(r: hardLink(original: first, link: second)) != 0) { return 2; }
+    if (textOf(path: second) != "one file") { return 3; }
+    bool same = match (stat(path: first)) {
+        case Ok(value: a): match (stat(path: second)) { case Ok(value: b): a.id == b.id; case Err(error: e): false; };
+        case Err(error: e): false;
+    };
+    if (!same) { return 4; }
+    if (codeOf(r: hardLink(original: first, link: second)) != 1) { return 5; }
+    if (codeOf(r: hardLink(original: dir + "/nothing", link: dir + "/third")) != 2) { return 6; }
+    // It outlives the first name.
+    if (codeOf(r: remove(path: first)) != 0) { return 7; }
+    return textOf(path: second) == "one file" ? 0 : 8;
+}
+
+fn uint8 main() {
+    string dir = "fs_links.tmp";
+    if (exists(path: dir)) { if (codeOf(r: removeDirAll(path: dir)) != 0) { return 1; } }
+    if (codeOf(r: createDirAll(path: dir)) != 0) { return 2; }
+    match (writeText(path: dir + "/target.txt", text: "original")) { case Ok(value: n): { } case Err(error: e): { return 3; } };
+    int32 a = links(dir: dir);
+    if (a != 0) { return cast<uint8>(100 + a); }
+    int32 b = hardLinks(dir: dir);
+    if (b != 0) { return cast<uint8>(120 + b); }
+    if (codeOf(r: removeDirAll(path: dir)) != 0) { return 4; }
+    return 42;
+}

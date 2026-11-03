@@ -1,0 +1,441 @@
+// `extractInto` (KR-5, ruling 11) writes an archive under one directory and never outside it. A tree of every kind it writes, with modes
+// reduced as the ruling says, the contents and links checked afterwards. Then each refusal, each by an archive built to attempt it, with
+// the rule it answers by and a check that nothing landed where it aimed: an absolute path, `..`, a chain of links that passes a lexical
+// check and leads out, an entry under a link, a write through a final link, a hard link to anything but an earlier regular file, a device,
+// a name that is not UTF-8, and a destination that is not new or empty. Names Windows cannot hold are ordinary elsewhere and refused
+// there. Returns 42.
+import { std::archive::tar::TarWriter, std::archive::tar::TarReader, std::archive::tar::TarHeader, std::archive::tar::TarKind,
+         std::archive::tar::TarOwner, std::archive::tar::TarEndMarker, std::archive::tar::extractInto, std::archive::tar::TarExtractError,
+         std::archive::tar::TarRefusal, std::collections::DynamicArray, std::collections::ConstView, std::collections::FixedArray,
+         std::io::Writer, std::io::SliceReader, std::io::IoError, std::io::IoErrorKind, std::time::Timestamp, std::fs::readText, std::fs::writeText,
+         std::fs::stat, std::fs::symlinkStat, std::fs::exists, std::fs::removeDirAll, std::fs::createDirAll, std::fs::Metadata, std::fs::symlink, core::eprintln };
+
+comptime int32 FAILED = 100;
+
+type resource Sink implements Writer {
+    DynamicArray<uint8> got;
+    public ctor make() { this.got = DynamicArray.empty(); }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        for (isize k = 0; k < bytes.length(); k = k + 1) { this.got.add(item: bytes[k]); }
+        return Result::Ok(value: bytes.length());
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public give fn DynamicArray<uint8> bytes() { return give this.got; }
+}
+
+fn DynamicArray<uint8> bytesOf(const ref string s) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    borrow s.bytes() as v { foreach (uint8 b in v) { a.add(item: b); } }
+    return a;
+}
+
+fn Timestamp stamp() { return Timestamp.fromUnixSecs(s: 315532800i64); }
+
+fn void begin(ref TarWriter<Sink> w, TarHeader h) {
+    match (w.begin(header: h)) { case Ok(value: _): { } case Err(error: e): { panic(msg: "begin"); } };
+}
+
+fn void addFile(ref TarWriter<Sink> w, const ref string path, const ref string body, uint32 mode) {
+    begin(w: ref w, h: TarHeader.make(path: path.bytes(), kind: TarKind::File(size: cast<uint64>(body.length())), mode: mode, mtime: stamp(), owner: TarOwner::None));
+    if (body.length() > 0) { match (w.write(bytes: body.bytes())) { case Ok(value: n): { } case Err(error: e): { panic(msg: "write"); } }; }
+}
+
+fn void directory(ref TarWriter<Sink> w, const ref string path, uint32 mode) {
+    begin(w: ref w, h: TarHeader.make(path: path.bytes(), kind: TarKind::Directory, mode: mode, mtime: stamp(), owner: TarOwner::None));
+}
+
+fn void softLink(ref TarWriter<Sink> w, const ref string path, const ref string target) {
+    begin(w: ref w, h: TarHeader.make(path: path.bytes(), kind: TarKind::Symlink(target: bytesOf(s: target)), mode: 0o777, mtime: stamp(), owner: TarOwner::None));
+}
+
+fn void hard(ref TarWriter<Sink> w, const ref string path, const ref string target) {
+    begin(w: ref w, h: TarHeader.make(path: path.bytes(), kind: TarKind::HardLink(target: bytesOf(s: target)), mode: 0o644, mtime: stamp(), owner: TarOwner::None));
+}
+
+fn DynamicArray<uint8> done(TarWriter<Sink> w) {
+    TarWriter<Sink> mine = give w;
+    return match (give mine.finish()) {
+        case Ok(value: s): { Sink d = give s; := give d.bytes(); }
+        case Err(error: u): { panic(msg: "finish"); }
+    };
+}
+
+fn TarWriter<Sink> writer() { return TarWriter.make(sink: Sink.make()); }
+
+// What an extraction answers: 0, or the rule's number, or `FAILED` plus what the filesystem said.
+fn int32 extract(DynamicArray<uint8> tar, const ref string dir) {
+    TarReader<SliceReader> t = TarReader.make(source: SliceReader.fromBytes(bytes: give tar), endMarker: TarEndMarker::Required);
+    Result<Unit, TarExtractError> r = extractInto(archive: ref t, dir: dir);
+    return match (give r) {
+        case Ok(value: _): 0;
+        case Err(error: e): codeOf(e: e);
+    };
+}
+
+fn int32 codeOf(const ref TarExtractError e) {
+    return match (e) {
+        case Refused(entry: n, rule: r): match (r) {
+            case DestinationInUse: 1; case BadName: 2; case NotUtf8: 3; case Absolute: 4; case ClimbsOut: 5; case NotOnThisSystem: 6;
+            case SpecialFile: 7; case LinkTarget: 8; case HardLinkTarget: 9; case UnderALink: 10; case _: 99;
+        };
+        case Failed(entry: n, error: x): match (x.kind()) { case AlreadyExists: FAILED + 1; case _: FAILED + 2; };
+    };
+}
+
+fn bool isLink(const ref string path) {
+    return match (symlinkStat(path: path)) { case Ok(value: m): m.isSymlink(); case Err(error: e): false; };
+}
+
+fn string textOf(const ref string path) {
+    return match (readText(path: path)) { case Ok(value: t): give t; case Err(error: e): "<unreadable>"; };
+}
+
+fn void fresh(const ref string dir) {
+    if (exists(path: dir)) { match (removeDirAll(path: dir)) { case Ok(value: _): { } case Err(error: e): { panic(msg: "removeDirAll"); } }; }
+}
+
+// Whether this system lets a test make a symbolic link at all: Windows wants Developer Mode or a privilege.
+fn bool linksWork(const ref string root) {
+    string probe = root + "/probe";
+    match (createDirAll(path: root)) { case Ok(value: _): { } case Err(error: e): { return false; } };
+    return match (symlink(original: "x", link: probe)) { case Ok(value: _): true; case Err(error: e): false; };
+}
+
+fn int32 tree(const ref string root, bool links) {
+    string dir = root + "/tree/nested/here";          // a destination whose parents are missing too
+    TarWriter<Sink> w = writer();
+    directory(w: ref w, path: "./", mode: 0o755);
+    addFile(w: ref w, path: "./plain.txt", body: "hello", mode: 0o644);
+    directory(w: ref w, path: "d/", mode: 0o755);
+    addFile(w: ref w, path: "d/e/f/nested.txt", body: "nested", mode: 0o644);        // parents the archive never listed
+    string longName = "l/o/n/g/" + "n123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890";
+    addFile(w: ref w, path: longName, body: "long", mode: 0o644);
+    addFile(w: ref w, path: "empty", body: "", mode: 0o644);
+    directory(w: ref w, path: "readonly/", mode: 0o500);
+    addFile(w: ref w, path: "readonly/inside", body: "still written", mode: 0o444);   // a directory keeps its owner's access
+    hard(w: ref w, path: "hl", target: "plain.txt");
+    hard(w: ref w, path: "d/hl2", target: "./d/e/f/nested.txt");
+    if (links) {
+        softLink(w: ref w, path: "ln", target: "plain.txt");
+        softLink(w: ref w, path: "d/e/up", target: "../../plain.txt");
+        softLink(w: ref w, path: "dangling", target: "not/yet/there");
+    }
+    int32 r = extract(tar: done(w: give w), dir: dir);
+    if (r != 0) { return 1000 + r; }
+    if (textOf(path: dir + "/plain.txt") != "hello") { return 1; }
+    if (textOf(path: dir + "/d/e/f/nested.txt") != "nested") { return 2; }
+    if (textOf(path: dir + "/" + longName) != "long") { return 3; }
+    if (textOf(path: dir + "/empty") != "") { return 4; }
+    if (textOf(path: dir + "/readonly/inside") != "still written") { return 5; }
+    if (textOf(path: dir + "/hl") != "hello") { return 6; }
+    if (textOf(path: dir + "/d/hl2") != "nested") { return 7; }
+    if (links) {
+        if (!isLink(path: dir + "/ln") || textOf(path: dir + "/ln") != "hello") { return 8; }
+        if (!isLink(path: dir + "/d/e/up") || textOf(path: dir + "/d/e/up") != "hello") { return 9; }
+        if (!isLink(path: dir + "/dangling")) { return 10; }
+    }
+    return 0;
+}
+
+// What is left of a mode. A POSIX file's bits are its own; on Windows they become an access list.
+@compileFor(!OS_WINDOWS)
+fn int32 modes(const ref string root) {
+    string dir = root + "/modes";
+    TarWriter<Sink> w = writer();
+    addFile(w: ref w, path: "secret", body: "x", mode: 0o600);
+    addFile(w: ref w, path: "exec", body: "x", mode: 0o755);
+    addFile(w: ref w, path: "setuid", body: "x", mode: 0o6755);
+    addFile(w: ref w, path: "groupwrite", body: "x", mode: 0o664);
+    addFile(w: ref w, path: "worldwrite", body: "x", mode: 0o777);
+    directory(w: ref w, path: "private/", mode: 0o700);
+    directory(w: ref w, path: "sticky/", mode: 0o1777);
+    directory(w: ref w, path: "readonly/", mode: 0o500);
+    int32 r = extract(tar: done(w: give w), dir: dir);
+    if (r != 0) { return 1000 + r; }
+    if (modeOf(path: dir + "/secret") != 0o600ui32) { return 1; }
+    if (modeOf(path: dir + "/exec") != 0o755ui32) { return 2; }
+    if (modeOf(path: dir + "/setuid") != 0o755ui32) { return 3; }
+    if (modeOf(path: dir + "/groupwrite") != 0o644ui32) { return 4; }
+    if (modeOf(path: dir + "/worldwrite") != 0o755ui32) { return 5; }
+    if (modeOf(path: dir + "/private") != 0o700ui32) { return 6; }
+    if (modeOf(path: dir + "/sticky") != 0o755ui32) { return 7; }
+    if (modeOf(path: dir + "/readonly") != 0o700ui32) { return 8; }
+    return 0;
+}
+
+@compileFor(OS_WINDOWS)
+fn int32 modes(const ref string root) { return 0; }
+
+@compileFor(!OS_WINDOWS)
+fn uint32 modeOf(const ref string path) {
+    return match (stat(path: path)) { case Ok(value: m): m.permissions.mode(); case Err(error: e): 0xFFFFui32; };
+}
+
+// A name only Windows refuses. Everywhere else each extracts as an ordinary file.
+@compileFor(!OS_WINDOWS)
+fn int32 systemNames(const ref string root) {
+    string dir = root + "/names";
+    TarWriter<Sink> w = writer();
+    addFile(w: ref w, path: "aux.c", body: "x", mode: 0o644);
+    addFile(w: ref w, path: "con", body: "x", mode: 0o644);
+    addFile(w: ref w, path: "COM1.txt", body: "x", mode: 0o644);
+    addFile(w: ref w, path: "a:b", body: "x", mode: 0o644);
+    addFile(w: ref w, path: "back\\slash", body: "x", mode: 0o644);
+    addFile(w: ref w, path: "trailing.", body: "x", mode: 0o644);
+    int32 r = extract(tar: done(w: give w), dir: dir);
+    if (r != 0) { return 1000 + r; }
+    return textOf(path: dir + "/aux.c") == "x" && textOf(path: dir + "/a:b") == "x" ? 0 : 1;
+}
+
+@compileFor(OS_WINDOWS)
+fn int32 refusedOnWindows(const ref string root, const ref string name, int32 k) {
+    string dir = root + "/win" + "${k}";
+    TarWriter<Sink> w = writer();
+    addFile(w: ref w, path: name, body: "x", mode: 0o644);
+    return extract(tar: done(w: give w), dir: dir) == 6 ? 0 : k;
+}
+
+@compileFor(OS_WINDOWS)
+fn int32 systemNames(const ref string root) {
+    InlineArray<string>#(10) names = ["aux.c", "CON", "com1.txt", "LPT9", "NUL", "a:b", "C:/evil", "back\\slash", "trailing.", "space "];
+    for (int32 k = 0; k < 10; k = k + 1) {
+        int32 r = refusedOnWindows(root: root, name: names[k], k: k + 1);
+        if (r != 0) { return r; }
+    }
+    return 0;
+}
+
+// 0 when extracting answers `want`.
+fn int32 refuses(TarWriter<Sink> w, const ref string dir, int32 want) {
+    TarWriter<Sink> mine = give w;
+    int32 got = extract(tar: done(w: give mine), dir: dir);
+    return got == want ? 0 : 1000 + got;
+}
+
+fn int32 refusals(const ref string root, bool links) {
+    int32 r = 0;
+    string outside = root + "/outside.txt";
+
+    TarWriter<Sink> a = writer();
+    addFile(w: ref a, path: "/tmp/kama_evil", body: "x", mode: 0o644);
+    r = refuses(w: give a, dir: root + "/r1", want: 4);
+    if (r != 0) { return 1000000 + r; }
+
+    TarWriter<Sink> b = writer();
+    addFile(w: ref b, path: "../outside.txt", body: "x", mode: 0o644);
+    r = refuses(w: give b, dir: root + "/r2", want: 5);
+    if (r != 0) { return 2000000 + r; }
+    if (exists(path: outside)) { return 2; }
+
+    TarWriter<Sink> c = writer();
+    addFile(w: ref c, path: "a/b/../../../outside.txt", body: "x", mode: 0o644);
+    r = refuses(w: give c, dir: root + "/r3", want: 5);
+    if (r != 0) { return 3000000 + r; }
+    if (exists(path: outside)) { return 3; }
+
+    if (links) {
+        TarWriter<Sink> d = writer();
+        softLink(w: ref d, path: "l", target: "/etc");
+        r = refuses(w: give d, dir: root + "/r4", want: 8);
+        if (r != 0) { return 4000000 + r; }
+
+        TarWriter<Sink> e = writer();
+        softLink(w: ref e, path: "l", target: "..");
+        r = refuses(w: give e, dir: root + "/r5", want: 8);
+        if (r != 0) { return 5000000 + r; }
+
+        TarWriter<Sink> f = writer();
+        softLink(w: ref f, path: "d/l", target: "../..");
+        r = refuses(w: give f, dir: root + "/r6", want: 8);
+        if (r != 0) { return 6000000 + r; }
+
+        // The chain: `d/up` is `..`, inside. `escape` reads, lexically, as `d` and so inside, and for real as the destination's parent.
+        TarWriter<Sink> g = writer();
+        softLink(w: ref g, path: "d/up", target: "..");
+        softLink(w: ref g, path: "escape", target: "d/up/..");
+        r = refuses(w: give g, dir: root + "/r7", want: 8);
+        if (r != 0) { return 7000000 + r; }
+        if (isLink(path: root + "/r7/escape")) { return 7; }
+
+        // The same at a depth where counting `..` cannot catch it. `up` is `a`, so `escape` reads, lexically, as `a/b` and so inside, and
+        // for real goes from `a` to the destination and then to its parent. Only `..` after a name tells them apart.
+        TarWriter<Sink> g2 = writer();
+        softLink(w: ref g2, path: "a/b/d/up", target: "../..");
+        softLink(w: ref g2, path: "a/b/escape", target: "d/up/../..");
+        r = refuses(w: give g2, dir: root + "/r7b", want: 8);
+        if (r != 0) { return 7500000 + r; }
+        if (isLink(path: root + "/r7b/a/b/escape")) { return 75; }
+
+        // A link to nothing at all.
+        TarWriter<Sink> g3 = writer();
+        softLink(w: ref g3, path: "l", target: "");
+        r = refuses(w: give g3, dir: root + "/r7c", want: 8);
+        if (r != 0) { return 7600000 + r; }
+
+        // A link, and then an entry through it.
+        TarWriter<Sink> h = writer();
+        directory(w: ref h, path: "real/", mode: 0o755);
+        softLink(w: ref h, path: "l", target: "real");
+        addFile(w: ref h, path: "l/through.txt", body: "x", mode: 0o644);
+        r = refuses(w: give h, dir: root + "/r8", want: 10);
+        if (r != 0) { return 8000000 + r; }
+        if (exists(path: root + "/r8/real/through.txt")) { return 8; }
+
+        // The same, spelled in another case: a case-insensitive filesystem reads it through the link, and a case-sensitive one has
+        // a separate directory. Either way nothing lands in `real`, which is the point of asking the system and not comparing names.
+        TarWriter<Sink> i = writer();
+        directory(w: ref i, path: "real/", mode: 0o755);
+        softLink(w: ref i, path: "l", target: "real");
+        addFile(w: ref i, path: "L/through.txt", body: "x", mode: 0o644);
+        int32 caseGot = extract(tar: done(w: give i), dir: root + "/r9");
+        if (caseGot != 0 && caseGot != 10) { return 9; }
+        if (exists(path: root + "/r9/real/through.txt")) { return 10; }
+
+        // A directory through a link.
+        TarWriter<Sink> j = writer();
+        directory(w: ref j, path: "real/", mode: 0o755);
+        softLink(w: ref j, path: "l", target: "real");
+        directory(w: ref j, path: "l/", mode: 0o755);
+        r = refuses(w: give j, dir: root + "/r10", want: 10);
+        if (r != 0) { return 10000000 + r; }
+
+        // Through a final link: the link stays as it was, and the file it names is untouched.
+        TarWriter<Sink> k = writer();
+        addFile(w: ref k, path: "target.txt", body: "original", mode: 0o644);
+        softLink(w: ref k, path: "l", target: "target.txt");
+        addFile(w: ref k, path: "l", body: "overwritten", mode: 0o644);
+        r = refuses(w: give k, dir: root + "/r11", want: FAILED + 1);
+        if (r != 0) { return 11000000 + r; }
+        if (textOf(path: root + "/r11/target.txt") != "original") { return 11; }
+
+        // A hard link to a symbolic link.
+        TarWriter<Sink> l = writer();
+        softLink(w: ref l, path: "l", target: "/etc/passwd");
+        r = refuses(w: give l, dir: root + "/r12", want: 8);
+        if (r != 0) { return 12000000 + r; }
+        TarWriter<Sink> m = writer();
+        addFile(w: ref m, path: "t", body: "x", mode: 0o644);
+        softLink(w: ref m, path: "l", target: "t");
+        hard(w: ref m, path: "h", target: "l");
+        r = refuses(w: give m, dir: root + "/r13", want: 9);
+        if (r != 0) { return 13000000 + r; }
+    }
+
+    // A hard link to nothing this archive wrote, however it is named.
+    TarWriter<Sink> n = writer();
+    hard(w: ref n, path: "h", target: "/etc/passwd");
+    r = refuses(w: give n, dir: root + "/r14", want: 9);
+    if (r != 0) { return 14000000 + r; }
+    TarWriter<Sink> o = writer();
+    hard(w: ref o, path: "h", target: "../outside.txt");
+    r = refuses(w: give o, dir: root + "/r15", want: 9);
+    if (r != 0) { return 15000000 + r; }
+    TarWriter<Sink> p = writer();
+    hard(w: ref p, path: "h", target: "later");
+    addFile(w: ref p, path: "later", body: "x", mode: 0o644);
+    r = refuses(w: give p, dir: root + "/r16", want: 9);
+    if (r != 0) { return 16000000 + r; }
+
+    // Devices, FIFOs.
+    TarWriter<Sink> q = writer();
+    begin(w: ref q, h: TarHeader.make(path: "dev".bytes(), kind: TarKind::CharDevice(major: 1ui32, minor: 3ui32), mode: 0o666, mtime: stamp(), owner: TarOwner::None));
+    r = refuses(w: give q, dir: root + "/r17", want: 7);
+    if (r != 0) { return 17000000 + r; }
+    TarWriter<Sink> s = writer();
+    begin(w: ref s, h: TarHeader.make(path: "pipe".bytes(), kind: TarKind::Fifo, mode: 0o666, mtime: stamp(), owner: TarOwner::None));
+    r = refuses(w: give s, dir: root + "/r18", want: 7);
+    if (r != 0) { return 18000000 + r; }
+
+    // A name that is not UTF-8, which a `string` path cannot hold.
+    TarWriter<Sink> t = writer();
+    InlineArray<uint8>#(4) latin = [99, 97, 102, 233];
+    begin(w: ref t, h: TarHeader.make(path: latin.view(), kind: TarKind::File(size: 0ui64), mode: 0o644, mtime: stamp(), owner: TarOwner::None));
+    r = refuses(w: give t, dir: root + "/r19", want: 3);
+    if (r != 0) { return 19000000 + r; }
+
+    // The same name twice: `CreateNew` refuses the second, and the first stands.
+    TarWriter<Sink> u = writer();
+    addFile(w: ref u, path: "twice", body: "first", mode: 0o644);
+    addFile(w: ref u, path: "twice", body: "second", mode: 0o644);
+    r = refuses(w: give u, dir: root + "/r20", want: FAILED + 1);
+    if (r != 0) { return 20000000 + r; }
+    if (textOf(path: root + "/r20/twice") != "first") { return 20; }
+
+    // A file where a directory is wanted, and a directory where a file is.
+    TarWriter<Sink> v = writer();
+    addFile(w: ref v, path: "f", body: "x", mode: 0o644);
+    addFile(w: ref v, path: "f/under", body: "x", mode: 0o644);
+    r = refuses(w: give v, dir: root + "/r21", want: FAILED + 1);
+    if (r != 0) { return 21000000 + r; }
+    TarWriter<Sink> x = writer();
+    directory(w: ref x, path: "d/", mode: 0o755);
+    addFile(w: ref x, path: "d", body: "x", mode: 0o644);
+    r = refuses(w: give x, dir: root + "/r22", want: FAILED + 1);
+    if (r != 0) { return 22000000 + r; }
+
+    // A body cut short is an error, with what was written left behind.
+    TarWriter<Sink> cutw = writer();
+    addFile(w: ref cutw, path: "cut", body: "hello hello", mode: 0o644);
+    DynamicArray<uint8> whole = done(w: give cutw);
+    DynamicArray<uint8> cut = DynamicArray.empty();
+    for (isize k = 0; k < 512 + 3; k = k + 1) { cut.add(item: whole[k]); }
+    if (extract(tar: give cut, dir: root + "/r24") != FAILED + 2) { return 24; }
+
+    // A name that is nothing but the destination.
+    TarWriter<Sink> y = writer();
+    addFile(w: ref y, path: "./", body: "", mode: 0o644);
+    r = refuses(w: give y, dir: root + "/r23", want: 2);
+    if (r != 0) { return 23000000 + r; }
+    return 0;
+}
+
+fn int32 destinations(const ref string root) {
+    // A destination with something in it is refused, and left alone.
+    string used = root + "/used";
+    match (createDirAll(path: used)) { case Ok(value: _): { } case Err(error: e): { return 1; } };
+    match (writeText(path: used + "/already", text: "here")) { case Ok(value: n): { } case Err(error: e): { return 2; } };
+    TarWriter<Sink> a = writer();
+    addFile(w: ref a, path: "x", body: "y", mode: 0o644);
+    int32 r = refuses(w: give a, dir: used, want: 1);
+    if (r != 0) { return 3; }
+    if (exists(path: used + "/x")) { return 4; }
+
+    // One that is a file.
+    string afile = root + "/afile";
+    match (writeText(path: afile, text: "here")) { case Ok(value: n): { } case Err(error: e): { return 5; } };
+    TarWriter<Sink> b = writer();
+    r = refuses(w: give b, dir: afile, want: 1);
+    if (r != 0) { return 6; }
+
+    // An empty one is fine.
+    string empty = root + "/emptydir";
+    match (createDirAll(path: empty)) { case Ok(value: _): { } case Err(error: e): { return 7; } };
+    TarWriter<Sink> c = writer();
+    addFile(w: ref c, path: "x", body: "y", mode: 0o644);
+    r = refuses(w: give c, dir: empty, want: 0);
+    if (r != 0) { return 8; }
+    return textOf(path: empty + "/x") == "y" ? 0 : 9;
+}
+
+fn uint8 main() {
+    string root = "archive_tar_extract.tmp";
+    fresh(dir: root);
+    bool links = linksWork(root: root);
+    int32 a = tree(root: root, links: links);
+    if (a != 0) { eprintlnCode(what: "tree", code: a); return 1; }
+    int32 b = modes(root: root);
+    if (b != 0) { eprintlnCode(what: "modes", code: b); return 2; }
+    int32 c = systemNames(root: root);
+    if (c != 0) { eprintlnCode(what: "names", code: c); return 3; }
+    int32 d = refusals(root: root, links: links);
+    if (d != 0) { eprintlnCode(what: "refusals", code: d); return 4; }
+    int32 e = destinations(root: root);
+    if (e != 0) { eprintlnCode(what: "destinations", code: e); return 5; }
+    fresh(dir: root);
+    return 42;
+}
+
+fn void eprintlnCode(const ref string what, int32 code) {
+    string line = "archive_tar_extract: ${what} answered ${code}";
+    eprintln(s: give line);
+}

@@ -17,8 +17,8 @@ import {
 };
 
 export { File, OpenMode, SeekFrom, Metadata, FileId, FileKind, Permissions, readFile, writeFile, readText, writeText, stat, symlinkStat,
-         readDir, remove, createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, exists, setPermissions,
-         canonicalPath };
+         readDir, remove, createDir, createDirWith, createDirAll, removeDir, removeDirAll, rename, symlink, hardLink, exists,
+         setPermissions, canonicalPath };
 
 // POSIX/Windows file bindings — see kama_os.h. Structs (`stat`, `dirent`, `DIR`) stay opaque; kama holds
 // only `int32` fds, `UnsafePtr` handles, and scalar out-params.
@@ -68,6 +68,8 @@ extern fn int32  kama_mkdir(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_rmdir(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_is_symlink(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_rename(UnsafeConstPtr<cchar> from, UnsafeConstPtr<cchar> to);
+extern fn int32  kama_symlink(UnsafeConstPtr<cchar> original, UnsafeConstPtr<cchar> at);
+extern fn int32  kama_hard_link(UnsafeConstPtr<cchar> original, UnsafeConstPtr<cchar> at);
 extern fn int32  kama_exists(UnsafeConstPtr<cchar> path);
 extern fn int32  kama_flock(int32 fd, int32 op);
 extern fn UnsafePtr    kama_diropen(UnsafeConstPtr<cchar> path);
@@ -849,6 +851,24 @@ unsafe fn Result<Unit, IoError> removeDirAll(const ref string path) {
 @parks
 unsafe fn Result<Unit, IoError> rename(const ref string from, const ref string to) {
     if (kama_rename(from: from.cstr(), to: to.cstr()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// A symbolic link at `link` holding `original`, as written, which need not exist yet. An existing `link` is `AlreadyExists`. A link's
+// target is read relative to the link's own directory. On Windows a link to a directory must say so, and is decided from what
+// `original` names now, so make its target first; and making one takes Developer Mode or a privilege, past which it is
+// `PermissionDenied`.
+@parks
+unsafe fn Result<Unit, IoError> symlink(const ref string original, const ref string link) {
+    if (kama_symlink(original: original.cstr(), at: link.cstr()) != 0) { return Result::Err(error: lastError()); }
+    return Result::Ok(value: Unit::Unit);
+}
+
+// A second name, `link`, for the file `original`. An existing `link` is `AlreadyExists`. Both must be on one filesystem, and one that has
+// hard links.
+@parks
+unsafe fn Result<Unit, IoError> hardLink(const ref string original, const ref string link) {
+    if (kama_hard_link(original: original.cstr(), at: link.cstr()) != 0) { return Result::Err(error: lastError()); }
     return Result::Ok(value: Unit::Unit);
 }
 

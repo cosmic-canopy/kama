@@ -1,0 +1,390 @@
+import { TarReader, TarHeader, std::collections::DynamicArray, std::collections::FixedArray, std::collections::ConstView, std::collections::Set,
+         std::encoding::utf8::decode, std::encoding::utf8::decodeLossy, std::encoding::utf8::validate, std::fs::File, std::fs::OpenMode,
+         std::fs::Permissions, std::fs::Metadata, std::fs::stat, std::fs::symlinkStat, std::fs::createDir, std::fs::createDirAll,
+         std::fs::createDirWith, std::fs::setPermissions, std::fs::readDir, std::fs::symlink, std::fs::hardLink, std::io::Reader, std::io::IoError,
+         std::io::IoErrorKind, std::io::writeAll, std::io::pump };
+export { extractInto, TarExtractError, TarRefusal };
+
+// `extractInto` writes an archive out under one directory, and never outside it, whatever the archive says.
+//
+//   TarReader<File> t = TarReader.make(source: give f, endMarker: TarEndMarker::Required);
+//   match (extractInto(archive: ref t, dir: "out")) { case Ok(value: _): { … } case Err(error: e): { … e.message() … } };
+//
+// Every check that resolves a path and then tests where it landed has failed somewhere (Python's `data` filter in June 2025, .NET's in
+// 2026), so this never traverses a link at all. The destination must be new or empty, so everything under it is the archive's. Each
+// entry's parents are asked of the operating system one at a time, with `symlinkStat`, and one that is a link is refused: comparing
+// spellings would be wrong on a case-insensitive filesystem, which reads `LINK/x` through `link`. Files are opened `CreateNew`, so
+// nothing is written through a final link. A link's target is judged by what it says, and may climb only at its start: `up -> ..` and
+// then `escape -> d/up/..` would otherwise pass a lexical check and lead outside, even though nothing here follows either.
+//
+// What it refuses, naming the entry and the rule: an absolute path, a `..` component, a NUL, a name that is not UTF-8 (since `std::fs`
+// takes a `string`), a device or a FIFO or a type this does not know, a link whose target is absolute or climbs out, a hard link to
+// anything but an earlier regular file of this archive, and any entry under a link. On Windows also what Windows cannot hold or reads as
+// something else, a drive, a UNC path, a stream, a reserved name, a trailing dot; on any other system those are ordinary names, and
+// refusing `aux.c` or a colon there would limit every platform to Windows's rules. An entry naming a path this archive already wrote is
+// refused, by `CreateNew`: a listing that shows one
+// file and an extraction that leaves another is how a scanner is fooled, though GNU tar and Python take the last.
+//
+// The setuid, setgid and sticky bits and group and other write are dropped, and nothing is ever chowned. A file has the rest of its
+// mode from its creation, so a private file is never readable while it is written. A directory keeps its owner's access, since entries
+// are still to come inside it, and times are not restored.
+//
+// A refusal or an error leaves what was already written, under a directory that was new or empty, so removing it all is safe. It reads as
+// `TarReader` does, so a `WouldBlock` from a source ends it: this is for a blocking source, or a fiber's.
+
+// Why an entry was refused.
+@nonExhaustive
+type enum TarRefusal implements Error {
+    DestinationInUse,
+    BadName,
+    NotUtf8,
+    Absolute,
+    ClimbsOut,
+    NotOnThisSystem,
+    SpecialFile,
+    LinkTarget,
+    HardLinkTarget,
+    UnderALink;
+
+    public const fn string message() {
+        return match (this) {
+            case DestinationInUse: "the destination must be new or empty";
+            case BadName: "a name with a NUL in it, or with nothing in it";
+            case NotUtf8: "a name that is not UTF-8";
+            case Absolute: "an absolute path";
+            case ClimbsOut: "a `..` component";
+            case NotOnThisSystem: "a name this system cannot hold, or reads as something else";
+            case SpecialFile: "a device, a FIFO, or a type this does not know";
+            case LinkTarget: "a link whose target is absolute or climbs out of the destination";
+            case HardLinkTarget: "a hard link to anything but an earlier regular file of this archive";
+            case UnderALink: "an entry under a symbolic link";
+        };
+    }
+}
+
+// What stopped an extraction, and the entry it stopped at: a rule it refused by, or an error from the source or the filesystem.
+type enum TarExtractError implements Error {
+    Refused(DynamicArray<uint8> entry, TarRefusal rule),
+    Failed(DynamicArray<uint8> entry, IoError error);
+
+    public const fn string message() {
+        return match (this) {
+            case Refused(entry: n, rule: r): { string name = decodeLossy(bytes: n.view()); string why = r.message(); := "`${name}`: ${why}"; }
+            case Failed(entry: n, error: e): { string name = decodeLossy(bytes: n.view()); string why = e.message(); := "`${name}`: ${why}"; }
+        };
+    }
+}
+
+// What Windows cannot hold in one component, or reads as something else: `\` is a separator, `:` a drive or a stream, a trailing dot or
+// space is dropped, and the stem of a device's name, in any case and with any extension, is the device.
+fn bool windowsRefuses(const ref string part) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    borrow part.bytes() as v { foreach (uint8 c in v) { b.add(item: c); } }
+    if (b.length() == 0) { return false; }
+    uint8 last = b[b.length() - 1];
+    if (last == 46ui8 || last == 32ui8) { return true; }
+    isize stem = b.length();
+    for (isize k = 0; k < b.length(); k = k + 1) {
+        uint8 c = b[k];
+        if (c < 32ui8 || c == 92ui8 || c == 58ui8 || c == 42ui8 || c == 63ui8 || c == 34ui8 || c == 60ui8 || c == 62ui8 || c == 124ui8) { return true; }
+        if (c == 46ui8 && k < stem) { stem = k; }
+    }
+    // Upper-cased, the stem as `CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, and `CONIN$`, `CONOUT$`.
+    DynamicArray<uint8> u = DynamicArray.empty();
+    for (isize k = 0; k < stem; k = k + 1) { u.add(item: (b[k] >= 97ui8 && b[k] <= 122ui8) ? b[k] - 32ui8 : b[k]); }
+    if (u.length() == 3) {
+        InlineArray<string>#(4) three = ["CON", "PRN", "AUX", "NUL"];
+        for (int32 k = 0; k < 4; k = k + 1) { if (spells(b: u, name: three[k])) { return true; } }
+    }
+    if (u.length() == 4 && u[3] >= 49ui8 && u[3] <= 57ui8) {
+        u[3] = 49;
+        if (spells(b: u, name: "COM1") || spells(b: u, name: "LPT1")) { return true; }
+    }
+    return spells(b: u, name: "CONIN$") || spells(b: u, name: "CONOUT$");
+}
+
+fn bool spells(const ref DynamicArray<uint8> b, const ref string name) {
+    bool same = false;
+    borrow name.bytes() as v {
+        same = v.length() == b.length();
+        for (isize k = 0; same && k < v.length(); k = k + 1) { same = v[k] == b[k]; }
+    }
+    return same;
+}
+
+// A platform's deltas are its own: on any other system those are ordinary names.
+@compileFor(OS_WINDOWS) fn bool refusedHere(const ref string part) { return windowsRefuses(part: part); }
+@compileFor(!OS_WINDOWS) fn bool refusedHere(const ref string part) { return false; }
+
+// A name split at `/` into `parts`, with `.` and empty components gone. `None` when it is fine.
+fn Optional<TarRefusal> split(ConstView<uint8> name, ref DynamicArray<string> parts) {
+    if (!validate(bytes: name)) { return Optional::Some(value: TarRefusal::NotUtf8); }
+    for (isize k = 0; k < name.length(); k = k + 1) { if (name[k] == 0ui8) { return Optional::Some(value: TarRefusal::BadName); } }
+    isize start = 0;
+    for (isize k = 0; k <= name.length(); k = k + 1) {
+        if (k < name.length() && name[k] != 47ui8) { continue; }
+        isize n = k - start;
+        bool dot = n == 1 && name[start] == 46ui8;
+        if (n > 0 && !dot) {
+            string part = decodeLossy(bytes: name.slice(from: start, count: n));
+            if (refusedHere(part: part)) { return Optional::Some(value: TarRefusal::NotOnThisSystem); }
+            parts.add(item: give part);
+        }
+        start = k + 1;
+    }
+    return Optional::None;
+}
+
+// Whether a link at this depth may hold this target. Relative, and it climbs only at its start and no further than the destination: a
+// `..` after a name is what lets a chain of links lead out, however each one looks by itself.
+fn bool targetStaysIn(ConstView<uint8> target, isize depth) {
+    if (target.length() > 0 && target[0] == 47ui8) { return false; }
+    DynamicArray<string> parts = DynamicArray.empty();
+    Optional<TarRefusal> bad = split(name: target, parts: ref parts);
+    bool fine = match (bad) { case Some(value: r): false; case None: true; };
+    if (!fine || parts.length() == 0) { return false; }
+    isize climbs = 0;
+    bool named = false;
+    for (isize k = 0; k < parts.length(); k = k + 1) {
+        if (parts[k] == "..") {
+            if (named) { return false; }
+            climbs = climbs + 1;
+        } else { named = true; }
+    }
+    return climbs <= depth;
+}
+
+// `dir` and the first `count` of `parts`, each a real directory, made where missing. `symlinkStat` follows nothing, and each component is
+// asked about only once the one before it is known to be a directory, so this never goes through a link.
+fn Result<string, TarExtractError> walk(const ref string dir, const ref DynamicArray<string> parts, isize count, const ref DynamicArray<uint8> entry) {
+    string path = copy dir;
+    for (isize k = 0; k < count; k = k + 1) {
+        path = path + "/" + parts[k];
+        Result<Metadata, IoError> m = symlinkStat(path: path);
+        match (m) {
+            case Ok(value: meta): {
+                if (meta.isSymlink()) { return Result::Err(error: TarExtractError::Refused(entry: copy entry, rule: TarRefusal::UnderALink)); }
+                if (!meta.isDir()) { return Result::Err(error: TarExtractError::Failed(entry: copy entry, error: IoError.of(kind: IoErrorKind::AlreadyExists))); }
+            }
+            case Err(error: e): {
+                bool missing = match (e.kind()) { case NotFound: true; case _: false; };
+                if (!missing) { return Result::Err(error: TarExtractError::Failed(entry: copy entry, error: e)); }
+                Result<Unit, IoError> made = createDir(path: path);
+                match (made) {
+                    case Err(error: x): { return Result::Err(error: TarExtractError::Failed(entry: copy entry, error: x)); }
+                    case Ok(value: _): { }
+                };
+            }
+        };
+    }
+    return Result::Ok(value: give path);
+}
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    borrow text.bytes() as v { foreach (uint8 c in v) { a.add(item: c); } }
+    return a;
+}
+
+// The destination, new or empty. It is the caller's to name, so a link there is followed.
+fn Result<Unit, TarExtractError> prepare(const ref string dir) {
+    Result<Metadata, IoError> m = stat(path: dir);
+    match (m) {
+        case Err(error: e): {
+            bool missing = match (e.kind()) { case NotFound: true; case _: false; };
+            if (!missing) { return Result::Err(error: TarExtractError::Failed(entry: bytesOf(text: dir), error: e)); }
+            Result<Unit, IoError> made = createDirAll(path: dir);
+            return match (made) {
+                case Err(error: x): Result::Err(error: TarExtractError::Failed(entry: bytesOf(text: dir), error: x));
+                case Ok(value: _): Result::Ok(value: Unit::Unit);
+            };
+        }
+        case Ok(value: meta): {
+            if (!meta.isDir()) { return Result::Err(error: TarExtractError::Refused(entry: bytesOf(text: dir), rule: TarRefusal::DestinationInUse)); }
+        }
+    };
+    Result<DynamicArray<string>, IoError> listed = readDir(path: dir);
+    match (listed) {
+        case Err(error: e): { return Result::Err(error: TarExtractError::Failed(entry: bytesOf(text: dir), error: e)); }
+        case Ok(value: all): {
+            if (all.length() != 0) { return Result::Err(error: TarExtractError::Refused(entry: bytesOf(text: dir), rule: TarRefusal::DestinationInUse)); }
+        }
+    };
+    return Result::Ok(value: Unit::Unit);
+}
+
+fn string joined(const ref DynamicArray<string> parts) {
+    string s = "";
+    for (isize k = 0; k < parts.length(); k = k + 1) {
+        if (k > 0) { s = s + "/"; }
+        s = s + parts[k];
+    }
+    return s;
+}
+
+// Writes the archive out under `dir`, which must be new or empty. See the head of this file.
+fn Result<Unit, TarExtractError> extractInto<R: Reader>(ref TarReader<R> archive, const ref string dir) {
+    Result<Unit, TarExtractError> ready = prepare(dir: dir);
+    match (give ready) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): { } };
+    Set<string> written = Set.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 65536);
+    DynamicArray<uint8> last = DynamicArray.empty();     // the entry an error from the archive itself came after
+    while (true) {
+        Optional<TarHeader> next = Optional::None;
+        Result<Optional<TarHeader>, IoError> r = archive.next();
+        match (give r) {
+            case Err(error: e): { return Result::Err(error: TarExtractError::Failed(entry: give last, error: e)); }
+            case Ok(value: o): { next = give o; }
+        };
+        bool done = false;
+        match (give next) {
+            case None: { done = true; }
+            case Some(value: h): {
+                last = copy h.path();
+                Result<Unit, TarExtractError> one = extractEntry(archive: ref archive, h: h, dir: dir, written: ref written, buf: ref buf);
+                match (give one) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): { } };
+            }
+        };
+        if (done) { return Result::Ok(value: Unit::Unit); }
+    }
+}
+
+fn Result<Unit, TarExtractError> extractEntry<R: Reader>(ref TarReader<R> archive, const ref TarHeader h, const ref string dir, ref Set<string> written,
+                                                         ref FixedArray<uint8> buf) {
+    if (h.path().length() > 0 && h.path()[0] == 47ui8) { return Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: TarRefusal::Absolute)); }
+    DynamicArray<string> parts = DynamicArray.empty();
+    Optional<TarRefusal> bad = split(name: h.path().view(), parts: ref parts);
+    match (bad) {
+        case Some(value: rule): { return Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: rule)); }
+        case None: { }
+    };
+    for (isize k = 0; k < parts.length(); k = k + 1) {
+        if (parts[k] == "..") { return Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: TarRefusal::ClimbsOut)); }
+    }
+    bool isDirectory = match (h.kind()) { case Directory: true; case _: false; };
+    if (parts.length() == 0) {
+        if (isDirectory) { return Result::Ok(value: Unit::Unit); }      // `./`, the destination itself
+        return Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: TarRefusal::BadName));
+    }
+    return match (h.kind()) {
+        case File(size: s): writeFileEntry(archive: ref archive, h: h, parts: parts, dir: dir, written: ref written, buf: ref buf);
+        case Directory: writeDirectory(h: h, parts: parts, dir: dir);
+        case Symlink(target: t): writeSymlink(h: h, parts: parts, target: t, dir: dir);
+        case HardLink(target: t): writeHardLink(h: h, parts: parts, target: t, dir: dir, written: ref written);
+        case _: Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: TarRefusal::SpecialFile));
+    };
+}
+
+// What the archive's mode leaves: no setuid, setgid or sticky, and no write for group or other.
+fn Permissions kept(uint32 mode, uint32 always) {
+    Result<Permissions, IoError> p = Permissions.fromMode(mode: (mode & 0o755ui32) | always);
+    return match (p) { case Ok(value: x): x; case Err(error: e): { panic(msg: "a mode masked to 0o755 is one `Permissions` holds"); } };
+}
+
+fn Result<Unit, TarExtractError> writeFileEntry<R: Reader>(ref TarReader<R> archive, const ref TarHeader h, const ref DynamicArray<string> parts, const ref string dir,
+                                                           ref Set<string> written, ref FixedArray<uint8> buf) {
+    Result<string, TarExtractError> parent = walk(dir: dir, parts: parts, count: parts.length() - 1, entry: h.path());
+    string path = match (give parent) { case Ok(value: p): give p; case Err(error: e): { return Result::Err(error: give e); } };
+    path = path + "/" + parts[parts.length() - 1];
+    Result<File, IoError> opened = File.openWith(path: path, mode: OpenMode::CreateNew, permissions: kept(mode: h.mode(), always: 0ui32));
+    File f = match (give opened) {
+        case Ok(value: x): give x;
+        case Err(error: e): { return Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: e)); }
+    };
+    while (true) {
+        Result<isize, IoError> r = archive.read(into: buf.viewMut());
+        isize n = match (r) {
+            case Ok(value: k): k;
+            case Err(error: e): { return Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: e)); }
+        };
+        if (n == 0) { break; }
+        Result<Unit, IoError> w = writeAll(w: f, bytes: buf.view().slice(from: 0, count: n));
+        match (w) {
+            case Err(error: e): { return Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: e)); }
+            case Ok(value: _): { }
+        };
+    }
+    written.add(key: joined(parts: parts));
+    return Result::Ok(value: Unit::Unit);
+}
+
+fn Result<Unit, TarExtractError> writeDirectory(const ref TarHeader h, const ref DynamicArray<string> parts, const ref string dir) {
+    Result<string, TarExtractError> parent = walk(dir: dir, parts: parts, count: parts.length() - 1, entry: h.path());
+    string path = match (give parent) { case Ok(value: p): give p; case Err(error: e): { return Result::Err(error: give e); } };
+    path = path + "/" + parts[parts.length() - 1];
+    Permissions want = kept(mode: h.mode(), always: 0o700ui32);
+    Result<Metadata, IoError> m = symlinkStat(path: path);
+    match (m) {
+        case Ok(value: meta): {
+            if (meta.isSymlink()) { return Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: TarRefusal::UnderALink)); }
+            if (!meta.isDir()) { return Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: IoError.of(kind: IoErrorKind::AlreadyExists))); }
+            Result<Unit, IoError> set = setPermissions(path: path, permissions: want);
+            return match (set) {
+                case Err(error: e): Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: e));
+                case Ok(value: _): Result::Ok(value: Unit::Unit);
+            };
+        }
+        case Err(error: e): { }
+    };
+    Result<Unit, IoError> made = createDirWith(path: path, permissions: want);
+    return match (made) {
+        case Err(error: e): Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: e));
+        case Ok(value: _): Result::Ok(value: Unit::Unit);
+    };
+}
+
+fn Result<Unit, TarExtractError> writeSymlink(const ref TarHeader h, const ref DynamicArray<string> parts, const ref DynamicArray<uint8> target, const ref string dir) {
+    if (!targetStaysIn(target: target.view(), depth: parts.length() - 1)) {
+        return Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: TarRefusal::LinkTarget));
+    }
+    Result<string, TarExtractError> parent = walk(dir: dir, parts: parts, count: parts.length() - 1, entry: h.path());
+    string path = match (give parent) { case Ok(value: p): give p; case Err(error: e): { return Result::Err(error: give e); } };
+    path = path + "/" + parts[parts.length() - 1];
+    string text = decodeLossy(bytes: target.view());
+    Result<Unit, IoError> made = symlink(original: text, link: path);
+    return match (made) {
+        case Err(error: e): Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: e));
+        case Ok(value: _): Result::Ok(value: Unit::Unit);
+    };
+}
+
+fn Result<Unit, IoError> copyFile(const ref string from, const ref string to, Permissions mode) {
+    Result<File, IoError> a = File.open(path: from, mode: OpenMode::Read);
+    File source = match (give a) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: e); } };
+    Result<File, IoError> b = File.openWith(path: to, mode: OpenMode::CreateNew, permissions: mode);
+    File sink = match (give b) { case Ok(value: x): give x; case Err(error: e): { return Result::Err(error: e); } };
+    Result<isize, IoError> n = pump(from: source, to: sink);
+    return match (n) { case Err(error: e): Result::Err(error: e); case Ok(value: _): Result::Ok(value: Unit::Unit); };
+}
+
+// A hard link's target is named from the archive's root, and must be a file this extraction wrote, under the very name it wrote it by.
+fn Result<Unit, TarExtractError> writeHardLink(const ref TarHeader h, const ref DynamicArray<string> parts, const ref DynamicArray<uint8> target, const ref string dir,
+                                               ref Set<string> written) {
+    DynamicArray<string> to = DynamicArray.empty();
+    Optional<TarRefusal> bad = split(name: target.view(), parts: ref to);
+    bool fine = match (bad) { case Some(value: r): false; case None: true; };
+    string key = joined(parts: to);
+    if (!fine || !written.contains(key: key)) {
+        return Result::Err(error: TarExtractError::Refused(entry: copy h.path(), rule: TarRefusal::HardLinkTarget));
+    }
+    Result<string, TarExtractError> parent = walk(dir: dir, parts: parts, count: parts.length() - 1, entry: h.path());
+    string path = match (give parent) { case Ok(value: p): give p; case Err(error: e): { return Result::Err(error: give e); } };
+    path = path + "/" + parts[parts.length() - 1];
+    string original = dir + "/" + key;
+    Result<Unit, IoError> made = hardLink(original: original, link: path);
+    match (made) {
+        case Ok(value: _): { }
+        case Err(error: e): {
+            bool taken = match (e.kind()) { case AlreadyExists: true; case _: false; };
+            if (taken) { return Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: e)); }
+            // A filesystem with no hard links, as FAT and wasm's have none, gets a copy of the same bytes (Python's `tarfile` does this).
+            Result<Unit, IoError> copied = copyFile(from: original, to: path, mode: kept(mode: h.mode(), always: 0ui32));
+            match (copied) {
+                case Err(error: x): { return Result::Err(error: TarExtractError::Failed(entry: copy h.path(), error: x)); }
+                case Ok(value: _): { }
+            };
+        }
+    };
+    written.add(key: joined(parts: parts));
+    return Result::Ok(value: Unit::Unit);
+}
