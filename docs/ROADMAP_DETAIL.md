@@ -477,15 +477,19 @@ neither is on this machine.
 
 | An archive that has | GNU tar | bsdtar | Python | Recommended |
 |---|---|---|---|---|
-| no end marker | reads, silent | reads, silent | reads, silent | `UnexpectedEof`, after every entry |
-| one zero block, then the end | reads, warns | reads, silent | reads, silent | `UnexpectedEof`, after every entry |
-| nothing at all | refused | reads as empty | refused | `UnexpectedEof` |
+| no end marker (Python's `tarfile`, never closed, writes this) | reads, silent | reads, silent | reads, silent | as the caller asks: T7 |
+| one zero block, then the end | reads, warns | reads, silent | reads, silent | as the caller asks: T7 |
+| one zero block, then another entry | stops, warns | stops, silent | stops, silent | as the caller asks: T7 |
+| nothing at all | refused | reads as empty | refused | as the caller asks: T7 |
 | a cut inside a header or a body | refused | refused | refused | `UnexpectedEof` |
 | a bad header checksum | refused | refused | refused | `InvalidData` |
 | bytes after the end marker | ignored | ignored | ignored | left in the source |
 | an unknown type flag | lists it, flagged unknown | as a regular file | keeps `Z` | `TarKind::Other(flag, size)` |
+| a symlink declaring a size | no body | no body | no body | no body: T2 has nowhere to hold one |
 | a name that is not UTF-8 | `caf\351.txt` | the bytes | `caf\udce9.txt` | the bytes |
-| a pax record declaring 8 GiB | refused, for want of bytes | "too large" | refused, for want of bytes | `InvalidData` past 1 MiB, before reading any |
+| a 2 MiB pax record of an unknown key | reads | "too large" | reads | reads, holding none of it: T6 |
+| a pax record declaring 8 GiB, and no such bytes | refused | "too large" | refused | `UnexpectedEof`, holding none of it |
+| an mtime past year 2262 | lists it | lists it | lists it | lists it, `mtime()` is `None`: T5 |
 
 **T1. Names are raw bytes:** path, link target, uname and gname, as `const ref DynamicArray<uint8>`, for the reason `GzipHeader`'s are.
 A `string` promises UTF-8 and tar promises nothing: Python smuggles such a byte through a surrogate, and Go's strings hold anything,
@@ -506,26 +510,38 @@ one more required argument, and a type.
 one is how it is audited. Past `0o7777`, `begin` answers `InvalidInput`, so it is no magic number with no range. Every peer uses an
 integer. Gives up: `Permissions`' named constants at this one call.
 
-**T5. `mtime` is a `std::time::Timestamp`,** which keeps pax's fractional seconds, where a `uint32` of seconds could not. A value
-`Timestamp` cannot hold is `InvalidData`, since `fromUnixSecs` traps on overflow and this is outside input. Gives up: nothing a caller
-would want.
+**T5. `mtime` is an `Optional<Timestamp>` when read, and a `Timestamp` when written.** `std::time::Timestamp` keeps pax's fractional
+seconds, where a `uint32` of seconds could not, but it holds only the years 1678 to 2262, and `fromUnixSecs` traps past them. An archive
+can say anything, and GNU tar, bsdtar and Python all list the year 36812, so a time that does not fit is `None`. Refusing it would stop
+a whole archive over one advisory field, and ruling 10 says every entry comes back. Gives up: a `match` at each read of a time.
 
-**T6. Bounds.** A pax or GNU extension record is at most 1 MiB, Go's bound, and past that is `InvalidData` before any of it is read.
-Without one, 512 bytes can ask for 8 GiB. Gives up: a path over a megabyte, which no filesystem has.
+**T6. Bound what is kept, not what is read.** A path, a link target, a uname or a gname, from a pax record or a GNU long name, is at most
+1 MiB, and past that is `InvalidData`, because each is held in memory. A pax record of any other key is skipped without being held, however
+long, so the memory is bounded and the time is the input's own. Go's bound is 1 MiB on the whole record, bsdtar's is similar, and both
+refuse an archive with a large extended attribute that GNU tar and Python read. Gives up: a few more lines than reading each record into
+one buffer, since records are parsed as they arrive.
 
-**T7. An archive must end with its two zero blocks.** This is the row where kama would stand alone, so why do the others accept it?
-Because a tar has no checksum over the whole, the marker is a convention, and writers do forget it (Go's `Writer.Close` is a common
-omission). What strictness buys is narrow: it catches a cut landing exactly between entries, and a `.tar.gz` is caught by gzip anyway.
-What it costs is narrow too, since every entry has been delivered before `next` answers, so a caller who wants the lenient reading
-stops there. Recommended strict, as decision 8 is about bytes after a gzip member, because silence is the one answer a caller cannot
-recover from, and an error it can ignore. Gives up: an error at the end of an archive every other tool reads silently.
+**T7. The end marker is the caller's choice, in the one ctor:** `TarReader.make(source:, endMarker: TarEndMarker::Required)` or
+`TarEndMarker::NotRequired`. Corrected before any ruling: this brief first recommended refusing a missing marker outright, and that was
+a gap. Python's own `tarfile`, never closed, writes an archive with no marker, and GNU tar, bsdtar and Python all read it, so `extractInto`
+and an ordinary loop would have called a good archive a failure. Its argument, that a caller who wanted the lenient reading could stop at
+the error, was wrong: the same `UnexpectedEof` also means a cut inside a header, so stopping there swallows a real truncation.
+
+- `NotRequired` reads what the other tools read: the source ending between entries, or the first zero block, ends the archive, and what
+  follows stays in the source. An empty source is an empty archive, as in bsdtar and, by its docs, Go.
+- `Required` asks for what none of them offers: two zero blocks and nothing less. Their absence is `UnexpectedEof`, and a zero block
+  followed by anything else is `InvalidData`, as in Go.
+
+A tar has no checksum over the whole, so the marker only catches a cut landing exactly between entries, which gzip's trailer already
+catches in a `.tar.gz`. So neither is a default, and the call says which it wants, as `level:` and `members:` do. Gives up: one more required
+argument.
 
 **T8. The hand-back is the decoders':** `give fn Result<R, Unfinished<TarReader<R>>> finish()` reads nothing and answers `InvalidInput`
-before the end marker, and `abandon` gives `R` back as it stands. `next()` skips what was left of the last body, which is its visible
+until `next` has found the end, and `abandon` gives `R` back as it stands. `next()` skips what was left of the last body, which is its visible
 I/O. Over a `GzipReader` that leaves the gzip trailer to the caller, and `GzipReader.finish` refuses until it has been read:
 
 ```kama fragment
-TarReader<GzipReader<File>> t = TarReader.make(source: give g);
+TarReader<GzipReader<File>> t = TarReader.make(source: give g, endMarker: TarEndMarker::NotRequired);
 … t.next() until it answers Ok(None) …
 GzipReader<File> g2 = match (give t.finish()) { case Ok(value: r): give r; case Err(error: u): { … } };
 … g2.read(into: buf) until Ok(0), which is when the checksum is verified …
