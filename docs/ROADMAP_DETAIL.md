@@ -564,25 +564,6 @@ So nothing in the corpus was being checked only through the capture.
 checks its arguments as the turbofish arm does; then the gate: zero new diagnostics over the corpus on bodies that
 compile, with `--probe-templates` counting the sites it moves from deferred to resolved.
 
-<a id="s2-underscore-join"></a>
-
-### Two names the `__` join makes can meet when a segment starts or ends with `_` (KR-300)
-
-Filed 2026-11-02, measured on `0.9.817`. kama joins the segments of a C name with `__` and refuses a `__` inside a
-segment (a source name in the lexer, SPEC § C names; a project, scope or module name since `0.9.818`), but not a
-leading or trailing `_`. So
-`geo_` + `x` and `geo` + `_x` both join to `geo___x`. A project `geo_` with module `x` and a project `geo` with module
-`_x`, each declaring `w` and both dependencies of one program, give one C name, `geo___x__w`, and kama refuses the valid
-program as "duplicate function 'w' — kama has no overloading, so a name may be declared only once in its module". When
-the two files share a name the refusal comes earlier, as two units that "would both generate `geo___x__x.c`". By the
-same arithmetic (not measured) two scopes meet (`@a_/net` and `@a/_net` are both `kS_a___net`), and so do a file stem
-and a private name (`app_.kama`'s `h` and `app.kama`'s `_h` are both `kF_app___h`); `kama demangle` cannot split any of
-them either.
-
-**Ruling owed:** refuse a leading or trailing `_` in a segment kama joins (a project, scope or module name; a file stem
-is the filesystem's spelling and would want its own answer), or make the join one-to-one by escaping `_`. Either may
-break a name in the corpus, so count those first.
-
 <a id="s2-deep-chain"></a>
 
 ### A long `+` chain crashes the compiler (KR-304)
@@ -594,6 +575,22 @@ literals checks and one of 2,000 dies with SIGSEGV, so a valid program gets a cr
 What others do: clang checks its remaining stack and grows it (`runWithSufficientStackSpace`), rustc grows its stack on demand (`stacker`), and GCC raises its own stack limit. A
 walk made iterative fixes one walk, so the likely answer is the compiler running on a stack large enough that its own recursion stops being the limit, with a clean diagnostic past
 that. The fix decides that: measure which walks go deep first.
+
+<a id="s2-enum-value-join"></a>
+
+### Two enum values meet when a name holds `_` (KR-306)
+
+Filed 2026-11-03, measured on `0.9.820` and `0.9.829`. An enum's value reaches C as `<Enum>_<Value>`
+(`kama.cemit.cpp`, the scalar-enum arm of member resolution), a single-`_` join, which is not one-to-one. In one file
+`type enum E_A { B, C }` and `type enum E { A_B, D }` both emit `kF_en__E_A_B`, and clang refuses the program:
+"redefinition of enumerator 'kF_en__E_A_B'". Found while probing the rule SPEC § C names now states (no edge `_`, no inner `__` in a
+joined name) makes the `__` join one-to-one but does not reach a `_` join. The other `_` join, a generic type's
+instance, was measured not to meet: `P<A, B>` and `P_A<B>` built and ran.
+
+**The likely fix:** join a value to its enum with `__`, as a method, constructor and type constant are, which puts it
+under that rule; the declared C surface (`type expose enum`, `type extern enum`) keeps its spelling. Count first
+what spells an enum value's C name by hand (the runtime headers, `include/kama_lldb.py`, `editor/vscode/names.js`),
+since each re-spells with it, and whether a tagged enum's variant tag (`<T>_<V>`) meets the same way.
 
 <a id="s2-quoted-format"></a>
 
@@ -2720,27 +2717,6 @@ no `trySend` on `0.9.811`). A broadcaster with one bounded channel per client th
 `trySend(item:)`, which never parks and hands the item back when the channel is full or closed, as `Undelivered` does today.
 Go's `select` with a `default`, tokio's `try_send` answering `Full(value)`, crossbeam's `try_send`. The reported workaround is
 a counter kept by hand on both sides of every channel.
-
-<a id="s6-poller-early"></a>
-
-### `Poller.wait` with a timeout can return before it on Windows (KR-301)
-
-Filed 2026-11-02, seen on `0.9.820`. `tests/fiber_poller_wait.kama`'s first case waits 30 ms on a `Poller` with nothing
-registered and asks that an `Instant` read at least 30 ms afterwards. In one full gate on a Windows box it exited 12: the
-wait returned 0 early. Run alone it then failed the same way in 1 of 10 runs. A probe of 200 such waits back to back in
-one process, off a fiber (the same call on Windows, whose Poller has no descriptor to park on), was never early: the
-least was 30 ms. So it is a race, not a constant offset, and a process's first wait may be the one at risk.
-
-The AFD backend (`kama_poller_wait` in `include/kama_os.h`) takes its start on `GetTickCount64`, which moves in ~15.6 ms
-steps. It hands `GetQueuedCompletionStatusEx` the milliseconds left by that count, and returns 0 on the port's
-`WAIT_TIMEOUT` (or, after a pass with only re-arms, when that count says the time is spent) without consulting a finer
-clock. `Instant` reads QueryPerformanceCounter. Which of the two ended early here was not caught. A step that falls
-between `start` and the first `spent` cuts a whole step from the wait, and the port's own timer is no finer than the
-tick. The rest of the runtime rounds a wait up so that none is early (the scheduler's
-poll timeout in `kama_sched.h`, a socket's deadline in `kama_os.h`).
-
-**The fix:** count the time on `kama_now_mono_ns`, the clock `Instant` holds. Round what is left up to the next
-millisecond, and on a `WAIT_TIMEOUT` go round again while any time is left, as the loop already does after a re-arm.
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
 
