@@ -305,6 +305,15 @@ static inline int kama__win_path_errno(DWORD e) {
         default:                                           return EINVAL;
     }
 }
+// ...and a CREATE_NEW's failure, which is EEXIST for anything already there, as O_CREAT | O_EXCL's is: Windows answers
+// ERROR_ACCESS_DENIED when what is there is a directory, so a tar entry `d` after `d/` read as a permission error.
+static inline int kama__new_errno(const wchar_t* w, DWORD e) {
+    if (e == ERROR_ACCESS_DENIED) {
+        const DWORD a = GetFileAttributesW(w);
+        if (a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY)) return EEXIST;
+    }
+    return kama__win_path_errno(e);
+}
 
 // ---- files (a Win32 handle, read and written through the CRT) --------------------
 // _O_BINARY is essential: Windows text mode would translate CRLF/^Z and corrupt binary data.
@@ -323,7 +332,11 @@ KAMA_NOINLINE static int32_t kama__open(const char* path, DWORD access, DWORD di
     kama__wpathbuf b; wchar_t* w = kama__wpath(path, &b); if (!w) return -1;
     HANDLE h = CreateFileW(w, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, disposition,
                            FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) { const DWORD e = GetLastError(); kama__os_fail(e, kama__win_path_errno(e)); return -1; }
+    if (h == INVALID_HANDLE_VALUE) {
+        const DWORD e = GetLastError();
+        kama__os_fail(e, disposition == CREATE_NEW ? kama__new_errno(w, e) : kama__win_path_errno(e));
+        return -1;
+    }
     const int fd = _open_osfhandle((intptr_t)h, _O_BINARY | _O_NOINHERIT | append);   // _O_APPEND: the CRT seeks to the end before each write
     if (fd < 0) { const int e = errno; CloseHandle(h); errno = e; return -1; }
     return (int32_t)fd;
@@ -872,9 +885,7 @@ KAMA_NOINLINE static int32_t kama_open_create_mode(const char* path, uint32_t mo
     SECURITY_ATTRIBUTES sa = { sizeof sa, &sd, FALSE };
     int made = 1, relist = 1;
     HANDLE h = CreateFileW(w, access, share, &sa, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS && how == 3) {
-        kama__os_fail(ERROR_FILE_EXISTS, EEXIST); return -1;
-    }
+    if (h == INVALID_HANDLE_VALUE && how == 3) { const DWORD e = GetLastError(); kama__os_fail(e, kama__new_errno(w, e)); return -1; }
     if (h == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_EXISTS) {
         made = 0;
         h = CreateFileW(w, access, share, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);

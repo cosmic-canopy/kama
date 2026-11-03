@@ -127,7 +127,8 @@ fn Optional<TarRefusal> split(ConstView<uint8> name, ref DynamicArray<string> pa
         bool dot = n == 1 && name[start] == 46ui8;
         if (n > 0 && !dot) {
             string part = decodeLossy(bytes: name.slice(from: start, count: n));
-            if (refusedHere(part: part)) { return Optional::Some(value: TarRefusal::NotOnThisSystem); }
+            // `..` is the climb check's to refuse: it ends in a dot, which Windows refuses, so it read as NotOnThisSystem there.
+            if (part != ".." && refusedHere(part: part)) { return Optional::Some(value: TarRefusal::NotOnThisSystem); }
             parts.add(item: give part);
         }
         start = k + 1;
