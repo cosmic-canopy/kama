@@ -2960,6 +2960,27 @@ no `trySend` on `0.9.811`). A broadcaster with one bounded channel per client th
 Go's `select` with a `default`, tokio's `try_send` answering `Full(value)`, crossbeam's `try_send`. The reported workaround is
 a counter kept by hand on both sides of every channel.
 
+<a id="s6-poller-early"></a>
+
+### `Poller.wait` with a timeout can return before it on Windows (KR-301)
+
+Filed 2026-11-02, seen on `0.9.820`. `tests/fiber_poller_wait.kama`'s first case waits 30 ms on a `Poller` with nothing
+registered and asks that an `Instant` read at least 30 ms afterwards. In one full gate on a Windows box it exited 12: the
+wait returned 0 early. Run alone it then failed the same way in 1 of 10 runs. A probe of 200 such waits back to back in
+one process, off a fiber (the same call on Windows, whose Poller has no descriptor to park on), was never early: the
+least was 30 ms. So it is a race, not a constant offset, and a process's first wait may be the one at risk.
+
+The AFD backend (`kama_poller_wait` in `include/kama_os.h`) takes its start on `GetTickCount64`, which moves in ~15.6 ms
+steps. It hands `GetQueuedCompletionStatusEx` the milliseconds left by that count, and returns 0 on the port's
+`WAIT_TIMEOUT` (or, after a pass with only re-arms, when that count says the time is spent) without consulting a finer
+clock. `Instant` reads QueryPerformanceCounter. Which of the two ended early here was not caught. A step that falls
+between `start` and the first `spent` cuts a whole step from the wait, and the port's own timer is no finer than the
+tick. The rest of the runtime rounds a wait up so that none is early (the scheduler's
+poll timeout in `kama_sched.h`, a socket's deadline in `kama_os.h`).
+
+**The fix:** count the time on `kama_now_mono_ns`, the clock `Instant` holds. Round what is left up to the next
+millisecond, and on a `WAIT_TIMEOUT` go round again while any time is left, as the loop already does after a re-arm.
+
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
 
 **Sequenced AFTER the LSP** (§1 post-1.0 order; user, 2026-07-26). **Strictly additive — it never touches the

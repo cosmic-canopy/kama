@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-301**
+**Next id: KR-302**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -59,6 +59,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-300 | **Two names the `__` join makes can meet when a segment starts or ends with `_`** — project `geo_`'s module `x` and project `geo`'s module `_x` are both `geo___x`, so a valid program is refused as a "duplicate function" (measured `0.9.817`); scopes and file stems by the same arithmetic. Ruling owed: refuse the underscore, or escape the join | S? | [§2](ROADMAP_DETAIL.md#s2-underscore-join) |
+| KR-301 | **`Poller.wait` with a timeout can return before it on Windows** — the AFD backend counts the time on `GetTickCount64`'s ~15.6 ms steps and takes the port's `WAIT_TIMEOUT` as the end, while `Instant` reads QueryPerformanceCounter: `fiber_poller_wait` saw a 30 ms wait end early (exit 12) once in a full gate on `0.9.820` and in 1 of 10 runs alone. The rest of the runtime rounds a wait up so it is never early | S | [§6](ROADMAP_DETAIL.md#s6-poller-early) |
 
 ## NOW — the next features, in build order
 
