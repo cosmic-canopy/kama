@@ -1,0 +1,86 @@
+// A local `InlineArray` in a generic body. Each shape uses an element type and a size nothing else here names, because what
+// failed was the array being the first of its kind:
+// - in a generic TYPE nobody instantiates, `view()`, `viewMut()` and `bytes()` on a size named only there were refused as "has no
+//   method", since a template's bodies stay out of the whole-program scan and its check as written came after the pass that
+//   gives an array those accessors;
+// - in a generic function, `InlineArray<T>#(4)` with a literal size gave C a typedef over a type named `T`, called or not;
+// - called, its `view()` wants a `ConstView<T>` that nothing registered soon enough to resolve `View.swap`'s own generic call.
+// Returns 42.
+import { std::collections::ConstView, std::collections::View, std::num::storeU32, std::num::loadU32, std::num::ByteOrder };
+
+fn isize countBytes(ConstView<uint8> b) { return b.length(); }
+
+// Nobody instantiates these.
+type resource Unused<W> {
+    W w;
+    public ctor make(W w) { this.w = give w; }
+    public fn int32 writes() {
+        InlineArray<uint8>#(11) t = [0; 11];
+        storeU32(into: t.viewMut(), at: 0, value: 1ui32, order: ByteOrder::Little);
+        return cast<int32>(t[0]);
+    }
+    public const fn uint32 reads() {
+        InlineArray<uint8>#(12) t = [0; 12];
+        return loadU32(from: t.view(), at: 0, order: ByteOrder::Little);
+    }
+    public const fn isize bytes() {
+        InlineArray<int16>#(13) t = [0; 13];
+        return countBytes(b: t.bytes());
+    }
+}
+
+type value UnusedOwnElement<W> {
+    W w;
+    public const fn isize n() {
+        InlineArray<W>#(14) t = [this.w; 14];
+        return t.view().length();
+    }
+}
+
+// Nobody calls these.
+fn isize unusedView<W>(W w) {
+    InlineArray<W>#(15) t = [copy w; 15];
+    return lengthOf::<W>(v: t.view());
+}
+fn void unusedLocal<W>(W w) {
+    InlineArray<W>#(16) t = [copy w; 16];
+}
+fn isize unusedLength<W>(W w) {
+    InlineArray<W>#(17) t = [copy w; 17];
+    return t.length();
+}
+
+fn isize lengthOf<W>(ConstView<W> v) { return v.length(); }
+
+// Called. No other `float32` window exists, so these are the first to need one.
+fn isize calledView<W>(W w) {
+    InlineArray<W>#(5) t = [copy w; 5];
+    return lengthOf::<W>(v: t.view());
+}
+
+// The writable half, whose `swap` calls the generic `relocate`. `uint16` windows exist nowhere else.
+fn W swapped<W: value>(W a, W b) {
+    InlineArray<W>#(2) t = [a, b];
+    t.viewMut().swap(i: 0, j: 1);
+    return t[0];
+}
+
+// Nothing called on it but `length`, and a value that goes in and comes out.
+fn W kept<W: value>(W w) {
+    InlineArray<W>#(3) t = [w; 3];
+    return t[cast<isize>(t.length()) - 1];
+}
+
+// A size from a comptime parameter, with no other `int8` window in the program.
+fn isize sized() comptime(int32 N) {
+    InlineArray<int8>#(N) t = [0; N];
+    return lengthOf::<int8>(v: t.view());
+}
+
+fn uint8 main() {
+    if (calledView::<float32>(w: 1.5f32) != 5) { return 1; }
+    if (swapped::<uint16>(a: 7, b: 9) != 9ui16) { return 2; }
+    if (kept::<int64>(w: 11i64) != 11i64) { return 3; }
+    if (sized()#(4) != 4) { return 4; }
+    return 42;
+}

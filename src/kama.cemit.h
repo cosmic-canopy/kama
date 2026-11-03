@@ -1815,6 +1815,8 @@ private:
     // one mistake keeps producing one diagnostic.
     std::set<const InvocationNode*>                 _genericInferFailed;
     std::set<const ASTNode*>                        _untypedByInference;   // see noteUntypedByInference
+    // What registerInstGenerics has walked, kept across calls: the instances a late pass mints are walked once more, alone.
+    std::set<std::string> _instGenericsWalked, _instGenericFnsWalked;
     std::string substSig();      // the active _typeSubst as a stable key ("" outside a generic instance)
     std::string callInstOf(const InvocationNode* call);   // the instantiation for `call` here, or ""
     std::map<std::string, SharedIdentifier>         _typeSubst;     // type-param name -> concrete (only while emitting an instantiation)

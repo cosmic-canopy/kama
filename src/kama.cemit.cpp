@@ -14998,6 +14998,9 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // isn't a concrete type — skip it silently; the concrete `Fixed<T, 4>` instance registers at the
     // use site (a caller's typed local / a bound instantiation). A concrete non-const size resolves here.
     if (!constArgN(nArg, n)) return;
+    // ...and the same for an unbound `T` in the element: the whole-program scan walks a generic FUNCTION's body with nothing
+    // bound, and registering `InlineArray<T>#(4)` there gave C a typedef over a type named `T`, called or not.
+    if (argCarriesUnboundParam(absolutizeType(deepSubstType(elem)))) return;
     // A probe's size is its placeholder (`N` is 1, so `#(N - 1)` is 0): the type still forms, so its elements are
     // typed, and the size is judged per instance, as a `comptime assert` over `N` is (KR-137).
     const bool probeSize = _probingTemplate && readsProbeConst(nArg->constArgValue ? nArg->constArgValue : nArg);
@@ -15103,8 +15106,9 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
     // every unit is collected, under whatever context the LAST unit left (a stdlib module), where a user
     // file's private `Point` resolves to nothing: the view it minted was over a bare, unregistered `Point`,
     // so `a.viewMut()` did not return a view at all, and an element that is itself a generic instance
-    // (`Frame<int32>`) walked `View.swap` with a `T` no inference could bind. KR-11.
-    _collections[cName].elem = absolutizeType(elem);
+    // (`Frame<int32>`) walked `View.swap` with a `T` no inference could bind. KR-11. Substituted, or an instance's own
+    // `InlineArray<T>#(4)` would ask that pass, which binds nothing, for a `View<T>`.
+    _collections[cName].elem = absolutizeType(deepSubstType(elem));
 }
 
 // `copy` of an `InlineStorage` whose element owns something: its bytes are places, and only its holder knows which hold
@@ -18935,6 +18939,7 @@ void CEmitter::checkTemplatesAsWritten()
         // Mirrors registerInstColls: seed the parameter types, then walk the block.
         _scanLocalTys.clear();
         _constLocalVals.clear(); _comptimeLocalVals.clear();
+        const size_t collsBefore = _collections.size();
         if (tmpl->parameters)
             for (auto& p : *tmpl->parameters) {
                 if (!p || !p->type) continue;
@@ -18943,6 +18948,9 @@ void CEmitter::checkTemplatesAsWritten()
             }
         scanTypeForCollections(tmpl->returnType);
         scanStmtForCollections(tmpl->block);
+        // An `InlineArray<T>#(N)` over the probe's own `T` exists only from here, past the pipeline's two passes that give
+        // an array its `view()`, `viewMut()` and `bytes()`.
+        if (_collections.size() != collsBefore) registerIntrinsicViews();
 
         const int  errsBefore = _unsupported;
         const long defBefore = _probeDeferred;
@@ -19082,7 +19090,12 @@ void CEmitter::checkTypeTemplatesAsWritten()
             const long resBefore  = _probeResolved;
             long byBefore[DK_Count];
             for (int i = 0; i < DK_Count; ++i) byBefore[i] = _probeDeferBy[i];
+            const size_t collsBefore = _collections.size();
             registerGenericTypeInst(tmpl, args);
+            // A local `InlineArray<uint8>#(8)` in a member is first seen here when nothing else names that size: a template's
+            // bodies are out of the whole-program scan, and this is past the pipeline's two passes that give an array its
+            // `view()`, `viewMut()` and `bytes()`. Without this the check refused a generic for no instance having it.
+            if (_collections.size() != collsBefore) registerIntrinsicViews();
             // The instance this template just got — the transitive scan appends others behind it, so
             // match on the template rather than taking the last entry.
             for (size_t i = before; i < _genericTypeInstOrder.size(); ++i) {
@@ -19185,8 +19198,8 @@ void CEmitter::registerInstGenerics()
         if (params) for (auto& p : *params)
             if (p && p->identifier && p->identifier->value && p->type) lt[*p->identifier->value] = p->type;
     };
-    std::set<std::string> done;
-    std::set<std::string> doneFns;
+    std::set<std::string>& done = _instGenericsWalked;
+    std::set<std::string>& doneFns = _instGenericFnsWalked;
     for (;;) {
         std::vector<std::string> todo;
         for (auto& kv : _genericTypeInsts) if (!done.count(kv.first)) todo.push_back(kv.first);
@@ -46614,14 +46627,20 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath);
             collectGenericInsts(u);
         }
-    registerInstGenerics();   // the same walk over a generic TYPE's members, once per instantiation with
-                              // _typeSubst bound — before registerInstColls, which reads _genericInsts.
-    registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
-                           // now that every instantiation is known — before the collection typedefs emit.
-    for (auto& kv : _collections) if (kv.second.kind == CollKind::Fixed) { ensureFixedEquals(kv.first); ensureFixedFormat(kv.first); }   // KR-215/216
-    registerIntrinsicViews();  // ...and the same for any InlineArray this pass just minted. Idempotent (it skips
-                           // one that already has `view`), so this only does work for a const-param-derived
-                           // size whose ELEMENT type no other InlineArray in the program already used.
+    // Until nothing new appears: an InlineArray first named under an instantiation (`#(N + 1)`, or `InlineArray<T>#(4)` in
+    // a generic function) gets its `View` from the pass at the end, and that `View` needs the same walk, or `View.swap`'s
+    // `relocate` stays unresolved. An ordinary program goes round once, since neither late pass mints anything.
+    for (;;) {
+        registerInstGenerics();   // the same walk over a generic TYPE's members, once per instantiation with
+                                  // _typeSubst bound — before registerInstColls, which reads _genericInsts.
+        const size_t walked = _genericTypeInsts.size() + _genericInsts.size();
+        registerInstColls();   // MCU 6b-1: register const-param-derived collection sizes (`InlineArray<T,(N+1)>`)
+                               // now that every instantiation is known — before the collection typedefs emit.
+        for (auto& kv : _collections) if (kv.second.kind == CollKind::Fixed) { ensureFixedEquals(kv.first); ensureFixedFormat(kv.first); }   // KR-215/216
+        registerIntrinsicViews();  // ...and the same for any InlineArray this pass just minted. Idempotent: it skips one
+                                   // that already has `view`.
+        if (_genericTypeInsts.size() + _genericInsts.size() == walked) break;
+    }
     refreshStaleParamTypes();  // a const-generic param mangled before its comptime constant was known
     registerOwnedDeserialize();   // the `Owned<X>` box read — BEFORE the fixpoint, which must see the
                                   // `Result<Owned<X>, Owned<Error>>` it mints to mark it move-only
