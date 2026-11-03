@@ -1,0 +1,208 @@
+// A decoder's `finish` (KR-5) reads nothing. Handed a stream not yet read to its end it answers `InvalidInput` with the
+// reader back whole, having made no call on the source, and that reader reads on and finishes. Reading exactly the last
+// byte is not yet the end: only the read that answers `Ok(0)` finds it. A source stalled mid-stream changes nothing, since
+// `finish` never sees it. A stream that failed answers its own error every time, and `abandon` still hands the source back,
+// which it does as it stands even when the decoder holds bytes the `BufReader` no longer has.
+// Returns 42.
+import { std::compress::deflate::DeflateReader, std::io::BufReader, std::io::Reader, std::io::IoError, std::io::IoErrorKind,
+         std::collections::DynamicArray, std::collections::FixedArray, std::collections::View, std::encoding::hex::decode };
+
+// 23 decoded bytes as one fixed block, and "TAIL" after it in the source.
+fn string stream() { return "cb48cdc9c957c8402701"; }
+comptime isize DECODED = 23;
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+// The stream's bytes and then "TAIL", counting every read made of it. With `stall`, each read answers `WouldBlock` first
+// and then gives one byte.
+type resource Source implements Reader {
+    DynamicArray<uint8> bytes;
+    isize pos;
+    int32 reads;
+    bool stall;
+    bool ready;
+
+    public ctor make(const ref string hex, bool stall) {
+        this.bytes = bytesOf(text: hex);
+        this.bytes.add(item: 84);
+        this.bytes.add(item: 65);
+        this.bytes.add(item: 73);
+        this.bytes.add(item: 76);
+        this.pos = 0;
+        this.reads = 0;
+        this.stall = stall;
+        this.ready = false;
+    }
+
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        this.reads = this.reads + 1;
+        if (this.stall && !this.ready) {
+            this.ready = true;
+            return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock));
+        }
+        this.ready = false;
+        isize left = this.bytes.length() - this.pos;
+        isize n = left < into.length() ? left : into.length();
+        if (this.stall && n > 1) { n = 1; }
+        for (isize k = 0; k < n; k = k + 1) { into[k] = this.bytes[this.pos + k]; }
+        this.pos = this.pos + n;
+        return Result::Ok(value: n);
+    }
+
+    public const fn int32 count() { return this.reads; }
+}
+
+fn DeflateReader<Source> over(const ref string hex, bool stall) {
+    return DeflateReader.make(source: BufReader.make(inner: Source.make(hex: hex, stall: stall)), limit: 1000000ui64);
+}
+
+// 1 InvalidInput, 2 InvalidData, 3 WouldBlock, 9 any other.
+fn int32 kindOf(IoError e) {
+    return match (e.kind()) { case InvalidInput: 1; case InvalidData: 2; case WouldBlock: 3; case _: 9; };
+}
+
+// How many reads the source behind a `BufReader` has seen.
+fn int32 readsOf(BufReader<Source> b) {
+    BufReader<Source> mine = give b;
+    return match (give mine.intoParts()) { case Parts(inner: s, unread: rest): s.count(); };
+}
+
+// A stream not read to its end answers `InvalidInput`, and the source has seen nothing.
+fn int32 unread() {
+    DeflateReader<Source> d = over(hex: stream(), stall: false);
+    return match (give d.finish()) {
+        case Ok(value: b): 1;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): sawNothing(d: give back, kind: kindOf(e: e)); };
+    };
+}
+
+fn int32 sawNothing(DeflateReader<Source> d, int32 kind) {
+    DeflateReader<Source> mine = give d;
+    if (kind != 1) { return 2; }
+    return readsOf(b: give mine.abandon()) == 0 ? 0 : 3;
+}
+
+// `chunk` bytes read, `finish` too soon, and then the same reader reads on to `Ok(0)`, finishes, and leaves "TAIL" in the
+// source. `chunk == DECODED` delivers the last byte and has still not found the end.
+fn int32 partWay(isize chunk) {
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    DeflateReader<Source> d = over(hex: stream(), stall: false);
+    isize first = match (d.read(into: buf.viewMut().slice(from: 0, count: chunk))) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (first != chunk) { return 1; }
+    return match (give d.finish()) {
+        case Ok(value: b): 2;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): readOn(d: give back, kind: kindOf(e: e), seen: first); };
+    };
+}
+
+fn int32 readOn(DeflateReader<Source> d, int32 kind, isize seen) {
+    DeflateReader<Source> mine = give d;
+    if (kind != 1) { return 3; }
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    isize total = seen;
+    while (true) {
+        isize n = match (mine.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return 4; }
+        if (n == 0) { break; }
+        total = total + n;
+    }
+    if (total != DECODED) { return 5; }
+    return match (give mine.finish()) { case Ok(value: b): tailOf(b: give b); case Err(error: u): 6; };
+}
+
+fn int32 tailOf(BufReader<Source> b) {
+    BufReader<Source> mine = give b;
+    FixedArray<uint8> t = FixedArray.make(size: 16);
+    isize k = match (mine.read(into: t.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+    return (k == 4 && t[0] == 84ui8 && t[3] == 76ui8) ? 0 : 7;
+}
+
+// A read the source stalled comes back as `WouldBlock`, and `finish` then answers `InvalidInput`: it did not ask the source.
+fn int32 stalled() {
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    DeflateReader<Source> d = over(hex: stream(), stall: true);
+    int32 kind = match (d.read(into: buf.viewMut())) { case Ok(value: k): 0; case Err(error: e): kindOf(e: e); };
+    if (kind != 3) { return 1; }
+    return match (give d.finish()) {
+        case Ok(value: b): 2;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): drained(d: give back, kind: kindOf(e: e)); };
+    };
+}
+
+// Reads on past every stall, and finishes.
+fn int32 drained(DeflateReader<Source> d, int32 kind) {
+    DeflateReader<Source> mine = give d;
+    if (kind != 1) { return 3; }
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    isize total = 0;
+    while (true) {
+        isize n = match (mine.read(into: buf.viewMut())) {
+            case Ok(value: k): k;
+            case Err(error: e): kindOf(e: e) == 3 ? -2 : -1;
+        };
+        if (n == -1) { return 4; }
+        if (n == 0) { break; }
+        if (n > 0) { total = total + n; }
+    }
+    if (total != DECODED) { return 5; }
+    return match (give mine.finish()) { case Ok(value: b): 0; case Err(error: u): 6; };
+}
+
+// A stream that failed: block type 3, refused. `finish` answers it each time, and `abandon` still gives the source back.
+fn int32 failed() {
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    DeflateReader<Source> d = over(hex: "07", stall: false);
+    int32 kind = match (d.read(into: buf.viewMut())) { case Ok(value: k): 0; case Err(error: e): kindOf(e: e); };
+    if (kind != 2) { return 1; }
+    return match (give d.finish()) {
+        case Ok(value: b): 2;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): failedAgain(d: give back, kind: kindOf(e: e)); };
+    };
+}
+
+fn int32 failedAgain(DeflateReader<Source> d, int32 kind) {
+    DeflateReader<Source> mine = give d;
+    if (kind != 2) { return 3; }
+    return match (give mine.finish()) {
+        case Ok(value: b): 4;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): abandoned(d: give back, kind: kindOf(e: e)); };
+    };
+}
+
+fn int32 abandoned(DeflateReader<Source> d, int32 kind) {
+    DeflateReader<Source> mine = give d;
+    if (kind != 2) { return 5; }
+    return readsOf(b: give mine.abandon()) == 1 ? 0 : 6;   // the one read that found the bad block
+}
+
+// Abandoned mid-header: the decoder holds two bytes of a stored block's length, taken one fill at a time, so neither is
+// in the `BufReader`'s buffer to go back to. The source is handed over as it stands, and reads on.
+fn int32 midHeader() {
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    DeflateReader<Source> d = over(hex: "010500faff68656c6c6f", stall: true);
+    for (int32 k = 0; k < 4; k = k + 1) {
+        int32 kind = match (d.read(into: buf.viewMut())) { case Ok(value: n): 0; case Err(error: e): kindOf(e: e); };
+        if (kind != 3) { return 1; }
+    }
+    BufReader<Source> back = give d.abandon();
+    int32 next = match (back.read(into: buf.viewMut())) { case Ok(value: n): cast<int32>(n); case Err(error: e): -1; };
+    return next == 1 && buf[0] == 250ui8 ? 0 : 2;     // the length's complement, the next byte in the source
+}
+
+fn uint8 main() {
+    int32 a = unread();
+    if (a != 0) { return cast<uint8>(10 + a); }
+    int32 b = partWay(chunk: 5);
+    if (b != 0) { return cast<uint8>(20 + b); }
+    int32 c = partWay(chunk: DECODED);
+    if (c != 0) { return cast<uint8>(30 + c); }
+    int32 d = stalled();
+    if (d != 0) { return cast<uint8>(40 + d); }
+    int32 e = failed();
+    if (e != 0) { return cast<uint8>(50 + e); }
+    int32 f = midHeader();
+    if (f != 0) { return cast<uint8>(60 + f); }
+    return 42;
+}

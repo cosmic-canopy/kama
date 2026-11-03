@@ -347,6 +347,29 @@ is safe by the rule `match` already holds, over lending the inner or `unsafe` fr
 `0.9.777` (SPEC *Consuming methods*), and `BufWriter.intoInner` (`0.9.779`) is the shape KR-5's `finish` takes:
 `give fn Result<W, Unfinished<GzipWriter<W>>> finish()`.
 
+**Corrected 2026-11-02, building step 4: a decoder's `finish` reads nothing** (`0.9.821`). As built in step 2 it decoded
+whatever the caller had not read, to find the stream's end, and returned `Result<BufReader<R>, IoError>`. So a read deadline
+or a `WouldBlock` inside `finish` dropped the reader and closed the socket inside it, and a handler that had read 100 bytes
+of a body could set off 64 MiB of decoding it never asked for, or hang on a silent peer. An encoder has to do I/O in `finish`,
+because its final block does not exist until then. A decoder has nothing left that only `finish` can produce, since `read`
+reaches the same end.
+
+| | Who holds the source | Does finishing read? | A stream not read to its end |
+|---|---|---|---|
+| Go `Close` | the caller | no | nothing says so; its docs warn the checksum needs the reader "fully consumed until the io.EOF" |
+| Rust flate2 `into_inner` | the decoder, by move | no | the source comes back mid-stream, with no warning |
+| Zig, Python `decompressobj`, zlib | the caller | no | `eof` and `Z_STREAM_END` are there to look at |
+| kama | the decoder, by move | no | `InvalidInput`, with the reader back whole in `Unfinished` |
+
+Go's `net/http` draws the same line a layer up: it reads at most 256 KiB of an unread body after a handler returns, and then
+closes the connection. **Ruled by the maintainer:** `finish` never reads, so all I/O is visible at `read` (GOALS #5), the one
+way to a stream's end is `read` answering `Ok(0)` (#4), and an `Ok` from `finish` still says the checksum was verified and the
+position is exact, which neither Go nor Rust can say. `give fn BufReader<R> abandon()` takes the source back as it stands,
+nothing verified: a stream that failed fails `finish` forever, and a server still needs the socket to answer 400 on. It moves
+nothing back into the `BufReader`, because mid-stream the decoder can hold bytes from an earlier fill. The cost: a caller who
+stops early writes a short read loop, and one who knows the size and reads exactly that many bytes reads once more to see
+`Ok(0)`, as in Go.
+
 **4. The limit.** A required `uint64 limit` on the decoded bytes, counted across a gzip file's members. Up to `limit`
 bytes are delivered, and the read that would pass it returns `Err` with the new kind `LimitExceeded`. The read stops
 there and never truncates silently, as Rust's `take` does. A ratio was rejected, because a ratio grows with the input

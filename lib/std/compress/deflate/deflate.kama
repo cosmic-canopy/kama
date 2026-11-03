@@ -8,13 +8,17 @@ export { DeflateReader, DeflateWriter, DeflateLevel };
 //
 //   DeflateReader<File> d = DeflateReader.make(source: BufReader.make(inner: give f), limit: 64 * 1024 * 1024);
 //   … d.read(into: buf) until it answers Ok(0) …
-//   match (give d.finish()) { case Ok(value: rest): { … the bytes after the stream … } case Err(error: e): { … } };
+//   match (give d.finish()) { case Ok(value: rest): { … the bytes after the stream … } case Err(error: u): { … } };
 //
 // Its source is a `BufReader`, and it takes exactly the stream's bytes from it, no more: it reads ahead only out of the
 // `BufReader`'s buffer, and when the stream ends it hands back the whole bytes it read ahead, so the next byte is still
 // in the `BufReader`. `finish` hands the `BufReader` back there. That is what back-to-back streams need: a gzip file's members, a git packfile's objects,
 // a stream inside a PNG chunk. A decoder that read its source in chunks of its own would lose what it read past the
 // end (Go's `flate.NewReader` over anything but an `io.ByteReader`; Rust's `read::DeflateDecoder`).
+//
+// `finish` itself reads nothing, so all of a decoder's I/O and work is visible at `read`, and an `Ok` from it says the
+// stream was read to its end, where Go's `Close` and Rust's `into_inner` hand a source back whether it was or not. A
+// reader stopped early reads on, or takes its source back with `abandon`.
 //
 // `limit` bounds the decoded bytes, and is required, because a few kilobytes of deflate can decode to gigabytes. Up to
 // `limit` bytes are delivered, and the read that would deliver one more answers `LimitExceeded`; nothing is cut short
@@ -210,19 +214,28 @@ type resource DeflateReader<R: Reader> implements Reader {
         return match (this.failure) { case Some(value: e): Result::Err(error: copy e); case None: Result::Ok(value: 0); };
     }
 
-    // The source back, at the first byte after the stream. What the caller has not read is decoded first (and counted
-    // against the limit), since the stream's end is found only by decoding to it.
-    public give fn Result<BufReader<R>, IoError> finish() {
-        FixedArray<uint8> scratch = FixedArray.make(size: 4096);
-        while (true) {
-            Result<isize, IoError> r = this.read(into: scratch.viewMut());
-            match (r) {
-                case Err(error: e): { return Result::Err(error: e); }
-                case Ok(value: n): { if (n == 0) { break; } }
-            };
+    // The source back, at the first byte after the stream. It reads nothing, so it cannot block, time out or spend time
+    // decoding: a stream's end is found by `read` answering `Ok(0)`, and until then this answers `InvalidInput`. A stream
+    // that failed answers its error. Either way the reader comes back whole in `Unfinished`, to read on from where it
+    // stopped, or to `abandon`.
+    public give fn Result<BufReader<R>, Unfinished<DeflateReader<R>>> finish() {
+        match (this.failure) {
+            case Some(value: e): {
+                IoError kept = e;
+                return Result::Err(error: Unfinished::Pending(adapter: give this, error: kept));
+            }
+            case None: { }
+        };
+        if (this.stage != Stage::Done) {
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
         }
         return Result::Ok(value: give this.src);
     }
+
+    // The source as it stands, for a stream that will not be read to its end: a corrupt request body still leaves a socket
+    // to answer it on. Nothing is verified, and the position means nothing, since a decoder takes bytes ahead of what it
+    // has decoded.
+    public give fn BufReader<R> abandon() { return give this.src; }
 
     fn bool fail(IoErrorKind kind) {
         this.failure = Optional::Some(value: IoError.of(kind: kind));

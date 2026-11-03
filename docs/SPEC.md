@@ -2997,9 +2997,11 @@ fn uint8 main() {
 
 **Compressed streams (`std::compress`).** `DeflateReader<R>` decodes raw deflate (RFC 1951) and is a `Reader` of the
 decoded bytes. Its source is a `BufReader<R>`, and it takes exactly the stream's bytes from it, handing back what it read
-ahead: `give d.finish()` hands the `BufReader` back at the first byte after the stream, so streams back to back <!-- test: compress_deflate_read -->
-(a gzip file's members, a packfile's objects) decode one after another. Its `limit` on the decoded bytes is required:
-up to `limit` bytes are delivered, and the read that would deliver one more answers `LimitExceeded`. A stream that <!-- test: compress_deflate_limit -->
+ahead: once a read has answered `Ok(0)`, `give d.finish()` hands the `BufReader` back at the first byte after the stream, so streams back to back <!-- test: compress_deflate_read -->
+(a gzip file's members, a packfile's objects) decode one after another. `finish` reads nothing, so it cannot block or time
+out: before the stream's end it answers `InvalidInput`, and after a failure that failure, each with the reader back whole <!-- test: compress_deflate_finish -->
+in `Unfinished`, and `give d.abandon()` takes the source back as it stands, nothing verified. Its `limit` on the decoded
+bytes is required: up to `limit` bytes are delivered, and the read that would deliver one more answers `LimitExceeded`. A stream that <!-- test: compress_deflate_limit -->
 breaks RFC 1951 is `InvalidData` and one cut short is `UnexpectedEof`, and either is final; an error from the source <!-- test: compress_deflate_invalid -->
 passes through and changes nothing, so the read after a `WouldBlock` resumes where it stopped.
 

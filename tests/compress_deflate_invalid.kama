@@ -34,7 +34,10 @@ fn int32 refused(const ref string stream, int32 want) {
     if (got != want) { return 1; }
     int32 again = match (d.read(into: buf.viewMut())) { case Ok(value: k): 8; case Err(error: e): kindOf(e: e); };
     if (again != want) { return 2; }
-    int32 fin = match (give d.finish()) { case Ok(value: b): 8; case Err(error: e): kindOf(e: e); };
+    int32 fin = match (give d.finish()) {
+        case Ok(value: b): 8;
+        case Err(error: u): match (give u) { case Pending(adapter: a, error: e): kindOf(e: e); };
+    };
     return fin == want ? 0 : 3;
 }
 
