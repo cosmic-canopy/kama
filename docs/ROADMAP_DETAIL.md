@@ -564,6 +564,12 @@ read at all.
    256 KiB): the 450 KiB of tables, and what building a block's codes takes for a moment.
 4. **zlib and gzip.** Their fixed fields go through `std::num`'s `loadU32`/`storeU32` and `loadU16`: the zlib trailer's
    Adler-32 is `ByteOrder::Big`; gzip's MTIME, trailer CRC-32 and ISIZE, and FEXTRA's XLEN, are `ByteOrder::Little`.
+   Two things to settle first, neither probed. **The trailer follows the final block, and `DeflateWriter.finish` has
+   already handed the sink back by then,** so through the public surface a `WouldBlock` in the trailer needs a second
+   retry state, and a `GzipWriter` rebuilt from an `Unfinished<DeflateWriter<W>>`. Recommended: a `friend` grant, as
+   `BufReader` grants `DeflateReader`, so a wrapper ends the blocks, adds its trailer to `encoded`, and one `drain` covers
+   both, which keeps finishing again as simple as it is now. **A checksum covers the count `write` answers,** never
+   `bytes.length()`, since a `write` may take fewer.
 5. **tar**, reader and writer.
 6. **`extractInto`** and the `std::fs` symlink binding, which goes in `kama_os.h`.
 7. **Guards.** `check-compress-interop.sh` runs both directions against python3's zlib, gzip and tarfile, at every
