@@ -52,4 +52,16 @@ sed 's/^expose fn/fn/' "$ROOT/tests/expose_basic.kama" > "$tmp/c/plain.kama"
 "$KAMA" build "$tmp/c/plain.kama" -o "$tmp/c/p" >/dev/null 2>&1 || fail "the unexposed variant did not build"
 [ ! -f "$tmp/c/p.h" ] || fail "p.h survived a build that exposes nothing — a stale prototype a host could still use"
 
-echo "check-host-header: PASS (clean C11 + C++17, a user's file is refused, a stale header is removed)"
+# --- 4. a scoped package's exposed names keep their spelling -------------------------------------------------
+# kama's own C names for `@t/hh` carry its scope (`kS_t__hh__…`, KR-291), but the declared C surface keeps the
+# spelling a host links against: the bare name, as before, never the scope.
+d="$tmp/d"; mkdir -p "$d/src"
+printf '{ "name": "@t/hh", "version": "0.1.0", "kind": "executable", "entry": "src/hh.kama", "modules": { ".": { "visibility": "internal" } } }\n' > "$d/kama.json"
+printf 'expose fn int32 tick(int32 n) { return n + 1; }\nfn uint8 main() { return cast<uint8>(tick(n: 1)); }\n' > "$d/src/hh.kama"
+"$KAMA" build "$d/kama.json" -o "$d/out/hh" >"$d/log" 2>&1 || { cat "$d/log" >&2; fail "a scoped project exposing a function did not build"; }
+hdr=$(ls "$d/out"/*.h 2>/dev/null | head -1)
+[ -n "$hdr" ] || fail "no host header beside a scoped project that exposes a function"
+grep -q '\bhh_tick\b' "$hdr" || { cat "$hdr" >&2; fail "a scoped package's exposed \`tick\` is not \`hh_tick\` in the host header"; }
+! grep -q 'kS_\|_t_hh' "$hdr" || { cat "$hdr" >&2; fail "a scoped package's scope reached its host header"; }
+
+echo "check-host-header: PASS (clean C11 + C++17, a user's file is refused, a stale header is removed, a scope stays out)"

@@ -1103,9 +1103,7 @@ std::string CEmitter::constRefKey(const IdentifierNode& id)
 std::string CEmitter::moduleKeyOf(const std::string& dotted) const
 {
     if (dotted.empty()) return "";
-    auto a = _nsCtx.aliases.find(dotted);      // `import physics as phys;` -> phys:: and physics:: are one
-    if (a != _nsCtx.aliases.end()) return "module:" + a->second;
-    std::string m = mangleNs(dotted);
+    std::string m = mangleNs(throughRoots(_nsCtx.importRoots, dotted));   // the root as this file's package names it
     if (_namespaces.count(m)) return "module:" + m;
     // A PREFIX of a declared namespace: no file declares `namespace std;`, but `std` in `std::collections`
     // still names a real module directory. _namespaces is sorted, so this is a lower_bound, not a scan.

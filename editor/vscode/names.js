@@ -48,6 +48,9 @@ function lexical(name) {
   // stripped again — a type the author called `k_Box` emits `kF_kk__k_Box`.
   const fileScoped = /^kF_[A-Za-z0-9_]+?__(.+)$/.exec(s);
   if (fileScoped) return fileScoped[1].replace(/__/g, '::');
+  // A scoped package heads its names with `kS_<scope>__<name>__`, which reads back as `@scope/name`.
+  const scoped = /^kS_([A-Za-z0-9_]+?)__([A-Za-z0-9_]+?)(?:__(.+))?$/.exec(s);
+  if (scoped) return '@' + scoped[1] + '/' + scoped[2] + (scoped[3] ? '::' + scoped[3].replace(/__/g, '::') : '');
   if (s.startsWith('kama__')) return s.slice(6).replace(/__/g, '::');
   if (s.startsWith('k_')) return s.slice(2);
   return s.replace(/__/g, '::');

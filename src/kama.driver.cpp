@@ -1134,15 +1134,18 @@ std::set<std::string> workspaceMembers(const std::string& projectDir, std::strin
 // across the filesystem for a name nobody had passed it — the behavior §2i removes. What resolves now is
 // a module some project DECLARES, and a loose build's own files are not searched for because they are
 // already in hand: the operands are the compilation.
+//
+// `segs[0]` is a package IDENTITY (`@north/net`), read through the importing package (importRootIdentity).
 std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs,
                                             const std::vector<std::string>& roots,
                                             std::string* matchedRoot = nullptr);
 
 // Why a module did not resolve, said in terms of the rule that refused it. Defined beside the resolver,
-// declared here because loadProgramUnits is where the failure surfaces.
-static void reportUnresolvedModule(const std::string& name, const std::vector<std::string>& segs,
-                                   const std::string& fromFile, const std::string& buildManifestDir,
-                                   const std::string& stdlibDir, bool reserved);
+// declared here because loadProgramUnits is where the failure surfaces. `spelled` is the import as written,
+// `identity` its root as the importing package (`importerDir`) names it.
+static void reportUnresolvedModule(const std::vector<std::string>& spelled, const std::string& identity,
+                                   const std::string& fromFile, const std::string& importerDir,
+                                   const std::string& buildManifestDir, const std::string& stdlibDir, bool reserved);
 
 SharedCompilationUnit parseFile(const std::string& inputFile);   // defined below
 SharedCompilationUnit parseString(const char* src, const std::string& name);   // defined below
@@ -1405,12 +1408,13 @@ std::string owningPackageDir(const std::string& fromDir);   // defined below, be
 // sits above that reader.
 struct ModuleId {
     bool        inProject = false;   // false: a LOOSE file — no manifest names it (§2i)
-    std::string project;             // the project's IMPORT name (`@acme/geo` imports as `geo`)
+    std::string project;             // the package's IDENTITY, its full name (`@acme/geo`; KR-291)
     std::string module;              // composed module name; "" means the project root
 
-    // What an `import` writes, and what §2e.25 mangles into the C symbol. A loose file has no project
-    // name to carry, so its folder chain IS its module — and a loose file in the root has no module at
-    // all, which is what makes it unimportable (§2e.27).
+    // The module's name, which §2e.25 mangles into the C symbol (`@acme/geo::x` is `kS_acme__geo__x`). An
+    // `import` writes its root as a local name of the importing package, which importRootIdentity reads back to
+    // this. A loose file has no project name to carry, so its folder chain IS its module — and a loose file in
+    // the root has no module at all, which is what makes it unimportable (§2e.27).
     std::string full() const {
         if (!inProject) return module;
         return module.empty() ? project : project + "::" + module;
@@ -1617,11 +1621,19 @@ static std::string moduleKeyOf(const SharedCompilationUnit&, const std::string& 
     return moduleIdForFile(path).full();
 }
 
-// Defined once DepSpec exists, beside the manifest loaders it wraps.
-const std::set<std::string>& declaredImportNames(const std::string& packageDir);
-// A package's OWN import name — what its files spell when they reach across its own modules. Empty if
-// the manifest has no `name` or cannot be read.
-const std::string& ownImportName(const std::string& packageDir);
+// The package that owns `unitPath` and so names its imports (KR-291), or "" for a file no package owns: a loose
+// operand, a synthetic unit, a file outside its manifest's `source`. Its manifest's `imports` read each root.
+static std::string importingPackageDir(const std::string& unitPath);
+// The identity an import root names in the importing file's package: a dependency's local name maps to the
+// package (`nnet` -> `@north/net`), its own name to itself; a root the package does not declare names itself.
+static std::string importRootIdentity(const std::string& packageDir, const std::string& root);
+// Every import root of `unitPath`'s package, as importRootIdentity reads them one at a time — what the emitter
+// is handed per unit. Empty for a file no package owns.
+static std::map<std::string, std::string> importRootsOf(const std::string& unitPath);
+// Does the package at `packageDir` declare the import root `root` — a dependency's local name, or its own name?
+static bool declaresImportRoot(const std::string& packageDir, const std::string& root);
+// The package at `packageDir`'s identity, its full `name` ("" when it has none).
+static std::string packageIdentityOf(const std::string& packageDir);
 std::string storeDir();   // the content-addressed package store (~/.kama/store)
 
 // The directory of the nearest `kama.json` at or above `fromDir` — the package that OWNS a file. A
@@ -1869,12 +1881,18 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
         // Phase D: graph serde is a compiler intrinsic now — no std::serialization::graph runtime to inject.
         if (!units[i]->importDeclarationList) continue;
         std::string here = dirName(paths[i]);
+        // The package whose manifest names this unit's import roots (KR-291): each package resolves its imports
+        // through its OWN dependencies, so a library deep in the graph keeps its `net` while the root's is another.
+        const std::string importer = importingPackageDir(paths[i]);
         for (auto& imp : *units[i]->importDeclarationList) {
-            std::vector<std::string> segs;
-            if (imp->modulePath) for (auto& s : *imp->modulePath) segs.push_back(*s);
-            if (segs.empty()) continue;
-            std::string key;                                  // "a::b" — match against loaded namespaces
+            std::vector<std::string> spelled;                 // the path as this file writes it (`nnet::wire`)
+            if (imp->modulePath) for (auto& s : *imp->modulePath) spelled.push_back(*s);
+            if (spelled.empty()) continue;
+            std::vector<std::string> segs = spelled;          // ...and as its package names it (`@north/net::wire`)
+            segs[0] = importRootIdentity(importer, spelled[0]);
+            std::string key, shown;                           // "a::b" — match against loaded namespaces
             for (size_t k = 0; k < segs.size(); ++k) key += (k ? "::" : "") + segs[k];
+            for (size_t k = 0; k < spelled.size(); ++k) shown += (k ? "::" : "") + spelled[k];
             // The names this import needs, and whether what is already loaded covers them. A bare import
             // (no symbol list) names nothing and is satisfied only by a `whole` module.
             std::vector<std::string> wanted;
@@ -1891,7 +1909,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                     if (covered) continue;                    // every name asked for is already loaded
                 }
             }
-            bool reserved = (segs[0] == "std" || segs[0] == "core");
+            bool reserved = (spelled[0] == "std" || spelled[0] == "core");
             std::vector<std::string> roots;
             if (!reserved) {
                 // The project this invocation is FOR, and the §2i cutover in one line: it is the file's
@@ -1914,7 +1932,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             std::string via;
             auto files = resolveModuleFiles(segs, roots, &via);
             if (files.empty()) {
-                reportUnresolvedModule(key, segs, paths[i], buildManifestDir, stdlibDir, reserved);
+                reportUnresolvedModule(spelled, segs[0], paths[i], importer, buildManifestDir, stdlibDir, reserved);
                 return false;
             }
             // A sub-project must be EXTRACTABLE — liftable out of its monorepo and still buildable — and
@@ -1949,9 +1967,9 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                 // whole block is skipped. So a multi-module library built, shipped, and then failed the
                 // first time anyone depended on it, with a diagnostic whose premise ("this package will
                 // not build on its own") the previous command had just disproved. The suggested remedy
-                // was a package depending on itself.
-                const bool selfImport = !owner.empty() && ownImportName(owner) == segs[0];
-                if (!owner.empty() && !selfImport && !declaredImportNames(owner).count(segs[0])) {
+                // was a package depending on itself. Its own name is one of its import roots, beside its
+                // dependencies' local names (ManifestModules::imports), so asking for the root asks both.
+                if (!owner.empty() && !declaresImportRoot(owner, spelled[0])) {
                     std::string ownerManifest = owner + "/kama.json";
                     undeclaredImport = true;
                     // M6 A3: pushed EVERY call, outside the warn-once gate below — a squiggle has to be
@@ -1968,26 +1986,28 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
                         d.severity  = DiagSeverity::Warning;
                         d.code      = "undeclared-import";
                         d.file      = paths[i];
-                        d.message   = "module '" + segs[0] + "' is not declared by this package (" +
+                        d.message   = "module '" + spelled[0] + "' is not declared by this package (" +
                                       ownerManifest + "), so it will not build on its own — add it under "
                                       "\"dependencies\"";
                         diagsOut->push_back(d);
                     }
-                    if (warnedFreeRide.insert(ownerManifest + "\n" + segs[0]).second) {
+                    if (warnedFreeRide.insert(ownerManifest + "\n" + spelled[0]).second) {
                         // Suggest the concrete line. The dependency's own package root is the nearest
-                        // manifest above its sources, which for a workspace sibling is a path away.
+                        // manifest above its sources, which for a workspace sibling is a path away. Its key
+                        // is the package's own name, which install requires (KR-111) — not the spelled root.
                         std::string depPkg = owningPackageDir(dirName(absolutePath(files[0])));
+                        std::string depKey = depPkg.empty() ? std::string() : packageIdentityOf(depPkg);
+                        if (depKey.empty()) depKey = spelled[0];
                         fprintf(stderr, "kama: %s: %s imports module '%s', but its own package (%s) "
                                 "does not declare it — only %s does, so this package will not build on "
                                 "its own.\n",
                                 strictImports ? "error" : "warning",
-                                paths[i].c_str(), segs[0].c_str(), ownerManifest.c_str(),
+                                paths[i].c_str(), spelled[0].c_str(), ownerManifest.c_str(),
                                 (buildManifestDir.empty() ? "the build" : (buildManifestDir + "/kama.json")).c_str());
                         if (!depPkg.empty())
                             fprintf(stderr, "kama: note: add to %s: \"dependencies\": { \"%s\": "
                                     "{ \"path\": \"%s\" } }\n",
-                                    ownerManifest.c_str(), segs[0].c_str(),
-                                    relativePath(owner, depPkg).c_str());
+                                    ownerManifest.c_str(), depKey.c_str(), relativePath(owner, depPkg).c_str());
                     }
                 }
             }
@@ -2047,7 +2067,7 @@ bool loadProgramUnits(const std::vector<std::string>& cliInputs, const char* arg
             if (admitted == 0) {
                 fprintf(stderr, "kama: error: %s:%d: imports module '%s', but every file in it is"
                                 " excluded from a %s build by its own `file @compileFor(...)` gate.\n",
-                        paths[i].c_str(), (imp ? imp->line : 1), key.c_str(), activeTargetLabel().c_str());
+                        paths[i].c_str(), (imp ? imp->line : 1), shown.c_str(), activeTargetLabel().c_str());
                 fprintf(stderr, "kama: note: a platform split needs BOTH sides — give the module a file"
                                 " gated for this target too, or gate the `import` site's declaration.\n");
                 return false;
@@ -2977,6 +2997,8 @@ static void configureEmitter(CEmitter& e)
         }
         return moduleIdForFile(unitPath).full();      // "" for a loose file — no kama.json above it
     });
+    // The roots a file's imports are spelled in, as its package's manifest names them (KR-291).
+    e.setImportRoots(importRootsOf);
     // The visibility rung (§2c). The driver answers the PREDICATE rather than exporting `ModuleVis`, for
     // the same reason it answers `setModuleResolver`: this is manifest work, and `ModuleNode`/`ModuleVis`
     // are static to this file and appear in no header. Both arguments are full module names as
@@ -2989,7 +3011,7 @@ static void configureEmitter(CEmitter& e)
         return it != g_namesLeftOut.end() && it->second.count(name) > 0;
     });
     e.setLocationResolver(packageLocationOf);   // a `panic`/`assert` site's file, package-relative (KR-121)
-    // The package a file belongs to (KR-176): its project's import name — never the first segment of
+    // The package a file belongs to (KR-176): its identity (`@kama/sodium`; KR-291) — never the first segment of
     // `packageLocationOf`, which splits `@kama/sodium` at its slash. A compiler-owned unit (`<prelude>`, `core`,
     // the triad) ships with std; every loose file of a build is one package.
     e.setPackageResolver([](const std::string& unitPath) -> std::string {
@@ -3115,13 +3137,16 @@ struct ModuleNode {
     bool isRoot() const { return key == "."; }
 };
 
-// A scoped package `@acme/foo` imports under its BARE last segment (`foo`) — the scope is registry
-// routing only. Two scopes exposing the same bare name collide (a hard error, detected at link time).
+// A scoped package `@acme/foo` imports under its BARE last segment (`foo`) unless its consumer names it otherwise
+// (KR-291); the full name is its identity — in the dependency view, the module names and its C names (`kS_acme__foo`).
 static std::string importNameOf(const std::string& name)
 {
     if (!name.empty() && name[0] == '@') { size_t s = name.rfind('/'); if (s != std::string::npos) return name.substr(s + 1); }
     return name;
 }
+// A dependency entry's two names (KR-291): the PACKAGE it is, and the name its consumer's files import it by.
+static std::string depIdentity(const std::string& key, const DepSpec&) { return key; }
+static std::string depLocalName(const std::string& key, const DepSpec&) { return importNameOf(key); }
 // The scope of a package name (`@acme` for `@acme/foo`), or "" for an unscoped name.
 static std::string scopeOf(const std::string& name)
 {
@@ -4832,8 +4857,12 @@ static bool validateModules(std::vector<ModuleNode>& mods, const std::string& pr
 // cached anywhere else would serve stale modules across exactly that edit.
 struct ManifestModules {
     std::string             projectName;   // already run through importNameOf
-    std::string             packageName;   // as written (`@kama/sodium`) — what a location shows
+    std::string             packageName;   // as written (`@kama/sodium`) — the package's identity (KR-291)
     std::vector<ModuleNode> mods;
+    // The import roots this package's files may spell (KR-291): each dependency's local name, and the package's
+    // own name, mapped to the identity they name. Each package resolves its imports through its own manifest, so
+    // one graph can hold two scopes' `net`. Cached here, so the editor's eviction of a manifest reaches it too.
+    std::map<std::string, std::string> imports;
     bool                    ok = false;    // false: unreadable or rejected — attribute nothing
 };
 
@@ -4854,9 +4883,12 @@ static const ManifestModules& manifestModulesCached(const std::string& manifest)
         std::ifstream in(osp(manifest), std::ios::binary);
         std::string src((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
         std::set<std::string> declared, defaults;
+        std::map<std::string, DepSpec> deps, devDeps;
         ManifestReader r(src, declared, defaults, manifest);
         r.modulesOut = &m.mods;
         r.nameOut    = &rawName;
+        r.deps       = &deps;
+        r.devDeps    = &devDeps;
         // A manifest that does not parse is not an error HERE — this runs on the resolution and editor
         // paths, which stay lenient about a broken manifest somewhere up the tree. resolveBuildConfig is
         // where a build says so out loud.
@@ -4864,6 +4896,9 @@ static const ManifestModules& manifestModulesCached(const std::string& manifest)
             m.projectName = importNameOf(rawName);
             m.packageName = rawName;
             m.ok = validateModules(m.mods, m.projectName, err);
+            for (const auto* d : { &deps, &devDeps })
+                for (const auto& kv : *d) m.imports[depLocalName(kv.first, kv.second)] = depIdentity(kv.first, kv.second);
+            if (!rawName.empty()) m.imports[m.projectName] = rawName;
         }
         if (!m.ok) m.mods.clear();
     }
@@ -4918,7 +4953,7 @@ static ModuleId moduleIdForFile(const std::string& absPath)
 
     const ManifestModules& mm = manifestModulesCached(manifest);
     id.inProject = true;
-    id.project   = mm.projectName;
+    id.project   = mm.packageName;   // the identity: `@south/net`, which no source spells (KR-291)
 
     std::string relDir = dirName(abs.substr(srcRoot.size() + 1));
     if (relDir == "." ) relDir.clear();
@@ -4988,8 +5023,10 @@ static std::string cStemForUnit(const std::string& unitPath)
     if (unitPath.empty() || unitPath[0] == '<') return stem;   // synthetic: no path to derive from
     std::string mod = moduleIdForFile(unitPath).full();
     if (mod.empty()) return stem;                              // the loose root — basename is all there is
-    for (size_t p; (p = mod.find("::")) != std::string::npos; ) mod.replace(p, 2, "__");
-    return mod + "__" + stem;
+    // The module's C prefix, as its symbols take it: `@south/net::x` is `kS_south__net__x` (KR-291), never a
+    // path with a `/` in it.
+    for (size_t p; (p = mod.find("::")) != std::string::npos; ) mod.replace(p, 2, ".");
+    return CEmitter::mangleNs(mod) + "__" + stem;
 }
 
 // ---- module name -> files: the inverse of the above (§2b) ------------------------------------------
@@ -5084,7 +5121,7 @@ static std::vector<std::string> moduleFilesInProject(const std::string& projDir,
     const std::string manifest = projDir + "/kama.json";
     if (!fileExists(manifest)) return {};
     const ManifestModules& mm = manifestModulesCached(manifest);
-    if (mm.projectName.empty() || mm.projectName != segs[0]) return {};   // a different project's name
+    if (mm.packageName.empty() || mm.packageName != segs[0]) return {};   // a different package
     const std::string& srcRel = manifestSourceCached(manifest);
     if (srcRel.empty()) return {};
 
@@ -5109,6 +5146,12 @@ static std::vector<std::string> moduleFilesInProject(const std::string& projDir,
     return out;
 }
 
+// Where a directory OF projects (a dependency view, a $KAMA_PATH entry) keeps the package `identity`.
+static std::string viewDirOf(const std::string& root, const std::string& identity)
+{
+    return root + "/" + importNameOf(identity);
+}
+
 std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs,
                                             const std::vector<std::string>& roots,
                                             std::string* matchedRoot)
@@ -5119,7 +5162,7 @@ std::vector<std::string> resolveModuleFiles(const std::vector<std::string>& segs
         // A root is either a project itself (the stdlib, or the project being built) or a directory OF
         // projects (a dependency view, a $KAMA_PATH entry), so both spellings are tried. Which one it was
         // is not worth distinguishing: a project answers only to its own `name` either way.
-        for (const std::string& p : { root, root + "/" + segs[0] }) {
+        for (const std::string& p : { root, viewDirOf(root, segs[0]) }) {
             std::vector<std::string> files = moduleFilesInProject(p, segs);
             if (!files.empty()) { if (matchedRoot) *matchedRoot = root; return files; }
         }
@@ -5152,10 +5195,12 @@ static std::string danglingLinkTarget(const std::string& link)
 #endif
 }
 
-static void reportUnresolvedModule(const std::string& name, const std::vector<std::string>& segs,
-                                   const std::string& fromFile, const std::string& buildManifestDir,
-                                   const std::string& stdlibDir, bool reserved)
+static void reportUnresolvedModule(const std::vector<std::string>& segs, const std::string& identity,
+                                   const std::string& fromFile, const std::string& importerDir,
+                                   const std::string& buildManifestDir, const std::string& stdlibDir, bool reserved)
 {
+    std::string name;
+    for (size_t k = 0; k < segs.size(); ++k) name += (k ? "::" : "") + segs[k];
     fprintf(stderr, "kama: error: cannot resolve module '%s' (imported by %s)\n",
             name.c_str(), fromFile.c_str());
     if (reserved) {
@@ -5171,19 +5216,29 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
     if (!buildManifestDir.empty()) {
         const std::string manifest = buildManifestDir + "/kama.json";
         const ManifestModules& mm = manifestModulesCached(manifest);
-        if (!mm.projectName.empty() && mm.projectName == segs[0]) {
+        // A dependency's file reads its roots through ITS manifest (KR-291), so the root's is the wrong one to
+        // blame — unless the name is the root's alone, which is the free ride a package's own view never gives.
+        const bool fromRoot = importerDir.empty() || absolutePath(importerDir) == absolutePath(buildManifestDir);
+        const std::string importerManifest = fromRoot ? manifest : importerDir + "/kama.json";
+        if (!fromRoot && !manifestModulesCached(importerManifest).imports.count(segs[0])) {
+            fprintf(stderr, "kama: note: %s does not declare `%s` — a package's imports resolve through its own "
+                            "dependencies, so what %s declares does not reach it; add it under \"dependencies\" "
+                            "there\n", importerManifest.c_str(), segs[0].c_str(), manifest.c_str());
+            return;
+        }
+        if (fromRoot && !mm.projectName.empty() && mm.projectName == segs[0]) {
             fprintf(stderr, "kama: note: `%s` is this project, but %s lists no module `%s` — a folder is a "
                             "module only once it is listed under \"modules\"\n",
                     segs[0].c_str(), manifest.c_str(), name.c_str());
             return;
         }
         std::map<std::string, DepSpec> deps, devDeps; std::string derr;
-        bool prod = false, dev = false;
-        if (loadManifestDeps(manifest, deps, derr, &devDeps, nullptr, nullptr)) {
-            for (const auto& d : deps)    prod = prod || importNameOf(d.first) == segs[0];
-            for (const auto& d : devDeps) dev  = dev  || importNameOf(d.first) == segs[0];
+        bool prod = !fromRoot, dev = false;   // a dependency's own dependencies are always installed as prod
+        if (fromRoot && loadManifestDeps(manifest, deps, derr, &devDeps, nullptr, nullptr)) {
+            for (const auto& d : deps)    prod = prod || depLocalName(d.first, d.second) == segs[0];
+            for (const auto& d : devDeps) dev  = dev  || depLocalName(d.first, d.second) == segs[0];
         }
-        const std::string link = buildManifestDir + (prod || !dev ? "/.kama/deps/" : "/.kama/dev-deps/") + segs[0];
+        const std::string link = viewDirOf(buildManifestDir + (prod || !dev ? "/.kama/deps" : "/.kama/dev-deps"), identity);
         const std::string target = danglingLinkTarget(link);
         if (!target.empty())
             fprintf(stderr, "kama: note: %s links to %s, which does not exist here — the dependencies were "
@@ -5191,7 +5246,7 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
                             "install %s`\n", link.c_str(), target.c_str(), manifest.c_str());
         else if (prod)
             fprintf(stderr, "kama: note: %s declares `%s`, but it is not installed — run `kama pkg install %s`\n",
-                    manifest.c_str(), segs[0].c_str(), manifest.c_str());
+                    importerManifest.c_str(), segs[0].c_str(), manifest.c_str());
         else if (dev)
             fprintf(stderr, "kama: note: `%s` is a dev-dependency in %s, which only a `--dev` build resolves\n",
                     segs[0].c_str(), manifest.c_str());
@@ -5300,22 +5355,34 @@ static bool loadManifestDeps(const std::string& path, std::map<std::string, DepS
     return true;
 }
 
-// The module names a package's manifest declares, as they are IMPORTED (`@acme/foo` imports as `foo`).
-// Cached: the per-package import check consults it for every import of every build. Declared up beside
-// loadProgramUnits, defined here where DepSpec exists.
-const std::set<std::string>& declaredImportNames(const std::string& packageDir)
+static std::string importingPackageDir(const std::string& unitPath)
 {
-    static std::map<std::string, std::set<std::string>> cache;
-    auto it = cache.find(packageDir);
-    if (it != cache.end()) return it->second;
-    std::set<std::string> names;
-    std::map<std::string, DepSpec> deps, devDeps;
-    std::string err;
-    if (loadManifestDeps(packageDir + "/kama.json", deps, err, &devDeps)) {
-        for (const auto& kv : deps)    names.insert(importNameOf(kv.first));
-        for (const auto& kv : devDeps) names.insert(importNameOf(kv.first));
-    }
-    return cache.emplace(packageDir, std::move(names)).first->second;
+    if (unitPath.empty() || unitPath[0] == '<' || !moduleIdForFile(unitPath).inProject) return std::string();
+    return owningPackageDir(dirName(unitPath));
+}
+
+static std::string importRootIdentity(const std::string& packageDir, const std::string& root)
+{
+    if (packageDir.empty()) return root;
+    const ManifestModules& mm = manifestModulesCached(packageDir + "/kama.json");
+    auto it = mm.imports.find(root);
+    return it == mm.imports.end() ? root : it->second;
+}
+
+static std::map<std::string, std::string> importRootsOf(const std::string& unitPath)
+{
+    const std::string pkg = importingPackageDir(unitPath);
+    return pkg.empty() ? std::map<std::string, std::string>() : manifestModulesCached(pkg + "/kama.json").imports;
+}
+
+static bool declaresImportRoot(const std::string& packageDir, const std::string& root)
+{
+    return manifestModulesCached(packageDir + "/kama.json").imports.count(root) > 0;
+}
+
+static std::string packageIdentityOf(const std::string& packageDir)
+{
+    return manifestModulesCached(packageDir + "/kama.json").packageName;
 }
 
 // Load a `kama.local.json`'s INSTALL-path override fields (M5.3): `overrides` (dep path-overrides) and a
@@ -5577,21 +5644,6 @@ static bool loadManifestPublishExclude(const std::string& path, std::vector<std:
     return true;
 }
 
-// A package's own import name, cached like `declaredImportNames` and read from the same manifest. Used
-// by the undeclared-import rule to tell an intra-package import from a free-ride: a file reaching across
-// its OWN package's modules spells its own package name, which no `dependencies` entry will ever contain.
-const std::string& ownImportName(const std::string& packageDir)
-{
-    static std::map<std::string, std::string> cache;
-    auto it = cache.find(packageDir);
-    if (it != cache.end()) return it->second;
-    std::string name, version, err;
-    if (loadManifestNameVersion(packageDir + "/kama.json", name, version, err) && !name.empty())
-        name = importNameOf(name);
-    else
-        name.clear();
-    return cache.emplace(packageDir, std::move(name)).first->second;
-}
 
 
 // ---- what ONE manifest contributes to the C command line --------------------------------------------
@@ -11148,27 +11200,26 @@ std::vector<std::string> lspImportModules(const std::string& fromPath, const std
     std::vector<std::string> segs = lspSplitModulePath(prefix, rel);
     std::set<std::string> out;                       // sorted + deduped across roots
 
-    // The top level names PROJECTS: the stdlib, `core`, the file's own project, and every dependency it declares.
+    // The top level names PROJECTS: the stdlib, `core`, and the file's package's import roots — its own name and
+    // the local name of every dependency it declares (KR-291).
+    const std::string proj = projectManifestDir({ fromPath });
     if (segs.empty()) {
         out.insert("std");
         out.insert("core");
-        const std::string proj = projectManifestDir({ fromPath });
-        if (!proj.empty()) {
-            const ManifestModules& mm = manifestModulesCached(proj + "/kama.json");
-            if (!mm.projectName.empty()) out.insert(mm.projectName);
-            for (const auto& d : declaredImportNames(proj)) out.insert(d);
-        }
+        if (!proj.empty())
+            for (const auto& kv : manifestModulesCached(proj + "/kama.json").imports) out.insert(kv.first);
         return { out.begin(), out.end() };
     }
 
-    // Below it, the modules of the project the first segment names.
+    // Below it, the modules of the package the first segment names in this file's package.
     const std::string chain = prefixChain(segs);   // "" when only the project is named
+    const std::string id = importRootIdentity(proj, segs[0]);
     for (const auto& root : lspImportRoots(fromPath, segs[0] == "std" || segs[0] == "core", argv0)) {
-        for (const std::string& p : { root, root + "/" + segs[0] }) {
+        for (const std::string& p : { root, viewDirOf(root, id) }) {
             const std::string manifest = p + "/kama.json";
             if (!fileExists(manifest)) continue;
             const ManifestModules& mm = manifestModulesCached(manifest);
-            if (mm.projectName != segs[0]) continue;
+            if (mm.packageName != id) continue;
             std::vector<std::string> names;
             collectModNames(mm.mods, names);
             for (const auto& m : names) {
@@ -11191,7 +11242,9 @@ std::vector<std::string> lspImportSymbols(const std::string& fromPath, const std
     std::string rel;
     std::vector<std::string> segs = lspSplitModulePath(modulePath, rel);
     if (segs.empty()) return {};
-    auto files = resolveModuleFiles(segs, lspImportRoots(fromPath, segs[0] == "std" || segs[0] == "core", argv0));
+    const bool stdlib = segs[0] == "std" || segs[0] == "core";
+    segs[0] = importRootIdentity(projectManifestDir({ fromPath }), segs[0]);   // as the file's package names it
+    auto files = resolveModuleFiles(segs, lspImportRoots(fromPath, stdlib, argv0));
     // Parse the module rather than reading the index: the module being imported is, by definition, one the
     // open file does not import yet, so it is not in the index at all. Only reachable from inside an
     // `import …::{ }` list, so the parse is per-gesture, not per-keystroke.
@@ -11277,9 +11330,13 @@ std::vector<std::string> lspImportCandidates(const std::string& fromPath, const 
             if (n && *n == symbol) { offer(symbol); break; }
     }
 
-    // (2) Every other reachable module, by its `export` manifest.
+    // (2) Every other reachable module, by its `export` manifest. Spelled as this file writes it, so its root is
+    // read through the file's package before it is compared with the module's own name (KR-291).
+    const std::string proj = projectManifestDir({ fromPath });
     for (const auto& mod : lspAllModuleNames(fromPath, argv0)) {
-        if (mod == mine) continue;                                // rung 1 owns this one, spelled bare
+        const size_t cut = mod.find("::");
+        const std::string named = importRootIdentity(proj, mod.substr(0, cut)) + (cut == std::string::npos ? "" : mod.substr(cut));
+        if (named == mine) continue;                              // rung 1 owns this one, spelled bare
         for (const auto& sym : lspImportSymbols(fromPath, mod, argv0))
             if (sym == symbol) { offer(mod + "::" + symbol); break; }
         if (out.size() >= kMaxCandidates) break;
@@ -13733,12 +13790,22 @@ int main(int argc, char** argv)
         // stay too. An entry names a package (`voice`, `std`), a module (`voice::dsp`), or a module and
         // everything inside it, and one that names nothing in the build is an error.
         std::set<std::string> optMatched;
-        const std::string rootProject = g_buildConfigRequest.manifest.empty() ? std::string()
-                                      : manifestModulesCached(g_buildConfigRequest.manifest).projectName;
-        auto optimizedPackage = [&](const std::string& pkg) {   // an import name: `voice`, `std`
+        const std::string rootDir = g_buildConfigRequest.manifest.empty() ? std::string()
+                                  : dirName(g_buildConfigRequest.manifest);
+        const std::string rootProject = rootDir.empty() ? std::string()
+                                      : manifestModulesCached(g_buildConfigRequest.manifest).packageName;
+        // An entry is spelled as the root's own code imports it (`voice`, `voice::dsp`), or by a package's full name
+        // (`@kama/voice`); either way it is read as the package or module it names, which is how a unit's module
+        // is named (KR-291).
+        auto named = [&](const std::string& e) {
+            if (!e.empty() && e[0] == '@') return e;
+            const size_t cut = e.find("::");
+            return importRootIdentity(rootDir, e.substr(0, cut)) + (cut == std::string::npos ? std::string() : e.substr(cut));
+        };
+        auto optimizedPackage = [&](const std::string& pkg) {   // a package identity: `@kama/voice`, `std`
             bool hit = false;
             for (const std::string& e : g_debugOptimize)
-                if (!pkg.empty() && importNameOf(e) == pkg) { optMatched.insert(e); hit = true; }
+                if (!pkg.empty() && named(e) == pkg) { optMatched.insert(e); hit = true; }
             return hit;
         };
         auto optimizedUnit = [&](const std::string& unitPath) {
@@ -13746,9 +13813,11 @@ int main(int argc, char** argv)
             const ModuleId id = moduleIdForFile(unitPath);
             bool hit = optimizedPackage(id.project);
             const std::string m = id.full();
-            for (const std::string& e : g_debugOptimize)
-                if (!m.empty() && (m == e || (m.size() > e.size() + 1 && m.compare(0, e.size(), e) == 0
-                                              && m.compare(e.size(), 2, "::") == 0))) { optMatched.insert(e); hit = true; }
+            for (const std::string& e : g_debugOptimize) {
+                const std::string n = named(e);
+                if (!m.empty() && (m == n || (m.size() > n.size() + 1 && m.compare(0, n.size(), n) == 0
+                                              && m.compare(n.size(), 2, "::") == 0))) { optMatched.insert(e); hit = true; }
+            }
             return hit;
         };
         for (auto& cf : cFiles) {
@@ -13797,7 +13866,7 @@ int main(int argc, char** argv)
                     default:            tok = "-x c "; break;
                 }
                 ccInputs.push_back({ tok + "\"" + cs.path + "\" ", obj, lang,
-                                     !release && optimizedPackage(cs.owner.empty() ? rootProject : importNameOf(cs.owner)) });
+                                     !release && optimizedPackage(cs.owner.empty() ? rootProject : importRootIdentity(rootDir, cs.owner)) });
             }
         }
 

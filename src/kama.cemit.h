@@ -352,7 +352,9 @@ struct NsCtx {
     std::string privScope;
     std::set<std::string> exportedHere;
     std::vector<std::string> usings;                  // imported public namespaces (mangled)
-    std::map<std::string, std::string> aliases;       // alias -> mangled namespace (module alias / `using X = Y`)
+    // The import roots this file's PACKAGE declares (KR-291): local name -> package identity (`nnet` ->
+    // `@north/net`), its own name included. A root not here names itself. Read through `throughRoots`.
+    std::map<std::string, std::string> importRoots;
     std::map<std::string, std::string> symbolAliases; // per-symbol import: local name -> mangled global symbol
 };
 
@@ -977,6 +979,16 @@ public:
     // Absent (or unset) means no: a grant that does not resolve stays an error.
     void setLeftOutOfBuild(std::function<bool(const std::string&, const std::string&)> f) { _leftOutOfBuild = std::move(f); }
     void setModuleResolver(std::function<std::string(const std::string&)> r) { _moduleResolver = r; }
+    // The import roots of the package a file belongs to (KR-291): each local name its manifest gives a dependency,
+    // and its own name, mapped to the package identity they name. Manifest work, so the driver answers. Absent,
+    // every root names itself.
+    void setImportRoots(std::function<std::map<std::string, std::string>(const std::string&)> f) { _importRoots = std::move(f); }
+    // "a.b" -> "a__b", and a scoped package's head `@s/n` -> `kS_s__n` (KR-291). Public because the driver names a
+    // unit's generated file and a package's C objects by the same prefix.
+    static std::string mangleNs(const std::string& ns);
+    // A dotted module path as a file spells it, its root read through that file's package (KR-291): `nnet.wire` is
+    // `@north/net.wire` when `roots` (NsCtx::importRoots) maps `nnet`. Dotted out, for mangleNs.
+    static std::string throughRoots(const std::map<std::string, std::string>& roots, const std::string& dotted);
     // The PACKAGE a file belongs to (KR-176): the boundary `@nonExhaustive` draws. Manifest work, so the driver answers.
     void setPackageResolver(std::function<std::string(const std::string&)> r) { _packageResolver = r; }
     // How a source file is spelled where a location is written INTO the program — a `panic`/`assert` site's
@@ -1641,6 +1653,7 @@ private:
     // and the method returns a view — see emitMethodOrCtorBody and emitDotOnTypeCtorCall.
     std::string _mintGrant;
     std::function<std::string(const std::string&)> _moduleResolver;
+    std::function<std::map<std::string, std::string>(const std::string&)> _importRoots;
     std::function<std::string(const std::string&)> _packageResolver;
     // `@nonExhaustive` enums (KR-176), by registry key (a generic one by its template's), to the package that declared
     // them: outside that package a `match` on one must carry `case _:`, because the package may add a case later.
@@ -2250,7 +2263,6 @@ private:
     std::map<const CompilationUnit*, NsCtx> _unitCtx;   // each file's context (for emit)
     NsCtx ctxOf(SharedCompilationUnit unit);                     // build a file's NsCtx
     static std::string qualifiedName(SharedIdentifier id);       // dotted "a.b.c" from value+qualifier
-    static std::string mangleNs(const std::string& ns);          // "a.b" -> "a__b"
     std::string qualify(const std::string& name) const;          // scope-prefix a declared name (the file-private scope for a name this file does not export)
     // KR-67. A name kama OWNS reaches C as `k_<name>`, so no header macro can rewrite it. See the
     // definition in kama.cemit.cpp for the rule and why the C preprocessor leaves no alternative.

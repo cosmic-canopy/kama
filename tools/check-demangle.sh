@@ -98,6 +98,12 @@ want std__collections__DynamicArray_string_kama__GlobalAllocator__dtor  'std::co
 want kama__Optional_string  'Optional<string>'
 want kama_main              main
 
+# --- a scoped package (KR-291): `kS_<scope>__<name>__` reads back as `@scope/name::` ----------------------
+# No table claims these (the probe has no such package), so this is the lexical rule a debugger meets.
+want kS_t__app__area            '@t/app::area'
+want kS_t__app__geo__Point      '@t/app::geo::Point'
+want kS_t__app__k_Box           '@t/app::k_Box'     # a declaration's leaf keeps its own `k_`
+
 # --- the language's own types under their C names -------------------------------------------------
 want kama_string            string
 want kama_string__length    string::length

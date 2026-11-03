@@ -73,6 +73,8 @@ eq(lexical('kF_kk__k_Box'),     'k_Box',      "a declaration's leaf keeps its ow
 eq(lexical('kama_main'),        'main',       'the entry point');
 eq(lexical('kama__print'),      'print',      'the prelude scope is implicit in source');
 eq(lexical('std__collections__Map'), 'std::collections::Map', 'a module scope reads as a path');
+eq(lexical('kS_acme__sc__val'), '@acme/sc::val', "a scoped package's prefix reads as its full name");
+eq(lexical('kS_acme__sc'),      '@acme/sc',      '...and alone, as the package');
 
 // --- compiler-owned locals are machinery, except the one that is not ----------------------------
 for (const t of ['kama_ret_0', 'kama_self', 'kama_match0', 'kama_msub1', 'kama_heap0'])

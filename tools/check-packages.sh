@@ -653,10 +653,17 @@ JSON
 printf 'import { sc::val };\nfn uint8 main() { return cast<uint8>(val()); }\n' > "$scp/src/main.kama"
 if ! "$KAMA" pkg install "$scp/kama.json" >"$tmp/scp.out" 2>&1; then echo "check-packages: FAIL — scoped install errored:" >&2; sed 's/^/  /' "$tmp/scp.out" >&2; exit 1; fi
 [ -L "$scp/.kama/deps/sc" ] || { echo "check-packages: FAIL — scoped dep did not import under its bare name (.kama/deps/sc)" >&2; ls "$scp/.kama/deps" >&2; exit 1; }
-if "$KAMA" build "$scp/kama.json" -o "$tmp/scapp" >"$tmp/scb.out" 2>&1; then
-    if "$tmp/scapp"; then rc=0; else rc=$?; fi
+mkdir -p "$tmp/scc"
+if "$KAMA" build "$scp/kama.json" -o "$tmp/scc/scapp" --keep-c >"$tmp/scb.out" 2>&1; then
+    if "$tmp/scc/scapp"; then rc=0; else rc=$?; fi
     [ "$rc" = 7 ] || { echo "check-packages: FAIL — scoped consumer returned $rc, expected 7" >&2; exit 1; }
 else echo "check-packages: FAIL — build of the scoped consumer failed:" >&2; sed 's/^/  /' "$tmp/scb.out" >&2; exit 1; fi
+# A scoped package's C names carry its scope (KR-291): `@acme/sc`'s `val` is `kS_acme__sc__val`, so another
+# scope's `sc` could never share it, and `kama demangle` reads it back as the package's full name.
+grep -q 'kS_acme__sc__val' "$tmp/scc"/*.c "$tmp/scc"/*.h 2>/dev/null \
+    || { echo "check-packages: FAIL — @acme/sc's val is not kS_acme__sc__val in the emitted C:" >&2; grep -oh '[A-Za-z_]*val\b' "$tmp/scc"/*.c | sort -u | head -5 >&2; exit 1; }
+dm=$("$KAMA" demangle "$scp/kama.json" -- kS_acme__sc__val 2>&1) || true
+[ "$dm" = "@acme/sc::val" ] || { echo "check-packages: FAIL — kS_acme__sc__val demangled to \`$dm\`, expected \`@acme/sc::val\`" >&2; exit 1; }
 # opt-out: an UNSCOPED name with `default:false` and no source is unresolvable (a clean hard error).
 opo="$tmp/opo"; mkdir -p "$opo"
 cat > "$opo/kama.json" <<JSON

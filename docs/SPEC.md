@@ -4656,11 +4656,12 @@ macros over the shipped header set on macOS, 21,748 over one Windows TU.
 | `kama_…` | what the **compiler** owns — runtime types and their members, emitted members and temps, the prelude's own scope |
 | `k_…` | what the **user** owns — fields, variant payloads and union members, parameters, locals, bindings, contract/vtable slots |
 | `kF_…` | a file's **private** declarations — `kF_<file>__…`, or `<module>__kF_<file>__…` in a module |
-| `<project>__…` | a **module's** declarations — `geo__area`, `std__collections__DynamicArray…`, `core__println` |
+| `kS_…` | a **scoped package's** declarations — `@south/net`'s `who` is `kS_south__net__who`, so two scopes' `net` never meet |
+| `<project>__…` | an **unscoped** package's declarations — `geo__area`, `std__collections__DynamicArray…`, `core__println` |
 
 They are disjoint by construction, not by convention: `k_` has `_` at index 1 and `kama_` has `a`, so no
 user name can ever produce a compiler-owned spelling. `k`, an uppercase tag and `_` is a prefix kama
-**builds** (`kF_`), set apart by its second character in turn. A user name that already starts with `k_` becomes
+**builds** (`kF_`, `kS_`), set apart by its second character in turn. A user name that already starts with `k_` becomes
 `k_k_…`, and the mangling stays reversible — strip exactly one `k_`. Two rules close the rest. A project's name
 keeps out of `k`, `kama`, anything starting `k_` or `kama_`, and `k` plus an uppercase letter alone or before
 `_` ([packages.md](packages.md)), since its `<project>__` prefix would open one of the other registers (a
@@ -4684,6 +4685,7 @@ crash log or `objdump`:
 
 ```sh
 kama demangle app.kama -- kF_app__Pair_int32__make     # -> Pair<int32>::make
+kama demangle app.kama -- kS_south__net__who           # -> @south/net::who
 ```
 
 It is a subcommand rather than a name map written beside the build, because a map is a record and a

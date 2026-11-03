@@ -496,6 +496,12 @@ def _demangle_frame(name):
         return name
     if name.startswith(PRELUDE_SCOPE):              # the prelude's scope is implicit in source
         return name[len(PRELUDE_SCOPE):].replace('__', '::')
+    if name.startswith('kS_'):                      # a scoped package: `kS_<scope>__<name>__<rest>`
+        parts = name[3:].split('__', 2)
+        if len(parts) >= 2:
+            head = '@' + parts[0] + '/' + parts[1]
+            return head + ('::' + parts[2].replace('__', '::') if len(parts) == 3 else '')
+        return name
     if '__' in name:                                # a module path
         return name.replace('__', '::')
     return name                                     # not kama's: hand it back untouched

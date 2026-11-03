@@ -368,6 +368,19 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
         // by whether a table claimed the token — so the recursion depth is the discriminator.
         if (cRegister && depth == 0 && tok.size() > 2 && tok.compare(0, 2, "k_") == 0) tok.erase(0, 2);
 
+        // A scoped package's head (KR-291): `kS_south__net__who` is `@south/net::who`. The scope and the name are
+        // segments C can join (no `__` inside either), so the first two `__` are the only split; the rest is a
+        // declaration's path below the package, demangled as one.
+        if (tok.size() > 3 && tok.compare(0, 3, "kS_") == 0) {
+            const size_t a = tok.find("__", 3);
+            if (a != std::string::npos) {
+                const size_t b = tok.find("__", a + 2);
+                out += "@" + tok.substr(3, a - 3) + "/" + tok.substr(a + 2, b == std::string::npos ? b : b - a - 2);
+                if (b != std::string::npos) out += "::" + demangleForDisplay(tok.substr(b + 2), depth + 1, cRegister);
+                continue;
+            }
+        }
+
         // Leading underscores are reserved-identifier territory — measure the token's real start.
         size_t lead = tok.find_first_not_of('_');
         if (lead == std::string::npos) { out += tok; continue; }
@@ -661,8 +674,23 @@ std::string CEmitter::qualifiedName(SharedIdentifier id)
 std::string CEmitter::mangleNs(const std::string& ns)
 {
     std::string r = ns;
+    // A scoped package's identity heads its names as `kS_<scope>__<name>` (KR-291): `k`, an uppercase tag and `_`
+    // is the register of the prefixes kama builds, which no project's, module's or user's name can open, so two
+    // scopes' `net` stay apart while an unscoped `net` keeps `net__`.
+    if (!r.empty() && r[0] == '@') {
+        const size_t slash = r.find('/');
+        if (slash != std::string::npos) r = "kS_" + r.substr(1, slash - 1) + "__" + r.substr(slash + 1);
+    }
     for (size_t p; (p = r.find('.')) != std::string::npos; ) r.replace(p, 1, "__");
     return r;
+}
+
+std::string CEmitter::throughRoots(const std::map<std::string, std::string>& roots, const std::string& dotted)
+{
+    const size_t dot = dotted.find('.');
+    auto r = roots.find(dotted.substr(0, dot));
+    if (r == roots.end()) return dotted;
+    return r->second + (dot == std::string::npos ? std::string() : dotted.substr(dot));
 }
 
 // A module name is written `a::b`; every manglable path in this file is dotted before `mangleNs` folds it
@@ -737,11 +765,12 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
         ctx.scope = privateScopeFor(ctx.unitPath);
         ctx.isPublic = false;
     }
-    // Imports (`::`-path already resolved to source by the driver). Populate scope bindings:
-    //   import a::b;            -- nothing (qualified-only, a::b::X)
-    //   import a::b as m;       -- module alias  -> aliases[m] = a__b, so m::X resolves
-    //   import a::b::{X,Y as Z} -- per-symbol    -> symbolAliases[X]=a__b__X, [Z]=a__b__Y (unqualified)
-    //
+    // Imports (`::`-path already resolved to source by the driver). One form populates the bindings:
+    //   import { a::b::X, a::b::Y as Z } -- symbolAliases[X]=a__b__X, [Z]=a__b__Y (unqualified)
+    // An import's root is a name of this file's PACKAGE (KR-291): `nnet::X` binds `@north/net`'s `X` when the
+    // package's manifest gives `@north/net` the local name `nnet`, so the root is read through `importRoots`.
+    if (_importRoots && !ctx.unitPath.empty() && ctx.unitPath[0] != '<') ctx.importRoots = _importRoots(ctx.unitPath);
+
     // An `as` alias may NOT claim a PROJECT root reachable from this file (§2f.29). It used to be able
     // to, and `global::a::b::X` was the escape hatch — name a module absolutely, past the file's own
     // aliases. That escape is gone with the `namespace` declaration, so the shadowing it worked around is
@@ -749,7 +778,11 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
     // roots, its own project, and the root of every module it imports — which is the right scope, because
     // an alias binds in one file and nowhere else.
     std::set<std::string> projectRoots = { "std", "core", "global" };
-    if (!module.empty()) projectRoots.insert(module.substr(0, module.find("::")));
+    if (!module.empty()) {
+        std::string own = module.substr(0, module.find("::"));   // the identity; this file spells its bare name
+        if (own[0] == '@') own = own.substr(own.find('/') + 1);
+        projectRoots.insert(own);
+    }
     if (unit->importDeclarationList)
         for (auto& imp : *unit->importDeclarationList)
             if (imp && imp->modulePath && !imp->modulePath->empty())
@@ -764,7 +797,7 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
             // needs no path because there is exactly one candidate, so it targets this file's own scope
             // and the symbols bind bare, just as a foreign per-symbol import does. (A file in no module
             // has scope `kF_<file>` and no siblings, so the form is inert rather than special-cased.)
-            std::string mod = imp->modulePath->empty() ? ctx.scope : mangleNs(path);
+            std::string mod = imp->modulePath->empty() ? ctx.scope : mangleNs(throughRoots(ctx.importRoots, path));
             if (imp->symbols)
                 for (auto& sym : *imp->symbols) {
                     if (!sym || !sym->identifier || !sym->identifier->value) continue;
@@ -867,11 +900,12 @@ std::string CEmitter::kMember(const ClassInfo& owner, const std::string& name)
 
 void CEmitter::restoreFileRung(NsCtx& ns, const std::string& declFile) const
 {
-    ns.privScope.clear(); ns.exportedHere.clear(); ns.module.clear();
+    ns.privScope.clear(); ns.exportedHere.clear(); ns.module.clear(); ns.importRoots.clear();
     if (declFile.empty() || declFile[0] == '<') return;          // compiler-owned, or unknown
     for (auto& kv : _unitCtx)
         if (kv.second.unitPath == declFile) {
             ns.privScope = kv.second.privScope; ns.exportedHere = kv.second.exportedHere; ns.module = kv.second.module;
+            ns.importRoots = kv.second.importRoots;   // a `friend` qualifier is read through the file's package
             return;
         }
 }
@@ -901,8 +935,7 @@ std::string CEmitter::siblingPrivateKey(const std::string& name,
 
 bool CEmitter::isNamespace(const std::string& name) const
 {
-    if (_nsCtx.aliases.count(name)) return true;
-    return _namespaces.count(mangleNs(name)) != 0;
+    return _namespaces.count(mangleNs(throughRoots(_nsCtx.importRoots, name))) != 0;
 }
 
 // Resolve a class/enum/interface reference (bare or qualified) to its registered
@@ -948,15 +981,10 @@ std::string CEmitter::resolveUserNameImpl(const std::string& value, SharedString
     // recovery that keeps that refusal the only line a reader sees.
     SharedStringList q = qualifier;
     if (q && !q->empty()) {
-        // Qualified `A.B...value` — a namespace path (alias-expand a 1-segment head).
-        std::string nsMangled;
-        if (q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
-            nsMangled = _nsCtx.aliases[*(*q)[0]];
-        else {
-            std::string path;
-            for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
-            nsMangled = mangleNs(path);
-        }
+        // Qualified `A.B...value` — a namespace path (its root read through the file's package).
+        std::string path;
+        for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
+        std::string nsMangled = mangleNs(throughRoots(_nsCtx.importRoots, path));
         std::string cand = nsMangled + "__" + value;
         if (known(cand)) return cand;
         // An extern keeps its literal key, so a qualified spelling reaches it only if THAT module exports
@@ -1040,11 +1068,17 @@ bool CEmitter::reportDeclaredElsewhere(const std::string& noun, const std::strin
     // now, `import { … };`.
     if (!exportedBy.empty()) {
         // Two modules may export the same name (`DecodeError` in base64 and hex); each import is offered,
-        // since only the reader knows which one they meant.
+        // since only the reader knows which one they meant. The line to paste spells the module as THIS file's
+        // package names it (KR-291): a dependency's local name, or its bare name when nothing declares it yet.
+        auto spelled = [&](const std::string& m) {
+            const std::string root = m.substr(0, m.find("::")), rest = m.substr(root.size());
+            for (const auto& r : _nsCtx.importRoots) if (r.second == root) return r.first + rest;
+            return (root[0] == '@' ? root.substr(root.find('/') + 1) : root) + rest;
+        };
         std::string where, fix;
         for (auto& m : exportedBy) {
             where += (where.empty() ? "`" : " and `") + m + "`";
-            fix += (fix.empty() ? "add `import { " : ", or add `import { ") + m + "::" + name + " };`";
+            fix += (fix.empty() ? "add `import { " : ", or add `import { ") + spelled(m) + "::" + name + " };`";
         }
         unsupported((noun + " `" + name + "` is not imported — it lives in " + where + "; " + fix).c_str(),
                     line, name);
@@ -3861,12 +3895,16 @@ void CEmitter::checkModulePaths(const std::vector<SharedCompilationUnit>& units)
                                  + "`; a language type (`Optional`, `Result`, …) needs neither").c_str(), id, name);
                 continue;
             }
-            // The longest leading run of segments that names a module; what follows it is the symbol.
+            // The longest leading run of segments that names a module; what follows it is the symbol. Its root
+            // is read through this file's package (KR-291), as the file's imports are.
+            auto uc = _unitCtx.find(u.get());
+            static const std::map<std::string, std::string> kNoRoots;
+            const std::map<std::string, std::string>& roots = uc != _unitCtx.end() ? uc->second.importRoots : kNoRoots;
             size_t modLen = 0;
             std::string path;
             for (size_t i = 0; i < q.size(); ++i) {
                 path += (i ? "." : "") + *q[i];
-                if (_namespaces.count(mangleNs(path))) modLen = i + 1;
+                if (_namespaces.count(mangleNs(throughRoots(roots, path)))) modLen = i + 1;
             }
             if (modLen == 0) continue;                          // `Color::Blue` — a type's scope, not a module
             std::string mod, rest;
@@ -3876,8 +3914,7 @@ void CEmitter::checkModulePaths(const std::vector<SharedCompilationUnit>& units)
             const std::string symbol = modLen < q.size() ? *q[modLen] : name;
             // Already imported (maybe under an `as` name): the fix is the spelling, not another import.
             std::string local;
-            const std::string key = mangleNs(dottedModule(mod)) + "__" + symbol;
-            auto uc = _unitCtx.find(u.get());
+            const std::string key = mangleNs(throughRoots(roots, dottedModule(mod))) + "__" + symbol;
             if (uc != _unitCtx.end())
                 for (auto& sa : uc->second.symbolAliases) if (sa.second == key) { local = sa.first; break; }
             const std::string spelled = local.empty() ? rest : local + rest.substr(symbol.size());
@@ -4270,14 +4307,9 @@ std::string CEmitter::resolveFuncImpl(const std::string& name, SharedStringList 
     }
     SharedStringList q = qualifier;                      // a module path — see resolveUserNameImpl
     if (q && !q->empty()) {
-        std::string nsMangled;
-        if (q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
-            nsMangled = _nsCtx.aliases[*(*q)[0]];
-        else {
-            std::string path;
-            for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
-            nsMangled = mangleNs(path);
-        }
+        std::string path;
+        for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
+        std::string nsMangled = mangleNs(throughRoots(_nsCtx.importRoots, path));
         std::string cand = nsMangled + "__" + name;
         if (_funcs.count(cand)) return cand;
         if (_externDeclSites.count(name)) return externExportedFrom(name, nsMangled) ? name : cand;   // see resolveUserNameImpl
@@ -4384,14 +4416,9 @@ std::string CEmitter::resolveModuleVarImpl(const std::string& name, SharedString
     }
     SharedStringList q = qualifier;                  // a module path — see resolveUserNameImpl
     if (q && !q->empty()) {
-        std::string nsMangled;
-        if (q->size() == 1 && _nsCtx.aliases.count(*(*q)[0]))
-            nsMangled = _nsCtx.aliases[*(*q)[0]];
-        else {
-            std::string path;
-            for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
-            nsMangled = mangleNs(path);
-        }
+        std::string path;
+        for (auto& seg : *q) path += (path.empty() ? "" : ".") + *seg;
+        std::string nsMangled = mangleNs(throughRoots(_nsCtx.importRoots, path));
         std::string cand = nsMangled + "__" + name;
         if (_moduleStatics.count(cand)) return cand;
         return siblingPrivateKey(name, [&](const std::string& k) { return _moduleStatics.count(k) > 0; }, nsMangled);
@@ -27199,7 +27226,10 @@ std::string CEmitter::hostQualified(const std::string& module, const std::string
 {
     std::string prefix;
     if (!module.empty()) {
-        for (size_t i = 0; i < module.size(); ++i) {
+        // A scoped package's identity (`@kama/gpu`) is the bare name here: the declared C surface keeps its
+        // spelling (KR-291), so `@kama/gpu`'s exposed `init` stays `gpu_init`.
+        const size_t from = module[0] == '@' && module.find('/') != std::string::npos ? module.find('/') + 1 : 0;
+        for (size_t i = from; i < module.size(); ++i) {
             if (module.compare(i, 2, "::") == 0) { prefix += '_'; ++i; continue; }
             char c = module[i];
             prefix += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
@@ -32155,15 +32185,15 @@ void CEmitter::checkFieldAccess(ClassInfo* owner, const std::string& field, int 
 // a free function, or a `Class::method` (both matched vs _currentFunc's C-name).
 // Does the qualifier of a `friend` accessor name a module this program loaded? The qualifier is judged
 // WHOLE, never by a prefix: the project root is a namespace too, so a prefix test would call
-// `sodium::box::sealInto` present whenever `sodium` is. Three shapes are present: a 1-segment file alias;
-// a path that is itself a registered module scope (`mod::func`, `mod::Type`); or a path whose last segment
-// names a class inside the registered module the rest spells (`mod::Type::method`). Anything else names a
-// module absent from the build — see the inert-grant rule in resolveFriends.
+// `sodium::box::sealInto` present whenever `sodium` is. Two shapes are present, the root read through the
+// file's package (KR-291): a path that is itself a registered module scope (`mod::func`, `mod::Type`); or a
+// path whose last segment names a class inside the registered module the rest spells (`mod::Type::method`).
+// Anything else names a module absent from the build — see the inert-grant rule in resolveFriends.
 bool CEmitter::friendModulePresent(SharedStringList qual)
 {
     if (!qual || qual->empty()) return true;
-    if (qual->size() == 1 && _nsCtx.aliases.count(*(*qual)[0])) return true;
-    auto dotted = [&](size_t n) { std::string path; for (size_t i = 0; i < n; ++i) path += (path.empty() ? "" : ".") + *(*qual)[i]; return path; };
+    auto dotted = [&](size_t n) { std::string path; for (size_t i = 0; i < n; ++i) path += (path.empty() ? "" : ".") + *(*qual)[i];
+                                  return throughRoots(_nsCtx.importRoots, path); };
     if (_namespaces.count(mangleNs(dotted(qual->size())))) return true;
     if (qual->size() >= 2 && _namespaces.count(mangleNs(dotted(qual->size() - 1)))) {
         auto head = std::make_shared<StringList>();
@@ -32182,7 +32212,12 @@ bool CEmitter::friendModulePresent(SharedStringList qual)
 bool CEmitter::friendLeftOut(SharedStringList qual, const std::string& val)
 {
     if (!_leftOutOfBuild || !qual || qual->empty()) return false;
-    auto joined = [&](size_t n) { std::string p; for (size_t i = 0; i < n; ++i) p += (p.empty() ? "" : "::") + *(*qual)[i]; return p; };
+    // The full module name, as the driver keys it: the root read through this file's package (KR-291).
+    auto joined = [&](size_t n) {
+        std::string p = throughRoots(_nsCtx.importRoots, *(*qual)[0]);
+        for (size_t i = 1; i < n; ++i) p += "::" + *(*qual)[i];
+        return p;
+    };
     if (_leftOutOfBuild(joined(qual->size()), val)) return true;
     return qual->size() >= 2 && _leftOutOfBuild(joined(qual->size() - 1), *qual->back());
 }
@@ -46737,7 +46772,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             for (auto& s : *imp->modulePath) path += (path.empty() ? "" : ".") + *s;
             const bool sameModule = imp->modulePath->empty();
             _nsCtx = _unitCtx[u.get()];
-            std::string mod = sameModule ? _nsCtx.scope : mangleNs(path);
+            std::string mod = sameModule ? _nsCtx.scope : mangleNs(throughRoots(_nsCtx.importRoots, path));
             // §2c AT THE IMPORT. `visibility` governs reach BEYOND a module; the file rung below has its
             // own say. A same-module entry is always allowed — a module's own files see each other
             // unconditionally, which is what "its own files" means in all four forms.
@@ -46747,9 +46782,11 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             // there consults a half-built index and the answer depends on which unit came first. It read
             // as "internal is enforced, a list is not"; both were really coin-flips on unit order.
             if (!sameModule && _moduleVisible) {
-                std::string target;                        // the entry's module, unmangled
+                std::string target;                        // the entry's module, unmangled, as this file spells it
                 for (auto& sg : *imp->modulePath) target += (target.empty() ? "" : "::") + *sg;
-                if (!_moduleVisible(_nsCtx.module, target))
+                std::string full = throughRoots(_nsCtx.importRoots, path);   // ...and as the driver names it
+                for (size_t p; (p = full.find('.')) != std::string::npos; ) full.replace(p, 1, "::");
+                if (!_moduleVisible(_nsCtx.module, full))
                     unsupported(("module `" + target + "` is not visible from "
                                  + (_nsCtx.module.empty() ? std::string("a file in no module")
                                                           : "`" + _nsCtx.module + "`")
