@@ -36,6 +36,9 @@ addr_of_temporary_element	addr_of_temporary_element.kama:7:31
 align_no_argument	align_no_argument.kama:4:0
 align_not_power_of_two	align_not_power_of_two.kama:5:0
 alignof_label	alignof_label.kama:2:53
+archive_tar_end_marker_required	archive_tar_end_marker_required.kama:4:31
+archive_tar_finish_consumes	archive_tar_finish_consumes.kama:6:21
+archive_tar_kind_open	archive_tar_kind_open.kama:6:11
 arg_duplicate	arg_duplicate.kama:3:37
 arg_kind_intrinsic_inline_array	arg_kind_intrinsic_inline_array.kama:5:4
 arg_kind_intrinsic_string	arg_kind_intrinsic_string.kama:7:15
@@ -187,6 +190,8 @@ compilefor_negated_component_typo	compilefor_negated_component_typo.kama:7:0
 compilefor_on_method	compilefor_on_method.kama:9:0 compilefor_on_method.kama:9:23
 compilefor_unknown_platform	compilefor_unknown_platform.kama:8:0
 compress_deflate_level_closed	compress_deflate_level_closed.kama:6:11
+compress_deflate_limit_required	compress_deflate_limit_required.kama:4:35
+compress_gzip_members_required	compress_gzip_members_required.kama:4:32
 comptime_arg_sizeof_extern	main.kama:7:18 main.kama:7:32
 comptime_arg_unify_conflict	comptime_arg_unify_conflict.kama:14:23
 comptime_args_arity	comptime_args_arity.kama:3:37

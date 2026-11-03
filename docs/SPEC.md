@@ -2434,7 +2434,9 @@ position and answers `InvalidInput` <!-- test: fs_random_access --> <!-- test: p
 wait, `tryLock`/`tryLockShared` answer `WouldBlock` when it is held elsewhere, `unlock` and closing release it, and so
 does the holder's death, so a lock file needs no pid check (Rust's `File::lock`; `flock` on Linux and macOS, advisory;
 `LockFileEx` on Windows, mandatory — another handle's read or write fails while it is held; none on wasm, `Other`); plus free `readFile`/`writeFile`/`readText`/`writeText`/`stat`/`readDir`/`remove`,
-`createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, and a `Metadata` of `size`,
+`createDir`/`createDirAll`/`removeDir`/`removeDirAll`/`rename`/`exists`, `symlink` and `hardLink` <!-- test: fs_links -->
+(`original:`, `link:`; on Windows a symbolic link wants Developer Mode or a privilege, past which it is `PermissionDenied`, and
+wasm's filesystem has no hard links), and a `Metadata` of `size`,
 `kind`, `modified` (a `std::time::Timestamp` — nanoseconds where the filesystem records them, whole seconds
 on Windows), `changed` (the change time — `st_ctim`, Windows' `ChangeTime` — which no user tool can set back, as `cp -p`
 and `touch -r` set `modified`), `id` (a `FileId`, equal for two reads of one file through any path, kept by a rename: a
@@ -2995,15 +2997,55 @@ fn uint8 main() {
 }
 ```
 
-**Compressed streams (`std::compress`).** `DeflateReader<R>` decodes raw deflate (RFC 1951) and is a `Reader` of the
-decoded bytes. Its source is a `BufReader<R>`, and it takes exactly the stream's bytes from it, handing back what it read
-ahead: once a read has answered `Ok(0)`, `give d.finish()` hands the `BufReader` back at the first byte after the stream, so streams back to back <!-- test: compress_deflate_read -->
-(a gzip file's members, a packfile's objects) decode one after another. `finish` reads nothing, so it cannot block or time
-out: before the stream's end it answers `InvalidInput`, and after a failure that failure, each with the reader back whole <!-- test: compress_deflate_finish -->
-in `Unfinished`, and `give d.abandon()` takes the source back as it stands, nothing verified. Its `limit` on the decoded
-bytes is required: up to `limit` bytes are delivered, and the read that would deliver one more answers `LimitExceeded`. A stream that <!-- test: compress_deflate_limit -->
-breaks RFC 1951 is `InvalidData` and one cut short is `UnexpectedEof`, and either is final; an error from the source <!-- test: compress_deflate_invalid -->
-passes through and changes nothing, so the read after a `WouldBlock` resumes where it stopped.
+**Compressed streams (`std::compress`).** `DeflateReader<R>` (RFC 1951), `ZlibReader<R>` (RFC 1950) and `GzipReader<R>` (RFC 1952) are `Reader`s of
+the decoded bytes. Each takes its source as a `BufReader<R>` and takes exactly the stream's bytes from it, handing back what it read ahead, so streams <!-- test: compress_deflate_read --> <!-- test: compress_zlib_read -->
+back to back (a gzip file's members, a packfile's objects) decode one after another. `limit`, a bound on the decoded bytes, is required, since a few <!-- xfail: compress_deflate_limit_required -->
+kilobytes can decode to gigabytes: up to `limit` bytes are delivered, and the read that would deliver one more answers `LimitExceeded`. A stream that breaks <!-- test: compress_deflate_limit --> <!-- test: compress_gzip_limit -->
+its format or fails a checksum is `InvalidData` and one cut short is `UnexpectedEof`, and either is final; an error from the source passes through and <!-- test: compress_deflate_invalid --> <!-- test: compress_zlib_invalid --> <!-- test: compress_gzip_invalid -->
+changes nothing, so the read after a `WouldBlock` resumes where it stopped. A read of nothing is not the end. <!-- test: compress_flips -->
+
+A checksum is verified by the read that answers `Ok(0)`. `give d.finish()` reads nothing, so it cannot block or time out: it hands the `BufReader` back at <!-- test: compress_deflate_finish -->
+the first byte after the stream, and an `Ok` from it says the stream was read to its end, where Go's `Close` and Rust's `into_inner` hand a source back
+whether it was or not. Before the end it answers `InvalidInput`, and after a failure that failure, each with the reader back whole in `Unfinished`, and
+`give d.abandon()` takes the source back as it stands, nothing verified.
+
+`DeflateWriter<W>`, `ZlibWriter<W>` and `GzipWriter<W>` are `Writer`s of the bytes to compress, each taking `level: DeflateLevel`, which is `Store`, <!-- test: compress_deflate_write --> <!-- test: compress_zlib_write --> <!-- test: compress_gzip_write -->
+`Level1` to `Level9` or `Frozen`, and is `@nonExhaustive`. `flush` is a sync flush, so a peer can decode everything written so far. `finish` writes the end <!-- xfail: compress_deflate_level_closed -->
+of the stream and hands the sink back, flushing nothing of its own; over a stalled sink the writer comes back whole in `Unfinished`, and finishing it again
+writes no second end. Dropping a writer abandons its stream, which then never verifies. The bytes depend only on the input and the level, never on how the
+writes were split, on every target, for one kama version; `DeflateLevel::Frozen`'s never change across versions, and are what `kama publish` writes, so a <!-- test: compress_deflate_frozen --> <!-- test: compress_gzip_frozen -->
+package's sha256 can be rebuilt by std.
+
+`GzipReader.make` takes `members: GzipMembers`, with no default: `All` reads a file's members as one stream, and `limit` counts across them, while `One` reads <!-- test: compress_gzip_read --> <!-- xfail: compress_gzip_members_required -->
+the first and leaves the rest in the `BufReader`. What follows a member under `All` is another member or nothing: zeros and junk are `InvalidData`, as in Go,
+where gzip(1) warns and exits 2, and Python skips zeros. `header()` reads as far as the header's end and gives the member most recently begun as a `GzipHeader`:
+`mtime()`, `os()`, and `name()`, `comment()` and `extra()` as raw bytes, empty when absent. RFC 1952 says a name is Latin-1 and gzip(1) copies a file name's
+bytes as they are, so nothing in a file says which it holds, and the caller decides. A name or a comment past 65,535 bytes is `InvalidData`, since neither
+has a length field. `GzipWriter` writes one header for every file, with no flags, no name and no time. A zlib stream that names a preset dictionary is `InvalidData`.
+
+**Archives (`std::archive::tar`).** `TarReader<R>` reads ustar, pax `x` and `g` records, GNU long names and v7, and hands back every entry as written, since <!-- test: archive_tar_read -->
+listing a hostile archive is how one audits it: `next()` gives each `TarHeader` or `None` at the end, skipping what was left of the last body, and `read`
+gives its body. `TarHeader.path()` is raw bytes, because a tar promises nothing about its names; `kind()` is a `TarKind` carrying what only that kind has <!-- xfail: archive_tar_kind_open -->
+(`File(size)`, `Directory`, `Symlink(target)`, `HardLink(target)`, `CharDevice(major, minor)`, `BlockDevice(major, minor)`, `Fifo`, `Other(flag, size)`), and is
+`@nonExhaustive`; `mode()` is the archive's own bits; `mtime()` is an `Optional<Timestamp>`, `None` for a time a `Timestamp` cannot hold; `owner()` is `TarOwner::None`
+or `Named(uid, gid, uname, gname)`. `make` takes `endMarker: TarEndMarker`, with no default: `NotRequired` reads what GNU tar, bsdtar and Python read, where the source <!-- test: archive_tar_invalid --> <!-- xfail: archive_tar_end_marker_required -->
+ending between entries or the first zero block ends the archive, and `Required` asks for what none of them offers, two zero blocks and nothing less. A header
+whose checksum fails, a number that does not parse or a malformed pax record is `InvalidData`, and a source that ends inside a header or a body is `UnexpectedEof`. A
+path, a link target or an owner name past 1 MiB is `InvalidData`, since each is held; a pax record of any other key is skipped without being held, however long. <!-- test: archive_tar_flips -->
+`finish` and `abandon` are the decoders', and `finish` hands `R` back exactly after the end, since a reader never reads ahead; over a `GzipReader` that leaves the <!-- xfail: archive_tar_finish_consumes -->
+gzip trailer to the caller, whose own `finish` then insists on it.
+
+`TarWriter<W>` writes ustar: `begin(header:)`, exactly the size declared through `write`, and `finish`. What no ustar field holds goes in a pax record. Too long <!-- test: archive_tar_write -->
+a body is `InvalidInput` with nothing taken, and too short is `InvalidInput` from the next `begin` or `finish`. Over `GzipWriter` at `Frozen`, an archive of regular <!-- test: archive_tar_frozen -->
+files with `kama publish`'s fields is publish's bytes.
+
+`extractInto(archive: ref t, dir: "out")` writes an archive under one directory and never outside it, and never traverses a link. The destination must be new or empty. <!-- test: archive_tar_extract -->
+Each entry's parents are asked of the operating system one at a time, so a parent that is a link is refused however it is spelled, and files are opened `CreateNew`, <!-- test: archive_tar_extract -->
+so nothing is written through a final link, and the same name twice is refused, where GNU tar, bsdtar and Python leave the last. It refuses, as a `TarExtractError` <!-- test: archive_tar_extract -->
+naming the entry and the `TarRefusal`: an absolute path, a `..` component, a NUL, a name that is not UTF-8, a device, a FIFO or a type it does not know, a link whose target is
+absolute or has a `..` anywhere but at its start or past the destination, a hard link to anything but an earlier regular file of the archive, and on Windows alone a
+drive, UNC path, stream, reserved name or trailing dot. The setuid, setgid and sticky bits and group and other write are dropped, nothing is chowned, and a directory keeps
+its owner's access. A hard link on a filesystem with none is a copy. What was written stays after a refusal, under a directory that was new or empty.
 
 Every platform difference lives in one bundled C bindings header, **`kama_os.h`** (pulled in only when a
 module `extern "kama_os.h";`s it — pay-for-what-you-use), which keeps OS aggregates (`struct stat`,

@@ -1,0 +1,12 @@
+// `TarKind` is `@nonExhaustive`, so that a type flag this does not know yet can get a name without breaking anyone. Outside std, a `match` on it
+// needs `case _:` even when it lists every kind there is today (KR-5).
+import { std::archive::tar::TarKind };
+
+fn int32 code(const ref TarKind k) {
+    return match (k) {
+        case File(size: s): 0; case Directory: 1; case Symlink(target: t): 2; case HardLink(target: t): 3; case CharDevice(major: a, minor: b): 4;
+        case BlockDevice(major: a, minor: b): 5; case Fifo: 6; case Other(flag: f, size: s): 7;
+    };
+}
+
+fn uint8 main() { return cast<uint8>(code(k: TarKind::Fifo)); }

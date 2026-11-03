@@ -877,6 +877,62 @@ KR_GOLDEN=sha256-c810092dce694803902974ee8b297fc27e45f3a2259e7fea8fa7a2cdbc3122d
 grep -q "\"integrity\": \"$KR_GOLDEN\"" "$kreg/golden/index.json" \
     || kfail "the golden package's integrity moved — the archive writer's bytes changed (expected $KR_GOLDEN)" "$kreg/golden/index.json"
 
+# 26i'. std can rebuild it. The same tarball, read through `TarReader` over `GzipReader` and written back through `TarWriter` over `GzipWriter` at
+# `DeflateLevel::Frozen`, is the same bytes (KR-5, ruling 7): two independent encoders agreeing to the byte, which is why `Frozen` costs no second
+# promise, and what lets `kama publish` move onto std when the compiler self-hosts.
+cat > "$tmp/gdrt.kama" <<'KREOF'
+import { std::archive::tar::TarReader, std::archive::tar::TarWriter, std::archive::tar::TarHeader, std::archive::tar::TarEndMarker, std::compress::gzip::GzipReader,
+         std::compress::gzip::GzipWriter, std::compress::gzip::GzipMembers, std::compress::deflate::DeflateLevel, std::collections::DynamicArray,
+         std::collections::FixedArray, std::collections::ConstView, std::fs::readFile, std::fs::writeFile, std::io::Writer, std::io::BufReader, std::io::SliceReader,
+         std::io::IoError };
+type resource Sink implements Writer {
+    DynamicArray<uint8> got;
+    public ctor make() { this.got = DynamicArray.empty(); }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        for (isize k = 0; k < bytes.length(); k = k + 1) { this.got.add(item: bytes[k]); }
+        return Result::Ok(value: bytes.length());
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public give fn DynamicArray<uint8> bytes() { return give this.got; }
+}
+fn uint8 main() {
+    DynamicArray<uint8> gz = match (readFile(path: "in.tar.gz")) { case Ok(value: b): give b; case Err(error: e): { return 1; } };
+    GzipReader<SliceReader> g = GzipReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: give gz)), limit: 1000000000ui64, members: GzipMembers::All);
+    TarReader<GzipReader<SliceReader>> r = TarReader.make(source: give g, endMarker: TarEndMarker::Required);
+    TarWriter<GzipWriter<Sink>> w = TarWriter.make(sink: GzipWriter.make(sink: Sink.make(), level: DeflateLevel::Frozen));
+    FixedArray<uint8> buf = FixedArray.make(size: 4096);
+    while (true) {
+        Optional<TarHeader> next = match (r.next()) { case Ok(value: o): give o; case Err(error: e): { return 2; } };
+        bool done = false;
+        match (give next) {
+            case None: { done = true; }
+            case Some(value: h): {
+                match (w.begin(header: h)) { case Ok(value: _): { } case Err(error: e): { return 3; } };
+                while (true) {
+                    isize n = match (r.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): { return 4; } };
+                    if (n == 0) { break; }
+                    match (w.write(bytes: buf.view().slice(from: 0, count: n))) { case Ok(value: m): { } case Err(error: e): { return 5; } };
+                }
+            }
+        };
+        if (done) { break; }
+    }
+    GzipWriter<Sink> gw = match (give w.finish()) { case Ok(value: x): give x; case Err(error: u): { return 6; } };
+    DynamicArray<uint8> again = match (give gw.finish()) {
+        case Ok(value: s): { Sink d = give s; := give d.bytes(); }
+        case Err(error: u): { return 7; }
+    };
+    match (writeFile(path: "out.tar.gz", bytes: again)) { case Ok(value: k): { } case Err(error: e): { return 8; } };
+    return 0;
+}
+KREOF
+"$KAMA" build "$tmp/gdrt.kama" -o "$tmp/gdrt" >"$tmp/gdrt.log" 2>&1 || kfail "std's round trip of the golden tarball does not build" "$tmp/gdrt.log"
+gdtgz=$(find "$kreg/golden" -name '*.tar.gz' | head -1)
+[ -n "$gdtgz" ] || kfail "the golden package left no tarball in the registry"
+mkdir -p "$tmp/gdrt.d"; cp "$gdtgz" "$tmp/gdrt.d/in.tar.gz"
+( cd "$tmp/gdrt.d" && "$tmp/gdrt" ) >"$tmp/gdrt.log" 2>&1 || kfail "std's round trip of the golden tarball failed" "$tmp/gdrt.log"
+cmp -s "$tmp/gdrt.d/in.tar.gz" "$tmp/gdrt.d/out.tar.gz" || kfail "std rewrote the golden tarball to different bytes: \`Frozen\`'s promise is broken"
+
 # 26j. a tracked symlink is refused by name, at publish and at --dry-run: a package holds regular files only (KR-260),
 # Go's rule. It shipped as a link through 0.9.783, which git on Windows checks out as a text file, so the package built
 # differently there. Leaving it out with `publish.exclude` publishes. POSIX only: msys2's `ln -s` copies.
@@ -2091,4 +2147,4 @@ printf '{ "overrides": { "@north/net": { "path": "../../libs/north2" } } }\n' > 
 arun a42 north2
 cmp -s "$tmp/a42.lock" "$al/apps/a42/kama.lock" || { echo "check-packages: FAIL — KR-291: an override changed the lock" >&2; exit 1; }
 
-echo "check-packages: PASS (store+integrity+tamper, no download left behind, Windows' own tar into a backslash-spelled store whatever tar PATH holds; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, a symlink refused by name, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision (a refused install leaves the view it found; a project named like its dependency refused at install and at build); kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; $HTTPNOTE; \`kama\` range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, \`pkg search\` all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package; a dependency key that is not the package's name, and a reserved \`core\`/\`std\` key, refused by name; KR-291 a local name with \`package\`, two scopes' net in one consumer, a deeper library keeping its own names, one module under two spellings, each consumer's collision refused naming the fix, one identity twice refused at install and at build, a stale bare-name view refused, pkg update/add by local name, an override by identity)"
+echo "check-packages: PASS (store+integrity+tamper, no download left behind, Windows' own tar into a backslash-spelled store whatever tar PATH holds; transitive BFS; sha pin; lock-honoring offline/cold re-fetch; dev-dep --dev boundary; pkg add/remove round-trip; conflict rejected; kama run entry/forward-exit/native-only; SemVer range select/intersect/downgrade/disjoint/offline; registry publish/immutability/resolve/transitive/offline/two-part-range-names-the-form; KR-100 publish ships the git-tracked files (outside-git/dirty/staged/untracked-manifest refused, ignored .env absent, subdirectory package, submodule shipped/not-checked-out refused, CRLF checkout = identical bytes, lfs filter refused, golden sha256 pinned, committed CR/Ctrl-Z bytes exact, a symlink refused by name, revision recorded; secret backstop names each + template ships; publish.exclude file/dir/no-match/dir-hint/kama.json/fixture-key; --dry-run lists/prints-the-real-integrity/writes-nothing/still-refuses; a path dependency refused at publish and --dry-run, a path dev-dependency ships; $KRNOTE); scopes/registries-config/opt-out/re-point/confusion-guard/collision (a refused install leaves the view it found; a project named like its dependency refused at install and at build); kama.local.json dep-override/lock-canonical/registries-override(replaces default:false)/stand-in for an unpublished version (never locked, its deps followed, a missing version refused)/absolute override and dependency paths; built-in default = registry.kama-lang.org (curl shim, no network) + unreachable index says so; too-new dependency says update; workspace sibling-dep/extractable/spelling-dedup/escape-refused/undeclared-tree-refused/free-ride-is-an-ERROR(lenient in the query/LSP path)-then-fixed; store-package-not-blamed; MULTI-MODULE library consumed as a dep (self-import is not a free-ride) + the free-ride still caught; output named for the PROJECT (not the first source file); path-dep links RELATIVE so a resolved tree survives a move (Windows junctions exempt — see the case); a dangling dep link named with its target, a declared-but-uninstalled dep and a dev-dep outside --dev each said as such (not blamed on the manifest), the install hint the command that works, the manifest as spelled; ACCEPTANCE every member builds standalone; build-from-OUTSIDE resolves deps + uses the project out/ + prefers the input file's own project; a foreign adapter is refused for its contract's home (no cross-package duplicate can be written); $SIGNOTE; $HTTPNOTE; 'kama' range refused at install and at build, satisfied one builds; registry metadata in the index entry + catalog rebuilt per publish, newer-than-floor keys refused at publish/--dry-run, each key's shape, 'pkg search' all-words/rank/none/no-catalog; a lock below the newest match, reached directly and through a path dep, kept; a member's sibling dep consumed from OUTSIDE its workspace, refused without one, refused from a fetched package; a dependency key that is not the package's name, and a reserved 'core'/'std' key, refused by name; KR-291 a local name with 'package', two scopes' net in one consumer, a deeper library keeping its own names, one module under two spellings, each consumer's collision refused naming the fix, one identity twice refused at install and at build, a stale bare-name view refused, pkg update/add by local name, an override by identity)"
