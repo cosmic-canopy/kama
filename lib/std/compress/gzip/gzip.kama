@@ -1,0 +1,382 @@
+import { std::collections::View, std::collections::ConstView, std::collections::DynamicArray, std::io::Reader, std::io::Writer,
+         std::io::BufReader, std::io::IoError, std::io::IoErrorKind, std::io::Unfinished, std::compress::deflate::DeflateReader,
+         std::compress::deflate::DeflateWriter, std::compress::deflate::DeflateLevel, std::digest::crc32::Crc32, std::num::loadU16,
+         std::num::loadU32, std::num::storeU32, std::num::ByteOrder };
+export { GzipReader, GzipWriter, GzipHeader, GzipMembers };
+
+// gzip (RFC 1952): a file of one or more members, each a deflate stream between a header and a trailer of its CRC-32 and size.
+// `.gz` files, `.tar.gz` packages and HTTP's `Content-Encoding: gzip` are gzip.
+//
+//   GzipReader<File> g = GzipReader.make(source: BufReader.make(inner: give f), limit: 64 * 1024 * 1024, members: GzipMembers::All);
+//   … g.read(into: buf) until it answers Ok(0), by when every checksum has been verified …
+//   match (give g.finish()) { case Ok(value: rest): { … } case Err(error: u): { … } };
+//
+// It reads as `DeflateReader` does, and `finish` and `abandon` mean what they mean there. `limit` counts the decoded bytes across
+// every member. What it adds: `InvalidData` for a header that is not gzip's, a header CRC, CRC-32 or size that does not match, or
+// a name or comment past its bound.
+//
+// `GzipMembers::All` is strict about what follows a member: another member or nothing. gzip(1) warns about anything else and
+// goes on, and Python skips zeros; here both are `InvalidData`, as in Go, since bytes nobody can account for are not a gzip file.
+// An empty source is `UnexpectedEof`, as in gzip(1), since a gzip file has at least one member; Python answers it with nothing.
+//
+//   GzipWriter<File> w = GzipWriter.make(sink: give f, level: DeflateLevel::Level6);
+//   … w.write(bytes: chunk), and w.flush() when a peer must be able to decode what has been written …
+//   match (give w.finish()) { case Ok(value: f2): { … the sink again … } case Err(error: u): { … } };
+//
+// It writes as `DeflateWriter` does, with the same promise about its bytes, and one header for every file: no flags, no name, no
+// time, XFL 0, OS 255. RFC 1952 makes those advisory, and a container like tar is where names and times belong. The same bytes
+// in always give the same bytes out, and `DeflateLevel::Frozen` gives what `kama publish` writes, forever. Dropping a writer
+// abandons its stream.
+
+// How much of a source a `GzipReader` decodes. RFC 1952 §2.2 lets a file be any number of members one after another: `All` reads
+// them as one stream, as gzip(1), Go and Python do. `One` reads the first and leaves what follows in the `BufReader`, for a member
+// embedded in something else (a WARC file's records are one member each).
+type enum GzipMembers { All, One }
+
+// A member's header (RFC 1952 §2.3). `name` and `comment` are the bytes as written, empty when the file has none: the RFC says
+// they are Latin-1, gzip(1) copies a file name's bytes as they are, which on Linux and macOS means UTF-8, and nothing in the file
+// says which it got, so the caller decides. They are also a stranger's bytes: a name may hold a path, so never open it unchecked.
+// `extra` is FEXTRA's subfields, as a BGZF reader wants them. `mtime` is seconds since the Unix epoch, 0 for none. `os` is the
+// RFC's byte, 255 for unknown.
+type resource GzipHeader {
+    friend GzipReader[make];
+
+    DynamicArray<uint8> nameBytes;
+    DynamicArray<uint8> commentBytes;
+    DynamicArray<uint8> extraBytes;
+    uint32 stamp;
+    uint8 system;
+
+    ctor make(DynamicArray<uint8> name, DynamicArray<uint8> comment, DynamicArray<uint8> extra, uint32 stamp, uint8 system) {
+        this.nameBytes = give name;
+        this.commentBytes = give comment;
+        this.extraBytes = give extra;
+        this.stamp = stamp;
+        this.system = system;
+    }
+
+    public const fn const ref DynamicArray<uint8> name() { return this.nameBytes; }
+    public const fn const ref DynamicArray<uint8> comment() { return this.commentBytes; }
+    public const fn const ref DynamicArray<uint8> extra() { return this.extraBytes; }
+    public const fn uint32 mtime() { return this.stamp; }
+    public const fn uint8 os() { return this.system; }
+}
+
+// FLG's bits (RFC 1952 §2.3.1). The top three are reserved, and a decoder must refuse them. FTEXT says nothing a reader acts on.
+comptime uint8 FHCRC = 2;
+comptime uint8 FEXTRA = 4;
+comptime uint8 FNAME = 8;
+comptime uint8 FCOMMENT = 16;
+comptime uint8 RESERVED = 224;
+
+// A name or a comment has no length field, only a NUL at its end, so a file could send gigabytes before it. FEXTRA's length is
+// 16 bits, and this holds the other two to the same (Rust's flate2 has this bound, Go's is 512).
+comptime isize FIELD_MAX = 65535;
+
+// Where the reader is in a member. A step that needs more than the source has stops without changing the stage, so the next
+// call repeats it.
+type enum Stage { Fixed, ExtraLength, Extra, Name, Comment, HeaderCrc, Body, Trailer, Done }
+
+type resource GzipReader<R: Reader> implements Reader {
+    DeflateReader<R> body;
+    GzipMembers members;
+    uint64 left;                     // of `limit`, what the finished members did not use
+    bool begun;                      // a member has begun: a source that ends now is the end of the file
+    Stage stage;
+    Crc32 sum;                       // the member's decoded bytes
+    Crc32 headerSum;                 // the member's header so far, for FHCRC
+    InlineArray<uint8>#(10) fixed;   // the header's fixed part, FEXTRA's length, FHCRC or the trailer so far, kept across a stall
+    isize have;
+    uint8 flags;
+    isize extraLeft;
+    DynamicArray<uint8> name;
+    DynamicArray<uint8> comment;
+    DynamicArray<uint8> extra;
+    uint32 mtime;
+    uint8 os;
+
+    public ctor make(BufReader<R> source, uint64 limit, GzipMembers members) {
+        this.body = DeflateReader.make(source: give source, limit: limit);
+        this.members = members;
+        this.left = limit;
+        this.begun = false;
+        this.stage = Stage::Fixed;
+        this.sum = Crc32.make();
+        this.headerSum = Crc32.make();
+        this.fixed = [0; 10];
+        this.have = 0;
+        this.flags = 0;
+        this.extraLeft = 0;
+        this.name = DynamicArray.empty();
+        this.comment = DynamicArray.empty();
+        this.extra = DynamicArray.empty();
+        this.mtime = 0;
+        this.os = 0;
+    }
+
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        match (this.body.failure) { case Some(value: e): { return Result::Err(error: e); } case None: { } };
+        // A read of nothing finds no end: a body that answers `Ok(0)` to it has not finished.
+        if (into.length() == 0) { return Result::Ok(value: 0); }
+        while (true) {
+            Result<Unit, IoError> h = this.readHeader();
+            match (h) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+            if (this.stage == Stage::Done) { return Result::Ok(value: 0); }
+            if (this.stage == Stage::Body) {
+                Result<isize, IoError> r = this.body.read(into: into);
+                match (r) {
+                    case Err(error: e): { return Result::Err(error: e); }
+                    case Ok(value: n): {
+                        if (n > 0) {
+                            this.sum.update(bytes: into.slice(from: 0, count: n));
+                            return Result::Ok(value: n);
+                        }
+                        this.stage = Stage::Trailer;
+                    }
+                };
+            }
+            Result<Unit, IoError> t = this.trailer();
+            match (t) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        }
+    }
+
+    // The header of the member most recently begun, reading only as far as its end. The result is its own copy, so it outlives
+    // this reader and a later member's header. After a file's last member it is still that member's.
+    public fn Result<GzipHeader, IoError> header() {
+        match (this.body.failure) { case Some(value: e): { return Result::Err(error: e); } case None: { } };
+        Result<Unit, IoError> h = this.readHeader();
+        return match (h) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: _): Result::Ok(value: GzipHeader.make(name: copy this.name, comment: copy this.comment,
+                                                                 extra: copy this.extra, stamp: this.mtime, system: this.os));
+        };
+    }
+
+    // The source back, at the first byte after what was decoded. It reads nothing: see `DeflateReader.finish`.
+    public give fn Result<BufReader<R>, Unfinished<GzipReader<R>>> finish() {
+        match (this.body.failure) {
+            case Some(value: e): {
+                IoError kept = e;
+                return Result::Err(error: Unfinished::Pending(adapter: give this, error: kept));
+            }
+            case None: { }
+        };
+        if (this.stage != Stage::Done) {
+            return Result::Err(error: Unfinished::Pending(adapter: give this, error: IoError.of(kind: IoErrorKind::InvalidInput)));
+        }
+        return Result::Ok(value: give this.body.abandon());
+    }
+
+    // The source as it stands, nothing verified: see `DeflateReader.abandon`.
+    public give fn BufReader<R> abandon() { return give this.body.abandon(); }
+
+    // A stream's own error is the body's: it ends both, and `finish` and every later read answer it.
+    fn IoError fail(IoErrorKind kind) {
+        IoError e = IoError.of(kind: kind);
+        this.body.failure = Optional::Some(value: e);
+        return e;
+    }
+
+    // `fixed` filled to `want` bytes. An error from the source passes through and loses nothing.
+    fn Result<Unit, IoError> gather(isize want) {
+        while (this.have < want) {
+            Result<isize, IoError> r = this.body.src.read(into: this.fixed.viewMut().slice(from: this.have, count: want - this.have));
+            match (r) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: n): {
+                    if (n == 0) { return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof)); }
+                    this.have = this.have + n;
+                }
+            };
+        }
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // One byte of the variable part of the header, counted for FHCRC.
+    fn Result<uint8, IoError> next() {
+        Result<isize, IoError> r = this.body.src.read(into: this.fixed.viewMut().slice(from: 0, count: 1));
+        return match (r) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: n): {
+                if (n == 0) { return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof)); }
+                this.headerSum.update(bytes: this.fixed.view().slice(from: 0, count: 1));
+                := Result::Ok(value: this.fixed[0]);
+            }
+        };
+    }
+
+    // The ten fixed bytes. Each is judged as it arrives, so junk after a member is refused without waiting for ten of them, and
+    // a source that ends before a next member's first byte is the end of the file.
+    fn Result<Unit, IoError> readFixed() {
+        while (this.have < 10) {
+            Result<isize, IoError> r = this.body.src.read(into: this.fixed.viewMut().slice(from: this.have, count: 10 - this.have));
+            match (r) {
+                case Err(error: e): { return Result::Err(error: e); }
+                case Ok(value: n): {
+                    if (n == 0) {
+                        if (this.have == 0 && this.begun) {
+                            this.stage = Stage::Done;
+                            return Result::Ok(value: Unit::Unit);
+                        }
+                        return Result::Err(error: this.fail(kind: IoErrorKind::UnexpectedEof));
+                    }
+                    this.have = this.have + n;
+                    if (this.fixed[0] != 0x1Fui8 || (this.have > 1 && this.fixed[1] != 0x8Bui8)) {
+                        return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData));
+                    }
+                }
+            };
+        }
+        if (this.fixed[2] != 8ui8 || (this.fixed[3] & RESERVED) != 0ui8) {
+            return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData));
+        }
+        this.flags = this.fixed[3];
+        this.mtime = loadU32(from: this.fixed.view(), at: 4, order: ByteOrder::Little);
+        this.os = this.fixed[9];
+        this.headerSum = Crc32.make();
+        this.headerSum.update(bytes: this.fixed.view());
+        this.name.clear();
+        this.comment.clear();
+        this.extra.clear();
+        this.begun = true;
+        this.have = 0;
+        this.stage = Stage::ExtraLength;
+        return Result::Ok(value: Unit::Unit);
+    }
+
+    // The header up to the start of the body, or nothing if the reader is past it.
+    fn Result<Unit, IoError> readHeader() {
+        while (true) {
+            match (this.stage) {
+                case Fixed: {
+                    Result<Unit, IoError> f = this.readFixed();
+                    match (f) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+                }
+                case ExtraLength: {
+                    if ((this.flags & FEXTRA) == 0ui8) { this.stage = Stage::Name; continue; }
+                    Result<Unit, IoError> g = this.gather(want: 2);
+                    match (g) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+                    this.headerSum.update(bytes: this.fixed.view().slice(from: 0, count: 2));
+                    this.extraLeft = cast<isize>(loadU16(from: this.fixed.view(), at: 0, order: ByteOrder::Little));
+                    this.have = 0;
+                    this.stage = Stage::Extra;
+                }
+                case Extra: {
+                    if (this.extraLeft == 0) { this.stage = Stage::Name; continue; }
+                    Result<uint8, IoError> b = this.next();
+                    match (b) {
+                        case Err(error: e): { return Result::Err(error: e); }
+                        case Ok(value: v): { this.extra.add(item: v); this.extraLeft = this.extraLeft - 1; }
+                    };
+                }
+                case Name: {
+                    if ((this.flags & FNAME) == 0ui8) { this.stage = Stage::Comment; continue; }
+                    Result<uint8, IoError> b = this.next();
+                    match (b) {
+                        case Err(error: e): { return Result::Err(error: e); }
+                        case Ok(value: v): {
+                            if (v == 0ui8) { this.stage = Stage::Comment; }
+                            else if (this.name.length() == FIELD_MAX) { return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData)); }
+                            else { this.name.add(item: v); }
+                        }
+                    };
+                }
+                case Comment: {
+                    if ((this.flags & FCOMMENT) == 0ui8) { this.stage = Stage::HeaderCrc; continue; }
+                    Result<uint8, IoError> b = this.next();
+                    match (b) {
+                        case Err(error: e): { return Result::Err(error: e); }
+                        case Ok(value: v): {
+                            if (v == 0ui8) { this.stage = Stage::HeaderCrc; }
+                            else if (this.comment.length() == FIELD_MAX) { return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData)); }
+                            else { this.comment.add(item: v); }
+                        }
+                    };
+                }
+                case HeaderCrc: {
+                    if ((this.flags & FHCRC) != 0ui8) {
+                        Result<Unit, IoError> g = this.gather(want: 2);
+                        match (g) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+                        if (loadU16(from: this.fixed.view(), at: 0, order: ByteOrder::Little) != truncate<uint16>(this.headerSum.finish())) {
+                            return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData));
+                        }
+                        this.have = 0;
+                    }
+                    this.stage = Stage::Body;
+                }
+                case _: { return Result::Ok(value: Unit::Unit); }
+            };
+        }
+    }
+
+    // The member's CRC-32 and its size modulo 2^32, the lowest byte first. Then `All` goes on to whatever follows, with what is
+    // left of the limit, and `One` is done.
+    fn Result<Unit, IoError> trailer() {
+        Result<Unit, IoError> g = this.gather(want: 8);
+        match (g) { case Err(error: e): { return Result::Err(error: e); } case Ok(value: _): { } };
+        if (loadU32(from: this.fixed.view(), at: 0, order: ByteOrder::Little) != this.sum.finish()
+            || loadU32(from: this.fixed.view(), at: 4, order: ByteOrder::Little) != truncate<uint32>(this.body.produced)) {
+            return Result::Err(error: this.fail(kind: IoErrorKind::InvalidData));
+        }
+        this.have = 0;
+        match (this.members) {
+            case One: { this.stage = Stage::Done; }
+            case All: {
+                this.left = this.left - this.body.produced;
+                this.body.restart(limit: this.left);
+                this.sum = Crc32.make();
+                this.stage = Stage::Fixed;
+            }
+        };
+        return Result::Ok(value: Unit::Unit);
+    }
+}
+
+type resource GzipWriter<W: Writer> implements Writer {
+    DeflateWriter<W> body;
+    Crc32 sum;
+    uint64 size;
+
+    // The header waits in the body's buffer, so nothing here can fail and the first `drain` sends it. ID1 ID2, deflate, no flags,
+    // MTIME 0, XFL 0, OS 255: the bytes do not depend on which OS wrote them, so claiming one would be false.
+    public ctor make(W sink, DeflateLevel level) {
+        this.body = DeflateWriter.make(sink: give sink, level: level);
+        this.sum = Crc32.make();
+        this.size = 0;
+        InlineArray<uint8>#(10) h = [0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 0xFF];
+        for (int32 k = 0; k < 10; k = k + 1) { this.body.encoded.add(item: h[k]); }
+    }
+
+    // Takes up to `bytes.length()` bytes, and the checksum and the size cover exactly the count it answers.
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        Result<isize, IoError> r = this.body.write(bytes: bytes);
+        return match (r) {
+            case Err(error: e): Result::Err(error: e);
+            case Ok(value: k): {
+                this.sum.update(bytes: bytes.slice(from: 0, count: k));
+                this.size = this.size + cast<uint64>(k);
+                := Result::Ok(value: k);
+            }
+        };
+    }
+
+    public fn Result<Unit, IoError> flush() { return this.body.flush(); }
+
+    // The final block and the trailer, then the sink back, flushing nothing of the sink's own. On a failure the writer comes back
+    // whole in `Unfinished`, and finishing it again writes neither twice.
+    public give fn Result<W, Unfinished<GzipWriter<W>>> finish() {
+        if (!this.body.finalWritten) {
+            this.body.endBlocks();
+            InlineArray<uint8>#(8) t = [0; 8];
+            storeU32(into: t.viewMut(), at: 0, value: this.sum.finish(), order: ByteOrder::Little);
+            storeU32(into: t.viewMut(), at: 4, value: truncate<uint32>(this.size), order: ByteOrder::Little);
+            for (int32 k = 0; k < 8; k = k + 1) { this.body.encoded.add(item: t[k]); }
+        }
+        Result<Unit, IoError> dr = this.body.drain();
+        match (dr) {
+            case Err(error: e): { return Result::Err(error: Unfinished::Pending(adapter: give this, error: e)); }
+            case Ok(value: _): {}
+        };
+        return Result::Ok(value: give this.body.intoSink());
+    }
+}

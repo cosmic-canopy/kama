@@ -199,7 +199,7 @@ fn uint8 main() {
     int32 c = partWay(chunk: DECODED);
     if (c != 0) { return cast<uint8>(30 + c); }
     int32 d = stalled();
-    if (d != 0) { return cast<uint8>(40 + d); }
+    if (d != 0) { return cast<uint8>(70 + d); }
     int32 e = failed();
     if (e != 0) { return cast<uint8>(50 + e); }
     int32 f = midHeader();

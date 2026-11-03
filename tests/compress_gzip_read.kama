@@ -1,0 +1,329 @@
+// `GzipReader` (KR-5): gzip (RFC 1952) decoded from a `BufReader`. Files from python3's gzip at each level, and members built by
+// hand with every optional header field, each read 1, 7 and 4,096 bytes at a time and checked by length and CRC-32. `header()`
+// gives each field as written, and the header of the member most recently begun. `GzipMembers::All` reads a file's members as
+// one stream, and `GzipMembers::One` stops after the first, leaving the rest in the `BufReader`, so members decode one at a time
+// and the bytes after them are still there. A source that stalls before every byte decodes the same, stopping inside every
+// header field and the trailer. A read of nothing is not the end. `finish` before the last member is verified answers
+// `InvalidInput` and the reader reads on, and `abandon` hands the source back. Returns 42.
+import { std::compress::gzip::GzipReader, std::compress::gzip::GzipMembers, std::compress::gzip::GzipHeader, std::io::BufReader,
+         std::io::SliceReader, std::io::Reader, std::io::IoError, std::io::IoErrorKind, std::collections::DynamicArray,
+         std::collections::FixedArray, std::collections::View, std::encoding::hex::decode, std::digest::crc32::crc32 };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+fn GzipReader<SliceReader> over(const ref string stream, GzipMembers members) {
+    return GzipReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: bytesOf(text: stream))),
+                           limit: 1000000ui64, members: members);
+}
+
+// 1 InvalidInput, 2 InvalidData, 3 UnexpectedEof, 5 WouldBlock, 9 any other.
+fn int32 kindOf(IoError e) {
+    return match (e.kind()) { case InvalidInput: 1; case InvalidData: 2; case UnexpectedEof: 3; case WouldBlock: 5; case _: 9; };
+}
+
+// Reads `d` to its end `chunk` bytes at a time: 0 when that is `len` bytes with this CRC-32.
+fn int32 drain(ref GzipReader<SliceReader> d, int32 len, uint32 crc, isize chunk) {
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: chunk);
+    while (true) {
+        isize n = match (d.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return 1; }
+        if (n == 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    if (cast<int32>(got.length()) != len) { return 2; }
+    if (crc32(bytes: got.view()) != crc) { return 3; }
+    return 0;
+}
+
+fn int32 check(const ref string stream, int32 len, uint32 crc) {
+    GzipReader<SliceReader> a = over(stream: stream, members: GzipMembers::All);
+    GzipReader<SliceReader> b = over(stream: stream, members: GzipMembers::All);
+    GzipReader<SliceReader> c = over(stream: stream, members: GzipMembers::All);
+    return drain(d: ref a, len: len, crc: crc, chunk: 1) + drain(d: ref b, len: len, crc: crc, chunk: 7)
+         + drain(d: ref c, len: len, crc: crc, chunk: 4096);
+}
+
+fn bool bytesAre(const ref DynamicArray<uint8> got, const ref string hex) {
+    DynamicArray<uint8> want = bytesOf(text: hex);
+    if (got.length() != want.length()) { return false; }
+    for (isize k = 0; k < got.length(); k = k + 1) { if (got[k] != want[k]) { return false; } }
+    return true;
+}
+
+// 0 when a header holds these fields.
+fn int32 fields(const ref GzipHeader h, const ref string name, const ref string comment, const ref string extra, uint32 mtime, uint8 os) {
+    if (!bytesAre(got: h.name(), hex: name)) { return 1; }
+    if (!bytesAre(got: h.comment(), hex: comment)) { return 2; }
+    if (!bytesAre(got: h.extra(), hex: extra)) { return 3; }
+    if (h.mtime() != mtime) { return 4; }
+    if (h.os() != os) { return 5; }
+    return 0;
+}
+
+fn int32 headers() {
+    // Asked before any read, it reads as far as the header's end, and reading then goes on from there. The result outlives the
+    // reader's own later state.
+    GzipReader<SliceReader> full = over(stream: "1f8b081fd202964902030600424302001b00636166c3a92e747874006120636f6d6d656e7400be187d568b6ec3200cfc"
+        + "95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c"
+        + "25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727"
+        + "c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97"
+        + "c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce12905133"
+        + "30881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c03503170750dba14093b6041402"
+        + "8c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a"
+        + "39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae566"
+        + "9f48613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84ab1afae8e3ef88495eecd45850435e62738c2"
+        + "436eb056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4f3d1575f255f8aa6a606d7633153028a3adb"
+        + "891acbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a17740de60c26d5e5e8ff0ba13b03c1d9941d"
+        + "1d9a7af86082a0e74ecce0f1ec090fbd956a291ea8befa07b229b0a0010b0000", members: GzipMembers::All);
+    GzipHeader h = match (full.header()) { case Ok(value: v): give v; case Err(error: e): { return 1; } };
+    if (fields(h: h, name: "636166c3a92e747874", comment: "6120636f6d6d656e74", extra: "424302001b00", mtime: 1234567890ui32, os: 3) != 0) { return 2; }
+    if (drain(d: ref full, len: 2817, crc: 2695899570ui32, chunk: 64) != 0) { return 3; }
+    GzipHeader again = match (full.header()) { case Ok(value: v): give v; case Err(error: e): { return 4; } };
+    if (fields(h: again, name: "636166c3a92e747874", comment: "6120636f6d6d656e74", extra: "424302001b00", mtime: 1234567890ui32, os: 3) != 0) { return 5; }
+
+    // A field a file does not carry is empty.
+    GzipReader<SliceReader> bare = over(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d17000000", members: GzipMembers::All);
+    GzipHeader b = match (bare.header()) { case Ok(value: v): give v; case Err(error: e): { return 6; } };
+    if (fields(h: b, name: "", comment: "", extra: "", mtime: 0ui32, os: 255) != 0) { return 7; }
+
+    // The member most recently begun: the first, and once it is read through, the second, which stays after the file's end.
+    GzipReader<SliceReader> two = over(stream: "1f8b08080000000000ff6f6e6500cb48cdc9c957c8402701e3513d8d170000001f8b08080000000000ff74776f00cb48"
+        + "cdc9c957c8402701e3513d8d17000000", members: GzipMembers::All);
+    GzipHeader m1 = match (two.header()) { case Ok(value: v): give v; case Err(error: e): { return 8; } };
+    if (!bytesAre(got: m1.name(), hex: "6f6e65")) { return 9; }
+    if (drain(d: ref two, len: 46, crc: 716160438ui32, chunk: 4096) != 0) { return 10; }
+    GzipHeader m2 = match (two.header()) { case Ok(value: v): give v; case Err(error: e): { return 11; } };
+    if (!bytesAre(got: m2.name(), hex: "74776f")) { return 12; }
+    // The first header's copy did not change under it.
+    if (!bytesAre(got: m1.name(), hex: "6f6e65")) { return 13; }
+    return 0;
+}
+
+// `GzipMembers::One`: each member by itself, the source left at the next, and "TAIL" left after the last.
+fn int32 oneByOne(isize chunk) {
+    GzipReader<SliceReader> one = over(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f8b08000000000000ff7d568b6ec3200cfc95fc"
+        + "9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b4"
+        + "6db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727c882"
+        + "daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97c372"
+        + "b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce129051333088"
+        + "1de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c03503170750dba14093b60414028c62"
+        + "e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a39c7"
+        + "39a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae5669f48"
+        + "613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84ab1afae8e3ef88495eecd45850435e62738c2436e"
+        + "b056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4f3d1575f255f8aa6a606d7633153028a3adb891a"
+        + "cbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a17740de60c26d5e5e8ff0ba13b03c1d9941d1d9a"
+        + "7af86082a0e74ecce0f1ec090fbd956a291ea8befa07b229b0a0010b00005441494c", members: GzipMembers::One);
+    if (drain(d: ref one, len: 23, crc: 2369606115ui32, chunk: chunk) != 0) { return 1; }
+    BufReader<SliceReader> rest = match (give one.finish()) { case Ok(value: b): give b; case Err(error: u): { return 2; } };
+    GzipReader<SliceReader> two = GzipReader.make(source: give rest, limit: 1000000ui64, members: GzipMembers::One);
+    if (drain(d: ref two, len: 2817, crc: 2695899570ui32, chunk: chunk) != 0) { return 3; }
+    BufReader<SliceReader> after = match (give two.finish()) { case Ok(value: b): give b; case Err(error: u): { return 4; } };
+    FixedArray<uint8> t = FixedArray.make(size: 16);
+    isize k = match (after.read(into: t.viewMut())) { case Ok(value: m): m; case Err(error: e): -1; };
+    return (k == 4 && t[0] == 84ui8 && t[3] == 76ui8) ? 0 : 5;   // "TAIL"
+}
+
+// A source that gives one byte per read and answers `WouldBlock` before each one.
+type resource Choppy implements Reader {
+    DynamicArray<uint8> bytes;
+    isize pos;
+    bool ready;
+
+    public ctor make(DynamicArray<uint8> bytes) { this.bytes = give bytes; this.pos = 0; this.ready = false; }
+
+    public fn Result<isize, IoError> read(View<uint8> into) {
+        if (!this.ready) {
+            this.ready = true;
+            return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock));
+        }
+        this.ready = false;
+        if (this.pos >= this.bytes.length() || into.length() == 0) { return Result::Ok(value: 0); }
+        into[0] = this.bytes[this.pos];
+        this.pos = this.pos + 1;
+        return Result::Ok(value: 1);
+    }
+}
+
+// Every byte stalls first, so a read stops inside every header field, the body and the trailer of both members, and each
+// resumes. `header()` stalls the same way.
+fn int32 stalled() {
+    GzipReader<Choppy> g = GzipReader.make(source: BufReader.make(inner: Choppy.make(bytes: bytesOf(text: "1f8b081fd202964902030600424302001b00636166c3a92e747874006120636f6d6d656e7400be187d568b6ec3200cfc"
+        + "95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c"
+        + "25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727"
+        + "c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97"
+        + "c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce12905133"
+        + "30881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c03503170750dba14093b6041402"
+        + "8c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a"
+        + "39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae566"
+        + "9f48613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84ab1afae8e3ef88495eecd45850435e62738c2"
+        + "436eb056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4f3d1575f255f8aa6a606d7633153028a3adb"
+        + "891acbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a17740de60c26d5e5e8ff0ba13b03c1d9941d"
+        + "1d9a7af86082a0e74ecce0f1ec090fbd956a291ea8befa07b229b0a0010b00001f8b08000000000000ffcb48cdc9c957"
+        + "c8402701e3513d8d17000000"))),
+                                           limit: 1000000ui64, members: GzipMembers::All);
+    int32 stalls = 0;
+    bool haveHeader = false;
+    while (!haveHeader) {
+        match (g.header()) {
+            case Ok(value: h): {
+                haveHeader = true;
+                if (fields(h: h, name: "636166c3a92e747874", comment: "6120636f6d6d656e74", extra: "424302001b00", mtime: 1234567890ui32, os: 3) != 0) { return 1; }
+            }
+            case Err(error: e): {
+                if (kindOf(e: e) != 5) { return 2; }
+                stalls = stalls + 1;
+            }
+        };
+    }
+    if (stalls < 40) { return 3; }    // the header is over 40 bytes, and each one stalled
+    DynamicArray<uint8> got = DynamicArray.empty();
+    FixedArray<uint8> buf = FixedArray.make(size: 5);
+    while (true) {
+        isize m = match (g.read(into: buf.viewMut())) {
+            case Ok(value: v): v;
+            case Err(error: e): kindOf(e: e) == 5 ? -2 : -1;
+        };
+        if (m == -1) { return 4; }
+        if (m == 0) { break; }
+        if (m > 0) { for (isize i = 0; i < m; i = i + 1) { got.add(item: buf[i]); } }
+    }
+    if (cast<int32>(got.length()) != 2840 || crc32(bytes: got.view()) != 3519959053ui32) { return 5; }
+    return match (give g.finish()) { case Ok(value: b): 0; case Err(error: u): 6; };
+}
+
+fn int32 readOn(GzipReader<SliceReader> g, int32 kind) {
+    GzipReader<SliceReader> mine = give g;
+    int32 read = drain(d: ref mine, len: 23, crc: 2369606115ui32, chunk: 64);
+    bool finished = match (give mine.finish()) { case Ok(value: b): true; case Err(error: u): false; };
+    return (kind == 1 && read == 0 && finished) ? 0 : 1;
+}
+
+fn uint8 main() {
+    // stored (level 0)
+    if (check(stream: "1f8b08000000000000ff011700e8ff68656c6c6f2068656c6c6f2068656c6c6f2068656c6c6fe3513d8d17000000", len: 23, crc: 2369606115ui32) != 0) { return 1; }
+    // level 1
+    if (check(stream: "1f8b08000000000004ff7555ed72c3200c7b155e8d3574ed2d4defbaecf6fa8bb0848dd3fd68017f48b27192fdd6cada"
+        + "b6cffd5696765debdecaf7fe6af551dab6685bb36fb97fef75bbb47284b6e2eefd40633a97cb731926cff2b0dbcff5fa"
+        + "a8db89805a00889fb461df2165d0da859847daea21ec8d8a6a001febf3f2257fed24a858785e932c937a82b07351a141"
+        + "9177bdefed55d78eae4abb5281d6f2a8fbe5e64a15d54b4917a350936e2712090f4a46d538d0cfc5dc5155949eb0bc05"
+        + "4a6080f10f4a8c0060ded3c9a3f0bcfee73f5f496f9cfa432916e54a81c6ae4d6d10abd275f64c6be7d92e0b09e33cd3"
+        + "244c8ccf81a7f1a3d770a12bf8c268d6324da2e87c30909a9860ea425cbe3542d95a1118f287b6e8d79e1c936c95a601"
+        + "f0629485a21535e089812a93827e8773ab11e17504b5d3051252b43c225aa611fe7bdf96e7af7a165e638acc6be04c34"
+        + "f0740e5daa5203bf6b0f174c0da323431cd0fad561e3edc12960da48f4b8f9614bfc06905e139661ff0157a9d3fb0f7e"
+        + "779c4fd4a472f856d68507c5dc72112400c33bb217241f3163fb10ee6705ba05fec44d421fcc89a3164d2e52c328a482"
+        + "8842abb7ce04e15f62dc270b736310f6c4ea038ff3993cf52ae1cd554774952462fb04f3c4657ec47a4fc6088e4d12c0"
+        + "a3552812a952c3f420f03cb30e643cf99d94fe634ea1f2fddd79a536ceb3f6812925844447c2567aa7e9564a27b7baec"
+        + "5f8ebc9a005909cf5287109a53315ec5f8fe181a84eaa737e2782f48b628b5c6fb0e553a099014ec3cb362f99360605b"
+        + "8a3e32910dfbff5425406820f6a4111018773682fd83255223dbae3a2427061dfda99bf9f4f11c82359e75ccda90e8fd"
+        + "3215c4fe03b229b0a0010b0000", len: 2817, crc: 2695899570ui32) != 0) { return 2; }
+    // level 6
+    if (check(stream: "1f8b08000000000000ff7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e9623"
+        + "9dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e17"
+        + "40392cbf7a5d5dca463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4"
+        + "a4a36e49a535d371fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e"
+        + "1c06718d9bd87d4b6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c60"
+        + "58fa1410c03503170750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdf"
+        + "ceedf10e64ec1b056df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da0"
+        + "33fae7952bd4312907a668aa33c1383ae5669f48613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84a"
+        + "b1afae8e3ef88495eecd45850435e62738c2436eb056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4"
+        + "f3d1575f255f8aa6a606d7633153028a3adb891acbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a"
+        + "17740de60c26d5e5e8ff0ba13b03c1d9941d1d9a7af86082a0e74ecce0f1ec090fbd956a291ea8befa07b229b0a0010b"
+        + "0000", len: 2817, crc: 2695899570ui32) != 0) { return 3; }
+    // level 9
+    if (check(stream: "1f8b08000000000002ff7d568b6ec3200cfc95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e9623"
+        + "9dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e17"
+        + "40392cbf7a5d5dca463794449a45a2d0e727c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4"
+        + "a4a36e49a535d371fa4e79dd47a6724abb97c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e"
+        + "1c06718d9bd87d4b6a20c1c734ce1290513330881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c60"
+        + "58fa1410c03503170750dba14093b60414028c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdf"
+        + "ceedf10e64ec1b056df58e9c089c9927451a39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da0"
+        + "33fae7952bd4312907a668aa33c1383ae5669f48610a9440bb83d86eca4c0cab758a0a5090dd1dd08c26597083b9c157"
+        + "8a7d7575f4c127ac746f2e2a24a8313fc1111e7283b502e72a9ea956a104816e21c1ad27d2936fdfdc48bc5da50d6a54"
+        + "e2f9e8abaf922f45535383ebb1982901459ded448d65df55d1df1f3bde8d4b64f50461fe22cca83508db7c5c83d74366"
+        + "cd0bba06730693ea72f4ff85d09d81e06cca8e0e4d3d7c3041d0732766f078f68487de4ab5140f545ffd03b229b0a001"
+        + "0b0000", len: 2817, crc: 2695899570ui32) != 0) { return 4; }
+    // the empty member
+    if (check(stream: "1f8b08000000000000ff03000000000000000000", len: 0, crc: 0ui32) != 0) { return 5; }
+    // a name, as gzip(1) writes it
+    if (check(stream: "1f8b0808010000000003636166c3a92e74787400cb48cdc9c957c8402701e3513d8d17000000", len: 23, crc: 2369606115ui32) != 0) { return 6; }
+    // a comment
+    if (check(stream: "1f8b08100000000000ff6120636f6d6d656e7400cb48cdc9c957c8402701e3513d8d17000000", len: 23, crc: 2369606115ui32) != 0) { return 7; }
+    // an extra field
+    if (check(stream: "1f8b08040000000000ff0600424302001b00cb48cdc9c957c8402701e3513d8d17000000", len: 23, crc: 2369606115ui32) != 0) { return 8; }
+    // an empty extra field
+    if (check(stream: "1f8b08040000000000ff0000cb48cdc9c957c8402701e3513d8d17000000", len: 23, crc: 2369606115ui32) != 0) { return 9; }
+    // an empty name and comment
+    if (check(stream: "1f8b08180000000000ff0000cb48cdc9c957c8402701e3513d8d17000000", len: 23, crc: 2369606115ui32) != 0) { return 10; }
+    // a header CRC with nothing else
+    if (check(stream: "1f8b08020000000000ff90c9cb48cdc9c957c8402701e3513d8d17000000", len: 23, crc: 2369606115ui32) != 0) { return 11; }
+    // every field at once
+    if (check(stream: "1f8b081fd202964902030600424302001b00636166c3a92e747874006120636f6d6d656e7400be187d568b6ec3200cfc"
+        + "95fc9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c"
+        + "25b46db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727"
+        + "c882daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97"
+        + "c372b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce12905133"
+        + "30881de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c03503170750dba14093b6041402"
+        + "8c62e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a"
+        + "39c739a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae566"
+        + "9f48613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84ab1afae8e3ef88495eecd45850435e62738c2"
+        + "436eb056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4f3d1575f255f8aa6a606d7633153028a3adb"
+        + "891acbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a17740de60c26d5e5e8ff0ba13b03c1d9941d"
+        + "1d9a7af86082a0e74ecce0f1ec090fbd956a291ea8befa07b229b0a0010b0000", len: 2817, crc: 2695899570ui32) != 0) { return 12; }
+    // FTEXT, which changes nothing
+    if (check(stream: "1f8b08010000000000ffcb48cdc9c957c8402701e3513d8d17000000", len: 23, crc: 2369606115ui32) != 0) { return 13; }
+    // two members
+    if (check(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f8b08000000000000ff7d568b6ec3200cfc95fc"
+        + "9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b4"
+        + "6db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727c882"
+        + "daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97c372"
+        + "b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce129051333088"
+        + "1de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c03503170750dba14093b60414028c62"
+        + "e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a39c7"
+        + "39a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae5669f48"
+        + "613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84ab1afae8e3ef88495eecd45850435e62738c2436e"
+        + "b056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4f3d1575f255f8aa6a606d7633153028a3adb891a"
+        + "cbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a17740de60c26d5e5e8ff0ba13b03c1d9941d1d9a"
+        + "7af86082a0e74ecce0f1ec090fbd956a291ea8befa07b229b0a0010b0000", len: 2840, crc: 2155008298ui32) != 0) { return 14; }
+    // empty members between
+    if (check(stream: "1f8b08000000000000ff030000000000000000001f8b08000000000000ffcb48cdc9c957c8402701e3513d8d17000000"
+        + "1f8b08000000000000ff030000000000000000001f8b08000000000000ff03000000000000000000", len: 23, crc: 2369606115ui32) != 0) { return 15; }
+    int32 a = headers();
+    if (a != 0) { return cast<uint8>(100 + a); }
+    if (oneByOne(chunk: 64) != 0) { return 50; }
+    if (oneByOne(chunk: 4096) != 0) { return 51; }
+    int32 s = stalled();
+    if (s != 0) { return cast<uint8>(60 + s); }
+
+    // A read of nothing is not the end: before the header, and once every byte is delivered and the trailer is unread.
+    FixedArray<uint8> none = FixedArray.make(size: 0);
+    FixedArray<uint8> buf = FixedArray.make(size: 23);
+    GzipReader<SliceReader> quiet = over(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d17000000", members: GzipMembers::All);
+    isize q0 = match (quiet.read(into: none.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (q0 != 0) { return 70; }
+    isize q1 = match (quiet.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (q1 != 23) { return 71; }
+    isize q2 = match (quiet.read(into: none.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (q2 != 0) { return 72; }
+    isize q3 = match (quiet.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (q3 != 0) { return 73; }
+    int32 qf = match (give quiet.finish()) { case Ok(value: b): 0; case Err(error: u): 1; };
+    if (qf != 0) { return 74; }
+
+    // `finish` before the last member is verified answers `InvalidInput`, and that reader reads on.
+    GzipReader<SliceReader> early = over(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d17000000", members: GzipMembers::All);
+    int32 ef = match (give early.finish()) {
+        case Ok(value: b): 80;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): readOn(g: give back, kind: kindOf(e: e)); };
+    };
+    if (ef != 0) { return 80; }
+
+    // `abandon` hands the source back wherever the stream has got to.
+    GzipReader<SliceReader> dropped = over(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d17000000", members: GzipMembers::All);
+    isize d0 = match (dropped.read(into: buf.viewMut().slice(from: 0, count: 2))) { case Ok(value: k): k; case Err(error: e): -1; };
+    if (d0 != 2) { return 81; }
+    BufReader<SliceReader> left = give dropped.abandon();
+    return 42;
+}

@@ -1,0 +1,83 @@
+// A decoder (KR-5) meets a stranger's bytes, so every single-bit flip of a small zlib stream and of a small gzip file, with every
+// optional header field in it, must answer `Ok` or `Err` and never trap. Whatever a reader accepts must be the original bytes:
+// the checksums catch the damage in the body and the bounds catch the rest, while the header's advisory fields may change freely.
+// Every truncation of each is refused as well, except where a gzip file may end. On the sanitizer leg this also shows no bad
+// read or write on any of those paths. Returns 42.
+import { std::compress::zlib::ZlibReader, std::compress::gzip::GzipReader, std::compress::gzip::GzipMembers, std::io::BufReader,
+         std::io::SliceReader, std::collections::DynamicArray, std::collections::FixedArray, std::encoding::hex::decode };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+fn bool same(const ref DynamicArray<uint8> a, const ref DynamicArray<uint8> b) {
+    if (a.length() != b.length()) { return false; }
+    for (isize k = 0; k < a.length(); k = k + 1) { if (a[k] != b[k]) { return false; } }
+    return true;
+}
+
+// `Ok` with the decoded bytes in `got`, or `Err`. The limit keeps a flip that declares a huge run from taking long.
+fn bool readZlib(const ref DynamicArray<uint8> s, ref DynamicArray<uint8> got) {
+    ZlibReader<SliceReader> z = ZlibReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: copy s)), limit: 100000ui64);
+    FixedArray<uint8> buf = FixedArray.make(size: 512);
+    while (true) {
+        isize n = match (z.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return false; }
+        if (n == 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    return match (give z.finish()) { case Ok(value: b): true; case Err(error: u): false; };
+}
+
+fn bool readGzip(const ref DynamicArray<uint8> s, ref DynamicArray<uint8> got) {
+    GzipReader<SliceReader> g = GzipReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: copy s)), limit: 100000ui64,
+                                                members: GzipMembers::All);
+    FixedArray<uint8> buf = FixedArray.make(size: 512);
+    while (true) {
+        isize n = match (g.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+        if (n < 0) { return false; }
+        if (n == 0) { break; }
+        for (isize i = 0; i < n; i = i + 1) { got.add(item: buf[i]); }
+    }
+    return match (give g.finish()) { case Ok(value: b): true; case Err(error: u): false; };
+}
+
+// 0 when the stream reads back as `want`, every flip of it reads as `want` or is refused, and every cut of it is refused. The one
+// exception is `whole`, the length of a gzip file's first member, since a file may end after any member.
+fn int32 flips(const ref DynamicArray<uint8> stream, const ref DynamicArray<uint8> want, bool isZlib, isize whole) {
+    DynamicArray<uint8> plain = DynamicArray.empty();
+    bool ok = isZlib ? readZlib(s: stream, got: ref plain) : readGzip(s: stream, got: ref plain);
+    if (!ok || !same(a: plain, b: want)) { return 1; }
+    DynamicArray<uint8> s = copy stream;
+    for (isize at = 0; at < s.length(); at = at + 1) {
+        for (int32 bit = 0; bit < 8; bit = bit + 1) {
+            uint8 mask = cast<uint8>(1 << bit);
+            s[at] = s[at] ^ mask;
+            DynamicArray<uint8> got = DynamicArray.empty();
+            bool took = isZlib ? readZlib(s: s, got: ref got) : readGzip(s: s, got: ref got);
+            if (took && !same(a: got, b: want)) { return 2; }
+            s[at] = s[at] ^ mask;
+        }
+    }
+    for (isize n = 0; n < s.length(); n = n + 1) {
+        DynamicArray<uint8> cut = DynamicArray.empty();
+        for (isize k = 0; k < n; k = k + 1) { cut.add(item: s[k]); }
+        DynamicArray<uint8> got = DynamicArray.empty();
+        bool took = isZlib ? readZlib(s: cut, got: ref got) : readGzip(s: cut, got: ref got);
+        if (took && n != whole) { return 3; }
+    }
+    return 0;
+}
+
+fn uint8 main() {
+    // "the quick brown fox jumps over the lazy dog, the quick brown fox", from python3's zlib at level 6.
+    DynamicArray<uint8> text = DynamicArray.empty();
+    string plain = "the quick brown fox jumps over the lazy dog, the quick brown fox";
+    borrow plain.bytes() as v { foreach (uint8 b in v) { text.add(item: b); } }
+    int32 a = flips(stream: bytesOf(text: "789c2bc94855282ccd4cce56482aca2fcf5348cbaf50c82acd2d2856c82f4b2d5228014ae72456552aa4e4a7eb8079688a01fe641779"), want: text, isZlib: true, whole: -1);
+    if (a != 0) { return cast<uint8>(10 + a); }
+    // The same text with every optional header field, as two members split after "fox".
+    int32 b = flips(stream: bytesOf(text: "1f8b081fd202964902030600424302001b00612e747874006300a85b2bc94855282ccd4cce56482aca2fcf5348cbaf0000ca02c191130000001f8b0809d20296490203620053c82acd2d2856c82f4b2d5228c94855c849acaa5448c94fd701f30a4b3393b315928af2cbf314d2f22b00c952bc6b2d000000"), want: text, isZlib: false, whole: 57);
+    if (b != 0) { return cast<uint8>(20 + b); }
+    return 42;
+}

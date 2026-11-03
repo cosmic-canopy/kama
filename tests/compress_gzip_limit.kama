@@ -1,0 +1,68 @@
+// `GzipReader`'s `limit` (KR-5) counts the decoded bytes across a file's members: a few kilobytes of gzip can decode to gigabytes,
+// and a thousand members of one gigabyte each are no smaller a threat than one of a thousand. A file of exactly `limit` bytes
+// decodes whole, and with `limit` one less every byte up to it is delivered and then `LimitExceeded`, which every later read
+// and `finish` repeat, though the member that passes it would fit by itself. An empty member passes a spent limit. `One` counts
+// only the member it reads. Returns 42.
+import { std::compress::gzip::GzipReader, std::compress::gzip::GzipMembers, std::io::BufReader, std::io::SliceReader,
+         std::io::IoError, std::io::IoErrorKind, std::collections::DynamicArray, std::collections::FixedArray,
+         std::encoding::hex::decode };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+fn GzipReader<SliceReader> over(const ref string stream, uint64 limit, GzipMembers members) {
+    return GzipReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: bytesOf(text: stream))), limit: limit, members: members);
+}
+
+fn int32 kindOf(IoError e) { return match (e.kind()) { case LimitExceeded: 3; case _: 9; }; }
+
+// How many bytes reading delivers before it ends (`kind` 0) or fails (`kind` its kind), 100 bytes at a time.
+fn isize upTo(ref GzipReader<SliceReader> d, ref int32 kind) {
+    FixedArray<uint8> buf = FixedArray.make(size: 100);
+    isize total = 0;
+    while (true) {
+        isize n = match (d.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): { kind = kindOf(e: e); := -1; } };
+        if (n <= 0) { return total; }
+        total = total + n;
+    }
+}
+
+fn uint8 main() {
+    string two = "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f8b08000000000000ff7d568b6ec3200cfc95fc"
+                 + "9a97d0a65a9a4a2d537f7f056cb0cfa69ab6160c7e9ccfc7f29e96239dd7bc2f5bba1c94d3f2cacf44f7259d9b7c25b4"
+                 + "6db757a6734dcb67999439effd087fac8f2db8358eed7f97cb9d4e1740392cbf7a5d5dca463794449a45a2d0e727c882"
+                 + "daeae778acbf63af382e158b3f72114cf6ec8491d31992aeeeb8e5f4a4a36e49a535d371fa4e79dd47a6724abb97c372"
+                 + "b4a5de56015edd97ef4633ebac74eae06b402017f8408b6f9017573e1c06718d9bd87d4b6a20c1c734ce129051333088"
+                 + "1de94600eebcfd0193a06525571a34616bf3cb5906d424cb444f8c6058fa1410c03503170750dba14093b60414028c62"
+                 + "e45629ba830aa51367a532a83db450fb06f6eb9ec790ac1d3cde7cdfceedf10e64ec1b056df58e9c089c9927451a39c7"
+                 + "39a886ab1bb575edaa9e1075a25142e9d4848da4092fb676a3fd0da033fae7952bd4312907a668aa33c1383ae5669f48"
+                 + "613f79961c10db4d998961b54e51010ab2bb039ad1240b6e3037f84ab1afae8e3ef88495eecd45850435e62738c2436e"
+                 + "b056e05cc533d52a9420d02d24b8f5a44210bcb99178bb4a1bd4a8c4f3d1575f255f8aa6a606d7633153028a3adb891a"
+                 + "cbbeaba2bf3f76bc1b97c8ea09c2fc4598516b10b6f9b806af87cc9a17740de60c26d5e5e8ff0ba13b03c1d9941d1d9a"
+                 + "7af86082a0e74ecce0f1ec090fbd956a291ea8befa07b229b0a0010b0000";   // 23 bytes, then 2817
+    string thenEmpty = "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f8b08000000000000ff03000000000000000000";   // 23 bytes, then an empty member
+    int32 kind = 0;
+
+    GzipReader<SliceReader> whole = over(stream: two, limit: 2840ui64, members: GzipMembers::All);
+    if (upTo(d: ref whole, kind: ref kind) != 2840 || kind != 0) { return 1; }
+
+    GzipReader<SliceReader> cut = over(stream: two, limit: 2839ui64, members: GzipMembers::All);
+    if (upTo(d: ref cut, kind: ref kind) != 2839 || kind != 3) { return 2; }
+    kind = 0;
+    if (upTo(d: ref cut, kind: ref kind) != 0 || kind != 3) { return 3; }
+    int32 fin = match (give cut.finish()) {
+        case Ok(value: b): 0;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): kindOf(e: e); };
+    };
+    if (fin != 3) { return 4; }
+
+    kind = 0;
+    GzipReader<SliceReader> spent = over(stream: thenEmpty, limit: 23ui64, members: GzipMembers::All);
+    if (upTo(d: ref spent, kind: ref kind) != 23 || kind != 0) { return 5; }
+
+    kind = 0;
+    GzipReader<SliceReader> only = over(stream: two, limit: 23ui64, members: GzipMembers::One);
+    if (upTo(d: ref only, kind: ref kind) != 23 || kind != 0) { return 6; }
+    return 42;
+}

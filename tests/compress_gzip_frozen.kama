@@ -1,0 +1,108 @@
+// `GzipWriter` at `DeflateLevel::Frozen` (KR-5, ruling 7) writes what `kama publish` writes, so the file itself can be the identity,
+// and it never changes across kama versions: a registry version is known by the sha256 of exactly these bytes. Each input is made
+// here, and each pin is the sha256 of what `kama.archive.cpp`'s own `gzip` wrote for those bytes. A pin that fails is a broken
+// promise, so it is never updated to pass. The cases are `compress_deflate_frozen`'s. Returns 42.
+import { std::compress::gzip::GzipWriter, std::compress::deflate::DeflateLevel, std::collections::DynamicArray,
+         std::collections::ConstView, std::io::Writer, std::io::IoError, std::digest::sha256::sha256,
+         std::encoding::hex::encode };
+
+// Every byte goes into an array.
+type resource Sink implements Writer {
+    DynamicArray<uint8> got;
+    public ctor make() { this.got = DynamicArray.empty(); }
+    public fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        for (isize k = 0; k < bytes.length(); k = k + 1) { this.got.add(item: bytes[k]); }
+        return Result::Ok(value: bytes.length());
+    }
+    public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
+    public give fn DynamicArray<uint8> bytes() { return give this.got; }
+}
+
+// xorshift32: the same bytes on every target, with no library to pin.
+type value Rand {
+    uint32 s;
+    public ctor seeded(uint32 s) { this.s = s; }
+    public fn uint32 next() {
+        this.s = this.s ^ (this.s << 13ui32);
+        this.s = this.s ^ (this.s >> 17ui32);
+        this.s = this.s ^ (this.s << 5ui32);
+        return this.s;
+    }
+}
+
+fn void addRandom(ref DynamicArray<uint8> into, isize n, uint32 seed) {
+    Rand r = Rand.seeded(s: seed);
+    for (isize k = 0; k < n; k = k + 1) { into.add(item: cast<uint8>(r.next() & 255ui32)); }
+}
+
+fn void addText(ref DynamicArray<uint8> into, const ref string text) {
+    borrow text.bytes() as v { foreach (uint8 b in v) { into.add(item: b); } }
+}
+
+// Twelve words in a random order: matches everywhere, ties in the chains, and more than one block's worth of tokens.
+fn void addWords(ref DynamicArray<uint8> into, isize n, uint32 seed) {
+    Rand r = Rand.seeded(s: seed);
+    InlineArray<string>#(12) words = ["alpha ", "beta ", "gamma ", "delta\n", "epsilon ", "zeta ", "eta ", "theta\n", "iota ",
+                                      "kappa ", "lambda ", "mu\n"];
+    isize start = into.length();
+    while (into.length() - start < n) {
+        addText(into: ref into, text: words[cast<isize>(r.next() % 12ui32)]);
+    }
+}
+
+fn DynamicArray<uint8> input(int32 k) {
+    DynamicArray<uint8> a = DynamicArray.empty();
+    if (k == 1) { addText(into: ref a, text: "the quick brown fox jumps o"); }
+    if (k == 2) { addWords(into: ref a, n: 150000, seed: 1ui32); }
+    if (k == 3) { addRandom(into: ref a, n: 16384, seed: 2ui32); }
+    if (k == 4) { addRandom(into: ref a, n: 16385, seed: 3ui32); }
+    if (k == 5) { addRandom(into: ref a, n: 70000, seed: 4ui32); }
+    if (k == 6) {
+        addRandom(into: ref a, n: 600, seed: 5ui32);
+        for (isize z = 0; z < 32168; z = z + 1) { a.add(item: 0); }
+        addRandom(into: ref a, n: 600, seed: 5ui32);
+    }
+    if (k == 7) { for (isize z = 0; z < 100000; z = z + 1) { a.add(item: 7); } }
+    if (k == 8) {
+        addWords(into: ref a, n: 30000, seed: 6ui32);
+        addRandom(into: ref a, n: 40000, seed: 7ui32);
+        for (isize z = 0; z < 40000; z = z + 1) { a.add(item: cast<uint8>(z & 3)); }
+        addWords(into: ref a, n: 30000, seed: 6ui32);
+    }
+    return a;
+}
+
+fn string frozen(const ref DynamicArray<uint8> bytes) {
+    GzipWriter<Sink> w = GzipWriter.make(sink: Sink.make(), level: DeflateLevel::Frozen);
+    match (w.write(bytes: bytes.view())) { case Ok(value: n): { } case Err(error: e): { panic(msg: "write"); } };
+    return match (give w.finish()) {
+        case Ok(value: s): hexOfSha(s: give s);
+        case Err(error: u): "unfinished";
+    };
+}
+
+fn string hexOfSha(Sink s) {
+    DynamicArray<uint8> b = give s.bytes();
+    InlineArray<uint8>#(32) digest = sha256(bytes: b.view());
+    return encode(bytes: digest.view());
+}
+
+fn uint8 main() {
+    InlineArray<string>#(9) pins = [
+        "ac73670af3abed54ac6fb4695131f4099be9fbe39d6076c5d0264a6bbdae9d83",
+        "3a7f25da077b796e6513b2f4c4eda95fc1ffd5ede8db196cd499eea42dd479c2",
+        "4227533d15aa450fdf7f3c75aa698aaf387ffe2a707390fd8872cb900bf6994c",
+        "7f6213a01954f883f85b003b5ef44d00a9411534ef3f6ae689871e8000f5760d",
+        "cc31995d1a0f8fe8292b9752b0b58015ec315410e5555c6d20a3f9f6a33a4933",
+        "e8d69af92bd9d869411184a05197460a3fd325631b0a78e730eecf9741f44540",
+        "398a7d5136c131118b5808350f332f88e5e5b5742eaa8dc145bcc9584854501f",
+        "f78a2fe9730bbf03d2de4d2d2bfd1fe54f2e4938bee72c86f9948d8e3011c077",
+        "d28981f52a7d3c513080a45a5a3156d31d53adf0a50b4d6d7b7ce4b835c2933d"
+    ];
+    for (int32 k = 0; k < 9; k = k + 1) {
+        DynamicArray<uint8> in0 = input(k: k);
+        string got = frozen(bytes: in0);
+        if (got != pins[k]) { return cast<uint8>(100 + k); }
+    }
+    return 42;
+}

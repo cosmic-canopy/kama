@@ -1,0 +1,135 @@
+// `GzipReader` (KR-5) refuses what RFC 1952 does not allow, with the kind that says why: `InvalidData` for a file that breaks the
+// format or fails a checksum, `UnexpectedEof` for a source that ends inside a member. One stream per class, each checked against
+// python3's gzip, which refuses it too where it can see it: Python ignores reserved flag bits and skips zeros after a member, and
+// answers an empty source with nothing, and here all three are refused. A second member's distance may not reach into the first,
+// and that stream's trailer holds what a decoder that let it would answer, so only the distance can refuse it. A name or a
+// comment of exactly 65,535 bytes is read and one byte more is refused, so a file cannot grow a header without bound. The error is
+// final: the read after it answers the same, and so does `finish`, and `abandon` still hands the source back. Returns 42.
+import { std::compress::gzip::GzipReader, std::compress::gzip::GzipMembers, std::compress::gzip::GzipHeader, std::io::BufReader,
+         std::io::SliceReader, std::io::IoError, std::io::IoErrorKind, std::collections::DynamicArray, std::collections::FixedArray,
+         std::encoding::hex::decode };
+
+fn DynamicArray<uint8> bytesOf(const ref string text) {
+    return match (decode(text: text)) { case Ok(value: b): give b; case Err(error: e): DynamicArray.empty(); };
+}
+
+// 2 InvalidData, 3 UnexpectedEof, 9 any other.
+fn int32 kindOf(IoError e) {
+    return match (e.kind()) { case InvalidData: 2; case UnexpectedEof: 3; case _: 9; };
+}
+
+// 0 when reading `stream` 7 bytes at a time ends in an error of kind `want`, and the next read and `finish` repeat it.
+fn int32 refusedBytes(DynamicArray<uint8> stream, int32 want) {
+    GzipReader<SliceReader> g = GzipReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: give stream)),
+                                                limit: 1000000ui64, members: GzipMembers::All);
+    FixedArray<uint8> buf = FixedArray.make(size: 7);
+    int32 got = 0;
+    while (got == 0) {
+        got = match (g.read(into: buf.viewMut())) { case Ok(value: k): k == 0 ? 8 : 0; case Err(error: e): kindOf(e: e); };
+    }
+    if (got != want) { return 1; }
+    int32 again = match (g.read(into: buf.viewMut())) { case Ok(value: k): 8; case Err(error: e): kindOf(e: e); };
+    if (again != want) { return 2; }
+    return match (give g.finish()) {
+        case Ok(value: b): 3;
+        case Err(error: u): match (give u) { case Pending(adapter: back, error: e): settled(g: give back, kind: kindOf(e: e), want: want); };
+    };
+}
+
+fn int32 refused(const ref string stream, int32 want) { return refusedBytes(stream: bytesOf(text: stream), want: want); }
+
+fn int32 settled(GzipReader<SliceReader> g, int32 kind, int32 want) {
+    GzipReader<SliceReader> mine = give g;
+    if (kind != want) { return 4; }
+    BufReader<SliceReader> left = give mine.abandon();
+    return 0;
+}
+
+// A member of nothing whose header has a name (`flag` 8) or a comment (16) of `n` bytes.
+fn DynamicArray<uint8> withField(uint8 flag, isize n) {
+    DynamicArray<uint8> b = DynamicArray.empty();
+    InlineArray<uint8>#(10) h = [0x1F, 0x8B, 8, flag, 0, 0, 0, 0, 0, 0xFF];
+    for (int32 k = 0; k < 10; k = k + 1) { b.add(item: h[k]); }
+    for (isize k = 0; k < n; k = k + 1) { b.add(item: 97); }
+    b.add(item: 0);
+    b.add(item: 3);      // the fixed block holding only its end
+    b.add(item: 0);
+    for (int32 k = 0; k < 8; k = k + 1) { b.add(item: 0); }
+    return b;
+}
+
+// 0 when a field of `n` bytes is read whole and `header()` gives all of it.
+fn int32 accepted(uint8 flag, isize n) {
+    GzipReader<SliceReader> g = GzipReader.make(source: BufReader.make(inner: SliceReader.fromBytes(bytes: withField(flag: flag, n: n))),
+                                                limit: 100ui64, members: GzipMembers::All);
+    GzipHeader h = match (g.header()) { case Ok(value: v): give v; case Err(error: e): { return 1; } };
+    if (h.name().length() + h.comment().length() != n) { return 2; }
+    FixedArray<uint8> buf = FixedArray.make(size: 7);
+    return match (g.read(into: buf.viewMut())) { case Ok(value: k): k == 0 ? 0 : 3; case Err(error: e): 4; };
+}
+
+fn uint8 main() {
+    // a first byte that is not gzip's
+    if (refused(stream: "1e8b08000000000000ffcb48cdc9c957c8402701e3513d8d17000000", want: 2) != 0) { return 1; }
+    // a second byte that is not gzip's
+    if (refused(stream: "1f8c08000000000000ffcb48cdc9c957c8402701e3513d8d17000000", want: 2) != 0) { return 2; }
+    // a method other than deflate
+    if (refused(stream: "1f8b07000000000000ffcb48cdc9c957c8402701e3513d8d17000000", want: 2) != 0) { return 3; }
+    // reserved flag bit 5
+    if (refused(stream: "1f8b08200000000000ffcb48cdc9c957c8402701e3513d8d17000000", want: 2) != 0) { return 4; }
+    // reserved flag bit 6
+    if (refused(stream: "1f8b08400000000000ffcb48cdc9c957c8402701e3513d8d17000000", want: 2) != 0) { return 5; }
+    // reserved flag bit 7
+    if (refused(stream: "1f8b08800000000000ffcb48cdc9c957c8402701e3513d8d17000000", want: 2) != 0) { return 6; }
+    // a header CRC that does not match
+    if (refused(stream: "1f8b08020000000000ff91c9cb48cdc9c957c8402701e3513d8d17000000", want: 2) != 0) { return 7; }
+    // a CRC-32 off by one bit
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e2513d8d17000000", want: 2) != 0) { return 8; }
+    // a size off by one bit
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d16000000", want: 2) != 0) { return 9; }
+    // a body with a reserved block type
+    if (refused(stream: "1f8b08000000000000ff07", want: 2) != 0) { return 10; }
+    // a second member reaching into the first
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f8b08000000000000ff030200ae5ea283030000"
+        + "00", want: 2) != 0) { return 11; }
+    // bytes after a member that begin no member
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000006a756e6b", want: 2) != 0) { return 12; }
+    // zeros after a member, which gzip(1) warns about and Python skips
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d1700000000000000000000000000000000000000", want: 2) != 0) { return 13; }
+    // a second member's bad second byte
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f00", want: 2) != 0) { return 14; }
+    // a second member's bad checksum
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f8b08000000000000ffcb48cdc9c957c8402701"
+        + "e2513d8d17000000", want: 2) != 0) { return 15; }
+    // a source with nothing in it
+    if (refused(stream: "", want: 3) != 0) { return 16; }
+    // one byte of header
+    if (refused(stream: "1f", want: 3) != 0) { return 17; }
+    // nine bytes of header
+    if (refused(stream: "1f8b08000000000000", want: 3) != 0) { return 18; }
+    // half of an extra length
+    if (refused(stream: "1f8b08040000000000ff02", want: 3) != 0) { return 19; }
+    // an extra field cut short
+    if (refused(stream: "1f8b08040000000000ff020061", want: 3) != 0) { return 20; }
+    // a name with no NUL
+    if (refused(stream: "1f8b08080000000000ff6162", want: 3) != 0) { return 21; }
+    // a comment with no NUL
+    if (refused(stream: "1f8b08100000000000ff6162", want: 3) != 0) { return 22; }
+    // half of a header CRC
+    if (refused(stream: "1f8b08020000000000ff90", want: 3) != 0) { return 23; }
+    // cut inside the body
+    if (refused(stream: "1f8b08000000000000ffcb48cd", want: 3) != 0) { return 24; }
+    // no trailer
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701", want: 3) != 0) { return 25; }
+    // half a trailer
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d", want: 3) != 0) { return 26; }
+    // the start of another member's magic and no more
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f", want: 3) != 0) { return 27; }
+    // another member's header cut short
+    if (refused(stream: "1f8b08000000000000ffcb48cdc9c957c8402701e3513d8d170000001f8b080000", want: 3) != 0) { return 28; }
+    if (accepted(flag: 8, n: 65535) != 0) { return 100; }
+    if (accepted(flag: 16, n: 65535) != 0) { return 101; }
+    if (refusedBytes(stream: withField(flag: 8, n: 65536), want: 2) != 0) { return 102; }
+    if (refusedBytes(stream: withField(flag: 16, n: 65536), want: 2) != 0) { return 103; }
+    return 42;
+}

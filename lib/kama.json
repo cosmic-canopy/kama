@@ -21,6 +21,9 @@
         "deflate": {
           "visibility": "public"
         },
+        "gzip": {
+          "visibility": "public"
+        },
         "zlib": {
           "visibility": "public"
         }

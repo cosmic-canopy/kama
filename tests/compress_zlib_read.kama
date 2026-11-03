@@ -229,7 +229,7 @@ fn uint8 main() {
     ZlibReader<SliceReader> dropped = over(stream: "789ccb48cdc9c957c8402701680308b1", limit: 1000000ui64);
     FixedArray<uint8> two = FixedArray.make(size: 2);
     isize d0 = match (dropped.read(into: two.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
-    if (d0 != 2) { return 42; }
+    if (d0 != 2) { return 43; }
     BufReader<SliceReader> left = give dropped.abandon();
 
     // `limit`: the whole stream at exactly its size, and with one less every byte up to it and then `LimitExceeded`.

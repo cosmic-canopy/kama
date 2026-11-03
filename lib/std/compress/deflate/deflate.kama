@@ -156,6 +156,7 @@ type resource DeflateReader<R: Reader> implements Reader {
     // zlib and gzip are a deflate body between a header and a trailer on the same source, and a stream that fails in
     // either fails as a body does (KR-5).
     friend std::compress::zlib::ZlibReader[src, failure];
+    friend std::compress::gzip::GzipReader[src, failure, produced, restart];
 
     BufReader<R> src;
     uint64 limit;
@@ -240,6 +241,15 @@ type resource DeflateReader<R: Reader> implements Reader {
     // to answer it on. Nothing is verified, and the position means nothing, since a decoder takes bytes ahead of what it
     // has decoded.
     public give fn BufReader<R> abandon() { return give this.src; }
+
+    // A new stream on the same source, for a gzip file's next member, once this one has reached `Done`. The window keeps the old
+    // stream's bytes, and none can be reached: `produced` says how far back a distance may go.
+    fn void restart(uint64 limit) {
+        this.limit = limit;
+        this.produced = 0;
+        this.stage = Stage::Header;
+        this.last = false;
+    }
 
     fn bool fail(IoErrorKind kind) {
         this.failure = Optional::Some(value: IoError.of(kind: kind));
@@ -700,6 +710,7 @@ type resource DeflateWriter<W: Writer> implements Writer {
     // A wrapper's header and trailer go out through this writer's own buffer, so one `drain` covers everything and finishing
     // again is as simple as it is here (zlib's one `pending` buffer; KR-5).
     friend std::compress::zlib::ZlibWriter[encoded, finalWritten, endBlocks, drain, intoSink];
+    friend std::compress::gzip::GzipWriter[encoded, finalWritten, endBlocks, drain, intoSink];
 
     W sink;
     int32 chain;                 // how many earlier positions a search walks; 0 compresses nothing

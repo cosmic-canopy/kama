@@ -334,7 +334,7 @@ BufReader<File> src = BufReader.make(inner: give pack);
 while (more) {
     ZlibReader<File> z = ZlibReader.make(source: give src, limit: 64 * 1024 * 1024);
     // … read the object …
-    match (z.finish()) { case Ok(value: b): { src = give b; } case Err(error: e): { … } };
+    match (give z.finish()) { case Ok(value: b): { src = give b; } case Err(error: u): { … } };
 }
 ```
 
@@ -430,12 +430,33 @@ row, `kama.archive.cpp`'s. A guard proves it: std reads publish's own `.tar.gz` 
 `DeflateLevel::Frozen`, and the sha256 must equal `KR_GOLDEN`. Two independent encoders agreeing to the byte is also the
 strongest test the new one gets.
 
-**8. gzip.** `GzipReader.make` decodes every member to the end of the source (RFC 1952 §2.2; gzip(1), Go, Python).
+**8. gzip.** `GzipMembers::All` decodes every member to the end of the source (RFC 1952 §2.2; gzip(1), Go, Python).
 Bytes after a member that do not start another member are `InvalidData`, strict as KR-204's "refuse, never repair".
-`GzipReader.member(…)` decodes exactly one member and leaves the rest in the `BufReader` (Go's `Multistream(false)`;
-WARC records are one member each). `header()` gives the name, comment, mtime and OS byte, and a header CRC (FHCRC) is
-verified. The writer always writes publish's header (no flags, MTIME 0, XFL 0, OS 255). Writing a name or an mtime is
-**genuinely optional**: RFC 1952 makes them advisory, and a container, tar, is where names and times belong.
+`GzipMembers::One` decodes exactly one member and leaves the rest in the `BufReader` (Go's `Multistream(false)`;
+WARC records are one member each). `header()` gives the name, comment, extra field, mtime and OS byte, and a header CRC
+(FHCRC) is verified. The writer always writes publish's header (no flags, MTIME 0, XFL 0, OS 255). Writing a name or an
+mtime is **genuinely optional**: RFC 1952 makes them advisory, and a container, tar, is where names and times belong.
+
+**Corrected 2026-11-02, building it,** all ruled by the maintainer but the last:
+
+- **One ctor, with a required `members: GzipMembers`.** As first written this was a second ctor, `GzipReader.member(…)`, which
+  decision 5's rule refuses: a choice belongs in one typed place a user meets at the call. Go has a setter
+  (`z.Multistream(false)`), and Rust has two types, where the wrong one, `GzDecoder`, stops silently after the first member. The
+  cost is one more required argument on every call.
+- **A name and a comment are raw bytes, `const ref DynamicArray<uint8>`, empty when absent,** the shape of `Output.stdout()`.
+  RFC 1952 says they are Latin-1, but gzip(1) copies a file name's bytes as they are: measured with Apple gzip 479, `café.txt`
+  writes `63 61 66 c3 a9 2e 74 78 74 00`, which is UTF-8. Go decodes it as Latin-1 and answers `cafÃ©.txt`; Rust's flate2 hands
+  back bytes; Python, .NET, Java and Zig skip the fields and have no API. The cost is that a caller wanting text converts it, and
+  decides what a name that is not UTF-8 means.
+- **Each is bounded at 65,535 bytes, and past that is `InvalidData`,** because a field with no length can run to gigabytes before
+  its NUL. FEXTRA's 16-bit length gives the same number, and flate2 has this bound; Go's is 512.
+- **`GzipHeader.extra()` was added,** FEXTRA's bytes: Go and flate2 expose them, a BGZF reader needs them, and the format bounds
+  them. Veto offered at the plan, none given.
+
+**Where the tools disagree, measured:** an empty source is `UnexpectedEof` here and in gzip(1), where Python answers it with
+nothing. Zeros after a member are `InvalidData` here and in Go, where gzip(1) warns and exits 2, and Python skips them. Other junk
+after a member is `InvalidData` here, in Go and in Python, where gzip(1) warns and exits 2. Python also ignores reserved flag bits
+and never checks FHCRC; both are refused here, as the RFC says of the first.
 
 **9. zlib.** One stream, with its Adler-32 verified; bytes after it stay in the `BufReader` (git packfiles, PNG). A
 stream that names a preset dictionary (FDICT) is `InvalidData` until KR-257.
@@ -585,20 +606,57 @@ read at all.
 
    Memory peaks at 700 to 900 KiB compressing and about 320 KiB at `Store`, over a baseline (zlib's default is about
    256 KiB): the 450 KiB of tables, and what building a block's codes takes for a moment.
-4. **zlib and gzip.** Their fixed fields go through `std::num`'s `loadU32`/`storeU32` and `loadU16`: the zlib trailer's
-   Adler-32 is `ByteOrder::Big`; gzip's MTIME, trailer CRC-32 and ISIZE, and FEXTRA's XLEN, are `ByteOrder::Little`.
-   Two things to settle first, neither probed. **The trailer follows the final block, and `DeflateWriter.finish` has
-   already handed the sink back by then,** so through the public surface a `WouldBlock` in the trailer needs a second
-   retry state, and a `GzipWriter` rebuilt from an `Unfinished<DeflateWriter<W>>`. Recommended: a `friend` grant, as
-   `BufReader` grants `DeflateReader`, so a wrapper ends the blocks, adds its trailer to `encoded`, and one `drain` covers
-   both, which keeps finishing again as simple as it is now. **A checksum covers the count `write` answers,** never
-   `bytes.length()`, since a `write` may take fewer.
+4. ✅ **zlib and gzip** (`0.9.822`, `0.9.824`). Their fixed fields go through `std::num`'s `loadU32`/`storeU32` and `loadU16`: the
+   zlib trailer's Adler-32 is `ByteOrder::Big`; gzip's MTIME, trailer CRC-32 and ISIZE, and FEXTRA's XLEN, are `ByteOrder::Little`.
+   What the map left to settle, both run:
+   - **The trailer follows the final block, after `DeflateWriter.finish` has handed the sink back.** A wrapper reaches into the
+     writer through a `friend` grant (`encoded`, `finalWritten`, `endBlocks`, `drain`, `intoSink`), so its header and trailer go in
+     the writer's own buffer and one `drain` covers everything, which is zlib's single `pending` buffer. Rust's flate2 keeps a
+     second retry counter for this, and Go has no retry.
+   - **A checksum covers the count `write` answers,** never `bytes.length()`. A `DeflateWriter` over a stalled sink answers short
+     once a piece is bigger than its 4,096-byte step.
+
+   What building it added: a stream's own error lives in the body's `failure`, since a wrapper with its own could not tell a
+   corrupt body, which is final, from a stalled source, which changes nothing. `read` with an empty `into` answers before anything
+   else, or a body's `Ok(0)` would read as the stream's end and verify a trailer that has not arrived. A later member resets
+   `produced` through a private `restart`, so its distances cannot reach the bytes the window still holds from the last one.
+
+   **Decision 7 holds:** `GzipWriter` at `Frozen` writes the bytes of `kama.archive.cpp`'s `gzip` on 21 corpora, whole, split and
+   through a stalling sink, and `compress_gzip_frozen` pins nine by sha256 from the C++. `kama publish`'s own golden tarball, read
+   through `GzipReader` and rewritten through `GzipWriter`, hashes to `KR_GOLDEN` (a manual run; step 7's guard makes it standing).
+   Every level round-trips through python3's zlib and gzip and through gzip(1), in both directions, and the streams python3 writes
+   decode through a source that stalls before every byte. 4 GiB + 5 bytes through both types, and through gzip(1) and python3,
+   gives ISIZE 5 and every byte back. 6,300 mutated streams in one process: no trap, no bytes that differ from python3's, and
+   nothing accepted that python3 refuses; what only python3 accepts is FHCRC and reserved bits it never checks, and an empty
+   source. `compress_flips` keeps every single-bit flip and every cut of one small stream of each format on the sanitizer leg.
+
+   **44 mutants each fail a fixture,** and they earned it. Three were missed at first, each a hole: the stalled-sink pieces were too
+   small to draw a short count; an FDICT vector's DICTID failed as deflate anyway, so FDICT itself was never what refused it; and
+   a failure code of `30 + 12` was 42, the success code, in one of three fixtures that could do that.
+
+   **Measured** (M4, 8 MB of text, the corpus above, one pass of each, interleaved with python3's zlib over 7 rounds, the minimum):
+
+   | | decode gzip | decode zlib | encode gzip, `Level6` | encode zlib, `Level6` |
+   |---|---|---|---|---|
+   | kama | 38 ms | 27 ms | 353 ms | 344 ms |
+   | zlib | 8.0 ms | 8.2 ms | 228 ms | 227 ms |
+
+   Decoding the bare body takes 24.4 ms (step 2b), so CRC-32 is about 14 ms of gzip's 38, which is KR-302, and Adler-32 about 3.
 5. **tar**, reader and writer.
 6. **`extractInto`** and the `std::fs` symlink binding, which goes in `kama_os.h`.
 7. **Guards.** `check-compress-interop.sh` runs both directions against python3's zlib, gzip and tarfile, at every
    level, over edge corpora. `check-packages.sh` round-trips publish's tarball through `Frozen`. An xfail backs each
    negative claim.
 8. **Docs.** SPEC's stdlib section, then this row is deleted.
+
+#### A faster CRC-32 (KR-302)
+
+`Crc32` takes one table lookup per byte: about 570 MB/s on the M4 (14 ms for 8 MB, measured in step 4 above), which is over a third
+of decoding a gzip file, though under 4% of encoding one. zlib folds with carry-less multiplication where the CPU has it and uses a
+braided table where it does not; Go slices eight bytes at a time and uses hardware instructions where it can. Slicing-by-8 is the
+step that fits std: pure kama, and its eight tables baked at compile time, as the one table is. Measure it interleaved, per byte
+and through `GzipReader`, against the one-table loop, since every access in it is bounds-checked. `std::digest::crc32` is
+public, so a faster one reaches PNG, zip and anyone else's checksum as well.
 
 <a id="s1-http-package"></a>
 
