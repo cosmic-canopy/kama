@@ -158,7 +158,11 @@ and an executable is not the softer case it looks like, since its own symbols ar
 same name. Some names are **reserved**: `std` and `core` (the bundled libraries), `global` (the floor's
 retired qualifier), and — because a project's name heads every C name its modules emit (`<project>__…`,
 [SPEC.md](SPEC.md) *C names*) — `k`, `kama`, and any name starting `k_` or `kama_`, whose prefix would open
-one of kama's own C registers. A monorepo directory may be called anything: it has no name in any file.
+one of kama's own C registers. For the same reason a name holds no `__` (kama joins C names with it, and no
+`import` could spell `a__b` anyway), and is not `k` plus an uppercase letter alone or before `_` (`kF_app`),
+the prefixes kama builds; a module segment is held to both. A **scope** is a legal identifier too, so
+`@my-org/geo` is refused and `@my_org/geo` is not. A monorepo directory may be called anything: it has no
+name in any file.
 The same rule holds wherever a name is read — a project's `name`, `kama seed`, and every **dependency key**
 (by its import name, so `"@x/core"` is refused too): a dependency named `core` would install and then never be
 reached, since `import core::v` resolves to the floor. Only the compiler's own two manifests, `lib/kama.json`

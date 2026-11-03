@@ -313,12 +313,12 @@ straight out of the binary and cannot: **a debugger**, a **C compiler's own erro
 and anything reading a crash log or an `objdump`.
 
 ```sh
-kama demangle app.kama -- k_Fapp__Pair_int32__make     # -> Pair<int32>::make
+kama demangle app.kama -- kF_app__Pair_int32__make     # -> Pair<int32>::make
 kama demangle app.kama < names.txt                     # a line in, a line out, until EOF
 ```
 
 Names are rewritten **in place**, so a whole line survives its surroundings —
-`int32_t k_Fapp__Pair_int32__sum(k_Fapp__Pair_int32* self)` comes back as
+`int32_t kF_app__Pair_int32__sum(kF_app__Pair_int32* self)` comes back as
 `int32_t Pair<int32>::sum(Pair<int32>* self)`. Paste the compiler error, not just the identifier.
 
 It takes the operands `check` takes, because **it is not a lexical rule**: rendering

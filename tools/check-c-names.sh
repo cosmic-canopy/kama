@@ -79,26 +79,27 @@ sys_n=$(wc -l < "$tmp/system.macros" | tr -d ' ')
 if [ "$sys_n" -lt 100 ]; then
     bad "the system scan found only $sys_n macros — the scanner is not reading headers, so §1 proves nothing"
 fi
-if LC_ALL=C grep -E '^(k_|kama_|KAMA_)' "$tmp/system.macros" > "$tmp/clash" 2>/dev/null && [ -s "$tmp/clash" ]; then
+if LC_ALL=C grep -E '^(k_|k[A-Z]_|kama_|KAMA_)' "$tmp/system.macros" > "$tmp/clash" 2>/dev/null && [ -s "$tmp/clash" ]; then
     bad "a PLATFORM header defines a macro in a register kama emits into:"
     sed 's/^/    /' "$tmp/clash" >&2
     echo "    Every kama program on this host is now at risk of the KR-67 miscompile." >&2
 else
-    echo "  ok: $sys_n platform macros, none in \`k_\`/\`kama_\`/\`KAMA_\`"
+    echo "  ok: $sys_n platform macros, none in \`k_\`/\`kF_\`…/\`kama_\`/\`KAMA_\`"
 fi
 
 # --- §2. kama's OWN shipped headers define nothing in the USER's register ------------------------------
 # `k_` is the user's half of the family, and kama must never put a macro there: a user field named `foo`
 # becomes `k_foo`, so a kama-shipped `#define k_foo` would rewrite it exactly as `<windef.h>`'s `near`
-# used to. (`kama_`/`KAMA_` are the compiler's own and are expected here.)
+# used to. `k` + an uppercase tag + `_` (`kF_` a file's private names) holds declarations too, so no macro
+# either. (`kama_`/`KAMA_` are the compiler's own and are expected here.)
 printf '#include "kama_runtime.h"\n#include "kama_os.h"\nint main(void){return 0;}\n' > "$tmp/shipped.c"
 macros_of "$tmp/shipped.c" > "$tmp/shipped.macros" || true
 ship_n=$(wc -l < "$tmp/shipped.macros" | tr -d ' ')
 if [ "$ship_n" -lt "$sys_n" ]; then
     bad "the shipped-header scan ($ship_n) saw fewer macros than the system scan ($sys_n) — it did not read kama's headers"
 fi
-if LC_ALL=C grep -E '^k_' "$tmp/shipped.macros" > "$tmp/own" 2>/dev/null && [ -s "$tmp/own" ]; then
-    bad "a kama-SHIPPED header defines a macro in the user's register \`k_\`:"
+if LC_ALL=C grep -E '^(k_|k[A-Z]_)' "$tmp/shipped.macros" > "$tmp/own" 2>/dev/null && [ -s "$tmp/own" ]; then
+    bad "a kama-SHIPPED header defines a macro in the user's register \`k_\` or a built prefix \`kF_\`…:"
     sed 's/^/    /' "$tmp/own" >&2
 else
     kama_n=$(LC_ALL=C grep -cE '^(kama_|KAMA_)' "$tmp/shipped.macros" || true)
@@ -107,8 +108,9 @@ fi
 
 # --- §3. The control: the scanner can actually catch one ----------------------------------------------
 # Without this, §1 and §2 are indistinguishable from a grep that never matches.
-printf '#define k_near 1\n#define kama_planted 2\nint main(void){return 0;}\n' > "$tmp/planted.c"
-if macros_of "$tmp/planted.c" | LC_ALL=C grep -qE '^(k_|kama_)'; then
+printf '#define k_near 1\n#define kF_planted 3\n#define kama_planted 2\nint main(void){return 0;}\n' > "$tmp/planted.c"
+macros_of "$tmp/planted.c" > "$tmp/planted.macros" || true
+if LC_ALL=C grep -qE '^(k_|kama_)' "$tmp/planted.macros" && LC_ALL=C grep -qE '^k[A-Z]_' "$tmp/planted.macros"; then
     echo "  ok: the control is caught (the scan can fail)"
 else
     bad "the CONTROL was not caught — this guard cannot detect a clash and every PASS above is vacuous"

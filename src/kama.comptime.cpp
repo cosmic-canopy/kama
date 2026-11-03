@@ -699,7 +699,7 @@ bool CEmitter::ctEvalExpr(SharedExpression e, CTEnv& env, CTValue& out)
             if (mit->second.vis == Visibility::Private && _ctCurrentOwner != owner
                 && !comptimeFriendGrants(owner, *inv->identifier->value, _ctCurrentOwner))
                 // The hint names the owner the way the SOURCE does (the qualifier as written), never the
-                // mangled key `_ctCurrentOwner` holds — a diagnostic that prints `k_Fprobe__Holder` at a
+                // mangled key `_ctCurrentOwner` holds — a diagnostic that prints `kF_probe__Holder` at a
                 // reader is the C-name family leaking into the language (KR-67).
                 return ctFail(("`" + disp + "` is a private `comptime fn` — not accessible here; "
                                "mark it `public` to call it from another scope, or have `"

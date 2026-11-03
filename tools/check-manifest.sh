@@ -621,13 +621,37 @@ proj goodname <<'JSON'
 JSON
 accept goodname "...while the underscored form builds"
 
-# A SCOPE is registry routing, never a namespace: `@my-org/geo` imports under its bare last segment, so
-# the hyphen there never has to be spelled in an `import`. Exempting it is what importNameOf is for, and
-# without this pair the rule above would quietly outlaw every scoped package with a hyphenated org.
+# A SCOPE reaches C (KR-291: a scoped package's names are `kS_<scope>__<name>__…`), so it is held to the
+# identifier rule too. It was exempt through 0.9.817 as registry routing, and this case accepted `@my-org`.
 proj scopedname <<'JSON'
 { "name": "@my-org/geo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
 JSON
-accept scopedname "a hyphen in a package SCOPE is routing, not a namespace"
+reject scopedname 'Try "@my_org"' "a hyphen in a package SCOPE is refused, and the message spells the scope that would work"
+proj scopedgood <<'JSON'
+{ "name": "@my_org/geo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+JSON
+accept scopedgood "...while the underscored scope builds"
+proj scopedjoin <<'JSON'
+{ "name": "@a__b/geo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject scopedjoin '`a__b` has `__` inside it' "a scope holding \`__\`, which a C join cannot keep apart"
+
+# A project's name heads its C names, so it is a segment C can join: no `__` inside it (no `import` could
+# spell `a__b` anyway; it installed and was a dead end), and not `k` + an uppercase tag (+ `_`), the
+# register of the prefixes kama builds — a project `kF_app` would spell `app.kama`'s private names.
+for nm in a__b kF_app kS_x kS; do
+    proj "cname_$nm" <<JSON
+{ "name": "$nm", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+JSON
+done
+reject cname_a__b '`a__b` has `__` inside it' "a project name holding \`__\`"
+reject cname_kF_app '`kF_app` opens `kF_`, a prefix kama builds' "a project name opening a built prefix"
+reject cname_kS_x '`kS_x` opens `kS_`' "...any uppercase tag"
+reject cname_kS '`kS` opens `kS_`' "...and the tag alone, which a \`__\` join extends"
+proj cname_kfine <<'JSON'
+{ "name": "kFine", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "modules": { ".": { "visibility": "internal" } } }
+JSON
+accept cname_kfine "...while \`kFine\`, whose third letter is no \`_\`, builds"
 
 # `global` names the always-in-scope FLOOR (§2f.29), and it is reserved by exactly this rule rather than
 # by separate machinery — that is the whole point of the correction that section carries: `global` is not
@@ -779,6 +803,19 @@ proj modbadname <<'JSON'
                "my-lib": { "visibility": "public", "name": "still-not" } } }
 JSON
 reject modbadname 'which is not a legal kama identifier' "a \`name\` that is itself not an identifier"
+
+# A module segment joins its project's C names too: `c__d` would spell module `c`'s `d`, and `kF_app`
+# under a project spells the private names of that project's `app.kama` (`p__kF_app__h`).
+proj modjoinseg <<'JSON'
+{ "name": "modjoinseg", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "c__d": { "visibility": "public" } } }
+JSON
+reject modjoinseg '`c__d` has `__` inside it' "a module segment holding \`__\`"
+proj modbuilt <<'JSON'
+{ "name": "modbuilt", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "net": { "visibility": "public", "name": "kF_app" } } }
+JSON
+reject modbuilt '`kF_app` opens `kF_`' "a module \`name\` opening a built prefix"
 
 proj modjoin <<'JSON'
 { "name": "modjoin", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",

@@ -43,10 +43,10 @@ function lexical(name) {
   let s = name;
   // `kama_main` is the entry point under the compiler's own register.
   if (s === 'kama_main') return 'main';
-  // A file-private scope is `k_F<stem>__`; a module scope is `<a>__<b>__`. Both are prefixes no user
+  // A file-private scope is `kF_<stem>__`; a module scope is `<a>__<b>__`. Both are prefixes no user
   // can spell in source, so they come off; what is left may itself be `k_`-prefixed and must not be
-  // stripped again — a type the author called `k_Box` emits `k_Fkk__k_Box`.
-  const fileScoped = /^k_F[A-Za-z0-9_]+?__(.+)$/.exec(s);
+  // stripped again — a type the author called `k_Box` emits `kF_kk__k_Box`.
+  const fileScoped = /^kF_[A-Za-z0-9_]+?__(.+)$/.exec(s);
   if (fileScoped) return fileScoped[1].replace(/__/g, '::');
   if (s.startsWith('kama__')) return s.slice(6).replace(/__/g, '::');
   if (s.startsWith('k_')) return s.slice(2);
@@ -60,7 +60,7 @@ function makeTable(answers) {
   // ⚠️ ALSO index by the LEXICAL form, because the name may already be half-demangled by the time it
   // gets here. `include/kama_lldb.py` renames frames LLDB-side, which is what gives a plain `lldb` and
   // every non-VS-Code editor a readable call stack — so a `stackTrace` response can arrive carrying
-  // `Pair_int32::make` rather than `k_Fapp__Pair_int32__make`. Keyed only by the mangled spelling, the
+  // `Pair_int32::make` rather than `kF_app__Pair_int32__make`. Keyed only by the mangled spelling, the
   // lookup would miss and the generic arguments would never be rendered: the LLDB layer's floor would
   // silently become the ceiling. The two layers have to meet on a common key.
   const alias = new Map();
@@ -158,7 +158,7 @@ function makeTracker(table, opts) {
       else if (m.command === 'evaluate') m.arguments.expression = table.mangle(m.arguments.expression);
       else if (m.command === 'setFunctionBreakpoints' && Array.isArray(m.arguments.breakpoints)) {
         // A function breakpoint is typed by a human, so it is typed in kama. `br set -n probe` against
-        // a kama binary resolves to nothing today; the symbol is `k_Fapp__probe`.
+        // a kama binary resolves to nothing today; the symbol is `kF_app__probe`.
         for (const b of m.arguments.breakpoints) if (b && b.name) b.name = table.mangle(b.name);
       }
     },

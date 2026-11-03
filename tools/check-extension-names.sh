@@ -68,8 +68,8 @@ const eq = (got, want, what) => { assert.deepStrictEqual(got, want, what + ': go
 // --- the lexical fallback: what a name with no table entry still reads as -------------------------
 eq(lexical('k_near'),           'near',       'a local loses the register');
 eq(lexical('k_k_near'),         'k_near',     'EXACTLY one strip: the author really wrote k_near');
-eq(lexical('k_Fapp__Pair'),     'Pair',       'a file-private scope comes off');
-eq(lexical('k_Fkk__k_Box'),     'k_Box',      "a declaration's leaf keeps its own k_");
+eq(lexical('kF_app__Pair'),     'Pair',       'a file-private scope comes off');
+eq(lexical('kF_kk__k_Box'),     'k_Box',      "a declaration's leaf keeps its own k_");
 eq(lexical('kama_main'),        'main',       'the entry point');
 eq(lexical('kama__print'),      'print',      'the prelude scope is implicit in source');
 eq(lexical('std__collections__Map'), 'std::collections::Map', 'a module scope reads as a path');
@@ -82,10 +82,10 @@ eq(isCompilerOwned('k_near'),    false, 'a user local is not machinery');
 
 // --- the table wins over the fallback, which is the whole point of running the front end ---------
 const table = makeTable({
-  'k_Fapp__Pair_int32__make': 'Pair<int32>::make',
+  'kF_app__Pair_int32__make': 'Pair<int32>::make',
   'std__collections__DynamicArray_string_kama__GlobalAllocator': 'DynamicArray<string>',
 });
-eq(table.frame('k_Fapp__Pair_int32__make'), 'Pair<int32>::make', 'a frame renders its type arguments');
+eq(table.frame('kF_app__Pair_int32__make'), 'Pair<int32>::make', 'a frame renders its type arguments');
 eq(table.type('std__collections__DynamicArray_string_kama__GlobalAllocator *'),
    'DynamicArray<string> *', 'a pointer keeps its decoration');
 eq(table.name('k_near'), 'near', 'a name the table never saw falls back');
@@ -97,7 +97,7 @@ const tr = makeTracker(table);
 tr.onDidSendMessage({ type: 'response', command: 'scopes', body: { scopes: [{ variablesReference: 1000 }] } });
 
 const stack = { type: 'response', command: 'stackTrace',
-                body: { stackFrames: [{ name: 'k_Fapp__Pair_int32__make' }, { name: 'kama_main' }] } };
+                body: { stackFrames: [{ name: 'kF_app__Pair_int32__make' }, { name: 'kama_main' }] } };
 tr.onDidSendMessage(stack);
 eq(stack.body.stackFrames.map((f) => f.name), ['Pair<int32>::make', 'main'], 'the call stack');
 
@@ -132,13 +132,13 @@ eq(ev2.arguments.expression, 'k_near.value', 'only the head is mangled; the path
 const fb = { type: 'request', command: 'setFunctionBreakpoints', seq: 13,
              arguments: { breakpoints: [{ name: 'Pair<int32>::make' }] } };
 tr.onWillReceiveMessage(fb);
-eq(fb.arguments.breakpoints[0].name, 'k_Fapp__Pair_int32__make', 'a function breakpoint is mangled back');
+eq(fb.arguments.breakpoints[0].name, 'kF_app__Pair_int32__make', 'a function breakpoint is mangled back');
 
 // --- the two layers must MEET. kama_lldb.py renames frames LLDB-side, so a stackTrace response can
 // --- arrive already lexically demangled; keyed only by the mangled spelling the table would miss it
 // --- and the generic arguments would never render — the LLDB floor would become the ceiling.
 eq(table.frame('Pair_int32::make'), 'Pair<int32>::make', 'a half-demangled frame still upgrades');
-eq(table.mangle('Pair_int32::make'), 'k_Fapp__Pair_int32__make', '...and still resolves back for a breakpoint');
+eq(table.mangle('Pair_int32::make'), 'kF_app__Pair_int32__make', '...and still resolves back for a breakpoint');
 
 // --- WHICH SESSIONS ARE KAMA'S. Detection, not a key you have to know to add: a key you must add is
 // --- itself a way for a project to debug with mangled names. `type: "lldb"` is shared with every

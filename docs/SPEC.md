@@ -4648,23 +4648,27 @@ matching identifier anywhere it appears. One generated `<name>.gen.h` carries ev
 importing `std::fs` *anywhere* puts the whole OS seam in front of **every** module's names. Measured: 4,708
 macros over the shipped header set on macOS, 21,748 over one Windows TU.
 
-**So every name kama owns reaches C in a namespace no header can rewrite.** Three registers:
+**So every name kama owns reaches C in a namespace no header can rewrite.** The registers:
 
 | register | holds |
 |---|---|
 | `KAMA_…` | kama's macros |
 | `kama_…` | what the **compiler** owns — runtime types and their members, emitted members and temps, the prelude's own scope |
-| `k_…` | what the **user** owns — fields, variant payloads and union members, parameters, locals, bindings, contract/vtable slots, and file-private declarations (`k_F<file>__…`) |
+| `k_…` | what the **user** owns — fields, variant payloads and union members, parameters, locals, bindings, contract/vtable slots |
+| `kF_…` | a file's **private** declarations — `kF_<file>__…`, or `<module>__kF_<file>__…` in a module |
 | `<project>__…` | a **module's** declarations — `geo__area`, `std__collections__DynamicArray…`, `core__println` |
 
 They are disjoint by construction, not by convention: `k_` has `_` at index 1 and `kama_` has `a`, so no
-user name can ever produce a compiler-owned spelling. A user name that already starts with `k_` becomes
+user name can ever produce a compiler-owned spelling. `k`, an uppercase tag and `_` is a prefix kama
+**builds** (`kF_`), set apart by its second character in turn. A user name that already starts with `k_` becomes
 `k_k_…`, and the mangling stays reversible — strip exactly one `k_`. Two rules close the rest. A project's name
-keeps out of `k`, `kama` and anything starting `k_` or `kama_` ([packages.md](packages.md)), since its
-`<project>__` prefix would open one of the other registers (a project `k`'s `x` was `k__x`, which a local
-`_x` also emits). And **a name may
-start with `__` but not contain one** — `__` is how scopes join in C, so a local `Fmain__helper` spelled <!-- xfail: identifier_inner_double_underscore -->
-the file-private `helper`'s C name (`k_Fmain__helper`). The one place that rule meets C is the declared
+keeps out of `k`, `kama`, anything starting `k_` or `kama_`, and `k` plus an uppercase letter alone or before
+`_` ([packages.md](packages.md)), since its `<project>__` prefix would open one of the other registers (a
+project `k`'s `x` was `k__x`, which a local `_x` also emits; a project `kF_app`'s `h` would be `app.kama`'s
+private `h`). And **a name may
+start with `__` but not contain one** — `__` is how scopes join in C, so a type `a__b` in `geo` would be <!-- xfail: identifier_inner_double_underscore -->
+`geo__a__b`, module `geo::a`'s `b`. A project's name, a scope and a module segment are held to the same,
+since they are joined the same way. The one place that rule meets C is the declared
 surface: an `extern fn` whose C name has `__` inside it is bound with `@linkName`.
 
 **The declared C surface keeps its spelling**, because code on the other side depends on it: `extern fn`
@@ -4679,7 +4683,7 @@ binary and cannot be taught otherwise — a debugger, a C compiler's own output 
 crash log or `objdump`:
 
 ```sh
-kama demangle app.kama -- k_Fapp__Pair_int32__make     # -> Pair<int32>::make
+kama demangle app.kama -- kF_app__Pair_int32__make     # -> Pair<int32>::make
 ```
 
 It is a subcommand rather than a name map written beside the build, because a map is a record and a
@@ -4691,7 +4695,7 @@ surroundings, and stdin is read as a batch so one process serves a whole debug s
 
 The **reversibility rule above is what makes it possible**: strip exactly one `k_`. Only a token no
 table claimed is stripped, because a declaration's own leaf was never prefixed — a type the author
-called `k_Box` in `kk.kama` is emitted `k_Fkk__k_Box` and demangles to `k_Box`, while a local called
+called `k_Box` in `kk.kama` is emitted `kF_kk__k_Box` and demangles to `k_Box`, while a local called
 `k_near` is emitted `k_k_near` and demangles to `k_near`.
 
 Values are a separate matter from names: `kama demangle --lldb-init` prints the command that loads the
@@ -4699,7 +4703,7 @@ LLDB formatters shipped beside the runtime headers, after which a `string` inspe
 `Optional` as `Some(…)`/`None` rather than as the lowering.
 
 **The residual, stated.** kama compiles headers it has never seen, so a user's own `extern "<vendor.h>"`
-could in principle define a macro spelled `k_…` or `kama_…`. `tools/check-c-names.sh` holds the line for
+could in principle define a macro spelled `k_…`, `kF_…` or `kama_…`. `tools/check-c-names.sh` holds the line for
 the surface kama ships and the system headers its seam pulls in, re-measured wherever the suite runs —
 because a macro surface moves with every SDK release. A vendor header that squats on kama's registers is
 the one case this rule cannot close, and it is a bug to report rather than a hazard to live with.
@@ -8237,7 +8241,7 @@ in every by-value position. An owned rvalue receiver is RAII-dropped through met
 
 ## Reserved/runtime
 
-Generated C names are prefixed and module-qualified — `k_F<file>__Type__member` for a file-private
+Generated C names are prefixed and module-qualified — `kF_<file>__Type__member` for a file-private
 declaration (§ *C names* has the whole scheme, and `kama demangle` reverses it) — and the compiler's own emitted names — the members it
 synthesizes (`kama_vptr`, `kama_base`, `kama_tag`, `kama_u`), its vtable slots (`kama_dtor`, `kama_size`,
 `kama_align`, `kama_type`) and its temporaries (`kama_ret_0`, `kama_strtmp0`) — live in the `kama_` register

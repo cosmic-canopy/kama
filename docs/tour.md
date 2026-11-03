@@ -730,7 +730,7 @@ the `hardware` qualifier, inline `asm`, and a `@noheap` attribute the compiler e
 
 `kama transpile app.kama -o app.c` writes the generated C if you want to read exactly what your
 program became. It is ordinary, portable C11. Its symbols carry a module-qualified prefix
-(`k_Fapp__Pair_int32__make`) so they can never collide with C's; the debugger shows kama's names and
+(`kF_app__Pair_int32__make`) so they can never collide with C's; the debugger shows kama's names and
 values, and `kama demangle` turns any symbol from a crash log back into the kama spelling.
 
 ## Tooling

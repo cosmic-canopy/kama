@@ -195,6 +195,9 @@ bool cIsReservedWord(const char* word);
 // Callers are the LSP's rename validation and the manifest reader (a `modules` key becomes a segment of
 // a module name, so it has to be spellable in an `import`).
 bool kamaIsIdentifier(const std::string& word);
+// Does this spelling hold `__` after its leading underscores (KR-88)? The lexer refuses such a source name, and the
+// manifest reader refuses such a project, scope or module name, because kama joins C name segments with `__`.
+bool hasInnerDoubleUnderscore(const char* s);
 // The lexer's keyword table, for keyword completion (LSP M4.3) — one source of truth, as above.
 size_t      kamaKeywordCount();
 const char* kamaKeywordAt(size_t i);

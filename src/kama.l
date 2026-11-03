@@ -82,7 +82,7 @@
  * The rules fire on every OCCURRENCE, not just the declaration, so `reservedReported` keeps it to one
  * error per spelling per file. Lexing continues (handleError accumulates) so a file naming two reserved
  * words reports both rather than one at a time. */
-/* ...and `__` INSIDE a name (KR-88). kama joins scopes with `__` in the C it emits (`k_Fmain__helper`,
+/* ...and `__` INSIDE a name (KR-88). kama joins scopes with `__` in the C it emits (`kF_main__helper`,
    `geo__area`), so a local `Fmain__helper` spelled a file-private function's C name — kama accepted it
    and clang refused the call. A LEADING `__` stays legal (`__ok` emits `k___ok`, which no scope forms). */
 #define RESERVED_CHECK(src)                                                       \
@@ -100,7 +100,7 @@
 static int getToken(const char *);
 static int contextualWord(int t, char hold, const char* after, struct LexerInstanceData* data);
 bool cIsReservedWord(const char *);
-static bool hasInnerDoubleUnderscore(const char *s)   /* `__` after the leading underscores */
+bool hasInnerDoubleUnderscore(const char *s)   /* `__` after the leading underscores */
 {
   while (*s == '_') ++s;
   return strstr(s, "__") != nullptr;

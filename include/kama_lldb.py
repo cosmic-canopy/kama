@@ -468,7 +468,7 @@ class StructSynth:
 # frame names — the CALL STACK, without an editor
 # ---------------------------------------------------------------------------------------------------
 #
-# A frame's name is the C symbol out of the debug info, so a backtrace reads `k_Fapp__Pair_int32__make`.
+# A frame's name is the C symbol out of the debug info, so a backtrace reads `kF_app__Pair_int32__make`.
 # LLDB demangles C++ and Rust itself because it knows those schemes; it cannot know kama's. But
 # `frame-format` accepts `${script.frame:<module>.<fn>}`, which calls back here per frame — so this is
 # fixable WITHOUT an editor in the loop, and a plain `lldb`, a terminal `bt` and any editor that is not
@@ -489,7 +489,7 @@ def _demangle_frame(name):
         return name
     if name == 'kama_main':
         return 'main'
-    if name.startswith('k_F'):                      # a file-private scope: `k_F<stem>__<rest>`
+    if name.startswith('kF_'):                      # a file-private scope: `kF_<stem>__<rest>`
         cut = name.find('__')
         if cut > 0:
             return name[cut + 2:].replace('__', '::')
@@ -521,9 +521,9 @@ def frame_name(frame, internal_dict):
 # spells a type by where it lives:
 #
 #     prelude                      kama__Optional_int32
-#     a loose file (no kama.json)  k_Fapp__Pair_int32          <- the F5 case
+#     a loose file (no kama.json)  kF_app__Pair_int32          <- the F5 case
 #     a module, exported           std__collections__DynamicArray_int32_kama__GlobalAllocator
-#     a module, not exported       std__collections__k_Fdynamic_array__Ctrl
+#     a module, not exported       std__collections__kF_dynamic_array__Ctrl
 #
 # so matching `^k_` alone would catch only loose files and miss every stdlib type. A generic instance
 # mints its own C type per instantiation, which is why this is a regex family and not a type list.
@@ -570,7 +570,7 @@ def __lldb_init_module(debugger, internal_dict):
     # Everything else kama minted, in each of the four scope shapes. LAST, so the specific providers
     # above win: LLDB prefers the most recently added match, so registration order here is reversed
     # relative to precedence and these must come after.
-    for shape in (r'^k_F[A-Za-z0-9_]+__.*$',          # a loose file's own types
+    for shape in (r'^kF_[A-Za-z0-9_]+__.*$',          # a loose file's own types
                   r'^kama__[A-Za-z0-9_]+.*$'):        # the prelude's
         _add(debugger, 'synthetic', shape, '-l %s.StructSynth' % m)
 

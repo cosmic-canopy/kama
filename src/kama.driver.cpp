@@ -1583,7 +1583,12 @@ static void setLooseRoot(const std::vector<std::string>& operands)
 // The module an OPERAND sits in, derived from the loose root — "" for a file in the root itself (§2e.27
 // makes those unimportable), for anything outside the root, and for a folder whose name is not a legal
 // kama identifier. That last one is not a rejection: nothing could ever write `import my-lib::{ … }`,
-// so such a folder is not a module and its files stay file-private, exactly as they are today.
+// so such a folder is not a module and its files stay file-private, exactly as they are today. A folder
+// whose name C could not join is not one either: a first folder that opens a C register (`k`, `kama_x`),
+// or any folder holding `__` or opening a prefix kama builds — a folder `kF_main/` beside `main.kama` made
+// its export and that file's private `h` one C name, refused as a "duplicate function".
+static std::string reservedByCRegister(const std::string& ident);
+static std::string segmentCReason(const std::string& seg);
 static std::string looseModuleFor(const std::string& absPath)
 {
     if (g_looseRoot.empty()) return std::string();
@@ -1594,7 +1599,8 @@ static std::string looseModuleFor(const std::string& absPath)
     for (size_t i = 0, s = 0; ; ++i) {
         if (i != rel.size() && rel[i] != '/') continue;
         const std::string seg = rel.substr(s, i - s);
-        if (!kamaIsIdentifier(seg)) return std::string();
+        if (!kamaIsIdentifier(seg) || !segmentCReason(seg).empty()) return std::string();
+        if (mod.empty() && !reservedByCRegister(seg).empty()) return std::string();
         mod += (mod.empty() ? "" : "::") + seg;
         if (i == rel.size()) break;
         s = i + 1;
@@ -3421,6 +3427,54 @@ static std::string reservedNameReason(const std::string& ident)
     return "";
 }
 
+// `k`, an uppercase tag and `_` is the register of the prefixes kama BUILDS (`kF_` heads a file's private names),
+// set apart by its second character from `k_`, `kama_` and every lowercase name. A segment that spells one could BE
+// one: a module `kF_app` under `geo` emits `geo__kF_app__h`, which is also what a private `h` in `geo`'s `app.kama`
+// emits. `k` plus the tag alone counts too, since a `__` join follows it (`kF__x` is the private scope of `_x.kama`).
+static bool opensBuiltPrefix(const std::string& s)
+{
+    return s.size() >= 2 && s[0] == 'k' && std::isupper((unsigned char)s[1]) && (s.size() == 2 || s[2] == '_');
+}
+
+// Why `seg` cannot be one segment of the C names kama joins with `__` — a project's name, a scope, a module, a loose
+// folder — or "". The lexer refuses an inner `__` in a source name for the same reason (KR-88), but a manifest's names
+// never reach the lexer until someone imports them, so `a__b` installed and then no `import` could spell it.
+static std::string segmentCReason(const std::string& seg)
+{
+    if (hasInnerDoubleUnderscore(seg.c_str()))
+        return "`" + seg + "` has `__` inside it, and kama joins the segments of a C name with `__`, so the join "
+               "could spell another declaration's name";
+    if (opensBuiltPrefix(seg))
+        return "`" + seg + "` opens `" + seg.substr(0, 2) + "_`, a prefix kama builds for C names of its own "
+               "(`kF_` heads a file's private names)";
+    return "";
+}
+
+// The rule for a package's own name, `name` or `@scope/name`, short of the reserved names (reservedNameReason, which
+// the caller asks because the compiler's own manifests are exempt from it): "" or what is wrong, written to follow
+// "but". The bare name is the package's root module and heads its C names, so it is an identifier C can join; a scope
+// is held to the same, since it reaches C too (KR-291), and is not reserved: `@kama` and `@std` are scopes.
+static std::string usableNameHint(const std::string& ident);
+static std::string packageNameError(const std::string& nm)
+{
+    const std::string ident = importNameOf(nm), scope = scopeOf(nm);
+    if (!scope.empty()) {
+        const std::string s = scope.substr(1), hint = usableNameHint(s);
+        if (!kamaIsIdentifier(s))
+            return "the scope `" + scope + "` is not `@` and a legal kama identifier — a scope reaches the C names of "
+                   "everything its package declares" + (!hint.empty() ? ". Try \"@" + hint + "\"" : "");
+        const std::string why = segmentCReason(s);
+        if (!why.empty()) return "the scope cannot be part of a C name: " + why;
+    }
+    if (!kamaIsIdentifier(ident)) {
+        const std::string hint = usableNameHint(ident);
+        return "a project's name is its root module and `" + ident + "` is not a legal kama identifier — nothing "
+               "could write `import " + ident + "::{ … }`" + (!hint.empty() ? ". Try \"" + hint + "\"" : "");
+    }
+    const std::string why = segmentCReason(ident);
+    return why.empty() ? why : "a project's name heads every C name it emits: " + why;
+}
+
 // The compiler's own manifests, the only two allowed the names `std` and `core`: `lib/kama.json` and
 // `lib/core/kama.json` under the stdlib this compiler resolves. By canonical path, so neither a copy nor a project
 // that happens to sit in a folder named `lib` passes for one.
@@ -3442,7 +3496,7 @@ static std::string usableNameHint(const std::string& ident)
     if ((h.rfind("kama-", 0) == 0 || h.rfind("kama_", 0) == 0) && h.size() > 5) h = h.substr(5);
     for (char& c : h) if (c == '-') c = '_';
     if (!kamaIsIdentifier(h) || kamaIsKeyword(h.c_str()) || h == "std" || h == "core" || h == "global"
-        || !reservedByCRegister(h).empty() || h == ident) return "";
+        || !reservedByCRegister(h).empty() || !segmentCReason(h).empty() || h == ident) return "";
     return h;
 }
 
@@ -3908,6 +3962,10 @@ struct ManifestReader {
                       "module name — give that node a `name` that is"
                     : "`name` for the module `" + here + "` is \"" + n.name + "\", which is not a legal "
                       "kama identifier");
+            if (!n.isRoot() && !segmentCReason(n.segment()).empty())
+                return fail("the module `" + here + "` cannot be a segment of a module name: "
+                            + segmentCReason(n.segment())
+                            + (n.name.empty() ? " — give that node a `name` that can" : ""));
             out.push_back(std::move(n));
             ws();
             if (i < s.size() && s[i] == ',') { ++i; ws(); continue; }
@@ -4611,20 +4669,14 @@ struct ManifestReader {
             // refusing it beats shipping one. This is the same rule reaching the manifest, which is
             // where a project that was not seeded gets read.
             //
-            // The SCOPE is exempt: `@my-org/geo` imports under its bare last segment, so the hyphen in
-            // an npm-style scope is registry routing and never reaches a namespace. importNameOf is the
-            // same function the dependency view names its directories with.
+            // The SCOPE is held to the same rule (packageNameError): it reaches C, so `@my-org/geo` is refused.
+            // It was exempt until 0.9.818, as registry routing that never reached a namespace.
             else if (key == "name") {
                 std::string nm;
                 if (!str(nm)) return false;
                 const std::string ident = importNameOf(nm);
-                if (!kamaIsIdentifier(ident)) {
-                    const std::string hint = usableNameHint(ident);
-                    return fail("`name` is \"" + nm + "\", but a project's name is its root module and `"
-                                + ident + "` is not a legal kama identifier — nothing could write `import "
-                                + ident + "::{ … }`"
-                                + (!hint.empty() ? ". Try \"" + hint + "\"" : ""));
-                }
+                const std::string bad = packageNameError(nm);
+                if (!bad.empty()) return fail("`name` is \"" + nm + "\", but " + bad);
                 // The one reserved-name rule (reservedNameReason). Refused HERE, not only at `kama seed`,
                 // because a project that was not seeded is read here and nowhere else. `std` and `core` are
                 // the standard library's own names, so the compiler's own two manifests — and only they,
@@ -5152,6 +5204,18 @@ static void reportUnresolvedModule(const std::string& name, const std::vector<st
     // A loose build, where the operands ARE the compilation (§2i). Nothing was looked for, so the useful
     // thing to say is that — and, when the file turns out to sit in a project, that naming the manifest
     // is the whole fix. The walk is affordable here because this path ends the build.
+    //
+    // ...unless the import spells a folder C cannot join, which looseModuleFor keeps out of the modules: the
+    // operands may well be in it, so "none of them is in it" would be false.
+    for (size_t i = 0; i < segs.size(); ++i) {
+        const std::string why = i == 0 && !reservedByCRegister(segs[0]).empty() ? reservedByCRegister(segs[0])
+                                                                               : segmentCReason(segs[i]);
+        if (!why.empty()) {
+            fprintf(stderr, "kama: note: a folder named `%s` is not a module, because %s — rename the folder\n",
+                    segs[i].c_str(), why.c_str());
+            return;
+        }
+    }
     fprintf(stderr, "kama: note: this build names no `kama.json`, so its modules are the files on the "
                     "command line and their folders — and none of them is in `%s`. Name that module's "
                     "sources too, or build a project\n", name.c_str());
@@ -9676,7 +9740,9 @@ static std::string seedDefaultName(const std::string& dir)
 // `kama seed` is the right place because the name it stamps into kama.json is the name every consumer
 // then has to spell.
 //
-//   <name> ::= [ "@" <seg> "/" ] <seg>        <seg> ::= [a-z] [a-z0-9_-]*
+//   <name> ::= [ "@" <scope> "/" ] <seg>      <seg> ::= [a-z] [a-z0-9_-]*      <scope> ::= [a-z] [a-z0-9_]*
+//
+// A scope has no `-` since it reaches C (KR-291), and neither it nor a project's name holds `__` (segmentCReason).
 //
 // Lowercase because the name is also a path component (.kama/deps/<importName>, the store label), and a
 // case-insensitive filesystem cannot tell `Geo` from `geo`.
@@ -9698,8 +9764,12 @@ static bool seedValidName(const std::string& name, bool mustBeImportable, std::s
             if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
         return true;
     };
-    if (!scope.empty() && !seg(scope.substr(1))) {
-        err = "'" + name + "' has a bad scope — a scope is @ then [a-z][a-z0-9_-]*"; return false;
+    // A scope reaches C (KR-291), so it is held to the manifest's rule: no `-`, and a segment C can join.
+    if (!scope.empty() && (!seg(scope.substr(1)) || scope.find('-') != std::string::npos)) {
+        err = "'" + name + "' has a bad scope — a scope is @ then [a-z][a-z0-9_]*"; return false;
+    }
+    if (!scope.empty() && !segmentCReason(scope.substr(1)).empty()) {
+        err = "'" + name + "' has a bad scope — " + segmentCReason(scope.substr(1)); return false;
     }
     if (name[0] == '@' && scope.empty()) { err = "'" + name + "' is missing the /name after its scope"; return false; }
     if (!seg(ident)) {
@@ -9720,6 +9790,7 @@ static bool seedValidName(const std::string& name, bool mustBeImportable, std::s
         err = "'" + ident + "' is a kama keyword, so it cannot be a project's root module";
         return false;
     }
+    if (!segmentCReason(ident).empty()) { err = segmentCReason(ident); return false; }   // as the manifest reader
     const std::string why = reservedNameReason(ident);   // the one rule the manifest reader also holds
     if (!why.empty()) { err = why; return false; }
     return true;
@@ -10102,7 +10173,7 @@ void usage(FILE* out = stderr)
         "                   whole line of C-compiler output with those spellings buried in it. Every name\n"
         "                   kama owns reaches C in a prefixed register (`k_` yours, `kama_` the\n"
         "                   compiler's) and a generic instance carries its arguments mangled into the\n"
-        "                   name; this turns `k_Fapp__Pair_int32__make` back into `Pair<int32>::make`.\n"
+        "                   name; this turns `kF_app__Pair_int32__make` back into `Pair<int32>::make`.\n"
         "                   With `-- <name>...` it answers those and exits; with none it reads stdin and\n"
         "                   answers one line per line until EOF, so one process serves a whole debug\n"
         "                   session (the analysis is paid once, each answer is a lookup).\n"
@@ -12450,7 +12521,7 @@ int main(int argc, char** argv)
 
     if (subcommand == "demangle") {
         // KR-32: render EMITTED C names back to the kama that produced them — a debugger frame
-        // (`k_Fapp__Pair_int32__make`), a local (`k_near`), a type (`kama__Optional_string`), or a whole
+        // (`kF_app__Pair_int32__make`), a local (`k_near`), a type (`kama__Optional_string`), or a whole
         // line of clang output with those spellings buried in it.
         //
         // WHY A SUBCOMMAND AND NOT A MAP WRITTEN BESIDE THE BUILD (ruled 2026-09-20). A map is a record,

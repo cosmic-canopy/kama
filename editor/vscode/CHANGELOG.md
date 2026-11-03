@@ -13,6 +13,14 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
+## [0.9.8] — 2026-11-02
+
+### Changed
+
+- **The debugger reads kama's new C names.** From kama 0.9.818 a file's private declarations reach C as `kF_…`
+  (they were `k_F…`), and from 0.9.819 a scoped package's as `kS_<scope>__<name>__…`. The call stack, the
+  variables and the breakpoints show both as kama spells them — `kS_south__net__who` is `@south/net::who`.
+
 ## [0.9.7] — 2026-10-30
 
 ### Added

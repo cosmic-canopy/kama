@@ -55,8 +55,8 @@ for opt in -O0 -O2; do
     su=$(ls "$tmp"/*.su 2>/dev/null | head -1)
     [ -n "$su" ] || { echo "check-fill-frame: SKIP — $CC_ wrote no .su file"; exit 0; }
     # A frame line is `file:line:col:NAME<TAB>BYTES<TAB>KIND`; the names are kama's mangled ones.
-    loc=$(awk -F'\t' '$1 ~ /:k_Ffill__local$/ {print $2}' "$su")
-    mk=$(awk -F'\t' '$1 ~ /:k_Ffill__Holder__reset$/ {print $2}' "$su")
+    loc=$(awk -F'\t' '$1 ~ /:kF_fill__local$/ {print $2}' "$su")
+    mk=$(awk -F'\t' '$1 ~ /:kF_fill__Holder__reset$/ {print $2}' "$su")
     [ -n "$loc" ] && [ -n "$mk" ] || fail "$opt: did not find both functions in $su"
     # The array is 8,192 bytes. One copy plus spill room passes; two copies (≥ 16,384) does not.
     [ "$loc" -lt 12288 ] || fail "$opt: a local filled by \`[s; (1024)]\` has a $loc-byte frame — the array is 8,192, so it holds a second copy"

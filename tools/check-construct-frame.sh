@@ -87,13 +87,13 @@ for opt in -O0 -O2; do
     su=$(ls "$tmp"/*.su 2>/dev/null | head -1)
     [ -n "$su" ] || { echo "check-construct-frame: SKIP — $CC_ wrote no .su file"; exit 0; }
     frame() { awk -F'\t' -v f="$1" '$1 ~ (":" f "$") {print $2}' "$su"; }
-    loc=$(frame k_Fcf__local); hp=$(frame k_Fcf__heap); ot=$(frame k_Fcf__outer); oi=$(frame k_Fcf__Outer__make__into)
-    [ -n "$oi" ] || oi=$(frame k_Fcf__Outer__make)   # a compiler with no into form: its ctor IS the value form
-    fl=$(frame k_Fcf__fallible); fi=$(frame k_Fcf__Fal__make__into)
-    ml=$(frame k_Fcf__matchedLocal); mt=$(frame k_Fcf__matchedTemp)
-    [ -n "$fi" ] || fi=$(frame k_Fcf__Fal__make)   # a compiler with no into form
-    rt=$(frame k_Fcf__returned); dt=$(frame k_Fcf__Det__tuned__into)
-    [ -n "$dt" ] || dt=$(frame k_Fcf__Det__tuned)
+    loc=$(frame kF_cf__local); hp=$(frame kF_cf__heap); ot=$(frame kF_cf__outer); oi=$(frame kF_cf__Outer__make__into)
+    [ -n "$oi" ] || oi=$(frame kF_cf__Outer__make)   # a compiler with no into form: its ctor IS the value form
+    fl=$(frame kF_cf__fallible); fi=$(frame kF_cf__Fal__make__into)
+    ml=$(frame kF_cf__matchedLocal); mt=$(frame kF_cf__matchedTemp)
+    [ -n "$fi" ] || fi=$(frame kF_cf__Fal__make)   # a compiler with no into form
+    rt=$(frame kF_cf__returned); dt=$(frame kF_cf__Det__tuned__into)
+    [ -n "$dt" ] || dt=$(frame kF_cf__Det__tuned)
     [ -n "$loc" ] && [ -n "$hp" ] && [ -n "$ot" ] && [ -n "$oi" ] && [ -n "$fl" ] && [ -n "$fi" ] \
         && [ -n "$ml" ] && [ -n "$mt" ] && [ -n "$rt" ] && [ -n "$dt" ] || fail "$opt: did not find every function in $su"
     # `Big` is 16,392 bytes. One copy plus spill room passes; a second (≥ 32,784) does not.

@@ -363,7 +363,7 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
         // ⚠️ Gated on `depth` as well as on the flag, and it must stay that way. The scope strips above
         // recurse on what is left after the scope, and what is left is a DECLARATION's leaf, which was
         // never `kName()`-prefixed: a type the author called `k_Box` in `kk.kama` is emitted
-        // `k_Fkk__k_Box`, and the file-scope strip hands `k_Box` back to this function. Stripping there
+        // `kF_kk__k_Box`, and the file-scope strip hands `k_Box` back to this function. Stripping there
         // too would rename the author's own type. The two cases are indistinguishable by spelling — only
         // by whether a table claimed the token — so the recursion depth is the discriminator.
         if (cRegister && depth == 0 && tok.size() > 2 && tok.compare(0, 2, "k_") == 0) tok.erase(0, 2);
@@ -694,14 +694,17 @@ static std::string privateScopeFor(const std::string& unitPath)
     size_t dot = stem.find_last_of('.');
     if (dot != std::string::npos) stem.erase(dot);
     // KR-67 stage 4: `_F` is `_`+uppercase, which C reserves to the implementation at every scope —
-    // 566 macros sit in that space on macOS alone. A file-private declaration is a name the USER
-    // owns, so it takes the user register.
-    std::string r = "k_F";
+    // 566 macros sit in that space on macOS alone. It was `k_F` until 0.9.818, inside the user's `k_`
+    // register and kept apart only by the rule that no name contains `__`. Now it is `kF_`: `k`, an
+    // uppercase tag and `_` is a prefix kama BUILDS (`kS_` is a scoped package's), set apart by its
+    // second character from the user's `k_`, the compiler's `kama_` and every project's name
+    // (reservedByCRegister refuses `k` + uppercase + `_` there).
+    std::string r = "kF_";
     for (char c : stem) r += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
     return r;
 }
 
-// Build a file's namespace context: the module its PATH puts it in, or private (`_F<file>`); collect its
+// Build a file's namespace context: the module its PATH puts it in, or private (`kF_<file>`); collect its
 // `using`s and aliases.
 //
 // A file's identity is where it sits — its path under its project's `source` root, resolved against the
@@ -760,7 +763,7 @@ NsCtx CEmitter::ctxOf(SharedCompilationUnit unit)
             // `import { X };` — an EMPTY modulePath is the SAME-MODULE form, not a malformed one. It
             // needs no path because there is exactly one candidate, so it targets this file's own scope
             // and the symbols bind bare, just as a foreign per-symbol import does. (A file in no module
-            // has scope `_F<file>` and no siblings, so the form is inert rather than special-cased.)
+            // has scope `kF_<file>` and no siblings, so the form is inert rather than special-cased.)
             std::string mod = imp->modulePath->empty() ? ctx.scope : mangleNs(path);
             if (imp->symbols)
                 for (auto& sym : *imp->symbols) {
@@ -17602,7 +17605,7 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
                             || (*pt->value == "View" && *at->value == "ConstView"))
                           && !constViewTemplateKey().empty() && !viewTemplateKey().empty();
         // The same template, spelled two ways: an argument typed by a generic call's return is ABSOLUTE
-        // (genericCallReturnNode — `wrap(v: 3)` is a `k_Fm__Box<int32>`), so it is compared with the
+        // (genericCallReturnNode — `wrap(v: 3)` is a `kF_m__Box<int32>`), so it is compared with the
         // parameter's head as the callee's own file resolves it.
         auto sameHead = [&]() -> bool {
             if (*pt->value == *at->value) return true;
@@ -27202,7 +27205,7 @@ std::string CEmitter::hostQualified(const std::string& module, const std::string
             prefix += (std::isalnum((unsigned char)c) || c == '_') ? c : '_';
         }
     } else if (!unitPath.empty()) {
-        // strip the `k_F` scope marker (KR-67 stage 4; it was `_F`) — the HOST header names a file
+        // strip the `kF_` scope marker (KR-67 stage 4; it was `_F`) — the HOST header names a file
         // by its stem, not by kama's internal mangle.
         prefix = privateScopeFor(unitPath).substr(3);
     }
@@ -36408,7 +36411,7 @@ std::string CEmitter::displayBody(const std::string& cName) const
 {
     if (_headerBodies.count(cName)) return cName;
     // A generic function's instance reads as its template and its arguments — `measure<Sq>`, not the mangled
-    // `measure::k_Fk39a2::Sq` a no-heap chain printed (KR-39).
+    // `measure::kF_k39a2::Sq` a no-heap chain printed (KR-39).
     auto gi = _genericInsts.find(cName);
     if (gi != _genericInsts.end()) {
         std::string s = demangleForDisplay(gi->second.templateKey) + "<";
@@ -46219,7 +46222,7 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
     // `Optional<geo::HidErr>` in a generic body was refused by `kama check` and COMPILED by `kama build`.
     buildDeclUnits(userUnits);
 
-    // Assign each file its namespace context (public module scope, or a `_F<file>` file-private one)
+    // Assign each file its namespace context (public module scope, or a `kF_<file>` file-private one)
     // and register public namespaces, before any name resolution.
     std::map<std::string, std::string> privateScopeOwner;   // scope -> the unit that minted it
     for (size_t i = 0; i < units.size(); ++i) {

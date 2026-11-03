@@ -52,7 +52,7 @@ or a crash log — a diagnostic, a hover and a `kama query` answer all show the 
 try to unpick it by hand, and do not grep the source for it; ask:
 
 ```sh
-kama demangle <file> -- k_Fapp__Pair_int32__make   # -> Pair<int32>::make
+kama demangle <file> -- kF_app__Pair_int32__make   # -> Pair<int32>::make
 ```
 
 Names are rewritten in place, so paste the whole error line, not just the identifier. With no `--` it

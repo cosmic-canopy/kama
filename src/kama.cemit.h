@@ -326,11 +326,11 @@ enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed, Simd, Mask, 
 inline bool isValueVectorKind(CollKind k) { return k == CollKind::Simd || k == CollKind::Mask; }
 
 // Per-file namespace context. A file with `namespace X;` is public (scope
-// = mangled X); a file without one is private (scope = "_F<file>"). Bare names
+// = mangled X); a file without one is private (scope = "kF_<file>"). Bare names
 // resolve to the file's own scope, then its `using`s — never another file's
 // private symbols (private-by-default).
 struct NsCtx {
-    std::string scope;        // mangle prefix: "Graphics" or "_F<file>"
+    std::string scope;        // mangle prefix: "Graphics" or "kF_<file>"
     // The file this context belongs to. Visibility is per FILE, not per module, so "may this reference
     // reach that declaration" is answered by comparing this against the symbol's `declFile`. It travels
     // in NsCtx rather than being read from `diagFile()` because every pass already installs the right
@@ -339,16 +339,16 @@ struct NsCtx {
     // Empty for the prelude, which is compiler-owned and exempt.
     std::string unitPath;
     // The module this file is in, UNMANGLED (`std::collections`), as the driver names it. `scope` holds the
-    // mangled form and cannot be turned back: a kama identifier may contain `__` (`_Hidden` -> `_F<file>___Hidden`),
+    // mangled form and cannot be turned back: a kama identifier may contain `__` (`_Hidden` -> `kF_<file>___Hidden`),
     // so the join is not injective. Empty for a file in no module.
     std::string module;
     bool        isPublic = false;
     // Per-FILE privacy inside a module (SPEC § Modules: visibility is per file). `privScope` is the mangle
-    // prefix a declaration this file does NOT export gets — `<module>___F<file>` — so two files of one
+    // prefix a declaration this file does NOT export gets — `<module>__kF_<file>` — so two files of one
     // module may each declare a private `helper`, a private `static n`, a private `type T`, and neither
     // shadows the other. `exportedHere` is this file's own `export { … }` list, read in ctxOf before any
     // key is minted, which is what lets `qualify()` decide at the declaration. Both empty for a loose file
-    // (its whole scope is already the private `_F<file>`) and for the prelude.
+    // (its whole scope is already the private `kF_<file>`) and for the prelude.
     std::string privScope;
     std::set<std::string> exportedHere;
     std::vector<std::string> usings;                  // imported public namespaces (mangled)
@@ -2147,15 +2147,15 @@ private:
     // mangled prefix and §2c is asked in real module names. Complete by construction — every module in the
     // compilation has at least one unit, and this is filled from the same loop that builds `_unitCtx`.
     std::map<std::string, std::string> _moduleNames;   // registered public namespaces (mangled)
-    // The file-private scopes this compilation minted (`_F<file>`, one per unit no module owns). A private
+    // The file-private scopes this compilation minted (`kF_<file>`, one per unit no module owns). A private
     // scope names nothing a user could write, so `demangleForDisplay` strips it from a message — and since
     // §2e.26 made the spelling name-derived rather than `_F<digits>`, there is no PATTERN left to recognise
     // one by. This registry is what it consults instead. Filled from the same loop that builds `_unitCtx`.
     std::set<std::string> _privateScopes;
     std::set<std::string> _exported;     // mangled names of `export`ed top-level decls (module public surface)
-    // A module file's private scope (`<module>___F<file>`) -> its module scope. Kept apart from
+    // A module file's private scope (`<module>__kF_<file>`) -> its module scope. Kept apart from
     // `_privateScopes` because it renders differently: the FILE segment is what no user can spell, the
-    // module still is, so `nhflag___Fapp__grow` displays as `nhflag::grow`, not `grow`.
+    // module still is, so `nhflag__kF_app__grow` displays as `nhflag::grow`, not `grow`.
     std::map<std::string, std::string> _privateFileScopes;
     std::set<std::string> _externNames;  // FFI: literal C names of extern structs
     // THE FILE RUNG, FFI SIDE. Every other symbol is judged by the ONE file that declares it

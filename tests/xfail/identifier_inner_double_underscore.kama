@@ -1,4 +1,6 @@
 // KR-88: `__` may lead a name but not appear inside one. kama joins scopes with `__` in the C it emits, so
-// this local spelled the file-private `helper`'s C name (`k_F<file>__helper`) and clang refused the call.
+// this local spelled the file-private `helper`'s C name (`k_F<file>__helper`, the spelling until 0.9.818) and
+// clang refused the call. The rule stands for every name the join extends: a type `a__b` in `geo` is `geo__a__b`,
+// which is also module `geo::a`'s `b`.
 fn int32 helper() { return 40; }
 fn uint8 main() { int32 Fidentifier_inner_double_underscore__helper = 2; return helper() + 2; }

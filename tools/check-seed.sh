@@ -218,6 +218,8 @@ reject "an uppercase name"           --name BadName
 reject "a name with a space"         --name 'Bad Name'
 reject "a keyword as a library name" --kind library --name return
 reject "a library named std"         --kind library --name std
+reject "a hyphenated scope"          --kind library --name @my-org/geo   # a scope reaches C (KR-291)
+reject "a project name holding __"   --kind library --name a__b
 reject "a two-part version"          --version 1.2
 reject "an unknown kind"             --kind nonsense
 reject "a monorepo with no members"  --kind monorepo

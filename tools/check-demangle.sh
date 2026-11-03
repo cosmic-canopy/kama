@@ -9,11 +9,11 @@
 # What this guard is really holding down is the ONE case the two spellings collide on. A declaration's
 # leaf and a local are both spelled `k_<something>`:
 #
-#     type value k_Box { public int32 k_x; }   ->  k_Fdm__k_Box  with a member  k_k_x
+#     type value k_Box { public int32 k_x; }   ->  kF_dm__k_Box  with a member  k_k_x
 #     int32 k_near = …                         ->  k_k_near
 #     int32 near   = …                         ->  k_near
 #
-# so `k_Fdm__k_Box` must come back `k_Box` (the author's own type name, NOT `Box`), while `k_k_near`
+# so `kF_dm__k_Box` must come back `k_Box` (the author's own type name, NOT `Box`), while `k_k_near`
 # must come back `k_near` and `k_near` must come back `near`. The rule that separates them is not
 # lexical — it is "strip the register only off a token no table claimed" — and nothing else in the suite
 # exercises it, because a diagnostic never carries a `k_` name at all (the analysis maps are keyed by the
@@ -30,7 +30,7 @@ if [ ! -x "$KAMA" ]; then echo "check-demangle: $KAMA not built" >&2; exit 1; fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-# The file STEM is what mints the file-private scope (`dm.kama` -> `k_Fdm`), so the name here is load
+# The file STEM is what mints the file-private scope (`dm.kama` -> `kF_dm`), so the name here is load
 # bearing and the expectations below spell it.
 cat > "$tmp/dm.kama" <<'KAMA'
 import { std::collections::DynamicArray };
@@ -82,13 +82,13 @@ want() {
 # --- the register, and the collision it has to survive -------------------------------------------
 want k_near               near        # a local the author called `near`
 want k_k_near             k_near      # ...and one the author really did call `k_near`
-want k_Fdm__k_Box         k_Box       # a DECLARATION's leaf is not in the register: do not strip it
+want kF_dm__k_Box         k_Box       # a DECLARATION's leaf is not in the register: do not strip it
 want k_k_x                k_x         # ...but its member is
-want k_Fdm__k_Box__make   k_Box::make
+want kF_dm__k_Box__make   k_Box::make
 
 # --- generic instances: the half no lexical rule can reach ---------------------------------------
-want k_Fdm__Pair_int32          'Pair<int32>'
-want k_Fdm__Pair_int32__sum     'Pair<int32>::sum'
+want kF_dm__Pair_int32          'Pair<int32>'
+want kF_dm__Pair_int32__sum     'Pair<int32>::sum'
 # A stdlib instance, with the allocator left at its default — which must NOT be rendered, or every
 # container in the debugger reads `DynamicArray<string, GlobalAllocator>`.
 want std__collections__DynamicArray_string_kama__GlobalAllocator        'std::collections::DynamicArray<string>'
@@ -104,7 +104,7 @@ want kama_string__length    string::length
 want InlineArray_int32_4    'InlineArray<int32>#(4)'
 
 # --- a name is rewritten IN PLACE, so a whole line of C survives its surroundings -----------------
-line=$(printf 'int32_t k_Fdm__Pair_int32__sum(k_Fdm__Pair_int32* self)' | "$KAMA" demangle "$tmp/dm.kama")
+line=$(printf 'int32_t kF_dm__Pair_int32__sum(kF_dm__Pair_int32* self)' | "$KAMA" demangle "$tmp/dm.kama")
 [ "$line" = 'int32_t Pair<int32>::sum(Pair<int32>* self)' ] \
     || fail "a C declaration line demangled to \`$line\`"
 
@@ -112,7 +112,7 @@ line=$(printf 'int32_t k_Fdm__Pair_int32__sum(k_Fdm__Pair_int32* self)' | "$KAMA
 # One analysis is ~140ms and one answer off the finished tables is a lookup, so a debugger that repaints
 # locals at every stop needs many answers from ONE process. If stdout is left block-buffered the caller
 # waits forever for a line sitting in this process's buffer, so this also proves the flush.
-printf 'k_near\nk_k_near\nk_Fdm__Pair_int32__sum\n\nkama__Optional_string\n' > "$tmp/in.txt"
+printf 'k_near\nk_k_near\nkF_dm__Pair_int32__sum\n\nkama__Optional_string\n' > "$tmp/in.txt"
 "$KAMA" demangle "$tmp/dm.kama" < "$tmp/in.txt" > "$tmp/out.txt" 2>"$tmp/err" \
     || { echo "check-demangle: FAIL — the stdin form exited nonzero:" >&2; sed 's/^/  /' "$tmp/err" >&2; exit 1; }
 cat > "$tmp/want.txt" <<'EOF'
