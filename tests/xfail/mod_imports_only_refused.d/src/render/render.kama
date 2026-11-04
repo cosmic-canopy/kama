@@ -1,0 +1,6 @@
+// `audio`'s `visibility` lets every module of the package import it, so what refuses this import is
+// `render`'s own `importsOnly`, which names only `frame`: one system may not import another (KR-308).
+import { imprefused::frame::tick, imprefused::audio::play };
+export { draw };
+
+fn int32 draw() { return tick() + play(); }

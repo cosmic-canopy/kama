@@ -292,6 +292,19 @@ does, and this map is where that location becomes an API.
 - **`visibility` is required on every node**, including one whose folder holds no `.kama` files yet —
   making it conditional on file presence would mean *adding a source file invalidates the manifest*. The
   four forms are a list of modules, `"children"`, `"internal"`, or `"public"`.
+- **`importsOnly` restricts what a module imports**, the importer's half of an edge, as `dependencies` is
+  a package's. It is optional: a module that writes none imports whatever `visibility` lets it. One that
+  writes it imports, from its own package, only the modules listed, spelled as a `visibility` list spells
+  them (`"."` for the root, `[]` for none). Another package is `dependencies`' business and is never
+  listed, and a child module is held only by its own list. An import must pass both halves, and the error
+  names the one that refused:
+
+  ```json
+  "audio":  { "visibility": "public", "importsOnly": ["frame", "world"] },
+  "render": { "visibility": "public", "importsOnly": ["frame", "world"] }
+  ```
+
+  A game still imports `audio` and `render`, which are `public`, and `render` may not import `audio`.
 
 `kama seed` writes the root entry for you, so most projects start from a working example rather than a
 blank key.

@@ -1,0 +1,5 @@
+// A list is an allowance, not a demand: `render` may import `world` and does not.
+import { imponly::frame::tick };
+export { draw };
+
+fn int32 draw() { return tick() * 10; }

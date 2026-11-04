@@ -3672,16 +3672,19 @@ bool CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     // spelling reaches a module WITHOUT importing it (that is deliberate — see the inbound clause below),
     // so the same rung has to be asked here or the manifest key is enforced in one position and not the
     // other, which is the shape of §1a claim 3 all over again.
-    if (_moduleVisible) {
+    if (_moduleReach) {
         const size_t cut = key.rfind("__");
         auto mn = cut == std::string::npos ? _moduleNames.end() : _moduleNames.find(key.substr(0, cut));
-        if (mn != _moduleNames.end() && !_moduleVisible(_nsCtx.module, mn->second)) {
+        const ModuleReach r = mn == _moduleNames.end() ? ModuleReach::Ok : _moduleReach(_nsCtx.module, mn->second);
+        if (r != ModuleReach::Ok) {
             if (quiet) return false;
-            unsupported(("module `" + mn->second + "` is not visible from "
-                         + (_nsCtx.module.empty() ? std::string("a file in no module")
-                                                  : "`" + _nsCtx.module + "`")
-                         + " — its `visibility` in `kama.json` does not name this module, and a qualified "
-                           "spelling reaches no further than an `import` would").c_str(), line);
+            unsupported((r == ModuleReach::NotVisible
+                ? "module `" + mn->second + "` is not visible from "
+                  + (_nsCtx.module.empty() ? std::string("a file in no module") : "`" + _nsCtx.module + "`")
+                  + " — its `visibility` in `kama.json` does not name this module, and a qualified spelling "
+                    "reaches no further than an `import` would"
+                : "module `" + mn->second + "` is not in the `importsOnly` of `" + _nsCtx.module + "` in "
+                  "`kama.json`, and a qualified spelling reaches no further than an `import` would").c_str(), line);
             return false;
         }
     }
@@ -47014,17 +47017,23 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
             // ATTRIBUTED, which happens through the resolver callback `ctxOf` itself makes — so asking
             // there consults a half-built index and the answer depends on which unit came first. It read
             // as "internal is enforced, a list is not"; both were really coin-flips on unit order.
-            if (!sameModule && _moduleVisible) {
+            if (!sameModule && _moduleReach) {
                 std::string target;                        // the entry's module, unmangled, as this file spells it
                 for (auto& sg : *imp->modulePath) target += (target.empty() ? "" : "::") + *sg;
                 std::string full = throughRoots(_nsCtx.importRoots, path);   // ...and as the driver names it
                 for (size_t p; (p = full.find('.')) != std::string::npos; ) full.replace(p, 1, "::");
-                if (!_moduleVisible(_nsCtx.module, full))
+                const ModuleReach r = _moduleReach(_nsCtx.module, full);
+                if (r == ModuleReach::NotVisible)
                     unsupported(("module `" + target + "` is not visible from "
                                  + (_nsCtx.module.empty() ? std::string("a file in no module")
                                                           : "`" + _nsCtx.module + "`")
                                  + " — its `visibility` in `kama.json` does not name this module. Widen it, "
                                    "or import from a module it does name").c_str(), imp);
+                // The importer's own half (KR-308): the restriction is the manifest's, so the fix is its to make.
+                else if (r == ModuleReach::NotInImportsOnly)
+                    unsupported(("module `" + target + "` is not in the `importsOnly` of `" + _nsCtx.module
+                                 + "` — that list in `kama.json` names every module of its package it may "
+                                   "import. Add it there if this edge is meant").c_str(), imp);
             }
             // M6 B3g: an `import`'s symbol list NAMES the things it imports, so renaming one of them has
             // to rewrite the import too — otherwise the rename leaves a module importing a symbol that no

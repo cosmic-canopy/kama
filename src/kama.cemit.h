@@ -325,6 +325,10 @@ enum class CollKind { String, Owned, Shared, Weak, Bindable, Fixed, Simd, Mask, 
 // several sites did — silently answered yes. Use this instead of naming the kinds.
 inline bool isValueVectorKind(CollKind k) { return k == CollKind::Simd || k == CollKind::Mask; }
 
+// Whether a file of one module may import another, and if not, which half of the manifest says no: the
+// imported module's `visibility`, or the importer's own `importsOnly` (KR-308). The driver answers it.
+enum class ModuleReach { Ok, NotVisible, NotInImportsOnly };
+
 // Per-file namespace context. A file with `namespace X;` is public (scope
 // = mangled X); a file without one is private (scope = "kF_<file>"). Bare names
 // resolve to the file's own scope, then its `using`s — never another file's
@@ -973,7 +977,7 @@ public:
     // §2c's rung, answered by the driver: may a file of `importer` see `imported`'s surface? Both are full
     // module names; "" is a file in no module. Absent (or unset) means allow, so a unit tree built without
     // a driver — a test harness, a future front end — is not silently locked down.
-    void setModuleVisible(std::function<bool(const std::string&, const std::string&)> f) { _moduleVisible = std::move(f); }
+    void setModuleReach(std::function<ModuleReach(const std::string&, const std::string&)> f) { _moduleReach = std::move(f); }
     // Does `module` (a full module name) declare `name` in a file this build left out? A module loads in part — only
     // the files an import needs — so a `friend` grant can name a declaration that is real and simply not compiled.
     // Absent (or unset) means no: a grant that does not resolve stays an error.
@@ -1668,7 +1672,7 @@ private:
     // `kama_cf, kama_cl`, the location it was handed, so a trap or `panic` in it names the caller's line.
     std::set<std::string> _trackCallerCNames;
     bool _trackCallerBody = false;
-    std::function<bool(const std::string&, const std::string&)> _moduleVisible;   // (importer, imported) -> §2c
+    std::function<ModuleReach(const std::string&, const std::string&)> _moduleReach;   // (importer, imported) -> §2c
     std::function<bool(const std::string&, const std::string&)> _leftOutOfBuild;  // (module, name) -> declared, not compiled
     // Pre-scanned conformances: target `primKey` -> the contracts a `type adapter` block grants it.
     // Populated before the collection pass so a generic-type-arg bound check that fires during

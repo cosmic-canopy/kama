@@ -636,72 +636,21 @@ against a real lldb on every push (Linux and Windows skip it), so the fix does n
    refusals xfail fixtures; `kama_lldb.py` cuts `<type>__`, checked by `tools/check-lldb-formatters.sh` where lldb
    runs (the Mac; this box has none). A VERSION bump, since emitted C changes for every enum.
 
-<a id="s2-module-imports"></a>
+<a id="s2-reach-twice"></a>
 
-### A module cannot limit which of its package's modules it imports (KR-308)
+### A refused import is reported twice, the second time as a qualified spelling (KR-310)
 
-Filed 2026-11-04 from a downstream engine whose rule is that one system never imports another: `audio`, `render` and
-the rest are modules of one library, each public so a game can import it, and each may import only the shared
-modules (`frame`, `world`). Measured on `0.9.840` with a library `eng` (modules `audio`, `render`, `frame`) and a
-game depending on it by path: with `audio` `"public"`, `render`'s `import { eng::audio::play };` checks; with
-`"visibility": ["frame"]` it is refused (*"module `eng::audio` is not visible from `eng::render` — its `visibility` in
-`kama.json` does not name this module"*), and so is the game's. `visibility` is set on the imported module, and
-`"public"`, the one form a dependent reaches, is a superset of `"internal"`, so a module open to its dependents is open
-to every sibling. Nothing in the manifest can say "render may not import audio", and the engine holds the rule with a
-check of its own outside the compiler.
+Measured on `0.9.842`. When an import is refused for reach (`visibility`, or a module's `importsOnly`), every use of
+the imported name in the file gets a second error: *"module `…` is not visible from `…` — its `visibility` … and a
+qualified spelling reaches no further than an `import` would"*, or the `importsOnly` twin. The use is a bare call
+(`play()`), and SPEC refuses a module path everywhere but an `import` (*A module path is written only in an `import`*), so the message describes a
+spelling that cannot exist. `xfail/mod_vis_not_listed.d` records both positions (`main.kama:2:9` for the import,
+`main.kama:4:25` for the use) and so do `mod_vis_children.d` and the two `mod_imports_only_*.d` fixtures.
 
-**kama has both halves already, one level apart.** A package says who may use each module (`visibility`, the exporter's
-side) and what it uses itself (`dependencies`, the importer's side). Below the package, only the exporter's side exists.
-
-**What others do.**
-- **Java (JPMS):** both sides per module: `requires` names what a module reads, and `exports p to m` narrows who may.
-- **Bazel:** a target's `deps` lists what it may use, and its `visibility` who may depend on it.
-- **Zig:** a module sees only the modules `build.zig` hands it through `addImport`.
-- **Rust:** item visibility is the exporter's (`pub(crate)`, `pub(in path)`); the importer's list is Cargo's
-  `[dependencies]`, so the edge is drawn between crates, and Bevy is split into crates (`bevy_audio`, `bevy_render`, …).
-- **Go:** `internal/` limits importers by path (the exporter's side); a layer rule is a linter's (`depguard`).
-- **Python:** import-linter's *independence* contract is this rule exactly: the listed modules import none of each
-  other. It is a tool beside the language.
-
-**Options.**
-- **A. An allow-list on a module node** (the importer's side, as `dependencies` is one level up). Each system
-  writes what it uses, `["frame", "world"]`, which also documents the layering where a reader looks for it.
-- **B. A fifth `visibility` form**, open to dependents but only to the listed siblings. One mechanism, but each
-  system then names who may import it, which states the rule backwards, and it breaks the four forms' widening order.
-- **C. A package per system** in one workspace, which `dependencies` already holds apart (unmeasured for this
-  case). It needs no change, and costs a manifest and a dependency per system; a game imports each, since `export`
-  names only a file's own declarations.
-- **D. Not the compiler's**: a lint, as Go and Python have it, with `kama query` supplying the import graph.
-
-**Ruled 2026-11-04: A, as `importsOnly`.** The maintainer asked for a name that says the list is an intentional
-restriction, which `imports` does not: it reads as a description of what the module happens to import. `importsOnly`
-reads as the sentence it enforces (`render` imports only `frame` and `world`).
-
-```json
-"modules": {
-  ".":      { "visibility": "internal" },
-  "frame":  { "visibility": "public" },
-  "world":  { "visibility": "public" },
-  "audio":  { "visibility": "public", "importsOnly": ["frame", "world"] },
-  "render": { "visibility": "public", "importsOnly": ["frame", "world"] }
-}
-```
-
-A game still imports `eng::audio` and `eng::render`, which are `public`; `render`'s `import { eng::audio::play };` is
-refused, naming `render`'s `importsOnly`; and a new system is held the moment it writes its own list.
-1. **`"importsOnly": [ … ]` on a module node, optional.** Absent, the module may import whatever `visibility` lets
-   it, as now. Present, a file of the module may import, from its own package, only the modules listed, spelled as
-   `visibility`'s list spells them; the module's own files always see each other, and `[]` imports none.
-2. **It governs the module's own package only.** Another package is `dependencies`' business, and `std` is never
-   listed.
-3. **Nesting grants nothing**, as SPEC's rule for `visibility` has it: a child module is held by its own
-   `importsOnly`, so a rule meant for a subtree is written on each node of it.
-4. **An edge needs both halves.** The refusal names the one that refused: the importer's `importsOnly` or the
-   imported module's `visibility`. An entry that names no module of the package, or the node itself, is refused, and
-   a `friend` grant naming a module is an import edge.
-5. **Proof:** the program above refused from `kama check` and `kama build`, which is also what the editor reports;
-   the manifest's refusals in a `tools/check-*.sh`; the key in docs/packages.md § `modules` and SPEC's `visibility`
-   paragraph. A VERSION bump.
+The second report comes from the reference-site check in `kama.cemit.cpp` (the `_moduleReach` clause before the
+outbound `export` test), written for a qualified reference that reached a module without importing it. Likely fix:
+the use of a name whose import was already refused reports nothing more; then measure whether that rule left the check
+anything else to catch, and delete it if not. Each fixture's `DIAGNOSTIC_LINES` row loses its use positions.
 
 <a id="s2-quoted-format"></a>
 

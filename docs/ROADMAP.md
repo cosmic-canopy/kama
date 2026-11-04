@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-310**
+**Next id: KR-311**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -59,6 +59,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-306 | *Claimed: Windows box, 2026-11-04.* **An enum's value or variant meets another C name** — a value or tag reaches C as `<Enum>_<Value>`, a `_` join, so two enums (`E_A`'s `B`, `E`'s `A_B`), an enum and a type (`E`'s `B`, a type `E_B`), or a tagged enum and its own tag type (a variant `kama_tag`, or a type `T_kama_tag` beside `T`) meet in one file and clang refuses the program; SPEC's `kama_` reservation is not enforced (measured to `0.9.839`). **Ruled 2026-11-04:** one helper names every enum constant, joined with `__`; a value and a member of its enum may not share a name; the tag type is `<Enum>__kama_tag` and `kama_` is enforced on joined names | S-M | [§2](ROADMAP_DETAIL.md#s2-enum-value-join) |
+| KR-310 | **A refused import is reported twice, the second time as a qualified spelling** — when `visibility` or `importsOnly` refuses an import, each use of the name gets a second error saying "a qualified spelling reaches no further than an `import` would", though the use is bare and no module path is legal outside an `import` (SPEC § Modules) (measured `0.9.842`). Likely fix: a refused import's uses report nothing more | S | [§2](ROADMAP_DETAIL.md#s2-reach-twice) |
 
 ## NOW — the next features, in build order
 
@@ -113,7 +114,6 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-269 | packaging & serde | **A package caps the optimization of its own C** — a release build compiles a package's vendored constant-time C at the root's `-O3`, and a `csources` entry takes only `path` and `compileFor`. A ceiling the package sets for its own files, or Cargo's per-package level set by the root: touches the root-only rule, ruling owed | S | [§10](ROADMAP_DETAIL.md#s10-csources-optimize) |
 | KR-231 | packaging & serde | **Zero-copy deserialization into a view struct** — `@generate(Deserializable)` on a `type view`, so a parsed record's strings are views into the input (serde's `#[serde(borrow)]`); the escaped-field case wants a ruling. Unblocked: a type holding a view is a view since `0.9.725` | M? | [§4](ROADMAP_DETAIL.md#s4-view-deserialize) |
 | KR-189 | packaging & serde | **Serialization follow-ups** — what §4 still schedules, with no row of its own until now: a tagged-enum payload holding `Shared`/`Weak`; a fat `Owned<Contract>` field; the `text::yaml` and `text::csv` back ends (csv wants its shape decided before it is built); a `Format` contract carrying a back end's entry points; and two bugs §4 names (`Weak<Contract>` does not monomorphize; a temporary passed to a contract-typed parameter takes an rvalue's address). Last measured 2026-09-09 — re-probe each before building | — | [§4](ROADMAP_DETAIL.md#s4) |
-| KR-308 | packaging & serde | **A module cannot limit which of its package's modules it imports** — `visibility` is set on the imported module, and `"public"`, the one form a dependent reaches, opens a module to every sibling too, so a layering rule between public modules (an engine's systems never importing each other) cannot be the compiler's (measured `0.9.840`). **Ruled 2026-11-04:** an optional `importsOnly` list on a module node, the importer's half that `dependencies` already is one level up | S | [§2](ROADMAP_DETAIL.md#s2-module-imports) |
 | KR-307 | compiler | **An `else if` ladder stops at about 195 arms** — the parser's stack is fixed at 1,200 symbols and a ladder holds six an arm, so a generated decision table is refused where every other compiler measured takes at least 1,000. Likely a left-recursive rule, so a ladder counts as a chain and leaves the stack flat | M? | [§2](ROADMAP_DETAIL.md#s2-else-if-ladder) |
 
 ## UNSCOPED — no design and no size yet; each wants a look before it can be ordered

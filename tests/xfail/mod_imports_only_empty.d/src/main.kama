@@ -1,0 +1,3 @@
+import { impempty::audio::play };
+
+fn uint8 main() { return cast<uint8>(play()); }

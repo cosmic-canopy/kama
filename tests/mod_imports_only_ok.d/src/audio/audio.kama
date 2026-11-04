@@ -1,0 +1,5 @@
+// Both modules it imports are on its list.
+import { imponly::frame::tick, imponly::world::size };
+export { play };
+
+fn int32 play() { return tick() + size(); }

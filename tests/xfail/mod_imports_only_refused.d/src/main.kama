@@ -1,0 +1,3 @@
+import { imprefused::render::draw };
+
+fn uint8 main() { return cast<uint8>(draw()); }

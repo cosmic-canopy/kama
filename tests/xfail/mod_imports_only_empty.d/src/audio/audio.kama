@@ -1,0 +1,5 @@
+// `[]` is a list too: `audio` imports nothing of its package, so even `frame`, open to all, is refused.
+import { impempty::frame::tick };
+export { play };
+
+fn int32 play() { return tick() + 1; }

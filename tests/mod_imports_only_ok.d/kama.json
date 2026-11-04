@@ -1,0 +1,12 @@
+{
+  "name": "imponly", "version": "0.1.0", "kind": "executable", "entry": "src/main.kama",
+
+  "modules": {
+    ".":      { "visibility": "internal" },
+    "frame":  { "visibility": "internal" },
+    "world":  { "visibility": "internal", "importsOnly": [] },
+    "audio":  { "visibility": "internal", "importsOnly": ["frame", "world"] },
+    "render": { "visibility": "internal", "importsOnly": ["frame", "world"],
+                "modules": { "detail": { "visibility": "internal" } } }
+  }
+}

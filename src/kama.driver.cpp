@@ -1426,6 +1426,7 @@ struct ModuleId {
 static ModuleId moduleIdForFile(const std::string& absPath);
 static std::string packageLocationOf(const std::string& unitPath);
 bool kamaModuleVisibleTo(const std::string& importer, const std::string& imported);   // §2c, defined below
+bool kamaModuleImportsOnlyAllows(const std::string& importer, const std::string& imported);   // KR-308, below
 
 // module full name ("std::collections", or a bare project name for a root module) -> the `kama.json` that
 // declares it. Filled as units are attributed, consumed by the visibility rung.
@@ -3017,8 +3018,10 @@ static void configureEmitter(CEmitter& e)
     // the same reason it answers `setModuleResolver`: this is manifest work, and `ModuleNode`/`ModuleVis`
     // are static to this file and appear in no header. Both arguments are full module names as
     // `ModuleId::full()` writes them; "" means a file in no module.
-    e.setModuleVisible([](const std::string& importer, const std::string& imported) -> bool {
-        return kamaModuleVisibleTo(importer, imported);
+    e.setModuleReach([](const std::string& importer, const std::string& imported) -> ModuleReach {
+        if (!kamaModuleVisibleTo(importer, imported)) return ModuleReach::NotVisible;
+        if (!kamaModuleImportsOnlyAllows(importer, imported)) return ModuleReach::NotInImportsOnly;
+        return ModuleReach::Ok;
     });
     e.setLeftOutOfBuild([](const std::string& module, const std::string& name) -> bool {
         auto it = g_namesLeftOut.find(module);
@@ -3141,6 +3144,10 @@ struct ModuleNode {
     std::string name;                       // `name` override for this one segment, or "" — never `::`-joined
     ModuleVis   vis = ModuleVis::Public;
     std::vector<std::string> visibleTo;     // the `List` form, in file order (empty unless vis == List)
+    // `importsOnly` (KR-308): the modules of this package that this one's files may import, the importer's half of
+    // an edge. Unwritten, there is no such rule; written `[]`, the module imports none of its package.
+    std::vector<std::string> importsOnly;
+    bool hasImportsOnly = false;
     std::vector<ModuleNode>  children;      // this node's own `modules`
 
     // Filled by validateModules, not by the parser: the composed identity. Kept beside the node so every
@@ -4016,6 +4023,12 @@ struct ManifestReader {
                 // Closed, like the top level: an unknown key inside a module entry is a swallowed
                 // visibility decision, which is the whole reason unknown keys became an error in 1a.
                 if (k == "visibility") { if (!visibilityValue(n, here)) return false; sawVisibility = true; }
+                else if (k == "importsOnly") {
+                    if (!stringArray(n.importsOnly, "importsOnly")) return false;
+                    n.hasImportsOnly = true;
+                    // The root is `"."` here as everywhere in the map; its composed name is "".
+                    for (auto& t : n.importsOnly) if (t == ".") t.clear();
+                }
                 else if (k == "name") {
                     if (!str(n.name)) return false;
                     // A `::`-joined `name` would smuggle hierarchy past the nesting — the one thing the
@@ -4940,28 +4953,34 @@ static bool composeModules(std::vector<ModuleNode>& nodes, const std::string& na
     return true;
 }
 
-// Every module named by a `visibility` list must exist. A typo here fails OPEN — the module quietly
-// grants access to nobody it meant to — so silence would be the worst possible outcome.
+// Every module named by a `visibility` or `importsOnly` list must exist. A typo in the first fails OPEN —
+// the module quietly grants access to nobody it meant to — and in the second it refuses an edge for a
+// reason nobody wrote, so silence would be the worst possible outcome either way.
 static bool checkVisibilityTargets(const std::vector<ModuleNode>& nodes,
                                    const std::map<std::string, ModuleNode*>& byName, std::string& err)
 {
     for (auto& n : nodes) {
         const std::string shown = n.modName.empty() ? std::string("\".\"") : "`" + n.modName + "`";
-        for (auto& target : n.visibleTo) {
-            if (byName.count(target)) {
-                // A module's own files always see each other, so the list is ADDITIVE and never names
-                // itself. Saying so anyway is a misunderstanding worth naming rather than ignoring.
-                if (target == n.modName) {
-                    err = "`visibility` for the module " + shown + " names itself — a module's own files "
-                          "always see each other, so the list only names OTHER modules";
-                    return false;
+        auto names = [&](const std::vector<std::string>& list, const std::string& key) {
+            for (auto& target : list) {
+                if (byName.count(target)) {
+                    // A module's own files always see each other, so the list is ADDITIVE and never names
+                    // itself. Saying so anyway is a misunderstanding worth naming rather than ignoring.
+                    if (target == n.modName) {
+                        err = "`" + key + "` for the module " + shown + " names itself — a module's own files "
+                              "always see each other, so the list only names OTHER modules";
+                        return false;
+                    }
+                    continue;
                 }
-                continue;
+                err = "`" + key + "` for the module " + shown + " names `" + (target.empty() ? "." : target)
+                    + "`, which is not a module in this project — a list may only name modules declared in "
+                      "this `modules` map";
+                return false;
             }
-            err = "`visibility` for the module " + shown + " names `" + target + "`, which is not a "
-                  "module in this project — a list may only name modules declared in this `modules` map";
-            return false;
-        }
+            return true;
+        };
+        if (!names(n.visibleTo, "visibility") || !names(n.importsOnly, "importsOnly")) return false;
         if (!checkVisibilityTargets(n.children, byName, err)) return false;
     }
     return true;
@@ -5193,23 +5212,41 @@ static std::string relativeModuleName(const std::string& full)
     return c == std::string::npos ? std::string() : full.substr(c + 2);
 }
 
+// The manifest node a full module name is declared by, or null when no readable manifest declares it — in
+// which case there is nothing to enforce, in either half of an edge.
+static const ModuleNode* declaredModuleNode(const std::string& full)
+{
+    auto it = moduleManifestIndex().find(full);
+    if (it == moduleManifestIndex().end()) return nullptr;      // no manifest declares it — see above
+    const ManifestModules& mm = manifestModulesCached(it->second);
+    if (!mm.ok) return nullptr;                                 // unreadable: attribute nothing
+    const std::string rel = relativeModuleName(full);
+    if (!rel.empty()) return nodeByModName(mm.mods, rel);
+    for (auto& n : mm.mods) if (n.isRoot()) return &n;          // the project ROOT module, `"."`
+    return nullptr;
+}
+
+// The importer's half (KR-308): a module that writes `importsOnly` imports, from its own package, only the
+// modules it names. Another package is `dependencies`' business, and nesting grants nothing, as it grants
+// no `visibility`: a child module is held by its own list.
+bool kamaModuleImportsOnlyAllows(const std::string& importer, const std::string& imported)
+{
+    if (importer.empty() || importer == imported) return true;  // its own files always see each other
+    if (projectOfModule(importer) != projectOfModule(imported)) return true;
+    const ModuleNode* node = declaredModuleNode(importer);
+    if (!node || !node->hasImportsOnly) return true;
+    const std::string rel = relativeModuleName(imported);
+    for (auto& t : node->importsOnly) if (t == rel) return true;
+    return false;
+}
+
 bool kamaModuleVisibleTo(const std::string& importer, const std::string& imported)
 {
     if (imported.empty() || importer == imported) return true;   // its own files always see each other
 
-    auto it = moduleManifestIndex().find(imported);
-    if (it == moduleManifestIndex().end()) return true;          // no manifest declares it — see above
-    const ManifestModules& mm = manifestModulesCached(it->second);
-    if (!mm.ok) return true;                                     // unreadable: attribute nothing
-
-    const std::string rel = relativeModuleName(imported);
-    const ModuleNode* node = nullptr;
-    if (rel.empty()) {                                           // the project ROOT module, `"."`
-        for (auto& n : mm.mods) if (n.isRoot()) { node = &n; break; }
-    } else {
-        node = nodeByModName(mm.mods, rel);
-    }
+    const ModuleNode* node = declaredModuleNode(imported);
     if (!node) return true;                                      // not declared: nothing to enforce
+    const std::string rel = relativeModuleName(imported);
 
     if (node->vis == ModuleVis::Public) return true;
     // Every remaining form is bounded by the project, so a different project — or none — cannot qualify.

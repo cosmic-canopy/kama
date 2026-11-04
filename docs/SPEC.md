@@ -7048,7 +7048,11 @@ modules in this project, `"children"` (every module nested under it, at any dept
 module in this project) and `"public"` (plus **dependent projects**, and the only form that crosses a
 project boundary). ⚠️ **Nesting determines NAME, never ACCESS**: a narrow parent does **not** confine a
 `public` child, which follows Go rather than Rust's implicit downward grant. A module's own files always
-see each other, so a list never names itself.
+see each other, so a list never names itself. **`importsOnly` is the importer's half** (KR-308): a module that <!-- test: mod_imports_only_ok -->
+writes it imports, from its own package, only the modules it lists, and an import must pass both halves, so a <!-- xfail: mod_imports_only_refused, mod_imports_only_empty -->
+`public` module can still be kept from a sibling (one engine system from another). It is optional, it names no
+other package (that is `dependencies`), and like `visibility` it does not nest: a child module is held by its
+own list alone.
 
 **Visibility is per FILE. A file may name only what it DECLARES or IMPORTS** — `export { … };` is the
 outbound half and `import` the inbound one, and the symmetry is the rule. A top-level `type`/`fn` leaves its

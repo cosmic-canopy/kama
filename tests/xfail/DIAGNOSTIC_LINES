@@ -976,6 +976,8 @@ mod_contract_not_visible	app.kama:1:9 app.kama:4:0 app.kama:7:0
 mod_ctor_private	main.kama:1:18 main.kama:1:25 main.kama:1:33
 mod_export_private	main.kama:1:9 main.kama:2:25
 mod_export_undefined	mod_export_undefined.kama:1:0
+mod_imports_only_empty	audio.kama:2:9 audio.kama:5:25
+mod_imports_only_refused	render.kama:3:34 render.kama:6:34
 mod_missing	-
 mod_sibling_private	b.kama:3:31
 mod_sibling_unimported	b.kama:5:31

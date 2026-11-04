@@ -1,0 +1,6 @@
+// ⚠️ THE ONE THAT MUST NOT BE A REJECTION: `render` may not import `audio`, and `render::detail` writes no list,
+// so it may. Nesting grants nothing, and confines nothing either — the same rule as `visibility`'s.
+import { imponly::audio::play };
+export { mix };
+
+fn int32 mix() { return play() + 20; }

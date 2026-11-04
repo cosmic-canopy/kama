@@ -1,0 +1,4 @@
+// `[]`: this module imports nothing of its package, and needs nothing.
+export { size };
+
+fn int32 size() { return 2; }

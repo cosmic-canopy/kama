@@ -881,6 +881,32 @@ proj modmyself <<'JSON'
 JSON
 reject modmyself 'names itself' "a list naming the module it is on"
 
+# `importsOnly` (KR-308) is the importer's half of an edge, and its names are held as `visibility`'s are: a typo
+# would refuse an edge for a reason nobody wrote. `"."` names the root, as the map's own key does, and `[]` is a
+# module that imports none of its package, which is a rule and not dead text.
+proj modimponly <<'JSON'
+{ "name": "modimponly", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".":      { "visibility": "internal" },
+               "net":    { "visibility": "internal", "importsOnly": [".", "net::web"],
+                           "modules": { "web": { "visibility": "internal", "importsOnly": [] } } } } }
+JSON
+accept modimponly "an \`importsOnly\` naming the root and a nested module, and an empty one"
+proj modimpghost <<'JSON'
+{ "name": "modimpghost", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "detail": { "visibility": "internal", "importsOnly": ["nosuch"] } } }
+JSON
+reject modimpghost '`importsOnly` for the module `detail` names `nosuch`, which is not a module in this project' "an \`importsOnly\` naming a module that does not exist"
+proj modimpself <<'JSON'
+{ "name": "modimpself", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "detail": { "visibility": "internal", "importsOnly": ["detail"] } } }
+JSON
+reject modimpself '`importsOnly` for the module `detail` names itself' "an \`importsOnly\` naming the module it is on"
+proj modimpword <<'JSON'
+{ "name": "modimpword", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" }, "detail": { "visibility": "internal", "importsOnly": "public" } } }
+JSON
+reject modimpword 'expected a JSON array of strings for `importsOnly`' "an \`importsOnly\` that is not a list"
+
 # `"."` is the PROJECT root, so it is only meaningful at the top of the map.
 proj modnestroot <<'JSON'
 { "name": "modnestroot", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
