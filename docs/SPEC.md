@@ -4851,8 +4851,11 @@ each with a message that names it:
   call, member access or index is a link, so `a + b + c` is two and `x.f().g()` is four. The count passes through
   parentheses and arguments, so a chain inside a chain adds to it, and two chains side by side do not.
 - **An expression nests at most 400 levels in the C it lowers to** (<!-- test: xfail/expr_nest_too_deep -->,
-  <!-- test: expr_nest_limit -->). A chain of arithmetic, logic or a value type's calls nests a level a link. A `string`
-  chain does not: each link is a C statement of its own, so only the first limit applies to it.
+  <!-- test: expr_nest_limit -->). A chain past 64 links lowers flat, one C temporary or statement a link, so this limit
+  does not reach it and it costs linear time (<!-- test: expr_chain_limit -->), and means what the nested form means
+  (<!-- test: expr_chain_flat -->). The exception is a chain of calls that return a place, since a copy of a place is
+  not that place: about 130 of those. Each temporary sits in the function's frame, so a very long `string` chain can
+  overflow a small stack when it runs, as a large local array can: wasm's default 256 KiB holds 6,000 terms and not 8,000.
 - **The parser's stack holds 1,200 grammar symbols** (<!-- test: xfail/parser_stack_depth -->): about 195 `else if` arms,
   290 nested calls or 1,180 nested blocks.
 

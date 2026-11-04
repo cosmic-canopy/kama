@@ -906,6 +906,7 @@ public:
 
 class BinaryExpressionNode : public ExpressionNode {
 public:
+    mutable signed char isLiteralMemo = -1;   // isLiteralExpr's answer, which a `1 + 1 + …` chain would redo per link
     int token;
     SharedExpression LHS;
     SharedExpression RHS;

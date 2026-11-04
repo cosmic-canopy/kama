@@ -1,30 +1,13 @@
-// A chain that nests in the C it lowers to, one level past what kama accepts (KR-304). `check` passed this and then
-// `build` failed, on a different term count per C compiler: 130 terms on Ubuntu's clang 18 (its bracket limit), a
-// crash by 800 on Apple's clang 21.
+// A chain that nests in the C it lowers to, one call past what kama accepts (KR-304). A call that returns a place cannot
+// go through a C temporary, because a copy of a place is not that place, so this cannot lower flat as other chains do.
+// `check` used to pass a chain like this and `build` then failed, on a different length per C compiler.
+type value V {
+    public int32 x = 0;
+    public ctor make() { }
+    public fn ref V me() { return this; }
+}
 fn uint8 main() {
-    bool b = true;
-    bool x =
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
-        b;
-    if (x) { return 42; }
-    return 1;
+    V v = V.make();
+    v.me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().x = 7;
+    return 42;
 }

@@ -1423,7 +1423,9 @@ bool isLiteralExpr(const ASTNode* n)
     if (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(n)) return isLiteralExpr(u->expression.get());
     if (auto* b = dynamic_cast<const BinaryExpressionNode*>(n)) {
         if (b->token == LTLT || b->token == GTGT) return isSmallLiteralShift(b);
-        return isLiteralExpr(b->LHS.get()) && isLiteralExpr(b->RHS.get());
+        if (b->isLiteralMemo < 0)
+            b->isLiteralMemo = isLiteralExpr(b->RHS.get()) && isLiteralExpr(b->LHS.get());   // the right first: a chain recurses left
+        return b->isLiteralMemo != 0;
     }
     // A ternary whose BOTH arms are literals is itself a literal for typing purposes — every value it can
     // produce is one, so the destination types the whole expression, exactly as it does for `2 + 3`. Only
@@ -1675,6 +1677,10 @@ std::vector<CEmitter::SavedLocalType> CEmitter::bindArmPayloadTypes(const ClassI
 std::string CEmitter::typeOfExpr(SharedExpression e)
 {
     if (!e) return "";
+    if (!_chainPins.empty()) {   // KR-304: see emitLongChain
+        auto pin = _chainPins.find(e.get());
+        if (pin != _chainPins.end()) return pin->second.type;
+    }
     ClassifierQuery q(_clsMemo);   // KR-78: see ClassifierMemo
     auto it = _clsMemo.type.find(e.get());
     if (it != _clsMemo.type.end()) return it->second;
@@ -5767,8 +5773,8 @@ std::string CEmitter::cEscapeStringBody(const std::string& s)
     return out;
 }
 
-// The value of a statement hoisted out of the expression being emitted (`_hoisted`). It is a C statement of its
-// own, so nesting starts over inside it: that is why a `string` chain lowers flat, however long.
+// The value of a statement hoisted out of the expression being emitted (`_hoisted`). It is a C statement of its own, so
+// its nesting is measured apart from the expression's: that is why a `string` chain lowers flat, however long.
 std::string CEmitter::emitHoistedInit(SharedExpression e)
 {
     const int outer = _cNest;
@@ -5778,28 +5784,152 @@ std::string CEmitter::emitHoistedInit(SharedExpression e)
     return r;
 }
 
+// The next link down a chain, or null: the operand a left-recursive rule nested, plus a prefix operator's, which the
+// parser's stack bounds but which costs it one slot a level, so it alone reaches past what C takes.
+static SharedExpression chainInner(ASTNode* n)
+{
+    if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) return b->LHS;
+    if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) return l->LHS;
+    if (auto* u = dynamic_cast<SimpleUnaryExpressionNode*>(n)) return u->expression;
+    if (auto* iv = dynamic_cast<InvocationNode*>(n))
+        if (auto* ma = dynamic_cast<MemberAccessNode*>(iv->expression.get())) return ma->expression;
+    return nullptr;
+}
+
+// A chain past KAMA_CHAIN_FLAT_AT links, its deepest link first, its classifications pinned; else empty.
+//
+// The classifiers cost a chain quadratic time. Each answers an operator by asking about its operands, and their memo
+// lasts one outermost query (KR-78, for good reason: an answer can change between queries), so every link emitted
+// re-walked everything below it: 46 s to check 8,000 `string` terms, and more for `int`. Asked once, deepest first,
+// under one query, each link costs one step. An answer stays right for as long as the chain is emitted because the
+// emitter was already asking before it emitted any operand, and a chain's lower links are emitted before anything
+// that could change one. No corpus chain reaches this, so ordinary code is untouched.
+std::vector<SharedExpression> CEmitter::longChainSpine(SharedExpression root)
+{
+    std::vector<SharedExpression> spine;
+    SharedExpression e = root;
+    for (SharedExpression in = chainInner(e.get()); in; in = chainInner(e.get())) { spine.push_back(e); e = in; }
+    if (spine.size() <= KAMA_CHAIN_FLAT_AT) return {};
+    std::reverse(spine.begin(), spine.end());
+    ClassifierQuery q(_clsMemo);
+    for (const SharedExpression& link : spine) {
+        ChainPin pin{typeOfExpr(link), exprClass(link), exprIsString(link)};
+        _chainPins.emplace(link.get(), std::move(pin));
+    }
+    return spine;
+}
+
+// A link of a long chain that returns by value: a fresh value, so no walk down a receiver needs what is under it. It is
+// not a `Shared`'s storage, a const place or a borrow's host, and each such walk at each link was quadratic again.
+bool CEmitter::chainLinkIsFreshValue(ASTNode* n)
+{
+    if (_chainPins.empty() || !_chainPins.count(n)) return false;
+    auto* iv = dynamic_cast<InvocationNode*>(n);
+    return iv && !invocationReturnsPlace(iv);
+}
+
+// Whether every link is a plain value a C temporary can hold. Not a `string` or a resource: each already lowers to a
+// statement of its own, with a drop this must not repeat. Not a place: a copy of one is not that place. And not at
+// file scope, where C has no statements.
+bool CEmitter::chainLowersFlat(const std::vector<SharedExpression>& spine)
+{
+    if (_scopes.empty() || _ctCheck) return false;
+    for (const SharedExpression& link : spine) {
+        const ChainPin& pin = _chainPins.at(link.get());
+        if (pin.str || ownsByValue(pin.type) || ownsByValue(pin.cls)) return false;
+        auto c = _classes.find(pin.cls);
+        if (c != _classes.end() && c->second.destructible) return false;
+        if (auto* iv = dynamic_cast<InvocationNode*>(link.get())) if (invocationReturnsPlace(iv)) return false;
+    }
+    return true;
+}
+
+// `a + a + …` as one C temporary a link, so the C stays flat however long the chain: `({ __auto_type t1 = a + a;
+// __auto_type t2 = t1 + a; t2 + a; })`. A statement expression, not hoisted statements, so it stays where it was
+// written: in a condition, in a `?:` arm or among other operands it runs when it always ran. Each link's own text is
+// what the emitter always wrote, with its lower operand already a temporary, so what each link means cannot change.
+//
+// A link's right side may hoist a statement of its own, which runs ahead of the whole expression and may name an
+// earlier link's temporary (`&&` hoists its left side into a flag). So the links before it are hoisted first, keeping
+// their order, and nothing runs earlier than a hoisted statement already did.
+std::string CEmitter::emitLongChain(const std::vector<SharedExpression>& spine)
+{
+    std::vector<std::string> held;
+    std::string value;
+    for (size_t i = 0; i < spine.size(); ++i) {
+        const size_t h0 = _hoisted.size();
+        value = emitExpression(spine[i]);
+        if (_hoisted.size() > h0) {
+            _hoisted.insert(_hoisted.begin() + (long)h0, held.begin(), held.end());
+            held.clear();
+        }
+        if (i + 1 == spine.size()) break;
+        const std::string t = "kama_chain" + std::to_string(_tempCounter++);
+        held.push_back("__auto_type " + t + " = " + value + ";");
+        _chainTemps[spine[i].get()] = t;
+    }
+    for (const SharedExpression& link : spine) _chainTemps.erase(link.get());
+    if (held.empty()) return value;
+    std::string body = "({ ";
+    for (const std::string& h : held) body += h + " ";
+    return body + value + "; })";
+}
+
+// How deep some C nests, in brackets, leaving out what is inside a string or character literal.
+static int cBracketDepth(const std::string& c)
+{
+    int depth = 0, most = 0;
+    for (size_t i = 0; i < c.size(); ++i) {
+        const char ch = c[i];
+        if (ch == '"' || ch == '\'') {
+            for (++i; i < c.size() && c[i] != ch; ++i) if (c[i] == '\\') ++i;
+        } else if (ch == '(' || ch == '[' || ch == '{') {
+            if (++depth > most) most = depth;
+        } else if (ch == ')' || ch == ']' || ch == '}') {
+            --depth;
+        }
+    }
+    return most;
+}
+
+// How deep one expression lowers (KR-304). What kama accepts cannot be whatever the C compiler survives: clang's own
+// stack gives out somewhere past a thousand brackets (Apple's and Ubuntu's took 1,000 nested parentheses and crashed by
+// 2,000, at 8 MiB), and a macro doubles what is written here, so `int` terms died at 800 of them. So the emitter stops
+// first, on what it wrote, the same on every host. It measures the text and not its own recursion, which is no guide: a
+// call returning a place is one level of recursion and three brackets. `kama check` runs this too, so the tools agree.
+//
+// Compile-time code is run here, not lowered, and CT_MAX_DEPTH is its limit. A generic's body as written is checked here,
+// and only its instances lower. A statement hoisted out of an expression comes through here as an expression of its own.
 std::string CEmitter::emitExpression(SharedExpression expr)
 {
     if (!expr) return "";
+    if (!_chainTemps.empty()) {   // a link already emitted, see emitLongChain
+        auto t = _chainTemps.find(expr.get());
+        if (t != _chainTemps.end()) return t->second;
+    }
+    ++_cNest;
+    std::string c = emitExpressionNode(expr);
+    if (--_cNest == 0 && !_ctCheck && !_probingTemplate && cBracketDepth(c) > KAMA_MAX_C_NEST)
+        unsupported("this expression nests more than 400 levels in the C it lowers to, past what C compilers reliably "
+                    "take; split it across statements", expr);
+    return c;
+}
+
+std::string CEmitter::emitExpressionNode(SharedExpression expr)
+{
     ASTNode* n = expr.get();
     PosGuard posGuard(*this, n);   // a line-only diagnostic below takes this node's span (KR-147)
 
-    // How deep one expression lowers (KR-304). `kama_add_i32((a), (b), …)` nests two C brackets a term, and a C
-    // compiler's own stack gives out somewhere past a thousand: Apple's clang and Ubuntu's took 1,000 nested
-    // parentheses and died by 2,000, at 8 MiB. What kama accepts cannot be whatever the C compiler survives, so
-    // the emitter stops first, the same on every host. `kama check` runs this too, so the two tools agree.
-    struct NestGuard {
-        int& depth;
-        explicit NestGuard(int& d) : depth(d) { ++depth; }
-        ~NestGuard() { --depth; }
-    } nestGuard(_cNest);
-    if (_cNest == 1) _cNestReported = false;
-    if (_cNest > KAMA_MAX_C_NEST) {
-        if (!_cNestReported)
-            unsupported("this expression nests more than 400 levels in the C it lowers to, past what C compilers "
-                        "reliably take; split it across statements", expr);
-        _cNestReported = true;
-        return "0";
+    // KR-304: the root of a long chain pins its links for as long as this call lasts.
+    struct PinScope {
+        std::unordered_map<const ASTNode*, ChainPin>& pins;
+        std::vector<SharedExpression> spine;
+        explicit PinScope(std::unordered_map<const ASTNode*, ChainPin>& p) : pins(p) { }
+        ~PinScope() { for (const SharedExpression& link : spine) pins.erase(link.get()); }
+    } pinScope(_chainPins);
+    if (chainInner(n) && !_chainPins.count(n)) {
+        pinScope.spine = longChainSpine(expr);
+        if (!pinScope.spine.empty() && chainLowersFlat(pinScope.spine)) return emitLongChain(pinScope.spine);
     }
 
     // Compile-time code, on every path: the subset the interpreter evaluates, and nothing else (KR-102). An array
@@ -28599,6 +28729,7 @@ const std::vector<ParamSig>* CEmitter::placeCallParams(InvocationNode* inv, bool
 void CEmitter::borrowHostRoots(SharedExpression e, std::vector<std::vector<std::string>>& out)
 {
     if (!e) return;
+    if (chainLinkIsFreshValue(e.get())) return;
     if (auto* inv = dynamic_cast<InvocationNode*>(e.get())) {
         if (auto* ma = dynamic_cast<MemberAccessNode*>(inv->expression.get())) borrowHostRoots(ma->expression, out);
         if (const std::vector<ParamSig>* ps = placeCallParams(inv))
@@ -29965,6 +30096,7 @@ bool CEmitter::chainThroughConstPlace(SharedExpression e)
 {
     if (!e) return false;
     ASTNode* n = e.get();
+    if (chainLinkIsFreshValue(n)) return false;
     if (auto* h = dynamic_cast<HandoffNode*>(n)) return chainThroughConstPlace(h->value);
     if (auto* inv = dynamic_cast<InvocationNode*>(n)) {
         if (invocationIsConstPlace(inv)) return true;
@@ -30092,6 +30224,7 @@ bool CEmitter::handleAccessTarget(const std::string& handleCls, const std::strin
 bool CEmitter::accessTargetOf(SharedExpression place, AccessTarget& t, bool* impure, bool bareWhole)
 {
     if (impure) *impure = false;
+    if (chainLinkIsFreshValue(place.get())) return false;
     if (bareWhole && place && !dynamic_cast<MemberAccessNode*>(place.get()) && !dynamic_cast<ElementAccessNode*>(place.get())
         && !dynamic_cast<InvocationNode*>(place.get()) && !dynamic_cast<HandoffNode*>(place.get())) {
         const bool isThis = dynamic_cast<ThisAccessNode*>(place.get()) != nullptr;
@@ -42740,6 +42873,10 @@ void CEmitter::emitGenericTypeInst(const GenericTypeInst& gi, int phase)
 bool CEmitter::exprIsString(SharedExpression e)
 {
     if (!e) return false;
+    if (!_chainPins.empty()) {   // KR-304: see emitLongChain
+        auto pin = _chainPins.find(e.get());
+        if (pin != _chainPins.end()) return pin->second.str;
+    }
     ClassifierQuery q(_clsMemo);   // KR-78: see ClassifierMemo
     auto it = _clsMemo.str.find(e.get());
     if (it != _clsMemo.str.end()) return it->second;
@@ -43143,6 +43280,10 @@ std::string CEmitter::indexElemTypeRaw(SharedExpression e)
 std::string CEmitter::exprClass(SharedExpression e)
 {
     if (!e) return "";
+    if (!_chainPins.empty()) {   // KR-304: see emitLongChain
+        auto pin = _chainPins.find(e.get());
+        if (pin != _chainPins.end()) return pin->second.cls;
+    }
     ClassifierQuery q(_clsMemo);   // KR-78: see ClassifierMemo
     auto it = _clsMemo.cls.find(e.get());
     if (it != _clsMemo.cls.end()) return it->second;
@@ -45413,8 +45554,9 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
     bool consumeTemp = false;
     std::string consumeKey;
     {
-        const std::string recvShown = unparseExpr(receiver);
-        const std::string shown = recvShown + "." + method + "()";
+        // Only a message reads these, and printing the receiver costs a long chain quadratic time (KR-304).
+        auto recvShown = [&] { return unparseExpr(receiver); };
+        auto shown = [&] { return recvShown() + "." + method + "()"; };
         ClassInfo* cowner = nullptr;
         MethodInfo* cmi = (_classes.count(cls) && !isSmartPtrClass(cls)) ? findMethod(&_classes[cls], method, &cowner) : nullptr;
         // Reached through a handle, a contract value or `Deref<T>`, a consuming method is never callable: a contract
@@ -45432,7 +45574,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         const bool instanceCall = cmi && !cmi->isStatic && !cmi->isCtor;
         if (consumeFlagged && (via || instanceCall)) _consumeClaimed = true;
         if (via) {
-            unsupported(("`" + method + "` consumes its receiver (`give fn`), and `" + recvShown + "` reaches it through "
+            unsupported(("`" + method + "` consumes its receiver (`give fn`), and `" + recvShown() + "` reaches it through "
                          + via + ", which the caller does not own — a consuming method is called on a value the "
                          "caller owns, or through a generic bound").c_str(), call);
             return "0";
@@ -45440,15 +45582,15 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         if (isConsumingMethod(cmi)) {
             if (!isNamedValue(receiver.get())) {
                 if (consumeFlagged)
-                    unsupported(("`give` before `" + shown + "` — its receiver is a fresh value, already the call's "
+                    unsupported(("`give` before `" + shown() + "` — its receiver is a fresh value, already the call's "
                                  "own; drop the `give`").c_str(), call);
                 consumeTemp = true;
             } else if (!consumeFlagged)
-                unsupported(("`" + shown + "` consumes `" + recvShown + "` (`" + method + "` is a `give fn`) — write `give "
-                             + shown + "`, so the move is visible where it happens").c_str(), call);
+                unsupported(("`" + shown() + "` consumes `" + recvShown() + "` (`" + method + "` is a `give fn`) — write `give "
+                             + shown() + "`, so the move is visible where it happens").c_str(), call);
             else consumeKey = consumeReceiverKey(receiver, call->line);
         } else if (consumeFlagged && instanceCall)
-            unsupported(("`give` before `" + shown + "` — `" + method + "` does not consume its receiver (it is not a "
+            unsupported(("`give` before `" + shown() + "` — `" + method + "` does not consume its receiver (it is not a "
                          "`give fn`), and a call's result is fresh, needing no marker; drop the `give`").c_str(), call);
     }
     // (An iterator-invalidation guard stood here, keyed on `method == "add" && isIntrinsicColl`. It
@@ -45523,7 +45665,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         std::vector<std::vector<std::string>> recvRoots;
         if (!recvPlace.empty()) recvRoots.push_back(recvPlace);
         else borrowHostRoots(receiver, recvRoots);
-        const std::string recvText = recvPlace.empty() ? unparseExpr(receiver) : placeText(recvPlace);
+        auto recvText = [&] { return recvPlace.empty() ? unparseExpr(receiver) : placeText(recvPlace); };
         auto overlapsReceiver = [&](const std::vector<std::string>& p) {
             for (auto& r : recvRoots) if (placesConflict(r, p)) return true;
             return false;
@@ -45556,13 +45698,13 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                     // windows of one buffer, one written, may overlap (KR-217) — and std has the method for that.
                     if (!vr.empty() && overlapsReceiver(vr) && isViewCType(mcls))
                         unsupported(("`" + placeText(vr) + "` is borrowed by the view argument `" + ps->name
-                                     + "` while `" + recvText + "`, a window over the same storage, is the receiver "
+                                     + "` while `" + recvText() + "`, a window over the same storage, is the receiver "
                                      "of non-`const fn` `" + method + "` — two windows of one buffer, one of them "
                                      "written, may overlap. `copyWithin(from:, to:, count:)` moves elements inside "
                                      "one buffer").c_str(), call);
                     else if (!vr.empty() && overlapsReceiver(vr))
                         unsupported(("`" + placeText(vr) + "` is borrowed by the view argument `" + ps->name
-                                     + "` while `" + recvText + "` is the receiver of non-`const "
+                                     + "` while `" + recvText() + "` is the receiver of non-`const "
                                      "fn` `" + method + "` — the method may grow the very storage that "
                                      "window views, leaving it dangling. Mint the view inside `" + method
                                      + "`, or declare it a `const fn` if it does not mutate").c_str(),
@@ -45578,7 +45720,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 if (ps->isConst) {
                     if (!ap.empty() && overlapsReceiver(ap))
                         unsupported(("`" + placeText(ap) + "` is passed as the `const ref` argument `" + ps->name
-                                     + "` while `" + recvText + "` is the receiver of non-`const fn` `"
+                                     + "` while `" + recvText() + "` is the receiver of non-`const fn` `"
                                      + method + "` — the method may change or free what it reads through `"
                                      + ps->name + "`. Pass a distinct place, copy it into a local first, or "
                                      "declare `" + method + "` a `const fn` if it does not mutate").c_str(), call);
@@ -45587,13 +45729,13 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 if (!ap.empty() && overlapsReceiver(ap)) {
                     if (recvPlace.empty())   // the receiver lives INSIDE the argument (an element of it)
                         unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
-                                     + "`, and it holds `" + recvText + "`, the receiver — through it the method "
+                                     + "`, and it holds `" + recvText() + "`, the receiver — through it the method "
                                      "could grow or empty what holds its own `this`, moving it out from under the "
                                      "call. Pass only what the method needs, or call it on a value moved out of "
                                      "the collection first").c_str(), call);
                     else
                         unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
-                                     + "` while `" + recvText + "` is its receiver — a non-`const "
+                                     + "` while `" + recvText() + "` is its receiver — a non-`const "
                                      "fn` borrows its receiver mutably, so this hands the method two mutable "
                                      "borrows of the same object; pass a distinct place, read it into a local "
                                      "first, or declare `" + method + "` a `const fn` if it does not mutate")

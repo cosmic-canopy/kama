@@ -1,234 +1,26 @@
-// Every kind of chain that nests in the C it lowers to, at exactly the deepest kama accepts (KR-304), so a C compiler
-// that cannot take them fails here on its own leg. `check` passed these and `build` then depended on the machine: an
-// `int` chain of 130 terms was a clang error on Ubuntu and fine on a Mac. Returns 42.
-@generate(of)
-type value M {
-    public int64 c;
-    public This operator+(This rhs) { return M.of(c: this.c + rhs.c); }
-    public fn This bump() { return M.of(c: this.c + 1i64); }
+// The deepest kama accepts of what nests in the C it lowers to (KR-304), so a C compiler that cannot take one fails here
+// on its own leg. `check` passed shapes like these and `build` then depended on the machine: 130 nested `int` terms
+// were a clang error on Ubuntu and fine on a Mac. Returns 42.
+type value V {
+    public int32 x = 0;
+    public ctor make() { }
+    public fn ref V me() { return this; }
 }
-fn int32 one() { return 1; }
+fn int32 f(int32 a) { return a; }
 
 fn uint8 main() {
+    V v = V.make();
+    v.me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().x = 7;
+    if (v.x != 7) { return 1; }
     int32 a = 1;
-    int32 i =
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a;
-    if (i != 400) { return 1; }
-    int32 c =
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() +
-        one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one() + one();
-    if (c != 399) { return 2; }
-    uint32 u = 1ui32;
-    uint32 o =
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u |
-        u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u | u;
-    if (o != 1ui32) { return 3; }
-    float64 d = 1.0;
-    float64 f =
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d +
-        d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d + d;
-    if (f != 400.0) { return 4; }
+    int32 r = a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a + (a))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))));
+    if (r != 393) { return 2; }
+    int32 c = f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: f(a: 1))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))));
+    if (c != 1) { return 3; }
     bool no = false;
-    bool any =
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no ||
-        no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no || no;
-    if (any) { return 5; }
-    bool yes = true;
-    bool all =
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes &&
-        yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes && yes;
-    if (!all) { return 6; }
-    M m = M.of(c: 1i64);
-    M sum =
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m +
-        m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m + m;
-    if (sum.c != 400i64) { return 7; }
-    M bumped = m.bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump()
-        .bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump().bump();
-    if (bumped.c != 200i64) { return 8; }
-    // A prefix operator costs the parser one slot, so this is the one nesting its stack alone would let past the limit.
-    bool flip = !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!yes;
-    if (flip) { return 9; }
-    // In a condition and in an arm: where a chain cannot be hoisted to a statement before it.
-    int32 g = 0;
-    while (
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a == 397 && g < 3) { g = g + 1; }
-    if (g != 3) { return 10; }
-    int32 arm = no ? 0 :
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a +
-        a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a;
-    if (arm != 399) { return 11; }
+    int32 t = no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (no ? 0 : (a))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))));
+    if (t != 1) { return 4; }
+    int32 k = cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(cast<int32>(a))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))));
+    if (k != 1) { return 5; }
     return 42;
 }

@@ -1,0 +1,143 @@
+// A chain past the length where it lowers flat, one C temporary a link, must mean what the nested form meant (KR-304):
+// the same order of calls, the same short-circuit, a condition or arm that runs when it always did, the same wrap and
+// narrowing, a right side that hoists its own statements. Every expected value here is what a compiler with flat lowering
+// turned off printed for this program. Returns 42.
+static uint32 log = 0ui32;
+static int32 calls = 0;
+fn int32 step(int32 v) { log = log * 31ui32 + cast<uint32>(v); calls = calls + 1; return v; }
+fn bool yes() { calls = calls + 1; return true; }
+fn bool no() { calls = calls + 1; return false; }
+fn string s(string v) { calls = calls + 1; return v; }
+@generate(of)
+type value M {
+    public int64 c;
+    public This operator+(This rhs) { return M.of(c: (this.c * 3i64 + rhs.c) % 1000003i64); }
+    public fn This bump(int64 by) { return M.of(c: (this.c * 7i64 + by) % 1000003i64); }
+}
+@generate(of)
+type value A implements Arithmetic<This> {
+    public int64 c;
+    public This operator+(This rhs) { return A.of(c: (this.c * 5i64 + rhs.c) % 1000003i64); }
+    public This operator-(This rhs) { return A.of(c: this.c - rhs.c); }
+    public This operator*(This rhs) { return A.of(c: this.c * rhs.c); }
+    public This operator/(This rhs) { return A.of(c: this.c / rhs.c); }
+}
+static int32 drops = 0;
+type resource R {
+    int32 v = 0;
+    public ctor make(int32 v) { this.v = v; }
+    public fn R next() { return R.make(v: this.v + 1); }
+    public const fn int32 value() { return this.v; }
+    ~R() { drops = drops + 1; }
+}
+static int32 boxDrops = 0;
+type resource Box {
+    int32 v = 0;
+    public ctor make(int32 v) { this.v = v; }
+    public fn Owned<Box> next() { return new Box.make(v: this.v + 1); }
+    public const fn int32 value() { return this.v; }
+    ~Box() { boxDrops = boxDrops + 1; }
+}
+// One body, an instance per type: what a link classifies as may not outlive the instance it was asked for.
+fn T sum<T: Arithmetic<T>>(T a) { return a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a + a; }
+fn uint8 main() {
+    log = 0ui32;
+    int32 order = step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5) + step(v: 1) + step(v: 2) + step(v: 3) + step(v: 4) + step(v: 5);
+    uint32 orderLog = log;
+    calls = 0;
+    bool anyOf = no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || yes() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no() || no();
+    int32 anyCalls = calls;
+    calls = 0;
+    bool allOf = yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && no() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes() && yes();
+    int32 allCalls = calls;
+    int32 i = 1;
+    int32 loops = 0;
+    calls = 0;
+    while (step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) + step(v: i) < 280) { i = i + 1; loops = loops + 1; }
+    int32 whileCalls = calls;
+    calls = 0;
+    bool off = false;
+    int32 arm = off ? step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) : 7;
+    int32 armCalls = calls;
+    calls = 0;
+    bool skipped = off && step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) + step(v: 1) > 0;
+    int32 skipCalls = calls;
+    int32 one = 1;
+    int32 mixed = one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1 + one + one + one * 2 - 1;
+    uint8 u = 200ui8;
+    uint8 wrapped = u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u + u;
+    int8 n8 = 1i8;
+    int8 narrow = n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8 + n8;
+    float64 half = 0.5;
+    float64 fsum = half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half + half;
+    bool atRoot = one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one + one == 70;
+    M m0 = M.of(c: 1i64);
+    M op = M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64) + M.of(c: 1i64) + M.of(c: 2i64) + M.of(c: 0i64);
+    int64 opC = op.c;
+    M chained = m0.bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64).bump(by: 2i64).bump(by: 3i64).bump(by: 0i64).bump(by: 1i64);
+    int64 chainedC = chained.c;
+    string t = "ab";
+    bool strs = t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2 && t.length() == 2;
+    bool hoists = (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3;
+    int32 lens = cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length()) + cast<int32>(s(v: "abc").length());
+    bool guarded = off && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3 && (t + "x").length() == 3;
+    bool flips = !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!off;
+    int32 held = 0;
+    {
+        R r0 = R.make(v: 0);
+        held = r0.next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().value();
+    }
+    int32 heldDrops = drops;
+    int32 boxed = 0;
+    {
+        Box b0 = Box.make(v: 0);
+        boxed = b0.next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().next().value();
+    }
+    int32 boxedDrops = boxDrops;
+    calls = 0;
+    string joined = s(v: "0") + s(v: "1") + s(v: "2") + s(v: "3") + s(v: "4") + s(v: "5") + s(v: "6") + s(v: "7") + s(v: "8") + s(v: "9") + s(v: "0") + s(v: "1") + s(v: "2") + s(v: "3") + s(v: "4") + s(v: "5") + s(v: "6") + s(v: "7") + s(v: "8") + s(v: "9") + s(v: "0") + s(v: "1") + s(v: "2") + s(v: "3") + s(v: "4") + s(v: "5") + s(v: "6") + s(v: "7") + s(v: "8") + s(v: "9") + s(v: "0") + s(v: "1") + s(v: "2") + s(v: "3") + s(v: "4") + s(v: "5") + s(v: "6") + s(v: "7") + s(v: "8") + s(v: "9") + s(v: "0") + s(v: "1") + s(v: "2") + s(v: "3") + s(v: "4") + s(v: "5") + s(v: "6") + s(v: "7") + s(v: "8") + s(v: "9") + s(v: "0") + s(v: "1") + s(v: "2") + s(v: "3") + s(v: "4") + s(v: "5") + s(v: "6") + s(v: "7") + s(v: "8") + s(v: "9") + s(v: "0") + s(v: "1") + s(v: "2") + s(v: "3") + s(v: "4") + s(v: "5") + s(v: "6") + s(v: "7") + s(v: "8") + s(v: "9");
+    int32 joinedLen = cast<int32>(joined.length());
+    int32 joinCalls = calls;
+    string tail = joined.concat(other: "z").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y").concat(other: "y");
+    int32 tailLen = cast<int32>(tail.length());
+    int32 sumI = sum(a: 2);
+    float64 sumF = sum(a: 0.25);
+    int64 sumA = sum(a: A.of(c: 3i64)).c;
+    int32 sumI2 = sum(a: 3);
+    if (order != 210) { return 1; }
+    if (orderLog != 2946534688ui32) { return 2; }
+    if (anyOf != true) { return 3; }
+    if (anyCalls != 11) { return 4; }
+    if (allOf != false) { return 5; }
+    if (allCalls != 11) { return 6; }
+    if (loops != 3) { return 7; }
+    if (whileCalls != 280) { return 8; }
+    if (arm != 7) { return 9; }
+    if (armCalls != 0) { return 10; }
+    if (skipped != false) { return 11; }
+    if (skipCalls != 0) { return 12; }
+    if (mixed != 70) { return 13; }
+    if (wrapped != 176ui8) { return 14; }
+    if (narrow != 70i8) { return 15; }
+    if (fsum != 35.0) { return 16; }
+    if (atRoot != true) { return 17; }
+    if (opC != 683049i64) { return 18; }
+    if (chainedC != 592378i64) { return 19; }
+    if (strs != true) { return 20; }
+    if (hoists != true) { return 21; }
+    if (lens != 210) { return 22; }
+    if (guarded != false) { return 23; }
+    if (flips != true) { return 24; }
+    if (held != 70) { return 25; }
+    if (heldDrops != 71) { return 26; }
+    if (boxed != 70) { return 27; }
+    if (boxedDrops != 71) { return 28; }
+    if (joinedLen != 70) { return 29; }
+    if (joinCalls != 70) { return 30; }
+    if (tailLen != 141) { return 31; }
+    if (sumI != 140) { return 32; }
+    if (sumF != 17.5) { return 33; }
+    if (sumA != 634837i64) { return 34; }
+    if (sumI2 != 210) { return 35; }
+    return 42;
+}

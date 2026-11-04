@@ -4033,10 +4033,20 @@ private:
     static std::string cEscapeStringBody(const std::string& s);   // escape a string's bytes for a C `"..."` body (no quotes/wrapper)
     static std::string kamaStrLit(const std::string& s);          // `kama_string_lit("…", n)` for a serde wire name
     std::string emitExpression(SharedExpression expr);
+    std::string emitExpressionNode(SharedExpression expr);   // what emitExpression measures
     std::string emitHoistedInit(SharedExpression e);
     static const int KAMA_MAX_C_NEST = 400;   // see emitExpression
     int  _cNest = 0;
-    bool _cNestReported = false;
+    // A long chain (KR-304): what its links classify as, kept for as long as it is emitted, and the C temporary
+    // holding each link already emitted. See emitLongChain.
+    static const size_t KAMA_CHAIN_FLAT_AT = 64;
+    struct ChainPin { std::string type, cls; bool str; };
+    std::unordered_map<const ASTNode*, ChainPin> _chainPins;
+    std::unordered_map<const ASTNode*, std::string> _chainTemps;
+    std::vector<SharedExpression> longChainSpine(SharedExpression root);
+    bool chainLowersFlat(const std::vector<SharedExpression>& spine);
+    bool chainLinkIsFreshValue(ASTNode* n);
+    std::string emitLongChain(const std::vector<SharedExpression>& spine);
     std::string emitInterpolation(InterpolatedStringNode* is);   // `"a ${x} b"` -> a hoisted Formatter build
     std::string emitTaggedInterpolation(InterpolatedStringNode* is);   // `tag"a ${x} b"` -> a Template + a `<tag>(ref Template)` call
     std::string emitInvocation(InvocationNode* call);

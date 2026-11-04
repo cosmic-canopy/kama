@@ -1,0 +1,14 @@
+// A const receiver, through a chain of place-returning calls long enough to be pinned (KR-304). A walk down a receiver is
+// cut short at a link that returns by value, which is a fresh value. A place is not one, so this one must still reach the
+// root and refuse the write.
+type value V {
+    public int32 x = 0;
+    public ctor make() { }
+    public const fn const ref V me() { return this; }
+    public fn void set(int32 to) { this.x = to; }
+}
+fn uint8 main() {
+    const V v = V.make();
+    v.me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().me().set(to: 7);
+    return 42;
+}
