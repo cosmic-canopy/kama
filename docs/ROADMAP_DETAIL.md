@@ -664,7 +664,7 @@ side) and what it uses itself (`dependencies`, the importer's side). Below the p
   other. It is a tool beside the language.
 
 **Options.**
-- **A. An `imports` list on a module node** (the importer's side, as `dependencies` is one level up). Each system
+- **A. An allow-list on a module node** (the importer's side, as `dependencies` is one level up). Each system
   writes what it uses, `["frame", "world"]`, which also documents the layering where a reader looks for it.
 - **B. A fifth `visibility` form**, open to dependents but only to the listed siblings. One mechanism, but each
   system then names who may import it, which states the rule backwards, and it breaks the four forms' widening order.
@@ -673,17 +673,32 @@ side) and what it uses itself (`dependencies`, the importer's side). Below the p
   names only a file's own declarations.
 - **D. Not the compiler's**: a lint, as Go and Python have it, with `kama query` supplying the import graph.
 
-**Recommended: A** (2026-11-04, for the maintainer's ruling):
-1. **`"imports": [ … ]` on a module node, optional.** Absent, the module may import whatever `visibility` lets it, as
-   now. Present, a file of the module may import, from its own package, only the modules listed, spelled as
-   `visibility`'s list spells them; the module's own files always see each other.
+**Ruled 2026-11-04: A, as `importsOnly`.** The maintainer asked for a name that says the list is an intentional
+restriction, which `imports` does not: it reads as a description of what the module happens to import. `importsOnly`
+reads as the sentence it enforces (`render` imports only `frame` and `world`).
+
+```json
+"modules": {
+  ".":      { "visibility": "internal" },
+  "frame":  { "visibility": "public" },
+  "world":  { "visibility": "public" },
+  "audio":  { "visibility": "public", "importsOnly": ["frame", "world"] },
+  "render": { "visibility": "public", "importsOnly": ["frame", "world"] }
+}
+```
+
+A game still imports `eng::audio` and `eng::render`, which are `public`; `render`'s `import { eng::audio::play };` is
+refused, naming `render`'s `importsOnly`; and a new system is held the moment it writes its own list.
+1. **`"importsOnly": [ … ]` on a module node, optional.** Absent, the module may import whatever `visibility` lets
+   it, as now. Present, a file of the module may import, from its own package, only the modules listed, spelled as
+   `visibility`'s list spells them; the module's own files always see each other, and `[]` imports none.
 2. **It governs the module's own package only.** Another package is `dependencies`' business, and `std` is never
    listed.
-3. **Nesting grants nothing**, as SPEC's rule for `visibility` has it: a child module is held by its own `imports`,
-   so a rule meant for a subtree is written on each node of it.
-4. **An edge needs both halves.** The refusal names the one that refused: the importer's `imports` or the imported
-   module's `visibility`. An entry that names no module of the package, or the node itself, is refused, and a `friend`
-   grant naming a module is an import edge.
+3. **Nesting grants nothing**, as SPEC's rule for `visibility` has it: a child module is held by its own
+   `importsOnly`, so a rule meant for a subtree is written on each node of it.
+4. **An edge needs both halves.** The refusal names the one that refused: the importer's `importsOnly` or the
+   imported module's `visibility`. An entry that names no module of the package, or the node itself, is refused, and
+   a `friend` grant naming a module is an import edge.
 5. **Proof:** the program above refused from `kama check` and `kama build`, which is also what the editor reports;
    the manifest's refusals in a `tools/check-*.sh`; the key in docs/packages.md § `modules` and SPEC's `visibility`
    paragraph. A VERSION bump.
@@ -2914,8 +2929,9 @@ near-native runtime.
 
 A portable lightweight **WebGPU** game engine — a product built *on* kama, **not** part of the language. Tiers:
 **math types** (shipped) → buffers/bindings → first triangle (shipped, browser + native, `examples/webgpu`) →
-scene/material. Depends on the 1.x systems (file I/O for assets, serialization for scenes). The engine *spine*
-(buffer/pipeline/binding libraries, renderer) is the engine product. See
+scene/material. Depends on the 1.x systems (file I/O for assets, serialization for scenes). The scene, its meshes,
+materials, lights and cameras are `@kama/graphics`, a first-party package since 2026-11-04 (below), and the engine
+product is what is left above it: frame pacing, its systems and the XR swapchain. See
 [ENGINE_READINESS.md](ENGINE_READINESS.md).
 
 **GPU and window are first-party PACKAGES, not std — decided 2026-10-16.** The maintainer's condition: "if it is in
@@ -2934,7 +2950,14 @@ consumers when they are built.
 repository, to the designs below and from the platform layers it replaces, and it is their first consumer. The
 packages stay first-party and these designs stay kama's: a change the build needs comes back as an amendment of its
 section here, and a compiler or std gap the build meets is filed as a row. What stays in the engine is what the
-designs already leave out of them: frame pacing, the renderer and the XR swapchain.
+designs already leave out of them: frame pacing and the XR swapchain (the renderer went to `@kama/graphics`, below).
+
+**A graphics library is a first-party package too: `@kama/graphics` — ruled 2026-11-04** (KR-309). Scenes, meshes,
+materials, lights, cameras and loaders, on `@kama/gpu`, naming no engine concept. It stands alone by the rule below:
+a model viewer, an editor and a non-game product each use one, and none needs a frame loop, a simulation or real time,
+as a tool needs GPU and window as much as a game does. Unlike KR-25 and KR-26, **its design lives in its own
+repository** (`cosmic-canopy/kama-graphics`, seeded 2026-11-03), not here, and the downstream engine that seeded it
+builds it and is its first consumer. A compiler or std gap the build meets is still filed here as a row.
 
 **XR is the engine's: neither std nor a first-party package — ruled 2026-11-02** (filed the day before as `@kama/xr`). The
 maintainer's rule: a capability is the language's or std's if it belongs there, a first-party package if it stands
@@ -2973,8 +2996,8 @@ project would hardcode SDK paths and emcc switches. A dependency cannot turn it 
     — `examples/webgpu/triangle.kama` hand-writes **five** `wgpu*Release` calls per frame, all on the happy
     path, so any early `return` added later leaks them. Two different bugs, two different halves.
   - **Scope.** It starts at exactly the handles the triangle touches; as a package it grows toward the whole of
-    webgpu.h. Buffers/bindings/pipelines *as an engine renderer* stay out; the same things *as released handles*
-    are in.
+    webgpu.h. Buffers/bindings/pipelines *as a renderer* stay out, since that is `@kama/graphics` on top of it; the
+    same things *as released handles* are in.
 
 - **Dev-loop hot-reload — a *library* on two small compiler primitives that already ship.**
   - **Compiler primitives (ship — see SPEC *Exposing to a host*):** `kama build --shared` (`.so`/`.dylib`/`.dll`)
