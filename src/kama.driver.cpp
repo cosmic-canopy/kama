@@ -14524,8 +14524,12 @@ static int kamaMain(int argc, char** argv)
                     // The user's `cflags` span comes OUT here, and only here: this command compiles
                     // nothing, it consumes objects. See where the span is recorded for what a compile
                     // flag on a link line does.
+                    // The standard and the warning flags come out too: they are compile flags, and they are
+                    // `--cc`'s, while under `--cxx` this command runs another driver. g++ refuses clang's
+                    // `-fbracket-depth` by name, so `--cc clang --cxx g++` could not link C++ at `-j 2` or more.
                     std::ostringstream ld;
-                    ld << linkDriver(base.substr(0, cflagsPos)) << base.substr(cflagsEnd) << linkGc;
+                    ld << linkDriver(base.substr(0, stdPos)) << " " << base.substr(stdEnd, cflagsPos - stdEnd)
+                       << base.substr(cflagsEnd) << linkGc;
                     // toolPath: the objects and the output are what GNU ld opens by name (see toolPath).
                     SpillList ldObjs; ldObjs.rsp = stripExtension(outPath) + ".objects.rsp";
                     for (auto& o : objs) ldObjs.add("\"" + toolPath(o) + "\" ");
