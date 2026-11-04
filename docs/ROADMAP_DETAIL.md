@@ -618,7 +618,9 @@ enum`, `type extern enum`, the host header's `#define <Enum>_<Value>`) keeps its
 below refuse nothing that exists. An enum value and a method of its enum may share a name today (`type enum E { B, C;
 public const fn int32 B() { … } }` builds), and the `__` join alone would make them meet as `E__B`.
 
-**Recommended, for the maintainer's ruling:**
+**Ruled 2026-11-04: all five as recommended.** The maintainer, on rule 1: 25 hand-written sites is excessive, and
+duplication goes wherever it can. `kama_lldb.py`'s change is checked by CI's macOS job, which runs the formatter guard
+against a real lldb on every push (Linux and Windows skip it), so the fix does not wait on the Mac.
 1. **One spelling.** A helper names an enum's constant, and every site goes through it (deletion: about 25 hand joins
    become calls). The declared surface keeps `<Enum>_<Value>`.
 2. **The join is `__`** (`E__B`), as a method, constructor and type constant are, so a value and a variant come under
@@ -633,6 +635,58 @@ public const fn int32 B() { … } }` builds), and the `__` join alone would make
 5. **Proof:** the six programs above become positive fixtures (RED on `0.9.839`, each a clang error), and the new
    refusals xfail fixtures; `kama_lldb.py` cuts `<type>__`, checked by `tools/check-lldb-formatters.sh` where lldb
    runs (the Mac; this box has none). A VERSION bump, since emitted C changes for every enum.
+
+<a id="s2-module-imports"></a>
+
+### A module cannot limit which of its package's modules it imports (KR-308)
+
+Filed 2026-11-04 from a downstream engine whose rule is that one system never imports another: `audio`, `render` and
+the rest are modules of one library, each public so a game can import it, and each may import only the shared
+modules (`frame`, `world`). Measured on `0.9.840` with a library `eng` (modules `audio`, `render`, `frame`) and a
+game depending on it by path: with `audio` `"public"`, `render`'s `import { eng::audio::play };` checks; with
+`"visibility": ["frame"]` it is refused (*"module `eng::audio` is not visible from `eng::render` — its `visibility` in
+`kama.json` does not name this module"*), and so is the game's. `visibility` is set on the imported module, and
+`"public"`, the one form a dependent reaches, is a superset of `"internal"`, so a module open to its dependents is open
+to every sibling. Nothing in the manifest can say "render may not import audio", and the engine holds the rule with a
+check of its own outside the compiler.
+
+**kama has both halves already, one level apart.** A package says who may use each module (`visibility`, the exporter's
+side) and what it uses itself (`dependencies`, the importer's side). Below the package, only the exporter's side exists.
+
+**What others do.**
+- **Java (JPMS):** both sides per module: `requires` names what a module reads, and `exports p to m` narrows who may.
+- **Bazel:** a target's `deps` lists what it may use, and its `visibility` who may depend on it.
+- **Zig:** a module sees only the modules `build.zig` hands it through `addImport`.
+- **Rust:** item visibility is the exporter's (`pub(crate)`, `pub(in path)`); the importer's list is Cargo's
+  `[dependencies]`, so the edge is drawn between crates, and Bevy is split into crates (`bevy_audio`, `bevy_render`, …).
+- **Go:** `internal/` limits importers by path (the exporter's side); a layer rule is a linter's (`depguard`).
+- **Python:** import-linter's *independence* contract is this rule exactly: the listed modules import none of each
+  other. It is a tool beside the language.
+
+**Options.**
+- **A. An `imports` list on a module node** (the importer's side, as `dependencies` is one level up). Each system
+  writes what it uses, `["frame", "world"]`, which also documents the layering where a reader looks for it.
+- **B. A fifth `visibility` form**, open to dependents but only to the listed siblings. One mechanism, but each
+  system then names who may import it, which states the rule backwards, and it breaks the four forms' widening order.
+- **C. A package per system** in one workspace, which `dependencies` already holds apart (unmeasured for this
+  case). It needs no change, and costs a manifest and a dependency per system; a game imports each, since `export`
+  names only a file's own declarations.
+- **D. Not the compiler's**: a lint, as Go and Python have it, with `kama query` supplying the import graph.
+
+**Recommended: A** (2026-11-04, for the maintainer's ruling):
+1. **`"imports": [ … ]` on a module node, optional.** Absent, the module may import whatever `visibility` lets it, as
+   now. Present, a file of the module may import, from its own package, only the modules listed, spelled as
+   `visibility`'s list spells them; the module's own files always see each other.
+2. **It governs the module's own package only.** Another package is `dependencies`' business, and `std` is never
+   listed.
+3. **Nesting grants nothing**, as SPEC's rule for `visibility` has it: a child module is held by its own `imports`,
+   so a rule meant for a subtree is written on each node of it.
+4. **An edge needs both halves.** The refusal names the one that refused: the importer's `imports` or the imported
+   module's `visibility`. An entry that names no module of the package, or the node itself, is refused, and a `friend`
+   grant naming a module is an import edge.
+5. **Proof:** the program above refused from `kama check` and `kama build`, which is also what the editor reports;
+   the manifest's refusals in a `tools/check-*.sh`; the key in docs/packages.md § `modules` and SPEC's `visibility`
+   paragraph. A VERSION bump.
 
 <a id="s2-quoted-format"></a>
 
@@ -2322,8 +2376,9 @@ default, each by a different formula. No mature tool keeps a password in the com
 `~/.android/debug.keystore` in Android Studio and cargo-apk, so their APKs install over each other; xbuild and
 gomobile ship a fixed key. Three manifest strategies: structured keys, raw fragments spliced in, or a whole file.
 
-**The first step, `kama.json`'s shape — recommended 2026-11-03, for the maintainer's ruling.** Nothing here is built
-or measured in kama yet. The hand proof (decision 3 above) comes before any of it is code.
+**The first step, `kama.json`'s shape — ruled 2026-11-04: all seven as recommended (2026-11-03), with 3's open
+question answered.** Nothing here is built or measured in kama yet. The hand proof (decision 3 above) comes before any
+of it is code.
 1. **`"kind": "app"`** says the project is an app the OS launches, beside `executable` and `library`, with `entry`
    naming the file whose `main` runs. On Android an app builds the `.so` with the glue and the APK around it; on a
    target with no app format it builds as an executable, an accepted no-op as `subsystem` is. An `executable` stays
@@ -2335,8 +2390,13 @@ or measured in kama yet. The hand proof (decision 3 above) comes before any of i
    Mac). `label` defaults to `name`.
 3. **The version is `version`.** The version name is the manifest's semver as written. The version code is derived as
    Tauri derives it, `major*1000000 + minor*1000 + patch`, with no override, refused past Android's 2100000000 or a
-   part past 999. Decide whether an app's version may carry a pre-release tag, since `1.0.0-beta.2` and `1.0.0` would
-   share a code and a store refuses the second upload.
+   part past 999. **An app's version carries no pre-release tag and no `+build`** (ruled 2026-11-04), refused with
+   the patch bump that replaces it: `1.0.0-beta.2` would share `1.0.0`'s code, which a store refuses on the second
+   upload, and Apple's App Store takes only up to three dot-separated integers (its ITMS-90060 error), so the shared
+   version could never carry one to iOS. Android itself allows one, since its version name is a free label, and the
+   tools that derive the code drop it without a word (cargo-apk gives `254.254.254-alpha.fix+2` the code of
+   `254.254.254`); Flutter instead types the code by hand (`1.2.3+4`). A beta is a patch, sent through the store's
+   own test channel. A library's `version` keeps semver's pre-releases for the registry.
 4. **minSdk is the triple's level** (`aarch64-linux-android29` is minSdk 29): it is one number already, and a second
    spelling could disagree. **`app.android.targetSdk` is stated, with no default**: Android gates behaviour changes
    on it, so it is the project's choice. cargo-apk and xbuild default it (35 and 33), and neither is the 34 Quest
