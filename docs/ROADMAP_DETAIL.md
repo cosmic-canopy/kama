@@ -2546,6 +2546,26 @@ wakes it through `kama_sched_wake`, the remote queue channels use since step 6. 
   512 blocking threads), the `offload` spelling, which file calls go to the pool, and whether a thread with no
   scheduler keeps calling inline (the recommendation: yes, no pool hop where nothing else could run).
 
+**Ruled 2026-11-04: KR-3 in full is next on the Mac, after KR-264 and KR-244, unhurried, over as many sessions as it takes.**
+The aim is threading in a good place for its consumers, so no step is narrowed or deferred to finish sooner. A downstream
+engine has asked for jobs, which is why it moved up, and that request does not outrank the design.
+- **Scope:** steps 7 to 11, and what those decisions left unbuilt: KR-296 (decision 11), KR-297 (decision 12), KR-202 (inside
+  step 7), KR-229 (inside step 8), and closing KR-255 on step 9's rerun. The other rows of the fibers arc stay queued.
+- **Who:** step 8 and step 7's `Poller.wait` over AFD belong to the Windows box, since this Mac could only test them through
+  CI. The Windows box also holds defects and blockers meanwhile.
+- **Order:** one brief for both pools' spelling first, then step 9, then 7, 10, KR-297, KR-296 and 11. The order is not critical
+  to correctness: step 9 relies only on steps 4 and 6, both shipped. Writing the one brief is what keeps it from costing the
+  design anything. **What it costs:** building 9 first is untried, and the process-wide thread start and stop written for it
+  gets adapted for 7.
+- **Where the job pool lives:** kama code in `std::concurrent` (`lib/std/concurrent/`), not a package, since its no-park rule is
+  in the compiler. `spawn job` beside `spawn` and `spawn fiber`, or a library call, is the brief's question: KR-255's record
+  only sketches the first.
+
+**That brief must also answer:** how the job-entry rule identifies a job; KR-288 (no shared read-only borrow across a scope's
+children); anything further the engine's threading model needs, filed here as rows; and whether `parallel_for` should run on the
+pool. Decision 5 keeps the two apart, and `parallel_for` starts its threads per call, measured at about 70 µs at 10 workers
+(release, M4 Mac, 3 runs, 68-74), so step 9 as written does not make it cheaper at frame rate.
+
 <a id="s6-fiber-cet"></a>
 
 ### Fibers under CET shadow stacks (KR-238)
@@ -2695,25 +2715,28 @@ match (TcpHalves.split(stream: give conn)) {
    `UdpUnjoined`, `UnixDatagramUnjoined`. A generic `Unjoined<R, W>` would add two type arguments at every use, for a type
    that has exactly one pair per socket kind.
 
-**To re-ask before building (2026-11-04): the spelling of `split`.** The ctor answered "kama has no overloading, and four
-socket types share one module". `give fn` shipped on 2026-10-30 (`0.9.777`), and a method belongs to its type, so
+**Ruled 2026-11-04, replacing the 2026-10-28 spelling: `give conn.split()`.** The ctor answered "kama has no overloading,
+and four socket types share one module". `give fn` shipped on 2026-10-30 (`0.9.777`), and a method belongs to its type, so
 that reason is gone. std took it up for this same job: `MemoryStreamPair`, `UnixStreamPair` and the datagram pair come apart
-with `give pair.split()`. So a socket would be the one thing in std taken apart by a ctor:
+with `give pair.split()`, and every socket already leaves by `give s.intoDescriptor()`. So a socket would have been the one
+thing in std taken apart by a ctor:
 
 ```kama fragment
-match (TcpHalves.split(stream: give conn)) { case Halves(reader: r, writer: w): { … } };   // ruled 2026-10-28
+match (TcpHalves.split(stream: give conn)) { case Halves(reader: r, writer: w): { … } };   // ruled 2026-10-28, retired
 match (give conn.split()) { case Halves(reader: r, writer: w): { … } };                    // as the pairs do
 ```
 
 Probed on `0.9.842` with stand-ins: a `give fn` on a resource with a destructor, handing back an enum of two halves over one
-counted cell and matched directly, builds and runs, and the socket closes exactly once. The bytes do not change.
-**Recommended: `give conn.split()`,** one way to take a thing apart (#4). `TcpStream.reunite(reader:, writer:)` stays a ctor:
-it takes two values and makes a stream.
+counted cell and matched directly, builds and runs, and the socket closes exactly once. The bytes do not change. One way to
+take a thing apart (#4). `TcpStream.reunite(reader:, writer:)` stays a ctor: it takes two values and makes a stream. Read
+decisions 2 and 4 and the 2026-10-28 revision above with `split` as this method; `UnixStream.split()`, `UdpSocket.split()` and
+`UnixDatagram.split()` follow.
 
 **How it is built** (drafted 2026-10-28, and held for the io_uring arm's read and write paths, which shipped in `0.9.757`–`0.9.765`):
 - **The cell** is three functions in `kama_os.h`: `kama_net_cell_new(size)`, 16 bytes of count and then the socket (out
   of memory is kama's panic); `kama_net_cell_leave(socket)`, 1 when that was the last half; `kama_net_cell_free(socket,
-  size)`. A split moves the socket in with a raw store (`s[0] = give stream`, as `std::memory`'s `replace` does); the
+  size)`. A split builds the cell's socket from `this`'s fields and clears them, so the `give fn`'s own end finds nothing to
+  close, as `intoDescriptor` does (drafted as a raw store of a whole stream, before `give fn`; to confirm in the first probe); the
   last half's drop runs `drop(ptr:)` on it and frees the cell; `reunite` nulls both halves' pointers, so their drops
   leave the cell alone, and `relocate`s the socket back out. A half is the socket's address, 8 bytes; a TCP cell is 16
   bytes plus the stream's 40. The count is a plain one, since neither half leaves its isolate.
@@ -2764,7 +2787,7 @@ do; off a fiber it keeps answering `WouldBlock`. The pair is not `Sendable`, so 
 wake is local, with no remote queue. Go's `net.Pipe` blocks the goroutine; tokio's `io::duplex` returns `Pending` and
 wakes the task. KR-265 needs it: a fiber blocked on a real socket never counts as fully blocked.
 
-**The brief (2026-11-04, measured on `0.9.842`).** Read as written, this is a waiter inside each ring. Four things in the
+**The brief (2026-11-04, measured on `0.9.842`).** Read as written, this is a waiter inside each ring. Five things in the
 tree decide otherwise.
 
 ```kama fragment
@@ -2796,19 +2819,54 @@ match (give p.split()) {
 4. **The other end's drop and `shutdown` must wake a waiter:** a parked read then answers 0 and a parked write
    `BrokenPipe`. A lane holds one waiter a direction, since a fiber's bundle may not be shared.
 
-**The bytes,** by arithmetic and not yet measured: a `Lane` gains two fiber pointers, 16 bytes on a 64-bit target, and an
-end gains one `bool`. **Against GOALS:** one rule for every stream (#4), and each wait is found by `grep @parks` (#5). A
-deadlock over the pipe hangs, as one over a channel does today (KR-312).
+5. **A parked read has no way out but the far end, so an end takes deadlines.** Every socket has `setReadDeadline` and
+   `setWriteDeadline`, and `kama_sched_parkUntil` already takes one. Without them a protocol's timeout path cannot be
+   tested on the pipe, and KR-265's virtual clock has nothing to drive.
 
-**Decisions for the ruling:**
-1. The end parks and the ring answers. Forced by point 1.
+| | Go `net.Pipe` | tokio `io::duplex` | kama, ruled |
+|---|---|---|---|
+| Empty read | blocks | stores one waker, `Pending` | parks |
+| Full write | blocks | stores one waker, `Pending` | parks |
+| Some room left | loops until all is taken | short count | short count |
+| Far end gone | EOF / `ErrClosedPipe` | 0 once drained / `BrokenPipe` | 0 once drained / `BrokenPipe`, and wakes the waiter |
+| Non-blocking switch | none | none | `setNonBlocking`, as a socket |
+| Deadline | yes, `os.ErrDeadlineExceeded` | none; `time::timeout` wraps any future | yes, as a socket |
+| Capacity chosen by the test | no, unbuffered | yes | yes |
+
+Read from their sources (`net/pipe.go`, `tokio/src/io/util/mem.rs`) on 2026-11-04, not run. Where kama stands alone, the
+reasons hold: `ReliableStream` requires `setNonBlocking` and a program driving its own `Poller` relies on `WouldBlock`;
+Go must loop because `io.Writer` forbids a short count without an error, where kama's `write` is the partial primitive and
+`writeAll` the loop; tokio can skip deadlines because dropping a future ends a wait, and kama has no such thing. Go's
+`testing/synctest` (1.25) uses `net.Pipe` as its fake connection, since a goroutine blocked on a real socket never counts
+as idle, which is this row followed by KR-265.
+
+**The bytes,** by arithmetic and not yet measured: a `Lane` gains two fiber pointers, 16 bytes on a 64-bit target, and an
+end gains a `bool` and two deadlines, 24 bytes with padding, so a pair grows 80 bytes. **Against GOALS:** one rule for every
+stream (#4), and each wait is found by `grep @parks` (#5). A deadlock over the pipe hangs, as one over a channel does today
+(KR-312), where Go reports it: that is the one place this leaves kama behind.
+
+**Ruled 2026-11-04, each provisional on the build's probes:**
+1. The end parks and the ring answers. Forced by point 1; tokio has the same shape.
 2. An end starts blocking, and `setNonBlocking(on: true)` answers `WouldBlock` on a fiber, as a socket does. **What it
    costs:** a test on a fiber that reads an empty pair and expects `WouldBlock` now waits, possibly for ever, until it says
-   `setNonBlocking`. Staying non-blocking until asked is the alternative, and it keeps the row's problem: the code under
+   `setNonBlocking`. That includes `main` reading an empty pair after its fibers have ended, since a scheduler stays until
+   its isolate ends. Staying non-blocking until asked is the alternative, and it keeps the row's problem: the code under
    test cannot be the code that runs.
-3. Where no scheduler runs, `WouldBlock`, unchanged.
+3. Where no scheduler runs, `WouldBlock`, unchanged. **What it costs:** the same line answers `WouldBlock` before an
+   isolate's first `spawn fiber` and parks after it. A program with no fibers carries no scheduler by design, and nothing
+   there could ever write.
 4. A write with any room still takes what fits and returns a short count, parking only when nothing fits, as a socket's
    write does.
+5. An end takes `setReadDeadline` and `setWriteDeadline` with a socket's meaning: an absolute `Instant`, and a passed
+   deadline answers `TimedOut` at once, even with bytes queued. A deadline that ends a park clears that fiber from the
+   lane, or a later write wakes a dead fiber. Where no scheduler runs, an empty read before the deadline is still
+   `WouldBlock`, since waiting could not help.
+
+**The gate (maintainer, 2026-11-04): parity or better.** Speed here is predicted and not measured. The pipe stays on one
+isolate, so a wake takes no lock and no atomic, where tokio takes a mutex per operation and Go rendezvouses over unbuffered
+channels; but kama's `Result`, its access records and its checked slices are unmeasured on this path. `bench/pipe/` runs kama,
+tokio and Go interleaved, on a 64-byte ping-pong and a bulk transfer through an 8 KiB ring, and this row commits only at
+parity or better, or with the number brought back to the maintainer.
 
 <a id="s6-virtual-clock"></a>
 
