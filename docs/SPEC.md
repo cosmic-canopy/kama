@@ -3039,7 +3039,7 @@ gzip trailer to the caller, whose own `finish` then insists on it.
 a body is `InvalidInput` with nothing taken, and too short is `InvalidInput` from the next `begin` or `finish`. Over `GzipWriter` at `Frozen`, an archive of regular <!-- test: archive_tar_frozen -->
 files with `kama publish`'s fields is publish's bytes.
 
-`extractInto(archive: ref t, dir: "out")` writes an archive under one directory and never outside it, and never traverses a link. The destination must be new or empty. <!-- test: archive_tar_extract -->
+`extractInto(archive: ref t, dir: "out")` writes an archive under one directory and never outside it, and never traverses a link. The destination must be new or empty. That is a promise about the archive: a second writer in that directory while it runs has the window `removeDirAll` states, which needs `openat`. <!-- test: archive_tar_extract -->
 Each entry's parents are asked of the operating system one at a time, so a parent that is a link is refused however it is spelled, and files are opened `CreateNew`, <!-- test: archive_tar_extract -->
 so nothing is written through a final link, and the same name twice is refused, where GNU tar, bsdtar and Python leave the last. It refuses, as a `TarExtractError` <!-- test: archive_tar_extract -->
 naming the entry and the `TarRefusal`: an absolute path, a `..` component, a NUL, a name that is not UTF-8, a device, a FIFO or a type it does not know, a link whose target is

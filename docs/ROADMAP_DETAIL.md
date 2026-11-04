@@ -476,6 +476,33 @@ resource limit both need; std has a process's liveness and start time, not this.
 `syscall.Getrusage`. **Recommended:** the current process's user and system time as `Duration`s
 (`getrusage(RUSAGE_SELF)`, `GetProcessTimes`), and a waited child's from its exit (`wait4`'s rusage).
 
+<a id="s1-fs-root"></a>
+
+#### Opening a file under a root without a race (KR-311)
+
+Filed 2026-11-04. A server of static files takes a path from a stranger and opens it under a root. `File.open` takes a path
+and follows links, and `canonicalPath` and `symlinkStat` answer about a path, so the check and the open are two walks, and a
+link swapped between them leaves the root. Measured on `0.9.842` with the swap made between the two calls: the check says the
+page is under the root, and a read of that same name returns the file outside it. `File.metadata().id` can show afterwards
+which file opened, which narrows the race and does not close it. No `openat` or `O_NOFOLLOW` reaches a program; the runtime's
+one `O_NOFOLLOW` sets a new directory's mode.
+
+Two of std's own promises stop at the same place. `removeDirAll` says so in its comment ("needs `openat`/`unlinkat` against a
+directory HANDLE"). `extractInto` asks `symlinkStat` of each parent and then opens by path, which settles what an archive can
+do and leaves the same window for a second writer in that directory while it runs (read from the source, not run).
+
+| | Under a root (from their documentation, not run here) |
+|---|---|
+| Go | `os.Root` (1.24): a name that leaves the directory is an error; a link is followed, and may not leave |
+| nginx | `disable_symlinks on from=$document_root`: any link in the path is refused; needs `openat` and `fstatat` |
+| Linux | `openat2` with `RESOLVE_BENEATH`, since 5.6 |
+| Rust | nothing in std; the `cap-std` crate's `Dir` |
+
+**The verdict: scheduled, design first.** The questions: whether a link that stays inside is followed (Go) or every link is
+refused (nginx's `on`, the smaller form); the per-platform types, since Linux has `openat2`, other POSIX systems walk each
+component with `openat` and `O_NOFOLLOW`, Windows opens relative to a handle, and wasm's virtual filesystem has neither; and
+whether `removeDirAll` and `extractInto` move onto it, which would close their windows too.
+
 <a id="s1-string-from-bytes"></a>
 
 #### A `string` from owned bytes without a copy (KR-273)
@@ -2668,6 +2695,21 @@ match (TcpHalves.split(stream: give conn)) {
    `UdpUnjoined`, `UnixDatagramUnjoined`. A generic `Unjoined<R, W>` would add two type arguments at every use, for a type
    that has exactly one pair per socket kind.
 
+**To re-ask before building (2026-11-04): the spelling of `split`.** The ctor answered "kama has no overloading, and four
+socket types share one module". `give fn` shipped on 2026-10-30 (`0.9.777`), and a method belongs to its type, so
+that reason is gone. std took it up for this same job: `MemoryStreamPair`, `UnixStreamPair` and the datagram pair come apart
+with `give pair.split()`. So a socket would be the one thing in std taken apart by a ctor:
+
+```kama fragment
+match (TcpHalves.split(stream: give conn)) { case Halves(reader: r, writer: w): { … } };   // ruled 2026-10-28
+match (give conn.split()) { case Halves(reader: r, writer: w): { … } };                    // as the pairs do
+```
+
+Probed on `0.9.842` with stand-ins: a `give fn` on a resource with a destructor, handing back an enum of two halves over one
+counted cell and matched directly, builds and runs, and the socket closes exactly once. The bytes do not change.
+**Recommended: `give conn.split()`,** one way to take a thing apart (#4). `TcpStream.reunite(reader:, writer:)` stays a ctor:
+it takes two values and makes a stream.
+
 **How it is built** (drafted 2026-10-28, and held for the io_uring arm's read and write paths, which shipped in `0.9.757`–`0.9.765`):
 - **The cell** is three functions in `kama_os.h`: `kama_net_cell_new(size)`, 16 bytes of count and then the socket (out
   of memory is kama's panic); `kama_net_cell_leave(socket)`, 1 when that was the last half; `kama_net_cell_free(socket,
@@ -2722,6 +2764,52 @@ do; off a fiber it keeps answering `WouldBlock`. The pair is not `Sendable`, so 
 wake is local, with no remote queue. Go's `net.Pipe` blocks the goroutine; tokio's `io::duplex` returns `Pending` and
 wakes the task. KR-265 needs it: a fiber blocked on a real socket never counts as fully blocked.
 
+**The brief (2026-11-04, measured on `0.9.842`).** Read as written, this is a waiter inside each ring. Four things in the
+tree decide otherwise.
+
+```kama fragment
+MemoryStreamPair p = MemoryStreamPair.open(capacity: 8);
+match (give p.split()) {
+    case Ends(first: a, second: b): {
+        scope {
+            spawn fiber serve(conn: give a);   // its `read` parks until `b` writes or goes
+            spawn fiber drive(conn: give b);   // its `write` into a full ring parks until `a` reads
+        }
+    }
+};
+```
+
+1. **The wait cannot live in the ring.** A `Lane` sits behind `Shared`, and the park rule refuses a call on `Shared`
+   storage that reaches a wait. A stand-in whose method waits on a channel is refused: "a lasting access to a `Shared`
+   value may not reach a park ... Take what you need out of it and wait after it". A stand-in whose ring answers and whose
+   end then waits, with no call on the ring open, builds and exits 42. So `Lane` keeps answering, and `MemoryStream.read`
+   and `write` loop: ask the lane, record this fiber as its waiter, park, ask again. Both take `@parks`, so they join the
+   park walk as a socket's calls do.
+2. **`setNonBlocking` stops being a no-op.** The file's header says the pair is "always non-blocking" and that
+   `setNonBlocking` changes nothing. On a socket it is what decides: a blocking call parks on a fiber, and a non-blocking
+   one answers `WouldBlock` there too (`lib/std/net/net.kama` ~204). A test of a protocol's `WouldBlock` path still needs
+   that answer on a fiber, so the pair takes the socket's rule.
+3. **"On a fiber" means what it means for a socket:** this isolate runs a scheduler (`kama__net_here`). Where none runs,
+   nothing else on the isolate could ever write, so the answer stays `WouldBlock`. A program that spawns no fiber carries
+   no scheduler (`KAMA_FIBERS`), and `spawn fiber` is refused on wasm until JSPI, so those builds keep today's behaviour.
+   The seam is a small extern pair in the runtime, as `kama_net_ready` is.
+4. **The other end's drop and `shutdown` must wake a waiter:** a parked read then answers 0 and a parked write
+   `BrokenPipe`. A lane holds one waiter a direction, since a fiber's bundle may not be shared.
+
+**The bytes,** by arithmetic and not yet measured: a `Lane` gains two fiber pointers, 16 bytes on a 64-bit target, and an
+end gains one `bool`. **Against GOALS:** one rule for every stream (#4), and each wait is found by `grep @parks` (#5). A
+deadlock over the pipe hangs, as one over a channel does today (KR-312).
+
+**Decisions for the ruling:**
+1. The end parks and the ring answers. Forced by point 1.
+2. An end starts blocking, and `setNonBlocking(on: true)` answers `WouldBlock` on a fiber, as a socket does. **What it
+   costs:** a test on a fiber that reads an empty pair and expects `WouldBlock` now waits, possibly for ever, until it says
+   `setNonBlocking`. Staying non-blocking until asked is the alternative, and it keeps the row's problem: the code under
+   test cannot be the code that runs.
+3. Where no scheduler runs, `WouldBlock`, unchanged.
+4. A write with any room still takes what fits and returns a short count, parking only when nothing fits, as a socket's
+   write does.
+
 <a id="s6-virtual-clock"></a>
 
 ### A virtual clock for the fiber scheduler (KR-265)
@@ -2732,6 +2820,20 @@ Go's `testing/synctest` runs a bubble whose clock jumps to the next timer once e
 tokio's `time::pause()` freezes the clock, which `advance` moves and the runtime moves itself when idle. **Design
 first:** a scope with its own clock that jumps when every fiber in it is parked on something the scope owns (a channel,
 a timer, an in-memory stream, KR-264, never a real socket), and how `monotonicNow()` reads it inside.
+
+<a id="s6-deadlock-report"></a>
+
+### Every fiber parked for good hangs in silence (KR-312)
+
+Filed 2026-11-04, measured on `0.9.842`: `main` joining a fiber that receives on a channel nobody sends to prints nothing
+and never returns. Go's runtime ends such a program with "all goroutines are asleep - deadlock!", and tokio hangs as kama does
+(both from their documentation, not run here). An in-memory pipe makes the case common: KR-264 exists for hermetic tests, and
+a protocol test with a bug would then hang its suite rather than fail it.
+
+**The verdict: scheduled, design first.** A scheduler knows its own fibers, so the question is what else could end a wait: a
+sender on another isolate, a socket, a timer, a child process. A report is true only when none of those exists on any isolate,
+which is a whole-program question on a runtime that is per-isolate by design. KR-265's "every fiber is parked on something the
+scope owns" asks nearly the same thing of one scope, so the two want designing together.
 
 <a id="s6-shared-read-borrow"></a>
 
@@ -4187,7 +4289,7 @@ ruling (2026-11-03): for now, and not to stay.
 
 **The trigger: the second compiler release that writes `kF_`.** By then a project that has moved has had a release to move from, and one pinned to a compiler before 0.9.818 sees `Fapp__probe` again, in the debugger
 alone: it is a cosmetic cost, on a pre-1.0 compiler, and it is what retiring it means. The work is `names.js`'s regex, `extension.js`'s scan, the three assertions in `check-extension-names`, and an extension
-version bump.
+version bump. **`v0.9.841` (2026-11-04) is the first release that writes `kF_`, so the next compiler release is the trigger.**
 
 <a id="s10-api-reference"></a>
 
