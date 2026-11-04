@@ -2210,61 +2210,38 @@ JVM) is to check.
 
 <a id="s5-android"></a>
 
-### Android, for Meta Quest's native route (KR-280, KR-283) — measured on `0.9.803`
+### An installable Android app, for Meta Quest's native route (KR-283)
 
 **The brief for the session that builds it, on the Windows box (it has the headset).** The owner, 2026-11-01: a game
 engine on kama will ship on Meta Quest both through the browser (WebXR) and natively; XR itself is the engine's (§8).
-Quest is an Android device (Horizon OS is Android 14, SDK 34), and its native XR is OpenXR, so the native route is an
-Android target first. The SDK's emulator carries everything up to the VR launch itself (item 4), so the work does not
-wait on the headset; nor on the PC's GPU, since a Quest-native app renders on the headset.
+Quest is an Android device (Horizon OS is Android 14, SDK 34), and its native XR is OpenXR. The Android target shipped
+in `0.9.830` (docs/targets.md): `--target aarch64-linux-android29` builds with the NDK kama finds itself, and `./dev
+test android` runs the suite over adb on the device's own CPU. What is left is the app the launcher starts. The SDK's
+emulator carries everything up to the VR launch itself, so the work does not wait on the headset; nor on the PC's GPU,
+since a Quest-native app renders on the headset.
 
-**Measured 2026-11-01**, Windows 11, NDK r30 LTS (`30.0.16248370`, installed at
-`%LOCALAPPDATA%\Android\Sdk\ndk\30.0.16248370`):
+**What the device leg leaves to the app** (measured 2026-11-03 on the emulator, AVD `kama34`, API 34):
+- **14 fixtures skip.** `adb shell`'s SELinux domain (`u:r:shell:s0`) may create no socket or FIFO file in
+  `/data/local/tmp`, though an app may in its own directory, so the leg skips the fixtures that make one (a
+  `std::net::Unix…` socket or `mkfifo`, `run_tests.sh`'s `SET_FILE_NODE`). An app's run is where they are measured.
+- **3 fixtures are unsettled on aarch64.** `proc_detach_dtor`, `proc_fiber_pipe` and `proc_open_file_limit` fail
+  as aarch64 under the emulator's ARM translator (`ndk_translation`) and pass as x86_64, so the leg builds for the
+  device's own CPU. The Quest is a real aarch64 device and settles them: `./dev test android` with the headset attached.
 
-1. `--target aarch64-linux-android --cc <ndk>/clang.exe` fails in the NDK's own `sys/cdefs.h`: *"Unversioned target
-   triples are not supported!"*. The per-API wrapper `aarch64-linux-android29-clang.cmd` failed the same way on
-   `0.9.803`, handed `-target aarch64-linux-android` too; since `0.9.809` a wrapper is spared, and a hello builds
-   through it with no `kama.json` target.
-2. A `kama.json` target gets past it, since the later `--target` wins:
-   `"QUEST": { "triple": "aarch64-linux-android", "cc": "<ndk>/…/bin/clang.exe", "ar": "<ndk>/…/bin/llvm-ar.exe",
-   "cflags": ["--target=aarch64-linux-android29"], "ldflags": ["--target=aarch64-linux-android29"] }`. A hello builds
-   as an AArch64 PIE (`NEEDED libdl.so libc.so`, the `NT_ANDROID_TYPE_IDENT` note), and `--shared` builds a `.so` that
-   exports its `expose fn` (as `probe_kama_answer`, module-prefixed per SPEC).
-3. 142 fixtures cross-built through that target (`fiber_`, `net_`, `proc_`, `fs_`, `time_`, `app_`, `isolate`,
-   `channel`, `random_`, `concurrent`): 74 link. 61 fail only on `ld.lld: unable to find library -lpthread`, because
-   bionic keeps pthreads in libc and the NDK ships no `libpthread`. The other 7 are `std::net::web`, which is
-   browser-only on every native target. With an empty `libpthread.a` on the search path, all 61 link: **135 of 135**.
-4. **Run on the SDK's emulator, 2026-11-02, with no headset.** `system-images;android-34;google_apis;x86_64` (AVD
-   `kama34`) boots headless in about 35 s under WHPX, which Windows 11 had usable already (VBS on; no admin, no reboot).
-   It reports `x86_64,arm64-v8a`: an arm64 executable runs through Google's `ndk_translation` (`binfmt_misc`), so
-   Quest's own ABI runs as well as an x86_64 twin of the target (`--target=x86_64-linux-android29`). The 135, pushed to
-   `/data/local/tmp` and run in `adb shell` against their `.expect`: **110 pass on both ABIs, with identical failures.**
-   16 are `proc_` fixtures that start the `procutil` helper `run_tests.sh` builds and names in `KAMA_PROCUTIL`, which
-   the probe did not provide, so they are unmeasured. 9 fail and are not yet looked at: `fs_file_kind` (23),
-   `fs_permissions_api` (1), `fs_readdir` (31), `net_accept_mode` (3), `net_addr_const` (16) and `net_unix_fds`,
-   `_nonblocking_connect`, `_peer`, `_stream` (4, 1, 2, 2).
-
-**What kama needs, in order:**
-- **The API level's spelling.** clang's spelling is the triple's suffix, `aarch64-linux-android29`, and
-  kama would read `android29` as the abi today (deriving `ABI_ANDROID29`).
-- **The link tail:** no `-lpthread` when the abi is `android` (at `kama.driver.cpp` ~13742), and nothing else
-  glibc-only.
+**What KR-283 builds.**
+- **An app.** Quest launches an APK whose activity is `android.app.NativeActivity`. It loads `lib<name>.so` and calls
+  `android_main` through the NDK's `sources/android/native_app_glue`. The entry needs no compiler change (built
+  2026-11-02): `@linkName("android_main") expose unsafe fn void androidMain(UnsafePtr app)` exports `android_main` from
+  the `.so` (`unsafe`, since it takes a raw pointer), and the glue is a `csources` entry. The OS owns the loop, as the
+  browser does on wasm: events arrive through `ALooper_pollOnce`, the window through `APP_CMD_INIT_WINDOW` and
+  `APP_CMD_TERM_WINDOW`, plus pause and resume.
+- **Packaging.** An `AndroidManifest.xml` with Meta's required entries (the `android.hardware.vr.headtracking`
+  `uses-feature`, the `com.oculus.intent.category.VR` launcher category, `com.oculus.supportedDevices`; minSdk 29 to
+  32; targetSdk 34, required of new store apps since 2026-03-01), compiled by `aapt2` against the platform's
+  `android.jar`. Then the `.so` at `lib/arm64-v8a/`, `zipalign`, and `apksigner` (v2 signing, which store review
+  requires). Every tool is in the Android SDK, and `apksigner` needs a JDK.
 - **Output.** Under `adb shell` a program has a stdout; an app the launcher starts has none, so `println` goes nowhere
   unless something routes it to logcat (`__android_log_write`, `-llog`).
-- **A device leg.** `./dev test android` pushes each fixture to `/data/local/tmp` and runs it in `adb shell`, on the
-  emulator by default and on the Quest when one is attached. That is how "110 pass" becomes "135 pass". It is the
-  Android twin of `test wasm`, which runs under node; since it needs no headset, CI could run it too (GitHub's Linux
-  runners expose KVM to the emulator; untried here).
-- **KR-283, an app.** Quest launches an APK whose activity is `android.app.NativeActivity`. It loads `lib<name>.so` and
-  calls `android_main` through the NDK's `sources/android/native_app_glue`. The entry needs no compiler change
-  (built 2026-11-02): `@linkName("android_main") expose unsafe fn void androidMain(UnsafePtr app)` exports
-  `android_main` from the `.so` (`unsafe`, since it takes a raw pointer), and the glue is a `csources` entry. The OS owns the loop, as the browser does on wasm: events arrive through `ALooper_pollOnce`, the
-  window through `APP_CMD_INIT_WINDOW` and `APP_CMD_TERM_WINDOW`, plus pause and resume.
-  - **Packaging.** An `AndroidManifest.xml` with Meta's required entries (the `android.hardware.vr.headtracking`
-    `uses-feature`, the `com.oculus.intent.category.VR` launcher category, `com.oculus.supportedDevices`; minSdk 29 to
-    32; targetSdk 34, required of new store apps since 2026-03-01), compiled by `aapt2` against the platform's
-    `android.jar`. Then the `.so` at `lib/arm64-v8a/`, `zipalign`, and `apksigner` (v2 signing, which store review
-    requires). Every tool is in the Android SDK, and `apksigner` needs a JDK.
 
 **What others do.**
 - **Rust:** cargo builds the `.so` (`cargo-ndk` wires the NDK linker), and the `android-activity` crate is the
@@ -2276,43 +2253,18 @@ wait on the headset; nor on the PC's GPU, since a Quest-native app renders on th
 - **C and C++:** Gradle with CMake or ndk-build, or aapt2 and apksigner driven by hand. A Gradle-free Quest 3
   OpenXR sample exists (CMU's 15-466 `ndk-openxr`).
 
-**Decided 2026-11-02** (the maintainer took the production answer for each; 3 and 6 replace a first step proposed the
-day before, and 7 is a direction whose shape KR-283 designs):
-1. **The API level: clang's versioned triple** `<arch>-linux-android<api>`. It keeps abi `android`, derives
-   `ABI_ANDROID`, and passes the full string to clang. The unversioned form is refused, naming the spelling. Whether a
-   level is also a flag (as `__ANDROID_API__` is in C) waits until std needs to gate on one.
-2. **Android stays `OS_LINUX` + `ABI_ANDROID`** (Go's shape, not Rust's): bionic runs std's Linux code, and the probe
-   shows it compiles. An Android delta is a declaration gated on `ABI_ANDROID`, never a conditional inside one.
-3. **kama finds the NDK; the triple is the only spelling.** When the abi is `android`, the driver takes clang from
-   `$ANDROID_NDK_HOME`, else the newest `ndk/<version>` under the SDK, and refuses with an error naming every place it
-   looked, as `--webgpu` finds wgpu-native. The SDK is `$ANDROID_HOME`, else Android Studio's default install
-   (amended 2026-11-02, below). So `kama build --target aarch64-linux-android29` needs no
-   `kama.json` target and no paths; a target's `cc` still overrides. No short built-in name: a named target follows
-   the host's architecture (docs/targets.md), and the triple already says the architecture and the level.
-   **The default location, amended 2026-11-02** (the maintainer asked whether others fall back to it; they do).
-   gomobile reads `ANDROID_HOME`, else `<home>/AppData/Local/Android/sdk` on Windows, `<home>/Library/Android/sdk`
-   on macOS and `<home>/Android/Sdk` elsewhere (`internal/sdkpath`); Flutter's tool checks the same three paths
-   after its own config and the variables; cargo-ndk detects an NDK "installed with Android Studio to its default
-   location" unless `ANDROID_NDK_HOME` says otherwise. The Android Gradle plugin is the exception: it asks for
-   `sdk.dir` or `ANDROID_HOME` and searches nothing, because Android Studio writes `local.properties` for it. So:
-   - **Order:** `ANDROID_NDK_HOME` (an NDK root), else the SDK from `ANDROID_HOME`, else gomobile's three paths.
-     Not the deprecated `ANDROID_SDK_ROOT`, and not a search of `PATH` for `adb` or `aapt` as Flutter does: each
-     would be a second way to say where the SDK is.
-   - **"Newest" compares versions numerically** (`30.0.16248370` over `9.x`, which a string sort gets wrong);
-     gomobile compares `Pkg.Revision` from each NDK's `source.properties`, Flutter sorts the directory names.
-   - The refusal lists the variables and the default path it tried, so the fallback is never invisible, and a
-     failed compile already names the clang that ran (since `0.9.811`). This box then builds for Android with
-     nothing set, since its SDK is at the Windows default.
-4. **Output goes to logcat through the app glue** (KR-283), when the launcher starts the app; `adb shell` runs keep
-   their stdout. Go's gomobile does the same.
-5. **The device leg is KR-280's gate:** `./dev test android` over adb, the emulator by default and the Quest when
-   attached. The headset gates only KR-283's last step, the VR launch on Horizon OS.
-6. **`kama build` makes the APK** for an Android app, as it makes the HTML harness for wasm: the `.so` with the NDK's
+**Decided 2026-11-02** (the maintainer took the production answer for each; 3 replaces a first step proposed the day
+before, and 4 is a direction whose shape KR-283 designs; the rulings on the target itself shipped, and docs/targets.md
+records them):
+1. **Output goes to logcat through the app glue**, when the launcher starts the app; `adb shell` runs keep their
+   stdout. Go's gomobile does the same.
+2. **The emulator first, the headset last.** The headset gates only the last step, the VR launch on Horizon OS.
+3. **`kama build` makes the APK** for an Android app, as it makes the HTML harness for wasm: the `.so` with the NDK's
    `native_app_glue` compiled in, a manifest the project supplies or `kama.json` generates (with room for Meta's
    entries), then aapt2, zipalign and apksigner from the SDK's newest build-tools, debug-signed with a generated key
    by default and release-signed with the project's keystore. The SDK's tools are external, as clang and emcc are.
-   The commands are proven by hand inside KR-283, never shipped as a recipe. `kama.json`'s shape is its first step.
-7. **`main` stays the entry on every target** (direction; the shape is KR-283's). The runtime supplies
+   The commands are proven by hand first, never shipped as a recipe. `kama.json`'s shape is the first step.
+4. **`main` stays the entry on every target** (direction; the shape is designed here). The runtime supplies
    `android_main`, runs kama's `main` on the glue's thread, and `std::app::run` pumps the looper and calls the tick,
    as emscripten's loop does on wasm; the lifecycle (pause, resume, a lost window) reaches the program as events, and
    a package (a window, XR) reaches the activity through a std accessor. A program that wants the glue to itself
@@ -2320,10 +2272,10 @@ day before, and 7 is a direction whose shape KR-283 designs):
 
 **The toolchain on the Windows box** (2026-11-02, under `%LOCALAPPDATA%\Android`, every download hash-checked): the
 NDK; the SDK's `cmdline-tools`, `platform-tools` (adb), `build-tools;37.0.0` (aapt2, zipalign, apksigner),
-`platforms;android-34`, the emulator with the image in item 4; and a portable Temurin JDK 21 for `sdkmanager` and
-`apksigner`, which a script names in `JAVA_HOME`. For KR-283's last step, the headset: developer mode (a Meta developer
-organisation, then the Meta Horizon app), a USB-C cable, and its USB-debugging prompt accepted, after which `adb
-devices` lists it.
+`platforms;android-34`, the emulator with `system-images;android-34;google_apis;x86_64` (AVD `kama34`, headless under
+WHPX in about 35 s); and a portable Temurin JDK 21 for `sdkmanager` and `apksigner`, which a script names in
+`JAVA_HOME`. For the last step, the headset: developer mode (a Meta developer organisation, then the Meta Horizon app),
+a USB-C cable, and its USB-debugging prompt accepted, after which `adb devices` lists it.
 
 <a id="s5-ios"></a>
 
@@ -2829,11 +2781,12 @@ and GLFW layer, and a tool or an editor needs both as much as a game does. XR do
 engine, and its hard half is engine design: the swapchain handed to the renderer (Vulkan or GLES on Quest; whether
 wgpu-native exposes either is unprobed) and, on the web, the frame loop `XRSession.requestAnimationFrame` owns. One
 interface over OpenXR and WebXR is an engine abstraction (Godot's `XRServer`). A bare OpenXR binding can stand alone, as
-Rust's `openxr` crate does, so the engine may publish one later. What kama owes XR is Quest's Android target (KR-280,
-KR-283); a gap the engine meets past that is filed here as a row. The 2026-11-01 survey, for that engine: Quest's loader
-is Khronos's `openxr_loader_for_android` AAR (Meta supports 1.0.34 and later), initialized with the activity's `JavaVM`
+Rust's `openxr` crate does, so the engine may publish one later. What kama owes XR is Quest's Android route: the
+target shipped in `0.9.830`, and the app is KR-283; a gap the engine meets past that is filed here as a row. The
+2026-11-01 survey, for that engine: Quest's loader is Khronos's `openxr_loader_for_android` AAR (Meta supports
+1.0.34 and later), initialized with the activity's `JavaVM`
 and `jobject`; on Windows it is `openxr_loader.dll` with Quest Link as the runtime, so a desktop build is tested in the
-headset before the Android target exists; WebXR is reached through `jsLibraries` with an `expose fn` as the per-frame
+headset before the Android app exists; WebXR is reached through `jsLibraries` with an `expose fn` as the per-frame
 callback, only on the page thread (a threaded wasm build's `main` runs on a worker), and renders through WebGL2, since
 WebGPU in WebXR is behind a flag in the Quest browser.
 
