@@ -1,8 +1,8 @@
 // `std::fs::symlink` and `hardLink`. A symbolic link holds its target as written, may dangle, and is read through; an existing path is
 // `AlreadyExists` and is left as it was. A hard link is a second name for one file: the same contents, the same `FileId`, and it outlives
 // the first name. A hard link to nothing is `NotFound`. Windows wants Developer Mode or a privilege for a symbolic link, and where neither
-// is held that half answers `PermissionDenied`, which is the one thing it may answer in its place. wasm's filesystem has no hard links. Returns
-// 42.
+// is held that half answers `PermissionDenied`, which is the one thing it may answer in its place. wasm's filesystem has no hard links, and
+// Android's SELinux refuses one to the shell. Returns 42.
 import { std::fs::symlink, std::fs::hardLink, std::fs::symlinkStat, std::fs::stat, std::fs::readText, std::fs::writeText, std::fs::remove,
          std::fs::removeDirAll, std::fs::createDirAll, std::fs::exists, std::fs::Metadata, std::io::IoError };
 
@@ -55,7 +55,15 @@ fn int32 hardLinks(const ref string dir) {
     return codeOf(r: hardLink(original: first, link: dir + "/second.txt")) != 0 ? 0 : 2;
 }
 
-@compileFor(!ARCH_WASM32)
+// Under `adb shell` Android's SELinux denies the link (measured on API 34), and the answer is `PermissionDenied`.
+@compileFor(ABI_ANDROID)
+fn int32 hardLinks(const ref string dir) {
+    string first = dir + "/first.txt";
+    match (writeText(path: first, text: "one file")) { case Ok(value: n): { } case Err(error: e): { return 1; } };
+    return codeOf(r: hardLink(original: first, link: dir + "/second.txt")) == 3 ? 0 : 2;
+}
+
+@compileFor(!ARCH_WASM32, !ABI_ANDROID)
 fn int32 hardLinks(const ref string dir) {
     string first = dir + "/first.txt";
     string second = dir + "/second.txt";

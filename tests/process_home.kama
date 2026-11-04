@@ -5,10 +5,11 @@ import { std::process::homeDirectory, std::process::currentUser, std::process::U
 
 fn bool nonEmpty(Result<string, IoError> r) { return match (r) { case Ok(value: s): s.length() > 0; case Err(error: e): false; }; }
 
-// An id no account has: NotFound, not a crash and not an empty path.
+// An id no account has: NotFound, not a crash and not an empty path. Bionic answers for every id that names an app or
+// isolated process of some user, up to 3999999999 (`u39999_i9999`, home `/data`), so this one is just past them.
 @compileFor(!OS_WINDOWS)
 fn bool unknownIsNotFound() {
-    Result<string, IoError> r = UserId.of(raw: 3999999999ui32).homeDirectory();
+    Result<string, IoError> r = UserId.of(raw: 4000000000ui32).homeDirectory();
     return match (r) { case Ok(value: s): false; case Err(error: e): match (e.kind()) { case NotFound: true; case _: false; }; };
 }
 @compileFor(OS_WINDOWS)

@@ -271,15 +271,16 @@ build_one() {
     fi
 }
 # Run a built fixture on the Android device, in a directory of its own there named as its build dir is here. $1 =
-# the executable, $2 = the stderr capture; sets `actual`. A run the device's `timeout` ended (124) touches the
-# watchdog's marker, so it reports as a hang does.
+# the executable, $2 = the stderr capture; sets `actual`. A run the device's `timeout` ended touches the watchdog's
+# marker, so it reports as a hang does. That is a 124 its `-v` announced: 124 is a fixture's own status too
+# (new_enum_variant's sum), which read as a hang until the announcement was asked for.
 device_run() {
     local here="${1%/*}" d b="${1##*/}"; d="$ADEV/${here##*/}"
     if ! adb_ push "$(kama_native_path "$1")" "$d/$b" >/dev/null 2>"$2"; then actual=125; return; fi
     # chmod: a file pushed from Windows arrives with no execute bit. umask: adb shell's is 000, which makes every new
     # file world-writable; 022 is the one the native leg runs under.
-    adb_ shell "cd $d && chmod 755 $b && umask 022 && $ANDROID_ENV timeout $KAMA_FIXTURE_TIMEOUT ./$b" 2>"$2"; actual=$?
-    [ "$actual" = 124 ] && : >"$here/timed_out"
+    adb_ shell "cd $d && chmod 755 $b && umask 022 && $ANDROID_ENV timeout -v $KAMA_FIXTURE_TIMEOUT ./$b" 2>"$2"; actual=$?
+    [ "$actual" = 124 ] && grep -q '^timeout: sending signal' "$2" && : >"$here/timed_out"
     adb_ shell "rm -rf $d" >/dev/null 2>&1
 }
 # Run a fixture under a WATCHDOG, because a fixture that hangs used to wedge the whole suite forever.
