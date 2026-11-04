@@ -689,22 +689,6 @@ against a real lldb on every push (Linux and Windows skip it), so the fix does n
    refusals xfail fixtures; `kama_lldb.py` cuts `<type>__`, checked by `tools/check-lldb-formatters.sh` where lldb
    runs (the Mac; this box has none). A VERSION bump, since emitted C changes for every enum.
 
-<a id="s2-reach-twice"></a>
-
-### A refused import is reported twice, the second time as a qualified spelling (KR-310)
-
-Measured on `0.9.842`. When an import is refused for reach (`visibility`, or a module's `importsOnly`), every use of
-the imported name in the file gets a second error: *"module `…` is not visible from `…` — its `visibility` … and a
-qualified spelling reaches no further than an `import` would"*, or the `importsOnly` twin. The use is a bare call
-(`play()`), and SPEC refuses a module path everywhere but an `import` (*A module path is written only in an `import`*), so the message describes a
-spelling that cannot exist. `xfail/mod_vis_not_listed.d` records both positions (`main.kama:2:9` for the import,
-`main.kama:4:25` for the use) and so do `mod_vis_children.d` and the two `mod_imports_only_*.d` fixtures.
-
-The second report comes from the reference-site check in `kama.cemit.cpp` (the `_moduleReach` clause before the
-outbound `export` test), written for a qualified reference that reached a module without importing it. Likely fix:
-the use of a name whose import was already refused reports nothing more; then measure whether that rule left the check
-anything else to catch, and delete it if not. Each fixture's `DIAGNOSTIC_LINES` row loses its use positions.
-
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)

@@ -972,17 +972,17 @@ mint_protocol_not_a_value	mint_protocol_not_a_value.kama:16:4
 missing_return	missing_return.kama:6:26
 mod_call_private	main.kama:4:18 main.kama:4:25 main.kama:4:33
 mod_collision	main.kama:1:20
-mod_contract_not_visible	app.kama:1:9 app.kama:4:0 app.kama:7:0
+mod_contract_not_visible	app.kama:1:9
 mod_ctor_private	main.kama:1:18 main.kama:1:25 main.kama:1:33
 mod_export_private	main.kama:1:9 main.kama:2:25
 mod_export_undefined	mod_export_undefined.kama:1:0
-mod_imports_only_empty	audio.kama:2:9 audio.kama:5:25
-mod_imports_only_refused	render.kama:3:34 render.kama:6:34
+mod_imports_only_empty	audio.kama:2:9
+mod_imports_only_refused	render.kama:3:34
 mod_missing	-
 mod_sibling_private	b.kama:3:31
 mod_sibling_unimported	b.kama:5:31
-mod_vis_children	main.kama:3:9 main.kama:5:18 main.kama:5:25
-mod_vis_not_listed	main.kama:2:9 main.kama:4:18 main.kama:4:25
+mod_vis_children	main.kama:3:9 main.kama:5:18
+mod_vis_not_listed	main.kama:2:9 main.kama:4:18
 module_path_already_imported	module_path_already_imported.kama:6:22
 module_path_as_downcast	main.kama:2:112 main.kama:2:190
 module_path_bound_fn	main.kama:2:19

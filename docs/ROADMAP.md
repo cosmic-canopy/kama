@@ -59,7 +59,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 | id | defect | size | detail |
 |---|---|---|---|
 | KR-306 | *Claimed: Windows box, 2026-11-04.* **An enum's value or variant meets another C name** — a value or tag reaches C as `<Enum>_<Value>`, a `_` join, so two enums (`E_A`'s `B`, `E`'s `A_B`), an enum and a type (`E`'s `B`, a type `E_B`), or a tagged enum and its own tag type (a variant `kama_tag`, or a type `T_kama_tag` beside `T`) meet in one file and clang refuses the program; SPEC's `kama_` reservation is not enforced (measured to `0.9.839`). **Ruled 2026-11-04:** one helper names every enum constant, joined with `__`; a value and a member of its enum may not share a name; the tag type is `<Enum>__kama_tag` and `kama_` is enforced on joined names | S-M | [§2](ROADMAP_DETAIL.md#s2-enum-value-join) |
-| KR-310 | *Claimed: Windows box, 2026-11-04.* **A refused import is reported twice, the second time as a qualified spelling** — when `visibility` or `importsOnly` refuses an import, each use of the name gets a second error saying "a qualified spelling reaches no further than an `import` would", though the use is bare and no module path is legal outside an `import` (SPEC § Modules) (measured `0.9.842`). Likely fix: a refused import's uses report nothing more | S | [§2](ROADMAP_DETAIL.md#s2-reach-twice) |
 
 ## NOW — the next features, in build order
 

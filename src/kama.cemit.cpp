@@ -3668,26 +3668,9 @@ bool CEmitter::checkReach(const std::string& key, const std::string& spelled, co
     // judged"); the outbound one did not, so the same instantiation produced a third, impossible copy of a
     // diagnostic it had already reported correctly twice.
     if (!_nsCtx.unitPath.empty() && _nsCtx.unitPath != refFile && declFile == _nsCtx.unitPath) return true;
-    // §2c FOR A QUALIFIED REFERENCE. The import site above covers what a file imports; a qualified
-    // spelling reaches a module WITHOUT importing it (that is deliberate — see the inbound clause below),
-    // so the same rung has to be asked here or the manifest key is enforced in one position and not the
-    // other, which is the shape of §1a claim 3 all over again.
-    if (_moduleReach) {
-        const size_t cut = key.rfind("__");
-        auto mn = cut == std::string::npos ? _moduleNames.end() : _moduleNames.find(key.substr(0, cut));
-        const ModuleReach r = mn == _moduleNames.end() ? ModuleReach::Ok : _moduleReach(_nsCtx.module, mn->second);
-        if (r != ModuleReach::Ok) {
-            if (quiet) return false;
-            unsupported((r == ModuleReach::NotVisible
-                ? "module `" + mn->second + "` is not visible from "
-                  + (_nsCtx.module.empty() ? std::string("a file in no module") : "`" + _nsCtx.module + "`")
-                  + " — its `visibility` in `kama.json` does not name this module, and a qualified spelling "
-                    "reaches no further than an `import` would"
-                : "module `" + mn->second + "` is not in the `importsOnly` of `" + _nsCtx.module + "` in "
-                  "`kama.json`, and a qualified spelling reaches no further than an `import` would").c_str(), line);
-            return false;
-        }
-    }
+    // Module reach (`visibility`, `importsOnly`) is judged once, at the `import`: a module path is written
+    // nowhere else (KR-87), so every name from another module arrives through one. Asking again here only
+    // repeated a refused import at each use (KR-310).
     if (!_exported.count(key)) {                             // OUTBOUND: it never left its file
         if (quiet) return false;
         unsupported(("`" + spelled + "` is not exported by `" + declFile + "`, so " + what
@@ -46498,7 +46481,6 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
         else                          ctx = ctxOf(units[i]);
         _unitCtx[units[i].get()] = ctx;
         if (ctx.isPublic && !ctx.scope.empty()) _namespaces.insert(ctx.scope);
-        if (!ctx.scope.empty() && !ctx.module.empty()) _moduleNames[ctx.scope] = ctx.module;
         // A file-private scope is derived from the file's NAME (§2e.26), so two units can only share one by
         // sharing a name — and then their file-private symbols would collide in the emitted C, silently,
         // since neither is importable and nothing else would notice. Two files in one directory cannot have

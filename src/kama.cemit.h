@@ -2162,10 +2162,6 @@ private:
     // Namespaces: current-file scope + the helpers that mangle/resolve names.
     NsCtx _nsCtx;
     std::set<std::string> _namespaces;
-    // Mangled module scope -> the unmangled name, for the visibility rung: a resolved symbol key carries the
-    // mangled prefix and §2c is asked in real module names. Complete by construction — every module in the
-    // compilation has at least one unit, and this is filled from the same loop that builds `_unitCtx`.
-    std::map<std::string, std::string> _moduleNames;   // registered public namespaces (mangled)
     // The file-private scopes this compilation minted (`kF_<file>`, one per unit no module owns). A private
     // scope names nothing a user could write, so `demangleForDisplay` strips it from a message — and since
     // §2e.26 made the spelling name-derived rather than `_F<digits>`, there is no PATTERN left to recognise
