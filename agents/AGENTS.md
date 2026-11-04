@@ -83,8 +83,8 @@ error and wants `cast<int8>(big)`. That covers every crossing, not just narrowin
 The same rule applies **between an operator's two operands**, comparisons included: `int32 + uint8` does
 not compile, and neither does `i < n` with an `int32` counter against an `isize` length — the commonest
 shape to get wrong. **Declare the counter `isize` and no cast is needed** (`isize i = 0; while (i < xs.length())`);
-reach for `cast<int32>(…)` only where the value genuinely leaves the size domain, such as `main`'s exit
-code. A **shift** is the exception: its right operand is a count, so `x << someInt32` on an `int64` is fine.
+reach for a `cast` only where the value genuinely leaves the size domain: `main`'s exit status is a `cast<uint8>(…)`.
+A **shift** is the exception: its right operand is a count, so `x << someInt32` on an `int64` is fine.
 
 **`isize` is the size type.** Every `length()`/`count()`, every index and every `operator[]` is an `isize`
 (`ptrdiff_t`) — `string`, `View`, `Fixed` and every collection alike. `usize` (`size_t`) is reserved for
