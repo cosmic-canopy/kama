@@ -11567,7 +11567,7 @@ static bool qNeedsText(QMode m)
     return m == QMode::Coverage || m == QMode::Complete || m == QMode::SigHelp;
 }
 
-int main(int argc, char** argv)
+static int kamaMain(int argc, char** argv)
 {
 #ifdef _WIN32
     // Binary stdio, before a single byte moves. The CRT opens fd 0/1/2 in TEXT mode, where every '\n' on
@@ -14665,4 +14665,12 @@ int main(int argc, char** argv)
     fprintf(stderr, "kama: unknown subcommand '%s'\n", subcommand.c_str());
     usage();
     return 2;
+}
+
+// kama.stack.cpp: runs the compiler on a stack of its own, so no host runs out below the language's limit.
+int kama_main_on_own_stack(int (*body)(int, char**), int argc, char** argv);
+
+int main(int argc, char** argv)
+{
+    return kama_main_on_own_stack(kamaMain, argc, argv);
 }

@@ -120,6 +120,7 @@ OBJECTS = $(addprefix $(BUILD)/, \
             kama.lsp.o    \
             kama.driver.o \
             kama.winpath.o \
+            kama.stack.o  \
             kama.archive.o \
             kama.prelude.gen.o \
             kama.agents.gen.o \
@@ -235,6 +236,12 @@ WINDRES ?= windres
 OBJECTS += $(BUILD)/kama.res.o
 $(BUILD)/kama.res.o: src/kama.rc src/kama.manifest | $(BUILD)
 	$(WINDRES) -I src -i src/kama.rc -o $@
+endif
+
+# kama.stack.cpp's thread. glibc has carried pthreads in libc since 2.34 and macOS always has; an older glibc
+# needs the flag.
+ifeq (Linux,$(shell uname -s))
+LDFLAGS += -pthread
 endif
 
 $(BUILD)/kama: $(OBJECTS)
