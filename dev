@@ -138,7 +138,7 @@ case "$task" in
       tsan)   leg KAMA_TSAN ;;
       msan)   leg KAMA_MSAN ;;
       wasm)   leg KAMA_WASM ;;
-      # Android (KR-280): every fixture built for KAMA_ANDROID_TARGET (default aarch64-linux-android29) and run over
+      # Android (KR-280): every fixture built for KAMA_ANDROID_TARGET (default: the device's own CPU) and run over
       # adb. Host-only, since the container has no adb, and not in `all`/`matrix`, since it needs a device.
       # `KAMA_ANDROID=1 ./dev fixture <name>…` runs chosen fixtures there.
       android) build_host; KAMA_ANDROID=1 ./run_tests.sh ;;

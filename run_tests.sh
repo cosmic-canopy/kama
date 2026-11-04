@@ -143,7 +143,7 @@ if [ "${KAMA_WASM:-0}" != "0" ]; then
 fi
 
 # Opt-in Android pass (KR-280): KAMA_ANDROID=1 builds every positive (and multi-file) fixture for an Android triple,
-# KAMA_ANDROID_TARGET (default aarch64-linux-android29: Meta Quest's ABI, which the SDK's x86_64 emulator also runs),
+# KAMA_ANDROID_TARGET (default: the device's own CPU at API 29, so aarch64 on a Quest and x86_64 on the SDK's emulator),
 # with the NDK kama finds itself, and runs it on the device adb sees (ANDROID_SERIAL picks one), each in a directory
 # of its own under /data/local/tmp, as a native run gets one here. The device's `timeout` bounds a run: the watchdog
 # here would only kill adb. Mutually exclusive with the sanitizers and with KAMA_WASM.
@@ -152,7 +152,7 @@ if [ "${KAMA_ANDROID:-0}" != "0" ]; then
     if [ ${#SAN_FLAGS[@]} -gt 0 ] || [ "$WASM" = 1 ]; then
         echo "error: KAMA_ANDROID is mutually exclusive with the sanitizers and KAMA_WASM" >&2; exit 2
     fi
-    ANDROID=1; ATARGET=(--target "${KAMA_ANDROID_TARGET:-aarch64-linux-android29}")
+    ANDROID=1
     # adb from the SDK kama finds the NDK in (docs/targets.md): $ANDROID_HOME, else Android Studio's default; else PATH.
     up=""; [ -n "${USERPROFILE:-}" ] && command -v cygpath >/dev/null 2>&1 && up="$(cygpath -u "$USERPROFILE")"
     ADB=""
@@ -171,6 +171,17 @@ if [ "${KAMA_ANDROID:-0}" != "0" ]; then
         echo "error: KAMA_ANDROID: adb sees no device — boot an emulator (emulator -avd <name> -no-window) or attach" \
              "one, and pick one of several with ANDROID_SERIAL" >&2; exit 2
     fi
+    # The emulator runs aarch64 only through its ARM translator, under which proc_detach_dtor, proc_fiber_pipe and
+    # proc_open_file_limit fail and pass as x86_64 (measured 2026-11-03), so a translated run is asked for by name.
+    if [ -z "${KAMA_ANDROID_TARGET:-}" ]; then
+        case "$(adb_ shell getprop ro.product.cpu.abi | tr -d '\r')" in
+            arm64-v8a) KAMA_ANDROID_TARGET=aarch64-linux-android29 ;;
+            x86_64)    KAMA_ANDROID_TARGET=x86_64-linux-android29 ;;
+            *) echo "error: KAMA_ANDROID: the device is neither arm64-v8a nor x86_64; name a triple in KAMA_ANDROID_TARGET" >&2
+               exit 2 ;;
+        esac
+    fi
+    ATARGET=(--target "$KAMA_ANDROID_TARGET")
     ADEV="/data/local/tmp/kama-tests-$$"
     adb_ shell "rm -rf $ADEV && mkdir -p $ADEV" || exit 2
     echo "(android mode: build every positive fixture for ${ATARGET[1]} + run on $(adb_ get-serialno))"
