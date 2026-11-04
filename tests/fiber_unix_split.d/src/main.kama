@@ -1,0 +1,103 @@
+// `UnixStream.split` on fibers (KR-244): a reader and a writer on one socket, both ends split, with a descriptor riding on
+// the write half and arriving on the read half, and the writer's drop the FIN that ends the far reader. `reunite` gives a
+// stream back and refuses two streams' halves. Datagrams where they exist (dgram_posix.kama), whose bound path is removed
+// once, by the last half to go. Each case is its own return code. Returns 42.
+import { std::net::UnixStreamPair, std::net::UnixStream, std::net::UnixReader, std::net::UnixWriter, std::io::IoError, std::io::Descriptor,
+         std::fs::File, std::fs::OpenMode, std::fs::writeText, std::fs::remove, std::concurrent::Fiber,
+         std::collections::DynamicArray, std::collections::FixedArray, datagrams };
+
+static int32 passed = 0;
+
+unsafe fn int32 hear(UnixReader r) {
+    FixedArray<uint8> buf = FixedArray.make(size: 8);
+    DynamicArray<Descriptor> ds = DynamicArray.empty();
+    usize n = match (r.recvDescriptors(into: buf.viewMut(), descriptors: ref ds)) { case Ok(value: k): k; case Err(error: e): cast<usize>(0); };
+    if (n != cast<usize>(3) || buf[2] != 3ui8 || ds.length() != 1) { return 1; }
+    File f = match (File.adopt(descriptor: ds.remove(index: 0))) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    passed = 1;
+    match (r.peerCredentials()) { case Ok(value: c): { } case Err(error: e): { return 3; } };
+    // The far writer's drop is the FIN this read ends on.
+    isize more = match (r.read(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): -1; };
+    return more == 0 ? 0 : 4;
+}
+unsafe fn int32 tell(UnixWriter w) {
+    FixedArray<uint8> msg = FixedArray.make(size: 3);
+    msg[0] = 1ui8; msg[1] = 2ui8; msg[2] = 3ui8;
+    File f = match (File.open(path: "fiber_unix_split.txt", mode: OpenMode::Read)) { case Ok(value: x): give x; case Err(error: e): { return 5; } };
+    Descriptor d = match (f.duplicateDescriptor()) { case Ok(value: x): give x; case Err(error: e): { return 6; } };
+    DynamicArray<Descriptor> outgoing = DynamicArray.empty();
+    outgoing.add(item: give d);
+    usize n = match (w.sendDescriptors(bytes: msg.view(), descriptors: give outgoing)) { case Ok(value: k): k; case Err(error: e): cast<usize>(0); };
+    return n == cast<usize>(3) ? 0 : 7;
+}
+
+unsafe fn int32 stream() {
+    match (UnixStreamPair.open()) {
+        case Err(error: e): { return 10; }
+        case Ok(value: p): {
+            match (give p.split()) { case Ends(first: a, second: b): {
+                match (give a.split()) { case Halves(reader: ar, writer: aw): {
+                    match (give b.split()) { case Halves(reader: br, writer: bw): {
+                        Fiber<int32> h = spawn fiber hear(r: give br);
+                        Fiber<int32> t = spawn fiber tell(w: give aw);
+                        int32 told = give t.join();
+                        int32 heard = give h.join();
+                        return told + heard;
+                    } };
+                } };
+            } };
+        }
+    };
+}
+unsafe fn int32 joined() {
+    match (UnixStreamPair.open()) {
+        case Err(error: e): { return 20; }
+        case Ok(value: p): {
+            match (give p.split()) { case Ends(first: a, second: b): {
+                match (give a.split()) { case Halves(reader: ar, writer: aw): {
+                    match (give b.split()) { case Halves(reader: br, writer: bw): {
+                        match (UnixStream.reunite(reader: give ar, writer: give bw)) {
+                            case Ok(value: s): { return 21; }
+                            case Err(error: e): { match (give e) { case Halves(reader: r, writer: w): { } }; }
+                        };
+                        return 0;
+                    } };
+                } };
+            } };
+        }
+    };
+}
+unsafe fn int32 joinedBack() {
+    match (UnixStreamPair.open()) {
+        case Err(error: e): { return 30; }
+        case Ok(value: p): {
+            FixedArray<uint8> one = FixedArray.make(size: 1);
+            match (give p.split()) { case Ends(first: a, second: b): {
+                match (give a.split()) { case Halves(reader: r, writer: w): {
+                    match (UnixStream.reunite(reader: give r, writer: give w)) {
+                        case Err(error: e): { return 31; }
+                        case Ok(value: s): {
+                            match (s.write(bytes: one.view())) { case Ok(value: n): { } case Err(error: e): { return 32; } };
+                            match (b.read(into: one.viewMut())) { case Ok(value: n): { return n == 1 ? 0 : 33; } case Err(error: e): { return 34; } };
+                        }
+                    };
+                } };
+            } };
+        }
+    };
+}
+
+unsafe fn uint8 run() {
+    match (writeText(path: "fiber_unix_split.txt", text: "x")) { case Ok(value: u): { } case Err(error: e): { return 90; } };
+    int32 s = stream();
+    _ = remove(path: "fiber_unix_split.txt");
+    if (s != 0) { return cast<uint8>(s); }
+    if (passed != 1) { return 91; }
+    int32 j = joined();
+    if (j != 0) { return cast<uint8>(j); }
+    int32 k = joinedBack();
+    if (k != 0) { return cast<uint8>(k); }
+    int32 d = datagrams();
+    return d == 0 ? 42 : cast<uint8>(d);
+}
+fn uint8 main() { return run(); }

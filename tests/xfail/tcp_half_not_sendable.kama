@@ -1,0 +1,5 @@
+// The halves of a split socket stay on one isolate (KR-244): thread-per-core never moves a connection, and they share a socket
+// whose fields each half's calls change. `reunite` is the way back to a stream that may cross.
+import { std::net::TcpReader, std::concurrent::Channel };
+fn void send(Channel<TcpReader> ch) { }
+fn uint8 main() { return 0; }

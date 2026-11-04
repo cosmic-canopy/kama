@@ -23,15 +23,20 @@ import {
     std::collections::View, std::collections::ConstView,
     std::encoding::utf8::decode, std::encoding::utf8::Utf8Error,
     std::io::Descriptor, std::collections::DynamicArray, std::collections::FixedArray,
+    std::io::Reader, std::io::Writer,
     ReliableStream, Shutdown, PeerCredentials, DatagramSocket, RecvFrom,
  std::time::Instant, ConnectOptions,
 };
 
-export { UnixStream, UnixStreamPair, UnixStreamEnds, UnixListener, UnixAddr, UnixDatagram, UnixDatagramPair, UnixDatagramEnds };
+export { UnixStream, UnixHalves, UnixReader, UnixWriter, UnixUnjoined, UnixStreamPair, UnixStreamEnds, UnixListener, UnixAddr,
+         UnixDatagram, UnixDatagramHalves, UnixDatagramReceiver, UnixDatagramSender, UnixDatagramUnjoined, UnixDatagramPair, UnixDatagramEnds };
 
 extern "kama_os.h";
 extern fn int32 kama_net_init();
 extern fn isize kama_socket_unix(int32 datagram);
+extern fn UnsafePtr kama_net_cell_new(usize size);
+extern fn int32 kama_net_cell_leave(UnsafePtr socket);
+extern fn void kama_net_cell_free(UnsafePtr socket, usize size);
 extern fn int32 kama_unix_pair(int32 datagram, out isize a, out isize b);
 extern fn int32 kama_unix_path_max();
 extern fn int32 kama_bind_unix(isize fd, UnsafeConstPtr<uint8> path, usize n, int32 kind);
@@ -425,6 +430,92 @@ type resource UnixStream implements ReliableStream, Sendable {   // a `Reader` a
     public const fn isize rawHandle() { return this.fd; }
 
     unsafe ~UnixStream() { if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); } }   // guard: see ~TcpStream
+
+    // Take the stream apart, consuming it (KR-244), so that one fiber may read while another writes:
+    // `match (give conn.split()) { case Halves(reader: r, writer: w): { … } };`. As `TcpStream.split`.
+    public unsafe give fn UnixHalves split() {
+        UnsafePtr<UnixStream> cell = cast<UnsafePtr<UnixStream>>(kama_net_cell_new(size: sizeof(UnixStream)));
+        cell[0] = UnixStream.whole(fd: this.fd, io: this.io, mode: this.mode, readBy: this.readBy, writeBy: this.writeBy);
+        this.fd = -1; this.io = null;                       // what the destructor finds at this method's end
+        return UnixHalves::Halves(reader: UnixReader.make(cell: cell), writer: UnixWriter.make(cell: cell));
+    }
+    // The stream back from its two halves, or both of them, unchanged, when they came from two different streams.
+    public unsafe ctor Result<UnixStream, UnixUnjoined> reunite(UnixReader reader, UnixWriter writer) {
+        if (reader.cell != writer.cell) { return Result::Err(error: UnixUnjoined::Halves(reader: give reader, writer: give writer)); }
+        UnsafePtr<UnixStream> cell = reader.cell;
+        isize fd = cell[0].fd;
+        UnsafePtr io = cell[0].io;
+        int32 mode = cell[0].mode;
+        uint64 readBy = cell[0].readBy;
+        uint64 writeBy = cell[0].writeBy;
+        reader.cell = null; writer.cell = null;             // so neither half's drop leaves the cell
+        kama_net_cell_free(socket: cast<UnsafePtr>(cell), size: sizeof(UnixStream));
+        return Result::Ok(value: UnixStream.whole(fd: fd, io: io, mode: mode, readBy: readBy, writeBy: writeBy));
+    }
+    // A socket's whole state, carried into a cell and back out.
+    unsafe ctor whole(isize fd, UnsafePtr io, int32 mode, uint64 readBy, uint64 writeBy) {
+        this.fd = fd; this.io = io; this.mode = mode; this.readBy = readBy; this.writeBy = writeBy;
+    }
+}
+
+// A `UnixStream` taken apart (`split`): its read half and its write half, which share one socket.
+type enum UnixHalves { Halves(UnixReader reader, UnixWriter writer); }
+
+// `UnixStream.reunite` given halves of two different streams: both handed back.
+type enum UnixUnjoined implements Error {
+    Halves(UnixReader reader, UnixWriter writer);
+    public const fn string message() { return "these halves came from two different streams, so they were not joined"; }
+}
+
+// The read half of a split `UnixStream`. The last half to go closes the socket.
+type resource UnixReader implements Reader {
+    UnsafePtr<UnixStream> cell;
+    unsafe ctor make(UnsafePtr<UnixStream> cell) { this.cell = cell; }
+    friend UnixStream::split[make];
+    friend UnixStream::reunite[cell];
+
+    @parks
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) { return this.cell[0].read(into: into); }
+    public unsafe fn Result<usize, IoError> recvDescriptors(View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
+        return this.cell[0].recvDescriptors(into: into, descriptors: ref descriptors);
+    }
+    public unsafe fn void setReadDeadline(Optional<Instant> at) { this.cell[0].setReadDeadline(at: at); }
+    public unsafe fn Result<UnixAddr, IoError> localAddr() { return this.cell[0].localAddr(); }
+    public unsafe fn Result<UnixAddr, IoError> peerAddr() { return this.cell[0].peerAddr(); }
+    public unsafe fn Result<PeerCredentials, IoError> peerCredentials() { return this.cell[0].peerCredentials(); }
+    unsafe ~UnixReader() {
+        if (this.cell == null) { return; }
+        if (kama_net_cell_leave(socket: cast<UnsafePtr>(this.cell)) == 1) {
+            drop(ptr: this.cell);
+            kama_net_cell_free(socket: cast<UnsafePtr>(this.cell), size: sizeof(UnixStream));
+        }
+    }
+}
+
+// The write half. Dropping it sends a FIN, as a `TcpWriter`'s drop does.
+type resource UnixWriter implements Writer {
+    UnsafePtr<UnixStream> cell;
+    unsafe ctor make(UnsafePtr<UnixStream> cell) { this.cell = cell; }
+    friend UnixStream::split[make];
+    friend UnixStream::reunite[cell];
+
+    @parks
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) { return this.cell[0].write(bytes: bytes); }
+    public unsafe fn Result<Unit, IoError> flush() { return this.cell[0].flush(); }
+    public unsafe fn Result<usize, IoError> sendDescriptors(ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
+        return this.cell[0].sendDescriptors(bytes: bytes, descriptors: give descriptors);
+    }
+    public unsafe fn void setWriteDeadline(Optional<Instant> at) { this.cell[0].setWriteDeadline(at: at); }
+    public unsafe fn Result<UnixAddr, IoError> localAddr() { return this.cell[0].localAddr(); }
+    public unsafe fn Result<UnixAddr, IoError> peerAddr() { return this.cell[0].peerAddr(); }
+    unsafe ~UnixWriter() {
+        if (this.cell == null) { return; }
+        _ = this.cell[0].shutdown(how: Shutdown::Write);    // a socket already reset has nothing more to say: ignored
+        if (kama_net_cell_leave(socket: cast<UnsafePtr>(this.cell)) == 1) {
+            drop(ptr: this.cell);
+            kama_net_cell_free(socket: cast<UnsafePtr>(this.cell), size: sizeof(UnixStream));
+        }
+    }
 }
 
 // A listening Unix-domain socket. Closes on drop and REMOVES the socket file it created. Move-only, `Sendable`.
@@ -714,6 +805,100 @@ type resource UnixDatagram implements DatagramSocket<UnixAddr>, Sendable {
     unsafe ~UnixDatagram() {
         if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); }
         if (this.created.length() > 0) { int32 ru = kama_unlink(path: this.created.cstr()); }
+    }
+
+    // Take the socket apart, consuming it (KR-244), so that one fiber may receive while another sends. As `UdpSocket.split`.
+    // The bound path travels with the socket, so the last half to go removes it, once.
+    public unsafe give fn UnixDatagramHalves split() {
+        UnsafePtr<UnixDatagram> cell = cast<UnsafePtr<UnixDatagram>>(kama_net_cell_new(size: sizeof(UnixDatagram)));
+        cell[0] = UnixDatagram.whole(fd: this.fd, created: copy this.created, io: this.io, mode: this.mode, readBy: this.readBy, writeBy: this.writeBy);
+        this.fd = -1; this.io = null; this.created = "";    // what the destructor finds at this method's end
+        return UnixDatagramHalves::Halves(receiver: UnixDatagramReceiver.make(cell: cell), sender: UnixDatagramSender.make(cell: cell));
+    }
+    // The socket back from its two halves, or both of them, unchanged, when they came from two different sockets.
+    public unsafe ctor Result<UnixDatagram, UnixDatagramUnjoined> reunite(UnixDatagramReceiver receiver, UnixDatagramSender sender) {
+        if (receiver.cell != sender.cell) { return Result::Err(error: UnixDatagramUnjoined::Halves(receiver: give receiver, sender: give sender)); }
+        UnsafePtr<UnixDatagram> cell = receiver.cell;
+        isize fd = cell[0].fd;
+        string created = copy cell[0].created;
+        UnsafePtr io = cell[0].io;
+        int32 mode = cell[0].mode;
+        uint64 readBy = cell[0].readBy;
+        uint64 writeBy = cell[0].writeBy;
+        receiver.cell = null; sender.cell = null;           // so neither half's drop leaves the cell
+        cell[0].fd = -1; cell[0].created = "";              // nothing for its destructor to close or remove
+        drop(ptr: cell);
+        kama_net_cell_free(socket: cast<UnsafePtr>(cell), size: sizeof(UnixDatagram));
+        return Result::Ok(value: UnixDatagram.whole(fd: fd, created: give created, io: io, mode: mode, readBy: readBy, writeBy: writeBy));
+    }
+    // A socket's whole state, carried into a cell and back out.
+    unsafe ctor whole(isize fd, string created, UnsafePtr io, int32 mode, uint64 readBy, uint64 writeBy) {
+        this.fd = fd; this.created = give created; this.io = io; this.mode = mode; this.readBy = readBy; this.writeBy = writeBy;
+    }
+}
+
+// A `UnixDatagram` taken apart (`split`): its receiving half and its sending half, which share one socket.
+@compileFor(!OS_WINDOWS)
+type enum UnixDatagramHalves { Halves(UnixDatagramReceiver receiver, UnixDatagramSender sender); }
+
+// `UnixDatagram.reunite` given halves of two different sockets: both handed back.
+@compileFor(!OS_WINDOWS)
+type enum UnixDatagramUnjoined implements Error {
+    Halves(UnixDatagramReceiver receiver, UnixDatagramSender sender);
+    public const fn string message() { return "these halves came from two different sockets, so they were not joined"; }
+}
+
+// The receiving half of a split `UnixDatagram`. The last half to go closes the socket and removes a file it bound.
+@compileFor(!OS_WINDOWS)
+type resource UnixDatagramReceiver {
+    UnsafePtr<UnixDatagram> cell;
+    unsafe ctor make(UnsafePtr<UnixDatagram> cell) { this.cell = cell; }
+    friend UnixDatagram::split[make];
+    friend UnixDatagram::reunite[cell];
+
+    @parks
+    public unsafe fn Result<usize, IoError> recv(View<uint8> into) { return this.cell[0].recv(into: into); }
+    @parks
+    public unsafe fn Result<RecvFrom<UnixAddr>, IoError> recvFrom(View<uint8> into) { return this.cell[0].recvFrom(into: into); }
+    public unsafe fn Result<usize, IoError> recvDescriptors(View<uint8> into, ref DynamicArray<Descriptor> descriptors) {
+        return this.cell[0].recvDescriptors(into: into, descriptors: ref descriptors);
+    }
+    public unsafe fn void setReadDeadline(Optional<Instant> at) { this.cell[0].setReadDeadline(at: at); }
+    public unsafe fn Result<UnixAddr, IoError> localAddr() { return this.cell[0].localAddr(); }
+    public unsafe fn Result<UnixAddr, IoError> peerAddr() { return this.cell[0].peerAddr(); }
+    unsafe ~UnixDatagramReceiver() {
+        if (this.cell == null) { return; }
+        if (kama_net_cell_leave(socket: cast<UnsafePtr>(this.cell)) == 1) {
+            drop(ptr: this.cell);
+            kama_net_cell_free(socket: cast<UnsafePtr>(this.cell), size: sizeof(UnixDatagram));
+        }
+    }
+}
+
+// The sending half. A datagram socket has no FIN to send: the last half to go closes it.
+@compileFor(!OS_WINDOWS)
+type resource UnixDatagramSender {
+    UnsafePtr<UnixDatagram> cell;
+    unsafe ctor make(UnsafePtr<UnixDatagram> cell) { this.cell = cell; }
+    friend UnixDatagram::split[make];
+    friend UnixDatagram::reunite[cell];
+
+    @parks
+    public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) { return this.cell[0].send(bytes: bytes); }
+    @parks
+    public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref UnixAddr to) { return this.cell[0].sendTo(bytes: bytes, to: to); }
+    public unsafe fn Result<usize, IoError> sendDescriptors(ConstView<uint8> bytes, DynamicArray<Descriptor> descriptors) {
+        return this.cell[0].sendDescriptors(bytes: bytes, descriptors: give descriptors);
+    }
+    public unsafe fn void setWriteDeadline(Optional<Instant> at) { this.cell[0].setWriteDeadline(at: at); }
+    public unsafe fn Result<UnixAddr, IoError> localAddr() { return this.cell[0].localAddr(); }
+    public unsafe fn Result<UnixAddr, IoError> peerAddr() { return this.cell[0].peerAddr(); }
+    unsafe ~UnixDatagramSender() {
+        if (this.cell == null) { return; }
+        if (kama_net_cell_leave(socket: cast<UnsafePtr>(this.cell)) == 1) {
+            drop(ptr: this.cell);
+            kama_net_cell_free(socket: cast<UnsafePtr>(this.cell), size: sizeof(UnixDatagram));
+        }
     }
 }
 

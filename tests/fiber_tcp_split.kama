@@ -1,0 +1,54 @@
+// `TcpStream.split` on fibers (KR-244): a reader fiber and a writer fiber on one socket at once. Both ends of a connection
+// split, four fibers, 8 MiB each way, and each writer's drop is the FIN its peer's reader ends on. Before this a `spawn
+// fiber` bundle could not reach two fibers, since each would hold the same stream. On io_uring this is a `RECV` and a `SEND`
+// in flight together on one descriptor. Returns 42.
+import { std::net::TcpListener, std::net::TcpStream, std::net::TcpReader, std::net::TcpWriter, std::io::IoError,
+         std::collections::FixedArray, std::concurrent::Fiber };
+
+comptime int64 EACH_WAY = 8388608i64;
+
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+
+unsafe fn int64 drain(TcpReader r) {
+    FixedArray<uint8> b = FixedArray.make(size: 4096);
+    int64 total = 0i64;
+    bool more = true;
+    while (more) {
+        match (r.read(into: b.viewMut())) {
+            case Ok(value: n): { total = total + cast<int64>(n); more = n != 0; }
+            case Err(error: e): { return -1i64; }
+        };
+    }
+    return total;
+}
+unsafe fn int64 pour(TcpWriter w) {
+    FixedArray<uint8> b = FixedArray.make(size: 4096);
+    int64 total = 0i64;
+    while (total < EACH_WAY) {
+        match (w.write(bytes: b.view())) {
+            case Ok(value: n): { total = total + cast<int64>(n); }
+            case Err(error: e): { return -1i64; }
+        };
+    }
+    return total;                                      // and `w` goes as this returns: the FIN
+}
+
+unsafe fn uint8 run() {
+    TcpListener l = match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    TcpStream c = match (TcpStream.connect(host: "127.0.0.1", port: portOf(l: l))) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    TcpStream s = match (l.accept()) { case Ok(value: x): give x; case Err(error: e): { return 4; } };
+    match (give c.split()) { case Halves(reader: cr, writer: cw): {
+        match (give s.split()) { case Halves(reader: sr, writer: sw): {
+            Fiber<int64> a = spawn fiber drain(r: give cr);
+            Fiber<int64> b = spawn fiber drain(r: give sr);
+            Fiber<int64> d = spawn fiber pour(w: give cw);
+            Fiber<int64> e = spawn fiber pour(w: give sw);
+            int64 fromClient = give d.join();
+            int64 fromServer = give e.join();
+            int64 atServer = give b.join();
+            int64 atClient = give a.join();
+            return fromClient >= EACH_WAY && atServer == fromClient && fromServer >= EACH_WAY && atClient == fromServer ? 42 : 1;
+        } };
+    } };
+}
+fn uint8 main() { return run(); }

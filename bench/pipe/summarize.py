@@ -2,7 +2,8 @@
 """summarize.py — KR-264's pipe table, from run.sh's TSV.
 
 For every workload and size: each arm's nanoseconds per operation (min and median over the rounds; a round trip for
-`pingpong`, a chunk for `bulk`, all four calls for `ops`), MB/s for `bulk`, and each arm against `kama`, paired by round:
+`pingpong`, a chunk for `bulk`, all four calls for `ops`, a chunk each way for `split`), MB/s one way for `bulk` and `split`,
+and each arm against `kama`, paired by round:
 the median ratio, and in how many rounds the arm was the faster. `kama#2` is in the same table: its gap to `kama` is the
 noise floor a difference has to clear.
 """
@@ -28,7 +29,7 @@ for (workload, bytes_, capacity) in sorted(by):
     for slot in sorted(slots, key=lambda s: (s != "kama", s)):
         v = slots[slot]
         best = min(v.values())
-        rate = f"{bytes_ * 1000 / best:,.0f}" if workload == "bulk" else ""
+        rate = f"{bytes_ * 1000 / best:,.0f}" if workload in ("bulk", "split") else ""
         pair = " | "
         if slot != "kama" and base:
             common = [r for r in v if r in base]

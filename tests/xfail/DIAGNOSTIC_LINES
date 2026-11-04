@@ -1515,6 +1515,7 @@ tag_ref_template	tag_ref_template.kama:2:0
 tag_template_hole_type	tag_template_hole_type.kama:4:55
 tag_typed_hole_spec	tag_typed_hole_spec.kama:5:20
 tag_unknown	tag_unknown.kama:4:19
+tcp_half_not_sendable	tcp_half_not_sendable.kama:4:21
 template_escape	template_escape.kama:7:4 template_escape.kama:8:4
 ternary_arm_copy_borrow	ternary_arm_copy_borrow.kama:7:28 ternary_arm_copy_borrow.kama:7:37
 ternary_arm_give	ternary_arm_give.kama:7:15

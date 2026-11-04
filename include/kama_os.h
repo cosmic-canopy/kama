@@ -4407,6 +4407,17 @@ static inline void  kama_pipe_park(uint64_t by) { (void)by; }
 static inline void  kama_pipe_wake(void* fiber) { (void)fiber; }
 #endif
 
+// A split socket's cell (KR-244): a count, and then the socket, which its two halves share. Neither half leaves its
+// isolate, so the count is a plain one, and 16 bytes ahead of the socket keeps it at any alignment a socket has.
+static inline void* kama_net_cell_new(size_t size) {
+    int64_t* c = (int64_t*)kama_alloc(16 + size, 16);
+    if (!c) kama_panic(kama_string_lit("std::net: out of memory splitting a socket", 42));
+    c[0] = 2;
+    return (char*)c + 16;
+}
+static inline int32_t kama_net_cell_leave(void* socket) { return --*(int64_t*)((char*)socket - 16) == 0; }
+static inline void kama_net_cell_free(void* socket, size_t size) { kama_free((char*)socket - 16, 16 + size, 16); }
+
 static inline void kama__net_fail(int e) {
 #if defined(_WIN32)
     kama__os_fail(0, e);

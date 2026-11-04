@@ -2550,7 +2550,7 @@ from data races keeps holding by construction.
 Steps 1–6 shipped `0.9.737`–`0.9.751` (fibers.md §8 records each, and the as-built notes under decisions 1, 3, 7, 8, 9,
 10 and 13). Step 5 was ruled 2026-10-26 and built `0.9.745`–`0.9.748` (fibers.md decisions 7, 11, 13 and 15): `Poller.wait`
 parks too, on its own descriptor on epoll and kqueue and through step 7's offload pool on AFD and `poll(2)`; two fibers
-on one socket is KR-244. Step 6 (`0.9.751`) made channels and isolate joins park, with no new surface.
+on one socket came as `split` in `0.9.845`. Step 6 (`0.9.751`) made channels and isolate joins park, with no new surface.
 
 **Step 7, where it starts (read 2026-10-27; re-probe before building).** Decision 8's third part: work that blocks and
 has no readiness to wait on runs on a small per-process pool of threads while the fiber parks, and the pool's completion
@@ -2572,7 +2572,7 @@ wakes it through `kama_sched_wake`, the remote queue channels use since step 6. 
   512 blocking threads), the `offload` spelling, which file calls go to the pool, and whether a thread with no
   scheduler keeps calling inline (the recommendation: yes, no pool hop where nothing else could run).
 
-**Ruled 2026-11-04: KR-3 in full is next on the Mac, after KR-244, unhurried, over as many sessions as it takes.**
+**Ruled 2026-11-04: KR-3 in full is next on the Mac, unhurried, over as many sessions as it takes.**
 The aim is threading in a good place for its consumers, so no step is narrowed or deferred to finish sooner. A downstream
 engine has asked for jobs, which is why it moved up, and that request does not outrank the design.
 - **Scope:** steps 7 to 11, and what those decisions left unbuilt: KR-296 (decision 11), KR-297 (decision 12), KR-202 (inside
@@ -2627,177 +2627,6 @@ they are on.
 It is unprobed here: this box is arm64 and its container is too, so the work wants an x86-64 Linux host with a
 CET-capable CPU and a kernel and glibc that enable it. Size M?. BTI and PAC on arm64 need nothing (fibers.md
 decision 2).
-
-<a id="s6-socket-split"></a>
-
-### Two fibers on one socket: a read half and a write half (KR-244)
-
-**Found 2026-10-26, planning KR-3 step 5.** A connection that reads and writes at once — a proxy copying both ways, a
-WebSocket with a heartbeat — is two loops over one socket. On fibers that is a reader fiber and a writer fiber, and
-the scheduler already holds one of each per registration (`kama_sched_io`'s `reader` and `writer`). The language
-refuses it: a bare `spawn fiber` takes a `ref` bundle only to a place no other child borrows, so two fibers cannot each
-hold the same `TcpStream`.
-
-| | How two tasks share one connection |
-|---|---|
-| Go | both goroutines hold the `net.Conn`; a concurrent `Read` and `Write` is documented safe |
-| tokio | `split(&mut s)` (borrowed halves) or `into_split()` (owned halves, `reunite` to join them) |
-| Rust std | `try_clone()`: a second handle on a duplicated descriptor |
-| Java | one `Socket`, its input and output streams used from two threads |
-
-**Verdict: scheduled.** A server language needs full duplex, and a duplicated descriptor is not the answer here: it
-shares the mode and would need a second registration for one open file. The shape wants rulings after step 5 ships —
-owned or borrowed halves, a `reunite`, which half's drop closes the socket, and how a half crosses an isolate under
-decision 13's release rule.
-
-**The brief (2026-10-27, after step 5 shipped).** Rust's std has a fourth answer the table leaves out: `Read` and
-`Write` are implemented for `&TcpStream`, so two scoped threads share one stream through a shared reference, and even
-`set_read_timeout` takes `&self`. The socket's state is the kernel's, so a shared reference is sound there.
-
-What kama already fixes, read from the tree:
-- **A view cannot be a `spawn fiber` bundle** (`xfail/spawn_fiber_view_bundle`), and a fiber takes one bundle
-  (`xfail/spawn_fiber_two_args`). Halves borrowed as views, tokio's `split(&mut s)`, cannot reach two fibers.
-- **A `const ref` may be shared by several children, but `read`, `write` and the deadline setters change the stream's
-  fields** (`io`, `mode`, `readBy`, `writeBy`, `lib/std/net/net.kama` ~94). Rust's `&TcpStream` model would need them
-  behind interior mutability, and a `const ref` may cross to an isolate child, where that state would race.
-- **Each socket has one home scheduler** (decision 13): the isolate that next uses a socket takes it off the previous
-  one's queue. Two isolates using one socket at once would take it from each other, and a reader parked on the first
-  would never wake.
-- **Thread-per-core never migrates a connection.** A server's isolate accepts a connection and serves it to the end, so
-  both directions of a connection live on one isolate. tokio's halves are `Send` because its work-stealing runtime
-  moves tasks between threads; kama's fibers never leave their isolate.
-- **The house shapes for "one thing, two ends":** a `Channel` mints counted `Sender`s and `Receiver`s, the last holder
-  freeing the queue; `UnixStreamPair` lends its two ends in place; `Undelivered` hands a resource back as an enum
-  payload taken apart with `match`.
-
-**The options.**
-- **(a) Owned halves, fiber-local.** A consuming `split()` turns a stream into a `TcpReader` and a `TcpWriter`, each a
-  move-only resource that is **not** `Sendable`. The two share one counted record (the descriptor, its registration,
-  the mode); each keeps its own direction's deadline. Dropping the writer sends a FIN (`shutdown(Write)`), as tokio's
-  `OwnedWriteHalf` does; the last half to drop takes the socket off the scheduler and closes it. `reunite(reader:,
-  writer:)` gives the `TcpStream` back, which is `Sendable` again, and a pair from two streams is handed back unjoined.
-- **(b) Owned halves that cross isolates.** As (a), but `Sendable`, with a registration per direction: a reader's
-  interest on its isolate's poller and a writer's on another's. epoll and kqueue allow it, and AFD polls per
-  operation, but it replaces decision 13's one home with two, for a case thread-per-core does not produce.
-- **(c) Go's model: a counted second handle.** `s.share()` returns another `TcpStream` on the same socket and
-  registration, the socket closing with the last. One type and no `reunite`, but either handle may read, so two
-  readers interleave bytes, which is a footgun with no use, and a shared handle is `Sendable` by its type, which
-  brings (b)'s problem back as a run-time one.
-
-**Recommendation: (a).** It is the GOALS answer: the disjointness is in the types (a reader cannot write), as
-`parallel_for`'s disjoint views are, so no two fibers touch one object's fields and no interior mutability is needed
-(#3a–c); one split, one way (#4); and `split` and `reunite` are visible, greppable acts (#5). It is consistent with
-practice: thread-per-core keeps a connection on its isolate (decision 1), decision 13's one home holds unchanged, and
-the shared record is counted the way a channel's queue is.
-
-**The spelling, probed 2026-10-27 (`0.9.751`):** a call cannot return two resources, and kama has no tuple. The two
-shapes the tree already uses:
-
-```kama
-// 1. An enum payload, taken apart by `match`, as `Undelivered` hands back an item:
-TcpHalves h = split(stream: give conn);
-match (give h) {
-    case Halves(reader: r, writer: w): {
-        scope {
-            spawn fiber pumpIn(from: give r);
-            spawn fiber pumpOut(to: give w);
-        }
-    }
-};
-// 2. A pair resource whose ends leave by a `take`, as `UnixStreamPair`'s leave by `intoDescriptor()`:
-TcpHalves h = split(stream: give conn);
-spawn fiber pumpIn(from: h.takeReader());
-spawn fiber pumpOut(to: h.takeWriter());
-```
-
-Shape 1 builds and runs today with two stand-in resources: both halves move into two fibers and each drops once. It
-is the one with no empty state, where a second `take` in shape 2 would hand out an empty half. The probe found two
-things on the way. `Split` cannot name the enum, since std's string iterator `Split` is in every scope. And the
-subject had to be a local: `match (split(stream: give conn))` refused to move a payload out of the call's result,
-until a `match` came to own a call's result (SPEC, *A subject that names storage*). **The bytes:** a half
-is a pointer to the shared record and its own deadline, 16 bytes on a 64-bit target; the record is one allocation at
-the split, the descriptor, the registration pointer, the mode and a count, 24 bytes.
-
-**Ruled 2026-10-27: (a), all six decisions as recommended** — the writer's drop sends a FIN (a channel's last sender closes it the same way), and the datagram sockets split in the same commit.
-
-**Decisions for the ruling:**
-1. Owned, fiber-local halves (a): `TcpReader` and `TcpWriter`, not `Sendable`.
-2. `split(stream: give s)` hands both back in one enum value, `TcpHalves::Halves(reader:, writer:)`, taken apart by
-   `match (give h)` (shape 1, probed).
-3. Dropping the writer sends a FIN. The last half to drop closes the socket, after taking it off the scheduler.
-4. `reunite(reader: give r, writer: give w)` returns the stream, or both halves back, unjoined, when they came from two
-   streams.
-5. Each half keeps its own direction's deadline: `setReadDeadline` on the reader, `setWriteDeadline` on the writer.
-6. `UnixStream` splits the same way in the same commit, as the platform rule wants one interface. Datagram sockets
-   (`UdpSocket`, `UnixDatagram`) have the same need, a receiving fiber beside a sending one, and take the same shape.
-
-**Revised 2026-10-28, building it: the spelling.** Decisions 2 and 4 named free functions, `split(stream:)` and
-`reunite(reader:, writer:)`. kama has no overloading (probed: "duplicate function 'split' — kama has no overloading"), and
-`TcpStream`, `UnixStream`, `UdpSocket` and `UnixDatagram` share one module, so only one free `split` and one `reunite`
-could exist there. **Ruled 2026-10-28: ctors,** the language's one way to make a value:
-- Decision 2 becomes `TcpHalves.split(stream: give s)`, a named ctor on the halves enum (an enum's ctor returns a
-  variant, `tests/enum_ctor.kama`), and so `UnixHalves.split(stream:)`, `UdpHalves.split(socket:)`,
-  `UnixDatagramHalves.split(socket:)`.
-- Decision 4 becomes `TcpStream.reunite(reader: give r, writer: give w)`, a fallible ctor returning
-  `Result<TcpStream, TcpUnjoined>`, as `TcpStream.connect` returns `Result<TcpStream, IoError>`.
-
-```kama fragment
-match (TcpHalves.split(stream: give conn)) {
-    case Halves(reader: r, writer: w): { scope { spawn fiber pumpIn(from: give r); spawn fiber pumpOut(to: give w); } }
-};
-```
-
-**Two more decisions, ruled 2026-10-28:**
-7. The datagram halves are named for their verbs: `UdpReceiver`/`UdpSender` and `UnixDatagramReceiver`/
-   `UnixDatagramSender`, whose calls are `recv`/`recvFrom` and `send`/`sendTo` (std's channel ends are already a
-   `Sender` and a `Receiver`). A `UnixStream`'s halves are `UnixReader`/`UnixWriter`.
-8. `reunite`'s failure is one `Error` enum per socket kind, shaped like `Undelivered<T>`:
-   `type enum TcpUnjoined implements Error { Halves(TcpReader reader, TcpWriter writer); }`, and `UnixUnjoined`,
-   `UdpUnjoined`, `UnixDatagramUnjoined`. A generic `Unjoined<R, W>` would add two type arguments at every use, for a type
-   that has exactly one pair per socket kind.
-
-**Ruled 2026-11-04, replacing the 2026-10-28 spelling: `give conn.split()`.** The ctor answered "kama has no overloading,
-and four socket types share one module". `give fn` shipped on 2026-10-30 (`0.9.777`), and a method belongs to its type, so
-that reason is gone. std took it up for this same job: `MemoryStreamPair`, `UnixStreamPair` and the datagram pair come apart
-with `give pair.split()`, and every socket already leaves by `give s.intoDescriptor()`. So a socket would have been the one
-thing in std taken apart by a ctor:
-
-```kama fragment
-match (TcpHalves.split(stream: give conn)) { case Halves(reader: r, writer: w): { … } };   // ruled 2026-10-28, retired
-match (give conn.split()) { case Halves(reader: r, writer: w): { … } };                    // as the pairs do
-```
-
-Probed on `0.9.842` with stand-ins: a `give fn` on a resource with a destructor, handing back an enum of two halves over one
-counted cell and matched directly, builds and runs, and the socket closes exactly once. The bytes do not change. One way to
-take a thing apart (#4). `TcpStream.reunite(reader:, writer:)` stays a ctor: it takes two values and makes a stream. Read
-decisions 2 and 4 and the 2026-10-28 revision above with `split` as this method; `UnixStream.split()`, `UdpSocket.split()` and
-`UnixDatagram.split()` follow.
-
-**How it is built** (drafted 2026-10-28, and held for the io_uring arm's read and write paths, which shipped in `0.9.757`–`0.9.765`):
-- **The cell** is three functions in `kama_os.h`: `kama_net_cell_new(size)`, 16 bytes of count and then the socket (out
-  of memory is kama's panic); `kama_net_cell_leave(socket)`, 1 when that was the last half; `kama_net_cell_free(socket,
-  size)`. A split builds the cell's socket from `this`'s fields and clears them, so the `give fn`'s own end finds nothing to
-  close, as `intoDescriptor` does (drafted as a raw store of a whole stream, before `give fn`; to confirm in the first probe); the
-  last half's drop runs `drop(ptr:)` on it and frees the cell; `reunite` nulls both halves' pointers, so their drops
-  leave the cell alone, and `relocate`s the socket back out. A half is the socket's address, 8 bytes; a TCP cell is 16
-  bytes plus the stream's 40. The count is a plain one, since neither half leaves its isolate.
-- **The halves delegate** to the socket's own methods, so the deadlines, the mode bits, `sendFile` and decision 13's
-  re-registration stay the socket's, unchanged. A `TcpReader` is a `Reader` (`read`, `setReadDeadline`, `localAddr`,
-  `peerAddr`); a `TcpWriter` is a `Writer` (`write`, `flush`, `sendFile`, `setWriteDeadline`, the addresses). A
-  `UnixReader` adds `recvDescriptors` and `peerCredentials`, a `UnixWriter` `sendDescriptors`. Settings that belong to
-  the whole socket (`setNoDelay`, keepalive, multicast, `setNonBlocking`, a datagram `connect`) stay on it, set before
-  the split or after `reunite`.
-- **Visibility is per file, and every name a std::net file exports is public**, so no private helper can be shared
-  between `net.kama`, `udp.kama` and `unix.kama`: each file binds the three externs and writes the moves inline.
-- **What the io_uring backend must allow:** a reader and a writer parked on one socket at once, so a `RECV` and a `SEND`
-  in flight together on one descriptor. Until this row, no safe program could have two operations in flight on one
-  descriptor. The ring arm keeps a reader and a writer per socket, each its own fiber's submission, and this row's
-  fixtures are what prove the two in flight together on it.
-- **Fixtures:** `fiber_tcp_split` (both ends split, four fibers, 8 MiB each way, each writer's drop the FIN its peer's
-  reader ends on), `net_split_reunite` (reunite; halves of two streams come back in `Err` and still work; each half's
-  deadline its own; the writer's FIN while the reader still reads; UDP), `fiber_dgram_split`, `fiber_unix_split.d`
-  (descriptor passing on the halves; `UnixDatagram` where it exists, its path unlinked once), and the xfail
-  `tcp_half_not_sendable`.
 
 <a id="s6-noheap-per-isolate"></a>
 
@@ -3635,7 +3464,25 @@ hand-tuned HTTP stacks (vectorized parsing, pipelining) such as Go's fasthttp, .
 servers at the top of TechEmpower's plaintext test. Java's virtual threads are kama's model on the JVM and were not
 measured.
 
+<a id="s9-ring-large-chunks"></a>
+
+### The ring arm behind epoll at large chunks (KR-317)
+
+Found 2026-11-04 by the measurement `split` shipped behind. Full-duplex TCP over loopback on one thread, a reader and a writer each side
+(`bench/pipe/`, `split`; nanoseconds a chunk each way, the minimum over 7 interleaved rounds, a Linux VM on an M4, the ring allowed):
+
+| | kama, io_uring | kama, epoll | tokio | Go |
+|---|---|---|---|---|
+| 1 KiB chunks | 1,128 | 1,123 | 1,161 | 2,822 |
+| 64 KiB chunks | 13,107 | 12,361 | 12,403 | 15,061 |
+
+Paired by round, epoll is 9% ahead of the ring at 64 KiB in all 7 rounds, and at 1 KiB they tie. kama on epoll ties tokio, so a program on
+kama's default arm is what falls behind. It is not the split, which is one pointer load before a system call. Not yet known: where the
+time goes (a `RECV` that returns short, more enters a chunk), and whether x86-64, where every write goes through the ring, shows the same.
+The ring was chosen on server workloads, whose reads are small; KR-254's ruling on writes is a per-platform rule of this kind.
+
 <a id="s9-fiber-memory"></a>
+
 
 #### Memory per idle fiber connection (KR-254)
 

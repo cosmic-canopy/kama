@@ -1,0 +1,46 @@
+file @compileFor(!OS_WINDOWS);
+// A `UnixDatagram`'s halves on fibers: the receiver starts first and parks while the sender runs. Its bound path travels
+// with the socket: the last half to go removes it, once, and after `reunite` the socket's own drop does.
+import { std::net::UnixDatagram, std::net::UnixDatagramReceiver, std::net::UnixDatagramSender, std::net::UnixAddr, std::io::IoError,
+         std::concurrent::Fiber, std::collections::FixedArray, std::fs::exists };
+export { datagrams };
+
+unsafe fn int32 hear(UnixDatagramReceiver r) {
+    FixedArray<uint8> buf = FixedArray.make(size: 4);
+    usize n = match (r.recv(into: buf.viewMut())) { case Ok(value: k): k; case Err(error: e): cast<usize>(0); };
+    return n == cast<usize>(2) && buf[1] == 9ui8 ? 0 : 40;
+}
+unsafe fn int32 say(UnixDatagramSender s) {
+    FixedArray<uint8> msg = FixedArray.make(size: 2);
+    msg[1] = 9ui8;
+    UnixAddr to = match (UnixAddr.fromPath(path: "fiber_unix_split_dgram.sock")) { case Ok(value: a): a; case Err(error: e): { return 41; } };
+    usize n = match (s.sendTo(bytes: msg.view(), to: to)) { case Ok(value: k): k; case Err(error: e): cast<usize>(0); };
+    return n == cast<usize>(2) ? 0 : 42;
+}
+
+unsafe fn int32 datagrams() {
+    UnixDatagram d = match (UnixDatagram.bind(path: "fiber_unix_split_dgram.sock")) { case Ok(value: x): give x; case Err(error: e): { return 50; } };
+    match (give d.split()) { case Halves(receiver: r, sender: s): {
+        Fiber<int32> h = spawn fiber hear(r: give r);
+        int32 said = 0;
+        {
+            Fiber<int32> t = spawn fiber say(s: give s);
+            said = give t.join();
+        }
+        if (!exists(path: "fiber_unix_split_dgram.sock")) { return 51; }                  // the receiver still holds it
+        int32 heard = give h.join();
+        if (said + heard != 0) { return 52; }
+    } };
+    if (exists(path: "fiber_unix_split_dgram.sock")) { return 53; }                       // the last half has gone, and removed it
+    // Bound afresh, since the path is free, and joined back: the socket's own drop removes it now, once.
+    UnixDatagram e = match (UnixDatagram.bind(path: "fiber_unix_split_dgram.sock")) { case Ok(value: x): give x; case Err(error: e2): { return 54; } };
+    match (give e.split()) { case Halves(receiver: r, sender: s): {
+        match (UnixDatagram.reunite(receiver: give r, sender: give s)) {
+            case Err(error: e3): { return 55; }
+            case Ok(value: j): {
+                if (!exists(path: "fiber_unix_split_dgram.sock")) { return 56; }
+            }
+        };
+    } };
+    return exists(path: "fiber_unix_split_dgram.sock") ? 57 : 0;
+}

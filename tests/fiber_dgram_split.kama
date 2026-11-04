@@ -1,0 +1,49 @@
+// `UdpSocket.split` on fibers (KR-244): a receiving fiber and a sending fiber on one socket, on both ends of a connected
+// pair. Each receiver parks on its empty socket while its own sender runs, paced so loopback keeps every datagram, and a
+// deadline turns a lost one into a failed count rather than a hang. Returns 42.
+import { std::net::UdpSocket, std::net::UdpReceiver, std::net::UdpSender, std::net::SocketAddr, std::io::IoError,
+         std::collections::FixedArray, std::concurrent::Fiber, std::time::sleep, std::time::Duration, std::time::monotonicNow };
+
+comptime int32 EACH_WAY = 200;
+
+unsafe fn int32 hear(UdpReceiver r) {
+    FixedArray<uint8> buf = FixedArray.make(size: 4);
+    r.setReadDeadline(at: Optional::Some(value: monotonicNow() + Duration.fromSecs(s: 10i64)));
+    int32 n = 0;
+    while (n < EACH_WAY) {
+        match (r.recv(into: buf.viewMut())) {
+            case Ok(value: k): { n = n + 1; }
+            case Err(error: e): { return n; }
+        };
+    }
+    return n;
+}
+unsafe fn int32 say(UdpSender s) {
+    FixedArray<uint8> msg = FixedArray.make(size: 4);
+    for (int32 i = 0; i < EACH_WAY; i = i + 1) {
+        match (s.send(bytes: msg.view())) { case Ok(value: k): { } case Err(error: e): { return -1; } };
+        sleep(d: Duration.fromMicros(us: 50i64));
+    }
+    return 0;
+}
+
+unsafe fn uint8 run() {
+    UdpSocket a = match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) { case Ok(value: x): give x; case Err(error: e): { return 2; } };
+    UdpSocket b = match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) { case Ok(value: x): give x; case Err(error: e): { return 3; } };
+    SocketAddr atA = match (a.localAddr()) { case Ok(value: x): x; case Err(error: e): { return 4; } };
+    SocketAddr atB = match (b.localAddr()) { case Ok(value: x): x; case Err(error: e): { return 5; } };
+    match (a.connectTo(address: atB)) { case Ok(value: u): { } case Err(error: e): { return 6; } };
+    match (b.connectTo(address: atA)) { case Ok(value: u): { } case Err(error: e): { return 7; } };
+    match (give a.split()) { case Halves(receiver: ar, sender: as1): {
+        match (give b.split()) { case Halves(receiver: br, sender: bs): {
+            Fiber<int32> h1 = spawn fiber hear(r: give ar);
+            Fiber<int32> h2 = spawn fiber hear(r: give br);
+            Fiber<int32> s1 = spawn fiber say(s: give as1);
+            Fiber<int32> s2 = spawn fiber say(s: give bs);
+            int32 sent = (give s1.join()) + (give s2.join());
+            int32 heard = (give h1.join()) + (give h2.join());
+            return sent == 0 && heard == 2 * EACH_WAY ? 42 : 1;
+        } };
+    } };
+}
+fn uint8 main() { return run(); }

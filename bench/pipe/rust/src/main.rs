@@ -69,6 +69,36 @@ async fn bulk(count: u64, bytes: usize, capacity: usize, spawn_both: bool) -> u1
     t0.elapsed().as_nanos()
 }
 
+// A TCP connection over loopback, `into_split` at both ends: four tasks on one thread. Always the driver: it has sockets.
+async fn split(count: u64, bytes: usize) -> u128 {
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = l.local_addr().unwrap().port();
+    let c = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let (s, _) = l.accept().await.unwrap();
+    let (cr, cw) = c.into_split();
+    let (sr, sw) = s.into_split();
+    let t0 = Instant::now();
+    let mut tasks = Vec::new();
+    for mut r in [cr, sr] {
+        tasks.push(tokio::spawn(async move {
+            let mut buf = vec![0u8; bytes];
+            while r.read(&mut buf).await.unwrap() != 0 {}
+        }));
+    }
+    for mut w in [cw, sw] {
+        tasks.push(tokio::spawn(async move {
+            let buf = vec![0u8; bytes];
+            for _ in 0..count {
+                w.write_all(&buf).await.unwrap();
+            }
+        }));
+    }
+    for t in tasks {
+        t.await.unwrap();
+    }
+    t0.elapsed().as_nanos()
+}
+
 fn main() {
     let workload = std::env::var("BENCH_WORKLOAD").unwrap_or_else(|_| "ops".to_string());
     let count = setting("BENCH_COUNT", 1_000_000);
@@ -76,7 +106,7 @@ fn main() {
     let capacity = setting("BENCH_CAPACITY", 8192) as usize;
     let shape = std::env::var("BENCH_TOKIO").unwrap_or_else(|_| "server".to_string());
     let mut builder = tokio::runtime::Builder::new_current_thread();
-    if shape != "nodriver" {
+    if shape != "nodriver" || workload == "split" {
         builder.enable_all();
     }
     let rt = builder.build().unwrap();
@@ -86,7 +116,8 @@ fn main() {
             "ops" => ops(count, bytes, capacity).await,
             "pingpong" => pingpong(count, bytes, capacity, spawn_both).await,
             "bulk" => bulk(count, bytes, capacity, spawn_both).await,
-            _ => panic!("pipe: BENCH_WORKLOAD is ops, pingpong or bulk"),
+            "split" => split(count, bytes).await,
+            _ => panic!("pipe: BENCH_WORKLOAD is ops, pingpong, bulk or split"),
         }
     });
     println!("{workload}\t{count}\t{bytes}\t{capacity}\t{ns}");

@@ -7,13 +7,19 @@
 //             fibers are not; BENCH_ROOT=1 makes one side the root, which parks by running the loop itself.
 //   bulk      one fiber writes BENCH_COUNT chunks of BENCH_BYTES through a ring of BENCH_CAPACITY, and another reads
 //             them until the stream ends.
+//   split     a TCP connection over loopback, split at both ends (KR-244): a reader and a writer fiber each side, every
+//             side writing BENCH_COUNT chunks of BENCH_BYTES at once. Four fibers on one isolate; a chunk is one each way.
 //
-// Usage: BENCH_WORKLOAD=ops|pingpong|bulk BENCH_COUNT=<n> BENCH_BYTES=<n> BENCH_CAPACITY=<n> [BENCH_ROOT=1] ./pipe
+// Usage: BENCH_WORKLOAD=ops|pingpong|bulk|split BENCH_COUNT=<n> BENCH_BYTES=<n> BENCH_CAPACITY=<n> [BENCH_ROOT=1] ./pipe
 // Prints one TSV row: workload, count, bytes, capacity, nanoseconds over the timed part.
 import { core::envOr, core::println,
     std::net::MemoryStreamPair,
     std::net::MemoryStream,
     std::net::MemoryStreamEnds,
+    std::net::TcpListener,
+    std::net::TcpStream,
+    std::net::TcpReader,
+    std::net::TcpWriter,
     std::io::IoError,
     std::collections::FixedArray,
     std::collections::View,
@@ -167,6 +173,64 @@ unsafe fn int64 bulk(int64 count, isize bytes, isize capacity) {
     return ns;
 }
 
+// One side's two halves of a split connection.
+type resource Sink {
+    TcpReader r;
+    isize bytes;
+    public ctor make(TcpReader r, isize bytes) { this.r = give r; this.bytes = bytes; }
+    public unsafe fn void run() {
+        FixedArray<uint8> buf = FixedArray.make(size: this.bytes);
+        bool more = true;
+        while (more) {
+            match (this.r.read(into: buf.viewMut())) {
+                case Ok(value: n): { more = n != 0; }
+                case Err(error: e): { panic(msg: "pipe: a read failed"); }
+            };
+        }
+    }
+}
+unsafe fn void sink(Sink s) { s.run(); }
+type resource Source {
+    TcpWriter w;
+    int64 count;
+    isize bytes;
+    public ctor make(TcpWriter w, int64 count, isize bytes) { this.w = give w; this.count = count; this.bytes = bytes; }
+    public unsafe fn void run() {
+        FixedArray<uint8> buf = FixedArray.make(size: this.bytes);
+        for (int64 i = 0i64; i < this.count; i = i + 1i64) {
+            isize off = 0;
+            while (off < this.bytes) {
+                match (this.w.write(bytes: buf.view().slice(from: off, count: this.bytes - off))) {
+                    case Ok(value: n): { off = off + n; }
+                    case Err(error: e): { panic(msg: "pipe: a write failed"); }
+                };
+            }
+        }
+    }
+}
+unsafe fn void source(Source s) { s.run(); }
+
+unsafe fn int64 split(int64 count, isize bytes) {
+    TcpListener l = match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) { case Ok(value: x): give x; case Err(error: e): { panic(msg: "pipe: bind"); } };
+    uint16 port = match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; };
+    TcpStream c = match (TcpStream.connect(host: "127.0.0.1", port: port)) { case Ok(value: x): give x; case Err(error: e): { panic(msg: "pipe: connect"); } };
+    TcpStream s = match (l.accept()) { case Ok(value: x): give x; case Err(error: e): { panic(msg: "pipe: accept"); } };
+    int64 ns = 0i64;
+    match (give c.split()) { case Halves(reader: cr, writer: cw): {
+        match (give s.split()) { case Halves(reader: sr, writer: sw): {
+            Instant t0 = monotonicNow();
+            scope {
+                spawn fiber sink(s: Sink.make(r: give cr, bytes: bytes));
+                spawn fiber sink(s: Sink.make(r: give sr, bytes: bytes));
+                spawn fiber source(s: Source.make(w: give cw, count: count, bytes: bytes));
+                spawn fiber source(s: Source.make(w: give sw, count: count, bytes: bytes));
+            }
+            ns = monotonicNow().since(earlier: t0).asNanos();
+        } };
+    } };
+    return ns;
+}
+
 unsafe fn uint8 run() {
     string workload = envOr(name: "BENCH_WORKLOAD", dflt: "ops");
     int64 count = setting(name: "BENCH_COUNT", dflt: "1000000");
@@ -176,7 +240,8 @@ unsafe fn uint8 run() {
     if (workload == "ops") { ns = ops(count: count, bytes: bytes, capacity: capacity); }
     else if (workload == "pingpong") { ns = pingpong(count: count, bytes: bytes, capacity: capacity, onRoot: setting(name: "BENCH_ROOT", dflt: "0") != 0i64); }
     else if (workload == "bulk") { ns = bulk(count: count, bytes: bytes, capacity: capacity); }
-    else { println(s: "pipe: BENCH_WORKLOAD is ops, pingpong or bulk"); return 2; }
+    else if (workload == "split") { ns = split(count: count, bytes: bytes); }
+    else { println(s: "pipe: BENCH_WORKLOAD is ops, pingpong, bulk or split"); return 2; }
     println(s: "${workload}\t${count}\t${bytes}\t${capacity}\t${ns}");
     return 0;
 }

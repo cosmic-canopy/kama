@@ -350,7 +350,7 @@ The public `Poller` keeps applying its own `add` at once; that is one call per s
 - **`Poller.wait` parks too.** On epoll and kqueue the fiber parks on the Poller's own descriptor, which both nest. AFD
   and `poll(2)` have no descriptor to wait on, so there the wait runs on step 7's offload pool: the same interface on
   every platform, the mechanism its own.
-- **Two fibers serving one socket,** a reader and a writer, is KR-244 (tokio's `split`).
+- **Two fibers serving one socket,** a reader and a writer, take it apart with `give conn.split()` (`0.9.845`), as tokio's `into_split` does.
 
 *As built (`0.9.745`–`0.9.748`):* every blocking std socket call runs one protocol around its system call,
 `kama_net_ready` before it and `kama_net_retry` after it fails (kama_os.h), and each socket keeps its wait beside its

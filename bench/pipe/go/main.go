@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -77,6 +78,50 @@ func bulk(count, bytes int) int64 {
 	return time.Since(t0).Nanoseconds()
 }
 
+// A TCP connection over loopback, with a reader and a writer goroutine on each end: Go's documented way, since a concurrent
+// Read and Write on one net.Conn is safe. Four goroutines on one P.
+func split(count, bytes int) int64 {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		panic(err)
+	}
+	c, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		panic(err)
+	}
+	s, err := l.Accept()
+	if err != nil {
+		panic(err)
+	}
+	var wg sync.WaitGroup
+	t0 := time.Now()
+	for _, conn := range []net.Conn{c, s} {
+		conn := conn
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			buf := make([]byte, bytes)
+			for {
+				if _, err := conn.Read(buf); err != nil {
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			buf := make([]byte, bytes)
+			for i := 0; i < count; i++ {
+				if _, err := conn.Write(buf); err != nil {
+					panic(err)
+				}
+			}
+			conn.(*net.TCPConn).CloseWrite()
+		}()
+	}
+	wg.Wait()
+	return time.Since(t0).Nanoseconds()
+}
+
 func main() {
 	runtime.GOMAXPROCS(1)
 	workload := os.Getenv("BENCH_WORKLOAD")
@@ -89,8 +134,10 @@ func main() {
 		ns = pingpong(count, bytes)
 	case "bulk":
 		ns = bulk(count, bytes)
+	case "split":
+		ns = split(count, bytes)
 	default:
-		fmt.Fprintln(os.Stderr, "pipe: BENCH_WORKLOAD is pingpong or bulk")
+		fmt.Fprintln(os.Stderr, "pipe: BENCH_WORKLOAD is pingpong, bulk or split")
 		os.Exit(2)
 	}
 	fmt.Printf("%s\t%d\t%d\t%d\t%d\n", workload, count, bytes, capacity, ns)

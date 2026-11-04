@@ -12,9 +12,10 @@ import {
     resolve,
     std::collections::DynamicArray,
     std::fs::File,
+    std::io::Reader, std::io::Writer,
 };
 
-export { TcpListener, TcpStream, ListenOptions, ConnectOptions };
+export { TcpListener, TcpStream, TcpHalves, TcpReader, TcpWriter, TcpUnjoined, ListenOptions, ConnectOptions };
 
 // POSIX/Winsock TCP bindings — see kama_os.h. Socket handles are `isize`: a Windows SOCKET is wider than
 // int, and INVALID_SOCKET reinterpreted as isize is -1, so a uniform `< 0 == error` convention holds on
@@ -58,6 +59,9 @@ extern fn int32 kama_net_close(isize fd, UnsafePtr io);
 extern fn void kama_net_settle(isize fd, UnsafePtr io, int32 mode);
 extern fn int32 kama_net_set_mode(isize fd, UnsafePtr io, UnsafePtr<int32> mode, int32 on);
 extern fn int32 kama_net_adopt_mode(isize fd);
+extern fn UnsafePtr kama_net_cell_new(usize size);
+extern fn int32 kama_net_cell_leave(UnsafePtr socket);
+extern fn void kama_net_cell_free(UnsafePtr socket, usize size);
 
 // A duration as a socket option takes it: a POSITIVE whole count of `unit` nanoseconds, rounded UP so a
 // timer never fires earlier than asked. Zero, negative, or more units than an `int32` holds is
@@ -387,6 +391,93 @@ type resource TcpStream implements ReliableStream, Sendable {   // a `Reader` an
     // compare in front of a syscall, standing between a future drop-tracking bug and a silent `close(0)`
     // on stdin. Cheap insurance against a catastrophic, near-undebuggable failure. Same for the two below.
     unsafe ~TcpStream() { if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); } }
+
+    // Take the stream apart, consuming it (KR-244), so that one fiber may read while another writes: a proxy copying both
+    // ways, a WebSocket with a heartbeat. `match (give conn.split()) { case Halves(reader: r, writer: w): { … } };`
+    // The halves stay on this isolate, since thread-per-core never moves a connection: neither is `Sendable`, and
+    // `reunite` is the way back to a stream that is.
+    public unsafe give fn TcpHalves split() {
+        UnsafePtr<TcpStream> cell = cast<UnsafePtr<TcpStream>>(kama_net_cell_new(size: sizeof(TcpStream)));
+        cell[0] = TcpStream.whole(fd: this.fd, io: this.io, mode: this.mode, readBy: this.readBy, writeBy: this.writeBy);
+        this.fd = -1; this.io = null;                       // what the destructor finds at this method's end
+        return TcpHalves::Halves(reader: TcpReader.make(cell: cell), writer: TcpWriter.make(cell: cell));
+    }
+    // The stream back from its two halves, or both of them, unchanged, when they came from two different streams.
+    public unsafe ctor Result<TcpStream, TcpUnjoined> reunite(TcpReader reader, TcpWriter writer) {
+        if (reader.cell != writer.cell) { return Result::Err(error: TcpUnjoined::Halves(reader: give reader, writer: give writer)); }
+        UnsafePtr<TcpStream> cell = reader.cell;
+        isize fd = cell[0].fd;
+        UnsafePtr io = cell[0].io;
+        int32 mode = cell[0].mode;
+        uint64 readBy = cell[0].readBy;
+        uint64 writeBy = cell[0].writeBy;
+        reader.cell = null; writer.cell = null;             // so neither half's drop leaves the cell
+        kama_net_cell_free(socket: cast<UnsafePtr>(cell), size: sizeof(TcpStream));
+        return Result::Ok(value: TcpStream.whole(fd: fd, io: io, mode: mode, readBy: readBy, writeBy: writeBy));
+    }
+    // A socket's whole state, carried into a cell and back out.
+    unsafe ctor whole(isize fd, UnsafePtr io, int32 mode, uint64 readBy, uint64 writeBy) {
+        this.fd = fd; this.io = io; this.mode = mode; this.readBy = readBy; this.writeBy = writeBy;
+    }
+}
+
+// A `TcpStream` taken apart (`split`): its read half and its write half, which share one socket.
+type enum TcpHalves { Halves(TcpReader reader, TcpWriter writer); }
+
+// `TcpStream.reunite` given halves of two different streams: both handed back, as `Undelivered` hands back an item.
+type enum TcpUnjoined implements Error {
+    Halves(TcpReader reader, TcpWriter writer);
+    public const fn string message() { return "these halves came from two different streams, so they were not joined"; }
+}
+
+// The read half of a split `TcpStream`, to hold in one fiber while another holds the write half. Dropping it stops
+// nothing the peer can see; the last half to go closes the socket.
+type resource TcpReader implements Reader {
+    UnsafePtr<TcpStream> cell;
+    unsafe ctor make(UnsafePtr<TcpStream> cell) { this.cell = cell; }
+    friend TcpStream::split[make];
+    friend TcpStream::reunite[cell];
+
+    @parks
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) { return this.cell[0].read(into: into); }
+    public unsafe fn void setReadDeadline(Optional<Instant> at) { this.cell[0].setReadDeadline(at: at); }
+    public unsafe fn Result<SocketAddr, IoError> localAddr() { return this.cell[0].localAddr(); }
+    public unsafe fn Result<SocketAddr, IoError> peerAddr() { return this.cell[0].peerAddr(); }
+    unsafe ~TcpReader() {
+        if (this.cell == null) { return; }
+        if (kama_net_cell_leave(socket: cast<UnsafePtr>(this.cell)) == 1) {
+            drop(ptr: this.cell);
+            kama_net_cell_free(socket: cast<UnsafePtr>(this.cell), size: sizeof(TcpStream));
+        }
+    }
+}
+
+// The write half. Dropping it sends a FIN, so the peer reads end of file while the read half still reads its reply: the
+// half-close a request and response protocol ends a request with, as a channel's last sender closes it.
+type resource TcpWriter implements Writer {
+    UnsafePtr<TcpStream> cell;
+    unsafe ctor make(UnsafePtr<TcpStream> cell) { this.cell = cell; }
+    friend TcpStream::split[make];
+    friend TcpStream::reunite[cell];
+
+    @parks
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) { return this.cell[0].write(bytes: bytes); }
+    public unsafe fn Result<Unit, IoError> flush() { return this.cell[0].flush(); }
+    @parks
+    public unsafe fn Result<uint64, IoError> sendFile(const ref File file, uint64 offset, uint64 count) {
+        return this.cell[0].sendFile(file: file, offset: offset, count: count);
+    }
+    public unsafe fn void setWriteDeadline(Optional<Instant> at) { this.cell[0].setWriteDeadline(at: at); }
+    public unsafe fn Result<SocketAddr, IoError> localAddr() { return this.cell[0].localAddr(); }
+    public unsafe fn Result<SocketAddr, IoError> peerAddr() { return this.cell[0].peerAddr(); }
+    unsafe ~TcpWriter() {
+        if (this.cell == null) { return; }
+        _ = this.cell[0].shutdown(how: Shutdown::Write);    // a socket already reset has nothing more to say: ignored
+        if (kama_net_cell_leave(socket: cast<UnsafePtr>(this.cell)) == 1) {
+            drop(ptr: this.cell);
+            kama_net_cell_free(socket: cast<UnsafePtr>(this.cell), size: sizeof(TcpStream));
+        }
+    }
 }
 
 // The options `TcpListener.bindWith` takes (KR-206): one type on every OS, each its own OS's (the platform rule). Each

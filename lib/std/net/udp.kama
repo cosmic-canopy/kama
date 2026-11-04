@@ -2,13 +2,16 @@
 import { std::io::IoError, std::io::IoErrorKind, std::io::lastError, std::io::Descriptor, std::collections::View, std::collections::ConstView, SocketAddr, RecvFrom, IpAddr,
          std::time::Instant };
 
-export { UdpSocket, DatagramSocket, UdpBindOptions, UdpPortShare };
+export { UdpSocket, UdpHalves, UdpReceiver, UdpSender, UdpUnjoined, DatagramSocket, UdpBindOptions, UdpPortShare };
 
 // POSIX/Winsock UDP bindings — see kama_os.h. Same conventions as the TCP module: socket handles are
 // `isize` (`< 0 == error`), the sockaddr fill stays in C, and an address crosses in `IpAddr.bytes`' seam form
 // (family, sixteen network-order bytes, port, scope id) — in as scalars, back as scalar out-params.
 extern "kama_os.h";
 extern fn isize kama_desc_dup(isize h, int32 kind);
+extern fn UnsafePtr kama_net_cell_new(usize size);
+extern fn int32 kama_net_cell_leave(UnsafePtr socket);
+extern fn void kama_net_cell_free(UnsafePtr socket, usize size);
 extern fn int32 kama_net_init();
 extern fn isize kama_socket_udp(int32 family);
 extern fn int32 kama_set_reuseaddr(isize fd);
@@ -381,4 +384,87 @@ type resource UdpSocket implements DatagramSocket<SocketAddr>, Sendable {
     public const fn isize rawHandle() { return this.fd; }
 
     unsafe ~UdpSocket() { if (this.fd >= 0) { int32 rc = kama_net_close(fd: this.fd, io: this.io); } }   // guard: see net.kama ~TcpStream
+
+    // Take the socket apart, consuming it (KR-244), so that one fiber may receive while another sends:
+    // `match (give socket.split()) { case Halves(receiver: r, sender: s): { … } };`. As `TcpStream.split`: the halves stay
+    // on this isolate, and `reunite` is the way back. Settings of the whole socket (`connect`, the multicast calls,
+    // `setNonBlocking`) are made before the split or after `reunite`.
+    public unsafe give fn UdpHalves split() {
+        UnsafePtr<UdpSocket> cell = cast<UnsafePtr<UdpSocket>>(kama_net_cell_new(size: sizeof(UdpSocket)));
+        cell[0] = UdpSocket.whole(fd: this.fd, io: this.io, mode: this.mode, readBy: this.readBy, writeBy: this.writeBy);
+        this.fd = -1; this.io = null;                       // what the destructor finds at this method's end
+        return UdpHalves::Halves(receiver: UdpReceiver.make(cell: cell), sender: UdpSender.make(cell: cell));
+    }
+    // The socket back from its two halves, or both of them, unchanged, when they came from two different sockets.
+    public unsafe ctor Result<UdpSocket, UdpUnjoined> reunite(UdpReceiver receiver, UdpSender sender) {
+        if (receiver.cell != sender.cell) { return Result::Err(error: UdpUnjoined::Halves(receiver: give receiver, sender: give sender)); }
+        UnsafePtr<UdpSocket> cell = receiver.cell;
+        isize fd = cell[0].fd;
+        UnsafePtr io = cell[0].io;
+        int32 mode = cell[0].mode;
+        uint64 readBy = cell[0].readBy;
+        uint64 writeBy = cell[0].writeBy;
+        receiver.cell = null; sender.cell = null;           // so neither half's drop leaves the cell
+        kama_net_cell_free(socket: cast<UnsafePtr>(cell), size: sizeof(UdpSocket));
+        return Result::Ok(value: UdpSocket.whole(fd: fd, io: io, mode: mode, readBy: readBy, writeBy: writeBy));
+    }
+    // A socket's whole state, carried into a cell and back out.
+    unsafe ctor whole(isize fd, UnsafePtr io, int32 mode, uint64 readBy, uint64 writeBy) {
+        this.fd = fd; this.io = io; this.mode = mode; this.readBy = readBy; this.writeBy = writeBy;
+    }
+}
+
+// A `UdpSocket` taken apart (`split`): its receiving half and its sending half, which share one socket.
+type enum UdpHalves { Halves(UdpReceiver receiver, UdpSender sender); }
+
+// `UdpSocket.reunite` given halves of two different sockets: both handed back.
+type enum UdpUnjoined implements Error {
+    Halves(UdpReceiver receiver, UdpSender sender);
+    public const fn string message() { return "these halves came from two different sockets, so they were not joined"; }
+}
+
+// The receiving half of a split `UdpSocket`. The last half to go closes the socket.
+type resource UdpReceiver {
+    UnsafePtr<UdpSocket> cell;
+    unsafe ctor make(UnsafePtr<UdpSocket> cell) { this.cell = cell; }
+    friend UdpSocket::split[make];
+    friend UdpSocket::reunite[cell];
+
+    @parks
+    public unsafe fn Result<usize, IoError> recv(View<uint8> into) { return this.cell[0].recv(into: into); }
+    @parks
+    public unsafe fn Result<RecvFrom<SocketAddr>, IoError> recvFrom(View<uint8> into) { return this.cell[0].recvFrom(into: into); }
+    public unsafe fn void setReadDeadline(Optional<Instant> at) { this.cell[0].setReadDeadline(at: at); }
+    public unsafe fn Result<SocketAddr, IoError> localAddr() { return this.cell[0].localAddr(); }
+    public unsafe fn Result<SocketAddr, IoError> peerAddr() { return this.cell[0].peerAddr(); }
+    unsafe ~UdpReceiver() {
+        if (this.cell == null) { return; }
+        if (kama_net_cell_leave(socket: cast<UnsafePtr>(this.cell)) == 1) {
+            drop(ptr: this.cell);
+            kama_net_cell_free(socket: cast<UnsafePtr>(this.cell), size: sizeof(UdpSocket));
+        }
+    }
+}
+
+// The sending half. A datagram socket has no FIN to send: the last half to go closes it.
+type resource UdpSender {
+    UnsafePtr<UdpSocket> cell;
+    unsafe ctor make(UnsafePtr<UdpSocket> cell) { this.cell = cell; }
+    friend UdpSocket::split[make];
+    friend UdpSocket::reunite[cell];
+
+    @parks
+    public unsafe fn Result<usize, IoError> send(ConstView<uint8> bytes) { return this.cell[0].send(bytes: bytes); }
+    @parks
+    public unsafe fn Result<usize, IoError> sendTo(ConstView<uint8> bytes, const ref SocketAddr to) { return this.cell[0].sendTo(bytes: bytes, to: to); }
+    public unsafe fn void setWriteDeadline(Optional<Instant> at) { this.cell[0].setWriteDeadline(at: at); }
+    public unsafe fn Result<SocketAddr, IoError> localAddr() { return this.cell[0].localAddr(); }
+    public unsafe fn Result<SocketAddr, IoError> peerAddr() { return this.cell[0].peerAddr(); }
+    unsafe ~UdpSender() {
+        if (this.cell == null) { return; }
+        if (kama_net_cell_leave(socket: cast<UnsafePtr>(this.cell)) == 1) {
+            drop(ptr: this.cell);
+            kama_net_cell_free(socket: cast<UnsafePtr>(this.cell), size: sizeof(UdpSocket));
+        }
+    }
 }

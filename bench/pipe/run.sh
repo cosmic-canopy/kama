@@ -11,7 +11,8 @@
 # so drift lands on every arm alike. `kama` runs twice, the second time as `kama#2`: its gap to itself is the noise floor
 # a difference has to clear. An arm whose toolchain is missing is left out with a line saying so. tokio runs in the three
 # shapes rust/src/main.rs names, since on a runtime with an I/O driver they differ by a factor of tens; `tokio` alone is the
-# shape a server's tasks have, and the one to compare with. `kama-root` makes one side of a ping-pong the root.
+# shape a server's tasks have, and the one to compare with. `kama-root` makes one side of a ping-pong the root, and on Linux `kama-epoll` is
+# the same binary with KAMA_IO_URING=0, where `kama` runs on the ring if the container allows it (`bench/run pipe` does).
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 out=${1:?usage: run.sh <out.tsv> [rounds]}
@@ -21,6 +22,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 "$KAMA" build "$here/pipe.kama" -o "$tmp/kama" --release >/dev/null
 avail="kama kama-root"
+[ "$(uname)" = Linux ] && avail="$avail kama-epoll"
 for c in ${CANDIDATES:-}; do
     "${c#*=}" build "$here/pipe.kama" -o "$tmp/kama-${c%%=*}" --release >/dev/null
     avail="$avail kama-${c%%=*}"
@@ -48,7 +50,7 @@ for s in ${SLOTS:-$default_slots}; do
         *) echo "run.sh: no $s here" >&2 ;;
     esac
 done
-configs=${CONFIGS:-"ops:2000000:64:8192 pingpong:1000000:64:4096 pingpong:1000000:4096:8192 bulk:200000:8192:8192 bulk:30000:65536:8192"}
+configs=${CONFIGS:-"ops:2000000:64:8192 pingpong:1000000:64:4096 pingpong:1000000:4096:8192 bulk:200000:8192:8192 bulk:30000:65536:8192 split:20000:65536:0 split:400000:1024:0"}
 
 printf 'round\tslot\tworkload\tcount\tbytes\tcapacity\tns\n' > "$out"
 n=$(echo $slots | wc -w | tr -d ' ')
@@ -61,14 +63,17 @@ while [ "$r" -le "$rounds" ]; do
         set -- $slots
         k=$(( (r - 1) % n )); while [ "$k" -gt 0 ]; do x=$1; shift; set -- "$@" "$x"; k=$((k - 1)); done
         for slot in "$@"; do
-            arm=${slot%#*}; root=0; shape=server; bin=$tmp/$arm
+            arm=${slot%#*}; root=0; shape=server; bin=$tmp/$arm; uring=1
             case $arm in
                 kama-root) root=1; bin=$tmp/kama ;;
+                kama-epoll) uring=0; bin=$tmp/kama ;;
                 tokio-*) shape=${arm#tokio-}; bin=$tmp/tokio ;;
             esac
             if [ "$arm" = go ] && [ "$workload" = ops ]; then continue; fi    # `net.Pipe` has no buffer: main.go says
             if [ "$arm" = kama-root ] && [ "$workload" != pingpong ]; then continue; fi
-            row=$(BENCH_WORKLOAD=$workload BENCH_COUNT=$count BENCH_BYTES=$bytes BENCH_CAPACITY=$capacity BENCH_ROOT=$root BENCH_TOKIO=$shape "$bin")
+            if [ "$arm" = kama-epoll ] && [ "$workload" != split ]; then continue; fi    # only sockets reach the OS's wait
+            case $arm:$workload in tokio-nodriver:split|tokio-test:split) continue ;; esac   # sockets need the driver
+            row=$(KAMA_IO_URING=$uring BENCH_WORKLOAD=$workload BENCH_COUNT=$count BENCH_BYTES=$bytes BENCH_CAPACITY=$capacity BENCH_ROOT=$root BENCH_TOKIO=$shape "$bin")
             printf '%s\t%s\t%s\n' "$r" "$slot" "$row" >> "$out"
         done
     done

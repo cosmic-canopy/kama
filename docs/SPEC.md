@@ -2481,6 +2481,21 @@ non-blocking and registers it with the isolate's scheduler at its first wait; ne
   fiber that drives its own `Poller` does not stop the isolate's others. A Windows `Poller` has no descriptor to park
   on, and there a fiber's wait still blocks the thread until the offload pool (KR-3 step 7).
 
+**Two fibers on one socket.** A proxy copying both ways or a WebSocket with a heartbeat is a reader and a writer at once, and a <!-- test: fiber_tcp_split, fiber_dgram_split, fiber_unix_split -->
+fiber's bundle may not be shared, so a socket comes apart. `give conn.split()` consumes a `TcpStream` and answers a `TcpHalves`,
+taken apart by `match`: `case Halves(reader: r, writer: w)`. A `TcpReader` is a `Reader` with `setReadDeadline`, a `TcpWriter` is
+a `Writer` with `sendFile` and `setWriteDeadline`, and both have the addresses. Each half calls the socket's own methods, so
+each keeps its own direction's deadline, and one set before the split still holds. A `UnixStream` splits into a `UnixReader` and a
+`UnixWriter`, which add `peerCredentials`, `recvDescriptors` and `sendDescriptors`; a `UdpSocket` into a `UdpReceiver` and a
+`UdpSender`, and a `UnixDatagram` likewise, named for their calls. Settings of the whole socket (`setNoDelay`, multicast,
+`setNonBlocking`, a datagram's `connect`) are made before the split or after `reunite`. <!-- test: net_split_reunite -->
+- **Dropping a stream's writer sends a FIN,** so the peer reads end of file while the reader still reads its reply. The last half to go
+  closes the socket, and removes a file a `UnixDatagram` bound.
+- **The way back is `TcpStream.reunite(reader: give r, writer: give w)`**, likewise on the other three. Halves of two different sockets
+  are refused with both handed back, in a `TcpUnjoined`, an `Error` taken apart by `match`.
+- **Neither half is `Sendable`:** they share one socket with fields each one's calls change, and thread-per-core never moves a <!-- xfail: tcp_half_not_sendable -->
+  connection. `reunite` gives back a stream that may cross. A half is 8 bytes, and the split allocates one cell for the socket.
+
 **Pipes and children on a fiber.** A `File` over a pipe, a FIFO or a terminal parks only its fiber while it waits, as a <!-- test: proc_fiber_pipe, fiber_sched -->
 socket does, and so do `StdIn`, `StdOut` and `StdErr`, `Process.wait()` until the child exits, and `Command.run()`
 while it captures; off a fiber each blocks its thread as before. Go and tokio put a child's pipes on their poller the

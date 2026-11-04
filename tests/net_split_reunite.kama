@@ -1,0 +1,182 @@
+// `split` and `reunite` on a thread (KR-244). `reunite` gives the stream back, and halves of two streams come back in `Err`
+// and still work. Each half's deadline is its own, and a deadline set before the split, or on a half, survives the way
+// back. The writer's drop is a FIN while the reader still reads, and the last half to go closes the socket, whichever it is. UDP splits the
+// same way, with no FIN. Each case is its own bit. Returns 0.
+import { std::net::TcpListener, std::net::TcpStream, std::net::TcpReader, std::net::TcpWriter, std::net::TcpUnjoined,
+         std::net::TcpHalves, std::net::UdpSocket, std::net::UdpUnjoined, std::net::SocketAddr, std::io::IoError,
+         std::collections::FixedArray, std::time::Instant, std::time::sleep, std::time::Duration };
+
+fn isize got(Result<isize, IoError> r) {   // the count, or -2 TimedOut, -3 anything else
+    return match (r) {
+        case Ok(value: n): n;
+        case Err(error: e): match (e.kind()) { case TimedOut: -2; case _: -3; };
+    };
+}
+fn Optional<Instant> past() { return Optional::Some(value: Instant.of(rawNanos: 1ui64)); }
+fn uint16 portOf(const ref TcpListener l) { return match (l.localAddr()) { case Ok(value: a): a.port; case Err(error: e): 0ui16; }; }
+unsafe fn TcpStream dial(const ref TcpListener l) {
+    Result<TcpStream, IoError> r = TcpStream.connect(host: "127.0.0.1", port: portOf(l: l));
+    match (give r) { case Ok(value: x): { return give x; } case Err(error: e): { panic(msg: "connect failed"); } };
+}
+unsafe fn TcpStream answer(ref TcpListener l) {
+    Result<TcpStream, IoError> r = l.accept();
+    match (give r) { case Ok(value: x): { return give x; } case Err(error: e): { panic(msg: "accept failed"); } };
+}
+
+// A byte each way through a joined stream, the far end being a plain stream.
+unsafe fn int32 joinedAgain(ref TcpListener l) {
+    TcpStream c = dial(l: l);
+    TcpStream s = answer(l: ref l);
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    match (give c.split()) { case Halves(reader: r, writer: w): {
+        Result<TcpStream, TcpUnjoined> back = TcpStream.reunite(reader: give r, writer: give w);
+        match (give back) {
+            case Err(error: e): { return 1; }
+            case Ok(value: t): {
+                if (got(r: t.write(bytes: b.view())) != 1 || got(r: s.read(into: b.viewMut())) != 1) { return 1; }
+                if (got(r: s.write(bytes: b.view())) != 1 || got(r: t.read(into: b.viewMut())) != 1) { return 1; }
+            }
+        };
+    } };
+    return 0;
+}
+
+// Halves of two streams: both come back, and both still work.
+unsafe fn int32 twoStreams(ref TcpListener l) {
+    TcpStream a = dial(l: l); TcpStream aPeer = answer(l: ref l);
+    TcpStream b = dial(l: l); TcpStream bPeer = answer(l: ref l);
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    match (give a.split()) { case Halves(reader: ar, writer: aw): {
+        match (give b.split()) { case Halves(reader: br, writer: bw): {
+            match (TcpStream.reunite(reader: give ar, writer: give bw)) {
+                case Ok(value: t): { return 1; }
+                case Err(error: e): {
+                    if (e.message().length() == 0) { return 1; }
+                    match (give e) { case Halves(reader: r, writer: w): {
+                        if (got(r: aPeer.write(bytes: one.view())) != 1 || got(r: r.read(into: one.viewMut())) != 1) { return 1; }
+                        if (got(r: w.write(bytes: one.view())) != 1 || got(r: bPeer.read(into: one.viewMut())) != 1) { return 1; }
+                    } };
+                }
+            };
+        } };
+    } };
+    return 0;
+}
+
+// Each half's deadline is its own, and each survives the way into a cell and back out.
+unsafe fn int32 deadlines(ref TcpListener l) {
+    TcpStream c = dial(l: l);
+    TcpStream s = answer(l: ref l);
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    c.setReadDeadline(at: past());
+    match (give c.split()) { case Halves(reader: r, writer: w): {
+        if (got(r: r.read(into: one.viewMut())) != -2) { return 1; }       // set before the split
+        if (got(r: w.write(bytes: one.view())) != 1) { return 1; }         // and it bounds reads alone
+        r.setReadDeadline(at: Optional::None);
+        w.setWriteDeadline(at: past());
+        if (got(r: w.write(bytes: one.view())) != -2) { return 1; }
+        if (got(r: s.write(bytes: one.view())) != 1 || got(r: r.read(into: one.viewMut())) != 1) { return 1; }
+        match (TcpStream.reunite(reader: give r, writer: give w)) {
+            case Err(error: e): { return 1; }
+            case Ok(value: t): { if (got(r: t.write(bytes: one.view())) != -2) { return 1; } }    // set on the half
+        };
+    } };
+    return 0;
+}
+
+// The writer's drop is a FIN, while the reader still reads the reply; the reader's drop stops nothing the peer can see.
+unsafe fn int32 halfClose(ref TcpListener l) {
+    TcpStream c = dial(l: l);
+    TcpStream s = answer(l: ref l);
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    match (give c.split()) { case Halves(reader: r, writer: w): {
+        { TcpWriter gone = give w; }
+        if (got(r: s.read(into: one.viewMut())) != 0) { return 1; }        // end of file
+        if (got(r: s.write(bytes: one.view())) != 1) { return 1; }
+        if (got(r: r.read(into: one.viewMut())) != 1) { return 1; }        // and the reply still comes
+    } };
+    return 0;
+}
+unsafe fn int32 readerGoesFirst(ref TcpListener l) {
+    TcpStream c = dial(l: l);
+    TcpStream s = answer(l: ref l);
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    match (give c.split()) { case Halves(reader: r, writer: w): {
+        { TcpReader gone = give r; }
+        if (got(r: w.write(bytes: one.view())) != 1) { return 1; }         // the socket is still open
+        if (got(r: s.read(into: one.viewMut())) != 1) { return 1; }
+        { TcpWriter gone = give w; }                                       // the last half: it closes
+        if (got(r: s.read(into: one.viewMut())) != 0) { return 1; }
+    } };
+    return 0;
+}
+
+// With the writer gone first, the reader is the last half and it is what closes the socket. A FIN alone would leave the peer
+// able to write for as long as it liked: only a closed socket makes a write fail.
+unsafe fn int32 lastHalfCloses(ref TcpListener l) {
+    TcpStream c = dial(l: l);
+    TcpStream s = answer(l: ref l);
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    match (give c.split()) { case Halves(reader: r, writer: w): {
+        { TcpWriter gone = give w; }
+        if (got(r: s.read(into: one.viewMut())) != 0) { return 1; }
+        if (got(r: s.write(bytes: one.view())) != 1) { return 1; }         // half closed: the peer may still write
+        { TcpReader gone = give r; }
+    } };
+    for (int32 tries = 0; tries < 2000; tries = tries + 1) {
+        if (got(r: s.write(bytes: one.view())) < 0) { return 0; }
+        sleep(d: Duration.fromMillis(ms: 1i64));
+    }
+    return 1;
+}
+
+// UDP: a datagram to itself through the halves, and two sockets' halves refused.
+unsafe fn int32 datagrams() {
+    UdpSocket a = match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    UdpSocket b = match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    SocketAddr self = match (a.localAddr()) { case Ok(value: x): x; case Err(error: e): { return 1; } };
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    one[0] = 5ui8;
+    match (give a.split()) { case Halves(receiver: r, sender: s): {
+        match (s.sendTo(bytes: one.view(), to: self)) { case Ok(value: n): { } case Err(error: e): { return 1; } };
+        one[0] = 0ui8;
+        match (r.recv(into: one.viewMut())) { case Ok(value: n): { if (one[0] != 5ui8) { return 1; } } case Err(error: e): { return 1; } };
+        match (give b.split()) { case Halves(receiver: br, sender: bs): {
+            match (UdpSocket.reunite(receiver: give r, sender: give bs)) {
+                case Ok(value: t): { return 1; }
+                case Err(error: e): { match (give e) { case Halves(receiver: r2, sender: s2): { } }; }
+            };
+        } };
+    } };
+    return 0;
+}
+unsafe fn int32 datagramJoined() {
+    UdpSocket a = match (UdpSocket.bind(host: "127.0.0.1", port: 0ui16)) { case Ok(value: x): give x; case Err(error: e): { return 1; } };
+    SocketAddr self = match (a.localAddr()) { case Ok(value: x): x; case Err(error: e): { return 1; } };
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    match (give a.split()) { case Halves(receiver: r, sender: s): {
+        match (UdpSocket.reunite(receiver: give r, sender: give s)) {
+            case Err(error: e): { return 1; }
+            case Ok(value: t): {
+                match (t.sendTo(bytes: one.view(), to: self)) { case Ok(value: n): { } case Err(error: e): { return 1; } };
+                match (t.recv(into: one.viewMut())) { case Ok(value: n): { } case Err(error: e): { return 1; } };
+            }
+        };
+    } };
+    return 0;
+}
+
+unsafe fn uint8 run() {
+    TcpListener l = match (TcpListener.bind(host: "127.0.0.1", port: 0ui16)) { case Ok(value: x): give x; case Err(error: e): { return 255; } };
+    int32 bad = 0;
+    if (joinedAgain(l: ref l) != 0) { bad = bad | 1; }
+    if (twoStreams(l: ref l) != 0) { bad = bad | 2; }
+    if (deadlines(l: ref l) != 0) { bad = bad | 4; }
+    if (halfClose(l: ref l) != 0) { bad = bad | 8; }
+    if (readerGoesFirst(l: ref l) != 0) { bad = bad | 16; }
+    if (datagrams() != 0) { bad = bad | 32; }
+    if (datagramJoined() != 0) { bad = bad | 64; }
+    if (lastHalfCloses(l: ref l) != 0) { bad = bad | 128; }
+    return cast<uint8>(bad);
+}
+fn uint8 main() { return run(); }
