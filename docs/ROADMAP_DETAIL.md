@@ -579,7 +579,7 @@ The likely fix is a left-recursive ladder rule, so that it leaves the stack flat
 
 <a id="s2-enum-value-join"></a>
 
-### Two enum values meet when a name holds `_` (KR-306)
+### An enum's value or variant meets another C name (KR-306)
 
 Filed 2026-11-03, measured on `0.9.820` and `0.9.829`. An enum's value reaches C as `<Enum>_<Value>`
 (`kama.cemit.cpp`, the scalar-enum arm of member resolution), a single-`_` join, which is not one-to-one. In one file
@@ -588,10 +588,51 @@ Filed 2026-11-03, measured on `0.9.820` and `0.9.829`. An enum's value reaches C
 joined name) makes the `__` join one-to-one but does not reach a `_` join. The other `_` join, a generic type's
 instance, was measured not to meet: `P<A, B>` and `P_A<B>` built and ran.
 
-**The likely fix:** join a value to its enum with `__`, as a method, constructor and type constant are, which puts it
-under that rule; the declared C surface (`type expose enum`, `type extern enum`) keeps its spelling. Count first
-what spells an enum value's C name by hand (the runtime headers, `include/kama_lldb.py`, `editor/vscode/names.js`),
-since each re-spells with it, and whether a tagged enum's variant tag (`<T>_<V>`) meets the same way.
+**Measured 2026-11-03 on `0.9.839`, the brief for the session that fixes it.** The row is wider than filed. Every case
+is a clang error, never a silent miscompile, and each program below is legal kama:
+
+| in one file | meets as |
+|---|---|
+| `type enum E_A { B, C }` and `type enum E { A_B, D }` (scalar) | the enumerator `kF_f__E_A_B` twice |
+| the same names, both tagged (`B(int32 v)`, `A_B(int32 v)`) | the tag constant `kF_f__T_A_B` twice |
+| a tagged `T_A { B(int32 v), C }` and a scalar `T { A_B, D }` | the tag constant and the enumerator |
+| `type enum E { B, C }` and `type value E_B { … }` | the enumerator and the typedef `kF_f__E_B` |
+| a tagged `type enum T { X(int32 v), Y }` and `type value T_kama_tag { … }` | the tag type and the typedef |
+| a tagged `type enum T { kama_tag(int32 v), Y }` | its own tag type and its variant's constant |
+
+The last is the bug `tests/enum_variant_named_tag.kama` was written for in `0.9.704`, back by another door: the tag
+type became `<Enum>_kama_tag` as "a name no variant can take, `kama_` being reserved", and nothing enforces the
+reservation SPEC states (*Names beginning `kama_` are reserved*): a variant, a method (`fn int32 kama_tag()`) and a
+top-level `fn kama_thing()` all build.
+
+**What spells these names.** The emitter, by hand, at about 25 sites (`ci.name << "_" << v.name` and its
+variants): the tag enum's declaration, construction, a variant test, and every `case` of a `match` and of the
+switches in the helpers it emits for an enum. Outside it, only `include/kama_lldb.py`'s `_variant`, which cuts `<type>_` off the tag constant to name the
+variant (that file's other patterns read type names, which do not change). Nothing in `include/`'s C,
+`editor/vscode/names.js` or any `csources` in the corpus names an emitted enum constant. `kama demangle` reads the
+emitter's own maps, so `E__B` would demangle as `E::B` with nothing added. The declared C surface (`type expose
+enum`, `type extern enum`, the host header's `#define <Enum>_<Value>`) keeps its spelling.
+
+**The corpus** (3,449 `.kama` files, 778 enum values and variants): none starts or ends with `_`, none starts with
+`kama_`, and no declaration outside the declared surface (`extern`, `expose fn`) is named `kama_…`. So rules 2 and 4
+below refuse nothing that exists. An enum value and a method of its enum may share a name today (`type enum E { B, C;
+public const fn int32 B() { … } }` builds), and the `__` join alone would make them meet as `E__B`.
+
+**Recommended, for the maintainer's ruling:**
+1. **One spelling.** A helper names an enum's constant, and every site goes through it (deletion: about 25 hand joins
+   become calls). The declared surface keeps `<Enum>_<Value>`.
+2. **The join is `__`** (`E__B`), as a method, constructor and type constant are, so a value and a variant come under
+   SPEC § C names' edge-`_` rule and are joined exactly as the enum's methods are. That closes the table's first
+   four rows (`E_A__B` is not `E__A_B`, and no type name contains `__`); rule 4 closes the last two.
+3. **A value or variant and a member of its enum may not share a name.** Both would be `E__B`; one member namespace is
+   also the simpler language (`E::B` and `e.B()` naming two things is a reading trap). Count first whether anything
+   in the corpus does it.
+4. **The tag type is `<Enum>__kama_tag`, and the `kama_` reservation is enforced** on every name kama joins (a
+   declaration, a method, a constructor, a constant, a value, a variant), as an xfail per kind. A local, a parameter
+   and a field stay free: they are `k_kama_…`.
+5. **Proof:** the six programs above become positive fixtures (RED on `0.9.839`, each a clang error), and the new
+   refusals xfail fixtures; `kama_lldb.py` cuts `<type>__`, checked by `tools/check-lldb-formatters.sh` where lldb
+   runs (the Mac; this box has none). A VERSION bump, since emitted C changes for every enum.
 
 <a id="s2-quoted-format"></a>
 
@@ -2236,23 +2277,83 @@ since a Quest-native app renders on the headset.
   the `.so` (`unsafe`, since it takes a raw pointer), and the glue is a `csources` entry. The OS owns the loop, as the
   browser does on wasm: events arrive through `ALooper_pollOnce`, the window through `APP_CMD_INIT_WINDOW` and
   `APP_CMD_TERM_WINDOW`, plus pause and resume.
-- **Packaging.** An `AndroidManifest.xml` with Meta's required entries (the `android.hardware.vr.headtracking`
-  `uses-feature`, the `com.oculus.intent.category.VR` launcher category, `com.oculus.supportedDevices`; minSdk 29 to
-  32; targetSdk 34, required of new store apps since 2026-03-01), compiled by `aapt2` against the platform's
+- **Packaging.** An `AndroidManifest.xml` with Meta's required entries, compiled by `aapt2` against the platform's
   `android.jar`. Then the `.so` at `lib/arm64-v8a/`, `zipalign`, and `apksigner` (v2 signing, which store review
-  requires). Every tool is in the Android SDK, and `apksigner` needs a JDK.
+  requires). Every tool is in the Android SDK, and `apksigner` needs a JDK. Meta's release-manifest page, binding
+  through VRC.Quest.Packaging.1 (read 2026-11-03,
+  <https://developers.meta.com/horizon/resources/publish-mobile-manifest/>), requires: the `uses-feature`
+  `android.hardware.vr.headtracking` (`required="true"`, `version="1"`) for an immersive app; a launch activity with
+  `MAIN`, the category `com.oculus.intent.category.VR` (Meta's OpenXR page shows Khronos's
+  `org.khronos.openxr.intent.category.IMMERSIVE_HMD` instead, and Godot's Meta plugin emits both) and
+  `excludeFromRecents`; the meta-data `com.oculus.supportedDevices` (`quest2|questpro|quest3|quest3s|vrglasses`);
+  `installLocation="auto"`; no `debuggable`; targetSdk 34 for an app created since 2026-03-01, minSdk 29 to 34 (32
+  recommended); and a network security configuration, whose attribute the page does not name. Meta's native page adds
+  `screenOrientation="landscape"` and a `configChanges` list, and is older than the release page (it shows 32/32).
+  `com.oculus.vr.focusaware` is on neither page, though upload checks rejected apps without it through 2025.
 - **Output.** Under `adb shell` a program has a stdout; an app the launcher starts has none, so `println` goes nowhere
   unless something routes it to logcat (`__android_log_write`, `-llog`).
 
 **What others do.**
 - **Rust:** cargo builds the `.so` (`cargo-ndk` wires the NDK linker), and the `android-activity` crate is the
-  NativeActivity/GameActivity glue. Packaging is a separate tool (`xbuild`, formerly `cargo-apk`). Rust names the OS
-  `target_os = "android"`, apart from Linux.
+  NativeActivity/GameActivity glue. Packaging was `cargo-apk` (deprecated, last release 2023-11) and then `xbuild`,
+  whose repository now says it is unmaintained. Rust names the OS `target_os = "android"`, apart from Linux.
 - **Go:** `gomobile build -target=android` packages and signs an APK itself, writing binary XML without the SDK's
   tools. `GOOS=android` also satisfies the `linux` build tag, which is kama's `OS_LINUX` + `ABI_ANDROID` shape.
 - **Zig:** `zig cc` has no bionic, so it uses the NDK's sysroot; packaging is community templates.
 - **C and C++:** Gradle with CMake or ndk-build, or aapt2 and apksigner driven by hand. A Gradle-free Quest 3
   OpenXR sample exists (CMU's 15-466 `ndk-openxr`).
+
+**How an app's packaging is configured** (surveyed 2026-11-03 from each tool's docs or source):
+
+| | app id | version code | manifest | release signing |
+|---|---|---|---|---|
+| cargo-apk | `package`, default `rust.<name>` | derived from the Cargo version (bit-packed) | generated from TOML tables | path and password in Cargo.toml, or env |
+| xbuild | default `com.example.<name>`; iOS gets the bare name | derived from semver | a YAML mirror of the XML | a PEM key, `--pem` or env |
+| gomobile | invented, `org.golang.todo.<lib>` (a TODO in its source); `-bundleid` is iOS-only | fixed at 1 | the package's own file as-is, else generated | none: one hardcoded debug key |
+| Tauri v2 | `identifier`, one for both platforms; its default is refused | `major*1000000 + minor*1000 + patch`, overridable | a generated Gradle project you edit | `keystore.properties`, outside version control |
+| Briefcase | `bundle` + the app's name, both platforms | version plus a build number, padded | generated, plus raw XML fragments | by hand (`jarsigner`) |
+| Android Gradle | `applicationId` | independent integer | merged from every library, with markers | `signingConfigs`, passwords in a properties file |
+| Godot 4 | `package/unique_name` | independent integer | generated, plugins splice entries | env (`GODOT_ANDROID_KEYSTORE_RELEASE_*`) or a credentials file |
+
+What the table says: the tools that build iOS and Android from one config take **one** reverse-DNS id (Tauri,
+Briefcase), and the per-platform tools drift (xbuild's two defaults, gomobile's invented one). A tool that defaults the
+id ships a placeholder, and Tauri refuses its own. Every tool takes **one** version string and derives the integer by
+default, each by a different formula. No mature tool keeps a password in the committed config. The debug key is
+`~/.android/debug.keystore` in Android Studio and cargo-apk, so their APKs install over each other; xbuild and
+gomobile ship a fixed key. Three manifest strategies: structured keys, raw fragments spliced in, or a whole file.
+
+**The first step, `kama.json`'s shape — recommended 2026-11-03, for the maintainer's ruling.** Nothing here is built
+or measured in kama yet. The hand proof (decision 3 above) comes before any of it is code.
+1. **`"kind": "app"`** says the project is an app the OS launches, beside `executable` and `library`, with `entry`
+   naming the file whose `main` runs. On Android an app builds the `.so` with the glue and the APK around it; on a
+   target with no app format it builds as an executable, an accepted no-op as `subsystem` is. An `executable` stays
+   what `adb shell` and the device leg run. The alternative, the `app` block's presence switching the output, is
+   implicit; `-o x.apk` is a second place to say it.
+2. **`"app": { "id": "com.example.game", "label": "Game" }`**, the identity iOS will share (KR-281). `id` has no
+   default: an app without one is refused, naming the key. Its segments are a letter and then letters and digits,
+   two or more, which is what both platforms accept (Android allows `_`, Apple `-`; to confirm Apple's rule on the
+   Mac). `label` defaults to `name`.
+3. **The version is `version`.** The version name is the manifest's semver as written. The version code is derived as
+   Tauri derives it, `major*1000000 + minor*1000 + patch`, with no override, refused past Android's 2100000000 or a
+   part past 999. Decide whether an app's version may carry a pre-release tag, since `1.0.0-beta.2` and `1.0.0` would
+   share a code and a store refuses the second upload.
+4. **minSdk is the triple's level** (`aarch64-linux-android29` is minSdk 29): it is one number already, and a second
+   spelling could disagree. **`app.android.targetSdk` is stated, with no default**: Android gates behaviour changes
+   on it, so it is the project's choice. cargo-apk and xbuild default it (35 and 33), and neither is the 34 Quest
+   requires today. It also names the `android.jar` aapt2 compiles against, and a missing platform is refused with the
+   `sdkmanager` line that installs it.
+5. **The manifest is generated, or supplied whole.** Generated from `app` and a closed set of keys under
+   `app.android`: `permissions` (a list), and `vr`, which emits Meta's required set above with `supportedDevices` as
+   its value. `"manifest": "<path>"` replaces it whole (gomobile's way), checked only where kama must agree with it:
+   the id, the activity, `lib_name` and minSdk. No merging, no fragments. A dependency's `permissions` union in,
+   since the package that binds an API is the one that knows its permission (as with `link`). Everything else in
+   `app` is the root's alone, like `shellFile`.
+6. **Signing follows the mode.** A debug build signs with `~/.android/debug.keystore`, which kama creates with
+   `keytool` when it is missing, using Android Studio's parameters. A `--release` build signs with
+   `app.android.keystore: { "path", "alias" }`, and is refused without it. Passwords come from the environment
+   (`KAMA_KEYSTORE_PASSWORD`, `KAMA_KEY_PASSWORD`), and a password in `kama.json` is refused.
+7. **Out of the first step:** `assets` (the APK's `assets/`, which needs a std reader over `AAssetManager`), `kama run`
+   installing and launching the app over adb, and the lifecycle (decision 4 above).
 
 **Decided 2026-11-02** (the maintainer took the production answer for each; 3 replaces a first step proposed the day
 before, and 4 is a direction whose shape KR-283 designs; the rulings on the target itself shipped, and docs/targets.md
