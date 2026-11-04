@@ -1,0 +1,37 @@
+// KR-306: an enum's value or variant reached C as `<Enum>_<Value>`, a `_` join, so in one file it met another name and
+// clang refused a legal program (measured to 0.9.846, each pair below a clang error on its own):
+//   `E_A`'s `B` and `E`'s `A_B`, scalar, tagged, or one of each, were all `E_A_B`;
+//   an enum `F`'s `B` was `F_B`, which a type of that name also is;
+//   a tagged `G`'s tag type was `G_kama_tag`, which a type of that name also is.
+// A value and a variant are joined with `__` now, as the enum's methods are, so none of them meets.
+type enum E_A { B, C }
+type enum E { A_B, D }
+
+type enum T_A { B(int32 v), C }
+type enum T { A_B(int32 v), D }
+
+type enum M_A { B(int32 v), C }
+type enum M { A_B, D }
+
+type enum F { B, C }
+type value F_B { public int32 n; public ctor make() { this.n = 1; } }
+
+type enum G { X(int32 v), Y }
+type value G_kama_tag { public int32 n; public ctor make() { this.n = 2; } }
+
+fn uint8 main() {
+    E_A e1 = E_A::B; E e2 = E::A_B;
+    if (e1 != E_A::B || e2 != E::A_B) { return 1; }
+    T_A t1 = T_A::B(v: 3); T t2 = T::A_B(v: 4);
+    int32 a = match (t1) { case B(v: n): n; case C: 0; };
+    int32 b = match (t2) { case A_B(v: n): n; case D: 0; };
+    if (a + b != 7) { return 2; }
+    M_A m1 = M_A::B(v: 5); M m2 = M::A_B;
+    int32 c = match (m1) { case B(v: n): n; case C: 0; };
+    if (c != 5 || m2 != M::A_B) { return 3; }
+    F f = F::B; F_B fb = F_B.make();
+    if (f != F::B || fb.n != 1) { return 4; }
+    G g = G::X(v: 6); G_kama_tag gt = G_kama_tag.make();
+    int32 d = match (g) { case X(v: n): n; case Y: 0; };
+    return cast<uint8>(d + gt.n - 8);
+}

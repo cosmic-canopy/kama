@@ -630,64 +630,73 @@ Why it is low: `YYINITDEPTH` cannot simply rise, because `YYSTYPE` holds `shared
 
 The likely fix is a left-recursive ladder rule, so that it leaves the stack flat, with each arm a chain link as `CHAIN_LINK` counts one. The node each arm builds stays what it is. What the C compiler takes then decides the number, since the ladder's text is flat but clang recurses through it: Apple's took 1,000 and warned of its stack by 5,000. A grammar change is four artifacts if the grammar's text changes.
 
-<a id="s2-enum-value-join"></a>
+<a id="s2-kama-lane"></a>
 
-### An enum's value or variant meets another C name (KR-306)
+### A user's name meets a name kama writes for itself (KR-318)
 
-Filed 2026-11-03, measured on `0.9.820` and `0.9.829`. An enum's value reaches C as `<Enum>_<Value>`
-(`kama.cemit.cpp`, the scalar-enum arm of member resolution), a single-`_` join, which is not one-to-one. In one file
-`type enum E_A { B, C }` and `type enum E { A_B, D }` both emit `kF_en__E_A_B`, and clang refuses the program:
-"redefinition of enumerator 'kF_en__E_A_B'". Found while probing the rule SPEC § C names now states (no edge `_`, no inner `__` in a
-joined name) makes the `__` join one-to-one but does not reach a `_` join. The other `_` join, a generic type's
-instance, was measured not to meet: `P<A, B>` and `P_A<B>` built and ran.
+Found 2026-11-04 while moving an enum's values onto the `__` join, measured on `0.9.847`. kama joins two kinds of name
+onto a type's C name with `__`: the members a user declares (`T__area`, and since `0.9.847` an enum's values,
+`Color__Red`), and what kama writes
+itself (`T__dtor`, a destructor the user wrote as `~T()` or never wrote at all). Both share one lane, so a name a user
+picks for something unrelated can be the name kama picked, and two C declarations get one spelling:
 
-**Measured 2026-11-03 on `0.9.839`, the brief for the session that fixes it.** The row is wider than filed. Every case
-is a clang error, never a silent miscompile, and each program below is legal kama:
-
-| in one file | meets as |
+| in one file | result |
 |---|---|
-| `type enum E_A { B, C }` and `type enum E { A_B, D }` (scalar) | the enumerator `kF_f__E_A_B` twice |
-| the same names, both tagged (`B(int32 v)`, `A_B(int32 v)`) | the tag constant `kF_f__T_A_B` twice |
-| a tagged `T_A { B(int32 v), C }` and a scalar `T { A_B, D }` | the tag constant and the enumerator |
-| `type enum E { B, C }` and `type value E_B { … }` | the enumerator and the typedef `kF_f__E_B` |
-| a tagged `type enum T { X(int32 v), Y }` and `type value T_kama_tag { … }` | the tag type and the typedef |
-| a tagged `type enum T { kama_tag(int32 v), Y }` | its own tag type and its variant's constant |
+| `fn int32 dtor()` beside `~R()` | clang: conflicting types for `R__dtor` |
+| `fn int32 vdrop()` on a `virtual` resource | clang: conflicting types for `Base__vdrop` |
+| `fn int32 vtable()` on a `virtual` resource, and a type `Base_vtable` | clang: redefinition, both |
+| `ctor copy` on an enum whose payload owns a `string` | clang: conflicting types for `E__copy` |
+| `type value Shape_vtbl` beside `type contract Shape`, boxed | clang: redefinition of `Shape_vtbl` |
+| `fn int32 op_add()` beside `operator+` | kama: "duplicate operator '+'", a wrong refusal |
+| a variant `dtor(string s)` | built on `0.9.846`; clang on `0.9.847` (the value's `__` join) |
+| a variant `equals(int32 v)` under `@generate(Equatable)` | built on `0.9.846`; clang on `0.9.847` |
 
-The last is the bug `tests/enum_variant_named_tag.kama` was written for in `0.9.704`, back by another door: the tag
-type became `<Enum>_kama_tag` as "a name no variant can take, `kama_` being reserved", and nothing enforces the
-reservation SPEC states (*Names beginning `kama_` are reserved*): a variant, a method (`fn int32 kama_tag()`) and a
-top-level `fn kama_thing()` all build.
+`lib/std/collections/sorted_map.kama`'s `BTreeNode` declares a method `serializeInto`, the graph twin's name, and is
+safe only because it has no hand-written `serialize` to make the twin.
 
-**What spells these names.** The emitter, by hand, at about 25 sites (`ci.name << "_" << v.name` and its
-variants): the tag enum's declaration, construction, a variant test, and every `case` of a `match` and of the
-switches in the helpers it emits for an enum. Outside it, only `include/kama_lldb.py`'s `_variant`, which cuts `<type>_` off the tag constant to name the
-variant (that file's other patterns read type names, which do not change). Nothing in `include/`'s C,
-`editor/vscode/names.js` or any `csources` in the corpus names an emitted enum constant. `kama demangle` reads the
-emitter's own maps, so `E__B` would demangle as `E::B` with nothing added. The declared C surface (`type expose
-enum`, `type extern enum`, the host header's `#define <Enum>_<Value>`) keeps its spelling.
+**Why nothing caught it.** A fixture corpus tests the names people write: every enum value in it is capitalized, and
+no fixture names a member after a helper kama generates. SPEC § C names claims a one-to-one mapping, and the edge-`_`
+and inner-`__` rules prove it only between two names a user writes; nothing checked a user's name against kama's.
 
-**The corpus** (3,449 `.kama` files, 778 enum values and variants): none starts or ends with `_`, none starts with
-`kama_`, and no declaration outside the declared surface (`extern`, `expose fn`) is named `kama_…`. So rules 2 and 4
-below refuse nothing that exists. An enum value and a method of its enum may share a name today (`type enum E { B, C;
-public const fn int32 B() { … } }` builds), and the `__` join alone would make them meet as `E__B`.
+**The inventory** (2026-11-04). kama generates, on a type's or a contract's C name: `__dtor` (61 sites, plus 41
+hand-written `kama__FieldKey__dtor` and the runtime's `kama_string__dtor`, which the generic funnel calls), `__vdrop`,
+`__vsize`/`__valign`, `__vtable`, the class vtable's struct type `<Root>_vtable`, a contract's struct type `<C>_vtbl`,
+`__as_<C>`, the graph-serde helpers (`__serializeInto`, `__deserializeFrom`, `__wireParts`, `__deserializeRoot`,
+`__visitEdges`, `__writeNode`, `__wireEdges`, `__graphTypeId`, `__graphImplVtbl`, `__serializeEdge`,
+`__deserializeEdge`), `__upgrade`, `__fillCopy`/`__fillCopyInto`, the `__copy` of an owning enum, array or contract
+handle, and an operator's member name `op_<sym>`. A contract's methods are the user's whether written or derived
+(`equals`, `hash`, `compareTo`, `format`, `serialize`, `deserialize`, `mergeFrom`, `deref`, `derefMut`, `adopt`,
+`allocate`, `deallocate`, `bytes`, `bytesMut`, `of`, `zero`, a resource's `ctor copy`). A suffix on a method's own C
+name (`__into`, `__kama_local`, `__kama_checked`, `__graphTwin`) is out of reach, since no member name holds `__`.
 
-**Ruled 2026-11-04: all five as recommended.** The maintainer, on rule 1: 25 hand-written sites is excessive, and
-duplication goes wherever it can. `kama_lldb.py`'s change is checked by CI's macOS job, which runs the formatter guard
-against a real lldb on every push (Linux and Windows skip it), so the fix does not wait on the Mac.
-1. **One spelling.** A helper names an enum's constant, and every site goes through it (deletion: about 25 hand joins
-   become calls). The declared surface keeps `<Enum>_<Value>`.
-2. **The join is `__`** (`E__B`), as a method, constructor and type constant are, so a value and a variant come under
-   SPEC § C names' edge-`_` rule and are joined exactly as the enum's methods are. That closes the table's first
-   four rows (`E_A__B` is not `E__A_B`, and no type name contains `__`); rule 4 closes the last two.
-3. **A value or variant and a member of its enum may not share a name.** Both would be `E__B`; one member namespace is
-   also the simpler language (`E::B` and `e.B()` naming two things is a reading trap). Count first whether anything
-   in the corpus does it.
-4. **The tag type is `<Enum>__kama_tag`, and the `kama_` reservation is enforced** on every name kama joins (a
-   declaration, a method, a constructor, a constant, a value, a variant), as an xfail per kind. A local, a parameter
-   and a field stay free: they are `k_kama_…`.
-5. **Proof:** the six programs above become positive fixtures (RED on `0.9.839`, each a clang error), and the new
-   refusals xfail fixtures; `kama_lldb.py` cuts `<type>__`, checked by `tools/check-lldb-formatters.sh` where lldb
-   runs (the Mac; this box has none). A VERSION bump, since emitted C changes for every enum.
+**Ruled 2026-11-04** (the maintainer: kama should color the functions it generates):
+1. **Two lanes.** A name a user writes joins as `<Type>__<name>`; a name kama chooses joins as `<Type>__kama_<what>`,
+   through one helper, as the tag type `<Enum>__kama_tag` already does. A joined user name may not begin `kama_`
+   (SPEC § C names), so the lanes cannot meet whatever either side adds later.
+2. **What moves:** every generated name above, single-`_` ones included (`Shape__kama_vtbl`, the class vtable's type
+   and instance), and an operator's member name, whose method key moves with it. `kama_string__dtor` becomes
+   `kama_string__kama_dtor`. `copy` splits: a resource's `ctor copy` is the user's and stays `T__copy`; the copy kama
+   writes for an enum, an array or a handle is `__kama_copy`.
+3. **A derived method is a member.** `@generate(Equatable)` writes a method the user calls (`a.equals(b)`), so it
+   stays `T__equals`, and the variant-vs-member rule counts it. An enum derives at most `serialize`, `deserialize`,
+   `format`, `equals`, `hash` and `compareTo`.
+4. **`dtor` stays a legal name** (the maintainer): with kama's destructor in its own lane, the word costs nothing.
+5. **Proof:** a positive fixture naming methods, a ctor and variants after every generated name (each a clang error
+   today); an xfail for a variant named after a derived method; and a guard that refuses a generated suffix joined by
+   hand outside the helper, so a helper added later cannot reopen the class. `kama demangle` shows `T::kama_dtor`.
+
+<a id="s2-instance-key"></a>
+
+### A type named like a generic instance's key is that instance (KR-319)
+
+Found 2026-11-04 by KR-318's inventory, measured on `0.9.847`. In one file, `type value Pair<T> { public T a; … }` and
+`type value Pair_int32 { public int32 b; … }`: `Pair_int32.make()` is checked as `Pair<int32>`'s ("missing the
+argument `a`"), and `q.b` as "`Pair<int32>` has no field `b`". A generic instance is keyed `<Tmpl>_<arg>` (the
+instance mangle in `kama.cemit.cpp`), a `_` join of two names a user can spell, so a plain type of that name and the
+instance share one table entry, and the key is the instance's C name too. The intrinsic instances (`Owned_`, `Shared_`,
+`Weak_`, `InlineArray_`, `Simd_`, `Mask_`, `InlineStorage_`) carry no scope prefix either. The enum-value join's brief measured
+`P<A, B>` against `P_A<B>` and found them apart, so the reach of this is a plain type against an instance; unprobed
+beyond that. Wants a look at moving the instance key out of the user's lane, as KR-318 does for generated members.
 
 <a id="s2-quoted-format"></a>
 

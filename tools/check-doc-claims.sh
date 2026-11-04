@@ -116,8 +116,9 @@ if [ -n "$unmarked" ]; then
 fi
 
 # ---- Half A: every marker must resolve ------------------------------------------------------------------
-# One marker may name several fixtures (`<!-- xfail: a, b -->`); a trailing `*` is a glob, matching the
-# spelling SPEC already used in prose for the `generic_uninst_*` family.
+# One marker may name several fixtures (`<!-- xfail: a, b -->`), each spelled out: a `*` is NOT a glob here.
+# This comment said it was, and a marker written on its word failed as "not a fixture", since the expansion
+# below runs against the working directory, not tests/xfail.
 for rel in $DOCS; do
     grep -on '<!-- *\(xfail\|test\): *[^>]*-->' "$ROOT/$rel" 2>/dev/null \
         | sed "s|^|$rel:|" || true
@@ -149,8 +150,7 @@ while IFS= read -r m; do
     names="${body#*:}"                       # " a, b -->"
     names="${names%%-->*}"                   # " a, b "
     # Comma AND space in IFS, so `a, b` splits the same way `tr ',' ' '` + default splitting did.
-    # Left unquoted deliberately: that preserves the previous pathname-expansion behaviour exactly
-    # (no marker uses a glob today — see the trailing-`*` note above, which nothing exercises).
+    # Left unquoted deliberately, for the split; a `*` in a name is refused below as not a fixture.
     IFS=', '
     for n in $names; do
         IFS=$saved_ifs

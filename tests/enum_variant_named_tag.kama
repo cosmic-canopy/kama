@@ -1,6 +1,6 @@
-// A variant may be named `Tag`. Its tag constant is `<Enum>_Tag` in C, and through 0.9.704 so was the enum's tag TYPE:
-// `kama check` passed and clang refused the redefinition. The type is `<Enum>_kama_tag` now — a name no variant can
-// take, `kama_` being reserved.
+// A variant may be named `Tag`. Its tag constant is `<Enum>__Tag` in C, and through 0.9.704 the enum's tag TYPE was
+// `<Enum>_Tag`, which the constant then was too: `kama check` passed and clang refused the redefinition. The type is
+// `<Enum>__kama_tag` now, a name no variant can take, since a variant may not begin `kama_` (KR-306).
 type enum Validator { Tag(int32 id), Date(int64 secs) }
 
 fn uint8 main() {

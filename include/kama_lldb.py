@@ -111,15 +111,15 @@ class StringSynth:
 def _variant(v):
     """-> (variant name as kama spells it, payload SBValue or None).
 
-    The lowering is `{ <Inst>_kama_tag kama_tag; union { struct {...} k_<Variant>; ... } kama_u; }`. The tag
-    CONSTANT is spelled `<Inst>_<Variant>`, so the variant name is the constant with the type's own name
-    cut off the front. A payloadless variant contributes NO union member at all, so the arm lookup must
-    be allowed to miss."""
+    The lowering is `{ <Inst>__kama_tag kama_tag; union { struct {...} k_<Variant>; ... } kama_u; }`. The tag
+    CONSTANT is spelled `<Inst>__<Variant>`, so the variant name is the constant with the type's own name
+    and the `__` join cut off the front. A payloadless variant contributes NO union member at all, so the
+    arm lookup must be allowed to miss."""
     # A POINTER to a tagged enum reaches here too — the emitter hoists one for every `match` subject
     # (`kama_msub1`), and user code passes them. LLDB resolves a member through a pointer, so the tag
     # reads fine, but the TYPE NAME is `kama__Optional_string *`, and the variant name is derived by
     # cutting the type's name off the front of the tag constant — which then cut nothing and printed the
-    # raw `kama__Optional_string_Some`. Dereference first so both halves see the same type.
+    # raw `kama__Optional_string__Some`. Dereference first so both halves see the same type.
     t = v.GetType()
     if t.IsPointerType():
         v = v.Dereference()
@@ -130,7 +130,7 @@ def _variant(v):
         return None, None
     label = tag.GetValue() or ''
     tyname = v.GetType().GetUnqualifiedType().GetName() or ''
-    name = label[len(tyname) + 1:] if label.startswith(tyname + '_') else label
+    name = label[len(tyname) + 2:] if label.startswith(tyname + '__') else label
     u = v.GetChildMemberWithName('kama_u')
     if not u.IsValid():
         return name, None

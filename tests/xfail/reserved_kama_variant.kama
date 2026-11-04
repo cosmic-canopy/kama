@@ -1,0 +1,4 @@
+// KR-306: a variant named `kama_tag` was `T_kama_tag` in C, the very name of its enum's tag type, and clang refused
+// it (0.9.846). Names beginning `kama_` are the runtime's, and a variant is joined into C, so it is refused.
+type enum T { kama_tag(int32 v), Y }
+fn uint8 main() { T t = T::kama_tag(v: 1); int32 a = match (t) { case kama_tag(v: n): n; case Y: 0; }; return cast<uint8>(a - 1); }

@@ -1,0 +1,3 @@
+// KR-306: a value and a method of its enum are both `E__B` in C, and `E::B` beside `e.B()` would name two things.
+type enum E { B, C; public const fn int32 B() { return 1; } }
+fn uint8 main() { E e = E::C; return cast<uint8>(e.B() - 1); }

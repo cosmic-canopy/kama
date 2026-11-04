@@ -1,0 +1,5 @@
+// KR-306: an enum's values and variants are joined into C as its methods are (`E__B`), so KR-300's rule holds them,
+// as it holds the enum's own methods, constructors and constants: `S_`'s `B` and `S`'s `_B` would both be `S___B`.
+type enum S { _B, C }
+type enum T { C_(int32 v), D; public fn int32 _m() { return 1; } }
+fn uint8 main() { return 0; }

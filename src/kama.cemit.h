@@ -606,10 +606,10 @@ struct ClassInfo {
 
     // Tagged unions: a payload/generic `enum` is backed by a ClassInfo whose layout is a
     // discriminant tag + a union of per-variant payloads (not the flat `fields`). `variants` drives
-    // struct + per-variant dtor emission; `tagCType` pins the tag width (`: IntType`), "" = Name_kama_tag.
+    // struct + per-variant dtor emission; `tagCType` pins the tag width (`: IntType`), "" = Name__kama_tag.
     bool                              isVariant = false;
     std::vector<VariantCase>          variants;
-    std::string                       tagCType;              // "" -> the synthesized `Name_kama_tag` enum
+    std::string                       tagCType;              // "" -> the synthesized `Name__kama_tag` enum
 
     // Namespaces: the declaring file's scope/usings/symbol-aliases, for resolving this
     // type's field/base/method references during header emission (a field typed with an
@@ -2272,6 +2272,15 @@ private:
     // The prelude's own scope (KR-67 stage 4a). Its declarations are keyed `kama__<name>`, so a
     // comparison against a RESOLVED prelude type must spell it this way, not bare.
     static std::string preludeName(const std::string& name) { return std::string(kamaPreludeScope()) + name; }
+    // An enum's value or variant in C (KR-306): `<Enum>__<Value>`, joined as the enum's methods are, so SPEC § C
+    // names' one-to-one rule covers it. A `_` join was not one-to-one: `E_A`'s `B` and `E`'s `A_B` met. A tagged
+    // enum's tag type is `enumConst(<Enum>, "kama_tag")`, which no variant can take, `kama_` being reserved.
+    // Every enum constant the emitter writes is spelled here; the declared C surface keeps its own spelling.
+    // Public, because the file-scope helpers in kama.cemit.cpp that write a constant are not members.
+public:
+    static std::string enumConst(const std::string& enumC, const std::string& v) { return enumC + "__" + v; }
+    static std::string preludeConst(const std::string& e, const std::string& v) { return enumConst(preludeName(e), v); }
+private:
     // The inverse, for a CONTRACT-name comparison. A bound reaches the predicates either as a
     // compiler-written literal (`satisfiesBound(t, "Copyable")`) or as a name the resolver already
     // qualified (`kama__Copyable`) — the two were the same string until stage 4a. Comparing on the

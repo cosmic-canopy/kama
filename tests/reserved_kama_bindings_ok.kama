@@ -1,0 +1,16 @@
+// KR-306: `kama_` is reserved on every name kama JOINS into C, a declaration, a member, a value or a variant. A field,
+// a parameter and a local are emitted `k_<name>`, so they stay free, even a field named `kama_tag` beside a tagged
+// enum's own `kama_tag`.
+type value P {
+    public int32 kama_tag;
+    public ctor make(int32 kama_seed) { this.kama_tag = kama_seed; }
+}
+
+type enum O { Some(P p), None }
+
+fn uint8 main() {
+    int32 kama_local = 3;
+    O o = O::Some(p: P.make(kama_seed: kama_local));
+    int32 got = match (o) { case Some(p: q): q.kama_tag; case None: 0; };
+    return cast<uint8>(got - 3);
+}

@@ -1,0 +1,4 @@
+// KR-306: names beginning `kama_` are the runtime's, and kama joins this one into its C names, so it is refused;
+// the reservation is what keeps every name kama writes for itself (a tagged enum's `<Enum>__kama_tag`) clear of a user's.
+type enum Switch { kama_on, Off }
+fn uint8 main() { Switch s = Switch::Off; if (s == Switch::Off) { return 0; } return 1; }

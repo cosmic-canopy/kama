@@ -490,6 +490,7 @@ enum_type_as_value	enum_type_as_value.kama:4:10
 enum_unknown_contract	enum_unknown_contract.kama:4:0
 enum_unknown_variant_dot	enum_unknown_variant_dot.kama:5:10
 enum_unknown_variant_scope	enum_unknown_variant_scope.kama:5:13
+enum_value_member_name	enum_value_member_name.kama:2:14
 enum_variant_arity	enum_variant_arity.kama:4:14
 enum_variant_dot	enum_variant_dot.kama:7:10
 error_downcast_owned	error_downcast_owned.kama:14:46
@@ -840,6 +841,7 @@ iter_reserve_map	iter_reserve_map.kama:16:38
 iter_reserve_slotmap	iter_reserve_slotmap.kama:16:38
 iter_return_over_local	iter_return_over_local.kama:12:4
 join_edge_underscore	join_edge_underscore.kama:5:13 join_edge_underscore.kama:6:9
+join_edge_underscore_enum	join_edge_underscore_enum.kama:3:14 join_edge_underscore_enum.kama:4:14 join_edge_underscore_enum.kama:4:46
 join_edge_underscore_file_	join_edge_underscore_file_.kama:1:0
 join_edge_underscore_member	join_edge_underscore_member.kama:4:11 join_edge_underscore_member.kama:4:38 join_edge_underscore_member.kama:5:75
 kind_argument	kind_argument.kama:6:37
@@ -1364,6 +1366,15 @@ reffn_match_alias_local	reffn_match_alias_local.kama:14:35
 reffn_static_local	reffn_static_local.kama:9:24 reffn_static_local.kama:9:37
 refreturn_local	refreturn_local.kama:5:78
 reserved_binding_name	reserved_binding_name.kama:2:18
+reserved_kama_comptime	reserved_kama_comptime.kama:3:15
+reserved_kama_ctor	reserved_kama_ctor.kama:3:43
+reserved_kama_function	reserved_kama_function.kama:3:9
+reserved_kama_method	reserved_kama_method.kama:3:75
+reserved_kama_static	reserved_kama_static.kama:3:13
+reserved_kama_type	reserved_kama_type.kama:3:11
+reserved_kama_type_constant	reserved_kama_type_constant.kama:3:46
+reserved_kama_value	reserved_kama_value.kama:3:19
+reserved_kama_variant	reserved_kama_variant.kama:3:14
 reserved_type_name	reserved_type_name.kama:3:11
 reserved_word_as_name	reserved_word_as_name.kama:17:10
 result_given_element	result_given_element.kama:3:33 result_given_element.kama:4:34 result_given_element.kama:6:4

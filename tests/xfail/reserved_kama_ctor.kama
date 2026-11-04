@@ -1,0 +1,4 @@
+// KR-306: names beginning `kama_` are the runtime's, and kama joins this one into its C names, so it is refused;
+// the reservation is what keeps every name kama writes for itself (a tagged enum's `<Enum>__kama_tag`) clear of a user's.
+type value P { public int32 a; public ctor kama_make() { this.a = 1; } }
+fn uint8 main() { P p = P.kama_make(); return cast<uint8>(p.a - 1); }

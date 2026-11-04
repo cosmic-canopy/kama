@@ -1913,7 +1913,8 @@ files.
 **no dereference** in kama outside an `unsafe fn`). `UnsafeConstPtr<T>` is the read-only twin, `T const*`
 (bare, `const void*`): same carrier, no store through it, no conversion back to `UnsafePtr<T>` (see
 *`unsafe fn`*). `usize`/`isize` map to `size_t`/`ptrdiff_t`. Names beginning
-`kama_` are reserved (runtime-provided).
+`kama_` are reserved for the runtime: no declaration, member, enum value or variant may take one (§ *C names*), <!-- xfail: reserved_kama_type, reserved_kama_function, reserved_kama_static, reserved_kama_comptime, reserved_kama_method, reserved_kama_ctor, reserved_kama_type_constant, reserved_kama_value, reserved_kama_variant -->
+though an `extern` or an `expose fn`, whose C name is its declared symbol, and a local, a parameter or a field may.
 
 **Pointer arithmetic is not in the language** — `p + n` on a raw pointer is an error, in both the bare and <!-- xfail: ptr_arithmetic -->
 the typed form, and so are `-p`, `~p` and `null` as any arithmetic operand. <!-- xfail: raw_pointer_operand --> An offset is **`addr(of: p[i])`**, which scales by the element type (a bare `UnsafePtr`
@@ -4732,12 +4733,15 @@ project `k`'s `x` was `k__x`, which a local `_x` also emits; a project `kF_app`'
 private `h`). And **a name may
 start with `__` but not contain one** — `__` is how scopes join in C, so a type `a__b` in `geo` would be <!-- xfail: identifier_inner_double_underscore -->
 `geo__a__b`, module `geo::a`'s `b`. A project's name, a scope and a module segment are held to the same,
-since they are joined the same way. **Nor may a joined name start or end with `_`**: beside an edge `_` the <!-- xfail: join_edge_underscore, join_edge_underscore_member, join_edge_underscore_file_ -->
+since they are joined the same way. **Nor may a joined name start or end with `_`**: beside an edge `_` the <!-- xfail: join_edge_underscore, join_edge_underscore_member, join_edge_underscore_file_, join_edge_underscore_enum -->
 join could move, so project `geo_`'s module `x` and project `geo`'s module `_x` would both be `geo___x`, and type
 `T_`'s method `m` and type `T`'s method `_m` both `T___m`. The rule holds for every name kama joins: a project, a
 scope, a module segment, a file's name (its private names are `kF_<file>__<name>`), and a declaration's own
-name — a top-level declaration, a type's method, constructor or constant. A local, a parameter, a field and a
-binding are `k_<name>` and joined to nothing, so `__ok` and a field `a_` stay legal. With both rules, every run
+name — a top-level declaration, a type's or an enum's method, constructor or constant, and an enum's value or
+variant, which is joined as its methods are (`Color__Red`; through `0.9.846` it was `Color_Red`, so `E_A`'s `B`
+and `E`'s `A_B` met). **And a joined name may not start `kama_`**, the compiler's register, which is what keeps a <!-- xfail: reserved_kama_type, reserved_kama_function, reserved_kama_static, reserved_kama_comptime, reserved_kama_method, reserved_kama_ctor, reserved_kama_type_constant, reserved_kama_value, reserved_kama_variant -->
+tagged enum's tag type, `<Enum>__kama_tag`, clear of its variants. A local, a parameter, a field and a
+binding are `k_<name>` and joined to nothing, so `__ok`, a field `a_` and a local `kama_x` stay legal. <!-- test: reserved_kama_bindings_ok, enum_c_names_meet --> With both rules, every run
 of underscores longer than one in a C name is exactly one join, and `kama demangle` reads it one way. The one
 place that rule meets C is the declared
 surface: an `extern fn` whose C name has `__` inside it is bound with `@linkName`.
@@ -6803,6 +6807,8 @@ four-ctor matrix*)
 which are checked like a type's (all three parsed and did nothing before `0.9.443`) — <!-- xfail: enum_comptime_assert -->
 but **not a field (a `const` one included), a destructor or an operator** — its layout is its tag plus its
 variant payloads, and it owns nothing beyond them; an operation on an enum is a named method. <!-- xfail: enum_field, generic_enum_field, enum_const_field, enum_operator -->
+A variant may not share a name with a member of its enum: `E::B` beside `e.B()` would name two things, and C spells <!-- xfail: enum_value_member_name -->
+both `E__B` (§ *C names*).
 **Operators on an enum are a non-goal**, declared or built in. An enum's values are named variants, so `+`,
 `|` or `<<` over them names no variant; a user `operator|` would reopen exactly the hole the built-in refusal
 closes (`Flag::Read | Flag::Write` is no `Flag`). The two needs that look like operators each have a home
