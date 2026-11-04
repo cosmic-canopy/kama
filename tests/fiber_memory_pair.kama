@@ -1,0 +1,175 @@
+// `MemoryStreamPair` on fibers (KR-264): a read of an empty direction parks until the far end writes or goes, a write
+// into a full one until the far end reads or goes, and what fits is taken at once with a short count. The far end's
+// drop and `shutdown` wake a fiber already parked, and the root parks as any fiber does. Each case is its own bit.
+// Returns 0. A wake that never comes hangs this, and the harness's watchdog says where.
+import { std::net::MemoryStreamPair, std::net::MemoryStream, std::net::Shutdown, std::io::IoError,
+         std::collections::FixedArray, std::concurrent::Fiber, std::time::sleep, std::time::Duration };
+
+comptime int64 TOTAL = 1048576i64;
+
+fn isize got(Result<isize, IoError> r) {   // the count, or -1 WouldBlock, -2 BrokenPipe, -3 anything else
+    return match (r) {
+        case Ok(value: n): n;
+        case Err(error: e): match (e.kind()) { case WouldBlock: -1; case BrokenPipe: -2; case _: -3; };
+    };
+}
+unsafe fn void pause() { sleep(d: Duration.fromMillis(ms: 1i64)); }    // long enough for a fiber spawned before this to park
+
+// Every byte of a pattern through a ring far smaller than a chunk, so both sides park over and over.
+unsafe fn int32 pour(MemoryStream s) {
+    FixedArray<uint8> chunk = FixedArray.make(size: 100);
+    int64 sent = 0i64;
+    while (sent < TOTAL) {
+        isize n = TOTAL - sent < 100i64 ? cast<isize>(TOTAL - sent) : 100;
+        for (isize i = 0; i < n; i = i + 1) { chunk[i] = cast<uint8>((sent + cast<int64>(i)) % 251i64); }
+        isize off = 0;
+        while (off < n) {
+            isize w = got(r: s.write(bytes: chunk.view().slice(from: off, count: n - off)));
+            if (w <= 0) { return 1; }
+            off = off + w;
+        }
+        sent = sent + cast<int64>(n);
+    }
+    return 0;
+}
+unsafe fn int32 drink(MemoryStream s) {
+    FixedArray<uint8> buf = FixedArray.make(size: 64);
+    int64 seen = 0i64;
+    bool more = true;
+    while (more) {
+        isize n = got(r: s.read(into: buf.viewMut()));
+        if (n < 0) { return 1; }
+        for (isize i = 0; i < n; i = i + 1) {
+            if (cast<int64>(buf[i]) != (seen + cast<int64>(i)) % 251i64) { return 1; }
+        }
+        seen = seen + cast<int64>(n);
+        more = n != 0;
+    }
+    return seen == TOTAL ? 0 : 1;
+}
+unsafe fn int32 throughATinyRing() {
+    match (MemoryStreamPair.open(capacity: 8).split()) {
+        case Ends(first: a, second: b): {
+            Fiber<int32> r = spawn fiber drink(s: give b);
+            Fiber<int32> w = spawn fiber pour(s: give a);
+            int32 written = give w.join();
+            return written + (give r.join());
+        }
+    };
+}
+
+// A short count when only some fits, with no wait: 12 bytes into a ring of 8 take 8, and the next write parks.
+unsafe fn isize writeTwice(MemoryStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 12);
+    if (got(r: s.write(bytes: b.view())) != 8) { return -10; }
+    return got(r: s.write(bytes: b.view()));                       // full: parks until the far end reads
+}
+unsafe fn isize readEight(MemoryStream s) {
+    pause();
+    FixedArray<uint8> b = FixedArray.make(size: 8);
+    isize n = got(r: s.read(into: b.viewMut()));
+    pause();                                                       // `s` stays until the writer has run: its drop would be a `BrokenPipe`
+    return n;
+}
+unsafe fn int32 shortThenPark() {
+    match (MemoryStreamPair.open(capacity: 8).split()) {
+        case Ends(first: a, second: b): {
+            Fiber<isize> w = spawn fiber writeTwice(s: give a);
+            Fiber<isize> r = spawn fiber readEight(s: give b);
+            isize read = give r.join();
+            isize wrote = give w.join();
+            return read == 8 && wrote == 8 ? 0 : 1;
+        }
+    };
+}
+
+unsafe fn isize readOne(MemoryStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    return got(r: s.read(into: b.viewMut()));
+}
+unsafe fn isize fillThenWrite(MemoryStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    if (got(r: s.write(bytes: b.view())) != 1) { return -10; }
+    return got(r: s.write(bytes: b.view()));                       // the ring of 1 is full: parks
+}
+unsafe fn int32 dropLater(MemoryStream s) { pause(); return 0; }   // and `s` goes as this returns
+
+// The far end goes while this one is parked: a read is 0, and a write `BrokenPipe`.
+unsafe fn int32 dropWakesReader() {
+    match (MemoryStreamPair.open(capacity: 1).split()) {
+        case Ends(first: a, second: b): {
+            Fiber<isize> r = spawn fiber readOne(s: give a);
+            Fiber<int32> d = spawn fiber dropLater(s: give b);
+            int32 z = give d.join();
+            return (give r.join()) == 0 ? 0 : 1;
+        }
+    };
+}
+unsafe fn int32 dropWakesWriter() {
+    match (MemoryStreamPair.open(capacity: 1).split()) {
+        case Ends(first: a, second: b): {
+            Fiber<isize> w = spawn fiber fillThenWrite(s: give a);
+            Fiber<int32> d = spawn fiber dropLater(s: give b);
+            int32 z = give d.join();
+            return (give w.join()) == -2 ? 0 : 1;
+        }
+    };
+}
+
+// The far end's `shutdown`, with the end itself still held.
+unsafe fn int32 shutWriteLater(MemoryStream s) { pause(); _ = s.shutdown(how: Shutdown::Write); pause(); return 0; }
+unsafe fn int32 shutReadLater(MemoryStream s) { pause(); _ = s.shutdown(how: Shutdown::Read); pause(); return 0; }
+unsafe fn int32 shutdownWakesReader() {
+    match (MemoryStreamPair.open(capacity: 1).split()) {
+        case Ends(first: a, second: b): {
+            Fiber<isize> r = spawn fiber readOne(s: give a);
+            Fiber<int32> d = spawn fiber shutWriteLater(s: give b);
+            isize n = give r.join();
+            int32 z = give d.join();
+            return n == 0 ? 0 : 1;
+        }
+    };
+}
+unsafe fn int32 shutdownWakesWriter() {
+    match (MemoryStreamPair.open(capacity: 1).split()) {
+        case Ends(first: a, second: b): {
+            Fiber<isize> w = spawn fiber fillThenWrite(s: give a);
+            Fiber<int32> d = spawn fiber shutReadLater(s: give b);
+            isize n = give w.join();
+            int32 z = give d.join();
+            return n == -2 ? 0 : 1;
+        }
+    };
+}
+
+// The root parks too: its read runs the loop until the fiber it started has written.
+unsafe fn int32 writeLater(MemoryStream s) {
+    pause();
+    FixedArray<uint8> b = FixedArray.make(size: 3);
+    b[0] = 7ui8;
+    return got(r: s.write(bytes: b.view())) == 3 ? 0 : 1;
+}
+unsafe fn int32 rootParks() {
+    match (MemoryStreamPair.open(capacity: 8).split()) {
+        case Ends(first: a, second: b): {
+            Fiber<int32> w = spawn fiber writeLater(s: give b);
+            FixedArray<uint8> buf = FixedArray.make(size: 8);
+            isize n = got(r: a.read(into: buf.viewMut()));
+            int32 wrote = give w.join();
+            return n == 3 && buf[0] == 7ui8 && wrote == 0 ? 0 : 1;
+        }
+    };
+}
+
+unsafe fn uint8 run() {
+    int32 bad = 0;
+    if (throughATinyRing() != 0) { bad = bad | 1; }
+    if (shortThenPark() != 0) { bad = bad | 2; }
+    if (dropWakesReader() != 0) { bad = bad | 4; }
+    if (dropWakesWriter() != 0) { bad = bad | 8; }
+    if (shutdownWakesReader() != 0) { bad = bad | 16; }
+    if (shutdownWakesWriter() != 0) { bad = bad | 32; }
+    if (rootParks() != 0) { bad = bad | 64; }
+    return cast<uint8>(bad);
+}
+fn uint8 main() { return run(); }

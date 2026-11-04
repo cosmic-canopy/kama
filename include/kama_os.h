@@ -4393,6 +4393,18 @@ static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_
 static inline ptrdiff_t kama__net_send(void* io, const uint8_t* buf, size_t n, uint64_t by);   // a write through it
 static inline int     kama__file_wait(ptrdiff_t fd, int32_t interest);             // one wait, no lasting record: 0 refused
 static inline int     kama__proc_park(int pid);                                    // until a child may have exited: -1 cannot
+static inline void*   kama_pipe_self(void);                                        // an in-memory stream's wait: below
+static inline void    kama_pipe_park(uint64_t by);
+static inline void    kama_pipe_wake(void* fiber);
+#else
+// An in-memory stream's wait (lib/std/net/memory.kama, KR-264), for the two ends of a pair, which never leave one
+// isolate. `kama_pipe_self` is the running fiber, the root included, and NULL where this isolate runs no scheduler: no
+// other code here could ever write, so the end answers WouldBlock. `kama_pipe_park` waits for a wake or for `by`, the
+// clock's nanoseconds, 0 for none. `kama_pipe_wake` makes a parked fiber ready, on this isolate only, so it takes no
+// lock and no atomic. A program with no fibers carries no scheduler, and never gets past the first.
+static inline void* kama_pipe_self(void) { return NULL; }
+static inline void  kama_pipe_park(uint64_t by) { (void)by; }
+static inline void  kama_pipe_wake(void* fiber) { (void)fiber; }
 #endif
 
 static inline void kama__net_fail(int e) {

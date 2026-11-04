@@ -2804,11 +2804,15 @@ macOS): each send arrives whole at the other end, and neither needs an address.
 **A connected pair in memory.** `MemoryStreamPair.open(capacity:)` makes two connected `MemoryStream`s that hold no <!-- test: net_memory_pair -->
 descriptor and run on every target, wasm included: the test pipe for protocol code written over `ReliableStream`. Each
 direction holds at most `capacity` bytes (at least 1), so a partial write happens at the size the test chose on every <!-- test: trap/memory_pair_capacity -->
-OS, where the kernel sizes a `UnixStreamPair`'s buffers. A write takes what fits and is `WouldBlock` when nothing does,
-and a read of an empty direction is `WouldBlock`. After the far end's `shutdown(how: Write)` or drop, a read is 0 once
-drained, and a write after this end's own `shutdown(how: Write)` is `BrokenPipe`, as is a write the far end shut its
-`Read` against. Always non-blocking, as a stream on the web is: `setNonBlocking` changes nothing. The ends are lent in
-place, `first()` and `second()`, as `UnixStreamPair`'s are, or taken apart with `give pair.split()`, and are not `Sendable`: they share their buffers through a
+OS, where the kernel sizes a `UnixStreamPair`'s buffers: a write takes what fits and returns a short count. An end waits
+as a socket does. On an isolate that runs fibers, a read of an empty direction parks until the far end writes or goes, and <!-- test: fiber_memory_pair -->
+a write into a full one until the far end reads or goes, under the same park rule as a socket's calls; `setNonBlocking(on: true)` <!-- xfail: park_memory_stream_shared -->
+makes those calls `WouldBlock` there too, and `setReadDeadline` and `setWriteDeadline` mean what a socket's do. Where no <!-- test: fiber_memory_pair_nonblocking, fiber_memory_pair_deadline -->
+scheduler runs, on an isolate before its first `spawn fiber` or on the web, nothing else could ever write, so those calls
+are `WouldBlock` however the end was set. A wait that nothing can end hangs, as one on a channel does. After the far end's
+`shutdown(how: Write)` or drop, a read is 0 once drained, and a write after this end's own `shutdown(how: Write)` is
+`BrokenPipe`, as is a write the far end shut its `Read` against. The ends are lent in place, `first()` and `second()`, as
+`UnixStreamPair`'s are, or taken apart with `give pair.split()`, and are not `Sendable`: they share their buffers through a
 `Shared`, so the pair is one isolate's. tokio's `io::duplex(max_buf_size)` is the model; Go's `net.Pipe` is unbuffered.
 
 **Passing open descriptors.** `UnixStream.sendDescriptors(bytes:, descriptors:)` sends open files, sockets

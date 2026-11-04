@@ -1,0 +1,93 @@
+// KR-264: an in-memory stream's deadlines mean what a socket's do (`fiber_deadline`). A deadline already passed fails at
+// once, even with bytes queued; a parked read or write fails `TimedOut` when it passes; `None` clears one; and each is its
+// own direction's. A deadline that ends a park leaves no fiber behind on the ring. To make a mistake there visible: a
+// finished fiber's control block normally waits on an idle list for reuse, where a stale wake finds it not parked and does
+// nothing, so `fillIdleList` fills that list first, and the timed fiber asks for a stack of its own size. Its block is then
+// truly freed as it ends, and the far end's write would be a use after free for ASan to report. Each case is its own bit.
+// Returns 0.
+import { std::net::MemoryStreamPair, std::net::MemoryStream, std::io::IoError, std::collections::FixedArray,
+         std::concurrent::Fiber, std::time::Instant, std::time::monotonicNow, std::time::Duration, std::time::sleep };
+
+fn isize got(Result<isize, IoError> r) {   // the count, or -1 WouldBlock, -2 TimedOut, -3 anything else
+    return match (r) {
+        case Ok(value: n): n;
+        case Err(error: e): match (e.kind()) { case WouldBlock: -1; case TimedOut: -2; case _: -3; };
+    };
+}
+unsafe fn Optional<Instant> soon() { return Optional::Some(value: monotonicNow() + Duration.of(nanos: 2000000i64)); }
+unsafe fn Optional<Instant> past() { return Optional::Some(value: Instant.of(rawNanos: 1ui64)); }
+
+static isize answer = 0;
+
+// More than the idle list holds (KAMA__FIBER_IDLE_MAX), all alive at once so none reuses another's stack.
+comptime int32 FILLERS = 256;
+unsafe fn void idle(int32 n) { sleep(d: Duration.fromMillis(ms: 1i64)); }
+unsafe fn void fillIdleList() {
+    scope {
+        for (int32 i = 0; i < FILLERS; i = i + 1) { spawn fiber idle(n: i); }
+    }
+}
+comptime isize OWN_STACK = 1024 * 1024;
+
+unsafe fn void timedRead(ref MemoryStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    s.setReadDeadline(at: soon());
+    Instant t0 = monotonicNow();
+    isize n = got(r: s.read(into: b.viewMut()));
+    answer = t0.elapsed().nanos >= 2000000i64 ? n : -9;     // and it waited out the deadline
+}
+unsafe fn void timedWrite(ref MemoryStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    answer = -8;
+    if (got(r: s.write(bytes: b.view())) != 1) { return; }
+    s.setWriteDeadline(at: soon());
+    Instant t0 = monotonicNow();
+    isize n = got(r: s.write(bytes: b.view()));             // the ring of 1 is full
+    answer = t0.elapsed().nanos >= 2000000i64 ? n : -9;
+}
+
+unsafe fn uint8 run() {
+    int32 bad = 0;
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    {
+        // Already passed: at once, with a byte queued and with room to write, on a thread's path too, as this root has no
+        // scheduler yet. Cleared, the same calls go through.
+        MemoryStreamPair p = MemoryStreamPair.open(capacity: 4);
+        if (got(r: p.first().write(bytes: one.view())) != 1) { bad = bad | 1; }
+        p.second().setReadDeadline(at: past());
+        if (got(r: p.second().read(into: one.viewMut())) != -2) { bad = bad | 1; }
+        p.second().setReadDeadline(at: Optional::None);
+        if (got(r: p.second().read(into: one.viewMut())) != 1) { bad = bad | 2; }
+        p.second().setWriteDeadline(at: past());
+        if (got(r: p.second().write(bytes: one.view())) != -2) { bad = bad | 4; }
+        p.second().setWriteDeadline(at: Optional::None);
+        if (got(r: p.second().write(bytes: one.view())) != 1) { bad = bad | 4; }
+        // A read deadline bounds reads alone; a zero-length call is no wait and meets none, as on a socket.
+        p.second().setWriteDeadline(at: past());
+        if (got(r: p.first().read(into: one.viewMut())) != 1) { bad = bad | 8; }
+        if (got(r: p.second().write(bytes: one.view().slice(from: 0, count: 0))) != 0) { bad = bad | 8; }
+        // Not passed yet, on a thread: nothing could write, so there is no wait to bound.
+        p.first().setReadDeadline(at: soon());
+        if (got(r: p.first().read(into: one.viewMut())) != -1) { bad = bad | 8; }
+    }
+    fillIdleList();
+    match (MemoryStreamPair.open(capacity: 1).split()) {
+        case Ends(first: a, second: b): {
+            scope { spawn fiber(stack: OWN_STACK) timedRead(s: ref a); }
+            if (answer != -2) { bad = bad | 16; }
+            // That fiber has ended and its block is freed. A write now finds nobody waiting on the ring, and the byte is there.
+            if (got(r: b.write(bytes: one.view())) != 1) { bad = bad | 32; }
+            a.setReadDeadline(at: Optional::None);
+            if (got(r: a.read(into: one.viewMut())) != 1) { bad = bad | 32; }
+        }
+    };
+    match (MemoryStreamPair.open(capacity: 1).split()) {
+        case Ends(first: a, second: b): {
+            scope { spawn fiber(stack: OWN_STACK) timedWrite(s: ref a); }
+            if (answer != -2) { bad = bad | 64; }
+            if (got(r: b.read(into: one.viewMut())) != 1) { bad = bad | 64; }      // wakes nobody, as above
+        }
+    };
+    return cast<uint8>(bad);
+}
+fn uint8 main() { return run(); }

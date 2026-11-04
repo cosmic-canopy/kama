@@ -2546,7 +2546,7 @@ wakes it through `kama_sched_wake`, the remote queue channels use since step 6. 
   512 blocking threads), the `offload` spelling, which file calls go to the pool, and whether a thread with no
   scheduler keeps calling inline (the recommendation: yes, no pool hop where nothing else could run).
 
-**Ruled 2026-11-04: KR-3 in full is next on the Mac, after KR-264 and KR-244, unhurried, over as many sessions as it takes.**
+**Ruled 2026-11-04: KR-3 in full is next on the Mac, after KR-244, unhurried, over as many sessions as it takes.**
 The aim is threading in a good place for its consumers, so no step is narrowed or deferred to finish sooner. A downstream
 engine has asked for jobs, which is why it moved up, and that request does not outrank the design.
 - **Scope:** steps 7 to 11, and what those decisions left unbuilt: KR-296 (decision 11), KR-297 (decision 12), KR-202 (inside
@@ -2776,98 +2776,6 @@ exists.
 `@noheap` boundary out of the I/O call answers it. The precise answer — judging an allocation by the isolates that
 reach it, as the park rule does — is this row, beside KR-79's generalization of the same engine.
 
-<a id="s6-memory-pair-park"></a>
-
-### An in-memory stream pair parks on a fiber (KR-264)
-
-Filed 2026-10-30. `MemoryStreamPair`'s ends answer `WouldBlock` on an empty read and on a full ring, on every isolate
-(`lib/std/net/memory.kama` ~38, ~51), so a test that drives a protocol over one on fibers has to spin. On a fiber an
-empty read should park until the other end writes or shuts, and a full write until the other end reads, as a socket's
-do; off a fiber it keeps answering `WouldBlock`. The pair is not `Sendable`, so both ends live on one isolate and the
-wake is local, with no remote queue. Go's `net.Pipe` blocks the goroutine; tokio's `io::duplex` returns `Pending` and
-wakes the task. KR-265 needs it: a fiber blocked on a real socket never counts as fully blocked.
-
-**The brief (2026-11-04, measured on `0.9.842`).** Read as written, this is a waiter inside each ring. Five things in the
-tree decide otherwise.
-
-```kama fragment
-MemoryStreamPair p = MemoryStreamPair.open(capacity: 8);
-match (give p.split()) {
-    case Ends(first: a, second: b): {
-        scope {
-            spawn fiber serve(conn: give a);   // its `read` parks until `b` writes or goes
-            spawn fiber drive(conn: give b);   // its `write` into a full ring parks until `a` reads
-        }
-    }
-};
-```
-
-1. **The wait cannot live in the ring.** A `Lane` sits behind `Shared`, and the park rule refuses a call on `Shared`
-   storage that reaches a wait. A stand-in whose method waits on a channel is refused: "a lasting access to a `Shared`
-   value may not reach a park ... Take what you need out of it and wait after it". A stand-in whose ring answers and whose
-   end then waits, with no call on the ring open, builds and exits 42. So `Lane` keeps answering, and `MemoryStream.read`
-   and `write` loop: ask the lane, record this fiber as its waiter, park, ask again. Both take `@parks`, so they join the
-   park walk as a socket's calls do.
-2. **`setNonBlocking` stops being a no-op.** The file's header says the pair is "always non-blocking" and that
-   `setNonBlocking` changes nothing. On a socket it is what decides: a blocking call parks on a fiber, and a non-blocking
-   one answers `WouldBlock` there too (`lib/std/net/net.kama` ~204). A test of a protocol's `WouldBlock` path still needs
-   that answer on a fiber, so the pair takes the socket's rule.
-3. **"On a fiber" means what it means for a socket:** this isolate runs a scheduler (`kama__net_here`). Where none runs,
-   nothing else on the isolate could ever write, so the answer stays `WouldBlock`. A program that spawns no fiber carries
-   no scheduler (`KAMA_FIBERS`), and `spawn fiber` is refused on wasm until JSPI, so those builds keep today's behaviour.
-   The seam is a small extern pair in the runtime, as `kama_net_ready` is.
-4. **The other end's drop and `shutdown` must wake a waiter:** a parked read then answers 0 and a parked write
-   `BrokenPipe`. A lane holds one waiter a direction, since a fiber's bundle may not be shared.
-
-5. **A parked read has no way out but the far end, so an end takes deadlines.** Every socket has `setReadDeadline` and
-   `setWriteDeadline`, and `kama_sched_parkUntil` already takes one. Without them a protocol's timeout path cannot be
-   tested on the pipe, and KR-265's virtual clock has nothing to drive.
-
-| | Go `net.Pipe` | tokio `io::duplex` | kama, ruled |
-|---|---|---|---|
-| Empty read | blocks | stores one waker, `Pending` | parks |
-| Full write | blocks | stores one waker, `Pending` | parks |
-| Some room left | loops until all is taken | short count | short count |
-| Far end gone | EOF / `ErrClosedPipe` | 0 once drained / `BrokenPipe` | 0 once drained / `BrokenPipe`, and wakes the waiter |
-| Non-blocking switch | none | none | `setNonBlocking`, as a socket |
-| Deadline | yes, `os.ErrDeadlineExceeded` | none; `time::timeout` wraps any future | yes, as a socket |
-| Capacity chosen by the test | no, unbuffered | yes | yes |
-
-Read from their sources (`net/pipe.go`, `tokio/src/io/util/mem.rs`) on 2026-11-04, not run. Where kama stands alone, the
-reasons hold: `ReliableStream` requires `setNonBlocking` and a program driving its own `Poller` relies on `WouldBlock`;
-Go must loop because `io.Writer` forbids a short count without an error, where kama's `write` is the partial primitive and
-`writeAll` the loop; tokio can skip deadlines because dropping a future ends a wait, and kama has no such thing. Go's
-`testing/synctest` (1.25) uses `net.Pipe` as its fake connection, since a goroutine blocked on a real socket never counts
-as idle, which is this row followed by KR-265.
-
-**The bytes,** by arithmetic and not yet measured: a `Lane` gains two fiber pointers, 16 bytes on a 64-bit target, and an
-end gains a `bool` and two deadlines, 24 bytes with padding, so a pair grows 80 bytes. **Against GOALS:** one rule for every
-stream (#4), and each wait is found by `grep @parks` (#5). A deadlock over the pipe hangs, as one over a channel does today
-(KR-312), where Go reports it: that is the one place this leaves kama behind.
-
-**Ruled 2026-11-04, each provisional on the build's probes:**
-1. The end parks and the ring answers. Forced by point 1; tokio has the same shape.
-2. An end starts blocking, and `setNonBlocking(on: true)` answers `WouldBlock` on a fiber, as a socket does. **What it
-   costs:** a test on a fiber that reads an empty pair and expects `WouldBlock` now waits, possibly for ever, until it says
-   `setNonBlocking`. That includes `main` reading an empty pair after its fibers have ended, since a scheduler stays until
-   its isolate ends. Staying non-blocking until asked is the alternative, and it keeps the row's problem: the code under
-   test cannot be the code that runs.
-3. Where no scheduler runs, `WouldBlock`, unchanged. **What it costs:** the same line answers `WouldBlock` before an
-   isolate's first `spawn fiber` and parks after it. A program with no fibers carries no scheduler by design, and nothing
-   there could ever write.
-4. A write with any room still takes what fits and returns a short count, parking only when nothing fits, as a socket's
-   write does.
-5. An end takes `setReadDeadline` and `setWriteDeadline` with a socket's meaning: an absolute `Instant`, and a passed
-   deadline answers `TimedOut` at once, even with bytes queued. A deadline that ends a park clears that fiber from the
-   lane, or a later write wakes a dead fiber. Where no scheduler runs, an empty read before the deadline is still
-   `WouldBlock`, since waiting could not help.
-
-**The gate (maintainer, 2026-11-04): parity or better.** Speed here is predicted and not measured. The pipe stays on one
-isolate, so a wake takes no lock and no atomic, where tokio takes a mutex per operation and Go rendezvouses over unbuffered
-channels; but kama's `Result`, its access records and its checked slices are unmeasured on this path. `bench/pipe/` runs kama,
-tokio and Go interleaved, on a 64-byte ping-pong and a bulk transfer through an 8 KiB ring, and this row commits only at
-parity or better, or with the number brought back to the maintainer.
-
 <a id="s6-virtual-clock"></a>
 
 ### A virtual clock for the fiber scheduler (KR-265)
@@ -2877,7 +2785,34 @@ directly (`kama_sched.h` ~369, ~879, ~909, ~1030; `kama_os.h` ~4335), so a test 
 Go's `testing/synctest` runs a bubble whose clock jumps to the next timer once every goroutine in it is durably blocked;
 tokio's `time::pause()` freezes the clock, which `advance` moves and the runtime moves itself when idle. **Design
 first:** a scope with its own clock that jumps when every fiber in it is parked on something the scope owns (a channel,
-a timer, an in-memory stream, KR-264, never a real socket), and how `monotonicNow()` reads it inside.
+a timer, an in-memory stream, never a real socket), and how `monotonicNow()` reads it inside.
+
+**What it inherits.** A `MemoryStreamPair` parks and takes deadlines since `0.9.844`, so a timeout over one is already a real
+wait on the scheduler's clock. Go's `testing/synctest` (1.25) uses `net.Pipe` as its fake connection, since a goroutine blocked
+on a real socket never counts as idle; its page does not say whether a pipe's deadlines follow the fake clock, so read
+`net/pipe.go` and try it before leaning on Go here.
+
+**What a wait costs, measured 2026-11-04 by `bench/pipe/`** (`0.9.844`; nanoseconds, the minimum over 9 interleaved rounds, an
+M4 Mac and a Linux VM on it, kama on fibers, tokio 1.54 on one thread, Go 1.27 at `GOMAXPROCS=1`). `tokio` has the I/O driver
+that `#[tokio::main]` and `#[tokio::test]` turn on, every side a spawned task, and "no driver" is the runtime built with neither
+sockets nor timers:
+
+| | kama | tokio | tokio, no driver | Go | | kama | tokio | tokio, no driver |
+|---|---|---|---|---|---|---|---|---|
+| | **Linux** | | | | | **macOS** | | |
+| ping-pong round trip, 64 B | **63** | 92 | 70 | 759 | | **69** | 462 | 76 |
+| ping-pong round trip, 4 KiB | **200** | 243 | 195 | 833 | | **226** | 610 | 223 |
+| 8 KiB chunk through an 8 KiB ring | **212** | 270 | 214 | 586 | | **216** | 622 | 214 |
+| 64 KiB chunk through an 8 KiB ring | **1,836** | 2,444 | 1,690 | 1,986 | | **1,766** | 4,843 | 1,725 |
+| write and read each way, nothing parks | **18** | 48 | 34 | no buffer | | **22** | 394 | 39 |
+
+kama leads every row against Go and against tokio with its driver. Against a runtime that cannot do I/O it is even, except on
+Linux 3% behind at a 4 KiB ping-pong and 8% at 64 KiB chunks. One side in `block_on`, the body of a `#[tokio::test]`, costs tokio
+318 ns a round trip on Linux and 11.7 µs on macOS, about what a `kevent` call costs there (read from the size, tokio not profiled).
+
+The first measurement read the other way: 507 ns a round trip against tokio's 456 on macOS, 60% of it one `kevent` call every 61
+runs (about 10 µs each, from that share of the profile). Two scheduler changes in `0.9.843` closed it, fibers.md decision 12 *As built*. The ring's own cost is
+what the feature adds where no scheduler runs: 19.9 ns a pass against 16.8 before it, the deadline and waiter tests.
 
 <a id="s6-deadlock-report"></a>
 
@@ -2885,7 +2820,7 @@ a timer, an in-memory stream, KR-264, never a real socket), and how `monotonicNo
 
 Filed 2026-11-04, measured on `0.9.842`: `main` joining a fiber that receives on a channel nobody sends to prints nothing
 and never returns. Go's runtime ends such a program with "all goroutines are asleep - deadlock!", and tokio hangs as kama does
-(both from their documentation, not run here). An in-memory pipe makes the case common: KR-264 exists for hermetic tests, and
+(both from their documentation, not run here). An in-memory pipe makes the case common: `MemoryStreamPair` exists for hermetic tests, and
 a protocol test with a bug would then hang its suite rather than fail it.
 
 **The verdict: scheduled, design first.** A scheduler knows its own fibers, so the question is what else could end a wait: a

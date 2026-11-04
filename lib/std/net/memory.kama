@@ -11,45 +11,60 @@
 //   p.first().shutdown(how: Shutdown::Write);
 //   p.second().read(into: buf.viewMut());    // Ok(0): the far end shut, and everything was read
 //
-// Always non-blocking, as a stream on the web is: `setNonBlocking` changes nothing. Not `Sendable`: the two ends share
-// their buffers through `Shared`, which never crosses an isolate, so this is one isolate's pipe. Between isolates,
-// natively, `UnixStreamPair` serves.
+// It waits as a socket does (KR-264). On an isolate that runs fibers, a read of an empty direction parks until the far
+// end writes or goes, and a write into a full one until the far end reads, so the code a test drives over a pair is the
+// code that runs over a socket; `setNonBlocking(on: true)` makes the same calls answer `WouldBlock`, and a deadline
+// bounds a wait. Where no scheduler runs, on a thread or the web, nothing else could ever write, so those answers are
+// `WouldBlock` whatever was asked. Not `Sendable`: the two ends share their buffers through `Shared`, which never crosses
+// an isolate, so this is one isolate's pipe, and a wake takes no lock and no atomic. Between isolates, natively,
+// `UnixStreamPair` serves.
 import { std::io::IoError, std::io::IoErrorKind, std::collections::View, std::collections::ConstView,
-         std::collections::FixedArray, std::memory::Shared, ReliableStream, Shutdown };
+         std::collections::FixedArray, std::memory::Shared, std::time::Instant, std::time::monotonicNow,
+         ReliableStream, Shutdown };
 
 export { MemoryStreamPair, MemoryStreamEnds, MemoryStream };
 
-// One direction: a ring of `capacity` bytes; whether its writer has shut it (once drained, a read is 0); and whether
-// its reader has gone (a write is `BrokenPipe`). Not exported, so its members are this file's alone.
+// The wait: kama_os.h says what each does.
+extern "kama_os.h";
+extern fn UnsafePtr kama_pipe_self();
+extern fn void kama_pipe_park(uint64 by);
+extern fn void kama_pipe_wake(UnsafePtr fiber);
+
+// One direction: a ring of `capacity` bytes; whether its writer has shut it (once drained, a read is 0); whether its
+// reader has gone (a write is `BrokenPipe`); and who is parked on it. It only ever answers: a call on a `Shared` may not
+// reach a park, so the end does the waiting. One fiber a side, since a fiber's bundle is never shared. Not exported, so
+// its members are this file's alone.
 type resource Lane {
     FixedArray<uint8> buf;
     isize head = 0;   // where the next byte is read
     isize len = 0;
     bool writerShut = false;
     bool readerGone = false;
+    UnsafePtr parkedReader = null;
+    UnsafePtr parkedWriter = null;
     public ctor make(isize capacity) { this.buf = FixedArray.make(size: capacity); }
 
-    // What fits; `WouldBlock` when nothing does; `BrokenPipe` once either side has shut this direction.
-    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
-        if (this.writerShut || this.readerGone) { return Result::Err(error: IoError.of(kind: IoErrorKind::BrokenPipe)); }
-        if (bytes.length() == 0) { return Result::Ok(value: 0); }
+    // What fits, or -1 when nothing does (the end decides whether that waits), or -2 once either side has shut this
+    // direction. A count rather than a `Result`, since these two are the whole of the pair's fast path, and only the end's
+    // slow path needs the error.
+    public unsafe fn isize write(ConstView<uint8> bytes) {
+        if (this.writerShut || this.readerGone) { return -2; }
+        if (bytes.length() == 0) { return 0; }
         isize cap = this.buf.length();
         isize n = bytes.length() < cap - this.len ? bytes.length() : cap - this.len;
-        if (n == 0) { return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock)); }
+        if (n == 0) { return -1; }
         isize at = (this.head + this.len) % cap;
         isize span = n < cap - at ? n : cap - at;                    // up to the end of the ring, then from 0
         this.buf.viewMut().slice(from: at, count: span).copyFrom(source: bytes.slice(from: 0, count: span));
         if (n > span) { this.buf.viewMut().slice(from: 0, count: n - span).copyFrom(source: bytes.slice(from: span, count: n - span)); }
         this.len = this.len + n;
-        return Result::Ok(value: n);
+        this.wakeReader();
+        return n;
     }
-    // What is queued, up to `into.length()`; `WouldBlock` when nothing is; 0 once it is empty and shut.
-    public unsafe fn Result<isize, IoError> read(View<uint8> into) {
-        if (into.length() == 0) { return Result::Ok(value: 0); }
-        if (this.len == 0) {
-            if (this.writerShut || this.readerGone) { return Result::Ok(value: 0); }
-            return Result::Err(error: IoError.of(kind: IoErrorKind::WouldBlock));
-        }
+    // What is queued, up to `into.length()`, or -1 when nothing is; 0 once it is empty and shut.
+    public unsafe fn isize read(View<uint8> into) {
+        if (into.length() == 0) { return 0; }
+        if (this.len == 0) { return this.writerShut || this.readerGone ? 0 : -1; }
         isize cap = this.buf.length();
         isize n = into.length() < this.len ? into.length() : this.len;
         isize span = n < cap - this.head ? n : cap - this.head;
@@ -57,27 +72,91 @@ type resource Lane {
         if (n > span) { into.slice(from: span, count: n - span).copyFrom(source: this.buf.view().slice(from: 0, count: n - span)); }
         this.head = (this.head + n) % cap;
         this.len = this.len - n;
-        return Result::Ok(value: n);
+        this.wakeWriter();
+        return n;
     }
-    public fn void shutWrite() { this.writerShut = true; }
-    public fn void shutRead() { this.readerGone = true; }
+    public unsafe fn void shutWrite() { this.writerShut = true; this.wakeReader(); }
+    public unsafe fn void shutRead() { this.readerGone = true; this.wakeWriter(); }
+    // Who waits here, or null once it stops: a wake empties the slot, and a deadline leaves its own fiber to do it, which
+    // must happen before that fiber can end.
+    public unsafe fn void parkReader(UnsafePtr fiber) { this.parkedReader = fiber; }
+    public unsafe fn void parkWriter(UnsafePtr fiber) { this.parkedWriter = fiber; }
+    unsafe fn void wakeReader() {
+        if (this.parkedReader != null) { kama_pipe_wake(fiber: this.parkedReader); this.parkedReader = null; }
+    }
+    unsafe fn void wakeWriter() {
+        if (this.parkedWriter != null) { kama_pipe_wake(fiber: this.parkedWriter); this.parkedWriter = null; }
+    }
 }
+
+// A deadline is `Instant`'s nanoseconds, 0 for none, as a socket's is.
+unsafe fn bool passed(uint64 by) { return monotonicNow().rawNanos >= by; }
+fn Result<isize, IoError> failure(IoErrorKind kind) { return Result::Err(error: IoError.of(kind: kind)); }
+fn uint64 byOf(Optional<Instant> at) { return match (at) { case Some(value: i): i.rawNanos == 0ui64 ? 1ui64 : i.rawNanos; case None: 0ui64; }; }
 
 // One end. What it writes is the other end's inbox; dropping it shuts both its directions, as closing a socket does,
 // so the far end reads 0 and its writes are `BrokenPipe`.
 type resource MemoryStream implements ReliableStream {
     Shared<Lane> inbox;    // what the other end writes
     Shared<Lane> outbox;   // what this end writes
+    bool nonBlocking = false;
+    uint64 readBy = 0;
+    uint64 writeBy = 0;
     ctor make(Shared<Lane> inbox, Shared<Lane> outbox) { this.inbox = give inbox; this.outbox = give outbox; }
     friend MemoryStreamPair::open[make];
 
-    public unsafe fn Result<isize, IoError> read(View<uint8> into) { return this.inbox.read(into: into); }
-    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) { return this.outbox.write(bytes: bytes); }
+    // Up to `into.length()` bytes, as `TcpStream.read`; 0 once the far end has shut and everything is read. An empty
+    // direction parks on a fiber, and is `WouldBlock` when this end is non-blocking or no scheduler runs here.
+    @parks
+    public unsafe fn Result<isize, IoError> read(View<uint8> into) {
+        isize n = this.readBy == 0ui64 ? this.inbox.read(into: into) : -1;
+        return n >= 0 ? Result::Ok(value: n) : this.readWaiting(into: into);
+    }
+    @parks
+    unsafe fn Result<isize, IoError> readWaiting(View<uint8> into) {
+        while (true) {
+            if (this.readBy != 0ui64 && into.length() != 0 && passed(by: this.readBy)) { return failure(kind: IoErrorKind::TimedOut); }
+            isize n = this.inbox.read(into: into);
+            if (n >= 0) { return Result::Ok(value: n); }
+            UnsafePtr me = this.nonBlocking ? cast<UnsafePtr>(null) : kama_pipe_self();
+            if (me == null) { return failure(kind: IoErrorKind::WouldBlock); }
+            this.inbox.parkReader(fiber: me);
+            kama_pipe_park(by: this.readBy);
+            this.inbox.parkReader(fiber: null);
+        }
+    }
+    // What fits, as `TcpStream.write`: a short count when only some does, so a caller wanting every byte sent uses the free
+    // `std::io::writeAll`. A full direction parks on a fiber, and is `WouldBlock` when this end is non-blocking or no
+    // scheduler runs here.
+    @parks
+    public unsafe fn Result<isize, IoError> write(ConstView<uint8> bytes) {
+        isize n = this.writeBy == 0ui64 ? this.outbox.write(bytes: bytes) : -1;
+        return n >= 0 ? Result::Ok(value: n) : this.writeWaiting(bytes: bytes);
+    }
+    @parks
+    unsafe fn Result<isize, IoError> writeWaiting(ConstView<uint8> bytes) {
+        while (true) {
+            if (this.writeBy != 0ui64 && bytes.length() != 0 && passed(by: this.writeBy)) { return failure(kind: IoErrorKind::TimedOut); }
+            isize n = this.outbox.write(bytes: bytes);
+            if (n >= 0) { return Result::Ok(value: n); }
+            if (n == -2) { return failure(kind: IoErrorKind::BrokenPipe); }
+            UnsafePtr me = this.nonBlocking ? cast<UnsafePtr>(null) : kama_pipe_self();
+            if (me == null) { return failure(kind: IoErrorKind::WouldBlock); }
+            this.outbox.parkWriter(fiber: me);
+            kama_pipe_park(by: this.writeBy);
+            this.outbox.parkWriter(fiber: null);
+        }
+    }
     public fn Result<Unit, IoError> flush() { return Result::Ok(value: Unit::Unit); }
-    public fn Result<Unit, IoError> setNonBlocking(bool on) { return Result::Ok(value: Unit::Unit); }
+    // In non-blocking mode a call that would wait answers `WouldBlock`, on a fiber too, as a socket's does.
+    public fn Result<Unit, IoError> setNonBlocking(bool on) { this.nonBlocking = on; return Result::Ok(value: Unit::Unit); }
+    // A socket's deadlines (`TcpStream.setReadDeadline`): an absolute `Instant` after which a call in that direction is
+    // `Err(TimedOut)`, at once if it has passed, even with bytes waiting, until it is reset; `None` clears it.
+    public fn void setReadDeadline(Optional<Instant> at) { this.readBy = byOf(at: at); }
+    public fn void setWriteDeadline(Optional<Instant> at) { this.writeBy = byOf(at: at); }
     // `Write` ends the stream the far end reads (it reads 0 once drained) and makes a later write here `BrokenPipe`;
     // `Read` makes a read here 0 and the far end's writes `BrokenPipe`; `Both` is the two. As `UnixStream.shutdown`.
-    public fn Result<Unit, IoError> shutdown(Shutdown how) {
+    public unsafe fn Result<Unit, IoError> shutdown(Shutdown how) {
         match (how) {
             case Read:  { this.inbox.shutRead(); }
             case Write: { this.outbox.shutWrite(); }
@@ -85,7 +164,7 @@ type resource MemoryStream implements ReliableStream {
         };
         return Result::Ok(value: Unit::Unit);
     }
-    ~MemoryStream() { this.inbox.shutRead(); this.outbox.shutWrite(); }
+    unsafe ~MemoryStream() { this.inbox.shutRead(); this.outbox.shutWrite(); }
 }
 
 // The two ends, each lent in place (`first()`, `second()`), as `UnixStreamPair` lends its ends, or taken apart into two

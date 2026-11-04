@@ -78,6 +78,9 @@ bench/
                       registering a socket, on this host's epoll or kqueue (KR-3 decision 6,
                       docs/design/fibers.md). `bench/poller/run.sh <out.tsv>`, then `summarize.py`. Runs on the
                       host, or in the dev container for epoll, with no image of its own.
+  pipe/               an in-memory stream pair against tokio's `duplex` and Go's `net.Pipe` (KR-264; the results are
+                      in docs/ROADMAP_DETAIL.md). `bench/run pipe <out.tsv> [rounds]` for all three, `bench/pipe/run.sh`
+                      on a host with no Go, then `bench/pipe/summarize.py`. Also what a fiber's park and wake cost.
   concurrent_map/     not a language comparison either: eight isolates on one `Locked<Map>` against a
                       `ConcurrentMap` (KR-232, SPEC *A concurrent map*). `bench/concurrent_map/run.py`.
 ```

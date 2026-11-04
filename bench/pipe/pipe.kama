@@ -1,0 +1,183 @@
+// pipe.kama — KR-264's microbenchmark: an in-memory stream pair against tokio's `duplex` and Go's `net.Pipe`, which
+// `rust/` and `go/` write the same way.
+//
+//   ops       one task, nothing parks: a write and a read each way. What the ring itself costs. Nothing spawns a fiber
+//             before it, so here it is also the path a program with no scheduler takes.
+//   pingpong  two fibers, BENCH_BYTES each way. Every round trip parks both of them. Neither is the root, as a server's
+//             fibers are not; BENCH_ROOT=1 makes one side the root, which parks by running the loop itself.
+//   bulk      one fiber writes BENCH_COUNT chunks of BENCH_BYTES through a ring of BENCH_CAPACITY, and another reads
+//             them until the stream ends.
+//
+// Usage: BENCH_WORKLOAD=ops|pingpong|bulk BENCH_COUNT=<n> BENCH_BYTES=<n> BENCH_CAPACITY=<n> [BENCH_ROOT=1] ./pipe
+// Prints one TSV row: workload, count, bytes, capacity, nanoseconds over the timed part.
+import { core::envOr, core::println,
+    std::net::MemoryStreamPair,
+    std::net::MemoryStream,
+    std::net::MemoryStreamEnds,
+    std::io::IoError,
+    std::collections::FixedArray,
+    std::collections::View,
+    std::collections::ConstView,
+    std::concurrent::Fiber,
+    std::time::Instant,
+    std::time::monotonicNow,
+};
+
+fn int64 parseInt(const ref string s) {
+    int64 v = 0i64;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int64 c = cast<int64>(s[i]);
+        if (c < 48i64 || c > 57i64) { return 0i64; }
+        v = v * 10i64 + c - 48i64;
+    }
+    return v;
+}
+unsafe fn int64 setting(string name, string dflt) { return parseInt(s: envOr(name: give name, dflt: give dflt)); }
+
+// As tokio's `write_all` and `read_exact`, directly on the type, so a contract call is not what is measured.
+unsafe fn void sendAll(ref MemoryStream s, ConstView<uint8> bytes) {
+    isize off = 0;
+    while (off < bytes.length()) {
+        match (s.write(bytes: bytes.slice(from: off, count: bytes.length() - off))) {
+            case Ok(value: n): { off = off + n; }
+            case Err(error: e): { panic(msg: "pipe: a write failed"); }
+        };
+    }
+}
+unsafe fn void recvAll(ref MemoryStream s, View<uint8> into) {
+    isize off = 0;
+    while (off < into.length()) {
+        match (s.read(into: into.slice(from: off, count: into.length() - off))) {
+            case Ok(value: n): {
+                if (n == 0) { panic(msg: "pipe: the stream ended early"); }
+                off = off + n;
+            }
+            case Err(error: e): { panic(msg: "pipe: a read failed"); }
+        };
+    }
+}
+
+unsafe fn int64 ops(int64 count, isize bytes, isize capacity) {
+    MemoryStreamPair p = MemoryStreamPair.open(capacity: capacity);
+    FixedArray<uint8> buf = FixedArray.make(size: bytes);
+    Instant t0 = monotonicNow();
+    for (int64 i = 0i64; i < count; i = i + 1i64) {
+        sendAll(s: ref p.first(), bytes: buf.view());
+        recvAll(s: ref p.second(), into: buf.viewMut());
+        sendAll(s: ref p.second(), bytes: buf.view());
+        recvAll(s: ref p.first(), into: buf.viewMut());
+    }
+    return monotonicNow().since(earlier: t0).asNanos();
+}
+
+// What the far fiber runs, as its one bundle.
+type resource Echo {
+    MemoryStream s;
+    int64 count;
+    isize bytes;
+    public ctor make(MemoryStream s, int64 count, isize bytes) { this.s = give s; this.count = count; this.bytes = bytes; }
+    public unsafe fn void run() {
+        FixedArray<uint8> buf = FixedArray.make(size: this.bytes);
+        for (int64 i = 0i64; i < this.count; i = i + 1i64) {
+            recvAll(s: ref this.s, into: buf.viewMut());
+            sendAll(s: ref this.s, bytes: buf.view());
+        }
+    }
+}
+unsafe fn void echo(Echo e) { e.run(); }
+
+// The other side, which times itself: with a fiber each side, nothing else knows when the first bytes went.
+type resource Ping {
+    MemoryStream s;
+    int64 count;
+    isize bytes;
+    public ctor make(MemoryStream s, int64 count, isize bytes) { this.s = give s; this.count = count; this.bytes = bytes; }
+    public unsafe fn int64 run() {
+        FixedArray<uint8> buf = FixedArray.make(size: this.bytes);
+        Instant t0 = monotonicNow();
+        for (int64 i = 0i64; i < this.count; i = i + 1i64) {
+            sendAll(s: ref this.s, bytes: buf.view());
+            recvAll(s: ref this.s, into: buf.viewMut());
+        }
+        return monotonicNow().since(earlier: t0).asNanos();
+    }
+}
+unsafe fn int64 ping(Ping p) { return p.run(); }
+
+unsafe fn int64 pingpong(int64 count, isize bytes, isize capacity, bool onRoot) {
+    int64 ns = 0i64;
+    match (MemoryStreamPair.open(capacity: capacity).split()) {
+        case Ends(first: a, second: b): {
+            scope {
+                spawn fiber echo(e: Echo.make(s: give b, count: count, bytes: bytes));
+                if (onRoot) {
+                    Ping p = Ping.make(s: give a, count: count, bytes: bytes);
+                    ns = p.run();
+                } else {
+                    Fiber<int64> f = spawn fiber ping(p: Ping.make(s: give a, count: count, bytes: bytes));
+                    ns = give f.join();
+                }
+            }
+        }
+    };
+    return ns;
+}
+
+type resource Drain {
+    MemoryStream s;
+    isize bytes;
+    public ctor make(MemoryStream s, isize bytes) { this.s = give s; this.bytes = bytes; }
+    public unsafe fn void run() {
+        FixedArray<uint8> buf = FixedArray.make(size: this.bytes);
+        bool more = true;
+        while (more) {
+            match (this.s.read(into: buf.viewMut())) {
+                case Ok(value: n): { more = n != 0; }
+                case Err(error: e): { panic(msg: "pipe: a read failed"); }
+            };
+        }
+    }
+}
+unsafe fn void drain(Drain d) { d.run(); }
+
+type resource Pour {
+    MemoryStream s;
+    int64 count;
+    isize bytes;
+    public ctor make(MemoryStream s, int64 count, isize bytes) { this.s = give s; this.count = count; this.bytes = bytes; }
+    public unsafe fn void run() {
+        FixedArray<uint8> buf = FixedArray.make(size: this.bytes);
+        for (int64 i = 0i64; i < this.count; i = i + 1i64) { sendAll(s: ref this.s, bytes: buf.view()); }
+    }
+}
+unsafe fn void pour(Pour p) { p.run(); }
+
+unsafe fn int64 bulk(int64 count, isize bytes, isize capacity) {
+    int64 ns = 0i64;
+    match (MemoryStreamPair.open(capacity: capacity).split()) {
+        case Ends(first: a, second: b): {
+            Instant t0 = monotonicNow();
+            scope {
+                spawn fiber drain(d: Drain.make(s: give b, bytes: bytes));
+                spawn fiber pour(p: Pour.make(s: give a, count: count, bytes: bytes));
+            }
+            ns = monotonicNow().since(earlier: t0).asNanos();
+        }
+    };
+    return ns;
+}
+
+unsafe fn uint8 run() {
+    string workload = envOr(name: "BENCH_WORKLOAD", dflt: "ops");
+    int64 count = setting(name: "BENCH_COUNT", dflt: "1000000");
+    isize bytes = cast<isize>(setting(name: "BENCH_BYTES", dflt: "64"));
+    isize capacity = cast<isize>(setting(name: "BENCH_CAPACITY", dflt: "8192"));
+    int64 ns = 0i64;
+    if (workload == "ops") { ns = ops(count: count, bytes: bytes, capacity: capacity); }
+    else if (workload == "pingpong") { ns = pingpong(count: count, bytes: bytes, capacity: capacity, onRoot: setting(name: "BENCH_ROOT", dflt: "0") != 0i64); }
+    else if (workload == "bulk") { ns = bulk(count: count, bytes: bytes, capacity: capacity); }
+    else { println(s: "pipe: BENCH_WORKLOAD is ops, pingpong or bulk"); return 2; }
+    println(s: "${workload}\t${count}\t${bytes}\t${capacity}\t${ns}");
+    return 0;
+}
+fn uint8 main() { return run(); }

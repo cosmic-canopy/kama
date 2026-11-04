@@ -1,0 +1,22 @@
+// An in-memory stream's read parks (KR-264), so it joins the park rule as a socket's does: a fiber may not hold a call open
+// on a `Shared` value across it (KR-3 step 4).
+import { std::net::MemoryStreamPair, std::net::MemoryStream, std::concurrent::Fiber, std::memory::Shared, std::io::IoError,
+         std::collections::FixedArray };
+type resource Holder {
+    MemoryStream s;
+    public ctor make(MemoryStream s) { this.s = give s; }
+    public unsafe fn Result<isize, IoError> pull(ref FixedArray<uint8> into) { return this.s.read(into: into.viewMut()); }
+}
+fn int32 nothing(int32 n) { return n; }
+unsafe fn uint8 run() {
+    match (MemoryStreamPair.open(capacity: 1).split()) {
+        case Ends(first: a, second: b): {
+            Shared<Holder> h = new Holder.make(s: give a);
+            FixedArray<uint8> buf = FixedArray.make(size: 1);
+            Fiber<int32> f = spawn fiber nothing(n: 0);
+            Result<isize, IoError> r = h.pull(into: ref buf);
+            return cast<uint8>(give f.join());
+        }
+    };
+}
+fn uint8 main() { return run(); }

@@ -1048,6 +1048,9 @@ static inline int kama__proc_park(int pid) {
     return -1;
 #endif
 }
+static inline void* kama_pipe_self(void) { return kama__fibers.sched ? (void*)kama_fiber_current() : NULL; }
+static inline void kama_pipe_park(uint64_t by) { (void)kama_sched_parkUntil(by); }
+static inline void kama_pipe_wake(void* fiber) { kama_sched_unpark((kama_fiber*)fiber); }
 static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by) {
 #if defined(KAMA__SCHED_URING)
     return kama__sched_ringRecv((kama_sched_io*)io, buf, n, by);
@@ -1073,6 +1076,9 @@ static inline int kama__net_drained(void* io, int32_t interest) { (void)io; (voi
 static inline int kama__net_ring(void* io) { (void)io; return 0; }
 static inline int kama__file_wait(ptrdiff_t fd, int32_t interest) { (void)fd; (void)interest; return 0; }
 static inline int kama__proc_park(int pid) { (void)pid; return -1; }
+static inline void* kama_pipe_self(void) { return NULL; }
+static inline void kama_pipe_park(uint64_t by) { (void)by; }
+static inline void kama_pipe_wake(void* fiber) { (void)fiber; }
 static inline ptrdiff_t kama__net_recv(void* io, uint8_t* buf, size_t n, uint64_t by) {
     (void)io; (void)buf; (void)n; (void)by; errno = ENOSYS; return -1;
 }

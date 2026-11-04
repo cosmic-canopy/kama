@@ -37364,6 +37364,7 @@ static std::string parkSeam(const std::string& f)
     if (f == "kama_sched_io_wait" || f == "kama__net_park" || f == "kama__net_recv" || f == "kama__net_send")
         return "a fiber's wait on a socket";
     if (f == "kama__time_park") return "a fiber's sleep";
+    if (f == "kama_pipe_park") return "a fiber's wait on an in-memory stream";
     if (f == "kama__channel_park") return "a fiber's wait on a channel";
     if (f == "kama__isolate_park") return "an isolate's join";
     if (f == "kama_fiber_switch" || f.compare(0, 11, "kama_sched_") == 0 || f.compare(0, 12, "kama__sched_") == 0)

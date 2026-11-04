@@ -1,0 +1,15 @@
+# The tokio arm of KR-264's pipe benchmark: `tokio::io::duplex` on one thread, as kama's fibers share one isolate. `net`
+# and `time` are what `enable_all` turns on, so the runtime carries the I/O driver a real program and `#[tokio::test]` do.
+[package]
+name = "pipe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "io-util", "net", "time"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

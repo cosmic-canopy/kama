@@ -1,0 +1,46 @@
+// KR-264: `setNonBlocking` on an in-memory stream means what it means on a socket (`fiber_net_user_nonblocking`). A
+// non-blocking end answers `WouldBlock` on a fiber, and set blocking again the same read parks until the far end writes.
+// Before an isolate has a scheduler nothing else could ever write, so a read answers `WouldBlock` whatever was asked.
+// Each case is its own bit. Returns 0.
+import { std::net::MemoryStreamPair, std::net::MemoryStream, std::io::IoError, std::collections::FixedArray,
+         std::concurrent::Fiber };
+
+fn isize got(Result<isize, IoError> r) {   // the count, or -1 WouldBlock, -3 anything else
+    return match (r) {
+        case Ok(value: n): n;
+        case Err(error: e): match (e.kind()) { case WouldBlock: -1; case _: -3; };
+    };
+}
+
+unsafe fn int32 probe(MemoryStream s) {
+    int32 bad = 0;
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    _ = s.setNonBlocking(on: true);
+    if (got(r: s.read(into: b.viewMut())) != -1) { bad = bad | 1; }                    // empty
+    if (got(r: s.write(bytes: b.view())) != 1) { bad = bad | 2; }
+    if (got(r: s.write(bytes: b.view())) != -1) { bad = bad | 2; }                     // the ring of 1 is full
+    _ = s.setNonBlocking(on: false);
+    if (got(r: s.read(into: b.viewMut())) != 1 || b[0] != 7ui8) { bad = bad | 4; }     // parks until `poke` writes
+    return bad;
+}
+unsafe fn int32 poke(MemoryStream s) {
+    FixedArray<uint8> b = FixedArray.make(size: 1);
+    b[0] = 7ui8;
+    return got(r: s.write(bytes: b.view())) == 1 ? 0 : 8;
+}
+
+unsafe fn uint8 run() {
+    int32 bad = 0;
+    MemoryStreamPair before = MemoryStreamPair.open(capacity: 1);
+    FixedArray<uint8> one = FixedArray.make(size: 1);
+    if (got(r: before.first().read(into: one.viewMut())) != -1) { bad = bad | 16; }    // no scheduler yet: blocking, and no wait
+    match (MemoryStreamPair.open(capacity: 1).split()) {
+        case Ends(first: a, second: b): {
+            Fiber<int32> p = spawn fiber probe(s: give a);
+            Fiber<int32> q = spawn fiber poke(s: give b);
+            bad = bad | (give p.join()) | (give q.join());
+        }
+    };
+    return cast<uint8>(bad);
+}
+fn uint8 main() { return run(); }
