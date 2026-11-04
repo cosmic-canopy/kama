@@ -5576,7 +5576,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
     CodeGenContext& ctx = *_synthCtx;
     auto ident = [&](const std::string& s) { return synthId(s); };
     if (spec) { emitHoleSpec(fv, hole, *spec); return; }
-    if (exprIsChar(hole)) { _hoisted.push_back("kama__Formatter__writeChar(&" + fv + ", " + emitExpression(hole) + ");"); return; }
+    if (exprIsChar(hole)) { _hoisted.push_back("kama__Formatter__writeChar(&" + fv + ", " + emitHoistedInit(hole) + ");"); return; }
     // `${x}` renders through the `Formattable` contract. Check that BEFORE synthesizing the call: the
     // synthesized node carries the synth context's line (1), so letting it fail inside emitDispatch
     // reported `unknown method` against line 1 of the user's file and never named `Formattable`, the type, or
@@ -5626,7 +5626,7 @@ void CEmitter::emitHoleInto(const std::string& fv, SharedExpression hole, Shared
     // contract-scope gate does not apply to it: the rule is about what a primitive's API looks like in
     // SOURCE, and interpolation is how the language itself reaches `Formattable`.
     bool prevSynth = _inSynthDispatch; _inSynthDispatch = true;
-    _hoisted.push_back(emitExpression(call) + ";");
+    _hoisted.push_back(emitHoistedInit(call) + ";");
     _inSynthDispatch = prevSynth;
 }
 
@@ -5767,11 +5767,40 @@ std::string CEmitter::cEscapeStringBody(const std::string& s)
     return out;
 }
 
+// The value of a statement hoisted out of the expression being emitted (`_hoisted`). It is a C statement of its
+// own, so nesting starts over inside it: that is why a `string` chain lowers flat, however long.
+std::string CEmitter::emitHoistedInit(SharedExpression e)
+{
+    const int outer = _cNest;
+    _cNest = 0;
+    std::string r = emitExpression(e);
+    _cNest = outer;
+    return r;
+}
+
 std::string CEmitter::emitExpression(SharedExpression expr)
 {
     if (!expr) return "";
     ASTNode* n = expr.get();
     PosGuard posGuard(*this, n);   // a line-only diagnostic below takes this node's span (KR-147)
+
+    // How deep one expression lowers (KR-304). `kama_add_i32((a), (b), …)` nests two C brackets a term, and a C
+    // compiler's own stack gives out somewhere past a thousand: Apple's clang and Ubuntu's took 1,000 nested
+    // parentheses and died by 2,000, at 8 MiB. What kama accepts cannot be whatever the C compiler survives, so
+    // the emitter stops first, the same on every host. `kama check` runs this too, so the two tools agree.
+    struct NestGuard {
+        int& depth;
+        explicit NestGuard(int& d) : depth(d) { ++depth; }
+        ~NestGuard() { --depth; }
+    } nestGuard(_cNest);
+    if (_cNest == 1) _cNestReported = false;
+    if (_cNest > KAMA_MAX_C_NEST) {
+        if (!_cNestReported)
+            unsupported("this expression nests more than 400 levels in the C it lowers to, past what C compilers "
+                        "reliably take; split it across statements", expr);
+        _cNestReported = true;
+        return "0";
+    }
 
     // Compile-time code, on every path: the subset the interpreter evaluates, and nothing else (KR-102). An array
     // literal is the interpreter's too, as an initializer — the one place the run-time rules let one stand — and
@@ -8468,7 +8497,7 @@ std::string CEmitter::logSpanOf(SharedExpression e, int /*depth*/)
     std::string t = hoistStringTemp(e);                               // owned rvalue -> registered scope-dtor'd temp
     if (t.empty()) {                                                  // literal / lvalue -> a borrow temp
         t = "kama_logspan" + std::to_string(_tempCounter++);
-        _hoisted.push_back("kama_string " + t + " = " + emitExpression(e) + ";");
+        _hoisted.push_back("kama_string " + t + " = " + emitHoistedInit(e) + ";");
     }
     return t;
 }
@@ -19812,7 +19841,7 @@ std::string CEmitter::indexReceiverPlace(SharedExpression recv, const std::strin
             return "(*(" + cls + "[]){ " + emitExpression(recv) + " })";
         }
         std::string t = "kama_recv" + std::to_string(_tempCounter++);
-        _hoisted.push_back(cls + " " + t + " = " + emitExpression(recv) + ";");
+        _hoisted.push_back(cls + " " + t + " = " + emitHoistedInit(recv) + ";");
         recordDestructibleLocal(t, cls);
         return t;
     }
@@ -20682,7 +20711,7 @@ std::string CEmitter::ternaryArmPlace(const SharedExpression& arm, const std::st
         return "(" + cls + "*)0";
     }
     const std::string t = "kama_tarm" + std::to_string(_tempCounter++);
-    _hoisted.push_back(cls + " " + t + " = " + emitExpression(arm) + ";");
+    _hoisted.push_back(cls + " " + t + " = " + emitHoistedInit(arm) + ";");
     recordDestructibleLocal(t, cls);
     return "&" + t;
 }
@@ -27996,7 +28025,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
             std::string t = "kama_ctorarg" + std::to_string(_tempCounter++);
             if (ctorIsFactory) {
                 // A named `ctor` factory returns by value — MOVE it into the temp (`T t = T__make(…)`).
-                _hoisted.push_back(ctorCls + " " + t + " = " + emitExpression(argExpr) + ";");
+                _hoisted.push_back(ctorCls + " " + t + " = " + emitHoistedInit(argExpr) + ";");
                 if (p.byRef && _classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
                 val = t;
             } else {
@@ -28019,7 +28048,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
             // would leak; `ref`/`out` needs a real interface lvalue to reseat — both handled elsewhere.)
             std::string t = "kama_ctorarg" + std::to_string(_tempCounter++);
             if (ctorIsFactory) {   // a named `ctor` factory returns by value — MOVE it into the temp
-                _hoisted.push_back(ctorCls + " " + t + " = " + emitExpression(argExpr) + ";");
+                _hoisted.push_back(ctorCls + " " + t + " = " + emitHoistedInit(argExpr) + ";");
                 if (_classes[ctorCls].destructible) recordDestructibleLocal(t, ctorCls);
             } else {   // nameless — no ctor to bind (see the sibling branch above)
                 rejectNamelessConstruction(_classes[ctorCls], ctorDisp(ctorIv, ctorCls), /*viaNew=*/false, srcLine);
@@ -28075,7 +28104,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                 st = hoistStringTemp(argExpr);
                 if (st.empty() && dynamic_cast<StringNode*>(argExpr.get())) {
                     st = "kama_strtmp" + std::to_string(_tempCounter++);
-                    _hoisted.push_back("kama_string " + st + " = " + emitExpression(argExpr) + ";");
+                    _hoisted.push_back("kama_string " + st + " = " + emitHoistedInit(argExpr) + ";");
                     recordDestructibleLocal(st, "kama_string");
                 }
             }
@@ -28110,7 +28139,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
                     if (cNumBits(pKindCType) || cNumTargetWidth(pKindCType) || pKindCType == "bool")
                         lct = pKindCType;
                     st = "kama_primtmp" + std::to_string(_tempCounter++);
-                    _hoisted.push_back(lct + " " + st + " = " + emitExpression(argExpr) + ";");
+                    _hoisted.push_back(lct + " " + st + " = " + emitHoistedInit(argExpr) + ";");
                 }
             }
             if (!st.empty()) argIsTemp = true;   // a `__strtmp`/`__primtmp` temp — see the check below
@@ -42761,7 +42790,7 @@ std::string CEmitter::hoistStringTemp(SharedExpression e)
     if (dynamic_cast<ElementAccessNode*>(n)) return "";
     if (!exprIsString(e)) return "";
     std::string t = "kama_strtmp" + std::to_string(_tempCounter++);
-    _hoisted.push_back("kama_string " + t + " = " + emitExpression(e) + ";");
+    _hoisted.push_back("kama_string " + t + " = " + emitHoistedInit(e) + ";");
     recordDestructibleLocal(t, "kama_string");
     return t;
 }
@@ -45732,7 +45761,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             if (auto* iv = dynamic_cast<InvocationNode*>(e.get()))
                 if (invocationReturnsPlace(iv) && _hoistOK) {
                     const std::string pt = "kama_strplace" + std::to_string(_tempCounter++);
-                    _hoisted.push_back("const kama_string* " + pt + " = &(" + emitExpression(e) + ");");
+                    _hoisted.push_back("const kama_string* " + pt + " = &(" + emitHoistedInit(e) + ");");
                     return "(*" + pt + ")";
                 }
             std::string t = hoistStringTemp(e);      // owned rvalue -> scope-dtor'd temp; "" if stable OR no slot
@@ -45824,7 +45853,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             // A consuming call's fresh receiver is the callee's to drop (KR-261): the temp holds it, nothing more.
             if (!ct.empty()) { if (!consumeTemp) recordDestructibleLocal(ct, cls); recvPtr = "&" + ct; }
             else {
-                _hoisted.push_back(cls + " " + t + " = " + emitExpression(receiver) + ";");
+                _hoisted.push_back(cls + " " + t + " = " + emitHoistedInit(receiver) + ";");
                 if (!consumeTemp) recordDestructibleLocal(t, cls);
                 recvPtr = "&" + t;
             }

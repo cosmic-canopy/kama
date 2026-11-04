@@ -1,0 +1,30 @@
+// A chain that nests in the C it lowers to, one level past what kama accepts (KR-304). `check` passed this and then
+// `build` failed, on a different term count per C compiler: 130 terms on Ubuntu's clang 18 (its bracket limit), a
+// crash by 800 on Apple's clang 21.
+fn uint8 main() {
+    bool b = true;
+    bool x =
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b || b ||
+        b;
+    if (x) { return 42; }
+    return 1;
+}

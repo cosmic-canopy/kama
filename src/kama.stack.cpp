@@ -1,9 +1,9 @@
 // The compiler's own stack (KR-304).
 //
 // Every walk over the AST recurses, so the stack a compile needs grows with how deep a program's expressions
-// go, and the stack it was handed is whatever the host felt like: 8 MiB from most shells, less under a tighter
-// `ulimit -s`, 2 MiB from a PE header nobody set. A deep expression was therefore a SIGSEGV whose depth changed
-// with the machine and with the build (1,700 terms in a release compiler, under 200 with ASan's frames). The
+// go, and the stack it was handed is the host's to choose: 8 MiB from most shells, less under a tighter `ulimit -s`,
+// whatever the linker's default put in a PE. A deep expression was therefore a SIGSEGV whose depth changed
+// with the machine and with the build (past 1,500 terms in a release compiler, under 200 with ASan's frames). The
 // language's limit lives in the parser, and a stated limit is only true if no host can run out below it, so the
 // compile runs on a stack of its own.
 //

@@ -512,6 +512,8 @@ expose_value_on_extern_fn	expose_value_on_extern_fn.kama:5:0
 expose_value_plain_enum_field	expose_value_plain_enum_field.kama:4:0
 expose_value_private_field	expose_value_private_field.kama:5:0
 expose_value_resource	expose_value_resource.kama:4:0
+expr_chain_too_long	expr_chain_too_long.kama:7:8
+expr_nest_too_deep	expr_nest_too_deep.kama:7:8
 extend_final	extend_final.kama:11:0
 extend_sealed	extend_sealed.kama:3:0
 extern_c_spelling_other_file	main.kama:8:34

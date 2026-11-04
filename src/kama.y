@@ -191,9 +191,28 @@ static void splitFnParams(const std::shared_ptr<FunctionDeclarationNode>& fn,
       (Cur).first_line = (Cur).last_line = YYRHSLOC(Rhs, 0).last_line;       \
       (Cur).first_column = (Cur).last_column = YYRHSLOC(Rhs, 0).last_column; \
     }                                                                        \
+    (Cur).chain = 0;                                                         \
+    for (int _i = 1; _i <= (N); ++_i)                                        \
+      if (YYRHSLOC(Rhs, _i).chain > (Cur).chain) (Cur).chain = YYRHSLOC(Rhs, _i).chain; \
     CodeGenContext* _ctx = yyget_extra(scanner)->codeGenContext.get();       \
     _ctx->line = (Cur).first_line;  _ctx->col = (Cur).first_column;          \
     _ctx->endLine = (Cur).last_line; _ctx->endCol = (Cur).last_column;       \
+  } while (0)
+
+/* The limit on a chain (KR-304). A rule that recurses on its LEFT grows the tree while the parser's stack stays
+ * flat: `a + b + c`, `x.f().g()`, `a[i][j]`. Nothing else bounds those, and every later walk recurses over them,
+ * so this is where the language says how far they go, and the answer cannot depend on the machine. A location
+ * is the one thing every rule passes up, so YYLLOC_DEFAULT carries the deepest chain through parentheses, calls,
+ * blocks and lists with no edit to them; only a link counts itself. The rules that need CHAIN_LINK are exactly
+ * the left-recursive cycles that build a nested node. Every other left-recursive rule appends to a list. */
+#define KAMA_MAX_CHAIN 10000
+#define CHAIN_LINK(loc)                                                                                      \
+  do {                                                                                                       \
+    if (++(loc).chain > KAMA_MAX_CHAIN) {                                                                    \
+      yyerror(&(loc), scanner, "this expression chains more than 10,000 operators, calls, member accesses "  \
+                               "or indexes, kama's limit; split it across statements");                      \
+      YYABORT;                                                                                               \
+    }                                                                                                        \
   } while (0)
 
 /* Stamp an already-built identifier node with a token's precise @N span (for decl names constructed inside
@@ -239,6 +258,15 @@ static void splitFnParams(const std::shared_ptr<FunctionDeclarationNode>& fn,
 %}
 
 %code requires {
+
+/* Bison's default location, plus how many chain links this rule's text holds on its deepest path (KR-304, see
+ * CHAIN_LINK). TRIVIAL is what the default location declares about itself, and it keeps Bison starting yylloc at
+ * 1:1; it does not enable stack relocation, which also needs a trivial YYSTYPE (see the YYINITDEPTH note). */
+struct KamaLoc {
+    int first_line, first_column, last_line, last_column;
+    int chain;
+};
+#define YYLTYPE_IS_TRIVIAL 1
 
 #ifndef YY_TYPEDEF_YY_SCANNER_T
 #define YY_TYPEDEF_YY_SCANNER_T
@@ -373,6 +401,7 @@ struct kamayystype {
 %expect 1
 %defines
 %locations
+%define api.location.type {struct KamaLoc}
 %define api.pure full
 /* Better syntax errors: "syntax error, unexpected X, expecting Y" (using the token string-aliases below,
    e.g. "when" / "[" / ":="). Zero runtime cost (the parser isn't in the runtime); the message is built
@@ -763,8 +792,8 @@ interp_body
 interp_hole
   : IDENTIFIER   { $$ = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1); }
   | THIS         { $$ = std::make_shared<ThisAccessNode>(SCANNER_CODEGENCONTEXT); }
-  | interp_hole DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
-  | interp_hole LEFT_BRACKET interp_index RIGHT_BRACKET   { $$ = std::make_shared<ElementAccessNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+  | interp_hole DOT IDENTIFIER   { CHAIN_LINK(@$); auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | interp_hole LEFT_BRACKET interp_index RIGHT_BRACKET   { CHAIN_LINK(@$); $$ = std::make_shared<ElementAccessNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   ;
 interp_index
   : IDENTIFIER              { $$ = std::make_shared<ExpressionList>(); $$->push_back(std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $1)); }
@@ -1825,7 +1854,7 @@ primary_expression_no_parenthesis
    trailing `>>` stays a shift. `.as` (DOT AS) is distinct from `.member` (DOT IDENTIFIER) — no conflict. */
 as_downcast_expression
   : primary_expression DOT AS LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN RPAREN
-    { $$ = std::make_shared<AsDowncastNode>(SCANNER_CODEGENCONTEXT, $1, $6); }
+    { CHAIN_LINK(@$); $$ = std::make_shared<AsDowncastNode>(SCANNER_CODEGENCONTEXT, $1, $6); }
   | qualified_identifier_no_generic DOT AS LT { yyget_extra(scanner)->genericDepth++; } type GT { yyget_extra(scanner)->genericDepth--; } LPAREN RPAREN
     { $$ = std::make_shared<AsDowncastNode>(SCANNER_CODEGENCONTEXT, std::static_pointer_cast<ExpressionNode>($1), $6); }
   ;
@@ -1842,7 +1871,7 @@ parenthesized_expression
   : LPAREN expression RPAREN   { $$ = $2; }
   ;
 member_access
-  : primary_expression DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  : primary_expression DOT IDENTIFIER   { CHAIN_LINK(@$); auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | class_type DOT IDENTIFIER   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
     /* `T.default()` — call the ctor the type ELECTED with `default ctor …()` (M8b), without having to
@@ -1864,25 +1893,25 @@ member_access
        the field is not a lesser evil: it leaves 0, which IS `WGPUBufferBindingType_BindingNotUsed`, so
        the entry is INERT rather than under-specified.
        Same two productions `default` and `base` needed, for the same reason. Measured: 0 conflicts. */
-  | primary_expression DOT TYPE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | primary_expression DOT TYPE   { CHAIN_LINK(@$); auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   /* reading a `slot`-named member */
-  | primary_expression DOT SLOT   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | primary_expression DOT SLOT   { CHAIN_LINK(@$); auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   /* reading a `file`-named member */
-  | primary_expression DOT FILE_KW   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | primary_expression DOT FILE_KW   { CHAIN_LINK(@$); auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT TYPE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT SLOT   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT FILE_KW   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
-  | primary_expression DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
+  | primary_expression DOT BASE   { CHAIN_LINK(@$); auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   | qualified_identifier_no_generic DOT BASE   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
     /* `s.truncate(maxBytes: 2)` — `truncate` became a keyword for the wrapping conversion, and it ALREADY
        named a `string` intrinsic (SPEC § Strings) documented as the total byte-budget cut. So it is
        contextual, exactly like `as`/`default`/`base` above and `copy`/`give` in `method_name`: a keyword
        only where a conversion can start, an ordinary member name after a DOT. */
-  | primary_expression DOT name_word   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }   /* `s.truncate(…)`, `p.give()` */
+  | primary_expression DOT name_word   { CHAIN_LINK(@$); auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), $1); STAMP_LOC(ma->identifier, @3); $$ = ma; }   /* `s.truncate(…)`, `p.give()` */
   | qualified_identifier_no_generic DOT name_word   { auto ma = std::make_shared<MemberAccessNode>(SCANNER_CODEGENCONTEXT, std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3), std::static_pointer_cast<ExpressionNode>($1)); STAMP_LOC(ma->identifier, @3); $$ = ma; }
   ;
 invocation_expression
-  : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+  : primary_expression_no_parenthesis LPAREN argument_list_opt RPAREN   { CHAIN_LINK(@$); $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
     /* `(ready ? onOk : onErr)(x: 1)` — any expression of `fnptr` type is callable (KR-107), and a parenthesized one
        is how an operator's result becomes a callee. Nothing else follows `( expr )` with `(`: kama has no C cast. */
   | parenthesized_expression LPAREN argument_list_opt RPAREN   { $$ = std::make_shared<InvocationNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
@@ -1915,6 +1944,7 @@ invocation_expression
        IdentifierNode's `genericArgs`, mirroring the free-fn turbofish above; two receiver forms mirror the
        `.as<T>()`/member_access pair (a bare ident reduces via qualified_identifier_no_generic). */
   | primary_expression DOT IDENTIFIER COLONCOLON LT { yyget_extra(scanner)->genericDepth++; } type_arg_list GT { yyget_extra(scanner)->genericDepth--; } LPAREN argument_list_opt RPAREN comptime_args_opt {
+        CHAIN_LINK(@$);
         auto id = std::make_shared<IdentifierNode>(SCANNER_CODEGENCONTEXT, $3, std::make_shared<StringList>(), (*$7)[0]);
         id->genericArgs = $7;
         id->nTypeArgs   = (int)$7->size();
@@ -2052,7 +2082,7 @@ variable_reference
   : expression
   ;
 element_access
-  : primary_expression LEFT_BRACKET expression_list RIGHT_BRACKET   { $$ = std::make_shared<ElementAccessNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
+  : primary_expression LEFT_BRACKET expression_list RIGHT_BRACKET   { CHAIN_LINK(@$); $$ = std::make_shared<ElementAccessNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   | qualified_identifier_no_generic LEFT_BRACKET expression_list RIGHT_BRACKET   { $$ = std::make_shared<ElementAccessNode>(SCANNER_CODEGENCONTEXT, $1, $3); }
   ;
 this_access
@@ -2128,10 +2158,10 @@ pre_decrement_expression
   : MINUSMINUS unary_expression   { $$ = std::make_shared<PreIncrDecrNode>(SCANNER_CODEGENCONTEXT, $1, $2); }
   ;
 post_increment_expression
-  : postfix_expression PLUSPLUS   { $$ = std::make_shared<PostIncrDecrNode>(SCANNER_CODEGENCONTEXT, $2, $1); }
+  : postfix_expression PLUSPLUS   { CHAIN_LINK(@$); $$ = std::make_shared<PostIncrDecrNode>(SCANNER_CODEGENCONTEXT, $2, $1); }
   ;
 post_decrement_expression
-  : postfix_expression MINUSMINUS   { $$ = std::make_shared<PostIncrDecrNode>(SCANNER_CODEGENCONTEXT, $2, $1); }
+  : postfix_expression MINUSMINUS   { CHAIN_LINK(@$); $$ = std::make_shared<PostIncrDecrNode>(SCANNER_CODEGENCONTEXT, $2, $1); }
   ;
 cast_expression
     /* The mid-rules track genericDepth across the cast's `<…>` so `cast<DynamicArray<int>>(x)` needs no space;
@@ -2190,51 +2220,51 @@ expression_list
 
 multiplicative_expression
   : unary_expression
-  | multiplicative_expression STAR unary_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
-  | multiplicative_expression SLASH unary_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
-  | multiplicative_expression PERCENT unary_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | multiplicative_expression STAR unary_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | multiplicative_expression SLASH unary_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | multiplicative_expression PERCENT unary_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 additive_expression
   : multiplicative_expression
-  | additive_expression PLUS multiplicative_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
-  | additive_expression MINUS multiplicative_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | additive_expression PLUS multiplicative_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | additive_expression MINUS multiplicative_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 shift_expression
   : additive_expression 
-  | shift_expression LTLT additive_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
-  | shift_expression GTGT additive_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | shift_expression LTLT additive_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | shift_expression GTGT additive_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 relational_expression
   : shift_expression
-  | relational_expression LT shift_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
-  | relational_expression GT shift_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
-  | relational_expression LEQ shift_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
-  | relational_expression GEQ shift_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | relational_expression LT shift_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | relational_expression GT shift_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | relational_expression LEQ shift_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | relational_expression GEQ shift_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 equality_expression
   : relational_expression
-  | equality_expression EQEQ relational_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
-  | equality_expression NOTEQ relational_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | equality_expression EQEQ relational_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | equality_expression NOTEQ relational_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 and_expression
   : equality_expression
-  | and_expression AMP equality_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | and_expression AMP equality_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 exclusive_or_expression
   : and_expression
-  | exclusive_or_expression CARET and_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | exclusive_or_expression CARET and_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 inclusive_or_expression
   : exclusive_or_expression
-  | inclusive_or_expression BAR exclusive_or_expression   { $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | inclusive_or_expression BAR exclusive_or_expression   { CHAIN_LINK(@$); $$ = std::make_shared<BinaryExpressionNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 conditional_and_expression
   : inclusive_or_expression
-  | conditional_and_expression ANDAND inclusive_or_expression   { $$ = std::make_shared<LogicalAndOrNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | conditional_and_expression ANDAND inclusive_or_expression   { CHAIN_LINK(@$); $$ = std::make_shared<LogicalAndOrNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 conditional_or_expression
   : conditional_and_expression
-  | conditional_or_expression OROR conditional_and_expression   { $$ = std::make_shared<LogicalAndOrNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
+  | conditional_or_expression OROR conditional_and_expression   { CHAIN_LINK(@$); $$ = std::make_shared<LogicalAndOrNode>(SCANNER_CODEGENCONTEXT, $2, $1, $3); }
   ;
 conditional_expression
   : conditional_or_expression

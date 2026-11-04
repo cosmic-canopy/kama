@@ -4841,6 +4841,21 @@ packages. Every language with warnings also grows a second language to silence t
 the language does. Advice that is not a rule — an import the package does not declare — is an editor hint from the
 language server, never a line on stderr.
 
+### How far an expression may go
+
+kama accepts or refuses a source the same way on every machine: the answer does not depend on the host's stack, on
+`ulimit`, or on which C compiler is installed, and `kama check` and `kama build` give the same one. Two limits say so,
+each with a message that names it:
+
+- **A chain holds at most 10,000 links on its deepest path** (<!-- test: xfail/expr_chain_too_long -->). Each operator,
+  call, member access or index is a link, so `a + b + c` is two and `x.f().g()` is four. The count passes through
+  parentheses and arguments, so a chain inside a chain adds to it, and two chains side by side do not.
+- **An expression nests at most 400 levels in the C it lowers to** (<!-- test: xfail/expr_nest_too_deep -->,
+  <!-- test: expr_nest_limit -->). A chain of arithmetic, logic or a value type's calls nests a level a link. A `string`
+  chain does not: each link is a C statement of its own, so only the first limit applies to it.
+
+Past any of them, split the expression across statements or move the inner part into a function.
+
 ## Type declarations — `value` / `resource` / `view` / `contract` / `enum` / `intrinsic` ✅
 
 Every type declaration is introduced by the **`type` marker** followed by a *kind* — parallel to `fn` on
