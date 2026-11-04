@@ -782,8 +782,11 @@ CcFamily ccFamily(const std::string& cc)
 std::string ccWarnFlags(const std::string& cc)
 {
     std::string w = "-Werror=return-type -Werror=uninitialized ";
+    // clang's limit on nested brackets differs by vendor and version, and each term of an `int` chain costs two,
+    // so a chain of 130 was a clang error on Ubuntu's 18 and fine on Apple's 21. What kama accepts is the
+    // parser's to say, so the vendor's number is lifted here; gcc has none, and rejects the flag.
     if (ccFamily(cc) == CcFamily::Clang)
-        w += "-Werror=incompatible-pointer-types -Wno-error=incompatible-function-pointer-types ";
+        w += "-Werror=incompatible-pointer-types -Wno-error=incompatible-function-pointer-types -fbracket-depth=100000 ";
     return w;
 }
 
