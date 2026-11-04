@@ -483,6 +483,11 @@ static inline void kama__stack_isolate(size_t stated) {
         if (pthread_attr_getguardsize(&a, &g) == 0 && g) guard = g;
         pthread_attr_destroy(&a);
     }
+#if defined(__ANDROID__)
+    // Bionic's stack starts AT its guard page, where glibc's starts just above it (measured on API 34: the address
+    // `pthread_attr_getstack` gives is the `---p` page of /proc/self/maps), so the range below missed every overflow.
+    if (lo) lo += guard;
+#endif
 #endif
     if (lo) { kama__fibers.guardHi = lo; kama__fibers.guardLo = lo - guard - KAMA__STACK_SLACK; }
 #endif
