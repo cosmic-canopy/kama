@@ -14214,6 +14214,11 @@ int main(int argc, char** argv)
         // draws. Measured clean on both clang++ and g++ (no non-system DLL imports; the program still runs).
         if (!wasm && !stopsAtObject && g_target.isWindows() && cxxLinks && g_target.runtime != "dynamic")
             link << "-static-libgcc -Wl,-Bstatic ";
+        // Android, by the same rule: the NDK's clang++ links libc++_shared.so, which no device carries ("library
+        // "libc++_shared.so" not found", measured on API 34), and `-static-libstdc++` is the NDK's own spelling of
+        // libc++_static for an executable.
+        if (!stopsAtObject && g_target.isAndroid() && cxxLinks && g_target.runtime != "dynamic")
+            link << "-static-libstdc++ ";
         // The PE SUBSYSTEM. Console is the default and stays byte-for-byte what it always was, so every
         // console tool, the CI legs and `kama` itself are untouched; a GUI program opts IN and stops
         // getting the stray console window Windows opens for a console-subsystem PE.

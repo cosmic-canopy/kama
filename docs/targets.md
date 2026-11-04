@@ -78,7 +78,8 @@ the NDK's own headers would refuse it. With no `cc`, kama finds the NDK's clang 
 
 The first that is set is the answer, never a fallback past a wrong one, and a refusal names where it looked. The
 NDK's `llvm-ar` archives a static library. A target's `cc` (an NDK wrapper, say) still wins. Bionic keeps pthreads
-in libc, so nothing links `-lpthread`. A program built this way runs under `adb shell` with a stdout; packaging an
+in libc, so nothing links `-lpthread`. C++ `csources` link the NDK's libc++ in statically, since no device
+carries `libc++_shared.so`; `--dynamic-runtime` keeps it shared, for you to ship beside the program. A program built this way runs under `adb shell` with a stdout; packaging an
 app the launcher starts (an APK) is not built yet.
 
 ```sh
@@ -688,7 +689,8 @@ or per-project, since linkage is a toolchain property like `cc` and `sysroot`:
 
 `--dynamic-runtime` wins over the manifest, the same way `--target` beats a declared `"default": true`.
 
-**In practice this only bites on Windows.** On Linux and macOS libc *is* the system — glibc and
+**In practice this only bites on Windows, and on Android for C++ (its libc++ ships with the NDK, not the
+device).** On Linux and macOS libc *is* the system — glibc and
 libSystem ship with the OS and pthreads live inside libc — so there is no non-system runtime to make a
 choice about, and the flag is an accepted no-op there (one build script, no branching). Going further
 would be actively wrong: static glibc breaks `dlopen`/NSS, and Apple does not support a static
