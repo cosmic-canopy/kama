@@ -432,6 +432,18 @@ random bytes find. **Design first.** The questions:
   LLVM have one, and Apple's clang does not;
 - how a corpus and crashes are kept in a project.
 
+<a id="s1-pq-save"></a>
+
+### `PriorityQueue` cannot be saved (KR-316)
+
+Reported 2026-11-04 by a game engine on kama; reproduced on `0.9.844`. In a `@generate(Serializable, Deserializable)` type, a
+`PriorityQueue<Timer>` field is refused: "field `due` has type `PriorityQueue`, which cannot be serialized — a composite field is written
+through its OWN `serialize`, and `PriorityQueue` has none". It is not `Iterable` either, since a heap's order means nothing (its own
+comment), so a state hash cannot fold it without draining it, though its doc names it the fit for timers. A wait held in saved, hashed and
+rolled-back state wants exactly that, and the reporter keeps its heap in its own array meanwhile. Rust's `BinaryHeap` serializes as a
+sequence and has `as_slice` (from its documentation, not run here). Both when the element has them, writing the backing array in stored order
+so a round trip is exact, and a read-only view of that array for hashing.
+
 <a id="s1-std-dirs"></a>
 
 #### The standard directories: temp, config, cache (KR-266)
@@ -547,6 +559,20 @@ language-completeness residual is **closed**; what remains here is genuinely lat
   (docs/packages.md): a fetched package cannot carry a local path. A `kama_workspace.json` holding both packages
   permits it, and registry versions end it.
 - **`scope` is in the shipped agent guide's reserved words**, since `0.9.557`; the report read a guide that lists it.
+
+<a id="s2-contract-narrow"></a>
+
+### A boxed contract cannot be narrowed back to its type (KR-314)
+
+Reported 2026-11-04 by a game engine on kama; reproduced on `0.9.844`. Erasure works: a `DynamicArray<Owned<Column>>` holds
+`new Store::<Pos>.make()`, and `cols[0].length()` dispatches. The way back does not: `Optional<Store<Pos>> back =
+cols[0].as<Store<Pos>>();` is refused, "`.as<T>()` applies to a boxed error". On an `Error` it answers a copy and refuses a type that owns
+memory (SPEC, `xfail/as_downcast_uncopyable`), so a store could not come back even there. Storage whose types are chosen at run time (an
+archetype store, an inspector, mods, a project loading a type the program never named) needs a typed way back, and today it takes
+`UnsafePtr` and hand-rolled type ids, outside kama's checks. Rust has `Any::downcast_ref`, C# `as`, Go a type assertion.
+
+**The verdict: scheduled, design first.** Asked for: any boxed contract, answering a borrow rather than a copy. To settle: where the type
+identity lives, whether it costs a contract that never narrows anything, and how the borrow roots under the window rules.
 
 <a id="s2-infer-from-bound-arg"></a>
 
@@ -2561,10 +2587,25 @@ engine has asked for jobs, which is why it moved up, and that request does not o
   in the compiler. `spawn job` beside `spawn` and `spawn fiber`, or a library call, is the brief's question: KR-255's record
   only sketches the first.
 
-**That brief must also answer:** how the job-entry rule identifies a job; KR-288 (no shared read-only borrow across a scope's
-children); anything further the engine's threading model needs, filed here as rows; and whether `parallel_for` should run on the
-pool. Decision 5 keeps the two apart, and `parallel_for` starts its threads per call, measured at about 70 µs at 10 workers
-(release, M4 Mac, 3 runs, 68-74), so step 9 as written does not make it cheaper at frame rate.
+**That brief must also answer,** from a game engine on kama that runs the subsystems of a frame phase in parallel, with the
+compiler proving their access (reported 2026-11-04, each reproduced on `0.9.844`):
+1. **Handing out work must be cheap enough for a barrier per phase.** `parallel_for` starts and joins its threads on every call.
+   Measured on `0.9.844` (release, M4 Mac, 1,024 elements, the minimum of 5 runs of 1,000 calls): 15 µs at 1 worker, 23 at 2, 33 at
+   4, 70 at 10, 100 at 16. The reporter measured far more on Windows (`0.9.793`): 0.15 ms at 1, 1.34–1.38 at 16, 1.83 at 20. A dozen
+   barriers a frame at 16 workers is 7% of a 60 Hz frame on the Mac, and all of it on Windows.
+2. **The pool must run borrowing work.** Decision 5's unit is "a `Sendable` job", moved in, and a moved job cannot borrow a frame's
+   stores, so the proof the compiler gives `scope` and `parallel_for` would be lost where the performance is, leaving `UnsafePtr`.
+   The ask: a `scope`'s children and a `parallel_for`'s workers run on the pool's threads, as Rayon's `scope` does. **This reopens
+   decision 5** ("`parallel_for` stays the data-parallel layer"), and may leave `spawn job` with little to do: the pool could be
+   what the existing forms run on. It also has to answer what a child loses by not being an isolate on its own thread: its stack
+   (`spawn(stack:)`), per-thread state, and how a panic ends it.
+3. **No heap allocation per hand-out.** `parallel_for` under `@noheap` is refused ("heaps a per-worker argument bundle"), and the
+   reporter wants allocation up front, with `@noheap` as the proof.
+
+And KR-288 (no shared read-only borrow across children), KR-313 (a `spawn` over several places) and KR-315 (parts chosen at run time)
+are the same design: what a child may borrow from a phase's data, and what proves it. **Not settled here:** when the reporter first
+needs the pool, which it leaves to a measurement, so it does not set the order on its own. How the job-entry rule identifies a job is
+this brief's as well, if `spawn job` survives.
 
 <a id="s6-fiber-cet"></a>
 
@@ -2846,6 +2887,37 @@ threads when `T: Sync`.
 since reading through `const ref` may still write (a `Shared<T>`'s count, a cache), and how `parallel_for`'s `const
 ref` already answers that is the first thing to read; the call-site spelling (`const ref c` at the `spawn`); and that
 the parent may not write the place until the scope joins, as with a mutable borrow.
+
+**Raised 2026-11-04,** as the largest share of the parallelism that proof refuses today, for KR-3's pool brief. Still refused on
+`0.9.844`, with a message to fix as this lands: the second error says "the child reads it, so writing it here races", where both
+children only read.
+
+<a id="s6-spawn-places"></a>
+
+### A `spawn` over several places (KR-313)
+
+Reported 2026-11-04 by a game engine on kama; reproduced on `0.9.844`. In a method, `spawn integrate(p: ref this.pos, v: ref this.vel);`
+for `fn void integrate(ref DynamicArray<Pos> p, const ref DynamicArray<Vel> v)` is refused: "`spawn` entry `integrate` must take exactly
+one argument (the bundle)". SPEC states it: one parameter, "because the bundle *is* the boundary". The workaround, a `Motion` holding
+both and spawned as `ref this.motion`, checks, but any other task on `vel`, even a reader, then overlaps all of `motion`, so the
+parallelism is coarser than the access. Nearly every system reads one store and writes another. Rust's `thread::scope` closure captures
+several disjoint borrows.
+
+**The verdict: scheduled, design first, in KR-3's pool brief.** The question is whether the one-bundle rule protects anything once each
+argument is held to the prefix rule as its own child; for a moved bundle, which is what crosses to an isolate, it may still.
+
+<a id="s6-disjoint-parts"></a>
+
+### Parallel tasks over parts chosen at run time (KR-315)
+
+Reported 2026-11-04 by a game engine on kama; reproduced on `0.9.844`. With `DynamicArray<DynamicArray<Pos>> cols`, `scope { spawn
+step(col: ref cols[0]); spawn step(col: ref cols[1]); }` is refused at both spawns: an element "names no place a static disjointness
+rule can pin", by design (SPEC). `parallel_for` covers an even split of one buffer, not a chosen part per task, which is what a scheduler
+wants when load or region picks the columns, zones or chunks. Rust's `slice::get_disjoint_mut` proves the indices distinct when it runs
+(from its documentation, not run here).
+
+**The verdict: scheduled, design first, in KR-3's pool brief.** Safe, with the check at run time: the shape of the split, what a `spawn`
+may borrow from it, and whether its parts can be places the prefix rule already understands.
 
 <a id="s7"></a>
 
