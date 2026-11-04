@@ -3,8 +3,8 @@
 // and by schedtest_poller.c with KAMA__SCHED_GENERIC, so the arm Windows and poll(2) take is tested on every host.
 // Checks 15–22 drive a socket's wait (kama_os.h, KR-3 step 5) the way std's socket calls do, in a program that runs
 // fibers — which defines KAMA_FIBERS before any kama header, as the emitter does for one; checks 30 and 32, a stream's
-// short read. Checks 34–37 drive a File's and a child's wait (KR-7): a pipe end kama made, an inherited one, /dev/null,
-// and a child's exit. Checks 23–29 drive a channel's wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6;
+// short read. Checks 34–38 drive a File's and a child's wait (KR-7): a pipe end kama made, an inherited one, /dev/null,
+// and a child's exit. Checks 40–43 drive a park straight into the next ready fiber. Checks 23–29 drive a channel's wait (kama_channel.h) and an isolate's join (kama_isolate.h), KR-3 step 6;
 // both are read AFTER the scheduler here, the order no emitted program has, so linking this proves the scheduler's half
 // of those seams is defined either way.
 #define KAMA_FIBERS 1
@@ -55,6 +55,12 @@ static void procWaiter(void* a) {
     if (kama_proc_wait_parked((ptrdiff_t)(intptr_t)a, &st) > 0 && WIFEXITED(st)) procStatus = WEXITSTATUS(st);
     pdone = 1;
 }
+// 38. ...seen with a fiber always ready, as a socket's wait is (8): a turn polls only while something is registered
+// (KR-264), and kqueue's wait for a child has a record of its own, which has to count. The limit makes a miss a failed
+// check rather than a hang.
+#define READY_LIMIT 100000000L
+static long readyTurns;
+static void alwaysReady(void* a) { (void)a; while (!pdone && readyTurns < READY_LIMIT) { readyTurns++; kama_sched_yield(); } }
 static int pipeUp(void) {
     if (pp[0] > 0) { close(pp[0]); close(pp[1]); }
     pio = NULL; pmode = 0; pgot = 0; pticks = 0; pdone = 0;
@@ -166,6 +172,23 @@ static volatile int readerRan; static long spins;
 static void busy(void* a) { (void)a; while (!readerRan && spins < 1000000) { spins++; kama_sched_yield(); } }
 static void starved(void* a) { (void)a; char c; while (recv(sv[0], &c, 1, 0) <= 0) kama_sched_io_wait(rio, 1, 0); readerRan = 1; }
 static void* lateWriter(void* a) { (void)a; kama_sleep_ns(5000000); char c = 7; (void)send(sv[1], &c, 1, 0); return NULL; }
+// 43. ...and so with fibers that park straight into each other, one always ready, and no visit to the loop of their own:
+// the poll still comes round. The limit makes a miss a failed check rather than a hang.
+static kama_fiber* cSideA; static kama_fiber* cSideB; static volatile int cRead; static long cTurns;
+static void cSide(void* other) {
+    kama_fiber** peer = (kama_fiber**)other;
+    while (!cRead && cTurns < 100000000L) { cTurns++; kama_sched_unpark(*peer); kama_sched_park(); }
+    kama_sched_unpark(*peer);
+}
+static void cReader(void* a) { (void)a; char c; while (recv(sv[0], &c, 1, 0) <= 0) kama_sched_io_wait(rio, 1, 0); cRead = 1; }
+
+// 40. A park goes straight to the next ready fiber only while the loop has nothing to do: a root that was woken runs next,
+// ahead of a fiber already ready. And a fiber reached that way ends on the root, whichever fiber parked into it.
+static kama_fiber* dRoot; static kama_fiber* dFirst; static int dSecondRan, dSecondBeforeRoot, dChainEnded;
+static void dSecond(void* a) { (void)a; dSecondRan = 1; }
+static void dWakesRoot(void* a) { (void)a; kama_sched_unpark(dRoot); kama_sched_park(); }
+static void dLast(void* a) { (void)a; dChainEnded++; }
+static void dParksInto(void* a) { (void)a; kama_sched_park(); dChainEnded++; }
 
 // 15–22: a socket's wait, as std's calls run it — kama_net_ready before the call, kama_net_retry after it fails.
 static int np[2];                                    // a fresh blocking pair per check
@@ -507,6 +530,18 @@ int fiber_sched_selftest(void) {
     CHECK(8, readerRan && spins < 1000000);
 
     { char junk[64]; while (recv(sv[0], junk, sizeof junk, 0) > 0) { } }   // what the checks above left unread
+    {
+        CHECK(430, pthread_create(&lw, NULL, lateWriter, NULL) == 0);
+        kama_fiber* cr = kama_sched_spawn(cReader, 0, 0);
+        cSideA = kama_sched_spawn(cSide, &cSideB, 0);
+        cSideB = kama_sched_spawn(cSide, &cSideA, 0);
+        kama_sched_join(cr);                                  // the root parks, so the sides may park into each other
+        kama_sched_detach(cSideA); kama_sched_detach(cSideB);
+        kama_sched_run();
+        pthread_join(lw, NULL);
+        CHECK(43, cRead && cTurns < 100000000L);
+    }
+    { char junk[64]; while (recv(sv[0], junk, sizeof junk, 0) > 0) { } }
     kama_sched_detach(kama_sched_spawn(filler, 0, 0));
     kama_sched_detach(kama_sched_spawn(drainer, 0, 0));
     kama_sched_run();
@@ -631,6 +666,16 @@ int fiber_sched_selftest(void) {
         kama_sched_run();
         CHECK(37, procStatus == 7 && pticks >= 3 && self->refs == baseRefs);
     }
+    {
+        pdone = 0;
+        const pid_t kid = fork();
+        if (kid == 0) { usleep(5000); _exit(8); }
+        CHECK(380, kid > 0);
+        kama_sched_detach(kama_sched_spawn(procWaiter, (void*)(intptr_t)kid, 0));
+        kama_sched_detach(kama_sched_spawn(alwaysReady, 0, 0));
+        kama_sched_run();
+        CHECK(38, procStatus == 8 && readyTurns < READY_LIMIT && self->refs == baseRefs);
+    }
 #endif
 
     chA = chanOf(0); chB = chanOf(0);
@@ -692,6 +737,24 @@ int fiber_sched_selftest(void) {
     kama_sched_join(c);                                       // on the root: the park runs `child`
     CHECK(11, childOut == 14);
 
+    dRoot = kama_fiber_current();
+    dFirst = kama_sched_spawn(dWakesRoot, 0, 0);
+    kama_fiber* dNext = kama_sched_spawn(dSecond, 0, 0);
+    kama_sched_park();                                        // runs `dFirst`, which wakes this root and parks
+    dSecondBeforeRoot = dSecondRan;
+    kama_sched_unpark(dFirst);
+    kama_sched_join(dFirst); kama_sched_join(dNext);
+    CHECK(40, !dSecondBeforeRoot && dSecondRan);
+
+    dChainEnded = 0;
+    kama_fiber* dParker = kama_sched_spawn(dParksInto, 0, 0);
+    kama_fiber* dEnder = kama_sched_spawn(dLast, 0, 0);
+    kama_sched_join(dEnder);                                  // `dParker` parks straight into `dEnder`, which ends: on this root
+    CHECK(41, dChainEnded == 1);
+    kama_sched_unpark(dParker);
+    kama_sched_join(dParker);
+    CHECK(42, dChainEnded == 2);
+
     kama_fiber_scope sc = { 0, 0 };
     for (int i = 0; i < 100; i++) kama_sched_scopeSpawn(&sc, counted, (void*)(intptr_t)i, 64 << 10);
     kama_sched_scopeWait(&sc);
@@ -722,6 +785,7 @@ int fiber_sched_selftest(void) {
     for (int i = 0; i < 10000; i++) kama_sched_detach(kama_sched_spawn(brief, (void*)(intptr_t)i, 64 << 10));
     kama_sched_run();
     CHECK(9, many == 10000);
+    CHECK(39, self->ios == 0);                                // every record a check made was counted back out: KR-264
     kama_sched_destroy();
     return failed;
 }

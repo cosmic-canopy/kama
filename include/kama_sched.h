@@ -9,7 +9,8 @@
 // uses sockets or isolates never compiles it.
 //
 // THE LOOP runs on the thread's own context (the root fiber, fiber 0): take the next ready fiber, switch to it, and
-// when it switches back — it parked, yielded or ended — take the next. When nothing is ready it waits for I/O, a timer
+// when it switches back — it parked, yielded or ended — take the next. A park with nothing else for the loop to do
+// switches to the next ready fiber itself (kama__sched_direct), so several fibers may run between two visits to the loop. When nothing is ready it waits for I/O, a timer
 // or a remote wake, for no longer than the earliest timer. The root parks too (a `scope`'s closing brace, a join), and
 // a park on the root RUNS the loop, inside the park, until something wakes it: the root is never queued, so a
 // `scope` runs the same C whether it is entered on the thread's own context or on a fiber (decision 1). Cooperative (decision 12): a fiber runs until it parks or
@@ -121,6 +122,7 @@ struct kama_sched {
     int32_t heapN, heapCap;
     int32_t live;                   // fibers made here that have not ended
     uint32_t ticks;                 // runs since the last poll
+    int32_t ios;                    // its kama_sched_io records: with none, no poll can report anything
     int32_t refs;                   // the thread, and each fiber control block not yet freed
     kama_fiber* remote;             // woken from another isolate: a stack, pushed with CAS, taken whole
     kama_sched_io* freed;           // registrations another isolate released: a stack, pushed with CAS, freed here
@@ -341,6 +343,29 @@ static inline void kama__sched_parkClean(void) {
 #endif
 #endif
 }
+// The next ready fiber's saved registers sit on its own stack, gone cold while every other ready fiber ran: fetch them
+// now, so they arrive while this one runs rather than when that one starts. Measured (KR-251): 1.7% less CPU per request
+// at 10,000 echo connections, none at 1,000, where they stay cached.
+static inline void kama__sched_prefetchNext(const kama_sched* s) {
+    const kama_fiber* n = s->head;
+    if (n) {
+        const char* sp = (const char*)n->sp;
+        __builtin_prefetch(sp); __builtin_prefetch(sp + 64); __builtin_prefetch(sp + 128);
+    }
+}
+// The fiber a park may switch to straight away, when a turn of the loop would only hand it over: the root is parked and
+// not woken, no timer is set, no wake came from another isolate and no poll is due. Each of those is the loop's to do at
+// once, so any of them sends the park there instead; records another isolate released wait for its next turn, at most
+// KAMA_SCHED_POLL_EVERY runs off. Going through the root costs a second switch and a turn on every park: 108 ns against
+// 63 for a round trip between two fibers on the M4, measured by bench/pipe/ (KR-264).
+static inline kama_fiber* kama__sched_direct(kama_sched* s) {
+    if (!s->head || !kama__fibers.root.parked || s->heapN || s->ticks + 1 >= KAMA_SCHED_POLL_EVERY) return NULL;
+    if (__atomic_load_n(&s->remote, __ATOMIC_RELAXED)) return NULL;
+    s->ticks++;
+    kama_fiber* n = kama__sched_pop(s);
+    kama__sched_prefetchNext(s);
+    return n;
+}
 // Park the running fiber until something unparks it, or until `deadline` (a kama_now_mono_ns time; 0 for none).
 // 1 when it was woken, 0 when the deadline passed. On the root, the park runs the loop until then.
 static inline int kama_sched_parkUntil(uint64_t deadline) {
@@ -351,7 +376,11 @@ static inline int kama_sched_parkUntil(uint64_t deadline) {
     f->parked = 1; f->timedOut = 0;
     if (deadline) { f->deadline = deadline; kama__sched_timerAdd(s, f); }
     if (f == &kama__fibers.root) { while (f->parked) kama__sched_turn(s); }
-    else kama_fiber_switch(f, &kama__fibers.root);
+    else {
+        kama_fiber* n = kama__sched_direct(s);
+        if (n) kama__fiber_switchFor(f, n, &kama__fibers.root);   // it ends on the root, as every fiber does
+        else kama_fiber_switch(f, &kama__fibers.root);
+    }
     return !f->timedOut;
 }
 static inline void kama_sched_park(void) { (void)kama_sched_parkUntil(0); }
@@ -580,6 +609,7 @@ static inline int kama_sched_io_init(kama_sched_io* io, ptrdiff_t fd) {
     if (kevent(((kama__poller*)s->poller)->kq, &ch, 1, NULL, 0, NULL) != 0) return -1;
 #endif
     __atomic_add_fetch(&s->refs, 1, __ATOMIC_RELAXED);
+    s->ios++;
     return 0;
 }
 // A registration that lives as long as its descriptor's owner: a socket's, a Poller's, a pipe end kama made.
@@ -612,6 +642,7 @@ static inline void kama_sched_io_fini(kama_sched_io* io) {
 #endif
     if (r) kama_sched_unpark(r);
     if (w) kama_sched_unpark(w);
+    s->ios--;
     kama__sched_unref(s);
 }
 static inline void kama_sched_io_close(kama_sched_io* io) {
@@ -780,7 +811,7 @@ static inline void kama__sched_drainFreed(kama_sched* s, int gone) {
         n++;
         io = next;
     }
-    if (n) __atomic_sub_fetch(&s->refs, n, __ATOMIC_ACQ_REL);   // the thread's own reference outlives this
+    if (n) { s->ios -= n; __atomic_sub_fetch(&s->refs, n, __ATOMIC_ACQ_REL); }   // the thread's own reference outlives this
 }
 
 // Wait for I/O, a remote wake or `timeoutNs` (-1: until something comes), and make ready what came.
@@ -889,16 +920,13 @@ static inline void kama__sched_turn(kama_sched* s) {
     if (rootParked && !kama__fibers.root.parked) return;   // the root's own wake came, and is never queued: no wait
     kama_fiber* f = kama__sched_pop(s);
     if (f) {
-        if (++s->ticks >= KAMA_SCHED_POLL_EVERY) { s->ticks = 0; kama__sched_wait(s, 0); }
-        // The next fiber's saved registers (kama__fiber_swap's 160 bytes) sit on its own stack, gone cold while every
-        // other ready fiber ran: fetch them now, so they arrive while this one runs rather than when that one starts.
-        // Measured (KR-251): 1.7% less CPU per request at 10,000 echo connections, none at 1,000, where they stay cached.
-        const kama_fiber* n = s->head;
-        if (n) {
-            const char* sp = (const char*)n->sp;
-            __builtin_prefetch(sp); __builtin_prefetch(sp + 64); __builtin_prefetch(sp + 128);
-        }
+        // With nothing registered no poll can report anything, and a remote wake needs none, since this turn already drained
+        // that queue. The OS's wait is the costliest thing a turn can do (`kevent` about 10 µs on an M4, KR-264), so fibers
+        // that only talk to each other never pay for it.
+        if (++s->ticks >= KAMA_SCHED_POLL_EVERY) { s->ticks = 0; if (s->ios) kama__sched_wait(s, 0); }
+        kama__sched_prefetchNext(s);
         kama_fiber_switch(&kama__fibers.root, f);
+        f = kama__fibers.from;                                 // it may have parked straight into another: this one came back
         if (f->done) {
             s->live--;
             kama_fiber_scope* sc = (kama_fiber_scope*)f->scope;
@@ -1005,12 +1033,14 @@ static inline int kama__proc_park(int pid) {
     struct kevent ch; EV_SET(&ch, (uintptr_t)pid, EVFILT_PROC, EV_ADD | EV_ONESHOT, NOTE_EXIT, 0, &rec);
     if (kevent(((kama__poller*)s->poller)->kq, &ch, 1, NULL, 0, NULL) != 0) return errno == ESRCH ? 0 : -1;
     __atomic_add_fetch(&s->refs, 1, __ATOMIC_RELAXED);
+    s->ios++;
     // An exit before the add may not report: look without reaping, and wait only for one still to come.
     siginfo_t si; memset(&si, 0, sizeof si);
     if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOHANG | WNOWAIT) != 0 || si.si_pid == 0) (void)kama_sched_io_wait(&rec, 1, 0);
     kama__sched_purge(s, &rec);
     struct kevent del, res; EV_SET(&del, (uintptr_t)pid, EVFILT_PROC, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
     (void)kevent(((kama__poller*)s->poller)->kq, &del, 1, &res, 1, NULL);   // ENOENT once it fired: fine
+    s->ios--;
     kama__sched_unref(s);
     return 0;
 #else

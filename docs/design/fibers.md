@@ -512,6 +512,15 @@ The scope stays the one structured construct, so kama needs no nursery object.
 A watchdog that reports a fiber running too long cannot print a warning, because kama has no stderr warning channel
 (a standing ruling). It is a trace event, or nothing.
 
+*As built (`0.9.843`):* the poll comes round every 61 runs only while something is registered (`kama_sched.ios`, one per
+`kama_sched_io` record): with none no poll can report anything, and a remote wake needs none, since each turn drains that
+queue. A park also goes straight to the next ready fiber when the loop has nothing else to do (`kama__sched_direct`): the root
+is parked and not woken, no timer is set, no remote wake waits and no poll is due. Every 61st run still goes through the loop,
+so fibers parking into each other cannot starve a socket (`tests/fiber_sched.d` checks 8, 38, 40–43), and a fiber reached that way
+ends on the root as every fiber does. Measured against `0.9.842`: a channel hop in `bench/fiber/` went from 269 to 38 ns at 100
+fibers and from 285 to 48 ns at 10,000 (M4, macOS, 7 interleaved rounds); a server's echo and HTTP on io_uring, from 100 to 10,000
+connections, use 0.7–1.6% less CPU a request with throughput within 0.3% (M4 Linux VM, 7 rounds, the noise floor 0.5%).
+
 ### Decision 13 — descriptor lifetime
 
 With decision 3, the case that bites Go, "fiber B closes a socket fiber A is parked on, and its number is reused",

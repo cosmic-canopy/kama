@@ -631,10 +631,11 @@ static inline kama_fiber* kama_fiber_new(void (*entry)(void*), void* arg, size_t
     return f;
 }
 
-// Leave the fiber running now, `from`, for `to`; returns when something switches back to `from`.
-static inline void kama_fiber_switch(kama_fiber* from, kama_fiber* to) {
+// Leave the fiber running now, `from`, for `to`, which returns to `resumer` if its entry ends; this returns when something
+// switches back to `from`.
+static inline void kama__fiber_switchFor(kama_fiber* from, kama_fiber* to, kama_fiber* resumer) {
     kama_fiber_thread* t = &kama__fibers;
-    to->resumer = from;
+    to->resumer = resumer;
     t->from = from;
     t->cur = to;
 #if defined(KAMA_FIBER_WIN)
@@ -658,6 +659,7 @@ static inline void kama_fiber_switch(kama_fiber* from, kama_fiber* to) {
 #endif
     kama__fibers.cur = from;
 }
+static inline void kama_fiber_switch(kama_fiber* from, kama_fiber* to) { kama__fiber_switchFor(from, to, from); }
 
 // The first switch into a fiber arrives here, on its own stack, and its entry's return leaves from here.
 static inline void kama__fiber_main(kama_fiber* self) {
