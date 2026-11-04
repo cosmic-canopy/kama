@@ -564,17 +564,18 @@ So nothing in the corpus was being checked only through the capture.
 checks its arguments as the turbofish arm does; then the gate: zero new diagnostics over the corpus on bodies that
 compile, with `--probe-templates` counting the sites it moves from deferred to resolved.
 
-<a id="s2-deep-chain"></a>
+<a id="s2-else-if-ladder"></a>
 
-### A long `+` chain crashes the compiler (KR-304)
+### An `else if` ladder stops at about 195 arms (KR-307)
 
-Found 2026-11-03, when `check-compiler-asan` overflowed on a fixture's 213-line hex literal. On the ordinary compiler, on an 8 MiB stack, a `string` of 1,000 concatenated
-literals checks and one of 2,000 dies with SIGSEGV, so a valid program gets a crash and no diagnostic. The operators nest to the left, so the depth is the term count, and
-`exprClass` recurses through `operatorResultClass` at about 3 frames a term; other walks over the same tree may recurse as well, and each wants measuring.
+`if (a == 0) { … } else if (a == 1) { … } …` is right-recursive in the grammar, so each arm holds six symbols on the parser's stack, which `YYINITDEPTH` fixes at 1,200. Measured on `0.9.838`, the same on macOS and
+Linux: 195 `else if` arms build and run, and one more is refused with a message saying so. Nesting does not cost that much elsewhere: 294 nested calls, 1,180 nested blocks. A decision table from a generator reaches 195.
 
-What others do: clang checks its remaining stack and grows it (`runWithSufficientStackSpace`), rustc grows its stack on demand (`stacker`), and GCC raises its own stack limit. A
-walk made iterative fixes one walk, so the likely answer is the compiler running on a stack large enough that its own recursion stops being the limit, with a clean diagnostic past
-that. The fix decides that: measure which walks go deep first.
+Measured with the same ladder at 198, 1,000, 5,000 and 20,000 arms. Apple's clang, node and python took 1,000 and failed at 5,000 (a stack warning and error, a `RangeError`, a `RecursionError`), zig's `ast-check` took 5,000 and died with SIGSEGV at 20,000, and rustc passed analysis at 20,000. So kama is alone below 1,000.
+
+Why it is low: `YYINITDEPTH` cannot simply rise, because `YYSTYPE` holds `shared_ptr`s, so Bison's stack cannot relocate and all 1,200 entries are built on every parse. That costs 0.5 ms a parse at 1,200 (see the note at the top of `kama.y`), and `kama lsp` parses per keystroke.
+
+The likely fix is a left-recursive ladder rule, so that it leaves the stack flat, with each arm a chain link as `CHAIN_LINK` counts one. The node each arm builds stays what it is. What the C compiler takes then decides the number, since the ladder's text is flat but clang recurses through it: Apple's took 1,000 and warned of its stack by 5,000. A grammar change is four artifacts if the grammar's text changes.
 
 <a id="s2-enum-value-join"></a>
 

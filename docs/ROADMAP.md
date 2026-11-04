@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-307**
+**Next id: KR-308**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-304 | **A long `+` chain crashes the compiler** — `kama check` on a `string` of 2,000 concatenated literals segfaults; 1,000 is fine (8 MiB stack, `0.9.826`, measured). The recursion is `exprClass` through `operatorResultClass`, about 3 frames a term, and under ASan's larger frames 213 terms overflow. No fixture reached it; a generated source would | S-M? | [§2](ROADMAP_DETAIL.md#s2-deep-chain) |
 | KR-306 | **Two enum values meet when a name holds `_`** — a value reaches C as `<Enum>_<Value>`, a `_` join, so `type enum E_A { B }` and `type enum E { A_B }` in one file are both `kF_en__E_A_B` and clang refuses the program (measured `0.9.820` and `0.9.829`). Likely fix: join a value with `__` like every other member, which puts it under SPEC's edge-`_` rule | S? | [§2](ROADMAP_DETAIL.md#s2-enum-value-join) |
 
 ## NOW — the next features, in build order
@@ -114,6 +113,7 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-269 | packaging & serde | **A package caps the optimization of its own C** — a release build compiles a package's vendored constant-time C at the root's `-O3`, and a `csources` entry takes only `path` and `compileFor`. A ceiling the package sets for its own files, or Cargo's per-package level set by the root: touches the root-only rule, ruling owed | S | [§10](ROADMAP_DETAIL.md#s10-csources-optimize) |
 | KR-231 | packaging & serde | **Zero-copy deserialization into a view struct** — `@generate(Deserializable)` on a `type view`, so a parsed record's strings are views into the input (serde's `#[serde(borrow)]`); the escaped-field case wants a ruling. Unblocked: a type holding a view is a view since `0.9.725` | M? | [§4](ROADMAP_DETAIL.md#s4-view-deserialize) |
 | KR-189 | packaging & serde | **Serialization follow-ups** — what §4 still schedules, with no row of its own until now: a tagged-enum payload holding `Shared`/`Weak`; a fat `Owned<Contract>` field; the `text::yaml` and `text::csv` back ends (csv wants its shape decided before it is built); a `Format` contract carrying a back end's entry points; and two bugs §4 names (`Weak<Contract>` does not monomorphize; a temporary passed to a contract-typed parameter takes an rvalue's address). Last measured 2026-09-09 — re-probe each before building | — | [§4](ROADMAP_DETAIL.md#s4) |
+| KR-307 | compiler | **An `else if` ladder stops at about 195 arms** — the parser's stack is fixed at 1,200 symbols and a ladder holds six an arm, so a generated decision table is refused where every other compiler measured takes at least 1,000. Likely a left-recursive rule, so a ladder counts as a chain and leaves the stack flat | M? | [§2](ROADMAP_DETAIL.md#s2-else-if-ladder) |
 
 ## UNSCOPED — no design and no size yet; each wants a look before it can be ordered
 
