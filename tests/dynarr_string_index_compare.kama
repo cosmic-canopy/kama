@@ -3,7 +3,7 @@
 // The emitter hoisted any string-typed rvalue operand into a scope-dropped `__strtmp` so a computed
 // string (`a + b`, `s.trim()`) would be freed rather than leaked. `a[i]` matched that rule — it is not a
 // literal, not an identifier, and its type is `string` — so `if (a[0] == "x")` emitted a shallow copy of
-// the element followed by `kama_string__dtor` on the copy: the array's buffer freed once there, and again
+// the element followed by `kama_string__kama_dtor` on the copy: the array's buffer freed once there, and again
 // when the array dropped. A double free, aborting at SCOPE EXIT rather than at the comparison.
 //
 // ⚠️ The elements here are HEAP-BACKED on purpose (built by concatenation). A literal element has no

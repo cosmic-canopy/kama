@@ -1,4 +1,4 @@
-// A deep `copy` of a string allocates a new buffer (`kama_string__copy` calls `kama_alloc`). The emitter
+// A deep `copy` of a string allocates a new buffer (`kama_string__kama_copy` calls `kama_alloc`). The emitter
 // used to spell `T__copy(&(x))` at TWELVE sites; they are one `copyCall` now, so the fact is recorded in
 // one place — the same argument the destructor edge makes. NOTE the sibling control: a string LITERAL
 // local is borrowed (`cap == 0`) and allocates nothing, so it stays legal here.

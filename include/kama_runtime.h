@@ -1336,7 +1336,7 @@ static inline char* kama__str_alloc(size_t n) {
 }
 
 // RAII: free only heap-owned strings; borrowed views are a no-op.
-static inline void kama_string__dtor(kama_string* self) {
+static inline void kama_string__kama_dtor(kama_string* self) {
     if (self->kama_cap) kama_free(self->kama_data, self->kama_cap, 1);
     self->kama_data = NULL; self->kama_len = 0; self->kama_cap = 0;
 }
@@ -1354,7 +1354,7 @@ static inline bool kama_string__equals(kama_string* self, kama_string other) {
            (self->kama_len == 0 || kama_cmp(self->kama_data, other.kama_data, self->kama_len) == 0);
 }
 // Deep copy -> a fresh heap-owned string (even copying a borrowed literal).
-static inline kama_string kama_string__copy(const kama_string* self) {
+static inline kama_string kama_string__kama_copy(const kama_string* self) {
     kama_string r; r.kama_len = self->kama_len;
     if (self->kama_len == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }
     char* buf = kama__str_alloc(self->kama_len + 1);
@@ -1518,13 +1518,13 @@ static inline kama_string kama_string__trim(kama_string* self) {
 // returns a copy of self — no infinite loop. `n = len - count*old.kama_len + count*with.kama_len` never
 // underflows: non-overlapping matches guarantee `count*old.kama_len <= len`.
 static inline kama_string kama_string__replace(kama_string* self, kama_string old, kama_string with) {
-    if (old.kama_len == 0 || old.kama_len > self->kama_len) return kama_string__copy(self);
+    if (old.kama_len == 0 || old.kama_len > self->kama_len) return kama_string__kama_copy(self);
     size_t count = 0, j = 0;
     while (j + old.kama_len <= self->kama_len) {
         if (kama_cmp(self->kama_data + j, old.kama_data, old.kama_len) == 0) { ++count; j += old.kama_len; }
         else ++j;
     }
-    if (count == 0) return kama_string__copy(self);
+    if (count == 0) return kama_string__kama_copy(self);
     size_t n = self->kama_len - count * old.kama_len + count * with.kama_len;
     kama_string r; r.kama_len = n;
     if (n == 0) { r.kama_data = NULL; r.kama_cap = 0; return r; }

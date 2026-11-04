@@ -1,1 +1,1 @@
-`Shape.dtor [Circle]` -> `Circle::dtor`
+`Shape.kama_dtor [Circle]` -> `Circle::kama_dtor`

@@ -110,11 +110,11 @@ for n in getaddrinfo GetEnvironmentStringsW opendir pthread_create CreateThread 
 done
 
 # --- 3. the capacity-guarded drop is still the ONLY one (KR-74) ---------------------------------------------
-# `kama_string__dtor` frees under `if (self->kama_cap)`, and the header scan is flow-insensitive, so the
+# `kama_string__kama_dtor` frees under `if (self->kama_cap)`, and the header scan is flow-insensitive, so the
 # compiler excludes it BY NAME (isCapacityGuardedDrop) or every no-heap body holding a string literal is
 # refused — SPEC promises that literal. A name is exactly the shape this row deleted 55 of, so it is allowed to
 # be one only while it is the one. A second guarded free must be a decision, not a surprise.
 guarded=$(grep -cE 'if \(self->kama_cap\)[[:space:]]*kama_free' include/*.h | awk -F: '{s+=$2} END {print s+0}')
-[ "$guarded" -eq 1 ] || fail "expected exactly ONE capacity-guarded kama_free in include/ (kama_string__dtor), found $guarded — CEmitter::isCapacityGuardedDrop names only that one, so a new one is silently a fact and will refuse programs SPEC says are legal"
+[ "$guarded" -eq 1 ] || fail "expected exactly ONE capacity-guarded kama_free in include/ (kama_string__kama_dtor), found $guarded — CEmitter::isCapacityGuardedDrop names only that one, so a new one is silently a fact and will refuse programs SPEC says are legal"
 
 echo "check-alloc-funnel: PASS (the C allocator is called only inside the kama_alloc/kama_realloc/kama_free funnel: include/, prelude/, lib/, and the C the emitter writes; the compiler's foreign-allocator list agrees with what include/ reaches; one capacity-guarded drop)"

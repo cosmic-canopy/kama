@@ -1,0 +1,5 @@
+// KR-318: a method `@generate` derives is a member of the enum, called as `e.equals(f)`, and is `E__equals` in C, so
+// a variant `equals` would be the same name twice: `E::equals(…)` and `e.equals(f)`. The rule for a written member.
+@generate(Equatable)
+type enum E { equals(int32 v), Nil; }
+fn uint8 main() { E e = E::equals(v: 1); return cast<uint8>(e.equals(other: E::Nil) ? 1 : 0); }

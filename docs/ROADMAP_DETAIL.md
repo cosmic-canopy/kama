@@ -630,73 +630,19 @@ Why it is low: `YYINITDEPTH` cannot simply rise, because `YYSTYPE` holds `shared
 
 The likely fix is a left-recursive ladder rule, so that it leaves the stack flat, with each arm a chain link as `CHAIN_LINK` counts one. The node each arm builds stays what it is. What the C compiler takes then decides the number, since the ladder's text is flat but clang recurses through it: Apple's took 1,000 and warned of its stack by 5,000. A grammar change is four artifacts if the grammar's text changes.
 
-<a id="s2-kama-lane"></a>
-
-### A user's name meets a name kama writes for itself (KR-318)
-
-Found 2026-11-04 while moving an enum's values onto the `__` join, measured on `0.9.847`. kama joins two kinds of name
-onto a type's C name with `__`: the members a user declares (`T__area`, and since `0.9.847` an enum's values,
-`Color__Red`), and what kama writes
-itself (`T__dtor`, a destructor the user wrote as `~T()` or never wrote at all). Both share one lane, so a name a user
-picks for something unrelated can be the name kama picked, and two C declarations get one spelling:
-
-| in one file | result |
-|---|---|
-| `fn int32 dtor()` beside `~R()` | clang: conflicting types for `R__dtor` |
-| `fn int32 vdrop()` on a `virtual` resource | clang: conflicting types for `Base__vdrop` |
-| `fn int32 vtable()` on a `virtual` resource, and a type `Base_vtable` | clang: redefinition, both |
-| `ctor copy` on an enum whose payload owns a `string` | clang: conflicting types for `E__copy` |
-| `type value Shape_vtbl` beside `type contract Shape`, boxed | clang: redefinition of `Shape_vtbl` |
-| `fn int32 op_add()` beside `operator+` | kama: "duplicate operator '+'", a wrong refusal |
-| a variant `dtor(string s)` | built on `0.9.846`; clang on `0.9.847` (the value's `__` join) |
-| a variant `equals(int32 v)` under `@generate(Equatable)` | built on `0.9.846`; clang on `0.9.847` |
-
-`lib/std/collections/sorted_map.kama`'s `BTreeNode` declares a method `serializeInto`, the graph twin's name, and is
-safe only because it has no hand-written `serialize` to make the twin.
-
-**Why nothing caught it.** A fixture corpus tests the names people write: every enum value in it is capitalized, and
-no fixture names a member after a helper kama generates. SPEC § C names claims a one-to-one mapping, and the edge-`_`
-and inner-`__` rules prove it only between two names a user writes; nothing checked a user's name against kama's.
-
-**The inventory** (2026-11-04). kama generates, on a type's or a contract's C name: `__dtor` (61 sites, plus 41
-hand-written `kama__FieldKey__dtor` and the runtime's `kama_string__dtor`, which the generic funnel calls), `__vdrop`,
-`__vsize`/`__valign`, `__vtable`, the class vtable's struct type `<Root>_vtable`, a contract's struct type `<C>_vtbl`,
-`__as_<C>`, the graph-serde helpers (`__serializeInto`, `__deserializeFrom`, `__wireParts`, `__deserializeRoot`,
-`__visitEdges`, `__writeNode`, `__wireEdges`, `__graphTypeId`, `__graphImplVtbl`, `__serializeEdge`,
-`__deserializeEdge`), `__upgrade`, `__fillCopy`/`__fillCopyInto`, the `__copy` of an owning enum, array or contract
-handle, and an operator's member name `op_<sym>`. A contract's methods are the user's whether written or derived
-(`equals`, `hash`, `compareTo`, `format`, `serialize`, `deserialize`, `mergeFrom`, `deref`, `derefMut`, `adopt`,
-`allocate`, `deallocate`, `bytes`, `bytesMut`, `of`, `zero`, a resource's `ctor copy`). A suffix on a method's own C
-name (`__into`, `__kama_local`, `__kama_checked`, `__graphTwin`) is out of reach, since no member name holds `__`.
-
-**Ruled 2026-11-04** (the maintainer: kama should color the functions it generates):
-1. **Two lanes.** A name a user writes joins as `<Type>__<name>`; a name kama chooses joins as `<Type>__kama_<what>`,
-   through one helper, as the tag type `<Enum>__kama_tag` already does. A joined user name may not begin `kama_`
-   (SPEC § C names), so the lanes cannot meet whatever either side adds later.
-2. **What moves:** every generated name above, single-`_` ones included (`Shape__kama_vtbl`, the class vtable's type
-   and instance), and an operator's member name, whose method key moves with it. `kama_string__dtor` becomes
-   `kama_string__kama_dtor`. `copy` splits: a resource's `ctor copy` is the user's and stays `T__copy`; the copy kama
-   writes for an enum, an array or a handle is `__kama_copy`.
-3. **A derived method is a member.** `@generate(Equatable)` writes a method the user calls (`a.equals(b)`), so it
-   stays `T__equals`, and the variant-vs-member rule counts it. An enum derives at most `serialize`, `deserialize`,
-   `format`, `equals`, `hash` and `compareTo`.
-4. **`dtor` stays a legal name** (the maintainer): with kama's destructor in its own lane, the word costs nothing.
-5. **Proof:** a positive fixture naming methods, a ctor and variants after every generated name (each a clang error
-   today); an xfail for a variant named after a derived method; and a guard that refuses a generated suffix joined by
-   hand outside the helper, so a helper added later cannot reopen the class. `kama demangle` shows `T::kama_dtor`.
-
 <a id="s2-instance-key"></a>
 
 ### A type named like a generic instance's key is that instance (KR-319)
 
-Found 2026-11-04 by KR-318's inventory, measured on `0.9.847`. In one file, `type value Pair<T> { public T a; … }` and
-`type value Pair_int32 { public int32 b; … }`: `Pair_int32.make()` is checked as `Pair<int32>`'s ("missing the
-argument `a`"), and `q.b` as "`Pair<int32>` has no field `b`". A generic instance is keyed `<Tmpl>_<arg>` (the
+Found 2026-11-04 by the inventory of names kama writes on a type, measured on `0.9.847`. In one file,
+`type value Pair<T> { public T a; … }` and `type value Pair_int32 { public int32 b; … }`: `Pair_int32.make()` is
+checked as `Pair<int32>`'s ("missing the argument `a`"), and `q.b` as "`Pair<int32>` has no field `b`". A generic instance is keyed `<Tmpl>_<arg>` (the
 instance mangle in `kama.cemit.cpp`), a `_` join of two names a user can spell, so a plain type of that name and the
 instance share one table entry, and the key is the instance's C name too. The intrinsic instances (`Owned_`, `Shared_`,
-`Weak_`, `InlineArray_`, `Simd_`, `Mask_`, `InlineStorage_`) carry no scope prefix either. The enum-value join's brief measured
-`P<A, B>` against `P_A<B>` and found them apart, so the reach of this is a plain type against an instance; unprobed
-beyond that. Wants a look at moving the instance key out of the user's lane, as KR-318 does for generated members.
+`Weak_`, `InlineArray_`, `Simd_`, `Mask_`, `InlineStorage_`) carry no scope prefix either. The enum-value join's brief
+measured `P<A, B>` against `P_A<B>` and found them apart, so the reach of this is a plain type against an instance;
+unprobed beyond that. Wants a look at moving the instance key out of the user's lane, as `0.9.848` did for the names
+kama writes on a type (`<Type>__kama_<what>`, SPEC § C names).
 
 <a id="s2-quoted-format"></a>
 

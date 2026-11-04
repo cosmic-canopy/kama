@@ -37,16 +37,16 @@ PRE=$(printf '%s\n' "$BODY" | sed -n '1,/makeInto/p')
 fail=0
 
 # 1. The slot DOES drop after it is filled — proves the dtor is emitted at all, so (2) is a real signal.
-if ! printf '%s\n' "$BODY" | grep -q 'Tracker__dtor(&k_t)'; then
+if ! printf '%s\n' "$BODY" | grep -q 'Tracker__kama_dtor(&k_t)'; then
     echo "check-slot: FAIL — the filled Tracker 't' has no dtor call anywhere; the differential is void" >&2
     printf '%s\n' "$BODY" >&2
     fail=1
 else
-    echo "  ok: the filled slot drops (Tracker__dtor(&k_t))"
+    echo "  ok: the filled slot drops (Tracker__kama_dtor(&k_t))"
 fi
 
 # 2. ...and the exit BEFORE the fill does not. This is the property the campaign exists to deliver.
-if printf '%s\n' "$PRE" | grep -q 'Tracker__dtor(&k_t)'; then
+if printf '%s\n' "$PRE" | grep -q 'Tracker__kama_dtor(&k_t)'; then
     echo "check-slot: FAIL — the early return emits a destructor for a slot that cannot hold a value yet;" >&2
     echo "  drop elision regressed (per-exit-point move state)" >&2
     printf '%s\n' "$PRE" >&2

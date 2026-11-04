@@ -9,7 +9,7 @@
 // `string` rather than `int32` as the argument so the rendering has something to get wrong, and the
 // allocator left at its default so the trailing-default drop is asserted too — the mangle expands
 // `GlobalAllocator` positionally, and a demangler that did not drop it would say
-// `DynamicArray<string, GlobalAllocator>::dtor`.
+// `DynamicArray<string, GlobalAllocator>::kama_dtor`.
 import { std::collections::DynamicArray };
 @noheap fn int32 tick(int32 n) {
     DynamicArray<string> l = DynamicArray.empty();

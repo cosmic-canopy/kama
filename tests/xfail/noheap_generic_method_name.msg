@@ -1,1 +1,1 @@
-`std::collections::DynamicArray<string>::dtor`
+`std::collections::DynamicArray<string>::kama_dtor`

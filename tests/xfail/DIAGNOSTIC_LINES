@@ -492,6 +492,7 @@ enum_unknown_variant_dot	enum_unknown_variant_dot.kama:5:10
 enum_unknown_variant_scope	enum_unknown_variant_scope.kama:5:13
 enum_value_member_name	enum_value_member_name.kama:2:14
 enum_variant_arity	enum_variant_arity.kama:4:14
+enum_variant_derived_name	enum_variant_derived_name.kama:4:14
 enum_variant_dot	enum_variant_dot.kama:7:10
 error_downcast_owned	error_downcast_owned.kama:14:46
 export_after_extern	export_after_extern.kama:4:0

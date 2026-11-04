@@ -2369,7 +2369,7 @@ std::string CEmitter::elementTypeOf(const std::string& cls)
     ClassInfo* c = &ci->second;
     if (c->isIntrinsicColl && !c->collElemClass.empty()) return c->collElemClass;
     ClassInfo* owner = nullptr;
-    MethodInfo* op = findMethod(c, "op_index", &owner);      // `a[i]` is registered under this name
+    MethodInfo* op = findMethod(c, "kama_op_index", &owner);      // `a[i]` is registered under this name
     if (op && owner) return classOfTypeNodeIn(owner->name, op->returnType);
     std::string pointee = derefTargetForQuery(cls);
     return pointee.empty() ? "" : elementTypeOf(pointee);

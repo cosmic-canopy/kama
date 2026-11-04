@@ -92,7 +92,7 @@ want kF_dm__Pair_int32__sum     'Pair<int32>::sum'
 # A stdlib instance, with the allocator left at its default — which must NOT be rendered, or every
 # container in the debugger reads `DynamicArray<string, GlobalAllocator>`.
 want std__collections__DynamicArray_string_kama__GlobalAllocator        'std::collections::DynamicArray<string>'
-want std__collections__DynamicArray_string_kama__GlobalAllocator__dtor  'std::collections::DynamicArray<string>::dtor'
+want std__collections__DynamicArray_string_kama__GlobalAllocator__kama_dtor  'std::collections::DynamicArray<string>::kama_dtor'
 # A PRELUDE instance. The prelude's scope is implicit in source, and stripping it before the instance
 # lookup used to destroy the key this needs — `Optional_string` instead of `Optional<string>`.
 want kama__Optional_string  'Optional<string>'

@@ -1139,7 +1139,7 @@ unchecked C, like an unmarked `extern fn`.
 **A destructor is a slot like any other.** Dropping an `Owned`/`Shared`/`Weak` handle over a **contract** or
 a **virtual base** runs the concrete object's `~T()` through the vtable, so the drop is an edge to every
 implementer's or subclass's destructor, and it is refused in a no-heap region when any of them frees to <!-- xfail: noheap_drop_contract_box, noheap_drop_contract_box_heap, noheap_drop_virtual_box -->
-the system heap — even when the handle's own storage is an arena: `` `Shape.dtor [Circle]` -> `Circle::dtor` ``.
+the system heap — even when the handle's own storage is an arena: `` `Shape.kama_dtor [Circle]` -> `Circle::kama_dtor` ``.
 Two declarations state the promise instead of leaving it to the implementers of the day:
 `@noheap ~Base()`, which **every subclass destructor is then held to** — a subclass that owns a field which
 frees must say so, and is refused when it cannot — and a contract declared **`for value`**, whose <!-- xfail: noheap_dtor_override -->
@@ -1500,7 +1500,7 @@ the source and const is deep (the write is refused through a `const ref`, raw po
 ctor must spell that `ref` itself: a parameter's ref-constness is part of the signature (below, *const ref*), <!-- xfail: copy_const_ref_signature -->
 so `ctor copy(const ref This source)` does not conform even when it never writes through the source. That costs
 nothing at the call: a `Copyable` resource element still copies out of a `const ref` container, since the one <!-- test: copy_resource_const_ref -->
-`__copy` funnel casts the const place. Copying never consumes
+copy funnel casts the const place. Copying never consumes
 it. Opting in **requires declaring the bare-hand-off default**: `Copyable<This>(bare: give)` (a bare hand-off moves)
 or `Copyable<This>(bare: copy)` (a bare hand-off deep-copies). A marker (**`give x`** / **`copy x`**) always
 overrides the default; there is no "ambiguous — must annotate" error. Because `copy`/`give` are markers only
@@ -4741,7 +4741,13 @@ name — a top-level declaration, a type's or an enum's method, constructor or c
 variant, which is joined as its methods are (`Color__Red`; through `0.9.846` it was `Color_Red`, so `E_A`'s `B`
 and `E`'s `A_B` met). **And a joined name may not start `kama_`**, the compiler's register, which is what keeps a <!-- xfail: reserved_kama_type, reserved_kama_function, reserved_kama_static, reserved_kama_comptime, reserved_kama_method, reserved_kama_ctor, reserved_kama_type_constant, reserved_kama_value, reserved_kama_variant -->
 tagged enum's tag type, `<Enum>__kama_tag`, clear of its variants. A local, a parameter, a field and a
-binding are `k_<name>` and joined to nothing, so `__ok`, a field `a_` and a local `kama_x` stay legal. <!-- test: reserved_kama_bindings_ok, enum_c_names_meet --> With both rules, every run
+binding are `k_<name>` and joined to nothing, so `__ok`, a field `a_` and a local `kama_x` stay legal. <!-- test: reserved_kama_bindings_ok, enum_c_names_meet -->
+Every name kama chooses on a type is in that register, `<Type>__kama_<what>`: its destructor (`~T()` is
+`T__kama_dtor`), a copy kama writes (an enum's, an `InlineArray`'s, a handle's), its vtable, a contract's table
+for it (`T__kama_as_C`), an operator's function (`T__kama_op_add`), a graph-serde helper and the tag type. So a
+member may be named `dtor`, `vdrop`, `vtable` or `op_add` (through `0.9.847` kama's names were `T__dtor` and the
+rest, which a member of that name met). What a type's author writes keeps the author's lane: a resource's `ctor <!-- test: kama_lane_meets -->
+copy` is `T__copy`, and a method `@generate` derives is `T__equals`, a member like any other. With both rules, every run
 of underscores longer than one in a C name is exactly one join, and `kama demangle` reads it one way. The one
 place that rule meets C is the declared
 surface: an `extern fn` whose C name has `__` inside it is bound with `@linkName`.
@@ -5837,7 +5843,7 @@ assignment, a field, a payload — and a fresh handle (`shapeOf(c: makeCircle())
 
 Polymorphism flows through the base's **public surface**, which invokes the `protected virtual` hooks
 (Template Method) — you never call an overridable method through the handle directly. Destruction is
-**virtual**: a `virtual`/`abstract resource` (and every owning contract handle) carries a vtable `__dtor`
+**virtual**: a `virtual`/`abstract resource` (and every owning contract handle) carries a vtable destructor
 slot, so dropping through a base/contract handle runs the **most-derived** destructor's full chain — the
 derived's owned resources are freed, never sliced, exactly once. (An upcast only ever yields an *owning*
 handle or a scope-local borrow; an un-owned contract value can't be stored — see Contracts.)
@@ -5999,7 +6005,7 @@ A built-in gets **no `_classes` entry** — every "is this a user type?" test ke
 conformance hangs on a separate registry, and a **scalar** target's `this` is the value itself: the method
 takes `T self` by value and the call is a plain `int32__hash(k)`. That is how `Map<int32, V>` /
 `Set<int32>` get their keys. A declared target's methods hang on its own ClassInfo, and it gets the
-ordinary `T__as_C` vtable beside its other contracts, so it binds to a contract value like any implementer.
+ordinary `T__kama_as_C` vtable beside its other contracts, so it binds to a contract value like any implementer.
 
 **A contract is a SCOPE.** An adapter decorates a type *within the scope of that contract*, so a <!-- xfail: adapter_direct_call, adapter_declared_direct_call -->
 contract-supplied method is **not part of the type's own API** — it is reached through the contract,
@@ -6366,9 +6372,9 @@ operands, positional by nature). The full overloadable set is supported: arithme
 
 | params | form | example | `a op b` lowers to |
 |--------|------|---------|--------------------|
-| 0 | unary on `this` | `Vec2 operator-()` | `Vec2__op_neg(&a)` |
-| 1 | binary **method** (`this` is the left operand) | `Vec2 operator+(Vec2 rhs)` | `Vec2__op_add(&a, b)` |
-| 2 | binary **free** (both explicit) | `Vec2 operator*(float64 s, Vec2 v)` | `Vec2__op_mul(a, b)` |
+| 0 | unary on `this` | `Vec2 operator-()` | `Vec2__kama_op_neg(&a)` |
+| 1 | binary **method** (`this` is the left operand) | `Vec2 operator+(Vec2 rhs)` | `Vec2__kama_op_add(&a, b)` |
+| 2 | binary **free** (both explicit) | `Vec2 operator*(float64 s, Vec2 v)` | `Vec2__kama_op_mul(a, b)` |
 
 The free form handles the mixed-type case a method can't — a primitive on the **left** (`s * v`). Dispatch
 prefers the method form on the left operand's type, else a free form on either operand's type. A binary or
@@ -6426,7 +6432,7 @@ keeps exact IEEE semantics at zero cost and never routes through `Comparable`. (
 NaN sorting last, which is what the sorted containers need. Same split as Rust's `total_cmp` vs `PartialEq`.)
 
 A user type may define a **place-returning index operator** — `public ref T operator[](usize i)` —
-whose body returns a place (`return this.cells[i]`). It lowers to `T* C__op_index(C* self, size_t i)`,
+whose body returns a place (`return this.cells[i]`). It lowers to `T* C__kama_op_index(C* self, size_t i)`,
 and the caller derefs the place, so `g[i] = v`, `g[i] += 1`, `m[i][j] = v`, `m[i].field = v`, and
 `ref g[i]` all work — the same place semantics as a built-in collection, now expressible in the
 language (so a `Vec`/matrix can be written *in* kama). The place is a **second-class borrow** of
@@ -6610,7 +6616,7 @@ fn uint8 main() {
   // in the prelude: type contract Additive<T is This> for value, resource, intrinsic { T operator+(T rhs); T operator-(T rhs); }
   //                 type contract Arithmetic<T is This> for value, resource, intrinsic implements Additive<T> {
   //                     T operator*(T rhs); T operator/(T rhs); }
-  fn T sum<T: Additive<T>>(T a, T b) { return a + b; }   // `a + b` -> the primitive `+`, or Concrete__op_add(&a, b)
+  fn T sum<T: Additive<T>>(T a, T b) { return a + b; }   // `a + b` -> the primitive `+`, or Concrete__kama_op_add(&a, b)
   ```
   Every number implements `Arithmetic` with its own operators, so `sum<int32>` is the bare `+`, overflow check
   and all. `std::num::Fixed` implements `Arithmetic`, and `Vec2`/`Vec3`/`Vec4` and `Duration`, which add and
@@ -6808,7 +6814,8 @@ which are checked like a type's (all three parsed and did nothing before `0.9.44
 but **not a field (a `const` one included), a destructor or an operator** — its layout is its tag plus its
 variant payloads, and it owns nothing beyond them; an operation on an enum is a named method. <!-- xfail: enum_field, generic_enum_field, enum_const_field, enum_operator -->
 A variant may not share a name with a member of its enum: `E::B` beside `e.B()` would name two things, and C spells <!-- xfail: enum_value_member_name -->
-both `E__B` (§ *C names*).
+both `E__B` (§ *C names*). A method `@generate` derives is a member too, written or not:
+under `@generate(Equatable)` a variant `equals` is refused. <!-- xfail: enum_variant_derived_name -->
 **Operators on an enum are a non-goal**, declared or built in. An enum's values are named variants, so `+`,
 `|` or `<<` over them names no variant; a user `operator|` would reopen exactly the hole the built-in refusal
 closes (`Flag::Read | Flag::Write` is no `Flag`). The two needs that look like operators each have a home

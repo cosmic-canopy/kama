@@ -298,7 +298,7 @@ struct MethodInfo {
     std::vector<std::string>     whenParams;
     std::vector<std::string>     whenBounds;
     std::vector<SharedIdentifier> whenBoundNodes;   // each bound as WRITTEN — its type arguments (exactBoundName)
-    // Operator overloads register as methods under a synthetic name (`op_add`, `op_neg`, …).
+    // Operator overloads register as methods under a synthetic name (`kama_op_add`, `kama_op_neg`, …).
     // They are NOT ClassMethodDeclarationNode, so `node` stays null: emit from `opDecl` instead.
     bool                         isOperator = false;
     int                          arity = 0;           // 0 = unary-on-this, 1 = binary method (`this`+rhs), 2 = binary free
@@ -524,7 +524,7 @@ struct ClassInfo {
     // A node in a serializable object graph: a `@generate` type that reaches a Shared/Weak field, OR a
     // pointee reached via some node's Shared/Weak field. Populated by computeGraphNodeTypes() (a closure
     // over the edge fields). Such a type keeps exactly the `serialize`/`deserialize` pair a by-value type
-    // has — the walk is emitted as INTERNAL C helpers (`K__visitEdges`/`K__writeNode`/`K__wireEdges`/
+    // has — the walk is emitted as INTERNAL C helpers (`K__kama_visitEdges`/`K__kama_writeNode`/`K__kama_wireEdges`/
     // `K____readInto`), so a node carries no extra public surface.
     bool                              isGraphNode = false;
     // Stable per-graph-node index (into `_graphNodeOrder`), assigned by computeGraphNodeTypes(): the node's
@@ -650,7 +650,7 @@ struct CollectionInfo {
     // later — after every unit is collected — and the C spellings above cannot be turned back into one.
     SharedIdentifier elem;
     // The paired smart-ptr INSTANCE name across the Shared<->Weak pair: for a Weak, the Shared it upgrades
-    // to (the `SHARED_NAME` for __upgrade + `Optional<that>`); for a Shared, the Weak it downgrades to.
+    // to (the `SHARED_NAME` for __kama_upgrade + `Optional<that>`); for a Shared, the Weak it downgrades to.
     // Defaults to the conventional `Shared_`/`Weak_` prefix; set explicitly for a library `Rc`/`RcWeak` pair.
     std::string  ifacePartner;
     std::string  downgradeName;    // a Shared with a library weak partner: the `downgrade` method name to emit ("" = none)
@@ -666,7 +666,7 @@ struct CollectionInfo {
 };
 
 // A `contract`: a set of method prototypes, lowered to a vtable struct
-// type + a fat-pointer value type. Implemented by classes via a C__as_I vtable. The method's
+// type + a fat-pointer value type. Implemented by classes via a C__kama_as_I vtable. The method's
 // return type + params are stored directly (not a node pointer) so it can be built from a
 // `type contract` (ClassMethodDeclarationNode).
 struct InterfaceMethod { std::string name; SharedIdentifier returnType; SharedParameterList params;
@@ -731,7 +731,7 @@ struct InterfaceInfo {
     std::vector<std::string>     usings;
     // Per-symbol imports (`import a::b::{X,Y as Z}`) of the declaring unit — needed so a contract method
     // signature that names an imported/library-generic type (`List<uint8>`, `Result<usize, IoError>`)
-    // resolves to its fully-qualified, monomorphized C name in the vtbl slot + the `C__as_I` cast.
+    // resolves to its fully-qualified, monomorphized C name in the vtbl slot + the `C__kama_as_I` cast.
     // (Generic contracts stash the whole NsCtx via _genericContractCtx; non-generic ones carry it here.)
     std::map<std::string, std::string> symbolAliases;
     // Kind gate (`for value, resource, view, enum, intrinsic`): which kinds may `implements` this
@@ -1613,7 +1613,7 @@ private:
     bool                               _basesLinked = false;     // linkBases() has run, so an empty ClassInfo::baseName means "no base" rather than "not resolved yet"
     bool                               _inBaseInstall = false;   // emitting the RHS of `this.base = …`: the one place an `abstract` type's ctor may be CALLED
     // OBJECT-GRAPH THREADING. Non-empty while emitting the graph-carrying TWIN of a serde body
-    // (`X__serializeInto` / `X__deserializeFrom`) — it holds the C name of that body's graph parameter,
+    // (`X__kama_serializeInto` / `X__kama_deserializeFrom`) — it holds the C name of that body's graph parameter,
     // which every nested serde call inside it appends as a trailing argument. Empty everywhere else, so an
     // ordinary by-value serialize is emitted exactly as before and pays nothing.
     //
@@ -1621,8 +1621,8 @@ private:
     // slot is filled by CASTING `&X__serialize` to the slot's function-pointer type, so changing that
     // function's arity would compile silently and then read an argument nobody pushed. The 2-arg spelling
     // is the contract's, and it stays exactly that shape.
-    std::string                        _serGraphArg;             // e.g. "g" inside `X__serializeInto`
-    std::string                        _deGraphArg;              // e.g. "g" inside `X__deserializeFrom`
+    std::string                        _serGraphArg;             // e.g. "g" inside `X__kama_serializeInto`
+    std::string                        _deGraphArg;              // e.g. "g" inside `X__kama_deserializeFrom`
     // THE CALL GATE. The name of the enclosing graph copy's OWN serializer/deserializer parameter — the
     // table travels with that sink and with no other. A body that builds a fresh `Serializer` and hands it
     // to a delegate is writing a DIFFERENT document, so threading our object table into it would stamp our
@@ -2041,8 +2041,9 @@ private:
     void checkParkWindows();
     bool _spawnsThreads = false;
     void noteThreadSpawn();
-    // The ONE spelling of a deep copy (`T__copy(&(x))`), so the intrinsic copy's fact is recorded in one place.
+    // The ONE spelling of a deep copy (`copyFn(T)(&(x))`), so the intrinsic copy's fact is recorded in one place.
     std::string copyCall(const std::string& cls, const std::string& lvalue);
+    std::string copyFn(const std::string& cls);   // a resource's `ctor copy`, else kama's `T__kama_copy`
     std::string copiedThrough(const std::string& ty, SharedExpression v, int handoff);
     std::string copyFirst(const std::string& cls, const std::string& src, int depth);
     bool isVariantCtorExpr(ASTNode* e);
@@ -2104,7 +2105,7 @@ private:
     struct DestructibleSite { std::string name; std::string className; int line = 0; std::string file; bool borrow = false; };
     std::map<std::string, OnPanicFn>        _onPanicFns;          // C name -> root of the walk
     std::map<std::string, DestructibleSite> _destructibleOwners;  // fn -> the first destructible local it owns
-    std::map<std::string, std::map<std::string, int>> _dropSiteLines;  // fn -> `T__dtor` -> the owner's declaration line
+    std::map<std::string, std::map<std::string, int>> _dropSiteLines;  // fn -> `T__kama_dtor` -> the owner's declaration line
     bool        _usesOnPanic   = false;   // any unit declares a region: the TU includes <setjmp.h> and defines KAMA_ONPANIC
     bool        _onPanicArmed  = false;   // the body being emitted is a region (prologue + disarm on every exit)
     std::string _onPanicRecover;          // the literal the landing pad returns ("" for a `void` region)
@@ -2139,7 +2140,7 @@ private:
     std::map<std::string, NsCtx>                    _genericContractCtx;    // template name -> home namespace ctx
     std::map<std::string, NsCtx>                    _genericContractInstCtx;// instance -> use-site ctx (its type args, e.g. a user `Point`, resolve here — like _genericTypeInstCtx)
     std::set<std::string>                           _genericContractInsts;  // mangled instance names already registered (dedup)
-    // A type-intrinsic target (a primitive, `string`) bound to a contract needs a `<key>__as_<C>` vtbl no class
+    // A type-intrinsic target (a primitive, `string`) bound to a contract needs a `<key>__kama_as_<C>` vtbl no class
     // sweep emits. Demanded at the use site (intrinsicContractVtbl), and only for pairs a program actually
     // binds — the alternative is ~100 vtables in every binary. The header's are written ahead of its buffered
     // body region; a module's are queued as file-scope helpers, and the set is cleared per module.
@@ -2273,13 +2274,19 @@ private:
     // comparison against a RESOLVED prelude type must spell it this way, not bare.
     static std::string preludeName(const std::string& name) { return std::string(kamaPreludeScope()) + name; }
     // An enum's value or variant in C (KR-306): `<Enum>__<Value>`, joined as the enum's methods are, so SPEC § C
-    // names' one-to-one rule covers it. A `_` join was not one-to-one: `E_A`'s `B` and `E`'s `A_B` met. A tagged
-    // enum's tag type is `enumConst(<Enum>, "kama_tag")`, which no variant can take, `kama_` being reserved.
+    // names' one-to-one rule covers it. A `_` join was not one-to-one: `E_A`'s `B` and `E`'s `A_B` met.
     // Every enum constant the emitter writes is spelled here; the declared C surface keeps its own spelling.
     // Public, because the file-scope helpers in kama.cemit.cpp that write a constant are not members.
 public:
     static std::string enumConst(const std::string& enumC, const std::string& v) { return enumC + "__" + v; }
     static std::string preludeConst(const std::string& e, const std::string& v) { return enumConst(preludeName(e), v); }
+    // A name kama chooses on a type (KR-318): `<Type>__kama_<what>` — a destructor, a generated copy, a vtable, a
+    // contract's table for an implementor (`kamaMember(T, "as_" + C)`), a graph-serde helper, an operator's method
+    // (`kama_op_add`), an enum's tag type. A name a user declares joins as `<Type>__<name>` and may not begin `kama_`,
+    // so the two lanes never meet: `dtor` is free to be a variant, and `~T()` is `T__kama_dtor`. Every name kama
+    // chooses is spelled here, and tools/check-kama-lane.sh refuses one joined by hand.
+    static std::string kamaMember(const std::string& typeC, const std::string& what) { return typeC + "__kama_" + what; }
+    static std::string preludeMember(const std::string& t, const std::string& what) { return kamaMember(preludeName(t), what); }
 private:
     // The inverse, for a CONTRACT-name comparison. A bound reaches the predicates either as a
     // compiler-written literal (`satisfiesBound(t, "Copyable")`) or as a name the resolver already
@@ -2779,7 +2786,7 @@ private:
     bool isPlainFixed(const std::string& cls) const;
     bool isOwningFixed(const std::string& cls) const;
     bool fixedCopyAllocates(const std::string& cls) const;   // does a deep copy of this owning InlineArray allocate
-    void emitOwningFixedFuncs(const CollectionInfo& info, bool protosOnly);   // its __dtor/__copy/__fillCopy(Into)
+    void emitOwningFixedFuncs(const CollectionInfo& info, bool protosOnly);   // its __kama_dtor/__kama_copy/__kama_fillCopy(Into)
     bool ensureFixedEquals(const std::string& cName);                        // KR-215: `equals` when the element is Equatable
     void emitFixedEquals(const CollectionInfo& info, bool protosOnly);
     bool ensureFixedFormat(const std::string& cName);                        // KR-216: `format` when the element is Formattable
@@ -2812,7 +2819,7 @@ private:
     // macro so the no-heap call graph can read the slot call and the free inside them — see the definition.
     void emitIfaceHandleFuncs(CollectionInfo& info, bool alloc);
     // Can a `NAME` handle's drop dispatch anything? A `for value` contract admits only kinds that own
-    // nothing, so its `__dtor` slot is NULL everywhere and the call is not emitted at all.
+    // nothing, so its `kama_dtor` slot is NULL everywhere and the call is not emitted at all.
     bool ifaceDropCanDispatch(const std::string& iface) const;
     // If `ea` indexes a collection, fill coll/recvExpr/idx and return true.
     bool collectionElemAccess(ElementAccessNode* ea, std::string& coll,
@@ -3047,9 +3054,9 @@ private:
     // assignment, a `return`, a `match` arm, a field initializer, an argument, a variant payload. Three of them:
     //   Box             a value whose type implements the contract — a primitive, a `string`, an enum, a `value`, a
     //                   `resource` — into `Owned<C>`/`Shared<C>` (`Owned<Error> e = DeError.of(…)`): heap-copied in,
-    //                   with its `__as_C` vtable;
+    //                   with its `__kama_as_C` vtable;
     //   ContractUpcast  a library `Owned<T>`/`Shared<T>` into the contract handle of the same kind (`Shared<Shape>
-    //                   s = sq;`) — the Liskov "is a": the same pointee, fattened with `T__as_C`;
+    //                   s = sq;`) — the Liskov "is a": the same pointee, fattened with `T__kama_as_C`;
     //   BaseUpcast      a library `Owned<Derived>`/`Shared<Derived>` into one over a base (`Owned<Shape> s = sq;`).
     // `Ternary`: a `?:` whose arm needs one of them; each arm converts on its own path.
     // Each position used to carry its own subset, so a `return`, an argument and an assignment reached clang for
@@ -3392,9 +3399,9 @@ private:
     // The delegate's graph-carrying C name. A distinct suffix on purpose: the twin of a method named
     // `serializeInto` would otherwise BE `X__serializeInto`, which is that method's own C name.
     static std::string graphDelegateTwinName(const MethodInfo& mi) { return mi.cName + "__graphTwin"; }
-    void emitGraphTwinProtos(ClassInfo& ci);        // `X__serializeInto` / `X__deserializeFrom` prototypes
+    void emitGraphTwinProtos(ClassInfo& ci);        // `X__kama_serializeInto` / `X__kama_deserializeFrom` prototypes
     void emitNullSerializer();                      // the discard sink discovery runs a body against
-    void emitGraphEdgeHelpers();                    // per edge type: `Shared_X__serializeEdge` (an expression)
+    void emitGraphEdgeHelpers();                    // per edge type: `Shared_X__kama_serializeEdge` (an expression)
     void emitGraphWorklistLoop(int depth);          // the discovery switch over the growing worklist
     void emitGraphObjectTable(int depth);           // `objects: [{id, type, value}]`
     void emitGraphDriverTail(const std::string& resC);   // free the worklist, sticky flag -> fallible Result
@@ -3407,7 +3414,7 @@ private:
     std::string graphEdgeElemType(ClassInfo& ci);   // the element type the marked accessor hands out, "" if unmarked
     bool graphWireElementsNeeded(ClassInfo& ci);
     bool graphPartIsEdge(SharedIdentifier ty);      // is this field/element something pass 2 must revisit?
-    void emitGraphWireElements(ClassInfo& ci);      // `X__wireParts`: stashed ids -> live handles
+    void emitGraphWireElements(ClassInfo& ci);      // `X__kama_wireParts`: stashed ids -> live handles
     std::set<std::string> _wirePartsInProgress;     // recursion guard for a self-referential instance
     void emitGraphReadRootDriver(ClassInfo& ci);    // a participant's `X__deserialize`: read the envelope
     bool _anyGraphTwin = false;                     // a null sink / edge helpers are emitted only if one exists
@@ -3433,7 +3440,7 @@ private:
     // contract (fat {obj,vtbl,ctrl} edge, resolved to a concrete conformance vtable at both endpoints).
     struct GraphEdge { std::string kind; std::string elemC; bool optional = false; bool elemIsContract = false; };
     GraphEdge graphEdgeOf(SharedIdentifier ty);
-    // Edge-handle class (`Shared_Leaf`) -> its edge, for every one that needs a `__serializeEdge` helper.
+    // Edge-handle class (`Shared_Leaf`) -> its edge, for every one that needs a `__kama_serializeEdge` helper.
     // Populated by planGraphTwins once the node set is final; empty when nothing needs a twin.
     std::map<std::string, GraphEdge> _graphEdgeHelperFor;
     void planGraphTwins();   // decide who needs a twin + which edge helpers to emit
@@ -3461,7 +3468,7 @@ private:
     // boxing even for a STATIC-ONLY conformance — the enum→interface capability. Set when a variant target
     // implements a contract, and (P2+) when a contract is a `Result` E-arg or an `Owned/Shared/Weak<C>`
     // element. Distinct from `_polyContracts` (serialization graph edges). For such a contract,
-    // `emitClassInterfaceVtables` emits `<Impl>__as_<C>` even for a static-only conformance (so an enum
+    // `emitClassInterfaceVtables` emits `<Impl>__kama_as_<C>` even for a static-only conformance (so an enum
     // gets a fat-pointer vtbl), and `rejectStoredInterface` treats a bare `C` in an owning slot as sugar.
     std::set<std::string> _polyDispatchContracts;
     bool isPolyDispatchContract(const std::string& c) const { return _polyDispatchContracts.count(c) != 0; }
@@ -3551,7 +3558,7 @@ private:
     }
     std::string ifaceSlotSig(SharedParameterList params);     // "(void* self, T a, ...)"
     void emitInterfaceTypes(InterfaceInfo& ii);               // vtbl struct + fat-pointer struct
-    void emitClassInterfaceVtables(ClassInfo& ci);            // the C__as_I instances
+    void emitClassInterfaceVtables(ClassInfo& ci);            // the C__kama_as_I instances
     // (I){ (void*)&<obj>, &<C>__as_I } — wrap a concrete lvalue as an interface value
     std::string fatPointer(const std::string& iface, const std::string& concrete, const std::string& addrExpr);
     // `site` is the method-NAME identifier at the call, for the reference index (M6 B3c) — the same
@@ -3716,7 +3723,7 @@ private:
                                   const char* opName, int line);
     std::string idTypeName(const std::string& ct);       // the name a diagnostic gives an identity-bearing type
     bool classDeclaresContract(const std::string& cls, const std::string& itf);
-    // Contracts a class needs a `C__as_I` vtable for — its own plus every one reached through a base — and
+    // Contracts a class needs a `C__kama_as_I` vtable for — its own plus every one reached through a base — and
     // whether an inherited one was declared static-only by whichever class in the chain declared it.
     std::vector<std::string> contractsToEmitFor(const ClassInfo& ci) const;
     bool contractIsStaticOnlyFor(const ClassInfo& ci, const std::string& itf) const;   // itf on `cls` or any base
@@ -4490,7 +4497,7 @@ private:
     // the caller degrades to a bare "assertion failed". Reusable for future compiler diagnostics.
     std::string unparseExpr(SharedExpression expr);
     // Operator overloading. `operatorMangle` maps a token + arity-class (0=unary, ≥1=binary)
-    // to a stable C-safe method name (`op_add`, `op_neg`, …), "" if the op has no such form.
+    // to a stable C-safe method name (`kama_op_add`, `kama_op_neg`, …), "" if the op has no such form.
     // `operatorParamList` synthesizes a ParameterList from an operator declarator's param1/param2 so
     // all normal method machinery (paramListC, paramSigsOf, emitMethodOrCtorBody) is reused verbatim.
     int         operatorTokenOf(const std::string& spelling);   // source spelling -> token (friend grants)

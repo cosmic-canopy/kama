@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-318 | *Claimed: Windows box, 2026-11-04.* **A user's name meets a name kama writes for itself** — kama joins what it generates onto a type's C name in the user's own lane (`T__dtor`, `T__vdrop`, `T__vtable`, an enum's copy, the graph-serde helpers, a contract's `C_vtbl`), so a method `dtor` beside `~R()`, a method `vdrop` or `vtable` on a virtual class, a `ctor copy` on an owning enum and a type `Shape_vtbl` beside contract `Shape` are clang errors, and a method `op_add` beside `operator+` is refused as a duplicate operator; since `0.9.847` a variant `dtor(…)`, or `equals` under `@generate(Equatable)`, is a clang error too (measured `0.9.847`). **Ruled 2026-11-04:** everything kama names on a type moves to a `__kama_` lane, and a derived method counts as a member | M | [§2](ROADMAP_DETAIL.md#s2-kama-lane) |
 | KR-319 | **A type named like a generic instance's key is that instance** — `Pair<int32>`'s key is `Pair_int32`, so beside `type value Pair<T>` a `type value Pair_int32` resolves to the instance: `Pair_int32.make()` asks for `Pair<int32>`'s argument and its own field is "no field" (measured `0.9.847`). The key is a `_` join of names a user can spell | — | [§2](ROADMAP_DETAIL.md#s2-instance-key) |
 
 ## NOW — the next features, in build order

@@ -1,0 +1,72 @@
+// KR-318: a name a user declares on a type and a name kama writes for itself on it were both `<Type>__<name>` in C,
+// so a member named after one of kama's met it: a method `dtor` beside `~R()` (clang: conflicting types for
+// `R__dtor`), a variant `dtor` of an owning enum, `vdrop`/`vsize`/`vtable` on a virtual class, a type
+// `Base_vtable` beside a class's vtable type, a `ctor copy` on an enum whose copy kama derives, a type `Shape_vtbl`
+// beside a contract, `as_Shape` on an implementor and `op_add` beside `operator+` (kama: "duplicate operator").
+// Every name kama chooses is now `<Type>__kama_<what>`, a lane no declared name can enter: each of these builds.
+type contract Shape for value { fn int32 area(); }
+
+type resource R {
+    int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    ~R() { }
+    public fn int32 dtor() { return this.n; }
+}
+
+type virtual(maxDepth: 1) resource Base {
+    int32 a;
+    public ctor make(int32 a) { this.a = a; }
+    public fn int32 get() { return this.extra(); }
+    public fn int32 vdrop() { return 1; }
+    public fn int32 vsize() { return 1; }
+    public fn int32 valign() { return 1; }
+    public fn int32 vtable() { return 1; }
+    protected virtual fn int32 extra() { return this.a; }
+}
+type value Base_vtable { public int32 n; public ctor make() { this.n = 1; } }
+type value Base_vtbl { public int32 n; public ctor make() { this.n = 1; } }
+
+type enum E { dtor(string s), tag(int32 t), Nil; public ctor make() { return E::Nil; } }
+type enum F { A(string s), B; public ctor copy() { return F::B; } }
+
+type value Sq implements Shape {
+    int32 s;
+    public ctor make(int32 s) { this.s = s; }
+    public fn int32 area() { return this.s * this.s; }
+    public fn int32 as_Shape() { return 1; }
+}
+type value Shape_vtbl { public int32 n; public ctor make() { this.n = 1; } }
+
+type value V {
+    public int32 n;
+    public ctor make(int32 n) { this.n = n; }
+    public fn int32 op_add() { return 1; }
+    public This operator+(This rhs) { return V.make(n: this.n + rhs.n); }
+}
+
+fn uint8 main() {
+    int32 sum = 0;
+    R r = R.make(n: 1);
+    sum = sum + r.dtor();                                                           // 1
+    Base b = Base.make(a: 1);
+    sum = sum + b.get() + b.vdrop() + b.vsize() + b.valign() + b.vtable();          // 6
+    sum = sum + Base_vtable.make().n + Base_vtbl.make().n;                          // 8
+    E e = E::dtor(s: "x");
+    E e2 = copy e;
+    int32 m1 = match (e2) { case dtor(s: x): cast<int32>(x.length()); case _: 0; };
+    sum = sum + m1;                                                                 // 9
+    E t = E::tag(t: 1);
+    int32 m2 = match (t) { case tag(t: x): x; case _: 0; };
+    sum = sum + m2;                                                                 // 10
+    F f = F.copy();
+    F g = copy f;
+    int32 m3 = match (g) { case B: 1; case _: 0; };
+    sum = sum + m3;                                                                 // 11
+    Sq q = Sq.make(s: 2);
+    Owned<Shape> o = new Sq.make(s: 2);
+    sum = sum + q.as_Shape() + Shape_vtbl.make().n + o.area() - 4;                  // 13
+    V v = V.make(n: 1);
+    V w = v + v;
+    sum = sum + w.n + v.op_add();                                                   // 16
+    return cast<uint8>(sum - 16);
+}

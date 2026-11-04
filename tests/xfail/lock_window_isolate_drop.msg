@@ -1,1 +1,1 @@
-`std::concurrent::Isolate::dtor`, which waits
+`std::concurrent::Isolate::kama_dtor`, which waits

@@ -1,1 +1,1 @@
-`Shape.dtor [Square]` -> `Square::dtor`
+`Shape.kama_dtor [Square]` -> `Square::kama_dtor`
