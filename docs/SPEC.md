@@ -4844,7 +4844,7 @@ language server, never a line on stderr.
 ### How far an expression may go
 
 kama accepts or refuses a source the same way on every machine: the answer does not depend on the host's stack, on
-`ulimit`, or on which C compiler is installed, and `kama check` and `kama build` give the same one. Two limits say so,
+`ulimit`, or on which C compiler is installed, and `kama check` and `kama build` give the same one. Three limits say so,
 each with a message that names it:
 
 - **A chain holds at most 10,000 links on its deepest path** (<!-- test: xfail/expr_chain_too_long -->). Each operator,
@@ -4853,6 +4853,8 @@ each with a message that names it:
 - **An expression nests at most 400 levels in the C it lowers to** (<!-- test: xfail/expr_nest_too_deep -->,
   <!-- test: expr_nest_limit -->). A chain of arithmetic, logic or a value type's calls nests a level a link. A `string`
   chain does not: each link is a C statement of its own, so only the first limit applies to it.
+- **The parser's stack holds 1,200 grammar symbols** (<!-- test: xfail/parser_stack_depth -->): about 195 `else if` arms,
+  290 nested calls or 1,180 nested blocks.
 
 Past any of them, split the expression across statements or move the inner part into a function.
 

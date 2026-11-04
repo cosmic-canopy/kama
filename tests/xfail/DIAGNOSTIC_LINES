@@ -1185,6 +1185,7 @@ parks_on_extern	parks_on_extern.kama:3:7
 parks_on_fnptr	parks_on_fnptr.kama:2:7
 parks_on_static	parks_on_static.kama:2:0
 parks_with_args	parks_with_args.kama:2:0
+parser_stack_depth	parser_stack_depth.kama:202:33
 pin_conformance_concrete	pin_conformance_concrete.kama:7:29
 pin_keyword_typo	pin_keyword_typo.kama:3:26
 pin_not_first	pin_not_first.kama:3:0

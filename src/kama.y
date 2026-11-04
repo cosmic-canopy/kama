@@ -17,7 +17,8 @@
  * buffer, buffer-parse moved 11.6 -> 12.1 ms — real, not noise, and worth 0.5 ms out of an 85 ms
  * analysis to stop lying to anyone with deeply nested code. Raise it deliberately, not to a huge
  * number: 1200 clears 200 nested ifs with room to spare (verified), which is far past hand-written
- * code and into generated-code territory. */
+ * code and into generated-code territory. Past it, yyerror says what happened in place of Bison's
+ * "memory exhausted". */
 #define YYINITDEPTH 1200
 #include <memory>
 #include <string>
@@ -3020,6 +3021,11 @@ int yyerror(YYLTYPE* llocp, yyscan_t scanner, const char *msg)
     // %locations gives the error's precise start (the offending token), better than the lexer counter.
     int line = llocp ? llocp->first_line : data->codeGenContext->line;
     int col  = llocp ? llocp->first_column : data->codeGenContext->col;
+    // The one way Bison runs out of memory here is its stack reaching YYINITDEPTH (see the note at the top), and
+    // its word for that tells the reader nothing about their program.
+    if (msg && !strcmp(msg, "memory exhausted"))
+        msg = "this nests deeper than kama's parser holds, which is 1,200 grammar symbols: about 195 `else if` arms or "
+              "290 nested calls; split it up, or move the inner part into a function";
     return data->codeGenContext->handleError(line, col, "Parse", msg ? msg : "");
 }
 
