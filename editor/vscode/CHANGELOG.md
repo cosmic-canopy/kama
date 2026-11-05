@@ -13,6 +13,15 @@ a change that never touched the editor. Compiler changes are in the
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions are
 [Semantic Versioning](https://semver.org/) — the Marketplace requires a strict `major.minor.patch`.
 
+## [0.9.10] — 2026-11-04
+
+### Changed
+
+- **The debugger reads kama's new names for generic types.** From kama 0.9.850 an instance such as `Pair<int32>` reaches C as
+  `Pair__kama_of__int32__kama_end` (it was `Pair_int32`, which a type you named `Pair_int32` could collide with). The call
+  stack, the variables and the breakpoints show it as `Pair<int32>`, and a program built by an earlier compiler still reads
+  as before.
+
 ## [0.9.9] — 2026-11-03
 
 ### Fixed

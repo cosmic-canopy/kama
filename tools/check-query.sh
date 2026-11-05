@@ -914,7 +914,7 @@ expect --project --refs 17:16 -- "use.kama:18:16"
 
 FIXTURE="$ROOT/tests/query/generics/src/use.kama"
 # From the call site: go-to-definition lands on the template's declaration, not on any instance, and hover
-# names the member through the TEMPLATE (`Box.get`, never `Box_int32.get`).
+# names the member through the TEMPLATE (`Box.get`, never the instance's `Box__kama_of__int32__kama_end.get`).
 expect --project --def 13:17  -- "lib.kama:17:16"
 expect --project --type 13:17 -- "method Box.get"
 expect --project --def 12:7   -- "lib.kama:15:13"

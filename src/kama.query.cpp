@@ -529,8 +529,9 @@ void CEmitter::buildDefSites()
 
     auto bareOf = [](const SharedIdentifier& id, const std::string& key) -> std::string {
         if (id && id->value) return *id->value;                 // the source spelling, when we have the name id
-        auto p = key.rfind("__");                               // else demangle the trailing segment
-        return p == std::string::npos ? key : key.substr(p + 2);
+        const std::string t = instanceTemplate(key);           // else demangle the trailing segment
+        auto p = t.rfind("__");
+        return p == std::string::npos ? t : t.substr(p + 2);
     };
 
     // A type's members. Methods + ctors share the type's owning unit (their nodes aren't top-level decls).
@@ -2210,8 +2211,18 @@ std::string CEmitter::spellTypeIn(const std::string& ownerKey, const SharedIdent
         // An INTRINSIC member's type node is synthesized from an already-mangled name (a smart pointer's
         // `deref` returns `ns__Node`); a user-written node holds the source spelling and has no `__`, so
         // stripping the namespace prefix is a no-op there. Same convention as buildDefSites' bareOf.
-        std::string out = *id->value;
-        { size_t sep = out.rfind("__"); if (sep != std::string::npos) out = out.substr(sep + 2); }
+        // An instance's key reads by its markers (KR-319): `ns__Box__kama_of__int32__kama_end` is `Box<int32>`.
+        std::function<std::string(const std::string&)> leaf = [&](const std::string& k) {
+            std::string tmpl, rest; std::vector<std::string> args;
+            if (splitInstance(k, tmpl, args, rest)) {
+                std::string s = leaf(tmpl) + "<";
+                for (size_t i = 0; i < args.size(); ++i) s += (i ? ", " : "") + leaf(args[i]);
+                return s + ">";
+            }
+            size_t sep = k.rfind("__");
+            return sep == std::string::npos ? k : k.substr(sep + 2);
+        };
+        std::string out = leaf(*id->value);
         if (id->genericArgs && !id->genericArgs->empty()) {
             out += "<";
             for (size_t i = 0; i < id->genericArgs->size(); ++i) out += (i ? ", " : "") + spell((*id->genericArgs)[i]);

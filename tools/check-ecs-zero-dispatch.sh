@@ -26,8 +26,16 @@ P="kF_$(basename "$SRC" .kama | tr -c 'A-Za-z0-9_\n' '_')"
 
 fail=0
 # 1. the contract-bounded generic monomorphized, and calls Timer__tick DIRECTLY
-if grep -q "${P}__tickAll__${P}__Timer" "$tmp/ecs.c"; then
-    body=$(sed -n "/^static int32_t ${P}__tickAll__${P}__Timer/,/^}/p" "$tmp/ecs.c")
+# The instance is found by what `kama demangle` says it is, `tickAll<Timer>`, never by its C name spelled
+# here: the instance's spelling changed too (`…__tickAll__kF_ecs_pattern__Timer` until 0.9.850), and a name
+# written into this guard went stale the same way the prefix did. The range starts at the definition (its
+# line ends `)`), not the prototype (`);`), which would run on into whatever function follows it.
+inst=""
+for n in $(grep -oE "^static int32_t ${P}__tickAll[A-Za-z0-9_]*\(" "$tmp/ecs.c" | sed 's/^static int32_t //; s/($//' | sort -u); do
+    [ "$("$KAMA" demangle "$SRC" -- "$n")" = "tickAll<Timer>" ] && inst=$n
+done
+if [ -n "$inst" ]; then
+    body=$(sed -n "/^static int32_t ${inst}(.*)\$/,/^}/p" "$tmp/ecs.c")
     if echo "$body" | grep -q "${P}__Timer__tick("; then
         echo "  ok: contract bound monomorphized to a DIRECT call (Timer__tick)"
     else

@@ -5,10 +5,10 @@
 // readable stacks. Two things it cannot reach, and they are what this file is for:
 //
 //   * a LOCAL's name. `frame variable` prints the DWARF name and LLDB has no hook to rewrite it.
-//   * the GENERIC ARGUMENTS in a frame name. The LLDB hook is lexical — `Pair_int32::make` — because
-//     rendering `Pair<int32>::make` needs the resolved program, which only `kama demangle` has. So
-//     this layer upgrades what that one produced rather than replacing it, and the table is indexed
-//     by BOTH spellings so the two meet.
+//   * the DROPPED DEFAULTS in a frame name. The LLDB hook is lexical — `DynamicArray<int32,
+//     kama::GlobalAllocator>::add` — because leaving out an argument at its default needs the resolved
+//     program, which only `kama demangle` has. So this layer upgrades what that one produced rather than
+//     replacing it, and the table is indexed by BOTH spellings so the two meet.
 //
 // Both require sitting between VS Code and the debug adapter and editing the DAP traffic.
 //
@@ -24,8 +24,8 @@ const path = require('path');
 // ---------------------------------------------------------------------------------------------------
 
 // A mangled name is turned back by `kama demangle`, which runs the compiler's front end — the only
-// thing that can render `std__collections__DynamicArray_int32_kama__GlobalAllocator` as
-// `DynamicArray<int32>`, because the argument spellings and the dropped default live in the resolved
+// thing that can render `std__collections__DynamicArray__kama_of__int32__kama_and__kama__GlobalAllocator__kama_end`
+// as `DynamicArray<int32>`, because the argument spellings and the dropped default live in the resolved
 // program, not in the text of the name.
 //
 // ⚠️ IT MUST BE BUILT UP FRONT, not asked per stop. `onDidSendMessage` is synchronous — there is
@@ -35,9 +35,15 @@ const path = require('path');
 // front-loaded into session start, because the place the names are needed cannot wait.
 //
 // `lexical` is the fallback for a name the table never saw, and it exists because the mangling is
-// reversible BY CONSTRUCTION (SPEC § *C names*): strip exactly one `k_`, drop a scope prefix. It cannot
-// render generic arguments — that is what the table is for — but it is never wrong about the register,
-// and it means a name the analysis missed still reads better than raw C.
+// reversible BY CONSTRUCTION (SPEC § *C names*): strip exactly one `k_`, drop a scope prefix, and read a
+// generic instance's markers as its brackets (kama 0.9.850): `Pair__kama_of__int32__kama_end` is
+// `Pair<int32>`. It cannot drop a defaulted argument — that is what the table is for — but it is never
+// wrong about the register, and it means a name the analysis missed still reads better than raw C. A
+// compiler before 0.9.850 joined an instance with `_` (`Pair_int32`), which this leaves as it is.
+function brackets(s) {
+  return s.replace(/__kama_of__/g, '<').replace(/__kama_and__/g, ', ').replace(/__kama_end/g, '>').replace(/__/g, '::');
+}
+
 function lexical(name) {
   if (typeof name !== 'string' || !name) return name;
   let s = name;
@@ -49,13 +55,13 @@ function lexical(name) {
   // `k_F` is the spelling before kama 0.9.818, read for a compiler that is pinned or not yet updated, since
   // the extension updates by itself and the compiler does not. KR-305 retires it.
   const fileScoped = /^(?:kF_|k_F)[A-Za-z0-9_]+?__(.+)$/.exec(s);
-  if (fileScoped) return fileScoped[1].replace(/__/g, '::');
+  if (fileScoped) return brackets(fileScoped[1]);
   // A scoped package heads its names with `kS_<scope>__<name>__`, which reads back as `@scope/name`.
   const scoped = /^kS_([A-Za-z0-9_]+?)__([A-Za-z0-9_]+?)(?:__(.+))?$/.exec(s);
-  if (scoped) return '@' + scoped[1] + '/' + scoped[2] + (scoped[3] ? '::' + scoped[3].replace(/__/g, '::') : '');
-  if (s.startsWith('kama__')) return s.slice(6).replace(/__/g, '::');
+  if (scoped) return '@' + scoped[1] + '/' + scoped[2] + (scoped[3] ? '::' + brackets(scoped[3]) : '');
+  if (s.startsWith('kama__')) return brackets(s.slice(6));
   if (s.startsWith('k_')) return s.slice(2);
-  return s.replace(/__/g, '::');
+  return brackets(s);
 }
 
 // Build the lookup used for the whole session. `answers` maps a mangled spelling to what `kama
@@ -65,7 +71,7 @@ function makeTable(answers) {
   // ⚠️ ALSO index by the LEXICAL form, because the name may already be half-demangled by the time it
   // gets here. `include/kama_lldb.py` renames frames LLDB-side, which is what gives a plain `lldb` and
   // every non-VS-Code editor a readable call stack — so a `stackTrace` response can arrive carrying
-  // `Pair_int32::make` rather than `kF_app__Pair_int32__make`. Keyed only by the mangled spelling, the
+  // `Pair<int32>::make` rather than `kF_app__Pair__kama_of__int32__kama_end__make`. Keyed only by the mangled spelling, the
   // lookup would miss and the generic arguments would never be rendered: the LLDB layer's floor would
   // silently become the ceiling. The two layers have to meet on a common key.
   const alias = new Map();
@@ -87,7 +93,7 @@ function makeTable(answers) {
   return {
     name: one,
     frame: one,
-    // A type as the debugger spells it may be a pointer (`kama__Optional_string *`) or otherwise
+    // A type as the debugger spells it may be a pointer (`kama__Optional__kama_of__string__kama_end *`) or otherwise
     // decorated; rewrite the identifier and leave the decoration alone.
     type: (t) => (typeof t === 'string' ? t.replace(/[A-Za-z_][A-Za-z0-9_]*/g, (tok) => one(tok)) : t),
     // The REQUEST direction. A user types `near.value` in the watch box; the adapter must be asked

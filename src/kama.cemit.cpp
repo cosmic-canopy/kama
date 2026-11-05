@@ -290,8 +290,8 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
 
         auto gi = _genericTypeInsts.find(tok);
         if (depth < 4 && gi != _genericTypeInsts.end()) { out += renderInstance(gi->second); continue; }
-        // ...and a generic CONTRACT instance, which that table does not hold: `kama__Comparable_string` is
-        // `Comparable<string>`, and a message naming it read "comes from the contract `Comparable_string`".
+        // ...and a generic CONTRACT instance, which that table does not hold: `kama__Comparable__kama_of__string__kama_end`
+        // is `Comparable<string>`, and a message naming it read "comes from the contract `Comparable_string`".
         GenericTypeInst gc;
         if (depth < 4 && contractInstOf(tok, gc)) { out += renderInstance(gc); continue; }
 
@@ -312,6 +312,20 @@ std::string CEmitter::demangleForDisplay(const std::string& msg, int depth, bool
                 }
             if (owner) {
                 out += renderInstance(*owner) + "::" + demangleForDisplay(tok.substr(cut + 2), depth + 1);
+                continue;
+            }
+        }
+        // Any other instance — a generic function's (`max__kama_of__int32__kama_end` is `max<int32>`), or one no table
+        // holds — reads by its markers alone (KR-319): the template, each argument, then the member after it, if any.
+        {
+            std::string tmpl, rest;
+            std::vector<std::string> args;
+            if (depth < 4 && splitInstance(tok, tmpl, args, rest)) {
+                std::string s = demangleForDisplay(tmpl, depth + 1) + "<";
+                for (size_t a = 0; a < args.size(); ++a) s += (a ? ", " : "") + demangleForDisplay(args[a], depth + 1);
+                s += ">";
+                if (rest.size() > 2 && rest.compare(0, 2, "__") == 0) s += "::" + demangleForDisplay(rest.substr(2), depth + 1);
+                out += s + (rest.size() > 2 && rest.compare(0, 2, "__") == 0 ? "" : rest);
                 continue;
             }
         }
@@ -4494,21 +4508,18 @@ std::string CEmitter::cType(SharedIdentifier type)
         return isConstRawPtrName(*type->value) ? base + " const*" : base + "*";
     }
 
-    // `InlineArray<T,N>` spells `InlineArray_<mangleT>_<N>`, and `Simd<T,N>` spells `Simd_<mangleT>_<N>` —
-    // the same two-argument shape (the comptime size mangles to its value), so one arm serves both.
+    // `InlineArray<T,N>` spells `instanceName("InlineArray", {T, N})`, and `Simd`, `Mask` and `InlineStorage` the
+    // same — one two-argument shape (the comptime size mangles to its value), so one arm serves all four.
     if (type->genericArg && type->value && type->genericArgs
         && (*type->value == "InlineArray" || *type->value == "Simd" || *type->value == "Mask"
-            || *type->value == "InlineStorage")) {
-        std::string m = *type->value;
-        for (auto& a : *type->genericArgs) m += "_" + mangleElem(a);
-        return m;
-    }
+            || *type->value == "InlineStorage"))
+        return instanceOf(*type->value, *type->genericArgs);
     // `BindableFunctionPtr<Sig>` spells its mangled struct name. (DynamicArray AND FixedArray are library
     // generic types now — std::collections — and smart pointers likewise; they flow through the generic-type
     // arm below.)
     if (type->genericArg && type->value && *type->value == "BindableFunctionPtr")
-        return *type->value + "_" + mangleElem(type->genericArg);
-    // a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box_int32`).
+        return instanceName(*type->value, { mangleElem(type->genericArg) });
+    // a user generic TYPE (`Box<int32>`) spells its specialized struct name (`Box__kama_of__int32__kama_end`).
     // Reached only for a non-reserved name with a type arg; under _typeSubst the arg's `T` resolves.
     if (type->genericArg && type->value) {   // genericArg mirrors genericArgs[0] (non-null iff there are args)
         std::string tmpl = resolveUserName(*type->value, type->qualifier, type.get());
@@ -6669,7 +6680,7 @@ std::string CEmitter::emitExpressionNode(SharedExpression expr)
             if (!src.empty() && _classes.count(src) && !isEnum(src)) {
                 if (opaqueScalarUnknown(src)) return "0";   // an opaque param — see the header
                 // Name it the way it was WRITTEN: a generic instance's `_classes` key is its MANGLED name
-                // (`InlineArray_uint8_4`), and a diagnostic naming a mangled type sends the reader looking
+                // (`InlineArray<uint8>#(4)`), and a diagnostic naming a mangled type sends the reader looking
                 // for a spelling that is not in their file. The operand's declared type node carries the
                 // spelling; the template key answers for the instance shapes that have no node here.
                 std::string srcName;
@@ -9336,7 +9347,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
                     if (iv->identifier && iv->identifier->value && isClass(ty)) {
                         std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
                         // `Box<int32> b = Box(v: 7)` — the ctor names the bare template `Box`, but
-                        // the declared type is the instance `Box_int32`; accept the template→instance match.
+                        // the declared type is the instance `Box<int32>`; accept the template→instance match.
                         auto g = _genericTypeInstOf.find(ty);
                         if (rn == ty || (g != _genericTypeInstOf.end() && g->second == rn))
                             stackCtor = iv;
@@ -10787,7 +10798,7 @@ void CEmitter::emitStatementBody(SharedStatement stmt, int depth)
             bool isArrayLit = dynamic_cast<ArrayLiteralNode*>(r) != nullptr;
             bool isVariantCtor = false;
             // A dot-on-type ctor call on a GENERIC template (`x = Map.empty()`) is value-producing and needs
-            // the LHS instance threaded so emitDotOnTypeCtorCall can resolve `Map` -> `Map_int32_int32` by LHS
+            // the LHS instance threaded so emitDotOnTypeCtorCall can resolve `Map` -> `Map<int32, int32>` by LHS
             // inference — the same channel a local-decl uses. (A concrete-type ctor needs no threading.) #M8d.2
             bool isDotCtor = false;
             if (!isMatch && !isArrayLit) {
@@ -11132,7 +11143,7 @@ std::string CEmitter::mangledFunctionName(FunctionDeclarationNode* fn, bool& isE
 
 // A `ParamSig::className` is mangled when the signature is REGISTERED, which is during unit collection —
 // and a `comptime` module constant only the INTERPRETER can fold (a `comptime fn` call) is not folded yet, so
-// `InlineArray<isize>#(MAX_CREW)` mangles to `InlineArray_isize_MAX_CREW`, the constant's NAME. The
+// `InlineArray<isize>#(MAX_CREW)` mangles to `InlineArray__kama_of__isize__kama_and__MAX_CREW__kama_end`, the constant's NAME. The
 // function's own prototype is fine, because `paramListC` re-`cType`s the AST node at EMIT time, by which
 // point the constant is known — so one instantiation ends up spelled two ways, and the CALL SITE's cast
 // (which reads `className`) names a type nothing declares. Found in a
@@ -11234,9 +11245,9 @@ std::vector<ParamSig> CEmitter::paramSigsOf(SharedParameterList params)
 }
 
 // A generic call used to reorder its arguments off the TEMPLATE's signature, whose `className`s are the
-// symbolic spellings (`std__collections__ConstView_T`). Every per-argument rule in emitReorderedCall keys on
+// symbolic spellings (`std__collections__ConstView__kama_of__T__kama_end`). Every per-argument rule in emitReorderedCall keys on
 // that C type — the kind rule, the identity rule, and the `View<X>` → `ConstView<X>` narrowing, which is
-// what found this: `isSorted(items: v)` narrowed nowhere because `ConstView_T` names no instance. Bind the
+// what found this: `isSorted(items: v)` narrowed nowhere because `ConstView<T>` names no instance. Bind the
 // instantiation's arguments exactly as emitGenericInst does, and the call site sees what the callee's
 // prototype says. Saved and restored around the binding: the caller may itself be an instantiation mid-walk.
 const std::vector<ParamSig>& CEmitter::instParamSigs(const GenericInst& gi)
@@ -14477,7 +14488,7 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
         case IDENTIFIER_FLOAT32_VAL: return "float32";
         case IDENTIFIER_FLOAT64_VAL: return "float64";
         // The size types mangle by their KAMA spelling, not their C one — a container instance is
-        // `DynamicArray_isize`, never `DynamicArray_ptrdiff_t`. These were a string test ahead of this
+        // `DynamicArray<isize>`'s argument is `isize`, never `ptrdiff_t`. These were a string test ahead of this
         // switch until 0.9.136, because they carried no `builtInVal` and `default:` handed them to
         // `resolveUserName`, which does not answer for a primitive: the suffix came back empty and the
         // call site emitted an UNMANGLED `std__ptr__relocate(...)`, which C rejects as an implicit
@@ -14504,16 +14515,16 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
             std::string base = resolveUserName(*elem->value, elem->qualifier, elem.get());
             // A generic INSTANCE (`Shared<C>`, `DynamicArray<int32>`) mangles through genericTypeMangle so
             // its DEFAULT type params + named overrides fill EXACTLY as in cType — a partially-applied
-            // `Shared<C>` becomes `Shared_C_GlobalAllocator` (not `Shared_C`), matching the class struct
+            // `Shared<C>` becomes `Shared<C, GlobalAllocator>` (not `Shared<C>`), matching the class struct
             // name. Else a nested `Optional<Shared<C>>` name (built here in registerGenericTypeInst) would
             // diverge from its filled body → two incompatible C structs. (M8 default-fill; latent until a
             // smart pointer with a defaulted param was nested in a generic.)
             if (elem->genericArgs && (_genericTypes.count(base) || _genericContracts.count(base)))
                 return genericTypeMangle(base, elem->genericArgs);
-            // recurse into a nested generic arg so `Shared<Circle>` mangles to
-            // `Shared_Circle` (not just `Shared`) — fixes the `List<Shared<Circle>>` collision.
-            if (elem->genericArgs) for (auto& a : *elem->genericArgs) base += "_" + mangleElem(a);
-            else if (elem->genericArg) base += "_" + mangleElem(elem->genericArg);
+            // recurse into a nested generic arg so `UnsafePtr<Circle>` mangles as an instance over `Circle`
+            // (not just `UnsafePtr`) — fixes the `List<UnsafePtr<Circle>>` collision.
+            if (elem->genericArgs) return instanceOf(base, *elem->genericArgs);
+            if (elem->genericArg) return instanceName(base, { mangleElem(elem->genericArg) });
             // A bare all-defaulted generic (`BitSet` == `BitSet<GlobalAllocator>`) mangles to its
             // defaulted instance name, matching cType (so a `DynamicArray<BitSet>` element mangles right).
             else if ((_genericTypes.count(base) || _genericContracts.count(base)) && allTypeParamsDefaulted(base))
@@ -14523,9 +14534,16 @@ std::string CEmitter::mangleElem(SharedIdentifier elem)
     }
 }
 
-// the mangled struct name for `Pair<A, B, …>` — the template's scoped name + one "_<mangle>"
-// suffix per type arg. `mangleElem` resolves a bound `T` under _typeSubst, so this is used identically
+// the mangled struct name for `Pair<A, B, …>` — `instanceName` over the template's scoped name and each
+// argument's mangle. `mangleElem` resolves a bound `T` under _typeSubst, so this is used identically
 // at discovery (concrete args), at cType (field/decl args under subst), and to name the specialized ClassInfo.
+std::string CEmitter::instanceOf(const std::string& tmpl, const std::vector<SharedIdentifier>& args)
+{
+    std::vector<std::string> m;
+    for (auto& a : args) m.push_back(mangleElem(a));
+    return instanceName(tmpl, m);
+}
+
 void CEmitter::positionalizeGenericArgs(const std::vector<std::string>& params,
                                         const std::vector<SharedIdentifier>& defaults,
                                         SharedIdentifierList args,
@@ -14692,7 +14710,7 @@ void CEmitter::registerIntrinsicViews()
             auto bvArgs = std::make_shared<IdentifierList>();
             bvArgs->push_back(ret);
             registerGenericContractInst(bk, bvArgs);
-            sci.interfaces.push_back(bk + "_" + mangleElem(ret));
+            sci.interfaces.push_back(instanceOf(bk, { ret }));
         }
     }
     // Collect first: registerGenericTypeInst can register further collections, and mutating
@@ -14743,7 +14761,7 @@ void CEmitter::registerIntrinsicViews()
                 auto vwArgs = std::make_shared<IdentifierList>();
                 vwArgs->push_back(viewRet);
                 registerGenericContractInst(ck, vwArgs);
-                ci.interfaces.push_back(ck + "_" + mangleElem(viewRet));
+                ci.interfaces.push_back(instanceOf(ck, { viewRet }));
             }
         };
         mint("view",    "Viewable",    constTmpl, /*isConst=*/true);
@@ -14764,9 +14782,7 @@ void CEmitter::registerIntrinsicViews()
                 const std::string k = preludeKey(contract);
                 if (!_genericContractParams.count(k)) return;
                 registerGenericContractInst(k, args);
-                std::string n = k;
-                for (auto& a : *args) n += "_" + mangleElem(a);
-                _classes[name].interfaces.push_back(n);
+                _classes[name].interfaces.push_back(instanceOf(k, *args));
             };
             put("bytes", rd, true);
             auto one = std::make_shared<IdentifierList>(); one->push_back(rd);
@@ -14819,7 +14835,7 @@ const std::string& CEmitter::viewTemplateKey()      { return viewTemplateKeyFor(
 const std::string& CEmitter::constViewTemplateKey() { return viewTemplateKeyFor("ConstView"); }
 
 // A generic contract INSTANCE's template and arguments, for spelling it as source does (`Comparable<string>`
-// for `kama__Comparable_string`): a registered one is an interface, one named only by a conformance is
+// for `Comparable<string>`): a registered one is an interface, one named only by a conformance is
 // recorded where resolveInterfaceNames mints it. False for anything else.
 bool CEmitter::contractInstOf(const std::string& key, GenericTypeInst& out) const
 {
@@ -14895,7 +14911,7 @@ std::string CEmitter::genericTypeMangle(const std::string& tmpl, SharedIdentifie
         }
     }
 
-    std::string m = tmpl;
+    std::vector<std::string> m;
     static const std::vector<SharedIdentifier> noDefs;
     if (params && !params->empty()) {
         std::vector<SharedIdentifier> full; std::vector<bool> isDefault;
@@ -14904,16 +14920,16 @@ std::string CEmitter::genericTypeMangle(const std::string& tmpl, SharedIdentifie
             if (!full[i]) continue;                              // unbound required param — invalid; registration reports
             if (isDefault[i] && homeCtx) {                       // mangle the default under its home ctx
                 NsCtx saved = _nsCtx; _nsCtx = *homeCtx;
-                m += "_" + mangleElem(full[i]);
+                m.push_back(mangleElem(full[i]));
                 _nsCtx = saved;
             } else {
-                m += "_" + mangleElem(full[i]);
+                m.push_back(mangleElem(full[i]));
             }
         }
-        return m;
+        return instanceName(tmpl, m);
     }
-    if (args) for (auto& a : *args) m += "_" + mangleElem(a);   // fallback: params unknown — raw args
-    return m;
+    if (args) return instanceOf(tmpl, *args);   // fallback: params unknown — raw args
+    return tmpl;
 }
 
 bool CEmitter::isCollectionType(SharedIdentifier t) const
@@ -15174,7 +15190,7 @@ void CEmitter::registerFixed(SharedIdentifier fixedType)
         return;
     }
 
-    std::string cName = "InlineArray_" + elemMangle + "_" + std::to_string(n);
+    std::string cName = instanceName("InlineArray", { elemMangle, std::to_string(n) });
     if (_collections.count(cName)) return;    // dedup
 
     CollectionInfo info;
@@ -15308,7 +15324,7 @@ void CEmitter::registerStorage(SharedIdentifier storageType)
                      "layout — hold `Owned<" + nm + ">` or `Shared<" + nm + ">` places instead").c_str(), storageType);
         return;
     }
-    const std::string cName = "InlineStorage_" + elemMangle + "_" + std::to_string(n);
+    const std::string cName = instanceName("InlineStorage", { elemMangle, std::to_string(n) });
     if (_collections.count(cName)) return;
     CollectionInfo info;
     info.kind = CollKind::Storage; info.cName = cName;
@@ -15405,7 +15421,7 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
         return;
     }
 
-    std::string cName = "Simd_" + elemMangle + "_" + std::to_string(n);
+    std::string cName = instanceName("Simd", { elemMangle, std::to_string(n) });
     if (_collections.count(cName)) return;    // dedup
 
     CollectionInfo info;
@@ -15468,19 +15484,19 @@ void CEmitter::registerSimd(SharedIdentifier simdType)
     // exists at all. Registered here so dispatch resolves them; the CALL is intercepted in emitDispatch
     // and folded to `__builtin_shufflevector`, because the lane indices must be literals.
     ParamSig pat; pat.name = "pattern"; pat.byRef = false;
-    pat.kindCType = "InlineArray_int32_" + std::to_string(n);
+    pat.kindCType = instanceName("InlineArray", { "int32", std::to_string(n) });
     addMethod("shuffle", { pat }, simdType, true);
     addMethod("blend",   { rhs, pat }, simdType, true);
     // ⚠️ The pattern's `InlineArray<int32, N>` is deliberately NOT registered. The literal is folded to
     // lane indices at the call and never reaches runtime, so registering it would emit an
-    // `InlineArray_int32_N` struct plus its five bounds-checked accessors into every program that uses a
+    // `InlineArray<int32>#(N)` struct plus its five bounds-checked accessors into every program that uses a
     // `Simd` and reference none of them. The ParamSig above names the type for arity/kind matching, which
     // is all the dispatch path needs before emitSimdShuffle takes over.
 
     // The MASK partner. Registered here rather than on first use of `Mask<T,N>` because the comparisons
     // that produce one live on this type, so the pair is always needed together — and because a mask's C
     // lane width is derived from T, which is known here and nowhere cheaper.
-    const std::string mName = "Mask_" + elemMangle + "_" + std::to_string(n);
+    const std::string mName = instanceName("Mask", { elemMangle, std::to_string(n) });
     SharedIdentifier mTy = synthId("Mask");
     {
         SharedIdentifierList mArgs = std::make_shared<IdentifierList>();
@@ -15624,8 +15640,7 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem, const std:
     // a library `Box<Contract>` is routed here under its own mangled name (Rust's `Box<dyn Trait>`);
     // otherwise the built-in Owned/Shared/Weak prefix.
     std::string cName = !customName.empty() ? customName
-                      : (kind == CollKind::Owned  ? "Owned_"
-                       : kind == CollKind::Shared ? "Shared_" : "Weak_") + elemMangle;
+                      : instanceName(kind == CollKind::Owned ? "Owned" : kind == CollKind::Shared ? "Shared" : "Weak", { elemMangle });
     if (_collections.count(cName)) return;      // dedup
 
     CollectionInfo info;
@@ -15636,10 +15651,10 @@ void CEmitter::registerSmartPtr(CollKind kind, SharedIdentifier elem, const std:
     // collection's ELEM_DTOR machinery, so elemDestructible stays false here.
     info.elemDestructible = !elemIface && _classes.count(elemClass) && _classes[elemClass].destructible;
     // The paired instance across Shared<->Weak (conventional prefix by default; a library `Rc`/`RcWeak`
-    // pair overrides this after registration). A Weak upgrades to `Shared_<elem>`; a Shared downgrades to
-    // `Weak_<elem>`.
-    if (kind == CollKind::Weak)        info.ifacePartner = "Shared_" + elemMangle;
-    else if (kind == CollKind::Shared) info.ifacePartner = "Weak_" + elemMangle;
+    // pair overrides this after registration). A Weak upgrades to `Shared<elem>`; a Shared downgrades to
+    // `Weak<elem>`.
+    if (kind == CollKind::Weak)        info.ifacePartner = instanceName("Shared", { elemMangle });
+    else if (kind == CollKind::Shared) info.ifacePartner = instanceName("Weak", { elemMangle });
     _collections[cName] = info;
     _collectionOrder.push_back(cName);
 
@@ -15710,7 +15725,7 @@ void CEmitter::registerBindable(SharedIdentifier elem)
                     elem ? elem->line : 0);
         return;
     }
-    std::string cName = "BindableFunctionPtr_" + mangleElem(elem);
+    std::string cName = instanceName("BindableFunctionPtr", { mangleElem(elem) });
     if (_collections.count(cName)) return;            // dedup
 
     CollectionInfo info;
@@ -15844,7 +15859,7 @@ bool CEmitter::argCarriesUnboundParam(const SharedIdentifier& a)
 // Build one synthetic specialized ClassInfo per `Box<Arg>` (mirrors registerCollection): copy the
 // template shape, rewrite identity (struct name + method cNames), re-derive param signatures under
 // _typeSubst, register in _classes, and transitively scan its substituted member types so a
-// `Box<T>` holding `List<T>` registers `List_int32`. Deduped by the mangled name.
+// `Box<T>` holding `List<T>` registers `List<int32>`. Deduped by the mangled name.
 // See the declaration. Split out of registerGenericTypeInst so the layout walk binds an instance exactly as
 // registration will (KR-94): a fold may measure `Box<uint16>` before discovery has registered it.
 std::vector<SharedIdentifier> CEmitter::concretizeGenericArgs(const std::string& tmpl, const std::vector<SharedIdentifier>& bound,
@@ -16048,8 +16063,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
             }
         }
 
-    std::string mangled = tmpl;
-    for (auto& c : concrete) mangled += "_" + mangleElem(c);
+    const std::string mangled = instanceOf(tmpl, concrete);
     if (_genericTypeInsts.count(mangled)) return;               // dedup
     // ...and a name already registered as a built-in SMART POINTER. A `Shared<Contract>` registers its `Weak`
     // partner that way (below), over the same concrete args, and never as a generic instance — so a later
@@ -16098,10 +16112,9 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
                 if (!weakTmpl.empty()) {
                     // Name the Weak partner over the SAME concrete args as the Shared (element +
                     // allocator/…), so it matches `mangleElem(Weak<…>)` — which fills default type params
-                    // (e.g. `Weak<Shape>` → `Weak_Shape_GlobalAllocator`). Using only the element would
+                    // (e.g. `Weak<Shape>` is `Weak<Shape, GlobalAllocator>`). Using only the element would
                     // diverge from every downstream `Weak<…>` reference.
-                    std::string weakMangled = weakTmpl;
-                    for (auto& c : concrete) weakMangled += "_" + mangleElem(c);
+                    const std::string weakMangled = instanceOf(weakTmpl, concrete);
                     registerSmartPtr(CollKind::Weak, concrete[0], weakMangled);
                     _collections[weakMangled].allocType   = allocTy;       // the Weak frees the ctrl through its own A copy
                     _collections[mangled].ifacePartner    = weakMangled;   // Rc_Shape downgrades to RcWeak_Shape
@@ -16294,7 +16307,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
         if (kv.second.node) for (auto& p : *kv.second.node->params) if (p) scanTypeForCollections(p->type);
     }
     // a generic tagged union (Optional<Shared<T>>) — scan each variant's substituted payload so
-    // the inner `Shared_int32` etc. registers (inner-first) before this instance's dtor references it.
+    // the inner `Shared<int32>` etc. registers (inner-first) before this instance's dtor references it.
     for (auto& v : ci.variants) for (auto& f : v.payload) scanTypeForCollections(f.type);
     // ...and every member BODY, under this instance's substitution (KR-62). collectCollections walks the
     // bodies of a non-generic type and skips a template's, on the premise that this function re-scans the
@@ -16330,7 +16343,7 @@ void CEmitter::registerGenericTypeInst(const std::string& tmpl_, SharedIdentifie
     }
     // A view in a tagged-union PAYLOAD (`Optional<View>`) would let the borrow be stored or returned via
     // the wrapper — the plain-field reject (emitClassStruct) doesn't see a union payload, so catch it here
-    // where the payload type is substituted concrete (`View_int32`, now registered by the scan above). A
+    // where the payload type is substituted concrete (`View<int32>`, now registered by the scan above). A
     // view is local/parameter-only; it can't be wrapped-and-stored.
     // ...which makes the instance a view itself (KR-225 decision 4): stack-only, returnable under the view rule, and
     // matched into view bindings. Only `isBorrow` moves; the kind stays, so a destructible one is still moved. A view
@@ -16614,7 +16627,7 @@ void CEmitter::scanTypeForGenericContracts(SharedIdentifier t)
 // registerGenericTypeInst, minus fields/ctor/dtor): resolve each arg through the active _typeSubst
 // (the nested/transitive case), mangle, dedup, copy the template shape into _interfaces under the
 // specialized name, then transitively scan the substituted method sigs so an inner `Optional<T>`
-// registers `Optional_int32` before this instance's vtable references it.
+// registers `Optional<int32>` before this instance's vtable references it.
 void CEmitter::registerGenericContractInst(const std::string& tmpl_, SharedIdentifierList args)
 {
     const std::string tmpl = preludeKey(tmpl_);   // a compiler-written leaf names a prelude contract
@@ -16626,9 +16639,9 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl_, SharedIdent
     // AND a nested generic arg (`Iterator<Entry<K,V>>` -> `Iterator<Entry<int32,int32>>`); `absolutizeType`
     // pins each name to its home mangle, so a cross-namespace arg (`std::collections::Entry`) keeps its
     // qualified name when the transitive `Optional<T>` scan below runs under the contract's (global) ctx —
-    // without it that scan would register a phantom bare `Optional_Entry_int32_int32` (unqualified, undefined
+    // without it that scan would register a phantom bare `Optional<Entry<int32, int32>>` (unqualified, undefined
     // payload). A shallow "bare-param only" substitution would instead leave `Entry<K,V>` un-monomorphized
-    // (a dangling `Optional_Entry_K_V`). Mirrors registerGenericTypeInst exactly.
+    // (a dangling `Optional<Entry<K, V>>`). Mirrors registerGenericTypeInst exactly.
     // Bind positional + named args, then fill trailing defaults (mirror of registerGenericTypeInst).
     int line = args && !args->empty() && args->front() ? args->front()->line : 0;
     ScopedStr _cu(_collectingUnitPath, _nsCtx.unitPath.empty() ? _collectingUnitPath : _nsCtx.unitPath);
@@ -16652,8 +16665,7 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl_, SharedIdent
         }
     }
 
-    std::string mangled = tmpl;
-    for (auto& c : concrete) mangled += "_" + mangleElem(c);
+    const std::string mangled = instanceOf(tmpl, concrete);
     if (!_genericContractInsts.insert(mangled).second) return;    // dedup (also stops self-recursion)
 
     NsCtx savedCtx = _nsCtx;
@@ -16722,7 +16734,7 @@ void CEmitter::registerGenericContractInst(const std::string& tmpl_, SharedIdent
     }
 
     // transitive close: register any collection / generic type the substituted method sigs use, so
-    // `Optional<T>` -> `Optional_int32` exists (as a complete typedef) before this vtable slot names it.
+    // `Optional<T>` -> `Optional<int32>` exists (as a complete typedef) before this vtable slot names it.
     for (auto& m : ii.methods) {
         scanTypeForCollections(m.returnType);
         if (m.params) for (auto& p : *m.params) if (p) scanTypeForCollections(p->type);
@@ -17080,17 +17092,17 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             scanStmtForCollections(fn->block);
         } else if (auto* cd = dynamic_cast<ClassDeclarationNode*>(decl.get())) {
             // skip a generic TYPE template's members — their types name the raw type params
-            // (`List<T>` would register a bogus `List_T`). Each concrete `Wrap<int32>` reference in
+            // (`List<T>` would register a bogus `List<T>`). Each concrete `Wrap<int32>` reference in
             // the program drives registerGenericTypeInst, which re-scans the specialized members
-            // under _typeSubst (so `List<T>` -> `List_int32`).
+            // under _typeSubst (so `List<T>` -> `List<int32>`).
             if (cd->typeParams && !cd->typeParams->empty()) continue;
             ScopedStr _reader(_constReaderType, qualify(*cd->name->value));   // its members read as it (KR-93)
             // `class C implements Iterator<int32>` — register the specialized contract instance so its
-            // vtable emits (a value/dynamic use of C needs `C__kama_as_Iterator_int32`).
+            // vtable emits (a value/dynamic use of C needs `C__kama_as_Iterator__kama_of__int32__kama_end`).
             // `This` is bound to the declaring type first: a PINNED contract writes its argument as `This`
             // (`implements Comparable<This>`), and this is where that instance is MINTED. Registering it
             // unbound files it under the literal word, so the vtable is defined as `C__kama_as_Comparable_This`
-            // while every use site asks for `C__kama_as_Comparable_C` — a link error, not a diagnostic.
+            // while every use site asks for `C__kama_as_Comparable__kama_of__C__kama_end` — a link error, not a diagnostic.
             if (cd->baseTypes && cd->baseTypes->interfaces) {
                 ScopedStr  _ts(_thisType, qualify(*cd->name->value));
                 ScopedThis _tt(_typeSubst, synthId(qualify(*cd->name->value)));
@@ -17128,7 +17140,7 @@ void CEmitter::collectCollections(SharedCompilationUnit unit)
             // so the payload must register unconditionally.
             //
             // Generic enums are skipped for the same reason generic classes are: their payloads name raw
-            // type params (`Optional<T>` would register a bogus `Shared_T`). Each concrete instance
+            // type params (`Optional<T>` would register a bogus `Shared<T>`). Each concrete instance
             // re-scans its substituted payloads in registerGenericTypeInst.
             if (ed->typeParams && !ed->typeParams->empty()) continue;
             // An enum's `implements` list needs the same treatment as a class's: a generic-contract
@@ -17414,7 +17426,7 @@ SharedIdentifier CEmitter::mintReturnTypeNode(SharedExpression host,
     }
     // An INTRINSIC collection resolves by neither route: `InlineArray<int32,4>` has no template in
     // `_genericTypes` and no `_classes` entry under the bare name — only the monomorphized instance
-    // `InlineArray_int32_4` exists, because registerFixed synthesizes the instance directly. Its C type IS
+    // `InlineArray<int32>#(4)` exists, because registerFixed synthesizes the instance directly. Its C type IS
     // that instance name, so ask for it. Without this an `InlineArray` alias came out of `borrow` untyped
     // and `sortUnstable(items: v)` could not infer `T`, while the same call on a `FixedArray` alias could.
     if (!shape) {
@@ -18006,12 +18018,9 @@ bool CEmitter::inferGenericInst(FunctionDeclarationNode* tmpl, const std::string
 
     out.templateKey = key;
     out.typeArgs.clear();
-    std::string mangled = key;
-    for (auto& tp : *tmpl->typeParams) {
-        SharedIdentifier a = absolutizeType(bind[*tp]);   // use-site mangle — see explicitGenericInst
-        out.typeArgs.push_back(a);
-        mangled += "__" + mangleElem(a);
-    }
+    for (auto& tp : *tmpl->typeParams)
+        out.typeArgs.push_back(absolutizeType(bind[*tp]));   // use-site mangle — see explicitGenericInst
+    const std::string mangled = instanceOf(key, out.typeArgs);
     out.mangledName = mangled;
     if (!boundsOk) _boundFailedInsts.insert(mangled);   // prototype only — see emitGenericInst
     return true;
@@ -18109,12 +18118,8 @@ bool CEmitter::explicitGenericInst(FunctionDeclarationNode* tmpl, const std::str
         if (containsBareCChar(c)) { boundsOk = false; if (_typeSubst.empty()) rejectBareCChar(c, "a type argument", line); }
 
     out.templateKey = key;
-    out.typeArgs.clear();
-    std::string mangled = key;
-    for (size_t i = 0; i < np; ++i) {
-        out.typeArgs.push_back(concrete[i]);
-        mangled += "__" + mangleElem(concrete[i]);
-    }
+    out.typeArgs.assign(concrete.begin(), concrete.begin() + np);
+    const std::string mangled = instanceOf(key, out.typeArgs);
     out.mangledName = mangled;
     if (!boundsOk) _boundFailedInsts.insert(mangled);   // prototype only — see emitGenericInst
     return true;
@@ -18457,7 +18462,7 @@ void CEmitter::emitGenericInst(const GenericInst& gi, bool prototypeOnly)
     if (cit != _genericCtx.end()) _nsCtx = cit->second;
 
     // Bind each parameter to its argument: a const param (`const N: int`) binds a VALUE in
-    // _comptimeSubst (so a `Fixed<T,N>` param type resolves to `Fixed_T_4`, and the body can READ `N`);
+    // _comptimeSubst (so a `Fixed<T,N>` param type resolves to `Fixed<T>#(4)`, and the body can READ `N`);
     // a type param binds a type in _typeSubst. Both are cleared identically at the end.
     bindInstParams(tmpl->typeParams, tmpl->constTypes, gi.typeArgs);
     const bool savedRaw = _rawInstanceBody;
@@ -19406,7 +19411,7 @@ void CEmitter::registerInstGenerics()
             ScopedAttrSite _as(*this, mangled, tit->second.declFile);
             // Skip an instance whose own arguments are not concrete. `_genericTypeInsts` can hold a
             // partially-resolved registration whose argument is still a bare type-parameter name
-            // (`DynamicArray_K`, seen from inside `SortedMap<K,V>`); binding `T -> K` would substitute one
+            // (`DynamicArray<K>`, seen from inside `SortedMap<K,V>`); binding `T -> K` would substitute one
             // unresolvable name for another and report the inference failure this pass exists to prevent.
             // Such an instance is never emitted, so there is nothing in it to discover. A nested generic
             // (`List<int32>`) and a const argument are both concrete for this purpose.
@@ -19463,11 +19468,11 @@ void CEmitter::emitSharedToWeakDowngrade(const CollectionInfo& info)
 
 void CEmitter::emitWeakTryUpgrade(const CollectionInfo& info)
 {
-    std::string sh  = info.ifacePartner;                 // the Shared it upgrades to (Shared_<elem> or a library `Rc_<elem>`)
+    std::string sh  = info.ifacePartner;                 // the Shared it upgrades to (`Shared<elem>` or a library `Rc<elem>`)
     // The prelude's `Optional` instance, keyed in the prelude's scope (KR-67 stage 4a). Built by
     // concatenation, so it is one of the few places the scope has to be spelled rather than resolved —
     // and a miss here is SILENT: the `!_genericTypeInsts.count(opt)` guard below just skips the upgrade.
-    std::string opt = preludeName("Optional") + "_" + sh;       // kama__Optional_<shared>
+    const std::string opt = preludeInstance("Optional", { sh });   // `Optional<shared>`
     if (!_genericTypeInsts.count(opt)) return;          // prelude Optional unavailable -> skip (upgrade stays)
     *_out << "static inline " << opt << " " << info.cName << "__tryUpgrade(" << info.cName << "* self) {\n"
           << "    " << sh << " s = " << kamaMember(info.cName, "upgrade") << "(self);\n"
@@ -19481,7 +19486,7 @@ void CEmitter::emitWeakTryUpgrade(const CollectionInfo& info)
 // emitted in the collection FUNCS phase where the Optional<usize> instance struct is already complete.
 void CEmitter::emitStringFind(const CollectionInfo& info)
 {
-    const std::string opt = preludeName("Optional") + "_isize";   // prelude-scoped (KR-67 stage 4a)
+    const std::string opt = preludeInstance("Optional", { "isize" });   // prelude-scoped (KR-67 stage 4a)
     if (!_genericTypeInsts.count(opt)) return;   // Optional<isize> unavailable -> skip (find unregistered)
     *_out << "static inline " << opt << " " << info.cName << "__find(" << info.cName
           << "* self, kama_string needle) {\n"
@@ -19765,12 +19770,12 @@ void CEmitter::emitCollectionDefs(bool typesOnly)
             else {
                 *_out << "KAMA_SIMD_FUNCS(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName
-                     << ", InlineArray_" << info.elemMangle << "_" << info.constValue << ")\n";
+                     << ", " << instanceName("InlineArray", { info.elemMangle, std::to_string(info.constValue) }) << ")\n";
                 *_out << "KAMA_SIMD_REDUCE(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName << ")\n";
                 *_out << "KAMA_SIMD_CMP(" << info.elemCType << ", " << info.constValue
                      << ", " << info.cName
-                     << ", Mask_" << info.elemMangle << "_" << info.constValue << ")\n";
+                     << ", " << instanceName("Mask", { info.elemMangle, std::to_string(info.constValue) }) << ")\n";
                 // Only a SIGNED INTEGER lane needs the overflow checkers. A float lane has no overflow
                 // rule to obey (IEEE gives infinities, not a trap) and an unsigned one wraps by
                 // definition at every width, so emitting them there would be dead code in every program.
@@ -20017,7 +20022,7 @@ bool CEmitter::refuseUnindexable(SharedExpression recv, ElementAccessNode* ea)
 
 // cType(typeNode) resolved in the type-substitution context of a generic-instance class `inCls` — so a
 // method's `T`-typed return (e.g. `iterator()` -> `VecIter<T>`, `next()` -> `Optional<T>`) resolves to
-// the concrete instance (`VecIter_int32` / `Optional_int32`). Mirrors computeDestructible's binding.
+// the concrete instance (`VecIter<int32>` / `Optional<int32>`). Mirrors computeDestructible's binding.
 //
 // A NON-generic class still has a home: its member signatures were written in its declaring file and
 // name what THAT file imports. Rendering them under the caller's `_nsCtx` made `Uuid.parse(…)`'s
@@ -21600,7 +21605,7 @@ std::string CEmitter::pinnedInstanceName(const std::string& bare_, const std::st
     if (g == _genericContracts.end() || g->second.pinnedParam != 0) return bare;
     auto ps = _genericContractParams.find(bare);
     if (ps == _genericContractParams.end() || ps->second.size() != 1) return bare;
-    return bare + "_" + t;
+    return instanceName(bare, { t });
 }
 
 // Record a compiler-synthesized conformance to a contract that may be PINNED. `@generate(Deserializable)`
@@ -21704,7 +21709,7 @@ bool CEmitter::satisfiesBound(const std::string& t, const std::string& bound_) c
         if (x.empty()) x = me->ownedPointeeClass(t);
         if (!x.empty() && satisfiesBound(x, "Serializable")) return true;
     }
-    if (preludeLeaf(bound_) == "Deserializable" || (!bound.empty() && preludeLeaf(bound).compare(0, 15, "Deserializable_") == 0)) {
+    if (preludeLeaf(bound_) == "Deserializable" || (!bound.empty() && preludeLeaf(instanceTemplate(bound)) == "Deserializable")) {
         CEmitter* me = const_cast<CEmitter*>(this);
         std::string x = me->sharedPointeeClass(t);
         if (x.empty()) x = me->ownedPointeeClass(t);
@@ -22914,7 +22919,7 @@ void CEmitter::linkContracts()
 
 // Resolve a parallel (names, nodes) interface list IN PLACE. `names` is the plain string list a ClassInfo
 // keeps; `nodes` is the AST list it was built from, which is the only place the generic args survive — a
-// `implements Iterator<int32>` has to become `Iterator_int32`, and `names` alone dropped the `<int32>`.
+// `implements Iterator<int32>` has to become `Iterator<int32>`'s instance, and `names` alone dropped the `<int32>`.
 // `nodes` may be null or shorter than `names` (a conformance recorded without a declaration site).
 void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIdentifierList nodes)
 {
@@ -22958,7 +22963,7 @@ void CEmitter::resolveInterfaceNames(std::vector<std::string>& names, SharedIden
         if (itfNode && (itfNode->genericArg || bareDefaulted) && _genericContracts.count(base)) {
             const std::string inst = genericTypeMangle(base, itfNode->genericArgs);   // Iterator -> Iterator_int32
             // Kept for diagnostics (contractInstOf): an instance named here is not registered as an interface
-            // until something binds it, so nothing else could spell `kama__Comparable_string` back.
+            // until something binds it, so nothing else could spell `Comparable<string>` back.
             if (!_contractInstSpelling.count(inst)) {
                 GenericTypeInst gi{ base, inst, {} };
                 if (itfNode->genericArgs) for (auto& a : *itfNode->genericArgs) gi.typeArgs.push_back(deepSubstType(a));
@@ -22992,7 +22997,7 @@ void CEmitter::linkBases()
             ci.baseName = resolveUserName(*ci.node->baseTypes->base->value, ci.node->baseTypes->base->qualifier);
 #endif
         // resolve each interface name; a generic-contract `implements Iterator<int32>` resolves to the
-        // specialized instance name (`Iterator_int32`) — its genericArgs live on the AST node, which
+        // specialized instance name (`Iterator<int32>`'s) — its genericArgs live on the AST node, which
         // ci.interfaces (a plain name list) dropped, so read them back in parallel.
         SharedIdentifierList ifaceNodes = (ci.node && ci.node->baseTypes) ? ci.node->baseTypes->interfaces
                                                                           : SharedIdentifierList();
@@ -24350,8 +24355,8 @@ std::string CEmitter::byteViewInstName(bool writable)
         n->genericArgs->push_back(u8);
         return n;
     };
-    if (!writable) return preludeKey("BytesViewable") + "_" + mangleElem(viewOf(constTmpl));
-    return preludeKey("Blittable") + "_" + mangleElem(viewOf(constTmpl)) + "_" + mangleElem(viewOf(viewTmpl));
+    if (!writable) return instanceOf(preludeKey("BytesViewable"), { viewOf(constTmpl) });
+    return instanceOf(preludeKey("Blittable"), { viewOf(constTmpl), viewOf(viewTmpl) });
 }
 
 // What a bound on a generic TYPE sees, which is judged while collections are collected — before the members exist
@@ -24447,8 +24452,7 @@ void CEmitter::registerByteViewMembers(const std::string& cls)
         const std::string k = preludeKey(contract);
         if (!_genericContractParams.count(k)) return;
         registerGenericContractInst(k, args);
-        std::string n = k;
-        for (auto& a : *args) n += "_" + mangleElem(a);
+        const std::string n = instanceOf(k, *args);
         bool has = false;
         for (auto& i : c.interfaces) if (i == n) has = true;
         if (!has) c.interfaces.push_back(n);
@@ -24516,8 +24520,7 @@ void CEmitter::registerViewByteViews(const std::string& inst)
         const std::string k = preludeKey(contract);
         if (!_genericContractParams.count(k)) return;
         registerGenericContractInst(k, args);
-        std::string n = k;
-        for (auto& a : *args) n += "_" + mangleElem(a);
+        const std::string n = instanceOf(k, *args);
         for (auto& i : c.interfaces) if (i == n) return;
         c.interfaces.push_back(n);
     };
@@ -26545,7 +26548,7 @@ std::string CEmitter::resolveWhenBound(const SharedIdentifier& b)
     return resolveUserName(*b->value, b->qualifier);
 }
 
-// The contract a bound NAMES, exactly. `Source<int32>` is the instance `Source_int32`, and a conformance
+// The contract a bound NAMES, exactly. `Source<int32>` is an instance of its own, and a conformance
 // list holds instance names — so reading only the template name (as both gates did) made `when [P:
 // Source<int32>]` never hold, and made `<P: Source<string>>` accept a `Source<int32>` (KR-15). The
 // arguments are mangled under `bind`, the instance's own type-parameter bindings, so `Source<T>` names the
@@ -26851,7 +26854,7 @@ bool CEmitter::ifaceNewAllocator(const std::string& ty, ObjectCreationNode* oc, 
 
 // Is `r` a ctor call spelled on a generic TEMPLATE name — `Box.make(…)`, `SortedMap::withAllocator(…)` —
 // or a qualified variant construction (`Optional::Some(…)`)? Such a call has no instance of its own: the
-// emitter resolves `Box` -> `Box_int32` from the assignment TARGET (the same channel a local declaration
+// emitter resolves `Box` -> `Box<int32>` from the assignment TARGET (the same channel a local declaration
 // uses), so the two assignment paths agree on it through this one predicate — the value-producing path
 // claims it, the fresh-rvalue resource path leaves it alone. Both spellings are here because the
 // corpus reassigns through both, and a predicate that knew one of them would send the other into a
@@ -27329,15 +27332,16 @@ void CEmitter::emitRuntimeSlotDefinitions()
     if (!_globalAllocator.empty()) {
         const ClassInfo& gci = _classes[_globalAllocator];
         auto a = gci.methods.find("allocate"), r = gci.methods.find("reallocate"), d = gci.methods.find("deallocate");
+        const std::string optPtr = preludeInstance("Optional", { "UnsafePtr" });
         if (a != gci.methods.end() && r != gci.methods.end() && d != gci.methods.end())
             *_out << _globalAllocator << " kama_global_allocator = {0};\n"
                   << "void* kama__global_allocate(size_t n, size_t align) {\n"
-                  << "    kama__Optional_UnsafePtr o = " << a->second.cName << "(&kama_global_allocator, n, align);\n"
-                  << "    return o.kama_tag == " << enumConst(preludeName("Optional") + "_UnsafePtr", "Some") << " ? o.kama_u.k_Some.k_value : 0;\n"
+                  << "    " << optPtr << " o = " << a->second.cName << "(&kama_global_allocator, n, align);\n"
+                  << "    return o.kama_tag == " << enumConst(optPtr, "Some") << " ? o.kama_u.k_Some.k_value : 0;\n"
                   << "}\n"
                   << "void* kama__global_reallocate(void* p, size_t n, size_t newN, size_t align) {\n"
-                  << "    kama__Optional_UnsafePtr o = " << r->second.cName << "(&kama_global_allocator, p, n, newN, align);\n"
-                  << "    return o.kama_tag == " << enumConst(preludeName("Optional") + "_UnsafePtr", "Some") << " ? o.kama_u.k_Some.k_value : 0;\n"
+                  << "    " << optPtr << " o = " << r->second.cName << "(&kama_global_allocator, p, n, newN, align);\n"
+                  << "    return o.kama_tag == " << enumConst(optPtr, "Some") << " ? o.kama_u.k_Some.k_value : 0;\n"
                   << "}\n"
                   << "void kama__global_deallocate(void* p, size_t n, size_t align) {\n"
                   << "    " << d->second.cName << "(&kama_global_allocator, p, n, align);\n"
@@ -27436,8 +27440,18 @@ struct CEmitter::HostHeader {
     std::string                        err;
 };
 
-std::string CEmitter::hostTypeName(HostHeader& h, const std::string& internal, const std::string& declFile)
+std::string CEmitter::hostTypeName(HostHeader& h, const std::string& internal_, const std::string& declFile)
 {
+    // A host writes an instance as it did before KR-319 (`ConstView_int32`, `kama_InlineArray_int32_4`): the declared C
+    // surface keeps its spelling, and the clash check below refuses the join a `_` makes ambiguous.
+    std::function<std::string(const std::string&)> flat = [&](const std::string& n) {
+        std::string tmpl, rest; std::vector<std::string> args;
+        if (!splitInstance(n, tmpl, args, rest)) return n;
+        std::string s = flat(tmpl);
+        for (auto& a : args) s += "_" + flat(a);
+        return s + flat(rest);
+    };
+    const std::string internal = flat(internal_);
     std::string module, unit;
     for (auto& kv : _unitCtx) {
         const NsCtx& c = kv.second;
@@ -27449,15 +27463,15 @@ std::string CEmitter::hostTypeName(HostHeader& h, const std::string& internal, c
             // An instance's suffix spells its arguments with kama's internal `__` (`View_geo__Vec2`), which C++
             // reserves; the host gets `_`, and the collision check below catches the join it makes ambiguous.
             for (size_t at; (at = n.find("__")) != std::string::npos; ) n.erase(at, 1);
-            auto claimed = h.owner.emplace(n, internal);
-            if (!claimed.second && claimed.first->second != internal && h.err.empty())
-                h.err = "`" + demangleForDisplay(internal) + "` and `" + demangleForDisplay(claimed.first->second)
+            auto claimed = h.owner.emplace(n, internal_);
+            if (!claimed.second && claimed.first->second != internal_ && h.err.empty())
+                h.err = "`" + demangleForDisplay(internal_) + "` and `" + demangleForDisplay(claimed.first->second)
                       + "` would both be `" + n + "` in the host header — rename one";
             return n; }
     }
     std::string n = "kama_" + internal;   // compiler-owned: an intrinsic or a prelude type, in no module
     for (size_t at; (at = n.find("__")) != std::string::npos; ) n.erase(at, 1);
-    h.owner.emplace(n, internal);
+    h.owner.emplace(n, internal_);
     return n;
 }
 
@@ -27808,7 +27822,7 @@ static std::string seqArgCType(const ParamSig& p, bool constRaw)
 }
 
 // A variant constructor — `Optional::Some(value: 1)`, `Optional::None`, `E::A` — or a ternary choosing between
-// them. Neither knows its instance (`Optional_int32`) until a destination types it, so every typed position
+// them. Neither knows its instance (`Optional<int32>`) until a destination types it, so every typed position
 // threads its type in when this answers yes. The ternary was missing: `o = c ? Optional::Some(value: 1) :
 // Optional::None;` reached its arms untyped as an assignment or an argument, and reported two false errors
 // (KR-157).
@@ -28077,7 +28091,7 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         if (ctorIv && ctorIv->identifier && ctorIv->identifier->value) {
             std::string rn = resolveUserName(*ctorIv->identifier->value, ctorIv->identifier->qualifier);
             if (isClass(rn) && _classes.count(rn)) ctorCls = rn;
-            // `f(b: Box(v: 7))` — the ctor names template `Box`; the target param is instance `Box_int32`.
+            // `f(b: Box(v: 7))` — the ctor names template `Box`; the target param is instance `Box<int32>`.
             else { auto g = _genericTypeInstOf.find(p.className);
                    if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = p.className; }
         }
@@ -31183,7 +31197,7 @@ void CEmitter::checkNamedCtorComplete(ClassInfo& owner, SharedBlock body)
         if (auto* lv = dynamic_cast<LocalVariableDeclaration*>(n)) {
             // Match BOTH forms: a concrete owner via `resolveUserName` (template name == owner.name), AND a
             // GENERIC owner via `cType` — for a monomorph, `owner.name` is the mangled instance
-            // (`DynamicArray_int32_BumpAllocator`) but `resolveUserName` yields the bare TEMPLATE, so it never
+            // (`DynamicArray<int32, BumpAllocator>`) but `resolveUserName` yields the bare TEMPLATE, so it never
             // matched → the whole gate was inert for generics (M8c finding). `cType(lv->type)` resolves the
             // local's `DynamicArray<T,A>` under the active instance subst to that same mangled name.
             bool isOwnerTy = lv->type && lv->type->value
@@ -32231,11 +32245,9 @@ Visibility CEmitter::fieldVisibility(const ClassInfo& ci, SharedModifierList mod
 // Is the function being emitted right now an instance of the generic free function `tmplKey`, and — when
 // the owner is itself a generic instance — the CORRESPONDING one?
 //
-// The same rule a generic TYPE accessor follows, computed differently because the manglings differ: a type
-// instance is `Box_int32` (one `_` per argument) and a function instance is `reader__int32` (two). Rather
-// than convert one spelling into the other — `mangleElem` can itself produce underscores, so splitting a
-// suffix back apart is guesswork — this compares the ARGUMENT LISTS, taking the function's from the
-// instantiation record and rebuilding the owner's suffix from them with the type spelling.
+// The same rule a generic TYPE accessor follows: a function's instance and a type's are both `instanceName`
+// (`reader__kama_of__int32__kama_end`, `Box__kama_of__int32__kama_end`), so the corresponding instance is the
+// template's key with the owner's argument suffix appended, as for a type.
 //
 // An owner that is not a generic instance has nothing to correspond to, so every instance of the accessor
 // is a friend — which is what a plain owner with a generic CLASS accessor already does.
@@ -32250,10 +32262,7 @@ bool CEmitter::fnTemplateCorresponds(const std::string& tmplKey, const std::stri
     if (_currentFunc.empty()) return false;
     auto fi = _genericInsts.find(_currentFunc);
     if (fi == _genericInsts.end() || fi->second.templateKey != tmplKey) return false;
-    if (ownerArgs.empty()) return true;
-    std::string fnArgs;
-    for (auto& a : fi->second.typeArgs) fnArgs += "_" + mangleElem(a);
-    return fnArgs == ownerArgs;
+    return ownerArgs.empty() || _currentFunc == tmplKey + ownerArgs;
 }
 
 // Is a member (declared on `owner`, visibility `vis`) accessible from the current
@@ -32296,7 +32305,7 @@ bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string
         // an owner-granted `friend` may touch the named members. The accessing
         // context is the current class (any of its methods) or the current function/method.
         // A grant naming a GENERIC type reaches the CORRESPONDING instance, and only that one: inside
-        // `Tree<int32>` the accessing context is `Tree_int32`, which can never equal the template key
+        // `Tree<int32>` the accessing context is `Tree<int32>`'s instance, which can never equal the template key
         // `Tree` the grant recorded. The correspondence is computed rather than compared — the owner
         // instance's own argument suffix, appended to the accessor's template key — so `Tree<A,B>` may
         // touch `Node<A,B>` while a sibling instance may not. That is the rule plain `private` already
@@ -32305,7 +32314,7 @@ bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string
         // gives for `friend struct Tree<K,V>;`, and kama's bare spelling is the one C++ refuses as
         // ambiguous, so kama reads it as the STRICTER of the two meanings — which keeps an explicit
         // `friend Tree<K,A>[m];` additive if it is ever wanted, rather than a source break.
-        std::string ownerArgs;   // "_int32_int32" — "" when the owner is not a generic instance
+        std::string ownerArgs;   // `__kama_of__int32__kama_end` — "" when the owner is not a generic instance
         if (owner->isGenericInst) {
             auto of = _genericTypeInstOf.find(owner->name);
             if (of != _genericTypeInstOf.end() && owner->name.size() > of->second.size())
@@ -32340,14 +32349,14 @@ bool CEmitter::accessAllowed(ClassInfo* owner, Visibility vis, const std::string
                 const std::vector<SharedIdentifier>* ownerConcrete = nullptr;
                 auto oi = _genericTypeInsts.find(owner->name);
                 if (oi != _genericTypeInsts.end()) ownerConcrete = &oi->second.typeArgs;
-                std::string key = g.accessor;
+                std::vector<std::string> args;
                 bool ok = true;
                 for (auto& e : g.accessorArgs) {
-                    if (e.first < 0) { key += "_" + e.second; continue; }
+                    if (e.first < 0) { args.push_back(e.second); continue; }
                     if (!ownerConcrete || (size_t)e.first >= ownerConcrete->size()) { ok = false; break; }
-                    key += "_" + mangleElem((*ownerConcrete)[e.first]);
+                    args.push_back(mangleElem((*ownerConcrete)[e.first]));
                 }
-                if (ok && cur && cur->name == key) return true;
+                if (ok && cur && cur->name == instanceName(g.accessor, args)) return true;
                 continue;
             }
             if (g.accessorIsTemplate) {
@@ -33617,7 +33626,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
             std::string mv = moveOnlySource(h->value, m->line); if (!mv.empty()) markMoved(mv);
         }
     } else {
-    // A1: pin the concrete instance so the inline variant ctor constructs `Optional_int32`, not bare `Optional`.
+    // A1: pin the concrete instance so the inline variant ctor constructs `Optional<int32>`, not bare `Optional`.
     // A value-producing nested `match`/variant-ternary subject needs the SAME pin: emitMatch requires a
     // non-empty `_matchTargetCType` + a statement slot (`_hoistOK`), and a ternary's inline variant ctors
     // need `_variantTargetType`, so the materialized owning temp is the resolved `subjCls`.
@@ -34402,7 +34411,7 @@ std::string CEmitter::tryHoistInlineCtor(SharedExpression e, const std::string& 
     std::string rn = resolveUserName(*iv->identifier->value, iv->identifier->qualifier);
     std::string ctorCls;
     if (isClass(rn) && _classes.count(rn)) ctorCls = rn;
-    else { auto g = _genericTypeInstOf.find(targetCType);   // ctor names template `Box`; target is `Box_int32`
+    else { auto g = _genericTypeInstOf.find(targetCType);   // ctor names template `Box`; target is `Box<int32>`
            if (g != _genericTypeInstOf.end() && g->second == rn) ctorCls = targetCType; }
     // An extern (C-POD) struct has no ctor to call — `return div_t(quot: 1);` would emit an undefined
     // `div_t__ctor`. Hand it back to the caller to diagnose rather than fabricating a call (the arg-position
@@ -34626,7 +34635,7 @@ std::string CEmitter::emitVariantConstruction(ClassInfo& ci, const std::string& 
     if (!vc) { unsupported(("'" + ci.name + "' has no variant '" + variant + "'").c_str(), srcLine); return "0"; }
 
     // ⚠️ NO ambient type-substitution here. This used to install the enum instance's args
-    // (`Optional_int32` -> `{T: int32}`) across the whole payload emission, so that the payload FIELD's C
+    // (`Optional<int32>` -> `{T: int32}`) across the whole payload emission, so that the payload FIELD's C
     // type resolved concretely. That one consumer is gone: the field type is read with
     // `fieldCType(ci.name, f)` below, which takes the baked type or `cTypeInInstance` — both scoped to the
     // owner, neither reading ambient state. What the binding still did was CORRUPT the other four
@@ -35598,7 +35607,7 @@ std::string CEmitter::emitInvocation(InvocationNode* call)
             // rule, no exceptions — which is the only way `grep '\.make('` finds every construction site.
             if (mi && mi->isCtor) {
                 // Diagnose with the SOURCE spelling the user wrote, not the mangled/monomorphized key
-                // `typeName` may have become above (`Point`, not `_F<file>__Point`; `Pair`, not `Pair_int32`).
+                // `typeName` may have become above (`Point`, not `_F<file>__Point`; `Pair`, not `Pair<int32>`'s key).
                 const std::string& disp = *qual->back();
                 unsupported(("`" + disp + "::" + name + "` names a constructor — construct with "
                              "dot-on-type: `" + disp + "." + name + "(...)`. `::` is scope resolution "
@@ -38320,7 +38329,7 @@ void CEmitter::emitInterfaceTypes(InterfaceInfo& ii)
     // need not import what the contract's signatures name. The site had no reseat at all, so a contract
     // member returning a type declared beside the contract was judged against a THIRD file's imports.
     ScopedContractNs _cns(_nsCtx, _collectingUnitPath, ii);
-    ContractSubst _cs(*this, ii);   // bind T->int32 for a generic-contract instance (`Iterator_int32`)
+    ContractSubst _cs(*this, ii);   // bind T->int32 for a generic-contract instance (`Iterator<int32>`)
     *_out << "struct " << kamaMember(ii.name, "vtbl") << " {\n";
     for (auto& m : ii.methods) {
         // A contract-required `ctor` (HeapOwner::adopt) or `static fn` (Hasher::finish) has no receiver, so a value cannot
@@ -46645,10 +46654,10 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                         claimType(n, *cd->name->value, cd->line);
                         // Also record params/defaults/ctx here (ahead of collectClasses), so a DEFAULTED
                         // type-arg mangles to its filled instance name (`DynamicArray<int32>` ->
-                        // `DynamicArray_int32_GlobalAllocator`) even in collectSignatures — which runs
+                        // `DynamicArray<int32, GlobalAllocator>`) even in collectSignatures — which runs
                         // BEFORE collectClasses and BEFORE this template's own unit (the CLI/main unit is
                         // collected first, its imports appended after). Without this, a free function
-                        // returning `DynamicArray<int32>` cached an unfilled `DynamicArray_int32` retCType
+                        // returning `DynamicArray<int32>` cached an unfilled `DynamicArray<int32>` retCType
                         // that named no registered class (breaking e.g. `make().length()`). Idempotent —
                         // collectClasses re-records the same values.
                         std::vector<std::string> ps;

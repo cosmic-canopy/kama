@@ -1,5 +1,6 @@
 #!/bin/sh
-# check-kama-lane.sh — every name kama chooses on a type is spelled by one helper, `kamaMember` (KR-318).
+# check-kama-lane.sh — every name kama chooses on a type is spelled by one helper, `kamaMember` (KR-318), and every
+# generic instance's name by another, `instanceName` (KR-319; section 2 below).
 #
 # The defect this guards. kama joins two kinds of name onto a type's C name: the members a user declares
 # (`T__area`) and what kama writes for itself (a destructor, a generated copy, a vtable, a graph-serde helper). Both
@@ -115,4 +116,48 @@ if [ -s "$tmp/hits" ]; then
 puts it in the \`<Type>__kama_<what>\` lane no declared name can enter. If it is a member a program calls (a derived \
 method), add it to MEMBERS here"
 fi
-echo "check-kama-lane: OK ($(printf '%s' "$W" | tr '|' '\n' | grep -c .) names kama chooses, each spelled by kamaMember)"
+
+# --- 2. instance names (KR-319) -----------------------------------------------------------------------------------
+# A generic instance is `<template>__kama_of__<arg>__kama_and__<arg>__kama_end`, spelled by `instanceName` and read
+# back by `instanceTemplate`/`splitInstance`, all in src/kama.cemit.h. Through 0.9.849 it was a `_` join of the
+# template and each argument's mangle, which met what a user can spell: a plain `Pair_int32` WAS `Pair<int32>`.
+#   C. a marker is written only in that header: never in an emitter literal, never in a runtime header;
+#   D. no name kamaMember chooses begins `of`, `and` or `end`, so `__kama_<what>` can never read as a marker;
+#   E. no argument's mangle is joined on with a bare `_` by hand, which is the spelling that was the defect.
+MARK='__kama_(of__|and__|end)'
+scan_marks() {
+    for f in "$@"; do
+        awk -v file="$f" -v re="$MARK" '
+            /^[[:space:]]*\/\// { next }
+            { lits = ""; s = $0
+              while (match(s, /"([^"\\]|\\.)*"/)) { lits = lits substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH) }
+              if (lits ~ re) printf "%s:%d: %s\n", file, NR, $0 }' "$f"
+    done
+}
+scan_marks_c() {
+    for f in "$@"; do
+        awk -v file="$f" -v re="$MARK" '{ line = $0; sub(/\/\/.*/, "", line); if (line ~ re) printf "%s:%d: %s\n", file, NR, $0 }' "$f"
+    done
+}
+scan_underscore_join() { grep -nE '"_" *\+ *mangleElem\(' "$@" || true; }
+
+printf '    std::string n = tmpl + "__kama_of__" + a + "__kama_end";\n' > "$tmp/mark.cpp"
+printf '    return instanceName(tmpl, { a });   // `Pair__kama_of__int32__kama_end`\n' > "$tmp/markclean.cpp"
+printf '    m += "_" + mangleElem(a);\n' > "$tmp/ujoin.cpp"
+[ -n "$(scan_marks "$tmp/mark.cpp")" ]          || fail "the marker scan missed a planted hand-written instance name"
+[ -z "$(scan_marks "$tmp/markclean.cpp")" ]     || fail "the marker scan fired on a helper call or a comment"
+[ -n "$(scan_underscore_join "$tmp/ujoin.cpp")" ] || fail "the join scan missed a planted \`\"_\" + mangleElem(\`"
+
+{
+    scan_marks src/*.cpp
+    scan_marks_c include/*.h
+    scan_underscore_join src/*.cpp src/*.h
+    printf '%s\n' "$W" | tr '|' '\n' | grep -E '^(of|and|end)' | sed 's/^/kamaMember what: /' || true
+} > "$tmp/ihits"
+if [ -s "$tmp/ihits" ]; then
+    sed 's/^/  /' "$tmp/ihits" >&2
+    fail "an instance name is spelled by hand — build it with \`instanceName(tmpl, args)\` or \`instanceOf\` (src/kama.cemit.h), \
+and read one with \`instanceTemplate\`/\`splitInstance\`; a name kama chooses on a type may not begin \`of\`, \`and\` or \`end\`"
+fi
+echo "check-kama-lane: OK ($(printf '%s' "$W" | tr '|' '\n' | grep -c .) names kama chooses, each spelled by kamaMember;"
+echo "                 every instance name spelled by instanceName)"

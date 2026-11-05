@@ -117,9 +117,10 @@ def _variant(v):
     arm lookup must be allowed to miss."""
     # A POINTER to a tagged enum reaches here too — the emitter hoists one for every `match` subject
     # (`kama_msub1`), and user code passes them. LLDB resolves a member through a pointer, so the tag
-    # reads fine, but the TYPE NAME is `kama__Optional_string *`, and the variant name is derived by
-    # cutting the type's name off the front of the tag constant — which then cut nothing and printed the
-    # raw `kama__Optional_string__Some`. Dereference first so both halves see the same type.
+    # reads fine, but the TYPE NAME is `kama__Optional__kama_of__string__kama_end *`, and the variant name
+    # is derived by cutting the type's name off the front of the tag constant — which then cut nothing and
+    # printed the raw `kama__Optional__kama_of__string__kama_end__Some`. Dereference first so both halves
+    # see the same type.
     t = v.GetType()
     if t.IsPointerType():
         v = v.Dereference()
@@ -338,7 +339,7 @@ def map_summary(valobj, internal_dict):
 
 def _is_weak(v):
     name = v.GetType().GetUnqualifiedType().GetName() or ''
-    return name.startswith('std__memory__Weak_')
+    return name.startswith('std__memory__Weak__kama_of__')
 
 
 def _strong_of(v):
@@ -483,6 +484,13 @@ class StructSynth:
 # `${function.name-with-args}` in the format string, so it is asked about libc, dyld and any other
 # language in the process too.
 
+def _path(s):
+    """`__` joins read as `::`, and a generic instance's markers (KR-319) as its brackets:
+    `Pair__kama_of__int32__kama_end__sum` is `Pair<int32>::sum`. The markers first, since they hold `__`."""
+    return (s.replace('__kama_of__', '<').replace('__kama_and__', ', ').replace('__kama_end', '>')
+             .replace('__', '::'))
+
+
 def _demangle_frame(name):
     """The lexical half of `kama demangle`, for a symbol. Mirrors names.js `lexical()`."""
     if not name:
@@ -492,18 +500,18 @@ def _demangle_frame(name):
     if name.startswith('kF_'):                      # a file-private scope: `kF_<stem>__<rest>`
         cut = name.find('__')
         if cut > 0:
-            return name[cut + 2:].replace('__', '::')
+            return _path(name[cut + 2:])
         return name
     if name.startswith(PRELUDE_SCOPE):              # the prelude's scope is implicit in source
-        return name[len(PRELUDE_SCOPE):].replace('__', '::')
+        return _path(name[len(PRELUDE_SCOPE):])
     if name.startswith('kS_'):                      # a scoped package: `kS_<scope>__<name>__<rest>`
         parts = name[3:].split('__', 2)
         if len(parts) >= 2:
             head = '@' + parts[0] + '/' + parts[1]
-            return head + ('::' + parts[2].replace('__', '::') if len(parts) == 3 else '')
+            return head + ('::' + _path(parts[2]) if len(parts) == 3 else '')
         return name
     if '__' in name:                                # a module path
-        return name.replace('__', '::')
+        return _path(name)
     return name                                     # not kama's: hand it back untouched
 
 
@@ -526,13 +534,15 @@ def frame_name(frame, internal_dict):
 # ⚠️ THE MATCH IS A REGEX OVER THE MANGLED TYPE NAME, and there are FOUR shapes, not one. `qualify()`
 # spells a type by where it lives:
 #
-#     prelude                      kama__Optional_int32
-#     a loose file (no kama.json)  kF_app__Pair_int32          <- the F5 case
-#     a module, exported           std__collections__DynamicArray_int32_kama__GlobalAllocator
+#     prelude                      kama__Optional__kama_of__int32__kama_end
+#     a loose file (no kama.json)  kF_app__Pair__kama_of__int32__kama_end          <- the F5 case
+#     a module, exported           std__collections__DynamicArray__kama_of__int32__kama_and__kama__GlobalAllocator__kama_end
 #     a module, not exported       std__collections__kF_dynamic_array__Ctrl
 #
 # so matching `^k_` alone would catch only loose files and miss every stdlib type. A generic instance
-# mints its own C type per instantiation, which is why this is a regex family and not a type list.
+# mints its own C type per instantiation, which is why this is a regex family and not a type list; each
+# family is its template's open marker to a close marker that ends the name (KR-319), so a type kama
+# names on an instance (`kama__Optional__kama_of__int32__kama_end__kama_tag`) is not taken for the instance.
 
 def _add(debugger, kind, regex, fn):
     debugger.HandleCommand('type %s add -w %s -x "%s" %s' % (kind, CATEGORY, regex, fn))
@@ -555,21 +565,21 @@ def __lldb_init_module(debugger, internal_dict):
     # Tagged enums. `-e` on the summary so the payload still EXPANDS underneath it: a summary otherwise
     # replaces the children rather than heading them, and `Some(...)` alone would make the payload
     # unreachable in a variables pane.
-    variant = r'^kama__(Optional|Result)_.*$'
+    variant = r'^kama__(Optional|Result)__kama_of__.*__kama_end$'
     _add(debugger, 'summary',   variant, '-e -F %s.variant_summary' % m)
     _add(debugger, 'synthetic', variant, '-l %s.VariantSynth' % m)
 
     # Contiguous sequences — same `-e`, and here it is the whole point: `len=2` with no elements under
     # it is strictly worse than the raw struct it replaced.
-    seq = r'^std__collections__(DynamicArray|FixedArray|View|ConstView)_.*$'
+    seq = r'^std__collections__(DynamicArray|FixedArray|View|ConstView)__kama_of__.*__kama_end$'
     _add(debugger, 'summary',   seq, '-e -F %s.seq_summary' % m)
     _add(debugger, 'synthetic', seq, '-l %s.SeqSynth' % m)
 
-    mp = r'^std__collections__Map_.*$'
+    mp = r'^std__collections__Map__kama_of__.*__kama_end$'
     _add(debugger, 'summary',   mp, '-e -F %s.map_summary' % m)
     _add(debugger, 'synthetic', mp, '-l %s.MapSynth' % m)
 
-    ptr = r'^std__memory__(Owned|Shared|Weak)_.*$'
+    ptr = r'^std__memory__(Owned|Shared|Weak)__kama_of__.*__kama_end$'
     _add(debugger, 'summary',   ptr, '-e -F %s.ptr_summary' % m)
     _add(debugger, 'synthetic', ptr, '-l %s.PtrSynth' % m)
 

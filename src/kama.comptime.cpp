@@ -138,13 +138,13 @@ bool CEmitter::comptimeFriendGrants(const std::string& ownerKey, const std::stri
             const std::vector<SharedIdentifier>* oa = nullptr;
             auto oi = _genericTypeInsts.find(ownerKey);
             if (oi != _genericTypeInsts.end()) oa = &oi->second.typeArgs;
-            std::string key = g.accessor; bool ok = true;
+            std::vector<std::string> args; bool ok = true;
             for (auto& e : g.accessorArgs) {
-                if (e.first < 0) { key += "_" + e.second; continue; }
+                if (e.first < 0) { args.push_back(e.second); continue; }
                 if (!oa || (size_t)e.first >= oa->size()) { ok = false; break; }
-                key += "_" + mangleElem((*oa)[e.first]);
+                args.push_back(mangleElem((*oa)[e.first]));
             }
-            if (ok && fromType == key) return true;
+            if (ok && fromType == instanceName(g.accessor, args)) return true;
             continue;
         }
         std::string acc = g.accessor;

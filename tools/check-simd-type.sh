@@ -43,8 +43,8 @@ trap 'rm -rf "$tmp"' EXIT
 # KAMA_SIMD_TYPE expands to `typedef T NAME __attribute__((vector_size(...)))` in kama_runtime.h, so the
 # generated file names the macro and the runtime carries the attribute. Assert both ends: a Simd was
 # registered AND the macro it resolves to is the portable spelling.
-if ! grep -q 'KAMA_SIMD_TYPE(float, 4, Simd_float32_4)' "$tmp/p.c"; then
-    echo "check-simd-type: FAIL — the emitted C does not register Simd_float32_4" >&2
+if ! grep -q 'KAMA_SIMD_TYPE(float, 4, Simd__kama_of__float32__kama_and__4__kama_end)' "$tmp/p.c"; then
+    echo "check-simd-type: FAIL — the emitted C does not register Simd<float32>#(4)" >&2
     grep -n 'Simd' "$tmp/p.c" | head -10 | sed 's/^/  /' >&2; exit 1
 fi
 # ⚠️ Match the ATTRIBUTE, not the bare word: the header's own comment explains at length why

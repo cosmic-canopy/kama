@@ -1,0 +1,74 @@
+// A generic instance's C name brackets its arguments in the kama lane (0.9.850, KR-319): `Pair<int32>` is
+// `Pair__kama_of__int32__kama_end`. Through 0.9.849 it was `<template>_<arg>…`, a `_` join of names a user can spell,
+// so each pair below was ONE type and the program did not build: kama checked the plain type as the instance
+// (`Pair_int32.make` "has no parameter `b` — did you mean `a:`?"), or clang met two definitions of one name. Each pair
+// was measured on 0.9.848, alone in its own file; here they all build and answer.
+
+// A plain type named like an instance.
+type value Pair<T> { public T a; public ctor make(T a) { this.a = a; } }
+type value Pair_int32 { public int32 b; public ctor make(int32 b) { this.b = b; } }
+
+// ...one level down: `A<B<int32>>` and `A<B_int32>`.
+type value B<T> { public T x; public ctor make(T x) { this.x = x; } }
+type value B_int32 { public bool y; public ctor make(bool y) { this.y = y; } }
+type value A<T> { public T inner; public ctor make(T inner) { this.inner = inner; } }
+
+// Two templates' instances: `P<int32, bool>` and `P_int32<bool>`.
+type value P<T, U> { public T a; public U b; public ctor make(T a, U b) { this.a = a; this.b = b; } }
+type value P_int32<T> { public T c; public ctor make(T c) { this.c = c; } }
+
+// An instance and a plain type's member, which clang met: `Box<Point>` was `kF_instance_key_meets__Box_kF_instance_key_meets__Point`,
+// and so was the method `Point()` of a type `Box_kF_instance_key_meets`. A module makes the same shape with no odd name:
+// `Box<geo::Point>` was `…Box_geo__Point`, a plain `Box_geo`'s member `Point`.
+type value Point { public int32 v; public ctor make(int32 v) { this.v = v; } }
+type value Box<T> { public T it; public ctor make(T it) { this.it = it; } }
+type value Box_kF_instance_key_meets { public int32 w; public ctor make(int32 w) { this.w = w; } public const fn int32 Point() { return this.w; } }
+
+// A const argument: `Fixed<int32>#(4)` and `Fixed_int32_4`.
+type value Fixed<T> comptime(int32 N) { public T a; public ctor make(T a) { this.a = a; } public const fn int32 size() { return N; } }
+type value Fixed_int32_4 { public int32 b; public ctor make(int32 b) { this.b = b; } }
+
+// A generic enum and a generic contract, each beside a plain one of the instance's old name.
+type enum Opt<T> { Some(T value), None }
+type enum Opt_int32 { Yes, No }
+type contract Src<T> for value { const fn T get(); }
+type contract Src_int32 for value { const fn bool flag(); }
+type value S implements Src<int32>, Src_int32 { public ctor make() { } public const fn int32 get() { return 9; } public const fn bool flag() { return true; } }
+
+// A generic function's instance, over the plain type that used to be the instance.
+fn T same<T>(T x) { return x; }
+
+fn uint8 main() {
+    Pair<int32> p = Pair::<int32>.make(a: 1);
+    Pair_int32 q = Pair_int32.make(b: 2);
+    if (p.a + q.b != 3) { return 1; }
+
+    A<B<int32>> ab = A::<B<int32>>.make(inner: B::<int32>.make(x: 5));
+    A<B_int32> ab2 = A::<B_int32>.make(inner: B_int32.make(y: true));
+    if (ab.inner.x != 5 || !ab2.inner.y) { return 2; }
+
+    P<int32, bool> pp = P::<int32, bool>.make(a: 7, b: true);
+    P_int32<bool> pq = P_int32::<bool>.make(c: true);
+    if (pp.a != 7 || !pp.b || !pq.c) { return 3; }
+
+    Box<Point> bx = Box::<Point>.make(it: Point.make(v: 3));
+    Box_kF_instance_key_meets by = Box_kF_instance_key_meets.make(w: 4);
+    if (bx.it.v + by.Point() != 7) { return 4; }
+
+    Fixed<int32>#(4) f = Fixed::<int32>#(4).make(a: 1);
+    Fixed_int32_4 g = Fixed_int32_4.make(b: 2);
+    if (f.a + g.b != 3 || f.size() != 4) { return 5; }
+
+    Opt<int32> o = Opt::Some(value: 4);
+    Opt_int32 oy = Opt_int32::Yes;
+    int32 ov = match (o) { case Some(value: v): v; case None: 0; };
+    int32 oyv = match (oy) { case Yes: 1; case No: 0; };
+    if (ov + oyv != 5) { return 6; }
+
+    S s = S.make();
+    if (s.get() != 9 || !s.flag()) { return 7; }
+
+    Pair_int32 r = same::<Pair_int32>(x: Pair_int32.make(b: 6));
+    if (r.b != 6 || same::<Pair<int32>>(x: p).a != 1) { return 8; }
+    return 0;
+}

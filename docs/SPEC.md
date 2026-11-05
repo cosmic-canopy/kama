@@ -4754,14 +4754,20 @@ Every name kama chooses on a type is in that register, `<Type>__kama_<what>`: it
 for it (`T__kama_as_C`), an operator's function (`T__kama_op_add`), a graph-serde helper and the tag type. So a
 member may be named `dtor`, `vdrop`, `vtable` or `op_add` (through `0.9.847` kama's names were `T__dtor` and the
 rest, which a member of that name met). What a type's author writes keeps the author's lane: a resource's `ctor <!-- test: kama_lane_meets -->
-copy` is `T__copy`, and a method `@generate` derives is `T__equals`, a member like any other. With both rules, every run
-of underscores longer than one in a C name is exactly one join, and `kama demangle` reads it one way. The one
-place that rule meets C is the declared
+copy` is `T__copy`, and a method `@generate` derives is `T__equals`, a member like any other.
+**A generic instance is named in that register too**, its arguments bracketed as the source brackets them: `Pair<int32>`
+is `Pair__kama_of__int32__kama_end`, `Map<K, V>` joins its arguments with `__kama_and__`, and a generic function's
+instance, an enum's, a contract's and an intrinsic's (`InlineArray<int32>#(4)`) are spelled the same way. Three markers,
+not one, so `A<B<C>, D>` and `A<B<C, D>>` differ in where `and` and `end` fall. Through `0.9.849` an instance was
+`Pair_int32`, a `_` join of names a user can spell, so a plain type `Pair_int32` was that instance, as was a template
+`P_int32<bool>` beside `P<int32, bool>`, and `Box<Point>` met a plain type's method `Point`. <!-- test: instance_key_meets -->
+With all three rules, every run of underscores longer than one in a C name is exactly one join, and `kama demangle`
+reads it one way. The one place that rule meets C is the declared
 surface: an `extern fn` whose C name has `__` inside it is bound with `@linkName`.
 
 **The declared C surface keeps its spelling**, because code on the other side depends on it: `extern fn`
 names, `type extern value` fields, `type expose value` / `expose enum` fields and values, and the parameter
-names in a published host header (§ *Exposing to a host*).
+and type names in a published host header (§ *Exposing to a host*), where an instance is still `ConstView_int32`.
 
 None of this reaches a human: a diagnostic, a hover, a `kama query` answer and an editor completion all
 show the name as written.
@@ -4771,15 +4777,16 @@ binary and cannot be taught otherwise — a debugger, a C compiler's own output 
 crash log or `objdump`:
 
 ```sh
-kama demangle app.kama -- kF_app__Pair_int32__make     # -> Pair<int32>::make
+kama demangle app.kama -- kF_app__Pair__kama_of__int32__kama_end__make     # -> Pair<int32>::make
 kama demangle app.kama -- kS_south__net__who           # -> @south/net::who
 ```
 
 It is a subcommand rather than a name map written beside the build, because a map is a record and a
 record can diverge from the binary being debugged — a stale one renames a frame to something plausible
-and wrong, silently. It runs the front end, because the reverse of `DynamicArray_int32_kama__GlobalAllocator`
-is `DynamicArray<int32>` and the argument spellings (and the dropped default) live in the resolved
-program, not in the text of the name. Names are rewritten in place, so a whole line of C survives its
+and wrong, silently. It runs the front end, because the reverse of
+`std__collections__DynamicArray__kama_of__int32__kama_and__kama__GlobalAllocator__kama_end` is `DynamicArray<int32>`,
+and the argument spellings (and the dropped default) live in the resolved program, not in the text of the name.
+An instance no table holds still reads by its markers alone. Names are rewritten in place, so a whole line of C survives its
 surroundings, and stdin is read as a batch so one process serves a whole debug session.
 
 The **reversibility rule above is what makes it possible**: strip exactly one `k_`. Only a token no
@@ -6233,7 +6240,7 @@ comptime fn InlineArray<uint8>#(256) crcTable() {           // top-level compile
     }
     return t;
 }
-comptime InlineArray<uint8>#(256) CRC = crcTable();   // baked → static const InlineArray_uint8_256 CRC = {.v={…}};
+comptime InlineArray<uint8>#(256) CRC = crcTable();   // baked → static const InlineArray__kama_of__uint8__kama_and__256__kama_end CRC = {.v={…}};
 
 type value Palette {
     comptime fn int32 sq(int32 x) { return x * x; }             // private (default) — internal helper
@@ -6632,7 +6639,7 @@ fn uint8 main() {
   float's is not an integer's) is in it; a contract of one's own may declare those, or `+` alone
   (`tests/generic_arith`). `x + x` on an unbounded `T` is refused with the bound to write. <!-- xfail: arith_unbounded -->
 - **Generic contracts** — a `contract` may itself be parameterized (`type contract Iterator<T>`), and is
-  **monomorphized per use** just like a generic type (`Iterator<int32>` → a specialized `Iterator_int32`).
+  **monomorphized per use** just like a generic type (`Iterator<int32>` → a specialized `Iterator__kama_of__int32__kama_end`).
   It has **full value + bound parity** with a plain contract: usable as a static bound
   `fn sum<I: Iterator<int32>>(I it)` (zero-cost, direct calls) *and* as a dynamic fat-pointer value
   `fn drain(Iterator<int32> it)` (vtable dispatch). A type opts in with `implements Iterator<int32>`.

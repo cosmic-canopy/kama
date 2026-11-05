@@ -20,7 +20,10 @@
 # kama spelling; the prefix is the C write only).
 #
 # The generic rows matter for the same reason from the other direction: a debugger's locals and frames are
-# full of generic instances, and rendering those needs the front end's tables, not a lexical rule.
+# full of generic instances, and rendering those needs the front end's tables, not a lexical rule. Since
+# 0.9.850 an instance brackets its arguments in the kama lane (`Pair__kama_of__int32__kama_end`, KR-319), so
+# a plain `Pair_int32` beside `Pair<int32>` is a different name and must read back as itself, and an instance
+# no table holds (a generic function's) still reads one way, by its markers alone.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -47,18 +50,25 @@ type value Pair<T: Arithmetic<T>> {
     public ctor make(T a, T b) { this.a = a; this.b = b; return this; }
     public fn T sum() { return this.a + this.b; }
 }
+// What `Pair<int32>` was spelled through 0.9.849, and so WAS: its `make` was checked as `Pair<int32>`'s.
+type value Pair_int32 {
+    public bool c;
+    public ctor make(bool c) { this.c = c; return this; }
+}
+fn T ident<T>(T x) { return x; }
 
 fn uint8 main() {
     int32 near = 1;
     int32 k_near = 2;
     k_Box b = k_Box.make(k_x: near);
     Pair<int32> p = Pair.make(a: k_near, b: 3);
+    Pair_int32 q = Pair_int32.make(c: true);
     DynamicArray<string> names = DynamicArray.empty();
     names.add(item: "ab");
     Optional<string> first = Optional::Some(value: "cd");
     int32 n = match (first) { case Some(value: s): cast<int32>(s.length()); case None: 0; };
     InlineArray<int32>#(4) quad = [1, 2, 3, 4];
-    return cast<uint8>(b.k_x + p.sum() + cast<int32>(names.length()) + n + quad[0]);
+    return cast<uint8>(b.k_x + p.sum() + cast<int32>(names.length()) + n + quad[0] + (q.c ? ident::<int32>(x: 1) : 0));
 }
 KAMA
 
@@ -87,15 +97,21 @@ want k_k_x                k_x         # ...but its member is
 want kF_dm__k_Box__make   k_Box::make
 
 # --- generic instances: the half no lexical rule can reach ---------------------------------------
-want kF_dm__Pair_int32          'Pair<int32>'
-want kF_dm__Pair_int32__sum     'Pair<int32>::sum'
+want kF_dm__Pair__kama_of__int32__kama_end          'Pair<int32>'
+want kF_dm__Pair__kama_of__int32__kama_end__sum     'Pair<int32>::sum'
+want kF_dm__Pair_int32                              Pair_int32          # the plain type, not the instance
+want kF_dm__Pair_int32__make                        Pair_int32::make
+# A generic function's instance, which no type table holds, and an instance of nothing this program declares:
+# both read by the markers alone.
+want kF_dm__ident__kama_of__int32__kama_end         'ident<int32>'
+want kF_dm__Nope__kama_of__int32__kama_and__kama__Optional__kama_of__string__kama_end__kama_end__go 'Nope<int32, Optional<string>>::go'
 # A stdlib instance, with the allocator left at its default — which must NOT be rendered, or every
 # container in the debugger reads `DynamicArray<string, GlobalAllocator>`.
-want std__collections__DynamicArray_string_kama__GlobalAllocator        'std::collections::DynamicArray<string>'
-want std__collections__DynamicArray_string_kama__GlobalAllocator__kama_dtor  'std::collections::DynamicArray<string>::kama_dtor'
+want std__collections__DynamicArray__kama_of__string__kama_and__kama__GlobalAllocator__kama_end        'std::collections::DynamicArray<string>'
+want std__collections__DynamicArray__kama_of__string__kama_and__kama__GlobalAllocator__kama_end__kama_dtor  'std::collections::DynamicArray<string>::kama_dtor'
 # A PRELUDE instance. The prelude's scope is implicit in source, and stripping it before the instance
 # lookup used to destroy the key this needs — `Optional_string` instead of `Optional<string>`.
-want kama__Optional_string  'Optional<string>'
+want kama__Optional__kama_of__string__kama_end  'Optional<string>'
 want kama_main              main
 
 # --- a scoped package (KR-291): `kS_<scope>__<name>__` reads back as `@scope/name::` ----------------------
@@ -107,10 +123,10 @@ want kS_t__app__k_Box           '@t/app::k_Box'     # a declaration's leaf keeps
 # --- the language's own types under their C names -------------------------------------------------
 want kama_string            string
 want kama_string__length    string::length
-want InlineArray_int32_4    'InlineArray<int32>#(4)'
+want InlineArray__kama_of__int32__kama_and__4__kama_end    'InlineArray<int32>#(4)'
 
 # --- a name is rewritten IN PLACE, so a whole line of C survives its surroundings -----------------
-line=$(printf 'int32_t kF_dm__Pair_int32__sum(kF_dm__Pair_int32* self)' | "$KAMA" demangle "$tmp/dm.kama")
+line=$(printf 'int32_t kF_dm__Pair__kama_of__int32__kama_end__sum(kF_dm__Pair__kama_of__int32__kama_end* self)' | "$KAMA" demangle "$tmp/dm.kama")
 [ "$line" = 'int32_t Pair<int32>::sum(Pair<int32>* self)' ] \
     || fail "a C declaration line demangled to \`$line\`"
 
@@ -118,7 +134,7 @@ line=$(printf 'int32_t kF_dm__Pair_int32__sum(kF_dm__Pair_int32* self)' | "$KAMA
 # One analysis is ~140ms and one answer off the finished tables is a lookup, so a debugger that repaints
 # locals at every stop needs many answers from ONE process. If stdout is left block-buffered the caller
 # waits forever for a line sitting in this process's buffer, so this also proves the flush.
-printf 'k_near\nk_k_near\nkF_dm__Pair_int32__sum\n\nkama__Optional_string\n' > "$tmp/in.txt"
+printf 'k_near\nk_k_near\nkF_dm__Pair__kama_of__int32__kama_end__sum\n\nkama__Optional__kama_of__string__kama_end\n' > "$tmp/in.txt"
 "$KAMA" demangle "$tmp/dm.kama" < "$tmp/in.txt" > "$tmp/out.txt" 2>"$tmp/err" \
     || { echo "check-demangle: FAIL — the stdin form exited nonzero:" >&2; sed 's/^/  /' "$tmp/err" >&2; exit 1; }
 cat > "$tmp/want.txt" <<'EOF'

@@ -750,7 +750,7 @@ struct InterfaceInfo {
     // which is what lets the type-erased box `Owned<Job>` cross an isolate boundary. Not a parent in
     // `refines`: the marker has no members to merge, only a requirement to pass on.
     bool                         requiresSendable = false;
-    // A specialized generic-contract instance (`Iterator_int32`) — emitted under a bound _typeSubst so
+    // A specialized generic-contract instance (`Iterator<int32>`) — emitted under a bound _typeSubst so
     // its `T`-typed method sigs resolve; the template itself lives in _genericContracts, not here.
     bool                         isGenericInst = false;
     // `type contract C<T is This>` — the parameter PINNED to the implementing type, or -1 for none. It is
@@ -765,7 +765,7 @@ struct InterfaceInfo {
     // only inside the view itself or inside the type it views. This flag is how a type DECLARES that it
     // views something — implementing a member of a marked contract lets that member's body mint the view
     // it returns. Copied into every specialization by the _genericContracts template path, so marking
-    // `Iterable<T>` marks `Iterable_int32` too.
+    // `Iterable<T>` marks `Iterable<int32>` too.
     bool                         isViewable = false;
     std::string                  declFile;   // the unit that declared it — a late whole-program check scopes diagFile() from it
     ClassDeclarationNode*        node = nullptr;  // decl site (`type contract` node; LSP def-site table, unused by emission)
@@ -1842,7 +1842,7 @@ private:
 
     // Generic TYPES (`type value Box<T>`). The TEMPLATE is kept OUT of _classes (so the normal
     // class loops never see it); each reachable `Box<Arg>` becomes a synthetic specialized ClassInfo
-    // (`Box_int32`, isGenericInst=true) registered in _classes and emitted under _typeSubst.
+    // (`Box<int32>`, isGenericInst=true) registered in _classes and emitted under _typeSubst.
     struct GenericTypeInst { std::string templateKey; std::string mangledName; std::vector<SharedIdentifier> typeArgs; };
     std::map<std::string, ClassInfo>          _genericTypes;        // template name -> ClassInfo shape (NOT in _classes)
     std::map<std::string, std::vector<std::string>> _genericTypeParams;  // template name -> type-param names [A, B]
@@ -2131,7 +2131,7 @@ private:
 
     // Generic CONTRACTS (`type contract Iterator<T>`) — the exact parallel of generic TYPES above. The
     // TEMPLATE is kept OUT of _interfaces (so the eager vtable-emit loop never sees its unbound `T`);
-    // each reachable `Iterator<Arg>` becomes a specialized InterfaceInfo (`Iterator_int32`,
+    // each reachable `Iterator<Arg>` becomes a specialized InterfaceInfo (`Iterator<int32>`,
     // isGenericInst=true) registered in _interfaces and emitted under _typeSubst. Bound-checking is by
     // method NAME (T-independent), so it reads the template's methods directly (no instance needed).
     std::map<std::string, InterfaceInfo>            _genericContracts;      // template name -> InterfaceInfo shape (NOT in _interfaces)
@@ -2287,6 +2287,45 @@ public:
     // chooses is spelled here, and tools/check-kama-lane.sh refuses one joined by hand.
     static std::string kamaMember(const std::string& typeC, const std::string& what) { return typeC + "__kama_" + what; }
     static std::string preludeMember(const std::string& t, const std::string& what) { return kamaMember(preludeName(t), what); }
+    // A generic instance's C name and table key (KR-319): `<template>__kama_of__<arg>__kama_and__<arg>…__kama_end`, so
+    // `Pair<int32>` is `Pair__kama_of__int32__kama_end`. A `_` join (`Pair_int32`) met what a user can spell: a plain
+    // `Pair_int32`, a template `P_int32<bool>`, a plain type's method. No user name holds a `kama_` leaf, and with three
+    // distinct markers a name reads one way with no table — `A<B<C>, D>` and `A<B<C, D>>` differ in where `and` and
+    // `end` fall. Every instance is spelled here: a type, an enum, a contract, a function, an intrinsic.
+    // tools/check-kama-lane.sh refuses a marker written by hand.
+    static std::string instanceName(const std::string& tmpl, const std::vector<std::string>& args) {
+        if (args.empty()) return tmpl;
+        std::string n = tmpl + "__kama_of__";
+        for (size_t i = 0; i < args.size(); ++i) { if (i) n += "__kama_and__"; n += args[i]; }
+        return n + "__kama_end";
+    }
+    static std::string preludeInstance(const std::string& t, const std::vector<std::string>& args) { return instanceName(preludeName(t), args); }
+    // The inverse: the template an instance's name was built from (`Pair` for `Pair__kama_of__int32__kama_end`), or the
+    // name itself when it is no instance. The first open marker is the outermost, since a template's name holds none.
+    static std::string instanceTemplate(const std::string& n)
+    { size_t at = n.find("__kama_of__"); return at == std::string::npos ? n : n.substr(0, at); }
+    // ...and the whole of it, read by the markers alone: the template, each argument (itself an instance when it is
+    // one), and what follows the close (`__make`, for a member). False for a name that is no instance.
+    static bool splitInstance(const std::string& n, std::string& tmpl, std::vector<std::string>& args, std::string& rest)
+    {
+        static const std::string open = "__kama_of__", sep = "__kama_and__", close = "__kama_end";
+        const size_t at = n.find(open);
+        if (at == std::string::npos) return false;
+        tmpl = n.substr(0, at);
+        args.clear();
+        size_t i = at + open.size(), from = i;
+        int depth = 0;   // instances opened inside the current argument
+        while (i < n.size()) {
+            if (n.compare(i, open.size(), open) == 0) { ++depth; i += open.size(); continue; }
+            if (n.compare(i, close.size(), close) == 0) {
+                if (depth-- == 0) { args.push_back(n.substr(from, i - from)); rest = n.substr(i + close.size()); return true; }
+                i += close.size(); continue;
+            }
+            if (depth == 0 && n.compare(i, sep.size(), sep) == 0) { args.push_back(n.substr(from, i - from)); i += sep.size(); from = i; continue; }
+            ++i;
+        }
+        return false;   // never closed: no name kama wrote
+    }
 private:
     // The inverse, for a CONTRACT-name comparison. A bound reaches the predicates either as a
     // compiler-written literal (`satisfiesBound(t, "Copyable")`) or as a name the resolver already
@@ -2894,7 +2933,9 @@ private:
     // to no known type (nor a primitive / This / UnsafePtr / usize / isize), recursing into nested generic args.
     // Guards registerGenericTypeInst against a generic FUNCTION's signature scanned before instantiation.
     bool argCarriesUnboundParam(const SharedIdentifier& a);
-    std::string genericTypeMangle(const std::string& tmpl, SharedIdentifierList args);  // "Pair" + "_int32" + "_string"
+    std::string genericTypeMangle(const std::string& tmpl, SharedIdentifierList args);  // `Pair<int32, string>`'s instanceName
+    // instanceName over argument NODES, each spelled by mangleElem — the form most builders hold.
+    std::string instanceOf(const std::string& tmpl, const std::vector<SharedIdentifier>& args);
     // Expand use-site type args into the full positional binding for a generic template: leading POSITIONAL
     // args in order, NAMED overrides (`A: T`) placed by param name, trailing gaps filled from `defaults`.
     // `full[i]`/`isDefault[i]` are index-aligned with `params` (a null `full[i]` = a required param left

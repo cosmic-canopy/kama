@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-319 | *Claimed: Windows box, 2026-11-04.* **A type named like a generic instance's key is that instance** — `Pair<int32>`'s key is `Pair_int32`, so beside `type value Pair<T>` a `type value Pair_int32` resolves to the instance: `Pair_int32.make()` asks for `Pair<int32>`'s argument and its own field is "no field" (measured `0.9.847`). The key is a `_` join of names a user can spell. **Measured wider and ruled 2026-11-04:** every instance's arguments bracketed in the kama lane, `__kama_of__` / `__kama_and__` / `__kama_end` | L | [§2](ROADMAP_DETAIL.md#s2-instance-key) |
 
 ## NOW — the next features, in build order
 

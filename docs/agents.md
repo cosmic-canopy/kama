@@ -313,16 +313,16 @@ straight out of the binary and cannot: **a debugger**, a **C compiler's own erro
 and anything reading a crash log or an `objdump`.
 
 ```sh
-kama demangle app.kama -- kF_app__Pair_int32__make     # -> Pair<int32>::make
+kama demangle app.kama -- kF_app__Pair__kama_of__int32__kama_end__make     # -> Pair<int32>::make
 kama demangle app.kama < names.txt                     # a line in, a line out, until EOF
 ```
 
 Names are rewritten **in place**, so a whole line survives its surroundings —
-`int32_t kF_app__Pair_int32__sum(kF_app__Pair_int32* self)` comes back as
+`int32_t kF_app__Pair__kama_of__int32__kama_end__sum(kF_app__Pair__kama_of__int32__kama_end* self)` comes back as
 `int32_t Pair<int32>::sum(Pair<int32>* self)`. Paste the compiler error, not just the identifier.
 
 It takes the operands `check` takes, because **it is not a lexical rule**: rendering
-`std__collections__DynamicArray_int32_kama__GlobalAllocator` back to `DynamicArray<int32>` — argument
+`std__collections__DynamicArray__kama_of__int32__kama_and__kama__GlobalAllocator__kama_end` back to `DynamicArray<int32>` — argument
 spellings restored, the allocator left at its default dropped — needs the resolved program, so it runs the
 same analysis. That is also why it reads a **batch** over stdin: the analysis is paid once per process and
 each answer after it is a lookup, which is what lets one process serve a whole debug session. Give it the
