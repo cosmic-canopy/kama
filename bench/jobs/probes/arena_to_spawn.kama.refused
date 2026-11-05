@@ -1,0 +1,10 @@
+// A store drawn from an arena, borrowed by two scope children: both refused. The same store under parallel_for checks.
+import { std::collections::Arena, std::collections::FixedArray, std::collections::BumpAllocator, std::concurrent::Isolate };
+fn void bump(ref FixedArray<int32, BumpAllocator> xs) { xs[0] = xs[0] + 1; }
+fn uint8 main() {
+    Arena zone = Arena.make(capacity: 4096);
+    FixedArray<int32, BumpAllocator> a = FixedArray.filledWithAllocator(allocator: zone.handle(), size: 16, value: 0);
+    FixedArray<int32, BumpAllocator> b = FixedArray.filledWithAllocator(allocator: zone.handle(), size: 16, value: 0);
+    scope { spawn bump(xs: ref a); spawn bump(xs: ref b); }
+    return cast<uint8>(a[0] + b[0]);
+}

@@ -1,0 +1,6 @@
+import { std::collections::DynamicArray };
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    return cast<uint8>(xs[0]);
+}

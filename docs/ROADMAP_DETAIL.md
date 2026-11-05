@@ -3065,7 +3065,7 @@ others wait; x86-64; bare-metal Linux; Windows.
 | KR-25, KR-26, KR-309 the engine's packages | their consumers; nothing here names them |
 | SPEC, `agents/AGENTS.md`, `docs/agents.md`, tree-sitter, the Zed and Helix pins | *Concurrency* rewritten, `workers:` gone everywhere, `spawn job` in every grammar |
 
-Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: KR-323 and KR-324 (defects) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`).
+Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: KR-323 and KR-324 (defects) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) are inputs to the audit owed above.
 
 #### Build order, once ruled
 
@@ -3129,6 +3129,41 @@ are named and classed by it.
 There is also no `Condvar`, `Semaphore`, `Barrier` or `Once` in std, and no written verdict. SPEC's *Channels* says a channel is the seam, in a
 sentence older than `Locked`. A bounded channel is a semaphore, and `scope` is a barrier for its own children. `Once` has no answer short of an
 `Atomic` by hand, and `Atomic.wait` (decision 14) makes each of them writable in kama. **Verdict owed, per primitive.**
+
+<a id="s6-arena-task"></a>
+
+### A store drawn from an `Arena` cannot be handed to a task (KR-326)
+
+Measured `0.9.850` (`bench/jobs/probes/arena_to_spawn.kama.refused`, `arena_parfor.kama`). Two `FixedArray<int32, BumpAllocator>` from one `Arena`, each borrowed by
+its own `spawn`, are refused at the bundle gate: `BumpAllocator` is not `Sendable`. The refusal is sound, since a `BumpAllocator` is a value holding a raw pointer to its
+arena's offset and bumps it unsynchronized, and a child holding the store could grow it. A `parallel_for` over the same store checks, because a body reaches elements and not
+the allocator. So work split over an arena's store is fine, and work handed the store as a whole is not. Budgeting memory per region, sized when the region loads and released
+in O(1), is the case that wants it.
+
+| | an arena several tasks may use |
+|---|---|
+| Rust | `bumpalo::Bump` is `Send` and not `Sync`; `bumpalo-herd` gives each thread a member |
+| C++ | `monotonic_buffer_resource` is unsynchronized; `synchronized_pool_resource` is another type |
+| Zig | `ThreadSafeAllocator` wraps any allocator |
+
+**Two shapes, by whether a task allocates while it runs.** An atomic bump lets tasks allocate, and an uncontended bump pays an atomic add, so it wants its own type rather than a
+slower `BumpAllocator`. A frozen handle, made once a region's stores are sized, may only free (a no-op), which makes it `Sendable` and costs nothing, and a task can never
+allocate through it. **Verdict: scheduled, design first,** with the question to the engine that reported it: which shape does its work need? Before `spawn job`, whose `ref`
+parameters meet the same gate.
+
+<a id="s6-wasm-serial"></a>
+
+### A wasm program holding a thread form has no single-threaded build (KR-327)
+
+Measured `0.9.850` (`bench/jobs/probes/wasm_form.kama`, `wasm_noform.kama`, `--target wasm --release`): one `parallel_for` makes the build threaded, the JS naming
+`SharedArrayBuffer` and `PThread` at 21,544 bytes, against neither at 8,893. The driver reads `spawnsThreads()` for it: a threaded runtime is a hosting model, chosen by what the
+program holds. A browser gives `SharedArrayBuffer` only to a cross-origin isolated page, so that page must send COOP and COEP, which not every host can, and `main` moves to a
+worker. A library using `parallel_for` inside therefore decides its host's headers, and a program that wants threads only by a switch must gate its forms out at build time.
+
+Rayon's global pool falls back to the current thread where threads are not supported, so the same source runs on wasm without atomics. **On a pool the answer is close to free:** a
+setting under which there are no worker threads, `parallel_for` and `spawn job` run on the caller in order, as `setJobThreads(count: 1)` already does at run time, and no threaded
+runtime is linked. `spawn` and `parallel_spawn` mean a thread, so they stay refused there. **Ruling owed, with KR-3's step 10:** whether this is a per-build setting and how it is spelled. *Predicted*
+to need no change to a form's lowering beyond the pool's own arm.
 
 <a id="s6-parfor-index"></a>
 
