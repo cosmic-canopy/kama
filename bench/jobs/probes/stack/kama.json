@@ -1,0 +1,9 @@
+{
+  "name": "fiberswitch",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "csources": ["csrc/selftest.c"],
+  "modules": { ".": { "visibility": "internal" } }
+}

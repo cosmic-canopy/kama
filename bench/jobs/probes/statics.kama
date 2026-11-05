@@ -1,0 +1,12 @@
+// Probe 1: a child's module static starts at the initialiser, not at what the parent or an earlier child left there.
+import { core::println, std::concurrent::Isolate };
+static int32 counter = 100;
+fn void child(ref int32 into) { into = counter; counter = counter + 1; }
+fn uint8 main() {
+    counter = 7;
+    int32 a = 0; int32 b = 0;
+    scope { spawn child(into: ref a); }
+    scope { spawn child(into: ref b); }
+    println(s: "main=${counter} first=${a} second=${b}");
+    return 0;
+}

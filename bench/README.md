@@ -81,6 +81,11 @@ bench/
   pipe/               an in-memory stream pair against tokio's `duplex` and Go's `net.Pipe` (KR-264; the results are
                       in docs/ROADMAP_DETAIL.md). `bench/run pipe <out.tsv> [rounds]` for all three, `bench/pipe/run.sh`
                       on a host with no Go, then `bench/pipe/summarize.py`. Also what a fiber's park and wake cost.
+  jobs/               KR-3's job pool: what a hand-out and its barrier cost, against `parallel_for`, Rayon, OpenMP and Go, and
+                      what each burns to get there (the brief is docs/ROADMAP_DETAIL.md `s6-pools`). pool.c is a prototype of the
+                      hand-out path, not the runtime. `bench/jobs/run.py <out.tsv>` on a host, `bench/run jobs <out.tsv> [rounds]`
+                      for the Linux arms, then `bench/jobs/summarize.py`. Runs on the Windows box too, under msys2. `wasm.sh` is the node leg, and
+                      `probes/` holds what the brief ran through the compiler.
   concurrent_map/     not a language comparison either: eight isolates on one `Locked<Map>` against a
                       `ConcurrentMap` (KR-232, SPEC *A concurrent map*). `bench/concurrent_map/run.py`.
 ```

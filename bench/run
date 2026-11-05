@@ -16,6 +16,8 @@
 #                             and CONFIGS pass through when set
 #   bench/run pipe [out] [rounds]    KR-264's in-memory stream pair against tokio and Go (bench/pipe/), out under .scratch/
 #                             by default; SLOTS and CONFIGS pass through when set
+#   bench/run jobs [out] [rounds]    KR-3's job pool against `parallel_for`, Rayon, OpenMP and Go (bench/jobs/), out under
+#                             .scratch/ by default; SLOTS, SHAPES and WORKERS pass through when set
 #   bench/run sh              interactive shell in the bench image
 #
 # Override the engine with KAMA_ENGINE=docker|podman.
@@ -71,6 +73,10 @@ case "${1:-}" in
   pipe)        "$ENGINE" run --rm --security-opt seccomp=unconfined --security-opt label=disable \
                  ${uring_args[@]+"${uring_args[@]}"} -v "$ROOT:/work" -w /work "$IMAGE" \
                  bash -c "make -s kama >/dev/null && sh bench/pipe/run.sh ${2:-.scratch/pipe.tsv} ${3:-15}" ;;
+  jobs)        job_args=()
+               for v in SLOTS SHAPES WORKERS ROUNDS_100US ROUNDS_1MS; do [ -n "${!v:-}" ] && job_args+=(-e "$v=${!v}"); done
+               "$ENGINE" run --rm ${job_args[@]+"${job_args[@]}"} -v "$ROOT:/work" -w /work "$IMAGE" \
+                 bash -c "make -s kama >/dev/null && python3 bench/jobs/run.py ${2:-.scratch/jobs.tsv} ${3:-7}" ;;
   # KR-253 §8 step 5's counts: perf's tracepoints need the container privileged and the VM's tracefs inside it, beside the
   # seccomp and SELinux relaxation every server run has. The VM must also allow perf (see WRAP above).
   # On a ROOTLESS podman machine (the macOS default) the container's root is the VM user, and the VM's tracefs is root's
@@ -81,5 +87,5 @@ case "${1:-}" in
                  -v /sys/kernel/tracing:/sys/kernel/tracing -v "$ROOT:/work" -w /work "$IMAGE" \
                  bash -c "make -s kama >/dev/null && bash bench/server/count.sh ${2:-.scratch/counts.tsv} ${3:-3}" ;;
   sh|shell)    "$ENGINE" run --rm -it -v "$ROOT:/work" -w /work "$IMAGE" bash ;;
-  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|uring [out] [rounds]|pipe [out] [rounds]|count [out] [runs]|sh}" >&2; exit 2 ;;
+  *) echo "usage: bench/run {build-image|build|run [workload]|report|all|server [out] [rounds]|uring [out] [rounds]|pipe [out] [rounds]|jobs [out] [rounds]|count [out] [runs]|sh}" >&2; exit 2 ;;
 esac

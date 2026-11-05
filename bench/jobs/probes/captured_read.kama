@@ -1,0 +1,17 @@
+// Is a Sendable local, captured by a parallel_for body, read by every worker at once on TODAY's compiler?
+import { core::println, std::concurrent::Isolate, std::collections::DynamicArray };
+type resource Store implements Sendable {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray::<int32>.empty(); for (int32 i = 0; i < 100; i = i + 1) { this.xs.add(item: i); } }
+    public const fn int64 total() { int64 t = 0i64; foreach (const ref int32 x in this.xs) { t = t + cast<int64>(x); } return t; }
+}
+fn uint8 main() {
+    Store s = Store.make();
+    DynamicArray<int64> out2 = DynamicArray::<int64>.empty();
+    for (int32 i = 0; i < 8; i = i + 1) { out2.add(item: 0i64); }
+    parallel_for (ref int64 e in out2, workers: 8) { e = s.total(); }
+    int64 sum = 0i64;
+    foreach (int64 v in out2) { sum = sum + v; }
+    println(s: "sum=${sum}");
+    return 0;
+}

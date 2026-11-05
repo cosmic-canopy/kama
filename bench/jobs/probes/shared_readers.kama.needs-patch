@@ -1,0 +1,34 @@
+// Probe 3: many isolates reading one collection through `const ref`, under TSan.
+import { core::println, std::concurrent::Isolate, std::collections::DynamicArray, std::collections::Map, std::collections::FixedArray };
+type resource Store implements Sendable {
+    DynamicArray<int32> xs;
+    Map<string, int32> m;
+    string name;
+    public ctor make() {
+        this.xs = DynamicArray::<int32>.empty();
+        for (int32 i = 0; i < 2000; i = i + 1) { this.xs.add(item: i); }
+        this.m = Map::<string, int32>.empty();
+        for (int32 i = 0; i < 500; i = i + 1) { this.m.put(key: "k${i}", value: i); }
+        this.name = "a shared name long enough to be on the heap, not inline at all";
+    }
+    public const fn int64 total() {
+        int64 t = 0i64;
+        foreach (const ref int32 x in this.xs) { t = t + cast<int64>(x); }
+        for (int32 i = 0; i < 500; i = i + 1) {
+            match (this.m.get(key: "k${i}")) { case Some(value: v): { t = t + cast<int64>(v); } case None: { } };
+        }
+        foreach (const ref int32 v in this.m.valuesConst()) { t = t + cast<int64>(v); }
+        t = t + cast<int64>(this.name.length());
+        return t;
+    }
+}
+fn void reader(const ref Store s) { for (int32 r = 0; r < 200; r = r + 1) { int64 v = s.total(); if (v == 0i64) { println(s: "zero"); } } }
+fn uint8 main() {
+    Store s = Store.make();
+    scope {
+        spawn reader(s: ref s); spawn reader(s: ref s); spawn reader(s: ref s); spawn reader(s: ref s);
+        spawn reader(s: ref s); spawn reader(s: ref s); spawn reader(s: ref s); spawn reader(s: ref s);
+    }
+    int64 t = s.total(); println(s: "total=${t}");
+    return 0;
+}

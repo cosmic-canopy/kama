@@ -1,0 +1,14 @@
+# The Rayon arm of KR-3's pool benchmark, the comparison a game engine on kama named: a pool that runs borrowing work.
+[package]
+name = "jobs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+rayon = "1.12"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

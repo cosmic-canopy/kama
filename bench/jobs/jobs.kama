@@ -1,0 +1,70 @@
+// jobs.kama — what `parallel_for` costs per hand-out today (KR-3's pool brief): it starts and joins its isolates on every
+// call. pool.c, rust/, go/ and omp.c write the same two shapes, and the same work, so `check` must agree across them.
+//
+//   tight  BENCH_CALLS barriers back to back over BENCH_ELEMS uint32s.
+//   frame  the same barrier once every BENCH_SLOT_US, spinning between, as a frame's phases do. 1,389 µs is 12 in a 60 Hz frame.
+//
+// An element is incremented and then put through BENCH_ROUNDS rounds of xorshift. With none, a hand-out carries no work to speak
+// of: a pool whose caller takes chunks then finishes them all before a worker wakes, so a phase's real cost wants real rounds.
+//
+// Usage: BENCH_SHAPE=tight|frame BENCH_WORKERS=<k> BENCH_CALLS=<n> BENCH_ELEMS=<n> BENCH_ROUNDS=<n> ./jobs
+// Prints one TSV row: shape, workers, calls, elems, total ns in the barriers, p50 ns, p99 ns, checksum.
+import { core::envOr, core::println,
+    std::collections::DynamicArray,
+    std::collections::sort,
+    std::concurrent::Isolate,
+    std::time::Instant,
+    std::time::monotonicNow,
+};
+
+fn int64 parseInt(const ref string s) {
+    int64 v = 0i64;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int64 c = cast<int64>(s[i]);
+        if (c < 48i64 || c > 57i64) { return 0i64; }
+        v = v * 10i64 + c - 48i64;
+    }
+    return v;
+}
+fn int64 setting(string name, string dflt) { return parseInt(s: envOr(name: give name, dflt: give dflt)); }
+
+fn uint8 main() {
+    string shape = envOr(name: "BENCH_SHAPE", dflt: "tight");
+    int32 workers = cast<int32>(setting(name: "BENCH_WORKERS", dflt: "4"));
+    int32 calls = cast<int32>(setting(name: "BENCH_CALLS", dflt: "2000"));
+    int32 elems = cast<int32>(setting(name: "BENCH_ELEMS", dflt: "1024"));
+    int64 slot = setting(name: "BENCH_SLOT_US", dflt: "1389") * 1000i64;
+    int32 rounds = cast<int32>(setting(name: "BENCH_ROUNDS", dflt: "0"));
+    bool frame = shape == "frame";
+
+    DynamicArray<uint32> xs = DynamicArray::<uint32>.empty();
+    for (int32 i = 0; i < elems; i = i + 1) { xs.add(item: 0ui32); }
+    DynamicArray<int64> t = DynamicArray::<int64>.empty();
+
+    int64 total = 0i64;
+    Instant start = monotonicNow();
+    int64 next = 0i64;
+    for (int32 c = 0; c < calls; c = c + 1) {
+        if (frame) {
+            next = next + slot;
+            while (monotonicNow().since(earlier: start).asNanos() < next) { }
+        }
+        Instant t0 = monotonicNow();
+        parallel_for (ref uint32 e in xs, workers: workers) {
+            uint32 x = e + 1ui32;
+            for (int32 r = 0; r < rounds; r = r + 1) { x = x ^ (x << 13); x = x ^ (x >> 17); x = x ^ (x << 5); }
+            e = x;
+        }
+        int64 ns = monotonicNow().since(earlier: t0).asNanos();
+        t.add(item: ns);
+        total = total + ns;
+    }
+
+    int64 check = 0i64;
+    foreach (uint32 x in xs) { check = check + cast<int64>(x); }
+    borrow t.viewMut() as v { sort(items: v); }
+    int64 p50 = t[cast<isize>(calls / 2i32)];
+    int64 p99 = t[cast<isize>(calls - 1i32 - calls / 100i32)];
+    println(s: "${shape}\t${workers}\t${calls}\t${elems}\t${total}\t${p50}\t${p99}\t${check}");
+    return 0;
+}
