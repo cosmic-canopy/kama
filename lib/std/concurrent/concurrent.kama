@@ -22,10 +22,10 @@ extern "kama_isolate.h";
 extern fn void kama_isolate_join_boxed(UnsafePtr h);
 extern fn int32 kama_parfor_workers();
 
-// How many isolates this machine can actually run at once — the same number `parallel_for` sizes its
+// How many isolates this process can actually run at once — the same number `parallel_for` sizes its
 // worker fan-out from, so a program that builds its own pool and one that hands work to `parallel_for`
-// agree about the machine. `sysconf`/`pthread_num_processors_np`/`emscripten_num_logical_cores` per
-// platform, and 1 on bare metal, where one core IS one isolate.
+// agree about the machine. The CPUs an affinity mask, a cgroup quota or a job object leaves this process
+// (kama_isolate.h), what the browser offers on wasm, and 1 on bare metal, where one core IS one isolate.
 //
 // `rawCpuCount` is `unsafe` because EVERY `extern fn` call is — that is the seam's rule, not a statement
 // about this function — and it is left OUT of the export list above, so it is module-private. A core

@@ -143,24 +143,46 @@ static inline void* kama_isolate_spawn_boxed_sized(void* (*entry)(void*), void* 
 }
 static inline void kama_isolate_join_boxed(void* h) { kama_isolate_join((kama_isolate_t)h); }
 
-// The default worker count for `parallel_for` (M6.3) when no build-time override is set: the machine's
-// logical-core count. Because a parallel_for's slices are disjoint and joined at a barrier, this only
+// The default worker count for `parallel_for` (M6.3) when no build-time override is set: the CPUs this
+// process may use, which is not always the machine's count (below). Because a parallel_for's slices are disjoint and joined at a barrier, this only
 // affects speed, never the result — the call site caps it at the collection length. Reached from kama as
 // `std::concurrent::cpuCount()`, which is what a `parallel_for (…, workers: cpuCount())` calls.
 #if defined(__EMSCRIPTEN__)
 #include <emscripten/threading.h>
 static inline int kama_parfor_workers(void) { int n = emscripten_num_logical_cores(); return n > 0 ? n : 1; }
 #elif defined(_WIN32)
-// mingw-w64 ships <unistd.h> but no sysconf, so the POSIX branch below did not merely misreport the core
-// count on Windows — it failed to COMPILE, and took every fixture that reaches this header with it
-// (isolate, channel, atomic, parfor, scope, shared, ecs: 31 of the 48 failures on the Windows leg).
+// How many CPUs this process may use: its affinity mask, and a job object's hard CPU rate cap, which is what a
+// Windows container's `--cpus` sets. Measured on 20 CPUs: under an affinity of 2, winpthreads'
+// `pthread_num_processors_np` (the mask's popcount) said 2, Go 2 and Rust's `available_parallelism` 20; under a cap
+// of 2 CPUs' worth, all three said 20. A cap rounds up, as Linux's quota does. Only the process's own job is read:
+// a cap on an enclosing job binds too, and Windows does not name it.
 //
-// winpthreads answers this itself, and <pthread.h> is already included above — which is the whole reason
-// to prefer it over GetActiveProcessorCount. That would mean either <windows.h>, which cannot be included
-// here (a TU that also uses kama_os.h needs <winsock2.h> to come FIRST — see the note at the top of that
-// header), or a hand-declared prototype that clang warns about the moment windows.h declares it too, and
-// a warning is a failed build in this suite.
-static inline int kama_parfor_workers(void) { int n = pthread_num_processors_np(); return n > 0 ? n : 1; }
+// Past 64 CPUs (more than one processor group, reasoned from the documentation; no box here has one) the mask is
+// the primary group's, and it reads 0 once the process's threads span groups, as they may from Windows 11 on.
+// `pthread_num_processors_np` answered 1 then; this answers every processor instead.
+//
+// Declared rather than included: headers are emitted in name order, and <windows.h> belongs to kama_os.h (as in
+// kama_fiber.h). Each matches its <windows.h> declaration, so a unit that sees both compiles: the job's class is an
+// enum there, which is an `unsigned int` here since no value is negative.
+__declspec(dllimport) void* __stdcall GetCurrentProcess(void);
+__declspec(dllimport) int __stdcall GetProcessAffinityMask(void* process, kama__win_size* mask, kama__win_size* system);
+__declspec(dllimport) unsigned long __stdcall GetActiveProcessorCount(unsigned short group);
+__declspec(dllimport) int __stdcall QueryInformationJobObject(void* job, unsigned int cls, void* info, unsigned long size,
+                                                              unsigned long* got);
+static inline int kama__usableCpus(void) {
+    long all = (long)GetActiveProcessorCount(0xffff);               /* ALL_PROCESSOR_GROUPS */
+    long n = all;
+    kama__win_size mask = 0, sys = 0;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &mask, &sys) && mask) n = __builtin_popcountll(mask);
+    struct { unsigned long flags; unsigned long rate; } cap = {0, 0};   /* JOBOBJECT_CPU_RATE_CONTROL_INFORMATION */
+    if (QueryInformationJobObject(0, 15 /* JobObjectCpuRateControlInformation */, &cap, sizeof cap, 0) && (cap.flags & 1)) {
+        unsigned long rate = (cap.flags & 4) ? cap.rate                /* HARD_CAP: a share of every processor, in 1/10000 */
+                           : (cap.flags & 0x10) ? (cap.rate >> 16) : 0; /* MIN_MAX_RATE: its MaxRate, the same unit */
+        long quota = rate ? (long)((rate * (unsigned long long)all + 9999) / 10000) : 0;
+        if (quota > 0 && quota < n) n = quota;
+    }
+    return n > 0 ? (int)n : 1;
+}
 #elif defined(__linux__)
 // How many CPUs this process may use, which is not how many the machine has: `sysconf` sees neither an affinity mask nor a
 // cgroup's quota, so under `taskset -c 0,1` on 6 CPUs it said 6 where Rust's `available_parallelism` and Go's `GOMAXPROCS`
@@ -266,6 +288,11 @@ static inline int kama__usableCpus(void) {
     if (quota > 0 && (n <= 0 || quota < n)) n = quota;
     return n > 0 ? (int)n : 1;
 }
+#else
+#include <unistd.h>
+static inline int kama_parfor_workers(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 1; }
+#endif
+#if !defined(__EMSCRIPTEN__) && (defined(_WIN32) || defined(__linux__))
 // Read once: racing first callers compute one answer, and a pool is sized from it once.
 static inline int kama_parfor_workers(void) {
     static int known;
@@ -273,9 +300,6 @@ static inline int kama_parfor_workers(void) {
     if (n == 0) { n = kama__usableCpus(); __atomic_store_n(&known, n, __ATOMIC_RELAXED); }
     return n;
 }
-#else
-#include <unistd.h>
-static inline int kama_parfor_workers(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 1; }
 #endif
 
 #if defined(KAMA__ISOLATE_FIBERS)

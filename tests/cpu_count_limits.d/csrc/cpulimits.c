@@ -1,4 +1,5 @@
-// The C half of tests/cpu_count_limits.d: kama_isolate.h's cgroup walk over a tree built here, and the affinity mask in a child.
+// The C half of tests/cpu_count_limits.d: kama_isolate.h's cgroup walk over a tree built here and the affinity mask in a child
+// (Linux), or this process's own mask and job object (Windows).
 #include "kama_isolate.h"
 #include "cpulimits.h"
 #if defined(__linux__)
@@ -72,6 +73,45 @@ int cpu_limits_selftest(void) {
     }
     int status = 0;
     if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) return 16;
+    return 0;
+}
+#elif defined(_WIN32)
+// Windows: this process's own affinity mask, then a job object it joins, whose CPU rate it sets and clears. After
+// kama_isolate.h on purpose: its hand-written declarations must agree with <windows.h>'s.
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+static int capped(HANDLE job, DWORD flags, DWORD rate) {
+    JOBOBJECT_CPU_RATE_CONTROL_INFORMATION rc = {0};
+    rc.ControlFlags = flags;
+    rc.CpuRate = rate;   /* the union's first member; MIN_MAX_RATE reads it as MinRate (low) and MaxRate (high) */
+    if (!SetInformationJobObject(job, JobObjectCpuRateControlInformation, &rc, sizeof rc)) return -1;
+    return kama__usableCpus();
+}
+int cpu_limits_selftest(void) {
+    DWORD_PTR mask = 0, sys = 0;
+    if (!GetProcessAffinityMask(GetCurrentProcess(), &mask, &sys) || !mask) return 21;
+    const int all = (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+    if (kama__usableCpus() != __builtin_popcountll(mask)) return 22;            // no limit: the mask
+    const DWORD_PTR lowest = mask & (~mask + 1);
+    if (!SetProcessAffinityMask(GetCurrentProcess(), lowest)) return 23;
+    if (kama__usableCpus() != 1) return 24;                                      // a mask of one CPU
+    const DWORD_PTR two = lowest | ((mask & ~lowest) & (~(mask & ~lowest) + 1));
+    if (two != lowest) {
+        if (!SetProcessAffinityMask(GetCurrentProcess(), two)) return 25;
+        if (kama__usableCpus() != 2) return 26;                                  // a mask of two
+    }
+    if (!SetProcessAffinityMask(GetCurrentProcess(), mask)) return 27;
+    if (all < 2) return 0;                                                       // a cap below one CPU is still one
+
+    HANDLE job = CreateJobObjectA(NULL, NULL);
+    if (!job || !AssignProcessToJobObject(job, GetCurrentProcess())) return 28;
+    const DWORD enable = JOB_OBJECT_CPU_RATE_CONTROL_ENABLE;
+    const DWORD oneAndHalf = (DWORD)(15000 / all), one = (DWORD)(10000 / all);   // shares of every processor
+    if (capped(job, enable | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, oneAndHalf) != 2) return 29;   // 1.5 rounds up
+    if (capped(job, enable | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, one) != 1) return 30;
+    if (capped(job, enable | JOB_OBJECT_CPU_RATE_CONTROL_MIN_MAX_RATE, (one << 16) | 1) != 1) return 31;  // MaxRate (MinRate 0 is refused)
+    if (capped(job, enable | JOB_OBJECT_CPU_RATE_CONTROL_WEIGHT_BASED, 5) != __builtin_popcountll(mask)) return 32;  // a weight caps nothing
+    if (capped(job, 0, 0) != __builtin_popcountll(mask)) return 33;              // cleared
     return 0;
 }
 #else

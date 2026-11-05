@@ -417,7 +417,8 @@ behaves as macOS's does. kama detects a FreeBSD host (`src/kama.driver.cpp`) but
 FreeBSD leg, so a `@compileFor(OS_FREEBSD)` twin would compile nowhere this repo runs. It falls into the
 `!OS_LINUX, !OS_MACOS` twin today: the backlog alone, which is correct, only narrower than FreeBSD can do. To build:
 a FreeBSD leg (a CI runner or the container), then the twin, its `kama_set_reuseport_lb` helper, and the fixture's
-`shared()` branch.
+`shared()` branch. The same leg owes `cpuCount()` its FreeBSD half: `cpuset_getaffinity`, as Linux and Windows read
+their masks (`kama_isolate.h`); FreeBSD falls into the `sysconf` branch today, which sees no mask.
 
 <a id="s1-fuzz"></a>
 
@@ -2828,7 +2829,7 @@ step 9 (the job pool) and step 7 (the offload pool) together, with KR-288, KR-31
 **Revised 2026-11-05, after the maintainer asked whether this still fits a general-purpose language.** It did not, in three places,
 all shaped by the frame loop that prompted the brief: decision 5 refused a `parallel_for` that reads a file, decision 4 made a process
 multi-threaded before `main`, and decision 7 took away per-worker state with nothing in its place. Decisions 4, 5 and 7 change,
-decisions 2, 8, 14 and 15 are corrected, and decisions 16 and 17 are new. KR-324 and KR-325 came out of the same probes, and so did a data race `parallel_for` let through, fixed in `0.9.851`.
+decisions 2, 8, 14 and 15 are corrected, and decisions 16 and 17 are new. `cpuCount()`'s limits (Linux `0.9.852`, Windows `0.9.855`) and KR-325 came out of the same probes, and so did a data race `parallel_for` let through, fixed in `0.9.851`.
 
 **What changes from what was ruled or said, plainly.**
 - **"Jobs must not park" (decision 5, ruled 2026-10) goes in part.** A job may wait on the OS, and may not wait on another task. That
@@ -3148,7 +3149,7 @@ the pool before `main`. Both arms keep the walk honest: the start is reached onl
 program expects on its own thread does not land in a worker, and `SIGSEGV` and `SIGBUS` stay open for the overflow handler. `pthread_atfork`
 returns the child's pool to unstarted, as `kama_fiber.h` already registers one. Priorities (a long held job competing with a barrier)
 are **not in this design**: KR-320 holds that verdict, since a pool has to exist before a priority can be measured. **The pool's size rests on
-`cpuCount()`, whose Windows half is KR-324.**
+`cpuCount()`, which counts what the process may use, on Linux since `0.9.852` and on Windows since `0.9.855`.**
 
 **Decision 5 — a job may not wait on another task; it may wait on the OS.** *Revised 2026-11-05: this first refused anything that reached
 `kama_fiber_switch`.* That refused the plainest parallel program there is, and the probe says so: `probes/parfor_files.kama`, a
@@ -3407,12 +3408,11 @@ others wait; bare-metal Linux, and Linux on x86-64 (Windows on x86-64 is measure
 | KR-25, KR-26, KR-309 the engine's packages | their consumers; nothing here names them |
 | SPEC, `agents/AGENTS.md`, `docs/agents.md`, tree-sitter, the Zed and Helix pins | *Concurrency* rewritten, `workers:` gone everywhere, `spawn job` in every grammar |
 
-Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: KR-324 (a defect) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) are inputs to the audit owed above.
+Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: `cpuCount()`'s Windows half (a defect, fixed in `0.9.855`) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) are inputs to the audit owed above.
 
 #### Build order, once ruled
 
 Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a measured gate against the arms above.
-0. KR-324's Windows half, before the pool sizes itself by it.
 1. KR-288 (S), then KR-313, each useful alone and neither needing a pool.
 2. `Atomic.wait` and `notify`, then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
    proof and the `@onPanic` refusal.
@@ -3421,28 +3421,6 @@ Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a meas
 5. Rerun `skew:12` with the burst offloaded, which closes KR-255, in its new shape: `scope { spawn job mix(b: ref buf, into: ref h); }`.
 6. Then step 7, 10, KR-297, KR-296, 11, as ruled. KR-296 inherits a constraint: a cancelled fiber still waits at its brace, since
    a job holds its frame.
-
-<a id="s6-cpucount"></a>
-
-### `cpuCount()` on Windows may count CPUs the process cannot use (KR-324)
-
-To `0.9.851` it was `sysconf(_SC_NPROCESSORS_ONLN)` on POSIX, which sees neither affinity nor a CPU quota, a wrong answer that a pool sizing itself by it would make worse: on a 128-core
-host in a 2-CPU container, 128 threads spin against a quota. **Linux is fixed in `0.9.852`** (`kama_isolate.h`, `tests/cpu_count_limits.d`). Measured on 6 vCPUs (`bench/jobs/probes/before_main/` for the others):
-
-| limit | kama to `0.9.851` | kama `0.9.852` | Rust `available_parallelism` | Go `GOMAXPROCS` |
-|---|---|---|---|---|
-| none | 6 | 6 | 6 | 6 |
-| `taskset -c 0,1` | 6 | **2** | 2 | 2 |
-| a container's `--cpus=1` | 6 | **1** | 1 | 2 |
-| a container's `--cpus=2.5` | 6 | **3** | not run | not run |
-
-**What is left is Windows:** `pthread_num_processors_np` is winpthreads', unmeasured under an affinity mask, and a job object's CPU rate limit and processor groups have not been looked at. macOS has no affinity call and no quota to read. FreeBSD's `cpuset_getaffinity` waits on a leg that builds there (KR-227's reason).
-
-**Next, on the Windows box:** measure `cpuCount()` against Rust's `available_parallelism`, Go's `runtime.NumCPU` and .NET's
-`Environment.ProcessorCount` under `start /affinity 3`, under a job object with a CPU rate limit, and with no limit; then
-read the affinity mask (`GetProcessAffinityMask`) and the job's rate (`QueryInformationJobObject`) as Linux reads its
-mask and quota, with `tests/cpu_count_limits.d` gaining a Windows arm. A machine with more than 64 logical processors
-(two processor groups) is the case no box here has; it is reasoned from the documentation and said so.
 
 <a id="s6-thread-control"></a>
 

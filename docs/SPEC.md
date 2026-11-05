@@ -7547,7 +7547,9 @@ fn void doubleAll(ref DynamicArray<int32> xs) {
 declare one), so a built-in construct does not get one either. Write `workers: cpuCount()` for one slice
 per core, `workers: 4` for a fixed width, or any expression: `workers: cpuCount() - 2` to leave headroom.
 `cpuCount()` counts what this process may use, read once: on Linux that is the online CPUs, narrowed by its affinity mask and by a <!-- test: cpu_count_limits -->
-cgroup's CPU quota rounded up, on it or any ancestor. (Rust's `available_parallelism` and Go's `GOMAXPROCS` read the same.)
+cgroup's CPU quota rounded up, on it or any ancestor (Rust's `available_parallelism` and Go's `GOMAXPROCS` read the same); on
+Windows its affinity mask, narrowed by its job object's CPU rate cap rounded up, which is what a container's `--cpus` sets (Go reads
+the mask alone there, and Rust neither).
 It is *exactly* what you asked for, capped only by `length` (more workers than elements would leave some
 with no slice) — not silently reduced to the core count, since oversubscription is the caller's call.
 A literal `workers: 0` or negative is a compile error. <!-- xfail: parfor_no_workers --> A second clause,
