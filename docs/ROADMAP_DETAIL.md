@@ -2339,9 +2339,9 @@ native x86-64 Windows 11 under msys2 UCRT64, and emsdk 6.0.13 under node.
 | the worst | 2 ulp (`cbrt`, `cbrtf`); 1 ulp everywhere else | — |
 
 The worst rows are not rare cases: `cbrt` differs on 58,666 inputs of 200,000, `atan2` on 44,021, `tanf` on 27,272, large-argument `sin` on
-10,297. musl's sources compiled natively (emsdk's own copy, the code wasm already runs; 55 files, about 49 KB for all 28 before
-`--gc-sections`) give wasm's bits on every input. So one implementation compiled into the program is the whole fix, and wasm's output does not
-change.
+10,297. musl's sources compiled natively (emsdk's own copy; 55 files, about 49 KB for all 28 before `--gc-sections`) give the bits of wasm
+built at `-O2` on every input. So one implementation compiled into the program is the whole fix. (kama's release wasm build is `-Oz`, which
+links three different functions: see below.)
 
 **What it costs**, ns per call, the median of 9 interleaved rounds over 4,096 inputs, platform libm and musl in one process (musl renamed). The box
 was running a full test suite at the time, so these are provisional and want a rerun on a quiet machine:
@@ -2354,13 +2354,20 @@ was running a full test suite at the time, so these are provisional and want a r
 | `float32` musl | 6.33 | 5.71 | 3.56 | 1.71 | 2.00 | 1.36 | 2.60 | 3.64 | 2.54 | 7.52 | 4.31 | 1.54 | 46.8 |
 
 Natively, about 12% more summed over the 14 functions, uneven by function: `log10` takes twice as long and `sinf`, `cosf` and `powf` 1.6–1.8 times,
-while `cbrt` and `hypotf` run two to 2.6 times faster. On wasm nothing changes, since it is musl already (8.5 ns `sin`, 9.4 `pow`).
+while `cbrt` and `hypotf` run two to 2.6 times faster. On wasm the cost is musl's own, which wasm already pays (8.5 ns `sin`, 9.4 `pow`).
 
 **The platform's libm does not agree with itself either.** UCRT takes an FMA3 code path at run time when the CPU has one, and
 `_set_FMA3_enable(0)` selects the path a CPU without FMA3 takes. The same executable on the same box, path on against path off: 16,914 of 5.8
 million inputs differ, in 16 of 29 rows (`tan` 5,226, `asin` 2,618, `cos` 1,969, `sin` 1,930), 1 ulp each. So two Windows machines disagree with
 each other, not only with wasm, and a program that never targets wasm still needs one implementation compiled in: a native-only form of the key
 would cost the same, so it is not offered. Linux, macOS and Android each ship their own libm, which an OS update can change; not measured here.
+
+**kama's wasm release build disagrees with its debug build.** A release wasm build compiles at `-Oz`, at which emscripten links `libc_optz`,
+whose `pow`, `log` and `log2` are older table-free versions (`pow_small.c`, `log_small.c`, `log2_small.c`, kept for size; emscripten issue
+15483). A debug build (`-g -O0`) links Arm's. The probe at `-Oz` against `-O2`: `pow` differs on 19,403 inputs, `log` on 1,924 and `log2` on
+80, 1 ulp each, and every other row agrees. So the 0 above is against a debug wasm build, the fix cannot leave wasm on emscripten's libm, and
+the vendored copy is compiled into wasm too. At `-Oz`, Arm's three with their tables are 16.7 KB of wasm object against 4.4 KB for the small
+ones: about 12 KB more, paid only by a program under the key that calls all three.
 
 Rerun with UCRT's FMA3 paths on and then off, the box still busy, so still provisional. The musl column is the same code in every run and moved
 between runs by up to 25% (2× on `hypotf`), which is the noise. Summed over all 28, musl was 7% slower than UCRT with FMA3 on and 4% faster than
@@ -2393,25 +2400,53 @@ from musl. Box2D hand-codes its trigonometry. glibc and CORE-MATH have been conv
 A second divergence comes with the libm: LLVM folds a libm call on a constant with the **build machine's** libm, so a constant folded on a Mac
 and the same call made at run time on Windows need not agree. A function compiled into the program is folded from its own code or not at all.
 
-**Recommendation:** under the key, `std::math`'s 14 functions, both widths, come from musl's sources vendored into kama. These are the sources
-wasm runs today, so wasm is unchanged. Without the key, the platform's libm stays, since the native release tier stays as fast as C.
+**Recommendation:** under the key, `std::math`'s 14 functions, both widths, come from musl's sources vendored into kama and compiled into
+every target, wasm included. Without the key, the platform's libm stays, since the native release tier stays as fast as C.
 
-**Decisions owed:**
-1. **The implementation: musl, as measured** (recommended). It matches wasm's bits, and is MIT (Sun's fdlibm notice and Arm's MIT notice on
-   the files that carry them). Natively it costs between 4% less and 12% more in sum over three provisional runs, mostly the FMA paths UCRT
-   takes only on CPUs that have them. CORE-MATH becomes a later step, correctly rounded, once measured.
+**Asked at the ruling, and answered.** *Does the whole program need it, or only the simulation?* Only what feeds the replicated state needs
+the bits, but the key stays program-wide. A second spelling per call (Java's `StrictMath` beside `Math`) is two ways to say `sin`. A
+per-package key leaks through any helper package the simulation shares with the renderer. Either way, one missed call is a desync found only
+by a hash. The cost does not argue for finer grain: at the worst consistent gap (2–3 ns a call, on `sinf`, `cosf` and `log10`), 10,000 bodies
+with one `sin` and one `cos` each at 60 steps a second come to about 0.36% of one core. That is arithmetic on the measured cost, not a measured
+simulation. *Would CORE-MATH replace musl on wasm too?* Yes: under the key it must, since musl's answers are not the correctly rounded ones.
+That is a reason to take it only once measured on wasm. The one argument for it later is that a correctly rounded answer cannot change when
+the library is bumped.
+
+**Ruled 2026-11-05: musl.** The maintainer ruled decision 1. Decisions 2–6 were put in the same session and not objected to, so the fix
+builds on them as written. Decision 4 gained one finding after the ruling (wasm compiles the vendored copy too, with Arm's `pow`, `log` and
+`log2`), which the maintainer may still overrule.
+
+**Decisions:**
+1. **The implementation: musl** (ruled). It is MIT (Sun's fdlibm notice and Arm's MIT notice on the files that carry them). Natively it costs
+   between 4% less and 12% more in sum over three provisional runs, mostly the FMA paths UCRT takes only on CPUs that have them. CORE-MATH
+   becomes a later step, correctly rounded, once measured.
 2. **Under the key only** (recommended), or always. Always is one behaviour everywhere, but a native cost (up to 2× on `log10`) on code that
    never asked for reproducibility, against the performance invariant at the top of ROADMAP.md.
 3. **The 14 functions in both widths, and nothing else** (recommended). The seven exact ones keep their builtins, and so does
    `KAMA_SIMD_MATH`, whose `sqrt`, `floor` and `ceil` are exact.
-4. **Where it lives:** one header beside `kama_math.h`, musl's code made `static`, its names prefixed `kama__musl_` and its MIT notice
-   kept (recommended). `kama_math.h` routes `kama_sin` to it when the driver defines the key's macro. Pinned to emsdk's musl version, and
-   bumped deliberately rather than with emsdk.
+4. **Where it lives:** one header beside `kama_math.h`, musl's code made `static`, its names prefixed `kama__musl_` and its notices
+   kept (recommended). `kama_math.h` routes `kama_sin` to it when the driver defines the key's macro, on **every** target, wasm included,
+   since emscripten's own libm differs between a debug and a release build (above). Arm's `pow`, `log` and `log2`, with their tables, not
+   emscripten's small ones: they are what native musl and a debug wasm build run, for about 12 KB of wasm. Taken from emsdk's tree (musl
+   1.2.6; emscripten changed none of the 55 files, and its one change to `libm.h` drops `FORCE_EVAL`, which only raises floating-point
+   exceptions), and bumped deliberately rather than with emsdk.
 5. **A dependency's key:** the key already propagates from a dependency (targets.md), so a dependency that asks would switch the
    whole program's `std::math` to musl, which is a speed change it imposes (recommended: yes, propagate, since its arithmetic is wrong without
    it). targets.md says what the key costs and that a dependency can switch it on; today it says neither.
 6. **The fixture:** `tests/repro_math.d` with the key, printing one hash per function over the probe's inputs, and one `.expect` held on
-   native, wasm, Android and the Mac's CI leg. It fails on native today.
+   native, wasm, Android and the Mac's CI leg. It fails on native today, and on wasm between debug and release.
+
+**For the build** (what compiled musl natively here, with clang 23 under msys2 UCRT64). The 55 files come from
+`system/lib/libc/musl/src/math`, with `src/internal/libm.h`:
+- the double forms: `sin cos tan __sin __cos __tan __rem_pio2 __rem_pio2_large asin acos atan atan2 exp exp_data log log_data log2 log2_data
+  log10 cbrt pow pow_data hypot`;
+- the float forms: `sinf cosf tanf __sindf __cosdf __tandf __rem_pio2f asinf acosf atanf atan2f expf exp2f_data logf logf_data log2f
+  log2f_data log10f cbrtf powf powf_data hypotf`;
+- the error helpers: `__math_{divzero,invalid,oflow,uflow,xflow}`, in both widths.
+
+Outside musl's tree they need `-Dhidden=` (musl's visibility macro), an empty `features.h` and `fp_arch.h`, and an `endian.h` that says
+little-endian. The probe and its comparison tool were scratch files on the Windows box; decision 6's fixture replaces them. Still to do with
+the fix: the timing on a quiet machine, and targets.md's sentence on cost.
 
 <a id="s5-wasm-closure"></a>
 
