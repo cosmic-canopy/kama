@@ -432,18 +432,6 @@ random bytes find. **Design first.** The questions:
   LLVM have one, and Apple's clang does not;
 - how a corpus and crashes are kept in a project.
 
-<a id="s1-pq-save"></a>
-
-### `PriorityQueue` cannot be saved (KR-316)
-
-Reported 2026-11-04 by a game engine on kama; reproduced on `0.9.844`. In a `@generate(Serializable, Deserializable)` type, a
-`PriorityQueue<Timer>` field is refused: "field `due` has type `PriorityQueue`, which cannot be serialized — a composite field is written
-through its OWN `serialize`, and `PriorityQueue` has none". It is not `Iterable` either, since a heap's order means nothing (its own
-comment), so a state hash cannot fold it without draining it, though its doc names it the fit for timers. A wait held in saved, hashed and
-rolled-back state wants exactly that, and the reporter keeps its heap in its own array meanwhile. Rust's `BinaryHeap` serializes as a
-sequence and has `as_slice` (from its documentation, not run here). Both when the element has them, writing the backing array in stored order
-so a round trip is exact, and a read-only view of that array for hashing.
-
 <a id="s1-std-dirs"></a>
 
 #### The standard directories: temp, config, cache (KR-266)

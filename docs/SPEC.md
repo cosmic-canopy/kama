@@ -878,9 +878,16 @@ automatically, so `m.get(key: 5)` / `m.get(key: Point.make(x: 1, y: 2))` work wi
 `PriorityQueue.minHeap()` — smallest out first, the fit for A* / event scheduling); `PriorityQueue.maxHeap()`
 inverts it. `push(item:)` and `pop() -> Optional<T>` are O(log n), `peek() -> Optional<T>` (copy, `Copyable`
 element) / `peekRef() -> const ref T` (read-only borrow, panics when empty; `peekRefMut()` to mutate in place) read the root O(1). It orders via the element's
-`Comparable.compareTo`, is move-only (deep-copies only for a `Copyable` element), and — since heap order isn't
-meaningful — isn't iterable; drain it with `pop`. (It's backed by a `DynamicArray`, which gained an O(1)
-`swap(i:, j:)` in-place element exchange.)
+`Comparable.compareTo`, is move-only (deep-copies only for a `Copyable` element), and — since its stored order
+is not the order it hands elements out — isn't iterable; drain it with `pop`. (It's backed by a `DynamicArray`,
+which gained an O(1) `swap(i:, j:)` in-place element exchange.) `view()` borrows that backing array read-only, in
+stored order (`borrow q.view() as v { foreach (… in v) … }`), and `isMaxHeap()` says which end comes out first:
+together they are a queue's whole state, which a hash or an inspector reads without draining it.
+**A round trip is exact.** It serializes when its element does, as `{"maxOrder":false,"items":[1,2,4,5,3]}`: the
+direction, which a bare array could not carry (a max-heap would read back a min-heap and pop in the wrong order),
+then the array in stored order, so a loaded queue hashes, pops and breaks ties as the saved one did.
+An `items` that is not a heap in that direction is refused as `Malformed` at the element that outranks its parent (`items[3]`). <!-- test: priority_queue_serde -->
+It is never re-heapified, because a repaired heap is a different queue from the one saved.
 
 **`SlotMap<V>`** is a generational slot map (Rust's `slotmap`; the ECS entity / asset registry): `insert(value:)
 -> Handle` hands back a stable, Copyable `Handle`, and `get(handle:) -> Optional<V>` (copy, `Copyable`) /

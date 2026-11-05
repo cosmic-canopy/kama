@@ -1,0 +1,119 @@
+// A `PriorityQueue` is saved and loaded as `{"maxOrder":…,"items":[…]}`: its direction, then its backing array in
+// stored order, so a round trip is exact. Until 0.9.849 it had no `serialize` or `deserialize`, so a world holding a
+// timer queue could not be saved: a `@generate(Serializable)` type with a `PriorityQueue<Timer>` field was refused.
+// The direction is on the wire because a bare array cannot carry it — a max-heap would come back a min-heap and pop
+// in the wrong order without a word. This pins the JSON form, a max-heap and the positional kbin backend round
+// tripping, an `items` array that is not a heap in its direction refused as `Malformed` at the element that outranks
+// its parent, and `view()` / `isMaxHeap()`, the read-only state a hash folds without draining the queue.
+import { std::serialization::text::json::serializeJsonBuffer,
+         std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::binary::kbin::serializeKbinPositionalBuffer,
+         std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+         std::collections::PriorityQueue, std::collections::DynamicArray };
+
+// A wait held as data: due at `step`, ties broken by `seq`, the order the waits were made.
+@generate(Serializable, Deserializable)
+type value Timer implements Comparable<This> {
+    @field public int64 step;
+    @field public int64 seq;
+    public ctor make(int64 step, int64 seq) { this.step = step; this.seq = seq; }
+    public const fn Ordering compareTo(const ref Timer other) {
+        if (this.step != other.step) { return this.step < other.step ? Ordering::Less : Ordering::Greater; }
+        if (this.seq != other.seq) { return this.seq < other.seq ? Ordering::Less : Ordering::Greater; }
+        return Ordering::Equal;
+    }
+}
+
+@generate(Serializable, Deserializable)
+type resource Timers {
+    @field PriorityQueue<Timer> due;
+    public ctor make() { this.due = PriorityQueue.minHeap(); }
+    public fn void wait(int64 step, int64 seq) { this.due.push(item: Timer.make(step: step, seq: seq)); }
+    // Every wait in the order it fires, emptying the queue.
+    public fn string fireAll() {
+        string order = "";
+        while (!this.due.isEmpty()) {
+            Optional<Timer> top = this.due.pop();
+            match (top) { case Some(value: w): { order = order + "${w.step}.${w.seq} "; } case None: {} };
+        }
+        return order;
+    }
+}
+
+fn string stored(const ref PriorityQueue<int32> q) {
+    string s = "";
+    borrow q.view() as heap { foreach (int32 v in heap) { s = s + "${v} "; } }
+    return s;
+}
+
+fn string drained(PriorityQueue<int32> q) {
+    string s = "";
+    while (!q.isEmpty()) {
+        Optional<int32> top = q.pop();
+        match (top) { case Some(value: v): { s = s + "${v} "; } case None: {} };
+    }
+    return s;
+}
+
+// The path a refusal names, or "ok" when the text reads back.
+fn string refusal(string json) {
+    Result<PriorityQueue<int32>, Owned<Error>> res = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give json);
+    return match (res) {
+        case Ok(value: x): "ok";
+        case Err(error: e): match (e.as<DeError>()) {
+            case Some(value: de): de.message();
+            case None: "not a DeError";
+        };
+    };
+}
+
+fn uint8 main() {
+    PriorityQueue<int32> mn = PriorityQueue.minHeap();
+    mn.push(item: 5); mn.push(item: 1); mn.push(item: 4); mn.push(item: 2); mn.push(item: 3);
+    if (stored(q: mn) != "1 2 4 5 3 ") { return 10; }
+    if (mn.isMaxHeap()) { return 11; }
+    Result<string, Owned<Error>> jr = serializeJsonBuffer(v: mn);
+    string j = match (give jr) { case Ok(value: x): give x; case Err(error: e): { return 12; } };
+    if (j != "{\"maxOrder\":false,\"items\":[1,2,4,5,3]}") { return 13; }
+    Result<PriorityQueue<int32>, Owned<Error>> jb = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give j);
+    PriorityQueue<int32> mn2 = match (give jb) { case Ok(value: x): give x; case Err(error: e): { return 14; } };
+    if (stored(q: mn2) != "1 2 4 5 3 ") { return 15; }
+    if (drained(q: give mn2) != "1 2 3 4 5 ") { return 16; }
+
+    // A max-heap keeps its direction: the case a bare array would have lost.
+    PriorityQueue<int32> mx = PriorityQueue.maxHeap();
+    mx.push(item: 4); mx.push(item: 9); mx.push(item: 7);
+    Result<string, Owned<Error>> xr = serializeJsonBuffer(v: mx);
+    string xj = match (give xr) { case Ok(value: x): give x; case Err(error: e): { return 20; } };
+    if (xj != "{\"maxOrder\":true,\"items\":[9,4,7]}") { return 21; }
+    Result<PriorityQueue<int32>, Owned<Error>> xb = deserializeJsonBuffer::<PriorityQueue<int32>>(src: give xj);
+    PriorityQueue<int32> mx2 = match (give xb) { case Ok(value: x): give x; case Err(error: e): { return 22; } };
+    if (!mx2.isMaxHeap()) { return 23; }
+    if (drained(q: give mx2) != "9 7 4 ") { return 24; }
+
+    // The positional backend, which has no names: the two fields read back by position.
+    Result<DynamicArray<uint8>, Owned<Error>> pr = serializeKbinPositionalBuffer(v: mx);
+    DynamicArray<uint8> bytes = match (give pr) { case Ok(value: x): give x; case Err(error: e): { return 30; } };
+    Result<PriorityQueue<int32>, Owned<Error>> pb = deserializeKbinPositionalBuffer::<PriorityQueue<int32>>(src: give bytes);
+    PriorityQueue<int32> mx3 = match (give pb) { case Ok(value: x): give x; case Err(error: e): { return 31; } };
+    if (!mx3.isMaxHeap() || stored(q: mx3) != "9 4 7 ") { return 32; }
+
+    // Refused, never repaired: each names the element that outranks its parent, or the field that failed.
+    if (refusal(json: "{\"maxOrder\":false,\"items\":[5,1]}") != "malformed input at `items[1]`") { return 40; }
+    if (refusal(json: "{\"maxOrder\":true,\"items\":[9,4,7,8]}") != "malformed input at `items[3]`") { return 41; }   // 8 under 4
+    if (refusal(json: "{\"maxOrder\":false,\"items\":[1,\"x\"]}") != "type mismatch at `items[1]`") { return 42; }
+    if (refusal(json: "{\"maxOrder\":1,\"items\":[]}") == "ok") { return 43; }
+    if (refusal(json: "[1,2]") == "ok") { return 44; }
+    if (refusal(json: "{\"maxOrder\":false,\"items\":[1,1,2]}") != "ok") { return 45; }   // equal elements are a heap
+    if (refusal(json: "{\"maxOrder\":false,\"items\":[]}") != "ok") { return 46; }
+
+    // The reported shape: a world's timer queue inside a derived type, saved and loaded with it.
+    Timers t = Timers.make();
+    t.wait(step: 5, seq: 0); t.wait(step: 3, seq: 1); t.wait(step: 3, seq: 2); t.wait(step: 8, seq: 3);
+    Result<string, Owned<Error>> tr = serializeJsonBuffer(v: t);
+    string tj = match (give tr) { case Ok(value: x): give x; case Err(error: e): { return 50; } };
+    Result<Timers, Owned<Error>> tb = deserializeJsonBuffer::<Timers>(src: give tj);
+    Timers t2 = match (give tb) { case Ok(value: x): give x; case Err(error: e): { return 51; } };
+    if (t2.fireAll() != "3.1 3.2 5.0 8.3 ") { return 52; }
+    return 0;
+}

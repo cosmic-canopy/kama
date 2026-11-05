@@ -1,4 +1,4 @@
-import { DynamicArray };
+import { DynamicArray, ConstView };
 export { PriorityQueue };
 
 // A binary-heap priority queue over a growable array (= C++ `std::priority_queue` / Rust `BinaryHeap` /
@@ -14,10 +14,13 @@ export { PriorityQueue };
 // **Direction is chosen at construction.** A bare `PriorityQueue()` (or `minHeap()`) is a MIN-heap: the
 // SMALLEST element comes out first — the fit for cost/time priorities (A* by f-score, Dijkstra, event/timer
 // scheduling). `maxHeap()` inverts it (largest first). One implementation, one type; a single `maxOrder`
-// flag flips every comparison. Iteration order isn't meaningful for a heap, so it isn't `Iterable`; drain
-// it with repeated `pop`.
+// flag flips every comparison. A heap's stored order is not the order it hands elements out, so it isn't
+// `Iterable`; drain it with repeated `pop`, or read the stored order through `view()`.
 type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> implements Copyable<This>(bare: give) when [T: Copyable<T>],
                                                                                   Sendable when [T: Sendable, A: Sendable],
+                                                                                  Viewable<ConstView<T>>,
+                                                                                  Serializable when [T: Serializable],
+                                                                                  Deserializable<This> when [T: Deserializable<T>, A: default],
                                                                                   Formattable when [T: Formattable] {
     DynamicArray<T, A> data;   // the heap-ordered backing store (data[0] = root)
     bool maxOrder = false;     // min-heap by default; `maxHeap()`/`maxHeapWith*` flip it to true
@@ -62,6 +65,14 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
 
     public const fn isize length() { return this.data.length(); }
     public const fn bool isEmpty() { return this.data.length() == 0; }
+
+    // The backing array, read-only and in stored order (Rust's `as_slice`, C#'s `UnorderedItems`): what a state hash
+    // folds and an inspector lists without draining the queue. It is the heap's order, not the pop order, and it is
+    // what `serialize` writes, so two queues that hash alike serialize alike. Valid only until the next `push`/`pop`.
+    public const fn ConstView<T> view() { return this.data.view(); }
+    // Which end comes out first: `true` for `maxHeap()` (largest first), `false` for the min-heap default. With
+    // `view()` it is the whole of a queue's state (Java's `comparator()`, C#'s `Comparer`).
+    public const fn bool isMaxHeap() { return this.maxOrder; }
 
     // True iff `a` belongs ABOVE `b` in the heap (nearer the root): for a min-heap the smaller element, for a
     // max-heap the larger. Equal elements never displace each other. Both operands are borrowed `ref T` so the
@@ -142,6 +153,51 @@ type resource PriorityQueue<T: Comparable<T>, A: Allocator = GlobalAllocator> im
 
     // Drop every element and reset to empty (keeps the backing buffer for reuse).
     public fn void clear() { this.data.clear(); }
+
+    // --- Serialization (present only when the element is Serializable/Deserializable) ---
+    // The heap as it is stored, beside its direction: `{"maxOrder":false,"items":[1,3,2]}`. The direction is on the wire
+    // because the array cannot carry it: a max-heap written as a bare array would read back as a min-heap and pop in
+    // the wrong order without a word (Java writes its comparator for the same reason; Rust and C++ hold it in the
+    // type). `items` is the backing array in stored order, so a round trip is exact and a loaded queue hashes, pops and
+    // ties as the saved one did.
+    public const fn Result<Unit, Owned<Error>> serialize(ref Serializer w) when [T: Serializable] {
+        w.beginObject(count: 2ui64);
+        w.field(name: "maxOrder", id: 0ui32);
+        w.writeBool(v: this.maxOrder);
+        w.field(name: "items", id: 1ui32);
+        Result<Unit, Owned<Error>> __si = this.data.serialize(w: w);
+        match (give __si) { case Err(error: e): { return Result::Err(error: give e); } case Ok(value: _): {} };
+        w.endObject();
+        return Result::Ok(value: Unit::Unit);
+    }
+    // Read back as written, and refused unless `items` is a heap in that direction: an element that outranks its parent
+    // is `Malformed` at `items[i]`, never repaired (Rust and Java re-heapify). A repaired heap is a different queue from
+    // the one saved — another stored order, so another `view()` hash, and among equal elements another pop order — and
+    // the likely cause, an element whose `compareTo` changed since the write, wants saying, as SlotMap refuses a free
+    // list that is wrong. GlobalAllocator-only, like the other collections' `deserialize`.
+    public ctor Result<PriorityQueue<T, A>, Owned<Error>> deserialize(Deserializer r) when [T: Deserializable<T>, A: default] {
+        r.beginObject(count: 2ui64);
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }   // not an object at all: say so, never an empty `Ok`
+        bool __f1 = r.moreFields(); FieldKey __n1 = r.field();
+        this.maxOrder = r.readBool();
+        if (r.failed()) { return Result::Err(error: DeError.at(kind: r.errorKind(), field: "maxOrder")); }
+        bool __f2 = r.moreFields(); FieldKey __n2 = r.field();
+        Result<DynamicArray<T, A>, Owned<Error>> __ei = DynamicArray::<T, A>.deserialize(r: r);   // bind — a match needs a named enum subject
+        match (give __ei) {
+            case Err(error: e): { return Result::Err(error: DeError::inField(error: give e, name: "items")); }
+            case Ok(value: v):  { this.data = give v; }
+        };
+        bool __f3 = r.moreFields(); r.endObject();
+        if (r.failed()) { return Result::Err(error: DeError.of(kind: r.errorKind())); }
+        isize i = 1;
+        while (i < this.data.length()) {
+            if (this.higher(a: this.data[i], b: this.data[(i - 1) / 2])) {
+                return Result::Err(error: DeError.at(kind: DeErrorKind::Malformed, field: "items[${i}]"));
+            }
+            i = i + 1;
+        }
+        return Result::Ok(value: give this);
+    }
 
     // Deep-copy the whole queue (present only for a Copyable element): the backing array is cloned element by
     // element and the ordering flag carried over, so the heap invariant is preserved without re-heapifying.
