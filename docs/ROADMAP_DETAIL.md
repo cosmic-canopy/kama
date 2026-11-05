@@ -2524,7 +2524,8 @@ this brief's as well, if `spawn job` survives.
 
 ### The job pool and the offload pool: one brief (KR-3)
 
-**Status: brief written 2026-11-04 on `0.9.845`, revised 2026-11-05 on `0.9.850`; rulings owed; no compiler code before them.** It answers what `s6-fibers` left to
+**Status: brief written 2026-11-04 on `0.9.845`, revised 2026-11-05 on `0.9.850`. Ruled 2026-11-05: all 17 decisions as recommended below, each option named here refused.
+An audit by the game engine that asked is owed, for any further ask, before the pool itself is built.** It answers what `s6-fibers` left to
 it, for
 step 9 (the job pool) and step 7 (the offload pool) together, with KR-288, KR-313 and KR-315. Everything marked *measured* comes from
 `bench/jobs/` and can be rerun, the compiler's half from `bench/jobs/probes/` (with the scratch patch for KR-288); results are in
