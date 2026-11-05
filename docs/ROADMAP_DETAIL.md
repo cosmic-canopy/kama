@@ -2292,6 +2292,29 @@ parks on it like a socket. On Windows a directory handle's overlapped `ReadDirec
 descriptor per file. wasm has no file system to watch in a browser. **Verdict: scheduled, design first:** the API (a watcher over paths, recursive or not,
 yielding events with the overflow and rename cases stated), its delivery through the `Poller`, and the platform order, Linux and Windows first.
 
+**The recommendation, for when it is designed (2026-11-05, production grade, unbuilt).**
+1. **One resource, `std::fs::Watcher`, blocking-shaped like a socket.** `watch(path, recursive:)` adds a root and
+   `unwatch` drops one; `next()` hands back the next event and parks a fiber (a thread with no scheduler blocks). No
+   callback and no channel in std's surface: a program that wants one wraps `next()` in a fiber.
+2. **Events: `Created`, `Modified`, `Removed`, `Renamed(from, to)` and `Rescan(root)`,** each with a path relative to its
+   root. `Renamed` is paired where the OS pairs it (inotify's cookie, `ReadDirectoryChangesW`'s old and new names) and
+   arrives as `Removed` and `Created` where it does not. **`Rescan` is the overflow:** the kernel dropped events and the
+   root must be read again. Never silence, which is the bug Java's macOS fallback and every unchecked queue ship.
+3. **A file is watched through its directory, filtered to its name,** so an editor's save-by-rename keeps reporting:
+   .NET's `Filter` and fsnotify's own advice.
+4. **Recursion where the OS has it** (`ReadDirectoryChangesW`'s subtree flag, FSEvents), and on Linux a walk that adds an
+   inotify watch per directory and adds each new directory as it appears, reporting what it holds as `Created` to close
+   the race. Running out of `max_user_watches` is an error naming the setting, not a quiet partial watch. fanotify needs
+   `CAP_SYS_ADMIN`, so not it.
+5. **No silent polling fallback.** A file system the OS cannot watch (a network mount, say) is an error; Java's polling
+   on macOS is the lesson. An explicit polling watcher can come later, by name.
+6. **No debouncing in std.** Events come as the OS coalesces them; Rust's `notify` keeps its debouncers in separate
+   crates for the same reason. A debounce is a few lines over `next()` and a timer, and is the caller's policy.
+7. **Delivery and platforms:** inotify's descriptor in the `Poller` (Linux); a directory handle's overlapped
+   `ReadDirectoryChangesW` on KR-3's step 8 completion port (Windows, this box); FSEvents on a dispatch queue waking the
+   `Poller` through a pipe (macOS, on the Mac); kqueue with KR-227's leg (FreeBSD); refused at compile time on wasm. Linux
+   and Windows first, since the suite runs both here.
+
 <a id="s5-repro-math"></a>
 
 ### `reproducible-float` does not make `std::math` reproducible (KR-328)
@@ -2319,6 +2342,10 @@ anyone can compile in, and CORE-MATH and CRlibm are correctly rounded throughout
 **Two fixes, and the defect is that neither is done.** Under the key, `std::math`'s functions come from one implementation compiled into the program, the same
 on every target (a port of musl's, as Rust's `libm`, or a correctly rounded one); or the key's documentation says it covers contraction only and names the
 functions it does not cover. The first keeps the promise. To measure first: what one implementation costs against the platform's libm, natively and on wasm.
+
+**Next, on the Windows box** (it builds and runs native and wasm): the probe above as a fixture that diffs the two legs' bits, then the
+candidates measured for bits and speed on both, a musl port compiled in under the key against the platform's libm without it, before
+the brief's decisions: which implementation, whether it applies without the key, and which functions it covers.
 
 <a id="s5-wasm-closure"></a>
 
@@ -2462,6 +2489,26 @@ records them):
    a package (a window, XR) reaches the activity through a std accessor. A program that wants the glue to itself
    still writes its own `@linkName("android_main")` entry.
 
+**Checked 2026-11-05: what Android expects, and that kama runs its tools rather than writing its own.** The maintainer
+asked that kama never rewrite a platform tool the platform requires.
+- **The tools are Google's.** `aapt2` is the resource compiler Android Studio and the Gradle plugin run, documented for
+  direct use (`aapt2 link -o app.apk -I android.jar --manifest AndroidManifest.xml`). `zipalign` and `apksigner` are the
+  SDK's, in that order: a v2+ signature covers the whole file, so aligning after signing breaks it. `d8` is needed only for
+  Java or Kotlin code, and a `NativeActivity` app with `android:hasCode="false"` has none. Gradle with the Android Gradle
+  Plugin is the build system that drives these same tools for a Java project, which kama does not have; Unity, Unreal,
+  Flutter and Tauri generate one because their apps carry Java. So decision 3 runs the platform's tools. What would be a
+  rewrite is gomobile's binary XML written without `aapt2`, and xbuild's own packaging, now unmaintained; both are refused.
+- **16 KB pages.** Since 2025-11-01 Google Play requires an app with native code that targets Android 15 or later to support
+  16 KB pages: every `LOAD` segment of a `.so` aligned to 16 KB, and an uncompressed `.so` zip-aligned on a 16 KB boundary
+  (`zipalign -P 16 4`, checked with `zipalign -c -P 16 -v 4`) ([developer.android.com](https://developer.android.com/guide/practices/page-sizes)).
+  *Measured here:* NDK r30 links kama's `aarch64-linux-android29` output with every `LOAD` at `2**14` by default. An older
+  NDK does not, and kama passes nothing for it, so KR-283 passes `-Wl,-z,max-page-size=16384` on every Android link and the
+  hand proof uses `-P 16`. Quest is not Play, but a 16 KB device refuses a misaligned library wherever it came from.
+- **The stores.** Meta's takes an APK, with OBB and asset files beside it, through `ovr-platform-util upload-quest-build`
+  ([Meta](https://developers.meta.com/horizon/documentation/native/ps-assets/)). Google Play has required an Android App Bundle
+  for a new app since August 2021, which Google's own `bundletool build-bundle` makes from the same compiled parts without
+  Gradle. So an AAB is a later step, for phones, and through `bundletool`, never a writer of kama's.
+
 **The toolchain on the Windows box** (2026-11-02, under `%LOCALAPPDATA%\Android`, every download hash-checked): the
 NDK; the SDK's `cmdline-tools`, `platform-tools` (adb), `build-tools;37.0.0` (aapt2, zipalign, apksigner),
 `platforms;android-34`, the emulator with `system-images;android-34;google_apis;x86_64` (AVD `kama34`, headless under
@@ -2484,9 +2531,19 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   `UIApplicationMain` and drives frames from `CADisplayLink`, the inverted loop wasm already has. And a `.app` signed
   with a provisioning profile. `dlopen` is barred, so KR-24's hot reload stays desktop-only.
 - **The verdict: scheduled, not yet designed.** It is a target of a general-purpose systems language, so it is not
-  optional. Android's rulings (§ Android, decisions 3, 6 and 7) are the expected shape, to confirm on the Mac: kama
-  finds Apple's SDK, `kama build` makes the signed `.app`, and `main` stays the entry. Also to decide: how std spells
-  the Darwin family.
+  optional. Android's principle carries over, kama runs the platform's own tools, and `main` stays the entry. Also to
+  decide: how std spells the Darwin family.
+- **Corrected 2026-11-05: on iOS the platform's tool is Xcode itself, so kama drives `xcodebuild` and never builds
+  around it.** This page said `kama build` would make the signed `.app` as it makes an APK. App Store Connect validates
+  the build environment Xcode writes into `Info.plist` (`DTXcode`, `DTXcodeBuild`, `DTSDKName`, `DTSDKBuild`): a beta
+  Xcode's values fail the upload (ITMS-90111, ITMS-90534), and since 2026-04-28 an upload must be built with the iOS 26
+  SDK or later. Every other language that ships iOS apps goes through Xcode: gomobile runs `xcrun xcodebuild` on a project
+  it generates; Tauri's cargo-mobile2 generates one with XcodeGen and builds it with `xcodebuild`; a Flutter app is an
+  Xcode workspace (`ios/Runner.xcworkspace`), where signing is set; Unity and Godot export an Xcode project. **The
+  expected shape, to rule on the Mac:** kama builds the program as a static library for `aarch64-ios-none`, generates an
+  Xcode project around it from `kama.json`'s `app` block (§ Android, decision 2, one id for both), and `kama build` runs
+  `xcodebuild`, which compiles the asset catalog and launch screen, signs with the provisioning profile and exports the
+  `.ipa` (`-exportArchive`). kama writes no `Info.plist` build keys, signs nothing and assembles no `.app` itself.
 
 <a id="s6"></a>
 
@@ -3243,6 +3300,12 @@ host in a 2-CPU container, 128 threads spin against a quota. **Linux is fixed in
 | a container's `--cpus=2.5` | 6 | **3** | not run | not run |
 
 **What is left is Windows:** `pthread_num_processors_np` is winpthreads', unmeasured under an affinity mask, and a job object's CPU rate limit and processor groups have not been looked at. macOS has no affinity call and no quota to read. FreeBSD's `cpuset_getaffinity` waits on a leg that builds there (KR-227's reason).
+
+**Next, on the Windows box:** measure `cpuCount()` against Rust's `available_parallelism`, Go's `runtime.NumCPU` and .NET's
+`Environment.ProcessorCount` under `start /affinity 3`, under a job object with a CPU rate limit, and with no limit; then
+read the affinity mask (`GetProcessAffinityMask`) and the job's rate (`QueryInformationJobObject`) as Linux reads its
+mask and quota, with `tests/cpu_count_limits.d` gaining a Windows arm. A machine with more than 64 logical processors
+(two processor groups) is the case no box here has; it is reasoned from the documentation and said so.
 
 <a id="s6-thread-control"></a>
 
