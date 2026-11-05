@@ -248,6 +248,14 @@ There is deliberately no per-target `modules` or `source` key to exclude it from
 the platform split a second time, in a different file from the code it is about, and the two would drift.
 See [SPEC.md](SPEC.md) *Conditional compilation* for the rules.
 
+**Nor is there a per-target `dependencies` key**, for the same reason: a target arm holding one is refused
+as an unknown key. A dependency is listed once, at the top level, and the file that imports it carries the
+gate. A dependency no compiled file imports is not built, so a Linux-only package in a Windows build costs
+its fetch and nothing else. A package some machines cannot fetch at all, a console's SDK under NDA, belongs
+to a project of its own: one executable per platform, each depending on the shared code, since a workspace
+member resolves only its own dependencies. Cargo, SwiftPM and pip state the split in the manifest and again
+in the code; Go, like kama, states it once, in the code.
+
 `source` is also what **importers** resolve through: a package's files are found under its source root
 and nowhere else. Files sitting beside `src/` rather than inside it belong to no project — which is the
 point, and the reason a package whose sources are in the wrong place fails to import rather than

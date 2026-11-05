@@ -125,6 +125,30 @@ JSON
 printf '{ "select": { "TARGET": { "HOST": { "ldflgas": [] } } } }\n' > "$tmp/armlocal/kama.local.json"
 reject armlocal 'unknown key `ldflgas` in the target `HOST`' "...and in a kama.local.json arm"
 
+# A target takes no `dependencies` (docs/packages.md): a dependency is listed once, and the importing file carries the
+# gate. Cargo's `[target.'cfg(…)'.dependencies]` is the shape refused.
+proj tdeps <<'JSON'
+{ "name": "tdeps", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "select": { "TARGET": { "HOST": { "dependencies": { "geo": { "path": "../geo" } } } } },
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject tdeps 'unknown key `dependencies` in the target `HOST`' "a target arm takes no \`dependencies\`"
+
+# ...which costs a platform-only package nothing where it is not imported: a dependency no compiled file imports is not
+# built. Its one file names a header no platform has, so building it would fail.
+mkdir -p "$tmp/onlyelsewhere/src"
+printf '{ "name": "onlyelsewhere", "version": "0.1.0", "kind": "library", "source": "src", "modules": { ".": { "visibility": "public" } } }\n' \
+    > "$tmp/onlyelsewhere/kama.json"
+printf 'export { start };\nextern "<kama_no_such_header.h>";\nextern fn int32 nowhere();\nunsafe fn int32 start() { return nowhere(); }\n' \
+    > "$tmp/onlyelsewhere/src/backend.kama"
+proj unimported <<'JSON'
+{ "name": "unimported", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  "modules": { ".": { "visibility": "internal" } },
+  "dependencies": { "onlyelsewhere": { "path": "../onlyelsewhere" } } }
+JSON
+"$KAMA" pkg install "$tmp/unimported/kama.json" >"$tmp/o" 2>"$tmp/e" || { bad "pkg install of a path dependency failed"; head -2 "$tmp/e" >&2; }
+accept unimported "a dependency no compiled file imports is not built"
+
 proj valtypo <<'JSON'
 { "name": "valtypo", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
   "select": { "AUDIO": { "NONE": { "default": true }, "MINI": { "inherit": "NONE" } } },
