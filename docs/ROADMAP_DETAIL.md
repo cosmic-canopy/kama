@@ -2124,6 +2124,23 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   optionals" ctor pattern. A **non-goal**, settled by the audit: one way to do a thing (GOALS 4) — named static factories + named params cover it, and SPEC § *Generics* says the same.
   (Distinct from **default *type* parameters**, which shipped.)
 
+<a id="s4-bounded-overflow"></a>
+
+### A bounded list given more elements than it holds reports a type mismatch (KR-334)
+
+Reported 2026-11-05 by a game engine on kama; reproduced on `0.9.854`. Take
+`@generate(Serializable, Deserializable) type value Patrol { @field(default) public InlineDynamicArray<int32>#(4) stops = InlineDynamicArray.empty(); … }`.
+Both `deserializeJsonBuffer::<Patrol>` and `mergeJsonBuffer` of `{"stops":[1,2,3,4,5]}` fail with ``type mismatch at `stops[4]` ``.
+Refusing is right, and so is the path, but every element has the right type: the list is full. So the message sends the reader to the
+wrong fix.
+
+The cause is one line. `InlineDynamicArray.deserialize` (`lib/std/collections/inline_dynamic_array.kama`) reports the first element
+with no place as `DeErrorKind::TypeMismatch`.
+- It is the only bounded container std can read. The others grow, and `InlineArray` is not read at all ("Deserialize breadth", above).
+- The reader serves every format, so one fix covers JSON and kbin.
+- `DeErrorKind` is `@nonExhaustive`, so a kind of its own ("too many elements") breaks nothing.
+- `tests/inline_dynamic_array_serde_bytes` pins today's ``type mismatch at `[3]` `` and changes with it.
+
 <a id="s5"></a>
 
 ## 5. 1.x — systems & runtime (post-1.0)
@@ -3503,6 +3520,28 @@ differing lengths would have to trap. **Verdict: scheduled, design first,** afte
 
 The engine that reported it no longer needs it for its own tables (2026-11-05), since it now keeps each table's columns in one chunk. The verdict stands on its
 own: a data-parallel loop over two arrays in step is common, and C# and OpenMP give it an index.
+
+<a id="s6-parfor-read-split"></a>
+
+### A `parallel_for` body may read the container it splits by `ref` (KR-333)
+
+Reported 2026-11-05 by a game engine on kama; reproduced on `0.9.854` (Windows 11, msys2 UCRT64). Over eight 1s,
+`parallel_for (ref int64 e in xs, workers: 8) { e = e + xs[0]; }` compiles and runs, and `xs[7]` comes out 2 in one run and 3 in
+the next. Every worker reads element 0 while element 0's worker writes it: a data race in safe code. The reported shape runs longer,
+so it shows plainly. Four `Chunk` values: chunk 0's worker counts its `n` to 200,000,000, while the other three read `chunks[0].n` as
+they count to 2,000,000. Three runs read `2271963 1985894 2298141`, `2953997 2857506 3726330` and `3909577 3057485 4098104`. Passing
+the container to a `const ref` call in the body (`e = e + sum(xs: xs);`) is let through too, and races the same way.
+
+`0.9.851` made the body's capture scan see every read and refused every write through a capture (`tests/parfor_capture_shapes`). The split container is
+still read like any other capture. Two neighbours are sound and are accepted today:
+- a `const ref` loop that reads the container, since there is no writer;
+- `xs.length()`, since no worker changes the length. Whether to keep it is a choice: a rule that bars every mention is simpler.
+
+`this` inside a worker is refused already (`tests/xfail/parfor_this`), so a split of a field is covered.
+
+**The fix:** while a `parallel_for` splits a container by `ref`, its body may not name that container, except through its element.
+It wants an xfail per shape (an index, a call) and a message naming the element as the way in. Do it before KR-3 moves
+`parallel_for` onto the pool, which keeps the same body rules.
 
 <a id="s6-job-priorities"></a>
 
