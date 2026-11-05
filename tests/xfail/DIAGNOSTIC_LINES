@@ -96,6 +96,7 @@ binder_shadow_match_local	binder_shadow_match_local.kama:12:4
 bitcast_clong	bitcast_clong.kama:2:42
 bitcast_literal_out_of_range	bitcast_literal_out_of_range.kama:3:27
 bitcast_nonscalar	bitcast_nonscalar.kama:6:18 bitcast_nonscalar.kama:7:23
+bitcast_operand_char	bitcast_operand_char.kama:7:15
 bitcast_width	bitcast_width.kama:5:16
 borrow_alias_reseat	borrow_alias_reseat.kama:15:8
 borrow_bare_host	borrow_bare_host.kama:12:4

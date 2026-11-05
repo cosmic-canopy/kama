@@ -4187,8 +4187,9 @@ be written **in the language** rather than baked into the compiler. Three builti
 - **`bitcast<T>(x)`** — a **same-width bit reinterpret** of a numeric scalar, distinct from `cast<T>` (a
   *value* conversion): `bitcast<uint32>(f)` exposes a `float32`'s IEEE-754 bits, `bitcast<float64>(u)` builds
   a double from a `uint64`. Source and target must be **equal-width numeric scalars** (`int8..int64`/
-  `uint8..uint64`/`float32`/`float64`); a width mismatch, a non-scalar, or an operand whose scalar type isn't
-  statically known (bind it to a local first) is a compile error. Lowers to a no-UB ISO-C11 union type-pun. <!-- xfail: bitcast_width, bitcast_nonscalar -->
+  `uint8..uint64`/`float32`/`float64`). The operand is any expression of such a type, a call, arithmetic or a
+  `cast` as much as a variable (`bitcast<uint64>(sin(x: x))`). Lowers to a no-UB ISO-C11 union type-pun. <!-- test: bitcast_operands -->
+  A width mismatch, a non-scalar (`char` among them), or an operand whose scalar type isn't statically known (bind it to a local first) is a compile error. <!-- xfail: bitcast_width, bitcast_nonscalar, bitcast_operand_char -->
   It is the safe-surface primitive for binary formats / hashing / endianness (`std::num` `byteswapF32` rides
   it); raw-memory reinterpret of composites stays behind `unsafe`/`UnsafePtr`.
 - **`assert(cond:, msg:)` / `debugAssert(cond:, msg:)` / `panic(msg:)`** — a clean **trap** (writes the

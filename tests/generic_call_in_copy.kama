@@ -1,0 +1,12 @@
+// A `copy` (and a `give`) wraps a place, and a place's index may be a call. Neither discovery walk entered the
+// wrapper to 0.9.852, so a generic call written there was never instantiated: "`pick` is a generic function
+// and no instantiation was resolved for this call". `tools/check-scan-parity.sh` now holds both walks to every
+// kind the emitter lowers.
+fn usize pick<T>(T i) { return cast<usize>(1); }
+
+fn uint8 main()
+{
+    InlineArray<int32>#(2) xs = [7, 9];
+    int32 e = copy xs[pick(i: 1i8)];
+    return cast<uint8>(e);               // 9
+}

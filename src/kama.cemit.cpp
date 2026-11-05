@@ -16932,6 +16932,8 @@ void CEmitter::scanExprForCollections(SharedExpression e)
     } else if (auto* c = dynamic_cast<CastNode*>(n)) {
         scanTypeForCollections(c->type);
         scanExprForCollections(c->unaryExpression);
+    } else if (auto* bc = dynamic_cast<BitcastNode*>(n)) {   // its target is a scalar: only the operand can name one
+        scanExprForCollections(bc->unaryExpression);
     } else if (auto* sz = dynamic_cast<SizeofNode*>(n)) {
         // The operand is a TYPE, and the C is `sizeof(<its struct>)` — so an instance named nowhere else
         // (`sizeof(DynamicArray<int64>)`, `alignof(Simd<float32>#(4))`) must be registered here, or its
@@ -16966,6 +16968,8 @@ void CEmitter::scanExprForCollections(SharedExpression e)
         scanExprForCollections(po->expression);
     } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         scanExprForCollections(su->expression);
+    } else if (auto* h = dynamic_cast<HandoffNode*>(n)) {   // `copy xs[f(i: 0)]`: a place, whose index may call
+        scanExprForCollections(h->value);
     } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
         if (al->elements) for (auto& x : *al->elements) scanExprForCollections(x);
         scanExprForCollections(al->fillValue);
@@ -18178,6 +18182,8 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
         if (oc->args) for (auto& a : *oc->args) if (a) scanExprForGenerics(a->expression, localTys);
     } else if (auto* c = dynamic_cast<CastNode*>(n)) {
         scanExprForGenerics(c->unaryExpression, localTys);
+    } else if (auto* bc = dynamic_cast<BitcastNode*>(n)) {
+        scanExprForGenerics(bc->unaryExpression, localTys);
     } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
         scanExprForGenerics(b->LHS, localTys); scanExprForGenerics(b->RHS, localTys);
     } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
@@ -18272,6 +18278,8 @@ void CEmitter::scanExprForGenerics(SharedExpression e, std::map<std::string, Sha
         scanExprForGenerics(po->expression, localTys);
     } else if (auto* su = dynamic_cast<SimpleUnaryExpressionNode*>(n)) {
         scanExprForGenerics(su->expression, localTys);
+    } else if (auto* h = dynamic_cast<HandoffNode*>(n)) {
+        scanExprForGenerics(h->value, localTys);
     } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
         // The three arms below (array literal, `.as<T>()`, `match`) are the ones this walk was MISSING
         // while its sibling `scanExprForCollections` had them all along. The two functions answer the same
@@ -44926,8 +44934,8 @@ std::string CEmitter::emitAsDowncast(AsDowncastNode* ad)
 // NO value conversion (`cast<T>` is the value conversion). Lowers to an ISO-C11 union type-pun (§6.5.2.3)
 // inside a compound literal — an rvalue, no UB, no strict-aliasing violation. Source and target must be
 // equal-width numeric scalars (`int8..int64`/`uint8..uint64`/`float32`/`float64`); a user type, `bool`/
-// `char`, a width mismatch, or an operand whose scalar type can't be resolved (e.g. a bare literal or an
-// unresolved generic) is a clean compile error. Endianness / composite reinterpret build on this in library.
+// `char`, a width mismatch, or an operand whose scalar type isn't statically known is a clean compile error.
+// Endianness / composite reinterpret build on this in library.
 std::string CEmitter::emitBitcast(BitcastNode* v)
 {
     // (byte width, C scalar type) for a supported numeric-scalar token; width 0 => unsupported.
@@ -44957,6 +44965,14 @@ std::string CEmitter::emitBitcast(BitcastNode* v)
             default:                     return {0, ""};
         }
     };
+    // The scalar whose C spelling is `ct`, width 0 for any other (`kama_char`, `bool`, an enum's name).
+    auto byCType = [&](const std::string& ct) -> std::pair<int, std::string> {
+        for (int tok : { IDENTIFIER_INT8_VAL, IDENTIFIER_INT16_VAL, IDENTIFIER_INT32_VAL, IDENTIFIER_INT64_VAL,
+                         IDENTIFIER_UINT8_VAL, IDENTIFIER_UINT16_VAL, IDENTIFIER_UINT32_VAL, IDENTIFIER_UINT64_VAL,
+                         IDENTIFIER_FLOAT32_VAL, IDENTIFIER_FLOAT64_VAL })
+            if (scalar(tok).second == ct) return scalar(tok);
+        return {0, ""};
+    };
     int toTok = (v->type && !v->type->genericArg) ? v->type->builtInVal : 0;
     auto to   = scalar(toTok);
     auto fr   = scalar(holeBuiltinType(v->unaryExpression));
@@ -44971,11 +44987,7 @@ std::string CEmitter::emitBitcast(BitcastNode* v)
         while (auto* u = dynamic_cast<const SimpleUnaryExpressionNode*>(lit)) lit = u->expression.get();
         const bool isFloat = dynamic_cast<const Float64Node*>(lit) || dynamic_cast<const Float32Node*>(lit);
         if (!isDeferrableLiteral(v->unaryExpression.get())) {                 // suffixed: its own width
-            const std::string ct = litRvalueCType(const_cast<ASTNode*>(lit));
-            for (int tok : { IDENTIFIER_INT8_VAL, IDENTIFIER_INT16_VAL, IDENTIFIER_INT32_VAL, IDENTIFIER_INT64_VAL,
-                             IDENTIFIER_UINT8_VAL, IDENTIFIER_UINT16_VAL, IDENTIFIER_UINT32_VAL, IDENTIFIER_UINT64_VAL,
-                             IDENTIFIER_FLOAT32_VAL, IDENTIFIER_FLOAT64_VAL })
-                if (scalar(tok).second == ct) { fr = scalar(tok); break; }
+            fr = byCType(litRvalueCType(const_cast<ASTNode*>(lit)));
         } else if (isFloat) {                                                  // a float of the target's width
             if (to.first == 4) { fr = scalar(IDENTIFIER_FLOAT32_VAL);
                                  claimFloatLiterals(v->unaryExpression, "float", "a `bitcast` operand", false, v->line); }
@@ -44993,14 +45005,21 @@ std::string CEmitter::emitBitcast(BitcastNode* v)
             if (fr.first) rejectConstOutOfRange(fr.second, v->unaryExpression, "a `bitcast` operand", false, v->line);
         }
     }
+    // Any other operand is typed as every expression is (`typeOfExpr`): a generic call (`sin(x: x)`), arithmetic
+    // (`x + 1.0`), a `cast<float32>(x)`. Only places were typed above, so each of those was refused although its type
+    // is statically known. After the literal arm, which types a literal by the TARGET, and after the type node,
+    // which keeps `char` (a `uint32_t` in C) refused: `typeOfExpr` spells it `kama_char`, which is no scalar here.
+    if (fr.first == 0 && v->unaryExpression && !isLiteralExpr(v->unaryExpression.get()))
+        fr = byCType(typeOfExpr(v->unaryExpression));
     if (to.first == 0) {
         unsupported(("bitcast<" + tname + ">(x) — the target `" + tname + "` must be a numeric scalar "
                      "(`int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v);
         return "0";
     }
     if (fr.first == 0) {
-        unsupported(("bitcast<" + tname + ">(x) — the operand's type isn't a resolvable numeric scalar "
-                     "(need a variable/field of `int8..int64`/`uint8..uint64`/`float32`/`float64`)").c_str(), v);
+        unsupported(("bitcast<" + tname + ">(x) — the operand must be a numeric scalar "
+                     "(`int8..int64`/`uint8..uint64`/`float32`/`float64`); if its type is not stated, bind it to a "
+                     "typed local first").c_str(), v);
         return "0";
     }
     if (to.first != fr.first) {

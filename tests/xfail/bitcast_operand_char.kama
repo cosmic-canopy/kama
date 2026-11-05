@@ -1,0 +1,9 @@
+// A `bitcast` operand is typed as any expression is, and that must not widen what it admits: a `char` is a
+// `uint32_t` in C, but it is a codepoint, not a numeric scalar, so a call returning one is refused as a `char`
+// local is. `cast<uint32>(c)` is its conversion.
+fn char first() { return 'a'; }
+
+fn uint8 main() {
+    uint32 b = bitcast<uint32>(first());   // a `char` operand: rejected
+    return cast<uint8>(b);
+}

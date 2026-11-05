@@ -562,27 +562,6 @@ archetype store, an inspector, mods, a project loading a type the program never 
 **The verdict: scheduled, design first.** Asked for: any boxed contract, answering a borrow rather than a copy. To settle: where the type
 identity lives, whether it costs a contract that never narrows anything, and how the borrow roots under the window rules.
 
-<a id="s2-bitcast-operand"></a>
-
-### `bitcast` refuses an operand whose type is known (KR-331)
-
-Found 2026-11-05 writing KR-328's probe, on `0.9.852`. SPEC (*Numeric conversions*): source and target must be equal-width numeric scalars, and *"an operand
-whose scalar type isn't statically known (bind it to a local first) is a compile error"*. The emitter types the operand with `holeBuiltinType`, which
-resolves a variable, a field, a literal, a plain function's result and a method's, and nothing else, so `kama check` and `kama build` both refuse:
-
-| operand | its type | today |
-|---|---|---|
-| `twice(x: x)`, a plain function | `float64` | builds |
-| `p.get()`, a method | `float64` | builds |
-| `p.f`, a field | `float64` | builds |
-| `sin(x: x)`, a generic function (`fn T sin<T: Real<T>>(T x)`) | `float64` | refused |
-| `x + 1.0` | `float64` | refused |
-| `cast<float32>(x)` | `float32`, written in the cast | refused |
-
-Each refused operand's type is statically known, so the program is one SPEC admits and the compiler refuses: a defect. The fix types the operand the way the
-rest of the emitter types an expression, and the message keeps its "bind it to a local" for an operand that truly has no scalar type. A fixture holds every
-row above.
-
 <a id="s2-immutable-array"></a>
 
 ### An `immutable` type cannot hold an array (KR-329)

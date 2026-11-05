@@ -89,5 +89,35 @@ report_only() {
 check_pair scanExprForCollections scanExprForGenerics
 check_pair scanStmtForCollections scanStmtForGenerics
 
+# A kind BOTH walks miss is one parity cannot see: two walks lacking the same arm agree. That is how the generic
+# call in `bitcast<uint64>(sin(x: x))` and in `copy xs[pick(i: 1)]` was never instantiated (to 0.9.852): neither
+# walk entered a BitcastNode or a HandoffNode, and the first refused as an untyped operand, the second as "no
+# instantiation was resolved". The oracle is the emitter's own ladder, `emitExpressionNode`: every kind it lowers
+# is entered by both walks, is declared one-sided in EXEMPT, or is a LEAF below, which holds no expression.
+#
+# - BooleanNode, CharNode, NullNode, StringNode, ZeroValueNode: literals.
+# - ThisAccessNode: `this`.
+# - InterpolatedStringNode: a hole is lexed as a place (a name with `.field`/`[index]`), so no call can be
+#   written in one (tests/xfail/interp_hole_operator), and a place is registered where it was declared.
+# - BaseAccessNode: only `base.field` lowers; `base[…]` is refused at emission, so its list never reaches C.
+LEAVES="BooleanNode CharNode NullNode StringNode ZeroValueNode ThisAccessNode InterpolatedStringNode BaseAccessNode"
+awk '/^std::string CEmitter::emitExpressionNode\(/,/^}/' "$SRC" | grep -oE 'dynamic_cast<[A-Za-z_]+\*>\(n\)' \
+    | sed -E 's/dynamic_cast<([A-Za-z_]+)\*>.*/\1/' | sort -u > "$tmp/emitted"
+if [ ! -s "$tmp/emitted" ]; then
+    echo "check-scan-parity: FAIL — derived an EMPTY node set for emitExpressionNode; it was renamed or reshaped." >&2
+    fail=1
+fi
+for walk in scanExprForCollections scanExprForGenerics; do
+    kinds "$walk" | sed -E 's/dynamic_cast<([A-Za-z_]+)\*>/\1/' > "$tmp/walk"
+    for k in $(comm -23 "$tmp/emitted" "$tmp/walk"); do
+        if printf '%s\n' "$EXEMPT" | grep -qx "$walk:$k"; then continue; fi
+        case " $LEAVES " in *" $k "*) continue ;; esac
+        echo "check-scan-parity: FAIL — emitExpressionNode lowers $k and $walk never enters it." >&2
+        echo "  A call or a type written inside one is never discovered. Add the arm to both walks, or declare" >&2
+        echo "  $k a LEAF with why." >&2
+        fail=1
+    done
+done
+
 [ "$fail" -eq 0 ] || exit 1
-echo "check-scan-parity: PASS (the collections and generics walks visit the same node kinds)"
+echo "check-scan-parity: PASS (the collections and generics walks visit the same node kinds, and every kind the emitter lowers)"

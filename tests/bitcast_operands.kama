@@ -1,0 +1,41 @@
+// A `bitcast` operand is typed as every expression is, not only when it is a place. To 0.9.852 a generic call
+// (`sin(x: x)`), arithmetic (`x + 1.0`) and a `cast<float32>(x)` were refused as "not a resolvable numeric
+// scalar", though each one's type is statically known; and since neither discovery walk entered a `bitcast`,
+// a generic call or a generic type's instance written only inside one was never registered. Each operand's
+// bits are compared against the same value bound to a local first.
+import { std::math::sin };
+
+type value P {
+    public float64 f;
+    public ctor make(float64 f) { this.f = f; return this; }
+    public const fn float64 get() { return this.f; }
+}
+
+type value Box<T> {
+    public T v;
+    public ctor make(T v) { this.v = v; return this; }
+    public const fn T get() { return this.v; }
+}
+
+fn float64 twice(float64 x) { return x * 2.0; }
+fn T ident<T>(T x) { return x; }
+
+fn uint8 main() {
+    float64 x = 0.5;
+    float32 h = 0.1f32;
+    P p = P.make(f: 0.25);
+    int32 ok = 0;
+
+    float64 t = twice(x: x);             if (bitcast<uint64>(twice(x: x)) == bitcast<uint64>(t)) { ok = ok + 1; }
+    float64 g = p.get();                 if (bitcast<uint64>(p.get()) == bitcast<uint64>(g)) { ok = ok + 2; }
+    float64 f = p.f;                     if (bitcast<uint64>(p.f) == bitcast<uint64>(f)) { ok = ok + 4; }
+    float64 s = sin(x: x);               if (bitcast<uint64>(sin(x: x)) == bitcast<uint64>(s)) { ok = ok + 8; }
+    float64 a = x + 1.0;                 if (bitcast<uint64>(x + 1.0) == bitcast<uint64>(a)) { ok = ok + 16; }
+    float32 c = cast<float32>(x);        if (bitcast<uint32>(cast<float32>(x)) == bitcast<uint32>(c)) { ok = ok + 32; }
+    // A `float32` sum takes its literal as a `float32` (1.0f), so the bits are not a `double` sum rounded after.
+    float32 hs = h + 1.0;                if (bitcast<uint32>(h + 1.0) == bitcast<uint32>(hs)) { ok = ok + 64; }
+    // `ident<float64>` and `Box<float64>` are named nowhere but inside the `bitcast`.
+    if (bitcast<uint64>(ident(x: x)) == bitcast<uint64>(x)
+        && bitcast<uint64>(Box::<float64>.make(v: x).get()) == bitcast<uint64>(x)) { ok = ok + 128; }
+    return cast<uint8>(ok);              // 255 when every operand is typed and lowered
+}
