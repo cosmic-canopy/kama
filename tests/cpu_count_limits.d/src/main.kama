@@ -1,0 +1,10 @@
+// `cpuCount()` counts what this process may use (Linux): an affinity mask and a cgroup's CPU quota, on a tree of cgroup files
+// the C half builds, since a fixture cannot set a quota on itself. Elsewhere the C half has nothing to test.
+extern "kama_isolate.h";
+extern "cpulimits.h";
+extern fn int32 cpu_limits_selftest();
+unsafe fn int32 run() { return cpu_limits_selftest(); }
+fn uint8 main() {
+    int32 r = run();
+    return r == 0 ? 42 : cast<uint8>(r);
+}

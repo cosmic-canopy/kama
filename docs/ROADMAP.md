@@ -58,7 +58,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-324 | **`cpuCount()` counts CPUs the process may not use** — it is `sysconf(_SC_NPROCESSORS_ONLN)`, so under `taskset -c 0,1` it says 6 where Rust and Go say 2, and in a container's `--cpus=1` it says 6 where Rust says 1 and Go 2 (measured 2026-11-05, 6 vCPUs). KR-3's pool sizes itself by it, so this comes first | S | [§6](ROADMAP_DETAIL.md#s6-cpucount) |
+| KR-324 | **`cpuCount()` on Windows may count CPUs the process cannot use** — Linux reads its affinity mask and cgroup quota since `0.9.852`. On Windows it is `pthread_num_processors_np`, unmeasured under an affinity mask, and a job object's CPU rate limit and processor groups are unlooked at. KR-3's pool sizes itself by it. The Windows box is measuring | S? | [§6](ROADMAP_DETAIL.md#s6-cpucount) |
 
 ## NOW — the next features, in build order
 

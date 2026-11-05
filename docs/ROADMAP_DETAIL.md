@@ -2805,8 +2805,8 @@ the pool before `main`. Both arms keep the walk honest: the start is reached onl
 **To build with it, none of it in the first version of this brief:** workers start with every asynchronous signal blocked, so a signal a
 program expects on its own thread does not land in a worker, and `SIGSEGV` and `SIGBUS` stay open for the overflow handler. `pthread_atfork`
 returns the child's pool to unstarted, as `kama_fiber.h` already registers one. Priorities (a long held job competing with a barrier)
-are **not in this design**: KR-320 holds that verdict, since a pool has to exist before a priority can be measured. **The pool is sized on
-a wrong number until KR-324 is fixed.**
+are **not in this design**: KR-320 holds that verdict, since a pool has to exist before a priority can be measured. **The pool's size rests on
+`cpuCount()`, whose Windows half is KR-324.**
 
 **Decision 5 — a job may not wait on another task; it may wait on the OS.** *Revised 2026-11-05: this first refused anything that reached
 `kama_fiber_switch`.* That refused the plainest parallel program there is, and the probe says so: `probes/parfor_files.kama`, a
@@ -3070,7 +3070,7 @@ Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202
 #### Build order, once ruled
 
 Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a measured gate against the arms above.
-0. The defect, KR-324, before any of it.
+0. KR-324's Windows half, before the pool sizes itself by it.
 1. KR-288 (S), then KR-313, each useful alone and neither needing a pool.
 2. `Atomic.wait` and `notify`, then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
    proof and the `@onPanic` refusal.
@@ -3082,20 +3082,19 @@ Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a meas
 
 <a id="s6-cpucount"></a>
 
-### `cpuCount()` counts CPUs the process may not use (KR-324)
+### `cpuCount()` on Windows may count CPUs the process cannot use (KR-324)
 
-`cpuCount()` is `sysconf(_SC_NPROCESSORS_ONLN)` on POSIX (`include/kama_isolate.h`), which sees neither affinity nor a CPU quota. Measured
-2026-11-05 on 6 vCPUs (`bench/jobs/probes/before_main/`):
+To `0.9.851` it was `sysconf(_SC_NPROCESSORS_ONLN)` on POSIX, which sees neither affinity nor a CPU quota, a wrong answer that a pool sizing itself by it would make worse: on a 128-core
+host in a 2-CPU container, 128 threads spin against a quota. **Linux is fixed in `0.9.852`** (`kama_isolate.h`, `tests/cpu_count_limits.d`). Measured on 6 vCPUs (`bench/jobs/probes/before_main/` for the others):
 
-| limit | kama | Rust `available_parallelism` | Go `GOMAXPROCS` | `nproc` |
+| limit | kama to `0.9.851` | kama `0.9.852` | Rust `available_parallelism` | Go `GOMAXPROCS` |
 |---|---|---|---|---|
 | none | 6 | 6 | 6 | 6 |
-| `taskset -c 0,1` | **6** | 2 | 2 | 2 |
-| a container's `--cpus=1` | **6** | 1 | 2 | 6 |
+| `taskset -c 0,1` | 6 | **2** | 2 | 2 |
+| a container's `--cpus=1` | 6 | **1** | 1 | 2 |
+| a container's `--cpus=2.5` | 6 | **3** | not run | not run |
 
-A wrong answer today, and a worse one once a pool sizes itself by it: on a 128-core host in a 2-CPU container, 128 threads spin against a
-quota. `ConcurrentMap`'s shard count reads it too. The fix is affinity first (`sched_getaffinity`), then cgroup `cpu.max` on Linux, rounded up;
-Windows and macOS want their own look (`pthread_num_processors_np` is unmeasured under an affinity mask).
+**What is left is Windows:** `pthread_num_processors_np` is winpthreads', unmeasured under an affinity mask, and a job object's CPU rate limit and processor groups have not been looked at. macOS has no affinity call and no quota to read. FreeBSD's `cpuset_getaffinity` waits on a leg that builds there (KR-227's reason).
 
 <a id="s6-thread-control"></a>
 

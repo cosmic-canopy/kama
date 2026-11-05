@@ -161,6 +161,118 @@ static inline int kama_parfor_workers(void) { int n = emscripten_num_logical_cor
 // header), or a hand-declared prototype that clang warns about the moment windows.h declares it too, and
 // a warning is a failed build in this suite.
 static inline int kama_parfor_workers(void) { int n = pthread_num_processors_np(); return n > 0 ? n : 1; }
+#elif defined(__linux__)
+// How many CPUs this process may use, which is not how many the machine has: `sysconf` sees neither an affinity mask nor a
+// cgroup's quota, so under `taskset -c 0,1` on 6 CPUs it said 6 where Rust's `available_parallelism` and Go's `GOMAXPROCS`
+// say 2, and a pool sized by it on a large host in a small container spins against the quota. A quota rounds up, as Go's and
+// Java's do, since 1.5 CPUs can run two threads. Raw `open` and `read`, since `cpuCount()` may sit in `@noheap` code and
+// `fopen` allocates.
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/syscall.h>
+extern long syscall(long, ...);   // <unistd.h> declares it only under a feature set this TU may have read it without
+
+static inline int kama__readSmall(const char* path, char* into, int cap) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    long got = read(fd, into, (size_t)cap - 1);
+    close(fd);
+    if (got <= 0) return 0;
+    into[got] = 0;
+    return 1;
+}
+static inline long kama__quotaCpus(long quota, long period) {
+    return (quota > 0 && period > 0) ? (quota + period - 1) / period : 0;
+}
+// The quota set on one cgroup directory: v2's `cpu.max` ("max 100000", "200000 100000") or v1's two files. 0 = none, or no file.
+static inline long kama__cgroupDirCpus(const char* dir, int v1) {
+    char path[4200], text[64];
+    if (!v1) {
+        snprintf(path, sizeof path, "%s/cpu.max", dir);
+        if (!kama__readSmall(path, text, sizeof text) || text[0] == 'm') return 0;
+        char* rest;
+        long quota = strtol(text, &rest, 10);
+        return kama__quotaCpus(quota, strtol(rest, NULL, 10));
+    }
+    snprintf(path, sizeof path, "%s/cpu.cfs_quota_us", dir);
+    if (!kama__readSmall(path, text, sizeof text)) return 0;
+    long quota = strtol(text, NULL, 10);
+    snprintf(path, sizeof path, "%s/cpu.cfs_period_us", dir);
+    if (!kama__readSmall(path, text, sizeof text)) return 0;
+    return kama__quotaCpus(quota, strtol(text, NULL, 10));
+}
+// The tightest quota from `base` + `cg` up through its ancestors, since a parent's limit binds its children. In a container
+// `cg` can name a host path the mount does not hold: those reads fail, and the mount's root answers.
+static inline long kama__cgroupWalkCpus(const char* base, const char* cg, int len, int v1) {
+    char dir[4096];
+    long best = 0;
+    for (;;) {
+        snprintf(dir, sizeof dir, "%s%.*s", base, len, cg);
+        long here = kama__cgroupDirCpus(dir, v1);
+        if (here > 0 && (best == 0 || here < best)) best = here;
+        if (len == 0) return best;
+        while (len > 0 && cg[--len] != '/') { }
+    }
+}
+// `selfCgroup` is /proc/self/cgroup, one `id:controllers:path` per line: `0::/path` on v2, `4:cpu,cpuacct:/path` on v1; `root`
+// is /sys/fs/cgroup. Parameters only so a fixture can hand it a tree. 0 = no quota anywhere.
+static inline long kama__cgroupCpus(const char* selfCgroup, const char* root) {
+    char text[4096], base[4096];
+    if (!kama__readSmall(selfCgroup, text, sizeof text)) return 0;
+    long best = 0;
+    for (char* line = text; line && *line; ) {
+        char* end = strchr(line, '\n');
+        char* c1 = strchr(line, ':');
+        char* c2 = c1 ? strchr(c1 + 1, ':') : NULL;
+        if (c2 && (!end || c2 < end)) {
+            const char* cg = c2 + 1;
+            int len = (int)(end ? end - cg : (long)strlen(cg));
+            if (len == 1 && cg[0] == '/') len = 0;
+            int ctl = (int)(c2 - c1 - 1);
+            long here = 0;
+            if (ctl == 0) {
+                here = kama__cgroupWalkCpus(root, cg, len, 0);
+            } else if ((ctl >= 3 && !strncmp(c1 + 1, "cpu,", 4)) || (ctl == 3 && !strncmp(c1 + 1, "cpu", 3))
+                       || (ctl > 4 && !strncmp(c2 - 4, ",cpu", 4)) || (ctl > 5 && strstr(c1 + 1, ",cpu,") && strstr(c1 + 1, ",cpu,") < c2)) {
+                snprintf(base, sizeof base, "%s/cpu,cpuacct", root);
+                here = kama__cgroupWalkCpus(base, cg, len, 1);
+                long named;
+                snprintf(base, sizeof base, "%s/cpu", root);
+                named = kama__cgroupWalkCpus(base, cg, len, 1);
+                if (named > 0 && (here == 0 || named < here)) here = named;
+            }
+            if (here > 0 && (best == 0 || here < best)) best = here;
+        }
+        line = end ? end + 1 : NULL;
+    }
+    return best;
+}
+static inline int kama__affinityCpus(void) {
+    unsigned long mask[128];   // 8,192 CPUs, the kernel's largest
+    long bytes = syscall(__NR_sched_getaffinity, 0, sizeof mask, mask);
+    if (bytes <= 0) return 0;
+    int n = 0;
+    for (long i = 0; i < bytes / (long)sizeof(unsigned long); ++i) n += __builtin_popcountl(mask[i]);
+    return n;
+}
+static inline int kama__usableCpus(void) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    long allowed = kama__affinityCpus();
+    if (allowed > 0 && (n <= 0 || allowed < n)) n = allowed;
+    long quota = kama__cgroupCpus("/proc/self/cgroup", "/sys/fs/cgroup");
+    if (quota > 0 && (n <= 0 || quota < n)) n = quota;
+    return n > 0 ? (int)n : 1;
+}
+// Read once: racing first callers compute one answer, and a pool is sized from it once.
+static inline int kama_parfor_workers(void) {
+    static int known;
+    int n = __atomic_load_n(&known, __ATOMIC_RELAXED);
+    if (n == 0) { n = kama__usableCpus(); __atomic_store_n(&known, n, __ATOMIC_RELAXED); }
+    return n;
+}
 #else
 #include <unistd.h>
 static inline int kama_parfor_workers(void) { long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 1; }
