@@ -1,0 +1,12 @@
+// A nested `parallel_for (ref …)` over a capture splits it once per outer worker, so the splits overlap.
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+fn uint8 main() {
+    DynamicArray<int64> xs = DynamicArray.empty();
+    xs.add(item: 1i64);
+    DynamicArray<int64> ys = DynamicArray.empty();
+    ys.add(item: 0i64);
+    parallel_for (ref int64 e in xs, workers: 2) {
+        parallel_for (ref int64 y in ys, workers: 2) { y = 1; }
+    }
+    return 0;
+}

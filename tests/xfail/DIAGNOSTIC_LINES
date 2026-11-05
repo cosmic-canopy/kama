@@ -1169,12 +1169,17 @@ parfor_break	parfor_break.kama:7:21
 parfor_clause_twice	parfor_clause_twice.kama:6:49
 parfor_const_view	parfor_const_view.kama:9:8
 parfor_elem_undeclared	parfor_elem_undeclared.kama:11:0
+parfor_foreach_ref_capture	parfor_foreach_ref_capture.kama:9:4
+parfor_give_capture	parfor_give_capture.kama:7:4 parfor_give_capture.kama:8:8
+parfor_nested_ref_capture	parfor_nested_ref_capture.kama:8:4
 parfor_no_workers	parfor_no_workers.kama:14:4
 parfor_noncontiguous	parfor_noncontiguous.kama:9:4
 parfor_ref_const_ref	parfor_ref_const_ref.kama:7:4
 parfor_return	parfor_return.kama:7:21
 parfor_this	parfor_this.kama:11:8
+parfor_viewmut_capture	parfor_viewmut_capture.kama:8:4
 parfor_write_capture	parfor_write_capture.kama:11:4
+parfor_write_capture_arm	parfor_write_capture_arm.kama:9:4
 park_call_access	park_call_access.kama:12:0
 park_memory_stream_shared	park_memory_stream_shared.kama:8:0
 park_window_channel_recv	park_window_channel_recv.kama:14:0

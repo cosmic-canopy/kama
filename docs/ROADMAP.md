@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-323 | **A captured local in a `match` arm of a `parallel_for` body is not captured** — `parallel_for (ref int64 e in xs, workers: 2) { match (pick(x: e)) { case A(v: n): { e = n * k; } case B: { } }; }` answers "cannot resolve `k`", and the same read under `if` compiles (measured `0.9.850`). The body's free-variable scan has no arm for `match` | S | [§2](ROADMAP_DETAIL.md#s2-parfor-match-capture) |
 | KR-324 | **`cpuCount()` counts CPUs the process may not use** — it is `sysconf(_SC_NPROCESSORS_ONLN)`, so under `taskset -c 0,1` it says 6 where Rust and Go say 2, and in a container's `--cpus=1` it says 6 where Rust says 1 and Go 2 (measured 2026-11-05, 6 vCPUs). KR-3's pool sizes itself by it, so this comes first | S | [§6](ROADMAP_DETAIL.md#s6-cpucount) |
 
 ## NOW — the next features, in build order

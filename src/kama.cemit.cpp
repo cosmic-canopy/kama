@@ -8174,7 +8174,12 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                     if (mi && !mi->isConst) { std::string r = rootBinding(ma->expression); if (!r.empty()) noteUse(r, true); }
                 }
             }
-            // else: a bare free-fn call target is a global symbol, not a capture — skip the callee name.
+            // else: a bare call target is a global symbol, not a capture, unless a local `fnptr` holds it.
+            else {
+                std::string callee = (inv->identifier && inv->identifier->value) ? *inv->identifier->value : "";
+                if (auto* cid = dynamic_cast<IdentifierNode*>(inv->expression.get())) if (cid->value) callee = *cid->value;
+                if (!callee.empty() && (findScopeDeclaring(callee) >= 0 || _paramNames.count(callee))) noteUse(callee, false);
+            }
             if (inv->args) for (auto& a : *inv->args) if (a) {
                 // A capture passed by `ref`/`out` may be mutated by the callee -> treat as a write.
                 bool byRef = a->modifier && a->modifier->value
@@ -8183,8 +8188,29 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                 scanE(a->expression);
             }
         } else if (auto* ea = dynamic_cast<ElementAccessNode*>(n)) {
+            if (ea->identifier && ea->identifier->value) noteUse(*ea->identifier->value, false);   // `ys[0]` names its base here
             scanE(ea->expression);
             if (ea->expressionlist) for (auto& x : *ea->expressionlist) scanE(x);
+        } else if (auto* is = dynamic_cast<InterpolatedStringNode*>(n)) {
+            for (auto& h : is->holes) scanE(h);
+        } else if (auto* al = dynamic_cast<ArrayLiteralNode*>(n)) {
+            if (al->elements) for (auto& x : *al->elements) scanE(x);
+            scanE(al->fillValue); scanE(al->fillCount);
+        } else if (auto* h = dynamic_cast<HandoffNode*>(n)) {
+            if (h->isGive) { std::string r = rootBinding(h->value); if (!r.empty()) noteUse(r, true); }   // a move out of a capture writes it
+            scanE(h->value);
+        } else if (auto* bc = dynamic_cast<BitcastNode*>(n)) {
+            scanE(bc->unaryExpression);
+        } else if (auto* ad = dynamic_cast<AsDowncastNode*>(n)) {
+            scanE(ad->operand);
+        } else if (auto* m = dynamic_cast<MatchNode*>(n)) {
+            scanE(m->subject);
+            if (m->arms) for (auto& arm : *m->arms) if (arm) {
+                if (arm->bindings) for (auto& nm : *arm->bindings) if (nm) bodyLocal.insert(*nm);
+                scanE(arm->body); scanS(arm->block);
+            }
+        } else if (auto* iso = dynamic_cast<IsolateNode*>(n)) {
+            scanE(iso->call); scanE(iso->stack);
         } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
             scanE(b->LHS); scanE(b->RHS);
         } else if (auto* l = dynamic_cast<LogicalAndOrNode*>(n)) {
@@ -8203,6 +8229,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             scanE(po->expression);
         } else if (auto* oc = dynamic_cast<ObjectCreationNode*>(n)) {
             if (oc->args) for (auto& a : *oc->args) if (a) scanE(a->expression);
+            if (oc->placement) for (auto& a : *oc->placement) if (a) scanE(a->expression);
         }
         // literals / other leaves: nothing to capture.
     };
@@ -8235,15 +8262,33 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
             if (fr->iteratorStatements) for (auto& st : *fr->iteratorStatements) scanS(st);
             scanS(fr->body);
         } else if (auto* fe = dynamic_cast<ForEachNode*>(n)) {
+            // A `ref` binding writes through to what it loops over, so over a capture it is a shared write.
+            if (fe->isRef && !fe->isConstRef) { std::string r = rootBinding(fe->expression); if (!r.empty()) noteUse(r, true); }
             scanE(fe->expression);
             if (fe->name && fe->name->value) bodyLocal.insert(*fe->name->value);
             scanS(fe->body);
+        } else if (auto* inner = dynamic_cast<ParallelForNode*>(n)) {
+            if (!inner->isConstRef) { std::string r = rootBinding(inner->expression); if (!r.empty()) noteUse(r, true); }
+            scanE(inner->expression); scanE(inner->workers); scanE(inner->stack);
+            if (inner->name && inner->name->value) bodyLocal.insert(*inner->name->value);
+            scanS(inner->body);
+        } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {
+            scanS(sc->body);
+        } else if (auto* bw = dynamic_cast<BorrowNode*>(n)) {
+            if (bw->bindings) for (auto& bb : *bw->bindings) if (bb) {
+                scanE(bb->host);
+                if (bb->alias && bb->alias->value) bodyLocal.insert(*bb->alias->value);
+            }
+            scanS(bw->body);
+        } else if (auto* av = dynamic_cast<ArmValueNode*>(n)) {
+            scanE(av->value);
         } else if (auto* r = dynamic_cast<ReturnNode*>(n)) {
             scanE(r->expression);
         }
         // ponytail: this recognizes the statement/expression node kinds a parallel_for body contains
         // today. A newly-added node kind that can name or write a local must be handled here, or its
-        // capture is missed — a loud failure (the worker fn won't compile), never a silent race.
+        // capture is missed — a loud failure (the worker fn won't compile). A `ref` alias over a capture
+        // is the one silent way to miss a WRITE, and it needs its own line above, as `foreach` has.
     };
     scanS(pf->body);
 
@@ -8258,8 +8303,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         c.cType     = _localCTypes.count(nm) ? _localCTypes[nm] : c.className;
         if (capWrites[nm] && !isAtomicClass(c.className))
             unsupported((KW + " body writes to captured `" + nm + "` — a non-atomic capture is shared "
-                         "across all workers and would race; make it an `Atomic<T>`, or write only through the "
-                         "loop element `" + loopVar + "`").c_str(), pf);
+                         "across all workers and would race; make it an `Atomic<T>`, `copy` a `Locked<T>` handle in "
+                         "the body, or write only through the loop element `" + loopVar + "`").c_str(), pf);
         c.addr = _refParams.count(nm) ? kName(nm) : ("&(" + kName(nm) + ")");   // a ref-param capture IS already a pointer
         // A capture reaches every worker by `ref` — the same crossing as a borrowed bundle, so the same
         // sendability gate (see the element record above).

@@ -2534,7 +2534,7 @@ step 9 (the job pool) and step 7 (the offload pool) together, with KR-288, KR-31
 **Revised 2026-11-05, after the maintainer asked whether this still fits a general-purpose language.** It did not, in three places,
 all shaped by the frame loop that prompted the brief: decision 5 refused a `parallel_for` that reads a file, decision 4 made a process
 multi-threaded before `main`, and decision 7 took away per-worker state with nothing in its place. Decisions 4, 5 and 7 change,
-decisions 2, 8, 14 and 15 are corrected, and decisions 16 and 17 are new. KR-323, KR-324 and KR-325 came out of the same probes.
+decisions 2, 8, 14 and 15 are corrected, and decisions 16 and 17 are new. KR-324 and KR-325 came out of the same probes, and so did a data race `parallel_for` let through, fixed in `0.9.851`.
 
 **What changes from what was ruled or said, plainly.**
 - **"Jobs must not park" (decision 5, ruled 2026-10) goes in part.** A job may wait on the OS, and may not wait on another task. That
@@ -3065,12 +3065,12 @@ others wait; x86-64; bare-metal Linux; Windows.
 | KR-25, KR-26, KR-309 the engine's packages | their consumers; nothing here names them |
 | SPEC, `agents/AGENTS.md`, `docs/agents.md`, tree-sitter, the Zed and Helix pins | *Concurrency* rewritten, `workers:` gone everywhere, `spawn job` in every grammar |
 
-Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: KR-323 and KR-324 (defects) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) are inputs to the audit owed above.
+Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: KR-324 (a defect) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) are inputs to the audit owed above.
 
 #### Build order, once ruled
 
 Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a measured gate against the arms above.
-0. The defects, KR-323 and KR-324, before any of it.
+0. The defect, KR-324, before any of it.
 1. KR-288 (S), then KR-313, each useful alone and neither needing a pool.
 2. `Atomic.wait` and `notify`, then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
    proof and the `@onPanic` refusal.
@@ -3079,25 +3079,6 @@ Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a meas
 5. Rerun `skew:12` with the burst offloaded, which closes KR-255, in its new shape: `scope { spawn job mix(b: ref buf, into: ref h); }`.
 6. Then step 7, 10, KR-297, KR-296, 11, as ruled. KR-296 inherits a constraint: a cancelled fiber still waits at its brace, since
    a job holds its frame.
-
-<a id="s2-parfor-match-capture"></a>
-
-### A captured local in a `match` arm of a `parallel_for` body (KR-323)
-
-Measured `0.9.850`; found 2026-11-05 writing a program that reads files in parallel. The read of `k` below answers "cannot resolve `k`", and
-the same read under an `if` compiles and runs. So a `parallel_for` that reads a file and handles the `Result` with a `match` cannot use
-anything captured in the arm. **Cause, read:** the free-variable scan in the `parallel_for` lowering (`scanS`, `src/kama.cemit.cpp`, "Free-variable
-capture analysis") has an arm per statement and expression kind and none for `match`, so `k` is never threaded in. Check `borrow` and a nested
-`scope` with it.
-
-```kama fragment
-parallel_for (ref int64 e in xs, workers: 2) {
-    match (pick(x: e)) {
-        case A(v: n): { e = n * k; }       // error: cannot resolve `k`
-        case B: { }
-    };
-}
-```
 
 <a id="s6-cpucount"></a>
 

@@ -1,0 +1,112 @@
+// A `parallel_for` body reads a capture wherever a local can be named. Before 0.9.851 the body's free-variable scan had no
+// arm for a `match`, an interpolation hole, a bare indexed base (`ys[0]`), a `scope`, a `borrow`, a nested form or a local
+// `fnptr`, so each of these answered "cannot resolve `k`". Its write half is in xfail/parfor_foreach_ref_capture and the
+// other parfor_*_capture fixtures. Run under TSan, since all of it shares captures across workers.
+import { std::collections::DynamicArray, std::concurrent::Isolate, std::concurrent::Atomic, std::concurrent::Locked };
+
+type enum Kind { A(int64 v), B }
+fn Kind pick(int64 x) { if (x > 0) { return Kind::A(v: x); } return Kind::B; }
+fnptr int64 Twice(int64 x);
+fn int64 twice(int64 x) { return x * 2; }
+fn DynamicArray<int64> oneTwo() {
+    DynamicArray<int64> xs = DynamicArray.empty();
+    xs.add(item: 1i64); xs.add(item: 2i64);
+    return give xs;
+}
+fn DynamicArray<int64> five() {
+    DynamicArray<int64> ys = DynamicArray.empty();
+    ys.add(item: 5i64);
+    return give ys;
+}
+fn int64 sum(const ref DynamicArray<int64> xs) {
+    int64 s = 0;
+    foreach (const ref int64 x in xs) { s = s + x; }
+    return s;
+}
+
+fn int64 armBlock(int64 k) {
+    DynamicArray<int64> xs = oneTwo();
+    parallel_for (ref int64 e in xs, workers: 2) { match (pick(x: e)) { case A(v: n): { e = n * k; } case B: { } }; }
+    return sum(xs: xs);
+}
+fn int64 armValue(int64 k) {
+    DynamicArray<int64> xs = oneTwo();
+    parallel_for (ref int64 e in xs, workers: 2) { int64 v = match (pick(x: e)) { case A(v: n): n * k; case B: k; }; e = v; }
+    return sum(xs: xs);
+}
+fn int64 subject(int64 k) {
+    DynamicArray<int64> xs = oneTwo();
+    parallel_for (ref int64 e in xs, workers: 2) { match (pick(x: k)) { case A(v: n): { e = e + n; } case B: { } }; }
+    return sum(xs: xs);
+}
+fn int64 hole(int64 k) {
+    DynamicArray<int64> xs = oneTwo();
+    parallel_for (ref int64 e in xs, workers: 2) { string s = "k=${k}"; e = cast<int64>(s.length()); }
+    return sum(xs: xs);
+}
+fn int64 indexed() {
+    DynamicArray<int64> xs = oneTwo();
+    DynamicArray<int64> ys = five();
+    parallel_for (ref int64 e in xs, workers: 2) { e = e * ys[0]; }
+    return sum(xs: xs);
+}
+fn int64 windowed() {
+    DynamicArray<int64> xs = oneTwo();
+    DynamicArray<int64> ys = five();
+    parallel_for (ref int64 e in xs, workers: 2) { borrow ys.view() as v { e = e + v[0]; } }
+    return sum(xs: xs);
+}
+fn int64 scoped(int64 k) {
+    DynamicArray<int64> xs = oneTwo();
+    parallel_for (ref int64 e in xs, workers: 2) { scope { e = e * k; } }
+    return sum(xs: xs);
+}
+fn int64 nested(int64 k) {
+    DynamicArray<int64> xs = oneTwo();
+    DynamicArray<int64> ys = five();
+    Atomic<int64> t = Atomic.make(value: 0i64);
+    parallel_for (ref int64 e in xs, workers: 2) {
+        parallel_for (const ref int64 y in ys, workers: 2) { t.fetchAdd(delta: y * k); }
+    }
+    return t.load();
+}
+fn int64 localFnptr() {
+    DynamicArray<int64> xs = oneTwo();
+    Twice f = twice;
+    parallel_for (ref int64 e in xs, workers: 2) { e = f(x: e); }
+    return sum(xs: xs);
+}
+fn int64 owningSubject() {
+    DynamicArray<int64> xs = oneTwo();
+    Optional<string> o = Optional::Some(value: "abc");
+    parallel_for (ref int64 e in xs, workers: 2) {
+        match (o) { case Some(value: s): { e = cast<int64>(s.length()); } case None: { } };
+    }
+    return sum(xs: xs);
+}
+fn int64 lockedHandle() {
+    DynamicArray<int64> xs = oneTwo();
+    Locked<int64> l = Locked.make(value: 0i64);
+    parallel_for (ref int64 e in xs, workers: 2) {
+        Locked<int64> h = copy l;
+        borrow h.lock().value() as x { x = x + e; }
+    }
+    int64 got = 0;
+    borrow l.lock().value() as x { got = x; }
+    return got;
+}
+
+fn uint8 main() {
+    if (armBlock(k: 3) != 9) { return 1; }
+    if (armValue(k: 3) != 9) { return 2; }
+    if (subject(k: 3) != 9) { return 3; }
+    if (hole(k: 3) != 6) { return 4; }
+    if (indexed() != 15) { return 5; }
+    if (windowed() != 13) { return 6; }
+    if (scoped(k: 3) != 9) { return 7; }
+    if (nested(k: 3) != 30) { return 8; }
+    if (localFnptr() != 6) { return 9; }
+    if (owningSubject() != 6) { return 10; }
+    if (lockedHandle() != 3) { return 11; }
+    return 42;
+}

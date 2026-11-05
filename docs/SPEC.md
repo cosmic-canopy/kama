@@ -7561,6 +7561,11 @@ The element and every captured local reach the workers by `ref`, which is the bo
 bundle, so each faces the same sendability gate: a user element type must declare `implements Sendable` <!-- xfail: parfor_elem_undeclared -->
 (a primitive needs nothing — see *Channels* below for the whole rule), and `parallel_spawn` shares the gate. <!-- test: ecs_pattern, parallel_spawn_pool -->
 
+A body reads a capture wherever a local can be named: a `match` arm, an interpolation hole, an index, a nested form. <!-- test: parfor_capture_shapes -->
+It writes none but an `Atomic<T>`. An assignment, `++`, a non-`const` method, a `ref` argument, a `foreach (ref …)`, a mutable view, a nested
+`parallel_for (ref …)` and a `give` each write what they reach, since every worker would reach the same place, and each is refused. <!-- xfail: parfor_write_capture, parfor_write_capture_arm, parfor_foreach_ref_capture, parfor_viewmut_capture, parfor_nested_ref_capture, parfor_give_capture -->
+A `Locked<T>` is shared as it is anywhere, by a `copy` of its handle, taken here in the body.
+
 **There are usually FEWER workers than elements** — `workers: 8` over 30 elements is 8 isolates running 4
 elements each, one after another. That is the point of the construct: the work is finite and independent,
 so four elements run back to back in the same total time, and 40,000 elements need not become 40,000 OS
