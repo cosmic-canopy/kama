@@ -1,0 +1,13 @@
+// reach.sh's method: does readFile reach a fiber switch? The park rule refuses a window around anything that does.
+import { std::concurrent::Fiber, std::concurrent::Isolate, std::fs::readFile };
+type value Box { public int32 n = 0; public ctor make() { } }
+fn void noop(ref int32 x) { x = 1; }
+fn void tested() { match (readFile(path: "x")) { case Ok(value: b): { } case Err(error: e): { } }; }
+unsafe fn uint8 entry() {
+    Shared<Box> s = new Box.make();
+    int32 v = 0;
+    scope { spawn fiber noop(x: ref v); }
+    borrow s.n as w { tested(); }
+    return 0;
+}
+fn uint8 main() { return entry(); }

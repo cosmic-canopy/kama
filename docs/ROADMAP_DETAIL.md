@@ -2524,13 +2524,20 @@ this brief's as well, if `spawn job` survives.
 
 ### The job pool and the offload pool: one brief (KR-3)
 
-**Status: brief written 2026-11-04 on `0.9.845`; rulings owed; no compiler code before them.** It answers what `s6-fibers` left to
+**Status: brief written 2026-11-04 on `0.9.845`, revised 2026-11-05 on `0.9.850`; rulings owed; no compiler code before them.** It answers what `s6-fibers` left to
 it, for
 step 9 (the job pool) and step 7 (the offload pool) together, with KR-288, KR-313 and KR-315. Everything marked *measured* comes from
 `bench/jobs/` and can be rerun, the compiler's half from `bench/jobs/probes/` (with the scratch patch for KR-288); results are in
 `docs/benchmarks/jobs-*.tsv`. Everything else says *predicted*.
 
+**Revised 2026-11-05, after the maintainer asked whether this still fits a general-purpose language.** It did not, in three places,
+all shaped by the frame loop that prompted the brief: decision 5 refused a `parallel_for` that reads a file, decision 4 made a process
+multi-threaded before `main`, and decision 7 took away per-worker state with nothing in its place. Decisions 4, 5 and 7 change,
+decisions 2, 8, 14 and 15 are corrected, and decisions 16 and 17 are new. KR-323, KR-324 and KR-325 came out of the same probes.
+
 **What changes from what was ruled or said, plainly.**
+- **"Jobs must not park" (decision 5, ruled 2026-10) goes in part.** A job may wait on the OS, and may not wait on another task. That
+  ruling was for a separate job pool; moving `parallel_for` onto the pool would have carried it onto every data-parallel loop.
 - **Decision 5 is reopened and two of its sentences go.** "`parallel_for` stays the data-parallel layer" goes: it runs on the
   pool. "Its unit
   is a `Sendable` job" goes: the unit is a record on the caller's stack, and it may borrow.
@@ -2669,7 +2676,8 @@ box runs it.
 | a panic | aborts the process | **nothing lost**: aborts the process | read: `kama_panic` |
 | `@onPanic` | per thread | **nothing lost**, and a hand-out stays refused inside one (decision 9) | measured: refused today only because it allocates |
 | the `Shared` access record and the lock record | per thread | **nothing lost**: a chunk's writes to its elements consult neither, and it cannot name another thread's `Shared` | read from the emitted C and the `Sendable` gate; re-probe with ASan when built |
-| waiting on anything | allowed | **refused** where the graph can see it (decision 5) | measured, per call, below |
+| waiting on another task | allowed, and hangs if that task is queued behind it | **refused** where the graph can see it (decision 5) | measured, per call, below |
+| waiting on the OS | allowed | **allowed**, and it holds one worker until it returns (decision 5) | measured: `probes/parfor_files.kama` compiles and runs today |
 | running fibers | allowed | **refused**: no scheduler on a pool thread | by the same walk |
 
 #### The audit against GOALS.md
@@ -2677,20 +2685,22 @@ box runs it.
 | decision | #1 library in kama | #3 alloc | #3a-c safety, kinds | #4 one way | #5 explicit | fits practice? |
 |---|---|---|---|---|---|---|
 | 1 what runs on the pool | yes | none per hand-out | unchanged | **one** data-parallel form | `spawn job` greppable | **no on one point:** a source break on what `parallel_for` may do |
-| 2 a language form | the pool yes, the proof no | — | the proof stays safe | a third `spawn` word beside `fiber` | yes | yes, as `spawn fiber` |
+| 2 a language form | the pool yes, the proof no | — | the proof stays safe | a third `spawn` word beside `fiber`, and decision 15 is a fourth | yes | yes, as `spawn fiber` |
 | 3 held `Job<R>` | yes | heap, visible, refused under `@noheap` | `Sendable` moved | same shape as `Fiber<R>` | yes | yes |
-| 4 one process pool | yes | up front | — | one | **partly:** started implicitly, sized by one call | partly: nothing else in kama starts before `main` unbidden |
-| 5 no-park rule | — | — | proof, not convention | — | names the chain | yes, the walk kama already has |
+| 4 one process pool | yes | at its first hand-out; up front when `@noheap` code hands out | — | one | **partly:** started implicitly, at a hand-out the program wrote | yes for hosted programs, as Rayon, Java and OpenMP; before `main` under `@noheap` |
+| 5 no waiting on a task | — | — | proof of no hang, not of no stall | — | names the chain | yes, the walk kama already has; the OS wait is every pool's answer |
 | 6 what a barrier does | yes | none | — | one per caller kind | — | yes |
-| 7 statics refused | — | — | stronger than the isolate's | — | names the chain | yes, the `@foreignEntry` walk |
+| 7 statics refused | — | — | stronger than the isolate's | — | names the chain | **no:** other pools give per-worker state; decision 16 answers the need instead |
 | 8 `stack:` kept | yes | a stack per stated size, cached | guard page | one clause | yes | yes |
 | 9 panic | — | — | a new refusal, to stay sound | — | — | yes |
 | 10 shared readers | — | — | same proof `parallel_for` rests on | no new spelling | **partly:** the signature says `const`, as a call's does | yes |
 | 11 several places | — | a stack record | each place judged alone | removes a rule | yes | **no:** rewrites "the bundle is the boundary" |
 | 12 chosen parts | — | none | checked at run time, as `xs[i]` | no new API | the index is visible | yes |
 | 13 `chunks:` | — | — | — | — | the name says what it is | a rename, 26 fixture files, no peer |
-| 14 pool in kama | **yes** | — | a bounded `unsafe` seam | — | — | **no:** every sibling seam is C, and measured no slower |
-| 15 offload pool | yes | a stack record, or held | — | same family | greppable | yes |
+| 14 pool in kama | **yes** | — | a bounded `unsafe` seam | — | — | **no:** every sibling seam is C, and measured no slower; no private OS symbol |
+| 15 offload pool | yes | a stack record, or held | — | same family, and its line against `spawn` is the thinnest here | greppable | yes |
+| 16 bind a chunk | — | none | a view, as the element's is | one more binding on one form | the chunk is in the source | yes: `par_chunks`, OpenMP's split |
+| 17 a view to a job | yes: parallel algorithms in std | none | prefix rule on the host | — | yes | yes: `split_at_mut` |
 
 No goal is traded against the best measured answer anywhere here. Where the pool is behind another runtime is stated above.
 
@@ -2707,18 +2717,26 @@ No goal is traded against the best measured answer anywhere here. Where the pool
 | Unity | `IJobFor` | managed `Thread` | nothing checks |
 | Go | one scheduler for everything | none | yes: a blocked goroutine costs little |
 
-**Every language with a pool keeps a thread form beside it. Why:** a thread may wait for another, and a sized pool's job waiting
-on a queued sibling hangs. So `spawn` stays `std::thread::scope` and `parallel_spawn`
+**Every language with a pool but Go keeps a thread form beside it. Why:** a thread may wait for another, and a sized pool's job waiting
+on a queued sibling hangs. Go can do without because its scheduler adds threads around a blocked goroutine. So `spawn` stays `std::thread::scope` and `parallel_spawn`
 stays a thread per element, and neither moves.
 
 **Recommended: `parallel_for` moves to the pool, and `spawn job` is new.** `parallel_for` already forbids what a pool cannot do:
 "an element may not wait on another element's progress" (SPEC), and `parallel_spawn` is already where to go
 if it must. Moving it silently speeds every existing use.
 
-- **Option A (recommended). Sacrifice:** a source break. A `parallel_for` body may no longer wait, and `workers: 64` is no longer
-  how to run 64 blocking calls. In-tree that is 1 fixture of 13 (14 sites read one by one: `fiber_isolate_join` sleeps in one, and
-  moves to `parallel_spawn`; `isolate_stack`
-  states `stack:`, which decision 8 keeps; none touches a module `static`), and **no peer project has a `parallel_for` in code at all.**
+- **Option A (recommended). Sacrifice:** a source break, in four parts, and the count below does not measure them, because no peer has
+  a `parallel_for` in code at all: the corpus cannot say what a general program does here.
+  1. A body may no longer wait on another task (decision 5). SPEC already forbids it, unchecked, and it hangs; a bounded `send` to a
+     consumer on its own isolate is legal today and does not hang, and it is refused too.
+  2. `workers: 64` no longer runs 64 blocking calls at once: `chunks: 64` runs as many as the pool has threads. **This one compiles
+     and goes slower,** so the rename in decision 13 is what makes a reader look at it. Many waits at once are fibers, or
+     `parallel_spawn` over workers draining a channel.
+  3. A body may not reach a module `static` (decision 7).
+  4. A body may not call through a plain `fnptr` (decision 5).
+
+  In-tree, after the rename: 0 of 13 fixtures (14 sites read one by one; `fiber_isolate_join` sleeps in one, which now passes;
+  `isolate_stack` states `stack:`, which decision 8 keeps; none touches a module `static`).
 - **Option B: `parallel_for` stays and a pooled twin arrives. Sacrifice:** two data-parallel forms, and the one that looks obvious
   is 2.6 times slower on a real phase and 33 times on a trivial one, at 10 chunks. GOALS #4.
 - **Option C: `spawn` moves too, whenever the walk proves it waits on nothing. Sacrifice:** a debug `send` silently moves a task
@@ -2726,9 +2744,12 @@ if it must. Moving it silently speeds every existing use.
 
 Consistent with practice on everything but the break, and pre-1.0 allows it.
 
-**Decision 2 — a language form, not a library call.** kama has no closures and a `ref` cannot be stored, so a safe library cannot
-hold a borrow in a queue: `std::thread::scope` and `rayon::scope` lean on closures and lifetimes, which kama has
-neither of. The proof lives in `scope`, so the form has to as well. A library spelling means `UnsafePtr`, and the compiler's proof
+**Decision 2 — a language form, not a library call.** A `ref` cannot be stored (GOALS 3e), so a safe library cannot hold a borrow in a
+queue. `std::thread::scope` and `rayon::scope` rest on lifetimes, which kama rules out on purpose. **Closures are not the reason, and
+this paragraph first said they were:** a closure in kama would capture by move or by `Shared` (§2's verdict, 2026-09-07) and add no
+borrowed capture, so adding them would leave this decision where it is. What the lack of them costs here is a named function per
+task, and a functor type for a library's own algorithm: `probes/parfor_functor.kama`, a generic `parMap<F: Mapper>` carrying state,
+runs today with a direct call. TBB began in that shape. The proof lives in `scope`, so the form has to as well. A library spelling means `UnsafePtr`, and the compiler's proof
 stops there, which is what the reporter asked to avoid. **Recommended: `spawn job`, contextual as `fiber` is (the lexer's
 lookahead),
 so `job` stays usable as a name.** A direct statement of its `scope`, as an isolate's is, so the count is read off the block and
@@ -2742,52 +2763,86 @@ work that outlives a block: decode started in one frame and collected three late
 is seen. A join runs the job on the spot if no worker has taken it. **Verdict: scheduled,** after the scope form. **Sacrifice:**
 one more type; a long held job occupies a worker that a barrier may want, which is the priority question below.
 
-**Decision 4 — one process pool, started before `main`.**
+**Decision 4 — one process pool, started at its first hand-out.** *Revised 2026-11-05: this first recommended starting it before `main`
+in any program holding a form.*
 
-| | pool | when it starts | who sizes it |
+| | pool | when its threads start | who sizes it |
 |---|---|---|---|
 | Rayon | global, plus any you build | first use | `build_global`, `RAYON_NUM_THREADS` |
 | Java | `commonPool`, plus any you build | first use | a system property |
 | OpenMP | one, per team | first region | `OMP_NUM_THREADS` |
 | Unity | one | engine start | `JobsUtility.JobWorkerCount`, lowered while running, up to a maximum |
-| Go | one | program start | `GOMAXPROCS`, settable while running |
+| Go | one scheduler | **in every program, before `main`:** *measured,* 5 threads at `main` with `GOMAXPROCS` 6 (Go 1.27.3, Linux arm64, 6 vCPUs), and more on demand | `GOMAXPROCS`, settable while running |
 
-- **A (recommended): started before `main` in a program whose code holds a pool form,** as `_spawnsThreads` already decides a wasm
-  build's hosting. `cpuCount()` threads counting the caller; `setJobThreads(count: n)` changes it, any time and not under
-  `@noheap`; `count: 1` makes every form run on its caller, in order.
-  **What it gives:** every allocation is up front, so `@noheap` proves a hand-out; the same binary can run serial and parallel,
-  which a game wants for comparing a world hash. **Sacrifice:** a start the program did not write, about 15 µs a thread (measured
-  here; predicted about ten times that on Windows from the reporter's
-  numbers), and 8 MiB reserved per thread with a few pages touched; deques are about 8 KiB each.
-- **B: a pool handle passed to each form. Sacrifice:** a parameter through every signature, the shape decision 7 refused from Zig,
+- **A (recommended): at the first hand-out, or at `setJobThreads(count: n)` if the program calls it first.** `cpuCount()` threads counting
+  the caller; `count: 1` makes every form run on its caller, in order, so one binary can run serial and parallel. **A program whose
+  `@noheap` code reaches a hand-out starts the pool before `main`,** since that code cannot, and the walk knows it from what the
+  program says: `@noheap` already means "allocate before here". **What it gives:**
+  - A program that never reaches a form at run time pays nothing, and a program sizing the pool first starts nothing twice.
+  - A process stays single-threaded until it does otherwise. *Measured* (`probes/before_main/`): `unshare(CLONE_NEWUSER)` succeeds
+    single-threaded and answers `EINVAL` with one other thread, which is why a Go container runtime does that work in a C constructor
+    (runc's `nsexec`); a thread started before `fork` is gone in the child (5 threads, then 1); and a sandbox applied per thread
+    (seccomp without `TSYNC`) would miss threads already running.
+  - **wasm pays far more than native, and only if it uses the pool.** *Measured under node:* the first thread takes 13 ms, and ten more
+    take 8-15 ms on the caller and 66-77 ms until all run (4 runs), against about 15 µs a thread on the M4. Before `main`, every page holding
+    a form anywhere would pay that at load. Browsers are unmeasured.
+
+  **Sacrifice:** a thread start the program did not spell, at a hand-out it did: about 150 µs at 10 threads here, predicted about ten
+  times that on Windows from the reporter's numbers, and 8 MiB reserved per thread with a few pages touched. One load and a branch
+  on every hand-out (*predicted* under a nanosecond). A program that wants the cost elsewhere calls `setJobThreads` at its start.
+- **B: before `main` in any program holding a form (the first recommendation). What it gives:** no cold first hand-out, and one rule, not
+  two. **Sacrifice:** everything A lists, in every run of every program whose code holds a form, including a package's rarely taken path.
+  Go is the precedent, and runc's constructor is what that precedent costs.
+- **C: a pool handle passed to each form. Sacrifice:** a parameter through every signature, the shape decision 7 refused from Zig,
   and a library cannot parallelize inside without asking for one.
-- **C: started at first use. Sacrifice:** a first hand-out that pays for every thread, and `@noheap` cannot be proven, since the
-  call reaches the allocator.
+- **Rejected: a hand-out under `@noheap` on an unstarted pool runs on its caller.** No heap, but a loop silently serial because a start
+  was forgotten, which is the cliff option C of decision 1 was refused for.
 
-**Starting before `main` puts kama with Unity and Go, not with Rayon and Java. Why:** those two are libraries, which cannot know a
-program will use them, while kama's compiler reads the form in the program. Priorities (a long held job competing with a barrier)
-are **not in this
-design**: KR-320 holds that verdict, since a pool has to exist before a priority can be measured.
+**The bytes** (*predicted*): the hand-out above, behind `if (!started) poolStart();`, and with no branch at all when the program starts
+the pool before `main`. Both arms keep the walk honest: the start is reached only where it may allocate.
 
-**Decision 5 — the no-park rule, and how a job is identified.** A job entry is identified as a thread entry is, by its
-trampoline's prefix (`__kama_job_`, with `kama_kama_pf_tramp`). The leaf is `kama_fiber_switch`, as the park rule's. A contract
-call is judged against every implementer. **Measured,** using the park rule as the test of what reaches a switch:
+**To build with it, none of it in the first version of this brief:** workers start with every asynchronous signal blocked, so a signal a
+program expects on its own thread does not land in a worker, and `SIGSEGV` and `SIGBUS` stay open for the overflow handler. `pthread_atfork`
+returns the child's pool to unstarted, as `kama_fiber.h` already registers one. Priorities (a long held job competing with a barrier)
+are **not in this design**: KR-320 holds that verdict, since a pool has to exist before a priority can be measured. **The pool is sized on
+a wrong number until KR-324 is fixed.**
+
+**Decision 5 — a job may not wait on another task; it may wait on the OS.** *Revised 2026-11-05: this first refused anything that reached
+`kama_fiber_switch`.* That refused the plainest parallel program there is, and the probe says so: `probes/parfor_files.kama`, a
+`parallel_for` calling `readFile` per path, compiles and runs today, and `readFile` reaches a switch (`probes/reach_readfile.kama.refused`
+names the chain). It would have had no replacement before step 7, and kama alone in the table in decision 1. One rule was covering
+two different harms:
+
+| a job waits on | what it costs the pool | can it hang the pool? |
+|---|---|---|
+| another task: a channel, a join | every worker can end up waiting on work queued behind it | **yes** |
+| the OS: a file, `sleep`, a socket | one worker, until the call returns | no: the call returns without the pool's help |
+
+**Recommended: the walk's leaves are the task waits,** `kama__channel_park`, `kama__isolate_park`, `kama_isolate_join`, `kama_sched_scopeWait`
+and a fiber's join, on the lock walk's `kRuntimeWaits`. A job entry is identified as a thread entry is, by its trampoline's prefix
+(`__kama_job_`, with `kama_kama_pf_tramp`). A contract call is judged against every implementer. A nested pool form is no wait, since the
+waiter takes work.
 
 | a job may | refused |
 |---|---|
-| `println`, `logInfo`, allocation, interpolation, `monotonicNow`, `Atomic`, a `Locked` window, `tryRecv`, `File.open` (until step 7) | `Sender.send`, `recv`, `sleep`, `File.read`, `TcpStream.connect`, an isolate's join, `spawn fiber` |
+| `println`, `logInfo`, allocation, `monotonicNow`, `Atomic`, a `Locked` window, `tryRecv`, **`File.read`, `readFile`, `sleep`, `TcpStream`, `Poller.wait`** | `Sender.send`, `recv`, `recvTimeout`, an isolate's join, `spawn fiber` |
 
-- **Why a rule when nobody else has one:** Rayon has no rule, and projects report deadlocks from a job waiting on what a waiting
-  worker's frame holds; Java and C# add threads to cover it. None of them has a whole-program walk, and kama does. A refusal
-  naming the chain beats a hang.
-- **`println` passes on purpose.** It blocks a thread for a moment and lets no other fiber in, which is what a lock window cares
-  about and a job does not.
-- **KR-298 `trySend` moves into scope,** as a job's only send.
-- **A blind call (`fnptr`, a bound function) is refused,** as both existing walks refuse it, with `@noparks fnptr` on the named
-  type as the way through, on the model of `@noheap fnptr`. **Sacrifice:** a table of plain function pointers needs the marker;
-  contracts and generics need nothing.
-- **Sacrifice of the rule:** a job does no I/O and no blocking send, so an asset read belongs on a fiber or `spawn offload`, and
-  its decode on a job. **Stated residuals,** as `Locked` states its own: a foreign C call that blocks, and a spin on an `Atomic`.
+- **Why any rule, when Rayon has none:** projects report deadlocks from a job waiting on what a waiting worker's frame holds, and Java and C#
+  add threads to cover it. kama has a whole-program walk, and a refusal naming the chain beats a hang. It also turns SPEC's unchecked "an
+  element may not wait on another element's progress" into a compile error, where today it hangs in silence.
+- **KR-298 `trySend` moves into scope,** as a job's only send. A `Locked` collection is the other way out.
+- **A blind call (`fnptr`, a bound function) is refused,** as both existing walks refuse it, with `@noparks fnptr` on the named type as the
+  way through. On the model of `@noheap fnptr`, the marker is part of the type and checked where a function is bound to it: a proof,
+  not a promise. **Sacrifice:** a table of plain function pointers needs the marker; contracts and generics need nothing.
+- **Sacrifice of the rule:** what October's ruling gave. A job that blocks holds a worker in silence: a frame can stall on a slow read, and a
+  fiber parked at a brace waits longer, since it takes no chunks. The width is the pool's, so a hundred slow requests are fibers, not
+  `chunks: 100`. **A program that wants the proof asks for it per function, with KR-79's *no blocking syscall*,** which is that row's own
+  example and now has a use; until KR-79 ships, nothing offers it. **Stated residuals,** as `Locked` states its own: a job blocked on
+  a socket or pipe whose other end is another job, or a fiber at a brace, hangs; so does a foreign C call that waits on one; a spin on an `Atomic`.
+- **Option: refuse every park (the first recommendation). Sacrifice:** no file, no `sleep` and no socket in any `parallel_for`, a
+  rule no other language has, for a harm that is a stall and not a hang. It is the right proof for a frame loop and the wrong default for
+  a language.
+- **Not in this design: a spare thread when a job blocks,** as Go, Java and C# have. Rayon has none. Reopened on a measurement.
 
 **Decision 6 — what a barrier does, by who is waiting.**
 
@@ -2803,25 +2858,27 @@ than 8.6 cores.
 **Rayon's real deadlock cannot happen here:** a waiting worker picks up a job that needs a lock its own frame holds (reported
 against Rayon repeatedly), and kama already refuses a join inside a lock window at compile time (`checkLockWindows`). The pool's
 wait joins that list.
-**The walk needs one cut:** one join has both arms, so a nested form on a job reaches a switch on the graph. A job never runs on a
-fiber (a fiber never helps, a job cannot start one), so the walk cuts that edge when it starts from a job entry. **Sacrifice:**
-nesting piles frames on a worker's stack, as Rayon's does.
+**A job never runs on a fiber** (a fiber never helps, a job cannot start one). The walk needs no cut for it now that its leaves are task
+waits. **Sacrifice:** nesting piles frames on a worker's stack, as Rayon's does.
 
-**Decision 7 — module `static`s: a job cannot reach one.** A chunk may run on the caller, so it would see *main's* copy and could
-change it, on one chunk out of k; on a worker it would see whatever the last job left. Measured today: a child starts at the
-initialiser. Unity's own documentation says jobs get no protection here and that it
-intends to prevent it by static analysis. **Recommended: refused, read or write, by the `@foreignEntry` walk, naming the chain,**
-so a job's result cannot depend on which worker ran it. In std that touches one static, `uuid.kama:58` (so a job cannot make a v7
-UUID until that is carried in). **Sacrifice:** no `static` cache or RNG in a job: pass it in, one per chunk. **Option: per-worker
-statics, stated.** **Sacrifice:** a result
-that depends on scheduling, which is the bug a game's world hash exists to catch.
+**Decision 7 — module `static`s: a job cannot reach one, and decision 16 replaces what that took.** A chunk may run on the caller, so it
+would see *main's* copy and could change it, on one chunk out of k; on a worker it would see whatever the last job left. *Measured
+today:* a `spawn` child starts at the initialiser, and a `parallel_for` worker has its own copy for all its elements
+(`probes/parfor_scratch.kama` prints `1 4 1 4 main=0`), **which is what per-worker scratch is today, and the first version of this decision
+took it away with "pass it in, one per chunk", though `parallel_for` has no way to pass one.** Unity's own documentation says jobs get no
+protection here and that it intends to prevent it by static analysis. **Recommended: refused, read or write, by the `@foreignEntry` walk,
+naming the chain,** so a job's result cannot depend on which worker ran it. In std that touches one static, `uuid.kama:58` (so a job cannot
+make a v7 UUID until that is carried in). **Sacrifice:** a library that keeps a `static` cannot be called from a job. **Option: per-worker
+statics, as every other pool has (`thread_local!`, `threadprivate`). Sacrifice:** a result that depends on scheduling, which is the bug a
+world hash exists to catch, and one chunk on main's copy unless the caller's chunks move too.
 
 **Decision 8 — `stack:` is kept.** `spawn job(stack: n) f(…)` and `parallel_for (…, stack: n)` run on a stack of that size on a
 pool thread, through `kama_fiber_switch`, with its guard page and handler. **Measured** (`kama_fiber.h` from C, on a 64 MiB
 stack): 100,000 frames deep, 26 ns a job with a kept stack, 50 ns freed to the idle list, ASan-clean. Rayon has only a pool-wide
 `stack_size`, so kama is alone here, **because** it owns a switch and a Rust
 library does not (the `stacker` crate is the nearest). The overflow message names the job's clause. **Sacrifice:** a mapping per
-stated size, on Windows through the Fiber API (*unmeasured there*). **Option: refuse `stack:`, send deep recursion to `spawn`.
+stated size, on Windows through the Fiber API (*unmeasured there*), and **it inherits KR-238:** where shadow stacks are enforced, on Linux
+x86-64, the switch refuses with a message, so a stated stack that works on a thread today would refuse until that row ships. **Option: refuse `stack:`, send deep recursion to `spawn`.
 Sacrifice:** `isolate_stack` and the clause go, for nothing measured.
 
 **Decision 9 — a panic, and `@onPanic`.** A panic aborts the process on any thread, unchanged. **A new refusal:** a hand-out
@@ -2890,8 +2947,11 @@ state a size, not a count; kama keeps a count, since `cpuCount() * 4` is what is
 **4.165 ms against the C arm's 4.151**, and 3.26 against 3.41 with one worker. **So the ruling stands, and it costs nothing
 here.** It needs two things `Atomic` lacks: **`wait` and `notify`** (C++20's, on futex, `__ulock` and `WaitOnAddress`), which is
 useful public surface anyway, and a seq-cst fence, which it can do without. The module loads only for a program holding a form, as
-`spawnsFiber` gates fibers, or importing `Atomic` would start threads. **Sacrifice:** macOS's `__ulock_*` is private API (libc++
-calls it too); `os_sync_wait_on_address` needs 14.4 and the floor is 14.0, so a weak link with that as the fallback.
+`spawnsFiber` gates fibers, or importing `Atomic` would start threads. **On macOS, no private symbol:** nothing in the tree calls `__ulock_*` today, and this would have been the first, in every binary with a
+form, in the way of KR-281's App Review. **Recommended:** `os_sync_wait_on_address`, public since macOS 14.4 and iOS 17.4, weak-linked, and
+under it a hashed table of `pthread` condvars, as libstdc++ does where it has no futex. **Sacrifice:** a slower wake on macOS 14.0-14.3
+(*unmeasured*), and an arm CI's macOS 26 runs only when forced. **Option: raise the floor to 14.4. Sacrifice:** those users. The
+prototype in `bench/jobs/` uses `__ulock_*`, which is fine for a bench.
 
 **Decision 15 — the offload pool (step 7).**
 
@@ -2903,7 +2963,9 @@ calls it too); `os_sync_wait_on_address` needs 14.4 and the floor is 14.0, so a 
 | Go | up to 10,000 | yes | |
 
 - **Spelling, for step 7's ruling: `spawn offload f(…)`, the same family and the same reason as decision 2,** as a scope child or
-  a held `Offload<R>`. It may block on anything, since that is its purpose, and a fiber parks at the brace. It holds no job's
+  a held `Offload<R>`. **Its line against `spawn` is the thinnest in the vocabulary:** on a fiber, a `spawn` child's join already parks
+  (SPEC, `fiber_isolate_join`), so `spawn` already runs a blocking call off a fiber. What `spawn offload` adds is reuse and a cap, without
+  which a thousand fibers each blocking on one call are a thousand threads. The pool itself is needed whatever this word is, for files and DNS. It may block on anything, since that is its purpose, and a fiber parks at the brace. It holds no job's
   rule; only `spawn fiber` is refused, since it has no scheduler.
 - **Separate threads from the job pool,** since its work blocks. **Sacrifice, stated:** up to cores (I/O) + cores (jobs) + the
   offload pool's in one process.
@@ -2912,17 +2974,160 @@ calls it too); `os_sync_wait_on_address` needs 14.4 and the floor is 14.0, so a 
 - **Which calls: all of a regular file's, data and metadata,** on a fiber; DNS with KR-202; `Poller.wait` on AFD and `poll(2)`
   (the Windows box's). **A thread with no scheduler keeps calling inline:** nothing else could run.
 
+**Decision 16 — `parallel_for` may bind a chunk, new 2026-11-05.** Per-chunk state is what a general data-parallel form lacks once statics go:
+scratch memory, and any sum.
+
+```kama fragment
+parallel_for (ConstView<int32> part in xs, chunks: cpuCount() * 4) {
+    int64 s = 0;                                       // this chunk's own, on its stack
+    foreach (const ref int32 e in part) { s = s + cast<int64>(e); }
+    total.fetchAdd(delta: s);                          // one add per chunk
+}
+```
+
+*Measured:* a body binds an element today, so a sum is an `Atomic` add per element, because a write to a captured local is refused. Over
+10,000,000 `int32` on the M4, `--release`, 7 rounds interleaved, min (`probes/parfor_atomic_sum.kama`): **a serial loop takes 0.57 ms, and
+`parallel_for` with `Atomic` takes 268 ms, 468 times slower** (the serial loop vectorizes; the gap is not all contention). The binding does
+not parse today (`probes/chunk_binding.kama.refused`).
+
+| | a chunk | per-worker or per-chunk state | a reduction |
+|---|---|---|---|
+| Rust (Rayon) | `par_chunks_mut` | `for_each_init` | `fold`, `reduce` |
+| C++ | TBB's `blocked_range` | `enumerable_thread_specific` | `parallel_reduce`, OpenMP's `reduction` |
+| C# | `Partitioner` | `localInit` | `localFinally` |
+| Go | a slice per goroutine | a local | by hand |
+
+**Recommended: bind a chunk, and no reduction clause.** One binding answers scratch and reduction both, where a clause answers one and needs a
+list of operators. std can then offer `parallelReduce` as an ordinary generic function over a functor, as `parfor_functor` shows. The
+lowering already holds the slice (*predicted:* the same bytes, the body run once per chunk). **Sacrifice:** a second binding on one form, four
+artifacts, and a result that follows `chunks:` if the body is sensitive to where a chunk ends. **Option: `reduction:` and `init:` clauses.
+Sacrifice:** two clauses and an operator list, for less. Size S-M, and it belongs beside KR-322, which reshapes the same binding. Early exit
+needs nothing new: `break` stays refused, and an `Atomic` flag with `continue` skips what is left.
+
+**Decision 17 — a view may go to a scope child, and `splitAt` makes two, new 2026-11-05.** Recursive fork-join over data is the other half
+of what a pool is for: parallel sort, merge, reduce. The brief's `fib` proves the pool does it, and **safe kama cannot write it over data:**
+*measured,* a `View` is refused as a `spawn` argument, for not being `Sendable` and not being given (`probes/view_to_spawn.kama.refused`), and
+by `ref`, since a view is already a borrow (`probes/view_ref_to_spawn.kama.refused`), and `View.slice` is `unsafe`.
+
+```kama fragment
+fn void sortPar(View<int32> v) {
+    if (v.length() < 4096) { sortUnstable(v: v); return; }
+    isize m = partition(v: v);
+    borrow v.before(at: m) as l, v.after(at: m) as r {          // two disjoint views, safe: the spelling wants its design
+        scope { spawn job sortPar(v: l); spawn job sortPar(v: r); }
+    }
+}
+```
+
+**Recommended: a view parameter on a scope child, its element `Sendable`, held to the prefix rule through the host it borrows; and a safe split
+giving two views in one window.** Rayon's is `rayon::join` over `split_at_mut`; Java's `ForkJoinTask` passes indices over one array, with no
+proof; Cilk spawns over pointers. For every `spawn` form, with decision 11. **Sacrifice:** the `borrow` window's rule that one host gives one
+view grows a named exception. Size M?, *predicted*, and only the pool form needs it first. **Option: leave it out. Sacrifice:** a parallel sort is
+`unsafe`, in std and in everyone's code.
+
+#### The whole vocabulary, once this is built
+
+| you want | reach for | runs on | may wait on | count known | what it costs |
+|---|---|---|---|---|---|
+| many things waiting at once: connections, timers | `spawn fiber` | this thread, taking turns | anything; a wait parks it | any, in a loop too | a pooled stack; about 8 KiB touched |
+| one even split of a container | `parallel_for` | the job pool | the OS | at run time | nothing per hand-out |
+| a few different CPU tasks, or a recursion | `spawn job` | the job pool | the OS | written in the block | nothing per hand-out; `Job<R>` a heap block |
+| one blocking call, without stalling a fiber | `spawn offload` | the offload pool | anything | written in the block | a queue; `Offload<R>` a heap block |
+| a thread of its own: a service, its own statics, a scheduler | `spawn` | a new thread | anything | written in the block; held as `Isolate` | a thread start |
+| one thread per worker, running beside the code after it | `parallel_spawn` | a new thread each | anything | the container's length | a thread start each |
+
+`scope { }` is every child's barrier. Between them: `Channel`, `Atomic`, `Locked`, `ReadWriteLocked`, `ConcurrentMap`. Six forms, **four spelled
+`spawn`, where the first version of this brief said "a third `spawn` word" and did not add `spawn offload`.** Rust has about seven across three
+libraries (`thread::spawn`, `thread::scope`, tokio's `spawn` and `spawn_blocking`, Rayon's `spawn`, `scope` and `par_iter`). Go has one, on
+growable stacks and a runtime that adds threads, and sits behind the pool on barriers above.
+
+#### What this does not close, and what it touches
+
+**Not measured, and owed before any of this ships as a claim about general programs.** Every shape above is a short barrier or a recursion.
+The build's gate adds: long jobs (seconds), where the pool should only match; two isolates sharing the pool; a job blocked on a file while
+others wait; x86-64; bare-metal Linux; Windows.
+
+| row | what changes for it |
+|---|---|
+| KR-79 reachability properties | gains a use: a proof that a job does no OS wait is its *no blocking syscall*. `@noparks` is one more hardcoded walk for it to absorb |
+| KR-238 CET | a job's `stack:` inherits its refusal (decision 8) |
+| KR-245 `@noheap` per isolate | unchanged in kind; a hand-out under `@noheap` on a fiber isolate parks at the brace, which is to be walked with it |
+| KR-255 CPU bursts | closes on the rerun |
+| KR-265 virtual clock | must not advance while a job or an offload is out, the trap tokio's paused clock has with `spawn_blocking` (*predicted*) |
+| KR-296 cancellation | a cancelled fiber still waits at its brace, since a job holds its frame |
+| KR-312 deadlock report | a fiber at a brace is not stuck while a job is out; a job blocked on the OS looks the same as one running |
+| KR-322 `parallel_for` index | reshapes the same binding as decision 16: design them together |
+| KR-233 fibers on bare metal, KR-19 | no threads there: `count: 1` is the natural meaning, unprobed |
+| KR-24 hot reload | a held `Job<R>` may run code an unload removes (*predicted*); a `scope` child cannot outlive its brace |
+| KR-281, KR-283 phones and headsets | P and E cores, and battery against a 50 µs spin, unmeasured; KR-281 needs decision 14's public wait |
+| KR-35 VM | `Atomic.wait` joins what a second back end must provide; the pool itself comes along in kama |
+| KR-25, KR-26, KR-309 the engine's packages | their consumers; nothing here names them |
+| SPEC, `agents/AGENTS.md`, `docs/agents.md`, tree-sitter, the Zed and Helix pins | *Concurrency* rewritten, `workers:` gone everywhere, `spawn job` in every grammar |
+
+Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: KR-323 and KR-324 (defects) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`).
+
 #### Build order, once ruled
 
 Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a measured gate against the arms above.
+0. The defects, KR-323 and KR-324, before any of it.
 1. KR-288 (S), then KR-313, each useful alone and neither needing a pool.
-2. `Atomic.wait` and `notify`, then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, the `@noheap` proof and the
-   `@onPanic` refusal.
-3. `spawn job`: four artifacts and the pins, the walk, statics, `@noparks fnptr`, a fiber's park at the brace; then `stack:`.
+2. `Atomic.wait` and `notify`, then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
+   proof and the `@onPanic` refusal.
+3. `spawn job`: four artifacts and the pins, the walk, statics, `@noparks fnptr`, a fiber's park at the brace; then decision 17's views; then `stack:`.
 4. KR-298; KR-315's element places; the held `Job<R>`.
 5. Rerun `skew:12` with the burst offloaded, which closes KR-255, in its new shape: `scope { spawn job mix(b: ref buf, into: ref h); }`.
 6. Then step 7, 10, KR-297, KR-296, 11, as ruled. KR-296 inherits a constraint: a cancelled fiber still waits at its brace, since
    a job holds its frame.
+
+<a id="s2-parfor-match-capture"></a>
+
+### A captured local in a `match` arm of a `parallel_for` body (KR-323)
+
+Measured `0.9.850`; found 2026-11-05 writing a program that reads files in parallel. The read of `k` below answers "cannot resolve `k`", and
+the same read under an `if` compiles and runs. So a `parallel_for` that reads a file and handles the `Result` with a `match` cannot use
+anything captured in the arm. **Cause, read:** the free-variable scan in the `parallel_for` lowering (`scanS`, `src/kama.cemit.cpp`, "Free-variable
+capture analysis") has an arm per statement and expression kind and none for `match`, so `k` is never threaded in. Check `borrow` and a nested
+`scope` with it.
+
+```kama fragment
+parallel_for (ref int64 e in xs, workers: 2) {
+    match (pick(x: e)) {
+        case A(v: n): { e = n * k; }       // error: cannot resolve `k`
+        case B: { }
+    };
+}
+```
+
+<a id="s6-cpucount"></a>
+
+### `cpuCount()` counts CPUs the process may not use (KR-324)
+
+`cpuCount()` is `sysconf(_SC_NPROCESSORS_ONLN)` on POSIX (`include/kama_isolate.h`), which sees neither affinity nor a CPU quota. Measured
+2026-11-05 on 6 vCPUs (`bench/jobs/probes/before_main/`):
+
+| limit | kama | Rust `available_parallelism` | Go `GOMAXPROCS` | `nproc` |
+|---|---|---|---|---|
+| none | 6 | 6 | 6 | 6 |
+| `taskset -c 0,1` | **6** | 2 | 2 | 2 |
+| a container's `--cpus=1` | **6** | 1 | 2 | 6 |
+
+A wrong answer today, and a worse one once a pool sizes itself by it: on a 128-core host in a 2-CPU container, 128 threads spin against a
+quota. `ConcurrentMap`'s shard count reads it too. The fix is affinity first (`sched_getaffinity`), then cgroup `cpu.max` on Linux, rounded up;
+Windows and macOS want their own look (`pthread_num_processors_np` is unmeasured under an affinity mask).
+
+<a id="s6-thread-control"></a>
+
+### Thread control and the remaining primitives (KR-325)
+
+Nothing in `lib/` or `include/` names a thread, pins one or sets its priority or QoS class: no `pthread_setname_np`, no affinity call, no
+`pthread_set_qos_class_self_np`. Rust names threads through `Builder::name`, Go has `LockOSThread`, C# has `Thread.Name` and `Priority`, and a
+debugger, a profiler and `top` all read a name. It matters more with a pool: on P and E cores a chunk on a slower core holds the barrier
+(`s6-pools`), and on Apple silicon QoS is what picks the core. **Verdict: scheduled, design first,** after the pool, so the pool's own threads
+are named and classed by it.
+
+There is also no `Condvar`, `Semaphore`, `Barrier` or `Once` in std, and no written verdict. SPEC's *Channels* says a channel is the seam, in a
+sentence older than `Locked`. A bounded channel is a semaphore, and `scope` is a barrier for its own children. `Once` has no answer short of an
+`Atomic` by hand, and `Atomic.wait` (decision 14) makes each of them writable in kama. **Verdict owed, per primitive.**
 
 <a id="s6-parfor-index"></a>
 

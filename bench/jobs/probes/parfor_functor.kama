@@ -1,0 +1,21 @@
+// A library's higher-order parallel algorithm with no closure: the state is a functor, the bound monomorphizes.
+import { std::collections::DynamicArray, std::concurrent::cpuCount, core::println };
+type contract Mapper for value { const fn int32 apply(int32 x); }
+type value Scale implements Mapper, Sendable {
+    int32 by;
+    public ctor make(int32 by) { this.by = by; }
+    public const fn int32 apply(int32 x) { return x * this.by; }
+}
+fn void parMap<F: Mapper>(ref DynamicArray<int32> xs, const ref F f) {
+    parallel_for (ref int32 e in xs, workers: cpuCount()) { e = f.apply(x: e); }
+}
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    int32 i = 0;
+    while (i < 1000) { xs.add(item: i); i = i + 1; }
+    Scale s = Scale.make(by: 3);
+    parMap(xs: ref xs, f: s);
+    int32 a = xs[10]; int32 b = xs[999];
+    println(s: "${a} ${b}");
+    return 0;
+}

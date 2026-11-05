@@ -1,0 +1,26 @@
+// The only reduction parallel_for offers: one Atomic add per element, against a plain serial loop. Interleaved, min of rounds.
+import { std::collections::DynamicArray, std::concurrent::cpuCount, std::concurrent::Atomic, std::time::monotonicNow, std::time::Instant, core::println };
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    int32 i = 0;
+    while (i < 10000000) { xs.add(item: i % 7); i = i + 1; }
+    int64 bestS = 9223372036854775807; int64 bestP = 9223372036854775807; int64 sumS = 0; int64 sumP = 0;
+    int32 r = 0;
+    while (r < 7) {
+        Instant a = monotonicNow();
+        int64 s = 0;
+        isize j = 0;
+        while (j < xs.length()) { s = s + cast<int64>(xs[j]); j = j + 1; }
+        Instant b = monotonicNow();
+        Atomic<int64> t = Atomic.make(value: 0i64);
+        parallel_for (ref int32 e in xs, workers: cpuCount()) { t.fetchAdd(delta: cast<int64>(e)); }
+        Instant c = monotonicNow();
+        int64 us1 = cast<int64>(b.since(earlier: a).asMicros()); int64 us2 = cast<int64>(c.since(earlier: b).asMicros());
+        if (us1 < bestS) { bestS = us1; }
+        if (us2 < bestP) { bestP = us2; }
+        sumS = s; sumP = t.load();
+        r = r + 1;
+    }
+    println(s: "serial ${bestS} us, parallel_for + Atomic ${bestP} us, sums ${sumS} ${sumP}");
+    return 0;
+}

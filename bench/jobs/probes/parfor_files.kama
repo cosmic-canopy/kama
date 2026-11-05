@@ -1,0 +1,21 @@
+// A general program: measure N files in parallel. Compiles and runs on today's parallel_for.
+import { std::collections::DynamicArray, std::concurrent::cpuCount, std::fs::readFile, core::println };
+type resource Item implements Sendable {
+    string p; int64 n;
+    public ctor make(string p) { this.p = give p; this.n = -1; }
+    public fn void measure() {
+        match (readFile(path: this.p)) {
+            case Ok(value: b): { this.n = cast<int64>(b.length()); }
+            case Err(error: e): { }
+        };
+    }
+    public const fn int64 size() { return this.n; }
+}
+fn uint8 main() {
+    DynamicArray<Item> items = DynamicArray.empty();
+    items.add(item: Item.make(p: "parfor_files.kama")); items.add(item: Item.make(p: "parfor_scratch.kama"));
+    parallel_for (ref Item it in items, workers: cpuCount()) { it.measure(); }
+    int64 a = items[0].size(); int64 b = items[1].size();
+    println(s: "bytes ${a} ${b}");
+    return 0;
+}

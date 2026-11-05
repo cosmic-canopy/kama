@@ -1,0 +1,8 @@
+import { std::collections::DynamicArray, std::collections::ConstView, std::concurrent::Isolate };
+fn void sumPart(ref ConstView<int32> v) { }
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    borrow xs.view() as v { scope { spawn sumPart(v: ref v); } }
+    return 0;
+}

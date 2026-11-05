@@ -293,7 +293,7 @@ The brief's premise, that a wasm fiber means Asyncify, no longer holds.
 `parallel_for` stays the data-parallel layer. The job pool is the task-parallel one, and its API is its own commit
 in the implementation map.
 
-**Reopened 2026-11-04,** with rulings owed: [the pools' brief](../ROADMAP_DETAIL.md#s6-pools) proposes that `parallel_for` runs on the pool, that the unit may borrow, and that a fiber waits at a `scope`'s brace, since a job's `send` would break this decision's own no-park rule. Until it is ruled, the text above stands as the record of what was ruled in 2026-10.
+**Reopened 2026-11-04,** with rulings owed: [the pools' brief](../ROADMAP_DETAIL.md#s6-pools) proposes that `parallel_for` runs on the pool, that the unit may borrow, that a fiber waits at a `scope`'s brace, since a job's `send` would break this decision's own no-park rule, and that a job may wait on the OS and not on another task. Until it is ruled, the text above stands as the record of what was ruled in 2026-10.
 
 ### Decision 6 — how the scheduler registers a socket (measured)
 
