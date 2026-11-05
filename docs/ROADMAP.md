@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-332**
+**Next id: KR-333**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -104,6 +104,7 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-202 | net & web | **A DNS lookup a loop can poll, with a deadline** — `resolve` is `getaddrinfo`, which blocks for seconds and takes no timeout. On the `Poller`'s waker (`0.9.719`) | M | [§1](ROADMAP_DETAIL.md#s1-async-dns) |
 | KR-204 | net & web | **Percent-encoding and a URL type** — std has neither, while its own WebSocket and WebTransport connect take a URL as a bare string. **Ruled 2026-10-18: std, strict RFC 3986** (refuse, never repair), percent-encoding in `std::encoding` with per-component sets plus `application/x-www-form-urlencoded`, a `Url` the transports take; IDNA later | M | [§1](ROADMAP_DETAIL.md#s1-url) |
 | KR-289 | net & web | **A wasm release runs Closure** — `--release` wasm passes `-Oz` and section GC but never `--closure=1`, which emdawnwebgpu's README asks of every release; reported on `examples/webgpu` to take the brotli'd JS from 11,768 to 7,117 bytes (2026-11-02, emscripten 6.0.13). A default needs std's `jsLibraries` Closure-safe and the property-name rule documented; a project opts in today with a gated `ldflags` | S-M? | [§5](ROADMAP_DETAIL.md#s5-wasm-closure) |
+| KR-332 | net & web | **A wasm release can be optimized for speed** — `--release` wasm is `-Oz`, so emscripten links table-free `pow`, `log` and `log2` (natively 1.5–2.7× slower than Arm's), and a debug wasm build runs `pow` faster than a release one; nothing picks speed. The maintainer leans performance-first (2026-11-05); measure size against speed at `-O2`/`-O3`/`-Os`/`-Oz` first | S? | [§5](ROADMAP_DETAIL.md#s5-wasm-opt) |
 | KR-205 | net & web | **Coverage-guided fuzzing** — no `kama fuzz` and no documented libFuzzer harness, though every parser that reads a stranger's bytes wants one. Design first | M? | [§1](ROADMAP_DETAIL.md#s1-fuzz) |
 | KR-227 | net & web | **FreeBSD's `balance`** — the listener-options ruling (2026-10-21) gives FreeBSD a `ListenOptions.balance` over `SO_REUSEPORT_LB`, its balanced form; unbuilt because no leg builds or runs FreeBSD (kama detects it as a host but has no built-in target and no CI for it), so it would be code nothing here compiles. Today FreeBSD gets the backlog-only twin | — | [§1](ROADMAP_DETAIL.md#s1-freebsd-balance) |
 | KR-229 | net & web | *Claimed: Windows box, 2026-11-05.* **Zero-copy `sendFile` on Windows** — `TcpStream.sendFile` copies through a buffer there, because `TransmitFile` with no OVERLAPPED "will not complete until the file has been sent", which would block a non-blocking socket for the whole count; kept non-blocking it is overlapped I/O plus a completion wait, the Windows event loop's job. Client editions also run two at a time. With KR-3 | — | [§6](ROADMAP_DETAIL.md#s6-fibers) |

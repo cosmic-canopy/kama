@@ -2413,8 +2413,8 @@ That is a reason to take it only once measured on wasm. The one argument for it 
 the library is bumped.
 
 **Ruled 2026-11-05: musl.** The maintainer ruled decision 1. Decisions 2–6 were put in the same session and not objected to, so the fix
-builds on them as written. Decision 4 gained one finding after the ruling (wasm compiles the vendored copy too, with Arm's `pow`, `log` and
-`log2`), which the maintainer may still overrule.
+builds on them as written. Decision 4 gained one finding after the ruling (wasm compiles the vendored copy too). The maintainer then ruled
+Arm's `pow`, `log` and `log2` over emscripten's small ones.
 
 **Decisions:**
 1. **The implementation: musl** (ruled). It is MIT (Sun's fdlibm notice and Arm's MIT notice on the files that carry them). Natively it costs
@@ -2426,8 +2426,11 @@ builds on them as written. Decision 4 gained one finding after the ruling (wasm 
    `KAMA_SIMD_MATH`, whose `sqrt`, `floor` and `ceil` are exact.
 4. **Where it lives:** one header beside `kama_math.h`, musl's code made `static`, its names prefixed `kama__musl_` and its notices
    kept (recommended). `kama_math.h` routes `kama_sin` to it when the driver defines the key's macro, on **every** target, wasm included,
-   since emscripten's own libm differs between a debug and a release build (above). Arm's `pow`, `log` and `log2`, with their tables, not
-   emscripten's small ones: they are what native musl and a debug wasm build run, for about 12 KB of wasm. Taken from emsdk's tree (musl
+   since emscripten's own libm differs between a debug and a release build (above). **Ruled 2026-11-05: Arm's `pow`, `log` and `log2`,
+   with their tables**, not emscripten's small ones, putting performance first. Natively the small ones run `pow` 2.7× slower (24.2 ns
+   against 9.0), `log` 1.5× and `log2` 1.6×. Arm's cost 11.9 KB more of linked wasm, 10.1 KB gzipped (15,081 bytes against 3,149 for a
+   program keeping all three); for scale, `examples/webgpu` downloads about 29 KB gzipped. The small ones compiled natively give `-Oz`
+   wasm's bits exactly, so either was open, but one per build type would break the key's promise. Taken from emsdk's tree (musl
    1.2.6; emscripten changed none of the 55 files, and its one change to `libm.h` drops `FORCE_EVAL`, which only raises floating-point
    exceptions), and bumped deliberately rather than with emsdk.
 5. **A dependency's key:** the key already propagates from a dependency (targets.md), so a dependency that asks would switch the
@@ -2461,6 +2464,22 @@ What a default needs: std's own `jsLibraries` Closure-safe (Closure renames unqu
 written in docs/targets.md for a project's `jsLibraries`, and a way out for a library that is not. A project opts in
 today with an `ldflags` entry gated to `ARCH_WASM32`. Which Closure emsdk runs on each host (a native binary or the
 JVM) is to check.
+
+<a id="s5-wasm-opt"></a>
+
+### A wasm release build is optimized for size, and nothing picks speed (KR-332)
+
+Found 2026-11-05 while measuring KR-328. `--release` compiles native at `-O3` and wasm at `-Oz` (GOALS.md; the driver's comment says
+"download cost dominates"). At `-Oz` emscripten links `libc_optz`, whose `pow`, `log` and `log2` are table-free versions kept for size.
+Compiled natively they run 2.7× (`pow`), 1.5× (`log`) and 1.6× (`log2`) slower than Arm's; on wasm, unmeasured. A debug wasm build
+(`-g -O0`) links the fast ones, so on wasm `pow` is faster in a debug build than in a release build. The rest of the program pays `-Oz`'s
+usual price too (less inlining, no unrolling), unmeasured for kama. Whether a raw `cflags` or `ldflags` entry gated to `ARCH_WASM32` can
+override it is unchecked: emscripten picks `libc_optz` from the link line.
+
+The maintainer's lean (2026-11-05): performance first, since a game downloads once and runs for hours. Measure before choosing:
+`examples/webgpu` and a simulation-shaped bench at `-O2`, `-O3`, `-Os` and `-Oz`, compressed size against speed. Then decide between a
+different default, a manifest setting, or `-Oz` kept with the reason written down. `reproducible-float`'s math functions do not depend on
+it, since KR-328 compiles its own copy into every build.
 
 <a id="s5-android"></a>
 
