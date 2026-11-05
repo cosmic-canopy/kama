@@ -2356,6 +2356,30 @@ was running a full test suite at the time, so these are provisional and want a r
 Natively, about 12% more summed over the 14 functions, uneven by function: `log10` takes twice as long and `sinf`, `cosf` and `powf` 1.6–1.8 times,
 while `cbrt` and `hypotf` run two to 2.6 times faster. On wasm nothing changes, since it is musl already (8.5 ns `sin`, 9.4 `pow`).
 
+**The platform's libm does not agree with itself either.** UCRT takes an FMA3 code path at run time when the CPU has one, and
+`_set_FMA3_enable(0)` selects the path a CPU without FMA3 takes. The same executable on the same box, path on against path off: 16,914 of 5.8
+million inputs differ, in 16 of 29 rows (`tan` 5,226, `asin` 2,618, `cos` 1,969, `sin` 1,930), 1 ulp each. So two Windows machines disagree with
+each other, not only with wasm, and a program that never targets wasm still needs one implementation compiled in: a native-only form of the key
+would cost the same, so it is not offered. Linux, macOS and Android each ship their own libm, which an OS update can change; not measured here.
+
+Rerun with UCRT's FMA3 paths on and then off, the box still busy, so still provisional. The musl column is the same code in every run and moved
+between runs by up to 25% (2× on `hypotf`), which is the noise. Summed over all 28, musl was 7% slower than UCRT with FMA3 on and 4% faster than
+UCRT with it off. So most of the gap is FMA, which an implementation that must give the same bits on a CPU without it cannot use. Held in all
+three runs: musl's `log10` and `log10f` take about twice as long, `sinf` and `cosf` 1.6–1.8 times and `powf` 1.5–1.8 times, and its `cbrt` is at
+least twice as fast.
+
+**Alternatives weighed.**
+- *A libm of kama's own, faster than musl.* The algorithms are published; the work in fdlibm, Arm's routines and CORE-MATH is the error
+  analysis, the special cases and large-argument reduction, and the speed left to win is mostly FMA, which this key rules out (above). Not
+  recommended.
+- *Swapping single functions where musl is measurably slow*, for example Arm's optimized-routines (where musl's `exp`, `log` and `pow` already
+  come from) for `sinf` and `cosf`. A swap changes wasm's bits too, which the key permits as long as wasm compiles the same vendored copy
+  rather than emscripten's. Unmeasured; a later step, once the fixture holds the bits.
+- *Correctly rounded* (CORE-MATH, below): the one route on which each platform may keep a fast FMA path and still agree, since a correctly
+  rounded answer is unique.
+- *Fixed point* (what lockstep strategy games use) *or software floating point*: exact everywhere, but a different number type or a much
+  slower one. A package's business, not `std::math`'s.
+
 **Not measured, and why.** CORE-MATH (correctly rounded, MIT) was downloaded and not built: this session's permissions refused compiling and
 running downloaded source, so it awaits the maintainer's leave. What is known without running it: a correctly rounded result is the same on
 every target by definition, so it would satisfy the key too, but it changes wasm's bits as well (to the correct ones), and its code leans on
@@ -2373,9 +2397,10 @@ and the same call made at run time on Windows need not agree. A function compile
 wasm runs today, so wasm is unchanged. Without the key, the platform's libm stays, since the native release tier stays as fast as C.
 
 **Decisions owed:**
-1. **The implementation: musl, as measured** (recommended). It matches wasm's bits, costs about 12% natively in sum, and is MIT. CORE-MATH
-   becomes a later step, correctly rounded, once measured.
-2. **Under the key only** (recommended), or always. Always is one behaviour everywhere, but a ~12% (and up to 2×) native cost on code that
+1. **The implementation: musl, as measured** (recommended). It matches wasm's bits, and is MIT (Sun's fdlibm notice and Arm's MIT notice on
+   the files that carry them). Natively it costs between 4% less and 12% more in sum over three provisional runs, mostly the FMA paths UCRT
+   takes only on CPUs that have them. CORE-MATH becomes a later step, correctly rounded, once measured.
+2. **Under the key only** (recommended), or always. Always is one behaviour everywhere, but a native cost (up to 2× on `log10`) on code that
    never asked for reproducibility, against the performance invariant at the top of ROADMAP.md.
 3. **The 14 functions in both widths, and nothing else** (recommended). The seven exact ones keep their builtins, and so does
    `KAMA_SIMD_MATH`, whose `sqrt`, `floor` and `ceil` are exact.
@@ -2384,7 +2409,7 @@ wasm runs today, so wasm is unchanged. Without the key, the platform's libm stay
    bumped deliberately rather than with emsdk.
 5. **A dependency's key:** the key already propagates from a dependency (targets.md), so a dependency that asks would switch the
    whole program's `std::math` to musl, which is a speed change it imposes (recommended: yes, propagate, since its arithmetic is wrong without
-   it; documented in targets.md).
+   it). targets.md says what the key costs and that a dependency can switch it on; today it says neither.
 6. **The fixture:** `tests/repro_math.d` with the key, printing one hash per function over the probe's inputs, and one `.expect` held on
    native, wasm, Android and the Mac's CI leg. It fails on native today.
 
