@@ -562,6 +562,24 @@ archetype store, an inspector, mods, a project loading a type the program never 
 **The verdict: scheduled, design first.** Asked for: any boxed contract, answering a borrow rather than a copy. To settle: where the type
 identity lives, whether it costs a contract that never narrows anything, and how the borrow roots under the window rules.
 
+<a id="s2-immutable-array"></a>
+
+### An `immutable` type cannot hold an array (KR-329)
+
+Reported 2026-11-05 by a game engine on kama; reproduced on `0.9.852`. `Shared<immutable T>` is how many isolates read one large read-only value with no
+copy: SPEC's table of how state reaches an isolate gives it to every isolate, unbounded, because nothing can change. But `type immutable value Clip { public InlineArray<float32>#(4) keys;
+public int32 n; … }` is refused, *"`immutable` type `Clip` has a mutable member `keys` of type `InlineArray<float32>#(4)` — every part of an `immutable`
+type must itself be deeply immutable"*, and a `DynamicArray` in a `type immutable resource` the same way. A `string` field builds, so untyped bytes are
+the only array an immutable type may carry: no typed table, mesh, animation clip or navmesh. It matters more under KR-3: a `scope`'s children will share
+a `const ref` (decision 10), but a held `Job<R>` takes a moved `Sendable` bundle and cannot borrow, so work that spans frames reads shared data only
+through `Shared<immutable T>`. Unity's blob assets are the precedent (*"immutable binary data… you can access them safely in parallel"*, with `BlobArray`),
+and Rust's `Arc<[T]>` is the same idea without a type rule.
+
+**The verdict: scheduled, design first** (the maintainer: "a general good thing for kama to have as a general systems language"; any program sharing a
+large read-only table across threads needs it). The least is an `InlineArray` whose elements are immutable, which kama already admits among the fields
+every isolate may share in a global allocator (SPEC, *Global allocator*). The rest is an array frozen once it is built, for sizes known only at load. To
+settle: how a frozen array is spelled and built, and whether freezing is a type or a state.
+
 <a id="s2-infer-from-bound-arg"></a>
 
 ### An argument typed by a parameter another argument fixed (KR-285)
@@ -2220,6 +2238,34 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
 native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
 
+<a id="s5-repro-math"></a>
+
+### `reproducible-float` does not make `std::math` reproducible (KR-328)
+
+Reported 2026-11-05 by a game engine on kama; reproduced on `0.9.852` (`.scratch`, a project with `"reproducible-float": true`, `--release`,
+native on Windows 11 under msys2 UCRT64 and `--target WASM` under node 24.21, emsdk 6.0.13). `docs/targets.md` says the key means *"this program's
+floating point must give the same bits on every target"*. It emits `-ffp-contract=off`, which settles fused multiply-add, and nothing else:
+`include/kama_math.h` makes each of `sin`, `cos`, `tan`, `exp`, `log`, `pow`, `atan2` and the rest *"a single inlined libm call"*, and native's libm
+and emscripten's musl round differently in the last bit. Over 200,000 inputs from −120 to 154, one ulp apart each:
+
+| function | inputs whose bits differ, native against wasm | the first |
+|---|---|---|
+| `sin` | 2 | `4603985457226728705` against `…704` |
+| `cos` | 5 | `4600133392713511169` against `…168` |
+| `exp` | 1 | `4196093971237854976` against `…975` |
+| `pow` | 23 | `4618302007584625153` against `…152` |
+| `atan2` | 9 | `13833032919484453889` against `…888` |
+
+A constant argument agrees, because the C compiler folds the call. `sqrt` is not at risk: IEEE 754 requires it correctly rounded. So the key's promise holds
+for arithmetic and breaks at the first transcendental call, which a simulation makes millions of times a second: a replay recorded in a browser and played on a
+desktop, a lockstep peer on each, or a world regenerated from its seed on the other target, diverges and is caught only by a hash. Box2D hand-codes its
+trigonometry for this reason (*"The atan2f function in the standard library is not cross-platform deterministic"*), Rust's `libm` crate is a port of musl
+anyone can compile in, and CORE-MATH and CRlibm are correctly rounded throughout.
+
+**Two fixes, and the defect is that neither is done.** Under the key, `std::math`'s functions come from one implementation compiled into the program, the same
+on every target (a port of musl's, as Rust's `libm`, or a correctly rounded one); or the key's documentation says it covers contraction only and names the
+functions it does not cover. The first keeps the promise. To measure first: what one implementation costs against the platform's libm, natively and on wasm.
+
 <a id="s5-wasm-closure"></a>
 
 ### A wasm release build does not run Closure (KR-289)
@@ -2525,7 +2571,7 @@ this brief's as well, if `spawn job` survives.
 ### The job pool and the offload pool: one brief (KR-3)
 
 **Status: brief written 2026-11-04 on `0.9.845`, revised 2026-11-05 on `0.9.850`, measured on Windows 2026-11-05 on `0.9.852`. Ruled 2026-11-05: all 17 decisions as recommended below, each option named here refused.
-An audit by the game engine that asked is owed, for any further ask, before the pool itself is built.** It answers what `s6-fibers` left to
+The game engine that asked audited it the same day, on `0.9.852`: nothing in it conflicts with a design the engine has decided, its answers to KR-326 and KR-327 are in those rows, and its needs are added to KR-320, KR-325, KR-298 and KR-79.** It answers what `s6-fibers` left to
 it, for
 step 9 (the job pool) and step 7 (the offload pool) together, with KR-288, KR-313 and KR-315. Everything marked *measured* comes from
 `bench/jobs/` and can be rerun, the compiler's half from `bench/jobs/probes/` (with the scratch patch for KR-288); results are in
@@ -3098,7 +3144,7 @@ others wait; bare-metal Linux, and Linux on x86-64 (Windows on x86-64 is measure
 
 | row | what changes for it |
 |---|---|
-| KR-79 reachability properties | gains a use: a proof that a job does no OS wait is its *no blocking syscall*. `@noparks` is one more hardcoded walk for it to absorb |
+| KR-79 reachability properties | gains a use: a proof that a job does no OS wait is its *no blocking syscall*. `@noparks` is one more hardcoded walk for it to absorb. The engine that asked would add one for replay: a simulation step reaches no outside input (no clock, file, socket, environment, `cpuCount()` or OS randomness) |
 | KR-238 CET | a job's `stack:` inherits its refusal (decision 8) |
 | KR-245 `@noheap` per isolate | unchanged in kind; a hand-out under `@noheap` on a fiber isolate parks at the brace, which is to be walked with it |
 | KR-255 CPU bursts | closes on the rerun |
@@ -3158,6 +3204,9 @@ There is also no `Condvar`, `Semaphore`, `Barrier` or `Once` in std, and no writ
 sentence older than `Locked`. A bounded channel is a semaphore, and `scope` is a barrier for its own children. `Once` has no answer short of an
 `Atomic` by hand, and `Atomic.wait` (decision 14) makes each of them writable in kama. **Verdict owed, per primitive.**
 
+**The engine that asked (2026-11-05)** needs names for its profiles of frame time per phase, and priority and core class, since a chunk on a slower core holds the
+barrier on Quest, phones and Apple silicon. Not looked at: how a native audio backend's real-time thread calls into kama.
+
 <a id="s6-arena-task"></a>
 
 ### A store drawn from an `Arena` cannot be handed to a task (KR-326)
@@ -3179,6 +3228,13 @@ slower `BumpAllocator`. A frozen handle, made once a region's stores are sized, 
 allocate through it. **Verdict: scheduled, design first,** with the question to the engine that reported it: which shape does its work need? Before `spawn job`, whose `ref`
 parameters meet the same gate.
 
+**The engine's answer (2026-11-05): both, each for a case it has decided.** A frozen handle for tables sized when a region loads and never grown, each run as its own task;
+an atomic bump for per-entity data and lists that spill past their capacity, in chunks that grow inside a worker, and later cells generated off the simulation. The second
+is refused under `parallel_for` as well (measured `0.9.852`): a `type resource ItemChunk { DynamicArray<int32, BumpAllocator> overflow; … }`, eight drawn from one `Arena`
+and grown by `parallel_for (ref ItemChunk c in chunks, workers: 8) { c.step(); }`, is refused at the element, "`ItemChunk` does not declare `implements Sendable`", and
+declaring it is refused at the field. Sound, since eight workers would bump one offset. So data that grows inside a worker splits across workers only on the global heap,
+outside the region's budget. Both shapes are allocator types the containers already take (`DynamicArray<T, A>`, `FixedArray<T, A>`); nothing in the pool changes.
+
 <a id="s6-wasm-serial"></a>
 
 ### A wasm program holding a thread form has no single-threaded build (KR-327)
@@ -3193,6 +3249,10 @@ setting under which there are no worker threads, `parallel_for` and `spawn job` 
 runtime is linked. `spawn` and `parallel_spawn` mean a thread, so they stay refused there. **Ruling owed, with KR-3's step 10:** whether this is a per-build setting and how it is spelled. *Predicted*
 to need no change to a form's lowering beyond the pool's own arm.
 
+**The engine that asked (2026-11-05): a per-build setting.** Its web build is single-threaded by default and takes threads from a build-time switch a game turns on by
+measurement, from one source. Set by the program being built, never by a dependency, which is the rule `no-heap` and `webgpu` follow: a library using `parallel_for` inside
+must not decide its host's headers.
+
 <a id="s6-parfor-index"></a>
 
 ### `parallel_for` over two stores, or with an index (KR-322)
@@ -3204,6 +3264,9 @@ chunk type holding both columns, which is what the reporter does. C#'s `Parallel
 Two operands split alike (`parallel_for (ref Pos p, const ref Vel v in pos, vel, chunks: n)`) carry the proof with them, and
 differing lengths would have to trap. **Verdict: scheduled, design first,** after the pool, since it changes that form's lowering.
 
+The engine that reported it no longer needs it for its own tables (2026-11-05), since it now keeps each table's columns in one chunk. The verdict stands on its
+own: a data-parallel loop over two arrays in step is common, and C# and OpenMP give it an index.
+
 <a id="s6-job-priorities"></a>
 
 ### Job priorities (KR-320)
@@ -3212,6 +3275,10 @@ Filed 2026-11-04, writing the pools' brief, which leaves them out on purpose. A 
 a worker a frame's barrier may be waiting for, and one queue cannot say that the barrier matters more. TBB has `task_arena`
 priorities and Unity keeps long work off its job threads by convention. **Verdict: scheduled, design first,** once a pool exists
 to measure: how often it happens, and whether a second set of threads for long work answers it more simply than priorities do.
+
+**The engine that asked (2026-11-05): its long jobs arrive with the held `Job<R>`, so design this in KR-3's step 4, not after a later measurement.** Streaming a region,
+generating cells and building a navmesh run off the simulation for several frames while every frame's barriers wait for workers, and for a procedural world that is
+its first day. It needs a barrier never to wait behind such a job; a second set of threads for long work would answer it.
 
 <a id="s6-fiber-cet"></a>
 
@@ -3397,6 +3464,9 @@ no `trySend` on `0.9.811`). A broadcaster with one bounded channel per client th
 `trySend(item:)`, which never parks and hands the item back when the channel is full or closed, as `Undelivered` does today.
 Go's `select` with a `default`, tokio's `try_send` answering `Full(value)`, crossbeam's `try_send`. The reported workaround is
 a counter kept by hand on both sides of every channel.
+
+**A second reason (2026-11-05):** a job may not park (KR-3's decision 5), so `send` is refused in one and `trySend` is the only send a job has. A game engine on
+kama needs it for its output phase's hand-off to audio and the network, whenever that phase runs on the pool. It is in KR-3's build order, step 4.
 
 ## 7. 2.0 — dual-mode: compiled + scripting/REPL (flagship)
 
