@@ -634,15 +634,71 @@ The likely fix is a left-recursive ladder rule, so that it leaves the stack flat
 
 ### A type named like a generic instance's key is that instance (KR-319)
 
-Found 2026-11-04 by the inventory of names kama writes on a type, measured on `0.9.847`. In one file,
-`type value Pair<T> { public T a; … }` and `type value Pair_int32 { public int32 b; … }`: `Pair_int32.make()` is
-checked as `Pair<int32>`'s ("missing the argument `a`"), and `q.b` as "`Pair<int32>` has no field `b`". A generic instance is keyed `<Tmpl>_<arg>` (the
-instance mangle in `kama.cemit.cpp`), a `_` join of two names a user can spell, so a plain type of that name and the
-instance share one table entry, and the key is the instance's C name too. The intrinsic instances (`Owned_`, `Shared_`,
-`Weak_`, `InlineArray_`, `Simd_`, `Mask_`, `InlineStorage_`) carry no scope prefix either. The enum-value join's brief
-measured `P<A, B>` against `P_A<B>` and found them apart, so the reach of this is a plain type against an instance;
-unprobed beyond that. Wants a look at moving the instance key out of the user's lane, as `0.9.848` did for the names
-kama writes on a type (`<Type>__kama_<what>`, SPEC § C names).
+Found 2026-11-04 by the inventory of names kama writes on a type. **Brief written 2026-11-04, measured on
+`0.9.848`. Ruled the same day (the maintainer): all six as recommended, spelled `of` / `and` / `end`.**
+
+**The defect.** A generic instance is keyed `<template>_<arg>_<arg>…` (`genericTypeMangle`, `kama.cemit.cpp`), and
+that string is both the emitter's table key and the C name. A user's name may hold a `_`, and a primitive, a const
+value, `UnsafePtr…` and an intrinsic carry no scope prefix, so the join meets names a user can spell. Each of these
+is one file, and each builds once its twin is renamed (the control, `Pair<int32>` beside `PairInt`, exits 3):
+
+| | the two declarations | what `0.9.848` does |
+|---|---|---|
+| 1 | `type value Pair<T>` and `type value Pair_int32` | `Pair_int32.make(b:)`: "has no parameter `b` — did you mean `a:`?"; "`Pair<int32>` has no field `b`" |
+| 2 | `P<int32, bool>` and a template `P_int32<bool>` | "`P_int32.make` has no parameter `c`"; "`P<int32, bool>` has no field `c`" — two instances, two templates |
+| 3 | `Box<Point>` and a plain `Box_kF_p4` with a method `Point` | clang: "redefinition of `kF_p4__Box_kF_p4__Point` as different kind of symbol" — an instance meets a member |
+| 4 | `Fixed<int32>#(4)` and `Fixed_int32_4` | as 1, through a const argument |
+| 5 | `type enum Opt<T>` and `type enum Opt_int32` | "`match` arm names unknown variant `Yes` of `Opt<int32>`" |
+| 6 | `type contract Src<T>` and `type contract Src_int32` | "`S` already implements `Src<int32>`" |
+
+`A<B<int32>>` against `A<B_int32>` fails too, as case 1 one level down. Case 3 is the shape a module makes without
+any odd name: `Box<geo::Point>` is `…Box_geo__Point`, a plain `Box_geo`'s method `Point`. A generic **function**'s
+instance joins with `__` (`kF_app__max__int32`), the scope lane itself, so it can meet only where a function and a
+module share a path (unprobed). **Why the corpus missed it:** a fixture names what people happen to write, and no
+fixture names a type after a template plus `_`. It is the class `0.9.848` closed for the names kama writes on a type.
+
+**What other compilers do** (from their documentation, not run here). The Itanium C++ ABI and Rust's v0 mangling
+bracket template arguments, `I…E`, around length-prefixed names (`3MapI6stringE`), so a name and its arguments can
+never be confused, at the cost of reading. Nim suffixes each instance with a hash of its arguments. V joins with
+`_` (`Array_int`, `Map_string_int`), kama's scheme today, with this class.
+
+**The requirement any spelling must meet.** The boundary between a template and its arguments lies in the kama lane:
+a `__` join to a `kama_` leaf, which no user name can produce since `0.9.847`. It takes **three distinct markers**:
+open, separator, close. Open and close alone are ambiguous (`A<B<C, D>>` and `A<B, C<D>>` both read `A open B open C
+… close close`); a separator in the scope lane (`__`) is ambiguous wherever a type and a module share a name; and
+without a close, an argument's own `__` cannot be told from the member join after it. With all three, a name reads
+one way with no table, and SPEC's "every run of underscores longer than one is exactly one join" still holds.
+Rejected: a hash suffix (disjoint by probability, not by construction, and unreadable in a debugger); refusing the
+user's name (the fault is kama's join, not the name, and a refusal could only be checked per instance, so a library
+could not know it had a clash until someone instantiated it).
+
+**The spellings**, emitted for three real names (`Pair<int32>::make`, `DynamicArray<int32>::add`, and the instance
+`Map<string, DynamicArray<Pair<int32>>>`, all measured from one program on `0.9.848`):
+
+| | `Pair<int32>::make` | `DynamicArray<int32>::add` | the `Map` |
+|---|---|---|---|
+| today | `kF_p10__Pair_int32__make` (24) | `std__collections__DynamicArray_int32_kama__GlobalAllocator__add` (63) | 154 |
+| `of` / `and` / `end` | `kF_p10__Pair__kama_of__int32__kama_end__make` (44) | `std__collections__DynamicArray__kama_of__int32__kama_and__kama__GlobalAllocator__kama_end__add` (94) | 258 |
+| `I` / `C` / `E` | `kF_p10__Pair__kama_I__int32__kama_E__make` (41) | `std__collections__DynamicArray__kama_I__int32__kama_C__kama__GlobalAllocator__kama_E__add` (89) | 241 |
+
+**Decisions** (all ruled as recommended, 2026-11-04):
+1. **The structure:** an instance's arguments bracketed in the kama lane by distinct open, separator and close
+   markers, built by one helper that every instance key goes through, as `kamaMember` is for the names on a type.
+   *Recommended.*
+2. **The spelling:** `__kama_of__`, `__kama_and__`, `__kama_end` (reads as words in a raw debugger frame) or Itanium's
+   letters `__kama_I__`, `__kama_C__`, `__kama_E` (about 6% shorter). *Recommended: `of` / `and` / `end`*, since a frame
+   is read without the demangler often enough and the difference is small.
+3. **Every instance takes it:** generic types, enums and contracts, generic functions, and the intrinsics
+   (`InlineArray_int32_4`, `Simd_…`, `UnsafePtr_uint8`), whose argument lists have the same `_` join inside. One
+   spelling, one helper. *Recommended.*
+4. **A published host header keeps today's spelling.** It already rewrites kama's `__` to `_`
+   (`std_collections_ConstView_int32`, `kama_InlineArray_int32_4`) and refuses two kama types that would share a host
+   name ("would both be `…` in the host header — rename one"). The markers are rewritten back to that form, so a host
+   built against an older header still compiles. *Recommended.*
+5. **The VS Code extension reads both spellings** until the second compiler release that writes the new one, then
+   the old reading is retired by a LATER row, as KR-305 does for `k_F`. *Recommended.*
+6. **The cost is measured and recorded:** the three names above grow 1.5 to 1.8 times, so the emitted C's bytes and the C
+   compile time of the corpus's largest program are measured before and after, in the commit. *Recommended.*
 
 <a id="s2-quoted-format"></a>
 
