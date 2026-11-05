@@ -105,6 +105,14 @@ static void child(void* a) { kama_sched_sleep(1000000); childOut = (int)(intptr_
 static int joined;
 static void parent(void* a) { (void)a; kama_fiber* c = kama_sched_spawn(child, (void*)(intptr_t)21, 0); kama_sched_join(c); joined = childOut; }
 
+// 40. A park goes straight to the next ready fiber only while the loop has nothing to do: a root that was woken runs next,
+// ahead of a fiber already ready. And a fiber reached that way ends on the root, whichever fiber parked into it.
+static kama_fiber* dRoot; static kama_fiber* dFirst; static int dSecondRan, dSecondBeforeRoot, dChainEnded;
+static void dSecond(void* a) { (void)a; dSecondRan = 1; }
+static void dWakesRoot(void* a) { (void)a; kama_sched_unpark(dRoot); kama_sched_park(); }
+static void dLast(void* a) { (void)a; dChainEnded++; }
+static void dParksInto(void* a) { (void)a; kama_sched_park(); dChainEnded++; }
+
 #if !defined(_WIN32)
 // 5. a reader parks on a socket and a writer wakes it; a writer parks on a full buffer and the reader drains it.
 static int sv[2]; static kama_sched_io* rio; static kama_sched_io* wio;
@@ -181,14 +189,6 @@ static void cSide(void* other) {
     kama_sched_unpark(*peer);
 }
 static void cReader(void* a) { (void)a; char c; while (recv(sv[0], &c, 1, 0) <= 0) kama_sched_io_wait(rio, 1, 0); cRead = 1; }
-
-// 40. A park goes straight to the next ready fiber only while the loop has nothing to do: a root that was woken runs next,
-// ahead of a fiber already ready. And a fiber reached that way ends on the root, whichever fiber parked into it.
-static kama_fiber* dRoot; static kama_fiber* dFirst; static int dSecondRan, dSecondBeforeRoot, dChainEnded;
-static void dSecond(void* a) { (void)a; dSecondRan = 1; }
-static void dWakesRoot(void* a) { (void)a; kama_sched_unpark(dRoot); kama_sched_park(); }
-static void dLast(void* a) { (void)a; dChainEnded++; }
-static void dParksInto(void* a) { (void)a; kama_sched_park(); dChainEnded++; }
 
 // 15–22: a socket's wait, as std's calls run it — kama_net_ready before the call, kama_net_retry after it fails.
 static int np[2];                                    // a fresh blocking pair per check
@@ -785,7 +785,7 @@ int fiber_sched_selftest(void) {
     for (int i = 0; i < 10000; i++) kama_sched_detach(kama_sched_spawn(brief, (void*)(intptr_t)i, 64 << 10));
     kama_sched_run();
     CHECK(9, many == 10000);
-    CHECK(39, self->ios == 0);                                // every record a check made was counted back out: KR-264
+    CHECK(39, kama_sched_current()->ios == 0);                // every record a check made was counted back out: KR-264
     kama_sched_destroy();
     return failed;
 }
