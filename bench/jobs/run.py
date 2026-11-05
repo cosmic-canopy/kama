@@ -13,8 +13,8 @@ Each round runs every arm on every config as a fresh process, in an order rotate
 alike. The child's user + system CPU comes from the OS, whatever language it is in: `extra` in the table is CPU beyond the one
 core the frame's caller spins on, which is what a pool burns to stay fast.
 
-Runs natively on macOS (kama, the C pool, Rayon), on Windows under msys2, and in the bench image for OpenMP and Go too
-(`bench/run jobs`).
+Runs natively on macOS (kama, the C pool, Rayon), on Windows under msys2 (every arm, with UCRT64's rust and go; the CPU there is
+the child's GetProcessTimes), and in the bench image for OpenMP and Go too (`bench/run jobs`).
 """
 import os
 import shutil
@@ -25,8 +25,18 @@ import time
 
 try:
     import resource
-except ImportError:  # Windows: no rusage, so `extra` stays empty there
+except ImportError:  # Windows: no rusage, so a child's CPU comes from its process handle instead (`child_cpu`)
     resource = None
+    import ctypes
+    from ctypes import wintypes
+
+
+def child_cpu(p):
+    """A finished child's user + kernel CPU, from the handle Popen still holds, which keeps its times readable (Windows)."""
+    t = [wintypes.FILETIME() for _ in range(4)]   # creation, exit, kernel, user
+    if not ctypes.windll.kernel32.GetProcessTimes(wintypes.HANDLE(int(p._handle)), *[ctypes.byref(x) for x in t]):
+        return ""
+    return f"{sum(x.dwHighDateTime << 32 | x.dwLowDateTime for x in t[2:]) / 1e7:.4f}"   # 100 ns ticks
 
 here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.dirname(os.path.dirname(here))
@@ -35,6 +45,7 @@ rounds = int(sys.argv[2]) if len(sys.argv) > 2 else 7
 tmp = tempfile.mkdtemp()
 kama = subprocess.check_output(["sh", "-c", f'ROOT="{root}"; . "$ROOT/tools/kama-bin.sh"; printf %s "$KAMA"'], text=True)
 ncpu = os.cpu_count() or 1
+exe = ".exe" if sys.platform == "win32" else ""   # cargo writes it, and go and the launch need it; cc and kama add their own
 
 # arm -> (binary, extra environment)
 arms = {}
@@ -59,7 +70,7 @@ if shutil.which("cargo"):
     env = dict(os.environ, CARGO_TARGET_DIR=target)
     if subprocess.call(["cargo", "build", "--release", "--offline", "-q"], cwd=f"{here}/rust", env=env, stderr=subprocess.DEVNULL):
         subprocess.check_call(["cargo", "build", "--release", "-q"], cwd=f"{here}/rust", env=env)
-    shutil.copy(f"{target}/release/jobs", f"{tmp}/rayon")
+    shutil.copy(f"{target}/release/jobs{exe}", f"{tmp}/rayon{exe}")
     for how in ("outside", "inside", "scope"):
         arms[f"rayon-{how}"] = ("rayon", {"BENCH_RAYON": how})
 else:
@@ -72,7 +83,7 @@ else:
     print("run.py: no OpenMP arm (no gcc -fopenmp here)", file=sys.stderr)
 
 if shutil.which("go"):
-    subprocess.check_call(["go", "build", "-o", f"{tmp}/go", "."], cwd=f"{here}/go")
+    subprocess.check_call(["go", "build", "-o", f"{tmp}/go{exe}", "."], cwd=f"{here}/go")
     arms["go"] = ("go", {})
 else:
     print("run.py: no Go arm (no go here)", file=sys.stderr)
@@ -111,12 +122,17 @@ def run(slot, config):
     env.update(extra)
     before = resource.getrusage(resource.RUSAGE_CHILDREN) if resource else None
     t0 = time.perf_counter()
-    row = subprocess.check_output([f"{tmp}/{binary}"], env=env, text=True).strip()
+    p = subprocess.Popen([f"{tmp}/{binary}"], env=env, stdout=subprocess.PIPE, text=True)
+    row = p.communicate()[0].strip()
     wall = time.perf_counter() - t0
+    if p.returncode:
+        raise subprocess.CalledProcessError(p.returncode, p.args)
     cpu = ""
     if resource:
         after = resource.getrusage(resource.RUSAGE_CHILDREN)
         cpu = f"{(after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime):.4f}"
+    elif sys.platform == "win32":
+        cpu = child_cpu(p)
     return f"{label}\t{row.split(chr(9), 1)[1]}\t{wall:.4f}\t{cpu}"
 
 with open(out, "w") as f:

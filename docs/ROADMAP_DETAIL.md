@@ -2524,7 +2524,7 @@ this brief's as well, if `spawn job` survives.
 
 ### The job pool and the offload pool: one brief (KR-3)
 
-**Status: brief written 2026-11-04 on `0.9.845`, revised 2026-11-05 on `0.9.850`. Ruled 2026-11-05: all 17 decisions as recommended below, each option named here refused.
+**Status: brief written 2026-11-04 on `0.9.845`, revised 2026-11-05 on `0.9.850`, measured on Windows 2026-11-05 on `0.9.852`. Ruled 2026-11-05: all 17 decisions as recommended below, each option named here refused.
 An audit by the game engine that asked is owed, for any further ask, before the pool itself is built.** It answers what `s6-fibers` left to
 it, for
 step 9 (the job pool) and step 7 (the offload pool) together, with KR-288, KR-313 and KR-315. Everything marked *measured* comes from
@@ -2663,10 +2663,58 @@ serial), where a wake crosses a hypervisor. Bare metal is unmeasured.
 322 µs today at 4 chunks and 58 on a pool; with no work, 243 and 2.4. So a pool removes the cost and gains no speed on a phase
 that short, the same floor as above.
 
-**Windows is unmeasured, and it is where the reporter's numbers are worst** (1.34-1.38 ms at 16 workers). `bench/jobs/` runs there
-under msys2 on `WaitOnAddress`. The prediction is that a pool removes the
-thread start that dominates that number, and that a wake costs tens of microseconds, but it stays a prediction until the Windows
-box runs it.
+**Windows, where the reporter's numbers are worst** (`jobs-windows.tsv`: Windows 11 on an AMD Ryzen AI 9 465, 10 cores and 20
+threads, Balanced power plan; `0.9.852`; msys2 UCRT64's gcc 16.2, Rust 1.99 and Go 1.27; 7 rounds, median, p99 in brackets, 1,988
+runs, 0 checksum disagreements; the pool sized to the machine at 20 threads, parked on `WaitOnAddress`). Serial 74 µs, then 917 µs:
+
+| chunks | `parallel_for` today | pool, 50 µs spin | pool, 2 ms spin | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` | OpenMP (gcc) | Go |
+|---|---|---|---|---|---|---|---|---|
+| 2 | 262 (459) | **91** (194) | 98 (2,051) | 93 (202) | 98 (207) | 84 (190) | 102 (242) | 94 (239) |
+| 4 | 389 (583) | **66** (126) | 145 (2,054) | 75 (142) | 93 (155) | 77 (150) | 97 (183) | 85 (234) |
+| 10 | 713 (1,022) | **59** (129) | 144 (2,045) | 108 (201) | 124 (237) | 107 (201) | 96 (184) | 78 (190) |
+| 16 | 1,047 (1,405) | **59** (128) | 138 (2,038) | 107 (238) | 119 (245) | 117 (247) | 115 (204) | 75 (184) |
+| 20 | 1,252 (1,704) | **59** (118) | 163 (2,048) | 103 (232) | 118 (258) | 115 (245) | 129 (218) | 74 (203) |
+| 40 | 2,405 (3,083) | **58** (122) | 152 (2,038) | 112 (273) | 125 (288) | 127 (340) | 206 (342) | 78 (213) |
+
+| chunks | `parallel_for` today | pool, 50 µs spin | pool, 2 ms spin | Rayon, caller on a worker | Rayon, caller outside | Rayon `scope` | OpenMP (gcc) | Go |
+|---|---|---|---|---|---|---|---|---|
+| 2 | 739 | **638** | 756 | 598 | 587 | 592 | 638 | 623 |
+| 4 | 632 | **351** | 435 | 382 | 385 | 389 | 428 | 459 |
+| 10 | 766 | **199** | 295 | 242 | 259 | 240 | 223 | 251 |
+| 16 | 1,088 | **167** | 348 | 212 | 219 | 208 | 205 | 235 |
+| 20 | 1,330 | **151** | 227 | 201 | 211 | 202 | 201 | 225 |
+| 40 | 2,491 | **136** | 280 | 199 | 207 | 191 | 251 | 208 |
+
+**What it says.**
+1. **The reporter's number is the thread start, and the pool removes it.** `parallel_for` today costs about 65 µs a chunk here with
+   no work (650 µs at 10 chunks, 1,071 at 16, 1,275 at 20, 2,499 at 40), 9.4 to 10.7 times the M4's, which is what was predicted;
+   the reporter's 1.34-1.38 ms at 16 and 1.83 at 20 on `0.9.793` are the same slope on another machine. Twelve of the shorter phases
+   at 10 chunks take 8.55 ms today, **51% of a 60 Hz frame** (7.3% on the M4); on the pool 0.71 ms (4.3%), Rayon 1.29, OpenMP 1.15,
+   Go 0.94. An ideal split is 0.09.
+2. **The pool with a 50 µs spin leads every phase from 4 chunks up, and stays flat as chunks pass threads:** 58-59 µs on the shorter
+   phase from 10 to 40 chunks, where Rayon takes 103-127, OpenMP 96-206 and Go 74-78; 136-199 µs on the 1 ms phase against 191-259
+   for the others. On the shorter phase its p99 is the lowest in every row from 4 chunks: 118-129 µs, where Rayon's is 142-155 at
+   4 chunks and 201-340 from 10.
+3. **A wake costs about 50 µs here, against about 30 on the M4** (inferred as there): the shorter phase settles at 58-59 µs from 74
+   serial, where an even split would reach 4-7. So a hand-out pays for itself above about 60 µs of work on this machine, and
+   `chunks: 1` below it.
+4. **A 2 ms spin loses outright,** to the 50 µs spin in every row of both tables (138-163 µs against 59 on the shorter phase from 10
+   chunks), and to Rayon in most of them, its p99 at 2.0-2.6 ms
+   throughout, burning 17.5 of 20 hardware threads. On the M4 it won the median from 10 chunks; here every spinning worker shares a
+   core with another hardware thread, the caller's among them, so spinning slows the work it waits for (inferred, not measured per
+   core). Decision 6's 50 µs and no knob hold more strongly on this machine than on the one that chose them.
+5. **Where the pool is behind, and it is stated:** at 2 chunks, Rayon's `scope` by 8% on the shorter phase (84 against 91) and
+   Rayon by 7-9% on the 1 ms phase (587-598 against 638), with Go 2% ahead there; and back-to-back barriers with no work, where
+   Rayon with the caller on a worker takes 1.1 µs at 2 chunks and 5.0 at 10, and Go 1.9 and 3.6, against the pool's 5.4 and 8.9
+   from outside it (Rayon from outside, 15.1 and 16.4). **Recursive forks:** the pool leads, fib(36) forking down to fib(10) in
+   2.46 ms on 20 threads against Rayon's 3.59.
+6. **What each burns** beyond the caller's core, at 10 chunks on the shorter phase: today 0.9 (its thread starts), pool
+   0.3, 2 ms spin 17.5, Rayon 0.0-0.5, OpenMP 0.0, Go 0.1. The CPU is the child's `GetProcessTimes`, as `run.py` reads it on Windows.
+
+`kama#2` against `kama`, paired by round: median 0.998, every pair within 0.79-1.28 but two, both in round 2, of unknown cause (a
+monitor of other processes' CPU covered rounds 3-7 and found none over a quarter core): one run of each took three times its usual
+(1,192 µs against 385, 1,647 against 720), and no median moves. Go's arm reads QueryPerformanceCounter on Windows, as Rust's `Instant` and the C arms' `clock_gettime` do: Go's own monotonic
+clock there advances with the timer interrupt, and read a barrier as 0 µs or a whole tick.
 
 #### What a child loses by not being an isolate on its own thread
 
@@ -2788,8 +2836,8 @@ in any program holding a form.*
     take 8-15 ms on the caller and 66-77 ms until all run (4 runs), against about 15 µs a thread on the M4. Before `main`, every page holding
     a form anywhere would pay that at load. Browsers are unmeasured.
 
-  **Sacrifice:** a thread start the program did not spell, at a hand-out it did: about 150 µs at 10 threads here, predicted about ten
-  times that on Windows from the reporter's numbers, and 8 MiB reserved per thread with a few pages touched. One load and a branch
+  **Sacrifice:** a thread start the program did not spell, at a hand-out it did: about 150 µs at 10 threads here, and about ten
+  times that on Windows, where a thread's start and join measured 9.4-10.7 times the M4's (`jobs-windows.tsv`), and 8 MiB reserved per thread with a few pages touched. One load and a branch
   on every hand-out (*predicted* under a nanosecond). A program that wants the cost elsewhere calls `setJobThreads` at its start.
 - **B: before `main` in any program holding a form (the first recommendation). What it gives:** no cold first hand-out, and one rule, not
   two. **Sacrifice:** everything A lists, in every run of every program whose code holds a form, including a package's rarely taken path.
@@ -3046,7 +3094,7 @@ growable stacks and a runtime that adds threads, and sits behind the pool on bar
 
 **Not measured, and owed before any of this ships as a claim about general programs.** Every shape above is a short barrier or a recursion.
 The build's gate adds: long jobs (seconds), where the pool should only match; two isolates sharing the pool; a job blocked on a file while
-others wait; x86-64; bare-metal Linux; Windows.
+others wait; bare-metal Linux, and Linux on x86-64 (Windows on x86-64 is measured above).
 
 | row | what changes for it |
 |---|---|

@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"sync"
-	"time"
 )
 
 func setting(name string, dflt int) int {
@@ -26,22 +25,22 @@ func main() {
 	workers := setting("BENCH_WORKERS", 4)
 	calls := setting("BENCH_CALLS", 2000)
 	elems := setting("BENCH_ELEMS", 1024)
-	slot := time.Duration(setting("BENCH_SLOT_US", 1389)) * time.Microsecond
+	slot := int64(setting("BENCH_SLOT_US", 1389)) * 1000
 	rounds := setting("BENCH_ROUNDS", 0)
 	xs := make([]uint32, elems)
 	t := make([]int64, calls)
 	k := min(workers, elems)
 	chunk := (elems + k - 1) / k
 	var total int64
-	start := time.Now()
-	var next time.Duration
+	start := nowNs()
+	var next int64
 	for c := 0; c < calls; c++ {
 		if shape == "frame" {
 			next += slot
-			for time.Since(start) < next {
+			for nowNs()-start < next {
 			}
 		}
-		t0 := time.Now()
+		t0 := nowNs()
 		var wg sync.WaitGroup
 		for from := 0; from < elems; from += chunk {
 			part := xs[from:min(from+chunk, elems)]
@@ -60,7 +59,7 @@ func main() {
 			}()
 		}
 		wg.Wait()
-		t[c] = time.Since(t0).Nanoseconds()
+		t[c] = nowNs() - t0
 		total += t[c]
 	}
 	var check int64

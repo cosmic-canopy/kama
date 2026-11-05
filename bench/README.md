@@ -84,8 +84,9 @@ bench/
   jobs/               KR-3's job pool: what a hand-out and its barrier cost, against `parallel_for`, Rayon, OpenMP and Go, and
                       what each burns to get there (the brief is docs/ROADMAP_DETAIL.md `s6-pools`). pool.c is a prototype of the
                       hand-out path, not the runtime. `bench/jobs/run.py <out.tsv>` on a host, `bench/run jobs <out.tsv> [rounds]`
-                      for the Linux arms, then `bench/jobs/summarize.py`. Runs on the Windows box too, under msys2. `wasm.sh` is the node leg, and
-                      `probes/` holds what the brief ran through the compiler.
+                      for the Linux arms, then `bench/jobs/summarize.py`. Runs on the Windows box too, under msys2, where UCRT64's
+                      rust and go give it every arm. `wasm.sh` is the node leg, and `probes/` holds what the brief ran through
+                      the compiler.
   concurrent_map/     not a language comparison either: eight isolates on one `Locked<Map>` against a
                       `ConcurrentMap` (KR-232, SPEC *A concurrent map*). `bench/concurrent_map/run.py`.
 ```
