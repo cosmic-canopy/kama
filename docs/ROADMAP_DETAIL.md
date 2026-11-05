@@ -562,6 +562,27 @@ archetype store, an inspector, mods, a project loading a type the program never 
 **The verdict: scheduled, design first.** Asked for: any boxed contract, answering a borrow rather than a copy. To settle: where the type
 identity lives, whether it costs a contract that never narrows anything, and how the borrow roots under the window rules.
 
+<a id="s2-bitcast-operand"></a>
+
+### `bitcast` refuses an operand whose type is known (KR-331)
+
+Found 2026-11-05 writing KR-328's probe, on `0.9.852`. SPEC (*Numeric conversions*): source and target must be equal-width numeric scalars, and *"an operand
+whose scalar type isn't statically known (bind it to a local first) is a compile error"*. The emitter types the operand with `holeBuiltinType`, which
+resolves a variable, a field, a literal, a plain function's result and a method's, and nothing else, so `kama check` and `kama build` both refuse:
+
+| operand | its type | today |
+|---|---|---|
+| `twice(x: x)`, a plain function | `float64` | builds |
+| `p.get()`, a method | `float64` | builds |
+| `p.f`, a field | `float64` | builds |
+| `sin(x: x)`, a generic function (`fn T sin<T: Real<T>>(T x)`) | `float64` | refused |
+| `x + 1.0` | `float64` | refused |
+| `cast<float32>(x)` | `float32`, written in the cast | refused |
+
+Each refused operand's type is statically known, so the program is one SPEC admits and the compiler refuses: a defect. The fix types the operand the way the
+rest of the emitter types an expression, and the message keeps its "bind it to a local" for an operand that truly has no scalar type. A fixture holds every
+row above.
+
 <a id="s2-immutable-array"></a>
 
 ### An `immutable` type cannot hold an array (KR-329)
@@ -2237,6 +2258,39 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 
 Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
 native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
+
+<a id="s5-file-watch"></a>
+
+### No file watcher in std (KR-330)
+
+Raised 2026-11-05 by a game engine on kama, for a running game that reloads its project data in development, and by the maintainer: *"File watcher is
+important."* Nothing in `lib/std` or `include/` binds a change notification, and `std::net`'s `Poller` refuses a regular file on Linux (`poll.kama`), so a
+program can only poll a file's modification time. KR-24's hot-reload library names file-watching as one of its three parts.
+
+**What others do.**
+
+| | in the standard library | Linux | macOS | Windows | recursive |
+|---|---|---|---|---|---|
+| Java | `WatchService` (JDK 7) | inotify | a polling fallback, still in 2022 ([OpenJDK discuss](https://mail.openjdk.org/pipermail/discuss/2022-August/006144.html)) | `ReadDirectoryChangesW` | per directory |
+| .NET | `FileSystemWatcher` | inotify | FSEvents | `ReadDirectoryChangesW` | `IncludeSubdirectories` |
+| Node | `fs.watch` | inotify | FSEvents | `ReadDirectoryChangesW` | Linux since 19.1 |
+| Deno | `Deno.watchFs` | through Rust's `notify` | | | yes |
+| Dart | `FileSystemEntity.watch` | inotify | FSEvents | `ReadDirectoryChangesW` | not on Linux, its 2.x docs say |
+| Rust | no: the `notify` crate (rust-analyzer, cargo-watch, Deno) | inotify | FSEvents or kqueue | `ReadDirectoryChangesW` | yes |
+| Go | no: `fsnotify` | inotify | kqueue | `ReadDirectoryChangesW` | no |
+| Python | no: `watchdog` | inotify | FSEvents | `ReadDirectoryChangesW` | yes |
+| Zig | no general API; `std.Build.Watch` drives `zig build --watch` | fanotify | kqueue, then FSEventStream | since 2024 | |
+
+**What every one of them meets.** A kernel queue overflows (inotify's `IN_Q_OVERFLOW`, `ReadDirectoryChangesW`'s `ERROR_NOTIFY_ENUM_DIR`, .NET's
+`InternalBufferSize`), and the answer is an event saying "rescan", never silence. An editor saves by writing a temporary file and renaming it over the
+original, so a watch on the file sees it vanish. inotify watches one directory per descriptor, bounded by `max_user_watches`, so recursion is a walk
+kept in step with creations; FSEvents and `ReadDirectoryChangesW` recurse natively. Events arrive in bursts and want coalescing.
+
+**Where it fits kama.** An inotify descriptor is pollable, so on Linux a watcher is one more source for the `Poller` each fiber scheduler owns, and a fiber
+parks on it like a socket. On Windows a directory handle's overlapped `ReadDirectoryChangesW` completes through the completion port that KR-3's step 8
+(this box's) builds. On macOS FSEvents delivers on a dispatch queue, which would wake the `Poller` through a pipe; kqueue's `EVFILT_VNODE` needs a
+descriptor per file. wasm has no file system to watch in a browser. **Verdict: scheduled, design first:** the API (a watcher over paths, recursive or not,
+yielding events with the overflow and rename cases stated), its delivery through the `Poller`, and the platform order, Linux and Windows first.
 
 <a id="s5-repro-math"></a>
 
