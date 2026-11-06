@@ -3521,28 +3521,6 @@ differing lengths would have to trap. **Verdict: scheduled, design first,** afte
 The engine that reported it no longer needs it for its own tables (2026-11-05), since it now keeps each table's columns in one chunk. The verdict stands on its
 own: a data-parallel loop over two arrays in step is common, and C# and OpenMP give it an index.
 
-<a id="s6-parfor-read-split"></a>
-
-### A `parallel_for` body may read the container it splits by `ref` (KR-333)
-
-Reported 2026-11-05 by a game engine on kama; reproduced on `0.9.854` (Windows 11, msys2 UCRT64). Over eight 1s,
-`parallel_for (ref int64 e in xs, workers: 8) { e = e + xs[0]; }` compiles and runs, and `xs[7]` comes out 2 in one run and 3 in
-the next. Every worker reads element 0 while element 0's worker writes it: a data race in safe code. The reported shape runs longer,
-so it shows plainly. Four `Chunk` values: chunk 0's worker counts its `n` to 200,000,000, while the other three read `chunks[0].n` as
-they count to 2,000,000. Three runs read `2271963 1985894 2298141`, `2953997 2857506 3726330` and `3909577 3057485 4098104`. Passing
-the container to a `const ref` call in the body (`e = e + sum(xs: xs);`) is let through too, and races the same way.
-
-`0.9.851` made the body's capture scan see every read and refused every write through a capture (`tests/parfor_capture_shapes`). The split container is
-still read like any other capture. Two neighbours are sound and are accepted today:
-- a `const ref` loop that reads the container, since there is no writer;
-- `xs.length()`, since no worker changes the length. Whether to keep it is a choice: a rule that bars every mention is simpler.
-
-`this` inside a worker is refused already (`tests/xfail/parfor_this`), so a split of a field is covered.
-
-**The fix:** while a `parallel_for` splits a container by `ref`, its body may not name that container, except through its element.
-It wants an xfail per shape (an index, a call) and a message naming the element as the way in. Do it before KR-3 moves
-`parallel_for` onto the pool, which keeps the same body rules.
-
 <a id="s6-job-priorities"></a>
 
 ### Job priorities (KR-320)

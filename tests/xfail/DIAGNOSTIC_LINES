@@ -1172,9 +1172,13 @@ parfor_const_view	parfor_const_view.kama:9:8
 parfor_elem_undeclared	parfor_elem_undeclared.kama:11:0
 parfor_foreach_ref_capture	parfor_foreach_ref_capture.kama:9:4
 parfor_give_capture	parfor_give_capture.kama:7:4 parfor_give_capture.kama:8:8
+parfor_inline_no_view	parfor_inline_no_view.kama:6:4
 parfor_nested_ref_capture	parfor_nested_ref_capture.kama:8:4
 parfor_no_workers	parfor_no_workers.kama:14:4
 parfor_noncontiguous	parfor_noncontiguous.kama:9:4
+parfor_read_split	parfor_read_split.kama:12:0
+parfor_read_split_host	parfor_read_split_host.kama:8:8
+parfor_read_split_whole	parfor_read_split_whole.kama:10:4
 parfor_ref_const_ref	parfor_ref_const_ref.kama:7:4
 parfor_return	parfor_return.kama:7:21
 parfor_this	parfor_this.kama:11:8

@@ -1,0 +1,16 @@
+// A method on the whole value may read any of its fields, so beside a split of one field it reads what the workers write.
+// A disjoint sibling field stays readable (tests/parfor_split_reads); `w` itself overlaps `w.xs`.
+import { std::collections::View, std::concurrent::Isolate };
+type value World implements Sendable {
+    public InlineArray<int64>#(2) xs; public int64 dt;
+    public ctor make() { this.xs = [1i64; 2]; this.dt = 3; }
+    public const fn int64 total() { return this.xs[0] + this.dt; }
+}
+fn void step(ref World w) {
+    parallel_for (ref int64 e in w.xs, workers: 2) { e = w.total(); }
+}
+fn uint8 main() {
+    World w = World.make();
+    step(w: ref w);
+    return 0;
+}

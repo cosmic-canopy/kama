@@ -1,0 +1,52 @@
+// What a `ref` split's body may still read: a sibling field of what it splits, a snapshot taken before the loop, another
+// container (inside a window over a third), and, when the split is `const ref`, the container itself. Each of these shares
+// nothing a worker writes. The refused half is xfail/parfor_read_split and its two neighbours.
+import { std::collections::DynamicArray, std::concurrent::Isolate, std::concurrent::Atomic };
+type value World implements Sendable {
+    public InlineArray<int64>#(2) xs; public int64 dt; public InlineArray<int64>#(1) other;
+    public ctor make() { this.xs = [1i64; 2]; this.dt = 3; this.other = [7i64; 1]; }
+}
+fn DynamicArray<int64> oneTwo() {
+    DynamicArray<int64> xs = DynamicArray.empty();
+    xs.add(item: 1i64); xs.add(item: 2i64);
+    return give xs;
+}
+fn int64 sum(const ref DynamicArray<int64> xs) {
+    int64 s = 0;
+    foreach (const ref int64 x in xs) { s = s + x; }
+    return s;
+}
+
+fn int64 sibling() {
+    World w = World.make();
+    parallel_for (ref int64 e in w.xs, workers: 2) { e = e + w.dt + w.other[0]; }
+    return w.xs[0] + w.xs[1];
+}
+fn int64 snapshot() {
+    DynamicArray<int64> xs = oneTwo();
+    DynamicArray<int64> prev = copy xs;
+    parallel_for (ref int64 e in xs, workers: 2) { e = e + prev[1]; }
+    return sum(xs: xs);
+}
+fn int64 viewOfAnother() {
+    DynamicArray<int64> ys = oneTwo();
+    DynamicArray<int64> zs = oneTwo();
+    borrow ys.viewMut() as v {
+        parallel_for (ref int64 e in v, workers: 2) { e = e + zs[1]; }
+    }
+    return sum(xs: ys);
+}
+fn int64 readers() {
+    DynamicArray<int64> xs = oneTwo();
+    Atomic<int64> t = Atomic.make(value: 0i64);
+    parallel_for (const ref int64 e in xs, workers: 2) { t.fetchAdd(delta: e + xs[0]); }
+    return t.load();
+}
+
+fn uint8 main() {
+    if (sibling() != 22) { return 1; }
+    if (snapshot() != 7) { return 2; }
+    if (viewOfAnother() != 7) { return 3; }
+    if (readers() != 5) { return 4; }
+    return 42;
+}

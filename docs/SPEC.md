@@ -7568,6 +7568,9 @@ A body reads a capture wherever a local can be named: a `match` arm, an interpol
 It writes none but an `Atomic<T>`. An assignment, `++`, a non-`const` method, a `ref` argument, a `foreach (ref …)`, a mutable view, a nested
 `parallel_for (ref …)` and a `give` each write what they reach, since every worker would reach the same place, and each is refused. <!-- xfail: parfor_write_capture, parfor_write_capture_arm, parfor_foreach_ref_capture, parfor_viewmut_capture, parfor_nested_ref_capture, parfor_give_capture -->
 A `Locked<T>` is shared as it is anywhere, by a `copy` of its handle, taken here in the body.
+What a `ref` split splits, the body reaches only through its element: naming the container, a place overlapping it, or the <!-- xfail: parfor_read_split, parfor_read_split_whole, parfor_read_split_host -->
+host of a view it splits reads what another worker writes, and is refused, read or write. A disjoint sibling field, a `copy` <!-- test: parfor_split_reads -->
+taken before the loop and a `const ref` split's own container stay readable.
 
 **There are usually FEWER workers than elements** — `workers: 8` over 30 elements is 8 isolates running 4
 elements each, one after another. That is the point of the construct: the work is finite and independent,

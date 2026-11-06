@@ -1,0 +1,20 @@
+// A `ref` split writes every element while the body runs, so a body that reads the container it splits reads what another
+// worker is writing. It compiled to 0.9.852: three workers read `chunks[0].n` while chunk 0's worker counted it, and each read
+// landed mid-count. The body reaches what it splits only through its element.
+import { std::collections::DynamicArray, std::concurrent::Isolate };
+type value Chunk implements Sendable {
+    public int32 id; public int32 n; public int32 seen;
+    public ctor make(int32 id) { this.id = id; this.n = 0; this.seen = 0; }
+}
+fn void work(ref DynamicArray<Chunk> chunks) {
+    parallel_for (ref Chunk c in chunks, workers: 4) {
+        c.n = c.n + 1;
+        if (c.id != 0) { c.seen = chunks[0].n; }
+    }
+}
+fn uint8 main() {
+    DynamicArray<Chunk> chunks = DynamicArray.empty();
+    for (int32 i = 0; i < 4; i += 1) { chunks.add(item: Chunk.make(id: i)); }
+    work(chunks: ref chunks);
+    return 0;
+}

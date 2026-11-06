@@ -8071,6 +8071,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         viewExpr  = emitExpression(pf->expression);
     } else if (pf->isConstRef) {
         MethodInfo* viewMi = findMethod(&_classes[itCls], "view", nullptr);
+        const std::string cause = viewMi ? std::string() : missingViewCause(itCls, "view");
+        if (!cause.empty()) { unsupported(cause.c_str(), pf); return; }
         if (!viewMi || !viewMi->params.empty() || !viewMi->isConst
             || !isViewCType(cTypeInInstance(itCls, viewMi->returnType))) {
             unsupported((KW + " (const ref …) needs a `View<T>`, a `ConstView<T>` or a contiguous container with "
@@ -8101,6 +8103,8 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         viewExpr  = emitExpression(pf->expression);
     } else {
         MethodInfo* viewMi = findMethod(&_classes[itCls], "viewMut", nullptr);
+        const std::string cause = viewMi ? std::string() : missingViewCause(itCls, "viewMut");
+        if (!cause.empty()) { unsupported(cause.c_str(), pf); return; }
         if (!viewMi || !viewMi->params.empty()
             || !isViewCType(cTypeInInstance(itCls, viewMi->returnType))) {
             unsupported((KW + " needs a `View<T>` or a contiguous container with a nullary `.viewMut()` "
@@ -8146,6 +8150,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         if (isWrite) capWrites[nm] = true;
     };
 
+    std::vector<SharedExpression> spawnCalls;   // a `spawn` in the body, which forEachPlaceUse leaves to the children's rule
     std::function<void(SharedExpression)> scanE;
     std::function<void(SharedStatement)>  scanS;
     scanE = [&](SharedExpression e) {
@@ -8210,6 +8215,7 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
                 scanE(arm->body); scanS(arm->block);
             }
         } else if (auto* iso = dynamic_cast<IsolateNode*>(n)) {
+            spawnCalls.push_back(iso->call);
             scanE(iso->call); scanE(iso->stack);
         } else if (auto* b = dynamic_cast<BinaryExpressionNode*>(n)) {
             scanE(b->LHS); scanE(b->RHS);
@@ -8291,6 +8297,41 @@ void CEmitter::emitParallelFor(ParallelForNode* pf, int depth)
         // is the one silent way to miss a WRITE, and it needs its own line above, as `foreach` has.
     };
     scanS(pf->body);
+
+    // A `ref` split writes every element while the body runs, so the body may use what it splits only through the loop
+    // element: through 0.9.852 `xs[0]`, `xs.length()` or `sum(xs: xs)` beside it read what another worker was writing.
+    // The test a `scope` body meets beside a `ref` child (emitScope), so a disjoint sibling (`w.dt` beside `w.xs`)
+    // stays usable. A split over an alias (a `borrow` view, a `foreach` binding) holds what the alias names too.
+    if (!pf->isConstRef) {
+        std::vector<std::vector<std::string>> roots;
+        borrowHostRoots(pf->expression, roots);
+        std::vector<std::pair<std::vector<std::string>, std::string>> held;   // a place, and the alias it is the host of
+        for (auto& r : roots) held.push_back({ r, "" });
+        for (size_t k = 0; k < held.size(); ++k)
+            if (held[k].first.size() == 1)
+                for (auto& sc : _scopes)
+                    for (auto& f : sc.frozen)
+                        if (f.alias == held[k].first[0]
+                            && std::none_of(held.begin(), held.end(), [&](const auto& h) { return h.first == f.place; }))
+                            held.push_back({ f.place, f.alias });
+        bool told = false;
+        auto use = [&](const std::vector<std::string>& p, int ln) {
+            for (auto& h : held)
+                if (!told && placesConflict(h.first, p)) {
+                    told = true;
+                    const std::string split = placeText(h.first), used = placeText(p);
+                    unsupported(("`" + used + "`" + (used == split ? std::string() : " overlaps `" + split + "`, which")
+                                 + (h.second.empty() ? " is split by this `" + KW + "`"
+                                                     : " is the host of `" + h.second + "`, which this `" + KW + "` splits")
+                                 + ": every worker writes its own elements of it while the body runs, so using it here, "
+                                   "read or write, races with another worker. Reach it only through the loop element `"
+                                 + loopVar + "`; read what the body needs before the loop (a `copy` is a snapshot), or split "
+                                   "it `const ref` when no worker writes").c_str(), ln);
+                }
+        };
+        forEachPlaceUse(pf->body, use);
+        for (auto& call : spawnCalls) forEachPlaceUse(nullptr, use, false, call);
+    }
 
     // Snapshot each capture's C type / class / address expression from the ENCLOSING context (intact
     // here), and apply the write-through-capture gate (c).

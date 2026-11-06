@@ -1,0 +1,8 @@
+// An `InlineArray` is contiguous, and its `viewMut()` exists only once `std::collections::View` is in the program. Without
+// the import a split over one was refused as "not contiguous" to 0.9.852, blaming the array for a missing import.
+import { std::concurrent::Isolate };
+fn uint8 main() {
+    InlineArray<int64>#(2) xs = [1i64; 2];
+    parallel_for (ref int64 e in xs, workers: 2) { e = e + 1; }
+    return cast<uint8>(xs[0] + xs[1]);
+}
