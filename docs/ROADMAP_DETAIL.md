@@ -2125,23 +2125,6 @@ and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains i
   optionals" ctor pattern. A **non-goal**, settled by the audit: one way to do a thing (GOALS 4) — named static factories + named params cover it, and SPEC § *Generics* says the same.
   (Distinct from **default *type* parameters**, which shipped.)
 
-<a id="s4-bounded-overflow"></a>
-
-### A bounded list given more elements than it holds reports a type mismatch (KR-334)
-
-Reported 2026-11-05 by a game engine on kama; reproduced on `0.9.854`. Take
-`@generate(Serializable, Deserializable) type value Patrol { @field(default) public InlineDynamicArray<int32>#(4) stops = InlineDynamicArray.empty(); … }`.
-Both `deserializeJsonBuffer::<Patrol>` and `mergeJsonBuffer` of `{"stops":[1,2,3,4,5]}` fail with ``type mismatch at `stops[4]` ``.
-Refusing is right, and so is the path, but every element has the right type: the list is full. So the message sends the reader to the
-wrong fix.
-
-The cause is one line. `InlineDynamicArray.deserialize` (`lib/std/collections/inline_dynamic_array.kama`) reports the first element
-with no place as `DeErrorKind::TypeMismatch`.
-- It is the only bounded container std can read. The others grow, and `InlineArray` is not read at all ("Deserialize breadth", above).
-- The reader serves every format, so one fix covers JSON and kbin.
-- `DeErrorKind` is `@nonExhaustive`, so a kind of its own ("too many elements") breaks nothing.
-- `tests/inline_dynamic_array_serde_bytes` pins today's ``type mismatch at `[3]` `` and changes with it.
-
 <a id="s5"></a>
 
 ## 5. 1.x — systems & runtime (post-1.0)

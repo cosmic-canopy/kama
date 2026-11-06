@@ -1,0 +1,59 @@
+// A bounded list given more elements than it holds fails with a kind of its own. To 0.9.854 it was `TypeMismatch`, so
+// `{"stops":[1,2,3,4,5]}` read into an `InlineDynamicArray<int32>#(4)` said ``type mismatch at `stops[4]` `` — the message a
+// wrong element type gives — though every element had the right type and the list was full. The reader is one for every
+// format, so a kbin read says the same; a wrong element type still says type mismatch.
+import {
+    std::collections::InlineDynamicArray, std::collections::DynamicArray, std::memory::Owned, core::eprintln,
+    std::serialization::text::json::deserializeJsonBuffer, std::serialization::text::json::mergeJsonBuffer,
+    std::serialization::binary::kbin::serializeKbinPositionalBuffer, std::serialization::binary::kbin::deserializeKbinPositionalBuffer,
+};
+@generate(Serializable, Deserializable) type value Patrol {
+    @field(default) public InlineDynamicArray<int32>#(4) stops = InlineDynamicArray.empty();
+    public ctor make() { }
+}
+@generate(Serializable, Deserializable) type resource Route {
+    @field DynamicArray<int32> stops = DynamicArray.empty();
+    public ctor make() { for (int32 i = 1; i <= 5; i += 1) { this.stops.add(item: i); } }
+}
+
+fn int32 says(Result<Patrol, Owned<Error>> r, DeErrorKind kind, string text) {
+    match (give r) {
+        case Ok(value: _): { return 1; }
+        case Err(error: e): {
+            Optional<DeError> de = e.as<DeError>();
+            match (de) {
+                case Some(value: d): { if (d.kind() != kind) { return 2; } }
+                case None: { return 4; }
+            };
+            if (e.message() != text) { eprintln(s: e.message()); return 8; }
+            return 0;
+        }
+    };
+}
+
+fn int32 merged(ref Patrol p, string src) {
+    Result<Unit, Owned<Error>> r = mergeJsonBuffer(src: give src, into: p);
+    match (give r) {
+        case Ok(value: _): { return 1; }
+        case Err(error: e): { if (e.message() != "too many elements at `stops[4]`") { eprintln(s: e.message()); return 2; } return 0; }
+    };
+}
+
+fn uint8 main() {
+    int32 bad = 0;
+    bad = bad + says(r: deserializeJsonBuffer::<Patrol>(src: "{\"stops\":[1,2,3,4,5]}"), kind: DeErrorKind::TooMany,
+                     text: "too many elements at `stops[4]`");
+    bad = bad + says(r: deserializeJsonBuffer::<Patrol>(src: "{\"stops\":[1,\"x\"]}"), kind: DeErrorKind::TypeMismatch,
+                     text: "type mismatch at `stops[1]`") * 16;
+    Patrol into = Patrol.make();
+    bad = bad + merged(p: into, src: "{\"stops\":[1,2,3,4,5]}") * 64;
+    Route five = Route.make();
+    match (serializeKbinPositionalBuffer(v: five)) {
+        case Ok(value: bytes): {
+            bad = bad + says(r: deserializeKbinPositionalBuffer::<Patrol>(src: give bytes), kind: DeErrorKind::TooMany,
+                             text: "too many elements at `stops[4]`") * 256;
+        }
+        case Err(error: _): { bad = bad + 4096; }
+    };
+    return bad == 0 ? 42 : 1;
+}

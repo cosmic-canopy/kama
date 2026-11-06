@@ -359,7 +359,8 @@ adds a whole run or none of it (`CapacityFull<Unit>`, as arrayvec's `CapacityErr
 refused like any `Result`. `capacity()` is `N`, with nothing to reserve; `N` is at least 1. Indexing, `remove`, <!-- xfail: inline_dynamic_array_zero -->
 `pop`, `swap`, `clear`, the views, the three `foreach` forms, `contains`/`indexOf`/`equals`, serde and `Sendable`
 are `DynamicArray`'s, over the live prefix; an index past the length traps though the place exists. Reading more <!-- test: inline_dynamic_array_serde_bytes, inline_dynamic_array_index, inline_dynamic_array_insert_at -->
-than `N` elements is an `Err` at the first with no place — never a truncation. Every place past the live prefix is
+than `N` elements is an `Err` of kind `TooMany` at the first with no place (``too many elements at `stops[4]` ``) — <!-- test: de_too_many -->
+never a truncation, and never a type mismatch, since every element read so far had the right type. Every place past the live prefix is
 kept **zero**: a `pop` or `remove` clears what it vacates, so a copy, a send or a byte view never carries a popped
 element's bytes, and two arrays holding the same elements are the same bytes. A value instance whose layout has no
 padding is `BytesViewable` (`InlineDynamicArray<uint8>#(64)` is; three `int32` places beside an `isize` length are <!-- xfail: inline_dynamic_array_padded_bytes -->
@@ -8152,7 +8153,7 @@ edge, and every pointee of a concrete one, **must** be `@generate(Serializable, 
 **compile-enforced**: a non-`@generate` implementor (which would have no adapters and be silently dropped
 from the wire) is a compile error at the edge field. <!-- xfail: poly_edge_nongenerate -->
 `DeErrorKind` = `{Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId, UnknownField,
-TooDeep}`, the kind a `DeError` carries beside its path. **Every reader stops at 128 nested objects and arrays** with <!-- test: serde_depth_limit -->
+TooDeep, TooMany}`, the kind a `DeError` carries beside its path (`TooMany`: a bounded list given more than it holds). **Every reader stops at 128 nested objects and arrays** with <!-- test: serde_depth_limit -->
 `TooDeep`: untrusted input must not decide how deep a read recurses, through a typed schema that holds itself or
 the skip of an unknown field, and 128 fits the smallest stack kama runs on. A JSON number is read by RFC 8259's <!-- test: json_number_grammar -->
 grammar, and an integer field takes only an integer that fits it — `1.5`, `1e3` and a value past the range are

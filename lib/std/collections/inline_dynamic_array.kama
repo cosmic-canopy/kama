@@ -260,7 +260,7 @@ type resource InlineDynamicArray<T> comptime(int32 N) value when [T: value]
         isize index = 0;
         while (r.moreElems()) {
             if (index == cast<isize>(N)) {
-                return Result::Err(error: DeError::inElement(error: DeError.of(kind: DeErrorKind::TypeMismatch), index: index));
+                return Result::Err(error: DeError::inElement(error: DeError.of(kind: DeErrorKind::TooMany), index: index));
             }
             Result<T, Owned<Error>> __er = T.deserialize(r: r);
             match (give __er) {

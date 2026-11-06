@@ -452,8 +452,10 @@ type contract Serializable for value, resource, enum, intrinsic { const fn Resul
 type enum DeErrorKind implements Sendable {
     Malformed, UnexpectedEnd, TypeMismatch, MissingField, UnresolvedReference, DuplicateId,
     UnknownField,   // a STRICT reader's: a key no field claims (`JsonDeserializer.strict`)
-    TooDeep;        // nested deeper than 128 objects/arrays, the depth every reader stops at: untrusted input must not
-                    // decide how deep a read recurses — last, the graph casts by value
+    TooDeep,        // nested deeper than 128 objects/arrays, the depth every reader stops at: untrusted input must not
+                    // decide how deep a read recurses
+    TooMany;        // more elements than a bounded list holds (`InlineDynamicArray<T>#(N)`), at the first with no place.
+                    // A new kind goes last: the graph reader carries a kind as its tag
 
     public const fn string message() {
         return match (this) {
@@ -465,6 +467,7 @@ type enum DeErrorKind implements Sendable {
             case DuplicateId:          "duplicate id";
             case UnknownField:         "unknown field";
             case TooDeep:              "nesting too deep";
+            case TooMany:              "too many elements";
         };
     }
 }

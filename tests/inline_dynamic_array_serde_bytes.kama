@@ -32,7 +32,7 @@ fn int32 run() {
     Result<InlineDynamicArray<string>#(3), Owned<Error>> over = deserializeJsonBuffer::<InlineDynamicArray<string>#(3)>(src: "[\"a\",\"b\",\"c\",\"d\"]");
     match (give over) {
         case Ok(value: _): { bad = bad + 8; }
-        case Err(error: e): { if (e.message() != "type mismatch at `[3]`") { eprintln(s: e.message()); bad = bad + 16; } }
+        case Err(error: e): { if (e.message() != "too many elements at `[3]`") { eprintln(s: e.message()); bad = bad + 16; } }
     };
     // A value instance's bytes: 8 places of uint8, then the length — no padding at N = 8.
     InlineDynamicArray<uint8>#(8) bs = InlineDynamicArray.empty();
