@@ -3260,7 +3260,7 @@ others wait; bare-metal Linux, and Linux on x86-64 (Windows on x86-64 is measure
 | KR-25, KR-26, KR-309 the engine's packages | their consumers; nothing here names them |
 | SPEC, `agents/AGENTS.md`, `docs/agents.md`, tree-sitter, the Zed and Helix pins | *Concurrency* rewritten, `workers:` gone everywhere, `spawn job` in every grammar |
 
-Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: `cpuCount()`'s Windows half (a defect, fixed in `0.9.855`) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) are inputs to the audit owed above.
+Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202 (with step 7), KR-204. New from this review: `cpuCount()`'s Windows half (a defect, fixed in `0.9.855`) and KR-325 (a thread cannot be named, pinned or prioritized, and there is no verdict on `Condvar`, `Semaphore`, `Barrier` or `Once`). KR-326 (an arena-backed store cannot reach a task, which `spawn job` meets too) and KR-327 (no single-threaded wasm build of a program holding a form) carry the engine's answers from its audit (above).
 
 #### Build order, once ruled
 
