@@ -3209,7 +3209,8 @@ needs nothing new: `break` stays refused, and an `Atomic` flag with `continue` s
 
 **Decision 17 — a view may go to a scope child, and `splitAt` makes two, new 2026-11-05.** Recursive fork-join over data is the other half
 of what a pool is for: parallel sort, merge, reduce. The brief's `fib` proves the pool does it, and **safe kama cannot write it over data:**
-*measured,* a `View` is refused as a `spawn` argument, for not being `Sendable` and not being given (`probes/view_to_spawn.kama.refused`), and
+*measured,* a `View` is refused as a `spawn` argument, as a borrow for a window the child could outlive (`probes/view_to_spawn.kama.refused`;
+until `0.9.859` it was refused for not being `Sendable` and not being given), and
 by `ref`, since a view is already a borrow (`probes/view_ref_to_spawn.kama.refused`), and `View.slice` is `unsafe`.
 
 ```kama fragment
