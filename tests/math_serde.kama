@@ -1,0 +1,50 @@
+import { std::math::Vec3, std::math::Quat, std::memory::Owned,
+         std::serialization::text::json::serializeJsonBuffer, std::serialization::text::json::deserializeJsonBuffer,
+         std::serialization::text::json::mergeJsonBuffer };
+// std::math's vectors and quaternion are records of their fields on the wire, so a component holding one is read from
+// data: `{"x": 1, "y": 2, "z": 3}` for a `Vec3`, `{"x": …, "w": …}` for a `Quat`. A merge sets only the components the
+// data names, and a read missing one names it. (A matrix holds an `InlineArray`, which serde does not read yet: KR-342.)
+// Exit code 42 iff every result is right.
+
+@generate(of, Serializable, Deserializable)
+type value Transform {
+    @field(default) public Vec3 position = Vec3.of(x: 0.0f32, y: 0.0f32, z: 0.0f32);
+    @field(default) public Quat rotation = Quat.identity();
+    @field(default) public Vec3 scale = Vec3.one();
+}
+
+fn string failure(Owned<Error> e) { return e.message(); }
+
+fn uint8 main() {
+    int32 ok = 0;
+    // read in full
+    Transform t = match (deserializeJsonBuffer::<Transform>(src: "{\"position\": {\"x\": 1, \"y\": 2, \"z\": 3}, \"rotation\": {\"x\": 0, \"y\": 0, \"z\": 0, \"w\": 1}, \"scale\": {\"x\": 2, \"y\": 2, \"z\": 2}}")) {
+        case Ok(value: v): v;
+        case Err(error: e): Transform.of(position: Vec3.one(), rotation: Quat.identity(), scale: Vec3.one());
+    };
+    if (t.position.y == 2.0f32 && t.rotation.w == 1.0f32 && t.scale.z == 2.0f32) { ok = ok + 1; }
+    // a field left out takes the record's default
+    Transform d = match (deserializeJsonBuffer::<Transform>(src: "{\"position\": {\"x\": 5, \"y\": 6, \"z\": 7}}")) {
+        case Ok(value: v): v;
+        case Err(error: e): Transform.of(position: Vec3.one(), rotation: Quat.identity(), scale: Vec3.one());
+    };
+    if (d.position.x == 5.0f32 && d.rotation.w == 1.0f32 && d.scale.x == 1.0f32) { ok = ok + 1; }
+    // a merge sets only the components the data names
+    Transform m = Transform.of(position: Vec3.of(x: 1.0f32, y: 2.0f32, z: 3.0f32), rotation: Quat.identity(), scale: Vec3.one());
+    match (mergeJsonBuffer::<Transform>(src: "{\"position\": {\"x\": -20}}", into: ref m)) { case Ok(value: u): { } case Err(error: e): { } };
+    if (m.position.x == -20.0f32 && m.position.y == 2.0f32 && m.position.z == 3.0f32) { ok = ok + 1; }
+    // a read missing a component names it
+    string miss = match (deserializeJsonBuffer::<Transform>(src: "{\"position\": {\"x\": 1, \"y\": 2}}")) {
+        case Ok(value: v): "ok";
+        case Err(error: e): failure(e: give e);
+    };
+    if (miss == "missing field `position.z`") { ok = ok + 1; }
+    // written and read back
+    string text = match (serializeJsonBuffer(v: t)) { case Ok(value: s): give s; case Err(error: e): ""; };
+    Transform back = match (deserializeJsonBuffer::<Transform>(src: give text)) {
+        case Ok(value: v): v;
+        case Err(error: e): Transform.of(position: Vec3.one(), rotation: Quat.identity(), scale: Vec3.one());
+    };
+    if (back.position == t.position && back.scale == t.scale && back.rotation.w == t.rotation.w) { ok = ok + 1; }
+    return cast<uint8>(ok == 5 ? 42 : ok);   // five checks
+}

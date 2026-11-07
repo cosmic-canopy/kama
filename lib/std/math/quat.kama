@@ -4,12 +4,12 @@
 import { Mat3, Mat4, Vec3, Vec4 };
 export { Quat };
 
-@generate(of)
+@generate(of, Serializable, Deserializable)
 type value Quat {
-    public float32 x;
-    public float32 y;
-    public float32 z;
-    public float32 w;
+    @field public float32 x;
+    @field public float32 y;
+    @field public float32 z;
+    @field public float32 w;
     public ctor identity() { return Quat.of(x: 0.0f32, y: 0.0f32, z: 0.0f32, w: 1.0f32); }
     // axis assumed normalized; angle in radians
     public ctor fromAxisAngle(Vec3 axis, float32 rad) {

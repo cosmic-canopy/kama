@@ -1953,6 +1953,10 @@ An aggregate's storage address is `addr(of: arr[0])`, and an element's address i
 
 Engine Tier-0 linear algebra — concrete **float32** value types: `Vec2/3/4`, `Mat2/3/4`, `Quat`, plus a
 full scalar surface over libm. `import { std::math::Vec3, std::math::Mat4, std::math::sqrt, std::math::sin, … };`.
+The vectors and `Quat` are `Serializable` and `Deserializable` as records of their fields, so a component holding <!-- test: math_serde -->
+one is read from data: `{"x": 1, "y": 2, "z": 3}` for a `Vec3`, `{"x": 0, "y": 0, "z": 0, "w": 1}` for a `Quat`; a
+merge (`mergeJsonBuffer`) sets only the components the data names. The matrices are not yet: each holds an
+`InlineArray` of columns, which serde does not read or write (KR-342).
 
 **One name per scalar operation, at BOTH float widths** — the width is inferred from the argument, so
 `sqrt(x: 1.0)` is a float64 call and `sqrt(x: 1.0f32)` a float32 one. That matters because a bare `1.0`
