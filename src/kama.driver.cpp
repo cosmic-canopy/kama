@@ -4099,23 +4099,47 @@ struct ManifestReader {
         return true;
     }
 
-    bool skipValue() {   // string | number | true/false/null | balanced object/array
+    // A value no key of this read captures is still READ as JSON, then dropped, so the manifest one command calls OK is
+    // the one every command can read. Up to 0.9.867 an uncaptured scalar was any bare word and an object or array only
+    // had to balance: `"entry": src/app.kama` passed `kama check`, which does not capture `entry`, while `kama run`,
+    // which does, could not read it.
+    bool skipValue() {
         ws(); if (i >= s.size()) return fail("unexpected end of manifest");
-        char c = s[i];
+        const char c = s[i];
         if (c == '"') { std::string t; return str(t); }
         if (c == '{' || c == '[') {
-            char open = c, close = (c == '{') ? '}' : ']'; int depth = 0; bool inStr = false;
-            while (i < s.size()) {
-                char d = s[i++];
-                if (inStr)            { if (d == '\\' && i < s.size()) ++i; else if (d == '"') inStr = false; }
-                else if (d == '"')      inStr = true;
-                else if (d == open)     ++depth;
-                else if (d == close)  { if (--depth == 0) return true; }
+            const char close = c == '{' ? '}' : ']';
+            ++i; ws();
+            if (i < s.size() && s[i] == close) { ++i; return true; }
+            for (;;) {
+                if (c == '{') {
+                    std::string k;
+                    if (!str(k)) return false;
+                    ws(); if (i >= s.size() || s[i] != ':') return fail("expected `:` after the key `" + k + "`");
+                    ++i;
+                }
+                if (!skipValue()) return false;
+                ws();
+                if (i < s.size() && s[i] == ',') { ++i; continue; }
+                if (i < s.size() && s[i] == close) { ++i; return true; }
+                return fail(std::string("expected `,` or `") + close + "`");
             }
-            return fail("unbalanced brackets in manifest");
         }
+        const size_t b = i;   // a literal or a number, as JSON spells them
         while (i < s.size() && s[i]!=','&&s[i]!='}'&&s[i]!=']'&&s[i]!=' '&&s[i]!='\t'&&s[i]!='\n'&&s[i]!='\r') ++i;
-        return true;
+        const std::string t = s.substr(b, i - b);
+        if (t == "true" || t == "false" || t == "null" || jsonNumber(t)) return true;
+        i = b;
+        return fail("`" + t + "` is not a JSON value — a string is quoted: \"" + t + "\"");
+    }
+    static bool jsonNumber(const std::string& t) {   // -?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?
+        size_t k = 0;
+        auto digits = [&]() { const size_t from = k; while (k < t.size() && t[k] >= '0' && t[k] <= '9') ++k; return k > from; };
+        if (k < t.size() && t[k] == '-') ++k;
+        if (k < t.size() && t[k] == '0') ++k; else if (!digits()) return false;
+        if (k < t.size() && t[k] == '.') { ++k; if (!digits()) return false; }
+        if (k < t.size() && (t[k] == 'e' || t[k] == 'E')) { ++k; if (k < t.size() && (t[k] == '+' || t[k] == '-')) ++k; if (!digits()) return false; }
+        return k == t.size();
     }
 
     // `select`: { "<GROUP>": { "<VALUE>": { ... }, ... }, ... }. Only the `TARGET` group is consumed
@@ -12444,7 +12468,12 @@ static int kamaMain(int argc, char** argv)
             return 2;
         }
         std::string entryRel, eerr;
-        loadManifestEntry(manifestOperand, entryRel, eerr);
+        // A manifest this read cannot parse says why, where: up to 0.9.867 the failure was dropped, and an `entry` whose
+        // value was malformed was reported as missing, sending the reader to add a key that was there.
+        if (!loadManifestEntry(manifestOperand, entryRel, eerr)) {
+            fprintf(stderr, "kama %s: %s: %s\n", subcommand.c_str(), manifestOperand.c_str(), eerr.c_str());
+            return 2;
+        }
         if (entryRel.empty()) {
             fprintf(stderr, "kama %s: %s declares \"kind\": \"executable\" but no \"entry\" — add "
                             "\"entry\": \"src/app.kama\" naming the file that holds `main`\n",

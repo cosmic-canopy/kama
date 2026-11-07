@@ -180,6 +180,21 @@ proj jsoncmt <<'JSON'
   "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject jsoncmt 'a comment at line 2, column 3 — kama.json is JSON, which has no comments' "a comment in kama.json is named as one"
+# A value no command captures is still read as JSON: up to 0.9.867 `"entry": src/app.kama` passed `kama check`, which
+# skips `entry`, and `kama run` then called the entry missing. Both refuse it now, saying where.
+proj entryunq <<'JSON'
+{ "name": "entryunq", "version": "0.1.0", "kind": "executable",
+  "entry": src/app.kama,
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject entryunq '(line 2, column 12)' "an unquoted \`entry\` is refused at build, naming where"
+if "$KAMA" check "$tmp/entryunq/kama.json" >"$tmp/o" 2>"$tmp/e"; then
+    bad "kama check passed a manifest whose \`entry\` is not JSON"
+elif grep -qF '`src/app.kama` is not a JSON value — a string is quoted: "src/app.kama" (line 2, column 12)' "$tmp/e"; then
+    ok "kama check refuses an unquoted \`entry\` it does not capture, naming where"
+else
+    bad "kama check refused an unquoted \`entry\`, but not with its place"; head -2 "$tmp/e" >&2
+fi
 
 # `kama` is the compiler-version RANGE a package's source needs (docs/packages.md § What compiler a package
 # needs). Held to a version range in the reader — the value set is closed — and checked against THIS
