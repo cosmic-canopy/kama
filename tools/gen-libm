@@ -1,0 +1,440 @@
+#!/usr/bin/env python3
+# gen-libm — regenerate include/kama_libm.h, the musl math a `reproducible-float` program compiles in, from ONE pinned
+# musl release.
+#
+#   tools/gen-libm <a musl source tree>      # emsdk ships one: upstream/emscripten/system/lib/libc/musl
+#
+# Why it exists. The key promises the same bits on every target, and `std::math`'s 14 functions that IEEE 754 does not
+# require correctly rounded (sin cos tan asin acos atan exp log log2 log10 cbrt pow atan2 hypot, both widths) were each
+# one call into the platform's libm, which rounds them its own way in the last bit: over 5.8 million inputs, Windows'
+# UCRT and emscripten's musl disagree on 343,547; UCRT disagrees with itself between a CPU with FMA3 and one without;
+# and a release wasm build (`-Oz`, which links emscripten's table-free pow, log and log2) disagrees with a debug one.
+# So under the key those functions come from this one copy, compiled into the program on every target, wasm included.
+# tests/repro_math.d holds the bits on every leg.
+#
+# The inputs are checked against the sha256 recorded below, so the code can only change on purpose: to move to a new
+# musl, change MUSL_VERSION and the hashes together, run this, and commit the header it writes.
+#
+# What this does to musl's code is mechanical; the arithmetic is untouched:
+#   - every `#include` is dropped, and the helpers these files take from musl's internal libm.h are written once
+#     (PRELUDE below, the same definitions renamed);
+#   - every name the header defines gets kama's prefix (SPEC § C names). A name the files share becomes
+#     `kama__musl_<name>`; a file's own static or macro becomes `kama__musl_<file>__<name>`, because 55 files that
+#     were 55 translation units each have their own `N`, `T`, `top12` and `pio2_hi`, and here they share one;
+#   - every definition is made `static`, so no symbol leaves the translation unit that includes the header;
+#   - `__FP_FAST_FMA` reads as 0. clang predefines it on aarch64 whatever `-ffp-contract` says, and musl's log, log2
+#     and pow then take a branch built on `__builtin_fma` whose last bit differs from the portable branch's. The
+#     portable branch is what x86-64 and wasm run, so it is what every target runs. `TOINT_INTRINSICS` reads as 0
+#     for the same reason (musl's default; an arch header may set it);
+#   - `FORCE_EVAL` is empty, as emscripten's copy has it: it only raises a floating-point exception, which kama
+#     does not expose, and never changes a result.
+# A data header's `extern hidden const struct X {…} NAME;` becomes `struct X {…};`, and the .c that defines NAME
+# defines it `static`. The files are written in an order that defines everything before its first use.
+import hashlib, os, re, sys
+
+MUSL_VERSION = "1.2.6"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+DATA_HEADERS = ["exp_data", "log_data", "log2_data", "pow_data", "exp2f_data", "logf_data", "log2f_data", "powf_data"]
+FILES = [
+    # the error handlers, xflow first: the others call it
+    "__math_xflow", "__math_xflowf", "__math_oflow", "__math_oflowf", "__math_uflow", "__math_uflowf",
+    "__math_divzero", "__math_divzerof", "__math_invalid", "__math_invalidf",
+    # the tables
+    "exp_data", "log_data", "log2_data", "pow_data", "exp2f_data", "logf_data", "log2f_data", "powf_data",
+    # the kernels
+    "__sin", "__cos", "__tan", "__rem_pio2_large", "__rem_pio2", "__sindf", "__cosdf", "__tandf", "__rem_pio2f",
+    # std::math's 14, both widths
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "log2", "log10", "cbrt", "pow", "hypot",
+    "sinf", "cosf", "tanf", "asinf", "acosf", "atanf", "atan2f", "expf", "logf", "log2f", "log10f", "cbrtf", "powf",
+    "hypotf",
+]
+
+SHA256 = {
+    "COPYRIGHT": "b870108ec5e7790e9f9919064f1b9421d62d5f9b0e6c230c6adf7ea2da62e97b",
+    "VERSION": "5844ffcc346f89c07b13ba7596bfb3788ed73f4755e541182d7822d43b7c7a24",
+    "src/math/exp_data.h": "df77fca837edd02b260dd09a2914202775909ae67a059218ae38cfab104e6d16",
+    "src/math/log_data.h": "a8dced6f0821f30cad040ba326b03e419fbe0a750ed8f3b0d7145992bee4bccc",
+    "src/math/log2_data.h": "b56e1a56f73a8700caa9787cd399fecf7f96038af56c2a590aeb6f0f8662ea8e",
+    "src/math/pow_data.h": "5014345a7958adcf6ff835b5e96afa99dd5a98c40dfe968442288e002b8e01a3",
+    "src/math/exp2f_data.h": "fb52b690bef63df2e8996f2d2b3fd77f9ea08795863e73afdc882df04460e850",
+    "src/math/logf_data.h": "80176d1f045f162e917ca5c2879994ab0ed9e27b479086d752e5793c91135adf",
+    "src/math/log2f_data.h": "cb65ee48f557b19c8a6366a05f16ffba38aa46b00c4c136faf2dea8f53675a9b",
+    "src/math/powf_data.h": "5d632276e5f21cdcd47f35c53cf792640ad347aabce1e1bd5774fad5371fc8d8",
+    "src/math/__math_xflow.c": "5feafe10347636884a071a5096f912d5ca4a0939844804ca09b88241405648ad",
+    "src/math/__math_xflowf.c": "38da031cfed0ba90e68a14dfbc57404ebcb827c9ac34648161c7d11cb212c9ba",
+    "src/math/__math_oflow.c": "74669de53bc4b250183cfa262a8a03ee8106f33a83e3aca6b217bafc7363b83c",
+    "src/math/__math_oflowf.c": "69414934bb798f5261e2d80f4b878e2bbe4dfa6025adbd06586195ba5554b04a",
+    "src/math/__math_uflow.c": "9a841197bbe9ade9bbd684f8bc65424a97c481d37dabb9fa1790bafe7959034a",
+    "src/math/__math_uflowf.c": "2371ed08fc95e48833a67122b5ef538ce7fc87f40fc7a4df451d71e1787d1d42",
+    "src/math/__math_divzero.c": "84aa910bdc5e7ccfed42098c37c44e278aa942d46e5a51d5ee8273336c79e719",
+    "src/math/__math_divzerof.c": "194c95f6cd238ffa14e78087b9acffca3a064f2fe46320d67b090bb7a559b1ca",
+    "src/math/__math_invalid.c": "b56440ed59fa1e1aaaf6bf8b672c8bb71eaf844457906f7773da1d67d7ef013b",
+    "src/math/__math_invalidf.c": "d2af8360271109d77dfab3c538eb158e34633454707dea4efa9f2f1e7e2bd0c7",
+    "src/math/exp_data.c": "c55dff64e369fe816cd8ce367064989bb119f85783599680d1a329031c660689",
+    "src/math/log_data.c": "e96bcd99d88fc57e0f3686299014f4b949a6212603ce237f39e16cedc155617a",
+    "src/math/log2_data.c": "5a62bb213f19dc1364cddb612e3d13831e382f5ae6f7fafd7064362f53478dfb",
+    "src/math/pow_data.c": "2052ec913f9b4a2170a98a6fcbcd7694f5dec220036b00c36106a2b4b65a4c55",
+    "src/math/exp2f_data.c": "3da38c471cc5eb8dc1c2e283c6c00a36b1d353ba5c8ca1e82d95180948e26bd5",
+    "src/math/logf_data.c": "60b08342fcef877b393a76fc36d92c576d6340ce153459aad03aad3d4716f9b5",
+    "src/math/log2f_data.c": "9261d7fdef29db26bd75310f029823593639ecf7c1cc089a6014623d49d21abe",
+    "src/math/powf_data.c": "136f491b0f904842b926784134d0adba7a9103d2ce8a226276dd6e9260457398",
+    "src/math/__sin.c": "f3a37ef9bcfb8a2f9c809d8c7f1aa2c17c8c3319ad7fb2fe7c0a6284ea8859d2",
+    "src/math/__cos.c": "3f0f774aab60a18d7ef935ffdf121bcda17cbadabff14096c614da22e31a42c1",
+    "src/math/__tan.c": "e18b65b69fced8dbb2d3ed1a3dc6daea0e9f857f2762f274380bd89a6f89d2c4",
+    "src/math/__rem_pio2_large.c": "b97f19fb5951c83a0c10506fab35646caefde13bd03100ad2af55ef00af0b9fb",
+    "src/math/__rem_pio2.c": "938329e0939cd83ee2185a52154b41242f618d4a6df1b08395f344da33d4f1e6",
+    "src/math/__sindf.c": "de7026bcd159b7d06a8cbcc162df722014f3b1a3cc4183116b6b7829eef1d118",
+    "src/math/__cosdf.c": "0ba872cc7e26b93bb9784d19fee84b263e1fa3543a76ec3c0893aea47453a2a7",
+    "src/math/__tandf.c": "60455f3cc0ac743f3eaf0017a3a4f0adbab37c0ee30d29397852d22904c40444",
+    "src/math/__rem_pio2f.c": "b73a0219ba4a34e39ed904b5008126ff1b12dfa1a4a380941363c8db5088d756",
+    "src/math/sin.c": "24e53a9d85f196f66919cc19247be5480bb607ef38844b1a24bc47c4fe4974ef",
+    "src/math/cos.c": "3a74e054057d636fa494bdd76a53a40db5cee618264f6ab31cb0538ba63c6bda",
+    "src/math/tan.c": "422d411bac962a1077ae394d14e54313012a6faa3476c20b2a66d3fb3f7a923f",
+    "src/math/asin.c": "9302dd0b2f302f7b7decce82e737ed250bae1bcc65c19eaf3d7ec19010892e63",
+    "src/math/acos.c": "cc6f9017e7e2e0ef01516fa12c68aa63865e6415c90dc039dfce9abffae09a4c",
+    "src/math/atan.c": "1cffb67a65456ae0bc5f07a94df04a4f18ebc1ac0bffe3219250c4e0555ee01d",
+    "src/math/atan2.c": "a5f94b09b10b4e72bb15d94ae403c9dfd27d7ad881ecd729000004429acfca63",
+    "src/math/exp.c": "7db56f21ca9b8915d36dd5099b707aafeb6a736eae798e19b76b074764e75f34",
+    "src/math/log.c": "a0694d8587a0d145d0f8ae87cbffba014d7988bc2ebcbfad94cea73b394c9ecc",
+    "src/math/log2.c": "281e4fc0f737419e245019d8bc8a8ca53032c2d88c31d08561e9e59dcb4b4640",
+    "src/math/log10.c": "ef9b4b1f0918cf1fcb797f9fa4d4ffe177bfa27f668d74a41d613bfbcd83850a",
+    "src/math/cbrt.c": "af442893d4048c0eb485b93b5628792fb796d45ffc0f88c682041366c7da611d",
+    "src/math/pow.c": "b06f0a08d74fcff8cced7afa2c0e47e301e3e8a19c0de5becdec28cd7b014027",
+    "src/math/hypot.c": "a5532b3328310bb3ac9f7cd9074fd26c5fe7288c719c907c5c03a615442f9e7e",
+    "src/math/sinf.c": "2583af55446f07da3225186c368a7aae5a0a0a0edab268967f4122b92e222b87",
+    "src/math/cosf.c": "33cf828e8e733da2b72c723b9ff20057b9a4f10df72a3923dadcb626c23d222c",
+    "src/math/tanf.c": "38b39aaf03d33341e606b67b3743ee5fa436b7e8338af155994d4b794b366003",
+    "src/math/asinf.c": "6bc9b2392b81efa4c6a80c8602a2c0898d3b5c77444f6d3266ac71c18df222c5",
+    "src/math/acosf.c": "b20b3dcb58ce7cc55963945f8cb83efbf064b29d2da3011f2cec5d08459f2aa7",
+    "src/math/atanf.c": "e0533d7b72aabce311a758a1f94fd15e5d4067be73b716cb1f425df5bc9039d6",
+    "src/math/atan2f.c": "31a61a0a4c7b00db625b708525f24673a83df868a3e363042c9cc9dcf0aaeec8",
+    "src/math/expf.c": "225123b9b3a47a083c06f2580c6b73d5cadae5cec545f9e928f7041ff837b4b4",
+    "src/math/logf.c": "eecf8e5dd0afd5f64f938ccae07c85b0a8e82919f5d4269936a3b8493fb64e47",
+    "src/math/log2f.c": "f2393ef18e78e6dc540e7349dbfea000018246d64fca3eefe73f11a286403352",
+    "src/math/log10f.c": "b8de5c0f14be2c622eca1cb33e80e5b131576c7c229aeffb8ea9f1d61555f6b9",
+    "src/math/cbrtf.c": "87b7065f44ac0cef6d21385c2b453dde7e15a51e9008ae0d726cd9eaa2dc43da",
+    "src/math/powf.c": "74069b3a380cf954361e0243b38de2094ae680e2ecfb3e50af61ab576f13babf",
+    "src/math/hypotf.c": "aea5ebf39a0dd8ad3d905d54fb59847381f79823f5f1e8ff52b16292fcc47f7d",
+}
+
+# musl's internal libm.h, the part these files use, with every name already prefixed. FORCE_EVAL is empty and the two
+# switches are 0, for the reasons the header comment gives.
+PRELUDE_NAMES = ["WANT_ROUNDING", "WANT_SNAN", "issignaling_inline", "issignalingf_inline", "TOINT_INTRINSICS",
+                 "__FP_FAST_FMA", "M_PI_2", "predict_true", "predict_false", "eval_as_float", "eval_as_double",
+                 "fp_barrierf", "fp_barrier", "fp_force_evalf", "fp_force_eval", "FORCE_EVAL", "asuint", "asfloat",
+                 "asuint64", "asdouble", "EXTRACT_WORDS",
+                 "GET_HIGH_WORD", "GET_LOW_WORD", "INSERT_WORDS", "SET_HIGH_WORD", "SET_LOW_WORD", "GET_FLOAT_WORD",
+                 "SET_FLOAT_WORD"]
+PRELUDE = r"""#include <stdint.h>
+#include <float.h>
+#include <math.h>
+
+// The bits below assume each operation rounds to its own type: double_t is double and float_t float.
+#if FLT_EVAL_METHOD != 0
+#error "kama_libm.h: reproducible-float needs a target that evaluates float in its own precision (FLT_EVAL_METHOD 0)"
+#endif
+
+#define kama__musl_WANT_ROUNDING 1
+#define kama__musl_WANT_SNAN 0
+#define kama__musl_issignalingf_inline(x) 0
+#define kama__musl_issignaling_inline(x) 0
+#define kama__musl_TOINT_INTRINSICS 0
+#define kama__musl___FP_FAST_FMA 0
+// musl's <math.h> spelling: a strict C11 <math.h> defines no M_ constant.
+#define kama__musl_M_PI_2 1.57079632679489661923
+
+#ifdef __GNUC__
+#define kama__musl_predict_true(x) __builtin_expect(!!(x), 1)
+#define kama__musl_predict_false(x) __builtin_expect(x, 0)
+#else
+#define kama__musl_predict_true(x) (x)
+#define kama__musl_predict_false(x) (x)
+#endif
+
+static inline float kama__musl_eval_as_float(float x)
+{
+	float y = x;
+	return y;
+}
+
+static inline double kama__musl_eval_as_double(double x)
+{
+	double y = x;
+	return y;
+}
+
+static inline float kama__musl_fp_barrierf(float x)
+{
+	volatile float y = x;
+	return y;
+}
+
+static inline double kama__musl_fp_barrier(double x)
+{
+	volatile double y = x;
+	return y;
+}
+
+static inline void kama__musl_fp_force_evalf(float x)
+{
+	volatile float y;
+	y = x;
+}
+
+static inline void kama__musl_fp_force_eval(double x)
+{
+	volatile double y;
+	y = x;
+}
+
+#define kama__musl_FORCE_EVAL(x)
+
+#define kama__musl_asuint(f) ((union{float _f; uint32_t _i;}){f})._i
+#define kama__musl_asfloat(i) ((union{uint32_t _i; float _f;}){i})._f
+#define kama__musl_asuint64(f) ((union{double _f; uint64_t _i;}){f})._i
+#define kama__musl_asdouble(i) ((union{uint64_t _i; double _f;}){i})._f
+
+#define kama__musl_EXTRACT_WORDS(hi,lo,d)         \
+do {                                              \
+  uint64_t __u = kama__musl_asuint64(d);          \
+  (hi) = __u >> 32;                               \
+  (lo) = (uint32_t)__u;                           \
+} while (0)
+
+#define kama__musl_GET_HIGH_WORD(hi,d)            \
+do {                                              \
+  (hi) = kama__musl_asuint64(d) >> 32;            \
+} while (0)
+
+#define kama__musl_GET_LOW_WORD(lo,d)             \
+do {                                              \
+  (lo) = (uint32_t)kama__musl_asuint64(d);        \
+} while (0)
+
+#define kama__musl_INSERT_WORDS(d,hi,lo)          \
+do {                                              \
+  (d) = kama__musl_asdouble(((uint64_t)(hi)<<32) | (uint32_t)(lo)); \
+} while (0)
+
+#define kama__musl_SET_HIGH_WORD(d,hi)            \
+  kama__musl_INSERT_WORDS(d, hi, (uint32_t)kama__musl_asuint64(d))
+
+#define kama__musl_SET_LOW_WORD(d,lo)             \
+  kama__musl_INSERT_WORDS(d, kama__musl_asuint64(d)>>32, lo)
+
+#define kama__musl_GET_FLOAT_WORD(w,d)            \
+do {                                              \
+  (w) = kama__musl_asuint(d);                     \
+} while (0)
+
+#define kama__musl_SET_FLOAT_WORD(d,w)            \
+do {                                              \
+  (d) = kama__musl_asfloat(w);                    \
+} while (0)
+"""
+
+PREFIX = "kama__musl_"
+IDENT = re.compile(r"(?<![\w.])(?<!->)[A-Za-z_]\w*")
+TOKEN = re.compile(r"[A-Za-z_]\w*|\d(?:[eEpP][+-]|[\w.])*|\S")
+
+def load(src, name):
+    data = open(os.path.join(src, name), "rb").read()
+    got = hashlib.sha256(data).hexdigest()
+    if got != SHA256[name]:
+        sys.exit("gen-libm: %s is not the pinned musl %s file (sha256 %s, expected %s)"
+                 % (name, MUSL_VERSION, got, SHA256[name]))
+    text = data.decode("utf-8")
+    if "\r" in text:
+        sys.exit("gen-libm: %s has CR line endings" % name)
+    return text
+
+def comment_spans(text):
+    """(start, end) of every comment in `text`. These files hold no string or character literal (checked below)."""
+    spans, i, n = [], 0, len(text)
+    while i < n:
+        if text.startswith("/*", i):
+            j = text.index("*/", i + 2) + 2
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+        else:
+            i += 1
+            continue
+        spans.append((i, j))
+        i = j
+    return spans
+
+def blank(text, spans):
+    """`text` with each span replaced by spaces, newlines kept, so every offset still lines up."""
+    out = list(text)
+    for s, e in spans:
+        for k in range(s, e):
+            if out[k] != "\n":
+                out[k] = " "
+    return "".join(out)
+
+def directive_spans(code):
+    spans = []
+    for m in re.finditer(r"(?m)^[ \t]*#", code):
+        e = m.start()
+        while True:
+            nl = code.find("\n", e)
+            if nl < 0:
+                e = len(code)
+                break
+            if code[nl - 1] != "\\":
+                e = nl
+                break
+            e = nl + 1
+        spans.append((m.start(), e))
+    return spans
+
+def top_level(code):
+    """Every name a top-level declaration in `code` declares: (name, is static, offset of its declaration). A
+    declarator's name is the last identifier before the `(`, `[`, `=`, `,` or `;` that ends it; a struct tag is not."""
+    out = []
+    depth, in_stmt, body = 0, False, False
+    for m in TOKEN.finditer(code):
+        t = m.group()
+        if depth:
+            if t in "({[":
+                depth += 1
+            elif t in ")}]":
+                depth -= 1
+                if depth == 0 and body and t == "}":
+                    in_stmt = body = False
+            continue
+        if not in_stmt:
+            in_stmt, start, static = True, m.start(), False
+            init, last, named, fn, tag = False, None, False, False, False
+        if t[0].isalpha() or t[0] == "_":
+            if t == "static":
+                static = True
+            elif not init and not tag:
+                last = t
+            tag = t in ("struct", "union", "enum")
+            continue
+        tag = False
+        if t in "([=,;" and not init and not named and last:
+            out.append((last, static, start))
+            named, fn = True, t == "("
+        if t in "([{":
+            if t == "{" and fn and not init:
+                body = True
+            depth += 1
+        elif t == "=":
+            init = True
+        elif t == ",":
+            init, last, named, fn = False, None, False, False
+        elif t == ";":
+            in_stmt = False
+    if depth or in_stmt:
+        sys.exit("gen-libm: unbalanced top level")
+    return out
+
+def rename(text, spans, names):
+    """Every identifier in `text` outside a comment that `names` maps, renamed; a member after `.` or `->` never is."""
+    sub = lambda s: IDENT.sub(lambda m: names.get(m.group(), m.group()), s)
+    out, at = [], 0
+    for s, e in spans:
+        out.append(sub(text[at:s]))
+        out.append(text[s:e])
+        at = e
+    out.append(sub(text[at:]))
+    return "".join(out)
+
+def main():
+    if len(sys.argv) != 2:
+        sys.exit("usage: tools/gen-libm <musl source tree>")
+    src = sys.argv[1]
+    if load(src, "VERSION").strip() != MUSL_VERSION:
+        sys.exit("gen-libm: the tree is not musl %s" % MUSL_VERSION)
+    # The MIT grant (through its closing rule) and the paragraph naming the math code's authors.
+    copyright = load(src, "COPYRIGHT").splitlines()
+    rules = [i for i, line in enumerate(copyright) if line and set(line) == {"-"}]
+    licence = copyright[:rules[1] + 1]
+    m = copyright.index("Much of the math library code (src/math/* and src/complex/*) is")
+    licence += [""] + copyright[m:copyright.index("", m)]
+
+    shared = {n: PREFIX + n for n in PRELUDE_NAMES}
+
+    headers = {}
+    for h in DATA_HEADERS:
+        text = load(src, "src/math/%s.h" % h)
+        text, n = re.subn(r"#ifndef (_\w+_H)\n#define \1\n", "", text)
+        text, k = re.subn(r"\n#endif\n$", "\n", text)
+        text, d = re.subn(r"extern hidden const struct (\w+) \{(.*?)\n\} (\w+);", r"struct \1 {\2\n};", text, flags=re.S)
+        if (n, k, d) != (1, 1, 1):
+            sys.exit("gen-libm: %s.h is not the shape this expects" % h)
+        text = re.sub(r"(?m)^#include [<\"][^>\"]+[>\"]\n", "", text)
+        code = blank(text, comment_spans(text))
+        for name in re.findall(r"(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)", code) + re.findall(r"\bstruct (\w+) \{", code):
+            shared[name] = PREFIX + name
+        headers[h] = text
+
+    files, local = {}, {}
+    for f in FILES:
+        text = re.sub(r"(?m)^#include [<\"][^>\"]+[>\"]\n", "", load(src, "src/math/%s.c" % f))
+        code = blank(text, comment_spans(text))
+        if '"' in code or "'" in code:
+            sys.exit("gen-libm: %s.c holds a literal this does not handle" % f)
+        macros = re.findall(r"(?m)^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)", code)
+        decls = top_level(blank(code, directive_spans(code)))
+        local[f] = {n: "%s%s__%s" % (PREFIX, f, n) for n in macros}
+        for name, static, _ in decls:
+            if static:
+                local[f][name] = "%s%s__%s" % (PREFIX, f, name)
+            else:
+                shared[name] = PREFIX + name
+        files[f] = (text, macros, decls)
+
+    new = list(shared.values()) + [v for names in local.values() for v in names.values()]
+    if len(new) != len(set(new)):
+        sys.exit("gen-libm: two names would be renamed alike")
+
+    body = []
+    for h in DATA_HEADERS:
+        text = headers[h]
+        body.append("// ---- musl src/math/%s.h %s\n" % (h, "-" * (100 - len(h))))
+        body.append(rename(text, comment_spans(text), shared))
+    for f in FILES:
+        text, macros, decls = files[f]
+        # `static` ahead of every declaration that had none, the last first so the offsets hold.
+        for at in sorted({at for _, static, at in decls if not static}, reverse=True):
+            text = text[:at] + "static " + text[at:]
+        names = dict(shared)
+        names.update(local[f])
+        body.append("// ---- musl src/math/%s.c %s\n" % (f, "-" * (100 - len(f))))
+        body.append(rename(text, comment_spans(text), names))
+        if macros:
+            body.append("".join("#undef %s\n" % local[f][n] for n in dict.fromkeys(macros)))
+        body.append("\n")
+
+    h = []
+    h.append("#ifndef KAMA_LIBM_H\n#define KAMA_LIBM_H\n\n")
+    h.append("// GENERATED by tools/gen-libm from musl %s — do not edit; change the generator.\n" % MUSL_VERSION)
+    h.append("//\n")
+    h.append("// std::math's sin, cos, tan, asin, acos, atan, exp, log, log2, log10, cbrt, pow, atan2 and hypot, in both widths,\n")
+    h.append("// as a program built with `reproducible-float` computes them: kama_math.h routes kama_sin and the rest here when the\n")
+    h.append("// driver defines KAMA_REPRODUCIBLE_FLOAT, and nothing else includes it. IEEE 754 does not require these correctly\n")
+    h.append("// rounded and every libm rounds them its own way, so the key's promise, the same bits on every target, needs this one\n")
+    h.append("// copy compiled into the program everywhere, wasm included. tests/repro_math.d holds the bits on every leg, and\n")
+    h.append("// tools/gen-libm says what was changed from musl's own files (only names, `static`, and two switches).\n")
+    h.append("//\n")
+    h.append("// musl's licence follows. The files that carry Sun's or Arm's notice keep it above their code.\n")
+    h.append("//\n")
+    h.extend(("// " + line).rstrip() + "\n" for line in licence)
+    h.append("\n")
+    h.append("// musl's code is written to musl's warning flags, not to a project's `-Wall -Werror`, which every other kama header\n")
+    h.append("// builds under; as a system header it warns about nothing (an error is still an error). Its bits do not change.\n")
+    h.append("#pragma GCC system_header\n\n")
+    h.append(PRELUDE)
+    h.append("\n")
+    h.extend(body)
+    h.append("#endif /* KAMA_LIBM_H */\n")
+    with open(os.path.join(ROOT, "include/kama_libm.h"), "w", encoding="utf-8", newline="\n") as out:
+        out.write("".join(h))
+
+if __name__ == "__main__":
+    main()

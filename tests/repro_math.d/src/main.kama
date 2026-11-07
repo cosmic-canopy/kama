@@ -1,0 +1,143 @@
+// `reproducible-float` promises the same bits on every target. `-ffp-contract=off` settles the arithmetic; this holds
+// the other half, std::math's 14 functions that IEEE 754 does not require correctly rounded. Every libm rounds those
+// its own way in the last bit, so a program whose correctness is its bits (a replay, a lockstep peer, a world
+// regenerated from its seed) diverged at its first `sin` between a browser and a desktop. Through 0.9.856 this failed
+// 28 of its 29 rows built natively on Windows (UCRT), and built for wasm it passed in debug and failed `log`, `log2`
+// and `pow` in release, where emscripten links table-free versions of the three. Under the key, kama_math.h routes the
+// 14 to musl compiled into the program (include/kama_libm.h), on every target.
+//
+// Each row hashes the result bits over 200,000 fixed inputs: FNV-1a over 64-bit words, a float32's bits zero-extended.
+// The inputs are built from integers by `+`, `*` and `/`, which IEEE 754 rounds the same everywhere, so every target
+// feeds the same bits. The expected hashes are what emscripten's own musl answers (a C probe built for wasm at -O2,
+// no kama involved), so this holds the vendored copy to an independent build of the same library, not to itself.
+// It exits with the number of rows that differ. tools/check-repro-math.sh runs it built `--release` as well.
+import { core::println,
+         std::math::sin, std::math::cos, std::math::tan, std::math::asin, std::math::acos, std::math::atan,
+         std::math::exp, std::math::log, std::math::log2, std::math::log10, std::math::cbrt, std::math::pow,
+         std::math::atan2, std::math::hypot };
+
+fn float64 lin(int64 i, float64 lo, float64 hi) { return lo + ((hi - lo) * cast<float64>(i)) / 199999.0; }
+fn float32 lin32(int64 i, float64 lo, float64 hi) { return cast<float32>(lin(i: i, lo: lo, hi: hi)); }
+// A two-argument row's second argument takes its own range at this permutation of the first's index.
+fn int64 other(int64 i) { return (i * 7919) % 200000; }
+
+fn uint64 mix(uint64 h, float64 r) { return (h ^ bitcast<uint64>(r)) * 1099511628211ui64; }
+fn uint64 mix32(uint64 h, float32 r) { return (h ^ cast<uint64>(bitcast<uint32>(r))) * 1099511628211ui64; }
+
+fn int32 check(string name, uint64 got, uint64 want) {
+    if (got == want) { return 0; }
+    println(s: "${name}: ${got}, expected ${want}");
+    return 1;
+}
+
+fn uint8 main() {
+    uint64 basis = 14695981039346656037ui64;
+    int32 bad = 0;
+    uint64 h = basis;
+
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: sin(x: lin(i: i, lo: -120.0, hi: 154.0))); }
+    bad = bad + check(name: "sin", got: h, want: 13349015730571478516ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) {
+        float64 x = 1000000.0;
+        for (int64 k = 0; k < i % 17; k++) { x = x * 10.0; }
+        h = mix(h: h, r: sin(x: x + cast<float64>(i)));
+    }
+    bad = bad + check(name: "sin, large arguments", got: h, want: 10853203025815334660ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: cos(x: lin(i: i, lo: -120.0, hi: 154.0))); }
+    bad = bad + check(name: "cos", got: h, want: 2442096341947885339ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: tan(x: lin(i: i, lo: -120.0, hi: 154.0))); }
+    bad = bad + check(name: "tan", got: h, want: 12780525197170076609ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: asin(x: lin(i: i, lo: -1.0, hi: 1.0))); }
+    bad = bad + check(name: "asin", got: h, want: 14294456238383767390ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: acos(x: lin(i: i, lo: -1.0, hi: 1.0))); }
+    bad = bad + check(name: "acos", got: h, want: 16007552855769012127ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: atan(x: lin(i: i, lo: -50.0, hi: 50.0))); }
+    bad = bad + check(name: "atan", got: h, want: 466708412478818537ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: exp(x: lin(i: i, lo: -745.0, hi: 710.0))); }
+    bad = bad + check(name: "exp", got: h, want: 15332400554080803305ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: log(x: lin(i: i, lo: 0.001, hi: 1000000.0))); }
+    bad = bad + check(name: "log", got: h, want: 13386460787720336164ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: log2(x: lin(i: i, lo: 0.001, hi: 1000000.0))); }
+    bad = bad + check(name: "log2", got: h, want: 2756291363959258317ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: log10(x: lin(i: i, lo: 0.001, hi: 1000000.0))); }
+    bad = bad + check(name: "log10", got: h, want: 3291785971619777428ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix(h: h, r: cbrt(x: lin(i: i, lo: -1000000.0, hi: 1000000.0))); }
+    bad = bad + check(name: "cbrt", got: h, want: 8744037085248242989ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) {
+        h = mix(h: h, r: pow(x: lin(i: i, lo: 0.001, hi: 50.0), y: lin(i: other(i: i), lo: -20.0, hi: 20.0)));
+    }
+    bad = bad + check(name: "pow", got: h, want: 15535037229436925528ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) {
+        h = mix(h: h, r: atan2(y: lin(i: i, lo: -120.0, hi: 154.0), x: lin(i: other(i: i), lo: -50.0, hi: 50.0)));
+    }
+    bad = bad + check(name: "atan2", got: h, want: 521182635272768061ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) {
+        h = mix(h: h, r: hypot(x: lin(i: i, lo: -1000.0, hi: 1000.0), y: lin(i: other(i: i), lo: -1000.0, hi: 1000.0)));
+    }
+    bad = bad + check(name: "hypot", got: h, want: 16621346542099836294ui64);
+
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: sin(x: lin32(i: i, lo: -120.0, hi: 154.0))); }
+    bad = bad + check(name: "sin, float32", got: h, want: 17758181727666877475ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: cos(x: lin32(i: i, lo: -120.0, hi: 154.0))); }
+    bad = bad + check(name: "cos, float32", got: h, want: 3766060856141476611ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: tan(x: lin32(i: i, lo: -120.0, hi: 154.0))); }
+    bad = bad + check(name: "tan, float32", got: h, want: 16379543072645095065ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: asin(x: lin32(i: i, lo: -1.0, hi: 1.0))); }
+    bad = bad + check(name: "asin, float32", got: h, want: 15557653331785463207ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: acos(x: lin32(i: i, lo: -1.0, hi: 1.0))); }
+    bad = bad + check(name: "acos, float32", got: h, want: 3806527378709157687ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: atan(x: lin32(i: i, lo: -50.0, hi: 50.0))); }
+    bad = bad + check(name: "atan, float32", got: h, want: 8463003879454623609ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: exp(x: lin32(i: i, lo: -100.0, hi: 88.0))); }
+    bad = bad + check(name: "exp, float32", got: h, want: 11288100934814516928ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: log(x: lin32(i: i, lo: 0.001, hi: 1000000.0))); }
+    bad = bad + check(name: "log, float32", got: h, want: 6209090763542641815ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: log2(x: lin32(i: i, lo: 0.001, hi: 1000000.0))); }
+    bad = bad + check(name: "log2, float32", got: h, want: 6429677959158828556ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: log10(x: lin32(i: i, lo: 0.001, hi: 1000000.0))); }
+    bad = bad + check(name: "log10, float32", got: h, want: 15624302168635713066ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) { h = mix32(h: h, r: cbrt(x: lin32(i: i, lo: -1000000.0, hi: 1000000.0))); }
+    bad = bad + check(name: "cbrt, float32", got: h, want: 13597092087118948775ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) {
+        h = mix32(h: h, r: pow(x: lin32(i: i, lo: 0.001, hi: 50.0), y: lin32(i: other(i: i), lo: -20.0, hi: 20.0)));
+    }
+    bad = bad + check(name: "pow, float32", got: h, want: 17951390290060795259ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) {
+        h = mix32(h: h, r: atan2(y: lin32(i: i, lo: -120.0, hi: 154.0), x: lin32(i: other(i: i), lo: -50.0, hi: 50.0)));
+    }
+    bad = bad + check(name: "atan2, float32", got: h, want: 5846944070466786890ui64);
+    h = basis;
+    for (int64 i = 0; i < 200000; i++) {
+        h = mix32(h: h, r: hypot(x: lin32(i: i, lo: -1000.0, hi: 1000.0), y: lin32(i: other(i: i), lo: -1000.0, hi: 1000.0)));
+    }
+    bad = bad + check(name: "hypot, float32", got: h, want: 13627156663685011154ui64);
+
+    return cast<uint8>(bad);
+}

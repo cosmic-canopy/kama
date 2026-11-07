@@ -1,0 +1,9 @@
+{
+  "name": "repromath",
+  "version": "0.1.0",
+  "kind": "executable",
+  "entry": "src/main.kama",
+  "source": "src",
+  "reproducible-float": true,
+  "modules": { ".": { "visibility": "internal" } }
+}

@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-335**
+**Next id: KR-336**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -58,7 +58,6 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
-| KR-328 | *Claimed: Windows box, 2026-11-05.* **`reproducible-float` does not make `std::math` reproducible** — the key promises "the same bits on every target" and emits `-ffp-contract=off`, but `sin`, `cos`, `exp`, `pow`, `atan2` and the rest are each one call into the platform's libm, and two libms differ in the last bit: over 200,000 inputs in a release build, native Windows and wasm disagree on `sin` 2, `cos` 5, `exp` 1, `pow` 23 and `atan2` 9, each by one ulp (measured `0.9.852`). A replay or a lockstep between a browser and a desktop diverges. **Ruled 2026-11-05: musl.** Across all 28 at-risk functions 343,547 of 5.8 million inputs differ, and 0 with musl compiled in; a release wasm build also disagrees with a debug one on `pow`, `log` and `log2`. Next: vendor musl's 14 functions into every target, wasm included, under the key (decisions and build recipe in §5) | M | [§5](ROADMAP_DETAIL.md#s5-repro-math) |
 
 ## NOW — the next features, in build order
 
@@ -113,6 +112,7 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-272 | stdlib reach | **A process's CPU time** — no user or system time for the current process or a waited child (`getrusage`, `GetProcessTimes`; Python's `process_time`) | S | [§1](ROADMAP_DETAIL.md#s1-cpu-time) |
 | KR-273 | stdlib reach | **A `string` from owned bytes without a copy** — every way from bytes to a `string` copies (Rust's `String::from_utf8(Vec<u8>)` moves); a validating moving constructor and an `unsafe` unchecked one, on the adoption `StringWriter.finish` already uses inside std | S | [§1](ROADMAP_DETAIL.md#s1-string-from-bytes) |
 | KR-311 | stdlib reach | **Opening a file under a root without a race** — `File.open` takes a path and follows links, so a server that checks a stranger's path and then opens it walks it twice, and a link swapped between the two leaves the root (measured `0.9.842`: the check says under the root, the read returns the file outside). Go's `os.Root`, nginx's `disable_symlinks`. Design first; `removeDirAll` and `extractInto` stop at the same window | M | [§1](ROADMAP_DETAIL.md#s1-fs-root) |
+| KR-335 | stdlib reach | **`reproducible-float`'s math, correctly rounded** — under the key `std::math`'s 14 not-correctly-rounded functions are musl's (`0.9.857`): the same bits on every target, but not the correct ones, and only as fixed as the vendored version. CORE-MATH (MIT) is correctly rounded, so its answers cannot drift on a bump, and a platform could keep its fast FMA path and still agree. It changes wasm's bits too and leans on software `fma` on baseline x86-64 and wasm: measure on wasm first. Building it needs the maintainer's leave (downloaded source) | M? | [§5](ROADMAP_DETAIL.md#s5-repro-math-cr) |
 | KR-101 | packaging & serde | **Publish from Perforce (and other VCS)** — the publish seam's second implementation (`vcsSnapshot`/`vcsRead`, rule in packages.md § *Publishing*): `p4 have` for the versioned files, `p4 opened` + `p4 status` for local changes, the changelist as the revision, `p4 print -k` for the depot bytes. Perforce is the game-studio default, which is the engine track's audience. Unbuildable blind: needs a P4 server to test against | — | [§10](ROADMAP_DETAIL.md#s10) |
 | KR-269 | packaging & serde | **A package caps the optimization of its own C** — a release build compiles a package's vendored constant-time C at the root's `-O3`, and a `csources` entry takes only `path` and `compileFor`. A ceiling the package sets for its own files, or Cargo's per-package level set by the root: touches the root-only rule, ruling owed | S | [§10](ROADMAP_DETAIL.md#s10-csources-optimize) |
 | KR-231 | packaging & serde | **Zero-copy deserialization into a view struct** — `@generate(Deserializable)` on a `type view`, so a parsed record's strings are views into the input (serde's `#[serde(borrow)]`); the escaped-field case wants a ruling. Unblocked: a type holding a view is a view since `0.9.725` | M? | [§4](ROADMAP_DETAIL.md#s4-view-deserialize) |

@@ -215,25 +215,49 @@ Without it, clang's default lets `a * b + c` contract into a single fused multip
 step instead of two. A target with an FMA (arm64) then gives different bits from one without
 (wasm32 MVP, baseline x86-64 SSE2), so the same source disagrees with itself browser-versus-native.
 Measured on this repo's own fixture: **13 of 64 random triples differ** on aarch64-macos in a release
-build, and **0** with the key.
+build, and **0** with the key. Contraction only differs in a `--release` build: kama's own
+overflow-checking arithmetic already splits a debug build's expressions.
 
-It is named for the goal rather than for the `-ffp-contract=off` it emits today, because the flag is a
-C-backend detail and the goal is not. It is a boolean because kama can honor exactly two states, and
+**The key's other half is `std::math`.** `sqrt`, `floor`, `ceil`, `round`, `trunc`, `abs` and `fmod` are
+exact, so every libm gives the same bits. IEEE 754 does not require `sin`, `cos`, `tan`, `asin`, `acos`,
+`atan`, `exp`, `log`, `log2`, `log10`, `cbrt`, `pow`, `atan2` or `hypot` to be correctly rounded, and each
+platform's libm rounds them its own way in the last bit: over 5.8 million inputs, Windows' and
+emscripten's disagree on 343,547, Windows disagrees with itself between a CPU with FMA3 and one without,
+and a release wasm build disagrees with a debug one. So under the key those 14, in both widths, come from
+musl (1.2.6) compiled into your program, the same code on every target, wasm included, in debug and
+release alike. `tests/repro_math.d` holds their bits on every leg kama tests. Without the key they are
+the platform's libm, exactly as fast as C's.
+
+**What it costs.** Contraction off gives up the fused multiply-adds a target could have used. The math
+runs at musl's speed instead of the platform's. On x86-64 Windows against UCRT (a quiet machine, ns per
+call), the 28 functions sum to about the same, unevenly: musl's `log10` takes about twice as long (2.4
+times in `float32`), `powf` 1.8 times and `tan` 1.4 times, while its `cbrt` runs twice as fast and
+`hypotf` nearly four times. On wasm it was musl already, except that a release build now gets Arm's
+table-driven `pow`, `log` and `log2` instead of emscripten's small ones, which costs about 12 KB more of
+wasm in a program that calls all three (natively the small ones run `pow` 2.7 times slower; on wasm,
+unmeasured).
+
+**And a notice.** Those functions are musl's code compiled into your program, so a program built with
+the key carries musl's MIT licence; its text is the first comment of `include/kama_libm.h`, and it asks
+that the notice travel with copies. Without the key, nothing of musl's is in your binary.
+
+It is named for the goal rather than for what it emits today, because `-ffp-contract=off` and a C libm
+are C-backend details and the goal is not. It is a boolean because kama can honor exactly two states, and
 "absent" already means *"I have not thought about it"* — a third spelling for that would be a second
 way to say the same thing. Manifest-only, deliberately: a property that correctness depends on must not
 be losable by forgetting a command-line flag.
 
-⚠️ Two honest limits. The flag applies to a **build**, so it does not travel through `kama transpile`
-into someone else's toolchain — pass it yourself there. And it changes nothing in a **debug** build
-that was not already true: kama's own overflow-checking arithmetic already splits the expression, so
-the difference only appears under `--release`.
+⚠️ One honest limit. The key applies to a **build**, so it does not travel through `kama transpile`
+into someone else's toolchain: compile that C with `-ffp-contract=off -DKAMA_REPRODUCIBLE_FLOAT`
+yourself.
 
 **And one way it is NOT like the other two: it propagates from a dependency.** `no-heap` and `webgpu`
 are read from your manifest only, because a dependency must not change what compiles in your program
-or make your build demand an SDK. `reproducible-float` can only turn contraction *off*, and it states
-a requirement of the dependency's own arithmetic — which you compile. So a dependency that declares it
-gets it, in your build, and it is one-way: a dependency's `false` takes nothing from a consumer (or a
-sibling) that asked. This was not true of `0.9.169` as shipped, where the key was grouped with the
+or make your build demand an SDK. `reproducible-float` states a requirement of the dependency's own
+arithmetic and of the math it calls, both of which run in your program. So a dependency that declares
+it gets it, in your build, for the whole program: contraction off everywhere, and `std::math` from musl,
+at the cost above. It is one-way: a dependency's `false` takes nothing from a consumer (or a sibling)
+that asked. This was not true of `0.9.169` as shipped, where the key was grouped with the
 other two — and a raw `-ffp-contract=off` in a dependency's `cflags` propagated while the first-class
 key replacing it did not.
 
@@ -548,7 +572,7 @@ What a dependency **cannot** do is redefine your build:
 |---|---|
 | `cflags`, `cxxflags`, `objcflags`, `ldflags`, `link`, `csources`, `cincludes`, `jsLibraries`, `emSettings`, `embedFiles`, `preloadFiles` | `cc`, `cxx`, `ar`, `sysroot`, `runtime`, `subsystem`, `triple` — your toolchain, your call |
 | | `shellFile` — the page your program runs in |
-| `reproducible-float` — it can only turn contraction off, and its own arithmetic is what you compile | `no-heap` — it changes what compiles, program-wide |
+| `reproducible-float` — its own arithmetic and math are what your program runs | `no-heap` — it changes what compiles, program-wide |
 | | `webgpu` — it selects an SDK, and could make your build demand a download |
 
 Two more rules worth knowing. A dependency's **relative** `-I`/`-L` is **refused**, because it would

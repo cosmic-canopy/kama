@@ -13749,7 +13749,13 @@ static int kamaMain(int argc, char** argv)
         //
         // ⚠️ It reaches `kama transpile` output not at all — the flag lives on the command line, not in
         // the C. A `#pragma STDC FP_CONTRACT` would travel, but GCC does not implement it.
-        if (g_target.reproFloat) cmd << "-ffp-contract=off ";
+        //
+        // The macro is the key's other half: `std::math`'s 14 functions that IEEE 754 does not require
+        // correctly rounded (`sin`, `pow`, `atan2`, …) come from musl compiled into the program
+        // (kama_math.h → kama_libm.h) rather than from the platform's libm, because every libm rounds
+        // them its own way in the last bit. On wasm too: emscripten links different `pow`, `log` and
+        // `log2` into a release build than into a debug one.
+        if (g_target.reproFloat) cmd << "-ffp-contract=off -DKAMA_REPRODUCIBLE_FLOAT ";
         // `-fno-math-errno`: kama never reads `errno` after a libm call (a domain error is a NaN, and
         // `std::io::lastError` is for OS calls), so the side effect only costs — with it live, a per-lane
         // `sqrtf` loop over a `Simd<float32>#(4)` cannot fold to `fsqrt.4s` and a scalar `sqrt` cannot

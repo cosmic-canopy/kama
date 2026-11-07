@@ -10,9 +10,9 @@
 // `export`ed under a namespace either. Renaming the SEAM is the way out: kama binds `kama_sin` and
 // publishes it as `sin`. Same shape `kama_fmt.h` uses for the number->string direction.
 //
-// Every one of these is a single inlined libm call, so the indirection costs nothing at -O1 and above.
-// `scalar.kama` still declares `extern "<math.h>"` alongside this header, because that declaration is
-// what makes the driver append `-lm`.
+// Each is one inlined call, so the indirection costs nothing at -O1 and above. `scalar.kama` still
+// declares `extern "<math.h>"` alongside this header, because that declaration is what makes the
+// driver append `-lm`.
 
 #include <math.h>
 
@@ -24,28 +24,49 @@
     static inline double kama_##name(double x, double y) { return name(x, y); }       \
     static inline float  kama_##name##f(float x, float y) { return name##f(x, y); }
 
-KAMA_MATH_1(sin)
-KAMA_MATH_1(cos)
-KAMA_MATH_1(tan)
-KAMA_MATH_1(asin)
-KAMA_MATH_1(acos)
-KAMA_MATH_1(atan)
-KAMA_MATH_1(exp)
-KAMA_MATH_1(log)
-KAMA_MATH_1(log2)
-KAMA_MATH_1(log10)
+// Exact, by IEEE 754 (`sqrt`) or by construction, so every libm gives the same bits: always libm's,
+// which a compiler inlines to one instruction where the target has it.
 KAMA_MATH_1(sqrt)
-KAMA_MATH_1(cbrt)
 KAMA_MATH_1(floor)
 KAMA_MATH_1(ceil)
 KAMA_MATH_1(round)
 KAMA_MATH_1(trunc)
 KAMA_MATH_1(fabs)
-
-KAMA_MATH_2(pow)
 KAMA_MATH_2(fmod)
-KAMA_MATH_2(atan2)
-KAMA_MATH_2(hypot)
+
+// Not required correctly rounded, so each libm rounds these its own way in the last bit: native Windows
+// and wasm disagree on 343,547 of 5.8 million inputs, a Windows CPU without FMA3 disagrees with one that
+// has it, and a release wasm build with a debug one. Under `reproducible-float`, which promises the same
+// bits on every target, the driver defines KAMA_REPRODUCIBLE_FLOAT and they come from musl compiled into
+// the program instead (kama_libm.h), on every target, wasm included. Without the key, the platform's libm,
+// which is as fast as C's because it is C's.
+#ifdef KAMA_REPRODUCIBLE_FLOAT
+#include "kama_libm.h"
+#define KAMA_LIBM_1(name)                                                           \
+    static inline double kama_##name(double x) { return kama__musl_##name(x); }     \
+    static inline float  kama_##name##f(float x) { return kama__musl_##name##f(x); }
+#define KAMA_LIBM_2(name)                                                                     \
+    static inline double kama_##name(double x, double y) { return kama__musl_##name(x, y); }   \
+    static inline float  kama_##name##f(float x, float y) { return kama__musl_##name##f(x, y); }
+#else
+#define KAMA_LIBM_1(name) KAMA_MATH_1(name)
+#define KAMA_LIBM_2(name) KAMA_MATH_2(name)
+#endif
+
+KAMA_LIBM_1(sin)
+KAMA_LIBM_1(cos)
+KAMA_LIBM_1(tan)
+KAMA_LIBM_1(asin)
+KAMA_LIBM_1(acos)
+KAMA_LIBM_1(atan)
+KAMA_LIBM_1(exp)
+KAMA_LIBM_1(log)
+KAMA_LIBM_1(log2)
+KAMA_LIBM_1(log10)
+KAMA_LIBM_1(cbrt)
+KAMA_LIBM_2(pow)
+KAMA_LIBM_2(atan2)
+KAMA_LIBM_2(hypot)
 
 // The lane-batch trio: `sqrt`/`floor`/`ceil` on a `Simd<float32|float64>#(N)`. The compiler emits one
 // instance per float lane batch beside its KAMA_SIMD_FUNCS (kama_runtime.h), passing the width-matched
@@ -69,5 +90,7 @@ static inline NAME NAME##__ceil(const NAME* self) {                             
 
 #undef KAMA_MATH_1
 #undef KAMA_MATH_2
+#undef KAMA_LIBM_1
+#undef KAMA_LIBM_2
 
 #endif

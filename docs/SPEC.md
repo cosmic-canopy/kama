@@ -1960,7 +1960,10 @@ silently. The engine helpers that have no libm counterpart stay float32 under th
 zero-arg functions because a zero-argument generic has nothing to infer from. The seam is `kama_math.h`:
 a kama function cannot share a name with the **extern** it calls, so the binding is renamed rather than
 the API (the same rename is now spelled in kama as `@linkName("sqrt") extern fn … cSqrt(…)`; the header
-predates it).
+predates it). Each is the platform's libm, except in a program built with `reproducible-float`: there the
+14 that IEEE 754 does not require correctly rounded (all but `sqrt`, `floor`, `ceil`, `round`, `trunc`,
+`abs` and `fmod`) come from musl compiled into the program, so they give the same bits on every target. <!-- test: repro_math -->
+See [targets.md](targets.md#no-heap-webgpu-and-reproducible-float--the-same-shape-for-the-same-reason).
 
 A generic call infers from any argument whose type is known, including another generic call's result:
 `abs(x: sin(x: t))` is `abs<float64>`, because the inner call is solved first. A field, an element and a
