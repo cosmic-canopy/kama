@@ -637,6 +637,29 @@ Why it is low: `YYINITDEPTH` cannot simply rise, because `YYSTYPE` holds `shared
 
 The likely fix is a left-recursive ladder rule, so that it leaves the stack flat, with each arm a chain link as `CHAIN_LINK` counts one. The node each arm builds stays what it is. What the C compiler takes then decides the number, since the ladder's text is flat but clang recurses through it: Apple's took 1,000 and warned of its stack by 5,000. A grammar change is four artifacts if the grammar's text changes.
 
+<a id="s2-contextual-spawn"></a>
+
+### `spawn` names a method (KR-337)
+
+`type value Pool { public fn void spawn(int32 n) { … } }` is refused at the declaration ("`spawn` is a reserved word,
+so it cannot be used as a name here"), and so is `p.spawn(n: 2)` (measured `0.9.860`); the same file with `truncate`
+builds, because `truncate` is contextual (`docs/KEYWORDS.md`). Engines spell creating an entity `spawn` (Bevy's
+`commands.spawn`, Unreal's `SpawnActor`), so it is the first name a game author or an agent reaches for. Reported by a
+game engine on kama, which spells it otherwise meanwhile, so nothing is blocked.
+
+**The rule,** worked out on `0.9.860` and not yet built: `spawn` is the keyword where a spawn can start, before a name
+(`spawn f(…)`, `spawn fiber …`, a future `spawn job`) or before its one clause (`spawn(stack: …) f(…)`), and a name
+everywhere else, always so directly after a `.` (`p.spawn(stack: 3)` is a call). The lexer decides it in
+`contextualWord` beside `truncate`, from the text after the word and from where the last `.` ended; a `SPAWN_NAME`
+token joins `name_word`, which admits it wherever `truncate` is admitted as a name. The one spelling it cannot take
+is a free function named `spawn` called with `stack:` as its first label, which reads as the clause.
+
+**Why it is a row and not done:** the editor grammars are most of it. tree-sitter decides `give`/`copy`/`truncate` in
+its external scanner (`tree-sitter-kama/src/scanner.c`), so `spawn` joins that scanner, `parser.c` is regenerated with
+the pinned CLI (`npm --prefix tree-sitter-kama ci`), and `editor/zed/extension.toml`'s pin follows the grammar
+commit (`tools/check-editors.sh`), as the else-if ladder's note says a grammar change is four artifacts. The machine
+that measured it has no tree-sitter CLI; the one that has it takes the row.
+
 <a id="s2-quoted-format"></a>
 
 ### A quoted, structural rendering — `${x:?}` (KR-222)
@@ -2534,6 +2557,30 @@ since building needs a Mac (Apple licenses its SDK only on Apple hardware). **Th
   Xcode project around it from `kama.json`'s `app` block (§ Android, decision 2, one id for both), and `kama build` runs
   `xcodebuild`, which compiles the asset catalog and launch screen, signs with the provisioning profile and exports the
   `.ipa` (`-exportArchive`). kama writes no `Info.plist` build keys, signs nothing and assembles no `.app` itself.
+
+<a id="s5-stack-bound"></a>
+
+### A computed stack bound per entry point (KR-336)
+
+SPEC § *The stack* states each target's stack: 8 MiB for a 64-bit native `main`, 2 MiB on 32-bit, 256 KiB on wasm. The
+one check a project can make is the C compiler's per frame (`-Wframe-larger-than=N -Werror=frame-larger-than` in its
+`cflags`), and a frame guard does not bound a chain. **Measured `0.9.860`:** ten functions, each holding an
+`InlineArray<int32>#(7000)` (28,000 bytes, under a 32 KiB guard) and calling the next, build clean on both targets;
+natively the program prints `sum 45`, and under node the wasm build fails with "Stack overflow detected. You can try
+increasing -sSTACK_SIZE (currently set to 262144)". Nothing at build time said so. On Windows the guard cannot be set
+below about 132 KB at all once `std::fs` is imported, since kama's own path frames are 64 KiB by design
+(`docs/platforms/windows.md`). A web game is where this bites: the browser's stack is the small one, and what overruns
+it is a chain of systems, engine modules and kama's own calls, on a path someone happens to take.
+
+**The ask, from a game engine on kama and seconded by another project as wanted but not blocking:** the worst-case
+stack depth of each entry point (`main`, each isolate, each `parallel_for` worker, and each pool job once KR-3 builds
+them), computed from the call graph with kama's runtime frames counted, reported against the stack the target states
+with the chain that exceeds it, as `@noheap` reports a chain. A recursion leaves the bound unknown, which is KR-79's
+*no recursion*; this is that property with a number on it. It needs each function's frame size, which only the C
+compiler knows: clang's `-fstack-usage` writes it per function (`.su` files), and the call graph kama builds already
+holds the edges. Indirect calls (a `fnptr`, a contract slot) bound only by their targets' maximum, as `--no-heap` treats
+a contract slot. Unscoped: whether it is a property a program declares, a build report, or a target's default, wants
+KR-79's design pass first.
 
 <a id="s6"></a>
 
@@ -4456,6 +4503,32 @@ interleaved): about 3 ms per seam TU. A program with any C header of its own kee
 <a id="s10"></a>
 
 ## 10. Tooling / distribution (deferred)
+
+<a id="s10-generate-step"></a>
+
+### A manifest step that generates code before analysis (KR-338)
+
+A game engine on kama generates part of each game's code from records, and decided not to commit the output. A game's
+own sources import the generated module (`import { game::gen::World }`), so until something has written it every
+front door fails. **Measured `0.9.860`:** a package listing `gen` under `modules`, with `src/gen` absent as git leaves it on a
+fresh clone, fails `kama check kama.json` with "cannot resolve module 'game::gen'"; restored, it checks. (The note that
+used to blame the manifest now names the missing folder, `0.9.864`.) None of the keys `docs/packages.md` lists runs a
+step first.
+
+**What others do.** Cargo runs a package's `build.rs` before compiling it, and the build script writes into `OUT_DIR`,
+re-run when the files it declares with `rerun-if-changed` change. Zig's `build.zig` is a program that can add a
+generate step whose output a module imports. Bazel and Buck have genrules with declared inputs and outputs. Go's `go
+generate` runs only by hand, and its output is committed, which is the other answer: no step, and the repository holds
+generated code.
+
+**The shape the report asks for:** a manifest entry naming a step that kama runs before analysis, with its inputs and its
+output module declared, so kama can skip it when nothing changed and `kama query` and the language server see what it
+wrote. The step is a kama program (a workspace member under `tools/`, say), so it needs no shell and runs the same on
+every host. Open for the design: whether the output lands in the source tree or under `out/`, how `kama lsp` runs a step
+it must not run on every keystroke, what a step may read (only declared inputs, as Bazel enforces, or anything, as
+`build.rs` may), and whether a dependency's step runs in its consumer's build. **Not a non-goal:** committing generated
+output works today, but it leaves a generator's users to remember to run it and to review machine-written diffs, and a
+build step is how the languages kama measures itself against answer it. Wanted by the owner as a general-purpose tool.
 
 <a id="s10-release-signing"></a>
 
