@@ -1,0 +1,13 @@
+// A `const fn` reads its receiver, so a mutable argument naming the same object lets it free what it reads: `peek`
+// holds a window on `this.xs` while `other.fill()` grows that array. Unchecked through 0.9.860, since only a
+// non-`const fn` receiver was compared with its arguments.
+import { std::collections::DynamicArray };
+type resource Bag {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); this.xs.add(item: 1); }
+    public fn void fill() { int32 i = 0; while (i < 1000) { this.xs.add(item: i); i = i + 1; } }
+    public const fn int32 peek(ref Bag other) {
+        borrow this.xs.view() as w { other.fill(); return w[0]; }
+    }
+}
+fn uint8 main() { Bag b = Bag.make(); return cast<uint8>(b.peek(other: ref b)); }

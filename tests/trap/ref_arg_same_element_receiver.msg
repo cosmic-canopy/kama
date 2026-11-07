@@ -1,0 +1,1 @@
+`bs[i]` and `bs[j]` name the same element in one call, and the callee may write one of them (ref_arg_same_element_receiver.kama:13)

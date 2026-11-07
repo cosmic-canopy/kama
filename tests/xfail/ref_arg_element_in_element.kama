@@ -1,0 +1,16 @@
+// `grid[i]` and `grid[k][0]` are elements of one container, but the second lives in storage the first may own: growing
+// `grid[i]` frees what `grid[k][0]` points into whenever `i == k`, and no comparison of the two addresses can see
+// that, since one is in `grid`'s buffer and the other in a row's. Refused, where two elements of the same depth are
+// compared when the call runs.
+import { std::collections::DynamicArray };
+fn void f(ref DynamicArray<int32> row, ref int32 cell) { row.add(item: 5); cell = 9; }
+fn uint8 main() {
+    DynamicArray<DynamicArray<int32>> grid = DynamicArray.empty();
+    DynamicArray<int32> r0 = DynamicArray.empty();
+    r0.add(item: 1);
+    grid.add(item: give r0);
+    isize i = 0;
+    isize k = 0;
+    f(row: ref grid[i], cell: ref grid[k][0]);
+    return cast<uint8>(grid[0][0]);
+}

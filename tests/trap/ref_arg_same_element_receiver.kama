@@ -1,0 +1,15 @@
+// The receiver and an argument as the pair: `bs[i].collide(other: ref bs[j])` with `i == j` hands `collide` its own
+// `this` as `other`. It traps when the call runs.
+@generate(of)
+type value Body {
+    public int32 v;
+    public fn void collide(ref Body other) { int32 t = this.v; this.v = other.v; other.v = t; }
+}
+fn isize pick(isize k) { return k; }
+fn uint8 main() {
+    InlineArray<Body>#(2) bs = [Body.of(v: 1), Body.of(v: 2)];
+    isize i = pick(k: 0);
+    isize j = pick(k: 0);
+    bs[i].collide(other: ref bs[j]);
+    return cast<uint8>(bs[0].v);
+}

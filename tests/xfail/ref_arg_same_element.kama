@@ -1,0 +1,8 @@
+// Two elements of one container by `ref` with equal constant indices are one element twice: refused at compile time,
+// as KR-3's decision 12 refuses two `spawn`s over `xs[1]`. (Distinct constants pass; tests/ref_arg_elements.)
+fn void swap2(ref int32 a, ref int32 b) { int32 t = a; a = b; b = t; }
+fn uint8 main() {
+    InlineArray<int32>#(2) xs = [1, 2];
+    swap2(a: ref xs[1], b: ref xs[1]);
+    return cast<uint8>(xs[0]);
+}

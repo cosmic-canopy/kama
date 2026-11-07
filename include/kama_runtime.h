@@ -627,6 +627,21 @@ static inline KAMA_NORETURN void kama_bounds_fail(ptrdiff_t i, size_t len, const
     kama_fail_puts(buf, &p, cap, " is out of bounds for length "); kama_fail_putu(buf, &p, cap, len);
     kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
 }
+// Two elements of one container handed to one call, at least one of them writable, whose indices the compiler could
+// not tell apart (`f(a: ref xs[i], b: ref xs[j])`): the call traps when they name the same storage, as `xs[i]` traps
+// out of range, rather than hand the callee two borrows of one element. Compared by address range, so an element
+// beside a field of the same element (`rows[i]`, `rows[j].pos`) is caught too.
+static inline KAMA_NORETURN void kama_args_alias_fail(const char* a, const char* b, const char* kama_f, int32_t kama_l) {
+    KAMA__FAIL_BUF;
+    kama_fail_puts(buf, &p, cap, a);  kama_fail_puts(buf, &p, cap, " and ");  kama_fail_puts(buf, &p, cap, b);
+    kama_fail_puts(buf, &p, cap, " name the same element in one call, and the callee may write one of them");
+    kama__fail(buf, sizeof buf, 6, p, kama_f, kama_l);
+}
+static inline void kama_args_distinct(const void* a, size_t na, const void* b, size_t nb, const char* an,
+                                      const char* bn, const char* kama_f, int32_t kama_l) {
+    const uintptr_t pa = (uintptr_t)a, pb = (uintptr_t)b;
+    if (pa < pb + nb && pb < pa + na) kama_args_alias_fail(an, bn, kama_f, kama_l);
+}
 // A `cast<T>` whose runtime value does not FIT `T`. Distinct from kama_bounds_fail: nothing is indexed,
 // so the message names the value and the range it missed. Same clean abort, same overridable hook.
 static inline KAMA_NORETURN void kama_narrow_fail_s(long long v, long long lo, unsigned long long hi, const char* kama_f, int32_t kama_l) {

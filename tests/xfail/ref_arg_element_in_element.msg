@@ -1,0 +1,1 @@
+and `grid[k][0]` is reached through storage `grid[i]` may own, which no index comparison can rule out

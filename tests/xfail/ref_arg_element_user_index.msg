@@ -1,0 +1,1 @@
+and `Pair` is indexed through its own `operator[]`

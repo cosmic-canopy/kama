@@ -1,0 +1,16 @@
+// A type's own `operator[]` may map two indices to one element (here `p[1]` and `p[7]` are both `b`), or hand out one
+// element inside another, so two of its elements in one call are refused rather than compared by address.
+type value Pair {
+    int32 a;
+    int32 b;
+    public ctor make() { this.a = 1; this.b = 2; }
+    public ref int32 operator[](isize i) { if (i == 0) { return this.a; } return this.b; }
+}
+fn void swap2(ref int32 a, ref int32 b) { int32 t = a; a = b; b = t; }
+fn uint8 main() {
+    Pair p = Pair.make();
+    isize i = 1;
+    isize j = 7;
+    swap2(a: ref p[i], b: ref p[j]);
+    return cast<uint8>(p[0]);
+}

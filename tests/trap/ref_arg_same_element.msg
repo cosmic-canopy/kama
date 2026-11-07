@@ -1,0 +1,1 @@
+`xs[i]` and `xs[j]` name the same element in one call, and the callee may write one of them (ref_arg_same_element.kama:12)

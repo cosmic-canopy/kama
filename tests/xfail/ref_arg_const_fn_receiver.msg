@@ -1,0 +1,1 @@
+`b` is passed as a mutable argument to `const fn` `peek` while `b` is its receiver

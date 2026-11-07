@@ -1,0 +1,11 @@
+// A read-only array beside one of its own elements by `ref`: the callee writes through `at` what it reads through
+// `live`. Refused as `fly(at: ref h.t, live: h)` is, and the message names `at` — through 0.9.860 the element form
+// compiled, and the field form called the mutable argument "an earlier argument".
+@generate(of)
+type value Transform { public int32 x; }
+fn void flyA(ref Transform at, const ref InlineArray<Transform>#(4) live) { at.x = live[1].x + 1; }
+fn uint8 main() {
+    InlineArray<Transform>#(4) arr = [Transform.of(x: 0); 4];
+    flyA(at: ref arr[0], live: arr);
+    return cast<uint8>(arr[0].x);
+}

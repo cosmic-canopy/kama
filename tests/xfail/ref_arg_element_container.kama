@@ -1,0 +1,15 @@
+// An element is a place inside its container, so `ref xs[0]` beside `ref xs` hands the callee two borrows of one
+// storage. Through 0.9.860 this compiled: `grow` added to `xs`, which moved its buffer, and the write through `e` then
+// landed in the freed one — the program read back 1, not 77.
+import { std::collections::DynamicArray };
+fn void grow(ref int32 e, ref DynamicArray<int32> xs) {
+    int32 i = 0;
+    while (i < 1000) { xs.add(item: i); i = i + 1; }
+    e = 77;
+}
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    grow(e: ref xs[0], xs: ref xs);
+    return cast<uint8>(xs[0]);
+}

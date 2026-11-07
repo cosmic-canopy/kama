@@ -1,0 +1,42 @@
+// Two elements of one container in one call, as KR-3's decision 12 takes two `spawn`s over one: distinct constant
+// indices pass with no check, any other pair is compared by address when the call runs (tests/trap/ref_arg_same_*),
+// and two `const ref` elements only read, so they may name one element. The receiver is one of the pair too:
+// `bs[i].collide(other: ref bs[j])`, the contact a physics step resolves. Exit code 42 iff every result is right.
+import { std::collections::DynamicArray };
+
+@generate(of)
+type value Body {
+    public int32 v;
+    public fn void collide(ref Body other) { int32 t = this.v; this.v = other.v; other.v = t; }
+}
+@generate(of)
+type value Row { public int32 v; public int32 w; }
+
+fn void swap2(ref int32 a, ref int32 b) { int32 t = a; a = b; b = t; }
+fn void bump(ref Row r, ref int32 x) { r.w = r.w + 1; x = x + 10; }
+fn int32 both(const ref int32 a, const ref int32 b) { return a + b; }
+fn void copyIn(ref int32 dst, const ref int32 src) { dst = src; }
+fn isize pick(isize k) { return k; }   // an index the compiler cannot fold, so the pair is compared when it runs
+
+fn uint8 main() {
+    int32 ok = 0;
+    InlineArray<int32>#(3) xs = [1, 2, 3];
+    swap2(a: ref xs[0], b: ref xs[2]);                       // distinct constants: no check at all
+    if (xs[0] == 3 && xs[2] == 1) { ok = ok + 1; }
+    DynamicArray<int32> ys = DynamicArray.empty();
+    ys.add(item: 5); ys.add(item: 6);
+    isize i = pick(k: 0);
+    isize j = pick(k: 1);
+    swap2(a: ref ys[i], b: ref ys[j]);                       // compared when it runs, and apart
+    if (ys[0] == 6 && ys[1] == 5) { ok = ok + 1; }
+    InlineArray<Body>#(2) bs = [Body.of(v: 7), Body.of(v: 8)];
+    bs[i].collide(other: ref bs[j]);                         // the receiver and an argument, apart
+    if (bs[0].v == 8 && bs[1].v == 7) { ok = ok + 1; }
+    InlineArray<Row>#(2) rows = [Row.of(v: 1, w: 0), Row.of(v: 2, w: 0)];
+    bump(r: ref rows[i], x: ref rows[j].v);                  // an element beside a field of another element
+    if (rows[0].w == 1 && rows[1].v == 12) { ok = ok + 1; }
+    if (both(a: ys[i], b: ys[i]) == 12) { ok = ok + 1; }     // two reads of one element share it
+    copyIn(dst: ref ys[i], src: xs[j]);                      // elements of two containers never overlap
+    if (ys[0] == 2) { ok = ok + 1; }
+    return cast<uint8>(ok * 7);
+}

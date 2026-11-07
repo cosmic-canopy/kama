@@ -1,0 +1,15 @@
+// The receiver side of an element argument: `grow` borrows `this` mutably and is handed an element of `this.xs`.
+// Through 0.9.860 this compiled — an element argument had no place for the receiver's check to compare — and the
+// write through `e` landed in the buffer `this.xs.add` had freed.
+import { std::collections::DynamicArray };
+type resource Bag {
+    DynamicArray<int32> xs;
+    public ctor make() { this.xs = DynamicArray.empty(); this.xs.add(item: 1); }
+    public fn void grow(ref int32 e) {
+        int32 i = 0;
+        while (i < 1000) { this.xs.add(item: i); i = i + 1; }
+        e = 77;
+    }
+    public fn int32 run() { this.grow(e: ref this.xs[0]); return this.xs[0]; }
+}
+fn uint8 main() { Bag b = Bag.make(); return cast<uint8>(b.run()); }

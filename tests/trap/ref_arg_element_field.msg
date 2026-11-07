@@ -1,0 +1,1 @@
+`rows[i]` and `rows[j].w` name the same element in one call, and the callee may write one of them (ref_arg_element_field.kama:11)

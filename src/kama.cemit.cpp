@@ -13623,6 +13623,9 @@ void CEmitter::collectClasses(SharedCompilationUnit unit)
                 if      (sn == "Shared") _sharedTmpl = ci.name;
                 else if (sn == "Owned")  _ownedTmpl  = ci.name;
                 else if (sn == "Weak")   _weakTmpl   = ci.name;
+                else if (ci.scope == "std__collections" && (sn == "DynamicArray" || sn == "FixedArray"
+                         || sn == "InlineDynamicArray" || sn == "View" || sn == "ConstView"))
+                    _contiguousTmpls.insert(ci.name);
                 else if (sn == "Channel"  && ci.scope == "std__concurrent") _channelTmpl  = ci.name;
                 else if (sn == "Sender"   && ci.scope == "std__concurrent") _senderTmpl   = ci.name;
                 else if (sn == "Receiver" && ci.scope == "std__concurrent") _receiverTmpl = ci.name;
@@ -20073,6 +20076,13 @@ MethodInfo* CEmitter::userIndexOp(const std::string& cls)
     ClassInfo* owner = nullptr;
     MethodInfo* mi = findMethod(&_classes[cls], "kama_op_index", &owner);
     return (mi && mi->isOperator && mi->isPlaceReturn) ? mi : nullptr;
+}
+
+bool CEmitter::contiguousElemColl(const std::string& cls) const
+{
+    if (isFixedColl(cls)) return true;   // an `InlineArray`
+    auto g = _genericTypeInstOf.find(cls);
+    return g != _genericTypeInstOf.end() && _contiguousTmpls.count(g->second);
 }
 
 bool CEmitter::indexesUserOp(ElementAccessNode* ea)
@@ -27963,6 +27973,11 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     // sites, where the member being dispatched is still in hand.
     PendingAccess recvAccess = _recvAccess;   // KR-211: this call's receiver access, if emitDispatch armed one
     _recvAccess = PendingAccess();
+    std::vector<RecvAliasCheck> recvAlias;    // ...and its receiver comparisons, if emitMethodCall queued any
+    if (args) {
+        auto ra = _recvAliasPending.find(args.get());
+        if (ra != _recvAliasPending.end()) { recvAlias = std::move(ra->second); _recvAliasPending.erase(ra); }
+    }
     const std::string localAlt = _localAlt;   // ...and the fast body to take when `this` was clean (emitDispatch)
     _localAlt.clear();
     struct ArgAccess { AccessTarget t; bool modify; size_t pi; bool view; std::string shown; };   // shown: as written
@@ -27999,32 +28014,48 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
     // unique by construction; kama's `ref` is not, so the check has to live at the call site. It is the
     // SAME prefix test the view model uses for `borrow`: `f(a: x, b: ref x.lo)` conflicts because `{x}` is
     // a prefix of `{x, lo}`. `out` is `byRef && !isConst`, so a fill overlapping a borrow is caught too.
-    std::vector<std::vector<std::string>> mutableArgPlaces;
     // A `const ref` argument is a borrow too, a read-only one, and the callee may change or free what it reads
     // through it by writing the mutable one: `two(a: o, b: ref o)` with `b = Optional::None` then a read of
     // `a`'s payload read a released value. Compared in both directions, so argument order cannot hide it.
-    std::vector<std::pair<std::vector<std::string>, std::string>> constArgPlaces;   // place -> param name
-    auto constArgConflict = [&](const std::vector<std::string>& place, const std::string& constName,
-                                const std::string& mutName) {
-        unsupported(("`" + placeText(place) + "` is passed both as the read-only `const ref` argument `" + constName
-                     + "` and as the mutable `ref`/`out` argument `" + mutName + "` in one call — the callee "
-                       "could change or free what it reads through `" + constName + "`. Pass distinct places, "
-                       "or copy one into a local first").c_str(), srcLine);
-    };
-    auto checkArgOverlap = [&](const std::vector<std::string>& path, const std::string& pname) {
-        if (path.empty()) return;                    // not a nameable place — nothing to compare
-        for (auto& seen : mutableArgPlaces)
-            if (placesConflict(seen, path))
-                unsupported(("`" + placeText(path) + "` is passed as two overlapping mutable arguments in "
-                             "one call (`" + pname + "` aliases an earlier `ref`/`out` argument) — the "
-                             "callee would hold two mutable borrows of the same object; pass distinct "
-                             "places, or read one into a local first").c_str(), srcLine);
-        for (auto& c : constArgPlaces)
-            if (placesConflict(c.first, path)) constArgConflict(path, c.second, pname);
-        mutableArgPlaces.push_back(path);
+    //
+    // The places are ELEMENT-AWARE (elemPlaces): `ref xs[0]` is `{xs, []}`, some element of `xs`. Through 0.9.860 the
+    // test read `placePath`, which has no place for an element, so `grow(e: ref xs[0], xs: ref xs)` compiled and the
+    // callee's write through `e` landed in the buffer `xs.add` had just freed; `fly(at: ref arr[0], live: arr)` handed a
+    // callee a read-only array it was writing. An element beside its container is now refused as a field beside its
+    // value is. Two elements of one container are decided as KR-3's decision 12 decides two `spawn`s over one: distinct
+    // constant indices pass, equal ones are refused, and any other pair is compared when the call runs (aliasChecks).
+    // judgeBorrowPair holds the rule, which the receiver's own check in emitMethodCall shares.
+    struct RefArg { std::vector<std::string> place; std::string name; bool isConst; size_t pi; SharedExpression expr; };
+    std::vector<RefArg> refArgs;
+    struct AliasCheck { size_t a, b; std::string shownA, shownB; };
+    std::vector<AliasCheck> aliasChecks;
+    auto refPairConflict = [&](const RefArg& x, const RefArg& y) -> bool {   // `x` was written first; true: decided
+        if (x.isConst && y.isConst) return false;   // two reads share a place
+        std::string shown, why;
+        const BorrowPair bp = judgeBorrowPair(x.place, x.expr, y.place, y.expr, shown, why);
+        if (bp == BorrowPair::Apart) return false;
+        const std::string ax = unparseExpr(x.expr), ay = unparseExpr(y.expr);
+        if (bp == BorrowPair::Check) { aliasChecks.push_back({ x.pi, y.pi, "`" + ax + "`", "`" + ay + "`" }); return true; }
+        if (ax == ay) shown = ax;   // one spelling twice: say it as written, `xs[1]` rather than `xs[…]`
+        if (!x.isConst && !y.isConst)
+            unsupported(("`" + shown + "` is passed as two overlapping mutable arguments in one call (`" + x.name
+                         + "` and `" + y.name + "`" + (ax != ay ? ", as `" + ax + "` and `" + ay + "`" : "")
+                         + ")" + why + " — the callee would hold two mutable borrows of the same object; pass "
+                         "distinct places, or read one into a local first").c_str(), srcLine);
+        else {
+            const RefArg& c = x.isConst ? x : y;
+            const RefArg& m = x.isConst ? y : x;
+            const std::string ac = unparseExpr(c.expr), am = unparseExpr(m.expr);
+            unsupported(("`" + shown + "` is passed both as the read-only `const ref` argument `" + c.name
+                         + "` and as the mutable `ref`/`out` argument `" + m.name + "` in one call"
+                         + (ac != am ? " (as `" + ac + "` and `" + am + "`)" : "") + why + " — the callee could "
+                         "change or free what it reads through `" + c.name + "`. Pass distinct places, or copy one "
+                         "into a local first").c_str(), srcLine);
+        }
+        return true;
     };
     // A VIEW argument is a borrow too, and one whose root the test above cannot see: `bad(d: ref d, v:
-    // d.view())` passes a by-value parameter, so it never reached `checkArgOverlap`, and `placePath` of an
+    // d.view())` passes a by-value parameter, so it never reached `refPairConflict`, and `placePath` of an
     // invocation is empty anyway. Rooted through its receiver it becomes an ordinary place and the same
     // prefix test applies — the callee must not be handed a window over a container it may also grow.
     // Compared in BOTH directions so argument order cannot hide it.
@@ -28151,26 +28182,24 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
         else if (!pKindCType.empty())
             rejectContractNonConformance(pKindCType, argExpr,
                                          ("argument `" + p.name + "`").c_str(), srcLine);
-        // Mutable-borrow uniqueness — see `checkArgOverlap` above. Read `byRef && !isConst` off the RESOLVED
-        // callee signature, never the call-site marker: the `ref` marker is optional (only `out` is
-        // mandatory), so the marker would miss the commonest spelling.
-        if (p.byRef && !p.isConst) {
-            std::vector<std::string> mp = placePath(argExpr);
-            checkArgOverlap(mp, p.name);
+        // Borrow uniqueness — see `refPairConflict` above. Read `byRef` and `isConst` off the RESOLVED callee
+        // signature, never the call-site marker: the `ref` marker is optional (only `out` is mandatory), so the
+        // marker would miss the commonest spelling.
+        if (p.byRef) {
             std::vector<std::vector<std::string>> mes;
             elemPlaces(argExpr, mes);
-            for (auto& me : mes) {
-                for (auto& vr : viewArgRoots)     // the other direction: the view argument came first
-                    if (writeHits(vr.first, me)) { viewArgConflict(vr.first, vr.second, p.name); break; }
-                mutableArgElemPlaces.push_back(me);
-            }
-        } else if (p.byRef && p.isConst) {
-            std::vector<std::string> cp = placePath(argExpr);
-            if (!cp.empty()) {
-                for (auto& seen : mutableArgPlaces)   // the other direction: the mutable argument came first
-                    if (placesConflict(seen, cp)) constArgConflict(cp, p.name, "an earlier argument");
-                constArgPlaces.push_back({ cp, p.name });
-            }
+            std::set<size_t> decided;   // one diagnostic or check per pair of arguments, however many roots each has
+            for (auto& me : mes)
+                for (auto& seen : refArgs)
+                    if (!decided.count(seen.pi) && refPairConflict(seen, RefArg{ me, p.name, p.isConst, pi, argExpr }))
+                        decided.insert(seen.pi);
+            for (auto& me : mes) refArgs.push_back({ me, p.name, p.isConst, pi, argExpr });
+            if (!p.isConst)
+                for (auto& me : mes) {
+                    for (auto& vr : viewArgRoots)     // the other direction: the view argument came first
+                        if (writeHits(vr.first, me)) { viewArgConflict(vr.first, vr.second, p.name); break; }
+                    mutableArgElemPlaces.push_back(me);
+                }
         } else if (!p.byRef && isViewCType(p.className)) {
             std::vector<std::vector<std::string>> roots;
             viewRootPlaces(argExpr, roots);
@@ -28747,6 +28776,44 @@ std::string CEmitter::emitReorderedCall(const std::string& shown, const std::str
             }
         }
     }
+    // Two elements of one container whose indices could not be told apart (refPairConflict), compared by address once
+    // every argument is evaluated, as written, and before the call: the arguments go into temporaries first if the
+    // access above did not put them there.
+    // The receiver's own (emitMethodCall) compare `this` — `lead` — with the argument it may share an element with.
+    if ((!aliasChecks.empty() || !recvAlias.empty()) && !_probingTemplate) {
+        auto holdLead = [&] {   // the receiver into a temporary, as the access above holds it
+            if (recvAlias.empty() || lead.empty() || lead.compare(0, 7, "kama_ar") == 0) return;
+            const std::string r = "kama_ar" + std::to_string(_tempCounter++);
+            accessSeq += "__auto_type " + r + " = " + lead + "; ";
+            lead = r;
+        };
+        if (accessSeq.empty()) {
+            for (auto& d : unhoisted) accessSeq += d + " ";
+            unhoisted.clear();
+            holdLead();   // the receiver first, then the arguments as written
+            for (size_t pi : order)
+                if (!argC[pi].empty()) {
+                    const std::string t = "kama_aa" + std::to_string(_tempCounter++);
+                    accessSeq += "__auto_type " + t + " = (" + argC[pi] + "); ";
+                    argC[pi] = t;
+                }
+        }
+        holdLead();
+        auto distinct = [&](const std::string& a, const std::string& b, const std::string& sa, const std::string& sb) {
+            accessSeq += "kama_args_distinct(" + a + ", sizeof(*" + a + "), " + b + ", sizeof(*" + b + "), \""
+                       + cEscapeStringBody(sa) + "\", \"" + cEscapeStringBody(sb) + "\", " + trapLoc(srcLine) + "); ";
+        };
+        for (auto& c : aliasChecks) distinct(argC[c.a], argC[c.b], c.shownA, c.shownB);
+        for (auto& c : recvAlias) {
+            size_t pi = params.size();
+            for (size_t i = 0; i < params.size(); ++i) if (params[i].name == c.param) { pi = i; break; }
+            if (lead.empty() || pi == params.size() || argC[pi].empty())
+                unsupported((c.shownArg + " and the receiver " + c.shownRecv + " may name one element, and this call "
+                             "has no place to compare them when it runs — pass a distinct place, or copy one into a "
+                             "local first").c_str(), srcLine);
+            else distinct(lead, argC[pi], c.shownRecv, c.shownArg);
+        }
+    }
     std::string callArgs = lead;
     bool first = lead.empty();
     for (auto& a : argC) { if (!first) callArgs += ", "; first = false; callArgs += a; }
@@ -28885,6 +28952,81 @@ void CEmitter::elemPlaces(SharedExpression e, std::vector<std::vector<std::strin
     }
     if (auto* inv = dynamic_cast<InvocationNode*>(e.get()))
         if (invocationReturnsPlace(inv)) borrowHostRoots(e, out);
+}
+
+// How two borrows handed to one call relate: two arguments (emitReorderedCall), or the receiver and an argument
+// (emitMethodCall). `shown` is the place they share. Apart, or an Overlap refused at compile time (`why` then says what
+// an element adds to the site's own sentence), or a Check made when the call runs. Which side writes is the site's to
+// weigh: two reads never reach here.
+//
+// One is the other, a field of it, or the container of an element of it: an Overlap. Both elements of one container:
+// element `i` of a contiguous container never owns element `j`, so they overlap exactly when their addresses do,
+// unless one reaches on through an element's own storage (`grid[i]` and `grid[k][l]`: growing `grid[i]` frees what
+// `grid[k][l]` points into, at any `l`). That is KR-3's decision 12, the rule for two `spawn`s over one container:
+// distinct constant indices are Apart, equal ones an Overlap, anything else a Check — and a container indexed through
+// its own `operator[]` an Overlap, since nothing says two of its indices never name one element, or one inside another.
+CEmitter::BorrowPair CEmitter::judgeBorrowPair(const std::vector<std::string>& px, const SharedExpression& ex,
+                                               const std::vector<std::string>& py, const SharedExpression& ey,
+                                               std::string& shown, std::string& why)
+{
+    if (!placesConflict(px, py)) return BorrowPair::Apart;
+    const size_t n = std::min(px.size(), py.size());
+    shown = placeText(n == px.size() ? px : py);
+    bool indexed = false;
+    for (size_t i = 0; i < n; ++i) if (px[i] == "[]") indexed = true;
+    if (!indexed) return BorrowPair::Overlap;
+    const bool xLonger = px.size() >= py.size();
+    const std::vector<std::string>& longer = xLonger ? px : py;
+    for (size_t i = n; i < longer.size(); ++i)
+        if (longer[i] == "[]") {
+            why = ", and `" + unparseExpr(xLonger ? ex : ey) + "` is reached through storage `" + unparseExpr(xLonger ? ey : ex)
+                + "` may own, which no index comparison can rule out";
+            return BorrowPair::Overlap;
+        }
+    std::vector<ElementAccessNode*> sx, sy;
+    if (!elemSteps(ex, sx) || !elemSteps(ey, sy) || sx.size() != px.size() || sy.size() != py.size())
+        return BorrowPair::Overlap;
+    bool equalConst = true;
+    for (size_t i = 0; i < n; ++i) {
+        if (px[i] != "[]") continue;
+        SharedExpression recv = sx[i]->expression ? sx[i]->expression
+                                                  : std::static_pointer_cast<ExpressionNode>(sx[i]->identifier);
+        const std::string cls = recv ? receiverClass(recv) : std::string();
+        if (!contiguousElemColl(cls)) {
+            why = ", and `" + demangleForDisplay(cls.empty() ? std::string("?") : cls) + "` is indexed through its own "
+                  "`operator[]`, so whether two of its indices name one element, or one inside another, is not something "
+                  "a comparison can tell";
+            return BorrowPair::Overlap;
+        }
+        int64_t ix = 0, iy = 0;
+        const bool cx = sx[i]->expressionlist && !sx[i]->expressionlist->empty() && constValue((*sx[i]->expressionlist)[0], ix);
+        const bool cy = sy[i]->expressionlist && !sy[i]->expressionlist->empty() && constValue((*sy[i]->expressionlist)[0], iy);
+        if (cx && cy && ix != iy) return BorrowPair::Apart;
+        if (!(cx && cy)) equalConst = false;
+    }
+    if (equalConst) { why = ", the same element twice"; return BorrowPair::Overlap; }
+    return BorrowPair::Check;
+}
+
+// The nodes behind elemPlaces' segments for a chain of names, fields and indices: one entry per segment, the
+// `ElementAccessNode` for a `[]` and null for a name. False for anything else (a call), whose places are its roots.
+bool CEmitter::elemSteps(SharedExpression e, std::vector<ElementAccessNode*>& out)
+{
+    if (!e) return false;
+    std::vector<std::string> p = placePath(e);
+    if (!p.empty()) { out.assign(p.size(), nullptr); return true; }
+    if (auto* ea = dynamic_cast<ElementAccessNode*>(e.get())) {
+        SharedExpression base = ea->expression ? ea->expression : std::static_pointer_cast<ExpressionNode>(ea->identifier);
+        if (!elemSteps(base, out)) return false;
+        out.push_back(ea);
+        return true;
+    }
+    if (auto* ma = dynamic_cast<MemberAccessNode*>(e.get())) {
+        if (!ma->expression || !elemSteps(ma->expression, out)) return false;
+        out.push_back(nullptr);
+        return true;
+    }
+    return false;
 }
 
 bool CEmitter::borrowHostIsTemporary(SharedExpression e)
@@ -45804,6 +45946,20 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                                      "receiver (declare it `const fn` on `" + mcls
                                      + "` if it does not mutate)").c_str(), call);
     }
+    // A receiver comparison queued below (`_recvAliasPending`) is placed by the emitReorderedCall this call reaches. A
+    // path that never reaches it would drop the comparison without a word, so whatever is left at return is refused.
+    struct RecvAliasGuard {
+        CEmitter* e; const void* key; int line;
+        ~RecvAliasGuard() {
+            auto it = e->_recvAliasPending.find(key);
+            if (it == e->_recvAliasPending.end()) return;
+            for (auto& c : it->second)
+                e->unsupported((c.shownArg + " and the receiver " + c.shownRecv + " may name one element, and this call "
+                                "has no place to compare them when it runs — pass a distinct place, or copy one into a "
+                                "local first").c_str(), line);
+            e->_recvAliasPending.erase(it);
+        }
+    } recvAliasGuard{ this, call->args.get(), call->line };
     // Mutable-borrow uniqueness, RECEIVER side. `emitReorderedCall` compares the `ref`/`out` arguments
     // against each other, but it only ever sees the receiver as an already-emitted C string, so
     // `p.absorb(other: p)` and `p.take(n: p.hi)` slipped through it. A non-`const fn` method borrows its
@@ -45865,7 +46021,18 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
             if (const std::vector<InterfaceMethod>* need = contractMethods(mcls))
                 for (auto& nm : *need)
                     if (nm.name == method) { mutating = !nm.isConst; calleeSigs = paramSigsOf(nm.params); break; }
-        if (mutating && !recvRoots.empty() && call->args) {
+        // The receiver's ELEMENT-AWARE places, judged against a `ref`/`const ref` argument as two arguments are
+        // (judgeBorrowPair): `bs[i].collide(other: ref bs[j])` is compared when the call runs, and
+        // `this.grow(e: ref this.xs[0])` is refused as `this.grow(e: ref this)` is — through 0.9.860 an element argument
+        // had no place here, so the method grew `this.xs` and wrote through `e` into the buffer it had freed. A `const fn`
+        // reads its receiver, so a MUTABLE argument overlapping it is refused too: `b.peek(other: ref b)` let `peek` hold
+        // a window on `this` while `other` grew it, unchecked up to 0.9.860.
+        std::vector<std::vector<std::string>> recvElems;
+        elemPlaces(receiver, recvElems);
+        // The method's `this` is the receiver's own address only for a class receiver: through a smart pointer or a
+        // contract it is a pointee or a vtable's object, so a pair that needs comparing there is refused instead.
+        const bool recvAddressable = !isSmartPtrClass(cls) && !isInterface(mcls);
+        if (!recvRoots.empty() && call->args) {
             for (auto& a : *call->args) {
                 if (!a || !a->name || !a->name->value) continue;
                 const ParamSig* ps = nullptr;
@@ -45875,6 +46042,7 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                 // rule with the receiver as the mutable side — and the receiver never reaches that rule,
                 // which only ever compares arguments with each other.
                 if (ps && !ps->byRef && isViewCType(ps->className)) {
+                    if (!mutating) continue;   // a `const fn` grows nothing a window views
                     std::vector<std::vector<std::string>> vrs;
                     viewRootPlaces(a->expression, vrs);
                     std::vector<std::string> vr;   // the first that overlaps the receiver, which is what is said
@@ -45897,35 +46065,48 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                     continue;
                 }
                 if (!ps || !ps->byRef) continue;
+                if (ps->isConst && !mutating) continue;   // the method and the argument both only read
                 SharedExpression ax = a->expression;
                 if (auto* h = dynamic_cast<HandoffNode*>(ax.get())) ax = h->value;
-                std::vector<std::string> ap = placePath(ax);
-                // A READ-ONLY borrow of the receiver's own storage is no safer: `d.appendAll(src: d)` may grow
-                // `d` and leave `src` pointing at the buffer it freed.
-                if (ps->isConst) {
-                    if (!ap.empty() && overlapsReceiver(ap))
-                        unsupported(("`" + placeText(ap) + "` is passed as the `const ref` argument `" + ps->name
-                                     + "` while `" + recvText() + "` is the receiver of non-`const fn` `"
-                                     + method + "` — the method may change or free what it reads through `"
-                                     + ps->name + "`. Pass a distinct place, copy it into a local first, or "
-                                     "declare `" + method + "` a `const fn` if it does not mutate").c_str(), call);
+                std::vector<std::vector<std::string>> aps;
+                elemPlaces(ax, aps);
+                std::string shown, why;
+                BorrowPair bp = BorrowPair::Apart;
+                for (auto& rp : recvElems) {
+                    for (auto& ap : aps) if ((bp = judgeBorrowPair(rp, receiver, ap, ax, shown, why)) != BorrowPair::Apart) break;
+                    if (bp != BorrowPair::Apart) break;
+                }
+                if (bp == BorrowPair::Apart) continue;
+                const std::string at = unparseExpr(ax);
+                if (bp == BorrowPair::Check && recvAddressable) {
+                    _recvAliasPending[call->args.get()].push_back({ ps->name, "`" + unparseExpr(receiver) + "`", "`" + at + "`" });
                     continue;
                 }
-                if (!ap.empty() && overlapsReceiver(ap)) {
-                    if (recvPlace.empty())   // the receiver lives INSIDE the argument (an element of it)
-                        unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
-                                     + "`, and it holds `" + recvText() + "`, the receiver — through it the method "
-                                     "could grow or empty what holds its own `this`, moving it out from under the "
-                                     "call. Pass only what the method needs, or call it on a value moved out of "
-                                     "the collection first").c_str(), call);
-                    else
-                        unsupported(("`" + placeText(ap) + "` is passed as a mutable argument to `" + method
-                                     + "` while `" + recvText() + "` is its receiver — a non-`const "
-                                     "fn` borrows its receiver mutably, so this hands the method two mutable "
-                                     "borrows of the same object; pass a distinct place, read it into a local "
-                                     "first, or declare `" + method + "` a `const fn` if it does not mutate")
-                                        .c_str(), call);
-                }
+                // A READ-ONLY borrow of the receiver's own storage is no safer: `d.appendAll(src: d)` may grow
+                // `d` and leave `src` pointing at the buffer it freed.
+                if (ps->isConst)
+                    unsupported(("`" + at + "` is passed as the `const ref` argument `" + ps->name
+                                 + "` while `" + recvText() + "` is the receiver of non-`const fn` `"
+                                 + method + "`" + why + " — the method may change or free what it reads through `"
+                                 + ps->name + "`. Pass a distinct place, copy it into a local first, or "
+                                 "declare `" + method + "` a `const fn` if it does not mutate").c_str(), call);
+                else if (!mutating)
+                    unsupported(("`" + at + "` is passed as a mutable argument to `const fn` `" + method + "` while `"
+                                 + recvText() + "` is its receiver" + why + " — the method reads `this` while it may change "
+                                 "or free it through `" + ps->name + "`. Pass a distinct place, or copy it into a local "
+                                 "first").c_str(), call);
+                else if (recvPlace.empty() && why.empty())   // the receiver lives INSIDE the argument (an element of it)
+                    unsupported(("`" + at + "` is passed as a mutable argument to `" + method
+                                 + "`, and it holds `" + recvText() + "`, the receiver — through it the method "
+                                 "could grow or empty what holds its own `this`, moving it out from under the "
+                                 "call. Pass only what the method needs, or call it on a value moved out of "
+                                 "the collection first").c_str(), call);
+                else
+                    unsupported(("`" + at + "` is passed as a mutable argument to `" + method
+                                 + "` while `" + recvText() + "` is its receiver" + why + " — a non-`const "
+                                 "fn` borrows its receiver mutably, so this hands the method two mutable "
+                                 "borrows of the same object; pass a distinct place, read it into a local "
+                                 "first, or declare `" + method + "` a `const fn` if it does not mutate").c_str(), call);
             }
         }
     }

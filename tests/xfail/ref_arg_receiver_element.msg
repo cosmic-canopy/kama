@@ -1,0 +1,1 @@
+`this.xs[0]` is passed as a mutable argument to `grow` while `this` is its receiver

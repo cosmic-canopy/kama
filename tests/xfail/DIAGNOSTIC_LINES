@@ -273,6 +273,7 @@ const_ptr_to_mut_local	const_ptr_to_mut_local.kama:6:4
 const_ref_addr_widen	const_ref_addr_widen.kama:6:4
 const_ref_arg_aliases_receiver	const_ref_arg_aliases_receiver.kama:9:38
 const_ref_arg_aliases_ref	const_ref_arg_aliases_ref.kama:14:23
+const_ref_arg_container_element	const_ref_arg_container_element.kama:9:4
 const_ref_as_mut_return	const_ref_as_mut_return.kama:13:35
 const_ref_compound	const_ref_compound.kama:10:4
 const_ref_contract_mismatch	const_ref_contract_mismatch.kama:13:0
@@ -1351,13 +1352,19 @@ reach_variant_expr_private	main.kama:2:77
 reach_variant_expr_unimported	main.kama:2:79
 reach_variant_expr_unknown	reach_variant_expr_unknown.kama:2:75
 recover_multi_error	recover_multi_error.kama:16:17 recover_multi_error.kama:22:4 recover_multi_error.kama:27:4
+ref_arg_const_fn_receiver	ref_arg_const_fn_receiver.kama:13:57
+ref_arg_element_container	ref_arg_element_container.kama:13:4
+ref_arg_element_in_element	ref_arg_element_in_element.kama:14:4
+ref_arg_element_user_index	ref_arg_element_user_index.kama:14:4
 ref_arg_holds_receiver	ref_arg_holds_receiver.kama:17:27
 ref_arg_holds_receiver_contract	ref_arg_holds_receiver_contract.kama:19:27
 ref_arg_holds_receiver_local	ref_arg_holds_receiver_local.kama:18:38
 ref_arg_overlap	ref_arg_overlap.kama:11:4
 ref_arg_overlap_field	ref_arg_overlap_field.kama:13:4
 ref_arg_overlap_receiver	ref_arg_overlap_receiver.kama:11:4
+ref_arg_receiver_element	ref_arg_receiver_element.kama:13:28
 ref_arg_rvalue_mut	ref_arg_rvalue_mut.kama:10:23 ref_arg_rvalue_mut.kama:8:28 ref_arg_rvalue_mut.kama:8:34 ref_arg_rvalue_mut.kama:8:50
+ref_arg_same_element	ref_arg_same_element.kama:6:4
 ref_arg_unlabeled	ref_arg_unlabeled.kama:7:16
 ref_field	ref_field.kama:4:14
 ref_handle	ref_handle.kama:5:14

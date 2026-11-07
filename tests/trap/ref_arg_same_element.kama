@@ -1,0 +1,14 @@
+// Two elements of one container by `ref`, whose indices turn out equal when the call runs: it traps, as `xs[i]`
+// traps out of range, instead of handing `swap2` two mutable borrows of one element.
+import { std::collections::DynamicArray };
+fn void swap2(ref int32 a, ref int32 b) { int32 t = a; a = b; b = t; }
+fn isize pick(isize k) { return k; }
+fn uint8 main() {
+    DynamicArray<int32> xs = DynamicArray.empty();
+    xs.add(item: 1);
+    xs.add(item: 2);
+    isize i = pick(k: 1);
+    isize j = pick(k: 1);
+    swap2(a: ref xs[i], b: ref xs[j]);
+    return cast<uint8>(xs[0]);
+}

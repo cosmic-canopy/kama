@@ -1813,7 +1813,20 @@ the call. The test is the window's prefix test over places, so disjoint fields s
 `f(a: ref p.lo, b: p.hi)`. A receiver that is an element is compared by what holds it, so an argument that
 CONTAINS the receiver is refused too: `this.items[0].touch(owner: ref this)` would let the method grow <!-- xfail: ref_arg_holds_receiver, ref_arg_holds_receiver_local -->
 `this.items` and move its own `this`. A receiver behind a contract — an `Owned<Handler>` element — is judged <!-- xfail: ref_arg_holds_receiver_contract -->
-by the contract member's signature, the only one in view.
+by the contract member's signature, the only one in view. A `const fn` reads its receiver, so a mutable argument
+overlapping it is refused as well: `b.peek(other: ref b)` could free what `peek` reads through `this`. <!-- xfail: ref_arg_const_fn_receiver -->
+
+**An element is a place too, inside its container.** `ref xs[i]` names some element of `xs`, so it overlaps `xs`
+itself: `grow(e: ref xs[0], xs: ref xs)` and `fly(at: ref arr[0], live: arr)` are refused as a field beside its <!-- xfail: ref_arg_element_container, const_ref_arg_container_element -->
+value is, and so is `this.grow(e: ref this.xs[0])`. Two elements of one container, at least one of them written, <!-- xfail: ref_arg_receiver_element -->
+follow the rule two `spawn`s over one container follow: distinct constant indices pass, equal ones are refused, <!-- xfail: ref_arg_same_element -->
+and any other pair is compared when the call runs, which traps as an index out of range traps when the two name
+the same storage. So `swap2(a: ref xs[i], b: ref xs[j])` and `bs[i].collide(other: ref bs[j])` compile, and run <!-- test: ref_arg_elements -->
+when `i != j`. The comparison is by address, which holds only where element `i` never owns element `j`: std's <!-- test: ref_arg_same_element, ref_arg_same_element_receiver, ref_arg_element_field -->
+contiguous containers (`InlineArray`, `DynamicArray`, `FixedArray`, `InlineDynamicArray`, `View`, `ConstView`).
+A container indexed through its own `operator[]` is refused instead, and so is an argument reached through an <!-- xfail: ref_arg_element_user_index -->
+element's own storage, as `grid[k][l]` beside `grid[i]` is: growing `grid[i]` frees what `grid[k][l]` points <!-- xfail: ref_arg_element_in_element -->
+into, at any `l`. Two `const ref` elements only read, so they may name the same one.
 
 "Every path" is a real flow merge, not "assigned somewhere": an `if`/`else` in which **both** arms assign
 counts, a lone `if` does not, and an arm that ends in `return`/`break`/`continue` never reaches the join

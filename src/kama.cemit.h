@@ -3531,6 +3531,11 @@ private:
     // std::concurrent's channel-family generic-template keys, captured at collection (like the memory
     // triad above). Used by checkChannelSendability to find every `channel<T>` instantiation site.
     std::string _channelTmpl, _senderTmpl, _receiverTmpl;
+    // std::collections' contiguous containers (`DynamicArray`, `FixedArray`, `InlineDynamicArray`, `View`, `ConstView`),
+    // whose elements are siblings in one buffer: element `i` never owns element `j`, so two elements handed to one call
+    // overlap exactly when their address ranges do (contiguousElemColl, the call-argument alias check).
+    std::set<std::string> _contiguousTmpls;
+    bool contiguousElemColl(const std::string& cls) const;
     // std::concurrent's `Atomic<T>` generic-template key (M6). Captured at collection like the family above;
     // used to validate the element (integer/`UnsafePtr` scalar only) and to exempt an `Atomic` from the
     // disjoint-borrow rule (several isolates may `ref`-borrow the SAME atomic cell — the sanctioned case).
@@ -4385,6 +4390,16 @@ private:
     // (some element: nothing proves two indices apart), a field of one extending that, and a call that returns a place
     // as every root it may point into, whole. What a write through `e` may land in, and what a view of `e` reads.
     void elemPlaces(SharedExpression e, std::vector<std::vector<std::string>>& out);
+    bool elemSteps(SharedExpression e, std::vector<ElementAccessNode*>& out);
+    enum class BorrowPair { Apart, Overlap, Check };
+    BorrowPair judgeBorrowPair(const std::vector<std::string>& px, const SharedExpression& ex,
+                               const std::vector<std::string>& py, const SharedExpression& ey,
+                               std::string& shown, std::string& why);
+    // A receiver beside an argument that names the same container's element (`bs[i].collide(other: ref bs[j])`):
+    // judged a Check in emitMethodCall, compared in emitReorderedCall once the receiver is emitted. Keyed by the call's
+    // argument list, the one object that reaches emitReorderedCall unchanged; a guard there refuses any left unplaced.
+    struct RecvAliasCheck { std::string param, shownRecv, shownArg; };
+    std::map<const void*, std::vector<RecvAliasCheck>> _recvAliasPending;
     // Whether a write to `w` moves or frees storage a VIEW frozen at `f` reads: `w` covers `f`, or lies inside it by a
     // path with no element in it. An element written in place (`f` = {d}, `w` = {d, []}) moves no buffer.
     static bool writeHits(const std::vector<std::string>& f, const std::vector<std::string>& w);

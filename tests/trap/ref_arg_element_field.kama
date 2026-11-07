@@ -1,0 +1,13 @@
+// An element beside a field of an element of the same container: the two overlap when the indices are equal, though
+// the addresses differ only by the field's offset. Compared by address range, so it traps.
+@generate(of)
+type value Row { public int32 v; public int32 w; }
+fn void bump(ref Row r, ref int32 x) { r.w = r.w + 1; x = x + 10; }
+fn isize pick(isize k) { return k; }
+fn uint8 main() {
+    InlineArray<Row>#(2) rows = [Row.of(v: 1, w: 0), Row.of(v: 2, w: 0)];
+    isize i = pick(k: 1);
+    isize j = pick(k: 1);
+    bump(r: ref rows[i], x: ref rows[j].w);
+    return cast<uint8>(rows[1].v);
+}
