@@ -7864,7 +7864,10 @@ void CEmitter::emitBorrow(BorrowNode* bn, int depth)
             _localCTypes[alias] = viewCType;
             _localTypeNodes[alias] = vmi->returnType;
             _scopes.back().declaredNames.push_back(alias);
-            for (const std::vector<std::string>& hp : hostRoots) frozenNow.push_back({ hp, alias, bn->line });
+            for (const std::vector<std::string>& hp : hostRoots) {
+                frozenNow.push_back({ hp, alias, bn->line });
+                frozenNow.back().reads = isConstViewCType(viewCType);
+            }
             _refusedBindings.erase(alias);
             // A view that CLOSES its window (KR-124): the window's scope owns the alias, so its destructor runs when
             // the window closes — on every path out, `return`/`break`/`continue` included, after the body's own
@@ -20534,7 +20537,8 @@ void CEmitter::emitForeachIterator(ForEachNode* fe, const std::string& container
     {
         std::vector<std::vector<std::string>> ops;
         viewRootPlaces(fe->expression, ops);   // roots `m.values()` at `m`, not at nothing
-        for (auto& op : ops) sc.frozen.push_back({ op, nm, fe->line, /*fromBorrow=*/false });
+        const bool reads = !((fe->isRef && !fe->isConstRef) || inPlace || (mintMi && !mintMi->isConst));
+        for (auto& op : ops) { sc.frozen.push_back({ op, nm, fe->line, /*fromBorrow=*/false }); sc.frozen.back().reads = reads; }
     }
     _scopes.push_back(sc);
     registerBinding(fe->name.get(), SymKind::Local);   // LSP index (the loop variable)
@@ -22404,32 +22408,34 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
     // ...nor something an enclosing `borrow` froze. A `ref` handed to a task is a mutable borrow like
     // any other — the direct call `grow(d: ref a)` is rejected inside a window, and routing the same
     // call through `spawn` must not launder it. A mutable one is caught with the call's other rules, at
-    // the lowering below; a read-only child is refused here.
-    if (p.isConst) rejectFrozenWrite(argNode->expression, iso->line);
+    // the lowering below; a read-only child is refused here, past every freeze whose holder only reads (KR-288).
+    if (p.isConst) rejectFrozenWrite(argNode->expression, iso->line, /*reader=*/true);
     // Disjointness: no two children of one scope may borrow OVERLAPPING places (they would race on the
     // shared storage). Two places overlap iff one is a prefix of the other — which is the exact
     // statement, not an approximation, so `w.bodies` and `w.springs` are admitted while `w` beside
     // either is still caught. Overlapping index-ranges of one buffer remain M6/`parallel_for`.
+    // Two READERS share (KR-288): `const` is deep, so nothing either can call writes the place, and what a `const fn`
+    // does write — a `Shared` count, through `unsafe` — the bundle's `Sendable` gate answers, as for `parallel_for`.
     // EXEMPTION (M6): an `Atomic<T>` is the sanctioned shared-mutable cell — its ops are race-free, so
     // several children borrowing the SAME atomic place is exactly the intended use, not a data race.
     if (!isAtomicClass(cls)) {
         Scope* ts = innermostTaskScope();
         for (auto& prev : ts->borrowedPlaces)
-            if (placesConflict(prev, place)) {
+            if (placesConflict(prev.place, place) && !(prev.reads && p.isConst)) {
                 unsupported(("two children in this `scope` borrow overlapping places (`"
-                             + placeText(prev) + "` and `" + placeText(place) + "`) — a shared mutable "
-                             "borrow across tasks would race; borrow disjoint fields or distinct locals, "
-                             "or use an `Atomic<T>` (M6)").c_str(), iso);
-                break;
+                             + placeText(prev.place) + "` and `" + placeText(place) + "`), and one of them may write, "
+                             "which would race; borrow disjoint fields or distinct locals, take the place `const ref` "
+                             "in every child that only reads it, or use an `Atomic<T>`").c_str(), iso);
+                return "";   // one fault, one report: the lowering below would call the same overlap a write
             }
-        ts->borrowedPlaces.push_back(place);
+        ts->borrowedPlaces.push_back({ place, p.isConst });
         // ...and against the scope BODY, which runs beside the child until the closing brace joins it. A
         // `ref` child may write the place, so the body may not use it at all (checked by emitScope over
         // the statements that follow); a `const ref` child only reads it, so the body may read it too and
         // is frozen against writes only — the same freeze a `borrow` window applies to its host.
         if (p.isConst) {
             Scope::FrozenPlace fp;
-            fp.place = place; fp.line = iso->line; fp.fromBorrow = false; fp.fromChild = true;
+            fp.place = place; fp.line = iso->line; fp.fromBorrow = false; fp.fromChild = true; fp.reads = true;
             ts->frozen.push_back(fp);
         } else {
             const bool nested = innermostTaskScopeIndex() != (int)_scopes.size() - 1;
@@ -29556,12 +29562,13 @@ bool CEmitter::writeHits(const std::vector<std::string>& f, const std::vector<st
 
 // The window a write to `w` would break. A view's freeze is judged by `writeHits`; a child's or an in-place `match`
 // payload's by plain overlap, since there any write at all races or changes what is read.
-const CEmitter::Scope::FrozenPlace* CEmitter::frozenWriteConflict(const std::vector<std::string>& w) const
+const CEmitter::Scope::FrozenPlace* CEmitter::frozenWriteConflict(const std::vector<std::string>& w, bool reader) const
 {
     if (w.empty()) return nullptr;
     for (int i = (int)_scopes.size() - 1; i >= 0; --i)
         for (auto& f : _scopes[i].frozen)
-            if ((f.fromChild || f.fromMatch) ? placesConflict(f.place, w) : writeHits(f.place, w)) return &f;
+            if (!(reader && f.reads) && ((f.fromChild || f.fromMatch) ? placesConflict(f.place, w) : writeHits(f.place, w)))
+                return &f;
     return nullptr;
 }
 
@@ -29574,14 +29581,24 @@ const std::vector<std::string>* CEmitter::frozenAliasRoot(const std::string& nam
     return nullptr;
 }
 
-bool CEmitter::rejectFrozenWrite(SharedExpression target, int line)
+bool CEmitter::rejectFrozenWrite(SharedExpression target, int line, bool reader)
 {
     std::vector<std::vector<std::string>> ws;
     elemPlaces(target, ws);
     std::vector<std::string> p;
     const Scope::FrozenPlace* f = nullptr;
-    for (auto& w : ws) if ((f = frozenWriteConflict(w))) { p = w; break; }
+    for (auto& w : ws) if ((f = frozenWriteConflict(w, reader))) { p = w; break; }
     if (!f) return false;
+    if (reader) {   // a child that only reads, stopped by a holder that may write while it does
+        const std::string by = f->fromBorrow ? "the enclosing `borrow` (opened at line " + std::to_string(f->line) + " as `"
+                                               + f->alias + "`)"
+                             : f->fromMatchWindow ? "the `match` arm binding `" + f->alias + "` (line " + std::to_string(f->line) + ")"
+                             : "the `foreach` at line " + std::to_string(f->line);
+        unsupported(("the child `spawn`ed here reads `" + placeText(p) + "`, but " + by + " may write it while the child "
+                     "does, which would race. Spawn the child outside it, or hold `" + placeText(p) + "` there "
+                     "read-only").c_str(), line);
+        return true;
+    }
     if (f->fromChild) {
         unsupported(("`" + placeText(p) + "` is borrowed by the child `spawn`ed at line " + std::to_string(f->line)
                      + " until this `scope` joins it — the child reads it, so writing it here races with the "
@@ -33948,7 +33965,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                         viewRootPlaces(m->subject, roots);
                         for (auto& r : roots) {
                             Scope::FrozenPlace fz; fz.place = r; fz.alias = bn; fz.line = bnLine;
-                            fz.fromBorrow = false; fz.fromMatchWindow = true;
+                            fz.fromBorrow = false; fz.fromMatchWindow = true; fz.reads = isConstViewCType(bcty);
                             _scopes.back().frozen.push_back(fz);
                         }
                         armWindow = !roots.empty();
@@ -34002,7 +34019,7 @@ void CEmitter::emitMatchSwitch(MatchNode* m, const std::string* resultTemp, int 
                     borrowedHere.push_back(bn);            // all three retired with the arm
                     if (!inPlaceSubject.empty()) {
                         Scope::FrozenPlace fz; fz.place = inPlaceSubject; fz.alias = bn; fz.line = bnLine;
-                        fz.fromBorrow = false; fz.fromMatch = true;
+                        fz.fromBorrow = false; fz.fromMatch = true; fz.reads = true;
                         _scopes.back().frozen.push_back(fz);
                     }
                 }

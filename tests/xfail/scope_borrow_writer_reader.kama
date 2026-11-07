@@ -1,0 +1,14 @@
+// The writer first, then a reader (KR-288): the reader's own freeze check finds nothing, since a `ref` child holds
+// its place by the scope's disjointness list, not by a freeze — so this order is guarded by that list alone. Must fail.
+import { std::concurrent::Isolate };
+type value Acc implements Sendable { public int32 total; public ctor make() { this.total = 0; } }
+fn void read(const ref Acc a) { int32 t = a.total; }
+fn void bump(ref Acc a) { a.total = a.total + 1; }
+fn uint8 main() {
+    Acc a = Acc.make();
+    scope {
+        spawn bump(a: ref a);
+        spawn read(a: ref a);      // ERROR: reads what the first child writes
+    }
+    return 0;
+}

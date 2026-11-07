@@ -1,0 +1,12 @@
+// A reader inside a window that may write (KR-288): the scope body can write the elements through `v` while the child
+// reads them. A read-only window shares with a reader (tests/scope_shared_readers). Must fail, naming the window.
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::View };
+fn void count(const ref DynamicArray<int32> d) { isize n = d.length(); }
+fn uint8 main() {
+    DynamicArray<int32> d = DynamicArray::<int32>.empty();
+    d.add(item: 1);
+    borrow d.viewMut() as v {
+        scope { spawn count(d: ref d); }   // ERROR: `v` may write what the child reads
+    }
+    return 0;
+}

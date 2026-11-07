@@ -1,0 +1,14 @@
+// Readers share a place (KR-288), a writer does not: a child that may write a place another child reads would race
+// with it. Reader first, then the writer — tests/xfail/scope_borrow_writer_reader is the other order. Must fail.
+import { std::concurrent::Isolate };
+type value Acc implements Sendable { public int32 total; public ctor make() { this.total = 0; } }
+fn void read(const ref Acc a) { int32 t = a.total; }
+fn void bump(ref Acc a) { a.total = a.total + 1; }
+fn uint8 main() {
+    Acc a = Acc.make();
+    scope {
+        spawn read(a: ref a);
+        spawn bump(a: ref a);      // ERROR: writes what the first child reads
+    }
+    return 0;
+}

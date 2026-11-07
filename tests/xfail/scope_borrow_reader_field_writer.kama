@@ -1,0 +1,19 @@
+// A reader of the whole place beside a writer of one field of it (KR-288): `{w}` is a prefix of `{w, bodies}`, so the
+// reader reads what the writer writes. Two readers there share (tests/scope_shared_readers). Must fail.
+import { std::concurrent::Isolate };
+type value Acc implements Sendable { public int32 total; public ctor make() { this.total = 0; } }
+type value World implements Sendable {
+    public Acc bodies;
+    public Acc springs;
+    public ctor make() { this.bodies = Acc.make(); this.springs = Acc.make(); }
+}
+fn void look(const ref World w) { int32 t = w.bodies.total; }
+fn void step(ref Acc a) { a.total = a.total + 1; }
+fn uint8 main() {
+    World w = World.make();
+    scope {
+        spawn look(w: ref w);
+        spawn step(a: ref w.bodies);   // ERROR: writes a field the first child reads
+    }
+    return 0;
+}

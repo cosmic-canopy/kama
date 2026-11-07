@@ -1,0 +1,10 @@
+// A `const ref` bundle crosses an isolate too, so readers of it on several threads need its type `Sendable` (KR-288):
+// that gate is what answers a `const fn` writing a non-atomic `Shared` count. Must fail.
+import { std::concurrent::Isolate };
+type value Plain { public int32 n; public ctor make() { this.n = 1; } }
+fn void read(const ref Plain p) { int32 v = p.n; }
+fn uint8 main() {
+    Plain p = Plain.make();
+    scope { spawn read(p: ref p); spawn read(p: ref p); }   // ERROR: `Plain` does not declare `implements Sendable`
+    return 0;
+}

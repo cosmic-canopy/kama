@@ -2419,7 +2419,9 @@ private:
                    // KR-211: the borrows into `Shared` values this scope holds — each a `kama_ctrl_borrow_leave(…)`,
                    // run by emitScopeCleanup on every exit, after the locals.
                    std::vector<std::string> borrowLeaves;
-                   std::vector<std::vector<std::string>> borrowedPlaces;
+                   // `reads`: the child takes it `const ref`, so it may share the place with other readers (KR-288).
+                   struct BorrowedPlace { std::vector<std::string> place; bool reads; };
+                   std::vector<BorrowedPlace> borrowedPlaces;
                    // `borrow h.mint() as v { … }` — the host PLACE, frozen for the extent of the block.
                    // A view is live over that storage, so growing or reseating it would leave the alias
                    // dangling. Conflict is the same prefix test the rest of the model uses, which is what
@@ -2446,7 +2448,11 @@ private:
                                         bool fromMatchWindow = false;
                                         // A `borrow` of a PLACE (KR-123): the alias points at that place, it is no
                                         // view, so assigning to it writes through it rather than reseating it.
-                                        bool placeAlias = false; };
+                                        bool placeAlias = false;
+                                        // Its holder only reads the place — a `const ref` child, a window over a
+                                        // `ConstView`, a `foreach` that writes nothing — so a child that only reads
+                                        // it too shares it (KR-288).
+                                        bool reads = false; };
                    std::vector<FrozenPlace> frozen;
                    // A `borrow` whose host makes a view that closes its window (KR-226): the region its body is in the
                    // emitted C, between `/*kama:lw+N*/` and `/*kama:lw-N*/`. 0 for any other scope.
@@ -4375,7 +4381,8 @@ private:
     // Whether a write to `w` moves or frees storage a VIEW frozen at `f` reads: `w` covers `f`, or lies inside it by a
     // path with no element in it. An element written in place (`f` = {d}, `w` = {d, []}) moves no buffer.
     static bool writeHits(const std::vector<std::string>& f, const std::vector<std::string>& w);
-    const Scope::FrozenPlace* frozenWriteConflict(const std::vector<std::string>& w) const;
+    // `reader`: the access only reads, as a `const ref` child does, so a freeze whose holder only reads is no conflict.
+    const Scope::FrozenPlace* frozenWriteConflict(const std::vector<std::string>& w, bool reader = false) const;
     const std::vector<std::string>* frozenAliasRoot(const std::string& name) const;  // the place a `borrow` ALIAS views
     void viewRootPlaces(SharedExpression e, std::vector<std::vector<std::string>>& out);   // every place a VIEW may borrow
     std::set<std::string> byRefArgNames(InvocationNode* inv);   // a call's `ref`/`const ref`/`out` arguments, by name
@@ -4407,7 +4414,7 @@ private:
     int contractObjectDepth(SharedExpression e, const std::string& iface);   // where a contract value's object lives
     bool checkContractObject(const std::string& name, SharedExpression rhs, bool isStore, int line);   // true: a temporary, refused
     SharedIdentifier mintReturnTypeNode(SharedExpression host, std::map<std::string, SharedIdentifier>& localTys);
-    bool rejectFrozenWrite(SharedExpression target, int line);
+    bool rejectFrozenWrite(SharedExpression target, int line, bool reader = false);
     // Every PLACE a statement uses — `c`, `c.f`, a method's receiver, an element's container — at its widest
     // nameable extent, so a disjoint sibling field is told apart (see emitScope's child-borrow check).
     // `writesOnly`: just the places the statement WRITES — an assignment or `++`/`--` target, a non-`const fn`

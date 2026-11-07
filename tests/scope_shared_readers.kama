@@ -1,0 +1,66 @@
+// Children of one `scope` that only read may share a place (KR-288): the entry takes it `const ref`, and the spawn
+// passes it `ref`, as any call to that parameter does. `const` is deep, so nothing a reader calls writes the place,
+// and what a `const fn` may still write (a `Shared` count) is the bundle's `Sendable` gate, as for `parallel_for`.
+// A reader also passes a window or a loop that only reads. tests/xfail/scope_borrow_reader_* still race.
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::Map };
+
+type resource Store implements Sendable {
+    DynamicArray<int32> xs;
+    Map<string, int32> m;
+    string name;
+    public ctor make() {
+        this.xs = DynamicArray::<int32>.empty();
+        for (int32 i = 0; i < 2000; i = i + 1) { this.xs.add(item: i); }
+        this.m = Map::<string, int32>.empty();
+        for (int32 i = 0; i < 500; i = i + 1) { this.m.put(key: "k${i}", value: i); }
+        this.name = "a shared name long enough to be on the heap, not inline at all";
+    }
+    public const fn int64 total() {
+        int64 t = 0i64;
+        foreach (const ref int32 x in this.xs) { t = t + cast<int64>(x); }
+        for (int32 i = 0; i < 500; i = i + 1) {
+            match (this.m.get(key: "k${i}")) { case Some(value: v): { t = t + cast<int64>(v); } case None: { } };
+        }
+        foreach (const ref int32 v in this.m.valuesConst()) { t = t + cast<int64>(v); }
+        return t + cast<int64>(this.name.length());
+    }
+}
+
+type value Part implements Sendable { public int64 n = 7; public ctor make() { } }
+type value World implements Sendable {
+    public Part bodies;
+    public Part springs;
+    public ctor make() { this.bodies = Part.make(); this.springs = Part.make(); }
+}
+
+// Every pass must see what the first saw; a write racing the readers would show as a different total.
+fn void reader(const ref Store s) {
+    int64 first = s.total();
+    for (int32 r = 0; r < 50; r = r + 1) { if (s.total() != first) { panic(msg: "torn read"); } }
+}
+fn void readWorld(const ref World w) { if (w.bodies.n + w.springs.n != 14i64) { panic(msg: "torn world"); } }
+fn void readPart(const ref Part p) { if (p.n != 7i64) { panic(msg: "torn part"); } }
+fn void count(const ref DynamicArray<int32> d) { if (d.length() != 3) { panic(msg: "torn count"); } }
+
+fn uint8 main() {
+    Store s = Store.make();
+    World w = World.make();
+    DynamicArray<int32> d = DynamicArray::<int32>.empty();
+    d.add(item: 1); d.add(item: 2); d.add(item: 3);
+    int64 mine = 0i64;
+    scope {
+        spawn reader(s: ref s); spawn reader(s: ref s); spawn reader(s: ref s); spawn reader(s: ref s);
+        spawn readWorld(w: ref w);                 // the whole world...
+        spawn readPart(p: ref w.bodies);           // ...beside a reader of one field of it
+        mine = s.total();                          // the scope body reads beside them too
+    }
+    borrow d.view() as v {                         // a read-only window: a reader shares it
+        scope { spawn count(d: ref d); spawn count(d: ref d); }
+    }
+    foreach (const ref int32 e in d) {             // a loop that only reads: so does a reader
+        scope { spawn count(d: ref d); }
+    }
+    // 1999000 + 124750 + 124750 + 62: the array, the lookups, the values, the name.
+    if (mine != 2248562i64 || s.total() != mine) { return 1; }
+    return 42;
+}

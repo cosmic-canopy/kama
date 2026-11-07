@@ -2662,7 +2662,7 @@ compiler proving their access (reported 2026-11-04, each reproduced on `0.9.844`
 3. **No heap allocation per hand-out.** `parallel_for` under `@noheap` is refused ("heaps a per-worker argument bundle"), and the
    reporter wants allocation up front, with `@noheap` as the proof.
 
-And KR-288 (no shared read-only borrow across children), KR-313 (a `spawn` over several places) and KR-315 (parts chosen at run time)
+And children sharing a read-only borrow (shipped `0.9.858`), KR-313 (a `spawn` over several places) and KR-315 (parts chosen at run time)
 are the same design: what a child may borrow from a phase's data, and what proves it. **Not settled here:** when the reporter first
 needs the pool, which it leaves to a measurement, so it does not set the order on its own. How the job-entry rule identifies a job is
 this brief's as well, if `spawn job` survives.
@@ -2674,8 +2674,8 @@ this brief's as well, if `spawn job` survives.
 **Status: brief written 2026-11-04 on `0.9.845`, revised 2026-11-05 on `0.9.850`, measured on Windows 2026-11-05 on `0.9.852`. Ruled 2026-11-05: all 17 decisions as recommended below, each option named here refused.
 The game engine that asked audited it the same day, on `0.9.852`: nothing in it conflicts with a design the engine has decided, its answers to KR-326 and KR-327 are in those rows, and its needs are added to KR-320, KR-325, KR-298 and KR-79.** It answers what `s6-fibers` left to
 it, for
-step 9 (the job pool) and step 7 (the offload pool) together, with KR-288, KR-313 and KR-315. Everything marked *measured* comes from
-`bench/jobs/` and can be rerun, the compiler's half from `bench/jobs/probes/` (with the scratch patch for KR-288); results are in
+step 9 (the job pool) and step 7 (the offload pool) together, with readers sharing a `const ref`, KR-313 and KR-315. Everything marked *measured* comes from
+`bench/jobs/` and can be rerun, the compiler's half from `bench/jobs/probes/` (the readers' scratch patch landed in `0.9.858`); results are in
 `docs/benchmarks/jobs-*.tsv`. Everything else says *predicted*.
 
 **Revised 2026-11-05, after the maintainer asked whether this still fits a general-purpose language.** It did not, in three places,
@@ -3082,7 +3082,7 @@ inside an `@onPanic` region stays refused. Today that holds only because `parall
 a `longjmp` past the barrier would leave workers holding pointers into a dead frame. It goes on the region's walk, with an xfail.
 **Sacrifice:** none anyone had.
 
-**Decision 10 — KR-288, readers share.**
+**Decision 10 — readers share (shipped `0.9.858`).**
 
 | | what shares a read | what makes a type safe to |
 |---|---|---|
@@ -3095,7 +3095,7 @@ a `longjmp` past the barrier would leave workers holding pointers into a dead fr
 through `&` (`Cell`, `RefCell`). In kama `const` is deep: *measured*, a write through `const this` is refused, through an `Owned`,
 through a collection, and through a non-`const` method. The only safe interior mutability is `Atomic` and `Locked`, which are safe
 to share. And **`parallel_for` already rests on this:** *measured,* eight workers
-reading one captured `Sendable` resource through a `const fn` compile today and are TSan-clean. KR-288 adds no new exposure; it
+reading one captured `Sendable` resource through a `const fn` compile today and are TSan-clean. Readers sharing adds no new exposure; it
 removes an inconsistency.
 
 *Measured with a scratch compiler (the conflict test in `isolatePrep` reads the parameter's constness and a reader passes another
@@ -3107,7 +3107,9 @@ write in the scope body, and a type that is not `Sendable`. A scan of `lib/std` 
 unparsed: the signature says it, as a call's does. **Stated rule:** an `unsafe` body writing under a `const fn` of a `Sendable`
 type must make that write safe to race; `parallel_for` already asks that, unstated. **Sacrifice:** `ref` at the call site does not
 show that the child only reads.
-Size S. Consistent with practice.
+Size S. Consistent with practice. **Shipped `0.9.858`, one step wider than the patch:** a reader child passes every freeze
+whose holder only reads (another reader, a window over a `ConstView`, a `foreach` that writes nothing, a `match` arm reading
+in place), and one whose holder may write refuses it by name, where it had said "growing or reseating".
 
 **Decision 11 — KR-313, several places.** `spawn integrate(p: ref this.pos, v: ref this.vel, dt: dt);`. "One parameter because the
 bundle *is* the boundary" protects nothing for a borrow: `parallel_for` already passes every capture as its own `ref`, in a
@@ -3265,7 +3267,7 @@ Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202
 #### Build order, once ruled
 
 Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a measured gate against the arms above.
-1. KR-288 (S), then KR-313, each useful alone and neither needing a pool.
+1. KR-313, useful alone and needing no pool (readers sharing a `const ref` shipped in `0.9.858`).
 2. `Atomic.wait` and `notify`, then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
    proof and the `@onPanic` refusal.
 3. `spawn job`: four artifacts and the pins, the walk, statics, `@noparks fnptr`, a fiber's park at the brace; then decision 17's views; then `stack:`.
@@ -3454,29 +3456,6 @@ a protocol test with a bug would then hang its suite rather than fail it.
 sender on another isolate, a socket, a timer, a child process. A report is true only when none of those exists on any isolate,
 which is a whole-program question on a runtime that is per-isolate by design. KR-265's "every fiber is parked on something the
 scope owns" asks nearly the same thing of one scope, so the two want designing together.
-
-<a id="s6-shared-read-borrow"></a>
-
-### Children of one `scope` sharing a read-only borrow (KR-288)
-
-Reported 2026-11-02 by a game engine on kama; reproduced on `0.9.805`. `fn void reader(const ref DynamicArray<int32>
-c)`, spawned twice in one `scope` as `spawn reader(c: ref c)`, is refused: the two children borrow overlapping places,
-and the second spawn is reported as a write that races the first. That is SPEC's rule (*What a child may borrow*: the
-same local twice is refused), which treats every child borrow as mutable. `c: const ref c` does not parse. The only
-read-only sharing across tasks is `parallel_for (const ref T e in coll)`.
-
-Several systems reading one store at once is where an entity system's parallelism comes from; without it each
-parallel task must own a disjoint store, or copy. Rust's `std::thread::scope` shares a `&T` among any number of
-threads when `T: Sync`.
-
-**The verdict: scheduled, design first.** The questions: what makes a type safe to read from several tasks at once,
-since reading through `const ref` may still write (a `Shared<T>`'s count, a cache), and how `parallel_for`'s `const
-ref` already answers that is the first thing to read; the call-site spelling (`const ref c` at the `spawn`); and that
-the parent may not write the place until the scope joins, as with a mutable borrow.
-
-**Raised 2026-11-04,** as the largest share of the parallelism that proof refuses today, for KR-3's pool brief. Still refused on
-`0.9.844`, with a message to fix as this lands: the second error says "the child reads it, so writing it here races", where both
-children only read.
 
 <a id="s6-spawn-places"></a>
 

@@ -1392,8 +1392,12 @@ result_given_element	result_given_element.kama:3:33 result_given_element.kama:4:
 scope_borrow_element	scope_borrow_element.kama:20:0 scope_borrow_element.kama:20:8
 scope_borrow_escape	scope_borrow_escape.kama:27:12
 scope_borrow_nested_prefix	scope_borrow_nested_prefix.kama:26:8
+scope_borrow_reader_field_writer	scope_borrow_reader_field_writer.kama:16:8
+scope_borrow_reader_window	scope_borrow_reader_window.kama:9:16
+scope_borrow_reader_writer	scope_borrow_reader_writer.kama:11:8
 scope_borrow_same_root	scope_borrow_same_root.kama:25:8
 scope_borrow_through_shared	scope_borrow_through_shared.kama:29:0 scope_borrow_through_shared.kama:29:8 scope_borrow_through_shared.kama:30:0 scope_borrow_through_shared.kama:30:8
+scope_borrow_writer_reader	scope_borrow_writer_reader.kama:11:8
 scope_child_constref_write	scope_child_constref_write.kama:18:28
 scope_child_ref_use	scope_child_ref_use.kama:18:0
 scope_child_ref_whole	scope_child_ref_whole.kama:18:0
@@ -1415,6 +1419,7 @@ sendable_lie_shared_field	sendable_lie_shared_field.kama:7:0
 sendable_undeclared_channel	sendable_undeclared_channel.kama:7:12
 sendable_undeclared_field	sendable_undeclared_field.kama:6:0
 sendable_undeclared_spawn	sendable_undeclared_spawn.kama:10:0
+sendable_undeclared_spawn_ref	sendable_undeclared_spawn_ref.kama:8:0
 ser_bits_unknown	ser_bits_unknown.kama:6:24
 ser_deprecated_alone	ser_deprecated_alone.kama:4:27
 ser_deprecated_and_skip	ser_deprecated_and_skip.kama:4:40

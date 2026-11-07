@@ -7337,14 +7337,15 @@ comes back.
 | --- | --- | --- | --- |
 | a moved `resource` | the child, exclusively | unbounded | ownership transferred |
 | `ref T`, **disjoint** places | one child per place | the `scope` | no two children see the same bytes; the join orders the parent's read |
+| `const ref T`, the **same** place | every child that only reads it | the `scope` | `const` is deep, so nothing a reader can call writes it |
 | `ref Atomic<T>`, the **same** place | every child | the `scope` | atomic operations do not race |
 | `Shared<immutable T>` | every isolate | unbounded | nothing can change |
 | a copy of a `Locked<T>` handle | every isolate, one window at a time | unbounded | the value is reachable only inside a window that holds the lock |
 
-Rows 2 and 3 are what a `scope` licenses, and they are the reason it exists: its closing brace
+Rows 2 to 4 are what a `scope` licenses, and they are the reason it exists: its closing brace
 joins **every** child before any local declared in it drops, so a borrow provably cannot dangle,
 the child's writes are ordered against the parent's next read with no atomic at all, and the scope
-is the domain over which "no two children overlap" is decided. Rows 1 and 4 need no scope because
+is the domain over which "no two children overlap" is decided. Rows 1 and 5 need no scope because
 they are self-sufficient — one transfers exclusivity, the other removes writing from the picture.
 
 **The scope body is one more party.** It runs beside its children until the closing brace, so a place a
@@ -7360,6 +7361,10 @@ isolates would release one non-atomic control block.
 The same shape over a deeply-`immutable` payload is legal <!-- test: spawn_bundle_immutable --> —
 that is the case whose control block switches to an atomic refcount, and it is what lets many
 isolates share one large read-only asset with no copy.
+
+**An `unsafe` body that writes under a `const fn` of a `Sendable` type must make that write safe to race.** Readers on
+several isolates may call it at once — `const ref` children of one `scope`, and the workers of a
+`parallel_for (const ref …)` — and the compiler cannot see through `unsafe` to prove the write harmless.
 
 ### Channels ✅
 
@@ -7502,11 +7507,22 @@ they block the thread as before. Each is then a park, held to the same rule as a
 
 A child borrows a **place** — a local, or a chain of field names on one: `spawn step(a: ref w.bodies)`
 beside `spawn step(a: ref w.springs)` gives two children two disjoint fields of one world.
-<!-- test: scope_borrow_disjoint_fields --> Two children may not borrow **overlapping** places, and
-two places overlap exactly when one is a prefix of the other, so `ref w` beside `ref w.bodies` is
-refused <!-- xfail: scope_borrow_nested_prefix --> and so is the same local twice.
+<!-- test: scope_borrow_disjoint_fields --> Two children may not borrow **overlapping** places when
+either may write, and two places overlap exactly when one is a prefix of the other, so `ref w` beside `ref w.bodies`
+is refused <!-- xfail: scope_borrow_nested_prefix --> and so is the same local twice.
 <!-- xfail: scope_borrow_same_root --> An `Atomic<T>` is exempt — it is the sanctioned shared-mutable
 cell, so several children may share one.
+
+**Readers share.** Children whose entries take a place `const ref` may all hold it at once, and a reader of `w` may sit
+beside a reader of `w.bodies`. <!-- test: scope_shared_readers --> <!-- test: fiber_shared_readers --> The spawn still
+writes `ref`, as every call to a `const ref` parameter does; the signature says the child only reads. A writer beside a
+reader is refused in either order, <!-- xfail: scope_borrow_reader_writer --> <!-- xfail: scope_borrow_writer_reader -->
+and so is a writer of a field beside a reader of the whole. <!-- xfail: scope_borrow_reader_field_writer -->
+A reader also shares with a window or a loop that only reads, and is refused inside one that may write. <!-- xfail: scope_borrow_reader_window -->
+It is sound because `const` is deep: a write through `const this` or a `const ref`, to a collection's element too, is refused, <!-- xfail: const_this_write, const_ref_write, const_ref_index_write -->
+and the only safe interior mutability is `Atomic<T>` and `Locked<T>`, both safe to share. What a `const fn` may still
+write — a `Shared` count — is answered by the bundle's `Sendable` gate, which a `const ref` bundle meets too. <!-- xfail: sendable_undeclared_spawn_ref -->
+Rust needs a second trait for this (`Sync`), because its safe code can mutate through `&`; kama's cannot.
 
 This needs no lifetime analysis, and that is the point. A field's storage is **inside** its root's
 storage, so it is created and destroyed exactly with the root; bounding the root bounds the field.
