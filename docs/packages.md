@@ -43,8 +43,9 @@ myapp/
   README.md
 ```
 
+`kama.json`:
+
 ```json
-// kama.json
 {
   "name": "myapp",
   "version": "0.1.0",
@@ -133,8 +134,9 @@ A monorepo takes the member names from you rather than inventing a directory con
 ```sh
 kama seed acme --kind monorepo --members engine,server
 ```
+`acme/kama_workspace.json`, which lists the members and nothing else:
+
 ```json
-// acme/kama_workspace.json — the members, and nothing else
 {
   "projects": {
     "engine": { "optional": false },
@@ -377,15 +379,19 @@ which is what keeps every member *extractable*: it must build identically whethe
 are checked out. The workspace file is for tooling — the language server's rename scope, and
 `kama pkg install` across the repo — and never for what the compiler emits.
 
+`acme/kama_workspace.json`:
+
 ```json
-// acme/kama_workspace.json
 {
   "projects": {
-    "libs/*":        { "optional": false },   // the glob must match at least one project
-    "tools/codegen": { "optional": true  }    // absent is fine, contributes nothing
+    "libs/*":        { "optional": false },
+    "tools/codegen": { "optional": true  }
   }
 }
 ```
+
+The glob `libs/*` must match at least one project; `tools/codegen` is optional, so when it is absent it contributes
+nothing.
 
 ```
 acme/
@@ -447,8 +453,9 @@ A member should be **extractable**: liftable out of the monorepo to stand alone.
 declare every dependency it *imports*, not merely to be built alongside one that does. So a member
 declares its siblings the same way it declares anything else — as a path dependency:
 
+`libs/net/kama.json`, where `net` imports `config` and so declares it:
+
 ```json
-// libs/net/kama.json — net imports config, so net declares config
 {
   "name": "net",
   "version": "0.1.0",
@@ -520,8 +527,9 @@ kama pkg add kama.json mathx --url https://example.com/mathx-1.2.0.tar.gz
 kama pkg add kama.json utils --path ../utils        # a sibling checkout
 ```
 
+`kama.json`:
+
 ```json
-// kama.json
 {
   "name": "myapp",
   "version": "0.1.0",
