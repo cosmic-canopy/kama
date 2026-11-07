@@ -2604,6 +2604,18 @@ holds the edges. Indirect calls (a `fnptr`, a contract slot) bound only by their
 a contract slot. Unscoped: whether it is a property a program declares, a build report, or a target's default, wants
 KR-79's design pass first.
 
+**What others do.** GCC's `-fstack-usage` writes each function's frame, and `-fcallgraph-info=su` (GCC 10) writes the call
+graph beside it. Clang and emcc have `-fstack-usage`. A tool after the build sums the deepest path: GNATstack for Ada and C,
+`cargo-call-stack` for Rust (on nightly's `-Z emit-stack-sizes`). No mainstream compiler refuses a program whose bound
+exceeds the stack it was given.
+
+**Measured on the Mac, 2026-11-07:** both C compilers kama drives write the sizes, host clang and emcc 6.0.13 for wasm, into
+`<output>.su`. A `--release` wasm build of the same chain fails too, as `RuntimeError: memory access out of bounds`. At
+`-O2` a callee the C compiler inlines is counted in its caller's frame and again in its own, so a sum over kama's graph
+overcounts it: safe, but pessimistic. Two more questions for the design pass: how an inlined frame is counted (GCC's
+call-graph file says, and clang has none), and that a bound belongs to a build, not to the source, since the sizes change
+with target and optimization level.
+
 <a id="s6"></a>
 
 ## 6. Concurrency — what is left above the primitives
@@ -3350,6 +3362,116 @@ Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a meas
 5. Rerun `skew:12` with the burst offloaded, which closes KR-255, in its new shape: `scope { spawn job mix(b: ref buf, into: ref h); }`.
 6. Then step 7, 10, KR-297, KR-296, 11, as ruled. KR-296 inherits a constraint: a cancelled fiber still waits at its brace, since
    a job holds its frame.
+
+#### Step 2 begins: `Atomic.wait` and `notify`, rulings owed (written 2026-11-07)
+
+Decision 14 ruled where a sleeping thread's wait comes from:
+- the public `os_sync_wait_on_address`, weak-linked;
+- a condvar below macOS 14.4;
+- no `__ulock_*`.
+
+The surface itself was never designed. Five decisions, W1 to W5, follow. They were measured where they can be, by
+`bench/jobs/wait.c` on an Apple M4 with macOS 26.4: the median of nine interleaved rounds. Linux and Windows are not measured
+yet; the same file builds on Windows with `-lsynchronization`.
+
+What it is for, the pool's idle worker and its fork:
+
+```kama fragment
+Atomic<uint32> epoch = Atomic.make(value: 0u32);
+uint32 seen = epoch.load();
+seen = epoch.wait(whileEquals: seen);     // a worker with nothing queued sleeps until the epoch moves
+epoch.fetchAdd(delta: 1u32);              // a fork
+epoch.notifyAll();
+```
+
+| | wait | wake | timeout | cells | a green thread |
+|---|---|---|---|---|---|
+| C++20 `std::atomic` | `wait(old)`, no early return | `notify_one`, `notify_all` | none; P2643 proposes `try_wait_for` (adoption not confirmed here) | every `T`, through a proxy word where the OS cannot wait | — |
+| Rust | none in std; the `atomic-wait` crate's `wait(&AtomicU32, u32)` may return early | `wake_one`, `wake_all` | none | 32-bit | — |
+| Zig `std.Thread.Futex` | `wait(ptr, expect)`, may return early | `wake(ptr, max)` | `timedWait` | 32-bit | — |
+| JavaScript `Atomics` | `wait(ta, i, v, t)` answers `"ok"`, `"not-equal"` or `"timed-out"`; refused on a browser's main thread | `notify(ta, i, count)` | yes | 32 and 64-bit | — |
+| Go | none on atomics | — | — | — | the runtime parks goroutines in a semaphore table keyed by address |
+| Java, Swift | none on atomics; Java parks a thread with `LockSupport.park` | — | — | — | — |
+
+**W1: the surface.** Recommended:
+
+```kama fragment
+public fn T wait(T whileEquals)                                    // the first other value it loads; never early
+public fn Optional<T> waitTimeout(T whileEquals, Duration timeout)  // None when the time passed first
+public fn void notifyOne()
+public fn void notifyAll()
+```
+
+- An early wake stays inside, as in C++, so a caller writes no loop.
+- The value seen is returned, which saves the reload every caller makes. libstdc++'s comments say C++26's timed waits will do
+  the same.
+- `waitTimeout` follows `recvTimeout`.
+- There is **no `waitExplicit`**. The load that ends a wait is one instruction under either order: on Apple's arm64 it is `ldar`
+  seq-cst and `ldapr` acquire, and on x86-64 a plain `mov` for both (compiled 2026-11-07). A weaker order would save one load's
+  ordering next to a 1.8 µs sleep, which is inferred, not measured.
+
+**Sacrifice:** two waits where C++20 has one. **Option: no timeout, as C++20. Sacrifice:** a worker with a deadline, or a
+watchdog, writes a sleep loop.
+
+**W2: every `Atomic<T>`, compared bitwise as `compareExchange` is.** That is the integers, `bool`, the floats and
+`UnsafePtr`. The OS can wait on 4 bytes on Linux, 4 or 8 on Apple and wasm, and 1 to 8 on Windows. W3 makes the width
+irrelevant, since no waiter sleeps on the cell. **Option: 32-bit cells only, refused at the call as `fetchAdd` is on a
+`bool`,** as Zig, Rust's crate and the futex do. **Sacrifice:** a `bool` flag or a 64-bit counter cannot be waited on, and a
+limit of one platform becomes a limit of the language.
+
+**W3: a waiter sleeps in one table keyed by the cell's address, never on the cell.** Every waiter, thread or fiber, queues in
+a bucket of a fixed table and sleeps on its own word. A notify reads the bucket's waiter count and stops there when it is zero.
+The table is 256 buckets of one cache line each, 16 KiB of zeroed static storage, linked only into a program that waits.
+
+| measured, ns | a notify nobody waits on | a round trip: two sleeps, two wakes |
+|---|---|---|
+| the OS's wake on the cell, every time | 94.7 | 1,807 |
+| the cell, plus a waiter count per bucket: libstdc++ and libc++ | 0.9 | 1,830 |
+| **the table** (Go's semaphore table, WebKit's ParkingLot, Rust's `parking_lot`) | **1.1** | **1,857** |
+| the table, each thread asleep on its own condvar: the fallback below macOS 14.4 | 1.1 | 2,005 |
+
+Parity with C++'s design: 0.2 ns on an idle notify, and 1.5% on a round trip. Without the count, every idle notify is a
+system call, which is why `pool.c` carries a `WAITER` bit of its own.
+
+One mechanism answers four needs:
+- a fiber (W4);
+- every width (W2);
+- macOS before 14.4: the word a thread sleeps on becomes its own condvar, 8% slower here. That was measured on 26.4; 14.0 to
+  14.3 themselves are not measured.
+- no private symbol.
+
+**This refines decision 14 and does not reverse it.** The weak-linked `os_sync_wait_on_address` and the condvar beneath it
+are still the two ways a thread sleeps. What changes is that the thread sleeps on its own word rather than the cell, and the
+condvar is the thread's own rather than a hashed one.
+
+**Option: wait on the cell where the OS can, use a proxy word elsewhere, and keep a separate list for fibers. Sacrifice:**
+three paths, each with its own tests, to win 1.5%.
+
+**W4: on a fiber, `wait` parks the fiber.** On an isolate that runs fibers, the waiter record holds the fiber, on the fiber's
+stack, and `notify` wakes it with `kama_sched_wake` from any isolate. That is the channel's design (KR-3 step 6), with the
+cell's address as the queue. Without it, a fiber waiting on a cell its sibling sets hangs the thread, since the sibling never
+runs. Go parks every wait. **Sacrifice:** a notify that finds a fiber pays the scheduler's remote wake.
+
+**W5: what the walks make of it.**
+- `wait` is marked `@parks` at its seam, as every std wait is, so a lock window refuses it, as it refuses `recv`.
+- It is a switch on a fiber (W4), so the park rule sees it.
+- To decision 5's job walk it is a **task wait**, since only another task changes the cell, so a job that reaches it is
+  refused, as `recv` is. `notify` waits on nothing.
+- `@noheap` holds: the table is static, and a waiter record is on the waiter's stack or its thread's.
+- **Open:** a program that can never wake a sleeper. That is wasm with no thread spawned, so no shared memory, and a
+  bare-metal target. The recommendation is to panic, *"nothing in this program can change it"*, rather than hang; bare metal
+  waits on WFE once KR-233 lands.
+- **Stated residual:** on a browser's main thread, which may not block, emscripten's futex spins instead of sleeping.
+
+**Audit against GOALS.**
+- **#3:** nothing new is shared; `Atomic` stays the one shared mutable cell, and W4 closes a hang.
+- **#4:** one wait and one timed wait, with no ordering twin and no loop at the call. KR-325's `Once`, `Semaphore` and
+  `Barrier` become kama code over it instead of three C seams.
+- **#5:** a wait names what it waits on, and returns what ended it.
+
+The production answer is C++'s surface over Go's mechanism. **Size M:** the header, the seam in
+`lib/std/concurrent/atomic.kama`, and fixtures on threads, fibers, the four widths, the floats, the timeout, the lock-window
+xfail, a single-thread panic, TSan, and a build at the 14.0 deployment target proving the weak link.
 
 <a id="s6-thread-control"></a>
 
