@@ -186,7 +186,10 @@ cxxreject MACOS   "-static-libgcc" "macOS has no libgcc_s to link and does not s
 reject    WINDOWS "-static-libgcc" "a C-only program links no C++ runtime to make static"
 
 # 2c. WASM THREADS ARE A HOSTING MODEL, not a link flag: `-pthread` + PROXY_TO_PTHREAD run `main` on a worker
-#     and need a SharedArrayBuffer, whose COOP/COEP headers break a cross-origin WebSocket. So a browser build
+#     and need a SharedArrayBuffer, so the page must be cross-origin isolated (COOP + COEP headers). That costs
+#     the page its cross-origin `no-cors` loads without a CORP header (an image, a script without `crossorigin`;
+#     COEP `credentialless` lifts it outside Safari), its cross-origin iframes and `window.opener` to another
+#     origin — not a WebSocket, which Fetch never puts through the CORP check. So a browser build
 #     is threaded only when the program CREATES a thread (`spawn`/`isolate`/`parallel_for`) — never because it
 #     imported `std::concurrent::Atomic`, whose module also carries `Isolate` (that one import
 #     made a WebGPU client die four layers away, reading `getContext` on a worker with no `document`).
