@@ -1,0 +1,4 @@
+// A listed module whose files declare no `World` — a generated module gone stale — is named as the import spells it,
+// `game::gen`: up to 0.9.867 this said "module `game.gen` does not export `World`", a spelling kama uses nowhere else.
+import { game::gen::World };
+fn uint8 main() { World w = World.of(n: 2); return cast<uint8>(w.n); }

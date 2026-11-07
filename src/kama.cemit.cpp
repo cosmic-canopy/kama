@@ -47513,7 +47513,13 @@ void CEmitter::collectProgram(const std::vector<SharedCompilationUnit>& userUnit
                                      "too, because a loose build compiles only the files it is given").c_str(),
                                     imp);
                     else
-                        unsupported(("module `" + path + "` does not export `" + n + "`").c_str(), imp);
+                    {
+                        // As the import spells it, `game::gen`: `path` is the dotted key the lookups above take, and
+                        // up to 0.9.867 this said "module `game.gen`", a spelling kama writes nowhere else.
+                        std::string shown = path;
+                        for (size_t p; (p = shown.find('.')) != std::string::npos; ) shown.replace(p, 1, "::");
+                        unsupported(("module `" + shown + "` does not export `" + n + "`").c_str(), imp);
+                    }
                 }
                 // The module-qualified name the export check just built IS the resolved key the symbol's
                 // def-site is registered under; an alias (`X as Y`) still refers to X, which is what

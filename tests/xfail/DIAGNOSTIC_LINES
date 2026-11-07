@@ -751,6 +751,7 @@ import_alias_shadows_project	import_alias_shadows_project.kama:6:9
 import_empty_braces	import_empty_braces.kama:3:9
 import_gated_out	main.kama:5:9
 import_loose_root	app.kama:1:9 app.kama:2:25
+import_missing_symbol_module	main.kama:3:9 main.kama:4:18 main.kama:4:28
 import_module_private	b.kama:1:9 b.kama:2:24
 import_name_unloaded	b.kama:2:9
 import_named_iter_unimported	import_named_iter_unimported.kama:6:4
