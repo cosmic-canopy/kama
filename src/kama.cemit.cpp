@@ -7263,27 +7263,6 @@ int CEmitter::findScopeBinding(const std::string& name)
 // Does `s` hold a bare `spawn fiber` that is a child of the scope being entered: anywhere in its body, loops and
 // branches included (decision 10), but not inside a nested `scope`, which owns its own, or an outlined `parallel_*`
 // body, which has none.
-bool CEmitter::hasFiberChild(const SharedStatement& s) const
-{
-    if (!s) return false;
-    ASTNode* n = s.get();
-    if (auto* iso = dynamic_cast<IsolateNode*>(n)) return iso->fiber;
-    if (dynamic_cast<ScopeNode*>(n) || dynamic_cast<ParallelForNode*>(n)) return false;
-    if (auto* b = dynamic_cast<BlockNode*>(n)) {
-        if (b->statements) for (auto& st : *b->statements) if (hasFiberChild(st)) return true;
-        return false;
-    }
-    if (auto* f = dynamic_cast<IfNode*>(n)) return hasFiberChild(f->ifStatement) || hasFiberChild(f->elseStatement);
-    if (auto* w = dynamic_cast<WhileNode*>(n)) return hasFiberChild(w->whileStatement);
-    if (auto* dw = dynamic_cast<DoWhileNode*>(n)) return hasFiberChild(dw->doWhileStatement);
-    if (auto* fr = dynamic_cast<ForNode*>(n)) return hasFiberChild(fr->body);
-    if (auto* fe = dynamic_cast<ForEachNode*>(n)) return hasFiberChild(fe->body);
-    if (auto* bn = dynamic_cast<BorrowNode*>(n)) return hasFiberChild(bn->body);
-    if (auto* m = dynamic_cast<MatchNode*>(n))
-        if (m->arms) for (auto& a : *m->arms) if (a && a->block && hasFiberChild(a->block)) return true;
-    return false;
-}
-
 // `scope { ... }` — structured concurrency (M4). Lowered like emitBlockScoped, but the scope is a TASK
 // scope: bare `spawn`s inside register their `kama_isolate_t` handles here, and emitScopeCleanup joins
 // them ALL before dropping any local (the join-before-drop barrier). A `scope` introduces exactly one
@@ -7295,7 +7274,7 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
     Scope s; s.isTaskScope = true;
     // Its fiber children are a runtime list, declared before the body: a `return` written ahead of a `spawn fiber` in a
     // loop must still wait for the fibers an earlier pass started.
-    if (hasFiberChild(sc->body)) s.fiberScope = "kama_kama_fs" + std::to_string(_tempCounter++);
+    if (_fiberScopes.count(sc)) s.fiberScope = "kama_kama_fs" + std::to_string(_tempCounter++);
     _scopes.push_back(s);
 
     *_out << "{\n";
@@ -17140,12 +17119,19 @@ void CEmitter::scanStmtForCollections(SharedStatement s)
         scanExprForCollections(pf->expression);
         scanExprForCollections(pf->workers);   // the clauses are expressions too
         scanExprForCollections(pf->stack);
+        _scanTaskScopes.push_back(nullptr);
         scanStmtForCollections(pf->body);
+        _scanTaskScopes.pop_back();
     } else if (auto* bn = dynamic_cast<BorrowNode*>(n)) {
         if (bn->bindings) for (auto& b : *bn->bindings) if (b) scanExprForCollections(b->host);
         scanStmtForCollections(bn->body);
     } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {   // a `scope { … }` is a block that joins at its brace
+        _scanTaskScopes.push_back(sc);
         scanStmtForCollections(sc->body);
+        _scanTaskScopes.pop_back();
+    } else if (auto* iso = dynamic_cast<IsolateNode*>(n)) {   // a bare `spawn`: a statement, where a held one is a value
+        if (iso->fiber && !_scanTaskScopes.empty() && _scanTaskScopes.back()) _fiberScopes.insert(_scanTaskScopes.back());
+        scanExprForCollections(std::dynamic_pointer_cast<ExpressionNode>(s));
     } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
         scanExprForCollections(std::dynamic_pointer_cast<ExpressionNode>(s));
     }
@@ -18466,7 +18452,7 @@ void CEmitter::scanStmtForGenerics(SharedStatement s, std::map<std::string, Shar
         scanStmtForGenerics(bn->body, bodyTys);
     } else if (auto* sc = dynamic_cast<ScopeNode*>(n)) {   // a `scope { … }` is a block that joins at its brace
         scanStmtForGenerics(sc->body, localTys);
-    } else if (dynamic_cast<ExpressionStatementNode*>(n)) {
+    } else if (dynamic_cast<IsolateNode*>(n) || dynamic_cast<ExpressionStatementNode*>(n)) {   // as the other walk
         scanExprForGenerics(std::dynamic_pointer_cast<ExpressionNode>(s), localTys);
     }
 }

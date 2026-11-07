@@ -1,0 +1,27 @@
+// A bare `spawn fiber` may sit anywhere in its `scope`'s body, an arm of a `match` EXPRESSION included. Until `0.9.859`
+// only statements were searched for one, so the scope declared no fiber list and the spawn was refused as "not inside
+// a `scope`": in an initializer, an assignment and a `return` alike.
+import { std::concurrent::Fiber, std::concurrent::Atomic };
+type enum Res { Ok(int64 value), Err(int32 code) }
+fn void add(ref Atomic<int64> into, int64 by) { into.fetchAdd(delta: by); }
+
+fn int64 inReturn(ref Atomic<int64> total) {
+    Res r = Res::Ok(value: 4i64);
+    scope {
+        return match (r) { case Ok(value: v): { spawn fiber add(into: ref total, by: v); := v; } case Err(code: c): 0i64; };
+    }
+}
+
+fn uint8 main() {
+    Atomic<int64> total = Atomic.make(value: 0i64);
+    Res r = Res::Ok(value: 10i64);
+    int64 got = 0i64;
+    scope {
+        int64 k = match (r) { case Ok(value: v): { spawn fiber add(into: ref total, by: v); := v; } case Err(code: c): 0i64; };
+        got = match (r) { case Ok(value: v): { spawn fiber add(into: ref total, by: v * 2i64); := v + k; } case Err(code: c): 0i64; };
+    }
+    int64 ret = inReturn(total: ref total);
+    if (got != 20i64 || ret != 4i64) { return 1; }
+    if (total.load() != 34i64) { return 2; }   // 10 + 20 + 4: every fiber ran before its scope closed
+    return 42;
+}

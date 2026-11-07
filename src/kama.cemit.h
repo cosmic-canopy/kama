@@ -2737,6 +2737,11 @@ private:
     // ClassInfo + CollectionInfo for each, and emit the C-template macro lines.
     void collectCollections(SharedCompilationUnit unit);
     void scanStmtForCollections(SharedStatement s);
+    // The scopes a bare `spawn fiber` belongs to, found by that walk because it reaches every statement, one in a `match`
+    // EXPRESSION's arm included: emitScope declares their fiber list before the body. The walk's enclosing scopes,
+    // innermost last; null for a `parallel_for` body, whose spawns no outer scope owns.
+    std::set<const ScopeNode*> _fiberScopes;
+    std::vector<const ScopeNode*> _scanTaskScopes;
     void scanExprForCollections(SharedExpression e);
     void scanTypeForCollections(SharedIdentifier t);
     bool isCollectionType(SharedIdentifier t) const;
@@ -3995,7 +4000,6 @@ private:
     std::map<std::string, FuncSig> _instSigs;   // a generic instance a `spawn` starts -> its signature (spawnEntry)
     void emitFiber(IsolateNode* iso, int depth);     // `spawn fiber work(job: give j);` — a child of its `scope`
     std::string emitFiberExpr(IsolateNode* iso);     // `Fiber<R> f = spawn fiber work(…);` — the held form
-    bool hasFiberChild(const SharedStatement& s) const;   // a bare `spawn fiber` the scope being entered owns
     bool spawnArgReads(IsolateNode* iso, const ArgumentNode* a);   // that argument's parameter is a `const ref`
     void emitScope(ScopeNode* sc, int depth);        // `scope { }` — structured concurrency + join barrier (M4)
     void emitBorrow(BorrowNode* bn, int depth);      // `borrow h as v { }` — the lexical window a view is minted into

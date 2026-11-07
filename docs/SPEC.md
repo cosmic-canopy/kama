@@ -7502,7 +7502,7 @@ So a scope's isolates are exactly the `spawn`s written in it, and can be counted
 block. That matches the coarse-isolate model above: roughly one isolate per core, not one per work
 item. A conditional child puts the `if` *outside* the scope <!-- test: scope_spawn_conditional -->,
 and per-item work over a container is `parallel_for`. A **fiber** child, `spawn fiber work(job: give j);`, is the
-one exception: it may sit anywhere in its scope's body, loops included, because the scope keeps a runtime list of <!-- test: fiber_scope_basic, fiber_spawn_loop -->
+one exception: it may sit anywhere in its scope's body, loops and a `match` expression's arms included, because the scope keeps a runtime list of <!-- test: fiber_scope_basic, fiber_spawn_loop, fiber_spawn_in_match_expr -->
 its live fibers and its closing brace waits for the list to empty (KR-3, being built: `docs/design/fibers.md`). That
 wait is a park, so a scope with fibers may not close inside a window over `Shared` storage (*Smart pointers*, the
 access model's **Fibers** item).
