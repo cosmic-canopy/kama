@@ -1850,6 +1850,24 @@ open question is the dialect: comments only (the smallest, and all the report as
 hand-editing invites, or full JSON5. Writing keeps emitting strict JSON either way. Wanted by the owner beside the
 `kama.json` ruling.
 
+<a id="s4-fixed-array-serde"></a>
+
+### A fixed-size array in a record (KR-342)
+
+**Measured `0.9.871`:** a `@generate(Serializable, Deserializable)` record with an `InlineArray<Vec3>#(3)` field is refused at
+the field, "`InlineArray` has none", in both directions, and `FixedArray<T, A>` writes a JSON array but has no `deserialize`
+(its own note: the length is unknown until read, and moving a temporary's buffer in needs a buffer-steal ctor). Found
+deriving serde for `std::math` (`0.9.872`): the vectors and `Quat` derive, but `Mat2/3/4` hold their columns in an
+`InlineArray` and cannot, and neither can any record holding a fixed array, such as KR-329's `Clip { InlineArray<float32>#(64)
+keys }`. `InlineDynamicArray<T>#(N)` already reads and writes, failing `TooMany` past `N` (since `0.9.856`).
+
+**The shape:** an `InlineArray<T>#(N)` is a JSON array of exactly `N`, written and read element by element through `T`'s
+own serde, so a matrix reads as `{"cols": [{"x":1,…}, …]}`. `InlineArray` is a compiler intrinsic with no kama body, so the
+compiler writes its serde per instantiation, as it writes a record's. **The design question:** what a short array reports.
+`TooMany` exists for a long one; a short one is either a new kind (`TooFew`, "expected 3 elements at `m.cols`, got 2"), or a
+`MissingField` naming the first absent index (`m.cols[2]`), which needs no new kind and says where. And whether a merge
+may write a prefix. `FixedArray`'s read lands with it, since the length question is the same.
+
 <a id="s4-view-deserialize"></a>
 
 ### Zero-copy deserialization into a view struct (KR-231)
@@ -1986,7 +2004,7 @@ ever arise in the sequence containers and `Map`/`SortedMap`/`SlotMap` values.
 Serialization ships today (by-value + object-graph + polymorphic contracts) with **two backends — `json` (text)
 and `binary` (KBIN)** — see [SPEC.md](SPEC.md) "Serialization". What remains is additive library + hardening:
 
-- **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T>#(N)` read; a bare `serializeJsonBuffer`/`deserializeJsonBuffer` of an
+- **Deserialize breadth** — `FixedArray<E>`/`InlineArray<T>#(N)` read, now its own row, KR-342; a bare `serializeJsonBuffer`/`deserializeJsonBuffer` of an
   intrinsic value. (A `const` field is a separate general language gap — doesn't parse today.)
   ✅ The enum half of this bullet SHIPPED with the derives: a bare `serializeJsonBuffer`/`deserializeJsonBuffer` of an enum value works
   (the cause was the missing `<Enum>__as_Serializable` vtbl, not a missing wire form), and so do
@@ -2676,6 +2694,24 @@ exceeds the stack it was given.
 overcounts it: safe, but pessimistic. Two more questions for the design pass: how an inlined frame is counted (GCC's
 call-graph file says, and clang has none), and that a bound belongs to a build, not to the source, since the sizes change
 with target and optimization level.
+
+<a id="s5-math-float64"></a>
+
+### `float64` vectors, quaternion and matrices (KR-343)
+
+`std::math`'s linear algebra is `float32` only (`vec.kama` opens "Float32 vectors"), while the scalar surface takes both
+widths through `Real<T>` (`scalar.kama`: "One name per operation, at both float widths"). A game engine on kama asked, and
+does not need them itself: its positions are a zone and a `float32` offset, so every system stays in `float32`. Its owner's
+question was whether this is a kama gap at all. **It is, for a general-purpose language:** a double-precision physics
+backend, a CAD or GIS tool, astronomy, or any world kept in absolute coordinates needs `float64` vectors, and every maths
+library compared has both widths: glam (`Vec3`/`DVec3`), Unity.Mathematics (`float3`/`double3`), GLM (`vec3`/`dvec3`), DirectXMath
+and Eigen (`Vector3f`/`Vector3d`). Not blocking anyone today.
+
+**The design question:** separate types (`DVec3`, `DQuat`, `DMat4`), which is what the others do and costs a second copy of
+every method, or one generic `Vec3<T: Real<T> = float32>`, which kama can say (a contract bound and a default type parameter)
+and which keeps `Vec3` meaning what it means now: one name per operation at both widths, as the scalars already have it.
+Measure first whether the generic instance compiles to the same code as today's `float32` type (`Real<T>`'s adapters are
+inlined calls), and what it does to error messages and `kama query`'s signatures. Verdict: scheduled, design first.
 
 <a id="s6"></a>
 
