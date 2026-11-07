@@ -43,7 +43,7 @@ static void os_wake(_Atomic uint32_t* a, int all) {
     else os_sync_wake_by_address_any((void*)a, 4, OS_SYNC_WAKE_BY_ADDRESS_NONE);
 }
 #elif defined(_WIN32)
-#include <windows.h>   // link with -lsynchronization
+#include <windows.h>   // link with -lsynchronization (the SDK) or -lapi-ms-win-core-synch-l1-2-0 (mingw-w64, zig)
 static void os_wait(_Atomic uint32_t* a, uint32_t v) { WaitOnAddress((volatile void*)a, &v, sizeof v, INFINITE); }
 static void os_wake(_Atomic uint32_t* a, int all) { if (all) WakeByAddressAll((void*)a); else WakeByAddressSingle((void*)a); }
 #else

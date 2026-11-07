@@ -3417,7 +3417,7 @@ Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202
 
 Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a measured gate against the arms above.
 1. Done: readers sharing a `const ref` (`0.9.858`) and a `spawn` over several places (`0.9.859`), each useful alone.
-2. `Atomic.wait` and `notify`, then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
+2. Done: `Atomic.wait` and `notify` (`0.9.871`). Next, the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
    proof and the `@onPanic` refusal.
 3. `spawn job`: four artifacts and the pins, the walk, statics, `@noparks fnptr`, a fiber's park at the brace; then decision 17's views; then `stack:`.
 4. KR-298; KR-315's element places; the held `Job<R>`.
@@ -3437,7 +3437,7 @@ before the ruling changed four of them, and each correction is stated where it l
 
 Measured by `bench/jobs/wait.c` and `bench/jobs/wait_cxx.cpp` (the C++ library as shipped) on an Apple M4 with macOS 26.4:
 the median of 7 to 9 interleaved rounds. Linux and Windows are not measured yet; both files build on Windows, `wait.c`
-with `-lsynchronization`.
+with `-lapi-ms-win-core-synch-l1-2-0` under zig.
 
 | arm, ns | a notify nobody waits on | a hand-off: a round trip, both threads awake | CPU beyond the table's on a 50 µs wait |
 |---|---|---|---|
@@ -3605,6 +3605,58 @@ and Windows. **Size M:**
 - the lock-window xfail;
 - checks for the panic on wasm without threads, the bare-metal poll, and the weak link at the 14.0 deployment target;
 - TSan, and a measured gate of the kama build against `wait_cxx.cpp`.
+
+**Built in `0.9.871`; the gate, measured 2026-11-07.** `bench/jobs/wait_kama.kama` was run against `wait_cxx.cpp` and
+`wait.c`'s `spin1000` and `table` arms on the M4, `--release` and `-O2`. Each figure is the median of nine interleaved rounds:
+200,000 hand-offs, 20,000,000 idle notifies and 4,000 slow waits a round. CPU is from the children's rusage.
+
+| | a hand-off, ns | an idle notify, ns | CPU per 50 µs wait, ns |
+|---|---|---|---|
+| **kama `Atomic.wait`** | **61.8** | **0.4** | **53,349** |
+| libc++'s `atomic::wait` | 65.7 | 3.3 | 61,730 |
+| the C model, `spin1000` | 57.7 | 1.2 | 53,485 |
+| the C model, no spin | 1,840 | 1.2 | 51,679 |
+
+Against libc++, kama is at parity or better on all three:
+- a hand-off 6% faster;
+- an idle notify at an eighth of the cost. It inlines into the caller, which the C arms' function pointers prevent;
+- 8.4 µs less CPU on every wait that sleeps.
+
+The hand-off is 7% behind the C model of the same table and poll; why is not measured. An
+earlier run on the build before the rebase measured 65.9, 74.1 and 62.7 ns for the first three rows: this box drifts,
+so only the interleaved comparison within one run is the claim. Linux and Windows are not measured yet. For Windows,
+`wait.c` links under zig with `-lapi-ms-win-core-synch-l1-2-0` (measured); `-lsynchronization`, the Windows SDK's name,
+does not link there.
+
+What building it found, against the ruling above:
+- **A bare-metal build cannot import `std::concurrent` at all.** That is filed as KR-341. Since `waitUntil` takes an
+  `Instant`, every program importing `Atomic` also compiles `std::time`'s units. That is a few units more for a hosted
+  build, and on bare metal it is the second half of KR-341. `kama_wait.h` itself reads no libc header beyond the
+  clock's, and compares a cell by its width rather than calling `memcmp`. `check-embedded.sh` compiles it alone with the
+  embedded flags, so it references nothing but `clock_gettime`.
+- **`WaitOnAddress` is looked up, not linked.** The first build linked `synchronization` into every Windows program, and
+  `check-target` and `check-windows-trims` failed: mingw-w64's kernel32 leaves the three functions out "for
+  compatibility with older versions of Windows", and zig's mingw-w64 has no `synchronization` import library. They are
+  resolved once from `api-ms-win-core-synch-l1-2-0.dll` through `GetModuleHandleW` and `GetProcAddress`, as libc++ and
+  Microsoft's STL resolve them. A Windows build imports neither (measured on x64 and arm64 builds through zig). That the
+  lookup succeeds at run time is for CI's Windows leg to show.
+- **The table is 32 KiB on glibc's arm64,** whose mutex is 48 B and takes a bucket past one cache line. It is 16 KiB
+  everywhere else.
+- **The scheduler's park hooks are shared now.** The channel's `kama__channel_here`, `self`, `by`, `switch` and `wake` are
+  `kama__park_*`, defined once in `kama_sched.h` for whichever of `kama_channel.h` and `kama_wait.h` asks.
+- **A `notify` stays legal in a lock window.** Its bucket lock is a leaf, never held while another is taken, and
+  `atomic_wait_threads` notifies from one. A `wait` is refused there (`xfail/atomic_wait_in_lock_window`).
+- **Mutations.** Five were caught:
+  - the count before the second look, which hangs the ping-pong;
+  - the fiber path, which hangs `fiber_atomic_wait`;
+  - a compare by value, which `atomic_wait_float_bits` answers wrongly;
+  - `@parks`, without which the xfail compiles;
+  - the deadline's path, which hangs both deadline fixtures.
+
+  One was not: the notify's fence, which survived three runs. With the poll, a hand-off rarely reaches the queue. arm64
+  lets a store pass a later load of another address, as x86's store buffer does, and that reorder is the lost wake the
+  fence prevents, but three runs on the M4 never showed it. TSan does not model fences, so no leg here can catch it.
+  The fence is what the C11 model requires. **Stated residual.**
 
 <a id="s6-thread-control"></a>
 

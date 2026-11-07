@@ -1,0 +1,70 @@
+// wait_kama.kama — `Atomic.wait` and `notifyOne` as shipped (KR-3 step 2), in wait.c's shapes: the measured gate against
+// wait_cxx.cpp (the C++ library) and wait.c's `spin1000` arm (the C model of the same table and poll).
+//
+//   pingpong  two threads hand a count back and forth over two cells: a round trip per op.
+//   slow      the same, the ponger busy for 50 µs before each answer, so every wait is a long one (compare CPU with
+//             `/usr/bin/time`, or getrusage in the C arms; this arm prints wall time only).
+//   idle      one thread notifies a cell nobody waits on: what a notify costs when every worker is busy.
+//
+// Usage: WAIT_SHAPE=pingpong|slow|idle WAIT_N=<ops> ./wait_kama
+// Prints the same first four TSV columns as wait.c: arm, shape, ops, ns per op. Run it interleaved with the others.
+import { core::envOr, core::println,
+    std::concurrent::Atomic,
+    std::time::Duration,
+    std::time::Instant,
+    std::time::monotonicNow,
+};
+
+fn int64 parseInt(const ref string s) {
+    int64 v = 0;
+    for (isize i = 0; i < s.length(); i = i + 1) {
+        int64 c = cast<int64>(s[i]);
+        if (c < 48 || c > 57) { return 0; }
+        v = v * 10 + c - 48;
+    }
+    return v;
+}
+
+fn void ponger(ref Atomic<uint32> ping, ref Atomic<uint32> pong, uint32 rounds, bool slow) {
+    uint32 i = 0;
+    while (i < rounds) {
+        _ = ping.wait(whileEquals: i);
+        if (slow) {
+            Instant t = monotonicNow();
+            while (t.elapsed() < Duration.fromMicros(us: 50)) { }
+        }
+        pong.store(value: i + 1);
+        pong.notifyOne();
+        i = i + 1;
+    }
+}
+
+fn uint8 main() {
+    string shape = envOr(name: "WAIT_SHAPE", dflt: "pingpong");
+    int64 n = parseInt(s: envOr(name: "WAIT_N", dflt: "20000"));
+    uint32 rounds = cast<uint32>(n);
+    Atomic<uint32> ping = Atomic.make(value: 0);
+    Atomic<uint32> pong = Atomic.make(value: 0);
+    Instant t0 = monotonicNow();
+    if (shape == "idle") {
+        uint32 i = 0;
+        while (i < rounds) { ping.store(value: i); ping.notifyOne(); i = i + 1; }
+    } else {
+        bool slow = shape == "slow";
+        scope {
+            spawn ponger(ping: ref ping, pong: ref pong, rounds: rounds, slow: slow);
+            uint32 i = 0;
+            while (i < rounds) {
+                ping.store(value: i + 1);
+                ping.notifyOne();
+                _ = pong.wait(whileEquals: i);
+                i = i + 1;
+            }
+        }
+    }
+    int64 ns = monotonicNow().since(earlier: t0).asNanos();
+    int64 whole = ns / n;
+    int64 tenth = ns * 10 / n % 10;
+    println(s: "kama\t${shape}\t${n}\t${whole}.${tenth}");
+    return 0;
+}
