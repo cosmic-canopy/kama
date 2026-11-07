@@ -2284,6 +2284,31 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
 native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
 
+<a id="s5-isr-shared-cell"></a>
+
+### `main` and an interrupt handler share a cell only through `unsafe` (KR-340)
+
+Filed 2026-11-07, while ruling `Atomic.wait` (KR-3 step 2, W5). An `@interrupt` handler takes no parameters, so whatever it
+shares with `main` is a module `static`, and on bare metal a `static` is one plain C global. A `static` holds no
+`resource`, though, and `Atomic<T>` is one, so the safe spelling is refused: *"`Atomic<bool>` is a `resource`, though it owns
+nothing"*. Through `0.9.869` that message said "owns memory", which was false. What compiles today is
+`static UnsafePtr<Atomic<bool>>`, set from `main` in an `unsafe fn` and read the same way in the handler (probed
+`--target embedded`). A plain `static bool` is accepted, and C may hoist its load out of `main`'s loop, so a flag the handler
+sets is never seen.
+
+| | an interrupt handler's flag |
+|---|---|
+| C | `volatile sig_atomic_t`, or a C11 `_Atomic` global |
+| Rust | a `static AtomicBool`, which needs no `unsafe` since an atomic is `Sync` |
+| Zig | a global `std.atomic.Value(bool)` |
+
+On a hosted target a `static` is per isolate (`_Thread_local`), and a foreign thread's callback reaches a cell through the
+pointer its C API hands it, so the case is bare metal, and a signal handler on the thread that installed it. **Verdict:
+scheduled, design first, with KR-233**, whose fibers wake from an interrupt handler through the same kind of cell. The
+question to rule is whether `Atomic<T>` alone is admitted as a `static`, or whether a `static` gains an atomic kind of its
+own. `Atomic<T>` owns nothing and has no teardown. What admitting it would still need is a rule that nothing moves it out
+of the `static`; no `static` has held a `resource` yet, so that rule has never been needed or probed.
+
 <a id="s5-file-watch"></a>
 
 ### No file watcher in std (KR-330)

@@ -48136,9 +48136,13 @@ void CEmitter::emitModuleStaticDecl(ModuleVariableDeclaration* mv, bool declOnly
         // foreign boundary instead: `Owned<T>` holds it, `release()` hands it to the host's userdata slot to
         // outlive a frame, `adopt` takes it back to destroy. GOALS §3a/§3e; the design for a destructible
         // static is kept in ROADMAP_DETAIL §2 should an isolate/MCU case ever pull it.
+        // A `resource` that owns nothing (`Atomic<T>`, a token) is refused for being a resource, and the message says
+        // that: through 0.9.869 it said "owns memory" of every type here, which was false of those.
+        const bool ownsNothing = !_classes[ty].destructible && !_classes[ty].isIntrinsicColl && !isSmartPtrClass(ty);
         if (!declOnly)
             unsupported(("a module `static` must be a value, UnsafePtr, `Simd`, or an `InlineArray` of values — `" + ty
-                         + "` owns memory. A `static` is the MCU shape, not a home for a resource: persistence is "
+                         + (ownsNothing ? "` is a `resource`, though it owns nothing" : "` owns memory")
+                         + ". A `static` is the MCU shape, not a home for a resource: persistence is "
                          "ownership, so keep it in an `Owned<" + ty + ">`, and `release()` it to a foreign API's "
                          "userdata slot when it must outlive a frame").c_str(), mv);
         return;

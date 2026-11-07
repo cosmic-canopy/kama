@@ -1,0 +1,1 @@
+is a `resource`, though it owns nothing

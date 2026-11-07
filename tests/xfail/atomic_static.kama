@@ -1,0 +1,5 @@
+// A module `static` holds no `resource`, and `Atomic<T>` is one, though it owns nothing. Through 0.9.869 the refusal said
+// "owns memory" of it, which was false. The case it leaves, bare metal's `main` and `@interrupt` handler sharing a flag, is KR-340.
+import { std::concurrent::Atomic };
+static Atomic<bool> ready = Atomic.make(value: false);
+fn uint8 main() { return 0; }

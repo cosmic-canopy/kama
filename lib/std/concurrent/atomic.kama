@@ -162,6 +162,8 @@ type resource Atomic<T> implements Sendable {   // one lock-free word: sendable 
     // No destructor, deliberately. An `Atomic<T>` owns nothing — the cell is inline and a zero value is
     // drop-safe (INVARIANT #0) — and kama generates a destructor only for a type that has teardown to do,
     // transitively, whether or not one is written. An EMPTY `~Atomic() { }` was not documentation: it set
-    // `hasDtor`, which makes the type `destructible`, which means "needs teardown at scope exit" — barring
-    // it from a module `static`, the one place a foreign-thread callback could reach a shared cell.
+    // `hasDtor`, which makes the type `destructible`, which means "needs teardown at scope exit".
+    // It is still no module `static`: a `static` holds no `resource`, and on a hosted target a `static` is per
+    // isolate anyway, so a foreign thread's callback reaches a cell through the pointer its C API hands it. The
+    // case left is bare metal, where `main` and an `@interrupt` handler share one: KR-340.
 }

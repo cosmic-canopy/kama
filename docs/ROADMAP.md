@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-340**
+**Next id: KR-341**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -139,6 +139,7 @@ Sized and unblocked, but not next; unordered within an arc.
 | KR-83 | **Extended `asm` (operand constraints) and `@naked` functions** — SPEC called them "tracked follow-ons" with no row; they are the MCU seam's remaining half | — | [§5](ROADMAP_DETAIL.md#s5) |
 | KR-222 | **A quoted, structural rendering (`${x:?}`)** — `${xs}` prints `[a, b]` for both `["a", "b"]` and `["a, b"]`, as the derive prints `name: a` for any string; Rust's `{:?}`, Python's `repr` and Swift's `debugDescription` quote. One spelling for structs and collections together, designed before any code | — | [§2](ROADMAP_DETAIL.md#s2-quoted-format) |
 | KR-233 | **Fibers on bare metal** — a Cortex-M switch, stacks from a static pool under `--no-heap`, wakes from an interrupt handler (KR-3's decision 15). After KR-3, beside KR-19 | — | [§5](ROADMAP_DETAIL.md#s5-mcu-fibers) |
+| KR-340 | **`main` and an interrupt handler share a cell only through `unsafe`** — a `static` holds no `resource`, so a `static Atomic<bool>` is refused and the flag an `@interrupt` handler sets goes through a `static UnsafePtr<Atomic<bool>>`; Rust's `static AtomicBool` needs no `unsafe`. Scheduled, design first, with KR-233 | — | [§5](ROADMAP_DETAIL.md#s5-isr-shared-cell) |
 | KR-281 | **An iOS target** — `--target IOS` is refused; `aarch64-ios-none` derives `OS_IOS`, which none of std's `OS_MACOS` declarations cover, and no flag names what macOS and iOS share. Shipping needs Apple's SDK (so a Mac), an app whose loop the OS owns (`UIApplicationMain`, `CADisplayLink`, as the browser owns it on wasm), and a signed `.app`, built through `xcodebuild` as Apple's upload checks expect. `dlopen` is barred, so KR-24 stays desktop-only | — | [§5](ROADMAP_DETAIL.md#s5-ios) |
 | KR-314 | **A boxed contract cannot be narrowed back to its type** — `.as<T>()` applies to an `Error` alone, and answers a copy, so it refuses a type that owns memory; storage whose types are chosen at run time (an archetype store, an inspector, mods) falls back to `UnsafePtr` and hand-rolled type ids. Any boxed contract, answering a borrow. Rust's `Any::downcast_ref`, C#'s `as`, Go's type assertion. Verdict: scheduled, design first | — | [§2](ROADMAP_DETAIL.md#s2-contract-narrow) |
 | KR-315 | **Parallel tasks over parts chosen at run time** — `spawn step(col: ref cols[0]); spawn step(col: ref cols[1]);` is refused by design, since an element names no place a static rule can pin, and `parallel_for` covers an even split, not a chosen part per task. A split whose parts are proven distinct when it runs, and which a `spawn` may borrow: Rust's `get_disjoint_mut`. Verdict: scheduled, design first, in KR-3's pool brief | — | [§6](ROADMAP_DETAIL.md#s6-disjoint-parts) |
