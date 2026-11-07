@@ -8267,11 +8267,13 @@ and vendor HALs are a later milestone. A module `static hardware UnsafePtr<T>` l
 and module `static`s become plain zero-cost `static`s (one core = one isolate).
 
 Debug builds are breakpoint-debuggable in an IDE (locals + call stack map back to `.kama`), and emit **one
-`.c` per module** (faithful stepping, readable generated code). A **`--release`** build, native or wasm, instead folds
-every module into **one unity translation unit** so the C compiler can inline across module boundaries — a
-`std::math` operator or a collection accessor inlines into the caller's hot loop and then auto-vectorizes,
-which is what lands numeric code at C parity (kama has no incremental object cache, so a build already compiles
-all modules in a single invocation — the unity fold costs nothing and only unlocks inlining). The
+`.c` per source file** (faithful stepping, readable generated code), each compiled to its own object, which the
+build cache keeps and reuses while its input is unchanged: a rebuild after an edit recompiles the files whose C
+changed ([targets.md](targets.md#kama-cache--rebuilds-skip-what-did-not-change)). A **`--release`** build, native or
+wasm, instead folds every module into **one unity translation unit** so the C compiler can inline across module
+boundaries — a `std::math` operator or a collection accessor inlines into the caller's hot loop and then
+auto-vectorizes, which is what lands numeric code at C parity. The fold leaves the cache nothing to keep, so a release
+build compiles the whole program each time. The
 numeric-safety checks (division by zero, `TYPE_MIN / -1`, a bad shift, an out-of-range float cast, a
 narrowing cast, signed overflow in debug) are the compiler's own, in the emitted C — **no `-fsanitize` flag
 in either tier**; signed overflow wraps (`-fwrapv`, passed in both tiers) in release.
