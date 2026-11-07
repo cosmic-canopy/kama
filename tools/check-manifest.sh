@@ -166,6 +166,20 @@ proj licbad <<'JSON'
 { "name": "licbad", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama", "license": 1, "modules": { ".": { "visibility": "internal" } } }
 JSON
 reject licbad 'expected a string' "a non-string \`license\` is refused, not skipped"
+# ...and says where (up to 0.9.865 a manifest's error had no position), and names a comment, which JSON has none of.
+proj strpos <<'JSON'
+{ "name": "strpos", "version": "0.1.0",
+  "kind": "executable", "entry": "src/app.kama",
+  "license": 1,
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject strpos 'expected a string (line 3, column 14)' "a manifest's error names its line and column"
+proj jsoncmt <<'JSON'
+{ "name": "jsoncmt", "version": "0.1.0", "kind": "executable", "entry": "src/app.kama",
+  // the root module
+  "modules": { ".": { "visibility": "internal" } } }
+JSON
+reject jsoncmt 'a comment at line 2, column 3 — kama.json is JSON, which has no comments' "a comment in kama.json is named as one"
 
 # `kama` is the compiler-version RANGE a package's source needs (docs/packages.md § What compiler a package
 # needs). Held to a version range in the reader — the value set is closed — and checked against THIS

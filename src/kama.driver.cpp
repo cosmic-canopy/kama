@@ -3678,8 +3678,26 @@ struct ManifestReader {
         : s(src), declared(d), defaults(df), manifestPath(path) {}
 
     void ws() { while (i < s.size() && (s[i]==' '||s[i]=='\t'||s[i]=='\n'||s[i]=='\r')) ++i; }
-    bool fail(const char* m) { if (err.empty()) err = m; return false; }
-    bool fail(const std::string& m) { if (err.empty()) err = m; return false; }
+    // Where the read stopped, as an editor counts: `line 3, column 14`. Up to 0.9.865 a manifest's error said only what
+    // went wrong, and "expected a string" in a forty-line file was found by eye. The commonest such stop is a comment,
+    // which JSON does not have though kama's own docs showed some, so a stop at `//` or `/*` is named as one.
+    std::string where(size_t at) const {
+        size_t line = 1, col = 1;
+        for (size_t k = 0; k < at && k < s.size(); ++k) { if (s[k] == '\n') { ++line; col = 1; } else ++col; }
+        return "line " + std::to_string(line) + ", column " + std::to_string(col);
+    }
+    bool fail(const std::string& m) {
+        if (!err.empty()) return false;
+        size_t k = i;
+        while (k < s.size() && (s[k]==' '||s[k]=='\t'||s[k]=='\n'||s[k]=='\r')) ++k;
+        if (k + 1 < s.size() && s[k] == '/' && (s[k + 1] == '/' || s[k + 1] == '*'))
+            err = "a comment at " + where(k) + " — " + baseName(manifestPath) + " is JSON, which has no comments; say "
+                  "it in the README, or in the commit that changes the line";
+        else
+            err = m + " (" + where(i) + ")";
+        return false;
+    }
+    bool fail(const char* m) { return fail(std::string(m)); }
 
     bool str(std::string& out) {
         ws(); if (i >= s.size() || s[i] != '"') return fail("expected a string");

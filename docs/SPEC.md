@@ -7052,12 +7052,14 @@ name is the chain of keys read down to it, rooted at the project's `name`
 compiler resolves it through the manifest, compiles the module's files, and scopes their public symbols.
 There is one keyword for depending on another module — `import` (it replaced `using`).
 
-```jsonc
-// geometry/kama.json
+`geometry/kama.json`, where `"."` is the files of `src/` (module `geometry`) and `"graphics"` those of `src/graphics/`
+(module `geometry::graphics`):
+
+```json
 { "name": "geometry", "version": "0.1.0", "kind": "library",
   "modules": {
-    ".":         { "visibility": "public" },   // src/*.kama          — module `geometry`
-    "graphics":  { "visibility": "public" },   // src/graphics/*.kama — module `geometry::graphics`
+    ".":         { "visibility": "public" },
+    "graphics":  { "visibility": "public" },
     "internals": { "visibility": ["graphics"] }
   } }
 ```
@@ -8157,7 +8159,7 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   it: what the reader read in full is dropped field by field, and a collection drops the elements it holds.
 - **Enums** serialize externally-tagged: `{"tag":"V"}` (no payload) / `{"tag":"V","value":{fields…}}` (payload);
   deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError` of kind `UnknownCase`, whose message <!-- test: de_unknown_case -->
-  names the value and the cases: "`Updte` is not a `Phase` (at `phase`): expected `Input`, `Update` or `Output`". The **variant selector** has The **variant selector** has
+  names the value and the cases: "`Updte` is not a `Phase` (at `phase`): expected `Input`, `Update` or `Output`". The **variant selector** has
   its own contract member (`variant(name, index)` / `variant() -> FieldKey`) rather than riding `writeString`:
   a discriminant is one of `n` known alternatives, not a string, so a positional or numbered backend spends
   one byte on it where a name costs the whole string. A named backend writes the name, unchanged.

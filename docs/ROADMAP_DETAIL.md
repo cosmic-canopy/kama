@@ -1828,6 +1828,28 @@ reporting, and the guard silently stopped firing until that skip was relaxed for
 
 ## 4. Reflection + serialization — remaining follow-ups (1.x)
 
+<a id="s4-json-comments"></a>
+
+### A JSON reader that takes comments, for hand-written files (KR-339)
+
+**Ruled 2026-11-07:** `kama.json` and `kama.local.json` stay strict JSON, so every JSON tool reads them, and a comment
+there is refused naming its line (`0.9.867`); the docs' examples that showed `//` notes were corrected to match. The
+other half of the report that led there is std's: a game engine on kama reads its hand-written records through
+`JsonDeserializer`, and a designer annotating a record (why a tuning value is what it is) has nowhere to write it.
+**Measured `0.9.860`:** a `//` line or a trailing comma in input to `deserializeJsonBuffer` fails "malformed input".
+
+**What others do.** VS Code's settings and `tsconfig.json` are JSONC: `//` and `/* */` comments, and trailing commas
+accepted in practice. JSON5 adds unquoted keys, single-quoted strings, hex numbers and more. Rust has separate crates
+(`json5`, `jsonc-parser`); Go's `encoding/json` has none and `hujson` (Tailscale) normalizes JSONC to JSON first;
+.NET's `System.Text.Json` takes `JsonCommentHandling.Skip` and `AllowTrailingCommas` as reader options, which is the
+shape kama's reader already has for strictness.
+
+**The shape, to design:** a constructor beside `make(src:)` and `strict(src:)` that also skips comments, so the READ
+decides, as it does for unknown keys: one type read leniently from a hand-written file and strictly from a peer. The
+open question is the dialect: comments only (the smallest, and all the report asks), or trailing commas too, which
+hand-editing invites, or full JSON5. Writing keeps emitting strict JSON either way. Wanted by the owner beside the
+`kama.json` ruling.
+
 <a id="s4-view-deserialize"></a>
 
 ### Zero-copy deserialization into a view struct (KR-231)

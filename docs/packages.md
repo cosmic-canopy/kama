@@ -277,14 +277,21 @@ does, and this map is where that location becomes an API.
 
 ```json
 "modules": {
-  ".":             { "visibility": "internal" },   // src/*.kama          -> `myapp`
-  "collections":   { "visibility": "public",       // src/collections/   -> `myapp::collections`
-                     "modules": {
-                       "detail": { "visibility": ["collections"] }   // -> `myapp::collections::detail`
-                     } },
-  "oddly-named":   { "visibility": "public", "name": "tidy" }        // -> `myapp::tidy`
+  ".":           { "visibility": "internal" },
+  "collections": { "visibility": "public",
+                   "modules": { "detail": { "visibility": ["collections"] } } },
+  "oddly-named": { "visibility": "public", "name": "tidy" }
 }
 ```
+
+| key | folder | module |
+|---|---|---|
+| `"."` | `src/*.kama` | `myapp` |
+| `"collections"` | `src/collections/` | `myapp::collections` |
+| `"detail"`, inside it | `src/collections/detail/` | `myapp::collections::detail` |
+| `"oddly-named"` | `src/oddly-named/` | `myapp::tidy` |
+
+`kama.json` is JSON, so it holds no comments: a `//` in it is refused, naming its line.
 
 - **`"."` is the project root** — the files directly under `source`. A project whose sources are all at
   the root still writes it, and that is the smallest legal map.
@@ -967,19 +974,22 @@ Deep-merge means it layers field-by-field, not whole-file: a `log.tags` entry it
 *alongside* the project's tags rather than replacing them, a scalar it sets wins, and a `flags`
 entry it declares *extends* the valid flag universe.
 
-```jsonc
-// kama.local.json — bend the build to this machine without touching the committed manifest
+A `kama.local.json` that bends the build to this machine without touching the committed manifest:
+
+```json
 {
-  "log":        { "level": "debug", "tags": { "audio": "trace" } },  // build-time (compiler)
-  "flags":      { "MY_EXPERIMENT": { "default": true } },            // build-time (compiler)
-  "select":     { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu",  // build configuration groups
-                                       "cc": "aarch64-linux-gnu-gcc" } },
+  "log":        { "level": "debug", "tags": { "audio": "trace" } },
+  "flags":      { "MY_EXPERIMENT": { "default": true } },
+  "select":     { "TARGET": { "RPI": { "triple": "aarch64-linux-gnu", "cc": "aarch64-linux-gnu-gcc" } },
                   "BUILD_TYPE": { "FAST": { "inherits": "RELEASE" } } },
-  "overrides":  { "geometry": { "path": "../geometry" } },           // install-time (kama pkg install)
-  "registries": { "default": ["file:///srv/mirror"] },              // install-time (kama pkg install)
-  "toolchain":  "v1.3.0"                                             // selector (which compiler runs)
+  "overrides":  { "geometry": { "path": "../geometry" } },
+  "registries": { "default": ["file:///srv/mirror"] },
+  "toolchain":  "v1.3.0"
 }
 ```
+
+`log`, `flags` and `select` are read at build time, by the compiler; `overrides` and `registries` at install time, by
+`kama pkg install`; and `toolchain` selects which compiler runs. Like `kama.json`, it is JSON, with no comments.
 
 Precedence, high to low: **`--log`/`KAMA_LOG` (runtime) > `kama.local.json` > `kama.json`**.
 
