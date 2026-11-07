@@ -1,0 +1,13 @@
+// A method called through a field the type does not have names the field, as a plain read of it does. Through
+// 0.9.860 `draws.crti.unit(…)` said only "cannot resolve the receiver of `unit`"; a deeper chain names the same field.
+@generate(of)
+type value Draw { public int32 key; public const fn int32 unit(int32 who) { return this.key + who; } }
+@generate(of)
+type value Pair2 { public Draw d; }
+@generate(of)
+type value HitDraws { public Draw crit; public Pair2 pair; }
+fn int32 use(const ref HitDraws draws, int32 me) { return draws.crti.unit(who: me) + draws.pari.d.unit(who: me); }
+fn uint8 main() {
+    HitDraws h = HitDraws.of(crit: Draw.of(key: 1), pair: Pair2.of(d: Draw.of(key: 2)));
+    return cast<uint8>(use(draws: h, me: 3));
+}

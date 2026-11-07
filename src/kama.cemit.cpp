@@ -46218,6 +46218,23 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
         // written (`globalHeap::<Pool>().liveCount()`), so it is the diagnostic an author actually sees; the
         // emitInvocation arm still answers for the bare-call form. `_globalAllocator` is empty either way,
         // so no second diagnostic can follow this one.
+        // A call made THROUGH a field the receiver's type does not have (`draws.crti.unit(…)`): the receiver has no
+        // type because the field is missing, and that is what to report, as a plain read of it does. Through 0.9.860
+        // this said only "cannot resolve the receiver of `unit`", naming neither the field nor its type. The chain is
+        // walked inward, so `draws.crti.key.unit(…)` names `crti` too.
+        for (auto* rma = dynamic_cast<MemberAccessNode*>(receiver.get()); rma;
+             rma = dynamic_cast<MemberAccessNode*>(rma->expression.get())) {
+            if (!rma->expression || !rma->identifier || !rma->identifier->value) break;
+            std::string bc = receiverClass(rma->expression);
+            if (isSmartPtrClass(bc) && smartKind(bc) != CollKind::Weak) bc = _classes[bc].collElemClass;
+            const std::string& f = *rma->identifier->value;
+            if (bc.empty() || !_classes.count(bc)) continue;   // its own base is unknown: look further in
+            if (findFieldOwner(&_classes[bc], f)) break;        // the field exists, so the miss is not a field's
+            const std::string dt = derefTarget(bc);
+            if (!dt.empty() && _classes.count(dt) && findFieldOwner(&_classes[dt], f)) break;
+            rejectMissingField(&_classes[bc], bc, rma, f);
+            return "0";
+        }
         // A call made ON a view accessor the program does not have (`s.bytes().length()`): the receiver has
         // no type because the inner method is missing, and that — not this call — is what to report.
         std::string viewWhy;

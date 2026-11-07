@@ -973,6 +973,7 @@ maxdepth_missing	maxdepth_missing.kama:3:0
 maxdepth_over_ceiling	maxdepth_over_ceiling.kama:4:0
 maxdepth_zero	maxdepth_zero.kama:4:0
 method_as_field	method_as_field.kama:9:41
+method_through_missing_field	method_through_missing_field.kama:9:58 method_through_missing_field.kama:9:85
 mint_protocol_not_a_value	mint_protocol_not_a_value.kama:16:4
 missing_return	missing_return.kama:6:26
 mod_call_private	main.kama:4:18 main.kama:4:25 main.kama:4:33
