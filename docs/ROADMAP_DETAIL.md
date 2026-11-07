@@ -2449,8 +2449,19 @@ Arm's `pow`, `log` and `log2` over emscripten's small ones.
 - the error helpers: `__math_{divzero,invalid,oflow,uflow,xflow}`, in both widths.
 
 Outside musl's tree they need `-Dhidden=` (musl's visibility macro), an empty `features.h` and `fp_arch.h`, and an `endian.h` that says
-little-endian. The probe and its comparison tool were scratch files on the Windows box; decision 6's fixture replaces them. Still to do with
-the fix: the timing on a quiet machine, and targets.md's sentence on cost.
+little-endian. Still to do with the fix: the timing on a quiet machine, and targets.md's sentence on cost.
+
+**The probe's inputs**, which decision 6's fixture reuses (the probe was C, kept only in the Windows box's `.scratch`). Each row has 200,000
+inputs, `x = lo + ((hi − lo) · i) / 199999` in `float64`. A function of two arguments takes its second at index `(i · 7919) mod 200000`, over
+the second argument's own range. The ranges:
+- `sin`, `cos`, `tan`, and the first argument of `atan2`: −120 to 154.
+- `asin` and `acos`: −1 to 1. `atan`, and the second argument of `atan2`: −50 to 50.
+- `exp`: −745 to 710, and `expf`: −100 to 88.
+- `log`, `log2` and `log10`: 10⁻³ to 10⁶. `cbrt`: −10⁶ to 10⁶.
+- `pow`: 10⁻³ to 50, raised to −20 to 20. `hypot`: −10³ to 10³ for both arguments.
+- Large-argument `sin`: `10⁶ · 10^(i mod 17) + i`, the power built by repeated `* 10`.
+
+The `float32` forms take the same inputs cast to `float32`.
 
 <a id="s5-wasm-closure"></a>
 
