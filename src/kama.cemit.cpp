@@ -46106,7 +46106,8 @@ std::string CEmitter::emitMethodCall(InvocationNode* call, MemberAccessNode* rec
                                  + "` while `" + recvText() + "` is its receiver" + why + " — a non-`const "
                                  "fn` borrows its receiver mutably, so this hands the method two mutable "
                                  "borrows of the same object; pass a distinct place, read it into a local "
-                                 "first, or declare `" + method + "` a `const fn` if it does not mutate").c_str(), call);
+                                 "first, or, if `" + method + "` writes neither, declare it a `const fn` and take `"
+                                 + ps->name + "` by `const ref`").c_str(), call);   // a `const fn` alone is refused above
             }
         }
     }

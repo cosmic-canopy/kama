@@ -4,14 +4,15 @@
 // cause was `exprClass` resolving `this.d`'s field type under the ambient `_typeSubst` (the enum
 // variant's, which bound only `Optional<T>`'s `T`), leaving `DynamicArray<T,A>`'s `A` unbound; now it
 // resolves under the field's OWNER instance (`cTypeInInstance`). SortedMap used to work around it by
-// binding the cloned value to a local first.
+// binding the cloned value to a local first. `clone` is a `const fn` taking `const ref`: it is handed an element of
+// `this.d`, and a method that could write `this` or `v` may not be (up to 0.9.860 that went unchecked here).
 import { std::collections::DynamicArray };
 
 type resource Store<V> {
     DynamicArray<V> d;
     public ctor make() { this.d = DynamicArray.empty(); }
     public fn void add(V x) { this.d.add(item: give x); }
-    fn V clone(ref V v) when [V: Copyable<V>] { return copy v; }
+    const fn V clone(const ref V v) when [V: Copyable<V>] { return copy v; }
 
     // operator[] nested inside `clone(...)`'s argument, inside `Some(...)`, inside a return.
     public fn Optional<V> cloned(int32 i) when [V: Copyable<V>] {
