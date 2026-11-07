@@ -1,0 +1,5 @@
+// `gen` is listed, and its folder is not there, as on a fresh clone of a project whose module a generator writes. The
+// note says what is missing: through 0.9.860 it said the manifest listed no such module, sending the reader to edit
+// a manifest that was already right. (A folder nobody listed: xfail/module_unlisted_folder.)
+import { game::gen::World };
+fn uint8 main() { World w = World.of(n: 2); return cast<uint8>(w.n); }

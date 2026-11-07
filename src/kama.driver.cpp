@@ -5405,6 +5405,28 @@ static void reportUnresolvedModule(const std::vector<std::string>& segs, const s
             return;
         }
         if (fromRoot && !mm.projectName.empty() && mm.projectName == segs[0]) {
+            // LISTED, with nothing there to resolve: the manifest is right and the folder is missing or holds no `.kama`
+            // file, which is what a fresh clone shows when a generator writes the module. Through 0.9.860 this said the
+            // module was unlisted, and sent the reader to edit a manifest that was already right.
+            std::string modName;
+            for (size_t k = 1; k < segs.size(); ++k) modName += (k > 1 ? "::" : "") + segs[k];
+            std::function<const ModuleNode*(const std::vector<ModuleNode>&)> listed = [&](const std::vector<ModuleNode>& ns) -> const ModuleNode* {
+                for (const auto& n : ns) {
+                    if (!n.isRoot() && n.modName == modName) return &n;
+                    if (const ModuleNode* c = listed(n.children)) return c;
+                }
+                return nullptr;
+            };
+            if (const ModuleNode* n = modName.empty() ? nullptr : listed(mm.mods)) {
+                std::string src, serr;
+                if (!loadManifestSource(manifest, src, serr) || src.empty()) src = "src";
+                const std::string dir = src + "/" + n->relPath;
+                fprintf(stderr, "kama: note: %s lists `%s`, but its folder %s %s — a listed module resolves once a `.kama` "
+                                "file is there, so if a tool generates it, run that first\n",
+                        manifest.c_str(), name.c_str(), dir.c_str(),
+                        dirExists(buildManifestDir + "/" + dir) ? "holds no `.kama` file" : "does not exist");
+                return;
+            }
             fprintf(stderr, "kama: note: `%s` is this project, but %s lists no module `%s` — a folder is a "
                             "module only once it is listed under \"modules\"\n",
                     segs[0].c_str(), manifest.c_str(), name.c_str());

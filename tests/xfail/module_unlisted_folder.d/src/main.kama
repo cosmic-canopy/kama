@@ -1,0 +1,4 @@
+// `src/extra` holds a file, but the manifest lists no module `extra`, so the folder is no module and the note says so.
+// (A listed module whose folder is missing: xfail/module_listed_folder_missing.)
+import { game::extra::e };
+fn uint8 main() { return cast<uint8>(e()); }

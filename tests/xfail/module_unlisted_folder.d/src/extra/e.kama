@@ -1,0 +1,2 @@
+export { e };
+fn int32 e() { return 1; }

@@ -989,6 +989,7 @@ mod_sibling_private	b.kama:3:31
 mod_sibling_unimported	b.kama:5:31
 mod_vis_children	main.kama:3:9 main.kama:5:18
 mod_vis_not_listed	main.kama:2:9 main.kama:4:18
+module_listed_folder_missing	-
 module_path_already_imported	module_path_already_imported.kama:6:22
 module_path_as_downcast	main.kama:2:112 main.kama:2:190
 module_path_bound_fn	main.kama:2:19
@@ -1033,6 +1034,7 @@ module_path_variant_expr	main.kama:2:84
 module_static_resource	module_static_resource.kama:3:0
 module_static_runtime_init	module_static_runtime_init.kama:3:0
 module_static_volatile	module_static_volatile.kama:8:16 module_static_volatile.kama:8:7
+module_unlisted_folder	-
 move_field	move_field.kama:7:28
 move_in_loop	move_in_loop.kama:9:0
 move_in_loop_break_maybe	move_in_loop_break_maybe.kama:15:4
