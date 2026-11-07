@@ -1,0 +1,29 @@
+// `Atomic.wait` compares BITS (KR-3 step 2, W2), as `compareExchange` does, so a float cell holding `-0.0` is not one
+// holding `0.0`, and a NaN is the NaN with its bits. A deadline already past makes each wait one look, so a compare by
+// value answers the opposite way here rather than hang.
+import { std::concurrent::Atomic, std::time::monotonicNow };
+
+fn uint8 main() {
+    float64 zero = 0.0;
+    float64 negZero = -zero;
+    float64 nan = zero / zero;
+
+    Atomic<float64> d = Atomic.make(value: negZero);
+    match (d.waitUntil(whileEquals: 0.0, deadline: monotonicNow())) {
+        case Ok(value: v): { if (1.0 / v > 0.0) { return 1; } }   // the -0.0 it holds, whose reciprocal is -inf
+        case Err(error: e): { return 2; }                         // equal by value, but the bits differ
+    };
+    d.store(value: nan);
+    match (d.waitUntil(whileEquals: nan, deadline: monotonicNow())) {
+        case Ok(value: v): { return 3; }                          // NaN != NaN by value, but the bits are the same
+        case Err(error: e): { }
+    };
+
+    float32 zero32 = 0.0f32;
+    Atomic<float32> f = Atomic.make(value: -zero32);
+    match (f.waitUntil(whileEquals: 0.0f32, deadline: monotonicNow())) {
+        case Ok(value: v): { }
+        case Err(error: e): { return 4; }
+    };
+    return 42;
+}

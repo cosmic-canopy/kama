@@ -27399,6 +27399,13 @@ void CEmitter::emitRuntimeSlotDefinitions()
           << "KAMA_ISOLATE_LOCAL kama_fiber_thread kama__fibers;\n"
           << "kama_fiber_process kama__fiberProc;\n"
           << "#endif\n";
+    // KR-3 step 2: `Atomic.wait`'s table, one per process, zeroed (every bucket's lock unlocked), for a program whose
+    // units bring in kama_wait.h. Bare metal and wasm without threads keep no table (kama_wait.h says why).
+    if (externsHeader("kama_wait.h"))
+        *_out << "#include \"kama_wait.h\"\n"
+              << "#if KAMA__WAIT_HOW == KAMA__WAIT_TABLE\n"
+              << "kama__wait_bucket kama__wait_table[KAMA__WAIT_BUCKETS];\n"
+              << "#endif\n";
     *_out << "#if !defined(KAMA_TARGET_EMBEDDED)\n"
           << "void (*kama_panic_hook)(kama_panic_info*) = 0;\n"
           << "int kama_in_panic_hook = 0;\n"

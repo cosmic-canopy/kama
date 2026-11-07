@@ -7712,6 +7712,31 @@ fn uint8 main() {
 by default. Each has an `…Explicit` form taking a `MemoryOrder` for the expert case. Atomics and `Locked`
 (below) are the whole shared-mutable surface; general shared mutable memory stays outside the safe language.
 
+**A task can sleep until a cell changes**, which is what a pool's idle worker, a `Once` or a countdown is built from:
+
+```kama fragment
+uint32 seen = epoch.load();
+seen = epoch.wait(whileEquals: seen);        // sleeps until another task moves the epoch, and answers the new one
+
+epoch.fetchAdd(delta: 1);                    // the task that moves it
+epoch.notifyAll();
+```
+
+- **`wait(whileEquals:)` answers the first other value it loads, and never early:** a wake that finds the same value <!-- test: atomic_wait_threads, atomic_wait_pingpong -->
+  waits again, so a caller writes no loop for that. A change and a change back between two looks go unseen, as in C++.
+  The compare is bitwise, as `compareExchange`'s is, on every element an `Atomic` takes. <!-- test: atomic_wait_widths, atomic_wait_float_bits -->
+- **`waitUntil(whileEquals:, deadline:)` gives up at an `Instant`,** answering `Err(WaitError::TimedOut)`. It takes a <!-- test: atomic_wait_deadline -->
+  deadline rather than a span, as a socket does: a caller waiting for more than "any change" loops, and a span would
+  start again at every change.
+- **A notify is never implied.** A write that should wake a waiter is followed by `notifyOne()` or `notifyAll()`; one
+  nobody waits on costs a fence and a load.
+- **On an isolate that runs fibers, only the waiting fiber parks,** and its siblings run, so one may change the cell. <!-- test: fiber_atomic_wait -->
+  A thread polls the cell for a microsecond before it sleeps.
+- **It is a wait, so a lock window cannot reach it,** as it cannot reach `recv`. <!-- xfail: atomic_wait_in_lock_window -->
+- **Where nothing else can run, it says so.** In a wasm build with no threads, a wait that nothing could ever end
+  panics, and one with a deadline waits it out. On bare metal an interrupt handler may change the cell, so the wait
+  polls it.
+
 ### Shared mutable state — `Locked<T>` ✅
 
 A cache several isolates write, a connection table, a metrics registry: state many isolates change, with no owner

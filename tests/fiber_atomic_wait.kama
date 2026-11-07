@@ -1,0 +1,51 @@
+// `Atomic.wait` on an isolate that runs fibers parks the fiber, not the thread (KR-3 step 2, W4), so a sibling fiber
+// can change the cell it waits on. Blocking the thread there would hang the isolate: the sibling never runs.
+// 1. the root fiber waits, and a sibling fiber sets the cell;
+// 2. a fiber waits, and the root sets the cell once the fiber is parked (the root's `sleep` parks it, so the fiber runs);
+// 3. a fiber waits, and another THREAD sets the cell: a remote wake;
+// 4. a fiber's deadline is the scheduler's timer: a wait nobody beats answers `Err` no sooner than its deadline, while
+//    a sibling fiber runs to its end meanwhile.
+import { std::concurrent::Atomic, std::concurrent::Fiber, std::time::sleep, std::time::Duration, std::time::Instant,
+         std::time::monotonicNow };
+
+fn void setTo(ref Atomic<uint32> c, uint32 v) { c.store(value: v); c.notifyAll(); }
+fn void setLater(ref Atomic<uint32> c, uint32 v) { sleep(d: Duration.fromMillis(ms: 10)); c.store(value: v); c.notifyAll(); }
+fn void awaitInto(ref Atomic<uint32> c, uint32 old, ref Atomic<uint32> got) { got.store(value: c.wait(whileEquals: old)); }
+fn void count(ref Atomic<uint32> n) { n.fetchAdd(delta: 1); }
+
+fn uint8 main() {
+    Atomic<uint32> cell = Atomic.make(value: 0);
+    Atomic<uint32> got = Atomic.make(value: 0);
+
+    scope {
+        spawn fiber setTo(c: ref cell, v: 1);
+        if (cell.wait(whileEquals: 0) != 1) { return 1; }
+    }
+
+    scope {
+        spawn fiber awaitInto(c: ref cell, old: 1, got: ref got);
+        sleep(d: Duration.fromMillis(ms: 5));
+        cell.store(value: 2);
+        cell.notifyAll();
+    }
+    if (got.load() != 2) { return 2; }
+
+    scope {
+        spawn fiber awaitInto(c: ref cell, old: 2, got: ref got);
+        spawn setLater(c: ref cell, v: 3);
+    }
+    if (got.load() != 3) { return 3; }
+
+    Atomic<uint32> ran = Atomic.make(value: 0);
+    Instant t0 = monotonicNow();
+    scope {
+        spawn fiber count(n: ref ran);
+        match (cell.waitUntil(whileEquals: 3, deadline: t0 + Duration.fromMillis(ms: 20))) {
+            case Ok(value: v): { return 4; }
+            case Err(error: e): { }
+        };
+        if (t0.elapsed() < Duration.fromMillis(ms: 20)) { return 5; }
+        if (ran.load() != 1) { return 6; }
+    }
+    return 42;
+}

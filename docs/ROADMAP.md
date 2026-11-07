@@ -27,7 +27,7 @@
 > made "find the row by its TEXT, never its number" a standing instruction to every reader, which is a
 > workaround for a numbering scheme rather than a property anyone wanted. **A `KR-` id is safe to cite.**
 
-**Next id: KR-341**
+**Next id: KR-342**
 
 **Two machines work this list.** A row one of them is building starts with *Claimed: <machine>, <date>*, pushed
 before the work starts; the other leaves it alone, and the claim goes when the row ships or is released.
@@ -58,6 +58,7 @@ table's length is the regression signal, and a session starts by fixing what it 
 
 | id | defect | size | detail |
 |---|---|---|---|
+| KR-341 | **A bare-metal build cannot import `std::concurrent::Atomic`** — a program using only `Atomic` compiles the module's `Isolate` unit, whose header includes `<pthread.h>`, and since `0.9.871` `std::time`'s, whose header includes `<time.h>`, so `clang --target=armv7m-none-eabi` stops at both (measured); `kama_atomic.h` and `kama_locked.h` say they are freestanding, and nothing built one | M? | [§5](ROADMAP_DETAIL.md#s5-bare-metal-concurrent) |
 
 ## NOW — the next features, in build order
 

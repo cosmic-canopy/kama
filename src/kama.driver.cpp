@@ -7324,7 +7324,7 @@ int transpileUnitToFile(SharedCompilationUnit unit, const std::string& srcPath,
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
                                        : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h")
                                           || emitter.externsHeader("kama_locked.h") || emitter.externsHeader("kama_fiber.h")
-                                          || emitter.externsHeader("kama_sched.h"));
+                                          || emitter.externsHeader("kama_sched.h") || emitter.externsHeader("kama_wait.h"));
     out.close();
     for (const auto& d : emitter.diagnostics()) renderDiagnostic(stderr, d);
     if (unsupported > 0) {
@@ -7382,7 +7382,7 @@ int emitProgramUnits(const std::vector<SharedCompilationUnit>& units,
     if (externsIsolate) *externsIsolate = g_target.isWasm() ? emitter.spawnsThreads()
                                        : (emitter.externsHeader("kama_isolate.h") || emitter.externsHeader("kama_channel.h")
                                           || emitter.externsHeader("kama_locked.h") || emitter.externsHeader("kama_fiber.h")
-                                          || emitter.externsHeader("kama_sched.h"));
+                                          || emitter.externsHeader("kama_sched.h") || emitter.externsHeader("kama_wait.h"));
     header.close();
     for (auto& f : moduleFiles) f->close();
 

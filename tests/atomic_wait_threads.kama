@@ -1,0 +1,46 @@
+// `notifyAll` and `notifyOne` wake every thread waiting on one cell (KR-3 step 2). Four waiters count themselves ready,
+// then wait for the epoch to move; main waits for all four to be ready, gives them time to fall asleep, moves the
+// epoch and wakes them. A second round wakes them one `notifyOne` at a time, and from inside a lock window: a notify
+// waits on nothing, so a window may reach it where it may not reach a wait (tests/xfail/atomic_wait_in_lock_window).
+import { std::concurrent::Atomic, std::concurrent::Locked, std::time::sleep, std::time::Duration };
+
+type value Tally implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+
+fn void waiter(ref Atomic<uint32> epoch, ref Atomic<uint32> ready, ref Atomic<uint32> woke) {
+    ready.fetchAdd(delta: 1);
+    ready.notifyAll();
+    if (epoch.wait(whileEquals: 0) == 1) { woke.fetchAdd(delta: 1); }
+    ready.fetchAdd(delta: 1);
+    ready.notifyAll();
+    if (epoch.wait(whileEquals: 1) == 2) { woke.fetchAdd(delta: 1); }
+}
+
+// Wait until `ready` reaches `n`, however many changes that takes.
+fn void until(ref Atomic<uint32> ready, uint32 n) {
+    uint32 seen = ready.load();
+    while (seen < n) { seen = ready.wait(whileEquals: seen); }
+}
+
+fn uint8 main() {
+    Atomic<uint32> epoch = Atomic.make(value: 0);
+    Atomic<uint32> ready = Atomic.make(value: 0);
+    Atomic<uint32> woke = Atomic.make(value: 0);
+    scope {
+        spawn waiter(epoch: ref epoch, ready: ref ready, woke: ref woke);
+        spawn waiter(epoch: ref epoch, ready: ref ready, woke: ref woke);
+        spawn waiter(epoch: ref epoch, ready: ref ready, woke: ref woke);
+        spawn waiter(epoch: ref epoch, ready: ref ready, woke: ref woke);
+        until(ready: ref ready, n: 4);
+        sleep(d: Duration.fromMillis(ms: 20));
+        epoch.store(value: 1);
+        epoch.notifyAll();
+        until(ready: ref ready, n: 8);
+        sleep(d: Duration.fromMillis(ms: 20));
+        Locked<Tally> rounds = Locked.make(value: Tally.zero());
+        epoch.store(value: 2);
+        while (woke.load() < 8) {
+            borrow rounds.lock().value() as t { t.n = t.n + 1; epoch.notifyOne(); }
+        }
+    }
+    return cast<uint8>(woke.load());   // 8: every waiter saw both moves
+}

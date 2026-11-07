@@ -52,7 +52,7 @@ done
 # including kama_sched.h's own `#error` for kama_os.h read before the define, which no order here may trip. A channel's
 # wait does the same since step 6, and kama_sched.h does not include kama_channel.h, so its half of that seam sits
 # after its include guard, so either order defines it (tests/fiber_sched.d reads kama_sched.h first, and links).
-SEAM="kama_channel.h kama_os.h kama_sched.h kama_time.h kama_fiber.h kama_isolate.h"
+SEAM="kama_channel.h kama_os.h kama_sched.h kama_time.h kama_fiber.h kama_isolate.h kama_wait.h"
 fibered=0
 for a in $SEAM; do
     for b in $HEADERS; do

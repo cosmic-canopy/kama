@@ -118,11 +118,12 @@ static inline int kama__channel_unheld(kama_channel_t* ch) {
 // with no scheduler every wait is the condvar's, as before, and a program with no fibers compiles none of this.
 #if defined(KAMA_FIBERS) && !defined(__EMSCRIPTEN__)
 #define KAMA__CHANNEL_FIBERS 1
-static inline int      kama__channel_here(void);             // this isolate runs a scheduler
-static inline void*    kama__channel_self(void);             // the running fiber, the root included
-static inline uint64_t kama__channel_by(int64_t nanos);      // the deadline `nanos` from now, on the scheduler's clock
-static inline int      kama__channel_switch(uint64_t by);    // park until woken (1) or until `by` passes (0); 0 for none
-static inline void     kama__channel_wake(void* fiber);      // make a parked fiber ready, from any isolate
+#define KAMA__PARK_FIBERS 1   /* the scheduler's park hooks, which kama_wait.h shares (kama_sched.h defines them) */
+static inline int      kama__park_here(void);             // this isolate runs a scheduler
+static inline void*    kama__park_self(void);             // the running fiber, the root included
+static inline uint64_t kama__park_by(int64_t nanos);      // the deadline `nanos` from now, on the scheduler's clock
+static inline int      kama__park_switch(uint64_t by);    // park until woken (1) or until `by` passes (0); 0 for none
+static inline void     kama__park_wake(void* fiber);      // make a parked fiber ready, from any isolate
 
 static inline void kama__channel_link(kama__chan_waitq* q, kama__chan_waiter* w) {
     w->next = NULL; w->prev = q->tail; w->linked = 1;
@@ -139,10 +140,10 @@ static inline void kama__channel_unlink(kama__chan_waitq* q, kama__chan_waiter* 
 // with nobody having taken it off.
 static inline int kama__channel_park(kama_channel_t* ch, kama__chan_waitq* q, uint64_t by) {
     kama__chan_waiter w;
-    w.fiber = kama__channel_self();
+    w.fiber = kama__park_self();
     kama__channel_link(q, &w);
     pthread_mutex_unlock(&ch->mu);
-    const int woke = kama__channel_switch(by);
+    const int woke = kama__park_switch(by);
     pthread_mutex_lock(&ch->mu);
     if (!w.linked) return 1;   // a waker took it off: what it was woken for is this fiber's to look at
     kama__channel_unlink(q, &w);
@@ -155,7 +156,7 @@ static inline int kama__channel_wakeOne(kama__chan_waitq* q) {
     kama__chan_waiter* w = q->head;
     if (!w) return 0;
     kama__channel_unlink(q, w);
-    kama__channel_wake(w->fiber);
+    kama__park_wake(w->fiber);
     return 1;
 }
 #endif
@@ -165,7 +166,7 @@ static inline int kama__channel_wakeOne(kama__chan_waitq* q) {
 // signal never needs both.
 static inline void kama__channel_wait(kama_channel_t* ch, pthread_cond_t* c, kama__chan_waitq* q) {
 #if defined(KAMA__CHANNEL_FIBERS)
-    if (kama__channel_here()) { (void)kama__channel_park(ch, q, 0); return; }
+    if (kama__park_here()) { (void)kama__channel_park(ch, q, 0); return; }
 #else
     (void)q;
 #endif
@@ -392,10 +393,10 @@ static inline int kama_channel_try_recv(void* h, void* out) {
 static inline int kama_channel_recv_timeout(void* h, void* out, int64_t nanos) {
     kama_channel_t* ch = (kama_channel_t*)h;
 #if defined(KAMA__CHANNEL_FIBERS)
-    if (kama__channel_here()) {
+    if (kama__park_here()) {
         /* A fiber's deadline is the scheduler's timer, on kama_now_mono_ns's clock (QueryPerformanceCounter on
            Windows), so it is taken there and not from the condvar's clock below. */
-        const uint64_t by = kama__channel_by(nanos);
+        const uint64_t by = kama__park_by(nanos);
         int late = nanos <= 0;
         pthread_mutex_lock(&ch->mu);
         while (ch->count == 0 && kama_channel_send_open(ch)) {

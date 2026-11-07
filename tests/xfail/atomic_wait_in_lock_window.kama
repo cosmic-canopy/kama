@@ -1,0 +1,10 @@
+// `Atomic.wait` waits on another task, so it cannot sit in a lock window, which may reach no wait (KR-226): the task
+// that would change the cell may be waiting for this lock. Its seam is `@parks`, as every std wait is (KR-3 step 2, W5).
+import { std::concurrent::Locked, std::concurrent::Atomic };
+type value Counter implements Sendable { public int32 n; public ctor zero() { this.n = 0; } }
+fn uint8 main() {
+    Locked<Counter> c = Locked.make(value: Counter.zero());
+    Atomic<uint32> ready = Atomic.make(value: 0);
+    borrow c.lock().value() as m { m.n = cast<int32>(ready.wait(whileEquals: 0)); }
+    return 0;
+}

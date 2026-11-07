@@ -1,5 +1,5 @@
-
-export { Atomic, MemoryOrder };
+import { std::time::Instant };
+export { Atomic, MemoryOrder, WaitError };
 
 // `Atomic<T>` — the ONE sanctioned cross-isolate shared-MUTABLE cell (M6). The concurrency analog of
 // `unsafe fn`/`UnsafePtr`: an opt-in, greppable seam where a value may be read and written concurrently by
@@ -41,6 +41,18 @@ export { Atomic, MemoryOrder };
 //
 // The cell is one inline `T`; each method takes its address to the width-generic op layer in kama_atomic.h,
 // which dispatches on `sizeof(T)` to a lock-free `__atomic_*_n` builtin (native AND wasm, one source).
+//
+// A thread or a fiber can also sleep until a cell changes (KR-3 step 2), which is what a pool's idle worker, a `Once`
+// or a countdown is built from:
+//
+//     uint32 seen = epoch.load();
+//     seen = epoch.wait(whileEquals: seen);   // sleeps until another task moves the epoch, and answers the new one
+//     ...
+//     epoch.fetchAdd(delta: 1);               // the other task: change the cell, then wake whoever waits on it
+//     epoch.notifyAll();
+//
+// A notify is never implied: a write that should wake a waiter is followed by `notifyOne` or `notifyAll`. One nobody
+// waits on costs a fence and a load.
 
 // Memory ordering for an atomic op (the `…Explicit` variants). Values match the compiler's `__ATOMIC_*`
 // enum, bridged by `orderBits`. `Consume` is deliberately omitted (every compiler treats it as `Acquire`;
@@ -66,6 +78,26 @@ extern fn void   kama_atomic_swap     (UnsafePtr cell, UnsafePtr val, UnsafePtr 
 extern fn int32  kama_atomic_cas      (UnsafePtr cell, UnsafePtr expected, UnsafePtr desired, usize width, int32 smo, int32 fmo);
 extern fn void   kama_atomic_fetch_add(UnsafePtr cell, UnsafePtr delta, UnsafePtr dst, usize width, int32 mo);
 extern fn void   kama_atomic_fetch_sub(UnsafePtr cell, UnsafePtr delta, UnsafePtr dst, usize width, int32 mo);
+
+extern "kama_wait.h";
+extern fn int32  kama_atomic_wait     (UnsafePtr cell, UnsafePtr old, UnsafePtr seen, usize width, uint64 deadline);
+extern fn void   kama_atomic_notify   (UnsafePtr cell, int32 all);
+
+// No deadline, for `wait`: the C seam's KAMA__WAIT_NONE.
+comptime uint64 NO_DEADLINE = 18446744073709551615;
+
+// Why `waitUntil` has no value: its deadline passed while the cell still held the value it waited on. Non-exhaustive,
+// so a cancelled fiber's wait can answer here too once fibers can be cancelled (KR-296).
+@nonExhaustive
+type enum WaitError implements Error {
+    TimedOut;
+
+    public const fn string message() {
+        return match (this) {
+            case TimedOut: "the deadline passed while the cell still held the value waited on";
+        };
+    }
+}
 
 type resource Atomic<T> implements Sendable {   // one lock-free word: sendable outright, and shareable by `ref`
     T value;   // the one shared cell; naturally aligned (a single-field struct), so the ops are lock-free
@@ -157,6 +189,50 @@ type resource Atomic<T> implements Sendable {   // one lock-free word: sendable 
         kama_atomic_fetch_sub(cell: cast<UnsafePtr>(addr(of: this.value)),
                               delta: cast<UnsafePtr>(addr(of: delta)), dst: cast<UnsafePtr>(addr(of: dst)),
                               width: sizeof(T), mo: orderBits(o: order));
+    }
+
+    // Wait while the cell holds `whileEquals`, and answer the first other value it loads. It never answers early: a
+    // wake that finds the same value waits again, so a caller writes no loop for that. A change and a change back
+    // between two looks go unseen, as in C++; a counter that only moves forward cannot meet that. The compare is
+    // bitwise, as `compareExchange`'s is. A thread polls the cell for a microsecond before it sleeps; on an isolate
+    // that runs fibers only this fiber parks, and the others run.
+    public fn T wait(T whileEquals) {
+        slot T seen;
+        _ = this.waitInto(whileEquals: whileEquals, deadline: NO_DEADLINE, seen: out seen);
+        return seen;
+    }
+
+    // `wait`, giving up at `deadline`: `Err(TimedOut)` when it passes first. A deadline rather than a span, because a
+    // caller waiting for more than "any change" loops, and a span would start again at every change:
+    //     Instant by = monotonicNow() + Duration.fromMillis(ms: 50);
+    //     uint32 left = pending.load();
+    //     while (left != 0) {
+    //         match (pending.waitUntil(whileEquals: left, deadline: by)) {
+    //             case Ok(value: now): { left = now; }
+    //             case Err(error: e): { return Result::Err(error: e); }
+    //         };
+    //     }
+    // A deadline already past is one look.
+    public fn Result<T, WaitError> waitUntil(T whileEquals, Instant deadline) {
+        slot T seen;
+        int32 r = this.waitInto(whileEquals: whileEquals, deadline: deadline.rawNanos, seen: out seen);
+        if (r == 0) { return Result::Ok(value: seen); }
+        return Result::Err(error: WaitError::TimedOut);
+    }
+
+    // The seam both waits go through, and the one a lock window may not reach.
+    @parks
+    unsafe fn int32 waitInto(T whileEquals, uint64 deadline, out T seen) {
+        return kama_atomic_wait(cell: cast<UnsafePtr>(addr(of: this.value)), old: cast<UnsafePtr>(addr(of: whileEquals)),
+                                seen: cast<UnsafePtr>(addr(of: seen)), width: sizeof(T), deadline: deadline);
+    }
+
+    // Wake one task waiting on this cell, or every one. Change the cell first: a waiter that wakes to the value it
+    // waited on waits again.
+    public fn void notifyOne() { this.notifyInto(all: 0); }
+    public fn void notifyAll() { this.notifyInto(all: 1); }
+    unsafe fn void notifyInto(int32 all) {
+        kama_atomic_notify(cell: cast<UnsafePtr>(addr(of: this.value)), all: all);
     }
 
     // No destructor, deliberately. An `Atomic<T>` owns nothing — the cell is inline and a zero value is

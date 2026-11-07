@@ -1,0 +1,74 @@
+// `Atomic.waitUntil` (KR-3 step 2, W1): a deadline, not a span, answering `Err(TimedOut)` when it passes first.
+// - a deadline already past is one look, and answers at once;
+// - a deadline nobody beats is kept: the wait lasts at least that long;
+// - a change before the deadline answers `Ok` with the new value;
+// - a countdown over several changes keeps ONE deadline, which a span restarted at every change would not.
+import { std::concurrent::Atomic, std::concurrent::WaitError, std::time::sleep, std::time::Duration,
+         std::time::Instant, std::time::monotonicNow };
+
+fn void checkIn(ref Atomic<uint32> pending, int64 afterMs) {
+    sleep(d: Duration.fromMillis(ms: afterMs));
+    pending.fetchSub(delta: 1);
+    pending.notifyAll();
+}
+
+fn uint8 main() {
+    Atomic<uint32> cell = Atomic.make(value: 7);
+
+    // Past: one look. A cell that differs still answers Ok.
+    match (cell.waitUntil(whileEquals: 7, deadline: monotonicNow())) {
+        case Ok(value: v): { return 1; }
+        case Err(error: e): { }
+    };
+    match (cell.waitUntil(whileEquals: 0, deadline: monotonicNow())) {
+        case Ok(value: v): { if (v != 7) { return 2; } }
+        case Err(error: e): { return 3; }
+    };
+
+    // Kept: nobody changes the cell, so it waits out 30 ms and no less.
+    Instant t0 = monotonicNow();
+    match (cell.waitUntil(whileEquals: 7, deadline: t0 + Duration.fromMillis(ms: 30))) {
+        case Ok(value: v): { return 4; }
+        case Err(error: e): { if (e.message() != "the deadline passed while the cell still held the value waited on") { return 5; } }
+    };
+    if (t0.elapsed() < Duration.fromMillis(ms: 30)) { return 6; }
+
+    // Beaten: three workers check in at 10, 20 and 30 ms, well inside a 5 s deadline that the loop keeps throughout.
+    Atomic<uint32> pending = Atomic.make(value: 3);
+    Instant by = monotonicNow() + Duration.fromSecs(s: 5);
+    uint32 left = pending.load();
+    scope {
+        spawn checkIn(pending: ref pending, afterMs: 10);
+        spawn checkIn(pending: ref pending, afterMs: 20);
+        spawn checkIn(pending: ref pending, afterMs: 30);
+        while (left != 0) {
+            match (pending.waitUntil(whileEquals: left, deadline: by)) {
+                case Ok(value: now): { left = now; }
+                case Err(error: e): { left = 99; }
+            };
+            if (left == 99) { return 7; }
+        }
+    }
+    if (left != 0) { return 8; }
+
+    // The same countdown against a deadline too short for it: the loop gives up at the deadline, not after it.
+    Atomic<uint32> slow = Atomic.make(value: 2);
+    Instant t1 = monotonicNow();
+    Instant soon = t1 + Duration.fromMillis(ms: 40);
+    bool gaveUp = false;
+    Duration took = Duration.zero();
+    scope {
+        spawn checkIn(pending: ref slow, afterMs: 25);
+        spawn checkIn(pending: ref slow, afterMs: 200);
+        uint32 s = slow.load();
+        while (s != 0 && !gaveUp) {
+            match (slow.waitUntil(whileEquals: s, deadline: soon)) {
+                case Ok(value: now): { s = now; }
+                case Err(error: e): { took = t1.elapsed(); gaveUp = true; }
+            };
+        }
+    }
+    if (!gaveUp) { return 9; }
+    if (took < Duration.fromMillis(ms: 40)) { return 10; }   // never before its deadline
+    return 42;
+}

@@ -2284,6 +2284,42 @@ their own, and `tests/xfail/noheap_flag_fs_readdir.d` pins that boundary.
 Parking already allocates nothing, because the waiter record lives on the fiber's stack. This comes after KR-3's
 native scheduler, beside KR-19's MCU packaging, and wants hardware to verify on.
 
+<a id="s5-bare-metal-concurrent"></a>
+
+### A bare-metal build cannot import `std::concurrent::Atomic` (KR-341)
+
+Found 2026-11-07, building `Atomic.wait`'s bare-metal branch (KR-3 step 2, W5). This program:
+
+```kama
+import { std::concurrent::Atomic };
+fn uint8 main() {
+    Atomic<uint32> ready = Atomic.make(value: 1);
+    ready.notifyAll();
+    return cast<uint8>(ready.wait(whileEquals: 0));
+}
+```
+
+It does not build with `--target embedded --select OUTPUT=STATIC --cc "clang --target=armv7m-none-eabi"`, which is how
+`tools/check-embedded.sh` stands in for a firmware toolchain. Two of the units it compiles include libc headers that a
+bare-metal compiler without a libc does not have:
+- `std::concurrent`'s `Isolate` unit (`concurrent.kama`), whose `kama_isolate.h` includes `<pthread.h>`. It was compiled
+  for an `Atomic`-only program before `Atomic.wait` too, since its destructor is kept. With the host's headers the
+  archive references `pthread_join` and `free`.
+- `std::time`'s units, whose `kama_time.h` includes `<time.h>`. They are reached since `0.9.871`, because `waitUntil`
+  takes an `Instant`.
+
+With a glibc host's compiler and headers in place of the triple, the build fails as well. The `Isolate` unit's `cpuCount`
+branch is chosen by `__linux__`, not by the target, and includes `<stdio.h>`. glibc's `sscanf` carries an asm label
+there, which clashes with the embedded runtime's own declaration of it ("cannot apply asm label to function after its
+first use", measured on the Linux leg).
+
+`kama_atomic.h` calls itself "freestanding-friendly" and `kama_locked.h` has a branch for `--target embedded`, but no
+fixture or guard ever built a bare-metal program importing `std::concurrent`. Until this is fixed, the `Atomic.wait`
+check in `check-embedded.sh` compiles `kama_wait.h` on its own with the embedded flags and the host's headers. So it
+proves the header's branch, which references no symbol but the clock's, and not the toolchain. The fix wants a bare-metal shape for the module's thread machinery: refuse `spawn` there, and compile none
+of it. It also wants a clock on bare metal, which is KR-19's: a board supplies `kama_now_mono_ns`, as it supplies
+`kama_panic_handler`.
+
 <a id="s5-isr-shared-cell"></a>
 
 ### `main` and an interrupt handler share a cell only through `unsafe` (KR-340)
@@ -3459,7 +3495,7 @@ public fn void notifyAll()
       match (pending.waitUntil(whileEquals: left, deadline: by)) {
           case Ok(value: now): { left = now; }
           case Err(error: e): { return Result::Err(error: e); }
-      }
+      };
   }
   ```
 - **It answers a `Result`, not an `Optional`.** A discarded `Optional` compiles without a word, while a discarded `Result`

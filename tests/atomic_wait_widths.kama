@@ -1,0 +1,46 @@
+// `Atomic.wait` on every width of cell (KR-3 step 2, W2): a waiter never sleeps on the cell itself, so a 1-byte `bool`,
+// an `int8`, a `uint16` and a `uint64` wait as a 32-bit cell does. Each cell is changed by another thread while main
+// waits on it, and the value `wait` answers is the one that thread stored.
+import { std::concurrent::Atomic, std::time::sleep, std::time::Duration };
+
+fn void setBool(ref Atomic<bool> c) { sleep(d: Duration.fromMillis(ms: 5)); c.store(value: true); c.notifyAll(); }
+fn void setI8(ref Atomic<int8> c) { sleep(d: Duration.fromMillis(ms: 5)); c.store(value: -128); c.notifyAll(); }
+fn void setU16(ref Atomic<uint16> c) { sleep(d: Duration.fromMillis(ms: 5)); c.store(value: 65535); c.notifyAll(); }
+fn void setI32(ref Atomic<int32> c) { sleep(d: Duration.fromMillis(ms: 5)); c.store(value: -2147483648); c.notifyAll(); }
+fn void setU64(ref Atomic<uint64> c) {
+    sleep(d: Duration.fromMillis(ms: 5));
+    c.store(value: 18446744073709551615);
+    c.notifyAll();
+}
+
+fn uint8 main() {
+    Atomic<bool> b = Atomic.make(value: false);
+    Atomic<int8> i8 = Atomic.make(value: 0);
+    Atomic<uint16> u16 = Atomic.make(value: 0);
+    Atomic<int32> i32 = Atomic.make(value: 0);
+    Atomic<uint64> u64 = Atomic.make(value: 0);
+    scope {
+        spawn setBool(c: ref b);
+        if (!b.wait(whileEquals: false)) { return 1; }
+    }
+    scope {
+        spawn setI8(c: ref i8);
+        if (i8.wait(whileEquals: 0) != -128) { return 2; }
+    }
+    scope {
+        spawn setU16(c: ref u16);
+        if (u16.wait(whileEquals: 0) != 65535) { return 3; }
+    }
+    scope {
+        spawn setI32(c: ref i32);
+        if (i32.wait(whileEquals: 0) != -2147483648) { return 4; }
+    }
+    scope {
+        spawn setU64(c: ref u64);
+        if (u64.wait(whileEquals: 0) != 18446744073709551615) { return 5; }
+    }
+    // A cell that already differs answers at once, at every width.
+    if (u16.wait(whileEquals: 1) != 65535) { return 6; }
+    if (!b.wait(whileEquals: false)) { return 7; }
+    return 42;
+}
