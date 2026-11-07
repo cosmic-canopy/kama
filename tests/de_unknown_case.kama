@@ -1,0 +1,60 @@
+import { std::memory::Owned, std::collections::DynamicArray, std::serialization::text::json::deserializeJsonBuffer };
+// A name none of an enum's cases has is reported as one, naming the value and the cases — as an unknown field is named —
+// rather than "malformed input", which named neither (up to 0.9.865). Its kind is `UnknownCase`, its `field()` the path,
+// and a value of another type in the name's place is still a `TypeMismatch`. Exit code 42 iff every report is right.
+
+@generate(Serializable, Deserializable)
+type enum Phase { Input, Update, Constraints, Output }
+@generate(Deserializable)
+type enum Shape { Circle(float64 radius), Dot }
+@generate(Deserializable)
+type resource Processor {
+    @field Phase phase;
+    @field DynamicArray<Phase> after;
+    @field Shape shape;
+}
+
+fn string describe(Owned<Error> e) {
+    Optional<DeError> d = e.as<DeError>();
+    return match (give d) {
+        case None: "not a DeError";
+        case Some(value: de): {
+            string m = de.message();
+            string f = match (de.field()) { case Some(value: p): copy p; case None: "-"; };
+            string k = match (de.kind()) { case UnknownCase: "UnknownCase"; case TypeMismatch: "TypeMismatch"; case _: "other"; };
+            := "${m}|${f}|${k}";
+        }
+    };
+}
+fn int32 check(string src, string want) {
+    string got = match (deserializeJsonBuffer::<Processor>(src: give src)) {
+        case Ok(value: p): "ok";
+        case Err(error: e): describe(e: give e);
+    };
+    return got == want ? 1 : 0;
+}
+
+fn uint8 main() {
+    int32 ok = 0;
+    // a misspelt case, and one in the wrong case
+    ok = ok + check(src: "{\"phase\": \"Updte\", \"after\": [], \"shape\": {\"tag\": \"Dot\"}}",
+                    want: "`Updte` is not a `Phase` (at `phase`): expected `Input`, `Update`, `Constraints` or `Output`|phase|UnknownCase");
+    ok = ok + check(src: "{\"phase\": \"update\", \"after\": [], \"shape\": {\"tag\": \"Dot\"}}",
+                    want: "`update` is not a `Phase` (at `phase`): expected `Input`, `Update`, `Constraints` or `Output`|phase|UnknownCase");
+    // an element of a list
+    ok = ok + check(src: "{\"phase\": \"Input\", \"after\": [\"Output\", \"Later\"], \"shape\": {\"tag\": \"Dot\"}}",
+                    want: "`Later` is not a `Phase` (at `after[1]`): expected `Input`, `Update`, `Constraints` or `Output`|after[1]|UnknownCase");
+    // an enum with a payload: its tag
+    ok = ok + check(src: "{\"phase\": \"Input\", \"after\": [], \"shape\": {\"tag\": \"Squar\", \"value\": {\"radius\": 1.0}}}",
+                    want: "`Squar` is not a `Shape` (at `shape`): expected `Circle` or `Dot`|shape|UnknownCase");
+    // a value of another type is still a type mismatch
+    ok = ok + check(src: "{\"phase\": 3, \"after\": [], \"shape\": {\"tag\": \"Dot\"}}",
+                    want: "type mismatch at `phase`|phase|TypeMismatch");
+    // the enum read as a whole: no path
+    string whole = match (deserializeJsonBuffer::<Phase>(src: "\"Nope\"")) {
+        case Ok(value: p): "ok";
+        case Err(error: e): describe(e: give e);
+    };
+    if (whole == "`Nope` is not a `Phase`: expected `Input`, `Update`, `Constraints` or `Output`|-|UnknownCase") { ok = ok + 1; }
+    return cast<uint8>(ok * 7);
+}

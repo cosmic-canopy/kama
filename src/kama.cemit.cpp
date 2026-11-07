@@ -41000,7 +41000,9 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
         for (size_t i = 0; i < ci.variants.size(); ++i) {
             indent(2); *_out << "case " << i << ": kama_result = " << enumConst(ci.name, ci.variants[i].name) << "; break;\n";
         }
-        indent(2); *_out << "default: r.kama_vtbl->k_fail(r.kama_obj); break;\n";
+        // A name none of the cases has — and not a read that already failed (a number in the name's place), which the
+        // boundary below reports as it is: the error names the value and the cases.
+        indent(2); *_out << "default: if (!r.kama_vtbl->k_failed(r.kama_obj)) { " << deUnknownCaseReturn(ci, resC) << " } break;\n";
         indent(1); *_out << "}\n";
         indent(1); *_out << preludeMember("FieldKey", "dtor") << "(&kama_tag);\n";
         indent(1); *_out << "if (r.kama_vtbl->k_failed(r.kama_obj)) {\n";
@@ -41140,6 +41142,8 @@ void CEmitter::emitEnumDeserializeDefinition(ClassInfo& ci)
     // emitted `(E){ .tag = E_ }` and did not compile, which is why `Deserializable` used to be silently
     // DROPPED from an enum whose every variant carries a payload. Return the Err here instead: nothing
     // has been constructed, so there is no partial to drop and `__result` is never touched.
+    // A name none of the cases has is reported as one, naming it; a tag whose read already failed falls to what follows.
+    indent(1); *_out << "else if (!r.kama_vtbl->k_failed(r.kama_obj)) { " << deUnknownCaseReturn(ci, resC) << " }\n";
     if (!dflt.empty()) {
         indent(1); *_out << "else { r.kama_vtbl->k_fail(r.kama_obj); kama_result = (" << ci.name << "){ .kama_tag = " << enumConst(ci.name, dflt) << " }; }\n";
     } else {
@@ -41488,6 +41492,27 @@ std::string CEmitter::deErrorBox(const std::string& kindExpr, const std::string&
     const std::string ownedErr = cType(ownedErrorTypeNode());
     return boxValueExpr(ownedErr, de, kamaMember(de, "as_" + _classes[ownedErr].collElemClass),
                         _classes[de].methods["at"].cName + "(" + kindExpr + ", " + pathExpr + ")", 0);
+}
+
+// An enum's reader handed a name none of its cases has (`kama_tag`): latch `UnknownCase` on the reader, drop the tag, and
+// return the error that names the value read and the cases — `DeError.unknownCase(key:, type:, cases:)`, whose phrase
+// is spelled here, once, from the declaration.
+std::string CEmitter::deUnknownCaseReturn(const ClassInfo& ci, const std::string& resC)
+{
+    std::string phrase;
+    for (size_t i = 0; i < ci.variants.size(); ++i)
+        phrase += std::string(i == 0 ? "" : i + 1 == ci.variants.size() ? " or " : ", ") + "`" + ci.variants[i].name + "`";
+    std::string type = demangleForDisplay(ci.name);
+    const size_t colons = type.rfind("::", type.find('<'));   // `game::Phase` -> `Phase`, `Opt<a::B>` stays whole
+    if (colons != std::string::npos) type = type.substr(colons + 2);
+    const std::string de = preludeName("DeError");
+    const std::string ownedErr = cType(ownedErrorTypeNode());
+    const std::string box = boxValueExpr(ownedErr, de, kamaMember(de, "as_" + _classes[ownedErr].collElemClass),
+                                         _classes[de].methods["unknownCase"].cName + "(&kama_tag, " + kamaStrLit(type) + ", "
+                                             + kamaStrLit(phrase) + ")", 0);
+    return ownedErr + " kama_uc = " + box + "; r.kama_vtbl->k_failWith(r.kama_obj, " + preludeConst("DeErrorKind", "UnknownCase")
+         + "); " + preludeMember("FieldKey", "dtor") + "(&kama_tag); return (" + resC + "){ .kama_tag = " + enumConst(resC, "Err")
+         + ", .kama_u.k_Err = { .k_error = kama_uc } };";
 }
 
 // A nested read's error one level out: `DeError::inField(error:, name:)`, the same call a hand-written reader makes.

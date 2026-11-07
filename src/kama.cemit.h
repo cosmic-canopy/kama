@@ -2672,6 +2672,7 @@ private:
     // (`kama_at == 2`, `!kama_seen[2]`), else "" — a C `string` expression over literals.
     std::string serPathChoice(const std::vector<std::pair<std::string, std::string>>& condAndName);
     // A reader's failure as an `Owned<Error>` holding `DeError.at(kind:, field:)` — an expression.
+    std::string deUnknownCaseReturn(const ClassInfo& ci, const std::string& resC);
     std::string deErrorBox(const std::string& kindExpr, const std::string& pathExpr);
     // `boxExpr` one level out (`DeError::inField`): a nested read's path gains this field's wire name.
     std::string deErrorInField(const std::string& boxExpr, const std::string& name);

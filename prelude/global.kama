@@ -454,7 +454,8 @@ type enum DeErrorKind implements Sendable {
     UnknownField,   // a STRICT reader's: a key no field claims (`JsonDeserializer.strict`)
     TooDeep,        // nested deeper than 128 objects/arrays, the depth every reader stops at: untrusted input must not
                     // decide how deep a read recurses
-    TooMany;        // more elements than a bounded list holds (`InlineDynamicArray<T>#(N)`), at the first with no place.
+    TooMany,        // more elements than a bounded list holds (`InlineDynamicArray<T>#(N)`), at the first with no place.
+    UnknownCase;    // a name no case of the enum being read has (`"phase": "Updte"`): the error names it and the cases.
                     // A new kind goes last: the graph reader carries a kind as its tag
 
     public const fn string message() {
@@ -468,6 +469,7 @@ type enum DeErrorKind implements Sendable {
             case UnknownField:         "unknown field";
             case TooDeep:              "nesting too deep";
             case TooMany:              "too many elements";
+            case UnknownCase:          "unknown case";
         };
     }
 }
@@ -481,12 +483,34 @@ type enum DeErrorKind implements Sendable {
 type resource DeError implements Error, Copyable<This>(bare: give), Sendable {
     DeErrorKind k = DeErrorKind::Malformed;
     string at = "";   // the path; "": the value being read as a whole
+    // An `UnknownCase`'s particulars, which its message gives so the value can be fixed without reading the type: the name
+    // read, the enum's name, and its cases as a phrase ("`Input`, `Update` or `Output`"). Empty for every other kind.
+    string got = "";
+    string of = "";
+    string cases = "";
 
     // An error about the value as a whole — what a reader knows, and what a hand-written `deserialize` raises.
     public ctor of(DeErrorKind kind) { this.k = kind; }
     // ...and one about a part of it: `DeError.at(kind: DeErrorKind::MissingField, field: "port")`.
     public ctor at(DeErrorKind kind, string field) { this.k = kind; this.at = give field; }
-    public ctor copy(ref DeError source) { this.k = source.k; this.at = copy source.at; }
+    public ctor copy(ref DeError source) {
+        this.k = source.k; this.at = copy source.at;
+        this.got = copy source.got; this.of = copy source.of; this.cases = copy source.cases;
+    }
+    // What an enum's derived reader raises for a name none of its cases has, given the key the reader found: "`Updte` is
+    // not a `Phase`: expected `Input`, `Update`, `Constraints` or `Output`". Up to 0.9.865 that was "malformed input",
+    // naming neither, while an unknown FIELD has always been named.
+    public ctor unknownCase(const ref FieldKey key, string type, string cases) {
+        this.k = DeErrorKind::UnknownCase;
+        this.got = match (key) { case Name(name: n): copy n; case Id(id: i): "#${i}"; case Position(rank: r): "#${r}"; };
+        this.of = give type;
+        this.cases = give cases;
+    }
+    // `inner` one level further out, under `path`: its kind and its particulars kept.
+    ctor within(ref DeError inner, string path) {
+        this.k = inner.k; this.at = give path;
+        this.got = copy inner.got; this.of = copy inner.of; this.cases = copy inner.cases;
+    }
 
     public const fn DeErrorKind kind() { return this.k; }
     // Where it failed — `server.port`, `servers[2].port`, `[0].name` — or `None` for the value as a whole.
@@ -494,8 +518,17 @@ type resource DeError implements Error, Copyable<This>(bare: give), Sendable {
         if (this.at.length() == 0) { return Optional::None; }
         return Optional::Some(value: copy this.at);
     }
-    // The kind, and where: "missing field `server.port`", "type mismatch at `servers[2].port`", "malformed input".
+    // The kind, and where: "missing field `server.port`", "type mismatch at `servers[2].port`", "malformed input"; and
+    // for an `UnknownCase` the name read and the cases: "`Updte` is not a `Phase` (at `phase`): expected `Input` or …".
     public const fn string message() {
+        if (this.of.length() > 0) {   // an `UnknownCase` the reader could name
+            string value = copy this.got;
+            string type = copy this.of;
+            string expected = copy this.cases;
+            string where = copy this.at;
+            if (where.length() == 0) { return "`${value}` is not a `${type}`: expected ${expected}"; }
+            return "`${value}` is not a `${type}` (at `${where}`): expected ${expected}";
+        }
         string kindText = this.k.message();
         if (this.at.length() == 0) { return kindText; }
         string where = copy this.at;
@@ -513,14 +546,14 @@ type resource DeError implements Error, Copyable<This>(bare: give), Sendable {
     public static fn std::memory::Owned<Error> inField(std::memory::Owned<Error> error, string name) {
         Optional<DeError> d = error.as<DeError>();
         return match (give d) {
-            case Some(value: e): DeError.at(kind: e.k, field: DeError::joined(step: name, rest: e.at));
+            case Some(value: e): DeError.within(inner: e, path: DeError::joined(step: name, rest: e.at));
             case None: give error;
         };
     }
     public static fn std::memory::Owned<Error> inElement(std::memory::Owned<Error> error, isize index) {
         Optional<DeError> d = error.as<DeError>();
         return match (give d) {
-            case Some(value: e): DeError.at(kind: e.k, field: DeError::joined(step: "[${index}]", rest: e.at));
+            case Some(value: e): DeError.within(inner: e, path: DeError::joined(step: "[${index}]", rest: e.at));
             case None: give error;
         };
     }

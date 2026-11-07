@@ -8156,7 +8156,8 @@ collection elements and `Owned`/`Optional` payloads alike — and enum variant p
   first failure is the one reported. A failed read constructs nothing, so the type's destructor never runs for
   it: what the reader read in full is dropped field by field, and a collection drops the elements it holds.
 - **Enums** serialize externally-tagged: `{"tag":"V"}` (no payload) / `{"tag":"V","value":{fields…}}` (payload);
-  deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError`. The **variant selector** has
+  deserialize reads the tag, dispatches, constructs; an unknown tag → `DeError` of kind `UnknownCase`, whose message <!-- test: de_unknown_case -->
+  names the value and the cases: "`Updte` is not a `Phase` (at `phase`): expected `Input`, `Update` or `Output`". The **variant selector** has The **variant selector** has
   its own contract member (`variant(name, index)` / `variant() -> FieldKey`) rather than riding `writeString`:
   a discriminant is one of `n` known alternatives, not a string, so a positional or numbered backend spends
   one byte on it where a name costs the whole string. A named backend writes the name, unchanged.
