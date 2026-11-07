@@ -996,7 +996,9 @@ struct Server {
         Json ps = Json::array();
         for (const auto& p : h.params) {
             Json jp = Json::object();
-            jp.set("label", p.label + ": " + p.detail);   // a string label: the client substring-matches it
+            // A string label, which the client substring-matches in the signature's: so spelled exactly as signatureAt
+            // spells the parameter there, mode and all (`read: const ref Shot`).
+            jp.set("label", p.label + ": " + (p.mode.empty() ? p.detail : p.mode + " " + p.detail));
             ps.push(std::move(jp));
         }
         Json sig = Json::object();

@@ -9712,6 +9712,21 @@ Json jsonSymbol(const SymbolInfo& s, bool withUri)
     j.set("kind", symKindName(s.kind));
     j.set("name", s.name);
     if (!s.container.empty()) j.set("container", s.container);
+    // A callable's declaration, and each parameter's mode apart from its type: what a function writes (`ref`), reads
+    // in place (`const ref`) or copies ("value"), read off the compiler rather than re-parsed by the tool asking.
+    if (!s.signature.empty()) {
+        j.set("signature", s.signature);
+        j.set("returns", s.returns);
+        Json ps = Json::array();
+        for (const auto& p : s.params) {
+            Json e = Json::object();
+            e.set("name", p.label);
+            e.set("mode", p.mode.empty() ? std::string("value") : p.mode);
+            e.set("type", p.detail);
+            ps.push(e);
+        }
+        j.set("params", ps);
+    }
     return j;
 }
 
@@ -13368,6 +13383,15 @@ static int kamaMain(int argc, char** argv)
                             Json e = Json::object();
                             e.set("label", h.label);
                             e.set("activeParam", h.activeParam);
+                            Json ps = Json::array();   // the label's parameters apart, as --symbols --json gives them
+                            for (const auto& p : h.params) {
+                                Json pe = Json::object();
+                                pe.set("name", p.label);
+                                pe.set("mode", p.mode.empty() ? std::string("value") : p.mode);
+                                pe.set("type", p.detail);
+                                ps.push(pe);
+                            }
+                            e.set("params", ps);
                             rs.push(e);
                         }
                         j.set("results", rs);

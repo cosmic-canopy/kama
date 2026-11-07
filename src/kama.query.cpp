@@ -430,6 +430,71 @@ std::string CEmitter::builtinFileOfDecl(const ASTNode* topLevelDecl) const
     return it == _declBuiltinFile.end() ? std::string() : it->second;
 }
 
+// A parameter's passing mode as kama spells it: "ref", "const ref", "out", or "" for one taken by value.
+static std::string paramMode(bool byRef, bool isConst, bool isOut)
+{
+    if (isOut) return "out";
+    if (byRef) return isConst ? "const ref" : "ref";
+    return "";
+}
+static std::string paramMode(const FunctionParameterNode* p)
+{
+    const std::string* m = (p && p->modifier && p->modifier->value) ? p->modifier->value.get() : nullptr;
+    return paramMode(m && (*m == "ref" || *m == "out"), p && p->isConst, m && *m == "out");
+}
+static std::string paramMode(const ParamSig& p) { return paramMode(p.byRef, p.isConst, p.isOut); }
+// `a: ref Point` — a parameter in a call's label, where the argument is written `a: ref p`.
+static std::string labelled(const std::string& name, const std::string& mode, const std::string& type)
+{
+    return name + ": " + (mode.empty() ? type : mode + " " + type);
+}
+
+// A callable declaration's signature as written (DefSite::signature): `fn void hit(ref Shot written, const ref Shot read,
+// Shot copied)`, `const fn int32 unit(int32 who)`, `ctor make(int32 x)`. A tool that reads a function's access off its
+// signature — a scheduler ordering what writes before what reads — asks the compiler for it rather than parsing kama.
+void CEmitter::fillDeclSignature(ASTNode* node, DefSite& d)
+{
+    SharedParameterList params;
+    std::string head, name;
+    if (auto* fn = dynamic_cast<FunctionDeclarationNode*>(node)) {
+        if (!fn->name || !fn->name->value) return;
+        d.returns = (fn->isConstRef ? "const ref " : fn->isRef ? "ref " : "")
+                  + (fn->returnType ? kamaTypeText(fn->returnType) : std::string("void"));
+        head = std::string(fn->isUnsafe ? "unsafe " : "") + (fn->isComptime ? "comptime " : "") + "fn " + d.returns + " ";
+        name = *fn->name->value;
+        params = fn->parameters;
+    } else if (auto* md = dynamic_cast<ClassMethodDeclarationNode*>(node)) {
+        if (!md->name || !md->name->value) return;
+        name = *md->name->value;
+        params = md->params;
+        const std::string mods = std::string(modHas(md->modifiers, "static") ? "static " : "")
+                               + (modHas(md->modifiers, "unsafe") ? "unsafe " : "");
+        if (md->isCtor) {
+            d.returns = md->returnType ? kamaTypeText(md->returnType) : d.container;
+            head = mods + "ctor ";
+        } else {
+            d.returns = (md->isConstRef ? "const ref " : md->isRef ? "ref " : "")
+                      + (md->returnType ? kamaTypeText(md->returnType) : std::string("void"));
+            head = mods + (md->isConsuming ? "give " : "") + (md->isConst ? "const " : "") + "fn " + d.returns + " ";
+        }
+    } else if (auto* cd = dynamic_cast<ClassConstructorDeclarationNode*>(node)) {
+        if (!cd->declarator || !cd->declarator->constructorName || !cd->declarator->constructorName->value) return;
+        name = *cd->declarator->constructorName->value;
+        params = cd->declarator->params;
+        d.returns = d.container;
+        head = "ctor ";
+    } else return;
+    std::string list;
+    if (params) for (auto& p : *params) {
+        if (!p || !p->identifier || !p->identifier->value) continue;
+        const std::string mode = paramMode(p.get()), type = p->type ? kamaTypeText(p->type) : std::string();
+        d.params.push_back(SignatureParam{ *p->identifier->value, type, mode });
+        list += (list.empty() ? "" : ", ") + std::string(p->isHardware ? "hardware " : "")
+              + (mode.empty() ? (p->isConst ? "const " : "") : mode + " ") + type + " " + *p->identifier->value;
+    }
+    d.signature = head + name + "(" + list + ")";
+}
+
 void CEmitter::addDefSite(const std::string& key, SymKind kind, const CompilationUnit* unit,
                           ASTNode* declNode, const SharedIdentifier& nameId,
                           const std::string& display, const std::string& container,
@@ -457,6 +522,9 @@ void CEmitter::addDefSite(const std::string& key, SymKind kind, const Compilatio
     d.node           = declNode;
     d.display        = display;
     d.container      = container;
+    if (kind == SymKind::Function || kind == SymKind::GenericFn || kind == SymKind::Method || kind == SymKind::Ctor
+        || kind == SymKind::ComptimeFn)
+        fillDeclSignature(declNode, d);
     _defSites[key] = d;   // one entry per resolved mangled name (map keys are already unique)
 }
 
@@ -1629,7 +1697,9 @@ std::string CEmitter::typeAtPosition(const std::string& uri, int line, int col) 
     auto m = _modules.find(e->declKey);
     if (m != _modules.end()) return "module " + m->second.display;
     auto it = _defSites.find(e->declKey);
-    if (it != _defSites.end()) return std::string(symKindName(it->second.kind)) + " " + it->second.display;
+    if (it != _defSites.end())
+        return std::string(symKindName(it->second.kind)) + " " + it->second.display
+             + (it->second.signature.empty() ? std::string() : ": " + it->second.signature);
     if (e->isDeclName || !e->id || !e->id->value) return "";
     return *e->id->value;   // a builtin/unresolved type — echo the source spelling
 }
@@ -1773,7 +1843,8 @@ std::vector<SymbolInfo> CEmitter::documentSymbols(const std::string& uri) const
             || kv.second.kind == SymKind::TypeParam || kv.second.kind == SymKind::ComptimeParam) continue;
         const DefSite& d = kv.second;
         if (d.unit != unit) continue;
-        out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, uri });
+        out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, uri, d.signature, d.params,
+                                  d.returns });
     }
     std::sort(out.begin(), out.end(), [](const SymbolInfo& a, const SymbolInfo& b) {
         if (a.range.line != b.range.line) return a.range.line < b.range.line;
@@ -1865,7 +1936,8 @@ std::vector<SymbolInfo> CEmitter::workspaceSymbols(const std::string& query) con
             for (char c : d.display) hay += (char)tolower((unsigned char)c);
             if (hay.find(needle) == std::string::npos) continue;
         }
-        out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, *d.unit->name });
+        out.push_back(SymbolInfo{ d.display, d.kind, d.range, d.selectionRange, d.container, *d.unit->name, d.signature,
+                                  d.params, d.returns });
     }
     std::sort(out.begin(), out.end(), [](const SymbolInfo& a, const SymbolInfo& b) {
         if (a.uri != b.uri) return a.uri < b.uri;
@@ -2480,7 +2552,7 @@ void CEmitter::addMembers(const std::string& clsKey, bool wantStatic, const Quer
             if (m.params) for (size_t i = 0; i < m.params->size(); ++i) {
                 const auto& p = (*m.params)[i];
                 if (!p || !p->identifier || !p->identifier->value) continue;
-                detail += (i ? ", " : "") + *p->identifier->value + ": " + spellTypeIn(clsKey, p->type);
+                detail += (i ? ", " : "") + labelled(*p->identifier->value, paramMode(p.get()), spellTypeIn(clsKey, p->type));
             }
             out.push_back(CompletionItem{ m.name, CompletionKind::Method, detail + ")", ic->second.name });
         }
@@ -2495,9 +2567,9 @@ void CEmitter::addMembers(const std::string& clsKey, bool wantStatic, const Quer
                             const SharedParameterList& nodes) {
         std::string s = "(";
         for (size_t i = 0; i < ps.size(); ++i) {
-            s += (i ? ", " : "") + ps[i].name + ": ";
-            s += (nodes && i < nodes->size() && (*nodes)[i]) ? spellTypeIn(ownerKey, (*nodes)[i]->type)
-                                                            : ps[i].className;
+            s += (i ? ", " : "") + labelled(ps[i].name, paramMode(ps[i]),
+                                            (nodes && i < nodes->size() && (*nodes)[i]) ? spellTypeIn(ownerKey, (*nodes)[i]->type)
+                                                                                       : ps[i].className);
         }
         return s + ")";
     };
@@ -2704,11 +2776,11 @@ void CEmitter::addNamesInScope(const QueryCtx& qc, const std::vector<QueryBindin
         std::string detail = "fn " + (kv.second.node ? spellTypeIn("", kv.second.node->returnType) : std::string())
                            + " " + label + "(";
         for (size_t i = 0; i < kv.second.params.size(); ++i) {
-            detail += (i ? ", " : "") + kv.second.params[i].name + ": ";
-            detail += (kv.second.node && kv.second.node->parameters && i < kv.second.node->parameters->size()
-                       && (*kv.second.node->parameters)[i])
-                          ? spellTypeIn("", (*kv.second.node->parameters)[i]->type)
-                          : kv.second.params[i].className;
+            detail += (i ? ", " : "") + labelled(kv.second.params[i].name, paramMode(kv.second.params[i]),
+                                                 (kv.second.node && kv.second.node->parameters
+                                                  && i < kv.second.node->parameters->size() && (*kv.second.node->parameters)[i])
+                                                     ? spellTypeIn("", (*kv.second.node->parameters)[i]->type)
+                                                     : kv.second.params[i].className);
         }
         emit(label, CompletionKind::Function, detail + ")", "");
     }
@@ -2784,14 +2856,14 @@ CEmitter::CalleeSig CEmitter::resolveCallee(const QueryCtx& qc, const std::vecto
         for (size_t i = 0; i < ps.size(); ++i) {
             std::string ty = (nodes && i < nodes->size() && (*nodes)[i])
                                  ? spellTypeIn(ownerKey, (*nodes)[i]->type) : ps[i].className;
-            sig.params.push_back(SignatureParam{ ps[i].name, ty });
+            sig.params.push_back(SignatureParam{ ps[i].name, ty, paramMode(ps[i]) });
         }
         sig.found = true;
     };
     auto fromNodes = [&](const SharedParameterList& nodes, const std::string& ownerKey) {
         if (nodes) for (auto& p : *nodes)
             if (p && p->identifier && p->identifier->value)
-                sig.params.push_back(SignatureParam{ *p->identifier->value, spellTypeIn(ownerKey, p->type) });
+                sig.params.push_back(SignatureParam{ *p->identifier->value, spellTypeIn(ownerKey, p->type), paramMode(p.get()) });
         sig.found = true;
     };
 
@@ -2895,7 +2967,7 @@ SignatureHelp CEmitter::signatureAt(const std::string& uri, const CompletionCont
         help.activeParam = ctx.activeParam;
     help.label = sig.display + "(";
     for (size_t i = 0; i < sig.params.size(); ++i)
-        help.label += (i ? ", " : "") + sig.params[i].label + ": " + sig.params[i].detail;
+        help.label += (i ? ", " : "") + labelled(sig.params[i].label, sig.params[i].mode, sig.params[i].detail);
     help.label += ")";
     if (!sig.ret.empty()) help.label += " -> " + sig.ret;
     return help;
@@ -2935,7 +3007,9 @@ std::vector<CompletionItem> CEmitter::completionsAt(const std::string& uri, cons
         for (auto& p : sig.params) {
             bool used = false;
             for (auto& f : ctx.filled) if (f == p.label) { used = true; break; }
-            if (!used) out.push_back(CompletionItem{ p.label + ":", CompletionKind::Label, p.detail, sig.display });
+            // The detail carries the mode, so the label says whether the argument is written `a: ref x`.
+            if (!used) out.push_back(CompletionItem{ p.label + ":", CompletionKind::Label,
+                                                     p.mode.empty() ? p.detail : p.mode + " " + p.detail, sig.display });
         }
     } else if (ctx.trigger == CompletionTrigger::Bare) {
         addNamesInScope(qc, binds, out);

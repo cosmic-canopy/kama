@@ -33,6 +33,11 @@ enum class SymKind { Class, Value, Resource, Contract, Enum, EnumMember,
                      ComptimeParam };  // KR-134: a `comptime(int32 N)` parameter, the same way
 const char* symKindName(SymKind k);      // stable lowercase tag ("class", "method", …) for text/JSON output
 
+// One parameter of a signature: label "a", detail "Point" (its type), and its passing mode as kama spells it, "ref",
+// "const ref" or "out", or "" for one taken by value. Without the mode `hit(written: Shot, read: Shot, copied: Shot)`
+// showed three parameters alike, though one is written through, one read in place and one a copy (up to 0.9.860).
+struct SignatureParam { std::string label, detail, mode; };
+
 // A declaration's location + identity. Keyed in `_defSites` by its RESOLVED mangled name (exactly what
 // resolveUserName / resolveFunc return), so a cursor on a reference resolves to it in one map lookup.
 struct DefSite {
@@ -56,6 +61,12 @@ struct DefSite {
     ASTNode*                node = nullptr;      // decl node (null for a node-less table entry)
     std::string             display;             // human name ("Point", "Point.area")
     std::string             container;           // enclosing type for methods/fields ("Point"), else ""
+    // A function's, method's or constructor's declaration as written — `fn void hit(ref Shot written, const ref Shot
+    // read, Shot copied)` — with its parameters and return type apart, for `--type` and `--symbols --json`. Empty
+    // for anything else.
+    std::string             signature;
+    std::vector<SignatureParam> params;
+    std::string             returns;
 };
 
 // One indexed source position: a declaration NAME, a signature TYPE reference, or (M3) a BODY use-site.
@@ -86,7 +97,8 @@ struct Location   { std::string uri; SrcRange range; };
 // `uri` is the declaring unit's path. It is redundant for documentSymbols (every symbol is in the file you
 // asked about) but load-bearing for workspaceSymbols, whose results span the project.
 struct SymbolInfo { std::string name; SymKind kind; SrcRange range, selectionRange; std::string container;
-                    std::string uri; };
+                    std::string uri;
+                    std::string signature; std::vector<SignatureParam> params; std::string returns; };   // as DefSite's
 
 // ---- completion + signature help (M4) --------------------------------------------------------------------
 //
@@ -150,7 +162,6 @@ struct CompletionItem {
     std::string    container;                          // declaring type / namespace ("" for a local)
 };
 
-struct SignatureParam { std::string label, detail; };  // label "a", detail "Point"
 struct SignatureHelp  { std::string label;             // "midpoint(a: Point, b: Point) -> Point"
                         std::vector<SignatureParam> params;
                         int activeParam = -1; };       // an empty label means nothing callable is here

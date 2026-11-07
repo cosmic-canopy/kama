@@ -1307,6 +1307,25 @@ expect --refs 7:6  -- "fnptr_calls.kama:11:14"
 expect --refs 4:26 -- "fnptr_calls.kama:13:16"
 expect --refs 14:27 -- "fnptr_calls.kama:15:14"
 
+# A parameter's passing mode is part of every signature a query gives. Up to 0.9.860 `--sighelp` and `--complete` showed
+# `hit(written: Shot, read: Shot, copied: Shot)`, three parameters alike though one is written through, one read in
+# place and one a copy, and the declaration gave no signature at all — so a tool reading a function's access off its
+# signature had to parse kama itself.
+echo "check-query: passing modes, and a declaration's signature"
+FIXTURE="$ROOT/tests/query/modes.kama"
+if [ ! -f "$FIXTURE" ]; then echo "check-query: missing $FIXTURE" >&2; exit 1; fi
+expect --sighelp 10:8 -- "sig=hit(written: ref Shot, read: const ref Shot, copied: Shot) -> void"
+expect --sighelp 12:9 -- "sig=fill(into: out int32) -> void"
+expect --sighelp 13:43 -- "sig=a.doubled(other: const ref Shot) -> int32"
+expect --complete 10:5 -- "fn void hit(written: ref Shot, read: const ref Shot, copied: Shot)"
+expect --type 4:8 -- "function hit: fn void hit(ref Shot written, const ref Shot read, Shot copied)"   # the declaration
+expect --type 10:4 -- "function hit: fn void hit(ref Shot written"                                     # ...and a call
+expect --type 2:56 -- "method Shot.doubled: const fn int32 doubled(const ref Shot other)"
+expect --symbols --json -- '"signature":"fn void fill(out int32 into)"'
+expect --symbols --json -- '{"name":"read","mode":"const ref","type":"Shot"}'
+expect --symbols --json -- '{"name":"copied","mode":"value","type":"Shot"}'
+expect --symbols -- "4:8 function hit"   # the text outline is unchanged
+
 # An argument naming nothing is one diagnostic, and an indexed one names the name. Counted for KR-103's reason.
 echo "check-query: an unresolved argument is one diagnostic"
 ua=$("$KAMA" query "$ROOT/tests/xfail/unresolved_argument_one_diagnostic.kama" --diagnostics 2>&1 || true)

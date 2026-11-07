@@ -1320,6 +1320,7 @@ private:
         ~RefUnitScope() { e->_refUnit = prev; }
     };
     const PosEntry* posAt(const CompilationUnit* unit, int line, int col) const;  // smallest span at cursor
+    void fillDeclSignature(ASTNode* node, DefSite& d);   // a callable's declaration as written (DefSite::signature)
     void addDefSite(const std::string& key, SymKind kind, const CompilationUnit* unit,
                     ASTNode* declNode, const SharedIdentifier& nameId,
                     const std::string& display, const std::string& container,

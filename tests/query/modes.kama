@@ -1,0 +1,14 @@
+@generate(of)
+type value Shot { public int32 n; public const fn int32 doubled(const ref Shot other) { return this.n + other.n; } }
+
+fn void hit(ref Shot written, const ref Shot read, Shot copied) { written.n = read.n + copied.n; }
+fn void fill(out int32 into) { into = 4; }
+
+fn uint8 main() {
+    Shot a = Shot.of(n: 1);
+    Shot b = Shot.of(n: 2);
+    hit(written: ref a, read: b, copied: Shot.of(n: 3));
+    int32 f = 0;
+    fill(into: out f);
+    return cast<uint8>(a.n + f + a.doubled(other: b));
+}

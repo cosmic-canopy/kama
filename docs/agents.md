@@ -120,6 +120,20 @@ $ kama query tests/query/shapes.kama --sighelp 18:26
 sig=Point.at(x: int32, y: int32) -> Point active=1
 ```
 
+A parameter's passing mode is part of the signature everywhere one is shown: `--sighelp`, `--complete`'s `detail`
+and an argument label's, so the label says whether the argument is written `written: ref a`. On a function, method
+or constructor, at its declaration or at any use, `--type` adds the declaration as written, and `--symbols --json`
+and `--search --json` carry it apart for a tool to read: `signature`, `returns`, and `params`, each with its `name`,
+`type` and `mode` (`ref`, `const ref`, `out` or `value`).
+
+```console
+$ kama query tests/query/modes.kama --sighelp 10:8
+sig=hit(written: ref Shot, read: const ref Shot, copied: Shot) -> void active=0
+
+$ kama query tests/query/modes.kama --type 4:8
+function hit: fn void hit(ref Shot written, const ref Shot read, Shot copied)
+```
+
 `--refs` lists the symbol's own uses. On a contract member that is the declaration and every call that reaches
 it through the contract — through a fat pointer or a generic's bound — and not the members implementing it, which
 `--impl` lists (it answers for a contract too: the types implementing it, an enum or a `type adapter` block
