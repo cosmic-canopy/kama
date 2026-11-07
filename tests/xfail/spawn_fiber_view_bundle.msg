@@ -1,1 +1,1 @@
-bundle is a view or a contract value
+is a view or a contract value

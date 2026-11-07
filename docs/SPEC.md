@@ -1191,7 +1191,7 @@ type value Mixer {                                     // ...and the same gate o
 #### Global allocator — `@globalAllocator` ✅
 
 Every heap block a kama program's C obtains, resizes or releases goes through one funnel, the runtime's `kama_alloc`/`kama_realloc`/`kama_free`,
-and that includes each box, container buffer, string, error box and `spawn` bundle. It defaults to the platform
+and that includes each box, container buffer, string, error box and a held `spawn`'s arguments. It defaults to the platform
 allocator. A program replaces that default with a **declaration**:
 
 ```kama fragment
@@ -2494,7 +2494,7 @@ non-blocking and registers it with the isolate's scheduler at its first wait; ne
   on, and there a fiber's wait still blocks the thread until the offload pool (KR-3 step 7).
 
 **Two fibers on one socket.** A proxy copying both ways or a WebSocket with a heartbeat is a reader and a writer at once, and a <!-- test: fiber_tcp_split, fiber_dgram_split, fiber_unix_split -->
-fiber's bundle may not be shared, so a socket comes apart. `give conn.split()` consumes a `TcpStream` and answers a `TcpHalves`,
+two fibers may not both hold one socket by `ref`, so a socket comes apart. `give conn.split()` consumes a `TcpStream` and answers a `TcpHalves`,
 taken apart by `match`: `case Halves(reader: r, writer: w)`. A `TcpReader` is a `Reader` with `setReadDeadline`, a `TcpWriter` is
 a `Writer` with `sendFile` and `setWriteDeadline`, and both have the addresses. Each half calls the socket's own methods, so
 each keeps its own direction's deadline, and one set before the split still holds. A `UnixStream` splits into a `UnixReader` and a
@@ -7307,29 +7307,37 @@ Windows (Rust's std reports a thread's overflow the same way there); a fiber's s
 The main thread is not: covering it would install a handler in every program, isolates or not, and its overflow is
 the platform's own crash. On wasm a stack is emscripten's, and its overflow is emscripten's to report.
 
-#### The bundle ✅
+#### The arguments ✅
 
-An isolate entry is an ordinary top-level `fn` that returns **`void`** and takes **exactly one**
-parameter — the **bundle**. <!-- xfail: parallel_spawn_no_scope --> It is `void` because there is
-no channel to hand a result back over, and one parameter because the bundle *is* the boundary:
-one object, one owner, one transfer. Everything an isolate receives, it receives here.
+An isolate entry is an ordinary top-level `fn` that returns **`void`** and takes **any number** of parameters, none <!-- test: spawn_several_args -->
+included. <!-- xfail: parallel_spawn_no_scope --> It is `void` because there is no channel to hand a result back over.
+Each argument crosses by its own rule, as it would alone: `spawn integrate(p: ref this.pos, v: ref this.vel, dt: dt)`
+borrows two places and copies a value. They are lowered as the entry's own call would lower them, so labels, `give` and
+`copy`, and a literal typed by its parameter all hold. A scope child's arguments sit in one record on the parent's frame
+until the join; a held `Isolate`'s are boxed and freed by the child. A fiber's are boxed too, since its spawn only queues
+it, and the next pass of a loop would overwrite a record on the frame before the fiber read it. <!-- test: fiber_several_args -->
+Everything an isolate receives, it receives here.
 
 The entry may be a generic function, with its type arguments written or inferred as in a call:
 `spawn work::<int32>(j: give j)`, and `spawn fiber` the same. <!-- test: spawn_generic_entry --> <!-- test: fiber_generic_entry -->
 A `spawn`, a `parallel_for` and a `BindableFunctionPtr.bind` may each be written in a generic's body. <!-- test: generic_body_parallel --> <!-- test: generic_body_helpers -->
 
-The bundle has two forms, and the choice is not a style preference — they restrict on **opposite
+An argument has two forms, and the choice is not a style preference — they restrict on **opposite
 axes**:
 
 | | restricts | is free in |
 | --- | --- | --- |
-| `give` — a moved `resource` | **the type** — it must be a `resource` (a `value`, a primitive and a `string` are all rejected) and it must declare **`implements Sendable`** | **lifetime** — the child may outlive the parent's frame, which is what the handle form needs |
+| a value the child owns — `give x`, `copy x`, a primitive | **the type** — it must declare **`implements Sendable`** | **lifetime** — the child may outlive the parent's frame, which is what the handle form needs |
 | `ref T` — a borrow | **the lifetime** — only from a bare `spawn` inside a `scope`, over a place that scope outlives | **the type** — any place, of any size, `ref int32` included |
 
-So a moved bundle transfers ownership (the parent provably cannot touch it afterwards), while a
+So a moved argument transfers ownership (the parent provably cannot touch it afterwards), while a
 borrowed one leaves the parent owning the storage — which makes `ref` the only way an isolate can
-mutate something the parent goes on using, since `join()` returns `void` and a moved bundle never
-comes back.
+mutate something the parent goes on using, since `join()` returns `void` and a moved value never
+comes back. Each `ref` argument is its own child to the scope's rules (*What a child may borrow*), so two arguments of
+one spawn may not overlap when either may write, <!-- xfail: spawn_args_overlap -->
+and a later child is judged against every argument of an earlier one. <!-- xfail: spawn_args_sibling_overlap -->
+A held `Isolate` takes no `ref` argument, beside a moved one or not, since it may outlive the place. <!-- xfail: spawn_held_ref_arg -->
+A view or a bare contract value, which borrows for a window the child could outlive, is refused as an argument. <!-- xfail: spawn_view_arg, spawn_fiber_view_bundle -->
 
 **How state reaches an isolate — the whole surface, in four rows.**
 
@@ -7354,8 +7362,9 @@ read or write; held by `const ref`, it may be read but not written. The same hol
 elements a `parallel_spawn` hands its workers. A disjoint sibling field stays usable, and so does an <!-- xfail: parallel_spawn_body_use -->
 `Atomic<T>`. Before the `spawn` and after the `scope`, the place is the parent's as always. <!-- test: scope_child_borrow_ok -->
 
-**Sendability applies to the bundle**, exactly as it does to a channel element: the bundle's type must
-declare `implements Sendable` (see *Channels* below for the whole rule), and a declaration over a
+**Sendability applies to every argument**, exactly as it does to a channel element: each argument's type must
+declare `implements Sendable` (see *Channels* below for the whole rule), and the error names the argument; <!-- xfail: sendable_undeclared_spawn_arg -->
+a declaration over a
 `Shared`/`Weak` with a **mutable** payload is rejected, naming the offending field, because both <!-- xfail: spawn_bundle_shared -->
 isolates would release one non-atomic control block.
 The same shape over a deeply-`immutable` payload is legal <!-- test: spawn_bundle_immutable --> —
@@ -7432,7 +7441,7 @@ minting both sides frees its queue (until `0.9.477` it blocked, and leaked, fore
 
 **Sendability is declared, and verified — the `immutable` model at the isolate seam.** A type says
 `implements Sendable`, and the compiler checks the claim over every field, base and variant payload; a
-crossing — a `spawn` bundle, a `Channel<T: Sendable>` element — **requires** the declaration. Both mistakes
+crossing — a `spawn` argument, a `Channel<T: Sendable>` element — **requires** the declaration. Both mistakes
 are errors: the **lie** (`Bad implements Sendable` over a `Shared<Leaf>` whose `Leaf` is mutable — a
 non-atomic refcount two isolates would release) is refused where it is made, naming the member and the <!-- xfail: channel_send_shared, spawn_bundle_shared, sendable_lie_shared_field -->
 reason; the **omission** (a plain `Quiet { int32 n; }` handed to `spawn` or put in a `Channel`) is refused <!-- xfail: sendable_undeclared_spawn, sendable_undeclared_channel -->
@@ -7458,7 +7467,7 @@ A boxed contract `Owned<C>` erases the concrete type behind it, so it is Sendabl
 each `implements Job` must declare `Sendable` too and is verified like any other; that is what lets a job
 queue of `Owned<Job>` cross. <!-- test: sendable_contract_refine -->
 A `view` and a bare `contract` value need no rule here: neither can be a field at all, so neither ever
-reaches a bundle. <!-- xfail: view_field, iface_field -->
+crosses inside a value. <!-- xfail: view_field, iface_field -->
 **The stdlib's I/O vocabulary is Sendable**, because a descriptor, a socket and a process handle are process-wide <!-- test: net_stream_to_isolate -->
 rather than bound to a thread, and each owning type is move-only: `File`, `TcpStream`, `TcpListener`,
 `UnixStream`, `UnixStreamPair`, `UnixListener`, `UnixDatagram`, `UnixDatagramPair`, `UdpSocket`, `Poller`, `Process`, `Command`, `Output`,
@@ -7471,7 +7480,7 @@ dropped exactly once — received, or buffered when the queue's last holder goes
 empty value is the one it states (`fd = -1`), not zero, and until `0.9.474` every send closed descriptor 0.
 
 A raw **`UnsafePtr` does cross**, and that is the `unsafe` seam working as designed rather than a hole: the
-bundle is built in an `unsafe ctor` and read through an `unsafe fn`, and **joining the child** — `scope`'s
+argument is built in an `unsafe ctor` and read through an `unsafe fn`, and **joining the child** — `scope`'s
 closing brace, or an explicit `give h.join()` — is what orders the write against the parent's read. It is the
 primary isolate idiom, not an edge case. <!-- test: isolate_basic -->
 
@@ -7521,7 +7530,7 @@ and so is a writer of a field beside a reader of the whole. <!-- xfail: scope_bo
 A reader also shares with a window or a loop that only reads, and is refused inside one that may write. <!-- xfail: scope_borrow_reader_window -->
 It is sound because `const` is deep: a write through `const this` or a `const ref`, to a collection's element too, is refused, <!-- xfail: const_this_write, const_ref_write, const_ref_index_write -->
 and the only safe interior mutability is `Atomic<T>` and `Locked<T>`, both safe to share. What a `const fn` may still
-write — a `Shared` count — is answered by the bundle's `Sendable` gate, which a `const ref` bundle meets too. <!-- xfail: sendable_undeclared_spawn_ref -->
+write — a `Shared` count — is answered by the `Sendable` gate, which a `const ref` argument meets too. <!-- xfail: sendable_undeclared_spawn_ref -->
 Rust needs a second trait for this (`Sync`), because its safe code can mutate through `&`; kama's cannot.
 
 This needs no lifetime analysis, and that is the point. A field's storage is **inside** its root's
@@ -7540,7 +7549,7 @@ object, so `a.bodies` and `b.springs` could be one cell under two non-prefix nam
 refused. <!-- xfail: scope_borrow_through_shared --> So is `ref s` on the handle itself, which would
 borrow that object. <!-- xfail: spawn_ref_shared_handle -->
 
-A `ref` bundle is lowered as the entry's own call would pass that argument, and every rule of a call's
+A `ref` argument is lowered as the entry's own call would pass it, and every rule of a call's
 `ref` holds. `ref this` borrows the object and `ref o` on an `Owned<T>` the object it holds,
 <!-- test: fiber_ref_bundle --> for both kinds of child. <!-- test: spawn_ref_bundle --> The label names
 the parameter, <!-- xfail: spawn_ref_bad_label --> the argument is what the parameter takes,
@@ -7583,7 +7592,7 @@ contiguous container that exposes `.viewMut()` (`DynamicArray`, `FixedArray` are
 non-contiguous container such as a `Map` has no `.viewMut()` and is rejected, and so is a read-only <!-- xfail: parfor_noncontiguous -->
 `ConstView<T>` (nothing to bind `ref` to). <!-- xfail: parfor_const_view -->
 The element and every captured local reach the workers by `ref`, which is the borrow form of a `spawn`
-bundle, so each faces the same sendability gate: a user element type must declare `implements Sendable` <!-- xfail: parfor_elem_undeclared -->
+argument, so each faces the same sendability gate: a user element type must declare `implements Sendable` <!-- xfail: parfor_elem_undeclared -->
 (a primitive needs nothing — see *Channels* below for the whole rule), and `parallel_spawn` shares the gate. <!-- test: ecs_pattern, parallel_spawn_pool -->
 
 A body reads a capture wherever a local can be named: a `match` arm, an interpolation hole, an index, a nested form. <!-- test: parfor_capture_shapes -->
@@ -7668,7 +7677,7 @@ by another isolate and therefore cannot race.** To share mutable state you must 
 `Atomic<T>` or `Locked<T>`, which are visible in a grep.
 
 That is the rule about *storage*. For the rule about how state **reaches** an isolate in the first
-place — the bundle, and the four ways anything crosses — see [The bundle](#the-bundle-) above; the
+place — a spawn's arguments, and the four ways anything crosses — see [The arguments](#the-arguments-) above; the
 two answer different halves of the same question and neither is complete alone.
 
 ### `Atomic<T>` ✅

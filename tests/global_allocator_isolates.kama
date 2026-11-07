@@ -78,7 +78,7 @@ fn int32 drain() {
     return n;
 }
 
-type resource Ends implements Sendable {   // `spawn` moves ONE bundle
+type resource Ends implements Sendable {
     Receiver<Owned<Point>> rx;
     Sender<Owned<Point>> tx;
     public ctor of(Receiver<Owned<Point>> rx, Sender<Owned<Point>> tx) { this.rx = give rx; this.tx = give tx; }

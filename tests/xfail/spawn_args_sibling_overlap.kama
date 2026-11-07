@@ -1,0 +1,14 @@
+// A second child's argument is judged against EVERY argument of the first (KR-313), not only its first one. Must fail.
+import { std::concurrent::Isolate };
+type value Acc implements Sendable { public int32 total; public ctor make() { this.total = 0; } }
+fn void two(ref Acc a, ref Acc b) { a.total = 1; b.total = 2; }
+fn void one(ref Acc c) { c.total = 3; }
+fn uint8 main() {
+    Acc x = Acc.make();
+    Acc y = Acc.make();
+    scope {
+        spawn two(a: ref x, b: ref y);
+        spawn one(c: ref y);              // ERROR: `y` is the first child's second argument
+    }
+    return 0;
+}

@@ -2662,7 +2662,7 @@ compiler proving their access (reported 2026-11-04, each reproduced on `0.9.844`
 3. **No heap allocation per hand-out.** `parallel_for` under `@noheap` is refused ("heaps a per-worker argument bundle"), and the
    reporter wants allocation up front, with `@noheap` as the proof.
 
-And children sharing a read-only borrow (shipped `0.9.858`), KR-313 (a `spawn` over several places) and KR-315 (parts chosen at run time)
+And children sharing a read-only borrow (shipped `0.9.858`), a `spawn` over several places (shipped `0.9.859`) and KR-315 (parts chosen at run time)
 are the same design: what a child may borrow from a phase's data, and what proves it. **Not settled here:** when the reporter first
 needs the pool, which it leaves to a measurement, so it does not set the order on its own. How the job-entry rule identifies a job is
 this brief's as well, if `spawn job` survives.
@@ -2674,7 +2674,7 @@ this brief's as well, if `spawn job` survives.
 **Status: brief written 2026-11-04 on `0.9.845`, revised 2026-11-05 on `0.9.850`, measured on Windows 2026-11-05 on `0.9.852`. Ruled 2026-11-05: all 17 decisions as recommended below, each option named here refused.
 The game engine that asked audited it the same day, on `0.9.852`: nothing in it conflicts with a design the engine has decided, its answers to KR-326 and KR-327 are in those rows, and its needs are added to KR-320, KR-325, KR-298 and KR-79.** It answers what `s6-fibers` left to
 it, for
-step 9 (the job pool) and step 7 (the offload pool) together, with readers sharing a `const ref`, KR-313 and KR-315. Everything marked *measured* comes from
+step 9 (the job pool) and step 7 (the offload pool) together, with readers sharing a `const ref`, a `spawn` over several places and KR-315. Everything marked *measured* comes from
 `bench/jobs/` and can be rerun, the compiler's half from `bench/jobs/probes/` (the readers' scratch patch landed in `0.9.858`); results are in
 `docs/benchmarks/jobs-*.tsv`. Everything else says *predicted*.
 
@@ -3111,14 +3111,19 @@ Size S. Consistent with practice. **Shipped `0.9.858`, one step wider than the p
 whose holder only reads (another reader, a window over a `ConstView`, a `foreach` that writes nothing, a `match` arm reading
 in place), and one whose holder may write refuses it by name, where it had said "growing or reseating".
 
-**Decision 11 — KR-313, several places.** `spawn integrate(p: ref this.pos, v: ref this.vel, dt: dt);`. "One parameter because the
+**Decision 11 — several places (shipped `0.9.859`).** `spawn integrate(p: ref this.pos, v: ref this.vel, dt: dt);`. "One parameter because the
 bundle *is* the boundary" protects nothing for a borrow: `parallel_for` already passes every capture as its own `ref`, in a
 generated record. **Recommended: an entry takes any number of parameters, for every `spawn` form:** each `ref` held to the prefix
 rule as its own child, each `give` to its own `Sendable` gate, and a value copied in, which today needs a `const ref`.
 **Sacrifice:** SPEC's rule is rewritten, and a generated record replaces the one pointer, on the frame for a scope child and on
 the heap for a held one. **Option: borrows only, a moved bundle stays single. Sacrifice:** a job cannot take a moved buffer and a
 borrowed table together, for nothing the rule protects. *Predicted* to cost nothing at run time: a record the same size as the
-arguments.
+arguments. **As built, one correction:** "on the frame for a scope child" holds for an isolate child only, whose record sits beside
+its handle until the join, one allocation fewer than the moved bundle's box. A fiber child's record is boxed, as a moved fiber
+bundle always was: the spawn only queues the fiber, and in a loop the next pass would overwrite a frame record before it ran
+(`fiber_several_args` holds that down). One `ref` parameter still passes the place's address, with no record. Building it found
+a compiler crash, fixed with it: `spawn w();` against an entry with no parameters read a parameter that was not there, in both
+forms, on every version to `0.9.858`; it is now legal.
 
 **Decision 12 — KR-315, parts chosen at run time.** **This differs from the plan's lean,** a checked "pick" type: it needed a new
 view kind and a sorted index list, and a smaller answer does more.
@@ -3267,7 +3272,7 @@ Rows that stay independent of this brief: KR-254, KR-317, KR-297, KR-229, KR-202
 #### Build order, once ruled
 
 Each with fixtures on native, san, TSan and wasm, mutation-tested, behind a measured gate against the arms above.
-1. KR-313, useful alone and needing no pool (readers sharing a `const ref` shipped in `0.9.858`).
+1. Done: readers sharing a `const ref` (`0.9.858`) and a `spawn` over several places (`0.9.859`), each useful alone.
 2. `Atomic.wait` and `notify`, then the pool in `std::concurrent` and `parallel_for` on it, `chunks:`, decision 16's chunk binding, the `@noheap`
    proof and the `@onPanic` refusal.
 3. `spawn job`: four artifacts and the pins, the walk, statics, `@noparks fnptr`, a fiber's park at the brace; then decision 17's views; then `stack:`.
@@ -3456,20 +3461,6 @@ a protocol test with a bug would then hang its suite rather than fail it.
 sender on another isolate, a socket, a timer, a child process. A report is true only when none of those exists on any isolate,
 which is a whole-program question on a runtime that is per-isolate by design. KR-265's "every fiber is parked on something the
 scope owns" asks nearly the same thing of one scope, so the two want designing together.
-
-<a id="s6-spawn-places"></a>
-
-### A `spawn` over several places (KR-313)
-
-Reported 2026-11-04 by a game engine on kama; reproduced on `0.9.844`. In a method, `spawn integrate(p: ref this.pos, v: ref this.vel);`
-for `fn void integrate(ref DynamicArray<Pos> p, const ref DynamicArray<Vel> v)` is refused: "`spawn` entry `integrate` must take exactly
-one argument (the bundle)". SPEC states it: one parameter, "because the bundle *is* the boundary". The workaround, a `Motion` holding
-both and spawned as `ref this.motion`, checks, but any other task on `vel`, even a reader, then overlaps all of `motion`, so the
-parallelism is coarser than the access. Nearly every system reads one store and writes another. Rust's `thread::scope` closure captures
-several disjoint borrows.
-
-**The verdict: scheduled, design first, in KR-3's pool brief.** The question is whether the one-bundle rule protects anything once each
-argument is held to the prefix rule as its own child; for a moved bundle, which is what crosses to an isolate, it may still.
 
 <a id="s6-disjoint-parts"></a>
 

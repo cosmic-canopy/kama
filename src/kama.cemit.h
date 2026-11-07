@@ -3188,10 +3188,10 @@ private:
     void computeDestructible();
     void computeReachesPointer();   // serialization mode gate — sibling of computeDestructible
     void computeAtomicRefcount();      // M6.2: a `Shared`/`Weak` instance over a deeply-immutable T takes the atomic ctrl-block flavor
-    // ...and the SAME gate on the other crossing: a `spawn` bundle. Recorded during emission (a `spawn`
+    // ...and the SAME gate on the other crossing: a `spawn`'s arguments. Recorded during emission (a `spawn`
     // lives in a body, which the collect-time channel pass cannot see) and checked after it.
-    // `what` names the crossing for the diagnostic: the bundle itself, or a `parallel_for` element / capture.
-    struct SpawnBundle { std::string cls; int line = 0; std::string file; std::string what = "as the bundle"; };
+    // `what` names the crossing for the diagnostic: the argument, or a `parallel_for` element / capture.
+    struct SpawnBundle { std::string cls; int line = 0; std::string file; std::string what = "as an argument"; };
     std::vector<SpawnBundle> _spawnBundles;
     void checkSpawnBundleSendability();
     // Sendability is DECLARED (`implements Sendable`) and VERIFIED (checkSendableDeclarations); a crossing
@@ -3980,20 +3980,23 @@ private:
     // is a borrow temp (no drop). Setup is flushed into `_hoisted` at `depth`.
     std::string logSpanOf(SharedExpression e, int depth);
     std::string isolateStackArg(SharedExpression stack, int line, bool fiber = false);   // a `stack:` clause, or ""
-    std::string isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
-                            bool& isBorrow, bool borrowOK);   // shared front half (borrow = M4.2 `ref`)
-    std::string bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, const ParamSig& p, const std::string& fname);
+    // KR-313: what a child starts with — nothing, one place's address, or a record of every argument (spawnArgs).
+    struct SpawnArgs { enum Kind { None, Place, Record } kind = None; std::string rec, val; };
+    bool spawnArgs(IsolateNode* iso, InvocationNode* inv, const FuncSig& sig, bool held, SpawnArgs& out);
+    const FuncSig* isolatePrep(IsolateNode* iso, bool held, SpawnArgs& args);   // shared front half of both forms
+    std::string isolateTrampoline(const FuncSig& sig, const SpawnArgs& args, bool boxed);
+    bool bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, const ParamSig& p, const std::string& fname);
     void emitIsolate(IsolateNode* iso, int depth);   // `spawn worker(p: give x);` — deferred-join scope child (M4)
     std::string emitIsolateExpr(IsolateNode* iso);   // `Isolate h = spawn worker(...)` — RAII handle form
     // KR-3: `spawn fiber` — a child on this isolate's scheduler (docs/design/fibers.md decisions 9, 10).
     std::string fiberTargetRefusal() const;          // why this target has no fibers yet, or ""
-    const FuncSig* fiberPrep(IsolateNode* iso, bool held, std::string& val, bool& isBorrow);
+    const FuncSig* fiberPrep(IsolateNode* iso, bool held, SpawnArgs& args);
     const FuncSig* spawnEntry(IsolateNode* iso, InvocationNode* inv);
     std::map<std::string, FuncSig> _instSigs;   // a generic instance a `spawn` starts -> its signature (spawnEntry)
     void emitFiber(IsolateNode* iso, int depth);     // `spawn fiber work(job: give j);` — a child of its `scope`
     std::string emitFiberExpr(IsolateNode* iso);     // `Fiber<R> f = spawn fiber work(…);` — the held form
     bool hasFiberChild(const SharedStatement& s) const;   // a bare `spawn fiber` the scope being entered owns
-    bool spawnBorrowsConst(IsolateNode* iso);        // its bundle is a `const ref`
+    bool spawnArgReads(IsolateNode* iso, const ArgumentNode* a);   // that argument's parameter is a `const ref`
     void emitScope(ScopeNode* sc, int depth);        // `scope { }` — structured concurrency + join barrier (M4)
     void emitBorrow(BorrowNode* bn, int depth);      // `borrow h as v { }` — the lexical window a view is minted into
     void emitParallelFor(ParallelForNode* pf, int depth);   // `parallel_for (ref T e in coll) { }` — disjoint-slice data-parallel (M6.3)

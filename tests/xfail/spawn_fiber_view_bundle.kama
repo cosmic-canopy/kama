@@ -1,4 +1,4 @@
-// A view borrows for a window the fiber could outlive: a fiber's bundle is a value it owns, or a `ref` to a place.
+// A view borrows for a window the fiber could outlive: a fiber's argument is a value it owns, or a `ref` to a place.
 import { std::concurrent::Fiber, std::collections::DynamicArray, std::collections::ConstView };
 fn void sum(ConstView<int32> xs) { }
 fn uint8 main() {

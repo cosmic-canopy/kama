@@ -16,8 +16,7 @@ fn int32 readKind(Result<isize, IoError> r) {
     return match (r) { case Ok(value: n): n == 0 ? 2 : 3; case Err(error: e): isWouldBlock(e: e) ? 1 : 3; };
 }
 
-// The peer: connects, sends nothing, and closes once told to — or at its timeout, whichever comes first. A `spawn`
-// entry takes one moved bundle.
+// The peer: connects, sends nothing, and closes once told to — or at its timeout, whichever comes first.
 type resource Peer implements Sendable {
     uint16 port;
     string path;

@@ -34,7 +34,7 @@ fn string argAt(int32 i) {
 static bool readerDone = false;
 static int32 ticks = 0;
 static int64 stdinBytes = 0;
-unsafe fn void countStdin(isize bufSize) {   // a fiber entry takes one argument, the bundle
+unsafe fn void countStdin(isize bufSize) {
     StdIn input = stdin();
     FixedArray<uint8> buf = FixedArray.make(size: bufSize);
     bool more = true;

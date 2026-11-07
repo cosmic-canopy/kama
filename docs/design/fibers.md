@@ -423,7 +423,8 @@ fibers when one of its units holds a `spawn fiber` (`CompilationUnit::spawnsFibe
 | a std function over a `fnptr` | `fibers.start(entry: handle, bundle: give c)`, blocked then by KR-107 (a `fnptr` was not a type argument until `0.9.790`) |
 
 - **The entry and the bundle.** The entry is the isolate's: a top-level `fn` and exactly one bundle. The bundle may
-  be any movable value, because it never leaves the isolate, or a `ref` the scope outlives.
+  be any movable value, because it never leaves the isolate, or a `ref` the scope outlives. *As built since `0.9.859`:*
+  any number of arguments, each by those same rules, boxed together, since a spawn only queues the fiber.
 - **`fiber` is contextual,** meaningful only after `spawn`, so it reserves nothing. It is greppable as `spawn fiber`.
   *As built (`0.9.741`):* the lexer returns `fiber` as a keyword only directly after `spawn`, so it stays a name
   everywhere else, a fiber's entry included. The one program it costs is an isolate spawned on a function named

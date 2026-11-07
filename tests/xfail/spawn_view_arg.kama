@@ -1,0 +1,12 @@
+// A view borrows for a window the isolate could outlive, so a `spawn` refuses one as an argument, beside others or not
+// (KR-313). Until then the one-bundle rule refused it for not being a moved `resource`. Must fail.
+import { std::concurrent::Isolate, std::collections::DynamicArray, std::collections::ConstView };
+fn void sum(ConstView<int32> xs, int32 by) { }
+fn uint8 main() {
+    DynamicArray<int32> d = DynamicArray::<int32>.empty();
+    d.add(item: 1);
+    borrow d.view() as v {
+        scope { spawn sum(xs: v, by: 2); }   // ERROR: `xs` is a view
+    }
+    return 0;
+}

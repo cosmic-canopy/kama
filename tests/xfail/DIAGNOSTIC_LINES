@@ -828,7 +828,7 @@ into_handle_ternary_move	into_handle_ternary_move.kama:13:11
 intrinsic_block_renamed	intrinsic_block_renamed.kama:4:0
 intrinsic_reserved	intrinsic_reserved.kama:5:8
 intrinsic_widen_escape	intrinsic_widen_escape.kama:5:0
-isolate_join_twice	isolate_join_twice.kama:7:16 isolate_join_twice.kama:9:9
+isolate_join_twice	isolate_join_twice.kama:9:9
 isolate_use_after_move	isolate_use_after_move.kama:25:23
 isr_nonvoid	isr_nonvoid.kama:2:0
 isr_params	isr_params.kama:2:0
@@ -1100,7 +1100,7 @@ noheap_on_static	noheap_on_static.kama:4:0
 noheap_optional_dtor	noheap_optional_dtor.kama:7:0
 noheap_owned_drop	noheap_owned_drop.kama:6:0
 noheap_pool_resolve	app.kama:67:0
-noheap_spawn	noheap_spawn.kama:13:0 noheap_spawn.kama:13:12
+noheap_spawn	noheap_spawn.kama:14:0
 noheap_spawn_fiber	noheap_spawn_fiber.kama:5:33
 noheap_string_concat	noheap_string_concat.kama:4:63
 noheap_string_copy	noheap_string_copy.kama:5:38
@@ -1419,6 +1419,7 @@ sendable_lie_shared_field	sendable_lie_shared_field.kama:7:0
 sendable_undeclared_channel	sendable_undeclared_channel.kama:7:12
 sendable_undeclared_field	sendable_undeclared_field.kama:6:0
 sendable_undeclared_spawn	sendable_undeclared_spawn.kama:10:0
+sendable_undeclared_spawn_arg	sendable_undeclared_spawn_arg.kama:7:0
 sendable_undeclared_spawn_ref	sendable_undeclared_spawn_ref.kama:8:0
 ser_bits_unknown	ser_bits_unknown.kama:6:24
 ser_deprecated_alone	ser_deprecated_alone.kama:4:27
@@ -1491,6 +1492,8 @@ source_utf8_overlong	source_utf8_overlong.kama:5:17
 source_utf8_string	source_utf8_string.kama:5:17
 source_utf8_truncated	source_utf8_truncated.kama:8:3
 source_utf8_verbatim	source_utf8_verbatim.kama:5:18
+spawn_args_overlap	spawn_args_overlap.kama:13:12
+spawn_args_sibling_overlap	spawn_args_sibling_overlap.kama:11:8
 spawn_bundle_shared	spawn_bundle_shared.kama:13:0
 spawn_fiber_constref_loop_write	spawn_fiber_constref_loop_write.kama:11:12
 spawn_fiber_handle_borrow	spawn_fiber_handle_borrow.kama:7:21
@@ -1504,12 +1507,12 @@ spawn_fiber_ref_in_loop	spawn_fiber_ref_in_loop.kama:8:46
 spawn_fiber_ref_loop_local	spawn_fiber_ref_loop_local.kama:10:12
 spawn_fiber_ref_match_binding	spawn_fiber_ref_match_binding.kama:9:35
 spawn_fiber_stack_zero	spawn_fiber_stack_zero.kama:4:26
-spawn_fiber_two_args	spawn_fiber_two_args.kama:4:26
 spawn_fiber_use_after_give	spawn_fiber_use_after_give.kama:8:23
 spawn_fiber_view_bundle	spawn_fiber_view_bundle.kama:7:35
 spawn_fiber_void_handle	spawn_fiber_void_handle.kama:4:35
 spawn_generic_fiber_type	spawn_generic_fiber_type.kama:7:21
 spawn_generic_no_inference	spawn_generic_no_inference.kama:8:24
+spawn_held_ref_arg	spawn_held_ref_arg.kama:9:16
 spawn_in_nested_block	spawn_in_nested_block.kama:24:12
 spawn_named_fiber	spawn_named_fiber.kama:6:56
 spawn_needs_concurrent	spawn_needs_concurrent.kama:10:12
@@ -1519,6 +1522,7 @@ spawn_ref_const	spawn_ref_const.kama:10:43 spawn_ref_const.kama:11:43 spawn_ref_
 spawn_ref_shared_handle	spawn_ref_shared_handle.kama:16:12 spawn_ref_shared_handle.kama:16:43
 spawn_ref_wrong_type	spawn_ref_wrong_type.kama:15:12 spawn_ref_wrong_type.kama:16:12
 spawn_stack_zero	spawn_stack_zero.kama:7:12
+spawn_view_arg	spawn_view_arg.kama:9:16
 split_missing_separator	split_missing_separator.kama:7:29
 split_wrong_label	split_wrong_label.kama:7:29
 static_call_nonstatic	static_call_nonstatic.kama:8:23

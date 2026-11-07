@@ -1,0 +1,46 @@
+// A fiber's entry takes any number of arguments too (KR-313). A fiber child's arguments are boxed, not left on the
+// parent's frame: the spawn only queues the fiber, so in a loop the next pass would overwrite a record on the frame
+// before the fiber read it, and every fiber below would see the last pass's `by`.
+import { std::concurrent::Fiber, std::concurrent::Atomic, std::collections::DynamicArray };
+
+type resource Job implements Sendable {
+    int64 n;
+    public ctor make(int64 n) { this.n = n; }
+    public const fn int64 value() { return this.n; }
+}
+
+fn void add(ref Atomic<int64> into, int64 by, const ref DynamicArray<int64> xs) {
+    into.fetchAdd(delta: by * cast<int64>(xs.length()));
+}
+fn int64 mul(int64 a, int64 b, Job j) { return a * b + j.value(); }
+fn void nothing() { }
+
+// A spawn writes what its non-`const` `ref` arguments name, judged argument by argument, so an arm that starts a
+// writer of its `match` subject keeps the payload a copy rather than reading it in place under the writer.
+type value Pt { public int64 n; public ctor make(int64 n) { this.n = n; } }
+type enum Res { Ok(Pt value), Err(int32 code) }
+fn void setErr(ref Res r, int32 code) { r = Res::Err(code: code); }
+fn int64 spawnWritesSubject() {
+    Res r = Res::Ok(value: Pt.make(n: 40i64));
+    int64 got = 0i64;
+    scope {
+        match (r) { case Ok(value: v): { spawn fiber setErr(r: ref r, code: 1); got = v.n + 2i64; } case Err(code: c): { } };
+    }
+    return match (r) { case Ok(value: v): 0i64; case Err(code: c): got + cast<int64>(c) - 1i64; };   // 42 once the writer ran
+}
+
+fn uint8 main() {
+    Atomic<int64> total = Atomic.make(value: 0i64);
+    DynamicArray<int64> xs = DynamicArray::<int64>.empty();
+    xs.add(item: 1i64); xs.add(item: 2i64);
+    scope {
+        for (int64 i = 1; i <= 3; i = i + 1) { spawn fiber add(into: ref total, by: i, xs: ref xs); }
+        spawn fiber nothing();
+    }
+    if (total.load() != 12i64) { return 1; }                      // (1 + 2 + 3) * 2; one shared record gives 18
+    Fiber<int64> f = spawn fiber mul(a: 3i64, b: 4i64, j: Job.make(n: 30i64));
+    int64 r = give f.join();
+    if (r != 42i64) { return 2; }
+    if (spawnWritesSubject() != 42i64) { return 3; }
+    return 42;
+}

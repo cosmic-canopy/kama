@@ -1,8 +1,9 @@
-// `spawn` heaps the moved argument bundle, so it is one of the constructs the gate funnels through —
-// and until now no `@noheap` fixture drove it, only `new`, `try new` and interpolation. A gate with no
-// fixture is a gate nobody has watched fail.
+// `spawn` heaps the isolate it starts (its control block, freed by the join), so it is one of the constructs the
+// gate funnels through — and until now no `@noheap` fixture drove it, only `new`, `try new` and interpolation. A gate
+// with no fixture is a gate nobody has watched fail. Its arguments no longer heap: a scope child's record sits on
+// the frame (KR-313), so the transitive walk into the runtime is what refuses it.
 import { std::concurrent::Isolate };
-type resource Acc {
+type resource Acc implements Sendable {
     int32 total;
     public ctor zero() { this.total = 0; return this; }
     public fn void run() { this.total = this.total + 1; }

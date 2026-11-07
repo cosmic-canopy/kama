@@ -1,0 +1,15 @@
+// Each `ref` argument of a `spawn` is held to the scope's rule as its own child (KR-313), so two arguments of ONE spawn
+// may not overlap when either writes: `{w}` is a prefix of `{w, bodies}`. Readers of both would share. Must fail.
+import { std::concurrent::Isolate };
+type value Acc implements Sendable { public int32 total; public ctor make() { this.total = 0; } }
+type value World implements Sendable {
+    public Acc bodies;
+    public Acc springs;
+    public ctor make() { this.bodies = Acc.make(); this.springs = Acc.make(); }
+}
+fn void step(const ref World w, ref Acc a) { a.total = w.springs.total + 1; }
+fn uint8 main() {
+    World w = World.make();
+    scope { spawn step(w: ref w, a: ref w.bodies); }   // ERROR: writes a field of what it also reads whole
+    return 0;
+}

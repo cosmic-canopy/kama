@@ -1,0 +1,12 @@
+// A held `Isolate` may outlive the `scope` it was started in, so none of its arguments may be a `ref`, even beside a
+// moved one (KR-313). Must fail.
+import { std::concurrent::Isolate };
+type resource Job implements Sendable { int64 n; public ctor make() { this.n = 1i64; } }
+type value Acc implements Sendable { public int64 total; public ctor make() { this.total = 0i64; } }
+fn void work(Job j, ref Acc a) { a.total = 1i64; }
+fn uint8 main() {
+    Acc a = Acc.make();
+    Isolate h = spawn work(j: Job.make(), a: ref a);   // ERROR: the handle could outlive `a`
+    give h.join();
+    return 0;
+}

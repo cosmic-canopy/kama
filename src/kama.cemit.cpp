@@ -7339,14 +7339,16 @@ void CEmitter::emitScope(ScopeNode* sc, int depth)
     popScope();
 }
 
-// A spawn whose bundle is a `const ref`: its `ref` argument only reads the place.
-bool CEmitter::spawnBorrowsConst(IsolateNode* iso)
+// A spawn's argument whose parameter is a `const ref`: it only reads the place.
+bool CEmitter::spawnArgReads(IsolateNode* iso, const ArgumentNode* a)
 {
     auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
-    if (!inv || !inv->identifier || !inv->identifier->value) return false;
+    if (!inv || !inv->identifier || !inv->identifier->value || !a->name || !a->name->value) return false;
     auto it = _funcs.find(resolveFunc(*inv->identifier->value, inv->identifier->qualifier));
-    return it != _funcs.end() && it->second.params.size() == 1 && it->second.params[0].byRef
-        && it->second.params[0].isConst;
+    if (it == _funcs.end()) return false;
+    for (const ParamSig& p : it->second.params)
+        if (p.name == *a->name->value) return p.byRef && p.isConst;
+    return false;
 }
 
 // Every PLACE a statement uses, at its widest nameable extent: `c.f.g` is ONE use of `c.f.g`, not of `c` and
@@ -7424,9 +7426,20 @@ void CEmitter::forEachPlaceUse(SharedStatement s, const std::function<void(const
         ASTNode* n = st.get();
         const int ln = n->line;
         // A second child: what it USES is judged by the children's disjointness rule. What it WRITES is a write
-        // like any call's — `spawn f(x: ref a)` writes `a` — and a write scan that skipped it would miss it.
+        // like any call's — `spawn f(x: ref a)` writes `a`, unless `x` is a `const ref` — and a write scan that
+        // skipped it would miss it.
         if (n == after) { armed = true; return; }
-        if (auto* iso = dynamic_cast<IsolateNode*>(n)) { if (writesOnly && !spawnBorrowsConst(iso)) E(iso->call, ln); return; }
+        if (auto* iso = dynamic_cast<IsolateNode*>(n)) {
+            auto* inv = dynamic_cast<InvocationNode*>(iso->call.get());
+            if (writesOnly && inv && inv->args)
+                for (auto& a : *inv->args) if (a) {
+                    if (a->modifier && a->modifier->value && (*a->modifier->value == "ref" || *a->modifier->value == "out")
+                        && !spawnArgReads(iso, a.get()))
+                        wrote(a->expression, ln);
+                    E(a->expression, ln);
+                }
+            return;
+        }
         if (auto* blk = dynamic_cast<BlockNode*>(n)) {
             if (blk->statements) for (auto& x : *blk->statements) S(x);
         } else if (auto* d = dynamic_cast<LocalVariableDeclaration*>(n)) {
@@ -22295,7 +22308,7 @@ std::string CEmitter::isolateStackArg(SharedExpression stack, int line, bool fib
 // sibling overlapping it, and kept from the scope's body until the closing brace. A fiber may also be spawned in a
 // loop (decision 10), whose every pass starts one, so there its place must outlive every pass as well. Returns the
 // `void*` the child is started with, or "" after a diagnostic.
-std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, const ParamSig& p, const std::string& fname)
+bool CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, const ParamSig& p, const std::string& fname)
 {
     const std::string kw = iso->fiber ? "`spawn fiber`" : "`spawn`";
     const std::string& cls = p.className;
@@ -22324,7 +22337,7 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
                      "`ref myWorld.bodies`). An element "
                      "(`a[i]`) or a call result names no place a static disjointness rule can pin — "
                      "split a buffer with `parallel_for` instead").c_str(), iso);
-        return "";   // the place is empty — never fall through and index it
+        return false;   // the place is empty — never fall through and index it
     }
     const std::string root = place[0];
 
@@ -22355,7 +22368,7 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
         unsupported((kw + " borrows `" + placeText(place) + "`, but `" + root + "` is a shared handle, and another "
                      "handle can name the same object, so two children are not provably disjoint. Own it "
                      "uniquely (`Owned<T>`), or move the bundle in with `give`").c_str(), iso);
-        return "";
+        return false;
     }
 
     // Escape check: the borrowed root must OUTLIVE the scope's join — be declared in the task scope itself or an
@@ -22368,7 +22381,7 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
         unsupported((kw + " may not borrow `" + root + "` — it is declared inside a block nested in the `scope`, "
                      "so it is destroyed before the scope " + (iso->fiber ? "waits for" : "joins") + " this "
                      "child; declare it in the `scope` itself or an outer scope").c_str(), iso);
-        return "";
+        return false;
     }
     // A fiber spawned in a LOOP starts a child on every pass, and every one borrows this one place.
     int loopAt = -1;
@@ -22378,7 +22391,7 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
             unsupported((kw + " in a loop borrows `" + placeText(place) + "` by `ref`, so every fiber the loop "
                          "starts would hold that one place at once — borrow it `const ref`, make it an "
                          "`Atomic<T>`, or move a value in").c_str(), iso);
-            return "";
+            return false;
         }
         // `const ref`: the children only read it, but a later pass of the loop could write it while they do.
         int wroteAt = 0;
@@ -22389,7 +22402,7 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
             unsupported((kw + " in a loop borrows `" + placeText(place) + "` `const ref`, and the loop writes it at "
                          "line " + std::to_string(wroteAt) + " — a later pass would write it while the fibers "
                          "already started read it. Write it before the loop, or after the `scope`").c_str(), iso);
-            return "";
+            return false;
         }
     }
     // Can't borrow something already moved into (or given away by) an earlier statement. Both keys
@@ -22426,7 +22439,7 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
                              + placeText(prev.place) + "` and `" + placeText(place) + "`), and one of them may write, "
                              "which would race; borrow disjoint fields or distinct locals, take the place `const ref` "
                              "in every child that only reads it, or use an `Atomic<T>`").c_str(), iso);
-                return "";   // one fault, one report: the lowering below would call the same overlap a write
+                return false;   // one fault, one report: the lowering below would call the same overlap a write
             }
         ts->borrowedPlaces.push_back({ place, p.isConst });
         // ...and against the scope BODY, which runs beside the child until the closing brace joins it. A
@@ -22444,12 +22457,7 @@ std::string CEmitter::bundleBorrow(IsolateNode* iso, ArgumentNode* argNode, cons
         }
     }
 
-    // The argument as `fname(…)` itself would be passed it: with no callee, the reordered call is that argument alone.
-    // One lowering, so a bundle keeps every rule a call's `ref` has. Written out here as `&(place)`, `ref this` handed
-    // over the address of `self`, an `Owned` the address of its handle, and a `const` place or a place of another type
-    // went through unchecked. The child's hold on the place is the scope's, ruled above, so it starts no call's access.
-    ScopedFlag _bundle(_loweringBundle);
-    return "(void*)" + emitReorderedCall(fname, "", "", { p }, dynamic_cast<InvocationNode*>(iso->call.get())->args, iso->line);
+    return true;
 }
 
 // A helper a body needs at file scope, once: `ahead` declares what the body names, a type or a prototype, and `def`
@@ -22500,8 +22508,86 @@ const FuncSig* CEmitter::spawnEntry(IsolateNode* iso, InvocationNode* inv)
     return &(_instSigs[inst] = sig);
 }
 
-std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::string& val,
-                                  bool& isBorrow, bool borrowOK)
+// KR-313: a `spawn`'s arguments, any number of them, each crossing by its own rule: a `ref` is held to the scope's rules
+// as its own child (bundleBorrow), each argument an isolate is handed meets the `Sendable` gate on its own, and a view or
+// a contract value, which borrows for a window the child could outlive, is refused. They are lowered as the entry's own
+// call would lower them, so labels, `give` and `copy`, a literal typed by its parameter and every rule of a call's `ref`
+// hold. What the child starts with: nothing, for an entry with no parameters; for one `ref` parameter, the place's
+// address; otherwise one record of the entry's own parameter types, `val` the call to its maker, placed by the caller.
+// False after a diagnostic.
+bool CEmitter::spawnArgs(IsolateNode* iso, InvocationNode* inv, const FuncSig& sig, bool held, SpawnArgs& out)
+{
+    const std::string fname = *inv->identifier->value;
+    const std::string kw = iso->fiber ? "`spawn fiber`" : "`spawn`";
+    std::map<std::string, ArgumentNode*> byName;
+    if (inv->args) for (auto& a : *inv->args) if (a && a->name && a->name->value) byName[*a->name->value] = a.get();
+    bool ok = true, heldRef = false;
+    for (const ParamSig& p : sig.params) {
+        if (isViewCType(p.className) || isInterface(p.className)) {
+            unsupported(("`" + fname + "`'s parameter `" + p.name + "` is a view or a contract value, which borrows for a "
+                         "window the child could outlive — a " + kw + " takes a value it owns, or a `ref` to a place its "
+                         "`scope` outlives").c_str(), iso);
+            ok = false;
+            continue;
+        }
+        // An isolate's argument crosses into another isolate exactly as a channel element does, so it faces the same
+        // gate — see checkSpawnBundleSendability for why the fact is recorded rather than tested here. A `ref` one
+        // too: the child can `copy` what it borrows, and readers on several threads share it (KR-288).
+        if (!iso->fiber && !_probingTemplate)
+            _spawnBundles.push_back(SpawnBundle{ p.className, iso->line, diagFile(), "as the argument `" + p.name + "`" });
+        if (!p.byRef) continue;
+        if (held) { heldRef = true; continue; }
+        auto f = byName.find(p.name);   // a missing or mistyped label is the call's to report, below
+        if (f != byName.end() && !bundleBorrow(iso, f->second, p, fname)) ok = false;
+    }
+    if (heldRef) {
+        unsupported(iso->fiber
+            ? "a held `Fiber<R>` may outlive the `scope` it was started in, so its arguments are moved or copied in — a "
+              "`ref` argument is for a bare `spawn fiber` inside a `scope { }`"
+            : "a held `Isolate` may outlive the `scope` it was started in, so its arguments are moved or copied in — a "
+              "`ref` argument is for a bare `spawn` inside a `scope { }`, which joins the child before the place drops", iso);
+        return false;
+    }
+    if (!ok) return false;
+    // The child's hold on each `ref` place is the scope's, ruled above, so it starts no call's access.
+    ScopedFlag _bundle(_loweringBundle);
+    if (sig.params.empty()) {
+        out.kind = SpawnArgs::None;
+        emitReorderedCall(fname, "", "", sig.params, inv->args, iso->line);   // names an argument nothing takes
+        return true;
+    }
+    if (sig.params.size() == 1 && sig.params[0].byRef) {
+        // With no callee, the reordered call is that argument alone: `&(place)`, or `self` for `ref this`.
+        out.kind = SpawnArgs::Place;
+        out.val = "(void*)" + emitReorderedCall(fname, "", "", sig.params, inv->args, iso->line);
+        return true;
+    }
+    const std::string sym = symbolOf(sig);
+    out.kind = SpawnArgs::Record;
+    out.rec = "__kama_spawnrec_" + sym;
+    std::string fields, params, sets;
+    for (size_t i = 0; i < sig.params.size(); ++i) {
+        const std::string ct = sig.params[i].className + (sig.params[i].byRef ? "*" : ""), f = "a" + std::to_string(i);
+        fields += ct + " " + f + "; ";
+        params += (i ? ", " : "") + ct + " " + f;
+        sets += " __r." + f + " = " + f + ";";
+    }
+    addFileScopeHelper("spawnrec:" + sym, "typedef struct { " + fields + "} " + out.rec + ";\n"
+                       "static inline " + out.rec + " " + out.rec + "__make(" + params + ") {" + " " + out.rec + " __r;"
+                       + sets + " return __r; }\n", "");
+    out.val = emitReorderedCall(fname, out.rec + "__make", "", sig.params, inv->args, iso->line);
+    return true;
+}
+
+// The entry called with what its record `r` holds: `sym(r.a0, r.a1, …)`.
+static std::string spawnRecordCall(const std::string& sym, size_t n, const std::string& r)
+{
+    std::string c = sym + "(";
+    for (size_t i = 0; i < n; ++i) c += (i ? ", " : "") + r + ".a" + std::to_string(i);
+    return c + ")";
+}
+
+const FuncSig* CEmitter::isolatePrep(IsolateNode* iso, bool held, SpawnArgs& args)
 {
     // The seam header (and its `-lpthread` link) flows in via `import std::concurrent;`. Without it the
     // generated spawn call would not compile — give a clear error instead.
@@ -22514,98 +22600,54 @@ std::string CEmitter::isolatePrep(IsolateNode* iso, std::string& cls, std::strin
     // indirect callee would capture/alias enclosing state — reject to keep the entry shared-nothing.
     if (!inv || !inv->identifier || !inv->identifier->value || inv->expression || callsThroughLocal(inv)) {
         unsupported("`spawn` entry must be a bare top-level function call, e.g. `spawn worker(p: give x)`", iso);
-        return "";   // `inv`/`identifier` may be the null this guard rejected — never fall through and deref it
+        return nullptr;   // `inv`/`identifier` may be the null this guard rejected — never fall through and deref it
     }
 
     const std::string fname = *inv->identifier->value;
     const FuncSig* entry = spawnEntry(iso, inv);
-    if (!entry) return "";
+    if (!entry) return nullptr;
     const FuncSig& sig = *entry;
 
-    // A `void` entry taking exactly one argument (the bundle) — `void` because there is no channel to
-    // hand a result back over (use an M3 channel, or a `ref` borrow's fields, for results). The single
-    // param's SHAPE selects the mode: a by-value move-only `resource` (M2/M4.1, `give`) or a `ref T`
-    // borrow of a caller-owned bundle (M4.2), sound because the scope joins before the local drops.
-    if (sig.retCType != "void")
+    // A `void` entry, because there is no channel to hand a result back over (use an M3 channel, or a `ref`
+    // argument's fields, for results). Its parameters are any number (KR-313), each crossing by its own rule.
+    if (sig.retCType != "void") {
         unsupported(("`spawn` entry `" + fname + "` must return void — there is no channel to return a result over").c_str(), iso);
-    if (sig.params.size() != 1)
-        unsupported(("`spawn` entry `" + fname + "` must take exactly one argument (the bundle)").c_str(), iso);
-    if (!inv->args || inv->args->size() != 1)
-        unsupported(("`spawn` call to `" + fname + "` needs exactly one argument").c_str(), iso);
-
-    const ParamSig& p = sig.params[0];
-    cls = p.className;
-    if (cls.empty())
-        // ⚠️ NOT "not a primitive": `className` is empty only when the parameter names no resolvable type
-        // at all. A `ref int32` bundle IS legal and `tests/parfor_in_scope.kama` relies on it — the borrow
-        // mode restricts the LIFETIME (scope-bounded, join-proven) and is free in the type, while the move
-        // mode restricts the TYPE (`isMoveOnlyValue` below) and is free in lifetime. The old wording named
-        // a rule neither mode has.
-        unsupported("`spawn` entry's parameter names no known type — the bundle must be a type this "
-                    "unit can see", iso);
-    isBorrow = p.byRef;   // a `ref T` param = borrow (M4.2); a by-value param = the moved bundle (M2/M4.1)
-    // The bundle crosses into another isolate exactly as a channel element does, so it faces the same
-    // sendability gate — see checkSpawnBundleSendability for why the fact is recorded rather than tested
-    // here. Recorded for BOTH modes: a moved handle is released by the child, and a borrowed one can be
-    // `copy`'d inside it.
-    if (!_probingTemplate && !cls.empty())
-        _spawnBundles.push_back(SpawnBundle{ cls, iso->line, diagFile() });
-
-    auto* argNode = dynamic_cast<ArgumentNode*>((*inv->args)[0].get());
-
-    if (isBorrow) {
-        // ── M4.2: a `ref T` borrow of a caller-owned scope local ────────────────────────────────────
-        if (!borrowOK || !innermostTaskScope())
-            unsupported("only a bare `spawn` inside a `scope { }` may `ref`-borrow (the scope joins the "
-                        "child before the local drops); the handle form must take a moved `give` bundle", iso);
-        val = bundleBorrow(iso, argNode, p, fname);
-        if (val.empty()) return "";
-
-        // Borrow trampoline: `__p` IS `&local` — pass it straight through as the `ref T` (`T*`) param.
-        // No heap box, no free, no move (the caller keeps the local and drops it after the join).
-        const std::string tramp = "static inline void* __kama_iso_" + symbolOf(sig) + "(void* __p)";
-        addFileScopeHelper("iso:" + symbolOf(sig), tramp + ";\n", tramp + " {\n"
-                           "    " + symbolOf(sig) + "((" + cls + "*)__p);   /* borrow: __p IS &local — no box, no free, no move */\n"
-                           "    return (void*)0;\n"
-                           "}\n");
-        return symbolOf(sig);
+        return nullptr;
     }
+    for (const ParamSig& p : sig.params)
+        if (p.className.empty()) {
+            // ⚠️ NOT "not a primitive": `className` is empty only when the parameter names no resolvable type at all. A
+            // `ref int32` argument IS legal and `tests/parfor_in_scope.kama` relies on it.
+            unsupported(("`spawn` entry `" + fname + "`'s parameter `" + p.name + "` names no known type — an argument "
+                         "must be of a type this unit can see").c_str(), iso);
+            return nullptr;
+        }
+    return spawnArgs(iso, inv, sig, held, args) ? &sig : nullptr;
+}
 
-    // ── M2/M4.1: a by-value MOVED `resource` bundle ─────────────────────────────────────────────────
-    // A move-only `resource` VALUE owned by the callee: ownership actually transfers across the thread
-    // (a plain `value` would only be copied; a collection would need source-nulling — both deferred).
-    if (!isMoveOnlyValue(cls))
-        unsupported("`spawn` argument must be a moved `resource` value — the entry's parameter type is not one", iso);
-    // The argument must be `give`n: a shared borrow would alias state across the thread boundary. Unwrap
-    // the HandoffNode ourselves (we emit no call — just the move + spawn).
-    SharedExpression argExpr = argNode ? argNode->expression : (*inv->args)[0]->expression;
-    auto* h = dynamic_cast<HandoffNode*>(argExpr.get());
-    if (!h || !h->isGive) {
-        unsupported("`spawn` argument must be `give`n (moved) — a borrow would alias state across the thread", iso);
-        return "";   // `h` may be the null this guard rejected — never fall through and deref it
-    }
-    SharedExpression src = h->value;
-
-    // Emit the per-entry trampoline once (the same worker may be spawned from several sites / both forms).
-    const std::string tramp = "static inline void* __kama_iso_" + symbolOf(sig) + "(void* __p)";
-    addFileScopeHelper("iso:" + symbolOf(sig), tramp + ";\n", tramp + " {\n"
-                       "    " + cls + " __v = *(" + cls + "*)__p;   /* relocate the bundle out of the heap box */\n"
-                       "    kama_free(__p, " + layoutOf(cls) + ");\n"
-                       "    " + symbolOf(sig) + "(__v);                   /* callee owns __v and drops it at fn-end */\n"
-                       "    return (void*)0;\n"
-                       "}\n");
-
-    // Read the source, then mark it moved (post-spawn use → use-after-move via the normal `give` seam).
-    // moveOnlySource rejects a field/element move, matching every other `give` site.
-    val = emitExpression(src);
-    std::string mv = moveOnlySource(src, iso->line); if (!mv.empty()) markMoved(mv);
-    return symbolOf(sig);
+// The function an isolate's thread starts in: it takes what spawnArgs made and calls the entry. `boxed`: a held
+// `Isolate`'s record, on the heap, which the child frees; a scope child's sits on the parent's frame until the join.
+std::string CEmitter::isolateTrampoline(const FuncSig& sig, const SpawnArgs& args, bool boxed)
+{
+    const std::string sym = symbolOf(sig), name = (boxed ? "__kama_isoh_" : "__kama_iso_") + sym;
+    const std::string head = "static inline void* " + name + "(void* __p)";
+    std::string body;
+    if (args.kind == SpawnArgs::None)
+        body = "    (void)__p;\n    " + sym + "();\n";
+    else if (args.kind == SpawnArgs::Place)
+        body = "    " + sym + "((" + sig.params[0].className + "*)__p);   /* __p IS the place: no box, no free, no move */\n";
+    else
+        body = "    " + args.rec + " __r = *(" + args.rec + "*)__p;   /* the arguments, out of their record */\n"
+             + (boxed ? "    kama_free(__p, " + layoutOf(args.rec) + ");\n" : "")
+             + "    " + spawnRecordCall(sym, sig.params.size(), "__r") + ";   /* the entry owns what was moved in */\n";
+    addFileScopeHelper((boxed ? "isoh:" : "iso:") + sym, head + ";\n", head + " {\n" + body + "    return (void*)0;\n}\n");
+    return name;
 }
 
 // `spawn worker(p: give x);` — a bare `spawn` STATEMENT, which is a **deferred-join child of the
 // enclosing `scope { }`** (M4). It is legal ONLY as a DIRECT statement of a scope (which owns the join);
-// outside a scope use the handle form `Isolate h = spawn worker(...)`. Generated C: heap the moved bundle
-// and spawn now, declaring the `kama_isolate_t` handle at the scope's block level; the join is emitted by
+// outside a scope use the handle form `Isolate h = spawn worker(...)`. Generated C: the arguments' record on the
+// frame and the spawn now, declaring the `kama_isolate_t` handle at the scope's block level; the join is emitted by
 // the scope's closing-brace barrier (emitScopeCleanup), which runs before any local dtor.
 void CEmitter::emitIsolate(IsolateNode* iso, int depth)
 {
@@ -22630,65 +22672,57 @@ void CEmitter::emitIsolate(IsolateNode* iso, int depth)
         return;   // registering it would emit a join naming a handle declared in the sub-block
     }
 
-    std::string cls, val;
-    bool isBorrow = false;
-    std::string cName = isolatePrep(iso, cls, val, isBorrow, /*borrowOK=*/true);
-    if (cName.empty()) return;   // prep already reported; its `cls`/`val` outputs are unset
+    SpawnArgs args;
+    const FuncSig* sig = isolatePrep(iso, /*held=*/false, args);
+    if (!sig) return;   // prep already reported
+    const std::string tramp = isolateTrampoline(*sig, args, /*boxed=*/false);
     std::string hnd = "kama_kama_iso" + std::to_string(_tempCounter++);
 
     line(iso->line);
-    // The handle is declared at THIS depth (the scope's own block), NOT inside any sub-block, so the
-    // scope-barrier join can name it.
+    flushHoisted(depth);   // emitReorderedCall may have hoisted argument temps
+    // The handle and the record are declared at THIS depth (the scope's own block), NOT inside any sub-block, so the
+    // scope-barrier join can name the handle, and the record the child reads from lives until that join: no box, no
+    // free. The child copies its arguments out as it starts, and the parent never touches the record again.
     indent(depth); *_out << "kama_isolate_t " << hnd << ";\n";
-    if (isBorrow) {
-        // M4.2 borrow: `val` is already `(void*)&(local)` — spawn with it directly. No box, no free.
-        noteThreadSpawn();
-        const std::string stk = isolateStackArg(iso->stack, iso->line);
-        indent(depth); *_out << hnd << " = kama_isolate_spawn" << (stk.empty() ? "" : "_sized") << "(&__kama_iso_"
-                             << cName << ", " << val << (stk.empty() ? "" : ", " + stk) << ");\n";
-    } else {
-        // M2/M4.1 move: heap the moved bundle, spawn with the box (the trampoline frees it). The malloc
-        // temp stays scoped to its sub-block.
-        rejectIfNoHeap("spawn heaps the moved argument bundle", iso->line);   // no-heap gate
-        std::string arg = "kama_kama_iso_arg" + std::to_string(_tempCounter++);
-        indent(depth);     *_out << "{\n";
-        indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)kama_alloc(" << layoutOf(cls) << ");\n";
-        indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-        indent(depth + 1); *_out << "*" << arg << " = (" << val << ");\n";
-        noteThreadSpawn();
-        const std::string stk = isolateStackArg(iso->stack, iso->line);
-        indent(depth + 1); *_out << hnd << " = kama_isolate_spawn" << (stk.empty() ? "" : "_sized") << "(&__kama_iso_"
-                                 << cName << ", " << arg << (stk.empty() ? "" : ", " + stk) << ");\n";
-        indent(depth);     *_out << "}\n";
+    std::string arg = args.kind == SpawnArgs::None ? "(void*)0" : args.val;
+    if (args.kind == SpawnArgs::Record) {
+        const std::string r = "kama_kama_iso_rec" + std::to_string(_tempCounter++);
+        indent(depth); *_out << args.rec << " " << r << " = " << args.val << ";\n";
+        arg = "&" + r;
     }
+    noteThreadSpawn();
+    const std::string stk = isolateStackArg(iso->stack, iso->line);
+    indent(depth); *_out << hnd << " = kama_isolate_spawn" << (stk.empty() ? "" : "_sized") << "(&" << tramp << ", "
+                         << arg << (stk.empty() ? "" : ", " + stk) << ");\n";
     // Register into the innermost scope AFTER emission (re-fetch: isolatePrep may have grown _scopes and
     // invalidated an earlier pointer). The scope joins this handle at its closing brace.
     innermostTaskScope()->taskChildren.push_back({ hnd, "" });
 }
 
-// `Isolate h = isolate worker(p: give x);` — the HANDLE form: spawn now and wrap the (heap-boxed) thread
+// `Isolate h = spawn worker(p: give x);` — the HANDLE form: spawn now and wrap the (heap-boxed) thread
 // handle in an RAII `std::concurrent::Isolate` whose drop = join. Generated C is a statement-expression:
-// heap the moved bundle, spawn (boxed), and hand the box to the `Isolate::fromRaw` ctor.
+// heap the arguments' record, spawn (boxed), and hand the box to the `Isolate::fromRaw` ctor.
 std::string CEmitter::emitIsolateExpr(IsolateNode* iso)
 {
     if (iso->fiber) return emitFiberExpr(iso);
-    std::string cls, val;
-    bool isBorrow = false;   // the handle form may outlive the scope, so borrowing is rejected in isolatePrep
-    std::string cName = isolatePrep(iso, cls, val, isBorrow, /*borrowOK=*/false);
-    if (cName.empty()) return "0";   // prep already reported; its `cls`/`val` outputs are unset
+    SpawnArgs args;
+    const FuncSig* sig = isolatePrep(iso, /*held=*/true, args);   // a held child may outlive the scope: no `ref`
+    if (!sig) return "0";   // prep already reported
     std::string iso_t = resolveUserName("Isolate", SharedStringList());
     if (!_classes.count(iso_t))
         unsupported("the `isolate` handle form needs `std::concurrent::Isolate` in scope — add `import std::concurrent;`", iso);
-    std::string arg = "kama_kama_iso_arg" + std::to_string(_tempCounter++);
+    const std::string tramp = isolateTrampoline(*sig, args, /*boxed=*/true);
+    std::string box, arg = "(void*)0";
+    if (args.kind == SpawnArgs::Record) {
+        arg = "kama_kama_iso_arg" + std::to_string(_tempCounter++);
+        box = args.rec + "* " + arg + " = (" + args.rec + "*)kama_alloc(" + layoutOf(args.rec) + "); "
+            + "if (!" + arg + ") kama_panic(kama_string_lit(\"out of memory\", 13)); "
+            + "*" + arg + " = " + args.val + "; ";
+    }
     const std::string stk = isolateStackArg(iso->stack, iso->line);
-    std::ostringstream e;
     noteThreadSpawn();
-    e << "({ " << cls << "* " << arg << " = (" << cls << "*)kama_alloc(" << layoutOf(cls) << "); "
-      << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13)); "
-      << "*" << arg << " = (" << val << "); "
-      << iso_t << "__fromRaw(kama_isolate_spawn_boxed" << (stk.empty() ? "" : "_sized") << "(&__kama_iso_" << cName
-      << ", " << arg << (stk.empty() ? "" : ", " + stk) << ")); })";
-    return e.str();
+    return "({ " + box + iso_t + "__fromRaw(kama_isolate_spawn_boxed" + (stk.empty() ? "" : "_sized") + "(&" + tramp
+         + ", " + arg + (stk.empty() ? "" : ", " + stk) + ")); })";
 }
 
 // ── KR-3: `spawn fiber` ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -22713,13 +22747,11 @@ std::string CEmitter::fiberTargetRefusal() const
     return "kama has no fiber switch for `" + arch + "` (x86-64, arm64, x86 and riscv64 have one)";
 }
 
-// What both forms of `spawn fiber` share: the seam and the target, the entry — a bare top-level fn taking exactly one
-// argument, the bundle — and the bundle itself (decision 9). Since a fiber never leaves its isolate, the bundle is any
-// value the entry's own call could be given, lowered by that call's rules (labels, `give` or `copy`, a literal typed
-// by the parameter), with neither the `Sendable` gate nor an isolate's moved-`resource` rule; or, for a bare spawn,
-// a `ref` to a place the scope outlives (bundleBorrow). `val` is the bundle's C value, or for a `ref` the `void*` the
-// fiber starts with. Null after a diagnostic.
-const FuncSig* CEmitter::fiberPrep(IsolateNode* iso, bool held, std::string& val, bool& isBorrow)
+// What both forms of `spawn fiber` share: the seam and the target, the entry — a bare top-level fn — and its
+// arguments (spawnArgs). Since a fiber never leaves its isolate, an argument is any value the entry's own call could be
+// given, with neither the `Sendable` gate nor an isolate's rules; or, for a bare spawn, a `ref` to a place the scope
+// outlives. Null after a diagnostic.
+const FuncSig* CEmitter::fiberPrep(IsolateNode* iso, bool held, SpawnArgs& args)
 {
     if (!externsHeader("kama_sched.h")) {
         unsupported("`spawn fiber` runs on the fiber scheduler, `std::concurrent` — import it: "
@@ -22739,10 +22771,6 @@ const FuncSig* CEmitter::fiberPrep(IsolateNode* iso, bool held, std::string& val
     const FuncSig* entry = spawnEntry(iso, inv);
     if (!entry) return nullptr;
     const FuncSig& sig = *entry;
-    if (sig.params.size() != 1 || !inv->args || inv->args->size() != 1) {
-        unsupported(("`spawn fiber` entry `" + fname + "` must take exactly one argument, the bundle").c_str(), iso);
-        return nullptr;
-    }
     if (sig.isPlaceReturn || isViewCType(sig.retCType)) {
         unsupported(("`" + fname + "` returns a place, which the fiber's caller would outlive — a fiber hands back a "
                      "value").c_str(), iso);
@@ -22759,31 +22787,13 @@ const FuncSig* CEmitter::fiberPrep(IsolateNode* iso, bool held, std::string& val
                      "`scope { }`, whose closing brace waits for it").c_str(), iso);
         return nullptr;
     }
-    const ParamSig& p = sig.params[0];
-    if (isViewCType(p.className) || isInterface(p.className)) {
-        unsupported(("`" + fname + "`'s bundle is a view or a contract value, which borrows for a window the fiber "
-                     "could outlive — a fiber takes a value it owns, or a `ref` to a place its `scope` outlives").c_str(),
-                    iso);
-        return nullptr;
-    }
-    isBorrow = p.byRef;
-    if (isBorrow) {
-        if (held) {
-            unsupported("a held `Fiber<R>` may outlive the `scope` it was started in, so its bundle is moved or copied "
-                        "in — a `ref` bundle is for a bare `spawn fiber` inside a `scope { }`", iso);
-            return nullptr;
-        }
-        val = bundleBorrow(iso, dynamic_cast<ArgumentNode*>((*inv->args)[0].get()), p, fname);
-        return val.empty() ? nullptr : &sig;
-    }
-    // The argument as `fname(…)` itself would be passed it: with no callee, the reordered call is that argument alone.
-    val = emitReorderedCall(fname, "", "", sig.params, inv->args, iso->line);
-    return &sig;
+    return spawnArgs(iso, inv, sig, held, args) ? &sig : nullptr;
 }
 
 // `spawn fiber work(job: give j);` — a fiber child of the enclosing `scope` (decision 10), anywhere in its body, loops
 // included: the scope keeps a runtime list of its live fibers rather than a handle per spawn, and its closing brace
-// waits for the list to empty. The bundle is boxed, and the fiber's trampoline moves it out and frees the box.
+// waits for the list to empty. The arguments' record is boxed, since the spawn only queues the fiber and a loop's next
+// pass would overwrite a record on the frame before it ran; the fiber's trampoline moves them out and frees the box.
 void CEmitter::emitFiber(IsolateNode* iso, int depth)
 {
     Scope* ts = innermostTaskScope();
@@ -22793,30 +22803,35 @@ void CEmitter::emitFiber(IsolateNode* iso, int depth)
         return;
     }
     const std::string fs = ts->fiberScope;   // fiberPrep may grow `_scopes`
-    std::string val;
-    bool isBorrow = false;
-    const FuncSig* sig = fiberPrep(iso, /*held=*/false, val, isBorrow);
+    SpawnArgs args;
+    const FuncSig* sig = fiberPrep(iso, /*held=*/false, args);
     if (!sig) return;
-    const std::string sym = symbolOf(*sig), cls = sig->params[0].className;
+    const std::string sym = symbolOf(*sig);
     const std::string tramp = "static inline void __kama_fib_" + sym + "(void* __p)";
-    addFileScopeHelper("fib:" + sym, tramp + ";\n", tramp + " {\n" + (isBorrow
-        ? "    " + sym + "((" + cls + "*)__p);   /* borrow: __p IS the place */\n"
-        : "    " + cls + " __v = *(" + cls + "*)__p;   /* relocate the bundle out of its box */\n"
-          "    kama_free(__p, " + layoutOf(cls) + ");\n"
-          "    " + sym + "(__v);                   /* the entry owns __v and drops it */\n") + "}\n");
+    std::string body;
+    if (args.kind == SpawnArgs::None)
+        body = "    (void)__p;\n    " + sym + "();\n";
+    else if (args.kind == SpawnArgs::Place)
+        body = "    " + sym + "((" + sig->params[0].className + "*)__p);   /* borrow: __p IS the place */\n";
+    else
+        body = "    " + args.rec + " __r = *(" + args.rec + "*)__p;   /* the arguments, out of their box */\n"
+               "    kama_free(__p, " + layoutOf(args.rec) + ");\n"
+               "    " + spawnRecordCall(sym, sig->params.size(), "__r") + ";   /* the entry owns what was moved in */\n";
+    addFileScopeHelper("fib:" + sym, tramp + ";\n", tramp + " {\n" + body + "}\n");
     const std::string stk = isolateStackArg(iso->stack, iso->line, /*fiber=*/true);
     const std::string start = stk.empty() ? "0" : stk;
     line(iso->line);
     flushHoisted(depth);
-    if (isBorrow) {
-        indent(depth); *_out << "kama_sched_scopeSpawn(&" << fs << ", &__kama_fib_" << sym << ", " << val << ", " << start << ");\n";
+    if (args.kind != SpawnArgs::Record) {
+        indent(depth); *_out << "kama_sched_scopeSpawn(&" << fs << ", &__kama_fib_" << sym << ", "
+                             << (args.kind == SpawnArgs::None ? "(void*)0" : args.val) << ", " << start << ");\n";
         return;
     }
     const std::string arg = "kama_kama_fib_arg" + std::to_string(_tempCounter++);
     indent(depth);     *_out << "{\n";
-    indent(depth + 1); *_out << cls << "* " << arg << " = (" << cls << "*)kama_alloc(" << layoutOf(cls) << ");\n";
+    indent(depth + 1); *_out << args.rec << "* " << arg << " = (" << args.rec << "*)kama_alloc(" << layoutOf(args.rec) << ");\n";
     indent(depth + 1); *_out << "if (!" << arg << ") kama_panic(kama_string_lit(\"out of memory\", 13));\n";
-    indent(depth + 1); *_out << "*" << arg << " = " << val << ";\n";
+    indent(depth + 1); *_out << "*" << arg << " = " << args.val << ";\n";
     indent(depth + 1); *_out << "kama_sched_scopeSpawn(&" << fs << ", &__kama_fib_" << sym << ", " << arg << ", " << start << ");\n";
     indent(depth);     *_out << "}\n";
 }
@@ -22833,9 +22848,8 @@ std::string CEmitter::emitFiberExpr(IsolateNode* iso)
                     "`Fiber<int32> f = spawn fiber work(…);` (`import { std::concurrent::Fiber };`)", iso);
         return "0";
     }
-    std::string val;
-    bool isBorrow = false;
-    const FuncSig* sig = fiberPrep(iso, /*held=*/true, val, isBorrow);
+    SpawnArgs args;
+    const FuncSig* sig = fiberPrep(iso, /*held=*/true, args);   // a held fiber takes no `ref`: None or a record
     if (!sig) return "0";
     const std::string rc = sig->retCType, held = cType(gi->second.typeArgs[0]);
     if (held != rc) {
@@ -22845,21 +22859,24 @@ std::string CEmitter::emitFiberExpr(IsolateNode* iso)
                      + ">`, not a `Fiber<" + shown(held) + ">`").c_str(), iso);
         return "0";
     }
-    const std::string sym = symbolOf(*sig), cls = sig->params[0].className, box = "__kama_fibbox_" + sym;
+    const bool rec = args.kind == SpawnArgs::Record;
+    const std::string sym = symbolOf(*sig), box = "__kama_fibbox_" + sym;
     const std::string tramp = "static inline void __kama_fibv_" + sym + "(void* __p)";
     addFileScopeHelper("fibv:" + sym,
-                       "typedef struct { " + cls + " arg; " + rc + "* res; } " + box + ";\n" + tramp + ";\n",
+                       "typedef struct { " + (rec ? args.rec + " args; " : std::string()) + rc + "* res; } " + box + ";\n"
+                       + tramp + ";\n",
                        tramp + " {\n"
-                       "    " + box + " __b = *(" + box + "*)__p;   /* relocate the bundle out of its box */\n"
+                       "    " + box + " __b = *(" + box + "*)__p;   /* the arguments, out of their box */\n"
                        "    kama_free(__p, " + layoutOf(box) + ");\n"
-                       "    *__b.res = " + sym + "(__b.arg);           /* into the cell the handle owns */\n"
+                       "    *__b.res = " + (rec ? spawnRecordCall(sym, sig->params.size(), "__b.args") : sym + "()")
+                       + ";   /* into the cell the handle owns */\n"
                        "}\n");
     const std::string stk = isolateStackArg(iso->stack, iso->line, /*fiber=*/true);
     const std::string n = std::to_string(_tempCounter++), r = "kama_kama_fib_res" + n, a = "kama_kama_fib_arg" + n;
     return "({ " + rc + "* " + r + " = (" + rc + "*)kama_alloc(" + layoutOf(rc) + "); "
          + box + "* " + a + " = (" + box + "*)kama_alloc(" + layoutOf(box) + "); "
          + "if (!" + r + " || !" + a + ") kama_panic(kama_string_lit(\"out of memory\", 13)); "
-         + a + "->arg = " + val + "; " + a + "->res = " + r + "; "
+         + (rec ? a + "->args = " + args.val + "; " : std::string()) + a + "->res = " + r + "; "
          + ty + "__fromRaw((void*)kama_sched_spawn(&__kama_fibv_" + sym + ", " + a + ", " + (stk.empty() ? "0" : stk)
          + "), " + r + "); })";
 }
@@ -37560,7 +37577,8 @@ void CEmitter::checkParkWindows()
     if (!anyAccess) return;
     static const std::string kSwitch = "kama_fiber_switch", kSpawn = "kama_sched_spawn";
     auto startsWith = [](const std::string& f, const std::string& p) { return f.compare(0, p.size(), p) == 0; };
-    auto threadEntry = [&](const std::string& f) { return startsWith(f, "__kama_iso_") || startsWith(f, "kama_kama_pf_tramp"); };
+    auto threadEntry = [&](const std::string& f) {
+        return startsWith(f, "__kama_iso_") || startsWith(f, "__kama_isoh_") || startsWith(f, "kama_kama_pf_tramp"); };
     auto fiberEntry  = [&](const std::string& f) { return startsWith(f, "__kama_fib_") || startsWith(f, "__kama_fibv_"); };
     auto eachCallee = [&](const std::string& f, const std::function<void(const std::string&, const CallEdge&)>& visit) {
         auto it = _callEdges.find(f);
@@ -37688,7 +37706,8 @@ void CEmitter::checkOnPanicRegions()
                 for (auto& e : it->second) {
                     const std::string& c = e.first;
                     if (c.compare(0, 11, "__kama_fib_") == 0 || c.compare(0, 12, "__kama_fibv_") == 0
-                        || c.compare(0, 11, "__kama_iso_") == 0 || c.compare(0, 18, "kama_kama_pf_tramp") == 0) continue;
+                        || c.compare(0, 11, "__kama_iso_") == 0 || c.compare(0, 12, "__kama_isoh_") == 0
+                        || c.compare(0, 18, "kama_kama_pf_tramp") == 0) continue;
                     if (seen.insert(c).second) { parent[c] = f; q.push_back(c); }
                 }
             }

@@ -1,0 +1,72 @@
+// A `spawn` takes any number of arguments (KR-313), each crossing by its own rule: a `ref` is held to the scope's rules
+// as its own child, a `give` moves a value in, and any other value is copied. A scope child's arguments sit in one record
+// on the parent's frame until the join; a held `Isolate`'s are boxed. Each check below fails with its own exit code.
+import { std::concurrent::Isolate, std::concurrent::Atomic, std::collections::DynamicArray };
+
+type resource Job implements Sendable {
+    int64 n;
+    public ctor make(int64 n) { this.n = n; }
+    public const fn int64 value() { return this.n; }
+}
+
+// The case that asked for it: a system that writes one store and reads another, spawned from a method.
+type resource Sim implements Sendable {
+    DynamicArray<int64> pos;
+    DynamicArray<int64> other;
+    DynamicArray<int64> vel;
+    public ctor make() {
+        this.pos = DynamicArray::<int64>.empty();
+        this.other = DynamicArray::<int64>.empty();
+        this.vel = DynamicArray::<int64>.empty();
+        for (int64 i = 1; i <= 4; i = i + 1) { this.pos.add(item: 0i64); this.other.add(item: 0i64); this.vel.add(item: i); }
+    }
+    public fn void step(int64 dt) {
+        scope {
+            spawn integrate(p: ref this.pos, v: ref this.vel, dt: dt);
+            spawn integrate(p: ref this.other, v: ref this.vel, dt: dt * 2i64);   // `vel` read by both (KR-288)
+        }
+    }
+    public const fn int64 total() {
+        int64 t = 0i64;
+        foreach (const ref int64 x in this.pos) { t = t + x; }
+        foreach (const ref int64 x in this.other) { t = t + x; }
+        return t;
+    }
+}
+fn void integrate(ref DynamicArray<int64> p, const ref DynamicArray<int64> v, int64 dt) {
+    for (isize i = 0; i < p.length(); i = i + 1) { p[i] = p[i] + v[i] * dt; }
+}
+
+fn void consume(Job j, ref Atomic<int64> into) { into.fetchAdd(delta: j.value()); }
+fn void named(string s, int64 times, ref Atomic<int64> into) { into.fetchAdd(delta: cast<int64>(s.length()) * times); }
+fn void both(const ref DynamicArray<int64> a, const ref DynamicArray<int64> b, ref Atomic<int64> into) {
+    into.fetchAdd(delta: cast<int64>(a.length() + b.length()));
+}
+fn void pair(Job a, Job b, int64 want) { if (a.value() + b.value() != want) { panic(msg: "a held isolate lost an argument"); } }
+fn void tick() { }
+
+fn uint8 main() {
+    Sim sim = Sim.make();
+    sim.step(dt: 1i64);
+    if (sim.total() != 30i64) { return 1; }                       // (1+2+3+4) * 1 + (1+2+3+4) * 2
+
+    Atomic<int64> total = Atomic.make(value: 0i64);
+    Job j = Job.make(n: 100i64);
+    string name = "seven!!";
+    DynamicArray<int64> xs = DynamicArray::<int64>.empty();
+    xs.add(item: 1i64); xs.add(item: 2i64);
+    scope {
+        spawn consume(j: give j, into: ref total);                // a moved value beside a borrowed cell
+        spawn named(s: copy name, times: 3i64, into: ref total);  // a copy and a plain value
+        spawn both(a: ref xs, b: ref xs, into: ref total);        // one place, read twice by one child
+        spawn tick();                                             // no arguments at all
+    }
+    if (total.load() != 125i64) { return 2; }                     // 100 + 7 * 3 + 2 + 2
+
+    Isolate h = spawn pair(a: Job.make(n: 20i64), b: Job.make(n: 22i64), want: 42i64);
+    give h.join();
+    Isolate t = spawn tick();
+    give t.join();
+    if (name.length() != 7) { return 3; }                         // `copy` left the parent's string alone
+    return 42;
+}

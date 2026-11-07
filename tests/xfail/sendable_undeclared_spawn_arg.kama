@@ -1,0 +1,9 @@
+// Each argument handed to an isolate meets the `Sendable` gate on its own (KR-313), and the message names it. Must fail.
+import { std::concurrent::Isolate };
+type resource Fine implements Sendable { int32 n; public ctor make() { this.n = 1; } }
+type resource Quiet { int32 n; public ctor make() { this.n = 2; } }
+fn void worker(Fine a, Quiet b) { }
+fn uint8 main() {
+    scope { spawn worker(a: Fine.make(), b: Quiet.make()); }   // ERROR: `Quiet` is not `Sendable`
+    return 0;
+}
